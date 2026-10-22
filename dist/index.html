@@ -73,6 +73,8 @@
   .active::after, .before-active::after { display: none; }
   .icon { flex: none; width: 16px; height: 16px; }
   .tab.active > .icon { color: var(--accent, currentColor); }
+  /* Unloaded to save memory; reloads when selected. */
+  .asleep:not(.active) > .icon, .asleep:not(.active) > .title { opacity: 0.5; }
   .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .close {
     flex: none;
@@ -160,6 +162,7 @@
       const classes = [];
       if (tab.id === active) classes.push("active");
       if (index === activeIndex - 1) classes.push("before-active");
+      if (tab.asleep) classes.push("asleep");
 
       if (tab.kind === "home") {
         const home = el("div", { id: "home", className: classes.join(" "), title: "Home" }, ICONS.home);
@@ -168,7 +171,7 @@
         return;
       }
 
-      const node = el("div", { className: ["tab", ...classes].join(" "), title: tab.title });
+      const node = el("div", { className: ["tab", ...classes].join(" "), title: tab.asleep ? `${tab.title} (asleep)` : tab.title });
       node.style.setProperty("--accent", ACCENTS[tab.kind] ?? "currentColor");
       node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
       node.append(el("span", { className: "title", textContent: tab.title || "Loading…" }));

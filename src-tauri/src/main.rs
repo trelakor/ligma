@@ -1,7 +1,10 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod settings;
 mod tabs;
+#[cfg(windows)]
+mod webview2;
 
 use std::process::Child;
 use std::sync::Mutex;
@@ -137,7 +140,6 @@ fn main() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .manage(tabs::Tabs::default())
         .on_menu_event(|app, event| {
             let _ = match event.id().as_ref() {
                 "new-tab" => tabs::new_tab(app),
@@ -156,6 +158,7 @@ fn main() {
         ])
         .setup(|app| {
             app.manage(FontAgent(Mutex::new(start_font_agent())));
+            app.manage(tabs::Tabs::new(&settings::load(app.handle())));
 
             // The window's own webview is the tab bar. Figma tabs are added
             // as child webviews below it.
@@ -189,9 +192,14 @@ fn main() {
             tabs::open(app.handle(), tabs::HOME_URL.parse()?)?;
 
             let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                tabs::sync_theme(&handle);
+            std::thread::spawn(move || {
+                for second in 1u64.. {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    tabs::sync_theme(&handle);
+                    if second % 30 == 0 {
+                        tabs::rest_idle(&handle);
+                    }
+                }
             });
             Ok(())
         })
