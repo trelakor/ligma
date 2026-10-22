@@ -1,0 +1,63 @@
+# Builds Ligma for macOS (universal) and Windows and publishes a GitHub
+# release named after the version in src-tauri/tauri.conf.json.
+# Run it by pushing a tag like v0.1.0, or manually from the Actions tab.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: windows-latest
+            args: ""
+            rust-targets: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Ligma v__VERSION__
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+          releaseBody: |
+            Lightweight desktop app for Figma.
+
+            **macOS** (Apple Silicon and Intel): download `Ligma_*_universal.dmg`.
+            The app is not notarized. After dragging it to Applications, run
+            `xattr -dr com.apple.quarantine /Applications/Ligma.app` once, or allow it in
+            System Settings → Privacy & Security → Open Anyway.
+
+            **Windows**: download `Ligma_*_x64-setup.exe` (or the `.msi`).
+            The installer is not signed. If SmartScreen warns, choose More info → Run anyway.
