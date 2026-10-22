@@ -11,14 +11,31 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 /// Font agent process started by Ligma, killed again on exit.
 struct FontAgent(Mutex<Option<Child>>);
 
-/// Starts Figma's local font helper if it isn't already running. figma.com
-/// asks it (via https://figmadaemon.com:44960) for the user's installed fonts.
-/// It normally runs only alongside the Figma desktop app or Figma's font
-/// installer.
+/// Where the Figma desktop app and Figma's font installer put the agent.
 #[cfg(target_os = "macos")]
+fn font_agent_path() -> Option<std::path::PathBuf> {
+    Some(
+        std::path::PathBuf::from(std::env::var_os("HOME")?)
+            .join("Library/Application Support/Figma/FigmaAgent.app/Contents/MacOS/figma_agent"),
+    )
+}
+
+#[cfg(windows)]
+fn font_agent_path() -> Option<std::path::PathBuf> {
+    Some(std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("FigmaAgent/figma_agent.exe"))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn font_agent_path() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Starts Figma's local font helper if it isn't already running. figma.com
+/// asks it (on http://127.0.0.1:44950 or https://figmadaemon.com:44960) for
+/// the user's installed fonts. It normally runs only alongside the Figma
+/// desktop app or Figma's font installer.
 fn start_font_agent() -> Option<Child> {
     use std::net::{SocketAddr, TcpStream};
-    use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
@@ -26,18 +43,16 @@ fn start_font_agent() -> Option<Child> {
     if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
         return None;
     }
-    let exe = PathBuf::from(std::env::var_os("HOME")?)
-        .join("Library/Application Support/Figma/FigmaAgent.app/Contents/MacOS/figma_agent");
-    Command::new(exe)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn start_font_agent() -> Option<Child> {
-    None
+    let exe = font_agent_path().filter(|exe| exe.is_file())?;
+    let mut command = Command::new(exe);
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command.spawn().ok()
 }
 
 /// macOS menu bar. File and Window hold the tab shortcuts; Cmd+W closes the
