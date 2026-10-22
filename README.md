@@ -39,7 +39,7 @@ npm run icon
 - Window size and position are saved between launches.
 - Drag-and-drop goes to Figma, so you can drop images and files onto the canvas.
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
-- Local fonts (macOS): Figma loads installed fonts through its font helper, `FigmaAgent`. If the helper isn't running, Ligma starts it from `~/Library/Application Support/Figma/FigmaAgent.app` and stops it on quit. The helper is installed by the Figma desktop app or [Figma's font installer](https://www.figma.com/downloads/).
+- Local fonts: Figma loads installed fonts through its font helper, `FigmaAgent`. If the helper isn't running, Ligma starts it (from `~/Library/Application Support/Figma/FigmaAgent.app` on macOS, `%LOCALAPPDATA%/FigmaAgent/figma_agent.exe` on Windows) and stops it on quit. The helper is installed by the Figma desktop app or [Figma's font installer](https://www.figma.com/downloads/). On Windows, Figma also waits for the browser's Local Network Access permission, which WebView2 reports as "prompt" but never asks for, so Ligma reports it as granted to Figma tabs.
 - Figma pages have no access to Tauri IPC. Only the local tab bar has permissions (`src-tauri/capabilities/tab-bar.json`).
 
 ## Known limits
