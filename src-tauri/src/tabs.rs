@@ -18,6 +18,24 @@ const HOME_ID: u32 = 0;
 #[cfg(target_os = "macos")]
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
+// Figma only asks its font agent for local fonts once Local Network Access
+// is "granted". WebView2 doesn't enforce that permission (loopback requests
+// already go through) but still reports "prompt" and never shows a prompt,
+// so Figma would wait forever. Report "prompt" as "granted"; a real "denied"
+// is left alone.
+#[cfg(windows)]
+const LOCAL_NETWORK_ACCESS_JS: &str = r#"(() => {
+  const names = new Set(["loopback-network", "local-network", "local-network-access"]);
+  const query = Permissions.prototype.query;
+  Permissions.prototype.query = async function (descriptor) {
+    const status = await query.call(this, descriptor);
+    if (names.has(descriptor?.name) && status.state === "prompt") {
+      Object.defineProperty(status, "state", { get: () => "granted" });
+    }
+    return status;
+  };
+})();"#;
+
 #[derive(Serialize)]
 struct Tab {
     id: u32,
@@ -134,6 +152,10 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT);
+    }
+    #[cfg(windows)]
+    {
+        builder = builder.initialization_script(LOCAL_NETWORK_ACCESS_JS);
     }
     window.add_child(
         builder,
