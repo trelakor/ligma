@@ -1,8 +1,16 @@
 //! Figma-style tabs. The main window's own webview is the local tab bar
 //! (`dist/index.html`). Each tab is a child webview below it, and only the
 //! active one is visible.
+//!
+//! Hidden tabs are wound down to save memory, since every loaded Figma file
+//! keeps its whole editor in RAM. On hide (Windows) WebView2 is asked to trim
+//! memory. After `SUSPEND_AFTER` (Windows) the page is frozen. After the
+//! user's `sleepTabsAfterMinutes` the webview is closed ("asleep") and
+//! reloads from its last URL when selected. Freezing and closing only happen
+//! when `CAN_REST_JS` says no work would be lost.
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
@@ -36,13 +44,74 @@ const LOCAL_NETWORK_ACCESS_JS: &str = r#"(() => {
   };
 })();"#;
 
+/// Remembers the page's `beforeunload` handlers so `CAN_REST_JS` can ask
+/// them, without unloading anything, whether leaving now would lose work.
+/// Figma registers one while edits haven't reached its servers.
+const BEFOREUNLOAD_JS: &str = r#"(() => {
+  const handlers = new Set();
+  const add = EventTarget.prototype.addEventListener;
+  const remove = EventTarget.prototype.removeEventListener;
+  EventTarget.prototype.addEventListener = function (type, listener, options) {
+    if (this === window && type === "beforeunload" && listener) handlers.add(listener);
+    return add.call(this, type, listener, options);
+  };
+  EventTarget.prototype.removeEventListener = function (type, listener, options) {
+    if (this === window && type === "beforeunload") handlers.delete(listener);
+    return remove.call(this, type, listener, options);
+  };
+  Object.defineProperty(window, "__ligmaCanRest", {
+    value: () => {
+      if (!navigator.onLine) return false;
+      let blocked = false;
+      const event = {
+        type: "beforeunload",
+        target: window,
+        currentTarget: window,
+        preventDefault() { blocked = true; },
+        stopPropagation() {},
+        stopImmediatePropagation() {},
+        get returnValue() { return ""; },
+        set returnValue(value) { if (value) blocked = true; },
+      };
+      for (const handler of [...handlers, window.onbeforeunload]) {
+        if (!handler) continue;
+        try {
+          const result = typeof handler === "function" ? handler.call(window, event) : handler.handleEvent(event);
+          if (typeof result === "string" && result) blocked = true;
+        } catch {
+          blocked = true;
+        }
+      }
+      return !blocked;
+    },
+  });
+})();"#;
+
+/// True if a hidden tab can be frozen or closed without losing work.
+const CAN_REST_JS: &str = "window.__ligmaCanRest?.() ?? false";
+
+/// How long a tab stays hidden before WebView2 freezes it (Windows).
+#[cfg(windows)]
+const SUSPEND_AFTER: Duration = Duration::from_secs(5 * 60);
+
 #[derive(Serialize)]
 struct Tab {
     id: u32,
     title: String,
     kind: &'static str,
+    /// No webview; reloads from `url` when selected.
+    asleep: bool,
     #[serde(skip)]
     file_key: Option<String>,
+    /// Last known address, to reload an asleep tab.
+    #[serde(skip)]
+    url: Url,
+    /// When the tab was last hidden. None while it's the active tab.
+    #[serde(skip)]
+    hidden_since: Option<Instant>,
+    /// Frozen by WebView2 (Windows).
+    #[serde(skip)]
+    suspended: bool,
 }
 
 #[derive(Default)]
@@ -52,10 +121,21 @@ struct TabState {
     next_id: u32,
     /// Colors of the active tab's Figma theme, from `THEME_JS`.
     theme: Option<serde_json::Value>,
+    /// Hidden time after which a tab is put to sleep. None: never.
+    sleep_after: Option<Duration>,
 }
 
-#[derive(Default)]
 pub struct Tabs(Mutex<TabState>);
+
+impl Tabs {
+    pub fn new(settings: &crate::settings::Settings) -> Self {
+        let minutes = settings.sleep_tabs_after_minutes;
+        Self(Mutex::new(TabState {
+            sleep_after: (minutes > 0).then(|| Duration::from_secs(minutes * 60)),
+            ..TabState::default()
+        }))
+    }
+}
 
 /// Reads Figma's theme colors. Figma sets `data-preferred-theme` on <body>
 /// and defines its palette as CSS variables there; FigJam and Dev Mode
@@ -130,11 +210,20 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             id,
             title: String::new(),
             kind: if id == HOME_ID { "home" } else { kind(&url) },
+            asleep: false,
             file_key: key,
+            url: url.clone(),
+            hidden_since: None,
+            suspended: false,
         });
         id
     };
+    create_webview(app, id, url)?;
+    select(app, id)
+}
 
+/// Loads tab `id`'s webview, for a new tab or one waking up.
+fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     let window = app.get_window("main").expect("main window exists");
     let (nav_app, popup_app, title_app) = (app.clone(), app.clone(), app.clone());
     #[allow(unused_mut)]
@@ -148,7 +237,8 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         })
         .on_document_title_changed(move |webview, title| {
             on_title_changed(&title_app, id, &webview, &title)
-        });
+        })
+        .initialization_script(BEFOREUNLOAD_JS);
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT);
@@ -162,7 +252,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         LogicalPosition::new(0.0, TAB_BAR_HEIGHT),
         content_size(&window)?,
     )?;
-    select(app, id)
+    Ok(())
 }
 
 /// `open` from a webview callback. Those run on the main thread, and
@@ -221,30 +311,53 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
             return;
         };
         tab.title = title.strip_suffix(" – Figma").unwrap_or(title).to_owned();
-        if let Some(url) = url.filter(|_| id != HOME_ID) {
-            tab.kind = kind(&url);
-            tab.file_key = file_key(&url);
+        if let Some(url) = url {
+            if id != HOME_ID {
+                tab.kind = kind(&url);
+                tab.file_key = file_key(&url);
+            }
+            tab.url = url;
         }
     }
     push_state(app);
 }
 
 pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
-    let previous = {
+    let (previous, wake) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-        if !state.tabs.iter().any(|tab| tab.id == id) {
+        let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == id) else {
             return Ok(());
+        };
+        tab.hidden_since = None;
+        tab.suspended = false;
+        let wake = std::mem::take(&mut tab.asleep).then(|| tab.url.clone());
+        let previous = std::mem::replace(&mut state.active, id);
+        if previous != id {
+            if let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == previous) {
+                tab.hidden_since = Some(Instant::now());
+            }
         }
-        std::mem::replace(&mut state.active, id)
+        (previous, wake)
     };
+    if let Some(url) = wake {
+        // Fails if the old webview is still closing. Stay asleep, so
+        // selecting the tab again retries.
+        if create_webview(app, id, url).is_err() {
+            with_tab(app, id, |tab| tab.asleep = true);
+        }
+    }
     if let Some(webview) = app.get_webview(&label(id)) {
         webview.show()?;
         webview.set_focus()?;
+        #[cfg(windows)]
+        crate::webview2::on_shown(&webview);
     }
     sync_theme(app);
     if previous != id {
         if let Some(webview) = app.get_webview(&label(previous)) {
             webview.hide()?;
+            #[cfg(windows)]
+            crate::webview2::on_hidden(&webview);
         }
     }
     push_state(app);
@@ -294,6 +407,101 @@ pub fn cycle(app: &AppHandle, offset: isize) -> tauri::Result<()> {
 
 pub fn new_tab(app: &AppHandle) -> tauri::Result<()> {
     open(app, HOME_URL.parse().unwrap())
+}
+
+/// Runs `f` on tab `id`, if it's still open.
+fn with_tab<T>(app: &AppHandle, id: u32, f: impl FnOnce(&mut Tab) -> T) -> Option<T> {
+    let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+    state.tabs.iter_mut().find(|tab| tab.id == id).map(f)
+}
+
+#[derive(Clone, Copy)]
+enum Rest {
+    #[cfg(windows)]
+    Suspend,
+    Sleep,
+}
+
+/// Freezes or closes tabs that have been hidden long enough. Call
+/// periodically.
+pub fn rest_idle(app: &AppHandle) {
+    let now = Instant::now();
+    let due: Vec<(u32, Instant, Rest, bool)> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state
+            .tabs
+            .iter()
+            .filter_map(|tab| {
+                let since = tab.hidden_since.filter(|_| !tab.asleep)?;
+                let hidden = now - since;
+                if state.sleep_after.is_some_and(|after| hidden >= after) {
+                    return Some((tab.id, since, Rest::Sleep, tab.suspended));
+                }
+                #[cfg(windows)]
+                if !tab.suspended && hidden >= SUSPEND_AFTER {
+                    return Some((tab.id, since, Rest::Suspend, false));
+                }
+                None
+            })
+            .collect()
+    };
+    for (id, since, rest, suspended) in due {
+        let Some(webview) = app.get_webview(&label(id)) else {
+            continue;
+        };
+        // A frozen page can't answer, and hasn't changed since it last said
+        // it could rest.
+        if suspended {
+            rest_now(app, id, since, rest);
+            continue;
+        }
+        let app = app.clone();
+        let _ = webview.eval_with_callback(CAN_REST_JS, move |json| {
+            if json == "true" {
+                // Not from inside the webview's own callback.
+                let app = app.clone();
+                std::thread::spawn(move || rest_now(&app, id, since, rest));
+            }
+        });
+    }
+}
+
+/// Applies `rest` to tab `id`, unless it was shown again after `since`.
+fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
+    let Some(webview) = app.get_webview(&label(id)) else {
+        return;
+    };
+    let still_hidden = move |tab: &Tab| tab.hidden_since == Some(since) && !tab.asleep;
+    match rest {
+        #[cfg(windows)]
+        Rest::Suspend => {
+            if with_tab(app, id, |tab| still_hidden(tab)) != Some(true) {
+                return;
+            }
+            let app = app.clone();
+            crate::webview2::try_suspend(&webview, move |ok| {
+                with_tab(&app, id, |tab| tab.suspended = ok && still_hidden(tab));
+            });
+        }
+        Rest::Sleep => {
+            let url = webview.url().ok();
+            let slept = with_tab(app, id, |tab| {
+                if !still_hidden(tab) {
+                    return false;
+                }
+                tab.asleep = true;
+                tab.suspended = false;
+                if let Some(url) = url {
+                    tab.url = url;
+                }
+                true
+            });
+            if slept == Some(true) {
+                let _ = webview.close();
+                push_state(app);
+            }
+        }
+    }
 }
 
 /// Matches the tab bar to the active tab's Figma theme. Runs on tab switch
