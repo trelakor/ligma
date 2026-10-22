@@ -1,0 +1,209 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Ligma</title>
+<!-- Tab bar. Fills the window, but only the top 40px are visible: Figma tabs
+     are child webviews laid over the rest (see src-tauri/src/tabs.rs). -->
+<style>
+  :root {
+    --bar: #383838;
+    --hover: #424242;
+    --active: #2c2c2c;
+    --divider: #4d4d4d;
+    --text: #b3b3b3;
+    --text-active: #fff;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; overflow: hidden; background: var(--active); }
+  body {
+    font: 500 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Inter", sans-serif;
+    color: var(--text);
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  #bar {
+    display: flex;
+    height: 40px;
+    padding-left: 78px; /* traffic lights */
+    background: var(--bar);
+  }
+  body.fullscreen #bar, body:not(.macos) #bar { padding-left: 0; }
+  /* Window controls where there's no native title bar (Windows, Linux). */
+  .control {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 46px;
+    color: var(--text-active);
+  }
+  .control:hover { background: var(--hover); }
+  .control.close-window:hover { background: #c42b1c; color: #fff; }
+  .tab, #home, #new {
+    position: relative;
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+  }
+  .tab:hover, #home:hover, #new:hover { background: var(--hover); }
+  .tab.active, #home.active { background: var(--active); color: var(--text-active); }
+  #home { width: 40px; }
+  /* Width follows the title, up to max-width. Once the bar is full,
+     tabs switch to equal widths (see `crowded` in render). */
+  .tab {
+    flex: 0 1 auto;
+    min-width: 48px;
+    max-width: 240px;
+    gap: 8px;
+    padding: 0 8px 0 12px;
+    justify-content: flex-start;
+  }
+  /* Dividers between inactive neighbours. */
+  #home::after, .tab::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    top: 12px;
+    bottom: 12px;
+    width: 1px;
+    background: var(--divider);
+  }
+  .active::after, .before-active::after { display: none; }
+  .icon { flex: none; width: 16px; height: 16px; }
+  .tab.active > .icon { color: var(--accent, currentColor); }
+  .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .close {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    visibility: hidden;
+  }
+  .tab:hover .close, .tab.active .close { visibility: visible; }
+  .close:hover { background: rgba(255, 255, 255, 0.1); }
+  #new { width: 36px; }
+  .crowded .tab { flex: 1 1 0; }
+  /* Always leave room to drag the window. */
+  #drag { flex: 1; min-width: 48px; }
+</style>
+</head>
+<body>
+<div id="bar" data-tauri-drag-region></div>
+<script>
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+
+  const svg = (body, size = 16) =>
+    `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+
+  const ICONS = {
+    home: svg('<path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/>'),
+    design: svg('<path d="M8 2.5 12.5 7 8 13.5 3.5 7z"/><circle cx="8" cy="7.5" r="1.2"/><path d="M8 8.7v4.8"/>'),
+    board: svg('<path d="M3 3h10v6.5L9.5 13H3z"/><path d="M13 9.5H9.5V13"/>'),
+    slides: svg('<rect x="2.5" y="3.5" width="11" height="8" rx="1"/><path d="M8 11.5v2M5.5 13.5h5"/>'),
+    proto: svg('<path d="M5 3.5v9l7-4.5z"/>'),
+    make: svg('<path d="M3 13 9.5 6.5M8 3l1.5 2L12 5.5 10 7l.5 2.5-2-1.5-2 1.5L7 7 5 5.5 7.5 5z"/>'),
+    site: svg('<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.6 1.6 2.3 3.4 2.3 5.5S9.6 11.9 8 13.5C6.4 11.9 5.7 10.1 5.7 8S6.4 4.1 8 2.5"/>'),
+    buzz: svg('<rect x="3" y="2.5" width="10" height="11" rx="1"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/>'),
+    page: svg('<path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M9.5 2.5V5H12"/>'),
+    close: svg('<path d="m5 5 6 6M11 5l-6 6"/>', 12),
+    plus: svg('<path d="M8 3.5v9M3.5 8h9"/>'),
+  };
+
+  const ACCENTS = {
+    design: "#0d99ff",
+    proto: "#0d99ff",
+    board: "#9747ff",
+    slides: "#ffa629",
+    make: "#14ae5c",
+    site: "#0d99ff",
+    buzz: "#ffa629",
+  };
+
+  const bar = document.getElementById("bar");
+
+  const el = (tag, props, html = "") => {
+    const node = Object.assign(document.createElement(tag), props);
+    if (html) node.innerHTML = html;
+    return node;
+  };
+
+  // Figma theme colors (see THEME_JS in tabs.rs) onto the bar's variables.
+  const THEME_VARS = {
+    "--bar": "bgSecondary",
+    "--hover": "bgTertiary",
+    "--active": "bg",
+    "--divider": "border",
+    "--text": "textSecondary",
+    "--text-active": "text",
+  };
+
+  const CONTROLS = {
+    minimize: svg('<path d="M3 8h10"/>', 10),
+    maximize: svg('<rect x="3.5" y="3.5" width="9" height="9"/>', 10),
+    close: svg('<path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/>', 10),
+  };
+
+  window.render = ({ tabs, active, fullscreen, theme, platform }) => {
+    document.body.classList.toggle("fullscreen", fullscreen);
+    document.body.classList.toggle("macos", platform === "macos");
+    for (const [cssVar, key] of Object.entries(THEME_VARS)) {
+      if (theme?.[key]) document.documentElement.style.setProperty(cssVar, theme[key]);
+    }
+    const activeIndex = tabs.findIndex((tab) => tab.id === active);
+    bar.replaceChildren();
+
+    tabs.forEach((tab, index) => {
+      const classes = [];
+      if (tab.id === active) classes.push("active");
+      if (index === activeIndex - 1) classes.push("before-active");
+
+      if (tab.kind === "home") {
+        const home = el("div", { id: "home", className: classes.join(" "), title: "Home" }, ICONS.home);
+        home.addEventListener("mousedown", (e) => e.button === 0 && invoke("select_tab", { id: tab.id }));
+        bar.append(home);
+        return;
+      }
+
+      const node = el("div", { className: ["tab", ...classes].join(" "), title: tab.title });
+      node.style.setProperty("--accent", ACCENTS[tab.kind] ?? "currentColor");
+      node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
+      node.append(el("span", { className: "title", textContent: tab.title || "Loading…" }));
+      const close = el("div", { className: "close", title: "Close tab" }, ICONS.close);
+      node.append(close);
+
+      node.addEventListener("mousedown", (e) => {
+        if (e.button === 0 && !close.contains(e.target)) invoke("select_tab", { id: tab.id });
+      });
+      // Middle click closes, like the desktop app.
+      node.addEventListener("auxclick", (e) => e.button === 1 && invoke("close_tab", { id: tab.id }));
+      close.addEventListener("click", () => invoke("close_tab", { id: tab.id }));
+      bar.append(node);
+    });
+
+    const plus = el("div", { id: "new", title: "New tab" }, ICONS.plus);
+    plus.addEventListener("click", () => invoke("open_new_tab"));
+    const drag = el("div", { id: "drag" });
+    drag.setAttribute("data-tauri-drag-region", "");
+    bar.append(plus, drag);
+    if (platform !== "macos") {
+      for (const [action, icon] of Object.entries(CONTROLS)) {
+        const control = el("div", { className: `control ${action}-window` }, icon);
+        control.addEventListener("click", () => invoke("window_control", { action }));
+        bar.append(control);
+      }
+    }
+
+    // Content-sized tabs only while they fit. Once the drag area is down to
+    // its minimum, the bar is full.
+    bar.classList.remove("crowded");
+    bar.classList.toggle("crowded", drag.getBoundingClientRect().width <= 48);
+  };
+
+  invoke("tab_bar_ready");
+</script>
+</body>
+</html>
