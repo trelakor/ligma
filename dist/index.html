@@ -72,6 +72,12 @@
     background: var(--divider);
   }
   .active::after, .before-active::after { display: none; }
+  /* Without traffic lights, Home sits flush left above Figma's nav rail
+     (48px plus its 1px border): match its width and run the divider down
+     into the rail's border. */
+  body:not(.macos) #home { width: 49px; }
+  body:not(.macos) #home::after { top: 0; bottom: 0; }
+  body:not(.macos) #home.before-active::after { display: block; }
   .icon { flex: none; width: 16px; height: 16px; }
   .emoji { font-size: 14px; line-height: 16px; text-align: center; }
   .tab.active > .icon { color: var(--accent, currentColor); }
@@ -194,6 +200,8 @@
   };
 
   const CONTROLS = {
+    // Settings lives in the app menu on macOS; elsewhere it's a button here.
+    settings: svg('<g transform="scale(.6667)" stroke-width="1.6"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></g>', 14),
     minimize: svg('<path d="M3 8h10"/>', 10),
     maximize: svg('<rect x="3.5" y="3.5" width="9" height="9"/>', 10),
     close: svg('<path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/>', 10),
@@ -326,6 +334,7 @@
     if (platform !== "macos") {
       for (const [action, icon] of Object.entries(CONTROLS)) {
         const control = el("div", { className: `control ${action}-window` }, icon);
+        if (action === "settings") control.title = "Settings";
         control.addEventListener("click", () => invoke("window_control", { action }));
         bar.append(control);
       }
