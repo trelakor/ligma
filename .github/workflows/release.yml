@@ -1,6 +1,8 @@
 # Builds Ligma for macOS (universal) and Windows and publishes a GitHub
 # release named after the version in src-tauri/tauri.conf.json.
 # Run it by pushing a tag like v0.1.0, or manually from the Actions tab.
+# The TAURI_SIGNING_PRIVATE_KEY secret signs the update packages, and the
+# release gets a latest.json that installed apps check for updates.
 name: Release
 
 on:
@@ -45,6 +47,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: v__VERSION__
           releaseName: Ligma v__VERSION__
@@ -58,6 +62,7 @@ jobs:
             The app is not notarized. After dragging it to Applications, run
             `xattr -dr com.apple.quarantine /Applications/Ligma.app` once, or allow it in
             System Settings → Privacy & Security → Open Anyway.
+            Ligma updates itself after that, so this is only needed for the first install.
 
             **Windows**: download `Ligma_*_x64-setup.exe` (or the `.msi`).
             The installer is not signed. If SmartScreen warns, choose More info → Run anyway.

@@ -8,6 +8,7 @@ mod settings;
 mod tabs;
 #[cfg(target_os = "macos")]
 mod titlebar;
+mod updater;
 #[cfg(windows)]
 mod webview2;
 #[cfg(target_os = "macos")]
@@ -147,6 +148,8 @@ fn main() {
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .on_menu_event(|app, event| {
             let _ = match event.id().as_ref() {
                 "new-tab" => tabs::new_tab(app),
@@ -168,6 +171,7 @@ fn main() {
             let settings = settings::load(app.handle());
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(&settings));
+            updater::start(app.handle());
 
             // The window's own webview is the tab bar. Figma tabs are added
             // as child webviews below it.
@@ -227,6 +231,8 @@ fn main() {
                 if let Some(mut agent) = app.state::<FontAgent>().0.lock().unwrap().take() {
                     let _ = agent.kill();
                 }
+                // An update the user chose to install later.
+                updater::install(app);
             }
         });
 }
