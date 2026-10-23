@@ -1982,7 +1982,10 @@ dependencies = [
 name = "ligma"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "discord-rich-presence",
+ "libc",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",
