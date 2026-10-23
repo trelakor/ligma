@@ -41,6 +41,7 @@ npm run icon
 - With `"restoreTabs": true` (Settings > Reopen tabs from last time), Ligma reopens your tabs, pins and the tab you had open. They're kept in `session.json` next to `settings.json`. Only the tab you had open loads; the others load when selected.
 - Shortcuts (macOS): `Cmd+T` new tab, `Cmd+W` close tab, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. Middle-click also closes a tab.
 - Links inside `figma.com` stay in the app. All other web links open in the default browser.
+- Continue with Google signs in through your browser, like the Figma desktop app, because Google doesn't allow sign-in inside embedded webviews. Ligma opens Figma's approval page in the browser. After you approve, the browser opens a `ligma://` link that hands the sign-in back to the tab you started from. Ligma only accepts that link while a sign-in it started is waiting (up to 15 minutes), so a link from anywhere else can't sign you into another account. A second Ligma launched by the link passes it on and exits (see `src-tauri/src/auth.rs`).
 - Window size and position are saved between launches.
 - Drag-and-drop goes to Figma, so you can drop images and files onto the canvas.
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
