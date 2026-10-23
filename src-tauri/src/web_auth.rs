@@ -96,7 +96,7 @@ pub fn start(app: &AppHandle, url: Url) {
             // Off the main thread: it may open a tab.
             std::thread::spawn(move || match link.as_deref().map(Url::parse) {
                 Some(Ok(link)) => crate::auth::on_figma_link(&app, &link),
-                _ => crate::auth::cancel(&app, code != CANCELED),
+                _ => crate::auth::cancel(&app, (code != CANCELED).then_some(crate::auth::START_FAILED)),
             });
         });
         let ns_url: *mut AnyObject = msg_send![class!(NSURL), URLWithString: ns_string(url.as_str())];
@@ -108,7 +108,7 @@ pub fn start(app: &AppHandle, url: Url) {
             completionHandler: &*completion
         ];
         if session.is_null() {
-            crate::auth::cancel(&app, true);
+            crate::auth::cancel(&app, Some(crate::auth::START_FAILED));
             return;
         }
         let _: () = msg_send![session, setPresentationContextProvider: anchor_provider()];
@@ -122,7 +122,7 @@ pub fn start(app: &AppHandle, url: Url) {
         }
         let started: Bool = msg_send![session, start];
         if !started.as_bool() {
-            crate::auth::cancel(&app, true);
+            crate::auth::cancel(&app, Some(crate::auth::START_FAILED));
         }
     });
 }
