@@ -41,6 +41,7 @@ npm run icon
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
 - Local fonts: Figma loads installed fonts through its font helper, `FigmaAgent`. If the helper isn't running, Ligma starts it (from `~/Library/Application Support/Figma/FigmaAgent.app` on macOS, `%LOCALAPPDATA%/FigmaAgent/figma_agent.exe` on Windows) and stops it on quit. The helper is installed by the Figma desktop app or [Figma's font installer](https://www.figma.com/downloads/). On Windows, Figma also waits for the browser's Local Network Access permission, which WebView2 reports as "prompt" but never asks for, so Ligma reports it as granted to Figma tabs.
 - Background tabs give memory back (see [Memory](#memory)).
+- Discord Rich Presence shows "Ligma" with the open file ("Editing …") and the selected tool. Turn it off with `"discordRichPresence": false` in `settings.json` (see [Memory](#memory) for where it lives).
 - Figma pages have no access to Tauri IPC. Only the local tab bar has permissions (`src-tauri/capabilities/tab-bar.json`).
 
 ## Memory
