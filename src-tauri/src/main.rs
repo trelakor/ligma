@@ -1,6 +1,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod auth;
 mod downloads;
 mod presence;
 #[cfg(target_os = "macos")]
@@ -19,6 +20,7 @@ use std::process::Child;
 use std::sync::Mutex;
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 /// Font agent process started by Ligma, killed again on exit.
 struct FontAgent(Mutex<Option<Child>>);
@@ -152,6 +154,15 @@ fn main() {
     let builder = builder.menu(build_menu);
 
     builder
+        // First, so a second launch exits before anything else starts. It
+        // brings a `ligma://` link to `on_open_url` and this window forward.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(window) = app.get_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         // Settings has a fixed size, which grows with new options.
         .plugin(
@@ -193,6 +204,21 @@ fn main() {
             #[cfg(target_os = "macos")]
             wkwebview::disable_screen_time();
             app.manage(FontAgent(Mutex::new(start_font_agent())));
+            app.manage(auth::Pending::default());
+            // The installer registers `ligma://` too; this keeps it pointing
+            // at this copy of Ligma. macOS reads it from Info.plist.
+            #[cfg(windows)]
+            let _ = app.deep_link().register_all();
+            let handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                // Off the main thread: it may open a tab.
+                let app = handle.clone();
+                std::thread::spawn(move || {
+                    for url in event.urls() {
+                        auth::on_open_url(&app, &url);
+                    }
+                });
+            });
             let settings = settings::load(app.handle());
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(&settings));

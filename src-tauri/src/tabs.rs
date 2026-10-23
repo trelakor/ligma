@@ -459,14 +459,15 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .disable_drag_drop_handler()
         .on_navigation(move |url| on_navigation(&nav_app, id, url))
         .on_new_window(move |url, _| {
-            on_new_window(&popup_app, url);
+            on_new_window(&popup_app, id, url);
             NewWindowResponse::Deny
         })
         .on_download(crate::downloads::on_download)
         .on_document_title_changed(move |webview, title| {
             on_title_changed(&title_app, id, &webview, &title)
         })
-        .initialization_script(BEFOREUNLOAD_JS);
+        .initialization_script(BEFOREUNLOAD_JS)
+        .initialization_script(crate::auth::PAGE_JS);
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
@@ -509,6 +510,14 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         }
         return false;
     }
+    if url.host_str() == Some(crate::auth::SIGNAL_HOST) {
+        crate::auth::on_signal(app, id, url);
+        return false;
+    }
+    if crate::auth::is_google_sign_in(url) {
+        sign_in_later(app, id);
+        return false;
+    }
     match url.scheme() {
         "http" | "https" => {}
         // blob:, data:, about: and friends stay in the page.
@@ -529,8 +538,21 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
     true
 }
 
-fn on_new_window(app: &AppHandle, url: Url) {
-    if is_figma(&url) {
+/// Has tab `id` start Google sign-in in the browser (see auth.rs). Not from
+/// within the webview's own callback, which is still deciding on the page.
+fn sign_in_later(app: &AppHandle, id: u32) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Some(webview) = app.get_webview(&label(id)) {
+            crate::auth::start(&webview);
+        }
+    });
+}
+
+fn on_new_window(app: &AppHandle, id: u32, url: Url) {
+    if crate::auth::is_google_sign_in(&url) {
+        sign_in_later(app, id);
+    } else if is_figma(&url) {
         open_later(app, url);
     } else if matches!(url.scheme(), "http" | "https") {
         open_in_browser(app, &url);
@@ -834,6 +856,37 @@ fn reload(app: &AppHandle, id: u32) {
         }
         None => {}
     }
+}
+
+/// Loads `url` in tab `id` and selects it, or in a new tab if `id` is
+/// gone. A frozen tab is put to sleep first, like in `reload`, and wakes
+/// with `url`.
+pub fn navigate(app: &AppHandle, id: u32, url: Url) {
+    let webview = app.get_webview(&label(id));
+    let live = with_tab(app, id, |tab| {
+        if tab.suspended && !tab.asleep {
+            tab.asleep = true;
+            tab.suspended = false;
+            tab.revealing = false;
+        }
+        tab.snapshot = None;
+        tab.url = url.clone();
+        !tab.asleep
+    });
+    match (live, webview) {
+        (None, _) => {
+            let _ = open(app, url);
+            return;
+        }
+        (Some(true), Some(webview)) => {
+            let _ = webview.navigate(url);
+        }
+        (Some(false), Some(webview)) => {
+            let _ = webview.close();
+        }
+        _ => {}
+    }
+    let _ = select(app, id);
 }
 
 /// Address tab `id` shows now, or showed when it went to sleep.

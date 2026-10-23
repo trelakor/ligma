@@ -17,6 +17,11 @@ discord-rich-presence = "1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
+# ligma:// links, which bring Google sign-in back from the browser
+# (src/auth.rs). On Windows a link starts a second Ligma, which hands it to
+# the running one.
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # The dialog plugin's own rfd, for the synchronous dialogs downloads need
 # in src/downloads.rs.
 rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
