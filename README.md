@@ -46,8 +46,8 @@ npm run icon
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
 - Local fonts: Figma loads installed fonts through its font helper, `FigmaAgent`. If the helper isn't running, Ligma starts it (from `~/Library/Application Support/Figma/FigmaAgent.app` on macOS, `%LOCALAPPDATA%/FigmaAgent/figma_agent.exe` on Windows) and stops it on quit. The helper is installed by the Figma desktop app or [Figma's font installer](https://www.figma.com/downloads/). On Windows, Figma also waits for the browser's Local Network Access permission, which WebView2 reports as "prompt" but never asks for, so Ligma reports it as granted to Figma tabs.
 - Background tabs give memory back (see [Memory](#memory)).
-- Discord Rich Presence shows "Ligma" with the open file ("Editing …") and the selected tool. The tool's icon (`assets/tools`) is the small image: blue while Ligma has focus, grey when you switch away. Turn it off in Settings, or with `"discordRichPresence": false` in `settings.json` (see [Memory](#memory) for where it lives).
-- Settings (macOS: Ligma > Settings…, `Cmd+,`) holds the options from `settings.json`. Changes are saved and apply right away.
+- Discord Rich Presence shows "Ligma" with the open file ("Editing …") and the selected tool. The tool's icon (`assets/tools`) is the small image: blue while Ligma has focus, grey when you switch away. Settings can hide the file name (it then says "Editing a file") or the tool, or turn it off; in `settings.json` these are `"discordShowFile"`, `"discordShowTool"` and `"discordRichPresence"` (see [Memory](#memory) for where it lives).
+- Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimize) holds the options from `settings.json`. Changes are saved and apply right away.
 - Figma pages have no access to Tauri IPC. Only the local tab bar has permissions (`src-tauri/capabilities/tab-bar.json`).
 
 ## Memory
@@ -66,7 +66,7 @@ Freezing and sleeping are skipped while you're offline or while Figma's `beforeu
 { "sleepTabsAfterMinutes": 30, "maxHiddenTabsLoaded": null, "reloadSnapshots": false }
 ```
 
-On macOS, Ligma > Settings… changes these without a restart. After editing the file by hand, restart Ligma. `"maxHiddenTabsLoaded": null` (the default) sets no limit; `1` keeps only the last tab you left loaded and `0` only the one you're looking at, trading reloads for memory. `"reloadSnapshots": true` turns on the snapshots. With `"sleepTabsAfterMinutes": 0` every tab stays loaded, whatever the limit or memory pressure. To see memory use on Windows, summed over Ligma and its WebView2 processes:
+The Settings window changes these without a restart. After editing the file by hand, restart Ligma. `"maxHiddenTabsLoaded": null` (the default) sets no limit; `1` keeps only the last tab you left loaded and `0` only the one you're looking at, trading reloads for memory. `"reloadSnapshots": true` turns on the snapshots. With `"sleepTabsAfterMinutes": 0` every tab stays loaded, whatever the limit or memory pressure. To see memory use on Windows, summed over Ligma and its WebView2 processes:
 
 ```powershell
 ./scripts/measure-memory.ps1               # Ligma

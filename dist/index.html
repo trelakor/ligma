@@ -72,10 +72,10 @@
     background: var(--divider);
   }
   .active::after, .before-active::after { display: none; }
-  /* Without traffic lights, Home sits flush left above Figma's nav rail
-     (48px plus its 1px border): match its width and run the divider down
-     into the rail's border. */
-  body:not(.macos) #home { width: 49px; }
+  /* Without traffic lights, Home sits flush left above Figma's nav rail:
+     match its width (measured by THEME_JS in tabs.rs; 48px plus its 1px
+     border at 100%) and run the divider down into the rail's border. */
+  body:not(.macos) #home { width: var(--rail-width, 49px); }
   body:not(.macos) #home::after { top: 0; bottom: 0; }
   body:not(.macos) #home.before-active::after { display: block; }
   .icon { flex: none; width: 16px; height: 16px; }
@@ -286,6 +286,11 @@
     document.body.classList.toggle("macos", platform === "macos");
     for (const [cssVar, key] of Object.entries(THEME_VARS)) {
       if (theme?.[key]) document.documentElement.style.setProperty(cssVar, theme[key]);
+    }
+    // Home and the Recents page have no rail; keep the last width so Home
+    // doesn't change size when switching to them.
+    if (theme?.railWidth) {
+      document.documentElement.style.setProperty("--rail-width", `${theme.railWidth / devicePixelRatio}px`);
     }
     const activeIndex = tabs.findIndex((tab) => tab.id === active);
     bar.replaceChildren();

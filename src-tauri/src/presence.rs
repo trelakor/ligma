@@ -7,6 +7,7 @@
 //! app sends it the wanted status every second and it forwards changes,
 //! reconnecting whenever Discord is (re)started.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -61,8 +62,13 @@ struct Status {
     focused: bool,
 }
 
-/// Channel to the worker. None when presence is off.
-pub struct Presence(Mutex<Option<Sender<Status>>>);
+pub struct Presence {
+    /// Channel to the worker. None when presence is off.
+    tx: Mutex<Option<Sender<Status>>>,
+    /// `discordShowFile` and `discordShowTool`.
+    show_file: AtomicBool,
+    show_tool: AtomicBool,
+}
 
 fn worker(settings: &crate::settings::Settings) -> Option<Sender<Status>> {
     if CLIENT_ID.is_empty() || !settings.discord_rich_presence {
@@ -74,13 +80,20 @@ fn worker(settings: &crate::settings::Settings) -> Option<Sender<Status>> {
 }
 
 pub fn start(settings: &crate::settings::Settings) -> Presence {
-    Presence(Mutex::new(worker(settings)))
+    Presence {
+        tx: Mutex::new(worker(settings)),
+        show_file: AtomicBool::new(settings.discord_show_file),
+        show_tool: AtomicBool::new(settings.discord_show_tool),
+    }
 }
 
 /// Turns presence on or off. Dropping the channel stops the worker, which
 /// disconnects from Discord and so clears the status.
 pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
-    let mut tx = app.state::<Presence>().inner().0.lock().unwrap();
+    let presence = app.state::<Presence>();
+    presence.show_file.store(settings.discord_show_file, Ordering::Relaxed);
+    presence.show_tool.store(settings.discord_show_tool, Ordering::Relaxed);
+    let mut tx = presence.tx.lock().unwrap();
     if tx.is_some() != settings.discord_rich_presence {
         *tx = worker(settings);
     }
@@ -88,7 +101,8 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
 
 /// Reports the active tab to Discord. Call periodically.
 pub fn sync(app: &AppHandle) {
-    let Some(tx) = app.state::<Presence>().0.lock().unwrap().clone() else {
+    let presence = app.state::<Presence>();
+    let Some(tx) = presence.tx.lock().unwrap().clone() else {
         return;
     };
     // Not `get_webview_window`: that returns None once the window holds
@@ -101,6 +115,12 @@ pub fn sync(app: &AppHandle) {
         let _ = tx.send(Status { focused, ..Status::default() });
         return;
     };
+    // An empty name shows as "Editing a file".
+    let file = if presence.show_file.load(Ordering::Relaxed) { file } else { String::new() };
+    if !presence.show_tool.load(Ordering::Relaxed) {
+        let _ = tx.send(Status { file: Some(file), tool: None, focused });
+        return;
+    }
     let _ = webview.eval_with_callback(TOOL_JS, move |json| {
         let tool = serde_json::from_str::<Option<String>>(&json).ok().flatten();
         let _ = tx.send(Status { file: Some(file.clone()), tool, focused });

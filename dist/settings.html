@@ -94,11 +94,23 @@
     </span>
     <input type="checkbox" id="discord">
   </label>
+  <label class="row" id="discord-file-row">
+    <span class="label">Show file name
+      <div class="hint">When off, Discord says "Editing a file".</div>
+    </span>
+    <input type="checkbox" id="discord-file">
+  </label>
+  <label class="row" id="discord-tool-row">
+    <span class="label">Show selected tool
+      <div class="hint">The tool's name and icon.</div>
+    </span>
+    <input type="checkbox" id="discord-tool">
+  </label>
 </div>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord"];
+  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-tool"];
   // Snapshots only exist on macOS.
   $("snapshots-row").hidden = !navigator.userAgent.includes("Mac");
 
@@ -119,6 +131,8 @@
     $("max-hidden").value = maxHidden;
     $("snapshots").checked = settings.reloadSnapshots;
     $("discord").checked = settings.discordRichPresence;
+    $("discord-file").checked = settings.discordShowFile;
+    $("discord-tool").checked = settings.discordShowTool;
     $("restore").checked = settings.restoreTabs;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
     for (const [id, enabled] of [
@@ -126,6 +140,8 @@
       ["limit-row", sleeping],
       ["max-hidden-row", sleeping && limited],
       ["snapshots-row", sleeping],
+      ["discord-file-row", settings.discordRichPresence],
+      ["discord-tool-row", settings.discordRichPresence],
     ]) {
       $(id).classList.toggle("disabled", !enabled);
       $(id).querySelector("input").disabled = !enabled;
@@ -146,6 +162,8 @@
       maxHiddenTabsLoaded: $("limit").checked ? maxHidden : null,
       reloadSnapshots: $("snapshots").checked,
       discordRichPresence: $("discord").checked,
+      discordShowFile: $("discord-file").checked,
+      discordShowTool: $("discord-tool").checked,
       restoreTabs: $("restore").checked,
     };
     show();
