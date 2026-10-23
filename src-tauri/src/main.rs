@@ -3,6 +3,8 @@
 
 mod auth;
 mod downloads;
+#[cfg(windows)]
+mod figma_scheme;
 mod presence;
 #[cfg(target_os = "macos")]
 mod pressure;
@@ -14,13 +16,14 @@ mod updater;
 #[cfg(windows)]
 mod webview2;
 #[cfg(target_os = "macos")]
+mod web_auth;
+#[cfg(target_os = "macos")]
 mod wkwebview;
 
 use std::process::Child;
 use std::sync::Mutex;
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_deep_link::DeepLinkExt;
 
 /// Font agent process started by Ligma, killed again on exit.
 struct FontAgent(Mutex<Option<Child>>);
@@ -155,14 +158,20 @@ fn main() {
 
     builder
         // First, so a second launch exits before anything else starts. It
-        // brings a `ligma://` link to `on_open_url` and this window forward.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        // brings this window forward, and on Windows the `figma://` link
+        // that started it to `figma_scheme`.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _| {
             if let Some(window) = app.get_window("main") {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
+            // Off the main thread: a link may open a tab.
+            #[cfg(windows)]
+            {
+                let app = app.clone();
+                std::thread::spawn(move || figma_scheme::on_args(&app, _args));
+            }
         }))
-        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         // Settings has a fixed size, which grows with new options.
         .plugin(
@@ -205,20 +214,13 @@ fn main() {
             wkwebview::disable_screen_time();
             app.manage(FontAgent(Mutex::new(start_font_agent())));
             app.manage(auth::Pending::default());
-            // The installer registers `ligma://` too; this keeps it pointing
-            // at this copy of Ligma. macOS reads it from Info.plist.
+            // A sign-in cut short by a crash may still have Figma's
+            // `figma://` borrowed.
             #[cfg(windows)]
-            let _ = app.deep_link().register_all();
-            let handle = app.handle().clone();
-            app.deep_link().on_open_url(move |event| {
-                // Off the main thread: it may open a tab.
-                let app = handle.clone();
-                std::thread::spawn(move || {
-                    for url in event.urls() {
-                        auth::on_open_url(&app, &url);
-                    }
-                });
-            });
+            {
+                figma_scheme::restore();
+                figma_scheme::claim_if_free();
+            }
             let settings = settings::load(app.handle());
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(&settings));
@@ -261,6 +263,12 @@ fn main() {
 
             tabs::layout(app.handle());
             tabs::restore(app.handle(), &settings)?;
+            // Started by a `figma://` link.
+            #[cfg(windows)]
+            {
+                let app = app.handle().clone();
+                std::thread::spawn(move || figma_scheme::on_args(&app, std::env::args().skip(1)));
+            }
 
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -282,6 +290,8 @@ fn main() {
                 if let Some(mut agent) = app.state::<FontAgent>().0.lock().unwrap().take() {
                     let _ = agent.kill();
                 }
+                #[cfg(windows)]
+                figma_scheme::restore();
                 // An update the user chose to install later.
                 updater::install(app);
             }
