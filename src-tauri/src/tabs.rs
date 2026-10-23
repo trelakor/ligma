@@ -53,6 +53,22 @@ const LOCAL_NETWORK_ACCESS_JS: &str = r#"(() => {
   };
 })();"#;
 
+/// Outside Safari, Figma moves a file name's leading emoji out of the page
+/// title and into the favicon (`#custom-emoji-favicon`). Put it back, so
+/// the tab bar can show it like on macOS.
+#[cfg(windows)]
+const TITLE_EMOJI_JS: &str = r#"(() => {
+  const title = Object.getOwnPropertyDescriptor(Document.prototype, "title");
+  Object.defineProperty(Document.prototype, "title", {
+    ...title,
+    set(value) {
+      const href = document.getElementById("custom-emoji-favicon")?.getAttribute("href") ?? "";
+      const emoji = /<text[^>]*>(.+?)<\/text>/s.exec(decodeURIComponent(href))?.[1];
+      title.set.call(this, emoji && !value.startsWith(emoji) ? `${emoji} ${value}` : value);
+    },
+  });
+})();"#;
+
 /// Figma's "Open in new tab" makes a `target="_blank"` link and clicks it
 /// from script, which WKWebView drops without asking `on_new_window`. Send
 /// those links to `on_navigation` instead, as a hidden iframe load of
@@ -453,7 +469,9 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     }
     #[cfg(windows)]
     {
-        builder = builder.initialization_script(LOCAL_NETWORK_ACCESS_JS);
+        builder = builder
+            .initialization_script(LOCAL_NETWORK_ACCESS_JS)
+            .initialization_script(TITLE_EMOJI_JS);
     }
     window.add_child(
         builder,
@@ -1220,6 +1238,7 @@ pub async fn window_control(webview: Webview, action: String) {
         "maximize" if window.is_maximized().unwrap_or(false) => window.unmaximize(),
         "maximize" => window.maximize(),
         "close" => window.close(),
+        "settings" => crate::settings::open_window(window.app_handle()),
         _ => Ok(()),
     };
 }

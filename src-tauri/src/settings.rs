@@ -3,7 +3,8 @@
 //! `~/Library/Application Support/dev.ligma.client` on macOS). Written
 //! with the defaults on first launch so there's a file to edit.
 //!
-//! The settings window (`dist/settings.html`, Ligma > Settings… on macOS)
+//! The settings window (`dist/settings.html`, Ligma > Settings… on macOS,
+//! the gear by the window controls elsewhere)
 //! edits the same file and applies each change right away.
 
 use std::sync::Mutex;
@@ -75,6 +76,9 @@ fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
 
 /// Opens the settings window, or focuses it if it's already open.
 pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
+    // The gear button's clicks can arrive together; one window between them.
+    static OPENING: Mutex<()> = Mutex::new(());
+    let _opening = OPENING.lock().unwrap();
     if let Some(window) = app.get_webview_window(WINDOW) {
         window.unminimize()?;
         return window.set_focus();
