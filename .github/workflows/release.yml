@@ -3,6 +3,9 @@
 # Run it by pushing a tag like v0.1.0, or manually from the Actions tab.
 # The TAURI_SIGNING_PRIVATE_KEY secret signs the update packages, and the
 # release gets a latest.json that installed apps check for updates.
+# The release notes come from scripts/release-notes.mjs: the version's
+# CHANGELOG.md section plus install steps naming its files. The run stops
+# before building if that section is missing or the tag isn't the version.
 name: Release
 
 on:
@@ -14,7 +17,32 @@ permissions:
   contents: write
 
 jobs:
+  notes:
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.notes.outputs.body }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - id: notes
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in src-tauri/tauri.conf.json."
+            exit 1
+          fi
+          {
+            echo "body<<RELEASE_NOTES_EOF"
+            node scripts/release-notes.mjs "$version"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   build:
+    needs: notes
     strategy:
       fail-fast: false
       matrix:
@@ -55,14 +83,4 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
-          releaseBody: |
-            Lightweight desktop app for Figma.
-
-            **macOS** (Apple Silicon and Intel): download `Ligma_*_universal.dmg`.
-            The app is not notarized. After dragging it to Applications, run
-            `xattr -dr com.apple.quarantine /Applications/Ligma.app` once, or allow it in
-            System Settings → Privacy & Security → Open Anyway.
-            Ligma updates itself after that, so this is only needed for the first install.
-
-            **Windows**: download `Ligma_*_x64-setup.exe` (or the `.msi`).
-            The installer is not signed. If SmartScreen warns, choose More info → Run anyway.
+          releaseBody: ${{ needs.notes.outputs.body }}
