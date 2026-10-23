@@ -73,6 +73,7 @@
   }
   .active::after, .before-active::after { display: none; }
   .icon { flex: none; width: 16px; height: 16px; }
+  .emoji { font-size: 14px; line-height: 16px; text-align: center; }
   .tab.active > .icon { color: var(--accent, currentColor); }
   /* Unloaded to save memory; reloads when selected. */
   .asleep:not(.active) > .icon, .asleep:not(.active) > .title { opacity: 0.5; }
@@ -89,7 +90,12 @@
   .tab:hover .close, .tab.active .close { visibility: visible; }
   .close:hover { background: rgba(255, 255, 255, 0.1); }
   #new { width: 36px; }
-  .crowded .tab { flex: 1 1 0; }
+  .crowded .tab:not(.pinned) { flex: 1 1 0; }
+  /* While a tab is dragged, the others slide out of its way. */
+  .dragging .tab { transition: transform 150ms ease; }
+  .dragging .tab.dragged { transition: none; z-index: 1; }
+  /* Pinned tabs show only their icon, like Home. */
+  .tab.pinned { flex: none; width: 38px; min-width: 38px; padding: 0; justify-content: center; }
   /* Always leave room to drag the window. */
   #drag { flex: 1; min-width: 48px; }
   /* Last image of a tab that's reloading after sleep, shown where its
@@ -136,9 +142,18 @@
   const svg = (body, size = 16) =>
     `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 
+  // The title's leading emoji, if any, and the rest of the title.
+  const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const splitEmoji = (title) => {
+    const first = graphemes.segment(title)[Symbol.iterator]().next().value?.segment ?? "";
+    if (!/\p{Emoji_Presentation}|\ufe0f|\p{Regional_Indicator}/u.test(first)) return ["", title];
+    const rest = title.slice(first.length).trimStart();
+    return rest ? [first, rest] : ["", title];
+  };
+
   const ICONS = {
     home: svg('<path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/>'),
-    design: svg('<path d="M8 2.5 12.5 7 8 13.5 3.5 7z"/><circle cx="8" cy="7.5" r="1.2"/><path d="M8 8.7v4.8"/>'),
+    design: svg('<g transform="rotate(135 8 8)"><path d="M8 13.5 3.5 7a4.5 4.5 0 0 1 9 0z"/><circle cx="8" cy="7" r="1.2"/><path d="M8 8.2v5.3"/></g>'),
     board: svg('<path d="M3 3h10v6.5L9.5 13H3z"/><path d="M13 9.5H9.5V13"/>'),
     slides: svg('<rect x="2.5" y="3.5" width="11" height="8" rx="1"/><path d="M8 11.5v2M5.5 13.5h5"/>'),
     proto: svg('<path d="M5 3.5v9l7-4.5z"/>'),
@@ -184,7 +199,81 @@
     close: svg('<path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/>', 10),
   };
 
-  window.render = ({ tabs, active, fullscreen, theme, platform }) => {
+  // Dragging a tab moves it among its group, the pinned tabs or the rest.
+  // `drag` holds the press until it moves DRAG_START px, then the drag;
+  // renders wait until the drop, so the tabs don't change under it.
+  const DRAG_START = 4;
+  let drag = null;
+  let deferred = null;
+  const groupNodes = (pinned) => [...bar.querySelectorAll(pinned ? ".tab.pinned" : ".tab:not(.pinned)")];
+
+  const startPress = (e, tab) => {
+    if (e.button === 0) drag = { id: tab.id, pinned: tab.pinned, startX: e.clientX, moving: false };
+  };
+
+  bar.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    // Released outside the bar before the drag began.
+    if (!(e.buttons & 1) && !drag.moving) {
+      drag = null;
+      return;
+    }
+    let dx = e.clientX - drag.startX;
+    if (!drag.moving) {
+      if (Math.abs(dx) < DRAG_START) return;
+      const nodes = groupNodes(drag.pinned);
+      drag.from = nodes.findIndex((node) => Number(node.dataset.id) === drag.id);
+      if (drag.from < 0 || nodes.length < 2) {
+        drag = null;
+        return;
+      }
+      drag.moving = true;
+      drag.rects = nodes.map((node) => node.getBoundingClientRect());
+      drag.to = drag.from;
+      // Keep getting the pointer if it leaves the bar.
+      bar.setPointerCapture(e.pointerId);
+      bar.classList.add("dragging");
+    }
+    const { from, rects } = drag;
+    const me = rects[from];
+    dx = Math.max(rects[0].left - me.left, Math.min(rects[rects.length - 1].right - me.right, dx));
+    // A neighbour gives way once the dragged tab's leading edge passes its
+    // middle, so a wide tab can still pass a narrow one at either end.
+    const mid = (rect) => rect.left + rect.width / 2;
+    const before = rects.filter((rect, i) => i < from && me.left + dx < mid(rect)).length;
+    const after = rects.filter((rect, i) => i > from && me.right + dx > mid(rect)).length;
+    drag.to = from - before + after;
+    groupNodes(drag.pinned).forEach((node, i) => {
+      const shift = i === from ? dx
+        : from < i && i <= drag.to ? -me.width
+        : drag.to <= i && i < from ? me.width
+        : 0;
+      node.classList.toggle("dragged", i === from);
+      node.style.transform = shift ? `translateX(${shift}px)` : "";
+    });
+  });
+
+  const endPress = () => {
+    const done = drag;
+    drag = null;
+    if (!done?.moving) return;
+    bar.classList.remove("dragging");
+    // The tab stays where it was dropped until the reply renders it there.
+    const state = deferred;
+    deferred = null;
+    if (done.to !== done.from) invoke("move_tab_to", { id: done.id, index: done.to });
+    else if (state) renderBar(state);
+    else groupNodes(done.pinned).forEach((node) => (node.style.transform = ""));
+  };
+  bar.addEventListener("pointerup", endPress);
+  bar.addEventListener("pointercancel", endPress);
+
+  window.render = (state) => {
+    if (drag?.moving) deferred = state;
+    else renderBar(state);
+  };
+
+  const renderBar = ({ tabs, active, fullscreen, theme, platform }) => {
     document.body.classList.toggle("fullscreen", fullscreen);
     document.body.classList.toggle("macos", platform === "macos");
     for (const [cssVar, key] of Object.entries(THEME_VARS)) {
@@ -202,23 +291,30 @@
       if (tab.kind === "home") {
         const home = el("div", { id: "home", className: classes.join(" "), title: "Home" }, ICONS.home);
         home.addEventListener("mousedown", (e) => e.button === 0 && invoke("select_tab", { id: tab.id }));
+        home.addEventListener("contextmenu", () => invoke("tab_menu", { id: tab.id }));
         bar.append(home);
         return;
       }
 
+      if (tab.pinned) classes.push("pinned");
       const node = el("div", { className: ["tab", ...classes].join(" "), title: tab.asleep ? `${tab.title} (asleep)` : tab.title });
+      node.dataset.id = tab.id;
       node.style.setProperty("--accent", ACCENTS[tab.kind] ?? "currentColor");
-      node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
-      node.append(el("span", { className: "title", textContent: tab.title || "Loading…" }));
+      // A file named "🎨 Thumbnails" shows 🎨 as its icon instead.
+      const [emoji, title] = splitEmoji(tab.title);
+      if (emoji) node.append(el("span", { className: "icon emoji", textContent: emoji }));
+      else node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
       const close = el("div", { className: "close", title: "Close tab" }, ICONS.close);
-      node.append(close);
+      if (!tab.pinned) node.append(el("span", { className: "title", textContent: title || "Loading…" }), close);
 
+      node.addEventListener("pointerdown", (e) => !close.contains(e.target) && startPress(e, tab));
       node.addEventListener("mousedown", (e) => {
         if (e.button === 0 && !close.contains(e.target)) invoke("select_tab", { id: tab.id });
       });
       // Middle click closes, like the desktop app.
       node.addEventListener("auxclick", (e) => e.button === 1 && invoke("close_tab", { id: tab.id }));
       close.addEventListener("click", () => invoke("close_tab", { id: tab.id }));
+      node.addEventListener("contextmenu", () => invoke("tab_menu", { id: tab.id }));
       bar.append(node);
     });
 
@@ -251,6 +347,9 @@
     snapshot.hidden = true;
     snapshotImage.removeAttribute("src");
   };
+
+  // Tabs have their own menu (`tab_menu`); nothing else in the bar has one.
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
 
   invoke("tab_bar_ready");
 </script>

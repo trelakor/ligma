@@ -4,7 +4,7 @@
 //! background and asks to restart. "Later" installs it on quit, so the next
 //! launch runs the new version. Packages are verified against `pubkey` in
 //! `tauri.conf.json`. The app is replaced in place, so its data (sign-in,
-//! settings) stays.
+//! settings) stays. Ligma > Check for Updates… does the same on demand.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -19,6 +19,10 @@ const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 #[derive(Default)]
 pub struct Pending(Mutex<Option<(Update, Vec<u8>)>>);
 
+/// Held while checking, so a manual check waits for a background one
+/// instead of downloading the same update twice.
+static CHECKING: Mutex<()> = Mutex::new(());
+
 pub fn start(app: &AppHandle) {
     app.manage(Pending::default());
     // Debug builds would replace themselves with the release build.
@@ -30,20 +34,58 @@ pub fn start(app: &AppHandle) {
         // Once one is downloaded, wait for it to be installed.
         if app.state::<Pending>().0.lock().unwrap().is_none() {
             // Offline or no release reachable: try again next time.
-            let _ = tauri::async_runtime::block_on(check(&app));
+            if let Ok(true) = tauri::async_runtime::block_on(check(&app)) {
+                ask_to_restart(&app);
+            }
         }
         std::thread::sleep(CHECK_EVERY);
     });
 }
 
-async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
+/// Checks right away, for the menu item, and says what it found.
+pub fn check_now(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if cfg!(debug_assertions) {
+            tell(&app, "Updates are off in debug builds.".into());
+            return;
+        }
+        match tauri::async_runtime::block_on(check(&app)) {
+            Ok(true) => ask_to_restart(&app),
+            Ok(false) => {
+                let version = app.package_info().version.to_string();
+                tell(&app, format!("Ligma {version} is the latest version."));
+            }
+            Err(error) => tell(&app, format!("Couldn't check for updates: {error}")),
+        }
+    });
+}
+
+/// Downloads a newer version, if there is one. True once one is pending.
+async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<bool> {
+    let _checking = CHECKING.lock().unwrap();
+    if app.state::<Pending>().0.lock().unwrap().is_some() {
+        return Ok(true);
+    }
     let Some(update) = app.updater()?.check().await? else {
-        return Ok(());
+        return Ok(false);
     };
     let bytes = update.download(|_, _| {}, || {}).await?;
-    let version = update.version.clone();
     *app.state::<Pending>().0.lock().unwrap() = Some((update, bytes));
+    Ok(true)
+}
 
+fn ask_to_restart(app: &AppHandle) {
+    let Some(version) = app
+        .state::<Pending>()
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(update, _)| update.version.clone())
+    else {
+        return;
+    };
     let handle = app.clone();
     app.dialog()
         .message(format!(
@@ -60,7 +102,10 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
                 handle.restart();
             }
         });
-    Ok(())
+}
+
+fn tell(app: &AppHandle, message: String) {
+    app.dialog().message(message).title("Check for Updates").show(|_| {});
 }
 
 /// Installs the downloaded update, if there is one. On macOS this replaces

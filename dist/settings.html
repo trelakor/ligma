@@ -48,6 +48,15 @@
 </style>
 </head>
 <body>
+<h2>Tabs</h2>
+<div class="group">
+  <label class="row">
+    <span class="label">Reopen tabs from last time
+      <div class="hint">Brings back your tabs and the one you had open. Each loads when you select it.</div>
+    </span>
+    <input type="checkbox" id="restore">
+  </label>
+</div>
 <h2>Memory</h2>
 <div class="group">
   <label class="row">
@@ -89,7 +98,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord"];
+  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord"];
   // Snapshots only exist on macOS.
   $("snapshots-row").hidden = !navigator.userAgent.includes("Mac");
 
@@ -110,6 +119,7 @@
     $("max-hidden").value = maxHidden;
     $("snapshots").checked = settings.reloadSnapshots;
     $("discord").checked = settings.discordRichPresence;
+    $("restore").checked = settings.restoreTabs;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -136,6 +146,7 @@
       maxHiddenTabsLoaded: $("limit").checked ? maxHidden : null,
       reloadSnapshots: $("snapshots").checked,
       discordRichPresence: $("discord").checked,
+      restoreTabs: $("restore").checked,
     };
     show();
     await invoke("set_settings", { settings });
