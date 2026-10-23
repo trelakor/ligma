@@ -16,6 +16,9 @@ tauri-plugin-window-state = "2"
 discord-rich-presence = "1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+# The dialog plugin's own rfd, for the synchronous save dialog downloads
+# need in src/tabs.rs.
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
 
 # Same versions Tauri's WebView2 backend uses, for the memory APIs in
 # src/webview2.rs.
