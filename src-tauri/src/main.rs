@@ -67,7 +67,8 @@ fn start_font_agent() -> Option<Child> {
     command.spawn().ok()
 }
 
-/// macOS menu bar. The app menu opens the settings window. File and Window
+/// macOS menu bar. The app menu opens the settings window and checks for
+/// updates. File and Window
 /// hold the tab shortcuts; Cmd+W closes the tab, not the window (or the
 /// settings window, when that has focus). Other platforms have no menu bar: on Windows it would
 /// show as a strip inside the window.
@@ -87,6 +88,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
                     &PredefinedMenuItem::about(app, None, None)?,
                     &PredefinedMenuItem::separator(app)?,
                     &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
+                    &MenuItem::with_id(app, "check-for-updates", "Check for Updates…", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::services(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
@@ -154,14 +156,20 @@ fn main() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .on_menu_event(|app, event| {
             let _ = match event.id().as_ref() {
                 "new-tab" => tabs::new_tab(app),
                 "settings" => settings::open_window(app),
+                "check-for-updates" => {
+                    updater::check_now(app);
+                    Ok(())
+                }
                 "close-tab" if settings::close_if_focused(app) => Ok(()),
                 "close-tab" => tabs::close_active(app),
                 "next-tab" => tabs::cycle(app, 1),
                 "previous-tab" => tabs::cycle(app, -1),
+                id if id.starts_with("tab-menu:") => tabs::on_menu(app, &id["tab-menu:".len()..]),
                 _ => Ok(()),
             };
         })
@@ -170,11 +178,15 @@ fn main() {
             tabs::select_tab,
             tabs::close_tab,
             tabs::open_new_tab,
+            tabs::tab_menu,
+            tabs::move_tab_to,
             tabs::window_control,
             settings::get_settings,
             settings::set_settings,
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            wkwebview::disable_screen_time();
             app.manage(FontAgent(Mutex::new(start_font_agent())));
             let settings = settings::load(app.handle());
             app.manage(tabs::Tabs::new(&settings));
@@ -217,7 +229,7 @@ fn main() {
             });
 
             tabs::layout(app.handle());
-            tabs::open(app.handle(), tabs::HOME_URL.parse()?)?;
+            tabs::restore(app.handle(), &settings)?;
 
             let handle = app.handle().clone();
             std::thread::spawn(move || {

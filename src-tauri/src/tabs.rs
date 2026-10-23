@@ -19,9 +19,11 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
+use tauri::menu::{ContextMenu, Menu, MenuItem, PredefinedMenuItem};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
 pub const TAB_BAR_HEIGHT: f64 = 38.0;
@@ -50,6 +52,25 @@ const LOCAL_NETWORK_ACCESS_JS: &str = r#"(() => {
     return status;
   };
 })();"#;
+
+/// Figma's "Open in new tab" makes a `target="_blank"` link and clicks it
+/// from script, which WKWebView drops without asking `on_new_window`. Send
+/// those links to `on_navigation` instead, as a hidden iframe load of
+/// `NEW_TAB_HOST`, which macOS reports there.
+#[cfg(target_os = "macos")]
+const NEW_TAB_JS: &str = r#"(() => {
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (this.target !== "_blank" || this.hasAttribute("download")) return click.call(this);
+    const frame = document.createElement("iframe");
+    frame.style.display = "none";
+    frame.src = "https://open.ligma.invalid/?url=" + encodeURIComponent(this.href);
+    document.documentElement.appendChild(frame);
+    setTimeout(() => frame.remove(), 1000);
+  };
+})()"#;
+#[cfg(target_os = "macos")]
+const NEW_TAB_HOST: &str = "open.ligma.invalid";
 
 /// Remembers the page's `beforeunload` handlers so `CAN_REST_JS` can ask
 /// them, without unloading anything, whether leaving now would lose work.
@@ -123,6 +144,8 @@ struct Tab {
     kind: &'static str,
     /// No webview; reloads from `url` when selected.
     asleep: bool,
+    /// Kept left of the other tabs, after Home, and shown as its icon only.
+    pinned: bool,
     #[serde(skip)]
     file_key: Option<String>,
     /// Last known address, to reload an asleep tab.
@@ -161,6 +184,29 @@ struct TabState {
     /// Show a waking tab's snapshot while it reloads (`reloadSnapshots`).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     snapshots: bool,
+    /// Keep the tabs in `SESSION_FILE` for the next launch (`restoreTabs`).
+    restore: bool,
+    /// What was last written there, to skip writing it again.
+    saved_session: Option<String>,
+}
+
+/// Tabs saved for the next launch, in the app data folder.
+const SESSION_FILE: &str = "session.json";
+
+/// The tabs as `SESSION_FILE` keeps them. Home comes first.
+#[derive(Deserialize, Serialize)]
+struct Session {
+    tabs: Vec<SavedTab>,
+    /// Index of the active tab.
+    active: usize,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedTab {
+    url: String,
+    title: String,
+    #[serde(default)]
+    pinned: bool,
 }
 
 pub struct Tabs(Mutex<TabState>);
@@ -180,6 +226,10 @@ impl TabState {
         self.sleep_after = (minutes > 0).then(|| Duration::from_secs(minutes * 60));
         self.max_hidden = settings.max_hidden_tabs_loaded.filter(|_| minutes > 0);
         self.snapshots = settings.reload_snapshots;
+        self.restore = settings.restore_tabs;
+        if !self.restore {
+            self.saved_session = None;
+        }
         if !self.snapshots {
             for tab in self.tabs.iter_mut().filter(|tab| !tab.revealing) {
                 tab.snapshot = None;
@@ -192,7 +242,92 @@ impl TabState {
 /// limit go to sleep right away.
 pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     app.state::<Tabs>().inner().0.lock().unwrap().configure(settings);
+    if settings.restore_tabs {
+        save_session(app);
+    } else if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::remove_file(dir.join(SESSION_FILE));
+    }
     rest_idle(app);
+}
+
+/// Opens the tabs saved by the last session, asleep so none loads until
+/// it's selected, then selects the one that was active. Opens Home alone
+/// if there are none, or `restoreTabs` is off.
+pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::Result<()> {
+    let session = settings
+        .restore_tabs
+        .then(|| app.path().app_data_dir().ok())
+        .flatten()
+        .and_then(|dir| std::fs::read_to_string(dir.join(SESSION_FILE)).ok())
+        .and_then(|json| serde_json::from_str::<Session>(&json).ok())
+        .filter(|session| !session.tabs.is_empty());
+    let Some(session) = session else {
+        return open(app, HOME_URL.parse().unwrap());
+    };
+    let active = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let mut active = HOME_ID;
+        for (index, saved) in session.tabs.into_iter().enumerate() {
+            let url = Url::parse(&saved.url).ok().filter(is_figma);
+            let home = state.tabs.is_empty();
+            let Some(url) = url.or_else(|| home.then(|| HOME_URL.parse().unwrap())) else {
+                continue;
+            };
+            let id = state.next_id;
+            state.next_id += 1;
+            if index == session.active {
+                active = id;
+            }
+            state.tabs.push(Tab {
+                id,
+                title: saved.title,
+                kind: if home { "home" } else { kind(&url) },
+                asleep: true,
+                pinned: saved.pinned && !home,
+                file_key: if home { None } else { file_key(&url) },
+                url,
+                hidden_since: None,
+                suspended: false,
+                snapshot: None,
+                revealing: false,
+            });
+        }
+        active
+    };
+    select(app, active)
+}
+
+/// Writes the tabs to `SESSION_FILE` if they changed and `restoreTabs` is on.
+fn save_session(app: &AppHandle) {
+    let json = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        // No tabs yet: launching, and `restore` hasn't read the file.
+        if !state.restore || state.tabs.is_empty() {
+            return;
+        }
+        let session = Session {
+            tabs: state
+                .tabs
+                .iter()
+                .map(|tab| SavedTab {
+                    url: tab.url.to_string(),
+                    title: tab.title.clone(),
+                    pinned: tab.pinned,
+                })
+                .collect(),
+            active: state.tabs.iter().position(|tab| tab.id == state.active).unwrap_or(0),
+        };
+        let json = serde_json::to_string_pretty(&session).unwrap();
+        if state.saved_session.as_ref() == Some(&json) {
+            return;
+        }
+        state.saved_session = Some(json.clone());
+        json
+    };
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(SESSION_FILE), json);
+    }
 }
 
 /// Reads Figma's theme colors. Figma sets `data-preferred-theme` on <body>
@@ -280,6 +415,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             title: String::new(),
             kind: if id == HOME_ID { "home" } else { kind(&url) },
             asleep: false,
+            pinned: false,
             file_key: key,
             url: url.clone(),
             hidden_since: None,
@@ -313,7 +449,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(BEFOREUNLOAD_JS);
     #[cfg(target_os = "macos")]
     {
-        builder = builder.user_agent(USER_AGENT);
+        builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
     }
     #[cfg(windows)]
     {
@@ -341,6 +477,16 @@ fn open_in_browser(app: &AppHandle, url: &Url) {
 }
 
 fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
+    #[cfg(target_os = "macos")]
+    if url.host_str() == Some(NEW_TAB_HOST) {
+        let target = url.query_pairs().find(|(key, _)| key == "url");
+        if let Some(Ok(target)) = target.map(|(_, target)| Url::parse(&target)) {
+            if is_figma(&target) {
+                open_later(app, target);
+            }
+        }
+        return false;
+    }
     match url.scheme() {
         "http" | "https" => {}
         // blob:, data:, about: and friends stay in the page.
@@ -570,26 +716,178 @@ fn reveal_when_ready(app: &AppHandle, id: u32) {
 
 /// Closes a tab. Home can't be closed.
 pub fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
-    if id == HOME_ID {
-        return Ok(());
-    }
+    close_tabs(app, &[id])
+}
+
+/// Closes tabs `ids`, except Home. If the active tab is among them, the
+/// nearest open tab to its right is selected, else the last one.
+fn close_tabs(app: &AppHandle, ids: &[u32]) -> tauri::Result<()> {
+    let ids: Vec<u32> = ids.iter().copied().filter(|&id| id != HOME_ID).collect();
     let next = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let Some(index) = state.tabs.iter().position(|tab| tab.id == id) else {
-            return Ok(());
-        };
-        state.tabs.remove(index);
+        let closing = |tab: &Tab| ids.contains(&tab.id);
+        let index = state.tabs.iter().position(|tab| tab.id == state.active);
         // Prefer the tab to the right, like the desktop app. Home is always
-        // left, so the list is never empty.
-        (state.active == id).then(|| state.tabs[index.min(state.tabs.len() - 1)].id)
+        // left and never closed, so one is always left.
+        let next = index.filter(|&index| closing(&state.tabs[index])).map(|index| {
+            let right = state.tabs[index..].iter().find(|tab| !closing(tab));
+            right.or_else(|| state.tabs.iter().rev().find(|tab| !closing(tab))).unwrap().id
+        });
+        state.tabs.retain(|tab| !closing(tab));
+        next
     };
     if let Some(next) = next {
         select(app, next)?;
     }
-    if let Some(webview) = app.get_webview(&label(id)) {
-        webview.close()?;
+    for id in ids {
+        if let Some(webview) = app.get_webview(&label(id)) {
+            webview.close()?;
+        }
     }
     push_state(app);
+    Ok(())
+}
+
+/// Pins or unpins tab `id`. Pinned tabs sit left, after Home, in the order
+/// they were pinned; an unpinned tab goes right after them.
+fn set_pinned(app: &AppHandle, id: u32, pinned: bool) {
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let Some(index) = state.tabs.iter().position(|tab| tab.id == id && id != HOME_ID) else {
+            return;
+        };
+        let mut tab = state.tabs.remove(index);
+        tab.pinned = pinned;
+        let pinned_count = state.tabs.iter().filter(|tab| tab.pinned).count();
+        state.tabs.insert(1 + pinned_count, tab);
+    }
+    push_state(app);
+}
+
+/// Moves tab `id` to `index` among its group: the pinned tabs, or the
+/// others. Home stays first.
+fn move_tab(app: &AppHandle, id: u32, index: usize) {
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        if let Some(from) = state.tabs.iter().position(|tab| tab.id == id && id != HOME_ID) {
+            let tab = state.tabs.remove(from);
+            let pinned_count = state.tabs.iter().filter(|tab| tab.pinned).count();
+            let (start, len) = if tab.pinned {
+                (1, pinned_count)
+            } else {
+                (1 + pinned_count, state.tabs.len() - 1 - pinned_count)
+            };
+            state.tabs.insert(start + index.min(len), tab);
+        }
+    }
+    push_state(app);
+}
+
+/// Reloads tab `id`. A frozen tab is put to sleep instead, so it loads
+/// afresh when selected, and an asleep one already will.
+fn reload(app: &AppHandle, id: u32) {
+    let Some(webview) = app.get_webview(&label(id)) else {
+        return;
+    };
+    let url = webview.url().ok();
+    let frozen = with_tab(app, id, |tab| {
+        let frozen = tab.suspended && !tab.asleep;
+        if frozen {
+            tab.asleep = true;
+            tab.suspended = false;
+            tab.revealing = false;
+            if let Some(url) = url {
+                tab.url = url;
+            }
+        }
+        frozen
+    });
+    match frozen {
+        Some(true) => {
+            let _ = webview.close();
+            push_state(app);
+        }
+        Some(false) => {
+            let _ = webview.reload();
+        }
+        None => {}
+    }
+}
+
+/// Address tab `id` shows now, or showed when it went to sleep.
+fn tab_url(app: &AppHandle, id: u32) -> Option<Url> {
+    let live = app.get_webview(&label(id)).and_then(|webview| webview.url().ok());
+    live.or_else(|| with_tab(app, id, |tab| tab.url.clone()))
+}
+
+/// Shows the right-click menu of tab `id`. Its items' ids are
+/// `tab-menu:<action>:<id>`, handled by `on_menu`.
+fn show_menu(app: &AppHandle, window: &Window, id: u32) -> tauri::Result<()> {
+    let Some(pinned) = with_tab(app, id, |tab| tab.pinned) else {
+        return Ok(());
+    };
+    let item = |action: &str, text: &str| {
+        MenuItem::with_id(app, format!("tab-menu:{action}:{id}"), text, true, None::<&str>)
+    };
+    let menu = if id == HOME_ID {
+        Menu::with_items(
+            app,
+            &[&item("copy", "Copy Link")?, &item("reload", "Reload")?, &item("close-others", "Close Other Tabs")?],
+        )?
+    } else {
+        Menu::with_items(
+            app,
+            &[
+                &item(if pinned { "unpin" } else { "pin" }, if pinned { "Unpin Tab" } else { "Pin Tab" })?,
+                &item("copy", "Copy Link")?,
+                &item("browser", "Open in Browser")?,
+                &item("reload", "Reload")?,
+                &PredefinedMenuItem::separator(app)?,
+                &item("close", "Close")?,
+                &item("close-others", "Close Other Tabs")?,
+                &item("close-all", "Close All Tabs")?,
+            ],
+        )?
+    };
+    menu.popup(window.clone())
+}
+
+/// Runs a tab menu item, given its id without the `tab-menu:` prefix.
+pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
+    let Some((action, id)) = item.split_once(':') else {
+        return Ok(());
+    };
+    let Ok(id) = id.parse::<u32>() else {
+        return Ok(());
+    };
+    // All tabs but `keep`, and but pinned ones unless `pinned_too`.
+    let others = |keep: u32, pinned_too: bool| -> Vec<u32> {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let tabs = state.tabs.iter().filter(|tab| pinned_too || !tab.pinned);
+        tabs.map(|tab| tab.id).filter(|&other| other != keep).collect()
+    };
+    match action {
+        "pin" => set_pinned(app, id, true),
+        "unpin" => set_pinned(app, id, false),
+        "copy" => {
+            if let Some(url) = tab_url(app, id) {
+                let _ = app.clipboard().write_text(url.to_string());
+            }
+        }
+        "browser" => {
+            if let Some(url) = tab_url(app, id) {
+                open_in_browser(app, &url);
+            }
+        }
+        "reload" => reload(app, id),
+        "close" => close(app, id)?,
+        "close-others" => {
+            select(app, id)?;
+            close_tabs(app, &others(id, false))?;
+        }
+        "close-all" => close_tabs(app, &others(HOME_ID, true))?,
+        _ => {}
+    }
     Ok(())
 }
 
@@ -858,6 +1156,7 @@ fn push_state(app: &AppHandle) {
         .unwrap()
     };
     let _ = bar.eval(format!("window.render?.({json})"));
+    save_session(app);
 }
 
 /// Only the local tab bar may drive tabs. Figma pages have no IPC access
@@ -884,6 +1183,20 @@ pub async fn select_tab(app: AppHandle, webview: Webview, id: u32) {
 pub async fn close_tab(app: AppHandle, webview: Webview, id: u32) {
     if from_tab_bar(&webview) {
         let _ = close(&app, id);
+    }
+}
+
+#[tauri::command]
+pub async fn tab_menu(app: AppHandle, webview: Webview, id: u32) {
+    if from_tab_bar(&webview) {
+        let _ = show_menu(&app, &webview.window(), id);
+    }
+}
+
+#[tauri::command]
+pub async fn move_tab_to(app: AppHandle, webview: Webview, id: u32, index: usize) {
+    if from_tab_bar(&webview) {
+        move_tab(&app, id, index);
     }
 }
 

@@ -9,6 +9,13 @@
 //! page is asked to run JavaScript. Callers must not `eval` in a tab while
 //! it's frozen or still resuming (`Tab::suspended`). The calls here catch
 //! exceptions themselves.
+//!
+//! On macOS 27, WebKit's Screen Time setup races with closing a webview: its
+//! KVO observer is removed on the main thread while Screen Time updates it
+//! on a private queue, and the exception aborts Ligma (WebKit bug, see
+//! https://developer.apple.com/forums/thread/809860). `disable_screen_time`
+//! turns that setup off for the whole process, so Screen Time can't block
+//! Figma pages inside Ligma, though it still counts the time spent in it.
 
 use std::ffi::{c_char, c_void, CStr};
 use std::panic::AssertUnwindSafe;
@@ -16,9 +23,23 @@ use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{AnyObject, Bool, Sel};
+use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
 use objc2::{class, msg_send, sel};
 use tauri::Webview;
+
+/// Replaces `-[WKWebView _installScreenTimeWebpageControllerIfNeeded]`
+/// with a no-op. Call before the first webview is created. Skipped if
+/// WebKit doesn't have it.
+pub fn disable_screen_time() {
+    unsafe extern "C-unwind" fn install_nothing(_: *mut AnyObject, _: Sel) {}
+
+    let method = AnyClass::get(c"WKWebView")
+        .and_then(|class| class.instance_method(sel!(_installScreenTimeWebpageControllerIfNeeded)));
+    if let Some(method) = method {
+        let imp: unsafe extern "C-unwind" fn(*mut AnyObject, Sel) = install_nothing;
+        unsafe { method.set_implementation(std::mem::transmute::<_, Imp>(imp)) };
+    }
+}
 
 /// Runs WebKit calls so that an Objective-C exception from them is logged
 /// rather than aborting Ligma (Rust can't unwind through one). False if one
