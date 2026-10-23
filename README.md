@@ -1,4 +1,4 @@
-<img src="assets/icon.png" width="64" height="64" alt="">
+<img src="assets/logo.png" width="64" height="64" alt="">
 
 # Ligma
 
@@ -25,7 +25,7 @@ npm run dev     # debug build, opens the app
 npm run build   # release bundle in src-tauri/target/release/bundle/
 ```
 
-Regenerate icons after editing `assets/icon.png`:
+Regenerate icons after editing `assets/icon.png` (macOS) or `assets/icon-windows.png` (Windows `icon.ico`):
 
 ```sh
 npm run icon
