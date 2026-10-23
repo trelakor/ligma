@@ -167,15 +167,32 @@ pub struct Tabs(Mutex<TabState>);
 
 impl Tabs {
     pub fn new(settings: &crate::settings::Settings) -> Self {
+        let mut state = TabState::default();
+        state.configure(settings);
+        Self(Mutex::new(state))
+    }
+}
+
+impl TabState {
+    fn configure(&mut self, settings: &crate::settings::Settings) {
         let minutes = settings.sleep_tabs_after_minutes;
         // Sleeping turned off means every tab stays loaded, limit or not.
-        Self(Mutex::new(TabState {
-            sleep_after: (minutes > 0).then(|| Duration::from_secs(minutes * 60)),
-            max_hidden: settings.max_hidden_tabs_loaded.filter(|_| minutes > 0),
-            snapshots: settings.reload_snapshots,
-            ..TabState::default()
-        }))
+        self.sleep_after = (minutes > 0).then(|| Duration::from_secs(minutes * 60));
+        self.max_hidden = settings.max_hidden_tabs_loaded.filter(|_| minutes > 0);
+        self.snapshots = settings.reload_snapshots;
+        if !self.snapshots {
+            for tab in self.tabs.iter_mut().filter(|tab| !tab.revealing) {
+                tab.snapshot = None;
+            }
+        }
     }
+}
+
+/// Applies changed settings. Tabs now past a shorter timeout or a lower
+/// limit go to sleep right away.
+pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
+    app.state::<Tabs>().inner().0.lock().unwrap().configure(settings);
+    rest_idle(app);
 }
 
 /// Reads Figma's theme colors. Figma sets `data-preferred-theme` on <body>

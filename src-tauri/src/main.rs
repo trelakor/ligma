@@ -66,8 +66,9 @@ fn start_font_agent() -> Option<Child> {
     command.spawn().ok()
 }
 
-/// macOS menu bar. File and Window hold the tab shortcuts; Cmd+W closes the
-/// tab, not the window. Other platforms have no menu bar: on Windows it would
+/// macOS menu bar. The app menu opens the settings window. File and Window
+/// hold the tab shortcuts; Cmd+W closes the tab, not the window (or the
+/// settings window, when that has focus). Other platforms have no menu bar: on Windows it would
 /// show as a strip inside the window.
 #[cfg(target_os = "macos")]
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -83,6 +84,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
                 true,
                 &[
                     &PredefinedMenuItem::about(app, None, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::services(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
@@ -153,6 +156,8 @@ fn main() {
         .on_menu_event(|app, event| {
             let _ = match event.id().as_ref() {
                 "new-tab" => tabs::new_tab(app),
+                "settings" => settings::open_window(app),
+                "close-tab" if settings::close_if_focused(app) => Ok(()),
                 "close-tab" => tabs::close_active(app),
                 "next-tab" => tabs::cycle(app, 1),
                 "previous-tab" => tabs::cycle(app, -1),
@@ -165,6 +170,8 @@ fn main() {
             tabs::close_tab,
             tabs::open_new_tab,
             tabs::window_control,
+            settings::get_settings,
+            settings::set_settings,
         ])
         .setup(|app| {
             app.manage(FontAgent(Mutex::new(start_font_agent())));

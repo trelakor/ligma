@@ -2,11 +2,18 @@
 //! (`%APPDATA%\dev.ligma.client` on Windows,
 //! `~/Library/Application Support/dev.ligma.client` on macOS). Written
 //! with the defaults on first launch so there's a file to edit.
+//!
+//! The settings window (`dist/settings.html`, Ligma > Settings… on macOS)
+//! edits the same file and applies each change right away.
+
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
 
-#[derive(Deserialize, Serialize)]
+const WINDOW: &str = "settings";
+
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Minutes a tab stays hidden before Ligma closes its webview to free
@@ -35,12 +42,15 @@ impl Default for Settings {
     }
 }
 
+/// The settings in effect, for the settings window.
+pub struct Current(Mutex<Settings>);
+
 pub fn load(app: &AppHandle) -> Settings {
     let Ok(dir) = app.path().app_config_dir() else {
         return Settings::default();
     };
     let path = dir.join("settings.json");
-    match std::fs::read_to_string(&path) {
+    let settings = match std::fs::read_to_string(&path) {
         Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
         Err(_) => {
             let settings = Settings::default();
@@ -48,5 +58,67 @@ pub fn load(app: &AppHandle) -> Settings {
             let _ = std::fs::write(&path, serde_json::to_string_pretty(&settings).unwrap());
             settings
         }
+    };
+    app.manage(Current(Mutex::new(settings.clone())));
+    settings
+}
+
+fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("settings.json"), serde_json::to_string_pretty(settings).unwrap())
+        .map_err(|e| e.to_string())
+}
+
+/// Opens the settings window, or focuses it if it's already open.
+pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        window.unminimize()?;
+        return window.set_focus();
     }
+    WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
+        .title("Settings")
+        .inner_size(520.0, 400.0)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .center()
+        .build()?;
+    Ok(())
+}
+
+/// True if the settings window has keyboard focus, so Cmd+W closes it
+/// rather than a tab.
+pub fn close_if_focused(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window(WINDOW) else {
+        return false;
+    };
+    if !window.is_focused().unwrap_or(false) {
+        return false;
+    }
+    let _ = window.close();
+    true
+}
+
+/// Only the settings window may read and change settings.
+fn from_settings_window(webview: &Webview) -> bool {
+    webview.label() == WINDOW
+}
+
+#[tauri::command]
+pub async fn get_settings(app: AppHandle, webview: Webview) -> Option<Settings> {
+    from_settings_window(&webview).then(|| app.state::<Current>().0.lock().unwrap().clone())
+}
+
+/// Saves `settings` and applies them to the running app.
+#[tauri::command]
+pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) -> Result<(), String> {
+    if !from_settings_window(&webview) {
+        return Err("not allowed".into());
+    }
+    save(&app, &settings)?;
+    crate::tabs::apply_settings(&app, &settings);
+    crate::presence::apply_settings(&app, &settings);
+    *app.state::<Current>().0.lock().unwrap() = settings;
+    Ok(())
 }
