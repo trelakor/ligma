@@ -8,7 +8,7 @@ name: Warm cache
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/faster-release-builds] # TEMP: testing
     paths:
       - src-tauri/Cargo.toml
       - src-tauri/Cargo.lock
