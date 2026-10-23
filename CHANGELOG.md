@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.9.0 - 2026-10-23
+
+- New Settings button on Windows, next to the minimize button. It opens the same Settings window as Ligma > Settings… on macOS.
+- Files whose names start with an emoji now show that emoji as their tab icon on Windows too.
+- On Windows, the Home tab lines up with Figma's left sidebar, and its divider continues into the sidebar's border.
+
 ## 0.8.0 - 2026-10-23
 
 - Right-click a tab to pin or unpin it, copy its link, open it in your browser, reload it, or close it, the other tabs or all tabs. Home's menu has Copy Link, Reload and Close Other Tabs. Close Other Tabs keeps pinned tabs.
