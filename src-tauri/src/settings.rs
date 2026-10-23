@@ -29,6 +29,8 @@ pub struct Settings {
     pub reload_snapshots: bool,
     /// Show the open file and selected tool on Discord.
     pub discord_rich_presence: bool,
+    /// Reopen the last session's tabs on launch, asleep until selected.
+    pub restore_tabs: bool,
 }
 
 impl Default for Settings {
@@ -38,6 +40,7 @@ impl Default for Settings {
             max_hidden_tabs_loaded: None,
             reload_snapshots: false,
             discord_rich_presence: true,
+            restore_tabs: false,
         }
     }
 }
@@ -78,7 +81,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
-        .inner_size(520.0, 400.0)
+        .inner_size(520.0, 480.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)

@@ -16,6 +16,7 @@ tauri-plugin-window-state = "2"
 discord-rich-presence = "1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
 # The dialog plugin's own rfd, for the synchronous dialogs downloads need
 # in src/downloads.rs.
 rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
