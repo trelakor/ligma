@@ -2,10 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod presence;
+#[cfg(target_os = "macos")]
+mod pressure;
 mod settings;
 mod tabs;
+#[cfg(target_os = "macos")]
+mod titlebar;
 #[cfg(windows)]
 mod webview2;
+#[cfg(target_os = "macos")]
+mod wkwebview;
 
 use std::process::Child;
 use std::sync::Mutex;
@@ -173,10 +179,7 @@ fn main() {
                 .background_color(tauri::window::Color(44, 44, 44, 255));
             #[cfg(target_os = "macos")]
             {
-                builder = builder
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .hidden_title(true)
-                    .traffic_light_position(tauri::LogicalPosition::new(14.0, 24.0));
+                builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
             }
             // Elsewhere the tab bar draws its own window controls.
             #[cfg(not(target_os = "macos"))]
@@ -184,6 +187,15 @@ fn main() {
                 builder = builder.decorations(false);
             }
             let window = builder.build()?;
+            // Traffic lights centered on the tab bar (see titlebar.rs).
+            #[cfg(target_os = "macos")]
+            unsafe {
+                titlebar::center_traffic_lights(window.ns_window()?.cast());
+            }
+            // `tabs::layout` sizes the tab bar's webview from here on.
+            if let Some(bar) = app.get_webview("main") {
+                bar.set_auto_resize(false)?;
+            }
 
             let handle = app.handle().clone();
             window.on_window_event(move |event| {
@@ -192,6 +204,7 @@ fn main() {
                 }
             });
 
+            tabs::layout(app.handle());
             tabs::open(app.handle(), tabs::HOME_URL.parse()?)?;
 
             let handle = app.handle().clone();
@@ -200,7 +213,7 @@ fn main() {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     tabs::sync_theme(&handle);
                     presence::sync(&handle);
-                    if second % 30 == 0 {
+                    if second % 30 == 0 || (second % 5 == 0 && tabs::under_pressure()) {
                         tabs::rest_idle(&handle);
                     }
                 }

@@ -21,6 +21,14 @@ discord-rich-presence = "1.1"
 webview2-com = "0.39"
 windows-core = "0.62"
 
+# libc for the memory pressure level in src/pressure.rs; objc2 and block2,
+# the same versions wry uses, for the AppKit and WebKit calls in
+# src/titlebar.rs and src/wkwebview.rs.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2 = { version = "0.6", features = ["exception"] }
+block2 = "0.6"
+
 # Small, fast release binary.
 [profile.release]
 codegen-units = 1
