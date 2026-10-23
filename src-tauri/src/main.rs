@@ -153,7 +153,12 @@ fn main() {
 
     builder
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Settings has a fixed size, which grows with new options.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[settings::WINDOW])
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
