@@ -7,6 +7,7 @@
 //! reconnecting whenever Discord is (re)started.
 
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::activity::{Activity, Assets, Timestamps};
@@ -52,20 +53,33 @@ struct Status {
 }
 
 /// Channel to the worker. None when presence is off.
-pub struct Presence(Option<Sender<Status>>);
+pub struct Presence(Mutex<Option<Sender<Status>>>);
 
-pub fn start(settings: &crate::settings::Settings) -> Presence {
+fn worker(settings: &crate::settings::Settings) -> Option<Sender<Status>> {
     if CLIENT_ID.is_empty() || !settings.discord_rich_presence {
-        return Presence(None);
+        return None;
     }
     let (tx, rx) = channel();
     std::thread::spawn(move || run(rx));
-    Presence(Some(tx))
+    Some(tx)
+}
+
+pub fn start(settings: &crate::settings::Settings) -> Presence {
+    Presence(Mutex::new(worker(settings)))
+}
+
+/// Turns presence on or off. Dropping the channel stops the worker, which
+/// disconnects from Discord and so clears the status.
+pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
+    let mut tx = app.state::<Presence>().inner().0.lock().unwrap();
+    if tx.is_some() != settings.discord_rich_presence {
+        *tx = worker(settings);
+    }
 }
 
 /// Reports the active tab to Discord. Call periodically.
 pub fn sync(app: &AppHandle) {
-    let Some(tx) = app.state::<Presence>().0.clone() else {
+    let Some(tx) = app.state::<Presence>().0.lock().unwrap().clone() else {
         return;
     };
     let Some((file, webview)) = crate::tabs::active_file(app) else {
@@ -115,7 +129,13 @@ fn run(rx: Receiver<Status>) {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(status) => wanted = status,
             Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return,
+            Err(RecvTimeoutError::Disconnected) => {
+                if let Some(mut client) = client {
+                    let _ = client.clear_activity();
+                    let _ = client.close();
+                }
+                return;
+            }
         }
         while let Ok(status) = rx.try_recv() {
             wanted = status;
