@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.1 - 2026-10-23
+
+- Continue with Google now finishes signing in. In 0.11.0 the approval in your browser went to the Figma desktop app, or nowhere, instead of back to Ligma.
+- On macOS, the approval page opens in a sign-in sheet that uses your Safari sign-in, and works alongside the Figma desktop app.
+- On Windows, the approval page opens in your browser. Without the Figma desktop app installed, Ligma also opens Figma's "Open in desktop app" links in a tab. With it, Ligma takes over those links only while you sign in, then hands them back.
+
 ## 0.11.0 - 2026-10-23
 
 - Continue with Google now works. Ligma opens Figma's approval page in your browser, where you sign in with Google and approve, then brings the sign-in back to the tab you started from. Google doesn't allow sign-in inside embedded webviews, so this is how the Figma desktop app does it too.
