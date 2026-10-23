@@ -1,6 +1,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod presence;
 mod settings;
 mod tabs;
 #[cfg(windows)]
@@ -158,7 +159,9 @@ fn main() {
         ])
         .setup(|app| {
             app.manage(FontAgent(Mutex::new(start_font_agent())));
-            app.manage(tabs::Tabs::new(&settings::load(app.handle())));
+            let settings = settings::load(app.handle());
+            app.manage(tabs::Tabs::new(&settings));
+            app.manage(presence::start(&settings));
 
             // The window's own webview is the tab bar. Figma tabs are added
             // as child webviews below it.
@@ -196,6 +199,7 @@ fn main() {
                 for second in 1u64.. {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     tabs::sync_theme(&handle);
+                    presence::sync(&handle);
                     if second % 30 == 0 {
                         tabs::rest_idle(&handle);
                     }
