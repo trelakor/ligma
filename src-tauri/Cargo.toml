@@ -42,10 +42,10 @@ libc = "0.2"
 objc2 = { version = "0.6", features = ["exception"] }
 block2 = "0.6"
 
-# Small, fast release binary.
+# Small, fast release binary. Thin LTO and the default codegen units keep
+# release builds (and CI) quick for a slightly larger binary than full LTO.
 [profile.release]
-codegen-units = 1
-lto = true
+lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true
