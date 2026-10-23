@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <title>Ligma</title>
-<!-- Tab bar. Fills the window, but only the top 40px are visible: Figma tabs
-     are child webviews laid over the rest (see src-tauri/src/tabs.rs). -->
+<!-- Tab bar. Its webview is 38px tall, and fills the window only while it
+     shows a reloading tab's snapshot; Figma tabs are child webviews below
+     it (see src-tauri/src/tabs.rs). -->
 <style>
   :root {
     --bar: #383838;
@@ -25,7 +26,7 @@
   }
   #bar {
     display: flex;
-    height: 40px;
+    height: 38px;
     padding-left: 78px; /* traffic lights */
     background: var(--bar);
   }
@@ -49,7 +50,7 @@
   }
   .tab:hover, #home:hover, #new:hover { background: var(--hover); }
   .tab.active, #home.active { background: var(--active); color: var(--text-active); }
-  #home { width: 40px; }
+  #home { width: 38px; }
   /* Width follows the title, up to max-width. Once the bar is full,
      tabs switch to equal widths (see `crowded` in render). */
   .tab {
@@ -65,8 +66,8 @@
     content: "";
     position: absolute;
     right: 0;
-    top: 12px;
-    bottom: 12px;
+    top: 11px;
+    bottom: 11px;
     width: 1px;
     background: var(--divider);
   }
@@ -91,10 +92,44 @@
   .crowded .tab { flex: 1 1 0; }
   /* Always leave room to drag the window. */
   #drag { flex: 1; min-width: 48px; }
+  /* Last image of a tab that's reloading after sleep, shown where its
+     webview goes until Figma has drawn the file again. */
+  #snapshot {
+    position: fixed;
+    top: 38px;
+    left: 0;
+    width: 100%;
+    height: calc(100% - 38px);
+    overflow: hidden;
+    cursor: progress;
+  }
+  #snapshot[hidden] { display: none; }
+  #snapshot > img { width: 100%; height: 100%; object-fit: cover; object-position: top left; }
+  /* The image looks live but isn't: a soft light sweeps across it every
+     few seconds while the tab reloads. */
+  #snapshot::after {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 60%;
+    background: linear-gradient(100deg, transparent 0%, rgba(255, 255, 255, 0.07) 35%, rgba(255, 255, 255, 0.14) 50%, rgba(255, 255, 255, 0.07) 65%, transparent 100%);
+    transform: translateX(-100%);
+    animation: shimmer 2.4s infinite;
+    will-change: transform;
+    pointer-events: none;
+  }
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); animation-timing-function: cubic-bezier(0.45, 0, 0.25, 1); }
+    60%, 100% { transform: translateX(270%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #snapshot::after { animation: none; }
+  }
 </style>
 </head>
 <body>
 <div id="bar" data-tauri-drag-region></div>
+<div id="snapshot" hidden><img alt=""></div>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
 
@@ -204,6 +239,17 @@
     // its minimum, the bar is full.
     bar.classList.remove("crowded");
     bar.classList.toggle("crowded", drag.getBoundingClientRect().width <= 48);
+  };
+
+  const snapshot = document.getElementById("snapshot");
+  const snapshotImage = snapshot.querySelector("img");
+  window.showSnapshot = (url) => {
+    snapshotImage.src = url;
+    snapshot.hidden = false;
+  };
+  window.hideSnapshot = () => {
+    snapshot.hidden = true;
+    snapshotImage.removeAttribute("src");
   };
 
   invoke("tab_bar_ready");

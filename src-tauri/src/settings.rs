@@ -10,15 +10,28 @@ use tauri::{AppHandle, Manager};
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Minutes a tab stays hidden before Ligma closes its webview to free
-    /// memory. It reloads when selected. 0 keeps every tab loaded.
+    /// memory. It reloads when selected. On macOS tabs sleep sooner under
+    /// memory pressure. 0 keeps every tab loaded.
     pub sleep_tabs_after_minutes: u64,
+    /// Hidden tabs that stay loaded, most recently used first and Home last.
+    /// The rest go to sleep right away. None (null): no limit. Ignored when
+    /// sleeping is off.
+    pub max_hidden_tabs_loaded: Option<usize>,
+    /// While a file tab reloads after sleep, show its last image instead of
+    /// Figma's loading screen (macOS).
+    pub reload_snapshots: bool,
     /// Show the open file and selected tool on Discord.
     pub discord_rich_presence: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { sleep_tabs_after_minutes: 30, discord_rich_presence: true }
+        Self {
+            sleep_tabs_after_minutes: 30,
+            max_hidden_tabs_loaded: None,
+            reload_snapshots: false,
+            discord_rich_presence: true,
+        }
     }
 }
 
