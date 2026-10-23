@@ -6,6 +6,7 @@
 # The release notes come from scripts/release-notes.mjs: the version's
 # CHANGELOG.md section plus install steps naming its files. The run stops
 # before building if that section is missing or the tag isn't the version.
+# The Rust build cache comes from warm-cache.yml.
 name: Release
 
 on:
@@ -66,9 +67,13 @@ jobs:
         with:
           targets: ${{ matrix.rust-targets }}
 
+      # Tag runs can't see each other's caches, only main's, so this reads
+      # the cache warm-cache.yml saves on main and doesn't save its own.
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+          shared-key: release
+          save-if: false
 
       - run: npm ci
 
