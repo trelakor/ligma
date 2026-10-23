@@ -1,0 +1,41 @@
+# Changelog
+
+Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
+
+## 0.5.0 - 2026-10-23
+
+- Ligma now updates itself. On launch and every 6 hours it checks for a new release, downloads it in the background and offers to restart. Choose Later and it installs when you quit. Your sign-in and settings stay.
+- Updates are signed and verified before they're installed.
+
+## 0.4.0 - 2026-10-23
+
+- Less memory on macOS: hidden tabs sleep after 10 minutes while macOS warns of memory pressure, and at once when pressure is critical.
+- Tabs hidden for 5 minutes are now frozen on macOS too, saving CPU.
+- New `maxHiddenTabsLoaded` setting limits how many hidden tabs stay loaded. Home goes to sleep first.
+- New `reloadSnapshots` setting (macOS): a file tab waking from sleep shows its last image until Figma has drawn the file.
+- The traffic lights are centered on the tab bar, which is now 38px tall.
+- Tab hover now clears when the mouse leaves the tab bar.
+- Added `scripts/measure-memory.sh` to measure memory use on macOS.
+
+## 0.3.0 - 2026-10-23
+
+- Discord Rich Presence shows Ligma, the open file and the selected tool. Turn it off with `"discordRichPresence": false` in `settings.json`.
+- Figma Make and Sites previews (`*.figma.site`) stay in the page on macOS instead of opening in the browser.
+
+## 0.2.1 - 2026-10-22
+
+- New Ligma icon on Windows.
+
+## 0.2.0 - 2026-10-22
+
+- Background tabs give memory back. On Windows a hidden tab's memory is trimmed at once and the tab is frozen after 5 minutes. On all platforms a tab hidden for 30 minutes goes to sleep and reloads when selected (`sleepTabsAfterMinutes` in `settings.json`).
+- Freezing and sleeping are skipped while offline or while Figma has unsaved edits.
+- Added `scripts/measure-memory.ps1` to measure memory use on Windows.
+
+## 0.1.1 - 2026-10-22
+
+- Local fonts work on Windows. Ligma also starts Figma's font helper on Windows when it isn't running.
+
+## 0.1.0 - 2026-10-22
+
+- First release: Figma in the system webview, with a Figma-style tab bar, theme-matched colors and local fonts through Figma's font helper. Builds for macOS (universal) and Windows.
