@@ -1,0 +1,56 @@
+# Builds Ligma on main to save the Rust build cache that release.yml reads.
+# GitHub only lets a tag's run restore caches from main (or the tag itself),
+# so without this every release compiles all its dependencies from scratch.
+# Runs when the Rust dependencies change, weekly so the cache follows new
+# stable Rust versions and isn't evicted, and manually from the Actions tab.
+# The matrix, toolchain and cache settings must match release.yml's build job.
+name: Warm cache
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src-tauri/Cargo.toml
+      - src-tauri/Cargo.lock
+      - .github/workflows/warm-cache.yml
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: windows-latest
+            args: ""
+            rust-targets: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: release
+
+      - run: npm ci
+
+      - run: npx tauri build --no-bundle ${{ matrix.args }}
