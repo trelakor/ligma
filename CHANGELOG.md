@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.10.0 - 2026-10-23
+
+- New Discord Rich Presence settings: Show file name (when off, Discord says "Editing a file") and Show selected tool (when off, the tool's name and icon are hidden).
+- On Windows, the Home tab now takes its width from Figma's left sidebar, so it lines up at any display scaling.
+- The Settings window is tall enough for all its options again. It no longer reopens at a size saved by an older version.
+
 ## 0.9.0 - 2026-10-23
 
 - New Settings button on Windows, next to the minimize button. It opens the same Settings window as Ligma > Settings… on macOS.
