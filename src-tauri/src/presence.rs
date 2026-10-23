@@ -1,5 +1,6 @@
 //! Discord Rich Presence: shows the open file and the selected tool, as
-//! "Ligma". Discord names the activity after the Discord application, so
+//! "Ligma". The tool's icon is the small image, blue while the window has
+//! focus and grey while it doesn't. Discord names the activity after the Discord application, so
 //! the application behind `CLIENT_ID` must be called "Ligma".
 //!
 //! Talking to Discord blocks, so a worker thread owns the connection. The
@@ -17,6 +18,8 @@ use tauri::{AppHandle, Manager};
 /// Application ID from the Discord Developer Portal. Empty: presence off.
 const CLIENT_ID: &str = "1563151879788167309";
 const LOGO_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/logo.png";
+/// Tool icons, `assets/tools/{focused,unfocused}/<slug>.png`.
+const TOOLS_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/tools";
 
 /// Discord allows 5 activity updates per 20 seconds.
 const MIN_INTERVAL: Duration = Duration::from_secs(4);
@@ -31,9 +34,13 @@ const TOOL_JS: &str = r#"(() => {
     "Move", "Hand", "Scale", "Frame", "Section", "Slice", "Rectangle", "Line",
     "Arrow", "Ellipse", "Polygon", "Star", "Image", "Pen", "Pencil", "Text",
     "Comment", "Sticky", "Shape", "Connector", "Marker", "Highlighter",
-    "Eraser", "Washi tape", "Stamp", "Table",
+    "Eraser", "Washi tape", "Stamp", "Table", "Text on path", "Annotation",
+    "Measurement",
   ];
   const byName = new Map(tools.map((tool) => [tool.toLowerCase(), tool]));
+  // Dev Mode names these after the action.
+  byName.set("annotate", "Annotation");
+  byName.set("measure", "Measurement");
   for (const el of document.querySelectorAll('[aria-pressed="true"], [aria-checked="true"]')) {
     const label = (el.getAttribute("aria-label") || el.getAttribute("data-tooltip") || "")
       .replace(/\s+[–—-]\s+.*$/, "")
@@ -50,6 +57,8 @@ struct Status {
     /// Name of the open file. None outside a file (Home, other pages).
     file: Option<String>,
     tool: Option<String>,
+    /// Whether the Ligma window has focus.
+    focused: bool,
 }
 
 /// Channel to the worker. None when presence is off.
@@ -82,13 +91,17 @@ pub fn sync(app: &AppHandle) {
     let Some(tx) = app.state::<Presence>().0.lock().unwrap().clone() else {
         return;
     };
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|window| window.is_focused().ok())
+        .unwrap_or(false);
     let Some((file, webview)) = crate::tabs::active_file(app) else {
-        let _ = tx.send(Status::default());
+        let _ = tx.send(Status { focused, ..Status::default() });
         return;
     };
     let _ = webview.eval_with_callback(TOOL_JS, move |json| {
         let tool = serde_json::from_str::<Option<String>>(&json).ok().flatten();
-        let _ = tx.send(Status { file: Some(file.clone()), tool });
+        let _ = tx.send(Status { file: Some(file.clone()), tool, focused });
     });
 }
 
@@ -98,6 +111,32 @@ fn now_ms() -> i64 {
         .map_or(0, |time| time.as_millis() as i64)
 }
 
+/// File name of the tool's icon in `assets/tools`, if it has one.
+fn tool_icon(tool: &str) -> Option<&'static str> {
+    Some(match tool {
+        "Move" => "move",
+        "Hand" => "hand",
+        "Scale" => "scale",
+        "Frame" => "frame",
+        "Section" => "section",
+        "Slice" => "slice",
+        "Rectangle" => "rectangle",
+        "Line" => "line",
+        "Arrow" => "arrow",
+        "Ellipse" => "ellipse",
+        "Polygon" => "polygon",
+        "Star" => "star",
+        "Pen" => "pen",
+        "Pencil" => "pencil",
+        "Text" => "text",
+        "Text on path" => "text-on-path",
+        "Comment" => "comment",
+        "Annotation" => "annotation",
+        "Measurement" => "measurement",
+        _ => return None,
+    })
+}
+
 fn activity(status: &Status, started: i64) -> Activity<'_> {
     let details = match status.file.as_deref() {
         // "Figma" is the title while the file is still loading.
@@ -105,15 +144,22 @@ fn activity(status: &Status, started: i64) -> Activity<'_> {
         Some(file) => format!("Editing {file}"),
         None => "Browsing files".to_owned(),
     };
+    let mut assets = Assets::new().large_image(LOGO_URL).large_text("Ligma");
     let mut activity = Activity::new()
         .name("Ligma")
         .details(details)
-        .timestamps(Timestamps::new().start(started))
-        .assets(Assets::new().large_image(LOGO_URL).large_text("Ligma"));
+        .timestamps(Timestamps::new().start(started));
     if let Some(tool) = &status.tool {
-        activity = activity.state(format!("{tool} tool"));
+        let label = format!("{tool} tool");
+        if let Some(icon) = tool_icon(tool) {
+            let state = if status.focused { "focused" } else { "unfocused" };
+            assets = assets
+                .small_image(format!("{TOOLS_URL}/{state}/{icon}.png"))
+                .small_text(label.clone());
+        }
+        activity = activity.state(label);
     }
-    activity
+    activity.assets(assets)
 }
 
 fn run(rx: Receiver<Status>) {
