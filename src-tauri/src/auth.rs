@@ -12,9 +12,17 @@
 //!    page for it: on macOS in Apple's sign-in sheet, which catches the
 //!    `figma://` link itself (web_auth.rs); on Windows in the browser, with
 //!    `figma://` pointed at Ligma meanwhile (figma_scheme.rs).
-//! 3. Once the user approves, `on_figma_link` gets the link. The tab that
-//!    asked loads Figma's own redeem page with its secret, which signs it in
-//!    and reloads. Tabs share cookies, so all are signed in.
+//! 3. Once the user approves, `on_figma_link` gets the link and hands its
+//!    secret to the page that asked, still on Figma's login page, like
+//!    Figma desktop does. The page redeems it
+//!    (`POST /api/session/app_auth/redeem`), then opens the files of the
+//!    account it added. Tabs share cookies, so all are signed in.
+//!
+//! Figma's "Add account" opens its login page in a new tab, and Google
+//! sign-in there runs the same steps; the redeem adds the account to the
+//! session. The page that asked must redeem: Figma's own `/app_auth/redeem`
+//! page sends a signed-in session on to its files without redeeming, and a
+//! signed-out session that loads the login page again can't redeem.
 //!
 //! A link is only redeemed while a sign-in Ligma started is waiting for
 //! it, so a link from elsewhere can't sign Ligma into someone else's account.
@@ -28,27 +36,61 @@ use tauri_plugin_dialog::DialogExt;
 /// Loaded by the page to report back; never resolves.
 pub const SIGNAL_HOST: &str = "auth.ligma.invalid";
 
+/// Fragment key of the sign-in secret handed to `PAGE_JS` by loading a
+/// page, when the page that asked was put to sleep meanwhile.
+const REDEEM_KEY: &str = "ligma_redeem";
+
+/// How long a woken or resuming tab gets before the secret is handed over
+/// by loading a page instead.
+const RESUME_WAIT: Duration = Duration::from_secs(10);
+
 /// How long a sign-in waits for the browser.
 const WAIT: Duration = Duration::from_secs(15 * 60);
 
 /// Defines `__ligmaSignIn`, which starts an app session and reports it to
-/// `SIGNAL_HOST`, and sends the login page's Google popup there instead of
-/// a window Ligma would deny. The page polls the popup for a result; the
-/// stand-in never closes, so it waits quietly until the redeem page loads.
+/// `SIGNAL_HOST`, and `__ligmaRedeem`, which redeems its secret and opens
+/// the account it added; also redeems a secret in the fragment
+/// (`REDEEM_KEY`). Sends the login page's Google popup to `__ligmaSignIn`
+/// instead of a window Ligma would deny. The page polls the popup for a
+/// result; the stand-in never closes, so it waits quietly for the secret.
 pub const PAGE_JS: &str = r#"(() => {
   if (location.hostname !== "www.figma.com") return;
   const signal = (params) => {
     location.href = "https://auth.ligma.invalid/?" + new URLSearchParams(params);
   };
+  const post = (path, body) =>
+    fetch(path, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "X-Csrf-Bypass": "yes" },
+      body: JSON.stringify(body),
+    }).then((response) => (response.ok ? response.json() : Promise.reject()));
+  // Ids of the accounts signed in to this session.
+  const accounts = () =>
+    fetch("/api/session/state", { credentials: "include", headers: { "X-Csrf-Bypass": "yes" } })
+      .then((response) => (response.ok ? response.json() : Promise.reject()))
+      .then(({ meta }) => (meta?.users ?? []).map((user) => String(user.id)))
+      .catch(() => []);
+  Object.defineProperty(window, "__ligmaRedeem", {
+    value: (secret) =>
+      accounts().then((before) =>
+        post("/api/session/app_auth/redeem", { g_secret: secret })
+          .then(accounts, () => Promise.reject())
+          .then((after) => {
+            const added = after.find((id) => !before.includes(id));
+            location.replace(added ? "/files?fuid=" + encodeURIComponent(added) : "/files");
+          })
+          .catch(() => signal({ error: "redeem" })),
+      ),
+  });
+  const secret = new URLSearchParams(location.hash.slice(1)).get("ligma_redeem");
+  if (secret) {
+    history.replaceState(history.state, "", location.pathname + location.search);
+    window.__ligmaRedeem(secret);
+  }
   Object.defineProperty(window, "__ligmaSignIn", {
     value: () =>
-      fetch("/api/session/app_auth", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json", "X-Csrf-Bypass": "yes" },
-        body: JSON.stringify({ app_type: "desktop" }),
-      })
-        .then((response) => (response.ok ? response.json() : Promise.reject()))
+      post("/api/session/app_auth", { app_type: "desktop" })
         .then(({ meta }) => signal({ grant: meta.id }))
         .catch(() => signal({ error: "start" })),
   });
@@ -88,7 +130,8 @@ pub fn on_signal(app: &AppHandle, id: u32, url: &Url) {
     let Some(grant) = grant.filter(|grant| {
         !grant.is_empty() && grant.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     }) else {
-        cancel(app, true);
+        let redeem = url.query_pairs().any(|(key, value)| key == "error" && value == "redeem");
+        cancel(app, Some(if redeem { REDEEM_FAILED } else { START_FAILED }));
         return;
     };
     let since = Instant::now();
@@ -117,17 +160,17 @@ pub fn on_signal(app: &AppHandle, id: u32, url: &Url) {
     });
 }
 
-/// Ends the waiting sign-in, telling the user if it `failed` rather than
-/// was cancelled.
-pub fn cancel(app: &AppHandle, failed: bool) {
+pub const START_FAILED: &str = "Figma couldn't start the sign-in. Check your connection and try again.";
+const REDEEM_FAILED: &str = "Figma didn't accept the sign-in. Try Continue with Google again.";
+
+/// Ends the waiting sign-in, showing `error` if it failed rather than was
+/// cancelled.
+pub fn cancel(app: &AppHandle, error: Option<&str>) {
     app.state::<Pending>().0.lock().unwrap().take();
     #[cfg(windows)]
     crate::figma_scheme::restore();
-    if failed {
-        app.dialog()
-            .message("Figma couldn't start the sign-in. Check your connection and try again.")
-            .title("Sign in with Google")
-            .show(|_| {});
+    if let Some(error) = error {
+        app.dialog().message(error).title("Sign in with Google").show(|_| {});
     }
 }
 
@@ -162,7 +205,35 @@ fn redeem(app: &AppHandle, secret: &str) {
     let Some((id, _)) = pending.filter(|(_, since)| since.elapsed() < WAIT) else {
         return;
     };
-    let mut redeem: Url = "https://www.figma.com/app_auth/redeem".parse().unwrap();
-    redeem.query_pairs_mut().append_pair("g_secret", secret);
-    crate::tabs::navigate(app, id, redeem);
+    // Asleep tabs wake, frozen ones resume (on macOS, a moment later).
+    let _ = crate::tabs::select(app, id);
+    let fallback = redeem_page(secret);
+    let started = Instant::now();
+    while started.elapsed() < RESUME_WAIT {
+        if let Some(webview) = crate::tabs::scriptable(app, id) {
+            // A tab that woke may not have its page yet; it loads one.
+            let _ = webview.eval(format!(
+                "window.__ligmaRedeem ? window.__ligmaRedeem({}) : location.replace({})",
+                serde_json::to_string(secret).unwrap(),
+                serde_json::to_string(fallback.as_str()).unwrap(),
+            ));
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    crate::tabs::navigate(app, id, fallback);
+}
+
+/// A page that redeems `secret` once loaded (see `REDEEM_KEY`). Its own
+/// query keeps it from being a same-page fragment change, which wouldn't
+/// run `PAGE_JS`.
+fn redeem_page(secret: &str) -> Url {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    let mut page: Url = format!("https://www.figma.com/files?ligma_signin={stamp}").parse().unwrap();
+    let mut fragment: Url = "https://fragment.invalid/".parse().unwrap();
+    fragment.query_pairs_mut().append_pair(REDEEM_KEY, secret);
+    page.set_fragment(fragment.query());
+    page
 }
