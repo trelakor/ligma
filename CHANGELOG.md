@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.6.1 - 2026-10-23
+
+- Discord Rich Presence now shows the blue tool icon while Ligma has focus. It showed the grey one whenever a file was open.
+
 ## 0.6.0 - 2026-10-23
 
 - New Settings window on macOS: Ligma > Settings… (Cmd+,). Changes to tab sleep, the hidden-tab limit, reload snapshots and Discord Rich Presence apply at once, without a restart.
