@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::webview::{NewWindowResponse, WebviewBuilder};
+use tauri::webview::{DownloadEvent, NewWindowResponse, WebviewBuilder};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window};
 use tauri_plugin_opener::OpenerExt;
 
@@ -306,6 +306,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             on_new_window(&popup_app, url);
             NewWindowResponse::Deny
         })
+        .on_download(on_download)
         .on_document_title_changed(move |webview, title| {
             on_title_changed(&title_app, id, &webview, &title)
         })
@@ -365,6 +366,30 @@ fn on_new_window(app: &AppHandle, url: Url) {
         open_later(app, url);
     } else if matches!(url.scheme(), "http" | "https") {
         open_in_browser(app, &url);
+    }
+}
+
+/// Figma exports by clicking a `download` link. Without a download handler
+/// the webview drops it, so ask where to save, like a browser would.
+fn on_download(webview: Webview, event: DownloadEvent) -> bool {
+    let DownloadEvent::Requested { destination, .. } = event else {
+        return true;
+    };
+    // This runs on the main thread inside the webview's callback, so use a
+    // synchronous dialog; the dialog plugin's waits on the main thread.
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(dir) = destination.parent() {
+        dialog = dialog.set_directory(dir);
+    }
+    if let Some(name) = destination.file_name() {
+        dialog = dialog.set_file_name(name.to_string_lossy());
+    }
+    match dialog.set_parent(&webview.window()).save_file() {
+        Some(path) => {
+            *destination = path;
+            true
+        }
+        None => false,
     }
 }
 
