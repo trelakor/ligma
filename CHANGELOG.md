@@ -2,6 +2,18 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.8.0 - 2026-10-23
+
+- Right-click a tab to pin or unpin it, copy its link, open it in your browser, reload it, or close it, the other tabs or all tabs. Home's menu has Copy Link, Reload and Close Other Tabs. Close Other Tabs keeps pinned tabs.
+- Pinned tabs sit right after Home and show only their icon.
+- Drag tabs to reorder them. Pinned tabs move among themselves, the others among themselves.
+- New setting, Reopen tabs from last time: brings back your tabs, pins and the tab you had open. Only that tab loads; the others load when you select them.
+- Ligma > Check for Updates… checks right away.
+- A file whose name starts with an emoji shows that emoji as its tab icon.
+- The Figma Design tab icon's pen nib is angled like Figma's.
+- "Open in new tab" on Home now opens the file in a new Ligma tab.
+- Fixed a crash on macOS 27 when closing a tab or when a tab went to sleep.
+
 ## 0.7.0 - 2026-10-23
 
 - Exporting several images at once saves them into a folder you choose, like the Figma desktop app, instead of as a zip. Files already in the folder are kept: new ones get a " (2)" suffix.
