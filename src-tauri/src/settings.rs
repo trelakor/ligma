@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
 
-const WINDOW: &str = "settings";
+pub const WINDOW: &str = "settings";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -30,6 +30,10 @@ pub struct Settings {
     pub reload_snapshots: bool,
     /// Show the open file and selected tool on Discord.
     pub discord_rich_presence: bool,
+    /// Name the open file on Discord; otherwise it says "Editing a file".
+    pub discord_show_file: bool,
+    /// Show the selected tool (icon and text) on Discord.
+    pub discord_show_tool: bool,
     /// Reopen the last session's tabs on launch, asleep until selected.
     pub restore_tabs: bool,
 }
@@ -41,6 +45,8 @@ impl Default for Settings {
             max_hidden_tabs_loaded: None,
             reload_snapshots: false,
             discord_rich_presence: true,
+            discord_show_file: true,
+            discord_show_tool: true,
             restore_tabs: false,
         }
     }
@@ -85,7 +91,8 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
-        .inner_size(520.0, 480.0)
+        // Fits every row; macOS has one more (reload snapshots).
+        .inner_size(520.0, if cfg!(target_os = "macos") { 600.0 } else { 540.0 })
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
