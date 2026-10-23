@@ -2,6 +2,13 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.6.0 - 2026-10-23
+
+- New Settings window on macOS: Ligma > Settings… (Cmd+,). Changes to tab sleep, the hidden-tab limit, reload snapshots and Discord Rich Presence apply at once, without a restart.
+- Discord Rich Presence shows the selected tool's icon: blue while Ligma has focus, grey otherwise. Text on path, Annotation and Measurement are now detected too.
+- Figma downloads ask where to save, like a browser, instead of being dropped.
+- Release notes now come from this changelog.
+
 ## 0.5.0 - 2026-10-23
 
 - Ligma now updates itself. On launch and every 6 hours it checks for a new release, downloads it in the background and offers to restart. Choose Later and it installs when you quit. Your sign-in and settings stay.
