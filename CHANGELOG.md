@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.0 - 2026-10-23
+
+- Continue with Google now works. Ligma opens Figma's approval page in your browser, where you sign in with Google and approve, then brings the sign-in back to the tab you started from. Google doesn't allow sign-in inside embedded webviews, so this is how the Figma desktop app does it too.
+- On Windows, opening Ligma again brings the open window forward instead of starting a second copy.
+
 ## 0.10.0 - 2026-10-23
 
 - New Discord Rich Presence settings: Show file name (when off, Discord says "Editing a file") and Show selected tool (when off, the tool's name and icon are hidden).
