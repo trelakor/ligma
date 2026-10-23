@@ -986,6 +986,14 @@ pub fn new_tab(app: &AppHandle) -> tauri::Result<()> {
     open(app, HOME_URL.parse().unwrap())
 }
 
+/// Webview of tab `id` if its page can run JavaScript now: loaded, and not
+/// frozen or still resuming.
+pub fn scriptable(app: &AppHandle, id: u32) -> Option<Webview> {
+    with_tab(app, id, |tab| !tab.asleep && !tab.suspended)?
+        .then(|| app.get_webview(&label(id)))
+        .flatten()
+}
+
 /// Title and webview of the active tab, if it shows a Figma file and can
 /// run JavaScript (not still resuming).
 pub fn active_file(app: &AppHandle) -> Option<(String, Webview)> {

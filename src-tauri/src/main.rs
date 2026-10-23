@@ -172,7 +172,10 @@ fn main() {
                 std::thread::spawn(move || figma_scheme::on_args(&app, _args));
             }
         }))
-        .plugin(tauri_plugin_opener::init())
+        // Ligma opens links from Rust. The plugin's own handler would catch
+        // `target="_blank"` clicks in Figma tabs, which have no IPC, and drop
+        // them (Add account, for one).
+        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         // Settings has a fixed size, which grows with new options.
         .plugin(
             tauri_plugin_window_state::Builder::default()
