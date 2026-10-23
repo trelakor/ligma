@@ -17,11 +17,9 @@ discord-rich-presence = "1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
-# ligma:// links, which bring Google sign-in back from the browser
-# (src/auth.rs). On Windows a link starts a second Ligma, which hands it to
-# the running one.
-tauri-plugin-deep-link = "2"
-tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+# On Windows a figma:// link starts a second Ligma, which hands it to the
+# running one (src/figma_scheme.rs).
+tauri-plugin-single-instance = "2"
 # The dialog plugin's own rfd, for the synchronous dialogs downloads need
 # in src/downloads.rs.
 rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
@@ -33,6 +31,8 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
 windows-core = "0.62"
+# figma:// registration in src/figma_scheme.rs.
+windows-registry = "0.6"
 
 # libc for the memory pressure level in src/pressure.rs; objc2 and block2,
 # the same versions wry uses, for the AppKit and WebKit calls in

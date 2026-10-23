@@ -41,7 +41,10 @@ npm run icon
 - With `"restoreTabs": true` (Settings > Reopen tabs from last time), Ligma reopens your tabs, pins and the tab you had open. They're kept in `session.json` next to `settings.json`. Only the tab you had open loads; the others load when selected.
 - Shortcuts (macOS): `Cmd+T` new tab, `Cmd+W` close tab, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. Middle-click also closes a tab.
 - Links inside `figma.com` stay in the app. All other web links open in the default browser.
-- Continue with Google signs in through your browser, like the Figma desktop app, because Google doesn't allow sign-in inside embedded webviews. Ligma opens Figma's approval page in the browser. After you approve, the browser opens a `ligma://` link that hands the sign-in back to the tab you started from. Ligma only accepts that link while a sign-in it started is waiting (up to 15 minutes), so a link from anywhere else can't sign you into another account. A second Ligma launched by the link passes it on and exits (see `src-tauri/src/auth.rs`).
+- Continue with Google signs in the way the Figma desktop app does, because Google doesn't allow sign-in inside embedded webviews: you approve Ligma on Figma's own page, signed in to Figma in a real browser, and Figma hands the sign-in back through a `figma://app_auth/redeem` link, which loads in the tab you started from. Figma only sends that link to `figma://`, whichever app asked (see `src-tauri/src/auth.rs`).
+  - macOS: the approval page opens in Apple's sign-in sheet, which shares Safari's cookies and catches the `figma://` link itself, so it works alongside the Figma desktop app (`web_auth.rs`).
+  - Windows: the page opens in your browser. Without the Figma desktop app, Ligma registers itself for `figma://` and also opens Figma's "Open in desktop app" links in a tab. With it, Ligma borrows `figma://` only while a sign-in waits (up to 15 minutes) and then puts Figma's entry back, also at the next launch if Ligma quit in between (`figma_scheme.rs`). A second Ligma started by a link passes it on and exits.
+  - A sign-in link is only accepted while a sign-in Ligma started is waiting, so a link from anywhere else can't sign you into another account.
 - Window size and position are saved between launches.
 - Drag-and-drop goes to Figma, so you can drop images and files onto the canvas.
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
@@ -84,5 +87,4 @@ On macOS, summed over Ligma and the WebKit processes it's responsible for (as Ac
 
 ## Known limits
 
-- "Continue with Google" sign-in needs Google's site, which opens in your browser. Sign in with email/password or SSO instead.
 - Windows builds are produced by CI and haven't been tested on a real Windows machine yet. Keyboard tab shortcuts are macOS-only for now.
