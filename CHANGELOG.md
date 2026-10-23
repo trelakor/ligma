@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.2 - 2026-10-23
+
+- Add account in Figma's account menu now works on Windows. It opens Figma's sign-in page in a new tab, where Continue with Google signs in the same way as the first time and then shows the added account.
+- Links Figma opens in a new window, like Add account, no longer do nothing on Windows.
+- Signing in with Google finishes in the page you started from, like in the Figma desktop app, and says so if Figma doesn't accept it.
+
 ## 0.11.1 - 2026-10-23
 
 - Continue with Google now finishes signing in. In 0.11.0 the approval in your browser went to the Figma desktop app, or nowhere, instead of back to Ligma.
