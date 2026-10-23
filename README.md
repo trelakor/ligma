@@ -12,7 +12,7 @@ Get the latest macOS and Windows builds from [Releases](../../releases/latest). 
 
 Ligma updates itself. On launch and every 6 hours it checks the latest release, downloads a newer version in the background and offers to restart. Choose Later and it installs when you quit. The app is replaced in place, so you stay signed in.
 
-To publish a release, bump `version` in `src-tauri/tauri.conf.json`, then push a matching tag (`git tag v0.2.0 && git push --tags`). `.github/workflows/release.yml` builds both platforms, attaches the installers and writes the `latest.json` that installed apps check. It signs the update packages with the `TAURI_SIGNING_PRIVATE_KEY` repository secret (a key from `npx tauri signer generate`, without password), whose public key is `plugins.updater.pubkey` in `tauri.conf.json`. Keep the private key: without it, installed apps can't update.
+To publish a release, bump `version` in `src-tauri/tauri.conf.json`, add a `## <version> - <date>` section with its changes to [`CHANGELOG.md`](CHANGELOG.md), then push a matching tag (`git tag v0.6.0 && git push --tags`). `.github/workflows/release.yml` stops if the changelog section is missing or the tag doesn't match the version. It writes the release notes from the changelog section with `scripts/release-notes.mjs` (run it locally to preview), builds both platforms, attaches the installers and writes the `latest.json` that installed apps check. It signs the update packages with the `TAURI_SIGNING_PRIVATE_KEY` repository secret (a key from `npx tauri signer generate`, without password), whose public key is `plugins.updater.pubkey` in `tauri.conf.json`. Keep the private key: without it, installed apps can't update.
 
 ## Requirements
 
