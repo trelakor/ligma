@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.7.0 - 2026-10-23
+
+- Exporting several images at once saves them into a folder you choose, like the Figma desktop app, instead of as a zip. Files already in the folder are kept: new ones get a " (2)" suffix.
+
 ## 0.6.1 - 2026-10-23
 
 - Discord Rich Presence now shows the blue tool icon while Ligma has focus. It showed the grey one whenever a file was open.
