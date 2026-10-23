@@ -166,6 +166,17 @@ fn is_figma(url: &Url) -> bool {
             .is_some_and(|host| host == "figma.com" || host.ends_with(".figma.com"))
 }
 
+/// Content Figma serves from its own domains inside its pages, like the
+/// `*.figma.site` previews of Make and Sites. On macOS `on_navigation` also
+/// sees iframe loads, so these must stay in the page rather than go to the
+/// browser.
+fn is_figma_content(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| host == "figma.site" || host.ends_with(".figma.site"))
+}
+
 /// Tab icon for a Figma URL, from the first path segment (`/design/<key>/...`).
 fn kind(url: &Url) -> &'static str {
     match url.path_segments().and_then(|mut s| s.next()) {
@@ -273,6 +284,9 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         "http" | "https" => {}
         // blob:, data:, about: and friends stay in the page.
         _ => return true,
+    }
+    if is_figma_content(url) {
+        return true;
     }
     if !is_figma(url) {
         open_in_browser(app, url);
