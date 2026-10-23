@@ -12,11 +12,13 @@ pub struct Settings {
     /// Minutes a tab stays hidden before Ligma closes its webview to free
     /// memory. It reloads when selected. 0 keeps every tab loaded.
     pub sleep_tabs_after_minutes: u64,
+    /// Show the open file and selected tool on Discord.
+    pub discord_rich_presence: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { sleep_tabs_after_minutes: 30 }
+        Self { sleep_tabs_after_minutes: 30, discord_rich_presence: true }
     }
 }
 

@@ -423,6 +423,17 @@ pub fn new_tab(app: &AppHandle) -> tauri::Result<()> {
     open(app, HOME_URL.parse().unwrap())
 }
 
+/// Title and webview of the active tab, if it shows a Figma file.
+pub fn active_file(app: &AppHandle) -> Option<(String, Webview)> {
+    let (id, title) = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let tab = state.tabs.iter().find(|tab| tab.id == state.active)?;
+        tab.file_key.as_ref()?;
+        (tab.id, tab.title.clone())
+    };
+    Some((title, app.get_webview(&label(id))?))
+}
+
 /// Runs `f` on tab `id`, if it's still open.
 fn with_tab<T>(app: &AppHandle, id: u32, f: impl FnOnce(&mut Tab) -> T) -> Option<T> {
     let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
