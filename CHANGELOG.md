@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.14.0 - 2026-10-24
+
+- Your Discord status shows where you are in the file under its name: the page in Figma Design and FigJam, the slide in Figma Slides or while presenting ("Slide 3 of 12", or the frame of a prototype), the chat in Figma Make, the asset in Figma Buzz ("Asset 2 of 5") and the webpage in Figma Sites. Each Figma product has its own switch in Settings, all on by default.
+- The selected tool shows on Discord only as its icon, named when you hover it, instead of also taking up a line of text.
+- Figma Buzz tabs show Buzz's pink party popper, Figma Make tabs show Make's silvery pinwheel, and Figma Sites tabs are Sites' deep purple.
+
 ## 0.13.1 - 2026-10-24
 
 - Hovering Ligma's logo on your Discord status shows the version of Ligma you're using.
