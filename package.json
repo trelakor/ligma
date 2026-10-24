@@ -8,7 +8,8 @@
     "build": "tauri build",
     "icon": "tauri icon assets/icon.png -o src-tauri/icons && tauri icon assets/icon-windows.png -o src-tauri/icons/.windows && node -e \"const fs=require('fs');fs.copyFileSync('src-tauri/icons/.windows/icon.ico','src-tauri/icons/icon.ico');fs.rmSync('src-tauri/icons/.windows',{recursive:true})\"",
     "tauri": "tauri",
-    "notices": "cargo about generate --manifest-path src-tauri/Cargo.toml -c src-tauri/about.toml -o THIRD_PARTY_NOTICES.md src-tauri/about.hbs"
+    "notices": "cargo about generate --manifest-path src-tauri/Cargo.toml -c src-tauri/about.toml -o THIRD_PARTY_NOTICES.md src-tauri/about.hbs",
+    "discord-assets": "node scripts/discord-assets.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

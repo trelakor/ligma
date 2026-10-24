@@ -19,8 +19,11 @@ use tauri::{AppHandle, Manager};
 /// Application ID from the Discord Developer Portal. Empty: presence off.
 const CLIENT_ID: &str = "1563151879788167309";
 const LOGO_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/logo.png";
-/// Tool icons, `assets/tools/{focused,unfocused}/<slug>.png`.
-const TOOLS_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/tools";
+/// Tool icons are art assets of the Discord application, uploaded in the
+/// Developer Portal (Rich Presence > Art Assets) and named
+/// `<product>-<focused|unfocused>-<slug>`. Only Figma Design's are there so
+/// far. `npm run discord-assets` checks that every one is uploaded.
+const TOOLS_PRODUCT: &str = "design";
 
 /// Discord allows 5 activity updates per 20 seconds.
 const MIN_INTERVAL: Duration = Duration::from_secs(4);
@@ -133,7 +136,7 @@ fn now_ms() -> i64 {
         .map_or(0, |time| time.as_millis() as i64)
 }
 
-/// File name of the tool's icon in `assets/tools`, if it has one.
+/// Slug of the tool's icon among the art assets, if it has one.
 fn tool_icon(tool: &str) -> Option<&'static str> {
     Some(match tool {
         "Move" => "move",
@@ -176,7 +179,7 @@ fn activity(status: &Status, started: i64) -> Activity<'_> {
         if let Some(icon) = tool_icon(tool) {
             let state = if status.focused { "focused" } else { "unfocused" };
             assets = assets
-                .small_image(format!("{TOOLS_URL}/{state}/{icon}.png"))
+                .small_image(format!("{TOOLS_PRODUCT}-{state}-{icon}"))
                 .small_text(label.clone());
         }
         activity = activity.state(label);
