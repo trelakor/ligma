@@ -6,15 +6,26 @@
 //! Talking to Discord blocks, so a worker thread owns the connection. The
 //! app sends it the wanted status every second and it forwards changes,
 //! reconnecting whenever Discord is (re)started.
+//!
+//! With invites on (`discordInvites`), the open file is also a Discord
+//! party: one per file, sized by the people Figma shows in it. Friends can
+//! then be invited from Discord's + menu, or ask to join from the user's
+//! profile (Ligma asks the user first). Joining starts Ligma through the
+//! launch command `register_launch` leaves for Discord, and Discord hands
+//! the party's secret, `<editor>/<file key>`, to `ACTIVITY_JOIN`. Ligma
+//! opens that file, and Figma shows it to whoever has access.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use discord_rich_presence::activity::{Activity, Assets, Timestamps};
-use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
+use discord_rich_presence::activity::{Activity, Assets, Party, Secrets, Timestamps};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+use crate::discord_ipc::Ipc;
 
 /// Application ID from the Discord Developer Portal. Empty: presence off.
 const CLIENT_ID: &str = "1563151879788167309";
@@ -29,6 +40,10 @@ const TOOLS_PRODUCT: &str = "design";
 const MIN_INTERVAL: Duration = Duration::from_secs(4);
 /// Wait between attempts to reach Discord when it isn't running.
 const RETRY_AFTER: Duration = Duration::from_secs(15);
+/// Party size Discord shows as the most people a file can hold. Discord
+/// only offers invites to a party with a size and room left in it; Figma
+/// has no such limit to report.
+const PARTY_MAX: i32 = 500;
 
 /// Name of the selected tool in the toolbar, or null. Figma marks the
 /// active tool button with `aria-pressed` or `aria-checked`; its label may
@@ -56,6 +71,32 @@ const TOOL_JS: &str = r#"(() => {
   return null;
 })()"#;
 
+/// Number of people in the file: Figma's avatars of live sessions in the
+/// toolbar, the user's own included (Figma shows one per person), and any
+/// "+N" for those that don't fit.
+const PEOPLE_JS: &str = r#"(() => {
+  const sessions = new Set();
+  for (const el of document.querySelectorAll("[data-tooltip-user-session-id]")) {
+    sessions.add(el.getAttribute("data-tooltip-user-session-id"));
+  }
+  let more = 0;
+  for (const el of document.querySelectorAll('[data-onboarding-key="multiplayer-row-container"] *')) {
+    const count = el.children.length ? null : /^\+(\d+)$/.exec(el.textContent.trim());
+    if (count) more = Math.max(more, Number(count[1]));
+  }
+  return Math.max(1, sessions.size + more);
+})()"#;
+
+/// The open file as a Discord party.
+#[derive(Clone, PartialEq)]
+struct Invite {
+    /// Same for everyone in the file, without giving its key away.
+    party: String,
+    /// Handed to whoever joins: `<editor>/<file key>`.
+    secret: String,
+    people: i32,
+}
+
 #[derive(Clone, Default, PartialEq)]
 struct Status {
     /// Name of the open file. None outside a file (Home, other pages).
@@ -65,30 +106,85 @@ struct Status {
     tool: Option<String>,
     /// Whether the Ligma window has focus.
     focused: bool,
+    /// Only with invites on, in a file.
+    invite: Option<Invite>,
+}
+
+enum Message {
+    Status(Status),
+    /// The user's answer to Discord user `user` asking to join.
+    Answer { user: String, invite: bool },
 }
 
 pub struct Presence {
     /// Channel to the worker. None when presence is off.
-    tx: Mutex<Option<Sender<Status>>>,
-    /// `discordShowFile` and `discordShowTool`.
+    tx: Mutex<Option<Sender<Message>>>,
+    /// `discordShowFile`, `discordShowTool` and `discordInvites`.
     show_file: AtomicBool,
     show_tool: AtomicBool,
+    invites: AtomicBool,
 }
 
-fn worker(settings: &crate::settings::Settings) -> Option<Sender<Status>> {
+fn worker(app: &AppHandle, settings: &crate::settings::Settings) -> Option<Sender<Message>> {
     if CLIENT_ID.is_empty() || !settings.discord_rich_presence {
         return None;
     }
+    register_launch(app);
     let (tx, rx) = channel();
-    std::thread::spawn(move || run(rx));
+    let app = app.clone();
+    std::thread::spawn(move || run(&app, rx));
     Some(tx)
 }
 
-pub fn start(settings: &crate::settings::Settings) -> Presence {
+pub fn start(app: &AppHandle, settings: &crate::settings::Settings) -> Presence {
     Presence {
-        tx: Mutex::new(worker(settings)),
+        tx: Mutex::new(worker(app, settings)),
         show_file: AtomicBool::new(settings.discord_show_file),
         show_tool: AtomicBool::new(settings.discord_show_tool),
+        invites: AtomicBool::new(settings.discord_invites),
+    }
+}
+
+/// Tells Discord how to start Ligma for someone joining a file, the way
+/// Discord's own RPC library does. Joining while Ligma runs goes straight
+/// to it instead.
+fn register_launch(_app: &AppHandle) {
+    #[cfg(windows)]
+    {
+        use windows_registry::CURRENT_USER;
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let exe = exe.display().to_string();
+        let key = format!(r"Software\Classes\discord-{CLIENT_ID}");
+        let _ = CURRENT_USER.create(&key).and_then(|key| {
+            key.set_string("", format!("URL:Run game {CLIENT_ID} protocol"))?;
+            key.set_string("URL Protocol", "")
+        });
+        let _ = CURRENT_USER
+            .create(format!(r"{key}\DefaultIcon"))
+            .and_then(|key| key.set_string("", &exe));
+        let _ = CURRENT_USER
+            .create(format!(r"{key}\shell\open\command"))
+            .and_then(|key| key.set_string("", format!("\"{exe}\"")));
+    }
+    // Discord reads the command from its games folder, if it's installed.
+    #[cfg(target_os = "macos")]
+    {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let discord = std::path::Path::new(&home).join("Library/Application Support/discord");
+        if !discord.is_dir() {
+            return;
+        }
+        let games = discord.join("games");
+        let command = format!("open -b {}", _app.config().identifier);
+        let _ = std::fs::create_dir_all(&games);
+        let _ = std::fs::write(
+            games.join(format!("{CLIENT_ID}.json")),
+            json!({ "command": command }).to_string(),
+        );
     }
 }
 
@@ -98,9 +194,10 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     let presence = app.state::<Presence>();
     presence.show_file.store(settings.discord_show_file, Ordering::Relaxed);
     presence.show_tool.store(settings.discord_show_tool, Ordering::Relaxed);
+    presence.invites.store(settings.discord_invites, Ordering::Relaxed);
     let mut tx = presence.tx.lock().unwrap();
     if tx.is_some() != settings.discord_rich_presence {
-        *tx = worker(settings);
+        *tx = worker(app, settings);
     }
 }
 
@@ -116,22 +213,44 @@ pub fn sync(app: &AppHandle) {
         .get_window("main")
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
-    let Some((file, view, webview)) = crate::tabs::active_file(app) else {
-        let _ = tx.send(Status { focused, ..Status::default() });
+    let Some(active) = crate::tabs::active_file(app) else {
+        let _ = tx.send(Message::Status(Status { focused, ..Status::default() }));
         return;
     };
-    let (verb, presenting) = verb(view);
+    let (verb, presenting) = verb(active.view);
     // An empty name shows as "Designing a file" and so on.
-    let file = if presence.show_file.load(Ordering::Relaxed) { file } else { String::new() };
+    let file = if presence.show_file.load(Ordering::Relaxed) { active.name } else { String::new() };
+    let invite = presence.invites.load(Ordering::Relaxed).then(|| Invite {
+        party: party_id(&active.key),
+        secret: format!("{}/{}", active.editor, active.key),
+        people: 1,
+    });
     // Presentations have no tools.
-    if presenting || !presence.show_tool.load(Ordering::Relaxed) {
-        let _ = tx.send(Status { file: Some(file), verb, tool: None, focused });
+    let show_tool = !presenting && presence.show_tool.load(Ordering::Relaxed);
+    if !show_tool && invite.is_none() {
+        let _ = tx.send(Message::Status(Status { file: Some(file), verb, tool: None, focused, invite }));
         return;
     }
-    let _ = webview.eval_with_callback(TOOL_JS, move |json| {
-        let tool = serde_json::from_str::<Option<String>>(&json).ok().flatten();
-        let _ = tx.send(Status { file: Some(file.clone()), verb, tool, focused });
+    let script = format!(
+        "[{}, {}]",
+        if show_tool { TOOL_JS } else { "null" },
+        if invite.is_some() { PEOPLE_JS } else { "1" },
+    );
+    let _ = active.webview.eval_with_callback(script, move |json| {
+        let (tool, people) = serde_json::from_str::<(Option<String>, i32)>(&json).unwrap_or((None, 1));
+        let invite = invite.clone().map(|invite| Invite { people: people.clamp(1, PARTY_MAX), ..invite });
+        let status = Status { file: Some(file.clone()), verb, tool, focused, invite };
+        let _ = tx.send(Message::Status(status));
     });
+}
+
+/// Discord party of the file with key `key`: an FNV-1a hash, the same in
+/// every Ligma.
+fn party_id(key: &str) -> String {
+    let hash = format!("ligma:{key}").bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{hash:016x}")
 }
 
 fn now_ms() -> i64 {
@@ -207,11 +326,70 @@ fn activity(status: &Status, started: i64) -> Activity<'_> {
         }
         activity = activity.state(label);
     }
+    if let Some(invite) = &status.invite {
+        activity = activity
+            .party(Party::new().id(invite.party.as_str()).size([invite.people, PARTY_MAX]))
+            .secrets(Secrets::new().join(invite.secret.as_str()));
+    }
     activity.assets(assets)
 }
 
-fn run(rx: Receiver<Status>) {
-    let mut client: Option<DiscordIpcClient> = None;
+/// Handles an event Discord sent (see `subscribe`).
+fn on_event(app: &AppHandle, message: &Value, file: Option<&str>) {
+    let data = &message["data"];
+    match message["evt"].as_str() {
+        // The user joined a friend's file, maybe starting Ligma for it.
+        Some("ACTIVITY_JOIN") => {
+            if let Some(secret) = data["secret"].as_str() {
+                let (app, secret) = (app.clone(), secret.to_owned());
+                // Off this thread: opening a tab waits on the main thread.
+                std::thread::spawn(move || crate::tabs::open_shared(&app, &secret));
+            }
+        }
+        // A friend asked to join the user's file.
+        Some("ACTIVITY_JOIN_REQUEST") => {
+            let user = &data["user"];
+            let Some(id) = user["id"].as_str() else {
+                return;
+            };
+            let name = [&user["global_name"], &user["username"]]
+                .into_iter()
+                .find_map(|name| name.as_str().filter(|name| !name.is_empty()))
+                .unwrap_or("Someone");
+            let file = match file {
+                Some("" | "Figma") | None => "your file".to_owned(),
+                Some(file) => file.to_owned(),
+            };
+            let (app, id) = (app.clone(), id.to_owned());
+            app.clone()
+                .dialog()
+                .message(format!(
+                    "{name} asked on Discord to join {file}. If you invite them, it opens in \
+                     their Ligma, for them to see if they have access."
+                ))
+                .title("Join Request")
+                .buttons(MessageDialogButtons::OkCancelCustom("Invite".into(), "Ignore".into()))
+                .show(move |invite| {
+                    let tx = app.state::<Presence>().tx.lock().unwrap().clone();
+                    if let Some(tx) = tx {
+                        let _ = tx.send(Message::Answer { user: id, invite });
+                    }
+                });
+        }
+        _ => {}
+    }
+}
+
+/// Connects to Discord and subscribes to the events `on_event` handles.
+fn connect() -> std::io::Result<Ipc> {
+    let mut ipc = Ipc::connect(CLIENT_ID)?;
+    ipc.subscribe("ACTIVITY_JOIN")?;
+    ipc.subscribe("ACTIVITY_JOIN_REQUEST")?;
+    Ok(ipc)
+}
+
+fn run(app: &AppHandle, rx: Receiver<Message>) {
+    let mut client: Option<Ipc> = None;
     let mut retry_at = Instant::now();
     let mut wanted = Status::default();
     // What Discord shows. None after connecting, so it gets sent again.
@@ -220,20 +398,43 @@ fn run(rx: Receiver<Status>) {
     // The elapsed time restarts with each file, and when presenting starts
     // or stops.
     let mut started = ((None, ""), now_ms());
+    // Answers to join requests, to send.
+    let mut answers = Vec::new();
     loop {
-        match rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(status) => wanted = status,
-            Err(RecvTimeoutError::Timeout) => {}
+        let mut message = match rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(message) => Some(message),
+            Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => {
                 if let Some(mut client) = client {
-                    let _ = client.clear_activity();
-                    let _ = client.close();
+                    let args = json!({ "pid": std::process::id(), "activity": null });
+                    let _ = client.command("SET_ACTIVITY", args);
                 }
                 return;
             }
+        };
+        while let Some(next) = message.take().or_else(|| rx.try_recv().ok()) {
+            match next {
+                Message::Status(status) => wanted = status,
+                Message::Answer { user, invite } => answers.push((user, invite)),
+            }
         }
-        while let Ok(status) = rx.try_recv() {
-            wanted = status;
+        if let Some(ipc) = &mut client {
+            let mut talk = || -> std::io::Result<()> {
+                for (user, invite) in answers.drain(..) {
+                    let cmd = if invite { "SEND_ACTIVITY_JOIN_INVITE" } else { "CLOSE_ACTIVITY_REQUEST" };
+                    ipc.command(cmd, json!({ "user_id": user }))?;
+                }
+                // Also Discord's responses to commands, which go unread.
+                while let Some(message) = ipc.poll()? {
+                    on_event(app, &message, shown.as_ref().and_then(|shown| shown.file.as_deref()));
+                }
+                Ok(())
+            };
+            if talk().is_err() {
+                // Discord quit. Reconnect on the next tick.
+                client = None;
+                shown = None;
+            }
         }
         if shown.as_ref() == Some(&wanted) || sent_at.is_some_and(|at| at.elapsed() < MIN_INTERVAL) {
             continue;
@@ -242,20 +443,22 @@ fn run(rx: Receiver<Status>) {
             if Instant::now() < retry_at {
                 continue;
             }
-            let mut new = DiscordIpcClient::new(CLIENT_ID);
-            if new.connect().is_err() {
-                retry_at = Instant::now() + RETRY_AFTER;
-                continue;
+            match connect() {
+                Ok(new) => client = Some(new),
+                Err(_) => {
+                    retry_at = Instant::now() + RETRY_AFTER;
+                    continue;
+                }
             }
-            client = Some(new);
         }
         let key = (wanted.file.clone(), wanted.verb);
         if started.0 != key {
             started = (key, now_ms());
         }
+        let args = json!({ "pid": std::process::id(), "activity": activity(&wanted, started.1) });
         let ok = client
             .as_mut()
-            .is_some_and(|client| client.set_activity(activity(&wanted, started.1)).is_ok());
+            .is_some_and(|client| client.command("SET_ACTIVITY", args).is_ok());
         sent_at = Some(Instant::now());
         if ok {
             shown = Some(wanted.clone());

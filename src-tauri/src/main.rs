@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod auth;
+mod discord_ipc;
 mod downloads;
 #[cfg(windows)]
 mod figma_scheme;
@@ -231,7 +232,7 @@ fn main() {
             }
             let settings = settings::load(app.handle());
             app.manage(tabs::Tabs::new(&settings));
-            app.manage(presence::start(&settings));
+            app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
 
             // The window's own webview is the tab bar. Figma tabs are added
