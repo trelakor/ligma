@@ -9,6 +9,7 @@ mod presence;
 #[cfg(target_os = "macos")]
 mod pressure;
 mod settings;
+mod tab_menu;
 mod tabs;
 #[cfg(target_os = "macos")]
 mod titlebar;
@@ -212,6 +213,9 @@ fn main() {
             settings::get_settings,
             settings::get_theme,
             settings::set_settings,
+            tab_menu::get_menu,
+            tab_menu::menu_ready,
+            tab_menu::menu_pick,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -259,10 +263,11 @@ fn main() {
             }
 
             let handle = app.handle().clone();
-            window.on_window_event(move |event| {
-                if let WindowEvent::Resized(_) = event {
-                    tabs::layout(&handle);
-                }
+            window.on_window_event(move |event| match event {
+                WindowEvent::Resized(_) => tabs::layout(&handle),
+                // The hidden tab menu window would keep the app running.
+                WindowEvent::Destroyed => tab_menu::close(&handle),
+                _ => {}
             });
 
             tabs::layout(app.handle());
