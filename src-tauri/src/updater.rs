@@ -7,8 +7,12 @@
 //! settings) stays. Ligma > Check for Updates… does the same on demand.
 //! If installing fails, Ligma says why, links to the release to install by
 //! hand and offers a report (report.rs), rather than carrying on as the old
-//! version. Each step is logged.
+//! version. Each step is logged. On Windows, Ligma winds down (hiding its
+//! windows) before it starts the installer; if Windows then won't start it
+//! (an antivirus or Smart App Control can refuse an unsigned installer),
+//! Ligma restarts itself to say so rather than staying open unseen.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -20,9 +24,19 @@ const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 const RELEASES: &str = "https://github.com/trelakor/ligma/releases/latest";
 
-/// Why installing on quit failed, kept in the config folder to say so on
-/// the next launch.
+/// Why installing failed, kept in the config folder to say so on the next
+/// launch: on quit, or when Ligma restarted after Windows wouldn't start the
+/// installer.
 const FAILED_FILE: &str = "update-failed.txt";
+
+/// Ligma has wound down for the installer (`on_before_exit`): its windows
+/// are hidden and Tauri can't be used any more, so a failure from here on
+/// is shown after a restart.
+static WOUND_DOWN: AtomicBool = AtomicBool::new(false);
+
+/// Why the last update failed to install, kept by `start` for
+/// `offer_last_failure` to show once the main window is up.
+static LAST_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
 /// An update that's downloaded but not installed yet, with its package.
 #[derive(Default)]
@@ -38,13 +52,16 @@ pub fn start(app: &AppHandle) {
     if cfg!(debug_assertions) {
         return;
     }
-    if let Some(error) = take_quit_failure(app) {
-        install_failed(app, error);
+    // After a failure, don't offer the same update again straight away.
+    let mut skip_check = false;
+    if let Some(error) = take_failure(app) {
+        *LAST_FAILURE.lock().unwrap() = Some(error);
+        skip_check = true;
     }
     let app = app.clone();
     std::thread::spawn(move || loop {
         // Once one is downloaded, wait for it to be installed.
-        if app.state::<Pending>().0.lock().unwrap().is_none() {
+        if !std::mem::take(&mut skip_check) && app.state::<Pending>().0.lock().unwrap().is_none() {
             // Offline or no release reachable: try again next time.
             match tauri::async_runtime::block_on(check(&app)) {
                 Ok(true) => ask_to_restart(&app),
@@ -54,6 +71,14 @@ pub fn start(app: &AppHandle) {
         }
         std::thread::sleep(CHECK_EVERY);
     });
+}
+
+/// Says why the last update failed to install, if it did. Call once the
+/// main window is up, so the prompt is centered over it.
+pub fn offer_last_failure(app: &AppHandle) {
+    if let Some(error) = LAST_FAILURE.lock().unwrap().take() {
+        install_failed(app, error);
+    }
 }
 
 /// Checks right away, for the menu item, and says what it found.
@@ -91,6 +116,7 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<bool> {
     let updater = app
         .updater_builder()
         .on_before_exit(move || {
+            WOUND_DOWN.store(true, Ordering::SeqCst);
             crate::shut_down(&handle);
             handle.cleanup_before_exit();
         })
@@ -130,7 +156,18 @@ fn ask_to_restart(app: &AppHandle) {
             // starts the new version.
             match install(&handle) {
                 Ok(()) => handle.restart(),
-                Err(error) => install_failed(&handle, format!("Couldn't install Ligma {version}: {error}")),
+                Err(error) => {
+                    let error = format!("Couldn't install Ligma {version}: {error}");
+                    if WOUND_DOWN.load(Ordering::SeqCst) {
+                        // The windows are hidden and Tauri is shut down:
+                        // say so from a fresh start instead.
+                        log::error!("{error}");
+                        remember_failure(&handle, &error);
+                        handle.state::<Pending>().0.lock().unwrap().take();
+                        handle.restart();
+                    }
+                    install_failed(&handle, error);
+                }
             }
         },
     );
@@ -187,19 +224,25 @@ pub fn install_on_quit(app: &AppHandle) {
     if let Err(error) = install(app) {
         let message = format!("Ligma {version} couldn't be installed when you quit: {error}");
         log::error!("{message}");
-        if let Ok(dir) = app.path().app_config_dir() {
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(dir.join(FAILED_FILE), message);
-        }
+        remember_failure(app, &message);
     }
 }
 
-/// The reason a quit-time install failed, if one did since the last launch.
-fn take_quit_failure(app: &AppHandle) -> Option<String> {
+/// Keeps `message` in `FAILED_FILE`, for the next launch to show.
+fn remember_failure(app: &AppHandle, message: &str) {
+    if let Ok(dir) = app.path().app_config_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(FAILED_FILE), message);
+    }
+}
+
+/// Why an update failed to install, if one did since the last launch.
+fn take_failure(app: &AppHandle) -> Option<String> {
     let path = app.path().app_config_dir().ok()?.join(FAILED_FILE);
     let error = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(path);
     // The update that failed may be the version running now, installed by hand.
     let version = app.package_info().version.to_string();
-    (!error.starts_with(&format!("Ligma {version} "))).then_some(error)
+    let this_version = [" ", ":"].iter().any(|end| error.contains(&format!("Ligma {version}{end}")));
+    (!this_version).then_some(error)
 }
