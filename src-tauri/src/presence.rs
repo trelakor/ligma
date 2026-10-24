@@ -60,8 +60,8 @@ const TOOL_JS: &str = r#"(() => {
 struct Status {
     /// Name of the open file. None outside a file (Home, other pages).
     file: Option<String>,
-    /// Whether the file is shown as a presentation rather than edited.
-    presenting: bool,
+    /// What's done with the file ("Designing", "Presenting", ...).
+    verb: &'static str,
     tool: Option<String>,
     /// Whether the Ligma window has focus.
     focused: bool,
@@ -116,20 +116,21 @@ pub fn sync(app: &AppHandle) {
         .get_window("main")
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
-    let Some((file, presenting, webview)) = crate::tabs::active_file(app) else {
+    let Some((file, view, webview)) = crate::tabs::active_file(app) else {
         let _ = tx.send(Status { focused, ..Status::default() });
         return;
     };
-    // An empty name shows as "Editing a file".
+    let (verb, presenting) = verb(view);
+    // An empty name shows as "Designing a file" and so on.
     let file = if presence.show_file.load(Ordering::Relaxed) { file } else { String::new() };
     // Presentations have no tools.
     if presenting || !presence.show_tool.load(Ordering::Relaxed) {
-        let _ = tx.send(Status { file: Some(file), presenting, tool: None, focused });
+        let _ = tx.send(Status { file: Some(file), verb, tool: None, focused });
         return;
     }
     let _ = webview.eval_with_callback(TOOL_JS, move |json| {
         let tool = serde_json::from_str::<Option<String>>(&json).ok().flatten();
-        let _ = tx.send(Status { file: Some(file.clone()), presenting, tool, focused });
+        let _ = tx.send(Status { file: Some(file.clone()), verb, tool, focused });
     });
 }
 
@@ -165,8 +166,22 @@ fn tool_icon(tool: &str) -> Option<&'static str> {
     })
 }
 
+/// What's done with a file shown in `view` (see `tabs::view`), and
+/// whether that's presenting it.
+fn verb(view: &str) -> (&'static str, bool) {
+    match view {
+        "proto" | "deck" | "presenter" => ("Presenting", true),
+        "board" => ("Jamming", false),
+        "slides" => ("Decking", false),
+        "make" => ("Generating", false),
+        "buzz" => ("Buzzing", false),
+        "site" => ("Page-building", false),
+        _ => ("Designing", false),
+    }
+}
+
 fn activity(status: &Status, started: i64) -> Activity<'_> {
-    let verb = if status.presenting { "Presenting" } else { "Editing" };
+    let verb = status.verb;
     let details = match status.file.as_deref() {
         // "Figma" is the title while the file is still loading.
         Some("" | "Figma") => format!("{verb} a file"),
@@ -200,7 +215,7 @@ fn run(rx: Receiver<Status>) {
     let mut sent_at: Option<Instant> = None;
     // The elapsed time restarts with each file, and when presenting starts
     // or stops.
-    let mut started = ((None, false), now_ms());
+    let mut started = ((None, ""), now_ms());
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(status) => wanted = status,
@@ -230,7 +245,7 @@ fn run(rx: Receiver<Status>) {
             }
             client = Some(new);
         }
-        let key = (wanted.file.clone(), wanted.presenting);
+        let key = (wanted.file.clone(), wanted.verb);
         if started.0 != key {
             started = (key, now_ms());
         }
