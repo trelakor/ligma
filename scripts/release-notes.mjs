@@ -45,6 +45,6 @@ ${changes}
 **macOS** (Apple Silicon and Intel): download \`Ligma_${version}_universal.dmg\` and drag Ligma to Applications.
 The app is not notarized, so run \`xattr -dr com.apple.quarantine /Applications/Ligma.app\` once, or allow it in System Settings → Privacy & Security → Open Anyway.
 
-**Windows**: download \`Ligma_${version}_x64-setup.exe\` (or \`Ligma_${version}_x64_en-US.msi\`).
+**Windows**: download \`Ligma_${version}_x64-setup.exe\`.
 The installer is not signed. If SmartScreen warns, choose More info → Run anyway.
 ${updating}`);
