@@ -26,6 +26,9 @@ tauri-plugin-single-instance = "2"
 rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
 # The updater's zip, to unpack multi-image exports in src/downloads.rs.
 zip = { version = "4", default-features = false, features = ["deflate"] }
+# ligma.log, for problem reports in src/report.rs.
+tauri-plugin-log = "2"
+log = "0.4"
 
 # Same versions Tauri's WebView2 backend uses, for the memory APIs in
 # src/webview2.rs.

@@ -94,11 +94,17 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         window.unminimize()?;
         return window.set_focus();
     }
+    // Fits every row; macOS has one more (reload snapshots). On a short
+    // screen it fits the screen instead, and the page scrolls.
+    let mut height: f64 = if cfg!(target_os = "macos") { 875.0 } else { 815.0 };
+    if let Ok(Some(monitor)) = app.primary_monitor() {
+        let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
+        height = height.min(area.height - 40.0);
+    }
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
-        // Fits every row; macOS has one more (reload snapshots).
-        .inner_size(520.0, if cfg!(target_os = "macos") { 720.0 } else { 660.0 })
+        .inner_size(520.0, height)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
@@ -197,4 +203,24 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
     crate::presence::apply_settings(&app, &settings);
     *app.state::<Current>().0.lock().unwrap() = settings;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_version(app: AppHandle, webview: Webview) -> Option<String> {
+    from_settings_window(&webview).then(|| app.package_info().version.to_string())
+}
+
+#[tauri::command]
+pub async fn check_for_updates(app: AppHandle, webview: Webview) {
+    if from_settings_window(&webview) {
+        crate::updater::check_now(&app);
+    }
+}
+
+/// Opens a new GitHub issue for the user to describe a problem.
+#[tauri::command]
+pub async fn report_problem(app: AppHandle, webview: Webview) {
+    if from_settings_window(&webview) {
+        crate::report::open(&app, None);
+    }
 }
