@@ -1075,21 +1075,60 @@ pub fn scriptable(app: &AppHandle, id: u32) -> Option<Webview> {
         .flatten()
 }
 
-/// File name, how it's shown (see `view`), and webview of the active tab,
-/// if it shows a Figma file and can run JavaScript (not still resuming).
-pub fn active_file(app: &AppHandle) -> Option<(String, &'static str, Webview)> {
-    let (id, title, view) = {
+/// The file in the active tab.
+pub struct ActiveFile {
+    pub name: String,
+    /// How it's shown (see `view`).
+    pub view: &'static str,
+    pub key: String,
+    /// Product whose editor opens it (see `kind`), presentations aside.
+    pub editor: &'static str,
+    pub webview: Webview,
+}
+
+/// The active tab's file, if it shows a Figma file and can run JavaScript
+/// (not still resuming).
+pub fn active_file(app: &AppHandle) -> Option<ActiveFile> {
+    let (id, name, view, key, editor) = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         let tab = state.tabs.iter().find(|tab| tab.id == state.active && !tab.suspended)?;
-        tab.file_key.as_ref()?;
-        let mut title = tab.title.as_str();
+        let key = tab.file_key.clone()?;
+        let mut name = tab.title.as_str();
         // "Presenter · <name>" and "Audience · <name>" in Slides.
         if matches!(view(&tab.url), "deck" | "presenter") {
-            title = title.split_once(" · ").map_or(title, |(_, name)| name);
+            name = name.split_once(" · ").map_or(name, |(_, name)| name);
         }
-        (tab.id, title.to_owned(), view(&tab.url))
+        // Prototypes are of Design files.
+        let editor = match kind(&tab.url) {
+            "proto" => "design",
+            kind => kind,
+        };
+        (tab.id, name.to_owned(), view(&tab.url), key, editor)
     };
-    Some((title, view, app.get_webview(&label(id))?))
+    let webview = app.get_webview(&label(id))?;
+    Some(ActiveFile { name, view, key, editor, webview })
+}
+
+/// Opens the file at `<editor>/<key>` (see `ActiveFile`) in its editor.
+/// From a Discord invite, so anything else is ignored.
+pub fn open_shared(app: &AppHandle, path: &str) -> tauri::Result<()> {
+    let Some((editor, key)) = path.split_once('/') else {
+        return Ok(());
+    };
+    let editors = ["design", "board", "slides", "make", "site", "buzz"];
+    if !editors.contains(&editor) || key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Ok(());
+    }
+    let Ok(url) = format!("https://www.figma.com/{editor}/{key}").parse() else {
+        return Ok(());
+    };
+    // Not yet, while a Ligma started for this is still setting up.
+    let Some(window) = app.get_window("main") else {
+        return Ok(());
+    };
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    open(app, url)
 }
 
 /// Runs `f` on tab `id`, if it's still open.
