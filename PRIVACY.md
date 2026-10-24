@@ -6,7 +6,7 @@ This policy covers Ligma, the desktop app in this repository, and the Ligma appl
 
 ## The short version
 
-Ligma has no servers and no accounts, and it collects nothing. It sends no analytics, telemetry or crash reports. We never receive your data.
+Ligma has no servers and no accounts, and it collects nothing. It sends no analytics, telemetry or crash reports. We never receive your data, unless you choose to report a problem on GitHub.
 
 ## What stays on your computer
 
@@ -15,6 +15,7 @@ Ligma keeps a few files in its app data folder (`%APPDATA%\dev.ligma.client` on 
 - `settings.json`: your settings.
 - `session.json`: your open and pinned tabs, if Reopen tabs from last time is on.
 - The window's size and position.
+- `ligma.log`, a log of what Ligma did, such as checking for and installing updates, and errors. It's in Ligma's log folder (`%LOCALAPPDATA%\dev.ligma.client\logs` on Windows, `~/Library/Logs/dev.ligma.client` on macOS) and holds no Figma file names or links.
 
 Figma's own data, such as cookies and your signed-in session, is kept by the system webview (WebView2 on Windows, WKWebView on macOS) on your computer. Uninstalling Ligma and deleting its app data folder removes all of it.
 
@@ -34,6 +35,16 @@ With Invites to files on, everyone you invite to the open file, and everyone who
 You choose what's shared in Ligma's Settings: hide the file name (it then says "Editing a file"), hide the tool, turn invites on or off, or turn Rich Presence off. Discord's own Activity Privacy settings can also hide it. Turning it off clears your status right away.
 
 The logo and tool icons are images in this repository on GitHub. Discord loads them from there to display them.
+
+## Problem reports
+
+When something goes wrong, such as an update that can't be installed, Ligma offers to report it. You can also report a problem from Settings, or Help on macOS. Report opens a new issue on Ligma's GitHub page in your browser, filled in with:
+
+- Ligma's version, and your system's name, version and processor type.
+- The error, if there was one.
+- The last lines of `ligma.log`, with your user name taken out of file paths.
+
+If that's too long for a link, Ligma also copies the full report to your clipboard for you to paste. Nothing is sent until you read it, edit it if you like, and submit it yourself. The issue is public on GitHub, under your GitHub account and [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement). We use reports only to fix Ligma.
 
 ## Other services Ligma connects to
 
