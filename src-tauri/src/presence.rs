@@ -114,7 +114,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
         || text('[class*="pagesDropdownButtonText"]')
         || (toggle?.closest("[aria-expanded]")?.getAttribute("aria-expanded") === "false"
           ? toggle.textContent.trim() : null);
-      return page && `Page: ${page}`;
+      return page;
     }
     // Presenting: "3 / 12" under the slide or frame.
     case "proto":
@@ -134,7 +134,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
     case "make": {
       const chat = text('[data-testid="chat-thread-row"] [aria-current="true"] span')
         || text('[data-testid="chat-threads-header"] span');
-      return chat && `Chat: ${chat}`;
+      return chat;
     }
     case "site": {
       // The webpage with the selection in it, else the last one that had it.
@@ -146,7 +146,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
         if (page.selected) window.__ligmaWebpage = page.guid;
       }
       const name = names.get(window.__ligmaWebpage);
-      return name ? `Webpage: ${name}` : null;
+      return name ?? null;
     }
   }
   return null;
@@ -184,7 +184,8 @@ struct Status {
     file: Option<String>,
     /// What's done with the file ("Designing", "Presenting", ...).
     verb: &'static str,
-    /// Where in the file the user is ("Page: Cover"), under its name.
+    /// Where in the file the user is (the page "Cover", "Slide 3 of 12"),
+    /// under its name.
     subtext: Option<String>,
     tool: Option<String>,
     /// Whether the Ligma window has focus.
