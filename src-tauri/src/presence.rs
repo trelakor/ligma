@@ -1,4 +1,5 @@
-//! Discord Rich Presence: shows the open file and the selected tool, as
+//! Discord Rich Presence: shows the open file, where in it the user is
+//! (the page, slide, chat, asset or webpage) and the selected tool, as
 //! "Ligma". The tool's icon is the small image, blue while the window has
 //! focus and grey while it doesn't. Discord names the activity after the Discord application, so
 //! the application behind `CLIENT_ID` must be called "Ligma".
@@ -15,7 +16,6 @@
 //! the party's secret, `<editor>/<file key>`, to `ACTIVITY_JOIN`. Ligma
 //! opens that file, and Figma shows it to whoever has access.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -76,6 +76,82 @@ const TOOL_JS: &str = r#"(() => {
   return null;
 })()"#;
 
+/// Where in the file the user is, shown under its name, or null. A
+/// function of the file's view (see `tabs::view`), reading only what
+/// Figma's panels show: `window.store` is for debugging, and Figma makes
+/// each read of it block the page for 5 seconds. Buzz shows an asset's
+/// name only on the canvas, so it says which asset it is instead.
+const SUBTEXT_JS: &str = r#"((view) => {
+  // Props of the component `up` levels above `el` in React's tree.
+  const props = (el, up) => {
+    const key = el && Object.keys(el).find((key) => key.startsWith("__reactFiber"));
+    let fiber = key && el[key];
+    for (let i = 0; fiber && i < up; i++) fiber = fiber.return;
+    return fiber?.memoizedProps;
+  };
+  const text = (selector) => document.querySelector(selector)?.textContent.trim() || null;
+  // "3 of 12": the selected item in Slides' or Buzz's carousel. It only
+  // draws the items in view, so they're counted in its data.
+  const position = (carousel) => {
+    const item = carousel?.querySelector('[data-testid="carousel-item"]:has([aria-selected="true"])');
+    if (!item) return null;
+    for (let up = 1; up < 5; up++) {
+      const items = props(carousel, up)?.carouselData?.carouselItemsById;
+      if (!items) continue;
+      const numbers = Object.values(items).map((item) => item.number || 0);
+      const number = items[item.getAttribute("value")]?.number;
+      if (number) return `${number} of ${Math.max(...numbers)}`;
+    }
+    return /\d+/.exec(item.querySelector('[aria-selected="true"]').getAttribute("aria-label"))?.[0] ?? null;
+  };
+  switch (view) {
+    case "design":
+    case "board": {
+      // Design's pages list, else the name on its collapsed header; FigJam's
+      // pages button names the page if the board has more than one.
+      const toggle = document.querySelector('[data-onboarding-key="pages-panel-toggle"]');
+      const page = text('[aria-current="page"] [class*="renameableNodeText"]')
+        || text('[class*="pagesDropdownButtonText"]')
+        || (toggle?.closest("[aria-expanded]")?.getAttribute("aria-expanded") === "false"
+          ? toggle.textContent.trim() : null);
+      return page;
+    }
+    // Presenting: "3 / 12" under the slide or frame.
+    case "proto":
+    case "deck":
+    case "presenter": {
+      const step = /^(\d+)\s*\/\s*(\d+)$/.exec(text('[aria-label="Stepper"] [class*="toolbeltLabel"]') || "");
+      return step && `${view === "proto" ? "Frame" : "Slide"} ${step[1]} of ${step[2]}`;
+    }
+    case "slides": {
+      const slide = position(document.querySelector('[data-testid="slides-carousel"]'));
+      return slide && `Slide ${slide}`;
+    }
+    case "buzz": {
+      const asset = position(document.querySelector('[data-testid="buzz-carousel"]'));
+      return asset && `Asset ${asset}`;
+    }
+    case "make": {
+      const chat = text('[data-testid="chat-thread-row"] [aria-current="true"] span')
+        || text('[data-testid="chat-threads-header"] span');
+      return chat;
+    }
+    case "site": {
+      // The webpage with the selection in it, else the last one that had it.
+      const names = new Map();
+      for (const row of document.querySelectorAll('[data-testid="left-panel-body"] [data-fpl-audit]')) {
+        const page = props(row, 2);
+        if (!page?.recordingKey?.startsWith("webpagesList.row")) continue;
+        names.set(page.guid, row.textContent.trim());
+        if (page.selected) window.__ligmaWebpage = page.guid;
+      }
+      const name = names.get(window.__ligmaWebpage);
+      return name ?? null;
+    }
+  }
+  return null;
+})"#;
+
 /// Number of people in the file: Figma's avatars of live sessions in the
 /// toolbar, the user's own included (Figma shows one per person), and any
 /// "+N" for those that don't fit.
@@ -108,6 +184,9 @@ struct Status {
     file: Option<String>,
     /// What's done with the file ("Designing", "Presenting", ...).
     verb: &'static str,
+    /// Where in the file the user is (the page "Cover", "Slide 3 of 12"),
+    /// under its name.
+    subtext: Option<String>,
     tool: Option<String>,
     /// Whether the Ligma window has focus.
     focused: bool,
@@ -124,10 +203,8 @@ enum Message {
 pub struct Presence {
     /// Channel to the worker. None when presence is off.
     tx: Mutex<Option<Sender<Message>>>,
-    /// `discordShowFile`, `discordShowTool` and `discordInvites`.
-    show_file: AtomicBool,
-    show_tool: AtomicBool,
-    invites: AtomicBool,
+    /// The settings in effect, for what to show.
+    settings: Mutex<crate::settings::Settings>,
 }
 
 fn worker(app: &AppHandle, settings: &crate::settings::Settings) -> Option<Sender<Message>> {
@@ -144,9 +221,7 @@ fn worker(app: &AppHandle, settings: &crate::settings::Settings) -> Option<Sende
 pub fn start(app: &AppHandle, settings: &crate::settings::Settings) -> Presence {
     Presence {
         tx: Mutex::new(worker(app, settings)),
-        show_file: AtomicBool::new(settings.discord_show_file),
-        show_tool: AtomicBool::new(settings.discord_show_tool),
-        invites: AtomicBool::new(settings.discord_invites),
+        settings: Mutex::new(settings.clone()),
     }
 }
 
@@ -197,9 +272,7 @@ fn register_launch(_app: &AppHandle) {
 /// disconnects from Discord and so clears the status.
 pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     let presence = app.state::<Presence>();
-    presence.show_file.store(settings.discord_show_file, Ordering::Relaxed);
-    presence.show_tool.store(settings.discord_show_tool, Ordering::Relaxed);
-    presence.invites.store(settings.discord_invites, Ordering::Relaxed);
+    *presence.settings.lock().unwrap() = settings.clone();
     let mut tx = presence.tx.lock().unwrap();
     if tx.is_some() != settings.discord_rich_presence {
         *tx = worker(app, settings);
@@ -222,31 +295,50 @@ pub fn sync(app: &AppHandle) {
         let _ = tx.send(Message::Status(Status { focused, ..Status::default() }));
         return;
     };
+    let settings = presence.settings.lock().unwrap().clone();
     let (verb, presenting) = verb(active.view);
     // An empty name shows as "Designing a file" and so on.
-    let file = if presence.show_file.load(Ordering::Relaxed) { active.name } else { String::new() };
-    let invite = presence.invites.load(Ordering::Relaxed).then(|| Invite {
+    let file = if settings.discord_show_file { active.name } else { String::new() };
+    let invite = settings.discord_invites.then(|| Invite {
         party: party_id(&active.key),
         secret: format!("{}/{}", active.editor, active.key),
         people: 1,
     });
     // Presentations have no tools.
-    let show_tool = !presenting && presence.show_tool.load(Ordering::Relaxed);
-    if !show_tool && invite.is_none() {
-        let _ = tx.send(Message::Status(Status { file: Some(file), verb, tool: None, focused, invite }));
+    let show_tool = !presenting && settings.discord_show_tool;
+    let show_subtext = shows_subtext(&settings, active.view);
+    if !show_tool && !show_subtext && invite.is_none() {
+        let status = Status { file: Some(file), verb, focused, invite, ..Status::default() };
+        let _ = tx.send(Message::Status(status));
         return;
     }
     let script = format!(
-        "[{}, {}]",
+        "[{}, {}, {}]",
         if show_tool { TOOL_JS } else { "null" },
         if invite.is_some() { PEOPLE_JS } else { "1" },
+        if show_subtext { format!("{SUBTEXT_JS}({:?})", active.view) } else { "null".to_owned() },
     );
     let _ = active.webview.eval_with_callback(script, move |json| {
-        let (tool, people) = serde_json::from_str::<(Option<String>, i32)>(&json).unwrap_or((None, 1));
+        let (tool, people, subtext) =
+            serde_json::from_str::<(Option<String>, i32, Option<String>)>(&json).unwrap_or((None, 1, None));
         let invite = invite.clone().map(|invite| Invite { people: people.max(1), ..invite });
-        let status = Status { file: Some(file.clone()), verb, tool, focused, invite };
+        let status = Status { file: Some(file.clone()), verb, subtext, tool, focused, invite };
         let _ = tx.send(Message::Status(status));
     });
+}
+
+/// Whether `settings` show where in the file the user is, for a file shown
+/// in `view` (see `tabs::view`).
+fn shows_subtext(settings: &crate::settings::Settings, view: &str) -> bool {
+    match view {
+        "design" => settings.discord_show_page,
+        "board" => settings.discord_show_figjam_page,
+        "slides" | "deck" | "presenter" | "proto" => settings.discord_show_slide,
+        "make" => settings.discord_show_chat,
+        "buzz" => settings.discord_show_asset,
+        "site" => settings.discord_show_webpage,
+        _ => false,
+    }
 }
 
 /// Discord party of the file with key `key`: an FNV-1a hash, the same in
@@ -322,15 +414,16 @@ fn activity<'a>(status: &'a Status, started: i64, version: &str) -> Activity<'a>
         .name("Ligma")
         .details(details)
         .timestamps(Timestamps::new().start(started));
-    if let Some(tool) = &status.tool {
-        let label = format!("{tool} tool");
-        if let Some(icon) = tool_icon(tool) {
-            let state = if status.focused { "focused" } else { "unfocused" };
-            assets = assets
-                .small_image(format!("{TOOLS_PRODUCT}-{state}-{icon}"))
-                .small_text(label.clone());
-        }
-        activity = activity.state(label);
+    // The tool is only the small image, named when hovered.
+    if let Some((tool, icon)) = status.tool.as_deref().and_then(|tool| Some((tool, tool_icon(tool)?))) {
+        let state = if status.focused { "focused" } else { "unfocused" };
+        assets = assets
+            .small_image(format!("{TOOLS_PRODUCT}-{state}-{icon}"))
+            .small_text(format!("{tool} tool"));
+    }
+    // Discord takes 2 to 128 characters.
+    if let Some(subtext) = status.subtext.as_deref().filter(|subtext| subtext.chars().count() >= 2) {
+        activity = activity.state(subtext.chars().take(128).collect::<String>());
     }
     if let Some(invite) = &status.invite {
         activity = activity
