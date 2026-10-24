@@ -304,7 +304,8 @@ fn verb(view: &str) -> (&'static str, bool) {
     }
 }
 
-fn activity(status: &Status, started: i64) -> Activity<'_> {
+/// `version` is Ligma's, shown when hovering the logo.
+fn activity<'a>(status: &'a Status, started: i64, version: &str) -> Activity<'a> {
     // "Designing in <file>", but "Presenting <file>".
     let verb = match status.verb {
         "Presenting" => "Presenting".to_owned(),
@@ -316,7 +317,7 @@ fn activity(status: &Status, started: i64) -> Activity<'_> {
         Some(file) => format!("{verb} {file}"),
         None => "Browsing files".to_owned(),
     };
-    let mut assets = Assets::new().large_image(LOGO_URL).large_text("Ligma");
+    let mut assets = Assets::new().large_image(LOGO_URL).large_text(format!("Ligma {version}"));
     let mut activity = Activity::new()
         .name("Ligma")
         .details(details)
@@ -460,7 +461,8 @@ fn run(app: &AppHandle, rx: Receiver<Message>) {
         if started.0 != key {
             started = (key, now_ms());
         }
-        let args = json!({ "pid": std::process::id(), "activity": activity(&wanted, started.1) });
+        let version = app.package_info().version.to_string();
+        let args = json!({ "pid": std::process::id(), "activity": activity(&wanted, started.1, &version) });
         let ok = client
             .as_mut()
             .is_some_and(|client| client.command("SET_ACTIVITY", args).is_ok());
