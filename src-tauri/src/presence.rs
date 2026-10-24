@@ -327,8 +327,12 @@ pub fn sync(app: &AppHandle) {
 }
 
 /// Whether `settings` show where in the file the user is, for a file shown
-/// in `view` (see `tabs::view`).
+/// in `view` (see `tabs::view`). Never without the file's name, which it
+/// goes under.
 fn shows_subtext(settings: &crate::settings::Settings, view: &str) -> bool {
+    if !settings.discord_show_file {
+        return false;
+    }
     match view {
         "design" => settings.discord_show_page,
         "board" => settings.discord_show_figjam_page,
