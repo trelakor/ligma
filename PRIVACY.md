@@ -23,7 +23,7 @@ Figma's own data, such as cookies and your signed-in session, is kept by the sys
 
 If Discord is running, Ligma tells the Discord app on your computer what to show on your profile. This goes over Discord's local connection (IPC) on your machine, not over the internet to us. Ligma sends:
 
-- "Ligma" and the time you started using it.
+- "Ligma", its version (shown when hovering its logo) and the time you started using it.
 - The name of the Figma file you have open, shown as "Editing …".
 - The Figma tool you have selected, and its icon.
 - With Invites to files on (it's off unless you turn it on): how many people Figma shows in the open file, an ID for the file that doesn't reveal it, and a link to the file that Discord keeps to itself until someone joins.
