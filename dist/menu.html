@@ -6,7 +6,8 @@
 <!-- A tab's right-click menu (see src-tauri/src/tab_menu.rs). The window
      is exactly the menu: the page draws the items from `get_menu`,
      reports its size with `menu_ready`, and sends the chosen item to
-     `menu_pick`. Colors come from the active Figma tab's menu theme. -->
+     `menu_pick`. Colors come from the active Figma tab's theme, so the
+     menu is light or dark with the editor. -->
 <style>
   /* Figma's UI3 menu, until the first Figma tab reports its theme. */
   :root {
@@ -55,19 +56,18 @@
   const menu = document.getElementById("menu");
   const pick = (action) => invoke("menu_pick", { action });
 
-  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables; a
-  // theme without menu colors falls back to the editor's.
+  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables. The
+  // editor's, not Figma's menu colors: those stay dark in light themes.
   const THEME_VARS = {
-    "--menu": ["menu", "bg"],
-    "--text": ["menuText", "text"],
-    "--selected": ["menuSelected", "brand"],
-    "--separator": ["menuBorder", "border"],
+    "--menu": "bg",
+    "--text": "text",
+    "--selected": "brand",
+    "--separator": "border",
   };
   const applyTheme = (theme) => {
     if (!theme) return;
-    for (const [cssVar, keys] of Object.entries(THEME_VARS)) {
-      const value = keys.map((key) => theme[key]).find(Boolean);
-      if (value) document.documentElement.style.setProperty(cssVar, value);
+    for (const [cssVar, key] of Object.entries(THEME_VARS)) {
+      if (theme[key]) document.documentElement.style.setProperty(cssVar, theme[key]);
     }
   };
 
