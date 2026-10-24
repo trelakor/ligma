@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::webview::DownloadEvent;
-use tauri::{Url, Webview};
+use tauri::{Manager, Url, Webview};
 
 /// Zipped exports on their way: the download's URL, its temporary file and
 /// the folder to unpack it into.
@@ -60,12 +60,13 @@ pub fn on_download(webview: Webview, event: DownloadEvent) -> bool {
                 let result = if success { unpack(&temp, &folder) } else { Ok(()) };
                 let _ = std::fs::remove_file(&temp);
                 if let Err(error) = result {
-                    rfd::MessageDialog::new()
-                        .set_level(rfd::MessageLevel::Error)
-                        .set_title("Export failed")
-                        .set_description(format!("Couldn't save the images to {}: {error}", folder.display()))
-                        .set_parent(&webview.window())
-                        .show();
+                    crate::prompt::show(
+                        webview.app_handle(),
+                        "Export Failed",
+                        format!("Couldn't save the images to {}: {error}", folder.display()),
+                        &["OK"],
+                        |_| {},
+                    );
                 }
             }
             true

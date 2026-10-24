@@ -10,13 +10,16 @@
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Webview, WebviewUrl, WebviewWindowBuilder};
 
 pub const WINDOW: &str = "settings";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    /// Size of Figma and Ligma's own interface, in percent, like a
+    /// browser's zoom. The tab bar grows with it.
+    pub interface_scale: u32,
     /// Minutes a tab stays hidden before Ligma closes its webview to free
     /// memory. It reloads when selected. On macOS tabs sleep sooner under
     /// memory pressure. 0 keeps every tab loaded.
@@ -59,6 +62,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            interface_scale: 100,
             sleep_tabs_after_minutes: 30,
             max_hidden_tabs_loaded: None,
             reload_snapshots: false,
@@ -75,6 +79,17 @@ impl Default for Settings {
             restore_tabs: false,
         }
     }
+}
+
+/// Interface scales the settings window steps through, in percent, like
+/// a browser's zoom levels. Others typed in are kept within the first and
+/// last.
+pub const SCALES: [u32; 11] = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+
+/// `interfaceScale` as a zoom factor, 1 at 100%.
+pub fn scale(settings: &Settings) -> f64 {
+    let (min, max) = (SCALES[0], SCALES[SCALES.len() - 1]);
+    f64::from(settings.interface_scale.clamp(min, max)) / 100.0
 }
 
 /// The settings in effect, for the settings window.
@@ -114,17 +129,13 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         window.unminimize()?;
         return window.set_focus();
     }
-    // Fits every row; macOS has one more (reload snapshots). On a short
-    // screen it fits the screen instead, and the page scrolls.
-    let mut height: f64 = if cfg!(target_os = "macos") { 1060.0 } else { 1000.0 };
-    if let Ok(Some(monitor)) = app.primary_monitor() {
-        let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
-        height = height.min(area.height - 40.0);
-    }
+    let size = window_size(app);
+    // Shown by `get_settings`, once the page is at the interface scale.
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
-        .inner_size(520.0, height)
+        .inner_size(size.width, size.height)
+        .visible(false)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
@@ -144,6 +155,13 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
+    // The size it was built with, and no accent-colored border.
+    #[cfg(windows)]
+    {
+        crate::frame::refresh(&window);
+        let _ = window.set_size(size);
+        crate::frame::match_theme(&window);
+    }
     // Traffic lights centered on the header, like on the tab bar. AppKit
     // only on the main thread.
     #[cfg(target_os = "macos")]
@@ -155,9 +173,42 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
             }
         })?;
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = window;
     Ok(())
+}
+
+/// The settings window's size at the interface scale: fits the longest page
+/// (Discord). On a small screen it fits the screen instead, and the page
+/// scrolls.
+fn window_size(app: &AppHandle) -> LogicalSize<f64> {
+    let scale = crate::tabs::scale(app);
+    let (mut width, mut height) = (680.0 * scale, 600.0 * scale);
+    if let Ok(Some(monitor)) = app.primary_monitor() {
+        let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
+        width = width.min(area.width - 40.0);
+        height = height.min(area.height - 40.0);
+    }
+    LogicalSize::new(width, height)
+}
+
+/// Zooms the settings window, if open, to the interface scale and resizes
+/// it around its middle.
+pub fn apply_scale(app: &AppHandle, scale: f64) {
+    let Some(window) = app.get_webview_window(WINDOW) else {
+        return;
+    };
+    let _ = window.set_zoom(scale);
+    let (Ok(position), Ok(old), Ok(factor)) = (window.outer_position(), window.outer_size(), window.scale_factor())
+    else {
+        return;
+    };
+    let size = window_size(app);
+    let _ = window.set_size(size);
+    let new = size.to_physical::<f64>(factor);
+    let x = position.x as f64 + (old.width as f64 - new.width) / 2.0;
+    let y = position.y as f64 + (old.height as f64 - new.height) / 2.0;
+    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round().max(0.0) as i32));
 }
 
 /// The theme's background as a window color, if it's `#rrggbb`.
@@ -203,7 +254,16 @@ fn from_settings_window(webview: &Webview) -> bool {
 
 #[tauri::command]
 pub async fn get_settings(app: AppHandle, webview: Webview) -> Option<Settings> {
-    from_settings_window(&webview).then(|| app.state::<Current>().0.lock().unwrap().clone())
+    if !from_settings_window(&webview) {
+        return None;
+    }
+    // Zoomed now: a zoom set before the page loaded doesn't last.
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let _ = window.set_zoom(crate::tabs::scale(&app));
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Some(app.state::<Current>().0.lock().unwrap().clone())
 }
 
 /// The active tab's Figma theme colors, for the settings window to match.

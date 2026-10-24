@@ -5,10 +5,11 @@
 <title>Settings</title>
 <!-- Settings window (Ligma > Settings…). Edits settings.json through
      `get_settings` / `set_settings` in src-tauri/src/settings.rs; each
-     change is saved and applied right away. About checks for updates and
-     reports a problem (src-tauri/src/report.rs). The window has no native
-     title bar: the header is its own, and its colors follow the active
-     Figma tab's theme (`applyTheme`, from `get_theme` and tabs.rs). -->
+     change is saved and applied right away. Each category has its own
+     page, picked in the sidebar. About checks for updates and reports a
+     problem (src-tauri/src/report.rs). The window has no native title bar:
+     the header is its own, and its colors follow the active Figma tab's
+     theme (`applyTheme`, from `get_theme` and tabs.rs). -->
 <style>
   /* Figma's UI3 palette, until the first Figma tab reports its own. */
   :root {
@@ -84,7 +85,38 @@
   #close:hover { background: #c42b1c; color: #fff; }
   .macos #close { display: none; }
 
-  main { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--bg-tertiary) transparent; }
+  #body { display: flex; flex: 1; min-height: 0; }
+
+  /* The categories, one page each. */
+  nav {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 2px;
+    width: 176px;
+    padding: 8px;
+    border-right: 1px solid var(--border);
+  }
+  nav button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: var(--text-secondary);
+    font: inherit;
+    text-align: left;
+  }
+  nav button:hover { background: var(--hover); color: var(--text); }
+  nav button[aria-selected="true"] { background: var(--bg-secondary); color: var(--text); font-weight: 550; }
+  nav svg { flex: none; }
+
+  main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--bg-tertiary) transparent; }
+  main > [role="tabpanel"] { padding-bottom: 12px; }
+  main > [hidden] { display: none; }
 
   section { padding: 8px 0 12px; }
   section + section { border-top: 1px solid var(--border); }
@@ -173,6 +205,25 @@
   .field input::-webkit-inner-spin-button, .field input::-webkit-outer-spin-button { -webkit-appearance: none; }
   .row.disabled .field { opacity: 0.4; border-color: transparent; }
 
+  /* The interface scale: a percentage between − and + buttons. */
+  .stepper { display: flex; flex: none; align-items: center; gap: 4px; }
+  .stepper .field { width: 64px; }
+  .stepper .field input { text-align: right; padding-right: 2px; }
+  .icon-button {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: var(--text);
+  }
+  .icon-button:hover:not(:disabled) { background: var(--hover); }
+  .icon-button:active:not(:disabled) { background: var(--bg-secondary); }
+  .icon-button:disabled { color: var(--text-tertiary); }
+
   /* Figma's secondary button. */
   .button {
     flex: none;
@@ -188,7 +239,7 @@
   .button:hover { background: var(--hover); }
   .button:active { background: var(--bg-secondary); }
 
-  .switch:focus-visible, #close:focus-visible, .button:focus-visible {
+  .switch:focus-visible, #close:focus-visible, .button:focus-visible, .icon-button:focus-visible, nav button:focus-visible {
     outline: 2px solid var(--brand);
     outline-offset: 1px;
   }
@@ -205,117 +256,171 @@
     <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/></svg>
   </button>
 </header>
+<div id="body">
+<nav role="tablist" aria-orientation="vertical" aria-label="Settings">
+  <button role="tab" id="tab-appearance" aria-controls="appearance">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 6h11"/></svg>
+    Appearance
+  </button>
+  <button role="tab" id="tab-tabs" aria-controls="tabs">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M2.5 13h11"/></svg>
+    Tabs &amp; Memory
+  </button>
+  <button role="tab" id="tab-discord" aria-controls="discord-page">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 4.5a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5H7.5L4.5 14v-2.5a2 2 0 0 1-2-2z"/></svg>
+    Discord
+  </button>
+  <button role="tab" id="tab-about" aria-controls="about">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3"/><circle cx="8" cy="5.5" r=".7" fill="currentColor" stroke="none"/></svg>
+    About
+  </button>
+</nav>
 <main>
-  <section>
-    <h2>Tabs</h2>
-    <label class="row">
-      <span class="label">Reopen tabs from last time
-        <div class="hint">Brings back your tabs and the one you had open. Each loads when you select it.</div>
-      </span>
-      <input type="checkbox" class="switch" id="restore">
-    </label>
-  </section>
-  <section>
-    <h2>Memory</h2>
-    <label class="row">
-      <span class="label">Put hidden tabs to sleep
-        <div class="hint">Closes a tab you aren't looking at to free its memory. It reloads when selected.</div>
-      </span>
-      <input type="checkbox" class="switch" id="sleep">
-    </label>
-    <label class="row nested" id="sleep-after-row">
-      <span class="label">After being hidden for</span>
-      <span class="field"><input type="number" id="sleep-after" min="1" step="1">min</span>
-    </label>
-    <label class="row nested" id="limit-row">
-      <span class="label">Limit hidden tabs kept loaded
-        <div class="hint">Past the limit, the oldest hidden tab sleeps right away. Home goes first.</div>
-      </span>
-      <input type="checkbox" class="switch" id="limit">
-    </label>
-    <label class="row nested" id="max-hidden-row">
-      <span class="label">Hidden tabs kept loaded</span>
-      <span class="field"><input type="number" id="max-hidden" min="0" step="1">tabs</span>
-    </label>
-    <label class="row nested" id="snapshots-row">
-      <span class="label">Show last image while a tab reloads
-        <div class="hint">In place of Figma's loading screen, after a file tab wakes from sleep.</div>
-      </span>
-      <input type="checkbox" class="switch" id="snapshots">
-    </label>
-  </section>
-  <section>
-    <h2>Discord</h2>
-    <label class="row">
-      <span class="label">Rich Presence
-        <div class="hint">Shows the open file, where you are in it and the selected tool on your Discord profile.</div>
-      </span>
-      <input type="checkbox" class="switch" id="discord">
-    </label>
-    <label class="row nested" id="discord-file-row">
-      <span class="label">Show file name
-        <div class="hint">When off, Discord doesn't name the file.</div>
-      </span>
-      <input type="checkbox" class="switch" id="discord-file">
-    </label>
-    <label class="row nested" id="discord-tool-row">
-      <span class="label">Show selected tool
-        <div class="hint">The tool's icon, named when hovered.</div>
-      </span>
-      <input type="checkbox" class="switch" id="discord-tool">
-    </label>
-    <div class="row nested" id="discord-where-row">
-      <span class="label">Show where you are in the file
-        <div class="hint">Under the file's name, for each Figma product.</div>
-      </span>
-    </div>
-    <label class="row nested deeper" id="discord-page-row">
-      <span class="label">Page in Figma Design</span>
-      <input type="checkbox" class="switch" id="discord-page">
-    </label>
-    <label class="row nested deeper" id="discord-figjam-page-row">
-      <span class="label">Page in FigJam</span>
-      <input type="checkbox" class="switch" id="discord-figjam-page">
-    </label>
-    <label class="row nested deeper" id="discord-slide-row">
-      <span class="label">Slide in Figma Slides and presentations</span>
-      <input type="checkbox" class="switch" id="discord-slide">
-    </label>
-    <label class="row nested deeper" id="discord-chat-row">
-      <span class="label">Chat in Figma Make</span>
-      <input type="checkbox" class="switch" id="discord-chat">
-    </label>
-    <label class="row nested deeper" id="discord-asset-row">
-      <span class="label">Asset in Figma Buzz</span>
-      <input type="checkbox" class="switch" id="discord-asset">
-    </label>
-    <label class="row nested deeper" id="discord-webpage-row">
-      <span class="label">Webpage in Figma Sites</span>
-      <input type="checkbox" class="switch" id="discord-webpage">
-    </label>
-    <label class="row nested" id="discord-invites-row">
-      <span class="label">Invites to files
-        <div class="hint">Lets Discord friends join the open file in their Ligma, if they have access in Figma. Shows how many are in it.</div>
-      </span>
-      <input type="checkbox" class="switch" id="discord-invites">
-    </label>
-  </section>
-  <section>
-    <h2>About</h2>
-    <div class="row">
-      <span class="label"><span id="version">Ligma</span>
-        <div class="hint">Ligma checks for updates on launch and every 6 hours.</div>
-      </span>
-      <button class="button" id="check-updates">Check for Updates</button>
-    </div>
-    <div class="row">
-      <span class="label">Report a problem
-        <div class="hint">Opens a GitHub issue with Ligma's version, your system and its recent log, for you to read and edit before sending. Nothing is sent otherwise.</div>
-      </span>
-      <button class="button" id="report">Report…</button>
-    </div>
-  </section>
+  <div role="tabpanel" id="appearance" aria-labelledby="tab-appearance">
+    <section>
+      <h2>Interface</h2>
+      <div class="row">
+        <span class="label">Interface scale
+          <div class="hint">Zooms Figma, the tab bar, menus, prompts and this window together, like a browser's zoom.</div>
+        </span>
+        <span class="stepper">
+          <button class="icon-button" id="scale-down" title="Smaller" aria-label="Smaller">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 8h8"/></svg>
+          </button>
+          <label class="field"><input type="number" id="scale" min="50" max="200" step="1" aria-label="Interface scale">%</label>
+          <button class="icon-button" id="scale-up" title="Larger" aria-label="Larger">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M4 8h8M8 4v8"/></svg>
+          </button>
+        </span>
+      </div>
+    </section>
+  </div>
+
+  <div role="tabpanel" id="tabs" aria-labelledby="tab-tabs" hidden>
+    <section>
+      <h2>Tabs</h2>
+      <label class="row">
+        <span class="label">Reopen tabs from last time
+          <div class="hint">Brings back your tabs and the one you had open. Each loads when you select it.</div>
+        </span>
+        <input type="checkbox" class="switch" id="restore">
+      </label>
+    </section>
+    <section>
+      <h2>Memory</h2>
+      <label class="row">
+        <span class="label">Put hidden tabs to sleep
+          <div class="hint">Closes a tab you aren't looking at to free its memory. It reloads when selected.</div>
+        </span>
+        <input type="checkbox" class="switch" id="sleep">
+      </label>
+      <label class="row nested" id="sleep-after-row">
+        <span class="label">After being hidden for</span>
+        <span class="field"><input type="number" id="sleep-after" min="1" step="1">min</span>
+      </label>
+      <label class="row nested" id="limit-row">
+        <span class="label">Limit hidden tabs kept loaded
+          <div class="hint">Past the limit, the oldest hidden tab sleeps right away. Home goes first.</div>
+        </span>
+        <input type="checkbox" class="switch" id="limit">
+      </label>
+      <label class="row nested" id="max-hidden-row">
+        <span class="label">Hidden tabs kept loaded</span>
+        <span class="field"><input type="number" id="max-hidden" min="0" step="1">tabs</span>
+      </label>
+      <label class="row nested" id="snapshots-row">
+        <span class="label">Show last image while a tab reloads
+          <div class="hint">In place of Figma's loading screen, after a file tab wakes from sleep.</div>
+        </span>
+        <input type="checkbox" class="switch" id="snapshots">
+      </label>
+    </section>
+  </div>
+
+  <div role="tabpanel" id="discord-page" aria-labelledby="tab-discord" hidden>
+    <section>
+      <h2>Rich Presence</h2>
+      <label class="row">
+        <span class="label">Show what you're working on
+          <div class="hint">Shows the open file, where you are in it and the selected tool on your Discord profile.</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord">
+      </label>
+      <label class="row nested" id="discord-file-row">
+        <span class="label">Show file name
+          <div class="hint">When off, Discord doesn't name the file.</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-file">
+      </label>
+      <label class="row nested" id="discord-tool-row">
+        <span class="label">Show selected tool
+          <div class="hint">The tool's icon, named when hovered.</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-tool">
+      </label>
+      <div class="row nested" id="discord-where-row">
+        <span class="label">Show where you are in the file
+          <div class="hint">Under the file's name, for each Figma product.</div>
+        </span>
+      </div>
+      <label class="row nested deeper" id="discord-page-row">
+        <span class="label">Page in Figma Design</span>
+        <input type="checkbox" class="switch" id="discord-page">
+      </label>
+      <label class="row nested deeper" id="discord-figjam-page-row">
+        <span class="label">Page in FigJam</span>
+        <input type="checkbox" class="switch" id="discord-figjam-page">
+      </label>
+      <label class="row nested deeper" id="discord-slide-row">
+        <span class="label">Slide in Figma Slides and presentations</span>
+        <input type="checkbox" class="switch" id="discord-slide">
+      </label>
+      <label class="row nested deeper" id="discord-chat-row">
+        <span class="label">Chat in Figma Make</span>
+        <input type="checkbox" class="switch" id="discord-chat">
+      </label>
+      <label class="row nested deeper" id="discord-asset-row">
+        <span class="label">Asset in Figma Buzz</span>
+        <input type="checkbox" class="switch" id="discord-asset">
+      </label>
+      <label class="row nested deeper" id="discord-webpage-row">
+        <span class="label">Webpage in Figma Sites</span>
+        <input type="checkbox" class="switch" id="discord-webpage">
+      </label>
+    </section>
+    <section>
+      <h2>Invites</h2>
+      <label class="row" id="discord-invites-row">
+        <span class="label">Invites to files
+          <div class="hint">Lets Discord friends join the open file in their Ligma, if they have access in Figma. Shows how many are in it. Needs Rich Presence.</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-invites">
+      </label>
+    </section>
+  </div>
+
+  <div role="tabpanel" id="about" aria-labelledby="tab-about" hidden>
+    <section>
+      <h2>Updates</h2>
+      <div class="row">
+        <span class="label"><span id="version">Ligma</span>
+          <div class="hint">Ligma checks for updates on launch and every 6 hours.</div>
+        </span>
+        <button class="button" id="check-updates">Check for Updates</button>
+      </div>
+    </section>
+    <section>
+      <h2>Help</h2>
+      <div class="row">
+        <span class="label">Report a problem
+          <div class="hint">Opens a GitHub issue with Ligma's version, your system and its recent log, for you to read and edit before sending. Nothing is sent otherwise.</div>
+        </span>
+        <button class="button" id="report">Report…</button>
+      </div>
+    </section>
+  </div>
 </main>
+</div>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
@@ -329,6 +434,9 @@
     "discord-asset": "discordShowAsset",
     "discord-webpage": "discordShowWebpage",
   };
+  // Interface scales − and + step through, like a browser's zoom levels
+  // (SCALES in settings.rs).
+  const SCALES = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
   const macos = navigator.userAgent.includes("Mac");
   document.documentElement.classList.toggle("macos", macos);
   // Snapshots only exist on macOS.
@@ -342,6 +450,29 @@
     if (document.activeElement?.matches("input[type=number]")) document.activeElement.blur();
     else close();
   });
+
+  // The sidebar's pages. The last one shown opens again next time.
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const showPage = (tab, focus = false) => {
+    for (const other of tabs) {
+      const selected = other === tab;
+      other.setAttribute("aria-selected", selected);
+      other.tabIndex = selected ? 0 : -1;
+      $(other.getAttribute("aria-controls")).hidden = !selected;
+    }
+    if (focus) tab.focus();
+    localStorage.setItem("settingsPage", tab.id);
+  };
+  for (const tab of tabs) tab.addEventListener("click", () => showPage(tab));
+  document.querySelector("nav").addEventListener("keydown", (e) => {
+    const at = tabs.indexOf(document.activeElement);
+    if (at < 0) return;
+    const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (to == null) return;
+    e.preventDefault();
+    showPage(tabs[(to + tabs.length) % tabs.length], true);
+  });
+  showPage($(localStorage.getItem("settingsPage")) ?? tabs[0]);
 
   // Figma theme colors (see THEME_JS in tabs.rs) onto the variables.
   const THEME_VARS = {
@@ -387,6 +518,10 @@
     const limited = settings.maxHiddenTabsLoaded != null;
     if (sleeping) sleepAfter = settings.sleepTabsAfterMinutes;
     if (limited) maxHidden = settings.maxHiddenTabsLoaded;
+    const scale = settings.interfaceScale;
+    $("scale").value = scale;
+    $("scale-down").disabled = scale <= SCALES[0];
+    $("scale-up").disabled = scale >= SCALES.at(-1);
     $("sleep").checked = sleeping;
     $("sleep-after").value = sleepAfter;
     $("limit").checked = limited;
@@ -421,11 +556,19 @@
     return Number.isFinite(value) && value >= min ? value : fallback;
   }
 
-  async function save() {
+  // A typed-in scale, kept within the presets' range.
+  function typedScale() {
+    const value = Math.round(Number($("scale").value));
+    if (!$("scale").value || !Number.isFinite(value)) return settings.interfaceScale;
+    return Math.min(SCALES.at(-1), Math.max(SCALES[0], value));
+  }
+
+  async function save(scale = typedScale()) {
     sleepAfter = whole($("sleep-after"), 1, sleepAfter);
     maxHidden = whole($("max-hidden"), 0, maxHidden);
     settings = {
       ...settings,
+      interfaceScale: scale,
       sleepTabsAfterMinutes: $("sleep").checked ? sleepAfter : 0,
       maxHiddenTabsLoaded: $("limit").checked ? maxHidden : null,
       reloadSnapshots: $("snapshots").checked,
@@ -440,7 +583,17 @@
     await invoke("set_settings", { settings });
   }
 
-  for (const id of [...fields, ...Object.keys(whereFields)]) $(id).addEventListener("change", save);
+  for (const id of [...fields, ...Object.keys(whereFields), "scale"]) $(id).addEventListener("change", () => save());
+
+  // − and + go to the next preset down or up, also from a typed-in value.
+  $("scale-down").addEventListener("click", () => {
+    const current = settings.interfaceScale;
+    save(SCALES.findLast((scale) => scale < current) ?? SCALES[0]);
+  });
+  $("scale-up").addEventListener("click", () => {
+    const current = settings.interfaceScale;
+    save(SCALES.find((scale) => scale > current) ?? SCALES.at(-1));
+  });
 
   $("check-updates").addEventListener("click", () => invoke("check_for_updates"));
   $("report").addEventListener("click", () => invoke("report_problem"));

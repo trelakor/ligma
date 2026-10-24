@@ -13,7 +13,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -118,17 +117,13 @@ fn ask_to_restart(app: &AppHandle) {
         return;
     };
     let handle = app.clone();
-    app.dialog()
-        .message(format!(
-            "Ligma {version} is ready. Restart now to use it, or it will be installed when you quit."
-        ))
-        .title("Update Available")
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            "Restart Now".into(),
-            "Later".into(),
-        ))
-        .show(move |restart| {
-            if !restart {
+    crate::prompt::show(
+        app,
+        "Update Available",
+        format!("Ligma {version} is ready. Restart now to use it, or it will be installed when you quit."),
+        &["Later", "Restart Now"],
+        move |choice| {
+            if choice != Some(1) {
                 return;
             }
             // On Windows a successful install quits Ligma, and the installer
@@ -137,7 +132,8 @@ fn ask_to_restart(app: &AppHandle) {
                 Ok(()) => handle.restart(),
                 Err(error) => install_failed(&handle, format!("Couldn't install Ligma {version}: {error}")),
             }
-        });
+        },
+    );
 }
 
 /// Says why an update couldn't be installed, and offers its download page
@@ -145,30 +141,23 @@ fn ask_to_restart(app: &AppHandle) {
 fn install_failed(app: &AppHandle, error: String) {
     log::error!("{error}");
     let handle = app.clone();
-    app.dialog()
-        .message(format!(
-            "{error}\n\nDownload the latest version and run its installer. Your sign-in and settings stay."
-        ))
-        .title("Update Failed")
-        .kind(MessageDialogKind::Error)
-        .buttons(MessageDialogButtons::YesNoCancelCustom(
-            "Download".into(),
-            "Report…".into(),
-            "Close".into(),
-        ))
-        .show_with_result(move |button| match button {
-            MessageDialogResult::Custom(label) if label == "Download" => {
+    crate::prompt::show(
+        app,
+        "Update Failed",
+        format!("{error}\n\nDownload the latest version and run its installer. Your sign-in and settings stay."),
+        &["Close", "Report…", "Download"],
+        move |choice| match choice {
+            Some(2) => {
                 let _ = handle.opener().open_url(RELEASES, None::<&str>);
             }
-            MessageDialogResult::Custom(label) if label == "Report…" => {
-                crate::report::open(&handle, Some(&error));
-            }
+            Some(1) => crate::report::open(&handle, Some(&error)),
             _ => {}
-        });
+        },
+    );
 }
 
 fn tell(app: &AppHandle, message: String) {
-    app.dialog().message(message).title("Check for Updates").show(|_| {});
+    crate::prompt::show(app, "Check for Updates", message, &["OK"], |_| {});
 }
 
 /// Installs the downloaded update, if there is one. On macOS this replaces

@@ -13,7 +13,6 @@ use log::LevelFilter;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Manager, Url, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 use tauri_plugin_opener::OpenerExt;
 
@@ -79,19 +78,14 @@ pub fn offer_last_crash(app: &AppHandle) {
     );
 }
 
-/// An error dialog that offers to report `problem`.
+/// An error prompt that offers to report `problem`.
 pub fn offer(app: &AppHandle, title: &str, message: String, problem: String) {
     let handle = app.clone();
-    app.dialog()
-        .message(message)
-        .title(title)
-        .kind(MessageDialogKind::Error)
-        .buttons(MessageDialogButtons::OkCancelCustom("Report…".into(), "Close".into()))
-        .show(move |report| {
-            if report {
-                open(&handle, Some(&problem));
-            }
-        });
+    crate::prompt::show(app, title, message, &["Close", "Report…"], move |choice| {
+        if choice == Some(1) {
+            open(&handle, Some(&problem));
+        }
+    });
 }
 
 /// Opens a new GitHub issue in the browser, filled in for `problem`, or for
