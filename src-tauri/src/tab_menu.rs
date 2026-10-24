@@ -70,7 +70,6 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     let _ = main;
     let window = builder.build()?;
-    window.set_zoom(crate::tabs::scale(app))?;
     #[cfg(target_os = "macos")]
     {
         let ns_window = window.clone();
@@ -150,6 +149,8 @@ pub async fn get_menu(app: AppHandle, webview: Webview) -> Option<Menu> {
         return None;
     }
     let items = OPEN.lock().unwrap().as_ref()?.items.clone();
+    // A zoom set before the page loaded doesn't last.
+    let _ = webview.set_zoom(crate::tabs::scale(&app));
     Some(Menu { items, theme: crate::tabs::theme(&app) })
 }
 

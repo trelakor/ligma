@@ -1371,6 +1371,7 @@ pub fn apply_scale(app: &AppHandle) {
     }
     crate::tab_menu::hide(app);
     crate::prompt::apply_scale(app, scale);
+    crate::settings::apply_scale(app, scale);
     layout(app);
 }
 
