@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.12.1 - 2026-10-24
+
+- If an update can't be installed, Ligma says why and offers to download it, instead of restarting as the old version. A failed update is offered again from Check for Updates…, and one that fails while quitting is reported on the next launch.
+- Windows releases ship only the `-setup.exe` installer. The `.msi` is gone.
+
 ## 0.12.0 - 2026-10-24
 
 - New Discord setting, Invites to files (off by default): Discord friends can join the file you have open. Invite them from the + menu in a Discord chat, or accept when they ask to join from your profile. It opens in their Ligma, starting it if needed, and Figma shows it to them if they have access. Your status shows how many people are in the file.
