@@ -141,6 +141,7 @@
   /* Options that depend on the row above. */
   .nested { padding-left: 32px; }
   .nested.deeper { padding-left: 48px; }
+  .nested.deepest { padding-left: 64px; }
   .row.disabled .label { color: var(--text-tertiary); }
   .row.disabled .hint { color: var(--text-tertiary); }
 
@@ -266,7 +267,7 @@
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M2.5 13h11"/></svg>
     Tabs &amp; Memory
   </button>
-  <button role="tab" id="tab-discord" aria-controls="discord-page">
+  <button role="tab" id="tab-discord" aria-controls="discord-panel">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 4.5a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5H7.5L4.5 14v-2.5a2 2 0 0 1-2-2z"/></svg>
     Discord
   </button>
@@ -337,7 +338,7 @@
     </section>
   </div>
 
-  <div role="tabpanel" id="discord-page" aria-labelledby="tab-discord" hidden>
+  <div role="tabpanel" id="discord-panel" aria-labelledby="tab-discord" hidden>
     <section>
       <h2>Rich Presence</h2>
       <label class="row">
@@ -352,40 +353,40 @@
         </span>
         <input type="checkbox" class="switch" id="discord-file">
       </label>
+      <div class="row nested deeper" id="discord-where-row">
+        <span class="label">Show where you are in the file
+          <div class="hint">Under the file's name, for each Figma product. Needs the file name shown.</div>
+        </span>
+      </div>
+      <label class="row nested deepest" id="discord-page-row">
+        <span class="label">Page in Figma Design</span>
+        <input type="checkbox" class="switch" id="discord-page">
+      </label>
+      <label class="row nested deepest" id="discord-figjam-page-row">
+        <span class="label">Page in FigJam</span>
+        <input type="checkbox" class="switch" id="discord-figjam-page">
+      </label>
+      <label class="row nested deepest" id="discord-slide-row">
+        <span class="label">Slide in Figma Slides and presentations</span>
+        <input type="checkbox" class="switch" id="discord-slide">
+      </label>
+      <label class="row nested deepest" id="discord-chat-row">
+        <span class="label">Chat in Figma Make</span>
+        <input type="checkbox" class="switch" id="discord-chat">
+      </label>
+      <label class="row nested deepest" id="discord-asset-row">
+        <span class="label">Asset in Figma Buzz</span>
+        <input type="checkbox" class="switch" id="discord-asset">
+      </label>
+      <label class="row nested deepest" id="discord-webpage-row">
+        <span class="label">Webpage in Figma Sites</span>
+        <input type="checkbox" class="switch" id="discord-webpage">
+      </label>
       <label class="row nested" id="discord-tool-row">
         <span class="label">Show selected tool
           <div class="hint">The tool's icon, named when hovered.</div>
         </span>
         <input type="checkbox" class="switch" id="discord-tool">
-      </label>
-      <div class="row nested" id="discord-where-row">
-        <span class="label">Show where you are in the file
-          <div class="hint">Under the file's name, for each Figma product.</div>
-        </span>
-      </div>
-      <label class="row nested deeper" id="discord-page-row">
-        <span class="label">Page in Figma Design</span>
-        <input type="checkbox" class="switch" id="discord-page">
-      </label>
-      <label class="row nested deeper" id="discord-figjam-page-row">
-        <span class="label">Page in FigJam</span>
-        <input type="checkbox" class="switch" id="discord-figjam-page">
-      </label>
-      <label class="row nested deeper" id="discord-slide-row">
-        <span class="label">Slide in Figma Slides and presentations</span>
-        <input type="checkbox" class="switch" id="discord-slide">
-      </label>
-      <label class="row nested deeper" id="discord-chat-row">
-        <span class="label">Chat in Figma Make</span>
-        <input type="checkbox" class="switch" id="discord-chat">
-      </label>
-      <label class="row nested deeper" id="discord-asset-row">
-        <span class="label">Asset in Figma Buzz</span>
-        <input type="checkbox" class="switch" id="discord-asset">
-      </label>
-      <label class="row nested deeper" id="discord-webpage-row">
-        <span class="label">Webpage in Figma Sites</span>
-        <input type="checkbox" class="switch" id="discord-webpage">
       </label>
     </section>
     <section>
@@ -542,8 +543,9 @@
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
-      ["discord-where-row", settings.discordRichPresence],
-      ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence]),
+      // Where you are shows under the file's name, so not without it.
+      ["discord-where-row", settings.discordRichPresence && settings.discordShowFile],
+      ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence && settings.discordShowFile]),
     ]) {
       $(id).classList.toggle("disabled", !enabled);
       const input = $(id).querySelector("input");
