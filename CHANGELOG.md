@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.12.0 - 2026-10-24
+
+- New Discord setting, Invites to files (off by default): Discord friends can join the file you have open. Invite them from the + menu in a Discord chat, or accept when they ask to join from your profile. It opens in their Ligma, starting it if needed, and Figma shows it to them if they have access. Your status shows how many people are in the file.
+- Ligma's logo on Discord sits on a white rounded tile, like the app icon.
+
 ## 0.11.7 - 2026-10-24
 
 - FigJam, Figma Make, Figma Buzz and Figma Sites tabs no longer end in the product's name, in the tab bar or on Discord.
