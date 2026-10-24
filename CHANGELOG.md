@@ -2,6 +2,13 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.13.0 - 2026-10-24
+
+- Report a problem from Settings (or Help on macOS). It opens a GitHub issue filled in with Ligma's version, your system and the end of Ligma's log, for you to check and submit. Nothing is sent otherwise.
+- Ligma keeps a log, `ligma.log`, of updates and errors. It holds no Figma file names or links.
+- Error dialogs offer to report the problem, and if Ligma ran into a problem last time, it offers to report it on the next launch.
+- Settings has an About section with Ligma's version and Check for Updates, now on Windows too.
+
 ## 0.12.1 - 2026-10-24
 
 - If an update can't be installed, Ligma says why and offers to download it, instead of restarting as the old version. A failed update is offered again from Check for Updates…, and one that fails while quitting is reported on the next launch.
