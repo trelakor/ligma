@@ -576,7 +576,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     )?;
     webview.set_zoom(scale(app))?;
     #[cfg(windows)]
-    crate::webview2::send_origin_to_plugin_downloads(&webview);
+    crate::webview2::drop_request_filters(&webview);
     Ok(())
 }
 

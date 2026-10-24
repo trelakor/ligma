@@ -3,41 +3,34 @@
 
 use tauri::Webview;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2_19, ICoreWebView2_3, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+    ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
-use webview2_com::{TrySuspendCompletedHandler, WebResourceRequestedEventHandler};
-use windows_core::{w, Interface, BOOL};
+use webview2_com::TrySuspendCompletedHandler;
+use windows_core::{w, Interface};
 
-/// Lets Figma download a community plugin's code. Figma asks for
-/// `/community/plugin/<id>/code`, which redirects to a signed copy on
-/// `s3-alpha-sig.figma.com`, and WebView2 follows that redirect without an
-/// `Origin` header. The server then answers without
-/// `Access-Control-Allow-Origin`, the read fails, and Figma says "An error
-/// occurred while loading the plugin environment". So give those requests
-/// the origin the page would have sent.
-pub fn send_origin_to_plugin_downloads(webview: &Webview) {
+/// Takes Tauri's request filters off a Figma tab, which never loads
+/// Tauri's own `tauri:`, `ipc:` or `asset:` URLs: Figma pages get no IPC.
+///
+/// While a webview has any such filter, WebView2 follows a redirect from
+/// the page's origin to another without an `Origin` header. Figma loads a
+/// community plugin's code that way, from `/community/plugin/<id>/code`
+/// to a signed copy on `s3-alpha-sig.figma.com`, which then answers
+/// without `Access-Control-Allow-Origin`; the read fails and Figma says "An
+/// error occurred while loading the plugin environment".
+pub fn drop_request_filters(webview: &Webview) {
     let _ = webview.with_webview(|platform| unsafe {
-        let Ok(core) = platform.controller().CoreWebView2() else {
+        let Ok(core) = platform.controller().CoreWebView2().and_then(|core| core.cast::<ICoreWebView2_22>()) else {
             return;
         };
-        let handler = WebResourceRequestedEventHandler::create(Box::new(|_, args| {
-            let Some(args) = args else {
-                return Ok(());
-            };
-            let headers = args.Request()?.Headers()?;
-            let mut has_origin = BOOL::default();
-            headers.Contains(w!("Origin"), &mut has_origin)?;
-            if !has_origin.as_bool() {
-                headers.SetHeader(w!("Origin"), w!("https://www.figma.com"))?;
-            }
-            Ok(())
-        }));
-        let mut token = 0;
-        if core.add_WebResourceRequested(&handler, &mut token).is_ok() {
-            let _ = core.AddWebResourceRequestedFilter(
-                w!("https://s3-alpha-sig.figma.com/plugins/*"),
+        // As wry adds them (`custom_protocol_workaround`). Missing ones
+        // (no `asset:` here) just fail.
+        for uri in [w!("http://tauri.*"), w!("http://ipc.*"), w!("http://asset.*")] {
+            let _ = core.RemoveWebResourceRequestedFilterWithRequestSourceKinds(
+                uri,
                 COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
             );
         }
     });
