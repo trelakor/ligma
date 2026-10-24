@@ -443,7 +443,7 @@ fn kind(url: &Url) -> &'static str {
     match url.path_segments().and_then(|mut s| s.next()) {
         Some("design" | "file") => "design",
         Some("board") => "board",
-        Some("slides" | "deck") => "slides",
+        Some("slides" | "deck" | "presenter") => "slides",
         Some("proto") => "proto",
         Some("make") => "make",
         Some("site") => "site",
@@ -463,22 +463,31 @@ fn file_key(url: &Url) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// True for a file's presentation (a prototype or a slideshow), which shares
-/// the file's key but isn't its editor.
+/// How a Figma URL shows its file: in its editor, or in one of the
+/// presentations that share the file's key. Slides presents in two: the
+/// presenter view and the audience's slideshow (`deck`).
+fn view(url: &Url) -> &'static str {
+    match url.path_segments().and_then(|mut s| s.next()) {
+        Some("proto") => "proto",
+        Some("deck") => "deck",
+        Some("presenter") => "presenter",
+        _ => kind(url),
+    }
+}
+
 fn is_presentation(url: &Url) -> bool {
-    matches!(url.path_segments().and_then(|mut s| s.next()), Some("proto" | "deck"))
-        || url.query_pairs().any(|(key, value)| key == "mode" && value == "present")
+    matches!(view(url), "proto" | "deck" | "presenter")
 }
 
 /// Opens `url` in a new tab, or focuses the tab already showing that file
-/// the same way. Presentations always get a new tab, like in a browser.
+/// the same way, so presenting a file again goes back to its presentation.
 pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     let key = file_key(&url);
     let id = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let existing = key.as_ref().filter(|_| !is_presentation(&url)).and_then(|key| {
+        let existing = key.as_ref().and_then(|key| {
             let tab = state.tabs.iter().find(|tab| {
-                tab.file_key.as_ref() == Some(key) && tab.kind == kind(&url)
+                tab.file_key.as_ref() == Some(key) && view(&tab.url) == view(&url)
             })?;
             Some(tab.id)
         });
@@ -634,7 +643,7 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
         let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == id) else {
             return;
         };
-        tab.title = title.strip_suffix(" – Figma").unwrap_or(title).to_owned();
+        tab.title = tab_title(title, url.as_ref().map_or("page", kind));
         if let Some(url) = url {
             if id != HOME_ID {
                 tab.kind = kind(&url);
@@ -644,6 +653,21 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
         }
     }
     push_state(app);
+}
+
+/// A tab's title from its page's: without Figma's suffix, or the "▶" a
+/// prototype's title starts with, which its tab's icon already shows.
+fn tab_title(title: &str, kind: &str) -> String {
+    let title = [" – Figma", " – Figma Slides", " - Figma Slides"]
+        .iter()
+        .find_map(|suffix| title.strip_suffix(suffix))
+        .unwrap_or(title);
+    let title = if kind == "proto" {
+        title.trim_start_matches(['▶', '\u{fe0f}']).trim_start()
+    } else {
+        title
+    };
+    title.to_owned()
 }
 
 pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
@@ -1053,16 +1077,21 @@ pub fn scriptable(app: &AppHandle, id: u32) -> Option<Webview> {
         .flatten()
 }
 
-/// Title and webview of the active tab, if it shows a Figma file and can
-/// run JavaScript (not still resuming).
-pub fn active_file(app: &AppHandle) -> Option<(String, Webview)> {
-    let (id, title) = {
+/// File name, whether it's presented, and webview of the active tab, if it
+/// shows a Figma file and can run JavaScript (not still resuming).
+pub fn active_file(app: &AppHandle) -> Option<(String, bool, Webview)> {
+    let (id, title, presenting) = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         let tab = state.tabs.iter().find(|tab| tab.id == state.active && !tab.suspended)?;
         tab.file_key.as_ref()?;
-        (tab.id, tab.title.clone())
+        let mut title = tab.title.as_str();
+        // "Presenter · <name>" and "Audience · <name>" in Slides.
+        if matches!(view(&tab.url), "deck" | "presenter") {
+            title = title.split_once(" · ").map_or(title, |(_, name)| name);
+        }
+        (tab.id, title.to_owned(), is_presentation(&tab.url))
     };
-    Some((title, app.get_webview(&label(id))?))
+    Some((title, presenting, app.get_webview(&label(id))?))
 }
 
 /// Runs `f` on tab `id`, if it's still open.

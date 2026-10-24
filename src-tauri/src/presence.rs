@@ -60,6 +60,8 @@ const TOOL_JS: &str = r#"(() => {
 struct Status {
     /// Name of the open file. None outside a file (Home, other pages).
     file: Option<String>,
+    /// Whether the file is shown as a presentation rather than edited.
+    presenting: bool,
     tool: Option<String>,
     /// Whether the Ligma window has focus.
     focused: bool,
@@ -114,19 +116,20 @@ pub fn sync(app: &AppHandle) {
         .get_window("main")
         .and_then(|window| window.is_focused().ok())
         .unwrap_or(false);
-    let Some((file, webview)) = crate::tabs::active_file(app) else {
+    let Some((file, presenting, webview)) = crate::tabs::active_file(app) else {
         let _ = tx.send(Status { focused, ..Status::default() });
         return;
     };
     // An empty name shows as "Editing a file".
     let file = if presence.show_file.load(Ordering::Relaxed) { file } else { String::new() };
-    if !presence.show_tool.load(Ordering::Relaxed) {
-        let _ = tx.send(Status { file: Some(file), tool: None, focused });
+    // Presentations have no tools.
+    if presenting || !presence.show_tool.load(Ordering::Relaxed) {
+        let _ = tx.send(Status { file: Some(file), presenting, tool: None, focused });
         return;
     }
     let _ = webview.eval_with_callback(TOOL_JS, move |json| {
         let tool = serde_json::from_str::<Option<String>>(&json).ok().flatten();
-        let _ = tx.send(Status { file: Some(file.clone()), tool, focused });
+        let _ = tx.send(Status { file: Some(file.clone()), presenting, tool, focused });
     });
 }
 
@@ -163,10 +166,11 @@ fn tool_icon(tool: &str) -> Option<&'static str> {
 }
 
 fn activity(status: &Status, started: i64) -> Activity<'_> {
+    let verb = if status.presenting { "Presenting" } else { "Editing" };
     let details = match status.file.as_deref() {
         // "Figma" is the title while the file is still loading.
-        Some("" | "Figma") => "Editing a file".to_owned(),
-        Some(file) => format!("Editing {file}"),
+        Some("" | "Figma") => format!("{verb} a file"),
+        Some(file) => format!("{verb} {file}"),
         None => "Browsing files".to_owned(),
     };
     let mut assets = Assets::new().large_image(LOGO_URL).large_text("Ligma");
@@ -194,8 +198,9 @@ fn run(rx: Receiver<Status>) {
     // What Discord shows. None after connecting, so it gets sent again.
     let mut shown: Option<Status> = None;
     let mut sent_at: Option<Instant> = None;
-    // The elapsed time restarts with each file.
-    let mut started = (None, now_ms());
+    // The elapsed time restarts with each file, and when presenting starts
+    // or stops.
+    let mut started = ((None, false), now_ms());
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(status) => wanted = status,
@@ -225,8 +230,9 @@ fn run(rx: Receiver<Status>) {
             }
             client = Some(new);
         }
-        if started.0 != wanted.file {
-            started = (wanted.file.clone(), now_ms());
+        let key = (wanted.file.clone(), wanted.presenting);
+        if started.0 != key {
+            started = (key, now_ms());
         }
         let ok = client
             .as_mut()
