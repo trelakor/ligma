@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.3 - 2026-10-23
+
+- The selected tool's icon in Discord Rich Presence is sharper. Ligma now uses icons uploaded to its Discord application instead of small images hosted on GitHub.
+- Ligma is now MIT licensed. The installers include the license and the licenses of the open source software Ligma uses.
+- New Terms of Service and Privacy Policy. Ligma collects nothing; the Privacy Policy explains what Discord Rich Presence shares.
+
 ## 0.11.2 - 2026-10-23
 
 - Add account in Figma's account menu now works on Windows. It opens Figma's sign-in page in a new tab, where Continue with Google signs in the same way as the first time and then shows the added account.
