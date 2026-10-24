@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.4 - 2026-10-23
+
+- Present in Figma Design opens the presentation in a new tab, like in a browser, instead of in place of the file.
+- Present in Figma Slides works. It did nothing before.
+
 ## 0.11.3 - 2026-10-23
 
 - The selected tool's icon in Discord Rich Presence is sharper. Ligma now uses icons uploaded to its Discord application instead of small images hosted on GitHub.
