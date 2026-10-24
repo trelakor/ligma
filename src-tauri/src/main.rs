@@ -9,6 +9,7 @@ mod figma_scheme;
 mod presence;
 #[cfg(target_os = "macos")]
 mod pressure;
+mod report;
 mod settings;
 mod tab_menu;
 mod tabs;
@@ -76,7 +77,7 @@ fn start_font_agent() -> Option<Child> {
 
 /// macOS menu bar. The app menu opens the settings window and checks for
 /// updates. File and Window
-/// hold the tab shortcuts; Cmd+W closes the tab, not the window (or the
+/// hold the tab shortcuts, and Help reports a problem; Cmd+W closes the tab, not the window (or the
 /// settings window, when that has focus). Other platforms have no menu bar: on Windows it would
 /// show as a strip inside the window.
 #[cfg(target_os = "macos")]
@@ -149,6 +150,12 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
                     &PredefinedMenuItem::fullscreen(app, None)?,
                 ],
             )?,
+            &Submenu::with_items(
+                app,
+                "Help",
+                true,
+                &[&MenuItem::with_id(app, "report-problem", "Report a Problem…", true, None::<&str>)?],
+            )?,
         ],
     )
 }
@@ -187,6 +194,7 @@ fn main() {
         // Ligma opens links from Rust. The plugin's own handler would catch
         // `target="_blank"` clicks in Figma tabs, which have no IPC, and drop
         // them (Add account, for one).
+        .plugin(report::log_plugin())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         // Settings has a fixed size, which grows with new options.
         .plugin(
@@ -203,6 +211,10 @@ fn main() {
                 "settings" => settings::open_window(app),
                 "check-for-updates" => {
                     updater::check_now(app);
+                    Ok(())
+                }
+                "report-problem" => {
+                    report::open(app, None);
                     Ok(())
                 }
                 "close-tab" if settings::close_if_focused(app) => Ok(()),
@@ -224,11 +236,16 @@ fn main() {
             settings::get_settings,
             settings::get_theme,
             settings::set_settings,
+            settings::get_version,
+            settings::check_for_updates,
+            settings::report_problem,
             tab_menu::get_menu,
             tab_menu::menu_ready,
             tab_menu::menu_pick,
         ])
         .setup(|app| {
+            report::catch_panics(app.handle());
+            report::offer_last_crash(app.handle());
             #[cfg(target_os = "macos")]
             wkwebview::disable_screen_time();
             app.manage(FontAgent(Mutex::new(start_font_agent())));
