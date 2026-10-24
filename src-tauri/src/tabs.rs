@@ -552,11 +552,13 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .on_page_load(move |webview, payload| {
             if let PageLoadEvent::Finished = payload.event() {
                 let _ = webview.set_zoom(scale(webview.app_handle()));
+                crate::plugins::push_to(&webview);
             }
         })
         .initialization_script(BEFOREUNLOAD_JS)
         .initialization_script(crate::auth::PAGE_JS)
-        .initialization_script(NEW_WINDOW_JS);
+        .initialization_script(NEW_WINDOW_JS)
+        .initialization_script(crate::plugins::page_js());
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
@@ -604,6 +606,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::auth::on_signal(app, id, url);
         return false;
     }
+    if url.host_str() == Some(crate::plugins::SIGNAL_HOST) {
+        crate::plugins::on_signal(app, id, url);
+        return false;
+    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -640,7 +646,9 @@ fn sign_in_later(app: &AppHandle, id: u32) {
 }
 
 fn on_new_window(app: &AppHandle, id: u32, url: Url) {
-    if crate::auth::is_google_sign_in(&url) {
+    if url.host_str() == Some(crate::plugins::SIGNAL_HOST) {
+        crate::plugins::on_signal(app, id, &url);
+    } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
         open_later(app, url);
@@ -1025,10 +1033,6 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
             Some(("close-all", "Close All Tabs")),
         ]
     };
-    let items = items
-        .into_iter()
-        .map(|item| item.map(|(action, text)| (action.to_owned(), text.to_owned())))
-        .collect();
     crate::tab_menu::show(app, id, items)
 }
 
@@ -1097,6 +1101,15 @@ pub fn scriptable(app: &AppHandle, id: u32) -> Option<Webview> {
     with_tab(app, id, |tab| !tab.asleep && !tab.suspended)?
         .then(|| app.get_webview(&label(id)))
         .flatten()
+}
+
+/// Webviews of the tabs that can run JavaScript now (see `scriptable`).
+pub fn scriptable_tabs(app: &AppHandle) -> Vec<Webview> {
+    let ids: Vec<u32> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.tabs.iter().filter(|tab| !tab.asleep && !tab.suspended).map(|tab| tab.id).collect()
+    };
+    ids.into_iter().filter_map(|id| app.get_webview(&label(id))).collect()
 }
 
 /// The file in the active tab.
@@ -1407,8 +1420,6 @@ fn push_state(app: &AppHandle) {
         fullscreen: bool,
         theme: &'a Option<serde_json::Value>,
         platform: &'static str,
-        /// A development plugin is switched on (see plugins.rs).
-        plugins: bool,
     }
 
     // Not `get_webview_window`: that returns None once the window holds
@@ -1417,7 +1428,6 @@ fn push_state(app: &AppHandle) {
         return;
     };
     let fullscreen = window.is_fullscreen().unwrap_or(false);
-    let plugins = crate::plugins::any_enabled(app);
     let json = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         serde_json::to_string(&View {
@@ -1426,17 +1436,11 @@ fn push_state(app: &AppHandle) {
             fullscreen,
             theme: &state.theme,
             platform: std::env::consts::OS,
-            plugins,
         })
         .unwrap()
     };
     let _ = bar.eval(format!("window.render?.({json})"));
     save_session(app);
-}
-
-/// Redraws the tab bar, for a change it shows that isn't the tabs'.
-pub fn refresh_bar(app: &AppHandle) {
-    push_state(app);
 }
 
 /// Only the local tab bar may drive tabs. Figma pages have no IPC access
@@ -1484,24 +1488,6 @@ pub async fn move_tab_to(app: AppHandle, webview: Webview, id: u32, index: usize
 pub async fn open_new_tab(app: AppHandle, webview: Webview) {
     if from_tab_bar(&webview) {
         let _ = new_tab(&app);
-    }
-}
-
-/// Opens the Plugins menu (see plugins.rs) for the active tab, if it's in
-/// a file's editor.
-#[tauri::command]
-pub async fn plugins_menu(app: AppHandle, webview: Webview) {
-    if !from_tab_bar(&webview) {
-        return;
-    }
-    let active = {
-        let state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let tab = state.tabs.iter().find(|tab| tab.id == state.active);
-        tab.filter(|tab| tab.file_key.is_some() && view(&tab.url) == tab.kind)
-            .map(|tab| (tab.id, tab.kind))
-    };
-    if let Some((id, kind)) = active {
-        let _ = crate::plugins::show_menu(&app, id, kind);
     }
 }
 

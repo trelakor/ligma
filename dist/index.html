@@ -41,14 +41,14 @@
   }
   .control:hover { background: var(--hover); }
   .control.close-window:hover { background: #c42b1c; color: #fff; }
-  .tab, #home, #new, #plugins {
+  .tab, #home, #new {
     position: relative;
     display: flex;
     flex: none;
     align-items: center;
     justify-content: center;
   }
-  .tab:hover, #home:hover, #new:hover, #plugins:hover { background: var(--hover); }
+  .tab:hover, #home:hover, #new:hover { background: var(--hover); }
   .tab.active, #home.active { background: var(--active); color: var(--text-active); }
   #home { width: 38px; }
   /* Width follows the title, up to max-width. Once the bar is full,
@@ -96,8 +96,6 @@
   .tab:hover .close, .tab.active .close { visibility: visible; }
   .close:hover { background: rgba(255, 255, 255, 0.1); }
   #new { width: 36px; }
-  /* Runs development plugins (src-tauri/src/plugins.rs) in the open file. */
-  #plugins { width: 38px; color: var(--text-active); }
   .crowded .tab:not(.pinned) { flex: 1 1 0; }
   /* While a tab is dragged, the others slide out of its way. */
   .dragging .tab { transition: transform 150ms ease; }
@@ -174,11 +172,7 @@
     page: svg('<path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M9.5 2.5V5H12"/>'),
     close: svg('<path d="m5 5 6 6M11 5l-6 6"/>', 12),
     plus: svg('<path d="M8 3.5v9M3.5 8h9"/>'),
-    // A puzzle piece, for plugins.
-    plugins: svg('<path d="M3 5.5h2.2a1.3 1.3 0 1 1 2.6 0H10v2.2a1.3 1.3 0 1 1 0 2.6v2.2H7.8a1.3 1.3 0 1 0-2.6 0H3z"/>'),
   };
-  // Tabs whose editor can run plugins.
-  const PLUGIN_KINDS = ["design", "board", "slides", "buzz"];
 
   const ACCENTS = {
     design: "#0d99ff",
@@ -291,7 +285,7 @@
     else renderBar(state);
   };
 
-  const renderBar = ({ tabs, active, fullscreen, theme, platform, plugins }) => {
+  const renderBar = ({ tabs, active, fullscreen, theme, platform }) => {
     document.body.classList.toggle("fullscreen", fullscreen);
     document.body.classList.toggle("macos", platform === "macos");
     for (const [cssVar, key] of Object.entries(THEME_VARS)) {
@@ -347,11 +341,6 @@
     const drag = el("div", { id: "drag" });
     drag.setAttribute("data-tauri-drag-region", "");
     bar.append(plus, drag);
-    if (plugins && PLUGIN_KINDS.includes(tabs[activeIndex]?.kind)) {
-      const button = el("div", { id: "plugins", title: "Plugins" }, ICONS.plugins);
-      button.addEventListener("click", () => invoke("plugins_menu"));
-      bar.append(button);
-    }
     if (platform !== "macos") {
       for (const [action, icon] of Object.entries(CONTROLS)) {
         const control = el("div", { className: `control ${action}-window` }, icon);

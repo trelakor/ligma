@@ -4,8 +4,11 @@
 //!
 //! The list is `plugins.json` next to `settings.json`, and Settings >
 //! Plugins (`dist/settings.html`) imports, switches on and off, and removes
-//! them. Enabled plugins are run from the tab bar's Plugins button, in the
-//! file tab it's on.
+//! them. Enabled plugins show in Figma's own Actions panel, under Plugins &
+//! widgets, like in the desktop app: marked Development, with a Development
+//! filter that lists only them and Import from manifest…, and Remove in
+//! their … menu. `PAGE_JS` draws them there and reports clicks by opening
+//! `SIGNAL_HOST` links, which `on_signal` handles.
 //!
 //! Figma's web editor offers its plugin API on the page as `window.figma`,
 //! for the developer console, in files the user can edit. `RUNNER_JS` runs
@@ -16,11 +19,12 @@
 //! run, so a rebuilt plugin runs its new code.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager, Webview};
+use tauri::{AppHandle, Manager, Url, Webview, Window};
 use tauri_plugin_opener::OpenerExt;
 
 const FILE: &str = "plugins.json";
@@ -42,8 +46,9 @@ struct Manifest {
     /// Editors it runs in: "figma", "figjam", "dev", "slides", "buzz".
     editor_types: Vec<String>,
     /// Its menu's commands as (text, command), submenus flattened into
-    /// "Submenu › Command". Empty if it has no menu.
-    commands: Vec<(String, String)>,
+    /// "Submenu › Command", and None for a separator. Empty if it has no
+    /// menu.
+    commands: Vec<Option<(String, String)>>,
 }
 
 enum Ui {
@@ -93,8 +98,12 @@ fn read_manifest(path: &Path) -> Result<Manifest, String> {
     })
 }
 
-fn flatten_menu(menu: &[Value], prefix: &str, commands: &mut Vec<(String, String)>) {
+fn flatten_menu(menu: &[Value], prefix: &str, commands: &mut Vec<Option<(String, String)>>) {
     for item in menu {
+        if item["separator"].as_bool() == Some(true) {
+            commands.push(None);
+            continue;
+        }
         let Some(name) = item["name"].as_str() else {
             continue;
         };
@@ -102,7 +111,7 @@ fn flatten_menu(menu: &[Value], prefix: &str, commands: &mut Vec<(String, String
         if let Some(submenu) = item["menu"].as_array() {
             flatten_menu(submenu, &format!("{text} › "), commands);
         } else if let Some(command) = item["command"].as_str() {
-            commands.push((text, command.to_owned()));
+            commands.push(Some((text, command.to_owned())));
         }
     }
 }
@@ -138,80 +147,116 @@ fn save(app: &AppHandle, entries: &[Entry]) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     std::fs::write(path, serde_json::to_string_pretty(entries).unwrap()).map_err(|e| e.to_string())?;
-    *ANY_ENABLED.lock().unwrap() = Some(entries.iter().any(|entry| entry.enabled));
-    // The tab bar shows its Plugins button only with a plugin enabled.
-    crate::tabs::refresh_bar(app);
+    push(app);
+    // Settings, if open, lists them too.
+    if let Some(window) = app.get_webview_window(crate::settings::WINDOW) {
+        let _ = window.eval("window.showPlugins?.()");
+    }
     Ok(())
 }
 
-/// Whether a plugin is switched on, known since the last change.
-static ANY_ENABLED: Mutex<Option<bool>> = Mutex::new(None);
+/// Origin of the links `PAGE_JS` opens to report a click.
+pub const SIGNAL_HOST: &str = "plugins.ligma.invalid";
 
-/// True if a plugin is switched on, for the tab bar's Plugins button.
-pub fn any_enabled(app: &AppHandle) -> bool {
-    *ANY_ENABLED
-        .lock()
-        .unwrap()
-        .get_or_insert_with(|| load(app).iter().any(|entry| entry.enabled))
+/// A secret for this run of Ligma, in `PAGE_JS` and every link it opens, so
+/// only that script can run or remove plugins: other frames, like plugin
+/// UIs, can open links too but can't read it.
+fn token() -> &'static str {
+    static TOKEN: OnceLock<String> = OnceLock::new();
+    TOKEN.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_nanos());
+        (0..2)
+            .map(|round| {
+                let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+                hasher.write_u128(nanos + round);
+                format!("{:016x}", hasher.finish())
+            })
+            .collect()
+    })
 }
 
-/// Plugin editor types that run in a tab of `kind` (see tabs.rs).
-fn editor_types(kind: &str) -> &'static [&'static str] {
-    match kind {
-        "design" => &["figma", "dev"],
-        "board" => &["figjam"],
-        "slides" => &["slides"],
-        "buzz" => &["buzz"],
-        _ => &[],
+/// Initialization script for Figma tabs (see `PAGE_JS`).
+pub fn page_js() -> String {
+    PAGE_JS.replace("__LIGMA_TOKEN__", token())
+}
+
+/// What `PAGE_JS` shows of the enabled plugins.
+fn page_list(app: &AppHandle) -> Value {
+    let plugins = load(app)
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .map(|entry| {
+            let plugin = describe(&entry);
+            let (editor_types, commands) = match read_manifest(&entry.manifest) {
+                Ok(manifest) => (manifest.editor_types, manifest.commands),
+                Err(_) => (vec!["figma".to_owned()], vec![]),
+            };
+            serde_json::json!({
+                "manifest": plugin.manifest,
+                "name": plugin.name,
+                "folder": plugin.folder,
+                "editorTypes": editor_types,
+                "commands": commands,
+                "problem": plugin.problem,
+            })
+        })
+        .collect();
+    Value::Array(plugins)
+}
+
+/// Sends the enabled plugins to Figma tab `webview`.
+pub fn push_to(webview: &Webview) {
+    let list = page_list(webview.app_handle());
+    let _ = webview.eval(format!("window.__ligmaDevPlugins?.set({list})"));
+}
+
+/// Sends the enabled plugins to every loaded Figma tab.
+fn push(app: &AppHandle) {
+    let list = page_list(app);
+    for webview in crate::tabs::scriptable_tabs(app) {
+        let _ = webview.eval(format!("window.__ligmaDevPlugins?.set({list})"));
     }
 }
 
-/// Plugins menu items: (manifest, command).
-static MENU: Mutex<Vec<(PathBuf, Option<String>)>> = Mutex::new(Vec::new());
-
-/// Opens the Plugins menu for tab `tab`, showing a file of `kind`: the
-/// enabled plugins that run in its editor, with their commands.
-pub fn show_menu(app: &AppHandle, tab: u32, kind: &str) -> tauri::Result<()> {
-    let types = editor_types(kind);
-    let mut items: Vec<crate::tab_menu::Item> = Vec::new();
-    let mut targets = Vec::new();
-    for entry in load(app).into_iter().filter(|entry| entry.enabled) {
-        let Ok(manifest) = read_manifest(&entry.manifest) else {
-            continue;
-        };
-        if !manifest.editor_types.iter().any(|t| types.contains(&t.as_str())) {
-            continue;
-        }
-        if manifest.commands.is_empty() {
-            items.push(Some((format!("plugins:{}", targets.len()), manifest.name.clone())));
-            targets.push((entry.manifest.clone(), None));
-        }
-        for (text, command) in &manifest.commands {
-            items.push(Some((format!("plugins:{}", targets.len()), format!("{} › {text}", manifest.name))));
-            targets.push((entry.manifest.clone(), Some(command.clone())));
-        }
+/// A click in the Actions panel, from `PAGE_JS` in tab `tab`:
+/// `/run?manifest=…&command=…`, `/remove?manifest=…` or `/import`.
+pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
+    let param = |name: &str| {
+        url.query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+    };
+    if param("token").as_deref() != Some(token()) {
+        return;
     }
-    if items.is_empty() {
-        let product = match kind {
-            "board" => "FigJam",
-            "slides" => "Figma Slides",
-            "buzz" => "Figma Buzz",
-            _ => "Figma Design",
-        };
-        items.push(Some((String::new(), format!("No plugins for {product}"))));
-    }
-    items.push(None);
-    items.push(Some(("manage-plugins".into(), "Manage Plugins…".into())));
-    *MENU.lock().unwrap() = targets;
-    crate::tab_menu::show(app, tab, items)
-}
-
-/// Runs a Plugins menu item in tab `tab`, given its action without the
-/// `plugins:` prefix.
-pub fn on_menu(app: &AppHandle, tab: u32, action: &str) {
-    let target = action.parse::<usize>().ok().and_then(|index| MENU.lock().unwrap().get(index).cloned());
-    if let Some((manifest, command)) = target {
-        run(app, tab, &manifest, command);
+    let manifest = param("manifest").map(PathBuf::from);
+    match url.path() {
+        "/run" => {
+            let known = load(app).into_iter().any(|entry| entry.enabled && Some(&entry.manifest) == manifest.as_ref());
+            if let (true, Some(manifest)) = (known, manifest) {
+                run(app, tab, &manifest, param("command").filter(|command| !command.is_empty()));
+            }
+        }
+        "/remove" => {
+            let mut entries = load(app);
+            entries.retain(|entry| Some(&entry.manifest) != manifest.as_ref());
+            if let Err(error) = save(app, &entries) {
+                log::error!("Couldn't remove plugin: {error}");
+            }
+        }
+        "/import" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let Some(window) = app.get_window("main") else {
+                    return;
+                };
+                if let Err(error) = import(&app, &window).await {
+                    crate::prompt::show(&app, "Couldn't import plugin", error, &["OK"], |_| {});
+                }
+            });
+        }
+        _ => {}
     }
 }
 
@@ -485,6 +530,349 @@ const RUNNER_JS: &str = r#"(spec, main) => {
   return "ok";
 }"#;
 
+/// Shows the enabled plugins (sent by `push`) in Figma's Actions panel,
+/// under Plugins & widgets, the way the desktop app shows development
+/// plugins: each with a Development badge, its commands in a menu when it
+/// has some, and Remove in its … menu. The panel's filter gets a
+/// Development option that lists only them, with Import from manifest…
+///
+/// Figma's panel is React's, so this only adds its own nodes next to
+/// Figma's and styles them with the class names Figma's rows use (taken
+/// from a row on screen when there is one). The Development filter hides
+/// Figma's rows and relabels the filter button with CSS, leaving Figma's
+/// nodes alone. Clicks go to Ligma as `SIGNAL_HOST` links: through
+/// `window.open` (`on_new_window`) on Windows, and on macOS as an iframe
+/// load, which WKWebView reports to `on_navigation`.
+const PAGE_JS: &str = r##"(() => {
+  if (location.hostname !== "www.figma.com" || window.top !== window) return;
+  const TOKEN = "__LIGMA_TOKEN__";
+  const signal = (action, params = {}) => {
+    const url = `https://plugins.ligma.invalid/${action}?` + new URLSearchParams({ token: TOKEN, ...params });
+    if (navigator.userAgent.includes("Mac")) {
+      const frame = document.createElement("iframe");
+      frame.style.display = "none";
+      frame.src = url;
+      document.documentElement.appendChild(frame);
+      setTimeout(() => frame.remove(), 1000);
+    } else {
+      window.open(url, "_blank");
+    }
+  };
+
+  let plugins = [];
+  // The Development filter is on.
+  let devOnly = false;
+  // Figma's own filter: 0 All, 1 Plugins, 2 Widgets.
+  let figmaFilter = 0;
+
+  // Figma's class names, as seen on 2026-10-24. Rows take theirs from a
+  // Figma row on screen, if there is one, in case these change.
+  const CLASSES = {
+    row: "cx_flex--tV5oZ cx_alignCenter--1v4xl cx_bRadius5--JCLrp cx_ml8--SwsTN cx_mr8--aRua- cx_p4--Ckaol cx_flexGrow1--IRFtW cx_flexShrink1--HTMk6 cx_flexBasis0--xUinj",
+    rowHover: "cx_colorBgHover--S-Hsw",
+    column: "x78zum5 xdt5ytf xh8yej3",
+    line: "x78zum5 x6s0dn4 x1qughib xh8yej3",
+    button: "x78zum5 x6s0dn4 x1md70p1 x1iyjqo2",
+    nameWrap: "x163pfp xy13l1i xw5ewwj",
+    name: "xuxw1ft xb3r6kr xlyipyv",
+    chevron: "xjbqb8w x1bawvfr",
+    menu: "base--dropdown--fDh-M _overlayBase--_overlayBase--lIllh pointing--content--5emtR",
+    option: "multilevel--option--6Kfme multilevel--optionBase--9MgmU base--_optionBase--elGk- text--ui2FontSize12--AJ7ld text--_fontBase--Qq3Bi",
+    optionActive: "multilevel--optionActive--fVOZg multilevel--optionBase--9MgmU base--_optionBase--elGk- text--ui2FontSize12--AJ7ld text--_fontBase--Qq3Bi",
+    optionName: "multilevel--name--XnFDS ellipsis--ellipsis--IdJAr",
+    separator: "base--separator--F9VEK",
+    separatorLine: "base--separatorLine--7cveq",
+    filterOption: "base--option--6qoop base--_optionBase--elGk- text--ui2FontSize12--AJ7ld text--_fontBase--Qq3Bi base--checkableOption--onu9O",
+    filterHover: "base--optionHover--2xcwm",
+    filterLabel: "xb3r6kr xlyipyv x1lliihq",
+    check: "base--check--OK8b1",
+  };
+  const harvest = (list) => {
+    const row = list.querySelector('div[data-testid="extension-list-item"]');
+    const button = row?.querySelector("button");
+    const name = button?.querySelector("div[aria-label]");
+    if (!row || !button || !name) return;
+    const tokens = row.className.split(/\s+/);
+    CLASSES.row = tokens.filter((token) => !token.includes("colorBgHover")).join(" ");
+    CLASSES.column = row.firstElementChild?.className || CLASSES.column;
+    CLASSES.line = row.firstElementChild?.firstElementChild?.className || CLASSES.line;
+    CLASSES.button = button.className;
+    CLASSES.nameWrap = name.parentElement.className;
+    CLASSES.name = name.className;
+  };
+
+  const ICONS = {
+    plugin: '<svg class="ligma-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="1.5" width="13" height="13" rx="3" stroke-dasharray="2 1.6"/><path d="M6.5 6 4.5 8l2 2M9.5 6l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    import: '<svg class="ligma-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7M5.5 7 8 9.5 10.5 7"/><path d="M3.5 9.5v2.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5V9.5"/></svg>',
+    chevron: '<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M9.768 6.768a.5.5 0 0 1 .707.707l-2.12 2.121a.5.5 0 0 1-.708 0L5.525 7.475a.5.5 0 0 1 .708-.707l1.768 1.767z"/></svg>',
+    dots: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M7 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m6 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m4.5 1.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3" clip-rule="evenodd"/></svg>',
+    check: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M15.584 7.722a.5.5 0 0 1 .832.555l-5 7.5a.502.502 0 0 1-.77.076l-3-3a.5.5 0 0 1 .708-.707l2.568 2.569z"/></svg>',
+  };
+
+  const STYLE = `
+    #ligma-dev-plugins { display: flex; flex-direction: column; }
+    [class*="list--list"]:has(> #ligma-dev-plugins.ligma-only) > :not(#ligma-dev-plugins) { display: none !important; }
+    html.ligma-dev-filter #extensions-filter-dropdown-button [class*="buttonContent"] > div > span:first-child { display: none; }
+    html.ligma-dev-filter #extensions-filter-dropdown-button [class*="buttonContent"] > div::before { content: "Development"; white-space: nowrap; }
+    html.ligma-dev-filter #extensions-filter-dropdown-menu [role="menuitem"][aria-checked="true"]:not([data-ligma-dev]) > svg { visibility: hidden; }
+    /* Where Figma's 20px plugin icons go, with their 2px margin. */
+    .ligma-icon { flex: none; box-sizing: border-box; width: 20px; height: 20px; margin: 2px; padding: 2px; color: var(--color-icon-secondary, var(--color-text-secondary)); }
+    .ligma-text { min-width: 0; }
+    .ligma-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .ligma-name-line > :first-child { min-width: 0; }
+    .ligma-badge { flex: none; padding: 0 4px; border: 1px solid var(--color-border); border-radius: 4px; font-size: 11px; line-height: 14px; color: var(--color-text-secondary); }
+    .ligma-path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; line-height: 16px; color: var(--color-text-secondary); }
+    .ligma-trail { flex: none; display: flex; align-items: center; }
+    .ligma-kind { font-size: 11px; line-height: 16px; color: var(--color-text-tertiary); }
+    .ligma-options { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; }
+    .ligma-options:hover { background: var(--color-bg-hover, rgba(127, 127, 127, 0.15)); }
+    .ligma-row:not(:hover):not(.ligma-open) .ligma-options { display: none; }
+    .ligma-row:hover .ligma-kind, .ligma-row.ligma-open .ligma-kind { display: none; }
+    .ligma-menu { position: fixed; z-index: 2147483000; max-width: 400px; }
+  `;
+
+  const el = (tag, className = "", html = "") => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (html) node.innerHTML = html;
+    return node;
+  };
+  const rowButton = (icon) => el("button", CLASSES.button, icon);
+
+  // Which plugins run in this file's editor.
+  const editorTypes = () =>
+    ({ design: ["figma", "dev"], file: ["figma", "dev"], board: ["figjam"], slides: ["slides"], buzz: ["buzz"] })[location.pathname.split("/")[1]] ?? [];
+
+  // Closes the Actions panel, as Figma does when a plugin starts.
+  const closeActions = () => {
+    const button = [...document.querySelectorAll('[aria-label="Actions"]')].find((button) => button.offsetParent);
+    if (document.querySelector('[data-testid="tab-extensions"]')) button?.click();
+  };
+
+  // A menu like Figma's (the … and command menus) under `anchor`. `items`
+  // are [text, action], or null for a separator.
+  let menu = null;
+  const closeMenu = () => {
+    menu?.remove();
+    menu = null;
+    for (const node of document.querySelectorAll(".ligma-open")) node.classList.remove("ligma-open");
+  };
+  const openMenu = (anchor, items, owner, alignEnd = false) => {
+    closeMenu();
+    menu = el("div", `${CLASSES.menu} ligma-menu`);
+    menu.setAttribute("role", "menu");
+    const list = el("div");
+    for (const item of items) {
+      if (!item) {
+        list.append(el("div", CLASSES.separator, `<div class="${CLASSES.separatorLine}"></div>`));
+        continue;
+      }
+      const [text, action] = item;
+      const option = el("div", CLASSES.option, `<div class="${CLASSES.optionName}"></div>`);
+      option.setAttribute("role", "menuitem");
+      option.firstChild.textContent = text;
+      option.addEventListener("mouseenter", () => (option.className = CLASSES.optionActive));
+      option.addEventListener("mouseleave", () => (option.className = CLASSES.option));
+      option.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeMenu();
+        action();
+      });
+      list.append(option);
+    }
+    menu.append(list);
+    document.body.append(menu);
+    const at = anchor.getBoundingClientRect();
+    const size = menu.getBoundingClientRect();
+    const top = at.bottom + 4 + size.height > innerHeight ? at.top - size.height - 4 : at.bottom + 4;
+    menu.style.top = `${Math.max(8, top)}px`;
+    const left = alignEnd ? at.right - size.width : at.left;
+    menu.style.left = `${Math.max(8, Math.min(left, innerWidth - size.width - 8))}px`;
+    owner?.classList.add("ligma-open");
+  };
+  // A press in the menu mustn't reach Figma or move focus out of its
+  // panel, which closes it.
+  for (const type of ["pointerdown", "mousedown"]) {
+    addEventListener(type, (e) => {
+      if (!menu) return;
+      if (menu.contains(e.target)) {
+        e.stopPropagation();
+        e.preventDefault();
+      } else if (type === "pointerdown") {
+        closeMenu();
+      }
+    }, true);
+  }
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && menu) {
+      e.stopPropagation();
+      closeMenu();
+    }
+  }, true);
+
+  const run = (plugin, command) => {
+    signal("run", { manifest: plugin.manifest, command: command ?? "" });
+    closeActions();
+  };
+
+  const row = (plugin) => {
+    const node = el("div", `${CLASSES.row} ligma-row`);
+    node.addEventListener("mouseenter", () => node.classList.add(CLASSES.rowHover));
+    node.addEventListener("mouseleave", () => node.classList.remove(CLASSES.rowHover));
+    const column = el("div", CLASSES.column);
+    const line = el("div", CLASSES.line);
+    const button = rowButton(ICONS.plugin);
+    const text = el("div", `${CLASSES.nameWrap} ligma-text`);
+    const nameLine = el("div", "ligma-name-line");
+    const name = el("div", CLASSES.name);
+    name.textContent = plugin.problem ? `⚠  ${plugin.name}` : plugin.name;
+    if (plugin.problem) node.title = plugin.problem;
+    nameLine.append(name, Object.assign(el("span", "ligma-badge"), { textContent: "Development" }));
+    const commands = plugin.commands ?? [];
+    if (commands.length) nameLine.append(el("span", CLASSES.chevron, ICONS.chevron));
+    text.append(nameLine);
+    if (devOnly) text.append(Object.assign(el("div", "ligma-path"), { textContent: plugin.folder, title: plugin.folder }));
+    button.append(text);
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!commands.length) return run(plugin);
+      openMenu(text, commands.map((command) => command && [command[0], () => run(plugin, command[1])]), node);
+    });
+    const trail = el("div", "ligma-trail");
+    if (!devOnly) trail.append(Object.assign(el("span", "ligma-kind"), { textContent: "Plugin" }));
+    const options = el("button", "ligma-options", ICONS.dots);
+    options.setAttribute("aria-label", `More options for ${plugin.name}`);
+    options.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openMenu(options, [["Remove", () => signal("remove", { manifest: plugin.manifest })]], node, true);
+    });
+    trail.append(options);
+    line.append(button, trail);
+    column.append(line);
+    node.append(column);
+    return node;
+  };
+
+  const importRow = () => {
+    const node = el("div", `${CLASSES.row} ligma-row`);
+    node.addEventListener("mouseenter", () => node.classList.add(CLASSES.rowHover));
+    node.addEventListener("mouseleave", () => node.classList.remove(CLASSES.rowHover));
+    const button = rowButton(ICONS.import);
+    const text = el("div", CLASSES.nameWrap);
+    text.append(Object.assign(el("div", CLASSES.name), { textContent: "Import from manifest…" }));
+    button.append(text);
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      signal("import");
+    });
+    const line = el("div", CLASSES.line);
+    line.append(button);
+    node.append(line);
+    return node;
+  };
+
+  // The Development option in the filter's menu, while it's open.
+  const filterOption = () => {
+    const items = document.getElementById("extensions-filter-dropdown-menu")?.firstElementChild;
+    if (!items) return;
+    let option = items.querySelector("[data-ligma-dev]");
+    if (!option) {
+      option = el("a", CLASSES.filterOption);
+      option.dataset.ligmaDev = "";
+      option.setAttribute("role", "menuitem");
+      option.tabIndex = -1;
+      option.addEventListener("mouseenter", () => option.classList.add(CLASSES.filterHover));
+      option.addEventListener("mouseleave", () => option.classList.remove(CLASSES.filterHover));
+      option.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        devOnly = true;
+        document.getElementById("extensions-filter-dropdown-button")?.click();
+        schedule();
+      });
+      items.append(option);
+    }
+    if (option.getAttribute("aria-checked") !== String(devOnly) || !option.firstChild) {
+      option.setAttribute("aria-checked", String(devOnly));
+      option.innerHTML = (devOnly ? ICONS.check : `<span class="${CLASSES.check}"></span>`) + `<div class="${CLASSES.filterLabel}">Development</div>`;
+    }
+  };
+  // Figma's own filter options turn Development off.
+  addEventListener("click", (e) => {
+    const item = e.target.closest?.('#extensions-filter-dropdown-menu [role="menuitem"]:not([data-ligma-dev])');
+    if (!item) return;
+    figmaFilter = [...item.parentElement.querySelectorAll('[role="menuitem"]:not([data-ligma-dev])')].indexOf(item);
+    devOnly = false;
+    schedule();
+  }, true);
+
+  let drawn = "";
+  const render = () => {
+    if (!document.getElementById("ligma-dev-style") && document.head) {
+      document.head.append(Object.assign(el("style"), { id: "ligma-dev-style", textContent: STYLE }));
+    }
+    const tab = document.querySelector('[data-testid="tab-extensions"]');
+    const active = tab?.getAttribute("aria-selected") === "true";
+    if (!active) {
+      devOnly = false;
+      figmaFilter = tab ? figmaFilter : 0;
+    }
+    document.documentElement.classList.toggle("ligma-dev-filter", devOnly);
+    filterOption();
+    let box = document.getElementById("ligma-dev-plugins");
+    if (!active) {
+      box?.remove();
+      drawn = "";
+      return;
+    }
+    let root = tab;
+    while (root && !(root.querySelector("input") && root.querySelector('[class*="list--list"]'))) root = root.parentElement;
+    const list = root?.querySelector('[class*="list--list"]');
+    if (!list) return;
+    const query = (root.querySelector("input")?.value ?? "").trim().toLowerCase();
+    const types = editorTypes();
+    const shown = devOnly || figmaFilter !== 2
+      ? plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type)) && (!query || plugin.name.toLowerCase().includes(query)))
+      : [];
+    const state = JSON.stringify([devOnly, query, shown]);
+    if (box?.parentElement === list && list.firstElementChild === box && state === drawn) return;
+    drawn = state;
+    harvest(list);
+    if (!box) {
+      box = el("div");
+      box.id = "ligma-dev-plugins";
+    }
+    box.classList.toggle("ligma-only", devOnly);
+    box.replaceChildren(...shown.map(row), ...(devOnly && !query ? [importRow()] : []));
+    if (list.firstElementChild !== box) list.prepend(box);
+  };
+  let scheduled = false;
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      render();
+    });
+  };
+  new MutationObserver((mutations) => {
+    // Not for its own changes.
+    if (mutations.every((m) => m.target.closest?.("#ligma-dev-plugins, .ligma-menu, [data-ligma-dev]"))) return;
+    schedule();
+  }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
+  addEventListener("input", schedule, true);
+
+  Object.defineProperty(window, "__ligmaDevPlugins", {
+    value: {
+      set(list) {
+        plugins = list;
+        drawn = "";
+        schedule();
+      },
+    },
+  });
+})();"##;
+
 // Settings > Plugins.
 
 #[derive(Serialize)]
@@ -550,16 +938,11 @@ pub async fn get_plugins(app: AppHandle, webview: Webview) -> Vec<Plugin> {
     load(&app).iter().map(describe).collect()
 }
 
-/// Asks for a plugin's `manifest.json` and adds it, enabled. Ok(false) if
-/// the dialog was cancelled.
-#[tauri::command]
-pub async fn import_plugin(app: AppHandle, webview: Webview) -> Result<bool, String> {
-    if !from_settings_window(&webview) {
-        return Err("not allowed".into());
-    }
-    let window = webview.window();
+/// Asks for a plugin's `manifest.json`, over `window`, and adds it,
+/// enabled. Ok(false) if the dialog was cancelled.
+async fn import(app: &AppHandle, window: &Window) -> Result<bool, String> {
     let picked = rfd::AsyncFileDialog::new()
-        .set_parent(&window)
+        .set_parent(window)
         .set_title("Import Plugin from Manifest")
         .add_filter("Plugin manifest", &["json"])
         .pick_file()
@@ -572,13 +955,25 @@ pub async fn import_plugin(app: AppHandle, webview: Webview) -> Result<bool, Str
         return Err("Pick the plugin's manifest.json.".into());
     }
     let name = read_manifest(&manifest)?.name;
-    let mut entries = load(&app);
-    if entries.iter().any(|entry| entry.manifest == manifest) {
-        return Err(format!("{name} is already imported."));
+    let mut entries = load(app);
+    match entries.iter_mut().find(|entry| entry.manifest == manifest) {
+        Some(entry) if entry.enabled => return Err(format!("{name} is already imported.")),
+        // Imported but switched off: switch it back on.
+        Some(entry) => entry.enabled = true,
+        None => entries.push(Entry { manifest, enabled: true }),
     }
-    entries.push(Entry { manifest, enabled: true });
-    save(&app, &entries)?;
+    save(app, &entries)?;
     Ok(true)
+}
+
+/// Asks for a plugin's `manifest.json` and adds it, enabled. Ok(false) if
+/// the dialog was cancelled.
+#[tauri::command]
+pub async fn import_plugin(app: AppHandle, webview: Webview) -> Result<bool, String> {
+    if !from_settings_window(&webview) {
+        return Err("not allowed".into());
+    }
+    import(&app, &webview.window()).await
 }
 
 #[tauri::command]
