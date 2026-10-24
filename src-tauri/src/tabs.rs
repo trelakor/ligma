@@ -72,19 +72,67 @@ const TITLE_EMOJI_JS: &str = r#"(() => {
 /// Figma's "Open in new tab" makes a `target="_blank"` link and clicks it
 /// from script, which WKWebView drops without asking `on_new_window`. Send
 /// those links to `on_navigation` instead, as a hidden iframe load of
-/// `NEW_TAB_HOST`, which macOS reports there.
+/// `NEW_TAB_HOST`, which macOS reports there. `NEW_WINDOW_JS` opens tabs
+/// the same way, through `__ligmaOpenTab`.
 #[cfg(target_os = "macos")]
 const NEW_TAB_JS: &str = r#"(() => {
-  const click = HTMLAnchorElement.prototype.click;
-  HTMLAnchorElement.prototype.click = function () {
-    if (this.target !== "_blank" || this.hasAttribute("download")) return click.call(this);
+  const openTab = (url) => {
     const frame = document.createElement("iframe");
     frame.style.display = "none";
-    frame.src = "https://open.ligma.invalid/?url=" + encodeURIComponent(this.href);
+    frame.src = "https://open.ligma.invalid/?url=" + encodeURIComponent(url);
     document.documentElement.appendChild(frame);
     setTimeout(() => frame.remove(), 1000);
   };
+  Object.defineProperty(window, "__ligmaOpenTab", { value: openTab });
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (this.target !== "_blank" || this.hasAttribute("download")) return click.call(this);
+    openTab(this.href);
+  };
 })()"#;
+
+/// Ligma denies every new window and opens Figma URLs as tabs instead, so
+/// `window.open` returns null. Figma then presents a file in place of its
+/// editor (Design), or loses the presentation altogether (Slides, which
+/// opens a blank window and sets its URL once it has one). Hand Figma a
+/// stand-in window instead, which sends any URL it's later given to a new
+/// tab: through `__ligmaOpenTab` on macOS, and on Windows through
+/// `window.open` again, which reaches `on_new_window`.
+const NEW_WINDOW_JS: &str = r#"(() => {
+  const open = window.open;
+  const openTab = (url) => {
+    if (window.__ligmaOpenTab) window.__ligmaOpenTab(url);
+    else open.call(window, url, "_blank");
+  };
+  const standIn = () => {
+    let closed = false;
+    const go = (url) => {
+      if (closed || url == null || String(url) === "" || String(url) === "about:blank") return;
+      try {
+        openTab(new URL(String(url), location.href).href);
+      } catch {}
+    };
+    const loc = { assign: go, replace: go, reload() {}, toString: () => "about:blank" };
+    Object.defineProperty(loc, "href", { get: () => "about:blank", set: go });
+    const doc = { open: () => doc, write() {}, writeln() {}, close() {}, title: "" };
+    return {
+      get closed() { return closed; },
+      close() { closed = true; },
+      focus() {},
+      blur() {},
+      postMessage() {},
+      opener: null,
+      document: doc,
+      get location() { return loc; },
+      set location(url) { go(url); },
+    };
+  };
+  window.open = function (url, target, ...rest) {
+    if (["_self", "_parent", "_top"].includes(target)) return open.call(this, url, target, ...rest);
+    if (url == null || String(url) === "" || String(url) === "about:blank") return standIn();
+    return open.call(this, url, target, ...rest) ?? standIn();
+  };
+})();"#;
 #[cfg(target_os = "macos")]
 const NEW_TAB_HOST: &str = "open.ligma.invalid";
 
@@ -415,13 +463,23 @@ fn file_key(url: &Url) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Opens `url` in a new tab, or focuses the tab already showing that file.
+/// True for a file's presentation (a prototype or a slideshow), which shares
+/// the file's key but isn't its editor.
+fn is_presentation(url: &Url) -> bool {
+    matches!(url.path_segments().and_then(|mut s| s.next()), Some("proto" | "deck"))
+        || url.query_pairs().any(|(key, value)| key == "mode" && value == "present")
+}
+
+/// Opens `url` in a new tab, or focuses the tab already showing that file
+/// the same way. Presentations always get a new tab, like in a browser.
 pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     let key = file_key(&url);
     let id = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let existing = key.as_ref().and_then(|key| {
-            let tab = state.tabs.iter().find(|tab| tab.file_key.as_ref() == Some(key))?;
+        let existing = key.as_ref().filter(|_| !is_presentation(&url)).and_then(|key| {
+            let tab = state.tabs.iter().find(|tab| {
+                tab.file_key.as_ref() == Some(key) && tab.kind == kind(&url)
+            })?;
             Some(tab.id)
         });
         if let Some(id) = existing {
@@ -467,7 +525,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             on_title_changed(&title_app, id, &webview, &title)
         })
         .initialization_script(BEFOREUNLOAD_JS)
-        .initialization_script(crate::auth::PAGE_JS);
+        .initialization_script(crate::auth::PAGE_JS)
+        .initialization_script(NEW_WINDOW_JS);
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
