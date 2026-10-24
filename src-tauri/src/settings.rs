@@ -131,7 +131,13 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
 
 /// The theme's background as a window color, if it's `#rrggbb`.
 fn background(theme: &serde_json::Value) -> Option<tauri::window::Color> {
-    let hex = theme.get("bg")?.as_str()?.strip_prefix('#')?;
+    theme_color(theme, "bg")
+}
+
+/// Theme color `key` (see `THEME_JS` in tabs.rs) as a window color, if
+/// it's `#rrggbb`.
+pub fn theme_color(theme: &serde_json::Value, key: &str) -> Option<tauri::window::Color> {
+    let hex = theme.get(key)?.as_str()?.strip_prefix('#')?;
     if hex.len() != 6 {
         return None;
     }
