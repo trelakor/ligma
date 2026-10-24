@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.5 - 2026-10-23
+
+- Presenting a file that's already being presented goes back to its presentation tab instead of opening another.
+- Prototype tabs no longer show a ▶ before the file name, since their icon is already a play button, and Figma Slides tabs no longer end in "Figma Slides".
+- Discord Rich Presence shows "Presenting" and the file's name while you present from Figma Design or Figma Slides.
+
 ## 0.11.4 - 2026-10-23
 
 - Present in Figma Design opens the presentation in a new tab, like in a browser, instead of in place of the file.
