@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Lets the settings window drag and close itself; it draws its own title bar.",
+  "webviews": ["settings"],
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-close"
+  ]
+}
