@@ -2,6 +2,14 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.15.0 - 2026-10-24
+
+- Settings has a page for each category: Appearance, Tabs & Memory, Discord and About.
+- New interface scale setting (Settings > Appearance) zooms Figma, the tab bar, menus, prompts and Settings together. − and + step through the usual zoom levels.
+- Prompts, such as join requests, update ready and errors, are drawn in Figma's style instead of as Windows message boxes, and open centered over the window.
+- The tab menu is light or dark with the editor.
+- On Windows 11, Ligma's menus, prompts and Settings have no accent-colored border, just a soft shadow.
+
 ## 0.14.0 - 2026-10-24
 
 - Your Discord status shows where you are in the file under its name: the page in Figma Design and FigJam, the slide in Figma Slides or while presenting ("Slide 3 of 12", or the frame of a prototype), the chat in Figma Make, the asset in Figma Buzz ("Asset 2 of 5") and the webpage in Figma Sites. Each Figma product has its own switch in Settings, all on by default.
