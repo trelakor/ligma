@@ -23,7 +23,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use discord_rich_presence::activity::{Activity, Assets, Party, Secrets, Timestamps};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use crate::discord_ipc::Ipc;
 
@@ -460,20 +459,22 @@ fn on_event(app: &AppHandle, message: &Value, file: Option<&str>) {
                 Some(file) => file.to_owned(),
             };
             let (app, id) = (app.clone(), id.to_owned());
-            app.clone()
-                .dialog()
-                .message(format!(
+            crate::prompt::show(
+                &app.clone(),
+                "Join Request",
+                format!(
                     "{name} asked on Discord to join {file}. If you invite them, it opens in \
                      their Ligma, for them to see if they have access."
-                ))
-                .title("Join Request")
-                .buttons(MessageDialogButtons::OkCancelCustom("Invite".into(), "Ignore".into()))
-                .show(move |invite| {
+                ),
+                &["Ignore", "Invite"],
+                move |choice| {
+                    let invite = choice == Some(1);
                     let tx = app.state::<Presence>().tx.lock().unwrap().clone();
                     if let Some(tx) = tx {
                         let _ = tx.send(Message::Answer { user: id, invite });
                     }
-                });
+                },
+            );
         }
         _ => {}
     }

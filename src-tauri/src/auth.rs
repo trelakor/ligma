@@ -31,7 +31,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager, Url};
-use tauri_plugin_dialog::DialogExt;
 
 /// Loaded by the page to report back; never resolves.
 pub const SIGNAL_HOST: &str = "auth.ligma.invalid";
@@ -170,7 +169,7 @@ pub fn cancel(app: &AppHandle, error: Option<&str>) {
     #[cfg(windows)]
     crate::figma_scheme::restore();
     if let Some(error) = error {
-        app.dialog().message(error).title("Sign in with Google").show(|_| {});
+        crate::prompt::show(app, "Sign in with Google", error, &["OK"], |_| {});
     }
 }
 

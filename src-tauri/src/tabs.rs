@@ -20,11 +20,12 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::webview::{NewWindowResponse, WebviewBuilder};
+use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
+/// At 100% interface scale; it grows with the scale.
 pub const TAB_BAR_HEIGHT: f64 = 38.0;
 pub const HOME_URL: &str = "https://www.figma.com/files";
 const HOME_ID: u32 = 0;
@@ -249,6 +250,8 @@ struct TabState {
     snapshots: bool,
     /// Keep the tabs in `SESSION_FILE` for the next launch (`restoreTabs`).
     restore: bool,
+    /// Zoom of Figma tabs and Ligma's own pages (`interfaceScale`), 1 at 100%.
+    scale: f64,
     /// What was last written there, to skip writing it again.
     saved_session: Option<String>,
 }
@@ -290,6 +293,7 @@ impl TabState {
         self.max_hidden = settings.max_hidden_tabs_loaded.filter(|_| minutes > 0);
         self.snapshots = settings.reload_snapshots;
         self.restore = settings.restore_tabs;
+        self.scale = crate::settings::scale(settings);
         if !self.restore {
             self.saved_session = None;
         }
@@ -304,7 +308,15 @@ impl TabState {
 /// Applies changed settings. Tabs now past a shorter timeout or a lower
 /// limit go to sleep right away.
 pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
-    app.state::<Tabs>().inner().0.lock().unwrap().configure(settings);
+    let rescaled = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let scale = state.scale;
+        state.configure(settings);
+        state.scale != scale
+    };
+    if rescaled {
+        apply_scale(app);
+    }
     if settings.restore_tabs {
         save_session(app);
     } else if let Ok(dir) = app.path().app_data_dir() {
@@ -535,6 +547,12 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .on_document_title_changed(move |webview, title| {
             on_title_changed(&title_app, id, &webview, &title)
         })
+        // In case a new page starts at the default zoom.
+        .on_page_load(move |webview, payload| {
+            if let PageLoadEvent::Finished = payload.event() {
+                let _ = webview.set_zoom(scale(webview.app_handle()));
+            }
+        })
         .initialization_script(BEFOREUNLOAD_JS)
         .initialization_script(crate::auth::PAGE_JS)
         .initialization_script(NEW_WINDOW_JS);
@@ -548,11 +566,12 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             .initialization_script(LOCAL_NETWORK_ACCESS_JS)
             .initialization_script(TITLE_EMOJI_JS);
     }
-    window.add_child(
+    let webview = window.add_child(
         builder,
-        LogicalPosition::new(0.0, TAB_BAR_HEIGHT),
-        content_size(&window)?,
+        LogicalPosition::new(0.0, bar_height(app)),
+        content_size(app, &window)?,
     )?;
+    webview.set_zoom(scale(app))?;
     Ok(())
 }
 
@@ -779,7 +798,7 @@ fn fit_tab_bar(app: &AppHandle) {
     };
     let size = size.to_logical::<f64>(scale);
     let full = app.state::<Tabs>().inner().0.lock().unwrap().snapshot_shown;
-    let height = if full { size.height } else { TAB_BAR_HEIGHT.min(size.height) };
+    let height = if full { size.height } else { bar_height(app).min(size.height) };
     let _ = bar.set_size(LogicalSize::new(size.width, height));
 }
 
@@ -1311,6 +1330,9 @@ pub fn sync_theme(app: &AppHandle) {
         }
         push_state(&app);
         crate::settings::apply_theme(&app, &theme);
+        crate::prompt::apply_theme(&app, &theme);
+        #[cfg(windows)]
+        crate::frame::match_theme_all(&app);
     });
 }
 
@@ -1319,9 +1341,36 @@ pub fn theme(app: &AppHandle) -> Option<serde_json::Value> {
     app.state::<Tabs>().inner().0.lock().unwrap().theme.clone()
 }
 
-fn content_size(window: &Window) -> tauri::Result<LogicalSize<f64>> {
+/// The interface scale (`interfaceScale`), 1 at 100%.
+pub fn scale(app: &AppHandle) -> f64 {
+    app.state::<Tabs>().inner().0.lock().unwrap().scale
+}
+
+/// The tab bar's height at the interface scale.
+fn bar_height(app: &AppHandle) -> f64 {
+    TAB_BAR_HEIGHT * scale(app)
+}
+
+fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f64>> {
     let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
-    Ok(LogicalSize::new(size.width, (size.height - TAB_BAR_HEIGHT).max(0.0)))
+    Ok(LogicalSize::new(size.width, (size.height - bar_height(app)).max(0.0)))
+}
+
+/// Zooms the tab bar, Figma tabs and open prompts to the interface scale,
+/// and fits the tabs under the bar at its new height.
+pub fn apply_scale(app: &AppHandle) {
+    let scale = scale(app);
+    if let Some(window) = app.get_window("main") {
+        for webview in window.webviews() {
+            let label = webview.label();
+            if label == "main" || label.starts_with("tab-") {
+                let _ = webview.set_zoom(scale);
+            }
+        }
+    }
+    crate::tab_menu::hide(app);
+    crate::prompt::apply_scale(app, scale);
+    layout(app);
 }
 
 /// Refits tab webviews to the window. Call on resize.
@@ -1329,11 +1378,13 @@ pub fn layout(app: &AppHandle) {
     let Some(window) = app.get_window("main") else {
         return;
     };
-    let Ok(size) = content_size(&window) else {
+    let Ok(size) = content_size(app, &window) else {
         return;
     };
+    let top = LogicalPosition::new(0.0, bar_height(app));
     for webview in window.webviews() {
         if webview.label().starts_with("tab-") {
+            let _ = webview.set_position(top);
             let _ = webview.set_size(size);
         }
     }
