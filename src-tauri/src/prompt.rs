@@ -27,6 +27,8 @@ struct Content {
 struct Open {
     content: Content,
     done: Option<Done>,
+    /// Centered and shown; a rescale keeps it where it is.
+    placed: bool,
 }
 
 static OPEN: Mutex<Option<HashMap<String, Open>>> = Mutex::new(None);
@@ -51,7 +53,7 @@ pub fn show(
     OPEN.lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)
-        .insert(label.clone(), Open { content, done: Some(Box::new(done)) });
+        .insert(label.clone(), Open { content, done: Some(Box::new(done)), placed: false });
     // Off the caller's thread: making a window on the main thread, from a
     // webview's callback, would wait on itself.
     let app = app.clone();
@@ -205,7 +207,13 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
     let size = LogicalSize::new(width * scale, height * scale);
     let _ = window.set_size(size);
     // Only placed the first time; a rescale keeps it where it is.
-    if !window.is_visible().unwrap_or(false) {
+    let first = OPEN
+        .lock()
+        .unwrap()
+        .as_mut()
+        .and_then(|open| open.get_mut(webview.label()))
+        .is_some_and(|open| !std::mem::replace(&mut open.placed, true));
+    if first {
         let factor = window.scale_factor().unwrap_or(1.0);
         let (w, h) = (size.width * factor, size.height * factor);
         let area = match app.get_window("main") {

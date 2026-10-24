@@ -199,10 +199,12 @@ fn main() {
         // them (Add account, for one).
         .plugin(report::log_plugin())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
-        // Settings has a fixed size, which grows with new options.
+        // Only the main window. Settings has a fixed size, which grows with
+        // new options, and the plugin would show a new tab menu or prompt
+        // right away, before it's placed.
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&[settings::WINDOW])
+                .with_filter(|label| label == "main")
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())

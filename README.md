@@ -56,7 +56,7 @@ npm run icon
 - Invites to files (off by default) makes the open file a Discord party, sized by the people Figma shows in it. Friends can be invited from the + menu in a Discord chat, or ask to join from your profile, which Ligma asks you about. Joining opens the file in their Ligma, starting it if needed, and Figma shows it to them if they have access. It needs Rich Presence on for both of you; in `settings.json` it's `"discordInvites"`.
 - Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimize) holds the options from `settings.json`, one page per category: Appearance, Tabs & Memory, Discord and About. Changes are saved and apply right away.
 - Interface scale (Settings > Appearance, `"interfaceScale"` in percent, 50 to 200) zooms Figma tabs, the tab bar, the tab menu and prompts together, like a browser's zoom; − and + step through the usual zoom levels. The tab bar grows with it.
-- The tab menu, prompts (update ready, join requests, errors) and the settings window are drawn by Ligma in Figma's style and follow the editor's light or dark theme. On Windows 11 their border is the theme's, not the accent color.
+- The tab menu, prompts (update ready, join requests, errors) and the settings window are drawn by Ligma in Figma's style and follow the editor's light or dark theme. On Windows 11 they have no accent-colored border, just the system shadow.
 - Figma pages have no access to Tauri IPC. Only the local tab bar has permissions (`src-tauri/capabilities/tab-bar.json`).
 
 ## Memory

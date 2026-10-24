@@ -159,7 +159,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
-    // A border in the theme's color, not the accent color.
+    // No accent-colored border.
     #[cfg(windows)]
     crate::frame::match_theme(&window);
     // Traffic lights centered on the header, like on the tab bar. AppKit
