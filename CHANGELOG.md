@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.13.1 - 2026-10-24
+
+- Hovering Ligma's logo on your Discord status shows the version of Ligma you're using.
+
 ## 0.13.0 - 2026-10-24
 
 - Report a problem from Settings (or Help on macOS). It opens a GitHub issue filled in with Ligma's version, your system and the end of Ligma's log, for you to check and submit. Nothing is sent otherwise.
