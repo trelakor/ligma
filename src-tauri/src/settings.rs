@@ -38,8 +38,8 @@ pub struct Settings {
     pub discord_show_file: bool,
     /// Show the selected tool's icon on Discord, named when hovered.
     pub discord_show_tool: bool,
-    /// Under the file's name on Discord, show where in it you are: the
-    /// page in Figma Design,
+    /// Under the file's name on Discord, show where in it you are (only
+    /// with `discord_show_file`): the page in Figma Design,
     pub discord_show_page: bool,
     /// the page in FigJam,
     pub discord_show_figjam_page: bool,
