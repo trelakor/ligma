@@ -25,14 +25,15 @@ If Discord is running, Ligma tells the Discord app on your computer what to show
 
 - "Ligma", its version (shown when hovering its logo) and the time you started using it.
 - The name of the Figma file you have open, shown as "Editing …".
-- The Figma tool you have selected, and its icon.
+- Where you are in the file: the page in Figma Design and FigJam, the slide in Figma Slides or the slide or frame you're presenting, the chat in Figma Make, which asset you're on in Figma Buzz, or the webpage in Figma Sites.
+- The icon of the Figma tool you have selected, and its name.
 - With Invites to files on (it's off unless you turn it on): how many people Figma shows in the open file, an ID for the file that doesn't reveal it, and a link to the file that Discord keeps to itself until someone joins.
 
 Discord then shows this to other people as part of your activity, under [Discord's Privacy Policy](https://discord.com/privacy). Ligma does not read your Discord account, messages, servers or friends, and doesn't ask for any OAuth2 permissions.
 
 With Invites to files on, everyone you invite to the open file, and everyone whose request to join you accept, gets the link to it. Figma still decides what they can see: without access, they get Figma's page to request it. When a friend asks to join, Discord tells Ligma their Discord name and user ID so Ligma can ask you; Ligma keeps neither. So that joining can start Ligma, Ligma tells Discord where it's installed (in the Windows registry, or in Discord's folder on macOS) while Rich Presence is on.
 
-You choose what's shared in Ligma's Settings: hide the file name (it then says "Editing a file"), hide the tool, turn invites on or off, or turn Rich Presence off. Discord's own Activity Privacy settings can also hide it. Turning it off clears your status right away.
+You choose what's shared in Ligma's Settings: hide the file name (it then says "Editing a file"), hide the tool, hide where you are in the file for each Figma product, turn invites on or off, or turn Rich Presence off. Discord's own Activity Privacy settings can also hide it. Turning it off clears your status right away.
 
 The logo and tool icons are images in this repository on GitHub. Discord loads them from there to display them.
 
