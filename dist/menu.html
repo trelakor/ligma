@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <title>Tab Menu</title>
-<!-- A tab's right-click menu (see src-tauri/src/tab_menu.rs). The window
+<!-- A tab's right-click menu, or the Plugins menu (see
+     src-tauri/src/tab_menu.rs). The window
      is exactly the menu: the page draws the items from `get_menu`,
      reports its size with `menu_ready`, and sends the chosen item to
      `menu_pick`. Colors come from the active Figma tab's theme, so the
@@ -46,6 +47,8 @@
     white-space: nowrap;
   }
   .item.selected { background: var(--selected); color: var(--selected-text); }
+  /* A note, like "No plugins for FigJam". */
+  .item.disabled { opacity: 0.5; }
   .separator { height: 1px; margin: 8px -8px; background: var(--separator); }
 </style>
 </head>
@@ -98,6 +101,12 @@
         role: "menuitem",
         textContent: text,
       });
+      if (!action) {
+        node.classList.add("disabled");
+        node.setAttribute("aria-disabled", "true");
+        menu.append(node);
+        return;
+      }
       const index = items.length;
       node.addEventListener("mousemove", () => selected !== index && select(index));
       node.addEventListener("click", () => pick(action));
