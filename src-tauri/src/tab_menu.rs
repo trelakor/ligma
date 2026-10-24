@@ -186,7 +186,7 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
             y = (y - h).max(top);
         }
     }
-    // A border in the theme's color, not the accent color.
+    // No accent-colored border.
     #[cfg(windows)]
     crate::frame::match_theme(&window);
     let _ = window.set_size(LogicalSize::new(width, height));

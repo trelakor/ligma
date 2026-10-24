@@ -408,8 +408,9 @@ fn save_session(app: &AppHandle) {
 /// Reads Figma's theme colors. Figma sets `data-preferred-theme` on <body>
 /// and defines its palette as CSS variables there; FigJam and Dev Mode
 /// override them, so this follows the active editor too. Also measures
-/// the editor's left navigation rail, in device pixels so the tab bar can
-/// convert it at its own zoom, for Home to line up with.
+/// the editor's left navigation rail, in CSS pixels, for Home to line up
+/// with. The tab bar has the same zoom, so the width holds as is, and
+/// follows a change of interface scale at once.
 const THEME_JS: &str = r#"(() => {
   const el = document.querySelector("[data-preferred-theme]");
   if (!el) return null;
@@ -417,7 +418,7 @@ const THEME_JS: &str = r#"(() => {
   const v = (name) => style.getPropertyValue(name).trim();
   const rail = document.querySelector('[data-testid="navigation-bar"]')?.getBoundingClientRect();
   return {
-    railWidth: rail?.width && rail.left === 0 ? rail.right * devicePixelRatio : null,
+    railWidth: rail?.width && rail.left === 0 ? rail.right : null,
     bg: v("--color-bg"),
     bgSecondary: v("--color-bg-secondary"),
     bgTertiary: v("--color-bg-tertiary"),
