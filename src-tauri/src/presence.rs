@@ -29,7 +29,7 @@ use crate::discord_ipc::Ipc;
 
 /// Application ID from the Discord Developer Portal. Empty: presence off.
 const CLIENT_ID: &str = "1563151879788167309";
-const LOGO_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/logo.png";
+const LOGO_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/discord-logo.png";
 /// Tool icons are art assets of the Discord application, uploaded in the
 /// Developer Portal (Rich Presence > Art Assets) and named
 /// `<product>-<focused|unfocused>-<slug>`. Only Figma Design's are there so
