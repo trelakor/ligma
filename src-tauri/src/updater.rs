@@ -34,6 +34,10 @@ const FAILED_FILE: &str = "update-failed.txt";
 /// is shown after a restart.
 static WOUND_DOWN: AtomicBool = AtomicBool::new(false);
 
+/// Why the last update failed to install, kept by `start` for
+/// `offer_last_failure` to show once the main window is up.
+static LAST_FAILURE: Mutex<Option<String>> = Mutex::new(None);
+
 /// An update that's downloaded but not installed yet, with its package.
 #[derive(Default)]
 pub struct Pending(Mutex<Option<(Update, Vec<u8>)>>);
@@ -51,7 +55,7 @@ pub fn start(app: &AppHandle) {
     // After a failure, don't offer the same update again straight away.
     let mut skip_check = false;
     if let Some(error) = take_failure(app) {
-        install_failed(app, error);
+        *LAST_FAILURE.lock().unwrap() = Some(error);
         skip_check = true;
     }
     let app = app.clone();
@@ -67,6 +71,14 @@ pub fn start(app: &AppHandle) {
         }
         std::thread::sleep(CHECK_EVERY);
     });
+}
+
+/// Says why the last update failed to install, if it did. Call once the
+/// main window is up, so the prompt is centered over it.
+pub fn offer_last_failure(app: &AppHandle) {
+    if let Some(error) = LAST_FAILURE.lock().unwrap().take() {
+        install_failed(app, error);
+    }
 }
 
 /// Checks right away, for the menu item, and says what it found.
