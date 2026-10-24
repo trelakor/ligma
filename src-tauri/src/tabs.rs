@@ -412,7 +412,9 @@ const THEME_JS: &str = r#"(() => {
     bgTertiary: v("--color-bg-tertiary"),
     text: v("--color-text"),
     textSecondary: v("--color-text-secondary"),
+    textTertiary: v("--color-text-tertiary"),
     border: v("--color-border"),
+    brand: v("--color-bg-brand"),
   };
 })()"#;
 
@@ -1270,10 +1272,16 @@ pub fn sync_theme(app: &AppHandle) {
             if state.active != active || state.theme.as_ref() == Some(&theme) {
                 return;
             }
-            state.theme = Some(theme);
+            state.theme = Some(theme.clone());
         }
         push_state(&app);
+        crate::settings::apply_theme(&app, &theme);
     });
+}
+
+/// The active tab's Figma theme colors (see `THEME_JS`), once known.
+pub fn theme(app: &AppHandle) -> Option<serde_json::Value> {
+    app.state::<Tabs>().inner().0.lock().unwrap().theme.clone()
 }
 
 fn content_size(window: &Window) -> tauri::Result<LogicalSize<f64>> {

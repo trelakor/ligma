@@ -89,16 +89,61 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         window.unminimize()?;
         return window.set_focus();
     }
-    WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
         // Fits every row; macOS has one more (reload snapshots).
-        .inner_size(520.0, if cfg!(target_os = "macos") { 600.0 } else { 540.0 })
+        .inner_size(520.0, if cfg!(target_os = "macos") { 660.0 } else { 600.0 })
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
-        .center()
-        .build()?;
+        .center();
+    // No flash of another color before the page draws.
+    if let Some(color) = crate::tabs::theme(app).as_ref().and_then(background) {
+        builder = builder.background_color(color);
+    }
+    // The page draws its own title bar (see settings.html), with the
+    // traffic lights in it on macOS and a close button elsewhere.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.decorations(false);
+    }
+    let window = builder.build()?;
+    // Traffic lights centered on the header, like on the tab bar. AppKit
+    // only on the main thread.
+    #[cfg(target_os = "macos")]
+    {
+        let ns_window = window.clone();
+        window.run_on_main_thread(move || {
+            if let Ok(ns_window) = ns_window.ns_window() {
+                unsafe { crate::titlebar::center_traffic_lights(ns_window.cast()) };
+            }
+        })?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
     Ok(())
+}
+
+/// The theme's background as a window color, if it's `#rrggbb`.
+fn background(theme: &serde_json::Value) -> Option<tauri::window::Color> {
+    let hex = theme.get("bg")?.as_str()?.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let channel = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    Some(tauri::window::Color(channel(0)?, channel(2)?, channel(4)?, 255))
+}
+
+/// Passes the active tab's new theme to the settings window, if open.
+pub fn apply_theme(app: &AppHandle, theme: &serde_json::Value) {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let _ = window.eval(format!("window.applyTheme?.({theme})"));
+    }
 }
 
 /// True if the settings window has keyboard focus, so Cmd+W closes it
@@ -122,6 +167,12 @@ fn from_settings_window(webview: &Webview) -> bool {
 #[tauri::command]
 pub async fn get_settings(app: AppHandle, webview: Webview) -> Option<Settings> {
     from_settings_window(&webview).then(|| app.state::<Current>().0.lock().unwrap().clone())
+}
+
+/// The active tab's Figma theme colors, for the settings window to match.
+#[tauri::command]
+pub async fn get_theme(app: AppHandle, webview: Webview) -> Option<serde_json::Value> {
+    from_settings_window(&webview).then(|| crate::tabs::theme(&app)).flatten()
 }
 
 /// Saves `settings` and applies them to the running app.
