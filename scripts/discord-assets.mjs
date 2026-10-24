@@ -21,7 +21,10 @@ const wanted = ["focused", "unfocused"].flatMap((state) =>
   slugs.map((slug) => `${product}-${state}-${slug}`),
 );
 
-const response = await fetch(`https://discord.com/api/v10/oauth2/applications/${clientId}/assets`);
+// Discord's CDN caches the list for up to 10 minutes; a fresh query skips it.
+const response = await fetch(
+  `https://discord.com/api/v10/oauth2/applications/${clientId}/assets?t=${Date.now()}`,
+);
 if (!response.ok) throw new Error(`Discord answered ${response.status}`);
 const uploaded = new Set((await response.json()).map((asset) => asset.name));
 
