@@ -22,6 +22,38 @@ extern "system" {
     fn DwmSetWindowAttribute(hwnd: isize, attribute: u32, value: *const core::ffi::c_void, size: u32) -> i32;
 }
 
+#[link(name = "user32")]
+extern "system" {
+    fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
+}
+
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
+const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_FRAMECHANGED: u32 = 0x0020;
+
+/// Has Windows work out `window`'s frame again. A window made hidden keeps
+/// the default frame, title bar and all, until it's first shown, so a size
+/// set meanwhile comes out a title bar too tall. Call right after building
+/// a hidden frameless window.
+pub fn refresh(window: &WebviewWindow) {
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    unsafe {
+        SetWindowPos(
+            hwnd.0 as isize,
+            0,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
 /// Takes `window`'s border away and gives the strip above its page the
 /// active theme's background.
 pub fn match_theme(window: &WebviewWindow) {

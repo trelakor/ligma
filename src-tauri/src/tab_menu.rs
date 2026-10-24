@@ -70,6 +70,8 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     let _ = main;
     let window = builder.build()?;
+    #[cfg(windows)]
+    crate::frame::refresh(&window);
     #[cfg(target_os = "macos")]
     {
         let ns_window = window.clone();
