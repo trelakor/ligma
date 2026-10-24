@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.7 - 2026-10-24
+
+- FigJam, Figma Make, Figma Buzz and Figma Sites tabs no longer end in the product's name, in the tab bar or on Discord.
+- Discord Rich Presence reads "Designing in", "Jamming in" and so on before the file's name. Presenting still reads "Presenting".
+
 ## 0.11.6 - 2026-10-24
 
 - Redesigned Settings in Figma's style, with its own title bar, Figma's switches and number fields, and Figma's light or dark theme. Esc closes it.
