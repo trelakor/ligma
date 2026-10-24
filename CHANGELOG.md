@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.15.1 - 2026-10-24
+
+- Fixed the Figma Design switch in Settings > Discord turning itself off whenever another setting changed. If it's off, switch it back on once.
+- Where you are in the file now only shows on Discord with the file's name. Its switches sit under Show file name in Settings and turn off with it.
+
 ## 0.15.0 - 2026-10-24
 
 - Settings has a page for each category: Appearance, Tabs & Memory, Discord and About.
