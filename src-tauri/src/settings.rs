@@ -28,12 +28,26 @@ pub struct Settings {
     /// While a file tab reloads after sleep, show its last image instead of
     /// Figma's loading screen (macOS).
     pub reload_snapshots: bool,
-    /// Show the open file and selected tool on Discord.
+    /// Show the open file, where in it you are and the selected tool on
+    /// Discord.
     pub discord_rich_presence: bool,
     /// Name the open file on Discord; otherwise it says "Editing a file".
     pub discord_show_file: bool,
-    /// Show the selected tool (icon and text) on Discord.
+    /// Show the selected tool's icon on Discord, named when hovered.
     pub discord_show_tool: bool,
+    /// Under the file's name on Discord, show where in it you are: the
+    /// page in Figma Design,
+    pub discord_show_page: bool,
+    /// the page in FigJam,
+    pub discord_show_figjam_page: bool,
+    /// the slide in Figma Slides, or presenting (the frame of a prototype),
+    pub discord_show_slide: bool,
+    /// the chat in Figma Make,
+    pub discord_show_chat: bool,
+    /// the asset in Figma Buzz,
+    pub discord_show_asset: bool,
+    /// and the webpage in Figma Sites.
+    pub discord_show_webpage: bool,
     /// Let Discord friends join the open file: invite them from the + menu
     /// in a Discord chat, or accept when they ask to join, and it opens in
     /// their Ligma if they have access. Shows how many are in the file.
@@ -51,6 +65,12 @@ impl Default for Settings {
             discord_rich_presence: true,
             discord_show_file: true,
             discord_show_tool: true,
+            discord_show_page: true,
+            discord_show_figjam_page: true,
+            discord_show_slide: true,
+            discord_show_chat: true,
+            discord_show_asset: true,
+            discord_show_webpage: true,
             discord_invites: false,
             restore_tabs: false,
         }
@@ -96,7 +116,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
     }
     // Fits every row; macOS has one more (reload snapshots). On a short
     // screen it fits the screen instead, and the page scrolls.
-    let mut height: f64 = if cfg!(target_os = "macos") { 875.0 } else { 815.0 };
+    let mut height: f64 = if cfg!(target_os = "macos") { 1060.0 } else { 1000.0 };
     if let Ok(Some(monitor)) = app.primary_monitor() {
         let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
         height = height.min(area.height - 40.0);
