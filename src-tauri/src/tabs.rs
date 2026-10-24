@@ -1025,6 +1025,10 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
             Some(("close-all", "Close All Tabs")),
         ]
     };
+    let items = items
+        .into_iter()
+        .map(|item| item.map(|(action, text)| (action.to_owned(), text.to_owned())))
+        .collect();
     crate::tab_menu::show(app, id, items)
 }
 
@@ -1403,6 +1407,8 @@ fn push_state(app: &AppHandle) {
         fullscreen: bool,
         theme: &'a Option<serde_json::Value>,
         platform: &'static str,
+        /// A development plugin is switched on (see plugins.rs).
+        plugins: bool,
     }
 
     // Not `get_webview_window`: that returns None once the window holds
@@ -1411,6 +1417,7 @@ fn push_state(app: &AppHandle) {
         return;
     };
     let fullscreen = window.is_fullscreen().unwrap_or(false);
+    let plugins = crate::plugins::any_enabled(app);
     let json = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         serde_json::to_string(&View {
@@ -1419,11 +1426,17 @@ fn push_state(app: &AppHandle) {
             fullscreen,
             theme: &state.theme,
             platform: std::env::consts::OS,
+            plugins,
         })
         .unwrap()
     };
     let _ = bar.eval(format!("window.render?.({json})"));
     save_session(app);
+}
+
+/// Redraws the tab bar, for a change it shows that isn't the tabs'.
+pub fn refresh_bar(app: &AppHandle) {
+    push_state(app);
 }
 
 /// Only the local tab bar may drive tabs. Figma pages have no IPC access
@@ -1471,6 +1484,24 @@ pub async fn move_tab_to(app: AppHandle, webview: Webview, id: u32, index: usize
 pub async fn open_new_tab(app: AppHandle, webview: Webview) {
     if from_tab_bar(&webview) {
         let _ = new_tab(&app);
+    }
+}
+
+/// Opens the Plugins menu (see plugins.rs) for the active tab, if it's in
+/// a file's editor.
+#[tauri::command]
+pub async fn plugins_menu(app: AppHandle, webview: Webview) {
+    if !from_tab_bar(&webview) {
+        return;
+    }
+    let active = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let tab = state.tabs.iter().find(|tab| tab.id == state.active);
+        tab.filter(|tab| tab.file_key.is_some() && view(&tab.url) == tab.kind)
+            .map(|tab| (tab.id, tab.kind))
+    };
+    if let Some((id, kind)) = active {
+        let _ = crate::plugins::show_menu(&app, id, kind);
     }
 }
 
