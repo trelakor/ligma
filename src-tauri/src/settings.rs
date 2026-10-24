@@ -122,10 +122,20 @@ fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
 
 /// Opens the settings window, or focuses it if it's already open.
 pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
+    open_window_at(app, None)
+}
+
+/// Opens the settings window, or focuses it, on the page whose sidebar tab
+/// is `page` (like "tab-plugins") if given.
+pub fn open_window_at(app: &AppHandle, page: Option<&str>) -> tauri::Result<()> {
     // The gear button's clicks can arrive together; one window between them.
     static OPENING: Mutex<()> = Mutex::new(());
     let _opening = OPENING.lock().unwrap();
+    let page = page.map(|page| serde_json::to_string(page).unwrap());
     if let Some(window) = app.get_webview_window(WINDOW) {
+        if let Some(page) = &page {
+            window.eval(format!("window.showPageById?.({page})"))?;
+        }
         window.unminimize()?;
         return window.set_focus();
     }
@@ -140,6 +150,10 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         .maximizable(false)
         .minimizable(false)
         .center();
+    // The page opens on the page it showed last, kept in localStorage.
+    if let Some(page) = &page {
+        builder = builder.initialization_script(format!("localStorage.setItem(\"settingsPage\", {page})"));
+    }
     // No flash of another color before the page draws.
     if let Some(color) = crate::tabs::theme(app).as_ref().and_then(background) {
         builder = builder.background_color(color);

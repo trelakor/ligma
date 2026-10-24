@@ -8,6 +8,7 @@ mod downloads;
 mod figma_scheme;
 #[cfg(windows)]
 mod frame;
+mod plugins;
 mod presence;
 #[cfg(target_os = "macos")]
 mod pressure;
@@ -237,12 +238,18 @@ fn main() {
             tabs::tab_menu,
             tabs::move_tab_to,
             tabs::window_control,
+            tabs::plugins_menu,
             settings::get_settings,
             settings::get_theme,
             settings::set_settings,
             settings::get_version,
             settings::check_for_updates,
             settings::report_problem,
+            plugins::get_plugins,
+            plugins::import_plugin,
+            plugins::set_plugin_enabled,
+            plugins::remove_plugin,
+            plugins::reveal_plugin,
             tab_menu::get_menu,
             tab_menu::menu_ready,
             tab_menu::menu_pick,

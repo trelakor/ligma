@@ -7,7 +7,8 @@
 //! them (`get_menu`), draws them, and reports its size (`menu_ready`);
 //! only then is the window placed at the cursor and shown. It hides when
 //! it loses focus, and `menu_pick` runs the chosen item through
-//! `tabs::on_menu`.
+//! `tabs::on_menu`. The tab bar's Plugins menu (plugins.rs) is drawn the
+//! same way.
 
 use std::sync::Mutex;
 
@@ -16,9 +17,10 @@ use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Webview, WebviewU
 
 pub const WINDOW: &str = "tab-menu";
 
-/// A menu item: the action `tabs::on_menu` runs, and its text. None is a
-/// separator.
-pub type Item = Option<(&'static str, &'static str)>;
+/// A menu item: the action `tabs::on_menu` (or `plugins::on_menu`, for
+/// `plugins:` actions) runs, and its text. None is a separator; an empty
+/// action is a note that can't be chosen.
+pub type Item = Option<(String, String)>;
 
 /// The menu being opened or shown.
 struct Open {
@@ -212,7 +214,14 @@ pub async fn menu_pick(app: AppHandle, webview: Webview, action: Option<String>)
         return;
     };
     // Only the actions this menu offered.
-    if open.items.iter().flatten().any(|(item, _)| *item == action) {
+    if action.is_empty() || !open.items.iter().flatten().any(|(item, _)| *item == action) {
+        return;
+    }
+    if let Some(plugin) = action.strip_prefix("plugins:") {
+        crate::plugins::on_menu(&app, open.tab, plugin);
+    } else if action == "manage-plugins" {
+        let _ = crate::settings::open_window_at(&app, Some("tab-plugins"));
+    } else {
         let _ = crate::tabs::on_menu(&app, &format!("{action}:{}", open.tab));
     }
 }
