@@ -422,7 +422,7 @@
       <h2>Development</h2>
       <div class="row">
         <span class="label">Import plugin from manifest
-          <div class="hint">Pick a plugin's manifest.json. Run plugins that are on from the Plugins button in the tab bar, in files you can edit. They aren't sandboxed like in the Figma app, so only import plugins you trust.</div>
+          <div class="hint">Pick a plugin's manifest.json. Plugins that are on show in Figma's Actions panel, under Plugins &amp; widgets, in files you can edit. They aren't sandboxed like in the Figma app, so only import plugins you trust.</div>
         </span>
         <button class="button" id="import-plugin">Import…</button>
       </div>
@@ -509,8 +509,6 @@
     showPage(tabs[(to + tabs.length) % tabs.length], true);
   });
   showPage($(localStorage.getItem("settingsPage")) ?? tabs[0]);
-  // From Rust, to open on a page (`open_window_at` in settings.rs).
-  window.showPageById = (id) => $(id) && showPage($(id));
 
   // Figma theme colors (see THEME_JS in tabs.rs) onto the variables.
   const THEME_VARS = {
