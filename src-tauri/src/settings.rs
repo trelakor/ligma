@@ -155,9 +155,13 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
-    // No accent-colored border.
+    // The size it was built with, and no accent-colored border.
     #[cfg(windows)]
-    crate::frame::match_theme(&window);
+    {
+        crate::frame::refresh(&window);
+        let _ = window.set_size(size);
+        crate::frame::match_theme(&window);
+    }
     // Traffic lights centered on the header, like on the tab bar. AppKit
     // only on the main thread.
     #[cfg(target_os = "macos")]
