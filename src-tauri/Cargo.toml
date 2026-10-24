@@ -16,13 +16,12 @@ tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2"
 discord-rich-presence = "1.1"
 tauri-plugin-updater = "2"
-tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 # On Windows a figma:// link starts a second Ligma, which hands it to the
 # running one (src/figma_scheme.rs).
 tauri-plugin-single-instance = "2"
-# The dialog plugin's own rfd, for the synchronous dialogs downloads need
-# in src/downloads.rs.
+# Native save and folder pickers, synchronous as downloads need in
+# src/downloads.rs. Prompts are Ligma's own (src/prompt.rs).
 rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
 # The updater's zip, to unpack multi-image exports in src/downloads.rs.
 zip = { version = "4", default-features = false, features = ["deflate"] }

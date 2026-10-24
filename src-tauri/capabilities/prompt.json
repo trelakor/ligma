@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "prompt",
+  "description": "Lets prompts drag themselves by their header; they have no native title bar.",
+  "windows": ["prompt-*"],
+  "permissions": [
+    "core:window:allow-start-dragging"
+  ]
+}
