@@ -3,6 +3,7 @@ name = "ligma"
 version = "0.1.0"
 description = "Lightweight desktop wrapper for Figma"
 edition = "2021"
+license = "MIT"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
