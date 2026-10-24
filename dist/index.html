@@ -313,8 +313,9 @@
       const node = el("div", { className: ["tab", ...classes].join(" "), title: tab.asleep ? `${tab.title} (asleep)` : tab.title });
       node.dataset.id = tab.id;
       node.style.setProperty("--accent", ACCENTS[tab.kind] ?? "currentColor");
-      // A file named "🎨 Thumbnails" shows 🎨 as its icon instead.
-      const [emoji, title] = splitEmoji(tab.title);
+      // A file named "🎨 Thumbnails" shows 🎨 as its icon instead, except
+      // in a prototype, which keeps its play icon.
+      const [emoji, title] = tab.kind === "proto" ? ["", tab.title] : splitEmoji(tab.title);
       if (emoji) node.append(el("span", { className: "icon emoji", textContent: emoji }));
       else node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
       const close = el("div", { className: "close", title: "Close tab" }, ICONS.close);
