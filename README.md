@@ -88,3 +88,7 @@ On macOS, summed over Ligma and the WebKit processes it's responsible for (as Ac
 ## Known limits
 
 - Windows builds are produced by CI and haven't been tested on a real Windows machine yet. Keyboard tab shortcuts are macOS-only for now.
+
+## Legal
+
+[Terms of Service](TERMS.md) · [Privacy Policy](PRIVACY.md)
