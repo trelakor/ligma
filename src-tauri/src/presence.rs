@@ -181,7 +181,11 @@ fn verb(view: &str) -> (&'static str, bool) {
 }
 
 fn activity(status: &Status, started: i64) -> Activity<'_> {
-    let verb = status.verb;
+    // "Designing in <file>", but "Presenting <file>".
+    let verb = match status.verb {
+        "Presenting" => "Presenting".to_owned(),
+        verb => format!("{verb} in"),
+    };
     let details = match status.file.as_deref() {
         // "Figma" is the title while the file is still loading.
         Some("" | "Figma") => format!("{verb} a file"),

@@ -657,12 +657,17 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
     push_state(app);
 }
 
-/// A tab's title from its page's: without Figma's suffix, or the "▶" a
-/// prototype's title starts with, which its tab's icon already shows.
+/// Products Figma ends page titles with ("<name> – FigJam").
+const PRODUCTS: [&str; 6] = ["Figma", "FigJam", "Figma Slides", "Figma Make", "Figma Buzz", "Figma Sites"];
+
+/// A tab's title from its page's: without Figma's product suffix, or the
+/// "▶" a prototype's title starts with, which its tab's icon already shows.
 fn tab_title(title: &str, kind: &str) -> String {
-    let title = [" – Figma", " – Figma Slides", " - Figma Slides"]
+    // An en dash usually; a hyphen in Slides' presentation titles.
+    let title = PRODUCTS
         .iter()
-        .find_map(|suffix| title.strip_suffix(suffix))
+        .flat_map(|product| [" – ", " - "].map(move |dash| (dash, product)))
+        .find_map(|(dash, product)| title.strip_suffix(product)?.strip_suffix(dash))
         .unwrap_or(title);
     let title = if kind == "proto" {
         title.trim_start_matches(['▶', '\u{fe0f}']).trim_start()
