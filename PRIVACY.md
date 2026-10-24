@@ -25,7 +25,7 @@ If Discord is running, Ligma tells the Discord app on your computer what to show
 
 - "Ligma", its version (shown when hovering its logo) and the time you started using it.
 - The name of the Figma file you have open, shown as "Editing …".
-- Where you are in the file: the page in Figma Design and FigJam, the slide in Figma Slides or the slide or frame you're presenting, the chat in Figma Make, the asset in Figma Buzz, or the webpage in Figma Sites.
+- Where you are in the file: the page in Figma Design and FigJam, the slide in Figma Slides or the slide or frame you're presenting, the chat in Figma Make, which asset you're on in Figma Buzz, or the webpage in Figma Sites.
 - The icon of the Figma tool you have selected, and its name.
 - With Invites to files on (it's off unless you turn it on): how many people Figma shows in the open file, an ID for the file that doesn't reveal it, and a link to the file that Discord keeps to itself until someone joins.
 

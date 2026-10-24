@@ -77,9 +77,10 @@ const TOOL_JS: &str = r#"(() => {
 })()"#;
 
 /// Where in the file the user is, shown under its name, or null. A
-/// function of the file's view (see `tabs::view`). Pages come from Figma's
-/// app state, the rest from its panels. Buzz shows an asset's name only on
-/// the canvas, so it's remembered from when the asset itself is selected.
+/// function of the file's view (see `tabs::view`), reading only what
+/// Figma's panels show: `window.store` is for debugging, and Figma makes
+/// each read of it block the page for 5 seconds. Buzz shows an asset's
+/// name only on the canvas, so it says which asset it is instead.
 const SUBTEXT_JS: &str = r#"((view) => {
   // Props of the component `up` levels above `el` in React's tree.
   const props = (el, up) => {
@@ -89,13 +90,31 @@ const SUBTEXT_JS: &str = r#"((view) => {
     return fiber?.memoizedProps;
   };
   const text = (selector) => document.querySelector(selector)?.textContent.trim() || null;
-  const mirror = window.store?.getState?.().mirror;
+  // "3 of 12": the selected item in Slides' or Buzz's carousel. It only
+  // draws the items in view, so they're counted in its data.
+  const position = (carousel) => {
+    const item = carousel?.querySelector('[data-testid="carousel-item"]:has([aria-selected="true"])');
+    if (!item) return null;
+    for (let up = 1; up < 5; up++) {
+      const items = props(carousel, up)?.carouselData?.carouselItemsById;
+      if (!items) continue;
+      const numbers = Object.values(items).map((item) => item.number || 0);
+      const number = items[item.getAttribute("value")]?.number;
+      if (number) return `${number} of ${Math.max(...numbers)}`;
+    }
+    return /\d+/.exec(item.querySelector('[aria-selected="true"]').getAttribute("aria-label"))?.[0] ?? null;
+  };
   switch (view) {
     case "design":
     case "board": {
-      const app = mirror?.appModel;
-      const page = app?.pagesList?.find((page) => page.nodeId === app.currentPage);
-      return page?.name ? `Page: ${page.name}` : null;
+      // Design's pages list, else the name on its collapsed header; FigJam's
+      // pages button names the page if the board has more than one.
+      const toggle = document.querySelector('[data-onboarding-key="pages-panel-toggle"]');
+      const page = text('[aria-current="page"] [class*="renameableNodeText"]')
+        || text('[class*="pagesDropdownButtonText"]')
+        || (toggle?.closest("[aria-expanded]")?.getAttribute("aria-expanded") === "false"
+          ? toggle.textContent.trim() : null);
+      return page && `Page: ${page}`;
     }
     // Presenting: "3 / 12" under the slide or frame.
     case "proto":
@@ -105,33 +124,17 @@ const SUBTEXT_JS: &str = r#"((view) => {
       return step && `${view === "proto" ? "Frame" : "Slide"} ${step[1]} of ${step[2]}`;
     }
     case "slides": {
-      const carousel = document.querySelector('[data-testid="slides-carousel"]');
-      const number = carousel?.querySelector('[aria-selected="true"][aria-label^="Slide "]')
-        ?.getAttribute("aria-label").slice("Slide ".length);
-      if (!number) return null;
-      // The carousel only draws the slides in view, so count them in its data.
-      let total = 0;
-      for (let up = 1; up < 5 && !total; up++) {
-        const items = props(carousel, up)?.carouselData?.carouselItemsById;
-        if (items) total = Math.max(0, ...Object.values(items).map((item) => item.number || 0));
-      }
-      return total ? `Slide ${number} of ${total}` : `Slide ${number}`;
+      const slide = position(document.querySelector('[data-testid="slides-carousel"]'));
+      return slide && `Slide ${slide}`;
+    }
+    case "buzz": {
+      const asset = position(document.querySelector('[data-testid="buzz-carousel"]'));
+      return asset && `Asset ${asset}`;
     }
     case "make": {
       const chat = text('[data-testid="chat-thread-row"] [aria-current="true"] span')
         || text('[data-testid="chat-threads-header"] span');
       return chat && `Chat: ${chat}`;
-    }
-    case "buzz": {
-      const names = (window.__ligmaAssetNames ||= {});
-      const item = '[data-testid="carousel-item"]';
-      const selected = Object.keys(mirror?.sceneGraphSelection || {});
-      const name = mirror?.selectionProperties?.name;
-      if (selected.length === 1 && name && document.querySelector(`${item}[value="${selected[0]}"]`)) {
-        names[selected[0]] = name;
-      }
-      const current = document.querySelector(`${item}:has([aria-selected="true"])`)?.getAttribute("value");
-      return names[current] ? `Asset: ${names[current]}` : null;
     }
     case "site": {
       // The webpage with the selection in it, else the last one that had it.
