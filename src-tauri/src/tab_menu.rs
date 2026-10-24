@@ -35,6 +35,7 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
     let at = app.cursor_position()?;
     *OPEN.lock().unwrap() = Some(Open { tab, items, at });
     if let Some(window) = app.get_webview_window(WINDOW) {
+        window.set_zoom(crate::tabs::scale(app))?;
         return window.eval("window.refresh?.()");
     }
     // The page fetches the items once it has loaded.
@@ -51,10 +52,9 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
         .maximizable(false)
         .minimizable(false)
         .skip_taskbar(true);
-    let theme = crate::tabs::theme(app);
-    let color = theme.as_ref().and_then(|theme| {
-        crate::settings::theme_color(theme, "menu").or_else(|| crate::settings::theme_color(theme, "bg"))
-    });
+    // Light or dark with the editor. Figma's own menus stay dark in light
+    // themes, which looks out of place on a light tab bar.
+    let color = crate::tabs::theme(app).and_then(|theme| crate::settings::theme_color(&theme, "bg"));
     if let Some(color) = color {
         builder = builder.background_color(color);
     }
@@ -70,6 +70,8 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     let _ = main;
     let window = builder.build()?;
+    #[cfg(windows)]
+    crate::frame::refresh(&window);
     #[cfg(target_os = "macos")]
     {
         let ns_window = window.clone();
@@ -112,7 +114,7 @@ pub fn close(app: &AppHandle) {
 /// Clips a borderless window to Figma's menu radius; AppKit gives it a
 /// matching shadow once it's see-through outside the corners.
 #[cfg(target_os = "macos")]
-unsafe fn round_corners(ns_window: *mut objc2::runtime::AnyObject) {
+pub unsafe fn round_corners(ns_window: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     let _: () = msg_send![ns_window, setOpaque: false];
@@ -149,11 +151,13 @@ pub async fn get_menu(app: AppHandle, webview: Webview) -> Option<Menu> {
         return None;
     }
     let items = OPEN.lock().unwrap().as_ref()?.items.clone();
+    // A zoom set before the page loaded doesn't last.
+    let _ = webview.set_zoom(crate::tabs::scale(&app));
     Some(Menu { items, theme: crate::tabs::theme(&app) })
 }
 
-/// The page has drawn the menu at `width` by `height`: place it at the
-/// cursor, inside the screen, and show it.
+/// The page has drawn the menu at `width` by `height` CSS pixels: place it
+/// at the cursor, inside the screen, and show it.
 #[tauri::command]
 pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f64) {
     if !from_menu(&webview) {
@@ -165,6 +169,9 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
     let Some(window) = app.get_webview_window(WINDOW) else {
         return;
     };
+    // At the interface scale.
+    let zoom = crate::tabs::scale(&app);
+    let (width, height) = (width * zoom, height * zoom);
     let monitor = app.monitor_from_point(at.x, at.y).ok().flatten();
     let scale = monitor.as_ref().map_or(1.0, |monitor| monitor.scale_factor());
     let (w, h) = (width * scale, height * scale);
@@ -182,6 +189,9 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
             y = (y - h).max(top);
         }
     }
+    // No accent-colored border.
+    #[cfg(windows)]
+    crate::frame::match_theme(&window);
     let _ = window.set_size(LogicalSize::new(width, height));
     let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
     let _ = window.show();
