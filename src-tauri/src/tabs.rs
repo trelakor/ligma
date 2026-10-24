@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
-use tauri::menu::{ContextMenu, Menu, MenuItem, PredefinedMenuItem};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
@@ -415,6 +414,11 @@ const THEME_JS: &str = r#"(() => {
     textTertiary: v("--color-text-tertiary"),
     border: v("--color-border"),
     brand: v("--color-bg-brand"),
+    menu: v("--color-bg-menu"),
+    menuSelected: v("--color-bg-menu-selected"),
+    menuText: v("--color-text-menu"),
+    menuTextSecondary: v("--color-text-menu-secondary"),
+    menuBorder: v("--color-border-menu"),
   };
 })()"#;
 
@@ -980,36 +984,27 @@ fn tab_url(app: &AppHandle, id: u32) -> Option<Url> {
     live.or_else(|| with_tab(app, id, |tab| tab.url.clone()))
 }
 
-/// Shows the right-click menu of tab `id`. Its items' ids are
-/// `tab-menu:<action>:<id>`, handled by `on_menu`.
-fn show_menu(app: &AppHandle, window: &Window, id: u32) -> tauri::Result<()> {
+/// Shows the right-click menu of tab `id` (see tab_menu.rs). Its items
+/// run through `on_menu`.
+fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let Some(pinned) = with_tab(app, id, |tab| tab.pinned) else {
         return Ok(());
     };
-    let item = |action: &str, text: &str| {
-        MenuItem::with_id(app, format!("tab-menu:{action}:{id}"), text, true, None::<&str>)
-    };
-    let menu = if id == HOME_ID {
-        Menu::with_items(
-            app,
-            &[&item("copy", "Copy Link")?, &item("reload", "Reload")?, &item("close-others", "Close Other Tabs")?],
-        )?
+    let items = if id == HOME_ID {
+        vec![Some(("copy", "Copy Link")), Some(("reload", "Reload")), Some(("close-others", "Close Other Tabs"))]
     } else {
-        Menu::with_items(
-            app,
-            &[
-                &item(if pinned { "unpin" } else { "pin" }, if pinned { "Unpin Tab" } else { "Pin Tab" })?,
-                &item("copy", "Copy Link")?,
-                &item("browser", "Open in Browser")?,
-                &item("reload", "Reload")?,
-                &PredefinedMenuItem::separator(app)?,
-                &item("close", "Close")?,
-                &item("close-others", "Close Other Tabs")?,
-                &item("close-all", "Close All Tabs")?,
-            ],
-        )?
+        vec![
+            Some(if pinned { ("unpin", "Unpin Tab") } else { ("pin", "Pin Tab") }),
+            Some(("copy", "Copy Link")),
+            Some(("browser", "Open in Browser")),
+            Some(("reload", "Reload")),
+            None,
+            Some(("close", "Close")),
+            Some(("close-others", "Close Other Tabs")),
+            Some(("close-all", "Close All Tabs")),
+        ]
     };
-    menu.popup(window.clone())
+    crate::tab_menu::show(app, id, items)
 }
 
 /// Runs a tab menu item, given its id without the `tab-menu:` prefix.
@@ -1368,7 +1363,7 @@ pub async fn close_tab(app: AppHandle, webview: Webview, id: u32) {
 #[tauri::command]
 pub async fn tab_menu(app: AppHandle, webview: Webview, id: u32) {
     if from_tab_bar(&webview) {
-        let _ = show_menu(&app, &webview.window(), id);
+        let _ = show_menu(&app, id);
     }
 }
 
