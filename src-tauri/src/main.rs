@@ -153,6 +153,16 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
     )
 }
 
+/// Undoes what Ligma started or borrowed, before it quits. Also run when an
+/// update's installer quits Ligma.
+fn shut_down(app: &tauri::AppHandle) {
+    if let Some(mut agent) = app.state::<FontAgent>().0.lock().unwrap().take() {
+        let _ = agent.kill();
+    }
+    #[cfg(windows)]
+    figma_scheme::restore();
+}
+
 fn main() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
@@ -297,13 +307,8 @@ fn main() {
         .expect("error while building Ligma")
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                if let Some(mut agent) = app.state::<FontAgent>().0.lock().unwrap().take() {
-                    let _ = agent.kill();
-                }
-                #[cfg(windows)]
-                figma_scheme::restore();
-                // An update the user chose to install later.
-                updater::install(app);
+                shut_down(app);
+                updater::install_on_quit(app);
             }
         });
 }
