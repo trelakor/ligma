@@ -12,7 +12,7 @@ Get the latest macOS and Windows builds from [Releases](../../releases/latest). 
 
 Ligma updates itself. On launch and every 6 hours it checks the latest release, downloads a newer version in the background and offers to restart. Choose Later and it installs when you quit. The app is replaced in place, so you stay signed in.
 
-To publish a release, bump `version` in `src-tauri/tauri.conf.json`, add a `## <version> - <date>` section with its changes to [`CHANGELOG.md`](CHANGELOG.md), then push a matching tag (`git tag v0.6.0 && git push --tags`). `.github/workflows/release.yml` stops if the changelog section is missing or the tag doesn't match the version. It writes the release notes from the changelog section with `scripts/release-notes.mjs` (run it locally to preview), builds both platforms, attaches the installers and writes the `latest.json` that installed apps check. It signs the update packages with the `TAURI_SIGNING_PRIVATE_KEY` repository secret (a key from `npx tauri signer generate`, without password), whose public key is `plugins.updater.pubkey` in `tauri.conf.json`. Keep the private key: without it, installed apps can't update.
+To publish a release, bump `version` in `src-tauri/tauri.conf.json`, add a `## <version> - <date>` section with its changes to [`CHANGELOG.md`](CHANGELOG.md), then push a matching tag (`git tag v0.6.0 && git push --tags`). `.github/workflows/release.yml` stops if the changelog section is missing or the tag doesn't match the version. It writes the release notes from the changelog section with `scripts/release-notes.mjs` (run it locally to preview), builds both platforms, attaches the installers and writes the `latest.json` that installed apps check. It signs the update packages with the `TAURI_SIGNING_PRIVATE_KEY` repository secret (a key from `npx tauri signer generate`, without password), whose public key is `plugins.updater.pubkey` in `tauri.conf.json`. Keep the private key: without it, installed apps can't update. If Rust dependencies changed, run `npm run notices` first (needs `cargo install --locked cargo-about --features cli`) to refresh [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), which ships in the installers.
 
 ## Requirements
 
@@ -50,7 +50,7 @@ npm run icon
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
 - Local fonts: Figma loads installed fonts through its font helper, `FigmaAgent`. If the helper isn't running, Ligma starts it (from `~/Library/Application Support/Figma/FigmaAgent.app` on macOS, `%LOCALAPPDATA%/FigmaAgent/figma_agent.exe` on Windows) and stops it on quit. The helper is installed by the Figma desktop app or [Figma's font installer](https://www.figma.com/downloads/). On Windows, Figma also waits for the browser's Local Network Access permission, which WebView2 reports as "prompt" but never asks for, so Ligma reports it as granted to Figma tabs.
 - Background tabs give memory back (see [Memory](#memory)).
-- Discord Rich Presence shows "Ligma" with the open file ("Editing …") and the selected tool. The tool's icon (`assets/tools`) is the small image: blue while Ligma has focus, grey when you switch away. Settings can hide the file name (it then says "Editing a file") or the tool, or turn it off; in `settings.json` these are `"discordShowFile"`, `"discordShowTool"` and `"discordRichPresence"` (see [Memory](#memory) for where it lives).
+- Discord Rich Presence shows "Ligma" with the open file ("Editing …") and the selected tool. The tool's icon (`assets/tools`, drawn from [Lucide](https://lucide.dev) by `npm run tool-icons`) is the small image: blue while Ligma has focus, grey when you switch away. Settings can hide the file name (it then says "Editing a file") or the tool, or turn it off; in `settings.json` these are `"discordShowFile"`, `"discordShowTool"` and `"discordRichPresence"` (see [Memory](#memory) for where it lives).
 - Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimize) holds the options from `settings.json`. Changes are saved and apply right away.
 - Figma pages have no access to Tauri IPC. Only the local tab bar has permissions (`src-tauri/capabilities/tab-bar.json`).
 
@@ -91,4 +91,6 @@ On macOS, summed over Ligma and the WebKit processes it's responsible for (as Ac
 
 ## Legal
 
-[Terms of Service](TERMS.md) · [Privacy Policy](PRIVACY.md)
+Ligma is [MIT licensed](LICENSE). It's not affiliated with Figma or Discord.
+
+[Terms of Service](TERMS.md) · [Privacy Policy](PRIVACY.md) · [Security](SECURITY.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
