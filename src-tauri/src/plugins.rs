@@ -602,8 +602,8 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const ICONS = {
-    plugin: '<svg class="ligma-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"><rect x="1.5" y="1.5" width="13" height="13" rx="3" stroke-dasharray="2 1.6"/><path d="M6.5 6 4.5 8l2 2M9.5 6l2 2-2 2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    import: '<svg class="ligma-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7M5.5 7 8 9.5 10.5 7"/><path d="M3.5 9.5v2.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5V9.5"/></svg>',
+    plugin: '<svg class="ligma-icon" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"><rect x=".5" y=".5" width="19" height="19" rx="4.5" stroke-dasharray="2.5 2"/><path d="M8 7 5 10l3 3M12 7l3 3-3 3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    import: '<svg class="ligma-icon ligma-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7M5.5 7 8 9.5 10.5 7"/><path d="M3.5 9.5v2.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5V9.5"/></svg>',
     chevron: '<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M9.768 6.768a.5.5 0 0 1 .707.707l-2.12 2.121a.5.5 0 0 1-.708 0L5.525 7.475a.5.5 0 0 1 .708-.707l1.768 1.767z"/></svg>',
     dots: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M7 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m6 0a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0m4.5 1.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3" clip-rule="evenodd"/></svg>',
     check: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M15.584 7.722a.5.5 0 0 1 .832.555l-5 7.5a.502.502 0 0 1-.77.076l-3-3a.5.5 0 0 1 .708-.707l2.568 2.569z"/></svg>',
@@ -616,7 +616,8 @@ const PAGE_JS: &str = r##"(() => {
     html.ligma-dev-filter #extensions-filter-dropdown-button [class*="buttonContent"] > div::before { content: "Development"; white-space: nowrap; }
     html.ligma-dev-filter #extensions-filter-dropdown-menu [role="menuitem"][aria-checked="true"]:not([data-ligma-dev]) > svg { visibility: hidden; }
     /* Where Figma's 20px plugin icons go, with their 2px margin. */
-    .ligma-icon { flex: none; box-sizing: border-box; width: 20px; height: 20px; margin: 2px; padding: 2px; color: var(--color-icon-secondary, var(--color-text-secondary)); }
+    .ligma-icon { flex: none; box-sizing: border-box; width: 20px; height: 20px; margin: 2px; color: var(--color-icon-tertiary, var(--color-text-tertiary)); }
+    .ligma-icon.ligma-glyph { padding: 2px; color: var(--color-icon-secondary, var(--color-text-secondary)); }
     .ligma-text { min-width: 0; }
     .ligma-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
     .ligma-name-line > :first-child { min-width: 0; }
@@ -626,8 +627,10 @@ const PAGE_JS: &str = r##"(() => {
     .ligma-kind { font-size: 11px; line-height: 16px; color: var(--color-text-tertiary); }
     .ligma-options { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; }
     .ligma-options:hover { background: var(--color-bg-hover, rgba(127, 127, 127, 0.15)); }
-    .ligma-row:not(:hover):not(.ligma-open) .ligma-options { display: none; }
-    .ligma-row:hover .ligma-kind, .ligma-row.ligma-open .ligma-kind { display: none; }
+    .ligma-row:not(:hover):not(.ligma-open):not(.ligma-selected) .ligma-options { display: none; }
+    .ligma-row:hover .ligma-kind, .ligma-row.ligma-open .ligma-kind, .ligma-row.ligma-selected .ligma-kind { display: none; }
+    html.ligma-selecting [data-testid="extension-list-item"][class*="colorBgHover"] { background-color: transparent !important; }
+    html.ligma-selecting [data-testid="extension-list-item"] [data-testid="extension-options-button"] { visibility: hidden; }
     .ligma-menu { position: fixed; z-index: 2147483000; max-width: 400px; }
   `;
 
@@ -652,12 +655,20 @@ const PAGE_JS: &str = r##"(() => {
   // A menu like Figma's (the … and command menus) under `anchor`. `items`
   // are [text, action], or null for a separator.
   let menu = null;
+  let menuOptions = [];
+  let menuIndex = -1;
+  const activate = (index) => {
+    menuIndex = index;
+    menuOptions.forEach((option, i) => (option.className = i === index ? CLASSES.optionActive : CLASSES.option));
+  };
   const closeMenu = () => {
     menu?.remove();
     menu = null;
+    menuOptions = [];
+    menuIndex = -1;
     for (const node of document.querySelectorAll(".ligma-open")) node.classList.remove("ligma-open");
   };
-  const openMenu = (anchor, items, owner, alignEnd = false) => {
+  const openMenu = (anchor, items, owner, alignEnd = false, byKeyboard = false) => {
     closeMenu();
     menu = el("div", `${CLASSES.menu} ligma-menu`);
     menu.setAttribute("role", "menu");
@@ -671,14 +682,16 @@ const PAGE_JS: &str = r##"(() => {
       const option = el("div", CLASSES.option, `<div class="${CLASSES.optionName}"></div>`);
       option.setAttribute("role", "menuitem");
       option.firstChild.textContent = text;
-      option.addEventListener("mouseenter", () => (option.className = CLASSES.optionActive));
-      option.addEventListener("mouseleave", () => (option.className = CLASSES.option));
+      const index = menuOptions.length;
+      option.addEventListener("mouseenter", () => activate(index));
+      option.addEventListener("mouseleave", () => activate(-1));
       option.addEventListener("click", (e) => {
         e.stopPropagation();
         closeMenu();
         action();
       });
       list.append(option);
+      menuOptions.push(option);
     }
     menu.append(list);
     document.body.append(menu);
@@ -689,6 +702,7 @@ const PAGE_JS: &str = r##"(() => {
     const left = alignEnd ? at.right - size.width : at.left;
     menu.style.left = `${Math.max(8, Math.min(left, innerWidth - size.width - 8))}px`;
     owner?.classList.add("ligma-open");
+    if (byKeyboard) activate(0);
   };
   // A press in the menu mustn't reach Figma or move focus out of its
   // panel, which closes it.
@@ -703,10 +717,68 @@ const PAGE_JS: &str = r##"(() => {
       }
     }, true);
   }
+
+  // The rows take part in Figma's keyboard selection: Figma selects its
+  // first row when the panel opens, ↑ and ↓ move through the rows and
+  // Enter runs the selected one. Ligma's rows come first, so they get the
+  // selection first, and give it back to Figma's first row past their last
+  // (Figma keeps its selection there meanwhile, its highlight hidden). ↑
+  // from Figma's first row, or with nothing selected, comes back to them.
+  let selected = -1;
+  const rows = () => [...(document.getElementById("ligma-dev-plugins")?.querySelectorAll(".ligma-row") ?? [])];
+  const figmaRows = () => [...document.querySelectorAll('[data-testid="extension-list-item"]')].filter((node) => node.offsetParent);
+  const select = (index) => {
+    selected = index;
+    rows().forEach((node, i) => {
+      node.classList.toggle("ligma-selected", i === index);
+      node.classList.toggle(CLASSES.rowHover, i === index);
+    });
+    document.documentElement.classList.toggle("ligma-selecting", index >= 0);
+    if (index >= 0) rows()[index]?.scrollIntoView({ block: "nearest" });
+  };
+  // Pointing at one of Figma's rows selects it, in Figma.
+  addEventListener("mouseover", (e) => {
+    if (selected >= 0 && e.target.closest?.('[data-testid="extension-list-item"]')) select(-1);
+  }, true);
+
   addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && menu) {
+    const stop = () => {
+      e.preventDefault();
       e.stopPropagation();
-      closeMenu();
+    };
+    if (menu) {
+      if (e.key === "Escape") {
+        stop();
+        closeMenu();
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        stop();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        activate(menuIndex < 0 ? (step > 0 ? 0 : menuOptions.length - 1) : (menuIndex + step + menuOptions.length) % menuOptions.length);
+      } else if (e.key === "Enter" && menuIndex >= 0) {
+        stop();
+        menuOptions[menuIndex].click();
+      }
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) return;
+    if (!document.querySelector('[data-testid="tab-extensions"][aria-selected="true"]')) return;
+    const mine = rows();
+    if (!mine.length) return;
+    if (selected >= 0) {
+      stop();
+      if (e.key === "Enter") mine[selected].querySelector("button")?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 }));
+      else if (e.key === "ArrowUp") select(Math.max(0, selected - 1));
+      else if (selected < mine.length - 1) select(selected + 1);
+      else if (!devOnly && figmaRows().length) select(-1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      const theirs = figmaRows();
+      const at = theirs.findIndex((node) => /colorBgHover/.test(node.className));
+      if (at <= 0) {
+        stop();
+        select(mine.length - 1);
+      }
     }
   }, true);
 
@@ -715,10 +787,13 @@ const PAGE_JS: &str = r##"(() => {
     closeActions();
   };
 
+  const selectable = (node) => {
+    node.addEventListener("mouseenter", () => select(rows().indexOf(node)));
+    return node;
+  };
+
   const row = (plugin) => {
-    const node = el("div", `${CLASSES.row} ligma-row`);
-    node.addEventListener("mouseenter", () => node.classList.add(CLASSES.rowHover));
-    node.addEventListener("mouseleave", () => node.classList.remove(CLASSES.rowHover));
+    const node = selectable(el("div", `${CLASSES.row} ligma-row`));
     const column = el("div", CLASSES.column);
     const line = el("div", CLASSES.line);
     const button = rowButton(ICONS.plugin);
@@ -736,7 +811,8 @@ const PAGE_JS: &str = r##"(() => {
     button.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!commands.length) return run(plugin);
-      openMenu(text, commands.map((command) => command && [command[0], () => run(plugin, command[1])]), node);
+      // From Enter (no mouse), with the first command active.
+      openMenu(text, commands.map((command) => command && [command[0], () => run(plugin, command[1])]), node, false, e.detail === 0);
     });
     const trail = el("div", "ligma-trail");
     if (!devOnly) trail.append(Object.assign(el("span", "ligma-kind"), { textContent: "Plugin" }));
@@ -754,9 +830,7 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const importRow = () => {
-    const node = el("div", `${CLASSES.row} ligma-row`);
-    node.addEventListener("mouseenter", () => node.classList.add(CLASSES.rowHover));
-    node.addEventListener("mouseleave", () => node.classList.remove(CLASSES.rowHover));
+    const node = selectable(el("div", `${CLASSES.row} ligma-row`));
     const button = rowButton(ICONS.import);
     const text = el("div", CLASSES.nameWrap);
     text.append(Object.assign(el("div", CLASSES.name), { textContent: "Import from manifest…" }));
@@ -823,6 +897,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!active) {
       box?.remove();
       drawn = "";
+      if (selected >= 0) select(-1);
       return;
     }
     let root = tab;
@@ -845,6 +920,7 @@ const PAGE_JS: &str = r##"(() => {
     box.classList.toggle("ligma-only", devOnly);
     box.replaceChildren(...shown.map(row), ...(devOnly && !query ? [importRow()] : []));
     if (list.firstElementChild !== box) list.prepend(box);
+    select(rows().length ? 0 : -1);
   };
   let scheduled = false;
   const schedule = () => {
