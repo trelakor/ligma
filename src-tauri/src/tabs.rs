@@ -475,10 +475,6 @@ fn view(url: &Url) -> &'static str {
     }
 }
 
-fn is_presentation(url: &Url) -> bool {
-    matches!(view(url), "proto" | "deck" | "presenter")
-}
-
 /// Opens `url` in a new tab, or focuses the tab already showing that file
 /// the same way, so presenting a file again goes back to its presentation.
 pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
@@ -1077,10 +1073,10 @@ pub fn scriptable(app: &AppHandle, id: u32) -> Option<Webview> {
         .flatten()
 }
 
-/// File name, whether it's presented, and webview of the active tab, if it
-/// shows a Figma file and can run JavaScript (not still resuming).
-pub fn active_file(app: &AppHandle) -> Option<(String, bool, Webview)> {
-    let (id, title, presenting) = {
+/// File name, how it's shown (see `view`), and webview of the active tab,
+/// if it shows a Figma file and can run JavaScript (not still resuming).
+pub fn active_file(app: &AppHandle) -> Option<(String, &'static str, Webview)> {
+    let (id, title, view) = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         let tab = state.tabs.iter().find(|tab| tab.id == state.active && !tab.suspended)?;
         tab.file_key.as_ref()?;
@@ -1089,9 +1085,9 @@ pub fn active_file(app: &AppHandle) -> Option<(String, bool, Webview)> {
         if matches!(view(&tab.url), "deck" | "presenter") {
             title = title.split_once(" · ").map_or(title, |(_, name)| name);
         }
-        (tab.id, title.to_owned(), is_presentation(&tab.url))
+        (tab.id, title.to_owned(), view(&tab.url))
     };
-    Some((title, presenting, app.get_webview(&label(id))?))
+    Some((title, view, app.get_webview(&label(id))?))
 }
 
 /// Runs `f` on tab `id`, if it's still open.
