@@ -312,6 +312,7 @@ fn main() {
             tabs::restore(app.handle(), &settings)?;
             // Once there's a window to show it over.
             report::offer_last_crash(app.handle());
+            updater::offer_last_failure(app.handle());
             // Started by a `figma://` link.
             #[cfg(windows)]
             {
