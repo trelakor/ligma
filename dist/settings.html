@@ -5,7 +5,8 @@
 <title>Settings</title>
 <!-- Settings window (Ligma > Settings…). Edits settings.json through
      `get_settings` / `set_settings` in src-tauri/src/settings.rs; each
-     change is saved and applied right away. The window has no native
+     change is saved and applied right away. About checks for updates and
+     reports a problem (src-tauri/src/report.rs). The window has no native
      title bar: the header is its own, and its colors follow the active
      Figma tab's theme (`applyTheme`, from `get_theme` and tabs.rs). -->
 <style>
@@ -171,7 +172,22 @@
   .field input::-webkit-inner-spin-button, .field input::-webkit-outer-spin-button { -webkit-appearance: none; }
   .row.disabled .field { opacity: 0.4; border-color: transparent; }
 
-  .switch:focus-visible, #close:focus-visible {
+  /* Figma's secondary button. */
+  .button {
+    flex: none;
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-weight: 450;
+  }
+  .button:hover { background: var(--hover); }
+  .button:active { background: var(--bg-secondary); }
+
+  .switch:focus-visible, #close:focus-visible, .button:focus-visible {
     outline: 2px solid var(--brand);
     outline-offset: 1px;
   }
@@ -253,6 +269,21 @@
       </span>
       <input type="checkbox" class="switch" id="discord-invites">
     </label>
+  </section>
+  <section>
+    <h2>About</h2>
+    <div class="row">
+      <span class="label"><span id="version">Ligma</span>
+        <div class="hint">Ligma checks for updates on launch and every 6 hours.</div>
+      </span>
+      <button class="button" id="check-updates">Check for Updates</button>
+    </div>
+    <div class="row">
+      <span class="label">Report a problem
+        <div class="hint">Opens a GitHub issue with Ligma's version, your system and its recent log, for you to read and edit before sending. Nothing is sent otherwise.</div>
+      </span>
+      <button class="button" id="report">Report…</button>
+    </div>
   </section>
 </main>
 <script>
@@ -366,6 +397,12 @@
   }
 
   for (const id of fields) $(id).addEventListener("change", save);
+
+  $("check-updates").addEventListener("click", () => invoke("check_for_updates"));
+  $("report").addEventListener("click", () => invoke("report_problem"));
+  invoke("get_version").then((version) => {
+    if (version) $("version").textContent = `Ligma ${version}`;
+  });
 
   invoke("get_theme").then(window.applyTheme);
   invoke("get_settings").then((loaded) => {

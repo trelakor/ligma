@@ -5,14 +5,15 @@
 //! launch runs the new version. Packages are verified against `pubkey` in
 //! `tauri.conf.json`. The app is replaced in place, so its data (sign-in,
 //! settings) stays. Ligma > Check for Updates… does the same on demand.
-//! If installing fails, Ligma says why and links to the release to install
-//! by hand, rather than carrying on as the old version.
+//! If installing fails, Ligma says why, links to the release to install by
+//! hand and offers a report (report.rs), rather than carrying on as the old
+//! version. Each step is logged.
 
 use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -46,8 +47,10 @@ pub fn start(app: &AppHandle) {
         // Once one is downloaded, wait for it to be installed.
         if app.state::<Pending>().0.lock().unwrap().is_none() {
             // Offline or no release reachable: try again next time.
-            if let Ok(true) = tauri::async_runtime::block_on(check(&app)) {
-                ask_to_restart(&app);
+            match tauri::async_runtime::block_on(check(&app)) {
+                Ok(true) => ask_to_restart(&app),
+                Ok(false) => {}
+                Err(error) => log::warn!("Couldn't check for updates: {error}"),
             }
         }
         std::thread::sleep(CHECK_EVERY);
@@ -68,7 +71,11 @@ pub fn check_now(app: &AppHandle) {
                 let version = app.package_info().version.to_string();
                 tell(&app, format!("Ligma {version} is the latest version."));
             }
-            Err(error) => tell(&app, format!("Couldn't check for updates: {error}")),
+            Err(error) => {
+                let error = format!("Couldn't check for updates: {error}");
+                log::warn!("{error}");
+                crate::report::offer(&app, "Check for Updates", error.clone(), error);
+            }
         }
     });
 }
@@ -92,7 +99,9 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<bool> {
     let Some(update) = updater.check().await? else {
         return Ok(false);
     };
+    log::info!("Downloading Ligma {}", update.version);
     let bytes = update.download(|_, _| {}, || {}).await?;
+    log::info!("Downloaded Ligma {}", update.version);
     *app.state::<Pending>().0.lock().unwrap() = Some((update, bytes));
     Ok(true)
 }
@@ -131,22 +140,30 @@ fn ask_to_restart(app: &AppHandle) {
         });
 }
 
-/// Says why an update couldn't be installed and offers its download page.
+/// Says why an update couldn't be installed, and offers its download page
+/// or a report.
 fn install_failed(app: &AppHandle, error: String) {
+    log::error!("{error}");
     let handle = app.clone();
     app.dialog()
         .message(format!(
-            "{error}
-
-Download the latest version and run its installer. Your sign-in and settings stay."
+            "{error}\n\nDownload the latest version and run its installer. Your sign-in and settings stay."
         ))
         .title("Update Failed")
         .kind(MessageDialogKind::Error)
-        .buttons(MessageDialogButtons::OkCancelCustom("Download".into(), "Close".into()))
-        .show(move |download| {
-            if download {
+        .buttons(MessageDialogButtons::YesNoCancelCustom(
+            "Download".into(),
+            "Report…".into(),
+            "Close".into(),
+        ))
+        .show_with_result(move |button| match button {
+            MessageDialogResult::Custom(label) if label == "Download" => {
                 let _ = handle.opener().open_url(RELEASES, None::<&str>);
             }
+            MessageDialogResult::Custom(label) if label == "Report…" => {
+                crate::report::open(&handle, Some(&error));
+            }
+            _ => {}
         });
 }
 
@@ -163,6 +180,7 @@ fn install(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
     let Some((update, bytes)) = pending else {
         return Ok(());
     };
+    log::info!("Installing Ligma {}", update.version);
     let result = update.install(&bytes);
     if result.is_err() {
         *app.state::<Pending>().0.lock().unwrap() = Some((update, bytes));
@@ -178,8 +196,9 @@ pub fn install_on_quit(app: &AppHandle) {
         None => return,
     };
     if let Err(error) = install(app) {
+        let message = format!("Ligma {version} couldn't be installed when you quit: {error}");
+        log::error!("{message}");
         if let Ok(dir) = app.path().app_config_dir() {
-            let message = format!("Ligma {version} couldn't be installed when you quit: {error}");
             let _ = std::fs::create_dir_all(&dir);
             let _ = std::fs::write(dir.join(FAILED_FILE), message);
         }

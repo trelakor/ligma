@@ -10,7 +10,9 @@ Lightweight desktop app for [Figma](https://www.figma.com), built with [Tauri 2]
 
 Get the latest macOS and Windows builds from [Releases](../../releases/latest). Both are unsigned; the release notes explain how to open them.
 
-Ligma updates itself. On launch and every 6 hours it checks the latest release, downloads a newer version in the background and offers to restart. Choose Later and it installs when you quit. The app is replaced in place, so you stay signed in.
+Ligma updates itself. On launch and every 6 hours it checks the latest release, downloads a newer version in the background and offers to restart. Choose Later and it installs when you quit. The app is replaced in place, so you stay signed in. If an update can't be installed, Ligma says why and offers to download it or report it.
+
+To report a problem, use Report… in Settings (or Help > Report a Problem… on macOS). It opens a GitHub issue filled in with Ligma's version, the system and the end of `ligma.log`, for you to check and submit. The log is in `%LOCALAPPDATA%\dev.ligma.client\logs` on Windows and `~/Library/Logs/dev.ligma.client` on macOS.
 
 To publish a release, bump `version` in `src-tauri/tauri.conf.json`, add a `## <version> - <date>` section with its changes to [`CHANGELOG.md`](CHANGELOG.md), then push a matching tag (`git tag v0.6.0 && git push --tags`). `.github/workflows/release.yml` stops if the changelog section is missing or the tag doesn't match the version. It writes the release notes from the changelog section with `scripts/release-notes.mjs` (run it locally to preview), builds both platforms, attaches the installers and writes the `latest.json` that installed apps check. It signs the update packages with the `TAURI_SIGNING_PRIVATE_KEY` repository secret (a key from `npx tauri signer generate`, without password), whose public key is `plugins.updater.pubkey` in `tauri.conf.json`. Keep the private key: without it, installed apps can't update. If Rust dependencies changed, run `npm run notices` first (needs `cargo install --locked cargo-about --features cli`) to refresh [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), which ships in the installers.
 
