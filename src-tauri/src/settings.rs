@@ -34,6 +34,10 @@ pub struct Settings {
     pub discord_show_file: bool,
     /// Show the selected tool (icon and text) on Discord.
     pub discord_show_tool: bool,
+    /// Let Discord friends join the open file: invite them from the + menu
+    /// in a Discord chat, or accept when they ask to join, and it opens in
+    /// their Ligma if they have access. Shows how many are in the file.
+    pub discord_invites: bool,
     /// Reopen the last session's tabs on launch, asleep until selected.
     pub restore_tabs: bool,
 }
@@ -47,6 +51,7 @@ impl Default for Settings {
             discord_rich_presence: true,
             discord_show_file: true,
             discord_show_tool: true,
+            discord_invites: false,
             restore_tabs: false,
         }
     }
@@ -93,7 +98,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
         // Fits every row; macOS has one more (reload snapshots).
-        .inner_size(520.0, if cfg!(target_os = "macos") { 660.0 } else { 600.0 })
+        .inner_size(520.0, if cfg!(target_os = "macos") { 720.0 } else { 660.0 })
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
