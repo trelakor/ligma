@@ -17,6 +17,9 @@ pub const WINDOW: &str = "settings";
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    /// Size of Figma and Ligma's own interface, in percent, like a
+    /// browser's zoom. The tab bar grows with it.
+    pub interface_scale: u32,
     /// Minutes a tab stays hidden before Ligma closes its webview to free
     /// memory. It reloads when selected. On macOS tabs sleep sooner under
     /// memory pressure. 0 keeps every tab loaded.
@@ -59,6 +62,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            interface_scale: 100,
             sleep_tabs_after_minutes: 30,
             max_hidden_tabs_loaded: None,
             reload_snapshots: false,
@@ -75,6 +79,17 @@ impl Default for Settings {
             restore_tabs: false,
         }
     }
+}
+
+/// Interface scales the settings window steps through, in percent, like
+/// a browser's zoom levels. Others typed in are kept within the first and
+/// last.
+pub const SCALES: [u32; 11] = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+
+/// `interfaceScale` as a zoom factor, 1 at 100%.
+pub fn scale(settings: &Settings) -> f64 {
+    let (min, max) = (SCALES[0], SCALES[SCALES.len() - 1]);
+    f64::from(settings.interface_scale.clamp(min, max)) / 100.0
 }
 
 /// The settings in effect, for the settings window.
@@ -114,9 +129,9 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         window.unminimize()?;
         return window.set_focus();
     }
-    // Fits every row; macOS has one more (reload snapshots). On a short
-    // screen it fits the screen instead, and the page scrolls.
-    let mut height: f64 = if cfg!(target_os = "macos") { 1060.0 } else { 1000.0 };
+    // Fits the longest page (Discord). On a short screen it fits the
+    // screen instead, and the page scrolls.
+    let mut height: f64 = 600.0;
     if let Ok(Some(monitor)) = app.primary_monitor() {
         let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
         height = height.min(area.height - 40.0);
@@ -124,7 +139,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
-        .inner_size(520.0, height)
+        .inner_size(680.0, height)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
@@ -144,6 +159,9 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
+    // A border in the theme's color, not the accent color.
+    #[cfg(windows)]
+    crate::frame::match_theme(&window);
     // Traffic lights centered on the header, like on the tab bar. AppKit
     // only on the main thread.
     #[cfg(target_os = "macos")]
@@ -155,7 +173,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
             }
         })?;
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let _ = window;
     Ok(())
 }

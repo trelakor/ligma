@@ -6,9 +6,12 @@ mod discord_ipc;
 mod downloads;
 #[cfg(windows)]
 mod figma_scheme;
+#[cfg(windows)]
+mod frame;
 mod presence;
 #[cfg(target_os = "macos")]
 mod pressure;
+mod prompt;
 mod report;
 mod settings;
 mod tab_menu;
@@ -203,7 +206,6 @@ fn main() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .on_menu_event(|app, event| {
             let _ = match event.id().as_ref() {
@@ -242,10 +244,12 @@ fn main() {
             tab_menu::get_menu,
             tab_menu::menu_ready,
             tab_menu::menu_pick,
+            prompt::get_prompt,
+            prompt::prompt_ready,
+            prompt::prompt_answer,
         ])
         .setup(|app| {
             report::catch_panics(app.handle());
-            report::offer_last_crash(app.handle());
             #[cfg(target_os = "macos")]
             wkwebview::disable_screen_time();
             app.manage(FontAgent(Mutex::new(start_font_agent())));
@@ -293,13 +297,19 @@ fn main() {
             let handle = app.handle().clone();
             window.on_window_event(move |event| match event {
                 WindowEvent::Resized(_) => tabs::layout(&handle),
-                // The hidden tab menu window would keep the app running.
-                WindowEvent::Destroyed => tab_menu::close(&handle),
+                // The hidden tab menu window, or a prompt, would keep the
+                // app running.
+                WindowEvent::Destroyed => {
+                    tab_menu::close(&handle);
+                    prompt::close_all(&handle);
+                }
                 _ => {}
             });
 
-            tabs::layout(app.handle());
+            tabs::apply_scale(app.handle());
             tabs::restore(app.handle(), &settings)?;
+            // Once there's a window to show it over.
+            report::offer_last_crash(app.handle());
             // Started by a `figma://` link.
             #[cfg(windows)]
             {
