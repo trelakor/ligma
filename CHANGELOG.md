@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.15.2 - 2026-10-24
+
+- If Windows won't start an update's installer (security software such as Smart App Control can block it), Ligma no longer stays open in the background with no window. It restarts and says the update failed, with the download page to install it by hand.
+
 ## 0.15.1 - 2026-10-24
 
 - Fixed the Figma Design switch in Settings > Discord turning itself off whenever another setting changed. If it's off, switch it back on once.
