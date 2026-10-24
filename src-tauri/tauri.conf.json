@@ -14,7 +14,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg", "nsis"],
     "createUpdaterArtifacts": true,
     "category": "GraphicsAndDesign",
     "license": "MIT",
