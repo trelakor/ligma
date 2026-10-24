@@ -294,7 +294,7 @@
     // Home and the Recents page have no rail; keep the last width so Home
     // doesn't change size when switching to them.
     if (theme?.railWidth) {
-      document.documentElement.style.setProperty("--rail-width", `${theme.railWidth / devicePixelRatio}px`);
+      document.documentElement.style.setProperty("--rail-width", `${theme.railWidth}px`);
     }
     const activeIndex = tabs.findIndex((tab) => tab.id === active);
     bar.replaceChildren();
