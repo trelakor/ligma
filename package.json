@@ -2,13 +2,18 @@
   "name": "ligma",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
     "icon": "tauri icon assets/icon.png -o src-tauri/icons && tauri icon assets/icon-windows.png -o src-tauri/icons/.windows && node -e \"const fs=require('fs');fs.copyFileSync('src-tauri/icons/.windows/icon.ico','src-tauri/icons/icon.ico');fs.rmSync('src-tauri/icons/.windows',{recursive:true})\"",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tool-icons": "node scripts/tool-icons.mjs",
+    "notices": "cargo about generate --manifest-path src-tauri/Cargo.toml -c src-tauri/about.toml -o THIRD_PARTY_NOTICES.md src-tauri/about.hbs"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@resvg/resvg-js": "^2.6.2",
+    "@tauri-apps/cli": "^2",
+    "lucide-static": "^1.61.0"
   }
 }
