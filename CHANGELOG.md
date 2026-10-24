@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.11.6 - 2026-10-24
+
+- Redesigned Settings in Figma's style, with its own title bar, Figma's switches and number fields, and Figma's light or dark theme. Esc closes it.
+- Right-clicking a tab opens a menu in Figma's style that follows Figma's theme, instead of the system menu. Arrow keys and Enter work in it.
+- Discord Rich Presence says what you're doing in each Figma product: Designing, Jamming in FigJam, Decking in Slides, Generating in Make, Buzzing in Buzz, and Page-building in Sites.
+
 ## 0.11.5 - 2026-10-23
 
 - Presenting a file that's already being presented goes back to its presentation tab instead of opening another.
