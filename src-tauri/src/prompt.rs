@@ -104,7 +104,10 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<()> {
     }
     let window = builder.build()?;
     #[cfg(windows)]
-    crate::frame::match_theme(&window);
+    {
+        crate::frame::refresh(&window);
+        crate::frame::match_theme(&window);
+    }
     #[cfg(target_os = "macos")]
     {
         let ns_window = window.clone();
