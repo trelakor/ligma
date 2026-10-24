@@ -247,12 +247,18 @@
       </span>
       <input type="checkbox" class="switch" id="discord-tool">
     </label>
+    <label class="row nested" id="discord-invites-row">
+      <span class="label">Invites to files
+        <div class="hint">Lets Discord friends join the open file in their Ligma, if they have access in Figma. Shows how many are in it.</div>
+      </span>
+      <input type="checkbox" class="switch" id="discord-invites">
+    </label>
   </section>
 </main>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-tool"];
+  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-tool", "discord-invites"];
   const macos = navigator.userAgent.includes("Mac");
   document.documentElement.classList.toggle("macos", macos);
   // Snapshots only exist on macOS.
@@ -319,6 +325,7 @@
     $("discord").checked = settings.discordRichPresence;
     $("discord-file").checked = settings.discordShowFile;
     $("discord-tool").checked = settings.discordShowTool;
+    $("discord-invites").checked = settings.discordInvites;
     $("restore").checked = settings.restoreTabs;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
     for (const [id, enabled] of [
@@ -328,6 +335,7 @@
       ["snapshots-row", sleeping],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
+      ["discord-invites-row", settings.discordRichPresence],
     ]) {
       $(id).classList.toggle("disabled", !enabled);
       $(id).querySelector("input").disabled = !enabled;
@@ -350,6 +358,7 @@
       discordRichPresence: $("discord").checked,
       discordShowFile: $("discord-file").checked,
       discordShowTool: $("discord-tool").checked,
+      discordInvites: $("discord-invites").checked,
       restoreTabs: $("restore").checked,
     };
     show();
