@@ -40,10 +40,15 @@ const TOOLS_PRODUCT: &str = "design";
 const MIN_INTERVAL: Duration = Duration::from_secs(4);
 /// Wait between attempts to reach Discord when it isn't running.
 const RETRY_AFTER: Duration = Duration::from_secs(15);
-/// Party size Discord shows as the most people a file can hold. Discord
-/// only offers invites to a party with a size and room left in it; Figma
-/// has no such limit to report.
-const PARTY_MAX: i32 = 500;
+/// Party sizes Discord shows as the most people a file can hold, the
+/// smallest one with room to spare. Discord only offers invites to a party
+/// with a size and room left in it; Figma has no such limit to report.
+const PARTY_SIZES: [i32; 4] = [10, 25, 50, 100];
+
+/// Party size for `people` in a file: "3 of 10", "12 of 25".
+fn party_max(people: i32) -> i32 {
+    PARTY_SIZES.into_iter().find(|&max| max > people).unwrap_or(people + 1)
+}
 
 /// Name of the selected tool in the toolbar, or null. Figma marks the
 /// active tool button with `aria-pressed` or `aria-checked`; its label may
@@ -238,7 +243,7 @@ pub fn sync(app: &AppHandle) {
     );
     let _ = active.webview.eval_with_callback(script, move |json| {
         let (tool, people) = serde_json::from_str::<(Option<String>, i32)>(&json).unwrap_or((None, 1));
-        let invite = invite.clone().map(|invite| Invite { people: people.clamp(1, PARTY_MAX), ..invite });
+        let invite = invite.clone().map(|invite| Invite { people: people.max(1), ..invite });
         let status = Status { file: Some(file.clone()), verb, tool, focused, invite };
         let _ = tx.send(Message::Status(status));
     });
@@ -328,7 +333,7 @@ fn activity(status: &Status, started: i64) -> Activity<'_> {
     }
     if let Some(invite) = &status.invite {
         activity = activity
-            .party(Party::new().id(invite.party.as_str()).size([invite.people, PARTY_MAX]))
+            .party(Party::new().id(invite.party.as_str()).size([invite.people, party_max(invite.people)]))
             .secrets(Secrets::new().join(invite.secret.as_str()));
     }
     activity.assets(assets)
