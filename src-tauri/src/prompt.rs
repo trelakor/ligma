@@ -114,7 +114,6 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<()> {
             }
         })?;
     }
-    let _ = window.set_zoom(crate::tabs::scale(app));
     let label = label.to_owned();
     window.on_window_event(move |event| {
         if let WindowEvent::Destroyed = event {
@@ -190,6 +189,9 @@ pub async fn get_prompt(app: AppHandle, webview: Webview) -> Option<Prompt> {
         return None;
     }
     let content = OPEN.lock().unwrap().as_ref()?.get(webview.label())?.content.clone();
+    // Zoomed now, before the page measures: a zoom set before it loaded
+    // doesn't last.
+    let _ = webview.set_zoom(crate::tabs::scale(&app));
     Some(Prompt { content, theme: crate::tabs::theme(&app) })
 }
 
