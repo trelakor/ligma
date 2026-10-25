@@ -34,8 +34,11 @@ log = "0.4"
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
 windows-core = "0.62"
-# GetKeyState for the tab shortcuts in src/webview2.rs.
-windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+# GetKeyState for the tab shortcuts and the stream tab previews are
+# captured into, in src/webview2.rs.
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage"] }
+# Tab preview images as `data:` URLs (src/webview2.rs).
+base64 = "0.22"
 # figma:// registration in src/figma_scheme.rs.
 windows-registry = "0.6"
 

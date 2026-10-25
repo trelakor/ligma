@@ -1,0 +1,129 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tab Preview</title>
+<!-- A hovered tab's preview card (see src-tauri/src/preview.rs): its last
+     image, name and product. The window is exactly the card: the page
+     draws it from `get_tab_preview` and reports its size with
+     `tab_preview_ready`. It never gets the mouse or focus. Colors come
+     from the active Figma tab's theme. -->
+<style>
+  /* Figma's UI3 dark theme, until the first Figma tab reports its theme. */
+  :root {
+    color-scheme: dark;
+    --bg: #2c2c2c;
+    --bg-secondary: #383838;
+    --text: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.7);
+    --border: rgba(255, 255, 255, 0.1);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: var(--bg); overflow: hidden; }
+  body {
+    font: 450 11px/16px "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-feature-settings: "cv11", "calt";
+    letter-spacing: 0.005em;
+    color: var(--text);
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  #card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 264px;
+    padding: 8px 8px 10px;
+  }
+  /* The tab as it last looked, at the window's proportions. */
+  #image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    object-position: top center;
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  #image[hidden] { display: none; }
+  #text { padding: 0 4px; min-width: 0; }
+  #title {
+    font-size: 13px;
+    line-height: 20px;
+    font-weight: 550;
+    letter-spacing: -0.0025em;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  #detail { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div id="card">
+  <img id="image" alt="" hidden>
+  <div id="text">
+    <div id="title"></div>
+    <div id="detail"></div>
+  </div>
+</div>
+<script>
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+  const $ = (id) => document.getElementById(id);
+
+  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables.
+  const THEME_VARS = {
+    "--bg": "bg",
+    "--bg-secondary": "bgSecondary",
+    "--text": "text",
+    "--text-secondary": "textSecondary",
+    "--border": "border",
+  };
+  const applyTheme = (theme) => {
+    if (!theme) return;
+    for (const [cssVar, key] of Object.entries(THEME_VARS)) {
+      if (theme[key]) document.documentElement.style.setProperty(cssVar, theme[key]);
+    }
+  };
+
+  // Tab kinds (`kind` in tabs.rs) by product.
+  const PRODUCTS = {
+    design: "Figma Design",
+    board: "FigJam",
+    slides: "Figma Slides",
+    proto: "Prototype",
+    make: "Figma Make",
+    site: "Figma Sites",
+    buzz: "Figma Buzz",
+  };
+
+  // Only the latest card is drawn, if they come quickly one after another.
+  let latest = 0;
+  window.refresh = async () => {
+    const asked = ++latest;
+    const card = await invoke("get_tab_preview");
+    if (!card || asked !== latest) return;
+    applyTheme(card.theme);
+    $("title").textContent = card.title || "Loading…";
+    $("detail").textContent = [PRODUCTS[card.kind] ?? "Figma", card.asleep && "Asleep"].filter(Boolean).join(" · ");
+    const image = $("image");
+    image.hidden = !card.image;
+    if (card.image) {
+      image.src = card.image;
+      // Drawn before it's shown, not after.
+      await image.decode().catch(() => (image.hidden = true));
+      if (asked !== latest) return;
+    } else {
+      image.removeAttribute("src");
+    }
+    const { width, height } = $("card").getBoundingClientRect();
+    await invoke("tab_preview_ready", { seq: card.seq, width: Math.ceil(width), height: Math.ceil(height) });
+  };
+
+  window.refresh();
+</script>
+</body>
+</html>
