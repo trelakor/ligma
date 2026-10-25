@@ -56,24 +56,28 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
         .focused(false)
         .focusable(false)
         .decorations(false)
-        // Rounded corners on Windows 11.
-        .shadow(true)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
         .skip_taskbar(true);
-    let color = crate::tabs::theme(app).and_then(|theme| crate::settings::theme_color(&theme, "bg"));
-    if let Some(color) = color {
-        builder = builder.background_color(color);
-    }
-    // Kept above the main window, and closed with it on Windows.
+    // Windows gives a window the mouse goes through neither rounded corners
+    // nor a shadow, so there it's see-through and the page draws both
+    // (`drawn` in preview.html). It's also kept above the main window, and
+    // closed with it.
     #[cfg(windows)]
     {
-        builder = builder.owner_raw(main.hwnd()?);
+        builder = builder.transparent(true).shadow(false).owner_raw(main.hwnd()?);
+    }
+    #[cfg(not(windows))]
+    {
+        let color = crate::tabs::theme(app).and_then(|theme| crate::settings::theme_color(&theme, "bg"));
+        if let Some(color) = color {
+            builder = builder.background_color(color);
+        }
     }
     #[cfg(target_os = "macos")]
     {
-        builder = builder.parent_raw(main.ns_window()?);
+        builder = builder.shadow(true).parent_raw(main.ns_window()?);
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     let _ = main;
@@ -171,10 +175,12 @@ pub async fn get_tab_preview(app: AppHandle, webview: Webview) -> Option<Card> {
     Some(Card { seq, tab: preview, theme: crate::tabs::theme(&app) })
 }
 
-/// The page has drawn card `seq` at `width` by `height` CSS pixels: place
-/// it under its tab, inside the main window, and show it.
+/// The page has drawn card `seq` at `width` by `height` CSS pixels, `inset`
+/// pixels into the page on every side (room for the shadow it draws on
+/// Windows): place the card under its tab, inside the main window, and
+/// show it.
 #[tauri::command]
-pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width: f64, height: f64) {
+pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width: f64, height: f64, inset: f64) {
     if !from_preview(&webview) {
         return;
     }
@@ -194,14 +200,11 @@ pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width
     let right = origin.x as f64 + size.width as f64 - margin - w;
     let x = (origin.x as f64 + left * px).min(right).max(origin.x as f64 + margin);
     let y = origin.y as f64 + ((crate::tabs::TAB_BAR_HEIGHT + GAP) * px).round();
-    let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
-    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y as i32));
+    let inset = (inset * px).round();
+    let _ = window.set_size(PhysicalSize::new((w + 2.0 * inset) as u32, (h + 2.0 * inset) as u32));
+    let _ = window.set_position(PhysicalPosition::new((x.round() - inset) as i32, (y - inset) as i32));
     #[cfg(windows)]
-    {
-        // No accent-colored border.
-        crate::frame::match_theme(&window);
-        crate::frame::show_inactive(&window, true);
-    }
+    crate::frame::show_inactive(&window, true);
     #[cfg(not(windows))]
     let _ = window.show();
 }
