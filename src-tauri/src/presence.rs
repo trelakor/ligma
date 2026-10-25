@@ -15,7 +15,11 @@
 //! launch command `register_launch` leaves for Discord, and Discord hands
 //! the party's secret, `<editor>/<file key>`, to `ACTIVITY_JOIN`. Ligma
 //! opens that file, and Figma shows it to whoever has access.
+//!
+//! Files hidden from their tab's menu (`HIDDEN_FILE`) show as "Designing a
+//! file", without their name or where in them the user is.
 
+use std::collections::BTreeSet;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -204,6 +208,48 @@ pub struct Presence {
     tx: Mutex<Option<Sender<Message>>>,
     /// The settings in effect, for what to show.
     settings: Mutex<crate::settings::Settings>,
+    /// Keys of the files whose name and whereabouts Discord isn't shown.
+    hidden: Mutex<BTreeSet<String>>,
+}
+
+/// The hidden files' keys, in the app data folder.
+const HIDDEN_FILE: &str = "discord-hidden.json";
+
+fn load_hidden(app: &AppHandle) -> BTreeSet<String> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join(HIDDEN_FILE)).ok())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+/// Whether the file with key `key` is hidden from Discord.
+pub fn is_hidden(app: &AppHandle, key: &str) -> bool {
+    app.state::<Presence>().hidden.lock().unwrap().contains(key)
+}
+
+/// Hides the file with key `key` from Discord, or shows it again, and
+/// saves the change.
+pub fn set_hidden(app: &AppHandle, key: &str, hidden: bool) {
+    let json = {
+        let presence = app.state::<Presence>();
+        let mut keys = presence.hidden.lock().unwrap();
+        let changed = if hidden { keys.insert(key.to_owned()) } else { keys.remove(key) };
+        if !changed {
+            return;
+        }
+        serde_json::to_string_pretty(&*keys).unwrap()
+    };
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(HIDDEN_FILE), json);
+    }
+}
+
+/// Whether Discord is being shown anything (`discordRichPresence`).
+pub fn is_on(app: &AppHandle) -> bool {
+    app.state::<Presence>().tx.lock().unwrap().is_some()
 }
 
 fn worker(app: &AppHandle, settings: &crate::settings::Settings) -> Option<Sender<Message>> {
@@ -221,6 +267,7 @@ pub fn start(app: &AppHandle, settings: &crate::settings::Settings) -> Presence 
     Presence {
         tx: Mutex::new(worker(app, settings)),
         settings: Mutex::new(settings.clone()),
+        hidden: Mutex::new(load_hidden(app)),
     }
 }
 
@@ -294,7 +341,9 @@ pub fn sync(app: &AppHandle) {
         let _ = tx.send(Message::Status(Status { focused, ..Status::default() }));
         return;
     };
-    let settings = presence.settings.lock().unwrap().clone();
+    let mut settings = presence.settings.lock().unwrap().clone();
+    // A hidden file shows as if file names were off.
+    settings.discord_show_file &= !presence.hidden.lock().unwrap().contains(&active.key);
     let (verb, presenting) = verb(active.view);
     // An empty name shows as "Designing a file" and so on.
     let file = if settings.discord_show_file { active.name } else { String::new() };
