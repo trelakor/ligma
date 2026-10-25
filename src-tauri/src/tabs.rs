@@ -14,7 +14,8 @@
 //! Freezing and closing only happen when `CAN_REST_JS` says no work would be
 //! lost. With `reloadSnapshots` on macOS, a tab's last image is kept when
 //! it's hidden and shown in its place while it reloads after sleep, until
-//! `READY_JS` says Figma has drawn the file.
+//! `READY_JS` says Figma has drawn the file. With `tabPreviews` the image
+//! is kept too, for the card hovering a tab shows (see preview.rs).
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -215,8 +216,8 @@ struct Tab {
     /// Last known address, to reload an asleep tab.
     #[serde(skip)]
     url: Url,
-    /// Image of the tab from when it was last hidden, as a `data:` URL
-    /// (macOS), shown while it reloads after sleep.
+    /// Image of the tab from when it was last on screen, as a `data:` URL:
+    /// shown while it reloads after sleep (macOS), and in its preview.
     #[serde(skip)]
     snapshot: Option<String>,
     /// Reloading behind its snapshot: the webview stays hidden until
@@ -246,8 +247,11 @@ struct TabState {
     /// A snapshot is showing, so the tab bar's webview fills the window.
     snapshot_shown: bool,
     /// Show a waking tab's snapshot while it reloads (`reloadSnapshots`).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     snapshots: bool,
+    /// Preview a hovered tab (`tabPreviews`), with its snapshot.
+    previews: bool,
+    /// When the active tab's image was last taken for `capture_active`.
+    last_capture: Option<Instant>,
     /// Keep the tabs in `SESSION_FILE` for the next launch (`restoreTabs`).
     restore: bool,
     /// Zoom of Figma tabs and Ligma's own pages (`interfaceScale`), 1 at 100%.
@@ -292,12 +296,13 @@ impl TabState {
         self.sleep_after = (minutes > 0).then(|| Duration::from_secs(minutes * 60));
         self.max_hidden = settings.max_hidden_tabs_loaded.filter(|_| minutes > 0);
         self.snapshots = settings.reload_snapshots;
+        self.previews = settings.tab_previews;
         self.restore = settings.restore_tabs;
         self.scale = crate::settings::scale(settings);
         if !self.restore {
             self.saved_session = None;
         }
-        if !self.snapshots {
+        if !self.snapshots && !self.previews {
             for tab in self.tabs.iter_mut().filter(|tab| !tab.revealing) {
                 tab.snapshot = None;
             }
@@ -316,6 +321,9 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     };
     if rescaled {
         apply_scale(app);
+    }
+    if !settings.tab_previews {
+        crate::preview::hide(app);
     }
     if settings.restore_tabs {
         save_session(app);
@@ -716,6 +724,8 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let (previous, wake, resume, snapshot) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        // Previews keep snapshots too; only `reloadSnapshots` shows them here.
+        let snapshots = state.snapshots;
         let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == id) else {
             return Ok(());
         };
@@ -729,7 +739,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         };
         let wake = std::mem::take(&mut tab.asleep).then(|| tab.url.clone());
         // Waking with a snapshot: show it while the page loads.
-        tab.revealing |= wake.is_some() && tab.snapshot.is_some() && tab.file_key.is_some();
+        tab.revealing |= snapshots && wake.is_some() && tab.snapshot.is_some() && tab.file_key.is_some();
         if !tab.revealing {
             tab.snapshot = None;
         }
@@ -775,8 +785,10 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     sync_theme(app);
     if previous != id {
         if let Some(webview) = app.get_webview(&label(previous)) {
+            // WebView2 can't be relied on to capture a webview it's hiding;
+            // on Windows the tab bar has `capture_active` take it beforehand.
             #[cfg(target_os = "macos")]
-            take_snapshot(app, previous, &webview);
+            capture(app, previous, &webview);
             webview.hide()?;
             #[cfg(windows)]
             crate::webview2::on_hidden(&webview);
@@ -818,24 +830,84 @@ fn fit_tab_bar(app: &AppHandle) {
     let _ = bar.set_size(LogicalSize::new(size.width, height));
 }
 
-/// Keeps an image of file tab `id` for when it wakes from sleep. Skipped
-/// while frozen (WebKit can't) or reloading (the old image is better).
-#[cfg(target_os = "macos")]
-fn take_snapshot(app: &AppHandle, id: u32, webview: &Webview) {
+/// Keeps an image of tab `id` for when it wakes from sleep (file tabs) and
+/// for its preview. Skipped for Home, while frozen (WebKit can't) or
+/// reloading (the old image is better).
+fn capture(app: &AppHandle, id: u32, webview: &Webview) {
     let wanted = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let tab = state.tabs.iter().find(|tab| tab.id == id);
-        state.snapshots && tab.is_some_and(|tab| tab.file_key.is_some() && !tab.suspended && !tab.revealing)
+        let wanted = |tab: &Tab| {
+            let kept = state.previews || (state.snapshots && tab.file_key.is_some());
+            kept && tab.id != HOME_ID && !tab.asleep && !tab.suspended && !tab.revealing
+        };
+        state.tabs.iter().find(|tab| tab.id == id).is_some_and(wanted)
     };
     if !wanted {
         return;
     }
     let app = app.clone();
+    let keep = move |url: String| {
+        with_tab(&app, id, |tab| tab.snapshot = Some(url));
+    };
+    #[cfg(target_os = "macos")]
     crate::wkwebview::snapshot(webview, move |url| {
-        if url.is_some() {
-            with_tab(&app, id, |tab| tab.snapshot = url);
+        if let Some(url) = url {
+            keep(url);
         }
     });
+    #[cfg(windows)]
+    crate::webview2::capture(webview, keep);
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = (webview, keep);
+}
+
+/// Least time between two `capture_active` images.
+const CAPTURE_EVERY: Duration = Duration::from_secs(2);
+
+/// Takes an image of the active tab for its preview, at most every
+/// `CAPTURE_EVERY`.
+pub fn capture_active(app: &AppHandle) {
+    let active = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        if !state.previews || state.last_capture.is_some_and(|at| at.elapsed() < CAPTURE_EVERY) {
+            return;
+        }
+        state.last_capture = Some(Instant::now());
+        state.active
+    };
+    if let Some(webview) = app.get_webview(&label(active)) {
+        capture(app, active, &webview);
+    }
+}
+
+/// True if tab `id` may be previewed: `tabPreviews` is on, and it's open
+/// and neither Home nor the active tab.
+pub fn can_preview(app: &AppHandle, id: u32) -> bool {
+    let state = app.state::<Tabs>().inner().0.lock().unwrap();
+    state.previews && id != HOME_ID && id != state.active && state.tabs.iter().any(|tab| tab.id == id)
+}
+
+/// What the preview of a tab shows.
+#[derive(Serialize)]
+pub struct Preview {
+    title: String,
+    kind: &'static str,
+    asleep: bool,
+    /// Its last image (see `capture`), as a `data:` URL.
+    image: Option<String>,
+}
+
+/// The preview of tab `id`, if it may be previewed (see `can_preview`).
+pub fn preview(app: &AppHandle, id: u32) -> Option<Preview> {
+    if !can_preview(app, id) {
+        return None;
+    }
+    with_tab(app, id, |tab| Preview {
+        title: tab.title.clone(),
+        kind: tab.kind,
+        asleep: tab.asleep,
+        image: tab.snapshot.clone(),
+    })
 }
 
 /// Shows reloading tab `id` once `READY_JS` has said the file is drawn
@@ -1394,6 +1466,7 @@ pub fn apply_scale(app: &AppHandle) {
         }
     }
     crate::tab_menu::hide(app);
+    crate::preview::hide(app);
     crate::prompt::apply_scale(app, scale);
     crate::settings::apply_scale(app, scale);
     layout(app);
