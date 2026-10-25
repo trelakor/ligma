@@ -9,7 +9,8 @@
 //! filter that lists only them and Import from manifest…, and Remove in
 //! their … menu. `PAGE_JS` draws them there and reports clicks by opening
 //! `SIGNAL_HOST` links, which `on_signal` handles. It also puts them, and
-//! the plugins saved to the user's Figma account, in the editor's left rail.
+//! the plugins and widgets saved to the user's Figma account, in the
+//! editor's left rail.
 //!
 //! Figma's web editor offers its plugin API on the page as `window.figma`,
 //! for the developer console, in files the user can edit. `RUNNER_JS` runs
@@ -206,17 +207,25 @@ fn page_list(app: &AppHandle) -> Value {
     Value::Array(plugins)
 }
 
-/// Sends the enabled plugins to Figma tab `webview`.
-pub fn push_to(webview: &Webview) {
-    let list = page_list(webview.app_handle());
-    let _ = webview.eval(format!("window.__ligmaDevPlugins?.set({list})"));
+/// The script sending `PAGE_JS` the enabled plugins and what the left rail
+/// shows.
+fn page_update(app: &AppHandle) -> String {
+    let list = page_list(app);
+    let settings = crate::settings::current(app);
+    let rail = serde_json::json!({ "plugins": settings.rail_plugins, "widgets": settings.rail_widgets });
+    format!("window.__ligmaDevPlugins?.set({list}, {rail})")
 }
 
-/// Sends the enabled plugins to every loaded Figma tab.
-fn push(app: &AppHandle) {
-    let list = page_list(app);
+/// Sends them to Figma tab `webview`.
+pub fn push_to(webview: &Webview) {
+    let _ = webview.eval(page_update(webview.app_handle()));
+}
+
+/// Sends them to every loaded Figma tab.
+pub fn push(app: &AppHandle) {
+    let script = page_update(app);
     for webview in crate::tabs::scriptable_tabs(app) {
-        let _ = webview.eval(format!("window.__ligmaDevPlugins?.set({list})"));
+        let _ = webview.eval(&script);
     }
 }
 
@@ -576,12 +585,13 @@ const RUNNER_JS: &str = r#"(spec, main) => {
 /// load, which WKWebView reports to `on_navigation`.
 ///
 /// The editor's left rail gets a button under Figma's for each of these
-/// plugins and each plugin saved to the user's account. Clicking one runs
-/// it, or opens its commands; right-clicking opens its … menu: Remove, and
-/// for saved plugins View details; Ctrl-dragging one moves it, and the
-/// order is kept. Saved plugins come from Figma's store and
-/// run, show their details and are removed through Figma's own code, found
-/// by text in its modules.
+/// plugins and each plugin and widget saved to the user's account. Clicking
+/// one runs it, opens its commands or puts the widget on the canvas;
+/// right-clicking opens its … menu: Remove, and for saved ones View
+/// details; Ctrl-dragging one moves it, and the order is kept. Saved ones
+/// come from Figma's live view of the user's saves (its store until that
+/// loads) and run, show their details and are removed through Figma's own
+/// code, found by text in its modules.
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
   const TOKEN = "__LIGMA_TOKEN__";
@@ -599,6 +609,8 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   let plugins = [];
+  // What the left rail shows, from Settings.
+  let railShows = { plugins: true, widgets: true };
   // The Development filter is on.
   let devOnly = false;
   // Figma's own filter: 0 All, 1 Plugins, 2 Widgets.
@@ -951,6 +963,9 @@ const PAGE_JS: &str = r##"(() => {
     manifestMenu: 'type:"submenu",subtype:"manifest"',
     unsave: '"UNSAVE_EXTENSION"',
     options: '"EXTENSION_OPTIONS_DROPDOWN"',
+    saves: '"manifest schema parse error"',
+    livegraph: "[livegraph] userId changed after livegraph client creation",
+    views: '"SavedResources",["orgId"]',
   };
   let figmaRequire = null;
   const modules = {};
@@ -1020,20 +1035,84 @@ const PAGE_JS: &str = r##"(() => {
   // Which plugins go in the rail: the editor's, Dev Mode's in Dev Mode.
   const railTypes = () =>
     document.body?.dataset.editorTheme === "dev-handoff" ? ["dev"] : editorTypes().filter((type) => type !== "dev");
+  // The saved plugins and widgets, as the Actions panel has them: from
+  // Figma's live view of what the user (and their org) saved. The store's
+  // `installedPluginVersions` is older and misses newer saves, so it only
+  // stands in until the view loads.
+  let saves = {};
+  const watchSaves = (core) => {
+    const [holder] = figmaModule("livegraph")?.imported(/let [\w$]+=([\w$]+)\.([\w$]+)\.get\(\);if\([\w$]+\)\{if\([\w$]+===[\w$]+\.userId/) ?? [];
+    const views = figmaModule("views")?.exports;
+    const client = holder?.get?.();
+    const view = views && Object.values(views).find((value) => value?._name === "SavedResources");
+    if (!client || !view) return;
+    const orgId = core.store().getState().currentUserOrgId ?? null;
+    if (saves.client === client && saves.orgId === orgId) return;
+    saves.unsubscribe?.();
+    const query = view({ orgId });
+    const mine = (saves = { client, orgId, data: null });
+    try {
+      mine.unsubscribe = client.subscribe(query.view, query.args, (result) => {
+        if (saves !== mine || result?.status !== "loaded") return;
+        mine.data = result.data;
+        schedule();
+      });
+    } catch (error) {
+      console.error("Ligma: couldn't watch saved plugins", error);
+    }
+  };
   const savedPlugins = (core, types) => {
-    const saved = core.store()?.getState().installedPluginVersions;
-    if (!saved?.loaded) return [];
-    return Object.values(saved.plugins).filter(
-      (plugin) => !plugin.manifest?.containsWidget && (plugin.manifest?.editorType ?? ["figma"]).some((type) => types.includes(type)),
+    const state = core.store()?.getState();
+    const convert = Object.values(figmaModule("saves")?.exports ?? {}).find(
+      (value) => typeof value === "function" && functionText(value).includes("/community/icon"),
+    );
+    let saved;
+    if (saves.data && convert) {
+      // Figma's own conversion, into what the store has for each.
+      saved = [["user", saves.data.currentUser], ["org", saves.data.org]].flatMap(([source, owner]) =>
+        (owner?.resourceSaves ?? []).map(({ resource }) => {
+          const plugin = resource?.resourceToPluginContent?.plugin;
+          if (!["plugin", "widget"].includes(resource?.resourceType) || !plugin?.viewableInEditor) return null;
+          try {
+            return convert(plugin, state.currentUserOrgId, state.user?.id, source, resource.communityPublishers ?? undefined);
+          } catch {
+            return null;
+          }
+        }),
+      );
+    } else if (state?.installedPluginVersions?.loaded) {
+      saved = Object.values(state.installedPluginVersions.plugins);
+    } else {
+      return [];
+    }
+    const seen = new Set();
+    return saved.filter(
+      (plugin) => plugin && !seen.has(plugin.plugin_id) && seen.add(plugin.plugin_id) && (plugin.manifest?.editorType ?? ["figma"]).some((type) => types.includes(type)),
     );
   };
-  const runSaved = (action) => {
+  const isWidget = (plugin) => !!plugin.manifest?.containsWidget;
+  // Runs a menu action of a saved plugin, which Figma looks for in the saved
+  // plugins it was given.
+  const runSaved = (plugin, action) => {
     const core = internals();
     try {
-      core.run(core.context(core.store().getState(), core.editor()), "quick-actions", action);
+      const context = core.context(core.store().getState(), core.editor());
+      core.run({ ...context, allSavedPlugins: { [plugin.plugin_id]: plugin, ...context.allSavedPlugins } }, "quick-actions", action);
     } catch (error) {
       console.error("Ligma: couldn't run plugin", error);
     }
+  };
+  // Puts a saved widget on the canvas, as its row in the Actions panel does.
+  // Figma fetches the widget's details first if it hasn't yet.
+  const insertWidget = async (core, widget) => {
+    const store = core.store();
+    const fetched = () => store.getState().publishedWidgets?.[widget.plugin_id];
+    if (!fetched()) {
+      const [fetch] = figmaModule("saves", true)?.imported(/\(0,([\w$]+)\.([\w$]+)\)\(\{widgetIds:/) ?? [];
+      if (fetch) store.dispatch(fetch({ widgetIds: [widget.plugin_id] }));
+      if (!(await until(fetched, 5000))) return console.error("Ligma: couldn't insert widget");
+    }
+    runSaved(widget, { type: "insert-installed-widget", pluginId: widget.plugin_id });
   };
   // A saved plugin's menu as [text, action] items, or null if it has none.
   const savedCommands = (core, plugin) => {
@@ -1045,7 +1124,7 @@ const PAGE_JS: &str = r##"(() => {
         : item.children ? flatten(item.children, `${prefix}${item.displayText} › `)
         : [[prefix + item.displayText, item.callback]],
       );
-    return flatten(core.menu(plugin.manifest.menu, plugin).map((item) => core.menuItem(item, ({ menuAction }) => () => runSaved(menuAction))));
+    return flatten(core.menu(plugin.manifest.menu, plugin).map((item) => core.menuItem(item, ({ menuAction }) => () => runSaved(plugin, menuAction))));
   };
   // Running a saved plugin without a menu, as its row in the Actions panel
   // does (plugins with parameters ask for them there).
@@ -1057,7 +1136,7 @@ const PAGE_JS: &str = r##"(() => {
     const unsave = figmaModule("unsave", true);
     const action = unsave && Object.values(unsave.exports).find((value) => value?.matches?.({ type: "UNSAVE_EXTENSION" }));
     if (!action) return console.error("Ligma: couldn't remove plugin");
-    internals().store().dispatch(action({ id: plugin.plugin_id, resourceType: "plugin", source: "inserts_modal" }));
+    internals().store().dispatch(action({ id: plugin.plugin_id, resourceType: isWidget(plugin) ? "widget" : "plugin", source: "inserts_modal" }));
   };
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1195,8 +1274,9 @@ const PAGE_JS: &str = r##"(() => {
     icon.src = plugin.redirect_icon_url;
     icon.addEventListener("error", () => icon.replaceWith(el("span", "", ICONS.plugin).firstChild), { once: true });
     return railButton(plugin.name, icon, (button, byKeyboard) => {
+      if (isWidget(plugin)) return insertWidget(core, plugin);
       const commands = savedCommands(core, plugin);
-      if (!commands) return runSaved(savedAction(core, plugin));
+      if (!commands) return runSaved(plugin, savedAction(core, plugin));
       openMenu(button, commands, button, { beside: true, byKeyboard });
     }, () => [
       ["View details", () => viewDetails(plugin)],
@@ -1215,14 +1295,17 @@ const PAGE_JS: &str = r##"(() => {
     }
     const core = internals();
     const store = core?.store();
+    if (core) watchSaves(core);
     if (store && store !== watchedStore) {
-      // Saving or removing a plugin shows it here.
+      // Saving or removing a plugin shows it here, and switching orgs
+      // changes which are saved.
       watchedStore = store;
-      let saved = store.getState().installedPluginVersions;
+      const watched = (state) => [state.installedPluginVersions, state.currentUserOrgId];
+      let last = watched(store.getState());
       store.subscribe(() => {
-        const now = store.getState().installedPluginVersions;
-        if (now !== saved) {
-          saved = now;
+        const now = watched(store.getState());
+        if (now.some((value, i) => value !== last[i])) {
+          last = now;
           schedule();
         }
       });
@@ -1230,8 +1313,8 @@ const PAGE_JS: &str = r##"(() => {
     // Not while a button is being dragged.
     if (dragging) return;
     const types = railTypes();
-    const dev = plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type)));
-    const saved = core ? savedPlugins(core, types) : [];
+    const dev = railShows.plugins ? plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type))) : [];
+    const saved = (core ? savedPlugins(core, types) : []).filter((plugin) => railShows[isWidget(plugin) ? "widgets" : "plugins"]);
     const state = JSON.stringify([dev, saved.map((plugin) => [plugin.plugin_id, plugin.name, plugin.redirect_icon_url, plugin.installed_by, plugin.current_plugin_version_id])]);
     const entries = [
       ...dev.map((plugin) => [`dev:${plugin.manifest}`, () => devRailButton(plugin)]),
@@ -1241,6 +1324,13 @@ const PAGE_JS: &str = r##"(() => {
     // (like newly saved plugins) first. Sorting keeps their own order.
     const order = railOrder();
     entries.sort(([a], [b]) => order.indexOf(a) - order.indexOf(b));
+    // Nothing to show (or all turned off in Settings): no rail, nor its
+    // separator.
+    if (!entries.length) {
+      rail?.remove();
+      railDrawn = "";
+      return;
+    }
     const keys = entries.map(([key]) => key);
     const shown = rail ? railButtons(rail).map((button) => button.dataset.ligmaKey) : [];
     if (rail?.previousElementSibling === top && state === railDrawn && JSON.stringify(shown) === JSON.stringify(keys)) return;
@@ -1255,7 +1345,7 @@ const PAGE_JS: &str = r##"(() => {
       button.dataset.ligmaKey = key;
       return button;
     });
-    rail.replaceChildren(...(buttons.length ? [Object.assign(el("div", RAIL.separator), { role: "separator" }), ...buttons] : []));
+    rail.replaceChildren(Object.assign(el("div", RAIL.separator), { role: "separator" }), ...buttons);
     if (rail.previousElementSibling !== top) top.after(rail);
   };
 
@@ -1411,8 +1501,9 @@ const PAGE_JS: &str = r##"(() => {
 
   Object.defineProperty(window, "__ligmaDevPlugins", {
     value: {
-      set(list) {
+      set(list, rail) {
         plugins = list;
+        if (rail) railShows = rail;
         drawn = "";
         schedule();
       },
