@@ -266,8 +266,30 @@ const PAGE_JS: &str = r##"(() => {
     // After Figma's observer has seen it.
     queueMicrotask(() => {
       toggle(contrast);
-      setTimeout(() => (contrast = null));
+      setTimeout(() => {
+        contrast = null;
+        repaintCanvas();
+      });
     });
+  };
+  // The canvas then has the new colors but draws its rulers again only when
+  // something on it changes. A move of the pointer, where it already is,
+  // makes it draw everything; a hidden tab gets it once shown.
+  let pointer = null;
+  addEventListener("pointermove", (event) => event.isTrusted && (pointer = [event.clientX, event.clientY]), { capture: true, passive: true });
+  let repaintWhenShown = false;
+  const repaintCanvas = () => {
+    const canvas = document.querySelector("canvas");
+    repaintWhenShown = !!canvas && document.hidden;
+    if (!canvas || document.hidden) return;
+    const box = canvas.getBoundingClientRect();
+    // Where the pointer is, if over the canvas; else the rulers' corner.
+    const over = pointer && pointer[0] >= box.left && pointer[0] < box.right && pointer[1] >= box.top && pointer[1] < box.bottom;
+    const [x, y] = over ? pointer : [box.left + 1, box.top + 1];
+    for (const type of ["pointermove", "mousemove"]) {
+      const Event = type === "pointermove" ? PointerEvent : MouseEvent;
+      canvas.dispatchEvent(new Event(type, { bubbles: true, clientX: x, clientY: y }));
+    }
   };
 
   apply([__LIGMA_APPEARANCE__, stored()].sort((a, b) => (b?.rev ?? 0) - (a?.rev ?? 0))[0]);
@@ -297,7 +319,9 @@ const PAGE_JS: &str = r##"(() => {
   });
   // A tab that was frozen meanwhile catches up when shown.
   addEventListener("storage", (event) => event.key === KEY && apply(stored()));
-  document.addEventListener("visibilitychange", () => apply(stored()));
+  document.addEventListener("visibilitychange", () => {
+    if (!apply(stored()) && repaintWhenShown) repaintCanvas();
+  });
 })();"##;
 
 /// What Figma tabs get of the appearance settings.
