@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.23.1 - 2026-10-25
+
+- With Figma's Open links in desktop app preference on, links and files now open in Ligma instead of the Figma desktop app. The preference no longer shows in the Figma logo's menu.
+
 ## 0.23.0 - 2026-10-25
 
 - Classic home page: Settings > Appearance > Home keeps Figma's classic file browser on accounts where Figma is trying its newer layout (a plan in the top-left menu, the sidebar and lists scoped to one plan). Off by default.
