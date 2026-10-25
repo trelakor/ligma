@@ -50,6 +50,12 @@ Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimiz
 - **Interface scale** (`"interfaceScale"` in percent, 50 to 200) zooms Figma tabs, the tab bar, the tab menu, prompts and the settings window together, like a browser's zoom; − and + step through the usual zoom levels. The tab bar grows with it.
 - The tab menu, prompts (update ready, join requests, errors) and the settings window are drawn by Ligma in Figma's style and follow the editor's light or dark theme. On Windows 11 they have no accent-colored border, just the system shadow.
 
+## Plugins in the left rail
+
+- Your plugins sit in the editor's left rail, under Figma's own buttons: development plugins, then every plugin saved to your Figma account, each with its icon. Click one to run it, or to pick from its commands if it has some. Icons grow on hover.
+- Right-click a plugin there for its menu, like its … menu in Actions > Plugins & widgets: View details and Remove for saved plugins, Remove for development plugins.
+- Hold Ctrl and drag a plugin to move it. The order is kept for every file; newly saved plugins come first.
+
 ## Development plugins
 
 Like the Figma desktop app's Plugins > Development > Import plugin from manifest…, which figma.com doesn't have.
