@@ -9,6 +9,7 @@ mod downloads;
 mod figma_scheme;
 #[cfg(windows)]
 mod frame;
+mod layers;
 mod plugins;
 mod presence;
 mod preview;
@@ -278,6 +279,7 @@ fn main() {
             }
             let settings = settings::load(app.handle());
             appearance::init(app.handle(), &settings);
+            layers::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());

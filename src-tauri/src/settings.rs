@@ -75,6 +75,9 @@ pub struct Settings {
     pub rail_plugins: bool,
     /// and saved widgets.
     pub rail_widgets: bool,
+    /// Show each layer's preview in the layers panel in every mode, as in
+    /// Draw mode. Figma renders them all, so off by default.
+    pub layer_previews: bool,
 }
 
 impl Default for Settings {
@@ -102,6 +105,7 @@ impl Default for Settings {
             tab_previews: true,
             rail_plugins: true,
             rail_widgets: true,
+            layer_previews: false,
         }
     }
 }
@@ -324,6 +328,7 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
     crate::tabs::apply_settings(&app, &settings);
     crate::appearance::apply_settings(&app, &settings);
     crate::presence::apply_settings(&app, &settings);
+    crate::layers::apply_settings(&app, &settings);
     let rail_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
