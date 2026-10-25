@@ -1,10 +1,10 @@
 //! Window frames of Ligma's own frameless windows (Windows only): the
-//! settings window, the tab menu and prompts. Windows 11 outlines them in
-//! the accent color when "Show accent color on title bars and window
-//! borders" is on, and keeps a strip of frame a pixel or two tall above the
-//! page in the caption color. Like Figma's windows, they get no border,
-//! just the system shadow, and the strip takes the page's background so it
-//! doesn't show. Windows 10 has neither and ignores this.
+//! settings window, the tab menu, tab previews and prompts. Windows 11
+//! outlines them in the accent color when "Show accent color on title bars
+//! and window borders" is on, and keeps a strip of frame a pixel or two
+//! tall above the page in the caption color. Like Figma's windows, they get
+//! no border, just the system shadow, and the strip takes the page's
+//! background so it doesn't show. Windows 10 has neither and ignores this.
 
 use tauri::{AppHandle, Manager, WebviewWindow};
 
@@ -25,7 +25,11 @@ extern "system" {
 #[link(name = "user32")]
 extern "system" {
     fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
+    fn ShowWindow(hwnd: isize, command: i32) -> i32;
 }
+
+const SW_HIDE: i32 = 0;
+const SW_SHOWNOACTIVATE: i32 = 4;
 
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
@@ -51,6 +55,17 @@ pub fn refresh(window: &WebviewWindow) {
             0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
+    }
+}
+
+/// Shows or hides `window` without activating it, so the window that has
+/// focus keeps it. Tauri's `show` only does that for a new window.
+pub fn show_inactive(window: &WebviewWindow, shown: bool) {
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    unsafe {
+        ShowWindow(hwnd.0 as isize, if shown { SW_SHOWNOACTIVATE } else { SW_HIDE });
     }
 }
 

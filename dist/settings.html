@@ -441,6 +441,12 @@
         </span>
         <input type="checkbox" class="switch" id="restore">
       </label>
+      <label class="row">
+        <span class="label">Preview tabs on hover
+          <div class="hint">Shows a tab's name and how it last looked when you point at it.</div>
+        </span>
+        <input type="checkbox" class="switch" id="previews">
+      </label>
     </section>
     <section>
       <h2>Memory</h2>
@@ -600,7 +606,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets"];
   // Where you are in the file, per product: switch and setting.
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -766,6 +772,7 @@
     $("discord-invites").checked = settings.discordInvites;
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
     $("restore").checked = settings.restoreTabs;
+    $("previews").checked = settings.tabPreviews;
     $("rail-plugins").checked = settings.railPlugins;
     $("rail-widgets").checked = settings.railWidgets;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
@@ -816,6 +823,7 @@
       discordInvites: $("discord-invites").checked,
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
       restoreTabs: $("restore").checked,
+      tabPreviews: $("previews").checked,
       railPlugins: $("rail-plugins").checked,
       railWidgets: $("rail-widgets").checked,
       ...changes,

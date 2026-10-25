@@ -69,6 +69,8 @@ pub struct Settings {
     pub discord_invites: bool,
     /// Reopen the last session's tabs on launch, asleep until selected.
     pub restore_tabs: bool,
+    /// Show a tab's last image and name under it while it's hovered.
+    pub tab_previews: bool,
     /// Show development and saved plugins in the editor's left rail,
     pub rail_plugins: bool,
     /// and saved widgets.
@@ -97,6 +99,7 @@ impl Default for Settings {
             discord_show_webpage: true,
             discord_invites: false,
             restore_tabs: false,
+            tab_previews: true,
             rail_plugins: true,
             rail_widgets: true,
         }
