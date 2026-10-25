@@ -155,7 +155,7 @@ fn ask_to_restart(app: &AppHandle) {
             // On Windows a successful install quits Ligma, and the installer
             // starts the new version.
             match install(&handle) {
-                Ok(()) => handle.restart(),
+                Ok(()) => relaunch(&handle),
                 Err(error) => {
                     let error = format!("Couldn't install Ligma {version}: {error}");
                     if WOUND_DOWN.load(Ordering::SeqCst) {
@@ -171,6 +171,51 @@ fn ask_to_restart(app: &AppHandle) {
             }
         },
     );
+}
+
+/// Quits and starts the new version. On macOS, Tauri's restart opens the
+/// app again with `open -n` while this one still runs, and the Dock gives
+/// the new one a tile of its own beside the one kept in the Dock. Instead a
+/// detached shell waits for Ligma to quit, then opens the app the usual
+/// way, into its Dock tile.
+fn relaunch(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = bundle_path() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let spawned = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; exec /usr/bin/open "$2""#)
+            .arg("sh")
+            .arg(std::process::id().to_string())
+            .arg(&bundle)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn();
+        match spawned {
+            Ok(_) => {
+                log::info!("Restarting into {}", bundle.display());
+                app.exit(0);
+                return;
+            }
+            Err(error) => log::error!("Couldn't restart through LaunchServices: {error}"),
+        }
+    }
+    app.restart();
+}
+
+/// The `.app` bundle Ligma runs from, if it runs from one.
+#[cfg(target_os = "macos")]
+fn bundle_path() -> Option<std::path::PathBuf> {
+    let exe = tauri::utils::platform::current_exe().ok()?;
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    (macos.ends_with("MacOS") && contents.ends_with("Contents") && bundle.extension()? == "app")
+        .then(|| bundle.to_path_buf())
 }
 
 /// Says why an update couldn't be installed, and offers its download page
