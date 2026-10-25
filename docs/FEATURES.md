@@ -52,8 +52,9 @@ Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimiz
 
 ## Plugins in the left rail
 
-- Your plugins sit in the editor's left rail, under Figma's own buttons: development plugins, then every plugin saved to your Figma account, each with its icon. Click one to run it, or to pick from its commands if it has some. Icons grow on hover.
-- Right-click a plugin there for its menu, like its … menu in Actions > Plugins & widgets: View details and Remove for saved plugins, Remove for development plugins.
+- Your plugins sit in the editor's left rail, under Figma's own buttons: development plugins, then every plugin and widget saved to your Figma account, each with its icon. Click a plugin to run it, or to pick from its commands if it has some; click a widget to put it on the canvas. Icons grow on hover.
+- Right-click one there for its menu, like its … menu in Actions > Plugins & widgets: View details and Remove for saved plugins and widgets, Remove for development plugins.
+- Settings > Plugins > Left rail shows or hides plugins (`"railPlugins"`) and widgets (`"railWidgets"`). With both off, the rail and its separator are gone.
 - Hold Ctrl and drag a plugin to move it. The order is kept for every file; newly saved plugins come first.
 
 ## Development plugins
