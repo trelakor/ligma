@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.22.0 - 2026-10-25
+
+- Tab previews: point at a tab to see a card with how it last looked, its name and product, and whether it's asleep, like the Figma desktop app. Previews show only the canvas, without Figma's panels and toolbars. Settings > Tabs > Preview tabs on hover turns them off.
+- Layer previews: Settings > Appearance > Layers > Show layer previews puts a small picture of each layer in the layers panel in every mode, as Figma does only in Draw mode. Each mode keeps its own tools and right sidebar. Off by default, since large files may feel slower; turning it on reloads files already open, each when you next look at it.
+- Hide a file from Discord: right-click its tab and choose Hide File on Discord, and while it's open Discord shows "a file" instead of its name and where you are. Show File on Discord undoes it. With Hide files by default (under Show file name), every file is hidden until you show it from its tab's menu.
+
 ## 0.21.0 - 2026-10-25
 
 - Saved widgets in the editor's left rail, next to your plugins. Click one to put it on the canvas; right-click for View details and Remove.
