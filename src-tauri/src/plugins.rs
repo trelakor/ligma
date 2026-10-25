@@ -207,13 +207,14 @@ fn page_list(app: &AppHandle) -> Value {
     Value::Array(plugins)
 }
 
-/// The script sending `PAGE_JS` the enabled plugins and what the left rail
-/// shows.
+/// The script sending `PAGE_JS` the enabled plugins, what the left rail
+/// shows and which tab the Actions panel opens on.
 fn page_update(app: &AppHandle) -> String {
     let list = page_list(app);
     let settings = crate::settings::current(app);
     let rail = serde_json::json!({ "plugins": settings.rail_plugins, "widgets": settings.rail_widgets });
-    format!("window.__ligmaDevPlugins?.set({list}, {rail})")
+    let plugins_tab = settings.actions_plugins_tab;
+    format!("window.__ligmaDevPlugins?.set({list}, {rail}, {plugins_tab})")
 }
 
 /// Sends them to Figma tab `webview`.
@@ -611,6 +612,10 @@ const PAGE_JS: &str = r##"(() => {
   let plugins = [];
   // What the left rail shows, from Settings.
   let railShows = { plugins: true, widgets: true };
+  // The Actions panel opens on Plugins & widgets, from Settings.
+  let pluginsTab = false;
+  // The panel was open at the last render.
+  let actionsOpen = false;
   // The Development filter is on.
   let devOnly = false;
   // Figma's own filter: 0 All, 1 Plugins, 2 Widgets.
@@ -1447,6 +1452,13 @@ const PAGE_JS: &str = r##"(() => {
     }
     renderRail();
     const tab = document.querySelector('[data-testid="tab-extensions"]');
+    // Just opened on All: over to Plugins & widgets, if so set. Opened on
+    // another tab (Assets), it stays there.
+    const opened = !!tab && !actionsOpen;
+    actionsOpen = !!tab;
+    if (opened && pluginsTab && document.querySelector('[data-testid="tab-all"]')?.getAttribute("aria-selected") === "true") {
+      tab.click();
+    }
     const active = tab?.getAttribute("aria-selected") === "true";
     if (!active) {
       devOnly = false;
@@ -1501,9 +1513,10 @@ const PAGE_JS: &str = r##"(() => {
 
   Object.defineProperty(window, "__ligmaDevPlugins", {
     value: {
-      set(list, rail) {
+      set(list, rail, opensOnPlugins) {
         plugins = list;
         if (rail) railShows = rail;
+        pluginsTab = !!opensOnPlugins;
         drawn = "";
         schedule();
       },
