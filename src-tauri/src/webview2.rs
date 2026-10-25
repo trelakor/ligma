@@ -1,14 +1,18 @@
-//! WebView2 memory controls for hidden tabs, the tab shortcuts, and a fix
-//! for Figma's plugin downloads (Windows only).
+//! WebView2 memory controls for hidden tabs, the tab shortcuts, tab
+//! preview images, and a fix for Figma's plugin downloads (Windows only).
 
 use tauri::{AppHandle, Manager, Webview};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+    ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
+    COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
     COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
-use webview2_com::{AcceleratorKeyPressedEventHandler, TrySuspendCompletedHandler};
+use webview2_com::{AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, TrySuspendCompletedHandler};
+use windows::Win32::Foundation::HGLOBAL;
+use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
+use windows::Win32::System::Com::{IStream, STREAM_SEEK_CUR, STREAM_SEEK_SET};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_T, VK_TAB, VK_W,
 };
@@ -134,4 +138,43 @@ pub fn try_suspend(webview: &Webview, done: impl FnOnce(bool) + Send + 'static) 
         }));
         let _ = core.TrySuspend(&handler);
     });
+}
+
+/// Takes an image of what `webview` shows now, for its tab's preview.
+/// `done` gets it as a JPEG `data:` URL, on the main thread; it isn't
+/// called if the image can't be had.
+pub fn capture(webview: &Webview, done: impl FnOnce(String) + Send + 'static) {
+    let _ = webview.with_webview(move |platform| unsafe {
+        let Ok(core) = platform.controller().CoreWebView2() else {
+            return;
+        };
+        let Ok(stream) = CreateStreamOnHGlobal(HGLOBAL::default(), true) else {
+            return;
+        };
+        let written = stream.clone();
+        let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
+            if let Some(url) = result.ok().and_then(|_| jpeg_data_url(&written)) {
+                done(url);
+            }
+            Ok(())
+        }));
+        let _ = core.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG, &stream, &handler);
+    });
+}
+
+/// What a capture wrote to `stream`, as a `data:` URL.
+unsafe fn jpeg_data_url(stream: &IStream) -> Option<String> {
+    use base64::Engine;
+    let mut len = 0u64;
+    stream.Seek(0, STREAM_SEEK_CUR, Some(&mut len)).ok()?;
+    stream.Seek(0, STREAM_SEEK_SET, None).ok()?;
+    let mut bytes = vec![0u8; usize::try_from(len).ok()?];
+    let mut read = 0u32;
+    stream.Read(bytes.as_mut_ptr().cast(), bytes.len() as u32, Some(&mut read)).ok().ok()?;
+    bytes.truncate(read as usize);
+    if bytes.is_empty() {
+        return None;
+    }
+    let base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Some(format!("data:image/jpeg;base64,{base64}"))
 }
