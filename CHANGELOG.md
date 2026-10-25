@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.16.0 - 2026-10-24
+
+- Development plugins: import a Figma plugin from your computer by its manifest.json, like the Figma app's Import plugin from manifest…. Settings has a Plugins page to import them, switch them on or off and remove them.
+- Plugins that are on show in Figma's Actions panel under Plugins & widgets, marked Development, with their commands, Remove in their … menu and a Development filter that lists only them with Import from manifest…. Arrow keys and Enter work on them like on Figma's own rows. They aren't sandboxed like in the Figma app, so only import plugins you trust.
+- Fixed community plugins on Windows failing to start with "An error occurred while loading the plugin environment".
+
 ## 0.15.2 - 2026-10-24
 
 - If Windows won't start an update's installer (security software such as Smart App Control can block it), Ligma no longer stays open in the background with no window. It restarts and says the update failed, with the download page to install it by hand.
