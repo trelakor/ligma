@@ -321,12 +321,14 @@ fn main() {
                     tabs::layout(&handle);
                 }
                 WindowEvent::Moved(_) | WindowEvent::Focused(false) => preview::hide(&handle),
-                // The hidden tab menu or preview window, or a prompt, would
-                // keep the app running.
+                // Ligma's other windows go with it: the hidden tab menu or
+                // preview window, a prompt or settings would keep the app
+                // running.
                 WindowEvent::Destroyed => {
                     tab_menu::close(&handle);
                     preview::close(&handle);
                     prompt::close_all(&handle);
+                    settings::close(&handle);
                 }
                 _ => {}
             });
