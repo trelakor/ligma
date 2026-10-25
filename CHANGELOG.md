@@ -2,6 +2,16 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.23.0 - 2026-10-25
+
+- Classic home page: Settings > Appearance > Home keeps Figma's classic file browser on accounts where Figma is trying its newer layout (a plan in the top-left menu, the sidebar and lists scoped to one plan). Off by default.
+- Actions menu: Settings > Plugins > Actions menu > Open on Plugins & widgets opens Figma's Actions menu on that tab rather than All. Off by default.
+- The Figma logo's menu no longer shows Back to files or Open in desktop app.
+- With a theme, the selection box you drag across Home's files takes the theme's color, like its outline already did.
+- Home's Design, FigJam and Slides buttons keep their white icons in light mode, as in Figma.
+- Closing the main window now closes Settings too, so Ligma quits instead of staying open.
+- macOS: restarting after an update opens Ligma in its Dock icon instead of adding a second one.
+
 ## 0.22.0 - 2026-10-25
 
 - Tab previews: point at a tab to see a card with how it last looked, its name and product, and whether it's asleep, like the Figma desktop app. Previews show only the canvas, without Figma's panels and toolbars. Settings > Tabs > Preview tabs on hover turns them off.
