@@ -223,6 +223,33 @@
     if (e.button === 0) drag = { id: tab.id, pinned: tab.pinned, startX: e.clientX, moving: false };
   };
 
+  // Pointing at another tab previews it in a card below (see
+  // src-tauri/src/preview.rs). Rust skips Home, the active tab, and
+  // everything when `tabPreviews` is off.
+  let previewing = null;
+  // By id: the bar may have been drawn again since.
+  const showPreview = (id) => {
+    const node = bar.querySelector(`.tab[data-id="${id}"]:not(.active)`);
+    if (!node) return hidePreview();
+    previewing = id;
+    invoke("show_tab_preview", { id, left: node.getBoundingClientRect().left });
+  };
+  const hoverTab = (node) => {
+    if (drag?.moving || node.classList.contains("active")) hidePreview();
+    else showPreview(Number(node.dataset.id));
+  };
+  const hidePreview = () => {
+    if (previewing == null) return;
+    previewing = null;
+    invoke("hide_tab_preview");
+  };
+  // In the bar, the pointer is likely on its way to another tab: Ligma
+  // keeps an image of the one it would leave (at most every second).
+  bar.addEventListener("pointerenter", () => invoke("capture_active_tab"));
+  bar.addEventListener("pointerover", (e) => e.target.closest(".tab") && invoke("capture_active_tab"));
+  bar.addEventListener("pointerleave", hidePreview);
+  addEventListener("blur", hidePreview);
+
   bar.addEventListener("pointermove", (e) => {
     if (!drag) return;
     // Released outside the bar before the drag began.
@@ -240,6 +267,7 @@
         return;
       }
       drag.moving = true;
+      hidePreview();
       drag.rects = nodes.map((node) => node.getBoundingClientRect());
       drag.to = drag.from;
       // Keep getting the pointer if it leaves the bar.
@@ -325,7 +353,11 @@
       const close = el("div", { className: "close", title: "Close tab" }, ICONS.close);
       if (!tab.pinned) node.append(el("span", { className: "title", textContent: title || "Loading…" }), close);
 
-      node.addEventListener("pointerdown", (e) => !close.contains(e.target) && startPress(e, tab));
+      node.addEventListener("pointerenter", () => hoverTab(node));
+      node.addEventListener("pointerdown", (e) => {
+        hidePreview();
+        if (!close.contains(e.target)) startPress(e, tab);
+      });
       node.addEventListener("mousedown", (e) => {
         if (e.button === 0 && !close.contains(e.target)) invoke("select_tab", { id: tab.id });
       });
@@ -354,6 +386,10 @@
     // its minimum, the bar is full.
     bar.classList.remove("crowded");
     bar.classList.toggle("crowded", drag.getBoundingClientRect().width <= 48);
+
+    // Off the tabs, the card goes. A previewed tab may have moved: follow it.
+    for (const other of bar.querySelectorAll(":scope > :not(.tab)")) other.addEventListener("pointerenter", hidePreview);
+    if (previewing != null) showPreview(previewing);
   };
 
   const snapshot = document.getElementById("snapshot");
@@ -368,7 +404,10 @@
   };
 
   // Tabs have their own menu (`tab_menu`); nothing else in the bar has one.
-  document.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    hidePreview();
+  });
 
   invoke("tab_bar_ready");
 </script>

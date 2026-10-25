@@ -12,6 +12,7 @@ mod frame;
 mod layers;
 mod plugins;
 mod presence;
+mod preview;
 #[cfg(target_os = "macos")]
 mod pressure;
 mod prompt;
@@ -254,6 +255,11 @@ fn main() {
             tab_menu::get_menu,
             tab_menu::menu_ready,
             tab_menu::menu_pick,
+            preview::show_tab_preview,
+            preview::hide_tab_preview,
+            preview::capture_active_tab,
+            preview::get_tab_preview,
+            preview::tab_preview_ready,
             prompt::get_prompt,
             prompt::prompt_ready,
             prompt::prompt_answer,
@@ -310,11 +316,16 @@ fn main() {
 
             let handle = app.handle().clone();
             window.on_window_event(move |event| match event {
-                WindowEvent::Resized(_) => tabs::layout(&handle),
-                // The hidden tab menu window, or a prompt, would keep the
-                // app running.
+                WindowEvent::Resized(_) => {
+                    preview::hide(&handle);
+                    tabs::layout(&handle);
+                }
+                WindowEvent::Moved(_) | WindowEvent::Focused(false) => preview::hide(&handle),
+                // The hidden tab menu or preview window, or a prompt, would
+                // keep the app running.
                 WindowEvent::Destroyed => {
                     tab_menu::close(&handle);
+                    preview::close(&handle);
                     prompt::close_all(&handle);
                 }
                 _ => {}

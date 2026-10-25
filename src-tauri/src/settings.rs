@@ -44,6 +44,10 @@ pub struct Settings {
     pub discord_rich_presence: bool,
     /// Name the open file on Discord; otherwise it says "Editing a file".
     pub discord_show_file: bool,
+    /// Hide every file from Discord, as with `discord_show_file` off, but
+    /// those shown from their tab's menu. Otherwise every file shows but
+    /// those hidden there.
+    pub discord_hide_files_by_default: bool,
     /// Show the selected tool's icon on Discord, named when hovered.
     pub discord_show_tool: bool,
     /// Under the file's name on Discord, show where in it you are (only
@@ -65,6 +69,8 @@ pub struct Settings {
     pub discord_invites: bool,
     /// Reopen the last session's tabs on launch, asleep until selected.
     pub restore_tabs: bool,
+    /// Show a tab's last image and name under it while it's hovered.
+    pub tab_previews: bool,
     /// Show development and saved plugins in the editor's left rail,
     pub rail_plugins: bool,
     /// and saved widgets.
@@ -86,6 +92,7 @@ impl Default for Settings {
             reload_snapshots: false,
             discord_rich_presence: true,
             discord_show_file: true,
+            discord_hide_files_by_default: false,
             discord_show_tool: true,
             discord_show_page: true,
             discord_show_figjam_page: true,
@@ -95,6 +102,7 @@ impl Default for Settings {
             discord_show_webpage: true,
             discord_invites: false,
             restore_tabs: false,
+            tab_previews: true,
             rail_plugins: true,
             rail_widgets: true,
             layer_previews: false,
