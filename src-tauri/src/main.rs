@@ -1,6 +1,7 @@
 // Hide the console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod appearance;
 mod auth;
 mod discord_ipc;
 mod downloads;
@@ -270,6 +271,7 @@ fn main() {
                 figma_scheme::claim_if_free();
             }
             let settings = settings::load(app.handle());
+            appearance::init(app.handle(), &settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
