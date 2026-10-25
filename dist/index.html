@@ -243,9 +243,10 @@
     previewing = null;
     invoke("hide_tab_preview");
   };
-  // Coming into the bar, the pointer is likely on its way to another tab:
-  // Ligma keeps an image of the one it would leave.
+  // In the bar, the pointer is likely on its way to another tab: Ligma
+  // keeps an image of the one it would leave (at most every second).
   bar.addEventListener("pointerenter", () => invoke("capture_active_tab"));
+  bar.addEventListener("pointerover", (e) => e.target.closest(".tab") && invoke("capture_active_tab"));
   bar.addEventListener("pointerleave", hidePreview);
   addEventListener("blur", hidePreview);
 
