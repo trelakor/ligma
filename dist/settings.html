@@ -537,6 +537,21 @@
 
   <div role="tabpanel" id="plugins-panel" aria-labelledby="tab-plugins" hidden>
     <section>
+      <h2>Left rail</h2>
+      <label class="row">
+        <span class="label">Show plugins
+          <div class="hint">Your development plugins and the plugins saved to your Figma account, under the editor's left rail. Click one to run it.</div>
+        </span>
+        <input type="checkbox" class="switch" id="rail-plugins">
+      </label>
+      <label class="row">
+        <span class="label">Show widgets
+          <div class="hint">The widgets saved to your Figma account. Click one to put it on the canvas.</div>
+        </span>
+        <input type="checkbox" class="switch" id="rail-widgets">
+      </label>
+    </section>
+    <section>
       <h2>Development</h2>
       <div class="row">
         <span class="label">Import plugin from manifest
@@ -579,7 +594,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-tool", "discord-invites"];
+  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets"];
   // Where you are in the file, per product: switch and setting.
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -744,6 +759,8 @@
     $("discord-invites").checked = settings.discordInvites;
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
     $("restore").checked = settings.restoreTabs;
+    $("rail-plugins").checked = settings.railPlugins;
+    $("rail-widgets").checked = settings.railWidgets;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -790,6 +807,8 @@
       discordInvites: $("discord-invites").checked,
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
       restoreTabs: $("restore").checked,
+      railPlugins: $("rail-plugins").checked,
+      railWidgets: $("rail-widgets").checked,
       ...changes,
     };
     show();
