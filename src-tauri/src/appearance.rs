@@ -11,11 +11,12 @@
 //! tints the grey `--ramp-*` primitives Figma builds its palette from and
 //! points each editor's brand colors at the theme's accent, so every
 //! panel, menu and button in Figma takes it, while the colors that stand
-//! for a product (Design's blue, FigJam's purple) stay. Ligma's tab bar, menus,
-//! prompts and settings window take their colors from the active tab's
-//! (`THEME_JS` in tabs.rs), so they follow. The canvas doesn't: Figma
-//! copies its colors from `<body>`'s computed style into the editor's
-//! renderer, and `PAGE_JS` hands that copy Figma's untinted colors.
+//! for a product (Design's blue, FigJam's purple) stay. Ligma's tab bar,
+//! menus, prompts and settings window take their colors from the active
+//! tab's (`THEME_JS` in tabs.rs), so they follow. Figma copies colors from
+//! `<body>`'s computed style into the editor's canvas, for the selection,
+//! rulers and labels it draws there; `PAGE_JS` hands it themed ones, with
+//! the editor's own color too, but Figma's for new shapes' fills.
 
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,7 +31,7 @@ const THEMES_JS: &str = include_str!("../../dist/themes.js");
 /// Runs in Figma tabs. `__LIGMA_APPEARANCE__` is the `Page` the tab was made
 /// with. A page loaded later in the same tab may find a newer one in
 /// `localStorage`, from another tab; the higher `rev` wins.
-const PAGE_JS: &str = r#"(() => {
+const PAGE_JS: &str = r##"(() => {
   if (!/(^|\.)figma\.com$/.test(location.hostname)) return;
   __LIGMA_THEMES__
   const KEY = "ligma-appearance";
@@ -70,9 +71,20 @@ const PAGE_JS: &str = r#"(() => {
   // keep their product's color. So do tokens naming a product or a state
   // (danger red).
   const KEEP = /design|figjam|handoff|component|assistive|measure|template|danger|warning|success|desktop|annotation|multiplayer|voting|inspect|timeline|code|prototype|published|-fs|fs[A-Z]/;
+  // The canvas (see `getComputedStyle` below) takes the theme for what Figma
+  // draws over your designs, selection and rulers included: also the open
+  // editor's product color (Design's blue selection) and canvas tokens. The
+  // fills Figma gives new shapes and frames keep Figma's colors, so nothing
+  // themed ends up in a design.
+  const CANVAS = /design|figjam|handoff|-fs|fs[A-Z]/;
+  const CANVAS_KEEP = /component|assistive|measure|template|danger|warning|success|annotation|multiplayer|voting|code|DefaultFill/;
+  const DEFAULT_FILL = /DefaultFill/;
+  // Figma's own color for `var(--ramp-<name>-<step>)`, where Ligma tints it.
+  const figmaColor = (name, step) =>
+    name === "grey" ? LIGMA_GREY[LIGMA_STEPS.indexOf(Number(step))] : name === "white" && step === "1000" ? "#ffffff" : null;
   const brandRules = [];
+  const canvasRules = [];
   const scanned = new WeakSet();
-  const UNTINTED = ":not([data-ligma-untinted])";
   const selectors = (selector) => {
     const parts = [];
     let depth = 0;
@@ -96,11 +108,11 @@ const PAGE_JS: &str = r#"(() => {
         const inside = editor && `body[data-editor-theme="${editor}"]`;
         // `:where(<theme> <editor>)`: an editor's theme element inside a theme.
         const nested = /^:where\((\S+) (.+)\)$/.exec(part);
-        if (nested) return editor ? [`body${nested[1]}[data-editor-theme="${editor}"] ${nested[2]}${UNTINTED}`] : [];
+        if (nested) return editor ? [`body${nested[1]}[data-editor-theme="${editor}"] ${nested[2]}`] : [];
         if (!part.startsWith("[")) return [];
         // And menus (see `markMenus`), which come in a theme element of their own.
         const menu = `${part}[data-ligma-menu]`;
-        return editor ? [`body${part}`, `${inside} ${part}${UNTINTED}`, menu] : [`body${part}`, menu];
+        return editor ? [`body${part}`, `${inside} ${part}`, menu] : [`body${part}`, menu];
       })
       .join(", ");
 
@@ -126,21 +138,24 @@ const PAGE_JS: &str = r#"(() => {
     }
   });
 
-  // Figma's menu colors are dark in light mode too. There, each one
-  // (`--color-bg-menu`, `--color-text-menu-secondary`, ...) takes the
-  // matching color of the page instead, but for the highlighted item, which
+  // Figma's menu and tooltip colors are dark in light mode too. There, each
+  // one (`--color-bg-menu`, `--color-text-tooltip-secondary`, ...) takes the
+  // matching color of the page instead, but for a highlighted item, which
   // keeps the brand color with white on it.
-  const MENU_KEEP = /^--color-(bg-menu-selected(-hover|-pressed)?|(text|icon)-menu-onselected|border-menu-(on)?selected(-strong)?)$/;
-  const menuRules = [];
+  const POPUP = /-?(menu|tooltip)/;
+  const POPUP_KEEP = /^--color-(bg-(menu|tooltip)-selected(-hover|-pressed)?|(text|icon)-(menu|tooltip)-onselected|border-(menu|tooltip)-(on)?selected(-strong)?)$/;
+  // A light tooltip on a light panel needs an edge: the shadow of Figma's
+  // other popovers, outline and all, in place of its dark tooltips' own.
+  const menuRules = ['[data-preferred-theme="light"] { --elevation-300-tooltip: var(--elevation-300) !important; }'];
   const scanMenus = (rule, selector) => {
     const decls = [];
     for (const name of rule.style) {
-      if (!name.startsWith("--color-") || !name.includes("menu") || MENU_KEEP.test(name)) continue;
-      const base = name.replace(/-?menu/, "");
+      if (!name.startsWith("--color-") || !POPUP.test(name) || POPUP_KEEP.test(name)) continue;
+      const base = name.replace(POPUP, "");
       if (rule.style.getPropertyValue(base)) decls.push(`${name}: var(${base}) !important;`);
     }
     if (!decls.length) return false;
-    menuRules.push(`${selectors(selector).map((part) => part + UNTINTED).join(", ")} { ${decls.join(" ")} }`);
+    menuRules.push(`${selector} { ${decls.join(" ")} }`);
     return true;
   };
   const scanRule = (rule) => {
@@ -151,13 +166,25 @@ const PAGE_JS: &str = r#"(() => {
     const brand = /--ramp-(?:pale-)?([a-z-]+)-\d+/.exec(rule.style.getPropertyValue("--color-bg-menu-selected"))?.[1];
     if (!mode || !brand) return menus;
     const decls = [];
+    const canvas = [];
     for (const name of rule.style) {
-      if (!name.startsWith("--color-") || KEEP.test(name)) continue;
+      if (!name.startsWith("--color-")) continue;
       const ramp = /^var\(--ramp-(pale-)?([a-z-]+)-(\d+)\)$/.exec(rule.style.getPropertyValue(name).trim());
-      if (ramp?.[2] === brand) decls.push(`${name}: var(--ligma-${ramp[1] ? "pale-" : ""}accent-${ramp[3]}) !important;`);
+      if (!ramp) continue;
+      const accent = `${name}: var(--ligma-${ramp[1] ? "pale-" : ""}accent-${ramp[3]}) !important;`;
+      if (DEFAULT_FILL.test(name)) {
+        const figma = !ramp[1] && figmaColor(ramp[2], ramp[3]);
+        if (figma) canvas.push(`${name}: ${figma} !important;`);
+      } else if (ramp[2] !== brand) continue;
+      else if (!KEEP.test(name)) decls.push(accent);
+      else if (CANVAS.test(name) && !CANVAS_KEEP.test(name)) canvas.push(accent);
+    }
+    const parts = selectors(selector).filter((part) => part.startsWith("["));
+    if (canvas.length && parts.length) {
+      canvasRules.push({ mode, css: `${parts.map((part) => part + "[data-ligma-canvas]").join(", ")} { ${canvas.join(" ")} }` });
     }
     const brandSelectors = brandSelector(selector);
-    if (!decls.length || !brandSelectors) return menus;
+    if (!decls.length || !brandSelectors) return menus || canvas.length > 0;
     brandRules.push({ mode, css: `${brandSelectors} { ${decls.join(" ")} }` });
     return true;
   };
@@ -180,14 +207,14 @@ const PAGE_JS: &str = r#"(() => {
   };
 
   // The greys and the accent ramps on Figma's theme elements and editors'
-  // own inside them, then the brand tokens. Not on `[data-ligma-untinted]`.
-  // Light menus come after, whatever the theme.
+  // own inside them, then the brand tokens and the canvas's. Light menus
+  // and tooltips come after, whatever the theme.
   const css = (mode, id) => {
     const vars = Object.entries(ligmaPalette(id, mode)).map(([name, value]) => `${name}: ${value} !important;`);
     if (!vars.length) return "";
     const theme = `[data-preferred-theme="${mode}"]`;
-    const brand = brandRules.filter((rule) => rule.mode === mode).map((rule) => rule.css);
-    return [`${theme}${UNTINTED}, :where(${theme}) [data-editor-theme]${UNTINTED} { ${vars.join(" ")} }`, ...brand].join("\n");
+    const own = (rules) => rules.filter((rule) => rule.mode === mode).map((rule) => rule.css);
+    return [`${theme}, :where(${theme}) [data-editor-theme] { ${vars.join(" ")} }`, ...own(brandRules), ...own(canvasRules)].join("\n");
   };
   const render = () => {
     if (current) style.textContent = [css("light", current.light), css("dark", current.dark), ...menuRules].join("\n");
@@ -195,24 +222,29 @@ const PAGE_JS: &str = r#"(() => {
 
   const apply = (page) => {
     if (!page || (current && page.rev <= current.rev)) return false;
+    const changed = !!current;
     current = page;
     render();
     followScheme();
+    if (changed) redrawCanvas();
     return true;
   };
 
   // Figma's canvas sync (`updateColorsInFullscreen`) reads every color from
-  // <body>'s computed style. Give it a stand-in for <body> with Figma's
-  // own colors, so the canvas keeps them.
+  // <body>'s computed style. Give it a stand-in for <body> instead, with the
+  // canvas's colors (`canvasRules`).
   let probe = null;
+  // While `redrawCanvas` toggles it: <body>'s `data-enhanced-contrast`.
+  let contrast = null;
   const computedStyle = window.getComputedStyle;
   window.getComputedStyle = function (element, pseudo) {
     if (element === document.body && style.textContent && /updateColorsInFullscreen/.test(new Error().stack)) {
       probe ??= document.createElement("div");
       probe.hidden = true;
-      probe.setAttribute("data-ligma-untinted", "");
+      probe.setAttribute("data-ligma-canvas", "");
       for (const name of ["data-preferred-theme", "data-editor-theme", "data-enhanced-contrast"]) {
-        const value = element.getAttribute(name);
+        const real = name === "data-enhanced-contrast" && contrast != null;
+        const value = real ? (contrast ? "" : null) : element.getAttribute(name);
         if (value == null) probe.removeAttribute(name);
         else probe.setAttribute(name, value);
       }
@@ -220,6 +252,22 @@ const PAGE_JS: &str = r#"(() => {
       return computedStyle.call(this, probe, pseudo);
     }
     return computedStyle.call(this, element, pseudo);
+  };
+  // Figma copies the colors into the canvas when <body>'s theme attributes
+  // change, so it takes a new theme's once one is toggled and put back,
+  // before anything is drawn. The copy keeps the attribute's real value.
+  const redrawCanvas = () => {
+    const body = document.body;
+    if (!body || !document.querySelector("canvas") || contrast != null) return;
+    const name = "data-enhanced-contrast";
+    contrast = body.hasAttribute(name);
+    const toggle = (on) => (on ? body.setAttribute(name, "") : body.removeAttribute(name));
+    toggle(!contrast);
+    // After Figma's observer has seen it.
+    queueMicrotask(() => {
+      toggle(contrast);
+      setTimeout(() => (contrast = null));
+    });
   };
 
   apply([__LIGMA_APPEARANCE__, stored()].sort((a, b) => (b?.rev ?? 0) - (a?.rev ?? 0))[0]);
@@ -250,7 +298,7 @@ const PAGE_JS: &str = r#"(() => {
   // A tab that was frozen meanwhile catches up when shown.
   addEventListener("storage", (event) => event.key === KEY && apply(stored()));
   document.addEventListener("visibilitychange", () => apply(stored()));
-})();"#;
+})();"##;
 
 /// What Figma tabs get of the appearance settings.
 #[derive(Clone, PartialEq, Serialize)]
