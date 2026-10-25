@@ -141,6 +141,8 @@ const NEW_TAB_HOST: &str = "open.ligma.invalid";
 /// Figma logo's, in every editor): Home has a tab of its own, and Ligma is
 /// the desktop app. A menu group left empty goes with them, separator and
 /// all. Figma's menus are React's, so the items are hidden, not removed.
+/// Figma spaces a group's first and last items from its separators; a
+/// hidden first or last item hands that space to its visible neighbor.
 const MAIN_MENU_JS: &str = r#"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
   const HIDE = new Set(["Back to files", "Open in desktop app"]);
@@ -149,12 +151,30 @@ const MAIN_MENU_JS: &str = r#"(() => {
     [data-ligma-hidden] { display: none !important; }
     [role="menu"] > li:has([data-ligma-hidden]):not(:has([role="menuitem"]:not([data-ligma-hidden]))) { display: none !important; }
   `;
+  const visible = (item, step) => {
+    let next = item[step];
+    while (next?.hasAttribute("data-ligma-hidden")) next = next[step];
+    return next;
+  };
+  const handOver = (item, computed, step, side) => {
+    const next = visible(item, step);
+    if (!next) return;
+    for (const box of ["margin", "padding"]) {
+      const value = computed.getPropertyValue(`${box}-${side}`);
+      if (parseFloat(value)) next.style.setProperty(`${box}-${side}`, value);
+    }
+  };
   const hide = (root) => {
     // An item, its label as it comes in, or a menu.
     const items = [root.closest('[role="menuitem"]'), ...root.querySelectorAll('[role="menuitem"]')];
     for (const item of items) {
-      if (!item) continue;
-      if (item.closest('[role="menu"]') && HIDE.has(item.textContent.trim())) item.setAttribute("data-ligma-hidden", "");
+      if (!item || item.hasAttribute("data-ligma-hidden")) continue;
+      if (!item.closest('[role="menu"]') || !HIDE.has(item.textContent.trim())) continue;
+      // Before it's hidden, while its spacing still shows.
+      const computed = getComputedStyle(item);
+      if (!visible(item, "previousElementSibling")) handOver(item, computed, "nextElementSibling", "top");
+      if (!visible(item, "nextElementSibling")) handOver(item, computed, "previousElementSibling", "bottom");
+      item.setAttribute("data-ligma-hidden", "");
     }
   };
   new MutationObserver((records) => {
