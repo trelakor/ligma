@@ -574,7 +574,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::auth::PAGE_JS)
         .initialization_script(NEW_WINDOW_JS)
         .initialization_script(crate::plugins::page_js())
-        .initialization_script(crate::appearance::page_js(app));
+        .initialization_script(crate::appearance::page_js(app))
+        .initialization_script(crate::layers::page_js());
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);

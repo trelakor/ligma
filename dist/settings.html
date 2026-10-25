@@ -430,6 +430,15 @@
         </span>
       </div>
     </section>
+    <section>
+      <h2>Layers</h2>
+      <label class="row">
+        <span class="label">Show layer previews
+          <div class="hint">A small picture of each layer in the layers panel, in every mode, like in Draw mode. Large files may feel slower. Turning it on reloads files already open, each when you next look at it.</div>
+        </span>
+        <input type="checkbox" class="switch" id="layer-previews">
+      </label>
+    </section>
   </div>
 
   <div role="tabpanel" id="tabs" aria-labelledby="tab-tabs" hidden>
@@ -606,7 +615,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "layer-previews"];
   // Where you are in the file, per product: switch and setting.
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -775,6 +784,7 @@
     $("previews").checked = settings.tabPreviews;
     $("rail-plugins").checked = settings.railPlugins;
     $("rail-widgets").checked = settings.railWidgets;
+    $("layer-previews").checked = settings.layerPreviews;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -826,6 +836,7 @@
       tabPreviews: $("previews").checked,
       railPlugins: $("rail-plugins").checked,
       railWidgets: $("rail-widgets").checked,
+      layerPreviews: $("layer-previews").checked,
       ...changes,
     };
     show();
