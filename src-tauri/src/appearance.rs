@@ -63,8 +63,10 @@ const PAGE_JS: &str = r#"(() => {
   // `[data-preferred-theme][data-editor-theme]`. Found in Figma's
   // stylesheets: the tokens such a rule takes from its brand ramp (that of
   // `--color-bg-menu-selected`), which then come from the accent instead.
-  // Not on the theme element Figma wraps around a product's icon (Home's
-  // file tiles, the editor switcher), its only child an <svg>, so icons
+  // Only in the open editor: on <body>, which carries its theme, and on
+  // theme elements of the same editor inside it (FigJam's toolbar). Figma
+  // draws each product's icon and button (Home's file tiles and its Design,
+  // FigJam, Slides buttons) in a theme element of that product, and those
   // keep their product's color. So do tokens naming a product or a state
   // (danger red).
   const KEEP = /design|figjam|handoff|component|assistive|measure|template|danger|warning|success|desktop|annotation|multiplayer|voting|inspect|timeline|code|prototype|published|-fs|fs[A-Z]/;
@@ -87,25 +89,76 @@ const PAGE_JS: &str = r#"(() => {
     parts.push(selector.slice(start));
     return parts.map((part) => part.trim());
   };
-  const NOT_ICON = ":not(:has(> svg:only-child))";
   const brandSelector = (selector) =>
     selectors(selector)
-      .map((part) => part + UNTINTED + NOT_ICON)
+      .flatMap((part) => {
+        const editor = /data-editor-theme="?([\w-]+)/.exec(part)?.[1];
+        const inside = editor && `body[data-editor-theme="${editor}"]`;
+        // `:where(<theme> <editor>)`: an editor's theme element inside a theme.
+        const nested = /^:where\((\S+) (.+)\)$/.exec(part);
+        if (nested) return editor ? [`body${nested[1]}[data-editor-theme="${editor}"] ${nested[2]}${UNTINTED}`] : [];
+        if (!part.startsWith("[")) return [];
+        // And menus (see `markMenus`), which come in a theme element of their own.
+        const menu = `${part}[data-ligma-menu]`;
+        return editor ? [`body${part}`, `${inside} ${part}${UNTINTED}`, menu] : [`body${part}`, menu];
+      })
       .join(", ");
+
+  // Figma draws each menu in a theme element of its own, dark in light mode
+  // too, so it would take the dark theme's colors there. In light mode the
+  // element becomes light; in both, it's marked for the theme's brand.
+  const MENU = '[role="menu"], [role="listbox"]';
+  const markMenus = (root) => {
+    const menus = root.matches(MENU) ? [root] : root.querySelectorAll(MENU);
+    for (const menu of menus) {
+      const scope = menu.closest("[data-preferred-theme]");
+      if (!scope || scope === document.body || scope.childElementCount !== 1) continue;
+      scope.setAttribute("data-ligma-menu", "");
+      if (scope.getAttribute("data-preferred-theme") === "dark" && document.body.getAttribute("data-preferred-theme") === "light") {
+        scope.setAttribute("data-preferred-theme", "light");
+        scope.style.colorScheme = "light";
+      }
+    }
+  };
+  const menuObserver = new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node.nodeType === Node.ELEMENT_NODE) markMenus(node);
+    }
+  });
+
+  // Figma's menu colors are dark in light mode too. There, each one
+  // (`--color-bg-menu`, `--color-text-menu-secondary`, ...) takes the
+  // matching color of the page instead, but for the highlighted item, which
+  // keeps the brand color with white on it.
+  const MENU_KEEP = /^--color-(bg-menu-selected(-hover|-pressed)?|(text|icon)-menu-onselected|border-menu-(on)?selected(-strong)?)$/;
+  const menuRules = [];
+  const scanMenus = (rule, selector) => {
+    const decls = [];
+    for (const name of rule.style) {
+      if (!name.startsWith("--color-") || !name.includes("menu") || MENU_KEEP.test(name)) continue;
+      const base = name.replace(/-?menu/, "");
+      if (rule.style.getPropertyValue(base)) decls.push(`${name}: var(${base}) !important;`);
+    }
+    if (!decls.length) return false;
+    menuRules.push(`${selectors(selector).map((part) => part + UNTINTED).join(", ")} { ${decls.join(" ")} }`);
+    return true;
+  };
   const scanRule = (rule) => {
     const selector = rule.selectorText;
     if (!selector?.includes("data-preferred-theme")) return false;
     const mode = /data-preferred-theme="?(light|dark)/.exec(selector)?.[1];
+    const menus = mode === "light" && scanMenus(rule, selector);
     const brand = /--ramp-(?:pale-)?([a-z-]+)-\d+/.exec(rule.style.getPropertyValue("--color-bg-menu-selected"))?.[1];
-    if (!mode || !brand) return false;
+    if (!mode || !brand) return menus;
     const decls = [];
     for (const name of rule.style) {
       if (!name.startsWith("--color-") || KEEP.test(name)) continue;
       const ramp = /^var\(--ramp-(pale-)?([a-z-]+)-(\d+)\)$/.exec(rule.style.getPropertyValue(name).trim());
       if (ramp?.[2] === brand) decls.push(`${name}: var(--ligma-${ramp[1] ? "pale-" : ""}accent-${ramp[3]}) !important;`);
     }
-    if (!decls.length) return false;
-    brandRules.push({ mode, css: `${brandSelector(selector)} { ${decls.join(" ")} }` });
+    const brandSelectors = brandSelector(selector);
+    if (!decls.length || !brandSelectors) return menus;
+    brandRules.push({ mode, css: `${brandSelectors} { ${decls.join(" ")} }` });
     return true;
   };
   const scan = () => {
@@ -128,6 +181,7 @@ const PAGE_JS: &str = r#"(() => {
 
   // The greys and the accent ramps on Figma's theme elements and editors'
   // own inside them, then the brand tokens. Not on `[data-ligma-untinted]`.
+  // Light menus come after, whatever the theme.
   const css = (mode, id) => {
     const vars = Object.entries(ligmaPalette(id, mode)).map(([name, value]) => `${name}: ${value} !important;`);
     if (!vars.length) return "";
@@ -136,7 +190,7 @@ const PAGE_JS: &str = r#"(() => {
     return [`${theme}${UNTINTED}, :where(${theme}) [data-editor-theme]${UNTINTED} { ${vars.join(" ")} }`, ...brand].join("\n");
   };
   const render = () => {
-    if (current) style.textContent = css("light", current.light) + "\n" + css("dark", current.dark);
+    if (current) style.textContent = [css("light", current.light), css("dark", current.dark), ...menuRules].join("\n");
   };
 
   const apply = (page) => {
@@ -177,7 +231,10 @@ const PAGE_JS: &str = r#"(() => {
   };
   if (!mount()) new MutationObserver((_, observer) => mount() && observer.disconnect()).observe(document, { childList: true });
   // Figma's stylesheets, as they arrive.
-  document.addEventListener("DOMContentLoaded", scan);
+  document.addEventListener("DOMContentLoaded", () => {
+    scan();
+    menuObserver.observe(document.body, { childList: true, subtree: true });
+  });
   addEventListener("load", (event) => event.target instanceof HTMLLinkElement && scan(), true);
   addEventListener("load", scan);
 

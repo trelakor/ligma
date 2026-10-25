@@ -27,8 +27,10 @@ const LIGMA_BLUE = {
   light: ["#f2f9ff", "#e5f4ff", "#bde3ff", "#80caff", "#0d99ff", "#007be5", "#0768cf", "#034ac1", "#093077", "#0d193f"],
   dark: ["#e2f1fd", "#cfe9fc", "#a8d7fa", "#7cc4f8", "#0c8ce9", "#0a6dc2", "#105cad", "#184591", "#1b335f", "#161e36"],
 };
-// How far the greys lean toward the theme's hue (OKLCH chroma, at mid grey).
-const LIGMA_TINT = { light: 0.034, dark: 0.024 };
+// How far the greys lean toward the theme's hue: OKLCH chroma at mid grey,
+// and for light greys and white in light mode, a share of the most chroma
+// the hue can have there, so every hue shows about as much.
+const LIGMA_TINT = { light: 0.05, dark: 0.024, lightShare: 0.9, lightMax: 0.034 };
 
 const ligmaOklch = (hex) => {
   const lin = (x) => (x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4);
@@ -41,20 +43,35 @@ const ligmaOklch = (hex) => {
   return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, Math.hypot(a, bb)];
 };
 
+// Linear sRGB of an OKLCH color; channels outside 0 to 1 are out of gamut.
+const ligmaRgb = (L, C, H) => {
+  const a = C * Math.cos((H * Math.PI) / 180);
+  const b = C * Math.sin((H * Math.PI) / 180);
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+};
+const ligmaInGamut = (L, C, H) => ligmaRgb(L, C, H).every((x) => x >= 0 && x <= 1);
+
+// The most chroma hue `H` can have at lightness `L` in sRGB.
+const ligmaMaxChroma = (L, H) => {
+  let [low, high] = [0, 0.4];
+  for (let i = 0; i < 20; i++) {
+    const mid = (low + high) / 2;
+    if (ligmaInGamut(L, mid, H)) low = mid;
+    else high = mid;
+  }
+  return low;
+};
+
 // `#rrggbb` for an OKLCH color, its chroma lowered until it fits in sRGB.
 const ligmaHex = (L, C, H) => {
-  const rgb = (c) => {
-    const a = c * Math.cos((H * Math.PI) / 180);
-    const b = c * Math.sin((H * Math.PI) / 180);
-    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
-    const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
-    const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
-    return [
-      4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
-    ];
-  };
+  const rgb = (c) => ligmaRgb(L, c, H);
   let channels = rgb(C);
   for (let i = 0; i < 40 && channels.some((x) => x < 0 || x > 1); i++) channels = rgb((C *= 0.9));
   const gamma = (x) => (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055);
@@ -71,11 +88,19 @@ function ligmaPalette(id, mode) {
   const theme = LIGMA_THEMES.find((theme) => theme.id === id);
   if (theme?.hue == null) return {};
   const vars = {};
-  // Most tint mid-ramp, less at the near-white and near-black ends.
-  const tint = (L) => LIGMA_TINT[mode] * Math.sqrt(Math.sin(Math.PI * L));
+  // Most tint mid-ramp, less at the near-white and near-black ends. Light
+  // mode's backgrounds and borders, the lightest greys, get a set share.
+  const light = (L) => Math.min(LIGMA_TINT.lightMax, LIGMA_TINT.lightShare * ligmaMaxChroma(L, theme.hue));
+  const tint = (L) => {
+    const curve = LIGMA_TINT[mode] * Math.sqrt(Math.sin(Math.PI * L));
+    return mode === "light" && L > 0.85 ? Math.max(curve, light(L)) : curve;
+  };
   LIGMA_STEPS.forEach((step, i) => {
-    const [L] = ligmaOklch(LIGMA_GREY[i]);
-    vars[`--ramp-grey-${step}`] = ligmaHex(L, Math.max(tint(L), mode === "light" ? 0.012 : 0), theme.hue);
+    let [L] = ligmaOklch(LIGMA_GREY[i]);
+    // A tinted white is a little darker than Figma's, so are these, to
+    // stay as far apart.
+    if (mode === "light" && L > 0.85) L -= 0.024;
+    vars[`--ramp-grey-${step}`] = ligmaHex(L, tint(L), theme.hue);
     for (const [name, ramp] of [["accent", LIGMA_BLUE[mode]], ["pale-accent", LIGMA_PALE_BLUE]]) {
       const [L2, C2] = ligmaOklch(ramp[i]);
       vars[`--ligma-${name}-${step}`] = ligmaHex(L2, C2, theme.accent);
@@ -83,7 +108,7 @@ function ligmaPalette(id, mode) {
   });
   // The light theme's background is white; tint it too. White stays white
   // in dark mode, where it's the text.
-  if (mode === "light") vars["--ramp-white-1000"] = ligmaHex(0.986, 0.011, theme.hue);
+  if (mode === "light") vars["--ramp-white-1000"] = ligmaHex(0.966, light(0.966), theme.hue);
   return vars;
 }
 
