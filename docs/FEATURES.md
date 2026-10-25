@@ -8,7 +8,7 @@ How Ligma behaves, in detail. For the short version, see the [README](../README.
 - Right-click a tab to pin or unpin it, copy its link, open it in the browser, reload it, or close it, the other tabs or all tabs. Pinned tabs sit after Home and show only their icon. Home's menu has Copy Link, Reload and Close Other Tabs.
 - A file whose name starts with an emoji shows that emoji as its tab icon.
 - With `"restoreTabs": true` (Settings > Reopen tabs from last time), Ligma reopens your tabs, pins and the tab you had open. They're kept in `session.json` next to `settings.json`. Only the tab you had open loads; the others load when selected.
-- Shortcuts (macOS): `Cmd+T` new tab, `Cmd+W` close tab, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. Middle-click also closes a tab.
+- Shortcuts: `Ctrl+T` (`Cmd+T` on macOS) new tab, `Ctrl+W` (`Cmd+W`) close tab, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. While the settings window has focus, `Ctrl+W` (`Cmd+W`) closes it instead. Middle-click also closes a tab.
 - Background tabs give memory back (see [Memory](MEMORY.md)).
 
 ## Browsing
