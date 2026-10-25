@@ -138,18 +138,20 @@ const NEW_WINDOW_JS: &str = r#"(() => {
 const NEW_TAB_HOST: &str = "open.ligma.invalid";
 
 /// Takes "Back to files" and "Open in desktop app" out of the main menu (the
-/// Figma logo's, in every editor): Home has a tab of its own, and Ligma is
-/// the desktop app. A menu group left empty goes with them, separator and
+/// Figma logo's, in every editor), and "Open links in desktop app" out of
+/// its Preferences: Home has a tab of its own, and Ligma is the desktop app
+/// (see `DESKTOP_APP_JS`). A menu group left empty goes with them, separator and
 /// all. Figma's menus are React's, so the items are hidden, not removed.
 /// Figma spaces a group's first and last items from its separators; a
 /// hidden first or last item hands that space to its visible neighbor.
 const MAIN_MENU_JS: &str = r#"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
-  const HIDE = new Set(["Back to files", "Open in desktop app"]);
+  const HIDE = new Set(["Back to files", "Open in desktop app", "Open links in desktop app"]);
+  const ITEM = '[role="menuitem"], [role="menuitemcheckbox"]';
   const style = document.createElement("style");
   style.textContent = `
     [data-ligma-hidden] { display: none !important; }
-    [role="menu"] > li:has([data-ligma-hidden]):not(:has([role="menuitem"]:not([data-ligma-hidden]))) { display: none !important; }
+    [role="menu"] > li:has([data-ligma-hidden]):not(:has(:is(${ITEM}):not([data-ligma-hidden]))) { display: none !important; }
   `;
   const visible = (item, step) => {
     let next = item[step];
@@ -166,7 +168,7 @@ const MAIN_MENU_JS: &str = r#"(() => {
   };
   const hide = (root) => {
     // An item, its label as it comes in, or a menu.
-    const items = [root.closest('[role="menuitem"]'), ...root.querySelectorAll('[role="menuitem"]')];
+    const items = [root.closest(ITEM), ...root.querySelectorAll(ITEM)];
     for (const item of items) {
       if (!item || item.hasAttribute("data-ligma-hidden")) continue;
       if (!item.closest('[role="menu"]') || !HIDE.has(item.textContent.trim())) continue;
@@ -184,6 +186,34 @@ const MAIN_MENU_JS: &str = r#"(() => {
   }).observe(document, { childList: true, subtree: true });
   const mount = () => (document.head ? (document.head.append(style), true) : false);
   if (!mount()) document.addEventListener("DOMContentLoaded", mount, { once: true });
+})();"#;
+
+/// Keeps every link in Ligma, even with Figma's "Open links in desktop app"
+/// preference on. Figma opens links in the desktop app through its font
+/// agent (`/figma/desktop/open-url` on 127.0.0.1:44950 or
+/// figmadaemon.com:44960), which Ligma starts for fonts. Fail its
+/// `/figma/desktop/` requests, as with no desktop app, and Figma stays on
+/// the page instead. Its fonts requests are left alone.
+const DESKTOP_APP_JS: &str = r#"(() => {
+  const blocked = (url) => {
+    try {
+      const { host, pathname } = new URL(String(url), location.href);
+      return (host === "127.0.0.1:44950" || host === "figmadaemon.com:44960") && pathname.startsWith("/figma/desktop/");
+    } catch {
+      return false;
+    }
+  };
+  const fetch = window.fetch;
+  window.fetch = function (input, init) {
+    const url = input instanceof Request ? input.url : input;
+    if (blocked(url)) return Promise.reject(new TypeError("Failed to fetch"));
+    return fetch.call(this, input, init);
+  };
+  const open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    // An unresolvable host fails the request the way a missing agent would.
+    return open.call(this, method, blocked(url) ? "https://agent.ligma.invalid/" : url, ...rest);
+  };
 })();"#;
 
 /// Remembers the page's `beforeunload` handlers so `CAN_REST_JS` can ask
@@ -623,6 +653,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::auth::PAGE_JS)
         .initialization_script(NEW_WINDOW_JS)
         .initialization_script(MAIN_MENU_JS)
+        .initialization_script(DESKTOP_APP_JS)
         .initialization_script(crate::plugins::page_js())
         .initialization_script(crate::appearance::page_js(app))
         .initialization_script(crate::modules::PAGE_JS)
@@ -690,6 +721,11 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
     }
     match url.scheme() {
         "http" | "https" => {}
+        // Not to the OS, which hands them to the Figma desktop app.
+        "figma" => {
+            figma_link_later(app, url.clone());
+            return false;
+        }
         // blob:, data:, about: and friends stay in the page.
         _ => return true,
     }
@@ -719,6 +755,12 @@ fn sign_in_later(app: &AppHandle, id: u32) {
     });
 }
 
+/// Opens a `figma://` link the way Ligma opens one from the OS (see auth.rs).
+fn figma_link_later(app: &AppHandle, url: Url) {
+    let app = app.clone();
+    std::thread::spawn(move || crate::auth::on_figma_link(&app, &url));
+}
+
 fn on_new_window(app: &AppHandle, id: u32, url: Url) {
     if url.host_str() == Some(crate::plugins::SIGNAL_HOST) {
         crate::plugins::on_signal(app, id, &url);
@@ -726,6 +768,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
         open_later(app, url);
+    } else if url.scheme() == "figma" {
+        figma_link_later(app, url);
     } else if matches!(url.scheme(), "http" | "https") {
         open_in_browser(app, &url);
     }
