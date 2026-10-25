@@ -8,7 +8,8 @@
 //! widgets, like in the desktop app: marked Development, with a Development
 //! filter that lists only them and Import from manifest…, and Remove in
 //! their … menu. `PAGE_JS` draws them there and reports clicks by opening
-//! `SIGNAL_HOST` links, which `on_signal` handles.
+//! `SIGNAL_HOST` links, which `on_signal` handles. It also puts them, and
+//! the plugins saved to the user's Figma account, in the editor's left rail.
 //!
 //! Figma's web editor offers its plugin API on the page as `window.figma`,
 //! for the developer console, in files the user can edit. `RUNNER_JS` runs
@@ -573,6 +574,13 @@ const RUNNER_JS: &str = r#"(spec, main) => {
 /// nodes alone. Clicks go to Ligma as `SIGNAL_HOST` links: through
 /// `window.open` (`on_new_window`) on Windows, and on macOS as an iframe
 /// load, which WKWebView reports to `on_navigation`.
+///
+/// The editor's left rail gets a button under Figma's for each of these
+/// plugins and each plugin saved to the user's account. Clicking one runs
+/// it, or opens its commands; right-clicking opens its … menu: Remove, and
+/// for saved plugins View details. Saved plugins come from Figma's store and
+/// run, show their details and are removed through Figma's own code, found
+/// by text in its modules.
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
   const TOKEN = "__LIGMA_TOKEN__";
@@ -662,6 +670,13 @@ const PAGE_JS: &str = r##"(() => {
     html.ligma-selecting [data-testid="extension-list-item"][class*="colorBgHover"] { background-color: transparent !important; }
     html.ligma-selecting [data-testid="extension-list-item"] [data-testid="extension-options-button"] { visibility: hidden; }
     .ligma-menu { position: fixed; z-index: 2147483000; max-width: 400px; }
+    /* Under Figma's rail buttons, scrolling if they don't fit. */
+    #ligma-rail { display: flex; flex-direction: column; align-items: center; flex: 0 1 auto; min-height: 0; margin-bottom: auto; overflow-y: auto; scrollbar-width: none; }
+    #ligma-rail > button { flex: none; }
+    #ligma-rail .ligma-icon { width: 24px; height: 24px; margin: 0; }
+    #ligma-rail button.ligma-open > div { background: var(--color-bg-hover, rgba(127, 127, 127, 0.15)); }
+    .ligma-rail-image { display: block; width: 24px; height: 24px; border-radius: 6px; object-fit: cover; }
+    html.ligma-hide-options [data-testid="extensionOptionsDropdown"] { opacity: 0 !important; pointer-events: none !important; }
   `;
 
   const el = (tag, className = "", html = "") => {
@@ -682,8 +697,9 @@ const PAGE_JS: &str = r##"(() => {
     if (document.querySelector('[data-testid="tab-extensions"]')) button?.click();
   };
 
-  // A menu like Figma's (the … and command menus) under `anchor`. `items`
-  // are [text, action], or null for a separator.
+  // A menu like Figma's (the … and command menus) under `anchor`, an
+  // element or a rect, or `beside` it, to its right. `items` are [text,
+  // action], or null for a separator.
   let menu = null;
   let menuOptions = [];
   let menuIndex = -1;
@@ -698,11 +714,13 @@ const PAGE_JS: &str = r##"(() => {
     menuIndex = -1;
     for (const node of document.querySelectorAll(".ligma-open")) node.classList.remove("ligma-open");
   };
-  const openMenu = (anchor, items, owner, alignEnd = false, byKeyboard = false) => {
+  const openMenu = (anchor, items, owner, { alignEnd = false, byKeyboard = false, beside = false } = {}) => {
     closeMenu();
     menu = el("div", `${CLASSES.menu} ligma-menu`);
     menu.setAttribute("role", "menu");
     const list = el("div");
+    // No separator first, last or after another.
+    items = items.filter((item, i) => item || (i > 0 && items[i - 1] && items.slice(i + 1).some(Boolean)));
     for (const item of items) {
       if (!item) {
         list.append(el("div", CLASSES.separator, `<div class="${CLASSES.separatorLine}"></div>`));
@@ -725,11 +743,12 @@ const PAGE_JS: &str = r##"(() => {
     }
     menu.append(list);
     document.body.append(menu);
-    const at = anchor.getBoundingClientRect();
+    const at = anchor.getBoundingClientRect?.() ?? anchor;
     const size = menu.getBoundingClientRect();
-    const top = at.bottom + 4 + size.height > innerHeight ? at.top - size.height - 4 : at.bottom + 4;
+    const below = at.bottom + 4 + size.height > innerHeight ? at.top - size.height - 4 : at.bottom + 4;
+    const top = beside ? Math.min(at.top, innerHeight - size.height - 8) : below;
     menu.style.top = `${Math.max(8, top)}px`;
-    const left = alignEnd ? at.right - size.width : at.left;
+    const left = beside ? at.right + 4 : alignEnd ? at.right - size.width : at.left;
     menu.style.left = `${Math.max(8, Math.min(left, innerWidth - size.width - 8))}px`;
     owner?.classList.add("ligma-open");
     if (byKeyboard) activate(0);
@@ -816,6 +835,8 @@ const PAGE_JS: &str = r##"(() => {
     signal("run", { manifest: plugin.manifest, command: command ?? "" });
     closeActions();
   };
+  const commandItems = (plugin) => (plugin.commands ?? []).map((command) => command && [command[0], () => run(plugin, command[1])]);
+  const devOptions = (plugin) => [["Remove", () => signal("remove", { manifest: plugin.manifest })]];
 
   const selectable = (node) => {
     node.addEventListener("mouseenter", () => select(rows().indexOf(node)));
@@ -842,7 +863,7 @@ const PAGE_JS: &str = r##"(() => {
       e.stopPropagation();
       if (!commands.length) return run(plugin);
       // From Enter (no mouse), with the first command active.
-      openMenu(text, commands.map((command) => command && [command[0], () => run(plugin, command[1])]), node, false, e.detail === 0);
+      openMenu(text, commandItems(plugin), node, { byKeyboard: e.detail === 0 });
     });
     const trail = el("div", "ligma-trail");
     if (!devOnly) trail.append(Object.assign(el("span", "ligma-kind"), { textContent: "Plugin" }));
@@ -850,7 +871,7 @@ const PAGE_JS: &str = r##"(() => {
     options.setAttribute("aria-label", `More options for ${plugin.name}`);
     options.addEventListener("click", (e) => {
       e.stopPropagation();
-      openMenu(options, [["Remove", () => signal("remove", { manifest: plugin.manifest })]], node, true);
+      openMenu(options, devOptions(plugin), node, { alignEnd: true });
     });
     trail.append(options);
     line.append(button, trail);
@@ -910,11 +931,316 @@ const PAGE_JS: &str = r##"(() => {
     schedule();
   }, true);
 
+  // Figma's own code for saved plugins, found by text in its modules like
+  // `RUNNER_JS` finds its plugin host. Each piece is looked up when first
+  // needed, as some load with the panels that use them. One pass over the
+  // modules (some 60 ms) looks for all that are missing, at most every 5
+  // seconds unless `now`, for a click.
+  const SIGNS = {
+    store: "This API is intended only for debugging",
+    runner: "runExtensionMenuAction: Expected PluginsMenuArgs",
+    shortcuts: "[CustomKeyboardShortcuts] no menu action found",
+    manifestMenu: 'type:"submenu",subtype:"manifest"',
+    unsave: '"UNSAVE_EXTENSION"',
+    options: '"EXTENSION_OPTIONS_DROPDOWN"',
+  };
+  let figmaRequire = null;
+  const modules = {};
+  let scanned = -Infinity;
+  const figmaModule = (key, now = false) => {
+    if (modules[key]) return modules[key];
+    if (!now && performance.now() - scanned < 5000) return null;
+    scanned = performance.now();
+    if (!figmaRequire) {
+      const chunks = globalThis.rspackChunk_figma_web_bundler ?? globalThis.webpackChunk_figma_web_bundler;
+      try {
+        chunks?.push([[Symbol("ligma")], {}, (r) => { figmaRequire = r; }]);
+      } catch {}
+    }
+    const require = figmaRequire;
+    if (!require?.m) return null;
+    const missing = Object.keys(SIGNS).filter((name) => !modules[name]);
+    for (const id of Object.keys(require.m)) {
+      const source = String(require.m[id]);
+      for (const name of missing) {
+        if (modules[name] || !source.includes(SIGNS[name])) continue;
+        // What the module calls `(0,alias.name)(…)` in the part matching
+        // `pattern`, with the alias and name captured in pairs.
+        const imported = (pattern) => {
+          const match = source.match(pattern);
+          const load = source.match(/^[^(]*\([\w$]+,[\w$]+,([\w$]+)\)/)?.[1];
+          if (!match || !load) return [];
+          const values = [];
+          for (let i = 1; i < match.length; i += 2) {
+            const quote = (name) => name.replace(/\$/g, "\\$");
+            const module = source.match(new RegExp(`[,;\\s]${quote(match[i])}=${quote(load)}\\((\\d+)\\)`))?.[1];
+            values.push(module && require(module)[match[i + 1]]);
+          }
+          return values;
+        };
+        modules[name] = { exports: require(id), imported };
+      }
+    }
+    return modules[key] ?? null;
+  };
+  const functionText = (fn) => Function.prototype.toString.call(fn);
+  // The store (not `window.store`, which is for debugging and stalls the
+  // page), running a plugin and its menu, as Figma's keyboard shortcuts for
+  // plugins do.
+  let figmaCore = null;
+  const internals = () => {
+    if (figmaCore) return figmaCore;
+    const store = figmaModule("store")?.exports;
+    const runner = figmaModule("runner");
+    const shortcuts = figmaModule("shortcuts");
+    const manifestMenu = figmaModule("manifestMenu");
+    if (!store || !runner || !shortcuts || !manifestMenu) return null;
+    const fns = (module) => Object.values(module.exports).filter((value) => typeof value === "function");
+    const [context, editor] = shortcuts.imported(/\(0,([\w$]+)\.([\w$]+)\)\([\w$]+,\(0,([\w$]+)\.([\w$]+)\)\(\)\)/);
+    const core = {
+      store: () => store.globalReduxStore,
+      context,
+      editor,
+      run: fns(runner).find((fn) => functionText(fn).includes("runExtensionMenuAction")),
+      menuItem: fns(runner).find((fn) => functionText(fn).includes('case"run-menu-action":return{displayText:')),
+      menu: fns(manifestMenu).find((fn) => functionText(fn).includes('subtype:"manifest"')),
+    };
+    if (Object.values(core).some((value) => typeof value !== "function")) return null;
+    return (figmaCore = core);
+  };
+
+  // Which plugins go in the rail: the editor's, Dev Mode's in Dev Mode.
+  const railTypes = () =>
+    document.body?.dataset.editorTheme === "dev-handoff" ? ["dev"] : editorTypes().filter((type) => type !== "dev");
+  const savedPlugins = (core, types) => {
+    const saved = core.store()?.getState().installedPluginVersions;
+    if (!saved?.loaded) return [];
+    return Object.values(saved.plugins).filter(
+      (plugin) => !plugin.manifest?.containsWidget && (plugin.manifest?.editorType ?? ["figma"]).some((type) => types.includes(type)),
+    );
+  };
+  const runSaved = (action) => {
+    const core = internals();
+    try {
+      core.run(core.context(core.store().getState(), core.editor()), "quick-actions", action);
+    } catch (error) {
+      console.error("Ligma: couldn't run plugin", error);
+    }
+  };
+  // A saved plugin's menu as [text, action] items, or null if it has none.
+  const savedCommands = (core, plugin) => {
+    if (!plugin.manifest?.menu?.length) return null;
+    const flatten = (items, prefix = "") =>
+      items.flatMap((item) =>
+        item.separator ? [null]
+        : item.header ? []
+        : item.children ? flatten(item.children, `${prefix}${item.displayText} › `)
+        : [[prefix + item.displayText, item.callback]],
+      );
+    return flatten(core.menu(plugin.manifest.menu, plugin).map((item) => core.menuItem(item, ({ menuAction }) => () => runSaved(menuAction))));
+  };
+  // Running a saved plugin without a menu, as its row in the Actions panel
+  // does (plugins with parameters ask for them there).
+  const savedAction = (core, plugin) => {
+    const { parameters, parameterOnly } = plugin.manifest ?? {};
+    return core.menu([{ name: plugin.name, command: "", parameters, parameterOnly }], plugin)[0].menuAction;
+  };
+  const removeSaved = (plugin) => {
+    const unsave = figmaModule("unsave", true);
+    const action = unsave && Object.values(unsave.exports).find((value) => value?.matches?.({ type: "UNSAVE_EXTENSION" }));
+    if (!action) return console.error("Ligma: couldn't remove plugin");
+    internals().store().dispatch(action({ id: plugin.plugin_id, resourceType: "plugin", source: "inserts_modal" }));
+  };
+
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // A press, the way Figma's menus take one: all at once, it closes the
+  // menu without choosing.
+  const press = async (node) => {
+    const at = node.getBoundingClientRect();
+    const init = { bubbles: true, cancelable: true, button: 0, clientX: at.x + 4, clientY: at.y + 4, pointerId: 1, pointerType: "mouse", isPrimary: true };
+    for (const [Type, type] of [[PointerEvent, "pointerover"], [MouseEvent, "mouseover"], [PointerEvent, "pointermove"], [MouseEvent, "mousemove"], [PointerEvent, "pointerdown"], [MouseEvent, "mousedown"], [PointerEvent, "pointerup"], [MouseEvent, "mouseup"], [MouseEvent, "click"]]) {
+      node.dispatchEvent(new Type(type, init));
+      await wait(20);
+    }
+  };
+  const until = async (find, ms) => {
+    for (let waited = 0; waited <= ms; waited += 50) {
+      const found = find();
+      if (found) return found;
+      await wait(50);
+    }
+    return null;
+  };
+  const panelRoot = (tab) => {
+    let root = tab;
+    while (root && !(root.querySelector("input") && root.querySelector('[class*="list--list"]'))) root = root.parentElement;
+    return root;
+  };
+  // View details: Figma's details view lives in the Actions panel, so this
+  // opens Plugins & widgets there and picks View details from the plugin's
+  // own … menu, kept out of sight. If its row isn't in the list, it
+  // searches for it first.
+  let viewing = false;
+  const viewDetails = async (plugin) => {
+    if (viewing) return;
+    viewing = true;
+    const root = document.documentElement;
+    root.classList.add("ligma-hide-options");
+    try {
+      const actions = () => [...document.querySelectorAll('[aria-label="Actions"]')].find((button) => button.offsetParent)?.click();
+      // Another plugin's details are open, which has no way to the list
+      // but back: close it to start over.
+      const details = () => document.querySelector('[data-testid="extension-details-view"]');
+      if (details()) {
+        actions();
+        await until(() => !details(), 1000);
+      }
+      if (!document.querySelector('[data-testid="tab-extensions"]')) actions();
+      // The first time, the panel's code loads first.
+      const tab = await until(() => document.querySelector('[data-testid="tab-extensions"]'), 5000);
+      if (!tab) return;
+      if (tab.getAttribute("aria-selected") !== "true") tab.click();
+      if (!(await until(() => tab.getAttribute("aria-selected") === "true", 2000))) return;
+      const rows = () => document.querySelector('[data-testid="extension-list-item"]');
+      if (!(await until(rows, 5000))) return;
+      const options = figmaModule("options", true);
+      const [show] = options?.imported(/\(0,([\w$]+)\.([\w$]+)\)\(\{type:[\w$]+,data:\{extensionId:/) ?? [];
+      const [translate] = options?.imported(/\(0,([\w$]+)\.([\w$]+)\)\("qa\.extensions\.view_details"\)/) ?? [];
+      if (!show) return console.error("Ligma: couldn't open plugin details");
+      const label = translate?.("qa.extensions.view_details") ?? "View details";
+      for (const search of [false, true]) {
+        if (search) {
+          const input = panelRoot(tab)?.querySelector("input");
+          if (!input) return;
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, plugin.name);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          await wait(500);
+          await until(rows, 3000);
+        }
+        internals().store().dispatch(show({ type: "EXTENSION_OPTIONS_DROPDOWN", data: { extensionId: plugin.plugin_id, localFileId: null, targetRect: new DOMRect() } }));
+        const option = await until(
+          () => [...document.querySelectorAll('[data-testid="extensionOptionsDropdown"] [role="menuitem"]')].find((node) => node.textContent.trim() === label),
+          1000,
+        );
+        if (option) return await press(option);
+      }
+    } finally {
+      root.classList.remove("ligma-hide-options");
+      viewing = false;
+    }
+  };
+
+  // The left rail: under Figma's buttons, a button for each plugin, the
+  // development plugins first, then the saved ones, in Figma's order.
+  // Clicking runs it (or opens its commands), right-clicking opens its …
+  // menu. Its buttons take their class names from Figma's.
+  const RAIL = {
+    button: "_19xx72g0 x78zum5 x6s0dn4 xl56j7k xh8yej3 xbspwgj xd2jme7 xy8ggh3 xdt5ytf x1dbijih x1ned7t2",
+    box: "x1467cpc xej7rzx x7r0jtz x78zum5 x6s0dn4 xl56j7k xkt69y7",
+    separator: "xso031l x1q0q8m5 x1hxpj6c xtaulvc x5yfwti x15g3bpb",
+  };
+  const harvestRail = (top) => {
+    // The box of a button that isn't selected: the most common one.
+    const buttons = [...top.querySelectorAll(":scope > button")].filter((button) => button.firstElementChild?.tagName === "DIV");
+    const count = (className) => buttons.filter((button) => button.firstElementChild.className === className).length;
+    const usual = buttons.sort((a, b) => count(b.firstElementChild.className) - count(a.firstElementChild.className))[0];
+    if (usual) {
+      RAIL.button = usual.className;
+      RAIL.box = usual.firstElementChild.className;
+    }
+    RAIL.separator = top.querySelector('[role="separator"]')?.className || RAIL.separator;
+  };
+  const railButton = (name, icon, onClick, options) => {
+    const button = el("button", RAIL.button);
+    button.type = "button";
+    button.setAttribute("aria-label", name);
+    // Figma's tooltips, as on its own rail buttons.
+    Object.assign(button.dataset, { tooltip: name, tooltipType: "text", tooltipShowRight: "true", tooltipOffsetY: "0", tooltipTimeoutDelay: "500", showTooltip: "true" });
+    const box = el("div", RAIL.box);
+    box.append(icon);
+    button.append(box);
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick(button, e.detail === 0);
+    });
+    button.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // At the pointer, or beside the button from the keyboard.
+      const at = e.clientX || e.clientY ? new DOMRect(e.clientX - 4, e.clientY, 0, 0) : button;
+      openMenu(at, options(), button, { beside: true, byKeyboard: !(e.clientX || e.clientY) });
+    });
+    return button;
+  };
+  const devRailButton = (plugin) => {
+    const icon = el("span", "", ICONS.plugin).firstChild;
+    const name = plugin.problem ? `⚠  ${plugin.name}` : plugin.name;
+    return railButton(name, icon, (button, byKeyboard) => {
+      if (!plugin.commands?.length) return run(plugin);
+      openMenu(button, commandItems(plugin), button, { beside: true, byKeyboard });
+    }, () => devOptions(plugin));
+  };
+  const savedRailButton = (core, plugin) => {
+    const icon = el("img", "ligma-rail-image");
+    icon.alt = "";
+    icon.draggable = false;
+    icon.src = plugin.redirect_icon_url;
+    icon.addEventListener("error", () => icon.replaceWith(el("span", "", ICONS.plugin).firstChild), { once: true });
+    return railButton(plugin.name, icon, (button, byKeyboard) => {
+      const commands = savedCommands(core, plugin);
+      if (!commands) return runSaved(savedAction(core, plugin));
+      openMenu(button, commands, button, { beside: true, byKeyboard });
+    }, () => [
+      ["View details", () => viewDetails(plugin)],
+      ...(plugin.installed_by === "user" ? [null, ["Remove", () => removeSaved(plugin)]] : []),
+    ]);
+  };
+  let railDrawn = "";
+  let watchedStore = null;
+  const renderRail = () => {
+    const top = document.querySelector('[data-testid="navigation-bar"] > [data-testid="navigation-bar-top-section"]');
+    let rail = document.getElementById("ligma-rail");
+    if (!top) {
+      rail?.remove();
+      railDrawn = "";
+      return;
+    }
+    const core = internals();
+    const store = core?.store();
+    if (store && store !== watchedStore) {
+      // Saving or removing a plugin shows it here.
+      watchedStore = store;
+      let saved = store.getState().installedPluginVersions;
+      store.subscribe(() => {
+        const now = store.getState().installedPluginVersions;
+        if (now !== saved) {
+          saved = now;
+          schedule();
+        }
+      });
+    }
+    const types = railTypes();
+    const dev = plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type)));
+    const saved = core ? savedPlugins(core, types) : [];
+    const state = JSON.stringify([dev, saved.map((plugin) => [plugin.plugin_id, plugin.name, plugin.redirect_icon_url, plugin.installed_by, plugin.current_plugin_version_id])]);
+    if (rail?.previousElementSibling === top && state === railDrawn) return;
+    railDrawn = state;
+    harvestRail(top);
+    if (!rail) {
+      rail = el("div");
+      rail.id = "ligma-rail";
+    }
+    const buttons = [...dev.map(devRailButton), ...saved.map((plugin) => savedRailButton(core, plugin))];
+    rail.replaceChildren(...(buttons.length ? [Object.assign(el("div", RAIL.separator), { role: "separator" }), ...buttons] : []));
+    if (rail.previousElementSibling !== top) top.after(rail);
+  };
+
   let drawn = "";
   const render = () => {
     if (!document.getElementById("ligma-dev-style") && document.head) {
       document.head.append(Object.assign(el("style"), { id: "ligma-dev-style", textContent: STYLE }));
     }
+    renderRail();
     const tab = document.querySelector('[data-testid="tab-extensions"]');
     const active = tab?.getAttribute("aria-selected") === "true";
     if (!active) {
@@ -963,7 +1289,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   new MutationObserver((mutations) => {
     // Not for its own changes.
-    if (mutations.every((m) => m.target.closest?.("#ligma-dev-plugins, .ligma-menu, [data-ligma-dev]"))) return;
+    if (mutations.every((m) => m.target.closest?.("#ligma-dev-plugins, #ligma-rail, .ligma-menu, [data-ligma-dev]"))) return;
     schedule();
   }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
   addEventListener("input", schedule, true);
