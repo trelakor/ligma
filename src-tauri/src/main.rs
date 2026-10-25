@@ -302,6 +302,8 @@ fn main() {
             // `tabs::layout` sizes the tab bar's webview from here on.
             if let Some(bar) = app.get_webview("main") {
                 bar.set_auto_resize(false)?;
+                #[cfg(windows)]
+                webview2::add_tab_shortcuts(&bar);
             }
 
             let handle = app.handle().clone();

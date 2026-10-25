@@ -8,7 +8,7 @@ How Ligma behaves, in detail. For the short version, see the [README](../README.
 - Right-click a tab to pin or unpin it, copy its link, open it in the browser, reload it, or close it, the other tabs or all tabs. Pinned tabs sit after Home and show only their icon. Home's menu has Copy Link, Reload and Close Other Tabs.
 - A file whose name starts with an emoji shows that emoji as its tab icon.
 - With `"restoreTabs": true` (Settings > Reopen tabs from last time), Ligma reopens your tabs, pins and the tab you had open. They're kept in `session.json` next to `settings.json`. Only the tab you had open loads; the others load when selected.
-- Shortcuts (macOS): `Cmd+T` new tab, `Cmd+W` close tab, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. Middle-click also closes a tab.
+- Shortcuts: `Ctrl+T` (`Cmd+T` on macOS) new tab, `Ctrl+W` (`Cmd+W`) close tab, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. While the settings window has focus, `Ctrl+W` (`Cmd+W`) closes it instead. Middle-click also closes a tab.
 - Background tabs give memory back (see [Memory](MEMORY.md)).
 
 ## Browsing
@@ -49,6 +49,12 @@ Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimiz
 - Themes recolor Figma's panels, toolbars, menus, tooltips and buttons, and what Figma draws over the canvas (selection, rulers, labels), and with them the tab bar, the tab menu, prompts and the settings window, but not your designs: new shapes and frames get Figma's usual fills (see `dist/themes.js` and `src-tauri/src/appearance.rs`).
 - **Interface scale** (`"interfaceScale"` in percent, 50 to 200) zooms Figma tabs, the tab bar, the tab menu, prompts and the settings window together, like a browser's zoom; − and + step through the usual zoom levels. The tab bar grows with it.
 - The tab menu, prompts (update ready, join requests, errors) and the settings window are drawn by Ligma in Figma's style and follow the editor's light or dark theme. On Windows 11 they have no accent-colored border, just the system shadow.
+
+## Plugins in the left rail
+
+- Your plugins sit in the editor's left rail, under Figma's own buttons: development plugins, then every plugin saved to your Figma account, each with its icon. Click one to run it, or to pick from its commands if it has some. Icons grow on hover.
+- Right-click a plugin there for its menu, like its … menu in Actions > Plugins & widgets: View details and Remove for saved plugins, Remove for development plugins.
+- Hold Ctrl and drag a plugin to move it. The order is kept for every file; newly saved plugins come first.
 
 ## Development plugins
 

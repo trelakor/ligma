@@ -1,14 +1,68 @@
-//! WebView2 memory controls for hidden tabs, and a fix for Figma's plugin
-//! downloads (Windows only).
+//! WebView2 memory controls for hidden tabs, the tab shortcuts, and a fix
+//! for Figma's plugin downloads (Windows only).
 
-use tauri::Webview;
+use tauri::{AppHandle, Manager, Webview};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
-    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
+    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
     COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
-use webview2_com::TrySuspendCompletedHandler;
+use webview2_com::{AcceleratorKeyPressedEventHandler, TrySuspendCompletedHandler};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_T, VK_TAB, VK_W,
+};
 use windows_core::{w, Interface};
+
+/// The tab shortcuts macOS has in its menu bar, which Windows doesn't have:
+/// `Ctrl+T` new tab, `Ctrl+W` close tab (or the settings window, when that
+/// has focus), `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. Added to every
+/// webview that can have keyboard focus, before the page sees the keys;
+/// figma.com leaves them to the browser anyway.
+pub fn add_tab_shortcuts(webview: &Webview) {
+    let app = webview.app_handle().clone();
+    let _ = webview.with_webview(move |platform| unsafe {
+        let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = Default::default();
+            let mut key = 0;
+            let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+            args.KeyEventKind(&mut kind)?;
+            args.VirtualKey(&mut key)?;
+            args.PhysicalKeyStatus(&mut status)?;
+            let down = |key: VIRTUAL_KEY| GetKeyState(key.0 as i32) < 0;
+            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN || !down(VK_CONTROL) || down(VK_MENU) {
+                return Ok(());
+            }
+            let shift = down(VK_SHIFT);
+            let action: fn(&AppHandle) -> tauri::Result<()> = match VIRTUAL_KEY(key as u16) {
+                VK_T if !shift => crate::tabs::new_tab,
+                VK_W if !shift => |app| match crate::settings::close_if_focused(app) {
+                    true => Ok(()),
+                    false => crate::tabs::close_active(app),
+                },
+                VK_TAB if shift => |app| crate::tabs::cycle(app, -1),
+                VK_TAB => |app| crate::tabs::cycle(app, 1),
+                _ => return Ok(()),
+            };
+            args.SetHandled(true)?;
+            // Held keys repeat, as menu shortcuts do on macOS, except
+            // closing, which would take every tab with it.
+            if status.WasKeyDown.as_bool() && key as u16 == VK_W.0 {
+                return Ok(());
+            }
+            // Off the main thread: opening or waking a tab creates a
+            // webview, which would block on itself here.
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let _ = action(&app);
+            });
+            Ok(())
+        }));
+        let mut token = 0;
+        let _ = platform.controller().add_AcceleratorKeyPressed(&handler, &mut token);
+    });
+}
 
 /// Takes Tauri's request filters off a Figma tab, which never loads
 /// Tauri's own `tauri:`, `ipc:` or `asset:` URLs: Figma pages get no IPC.
