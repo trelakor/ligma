@@ -44,6 +44,10 @@ pub struct Settings {
     pub discord_rich_presence: bool,
     /// Name the open file on Discord; otherwise it says "Editing a file".
     pub discord_show_file: bool,
+    /// Hide every file from Discord, as with `discord_show_file` off, but
+    /// those shown from their tab's menu. Otherwise every file shows but
+    /// those hidden there.
+    pub discord_hide_files_by_default: bool,
     /// Show the selected tool's icon on Discord, named when hovered.
     pub discord_show_tool: bool,
     /// Under the file's name on Discord, show where in it you are (only
@@ -85,6 +89,7 @@ impl Default for Settings {
             reload_snapshots: false,
             discord_rich_presence: true,
             discord_show_file: true,
+            discord_hide_files_by_default: false,
             discord_show_tool: true,
             discord_show_page: true,
             discord_show_figjam_page: true,

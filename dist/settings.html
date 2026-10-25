@@ -494,6 +494,12 @@
         </span>
         <input type="checkbox" class="switch" id="discord-file">
       </label>
+      <label class="row nested deeper" id="discord-hide-files-row">
+        <span class="label">Hide files by default
+          <div class="hint">Every file shows as "Editing a file" until you choose Show File on Discord in its tab's menu. When off, every file shows until you choose Hide File on Discord.</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-hide-files">
+      </label>
       <div class="row nested deeper" id="discord-where-row">
         <span class="label">Show where you are in the file
           <div class="hint">Under the file's name, for each Figma product. Needs the file name shown.</div>
@@ -600,7 +606,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets"];
   // Where you are in the file, per product: switch and setting.
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -761,6 +767,7 @@
     $("snapshots").checked = settings.reloadSnapshots;
     $("discord").checked = settings.discordRichPresence;
     $("discord-file").checked = settings.discordShowFile;
+    $("discord-hide-files").checked = settings.discordHideFilesByDefault;
     $("discord-tool").checked = settings.discordShowTool;
     $("discord-invites").checked = settings.discordInvites;
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
@@ -778,6 +785,7 @@
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
       // Where you are shows under the file's name, so not without it.
+      ["discord-hide-files-row", settings.discordRichPresence && settings.discordShowFile],
       ["discord-where-row", settings.discordRichPresence && settings.discordShowFile],
       ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence && settings.discordShowFile]),
     ]) {
@@ -810,6 +818,7 @@
       reloadSnapshots: $("snapshots").checked,
       discordRichPresence: $("discord").checked,
       discordShowFile: $("discord-file").checked,
+      discordHideFilesByDefault: $("discord-hide-files").checked,
       discordShowTool: $("discord-tool").checked,
       discordInvites: $("discord-invites").checked,
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
