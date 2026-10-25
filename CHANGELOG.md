@@ -2,6 +2,13 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.17.0 - 2026-10-24
+
+- Color scheme and themes in Settings > Appearance. Pick System, Light or Dark for Figma and Ligma together (it takes the place of Figma's own Theme setting), and a color theme for each mode: Figma's own colors, or Grove, Lagoon, Ocean, Midnight, Iris, Rose, Ember or Amber.
+- A theme tints Figma's panels, toolbars, menus and buttons and gives every editor's brand color its accent, in Design, FigJam, Slides, Buzz, Sites, Make and Dev Mode. The tab bar, tab menu, prompts and settings window follow right away. Product colors, like the Design and FigJam icons on Home, stay.
+- On the canvas, selection, rulers and labels take the theme too. Your designs don't: new shapes and frames get Figma's usual fills.
+- In light mode, Figma's menus and tooltips are light, in every theme.
+
 ## 0.16.0 - 2026-10-24
 
 - Development plugins: import a Figma plugin from your computer by its manifest.json, like the Figma app's Import plugin from manifest…. Settings has a Plugins page to import them, switch them on or off and remove them.
