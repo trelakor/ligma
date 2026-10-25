@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.18.0 - 2026-10-25
+
+- Number fields in Settings scrub like Figma's: drag one right to raise its value or left to lower it, with Shift in steps of 10. Click without dragging to type in it as before.
+
 ## 0.17.1 - 2026-10-25
 
 - Fixed a pixel-wide white or black line beside the layers or properties panel at some interface scales.
