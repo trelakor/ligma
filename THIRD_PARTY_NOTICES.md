@@ -6474,8 +6474,6 @@ Used by:
 - r-efi 6.0.0
 - rustls-platform-verifier-android 0.2.0
 - tauri-plugin-clipboard-manager 2.5.0
-- tauri-plugin-dialog 2.8.3
-- tauri-plugin-fs 2.7.1
 - tauri-plugin-log 2.10.1
 - tauri-plugin-opener 2.7.2
 - tauri-plugin-single-instance 2.5.4

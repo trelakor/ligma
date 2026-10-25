@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.20.0 - 2026-10-25
+
+- Tab shortcuts on Windows, as on macOS: Ctrl+T opens a new tab, Ctrl+W closes the tab, and Ctrl+Tab and Ctrl+Shift+Tab switch tabs. They work in Figma, the tab bar and Settings, where Ctrl+W closes the window instead.
+- A cleaner README, with the details moved to docs/FEATURES.md, docs/MEMORY.md and docs/DEVELOPMENT.md.
+
 ## 0.19.0 - 2026-10-25
 
 - Your plugins in the editor's left rail, under Figma's own buttons: development plugins, then every plugin saved to your Figma account, each with its icon. Click one to run it, or to pick from its commands if it has some.
