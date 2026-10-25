@@ -8,20 +8,21 @@ A lightweight desktop app for [Figma](https://www.figma.com), about 4 MB.
 
 [Download](../../releases/latest) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md)
 
-Created in [T3 Code](https://t3.codes).
-
 </div>
 
 ## Who it's for
 
 People who use Figma all day and want a desktop app that's lighter than the official one. Ligma is built with [Tauri 2](https://tauri.app) and opens `figma.com` in the system webview (WebView2 on Windows, WKWebView on macOS) instead of bundling a browser engine.
 
+It also adds touches the official app doesn't have: color themes to make Figma your own, your plugins one click away in the editor's left rail, and your current file on your Discord profile.
+
 ## Features
 
 - **Tabs** like the Figma desktop app, with pinning, emoji icons and reopening your tabs from last time
 - **Google sign-in** that works like the desktop app's, alongside it or without it
 - **Low memory use:** tabs you aren't looking at are trimmed, frozen and put to sleep ([details](docs/MEMORY.md))
-- **Themes** that recolor Figma's interface, plus a light/dark scheme and interface scale
+- **Themes** in light and dark variants that recolor Figma's interface, with an adjustable interface scale
+- **Plugins in the left rail:** your saved and development plugins under Figma's own buttons, one click to run
 - **Development plugins** imported from a `manifest.json`, which figma.com doesn't support
 - **Discord Rich Presence** showing your file, page and tool, with optional invites to files
 - **Local fonts** through Figma's font helper
@@ -49,11 +50,14 @@ See [Development](docs/DEVELOPMENT.md) for icons and releasing.
 
 ## Known limits
 
-- Windows builds haven't been tested on a real Windows machine yet.
-- Keyboard tab shortcuts are macOS-only for now.
+- Keyboard tab shortcuts (`Cmd+T`, `Cmd+W`, `Ctrl+Tab`) are macOS-only for now.
 
 ## Legal
 
 Ligma is [MIT licensed](LICENSE). It's not affiliated with Figma or Discord.
 
 [Terms of Service](TERMS.md) · [Privacy Policy](PRIVACY.md) · [Security](SECURITY.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
+---
+
+<sub>Created in [T3 Code](https://t3.codes).</sub>
