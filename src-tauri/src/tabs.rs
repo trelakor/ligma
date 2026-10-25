@@ -874,10 +874,12 @@ fn capture(app: &AppHandle, id: u32, webview: &Webview) {
 
 /// Finds the open canvas in a Figma editor, as `[left, top, width, height]`
 /// fractions of the page, or null outside one. That's the largest
-/// `<canvas>`, less whatever Figma lays over its edges: scanning in from
-/// each side through its middle, the first point where the canvas (or
-/// something spanning it, like Figma's input layer) is on top. So the
-/// panels, toolbar and floating tool bar stay out of the preview.
+/// `<canvas>`, less whatever Figma lays over its edges, like the floating
+/// tool bar: scanning a quarter of the way in from each side through the
+/// middle, the crop goes a little inside the innermost point where
+/// something other than the canvas (or a layer spanning it, like Figma's
+/// input layer) is on top. The tool bar floats clear of the bottom edge,
+/// so the scan can't stop at the first open point.
 const CROP_JS: &str = r#"(() => {
   const area = (r) => r.width * r.height;
   const canvases = [...document.querySelectorAll("canvas")].map((c) => [c, c.getBoundingClientRect()]);
@@ -894,18 +896,16 @@ const CROP_JS: &str = r#"(() => {
     return e.width >= (right - left) * 0.9 && e.height >= (bottom - top) * 0.9;
   };
   const cx = (left + right) / 2, cy = (top + bottom) / 2;
-  const scan = (from, to, at) => {
-    const step = from < to ? 4 : -4;
-    for (let v = from; step > 0 ? v < to : v > to; v += step) if (at(v)) return v;
-    return from;
+  const edge = (from, depth, at) => {
+    const step = Math.sign(depth) * 4;
+    let inner = from;
+    for (let v = from; Math.abs(v - from) <= Math.abs(depth); v += step) if (!at(v)) inner = v + step * 3;
+    return inner;
   };
-  const x0 = scan(left + 1, cx, (x) => open(x, cy));
-  const x1 = scan(right - 1, cx, (x) => open(x, cy));
-  const y0 = scan(top + 1, cy, (y) => open(cx, y));
-  const y1 = scan(bottom - 1, cy, (y) => open(cx, y));
-  if (x1 - x0 < (right - left) * 0.3 || y1 - y0 < (bottom - top) * 0.3) {
-    return [left / W, top / H, (right - left) / W, (bottom - top) / H];
-  }
+  const x0 = edge(left, (right - left) / 4, (x) => open(x, cy));
+  const x1 = edge(right - 1, -(right - left) / 4, (x) => open(x, cy));
+  const y0 = edge(top, (bottom - top) / 4, (y) => open(cx, y));
+  const y1 = edge(bottom - 1, -(bottom - top) / 4, (y) => open(cx, y));
   return [x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H];
 })()"#;
 
