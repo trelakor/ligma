@@ -15,6 +15,7 @@ How Ligma behaves, in detail. For the short version, see the [README](../README.
 ## Browsing
 
 - Links inside `figma.com` stay in the app. All other web links open in the default browser.
+- The Figma logo's menu in the editor leaves out Back to files (Home has its own tab) and Open in desktop app.
 - Window size and position are saved between launches.
 - Drag-and-drop goes to Figma, so you can drop images and files onto the canvas.
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
