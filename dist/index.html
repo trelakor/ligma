@@ -223,30 +223,22 @@
     if (e.button === 0) drag = { id: tab.id, pinned: tab.pinned, startX: e.clientX, moving: false };
   };
 
-  // Resting the pointer on another tab previews it in a card below (see
-  // src-tauri/src/preview.rs), after PREVIEW_DELAY; while one shows, the
-  // next tab's follows at once. Rust skips Home, the active tab, and
+  // Pointing at another tab previews it in a card below (see
+  // src-tauri/src/preview.rs). Rust skips Home, the active tab, and
   // everything when `tabPreviews` is off.
-  const PREVIEW_DELAY = 500;
-  let previewTimer = 0;
   let previewing = null;
-  // By id: the bar may have been drawn again since the pointer came.
+  // By id: the bar may have been drawn again since.
   const showPreview = (id) => {
-    clearTimeout(previewTimer);
     const node = bar.querySelector(`.tab[data-id="${id}"]:not(.active)`);
     if (!node) return hidePreview();
     previewing = id;
     invoke("show_tab_preview", { id, left: node.getBoundingClientRect().left });
   };
   const hoverTab = (node) => {
-    clearTimeout(previewTimer);
-    const id = Number(node.dataset.id);
     if (drag?.moving || node.classList.contains("active")) hidePreview();
-    else if (previewing != null) showPreview(id);
-    else previewTimer = setTimeout(() => showPreview(id), PREVIEW_DELAY);
+    else showPreview(Number(node.dataset.id));
   };
   const hidePreview = () => {
-    clearTimeout(previewTimer);
     if (previewing == null) return;
     previewing = null;
     invoke("hide_tab_preview");
@@ -361,7 +353,6 @@
       if (!tab.pinned) node.append(el("span", { className: "title", textContent: title || "Loading…" }), close);
 
       node.addEventListener("pointerenter", () => hoverTab(node));
-      node.addEventListener("pointerleave", () => clearTimeout(previewTimer));
       node.addEventListener("pointerdown", (e) => {
         hidePreview();
         if (!close.contains(e.target)) startPress(e, tab);
