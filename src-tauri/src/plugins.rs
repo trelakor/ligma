@@ -341,7 +341,10 @@ fn fail(app: &AppHandle, name: &str, message: &str) {
 /// X closes it for good, so each run starts on a new one: Figma's own code
 /// closes the old one and makes another, as it does after a plugin from its
 /// menu ends. Ligma finds that code by text in Figma's modules, and without
-/// it falls back on the API as it is.
+/// it falls back on the API as it is. While a plugin from Figma's menu is
+/// open, `window.figma` is instead a stand-in for debugging that plugin
+/// (Figma's "CONSOLE_SHIM", which refuses `figma.ui.onmessage`), so that
+/// plugin is closed first, as Figma does when another plugin starts.
 ///
 /// The plugin gets the API with `figma.command`, the `run` and `close`
 /// events, `closePlugin`, its own `clientStorage` and timers that stop when
@@ -380,15 +383,17 @@ const RUNNER_JS: &str = r#"(spec, main) => {
     host.reset();
   };
 
-  let api = window.figma;
-  if (api == null) return "unavailable";
-  window.__ligmaClosePlugin?.();
-  if (host) {
-    renew();
-    api = window.figma;
-  }
-  if (!alive(api)) return host ? "unavailable" : "reload";
+  // The stand-in for a running plugin from Figma's menu.
+  const isStandIn = (api) => {
+    try {
+      api.ui.onmessage;
+      return false;
+    } catch (error) {
+      return /developer tools console/.test(error?.message ?? "");
+    }
+  };
 
+  const begin = (api) => {
   const PRODUCTS = { figma: "Figma Design", figjam: "FigJam", dev: "Dev Mode", slides: "Figma Slides", buzz: "Figma Buzz" };
   if (!spec.editorTypes.includes(api.editorType)) {
     api.notify(`${spec.name} doesn't run in ${PRODUCTS[api.editorType] ?? api.editorType}`, { error: true });
@@ -528,6 +533,31 @@ const RUNNER_JS: &str = r#"(spec, main) => {
     }
   });
   return "ok";
+  };
+
+  let api = window.figma;
+  if (api == null) return "unavailable";
+  window.__ligmaClosePlugin?.();
+  if (isStandIn(api)) {
+    if (!host) return "unavailable";
+    // Its closing finishes later; then a new API takes its place.
+    (async () => {
+      try {
+        await host.close({});
+      } catch {}
+      host.reset();
+      const fresh = window.figma;
+      if (alive(fresh) && !isStandIn(fresh)) begin(fresh);
+      else console.error(`Ligma: couldn't start ${spec.name} after closing the open plugin`);
+    })();
+    return "ok";
+  }
+  if (host) {
+    renew();
+    api = window.figma;
+  }
+  if (!alive(api)) return host ? "unavailable" : "reload";
+  return begin(api);
 }"#;
 
 /// Shows the enabled plugins (sent by `push`) in Figma's Actions panel,
