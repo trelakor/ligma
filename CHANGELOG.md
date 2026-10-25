@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.17.1 - 2026-10-25
+
+- Fixed a pixel-wide white or black line beside the layers or properties panel at some interface scales.
+
 ## 0.17.0 - 2026-10-24
 
 - Color scheme and themes in Settings > Appearance. Pick System, Light or Dark for Figma and Ligma together (it takes the place of Figma's own Theme setting), and a color theme for each mode: Figma's own colors, or Grove, Lagoon, Ocean, Midnight, Iris, Rose, Ember or Amber.
