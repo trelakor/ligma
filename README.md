@@ -18,7 +18,7 @@ It also adds touches the official app doesn't have: color themes to make Figma y
 
 ## Features
 
-- **Tabs** like the Figma desktop app, with pinning, emoji icons and reopening your tabs from last time
+- **Tabs** like the Figma desktop app, with pinning, emoji icons, keyboard shortcuts and reopening your tabs from last time
 - **Google sign-in** that works like the desktop app's, alongside it or without it
 - **Low memory use:** tabs you aren't looking at are trimmed, frozen and put to sleep ([details](docs/MEMORY.md))
 - **Themes** in light and dark variants that recolor Figma's interface, with an adjustable interface scale
@@ -47,10 +47,6 @@ npm run build   # release bundle
 ```
 
 See [Development](docs/DEVELOPMENT.md) for icons and releasing.
-
-## Known limits
-
-- Keyboard tab shortcuts (`Cmd+T`, `Cmd+W`, `Ctrl+Tab`) are macOS-only for now.
 
 ## Legal
 
