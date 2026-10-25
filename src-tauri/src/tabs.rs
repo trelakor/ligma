@@ -220,6 +220,10 @@ struct Tab {
     /// shown while it reloads after sleep (macOS), and in its preview.
     #[serde(skip)]
     snapshot: Option<String>,
+    /// Part of `snapshot` that's open canvas, without Figma's panels and
+    /// toolbars (see `CROP_JS`), for the preview to show.
+    #[serde(skip)]
+    crop: Option<[f64; 4]>,
     /// Reloading behind its snapshot: the webview stays hidden until
     /// `READY_JS` says the file is drawn.
     #[serde(skip)]
@@ -372,6 +376,7 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
                 hidden_since: None,
                 suspended: false,
                 snapshot: None,
+                crop: None,
                 revealing: false,
             });
         }
@@ -531,6 +536,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             hidden_since: None,
             suspended: false,
             snapshot: None,
+            crop: None,
             revealing: false,
         });
         id
@@ -740,10 +746,8 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         let wake = std::mem::take(&mut tab.asleep).then(|| tab.url.clone());
         // Waking with a snapshot: show it while the page loads.
         tab.revealing |= snapshots && wake.is_some() && tab.snapshot.is_some() && tab.file_key.is_some();
-        if !tab.revealing {
-            tab.snapshot = None;
-        }
-        let snapshot = tab.snapshot.clone();
+        // Kept otherwise, for the tab's preview once it's hidden again.
+        let snapshot = tab.snapshot.clone().filter(|_| tab.revealing);
         let previous = std::mem::replace(&mut state.active, id);
         if previous != id {
             if let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == previous) {
@@ -845,6 +849,13 @@ fn capture(app: &AppHandle, id: u32, webview: &Webview) {
     if !wanted {
         return;
     }
+    // Measured alongside, not first: on macOS the image must be taken
+    // before the webview is hidden.
+    let crop_app = app.clone();
+    let _ = webview.eval_with_callback(CROP_JS, move |json| {
+        let crop = serde_json::from_str::<Option<[f64; 4]>>(&json).ok().flatten();
+        with_tab(&crop_app, id, |tab| tab.crop = crop);
+    });
     let app = app.clone();
     let keep = move |url: String| {
         with_tab(&app, id, |tab| tab.snapshot = Some(url));
@@ -861,8 +872,45 @@ fn capture(app: &AppHandle, id: u32, webview: &Webview) {
     let _ = (webview, keep);
 }
 
+/// Finds the open canvas in a Figma editor, as `[left, top, width, height]`
+/// fractions of the page, or null outside one. That's the largest
+/// `<canvas>`, less whatever Figma lays over its edges: scanning in from
+/// each side through its middle, the first point where the canvas (or
+/// something spanning it, like Figma's input layer) is on top. So the
+/// panels, toolbar and floating tool bar stay out of the preview.
+const CROP_JS: &str = r#"(() => {
+  const area = (r) => r.width * r.height;
+  const canvases = [...document.querySelectorAll("canvas")].map((c) => [c, c.getBoundingClientRect()]);
+  const [canvas, r] = canvases.reduce((a, b) => (area(b[1]) > area(a[1]) ? b : a), [null, { width: 0, height: 0 }]);
+  const W = innerWidth, H = innerHeight;
+  if (!canvas || area(r) < W * H * 0.2) return null;
+  const left = Math.max(0, r.left), top = Math.max(0, r.top);
+  const right = Math.min(W, r.right), bottom = Math.min(H, r.bottom);
+  const open = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return false;
+    if (el === canvas || el.contains(canvas)) return true;
+    const e = el.getBoundingClientRect();
+    return e.width >= (right - left) * 0.9 && e.height >= (bottom - top) * 0.9;
+  };
+  const cx = (left + right) / 2, cy = (top + bottom) / 2;
+  const scan = (from, to, at) => {
+    const step = from < to ? 4 : -4;
+    for (let v = from; step > 0 ? v < to : v > to; v += step) if (at(v)) return v;
+    return from;
+  };
+  const x0 = scan(left + 1, cx, (x) => open(x, cy));
+  const x1 = scan(right - 1, cx, (x) => open(x, cy));
+  const y0 = scan(top + 1, cy, (y) => open(cx, y));
+  const y1 = scan(bottom - 1, cy, (y) => open(cx, y));
+  if (x1 - x0 < (right - left) * 0.3 || y1 - y0 < (bottom - top) * 0.3) {
+    return [left / W, top / H, (right - left) / W, (bottom - top) / H];
+  }
+  return [x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H];
+})()"#;
+
 /// Least time between two `capture_active` images.
-const CAPTURE_EVERY: Duration = Duration::from_secs(2);
+const CAPTURE_EVERY: Duration = Duration::from_secs(1);
 
 /// Takes an image of the active tab for its preview, at most every
 /// `CAPTURE_EVERY`.
@@ -893,8 +941,10 @@ pub struct Preview {
     title: String,
     kind: &'static str,
     asleep: bool,
-    /// Its last image (see `capture`), as a `data:` URL.
+    /// Its last image (see `capture`), as a `data:` URL,
     image: Option<String>,
+    /// and the part of it to show (see `CROP_JS`).
+    crop: Option<[f64; 4]>,
 }
 
 /// The preview of tab `id`, if it may be previewed (see `can_preview`).
@@ -907,6 +957,7 @@ pub fn preview(app: &AppHandle, id: u32) -> Option<Preview> {
         kind: tab.kind,
         asleep: tab.asleep,
         image: tab.snapshot.clone(),
+        crop: tab.crop,
     })
 }
 
@@ -942,7 +993,6 @@ fn reveal_when_ready(app: &AppHandle, id: u32) {
                 return;
             };
             tab.revealing = false;
-            tab.snapshot = None;
             active == id
         };
         if active {
@@ -1067,6 +1117,7 @@ pub fn navigate(app: &AppHandle, id: u32, url: Url) {
             tab.revealing = false;
         }
         tab.snapshot = None;
+        tab.crop = None;
         tab.url = url.clone();
         !tab.asleep
     });

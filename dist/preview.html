@@ -46,16 +46,15 @@
     width: 264px;
     padding: 8px 8px 10px;
   }
-  /* The tab as it last looked, at the window's proportions. */
+  /* The tab's canvas as it last looked. */
   #image {
     display: block;
     width: 100%;
     aspect-ratio: 16 / 10;
-    object-fit: cover;
-    object-position: top center;
     border-radius: 6px;
     background: var(--bg-secondary);
-    box-shadow: inset 0 0 0 1px var(--border);
+    outline: 1px solid var(--border);
+    outline-offset: -1px;
   }
   #image[hidden] { display: none; }
   #text { padding: 0 4px; min-width: 0; }
@@ -73,7 +72,7 @@
 </head>
 <body>
 <div id="card">
-  <img id="image" alt="" hidden>
+  <canvas id="image" hidden></canvas>
   <div id="text">
     <div id="title"></div>
     <div id="detail"></div>
@@ -112,6 +111,27 @@
     buzz: "Figma Buzz",
   };
 
+  // Draws the `crop` part of `source` (fractions, see CROP_JS in tabs.rs),
+  // or all of it, to fill `canvas`, trimming the longer side evenly.
+  const draw = (canvas, source, crop) => {
+    const [cx, cy, cw, ch] = crop ?? [0, 0, 1, 1];
+    let [sx, sy, sw, sh] = [cx * source.width, cy * source.height, cw * source.width, ch * source.height];
+    const { width, height } = canvas.getBoundingClientRect();
+    const fit = width / height;
+    if (sw / sh > fit) {
+      sx += (sw - sh * fit) / 2;
+      sw = sh * fit;
+    } else {
+      sy += (sh - sw / fit) / 2;
+      sh = sw / fit;
+    }
+    canvas.width = Math.round(width * devicePixelRatio);
+    canvas.height = Math.round(height * devicePixelRatio);
+    const context = canvas.getContext("2d");
+    context.imageSmoothingQuality = "high";
+    context.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  };
+
   // Only the latest card is drawn, if they come quickly one after another.
   let latest = 0;
   window.refresh = async () => {
@@ -124,12 +144,13 @@
     const image = $("image");
     image.hidden = !card.image;
     if (card.image) {
-      image.src = card.image;
       // Drawn before it's shown, not after.
-      await image.decode().catch(() => (image.hidden = true));
+      const loaded = new Image();
+      loaded.src = card.image;
+      const ok = await loaded.decode().then(() => true, () => false);
       if (asked !== latest) return;
-    } else {
-      image.removeAttribute("src");
+      if (ok) draw(image, loaded, card.crop);
+      else image.hidden = true;
     }
     const { width, height } = $("card").getBoundingClientRect();
     await invoke("tab_preview_ready", { seq: card.seq, width: Math.ceil(width), height: Math.ceil(height), inset: INSET });
