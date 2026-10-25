@@ -17,7 +17,9 @@
 //! opens that file, and Figma shows it to whoever has access.
 //!
 //! Files hidden from their tab's menu (`HIDDEN_FILE`) show as "Designing a
-//! file", without their name or where in them the user is.
+//! file", without their name or where in them the user is. With
+//! `discordHideFilesByDefault` every file is hidden instead, but those
+//! shown from their tab's menu.
 
 use std::collections::BTreeSet;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -25,6 +27,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use discord_rich_presence::activity::{Activity, Assets, Party, Secrets, Timestamps};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
@@ -208,14 +211,36 @@ pub struct Presence {
     tx: Mutex<Option<Sender<Message>>>,
     /// The settings in effect, for what to show.
     settings: Mutex<crate::settings::Settings>,
-    /// Keys of the files whose name and whereabouts Discord isn't shown.
-    hidden: Mutex<BTreeSet<String>>,
+    /// Files picked from their tab's menu.
+    choices: Mutex<Choices>,
 }
 
-/// The hidden files' keys, in the app data folder.
+/// Keys of the files picked from their tab's menu, kept in `HIDDEN_FILE`.
+/// Each list counts only while files are shown, or hidden, by default
+/// (`discordHideFilesByDefault`), so switching keeps both.
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default)]
+struct Choices {
+    /// Hidden although files are shown by default.
+    hidden: BTreeSet<String>,
+    /// Shown although files are hidden by default.
+    shown: BTreeSet<String>,
+}
+
+impl Choices {
+    fn is_hidden(&self, key: &str, by_default: bool) -> bool {
+        if by_default {
+            !self.shown.contains(key)
+        } else {
+            self.hidden.contains(key)
+        }
+    }
+}
+
+/// The picked files, in the app data folder.
 const HIDDEN_FILE: &str = "discord-hidden.json";
 
-fn load_hidden(app: &AppHandle) -> BTreeSet<String> {
+fn load_choices(app: &AppHandle) -> Choices {
     app.path()
         .app_data_dir()
         .ok()
@@ -226,7 +251,10 @@ fn load_hidden(app: &AppHandle) -> BTreeSet<String> {
 
 /// Whether the file with key `key` is hidden from Discord.
 pub fn is_hidden(app: &AppHandle, key: &str) -> bool {
-    app.state::<Presence>().hidden.lock().unwrap().contains(key)
+    let presence = app.state::<Presence>();
+    let by_default = presence.settings.lock().unwrap().discord_hide_files_by_default;
+    let hidden = presence.choices.lock().unwrap().is_hidden(key, by_default);
+    hidden
 }
 
 /// Hides the file with key `key` from Discord, or shows it again, and
@@ -234,12 +262,19 @@ pub fn is_hidden(app: &AppHandle, key: &str) -> bool {
 pub fn set_hidden(app: &AppHandle, key: &str, hidden: bool) {
     let json = {
         let presence = app.state::<Presence>();
-        let mut keys = presence.hidden.lock().unwrap();
-        let changed = if hidden { keys.insert(key.to_owned()) } else { keys.remove(key) };
+        let by_default = presence.settings.lock().unwrap().discord_hide_files_by_default;
+        let mut choices = presence.choices.lock().unwrap();
+        // The exceptions to the default.
+        let (keys, add) = if by_default {
+            (&mut choices.shown, !hidden)
+        } else {
+            (&mut choices.hidden, hidden)
+        };
+        let changed = if add { keys.insert(key.to_owned()) } else { keys.remove(key) };
         if !changed {
             return;
         }
-        serde_json::to_string_pretty(&*keys).unwrap()
+        serde_json::to_string_pretty(&*choices).unwrap()
     };
     if let Ok(dir) = app.path().app_data_dir() {
         let _ = std::fs::create_dir_all(&dir);
@@ -267,7 +302,7 @@ pub fn start(app: &AppHandle, settings: &crate::settings::Settings) -> Presence 
     Presence {
         tx: Mutex::new(worker(app, settings)),
         settings: Mutex::new(settings.clone()),
-        hidden: Mutex::new(load_hidden(app)),
+        choices: Mutex::new(load_choices(app)),
     }
 }
 
@@ -343,7 +378,8 @@ pub fn sync(app: &AppHandle) {
     };
     let mut settings = presence.settings.lock().unwrap().clone();
     // A hidden file shows as if file names were off.
-    settings.discord_show_file &= !presence.hidden.lock().unwrap().contains(&active.key);
+    let hidden = presence.choices.lock().unwrap().is_hidden(&active.key, settings.discord_hide_files_by_default);
+    settings.discord_show_file &= !hidden;
     let (verb, presenting) = verb(active.view);
     // An empty name shows as "Designing a file" and so on.
     let file = if settings.discord_show_file { active.name } else { String::new() };
