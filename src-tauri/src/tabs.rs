@@ -137,6 +137,55 @@ const NEW_WINDOW_JS: &str = r#"(() => {
 #[cfg(target_os = "macos")]
 const NEW_TAB_HOST: &str = "open.ligma.invalid";
 
+/// Takes "Back to files" and "Open in desktop app" out of the main menu (the
+/// Figma logo's, in every editor): Home has a tab of its own, and Ligma is
+/// the desktop app. A menu group left empty goes with them, separator and
+/// all. Figma's menus are React's, so the items are hidden, not removed.
+/// Figma spaces a group's first and last items from its separators; a
+/// hidden first or last item hands that space to its visible neighbor.
+const MAIN_MENU_JS: &str = r#"(() => {
+  if (location.hostname !== "www.figma.com" || window.top !== window) return;
+  const HIDE = new Set(["Back to files", "Open in desktop app"]);
+  const style = document.createElement("style");
+  style.textContent = `
+    [data-ligma-hidden] { display: none !important; }
+    [role="menu"] > li:has([data-ligma-hidden]):not(:has([role="menuitem"]:not([data-ligma-hidden]))) { display: none !important; }
+  `;
+  const visible = (item, step) => {
+    let next = item[step];
+    while (next?.hasAttribute("data-ligma-hidden")) next = next[step];
+    return next;
+  };
+  const handOver = (item, computed, step, side) => {
+    const next = visible(item, step);
+    if (!next) return;
+    for (const box of ["margin", "padding"]) {
+      const value = computed.getPropertyValue(`${box}-${side}`);
+      if (parseFloat(value)) next.style.setProperty(`${box}-${side}`, value);
+    }
+  };
+  const hide = (root) => {
+    // An item, its label as it comes in, or a menu.
+    const items = [root.closest('[role="menuitem"]'), ...root.querySelectorAll('[role="menuitem"]')];
+    for (const item of items) {
+      if (!item || item.hasAttribute("data-ligma-hidden")) continue;
+      if (!item.closest('[role="menu"]') || !HIDE.has(item.textContent.trim())) continue;
+      // Before it's hidden, while its spacing still shows.
+      const computed = getComputedStyle(item);
+      if (!visible(item, "previousElementSibling")) handOver(item, computed, "nextElementSibling", "top");
+      if (!visible(item, "nextElementSibling")) handOver(item, computed, "previousElementSibling", "bottom");
+      item.setAttribute("data-ligma-hidden", "");
+    }
+  };
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node.nodeType === Node.ELEMENT_NODE) hide(node);
+    }
+  }).observe(document, { childList: true, subtree: true });
+  const mount = () => (document.head ? (document.head.append(style), true) : false);
+  if (!mount()) document.addEventListener("DOMContentLoaded", mount, { once: true });
+})();"#;
+
 /// Remembers the page's `beforeunload` handlers so `CAN_REST_JS` can ask
 /// them, without unloading anything, whether leaving now would lose work.
 /// Figma registers one while edits haven't reached its servers.
@@ -573,6 +622,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(BEFOREUNLOAD_JS)
         .initialization_script(crate::auth::PAGE_JS)
         .initialization_script(NEW_WINDOW_JS)
+        .initialization_script(MAIN_MENU_JS)
         .initialization_script(crate::plugins::page_js())
         .initialization_script(crate::appearance::page_js(app))
         .initialization_script(crate::modules::PAGE_JS)
