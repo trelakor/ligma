@@ -2238,6 +2238,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "webview2-com",
+ "windows",
  "windows-core",
  "windows-registry",
  "zip",
