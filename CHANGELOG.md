@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.21.0 - 2026-10-25
+
+- Saved widgets in the editor's left rail, next to your plugins. Click one to put it on the canvas; right-click for View details and Remove.
+- Every plugin saved to your Figma account now shows in the rail, as in Actions > Plugins & widgets. Some newer saves were missing before.
+- Settings > Plugins > Left rail shows or hides plugins and widgets there. With both off, the rail's separator goes too.
+
 ## 0.20.0 - 2026-10-25
 
 - Tab shortcuts on Windows, as on macOS: Ctrl+T opens a new tab, Ctrl+W closes the tab, and Ctrl+Tab and Ctrl+Shift+Tab switch tabs. They work in Figma, the tab bar and Settings, where Ctrl+W closes the window instead.
