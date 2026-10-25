@@ -1146,22 +1146,36 @@ fn tab_url(app: &AppHandle, id: u32) -> Option<Url> {
 /// Shows the right-click menu of tab `id` (see tab_menu.rs). Its items
 /// run through `on_menu`.
 fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
-    let Some(pinned) = with_tab(app, id, |tab| tab.pinned) else {
+    let Some((pinned, key)) = with_tab(app, id, |tab| (tab.pinned, tab.file_key.clone())) else {
         return Ok(());
     };
+    // Files only, while Discord is shown anything.
+    let discord = key.filter(|_| crate::presence::is_on(app)).map(|key| {
+        if crate::presence::is_hidden(app, &key) {
+            ("discord-show", "Show File on Discord")
+        } else {
+            ("discord-hide", "Hide File on Discord")
+        }
+    });
     let items = if id == HOME_ID {
         vec![Some(("copy", "Copy Link")), Some(("reload", "Reload")), Some(("close-others", "Close Other Tabs"))]
     } else {
-        vec![
+        let mut items = vec![
             Some(if pinned { ("unpin", "Unpin Tab") } else { ("pin", "Pin Tab") }),
             Some(("copy", "Copy Link")),
             Some(("browser", "Open in Browser")),
             Some(("reload", "Reload")),
+        ];
+        if discord.is_some() {
+            items.extend([None, discord]);
+        }
+        items.extend([
             None,
             Some(("close", "Close")),
             Some(("close-others", "Close Other Tabs")),
             Some(("close-all", "Close All Tabs")),
-        ]
+        ]);
+        items
     };
     crate::tab_menu::show(app, id, items)
 }
@@ -1194,6 +1208,11 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
             }
         }
         "reload" => reload(app, id),
+        "discord-hide" | "discord-show" => {
+            if let Some(Some(key)) = with_tab(app, id, |tab| tab.file_key.clone()) {
+                crate::presence::set_hidden(app, &key, action == "discord-hide");
+            }
+        }
         "close" => close(app, id)?,
         "close-others" => {
             select(app, id)?;
