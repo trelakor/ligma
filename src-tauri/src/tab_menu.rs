@@ -32,6 +32,8 @@ static OPEN: Mutex<Option<Open>> = Mutex::new(None);
 
 /// Opens the menu of tab `tab` at the cursor.
 pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
+    // The menu takes the tab preview's place.
+    crate::preview::hide(app);
     let at = app.cursor_position()?;
     *OPEN.lock().unwrap() = Some(Open { tab, items, at });
     if let Some(window) = app.get_webview_window(WINDOW) {
@@ -93,6 +95,11 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+/// True while a menu is being opened or shown.
+pub fn is_open() -> bool {
+    OPEN.lock().unwrap().is_some()
 }
 
 /// Hides the menu, if shown.

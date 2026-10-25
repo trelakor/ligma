@@ -23,6 +23,7 @@ Change these in Settings > Tabs & Memory (applies right away) or in `settings.js
 - `"sleepTabsAfterMinutes": 0` keeps every tab loaded, whatever the limit or memory pressure.
 - `"maxHiddenTabsLoaded": null` (the default) sets no limit; `1` keeps only the last tab you left loaded and `0` only the one you're looking at, trading reloads for memory.
 - `"reloadSnapshots": true` turns on the snapshots.
+- Tab previews (`"tabPreviews"`, on by default) keep each hidden tab's last image in memory as a JPEG, a few hundred KB per tab. `"tabPreviews": false` drops them.
 
 ## Measuring
 
