@@ -208,6 +208,11 @@
   }
   .field input::-webkit-inner-spin-button, .field input::-webkit-outer-spin-button { -webkit-appearance: none; }
   .row.disabled .field { opacity: 0.4; border-color: transparent; }
+  /* Fields that scrub (`scrub` below): the cursor says so until you type. */
+  .scrub, .scrub input { cursor: ew-resize; }
+  .scrub:focus-within, .scrub:focus-within input { cursor: text; }
+  .row.disabled .scrub, .row.disabled .scrub input { cursor: default; }
+  :root.scrubbing, :root.scrubbing * { cursor: ew-resize !important; }
 
   /* The interface scale: a percentage between − and + buttons. */
   .stepper { display: flex; flex: none; align-items: center; gap: 4px; }
@@ -447,7 +452,7 @@
       </label>
       <label class="row nested" id="sleep-after-row">
         <span class="label">After being hidden for</span>
-        <span class="field"><input type="number" id="sleep-after" min="1" step="1">min</span>
+        <span class="field scrub"><input type="number" id="sleep-after" min="1" step="1">min</span>
       </label>
       <label class="row nested" id="limit-row">
         <span class="label">Limit hidden tabs kept loaded
@@ -457,7 +462,7 @@
       </label>
       <label class="row nested" id="max-hidden-row">
         <span class="label">Hidden tabs kept loaded</span>
-        <span class="field"><input type="number" id="max-hidden" min="0" step="1">tabs</span>
+        <span class="field scrub"><input type="number" id="max-hidden" min="0" step="1">tabs</span>
       </label>
       <label class="row nested" id="snapshots-row">
         <span class="label">Show last image while a tab reloads
@@ -792,6 +797,63 @@
   }
 
   for (const id of [...fields, ...Object.keys(whereFields), "scale"]) $(id).addEventListener("change", () => save());
+
+  // Number fields scrub like Figma's: drag one right to raise its value
+  // and left to lower it, with Shift in steps of 10. A click without a
+  // drag focuses it for typing, and in a focused field a drag selects text.
+  const SCRUB_PX = 2;
+  const scrub = (input) => (down) => {
+    if (down.button !== 0 || input.disabled || document.activeElement === input) return;
+    down.preventDefault();
+    const min = input.min === "" ? -Infinity : Number(input.min);
+    const start = Number(input.value);
+    let scrubbing = false;
+    let lastX = down.screenX;
+    let travel = 0;
+    const move = (e) => {
+      if (!scrubbing && Math.abs(e.screenX - down.screenX) < 3) return;
+      scrubbing = true;
+      document.documentElement.classList.add("scrubbing");
+      travel += (e.screenX - lastX) * (e.shiftKey ? 10 : 1);
+      lastX = e.screenX;
+      const value = Math.max(min, start + Math.trunc(travel / SCRUB_PX));
+      // No travel banked past the minimum, so turning back moves at once.
+      travel = Math.max(travel, (min - start) * SCRUB_PX);
+      input.value = value;
+    };
+    let cancelled = false;
+    const stop = () => {
+      removeEventListener("mousemove", move);
+      removeEventListener("keydown", cancel, true);
+      document.documentElement.classList.remove("scrubbing");
+    };
+    // Esc puts the value back, rather than closing the window.
+    const cancel = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      cancelled = true;
+      input.value = start;
+      stop();
+    };
+    const up = () => {
+      stop();
+      removeEventListener("mouseup", up);
+      if (!scrubbing && !cancelled) {
+        input.focus();
+        input.select();
+        return;
+      }
+      // The click that ends a drag would focus the field through its label.
+      const swallow = (e) => e.preventDefault();
+      addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => removeEventListener("click", swallow, true));
+      if (!cancelled && Number(input.value) !== start) save();
+    };
+    addEventListener("mousemove", move);
+    addEventListener("mouseup", up);
+    addEventListener("keydown", cancel, true);
+  };
+  for (const input of document.querySelectorAll(".scrub input")) input.closest(".scrub").addEventListener("mousedown", scrub(input));
 
   // − and + go to the next preset down or up, also from a typed-in value.
   $("scale-down").addEventListener("click", () => {
