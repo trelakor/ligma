@@ -8,15 +8,17 @@
 //! and passes changes between its tabs as `storage` events.
 //!
 //! A color theme (`lightTheme`, `darkTheme`, from `dist/themes.js`)
-//! recolors the `--ramp-*` primitives Figma builds its palette from, so
-//! every panel, menu and button in Figma takes it. Ligma's tab bar, menus,
+//! tints the grey `--ramp-*` primitives Figma builds its palette from and
+//! points each editor's brand colors at the theme's accent, so every
+//! panel, menu and button in Figma takes it, while the colors that stand
+//! for a product (Design's blue, FigJam's purple) stay. Ligma's tab bar, menus,
 //! prompts and settings window take their colors from the active tab's
 //! (`THEME_JS` in tabs.rs), so they follow. The canvas doesn't: Figma
 //! copies its colors from `<body>`'s computed style into the editor's
 //! renderer, and `PAGE_JS` hands that copy Figma's untinted colors.
 
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, Theme, Webview};
@@ -56,19 +58,91 @@ const PAGE_JS: &str = r#"(() => {
     } catch {}
   };
 
-  // Overrides Figma's ramps where it sets them: on its theme element and on
-  // editors' own theme elements inside it. Not on `[data-ligma-untinted]`.
+  // Each editor has its own brand color (Design and Home blue, FigJam
+  // purple, Dev Mode green, ...), set by a rule for its
+  // `[data-preferred-theme][data-editor-theme]`. Found in Figma's
+  // stylesheets: the tokens such a rule takes from its brand ramp (that of
+  // `--color-bg-menu-selected`), which then come from the accent instead.
+  // Not on the theme element Figma wraps around a product's icon (Home's
+  // file tiles, the editor switcher), its only child an <svg>, so icons
+  // keep their product's color. So do tokens naming a product or a state
+  // (danger red).
+  const KEEP = /design|figjam|handoff|component|assistive|measure|template|danger|warning|success|desktop|annotation|multiplayer|voting|inspect|timeline|code|prototype|published|-fs|fs[A-Z]/;
+  const brandRules = [];
+  const scanned = new WeakSet();
+  const UNTINTED = ":not([data-ligma-untinted])";
+  const selectors = (selector) => {
+    const parts = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < selector.length; i++) {
+      const c = selector[i];
+      if (c === "(") depth++;
+      else if (c === ")") depth--;
+      else if (c === "," && !depth) {
+        parts.push(selector.slice(start, i));
+        start = i + 1;
+      }
+    }
+    parts.push(selector.slice(start));
+    return parts.map((part) => part.trim());
+  };
+  const NOT_ICON = ":not(:has(> svg:only-child))";
+  const brandSelector = (selector) =>
+    selectors(selector)
+      .map((part) => part + UNTINTED + NOT_ICON)
+      .join(", ");
+  const scanRule = (rule) => {
+    const selector = rule.selectorText;
+    if (!selector?.includes("data-preferred-theme")) return false;
+    const mode = /data-preferred-theme="?(light|dark)/.exec(selector)?.[1];
+    const brand = /--ramp-(?:pale-)?([a-z-]+)-\d+/.exec(rule.style.getPropertyValue("--color-bg-menu-selected"))?.[1];
+    if (!mode || !brand) return false;
+    const decls = [];
+    for (const name of rule.style) {
+      if (!name.startsWith("--color-") || KEEP.test(name)) continue;
+      const ramp = /^var\(--ramp-(pale-)?([a-z-]+)-(\d+)\)$/.exec(rule.style.getPropertyValue(name).trim());
+      if (ramp?.[2] === brand) decls.push(`${name}: var(--ligma-${ramp[1] ? "pale-" : ""}accent-${ramp[3]}) !important;`);
+    }
+    if (!decls.length) return false;
+    brandRules.push({ mode, css: `${brandSelector(selector)} { ${decls.join(" ")} }` });
+    return true;
+  };
+  const scan = () => {
+    let found = false;
+    const walk = (rules) => {
+      for (const rule of rules) {
+        if (rule instanceof CSSStyleRule) found = scanRule(rule) || found;
+        else if (rule.cssRules) walk(rule.cssRules);
+      }
+    };
+    for (const sheet of document.styleSheets) {
+      if (scanned.has(sheet)) continue;
+      try {
+        walk(sheet.cssRules);
+        scanned.add(sheet);
+      } catch {}
+    }
+    if (found) render();
+  };
+
+  // The greys and the accent ramps on Figma's theme elements and editors'
+  // own inside them, then the brand tokens. Not on `[data-ligma-untinted]`.
   const css = (mode, id) => {
     const vars = Object.entries(ligmaPalette(id, mode)).map(([name, value]) => `${name}: ${value} !important;`);
     if (!vars.length) return "";
     const theme = `[data-preferred-theme="${mode}"]`;
-    return `${theme}:not([data-ligma-untinted]), :where(${theme}) [data-editor-theme]:not([data-ligma-untinted]) { ${vars.join(" ")} }`;
+    const brand = brandRules.filter((rule) => rule.mode === mode).map((rule) => rule.css);
+    return [`${theme}${UNTINTED}, :where(${theme}) [data-editor-theme]${UNTINTED} { ${vars.join(" ")} }`, ...brand].join("\n");
+  };
+  const render = () => {
+    if (current) style.textContent = css("light", current.light) + "\n" + css("dark", current.dark);
   };
 
   const apply = (page) => {
     if (!page || (current && page.rev <= current.rev)) return false;
     current = page;
-    style.textContent = css("light", page.light) + "\n" + css("dark", page.dark);
+    render();
     followScheme();
     return true;
   };
@@ -102,6 +176,10 @@ const PAGE_JS: &str = r#"(() => {
     return !!parent;
   };
   if (!mount()) new MutationObserver((_, observer) => mount() && observer.disconnect()).observe(document, { childList: true });
+  // Figma's stylesheets, as they arrive.
+  document.addEventListener("DOMContentLoaded", scan);
+  addEventListener("load", (event) => event.target instanceof HTMLLinkElement && scan(), true);
+  addEventListener("load", scan);
 
   // From Ligma when the settings change, and at each page load.
   Object.defineProperty(window, "__ligmaAppearance", {
@@ -190,9 +268,21 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
         }
         changed
     };
-    if changed {
-        for webview in crate::tabs::scriptable_tabs(app) {
-            push_to(&webview);
-        }
+    if !changed {
+        return;
     }
+    for webview in crate::tabs::scriptable_tabs(app) {
+        push_to(&webview);
+    }
+    // Ligma's own windows take the new colors from the active tab, which
+    // has a theme right away but Figma redraws for a new color scheme a
+    // moment later. Look again a few times rather than at the next
+    // once-a-second check.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for wait in [0, 40, 80, 120, 200, 300, 500] {
+            std::thread::sleep(Duration::from_millis(wait));
+            crate::tabs::sync_theme(&app);
+        }
+    });
 }
