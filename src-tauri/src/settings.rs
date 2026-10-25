@@ -293,6 +293,13 @@ pub fn close_if_focused(app: &AppHandle) -> bool {
     true
 }
 
+/// Closes the settings window, if open, for when the main window goes.
+pub fn close(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let _ = window.destroy();
+    }
+}
+
 /// Only the settings window may read and change settings.
 fn from_settings_window(webview: &Webview) -> bool {
     webview.label() == WINDOW
