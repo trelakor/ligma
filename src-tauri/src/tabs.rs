@@ -553,12 +553,14 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             if let PageLoadEvent::Finished = payload.event() {
                 let _ = webview.set_zoom(scale(webview.app_handle()));
                 crate::plugins::push_to(&webview);
+                crate::appearance::push_to(&webview);
             }
         })
         .initialization_script(BEFOREUNLOAD_JS)
         .initialization_script(crate::auth::PAGE_JS)
         .initialization_script(NEW_WINDOW_JS)
-        .initialization_script(crate::plugins::page_js());
+        .initialization_script(crate::plugins::page_js())
+        .initialization_script(crate::appearance::page_js(app));
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
