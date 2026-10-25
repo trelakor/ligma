@@ -173,9 +173,10 @@ pub fn cancel(app: &AppHandle, error: Option<&str>) {
     }
 }
 
-/// A `figma://` link: the end of a sign-in, or on Windows, where Ligma may
-/// handle the scheme, one of Figma's "Open in desktop app" links, opened in
-/// a tab. Not on the main thread: it may open one.
+/// A `figma://` link: the end of a sign-in, or one of Figma's "Open in
+/// desktop app" links (from a Figma page, or on Windows, where Ligma may
+/// handle the scheme, from the OS), opened in a tab. Not on the main
+/// thread: it may open one.
 pub fn on_figma_link(app: &AppHandle, url: &Url) {
     if let Some(window) = app.get_window("main") {
         let _ = window.unminimize();
