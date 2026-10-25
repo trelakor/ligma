@@ -552,11 +552,13 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .on_page_load(move |webview, payload| {
             if let PageLoadEvent::Finished = payload.event() {
                 let _ = webview.set_zoom(scale(webview.app_handle()));
+                crate::plugins::push_to(&webview);
             }
         })
         .initialization_script(BEFOREUNLOAD_JS)
         .initialization_script(crate::auth::PAGE_JS)
-        .initialization_script(NEW_WINDOW_JS);
+        .initialization_script(NEW_WINDOW_JS)
+        .initialization_script(crate::plugins::page_js());
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
@@ -573,6 +575,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         content_size(app, &window)?,
     )?;
     webview.set_zoom(scale(app))?;
+    #[cfg(windows)]
+    crate::webview2::drop_request_filters(&webview);
     Ok(())
 }
 
@@ -602,6 +606,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
     }
     if url.host_str() == Some(crate::auth::SIGNAL_HOST) {
         crate::auth::on_signal(app, id, url);
+        return false;
+    }
+    if url.host_str() == Some(crate::plugins::SIGNAL_HOST) {
+        crate::plugins::on_signal(app, id, url);
         return false;
     }
     if crate::auth::is_google_sign_in(url) {
@@ -640,7 +648,9 @@ fn sign_in_later(app: &AppHandle, id: u32) {
 }
 
 fn on_new_window(app: &AppHandle, id: u32, url: Url) {
-    if crate::auth::is_google_sign_in(&url) {
+    if url.host_str() == Some(crate::plugins::SIGNAL_HOST) {
+        crate::plugins::on_signal(app, id, &url);
+    } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
         open_later(app, url);
@@ -1093,6 +1103,15 @@ pub fn scriptable(app: &AppHandle, id: u32) -> Option<Webview> {
     with_tab(app, id, |tab| !tab.asleep && !tab.suspended)?
         .then(|| app.get_webview(&label(id)))
         .flatten()
+}
+
+/// Webviews of the tabs that can run JavaScript now (see `scriptable`).
+pub fn scriptable_tabs(app: &AppHandle) -> Vec<Webview> {
+    let ids: Vec<u32> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.tabs.iter().filter(|tab| !tab.asleep && !tab.suspended).map(|tab| tab.id).collect()
+    };
+    ids.into_iter().filter_map(|id| app.get_webview(&label(id))).collect()
 }
 
 /// The file in the active tab.
