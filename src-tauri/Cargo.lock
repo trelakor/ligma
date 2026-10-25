@@ -2221,6 +2221,7 @@ dependencies = [
 name = "ligma"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "block2",
  "discord-rich-presence",
  "libc",
