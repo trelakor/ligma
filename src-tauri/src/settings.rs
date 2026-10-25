@@ -75,6 +75,9 @@ pub struct Settings {
     pub rail_plugins: bool,
     /// and saved widgets.
     pub rail_widgets: bool,
+    /// Open Figma's Actions menu on its Plugins & widgets tab rather than
+    /// All.
+    pub actions_plugins_tab: bool,
     /// Show each layer's preview in the layers panel in every mode, as in
     /// Draw mode. Figma renders them all, so off by default.
     pub layer_previews: bool,
@@ -105,6 +108,7 @@ impl Default for Settings {
             tab_previews: true,
             rail_plugins: true,
             rail_widgets: true,
+            actions_plugins_tab: false,
             layer_previews: false,
         }
     }
@@ -336,14 +340,15 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
     crate::appearance::apply_settings(&app, &settings);
     crate::presence::apply_settings(&app, &settings);
     crate::layers::apply_settings(&app, &settings);
-    let rail_changed = {
+    let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
-        let changed = (current.rail_plugins, current.rail_widgets) != (settings.rail_plugins, settings.rail_widgets);
+        let shown = |s: &Settings| (s.rail_plugins, s.rail_widgets, s.actions_plugins_tab);
+        let changed = shown(&current) != shown(&settings);
         *current = settings;
         changed
     };
-    if rail_changed {
+    if plugins_changed {
         crate::plugins::push(&app);
     }
     Ok(())

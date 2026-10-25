@@ -60,6 +60,7 @@ Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimiz
 - Right-click one there for its menu, like its … menu in Actions > Plugins & widgets: View details and Remove for saved plugins and widgets, Remove for development plugins.
 - Settings > Plugins > Left rail shows or hides plugins (`"railPlugins"`) and widgets (`"railWidgets"`). With both off, the rail and its separator are gone.
 - Hold Ctrl and drag a plugin to move it. The order is kept for every file; newly saved plugins come first.
+- Settings > Plugins > Actions menu > Open on Plugins & widgets (`"actionsPluginsTab"`, off by default) opens Figma's Actions menu on that tab rather than All.
 
 ## Development plugins
 
