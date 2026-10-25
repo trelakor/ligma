@@ -181,6 +181,9 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         crate::frame::refresh(&window);
         let _ = window.set_size(size);
         crate::frame::match_theme(&window);
+        if let Some(webview) = app.get_webview(WINDOW) {
+            crate::webview2::add_tab_shortcuts(&webview);
+        }
     }
     // Traffic lights centered on the header, like on the tab bar. AppKit
     // only on the main thread.
