@@ -439,6 +439,15 @@
         <input type="checkbox" class="switch" id="layer-previews">
       </label>
     </section>
+    <section>
+      <h2>Home</h2>
+      <label class="row">
+        <span class="label">Use the classic home page
+          <div class="hint">Figma is trying a new home page on some accounts, with your files sorted by plan. This keeps the usual one, with you in the top left and your teams in the sidebar, for every account.</div>
+        </span>
+        <input type="checkbox" class="switch" id="classic-home">
+      </label>
+    </section>
   </div>
 
   <div role="tabpanel" id="tabs" aria-labelledby="tab-tabs" hidden>
@@ -624,7 +633,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "classic-home"];
   // Where you are in the file, per product: switch and setting.
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -795,6 +804,7 @@
     $("rail-widgets").checked = settings.railWidgets;
     $("actions-plugins-tab").checked = settings.actionsPluginsTab;
     $("layer-previews").checked = settings.layerPreviews;
+    $("classic-home").checked = settings.classicHome;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -848,6 +858,7 @@
       railWidgets: $("rail-widgets").checked,
       actionsPluginsTab: $("actions-plugins-tab").checked,
       layerPreviews: $("layer-previews").checked,
+      classicHome: $("classic-home").checked,
       ...changes,
     };
     show();
