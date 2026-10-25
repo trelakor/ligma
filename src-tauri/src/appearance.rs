@@ -79,6 +79,7 @@ const PAGE_JS: &str = r##"(() => {
   const CANVAS = /design|figjam|handoff|-fs|fs[A-Z]/;
   const CANVAS_KEEP = /component|assistive|measure|template|danger|warning|success|annotation|multiplayer|voting|code|DefaultFill/;
   const DEFAULT_FILL = /DefaultFill/;
+  const AREA = /selectedarea/i;
   // Figma's own color for `var(--ramp-<name>-<step>)`, where Ligma tints it.
   const figmaColor = (name, step) =>
     name === "grey" ? LIGMA_GREY[LIGMA_STEPS.indexOf(Number(step))] : name === "white" && step === "1000" ? "#ffffff" : null;
@@ -169,7 +170,17 @@ const PAGE_JS: &str = r##"(() => {
     const canvas = [];
     for (const name of rule.style) {
       if (!name.startsWith("--color-")) continue;
-      const ramp = /^var\(--ramp-(pale-)?([a-z-]+)-(\d+)\)$/.exec(rule.style.getPropertyValue(name).trim());
+      const value = rule.style.getPropertyValue(name).trim();
+      // The fill of a selection box (dragging across Home's files, or the
+      // canvas) is the brand color, see-through, written out rather than
+      // taken from the ramp.
+      const area = AREA.test(name) && /^#[0-9a-f]{6}([0-9a-f]{2})$/i.exec(value);
+      if (area) {
+        const alpha = Math.round((parseInt(area[1], 16) / 255) * 100);
+        decls.push(`${name}: color-mix(in srgb, var(--ligma-accent-500) ${alpha}%, transparent) !important;`);
+        continue;
+      }
+      const ramp = /^var\(--ramp-(pale-)?([a-z-]+)-(\d+)\)$/.exec(value);
       if (!ramp) continue;
       const accent = `${name}: var(--ligma-${ramp[1] ? "pale-" : ""}accent-${ramp[3]}) !important;`;
       if (DEFAULT_FILL.test(name)) {
@@ -222,8 +233,12 @@ const PAGE_JS: &str = r##"(() => {
   // the canvas's own black background or, past it, the transparent page
   // and the webview's white or black. Both take the panels' color.
   const SEAM = "body:has(.gpu-view-content), .gpu-view-content, .gpu-view-content > canvas { background-color: var(--color-bg) !important; }";
+  // Home's Design, FigJam and Slides buttons draw their icons, white on the
+  // product's color, in the menus' icon color, which light menus above
+  // turn dark. They stay white, as in Figma.
+  const PRODUCT_ICONS = '[data-preferred-theme="light"] :is([data-testid="file-icon"], [data-testid="plus-icon"]) { --color-icon: #ffffff !important; }';
   const render = () => {
-    if (current) style.textContent = [css("light", current.light), css("dark", current.dark), ...menuRules, SEAM].join("\n");
+    if (current) style.textContent = [css("light", current.light), css("dark", current.dark), ...menuRules, SEAM, PRODUCT_ICONS].join("\n");
   };
 
   const apply = (page) => {
