@@ -17,6 +17,14 @@ pub const WINDOW: &str = "settings";
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
+    /// Light or dark, for Figma and Ligma alike. System follows the
+    /// system's. Takes the place of Figma's own Theme setting.
+    pub color_scheme: ColorScheme,
+    /// Color theme in light mode, from `dist/themes.js`: "figma" for
+    /// Figma's own colors,
+    pub light_theme: String,
+    /// and in dark mode.
+    pub dark_theme: String,
     /// Size of Figma and Ligma's own interface, in percent, like a
     /// browser's zoom. The tab bar grows with it.
     pub interface_scale: u32,
@@ -62,6 +70,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            color_scheme: ColorScheme::System,
+            light_theme: "figma".into(),
+            dark_theme: "figma".into(),
             interface_scale: 100,
             sleep_tabs_after_minutes: 30,
             max_hidden_tabs_loaded: None,
@@ -79,6 +90,15 @@ impl Default for Settings {
             restore_tabs: false,
         }
     }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorScheme {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 /// Interface scales the settings window steps through, in percent, like
@@ -280,6 +300,7 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
     }
     save(&app, &settings)?;
     crate::tabs::apply_settings(&app, &settings);
+    crate::appearance::apply_settings(&app, &settings);
     crate::presence::apply_settings(&app, &settings);
     *app.state::<Current>().0.lock().unwrap() = settings;
     Ok(())
