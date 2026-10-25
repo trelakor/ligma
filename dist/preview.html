@@ -30,6 +30,15 @@
     user-select: none;
     -webkit-font-smoothing: antialiased;
   }
+  /* On Windows the window is see-through and the page draws the card's
+     corners and shadow, with room for it all round (INSET). */
+  html.drawn, html.drawn body { background: transparent; }
+  html.drawn #card {
+    margin: 16px;
+    border-radius: 13px;
+    background: var(--bg);
+    box-shadow: 0 0 0 0.5px var(--border), 0 2px 5px rgba(0, 0, 0, 0.15), 0 6px 14px rgba(0, 0, 0, 0.2);
+  }
   #card {
     display: flex;
     flex-direction: column;
@@ -73,6 +82,9 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
+  const drawn = !navigator.userAgent.includes("Mac");
+  document.documentElement.classList.toggle("drawn", drawn);
+  const INSET = drawn ? 16 : 0;
 
   // Figma theme colors (see THEME_JS in tabs.rs) onto the variables.
   const THEME_VARS = {
@@ -120,7 +132,7 @@
       image.removeAttribute("src");
     }
     const { width, height } = $("card").getBoundingClientRect();
-    await invoke("tab_preview_ready", { seq: card.seq, width: Math.ceil(width), height: Math.ceil(height) });
+    await invoke("tab_preview_ready", { seq: card.seq, width: Math.ceil(width), height: Math.ceil(height), inset: INSET });
   };
 
   window.refresh();
