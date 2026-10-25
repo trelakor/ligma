@@ -65,6 +65,10 @@ pub struct Settings {
     pub discord_invites: bool,
     /// Reopen the last session's tabs on launch, asleep until selected.
     pub restore_tabs: bool,
+    /// Show development and saved plugins in the editor's left rail,
+    pub rail_plugins: bool,
+    /// and saved widgets.
+    pub rail_widgets: bool,
 }
 
 impl Default for Settings {
@@ -88,6 +92,8 @@ impl Default for Settings {
             discord_show_webpage: true,
             discord_invites: false,
             restore_tabs: false,
+            rail_plugins: true,
+            rail_widgets: true,
         }
     }
 }
@@ -114,6 +120,11 @@ pub fn scale(settings: &Settings) -> f64 {
 
 /// The settings in effect, for the settings window.
 pub struct Current(Mutex<Settings>);
+
+/// The settings in effect.
+pub fn current(app: &AppHandle) -> Settings {
+    app.state::<Current>().0.lock().unwrap().clone()
+}
 
 pub fn load(app: &AppHandle) -> Settings {
     let Ok(dir) = app.path().app_config_dir() else {
@@ -305,7 +316,16 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
     crate::tabs::apply_settings(&app, &settings);
     crate::appearance::apply_settings(&app, &settings);
     crate::presence::apply_settings(&app, &settings);
-    *app.state::<Current>().0.lock().unwrap() = settings;
+    let rail_changed = {
+        let current = app.state::<Current>();
+        let mut current = current.0.lock().unwrap();
+        let changed = (current.rail_plugins, current.rail_widgets) != (settings.rail_plugins, settings.rail_widgets);
+        *current = settings;
+        changed
+    };
+    if rail_changed {
+        crate::plugins::push(&app);
+    }
     Ok(())
 }
 

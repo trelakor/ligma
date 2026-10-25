@@ -207,17 +207,25 @@ fn page_list(app: &AppHandle) -> Value {
     Value::Array(plugins)
 }
 
-/// Sends the enabled plugins to Figma tab `webview`.
-pub fn push_to(webview: &Webview) {
-    let list = page_list(webview.app_handle());
-    let _ = webview.eval(format!("window.__ligmaDevPlugins?.set({list})"));
+/// The script sending `PAGE_JS` the enabled plugins and what the left rail
+/// shows.
+fn page_update(app: &AppHandle) -> String {
+    let list = page_list(app);
+    let settings = crate::settings::current(app);
+    let rail = serde_json::json!({ "plugins": settings.rail_plugins, "widgets": settings.rail_widgets });
+    format!("window.__ligmaDevPlugins?.set({list}, {rail})")
 }
 
-/// Sends the enabled plugins to every loaded Figma tab.
-fn push(app: &AppHandle) {
-    let list = page_list(app);
+/// Sends them to Figma tab `webview`.
+pub fn push_to(webview: &Webview) {
+    let _ = webview.eval(page_update(webview.app_handle()));
+}
+
+/// Sends them to every loaded Figma tab.
+pub fn push(app: &AppHandle) {
+    let script = page_update(app);
     for webview in crate::tabs::scriptable_tabs(app) {
-        let _ = webview.eval(format!("window.__ligmaDevPlugins?.set({list})"));
+        let _ = webview.eval(&script);
     }
 }
 
@@ -601,6 +609,8 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   let plugins = [];
+  // What the left rail shows, from Settings.
+  let railShows = { plugins: true, widgets: true };
   // The Development filter is on.
   let devOnly = false;
   // Figma's own filter: 0 All, 1 Plugins, 2 Widgets.
@@ -1303,8 +1313,8 @@ const PAGE_JS: &str = r##"(() => {
     // Not while a button is being dragged.
     if (dragging) return;
     const types = railTypes();
-    const dev = plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type)));
-    const saved = core ? savedPlugins(core, types) : [];
+    const dev = railShows.plugins ? plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type))) : [];
+    const saved = (core ? savedPlugins(core, types) : []).filter((plugin) => railShows[isWidget(plugin) ? "widgets" : "plugins"]);
     const state = JSON.stringify([dev, saved.map((plugin) => [plugin.plugin_id, plugin.name, plugin.redirect_icon_url, plugin.installed_by, plugin.current_plugin_version_id])]);
     const entries = [
       ...dev.map((plugin) => [`dev:${plugin.manifest}`, () => devRailButton(plugin)]),
@@ -1314,6 +1324,13 @@ const PAGE_JS: &str = r##"(() => {
     // (like newly saved plugins) first. Sorting keeps their own order.
     const order = railOrder();
     entries.sort(([a], [b]) => order.indexOf(a) - order.indexOf(b));
+    // Nothing to show (or all turned off in Settings): no rail, nor its
+    // separator.
+    if (!entries.length) {
+      rail?.remove();
+      railDrawn = "";
+      return;
+    }
     const keys = entries.map(([key]) => key);
     const shown = rail ? railButtons(rail).map((button) => button.dataset.ligmaKey) : [];
     if (rail?.previousElementSibling === top && state === railDrawn && JSON.stringify(shown) === JSON.stringify(keys)) return;
@@ -1328,7 +1345,7 @@ const PAGE_JS: &str = r##"(() => {
       button.dataset.ligmaKey = key;
       return button;
     });
-    rail.replaceChildren(...(buttons.length ? [Object.assign(el("div", RAIL.separator), { role: "separator" }), ...buttons] : []));
+    rail.replaceChildren(Object.assign(el("div", RAIL.separator), { role: "separator" }), ...buttons);
     if (rail.previousElementSibling !== top) top.after(rail);
   };
 
@@ -1484,8 +1501,9 @@ const PAGE_JS: &str = r##"(() => {
 
   Object.defineProperty(window, "__ligmaDevPlugins", {
     value: {
-      set(list) {
+      set(list, rail) {
         plugins = list;
+        if (rail) railShows = rail;
         drawn = "";
         schedule();
       },
