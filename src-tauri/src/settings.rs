@@ -81,6 +81,9 @@ pub struct Settings {
     /// Show each layer's preview in the layers panel in every mode, as in
     /// Draw mode. Figma renders them all, so off by default.
     pub layer_previews: bool,
+    /// Keep Figma's long-standing home page layout on accounts Figma is
+    /// trying a newer one on.
+    pub classic_home: bool,
 }
 
 impl Default for Settings {
@@ -110,6 +113,7 @@ impl Default for Settings {
             rail_widgets: true,
             actions_plugins_tab: false,
             layer_previews: false,
+            classic_home: false,
         }
     }
 }
@@ -340,6 +344,7 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
     crate::appearance::apply_settings(&app, &settings);
     crate::presence::apply_settings(&app, &settings);
     crate::layers::apply_settings(&app, &settings);
+    crate::home::apply_settings(&app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
