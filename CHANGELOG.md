@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.19.0 - 2026-10-25
+
+- Your plugins in the editor's left rail, under Figma's own buttons: development plugins, then every plugin saved to your Figma account, each with its icon. Click one to run it, or to pick from its commands if it has some.
+- Right-click a plugin there for its menu, like its … menu in Actions > Plugins & widgets: View details and Remove for saved plugins, Remove for development plugins.
+- Hold Ctrl and drag a plugin to move it. The order is kept for every file; newly saved plugins come first.
+
 ## 0.18.0 - 2026-10-25
 
 - Number fields in Settings scrub like Figma's: drag one right to raise its value or left to lower it, with Shift in steps of 10. Click without dragging to type in it as before.
