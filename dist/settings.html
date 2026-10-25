@@ -450,6 +450,12 @@
         </span>
         <input type="checkbox" class="switch" id="restore">
       </label>
+      <label class="row">
+        <span class="label">Preview tabs on hover
+          <div class="hint">Shows a tab's name and how it last looked when you point at it.</div>
+        </span>
+        <input type="checkbox" class="switch" id="previews">
+      </label>
     </section>
     <section>
       <h2>Memory</h2>
@@ -496,6 +502,12 @@
           <div class="hint">When off, Discord doesn't name the file.</div>
         </span>
         <input type="checkbox" class="switch" id="discord-file">
+      </label>
+      <label class="row nested deeper" id="discord-hide-files-row">
+        <span class="label">Hide files by default
+          <div class="hint">Every file shows as "Editing a file" until you choose Show File on Discord in its tab's menu. When off, every file shows until you choose Hide File on Discord.</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-hide-files">
       </label>
       <div class="row nested deeper" id="discord-where-row">
         <span class="label">Show where you are in the file
@@ -603,7 +615,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "layer-previews"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "layer-previews"];
   // Where you are in the file, per product: switch and setting.
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -764,10 +776,12 @@
     $("snapshots").checked = settings.reloadSnapshots;
     $("discord").checked = settings.discordRichPresence;
     $("discord-file").checked = settings.discordShowFile;
+    $("discord-hide-files").checked = settings.discordHideFilesByDefault;
     $("discord-tool").checked = settings.discordShowTool;
     $("discord-invites").checked = settings.discordInvites;
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
     $("restore").checked = settings.restoreTabs;
+    $("previews").checked = settings.tabPreviews;
     $("rail-plugins").checked = settings.railPlugins;
     $("rail-widgets").checked = settings.railWidgets;
     $("layer-previews").checked = settings.layerPreviews;
@@ -781,6 +795,7 @@
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
       // Where you are shows under the file's name, so not without it.
+      ["discord-hide-files-row", settings.discordRichPresence && settings.discordShowFile],
       ["discord-where-row", settings.discordRichPresence && settings.discordShowFile],
       ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence && settings.discordShowFile]),
     ]) {
@@ -813,10 +828,12 @@
       reloadSnapshots: $("snapshots").checked,
       discordRichPresence: $("discord").checked,
       discordShowFile: $("discord-file").checked,
+      discordHideFilesByDefault: $("discord-hide-files").checked,
       discordShowTool: $("discord-tool").checked,
       discordInvites: $("discord-invites").checked,
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
       restoreTabs: $("restore").checked,
+      tabPreviews: $("previews").checked,
       railPlugins: $("rail-plugins").checked,
       railWidgets: $("rail-widgets").checked,
       layerPreviews: $("layer-previews").checked,
