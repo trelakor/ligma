@@ -578,7 +578,8 @@ const RUNNER_JS: &str = r#"(spec, main) => {
 /// The editor's left rail gets a button under Figma's for each of these
 /// plugins and each plugin saved to the user's account. Clicking one runs
 /// it, or opens its commands; right-clicking opens its … menu: Remove, and
-/// for saved plugins View details. Saved plugins come from Figma's store and
+/// for saved plugins View details; Ctrl-dragging one moves it, and the
+/// order is kept. Saved plugins come from Figma's store and
 /// run, show their details and are removed through Figma's own code, found
 /// by text in its modules.
 const PAGE_JS: &str = r##"(() => {
@@ -675,6 +676,13 @@ const PAGE_JS: &str = r##"(() => {
     #ligma-rail > button { flex: none; }
     #ligma-rail .ligma-icon { width: 24px; height: 24px; margin: 0; }
     #ligma-rail button.ligma-open > div { background: var(--color-bg-hover, rgba(127, 127, 127, 0.15)); }
+    /* Icons grow a little under the pointer, and while picked up. */
+    #ligma-rail > button > div > * { transition: transform 120ms ease-out; }
+    #ligma-rail > button:hover > div > *, #ligma-rail > button.ligma-open > div > *, #ligma-rail > button.ligma-dragging > div > * { transform: scale(1.12); }
+    #ligma-rail > button.ligma-dragging { position: relative; z-index: 1; }
+    html.ligma-ctrl #ligma-rail > button { cursor: grab; }
+    html.ligma-rail-dragging, html.ligma-rail-dragging * { cursor: grabbing !important; }
+    @media (prefers-reduced-motion: reduce) { #ligma-rail > button > div > * { transition: none; } }
     .ligma-rail-image { display: block; width: 24px; height: 24px; border-radius: 6px; object-fit: cover; }
     html.ligma-hide-options [data-testid="extensionOptionsDropdown"] { opacity: 0 !important; pointer-events: none !important; }
   `;
@@ -1219,21 +1227,128 @@ const PAGE_JS: &str = r##"(() => {
         }
       });
     }
+    // Not while a button is being dragged.
+    if (dragging) return;
     const types = railTypes();
     const dev = plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type)));
     const saved = core ? savedPlugins(core, types) : [];
     const state = JSON.stringify([dev, saved.map((plugin) => [plugin.plugin_id, plugin.name, plugin.redirect_icon_url, plugin.installed_by, plugin.current_plugin_version_id])]);
-    if (rail?.previousElementSibling === top && state === railDrawn) return;
+    const entries = [
+      ...dev.map((plugin) => [`dev:${plugin.manifest}`, () => devRailButton(plugin)]),
+      ...saved.map((plugin) => [`saved:${plugin.plugin_id}`, () => savedRailButton(core, plugin)]),
+    ];
+    // In the order the user dragged them into, ones they haven't placed
+    // (like newly saved plugins) first. Sorting keeps their own order.
+    const order = railOrder();
+    entries.sort(([a], [b]) => order.indexOf(a) - order.indexOf(b));
+    const keys = entries.map(([key]) => key);
+    const shown = rail ? railButtons(rail).map((button) => button.dataset.ligmaKey) : [];
+    if (rail?.previousElementSibling === top && state === railDrawn && JSON.stringify(shown) === JSON.stringify(keys)) return;
     railDrawn = state;
     harvestRail(top);
     if (!rail) {
       rail = el("div");
       rail.id = "ligma-rail";
     }
-    const buttons = [...dev.map(devRailButton), ...saved.map((plugin) => savedRailButton(core, plugin))];
+    const buttons = entries.map(([key, make]) => {
+      const button = make();
+      button.dataset.ligmaKey = key;
+      return button;
+    });
     rail.replaceChildren(...(buttons.length ? [Object.assign(el("div", RAIL.separator), { role: "separator" }), ...buttons] : []));
     if (rail.previousElementSibling !== top) top.after(rail);
   };
+
+  // Ctrl-dragging a rail button moves it. The order is kept in figma.com's
+  // storage, for every file and tab; plugins not in this editor keep their
+  // places after the ones in it.
+  const ORDER_KEY = "ligma-rail-order";
+  const railOrder = () => {
+    try {
+      const order = JSON.parse(localStorage.getItem(ORDER_KEY));
+      return Array.isArray(order) ? order : [];
+    } catch {
+      return [];
+    }
+  };
+  const railButtons = (rail) => [...rail.querySelectorAll(":scope > button")];
+  addEventListener("storage", (e) => {
+    if (e.key === ORDER_KEY) schedule();
+  });
+  const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let dragging = null;
+  let swallowClick = false;
+  addEventListener("pointerdown", (e) => {
+    swallowClick = false;
+    const button = e.target.closest?.("#ligma-rail > button");
+    if (!button || !e.ctrlKey || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenu();
+    dragging = { button, pointer: e.pointerId, startY: e.clientY, startTop: button.offsetTop, moved: false };
+    try {
+      button.setPointerCapture(e.pointerId);
+    } catch {}
+  }, true);
+  addEventListener("pointermove", (e) => {
+    if (dragging?.pointer !== e.pointerId) return;
+    const { button } = dragging;
+    if (!dragging.moved) {
+      if (Math.abs(e.clientY - dragging.startY) < 3) return;
+      dragging.moved = true;
+      button.classList.add("ligma-dragging");
+      document.documentElement.classList.add("ligma-rail-dragging");
+    }
+    // Its place: after every other button whose middle it's past.
+    const rail = button.parentElement;
+    const others = railButtons(rail).filter((other) => other !== button);
+    const index = others.filter((other) => {
+      const at = other.getBoundingClientRect();
+      return e.clientY > at.top + at.height / 2;
+    }).length;
+    if (railButtons(rail).indexOf(button) !== index) {
+      // The others slide into their new places.
+      const before = new Map(others.map((other) => [other, other.getBoundingClientRect().top]));
+      if (others[index]) rail.insertBefore(button, others[index]);
+      else rail.append(button);
+      if (!still()) {
+        for (const [other, top] of before) {
+          const by = top - other.getBoundingClientRect().top;
+          if (by) other.animate([{ transform: `translateY(${by}px)` }, { transform: "none" }], { duration: 150, easing: "ease-out" });
+        }
+      }
+    }
+    // It follows the pointer, from wherever its place now is.
+    button.style.transform = `translateY(${e.clientY - dragging.startY - (button.offsetTop - dragging.startTop)}px)`;
+  }, true);
+  const drop = (e) => {
+    if (dragging?.pointer !== e.pointerId) return;
+    const { button, moved } = dragging;
+    dragging = null;
+    if (!moved) return;
+    // Not a click on the button too.
+    swallowClick = true;
+    button.classList.remove("ligma-dragging");
+    document.documentElement.classList.remove("ligma-rail-dragging");
+    const offset = button.style.transform;
+    button.style.transform = "";
+    if (!still()) button.animate([{ transform: offset }, { transform: "none" }], { duration: 150, easing: "ease-out" });
+    const placed = railButtons(button.parentElement).map((other) => other.dataset.ligmaKey);
+    localStorage.setItem(ORDER_KEY, JSON.stringify([...placed, ...railOrder().filter((key) => !placed.includes(key))]));
+  };
+  addEventListener("pointerup", drop, true);
+  addEventListener("pointercancel", drop, true);
+  addEventListener("click", (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+  // With Ctrl held, the buttons show they can be picked up.
+  const ctrl = (e) => document.documentElement.classList.toggle("ligma-ctrl", e.ctrlKey);
+  addEventListener("keydown", ctrl, true);
+  addEventListener("keyup", ctrl, true);
+  addEventListener("blur", () => document.documentElement.classList.remove("ligma-ctrl"));
 
   let drawn = "";
   const render = () => {
