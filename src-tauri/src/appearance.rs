@@ -216,8 +216,14 @@ const PAGE_JS: &str = r##"(() => {
     const own = (rules) => rules.filter((rule) => rule.mode === mode).map((rule) => rule.css);
     return [`${theme}, :where(${theme}) [data-editor-theme] { ${vars.join(" ")} }`, ...own(brandRules), ...own(canvasRules)].join("\n");
   };
+  // At an interface scale that puts the panels' edges between device
+  // pixels, the editor's canvas and the panels beside it round to them
+  // differently, leaving a pixel-wide gap at a panel's edge. Behind it is
+  // the canvas's own black background or, past it, the transparent page
+  // and the webview's white or black. Both take the panels' color.
+  const SEAM = "body:has(.gpu-view-content), .gpu-view-content, .gpu-view-content > canvas { background-color: var(--color-bg) !important; }";
   const render = () => {
-    if (current) style.textContent = [css("light", current.light), css("dark", current.dark), ...menuRules].join("\n");
+    if (current) style.textContent = [css("light", current.light), css("dark", current.dark), ...menuRules, SEAM].join("\n");
   };
 
   const apply = (page) => {
