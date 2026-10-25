@@ -15,6 +15,7 @@ How Ligma behaves, in detail. For the short version, see the [README](../README.
 ## Browsing
 
 - Links inside `figma.com` stay in the app. All other web links open in the default browser.
+- The Figma logo's menu in the editor leaves out Back to files (Home has its own tab) and Open in desktop app.
 - Window size and position are saved between launches.
 - Drag-and-drop goes to Figma, so you can drop images and files onto the canvas.
 - On macOS, the app sends a Safari user agent so Figma treats the webview as a supported browser.
@@ -60,6 +61,7 @@ Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimiz
 - Right-click one there for its menu, like its … menu in Actions > Plugins & widgets: View details and Remove for saved plugins and widgets, Remove for development plugins.
 - Settings > Plugins > Left rail shows or hides plugins (`"railPlugins"`) and widgets (`"railWidgets"`). With both off, the rail and its separator are gone.
 - Hold Ctrl and drag a plugin to move it. The order is kept for every file; newly saved plugins come first.
+- Settings > Plugins > Actions menu > Open on Plugins & widgets (`"actionsPluginsTab"`, off by default) opens Figma's Actions menu on that tab rather than All.
 
 ## Development plugins
 

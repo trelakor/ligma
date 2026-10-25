@@ -582,6 +582,15 @@
       </label>
     </section>
     <section>
+      <h2>Actions menu</h2>
+      <label class="row">
+        <span class="label">Open on Plugins &amp; widgets
+          <div class="hint">Figma's Actions menu opens on its Plugins &amp; widgets tab rather than All.</div>
+        </span>
+        <input type="checkbox" class="switch" id="actions-plugins-tab">
+      </label>
+    </section>
+    <section>
       <h2>Development</h2>
       <div class="row">
         <span class="label">Import plugin from manifest
@@ -624,7 +633,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "layer-previews", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "classic-home"];
   // Where you are in the file, per product: switch and setting.
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -793,6 +802,7 @@
     $("previews").checked = settings.tabPreviews;
     $("rail-plugins").checked = settings.railPlugins;
     $("rail-widgets").checked = settings.railWidgets;
+    $("actions-plugins-tab").checked = settings.actionsPluginsTab;
     $("layer-previews").checked = settings.layerPreviews;
     $("classic-home").checked = settings.classicHome;
     // Without sleep nothing is unloaded, so the other memory options do nothing.
@@ -846,6 +856,7 @@
       tabPreviews: $("previews").checked,
       railPlugins: $("rail-plugins").checked,
       railWidgets: $("rail-widgets").checked,
+      actionsPluginsTab: $("actions-plugins-tab").checked,
       layerPreviews: $("layer-previews").checked,
       classicHome: $("classic-home").checked,
       ...changes,
