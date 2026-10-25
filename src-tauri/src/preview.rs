@@ -36,7 +36,8 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 /// Opens the card of tab `tab`, whose left edge is `left` CSS pixels into
 /// the tab bar.
 fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
-    if !crate::tabs::can_preview(app, tab) {
+    // Not over a tab's menu.
+    if !crate::tabs::can_preview(app, tab) || crate::tab_menu::is_open() {
         hide(app);
         return Ok(());
     }
