@@ -12,13 +12,10 @@
 //! building them as in Draw mode, in every mode. Tools and the right
 //! sidebar stay the mode's own.
 //!
-//! Figma's modules export through getters that can't be redefined once
-//! loaded, so `PAGE_JS` wraps the four modules' factories as their chunks
-//! arrive. That means reading every module's source as it loads (about
-//! 60 ms over a file's load), so it only does that in pages loaded with
-//! the setting on. Turning it off applies right away. Turning it on in a
-//! file already open reloads it, when its tab is shown and its edits have
-//! been saved.
+//! `PAGE_JS` wraps the four modules as they load (see `modules.rs`), so
+//! only in pages loaded with the setting on. Turning it off applies right
+//! away. Turning it on in a file already open reloads it, when its tab is
+//! shown and its edits have been saved.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +28,7 @@ use crate::settings::Settings;
 /// setting when the tab was made. A page loaded later in the same tab may
 /// find a newer one in `localStorage`; the higher `rev` wins.
 const PAGE_JS: &str = r##"(() => {
-  if (location.hostname !== "www.figma.com" || window.top !== window) return;
+  if (location.hostname !== "www.figma.com" || window.top !== window || !window.__ligmaModules) return;
   const KEY = "ligma-layer-previews";
   let state = __LIGMA_LAYER_PREVIEWS__;
   try {
@@ -57,51 +54,20 @@ const PAGE_JS: &str = r##"(() => {
     panel: (source) => source.includes('label:"ObjectsPanel"'),
   };
 
-  // Wraps them as they arrive (see the top).
+  // Wraps them as they arrive (see the top and `modules.rs`).
   let patched = false;
   const install = () => {
     patched = true;
-    let React = null;
     // Draw mode's layers panel look, and the context Figma passes it in.
     let looks = null;
     // Only the parts that make previews: Draw mode also focuses the layers
     // panel on the selection and doesn't bold names, which stay the mode's.
     const PREVIEW_KEYS = ["topLevelObjectRowHeight", "nestedObjectRowHeight", "rowSelectionGap", "insertionLineBoxOffset", "showVisualLayerIcons", "topLevelIconSize", "nestedIconSize"];
 
-    // React, from what a module imports: the module `x` whose `x.useState`
-    // and the like it calls.
-    const findReact = (source, require) => {
-      for (const [, name, id] of source.matchAll(/([\w$]+)=[\w$]+\((\d+)\)/g)) {
-        const escaped = name.replace(/\$/g, "\\$");
-        if (!new RegExp(`[^\\w$]${escaped}\\.use(State|Effect|Context|Memo|Callback|Ref)\\b`).test(source)) continue;
-        try {
-          const exports = require(id);
-          if (exports?.useSyncExternalStore && exports.forwardRef && exports.createElement) return exports;
-        } catch {}
-      }
-      return null;
-    };
-
-    // An export getter that hands out `wrap(value)` instead, made when the
-    // value is first read: modules may export a `let` declared after the
-    // getters.
-    const wrapGetter = (get, wrap) => {
-      let from;
-      let to;
-      return () => {
-        const value = get();
-        if (value !== from) {
-          from = value;
-          to = wrap(value);
-        }
-        return to;
-      };
-    };
-
     // A hook among a module's exports, `pattern` its source, that says false
     // instead while on. Figma's is called every time, so hooks keep their
     // order.
-    const falseWhileOn = (pattern) => (value) => {
+    const falseWhileOn = (pattern) => (value, React) => {
       if (typeof value !== "function" || !React || !pattern.test(String(value))) return value;
       return function () {
         const figma = value.apply(this, arguments);
@@ -109,8 +75,7 @@ const PAGE_JS: &str = r##"(() => {
       };
     };
 
-    // What to do with each of `MODULES`.
-    const PATCHES = [
+    window.__ligmaModules.patch([
       {
         // Picks Figma's newer layers panel, which has no previews, in Design
         // mode: `function m(){return!0===x()}` among its exports.
@@ -138,7 +103,7 @@ const PAGE_JS: &str = r##"(() => {
       {
         // The layers panel: provides Draw mode's look while on.
         match: MODULES.panel,
-        getter: (Panel) => {
+        getter: (Panel, React) => {
           if (!Panel?.$$typeof || !React || !looks) return Panel;
           const { context, draw } = looks;
           const Previews = React.forwardRef((props, ref) => {
@@ -156,79 +121,12 @@ const PAGE_JS: &str = r##"(() => {
           return Previews;
         },
       },
-    ];
-    let remaining = PATCHES.length;
-
-    const wrapFactory = (factory, patch, source) =>
-      function (module, exports, require) {
-        React ??= findReact(source, require);
-        const proxied = patch.getter
-          ? new Proxy(require, {
-              get: (target, key) =>
-                key === "d"
-                  ? (exports, getters, values) => {
-                      const wrapped = {};
-                      for (const name of Object.keys(getters ?? {})) wrapped[name] = wrapGetter(getters[name], patch.getter);
-                      return target.d(exports, wrapped, values);
-                    }
-                  : target[key],
-            })
-          : require;
-        const result = factory.call(this, module, exports, proxied);
-        try {
-          patch.loaded?.(module.exports);
-        } catch {}
-        return result;
-      };
-
-    const patchChunk = (chunk) => {
-      const modules = Array.isArray(chunk) ? chunk[1] : null;
-      if (!remaining || !modules || typeof modules !== "object") return;
-      for (const id of Object.keys(modules)) {
-        const factory = modules[id];
-        if (typeof factory !== "function") continue;
-        const source = Function.prototype.toString.call(factory);
-        const patch = PATCHES.find((patch) => !patch.done && patch.match(source));
-        if (!patch) continue;
-        patch.done = true;
-        remaining--;
-        modules[id] = wrapFactory(factory, patch, source);
-        if (!remaining) return;
-      }
-    };
-
-    // Figma's chunks arrive through `push` on this array: Array's own until
-    // the bundler's runtime loads and sets its own (if it hasn't already).
-    // Each push goes through `patchChunk` first.
-    const GLOBAL = "rspackChunk_figma_web_bundler";
-    const chunks = (window[GLOBAL] ??= []);
-    let push = chunks.push;
-    Object.defineProperty(chunks, "push", {
-      configurable: true,
-      get: () => {
-        const target = push;
-        return function (...items) {
-          for (const item of items) patchChunk(item);
-          return target.apply(this, items);
-        };
-      },
-      set: (value) => {
-        push = value;
-      },
-    });
+    ]);
   };
 
   // Some of the modules `install` wraps have arrived, so it's too late to
   // wrap them all.
-  const figmaLoaded = () =>
-    (window.rspackChunk_figma_web_bundler ?? []).some((chunk) => {
-      const modules = Array.isArray(chunk) ? chunk[1] : null;
-      return Object.values((modules && typeof modules === "object" && modules) || {}).some((factory) => {
-        if (typeof factory !== "function") return false;
-        const source = Function.prototype.toString.call(factory);
-        return Object.values(MODULES).some((match) => match(source));
-      });
-    });
+  const figmaLoaded = () => Object.values(MODULES).some((match) => window.__ligmaModules.arrived(match));
 
   // Turned on after the panel loaded without previews: reload, once the
   // tab is shown and Figma has no edits still saving.
