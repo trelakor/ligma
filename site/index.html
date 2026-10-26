@@ -13,206 +13,867 @@
 <meta property="og:url" content="https://trelakor.github.io/ligma/">
 <meta property="og:image" content="https://trelakor.github.io/ligma/logo.png">
 <meta name="twitter:card" content="summary">
+<link rel="preload" href="fonts/funnel-display.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+<script>
+  // Light or dark before first paint; the themes below can change it.
+  document.documentElement.className = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+</script>
 <style>
+  @font-face { font-family: "Funnel Display"; src: url(fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; font-display: swap; }
+  @font-face { font-family: "Inter"; src: url(fonts/inter.woff2) format("woff2"); font-weight: 400 700; font-display: swap; }
+
+  /* Figma's ramps (dist/themes.js), as Figma ships them. A theme swaps
+     them for its own (`applyTheme` below). */
   :root {
-    --bg: #ffffff; --fg: #1e1e1e; --muted: #5f5f5f; --line: #e6e6e6; --card: #f7f7f7;
-    --green: #00cc66; --red: #ff0029; --purple: #914fff; --blue: #00b9ff;
-    color-scheme: light dark;
+    --white: #ffffff;
+    --g-100: #f5f5f5; --g-200: #e6e6e6; --g-300: #d9d9d9; --g-400: #b3b3b3; --g-500: #757575;
+    --g-600: #444444; --g-700: #383838; --g-800: #2c2c2c; --g-900: #1e1e1e; --g-1000: #111111;
+    --a-200: #e5f4ff; --a-300: #bde3ff; --a-500: #0d99ff; --a-700: #0768cf; --a-800: #034ac1; --a-1000: #0d193f;
+    --display: "Funnel Display", "Inter", ui-sans-serif, system-ui, sans-serif;
+    --text: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --wrap: 1240px;
+    --gutter: clamp(16px, 4vw, 40px);
+    --ease: cubic-bezier(0.2, 0.9, 0.3, 1);
   }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #161616; --fg: #f2f2f2; --muted: #a3a3a3; --line: #2c2c2c; --card: #1f1f1f; }
+  :root.dark { --a-200: #cfe9fc; --a-300: #a8d7fa; --a-500: #0c8ce9; --a-700: #105cad; --a-800: #184591; --a-1000: #161e36; }
+
+  /* What each color does, in light and in dark. */
+  :root.light {
+    color-scheme: light;
+    --bg: var(--white); --surface: var(--g-100); --line: var(--g-200); --line-strong: var(--g-300);
+    --ink: var(--g-900); --ink-2: var(--g-600); --ink-3: var(--g-500);
+    --field: var(--a-500); --field-ink: var(--a-1000);
+    --link: var(--a-700); --select: var(--a-200); --input: var(--g-100);
+    --weight: var(--g-100); --weight-rule: var(--g-200); --weight-ink: var(--g-500);
+    --tb-bar: var(--g-100); --tb-active: var(--white); --tb-text: var(--g-500); --tb-text-active: var(--g-900); --tb-divider: var(--g-200);
+    --panel: var(--white); --canvas: var(--g-100);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 12px 32px -8px rgb(0 0 0 / 0.22);
   }
+  :root.dark {
+    color-scheme: dark;
+    --bg: var(--g-900); --surface: var(--g-800); --line: var(--g-700); --line-strong: var(--g-600);
+    --ink: #ffffff; --ink-2: var(--g-400); --ink-3: var(--g-500);
+    --field: var(--a-500); --field-ink: color-mix(in oklab, var(--a-1000), #000 40%);
+    --link: var(--a-300); --select: var(--a-800); --input: var(--g-700);
+    --weight: var(--g-800); --weight-rule: var(--g-700); --weight-ink: var(--g-500);
+    --tb-bar: var(--g-700); --tb-active: var(--g-800); --tb-text: var(--g-400); --tb-text-active: #ffffff; --tb-divider: var(--g-600);
+    --panel: var(--g-800); --canvas: var(--g-900);
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 40px -8px rgb(0 0 0 / 0.55);
+  }
+
   * { box-sizing: border-box; }
+  html { background: var(--bg); scroll-behavior: smooth; scroll-padding-top: 24px; }
   body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0; color: var(--ink); background: var(--bg);
+    font: 400 17px/1.6 var(--text); font-feature-settings: "cv11", "calt";
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
   }
-  a { color: inherit; }
-  code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 0.1em 0.35em; overflow-wrap: anywhere; }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
-  nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
-  nav .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; text-decoration: none; }
-  nav .brand img { width: 28px; height: 28px; }
-  nav .links { display: flex; gap: 20px; font-size: 15px; }
-  nav .links a { color: var(--muted); text-decoration: none; }
-  nav .links a:hover { color: var(--fg); }
+  ::selection { background: var(--field); color: var(--field-ink); }
+  a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 0.2em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 2px solid var(--field); outline-offset: 3px; border-radius: 4px; }
+  img { display: block; }
+  h1, h2, h3 { font-family: var(--display); font-weight: 650; margin: 0; text-wrap: balance; }
+  h2 { font-size: clamp(2.25rem, 5vw, 4rem); line-height: 1; letter-spacing: -0.035em; }
+  h3 { font-size: 1.625rem; line-height: 1.15; letter-spacing: -0.02em; }
+  p { margin: 0; text-wrap: pretty; }
+  code {
+    font: 0.86em/1.5 var(--mono); padding: 0.15em 0.4em; border-radius: 5px;
+    background: var(--surface); border: 1px solid var(--line); overflow-wrap: anywhere;
+  }
+  .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 var(--gutter); }
+  .icon { flex: none; width: 1em; height: 1em; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-  .hero { text-align: center; padding: 64px 0 48px; }
-  .hero img { width: 112px; height: 112px; }
-  .hero h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.1; margin: 16px 0 12px; letter-spacing: -0.02em; }
-  .hero p { font-size: 19px; color: var(--muted); max-width: 560px; margin: 0 auto 32px; }
-  .buttons { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+  /* Buttons */
   .btn {
-    display: inline-flex; align-items: center; gap: 8px; padding: 12px 22px; border-radius: 10px;
-    font-weight: 600; text-decoration: none; border: 1px solid var(--line); background: var(--card);
+    display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 24px;
+    border-radius: 12px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink);
+    font: 600 16px/1 var(--text); text-decoration: none; white-space: nowrap; cursor: pointer;
+    transition: background-color 160ms var(--ease), transform 160ms var(--ease), border-color 160ms var(--ease);
   }
-  .btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-  .btn:hover { opacity: 0.88; }
-  .meta { margin-top: 14px; font-size: 14px; color: var(--muted); }
+  .btn:hover { background: var(--surface); text-decoration: none; }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .btn.primary:hover { background: color-mix(in oklab, var(--ink) 86%, var(--bg)); }
+  .btn .icon { width: 18px; height: 18px; }
+  .btn small { font-weight: 450; opacity: 0.75; font-size: 14px; }
 
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0 72px; }
-  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; text-align: center; }
-  .stat b { display: block; font-size: 30px; letter-spacing: -0.02em; }
-  .stat span { color: var(--muted); font-size: 14px; }
+  /* Nav */
+  nav { display: flex; align-items: center; justify-content: space-between; gap: 24px; height: 80px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font: 650 21px/1 var(--display); letter-spacing: -0.02em; }
+  .brand img { width: 30px; height: 30px; }
+  nav ul { display: flex; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  nav ul a { display: block; padding: 8px 12px; border-radius: 8px; color: var(--ink-2); text-decoration: none; font-size: 15px; font-weight: 500; }
+  nav ul a:hover { color: var(--ink); background: var(--surface); }
+  nav .btn { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 10px; margin-left: 8px; }
 
-  h2 { font-size: 30px; letter-spacing: -0.01em; margin: 0 0 8px; }
-  .lead { color: var(--muted); margin: 0 0 28px; }
-  section { margin-bottom: 80px; }
+  /* Hero: the headline, the download, and both apps drawn to scale. */
+  .hero { padding: clamp(32px, 6vw, 72px) 0 0; }
+  .masthead { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 32px 48px; align-items: end; }
+  .hero h1 { font-size: clamp(3.25rem, 8.4vw, 6rem); line-height: 0.92; letter-spacing: -0.04em; font-weight: 700; }
+  .pitch p { font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 30em; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  .meta { margin-top: 12px; font-size: 14px; color: var(--ink-2); }
 
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
-  .card h3 { margin: 0 0 6px; font-size: 17px; display: flex; align-items: center; gap: 10px; }
-  .card h3::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--dot); flex: none; }
-  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .weight {
+    position: relative; margin: clamp(40px, 6vw, 64px) 0 0; aspect-ratio: 1240 / 420; min-height: 280px;
+    border-radius: 20px; overflow: hidden; container-type: inline-size;
+    background:
+      linear-gradient(to right, var(--weight-rule) 1px, transparent 1px) 0 0 / 10% 100%,
+      linear-gradient(to bottom, var(--weight-rule) 1px, transparent 1px) 0 0 / 100% 10%,
+      var(--weight);
+  }
+  .weight .them { position: absolute; top: clamp(16px, 2.6cqw, 32px); left: clamp(16px, 2.6cqw, 32px); right: clamp(16px, 2.6cqw, 32px); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .weight .them span { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+  .weight .them b { font: 700 clamp(3.5rem, 12cqw, 9.5rem)/0.8 var(--display); letter-spacing: -0.05em; color: var(--weight-ink); font-variant-numeric: tabular-nums; }
+  /* 16 MB of 305 MB, by area: each side at sqrt(16 / 305). */
+  .weight .us { position: absolute; left: 0; bottom: 0; width: 22.9%; height: 22.9%; background: var(--field); border-top-right-radius: 12px; }
+  .weight .us-label { position: absolute; left: calc(22.9% + 16px); bottom: 14px; display: flex; align-items: baseline; gap: 12px; }
+  .weight .us-label b { font: 700 clamp(2rem, 4.6cqw, 3.5rem)/1 var(--display); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  .weight .us-label span { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+  .caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 24px; margin-top: 12px; font-size: 14px; color: var(--ink-2); }
 
-  .swatches { display: flex; flex-wrap: wrap; gap: 14px; }
-  .swatch { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
-  .swatch i { width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--line); }
+  section { padding-top: clamp(96px, 12vw, 160px); }
+  .head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr); gap: 16px 48px; align-items: end; margin-bottom: clamp(40px, 5vw, 64px); }
+  .head p { color: var(--ink-2); font-size: 18px; max-width: 34em; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 15px; }
-  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 500; }
-  td:first-child { font-weight: 600; }
+  /* Feature spreads: a swatch chip with the feature drawn in it, beside
+     what it does. */
+  .spread { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 32px clamp(32px, 5vw, 72px); align-items: center; }
+  .spread + .spread { margin-top: clamp(64px, 8vw, 112px); }
+  .spread.flip { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+  .spread.flip .chip { order: 2; }
+  .spread h3 { display: flex; align-items: center; gap: 12px; font-size: clamp(1.75rem, 3vw, 2.5rem); letter-spacing: -0.03em; }
+  .spread h3 .icon { width: 28px; height: 28px; color: var(--field); }
+  .spread p { margin-top: 16px; color: var(--ink-2); font-size: 18px; }
+  .spread ul { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .spread li { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; color: var(--ink-2); }
+  .spread li b { color: var(--ink); font-weight: 600; }
 
-  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-  .steps .card p + p { margin-top: 8px; }
+  .chip { border-radius: 20px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
+  .chip .field { position: relative; aspect-ratio: 4 / 3; background: var(--field); container-type: inline-size; overflow: hidden; }
+  .chip .strip { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; padding: 14px 20px 16px; }
+  .chip .strip b { font: 650 17px/1.2 var(--display); letter-spacing: -0.01em; }
+  .chip .strip code { background: none; border: 0; padding: 0; color: var(--ink-2); font-size: 13px; white-space: nowrap; }
+  /* Drawings scale with their chip: 1em is a hundredth of its width at 640px wide. */
+  .art { position: absolute; inset: 0; font-size: 1.5625cqw; font-family: var(--text); line-height: 1.3; }
 
-  footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; }
-  footer a { color: var(--muted); }
+  /* Tabs drawing */
+  .window { position: absolute; left: 6em; right: -4em; top: 9em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
+  .tabbar { display: flex; height: 3.8em; background: var(--tb-bar); color: var(--tb-text); font-size: 1.2em; font-weight: 500; }
+  .tabbar > div { position: relative; display: flex; align-items: center; gap: 0.66em; flex: none; padding: 0 0.66em 0 1em; }
+  .tabbar > div::after { content: ""; position: absolute; right: 0; top: 0.9em; bottom: 0.9em; width: 1px; background: var(--tb-divider); }
+  .tabbar .sq { width: 3.17em; padding: 0; justify-content: center; }
+  .tabbar .on { background: var(--tb-active); color: var(--tb-text-active); }
+  .tabbar .on::after, .tabbar .pre::after { display: none; }
+  .tabbar .hover { background: color-mix(in oklab, var(--tb-bar) 88%, var(--tb-text)); }
+  .tabbar .sleep .glyph, .tabbar .sleep span { opacity: 0.5; }
+  .tabbar .glyph { width: 1.33em; height: 1.33em; }
+  .tabbar .emoji { font-size: 1.15em; line-height: 1; }
+  .tabbar .x { width: 1em; height: 1em; opacity: 0.7; }
+  .editor { display: grid; grid-template-columns: 22em 1fr; height: calc(100% - 4.56em); }
+  .editor .side { background: var(--panel); border-right: 1px solid var(--line); padding: 1.6em 1.4em; display: flex; flex-direction: column; gap: 1em; }
+  .bar { height: 0.8em; border-radius: 0.4em; background: var(--line); }
+  .bar.short { width: 60%; }
+  .bar.picked { background: var(--select); }
+  .tabpreview {
+    position: absolute; top: 12.8em; left: 33em; width: 24em; padding: 0.8em 0.8em 1em; border-radius: 1.3em;
+    background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink);
+  }
+  .tabpreview .shot { aspect-ratio: 16 / 9; border-radius: 0.6em; background: #1f1d2b; position: relative; overflow: hidden; }
+  .tabpreview .shot i { position: absolute; display: block; border-radius: 0.3em; }
+  .tabpreview b { display: block; margin: 0.7em 0.4em 0; font-size: 1.3em; font-weight: 600; }
+  .tabpreview span { display: block; margin: 0 0.4em; font-size: 1.1em; color: var(--ink-2); }
 
+  /* Left rail drawing */
+  .ui { position: absolute; left: 7em; top: 7em; right: -4em; bottom: -4em; display: grid; grid-template-columns: 6em 24em 1fr; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
+  .rail { display: flex; flex-direction: column; align-items: center; gap: 0.9em; padding: 1.4em 0; background: var(--panel); border-right: 1px solid var(--line); color: var(--ink-2); }
+  .rail .tool { display: grid; place-items: center; width: 3.6em; height: 3.6em; border-radius: 0.8em; }
+  .rail .tool.on { background: var(--surface); color: var(--ink); }
+  .rail .tool svg { width: 2em; height: 2em; }
+  .rail hr { width: 2.8em; border: 0; border-top: 1px solid var(--line); margin: 0.3em 0; }
+  .rail .plug { display: grid; place-items: center; width: 3.2em; height: 3.2em; border-radius: 0.8em; color: #fff; transition: transform 200ms var(--ease); }
+  .rail .plug svg { width: 1.8em; height: 1.8em; }
+  .rail .plug.big { transform: scale(1.18); box-shadow: 0 0.3em 0.9em rgb(0 0 0 / 0.25); }
+  .layers { background: var(--panel); border-right: 1px solid var(--line); padding: 1.6em 1.4em; display: flex; flex-direction: column; gap: 0.6em; }
+  .layers .file { font-size: 1.3em; font-weight: 600; color: var(--ink); }
+  .layers .sub { font-size: 1.1em; color: var(--ink-2); margin-bottom: 1em; }
+  .layers .row { display: flex; align-items: center; gap: 0.8em; height: 2.6em; padding: 0 0.6em; border-radius: 0.5em; font-size: 1.1em; color: var(--ink-2); }
+  .layers .row svg { width: 1.3em; height: 1.3em; }
+  .layers .row.on { background: var(--select); color: var(--ink); }
+  .tip { position: absolute; left: 13.6em; top: 23.3em; padding: 0.6em 1em; border-radius: 0.6em; background: #1e1e1e; color: #fff; font-size: 1.2em; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow); }
+  .tip::before { content: ""; position: absolute; left: -0.4em; top: 50%; width: 0.8em; height: 0.8em; background: inherit; transform: translateY(-50%) rotate(45deg); border-radius: 0.1em; }
+
+  /* Discord drawing (Discord's own dark colors) */
+  .profile { position: absolute; left: 50%; top: 7em; width: 40em; transform: translateX(-50%); border-radius: 1.6em; overflow: hidden; background: #232428; color: #f2f3f5; box-shadow: 0 2em 4em -1em rgb(0 0 0 / 0.45); }
+  .profile .banner { height: 7em; background: var(--field-ink); }
+  .profile .who { position: relative; padding: 0 2em; }
+  .profile .avatar { position: absolute; top: -4em; width: 8em; height: 8em; border-radius: 50%; border: 0.6em solid #232428; background: #f0b232; display: grid; place-items: center; color: #3a2a06; }
+  .profile .avatar span { font: 700 3.2em/1 var(--display); }
+  .profile .avatar::after { content: ""; position: absolute; right: -0.3em; bottom: -0.3em; width: 2.4em; height: 2.4em; border-radius: 50%; background: #23a55a; border: 0.5em solid #232428; }
+  .profile .name { padding-top: 2.4em; font-size: 2em; font-weight: 700; line-height: 1.2; }
+  .profile .handle { font-size: 1.3em; color: #b5bac1; }
+  .activity { margin: 1.6em 1.6em 1.8em; padding: 1.4em; border-radius: 1em; background: #111214; }
+  .activity .label { font-size: 1.1em; font-weight: 700; color: #b5bac1; }
+  .activity .card { display: flex; gap: 1.4em; margin-top: 1em; }
+  .activity .large { position: relative; flex: none; width: 7.2em; height: 7.2em; }
+  .activity .large img { width: 100%; height: 100%; border-radius: 0.8em; background: #fff; }
+  .activity .small { position: absolute; right: -0.6em; bottom: -0.6em; display: grid; place-items: center; width: 2.8em; height: 2.8em; border-radius: 50%; background: #0d99ff; color: #fff; border: 0.3em solid #111214; }
+  .activity .small svg { width: 1.5em; height: 1.5em; }
+  .activity .lines { font-size: 1.3em; line-height: 1.45; color: #dbdee1; min-width: 0; }
+  .activity .lines b { display: block; color: #f2f3f5; }
+  .activity .lines span { display: block; color: #b5bac1; }
+  .activity .join { display: grid; place-items: center; height: 3.2em; margin-top: 1.2em; border-radius: 0.6em; background: #4e5058; font-size: 1.2em; font-weight: 600; }
+
+  /* The rest, as an index */
+  .index { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 48px); margin-top: clamp(80px, 10vw, 128px); border-top: 2px solid var(--ink); }
+  .index > div { padding: 24px 0 32px; border-bottom: 1px solid var(--line); }
+  .index h3 { display: flex; align-items: center; gap: 10px; font-size: 1.375rem; }
+  .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
+  .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
+
+  /* Themes: the fan deck. Each chip is a theme's accent, its name and
+     hue, and the app's two swatches, light and dark, to click. */
+  .deck { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 10px; }
+  .theme { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
+  .theme.picked { transform: translateY(-10px); box-shadow: 0 0 0 2px var(--ink), var(--shadow); }
+  .theme .swatch { display: flex; flex-direction: column; justify-content: flex-end; aspect-ratio: 1 / 1.15; padding: 10px 12px; background: var(--chip); color: var(--chip-ink); }
+  .theme .swatch b { font: 650 17px/1.1 var(--display); letter-spacing: -0.01em; }
+  .theme .swatch span { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .dark .theme .swatch { color: color-mix(in oklab, var(--chip-ink), #000 40%); }
+  .orbs { display: flex; justify-content: center; gap: 10px; padding: 14px 6px; }
+  /* As in the settings window (dist/settings.html): ligmaMesh's blobs,
+     blurred together, drifting while hovered. */
+  .orb {
+    position: relative; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%;
+    background: none; cursor: pointer; box-shadow: 0 0 0 1px rgb(127 127 127 / 0.25);
+    transition: transform 160ms var(--ease), box-shadow 120ms ease-out;
+  }
+  .orb .mesh { position: absolute; inset: 0; overflow: hidden; border-radius: 50%; isolation: isolate; }
+  .orb .mesh::before {
+    content: ""; position: absolute; inset: -18%; background: var(--orb);
+    filter: blur(5px) saturate(1.2); animation: drift 4s ease-in-out infinite alternate paused;
+  }
+  .orb:hover { transform: scale(1.1); }
+  .orb:hover .mesh::before, .orb:focus-visible .mesh::before { animation-play-state: running; }
+  @keyframes drift {
+    33% { transform: rotate(40deg) scale(1.1); filter: blur(5px) saturate(1.4) hue-rotate(-10deg); }
+    66% { transform: rotate(-25deg) scale(1.05); filter: blur(5px) saturate(1.3) hue-rotate(8deg); }
+    100% { transform: rotate(70deg) scale(1.12); filter: blur(5px) saturate(1.45); }
+  }
+  .orb:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ink); }
+  .orb[aria-checked="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--field); }
+  .orb .badge {
+    position: absolute; z-index: 1; right: -5px; bottom: -5px; display: none; place-items: center;
+    width: 16px; height: 16px; border-radius: 50%; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1.5px var(--field);
+  }
+  .orb .badge svg { width: 10px; height: 10px; }
+  .orb[aria-checked="true"] .badge { display: grid; }
+  .now { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 28px; font-size: 15px; color: var(--ink-2); min-height: 40px; }
+  .now b { color: var(--ink); font-weight: 600; }
+  .now button { font: inherit; font-weight: 600; color: var(--link); background: none; border: 0; padding: 4px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; }
+  .now button[hidden] { display: none; }
+
+  /* Figma, drawn in the page's theme. The design on the canvas keeps its
+     own colors, as it does in Ligma. */
+  .figma { position: relative; margin-top: 32px; border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px var(--line), var(--shadow); container-type: inline-size; aspect-ratio: 1240 / 600; }
+  .figma .art { font-size: 0.8065cqw; } /* 1em is 10px at 1240px wide */
+  .fg { position: absolute; inset: 0; display: grid; grid-template-columns: 24em 1fr 24em; background: var(--canvas); }
+  .fg .panel { background: var(--panel); display: flex; flex-direction: column; gap: 0.8em; padding: 1.6em; color: var(--ink-2); font-size: 1.1em; }
+  .fg .panel:first-child { border-right: 1px solid var(--line); }
+  .fg .panel:last-child { border-left: 1px solid var(--line); }
+  .fg .file { font-size: 1.2em; font-weight: 600; color: var(--ink); }
+  .fg .tabs2 { display: flex; gap: 1.6em; padding-bottom: 1em; border-bottom: 1px solid var(--line); margin-bottom: 0.4em; }
+  .fg .tabs2 b { color: var(--ink); font-weight: 600; }
+  .fg .row { display: flex; align-items: center; gap: 0.8em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; }
+  .fg .row svg { width: 1.3em; height: 1.3em; }
+  .fg .row.on { background: var(--select); color: var(--ink); }
+  .fg .row.in { padding-left: 2.6em; }
+  .fg .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6em; }
+  .fg .avatar { width: 2.6em; height: 2.6em; border-radius: 50%; background: #f0b232; }
+  .fg .share { padding: 0.6em 1.2em; border-radius: 0.6em; background: var(--field); color: var(--field-ink); font-weight: 600; }
+  .fg .prop { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6em; }
+  .fg .prop span { display: flex; align-items: center; gap: 0.6em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); color: var(--ink); font-variant-numeric: tabular-nums; }
+  .fg .prop span i { font-style: normal; color: var(--ink-3); }
+  .fg .h4 { margin: 1em 0 0.2em; font-size: 1em; font-weight: 600; color: var(--ink); }
+  .fg .fill { display: flex; align-items: center; gap: 0.8em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); color: var(--ink); }
+  .fg .fill i { width: 1.4em; height: 1.4em; border-radius: 0.3em; background: #ff5c39; }
+  .stage { position: relative; }
+  .poster { position: absolute; left: 50%; top: 50%; width: 32em; height: 40em; transform: translate(-50%, -54%); background: #ff5c39; border-radius: 0.2em; overflow: hidden; }
+  .poster .sun { position: absolute; left: 4em; top: 4em; width: 16em; height: 16em; border-radius: 50%; background: #ffd23f; }
+  .poster .hill { position: absolute; left: -6em; right: -6em; bottom: -14em; height: 28em; border-radius: 50%; background: #1f1d2b; }
+  .poster .type { position: absolute; left: 3em; bottom: 3em; color: #fff4e0; font: 700 4.4em/0.9 var(--display); letter-spacing: -0.04em; }
+  .frame-name { position: absolute; left: calc(50% - 16em); top: calc(50% - 22.4em - 2.4em); font-size: 1.1em; color: var(--ink-2); }
+  .selection { position: absolute; left: 50%; top: 50%; width: 32em; height: 40em; transform: translate(-50%, -54%); box-shadow: 0 0 0 0.15em var(--field); }
+  .selection i { position: absolute; width: 0.9em; height: 0.9em; background: #fff; border: 0.15em solid var(--field); }
+  .selection i:nth-child(1) { left: -0.5em; top: -0.5em; } .selection i:nth-child(2) { right: -0.5em; top: -0.5em; }
+  .selection i:nth-child(3) { left: -0.5em; bottom: -0.5em; } .selection i:nth-child(4) { right: -0.5em; bottom: -0.5em; }
+  .selection span { position: absolute; left: 50%; bottom: -3em; transform: translateX(-50%); padding: 0.2em 0.6em; border-radius: 0.3em; background: var(--field); color: var(--field-ink); font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .toolbar { position: absolute; left: 50%; bottom: 2.4em; transform: translateX(-50%); display: flex; gap: 0.4em; padding: 0.6em; border-radius: 1.2em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); }
+  .toolbar span { display: grid; place-items: center; width: 3.6em; height: 3.6em; border-radius: 0.8em; }
+  .toolbar span.on { background: var(--field); color: var(--field-ink); }
+  .toolbar svg { width: 2em; height: 2em; }
+  .figma-caption { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+
+  /* Compare */
+  .compare { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .compare th, .compare td { padding: 20px 16px 20px 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+  .compare thead th { padding-top: 0; font: 650 clamp(1.25rem, 2.2vw, 1.75rem)/1.1 var(--display); letter-spacing: -0.02em; border-bottom: 2px solid var(--ink); }
+  .compare thead th:nth-child(2) { color: var(--ink); }
+  .compare tbody th { font-weight: 500; color: var(--ink-2); font-size: 16px; width: 34%; }
+  .compare td { font-size: 17px; }
+  .compare td:nth-child(2) { font-weight: 600; }
+  .compare .big td { font: 700 clamp(1.75rem, 3.6vw, 2.75rem)/1 var(--display); letter-spacing: -0.03em; }
+  .compare .big td:nth-child(3) { color: var(--ink-3); }
+
+  /* Install */
+  .install { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(24px, 4vw, 48px); }
+  .os { padding-top: 24px; border-top: 2px solid var(--ink); }
+  .os h3 { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .os h3 small { font: 500 14px/1 var(--text); color: var(--ink-2); letter-spacing: 0; }
+  .os ol { margin: 20px 0 0; padding: 0; list-style: none; counter-reset: step; }
+  .os li { position: relative; padding: 0 0 18px 40px; color: var(--ink-2); counter-increment: step; }
+  .os li::before { content: counter(step); position: absolute; left: 0; top: 0.05em; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 13px; font-weight: 600; }
+  .os li b { color: var(--ink); font-weight: 600; }
+  .cmd { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 6px 6px 6px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
+  .cmd code { flex: 1; min-width: 0; padding: 0; background: none; border: 0; color: var(--ink); }
+  .cmd button { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--bg); color: var(--ink); font: 500 13px/1 var(--text); cursor: pointer; box-shadow: 0 0 0 1px var(--line); }
+  .cmd button:hover { background: var(--line); }
+  .cmd button svg { width: 14px; height: 14px; }
+
+  /* Close: the whole field in the theme's color. */
+  .closing { margin-top: clamp(96px, 12vw, 160px); background: var(--field); color: var(--field-ink); }
+  .closing .wrap { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 32px 48px; align-items: center; padding-top: clamp(56px, 8vw, 96px); padding-bottom: clamp(56px, 8vw, 96px); }
+  .closing img { width: clamp(80px, 10vw, 136px); height: auto; padding: 14%; border-radius: 24%; background: #fff; box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.35); }
+  .closing h2 { font-size: clamp(2.5rem, 6.4vw, 5rem); }
+  .closing p { margin-top: 12px; font-size: 18px; }
+  .closing .actions { margin-top: 28px; }
+  .closing .btn { border-color: var(--field-ink); color: var(--field-ink); }
+  .closing .btn:hover { background: color-mix(in oklab, var(--field-ink) 10%, transparent); }
+  .closing .btn.primary { background: var(--field-ink); color: var(--field); }
+  .closing .btn.primary:hover { background: color-mix(in oklab, var(--field-ink) 88%, var(--field)); }
+  .closing :focus-visible { outline-color: var(--field-ink); }
+  .closing ::selection { background: var(--field-ink); color: var(--field); }
+
+  footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; padding: 32px 0 48px; font-size: 14px; color: var(--ink-2); }
+  footer ul { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none; }
+  footer a { color: var(--ink-2); }
+  footer a:hover { color: var(--ink); }
+
+  /* Retinting: the new theme spreads out from the swatch clicked. */
+  ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+
+  @media (max-width: 1080px) {
+    .deck { grid-template-columns: repeat(5, minmax(0, 1fr)); row-gap: 20px; }
+  }
+  @media (max-width: 900px) {
+    .masthead, .head, .spread, .spread.flip { grid-template-columns: minmax(0, 1fr); }
+    .spread.flip .chip { order: 0; }
+    .index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .figma { aspect-ratio: 4 / 3; }
+    .figma .art { font-size: 1.25cqw; }
+    .fg { grid-template-columns: 24em 1fr; }
+    .fg .panel:last-child { display: none; }
+  }
   @media (max-width: 640px) {
-    .stats { grid-template-columns: 1fr; }
-    nav .links a.hide-sm { display: none; }
+    nav ul li:not(:last-child) { display: none; }
+    .weight { aspect-ratio: 3 / 4; min-height: 0; }
+    .weight .us-label { left: 16px; bottom: calc(22.9% + 12px); }
+    .deck { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .index { grid-template-columns: minmax(0, 1fr); }
+    .install { grid-template-columns: minmax(0, 1fr); }
+    .closing .wrap { grid-template-columns: minmax(0, 1fr); }
+    .compare tbody th { width: 40%; }
+    .compare th, .compare td { padding-right: 10px; }
+    .btn { height: 48px; padding: 0 18px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .orb, .theme, .btn, .rail .plug { transition: none; }
+    .orb .mesh::before { animation: none; }
   }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- Icons in the app's grammar (dist/index.html): 16px, 1.2 stroke. -->
+  <defs>
+    <symbol id="i-download" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></symbol>
+    <symbol id="i-star" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="m8 2 1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z"/></symbol>
+    <symbol id="i-tabs" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 13.5h13M2.5 13.5v-8a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v8"/><path d="M8.5 7.5h4a1 1 0 0 1 1 1v5"/></symbol>
+    <symbol id="i-rail" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2"/><path d="M11.25 9v4.5M9 11.25h4.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-presence" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="5.5" r="2.5"/><path d="M2.5 13.5c.5-2.4 2.3-3.8 4.5-3.8 1 0 1.9.3 2.6.7"/><circle cx="12" cy="12" r="2"/></symbol>
+    <symbol id="i-sleep" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 10A4.5 4.5 0 1 1 5.5 4.5a3.6 3.6 0 0 0 5 5.5z"/><path d="M10 2.5h3l-3 3h3"/></symbol>
+    <symbol id="i-key" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="10.5" r="3"/><path d="m7.6 8.4 5.9-5.9M11.5 4.5 13 6M9.8 6.2l1.2 1.2"/></symbol>
+    <symbol id="i-manifest" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M9.5 2.5V5H12"/><path d="M7 7.5c-.7 0-.8.4-.8 1s-.1 1-.8 1c.7 0 .8.4.8 1s.1 1 .8 1M9 7.5c.7 0 .8.4.8 1s.1 1 .8 1c-.7 0-.8.4-.8 1s-.1 1-.8 1"/></symbol>
+    <symbol id="i-fonts" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 12.5 5 3.5l3.5 9M2.8 9.3h4.4"/><circle cx="11.8" cy="10.3" r="2.2"/><path d="M14 8.1v4.4"/></symbol>
+    <symbol id="i-update" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8A5.5 5.5 0 1 1 11.6 3.8"/><path d="M13.5 2v2.5H11"/><path d="M8 5.5v5M6 8.5l2 2 2-2"/></symbol>
+    <symbol id="i-scale" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.3 10.3 3.2 3.2M7 5v4M5 7h4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
+    <!-- From the tab bar -->
+    <symbol id="i-home" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/></symbol>
+    <symbol id="i-design" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(135 8 8)"><path d="M8 13.5 3.5 7a4.5 4.5 0 0 1 9 0z"/><circle cx="8" cy="7" r="1.2"/><path d="M8 8.2v5.3"/></g></symbol>
+    <symbol id="i-board" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h10v6.5L9.5 13H3z"/><path d="M13 9.5H9.5V13"/></symbol>
+    <symbol id="i-slides" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="11" height="8" rx="1"/><path d="M8 11.5v2M5.5 13.5h5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="m5 5 6 6M11 5l-6 6"/></symbol>
+    <!-- Editor bits -->
+    <symbol id="i-frame" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M5.5 2.5v11M10.5 2.5v11M2.5 5.5h11M2.5 10.5h11"/></symbol>
+    <symbol id="i-rect" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3" y="3" width="10" height="10" rx="1"/></symbol>
+    <symbol id="i-ellipse" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="5"/></symbol>
+    <symbol id="i-text" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M3.5 4V3h9v1M8 3v10M6.5 13h3"/></symbol>
+    <symbol id="i-move" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M4 2.5 12.5 9l-4 .5-2 3.5z"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2.5 4.5 6-2.5 5H6l-2.5-5z"/><circle cx="8" cy="8.5" r="1"/><path d="M8 2.5v5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5 14 6 8 9.5 2 6z"/><path d="m2 9.5 6 3.5 6-3.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-assets" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5 13 8l-5 5.5L3 8z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 1 1 6.5 3a4.5 4.5 0 0 0 6.5 6.5z"/></symbol>
+  </defs>
+</svg>
+
 <div class="wrap">
-  <nav>
-    <a class="brand" href="./"><img src="logo.png" alt="">Ligma</a>
-    <div class="links">
-      <a href="#features" class="hide-sm">Features</a>
-      <a href="#install" class="hide-sm">Install</a>
-      <a href="https://github.com/trelakor/ligma">GitHub</a>
-    </div>
+  <nav aria-label="Main">
+    <a class="brand" href="./"><img src="logo.png" alt="" width="30" height="30">Ligma</a>
+    <ul>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#themes">Themes</a></li>
+      <li><a href="#install">Install</a></li>
+      <li><a href="https://github.com/trelakor/ligma">GitHub</a></li>
+      <li><a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download>Download</a></li>
+    </ul>
   </nav>
 
   <header class="hero">
-    <img src="logo.png" alt="Ligma logo">
-    <h1>Figma, without the weight</h1>
-    <p>A lightweight desktop app for Figma on macOS and Windows. About 4&nbsp;MB, with tabs, themes, your plugins in the left rail and your file on Discord.</p>
-    <div class="buttons">
-      <a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest">Download</a>
-      <a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a>
-      <a class="btn" href="https://github.com/trelakor/ligma">★ Star on GitHub</a>
+    <div class="masthead">
+      <h1>Figma, without the weight.</h1>
+      <div class="pitch">
+        <p>A desktop app for Figma on macOS and Windows that uses your system's own webview instead of shipping a browser. Tabs, themes, your plugins in the left rail and your file on Discord.</p>
+        <div class="actions">
+          <a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
+          <a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a>
+        </div>
+        <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
+      </div>
     </div>
-    <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
+
+    <figure class="weight" role="img" aria-label="Installed size on macOS, drawn to scale by area: Figma desktop 305 MB, Ligma 16 MB.">
+      <div class="them" aria-hidden="true"><span>Figma desktop</span><b>305 MB</b></div>
+      <div class="us" aria-hidden="true"></div>
+      <div class="us-label" aria-hidden="true"><b>16 MB</b><span>Ligma</span></div>
+    </figure>
+    <div class="caption">
+      <span>Installed on macOS, drawn to scale by area.</span>
+      <span id="sizes">Downloads: 2.2 MB on Windows, 7.1 MB on macOS.</span>
+    </div>
   </header>
 
-  <div class="stats">
-    <div class="stat"><b>2.2 MB</b><span>Windows installer</span></div>
-    <div class="stat"><b>16 MB</b><span>installed on macOS, vs 305 MB for Figma desktop</span></div>
-    <div class="stat"><b>0</b><span>bundled browser engines</span></div>
-  </div>
+  <section id="features" aria-labelledby="features-heading">
+    <div class="head">
+      <h2 id="features-heading">Everything the browser tab is missing</h2>
+      <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
+    </div>
 
-  <section id="features">
-    <h2>What you get</h2>
-    <p class="lead">Ligma opens figma.com in your system's webview (WebView2 or WKWebView) instead of shipping its own browser, and adds what the web version is missing.</p>
-    <div class="grid">
-      <div class="card" style="--dot: var(--purple)"><h3>Tabs</h3><p>Like the Figma desktop app: pinning, previews on hover, emoji icons, shortcuts and your tabs reopened from last time.</p></div>
-      <div class="card" style="--dot: var(--blue)"><h3>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
-      <div class="card" style="--dot: var(--green)"><h3>Themes</h3><p>Light and dark variants that recolor Figma's interface, never your designs, plus an adjustable interface scale.</p></div>
-      <div class="card" style="--dot: var(--red)"><h3>Plugins in the left rail</h3><p>Your saved and development plugins sit under Figma's own buttons, one click to run.</p></div>
-      <div class="card" style="--dot: var(--purple)"><h3>Development plugins</h3><p>Import a plugin from its <code>manifest.json</code>, which figma.com doesn't support.</p></div>
-      <div class="card" style="--dot: var(--blue)"><h3>Discord Rich Presence</h3><p>Shows your file, page and tool, with per-file hiding and optional invites to files.</p></div>
-      <div class="card" style="--dot: var(--green)"><h3>Google sign-in</h3><p>Works like the desktop app's, with or without the official app installed.</p></div>
-      <div class="card" style="--dot: var(--red)"><h3>Local fonts</h3><p>Uses Figma's font helper, starting it when needed.</p></div>
-      <div class="card" style="--dot: var(--purple)"><h3>Automatic updates</h3><p>Downloaded in the background and installed in place, so you stay signed in.</p></div>
+    <article class="spread">
+      <div class="chip">
+        <div class="field">
+          <div class="art" aria-hidden="true">
+            <div class="window">
+              <div class="tabbar">
+                <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
+                <div class="sq"><span class="emoji">🎨</span></div>
+                <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
+                <div><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
+                <div class="hover sleep pre"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
+                <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
+              </div>
+              <div class="editor">
+                <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div><div class="bar short"></div></div>
+                <div></div>
+              </div>
+            </div>
+            <div class="tabpreview">
+              <div class="shot">
+                <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
+                <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
+                <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
+                <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
+              </div>
+              <b>Q3 pitch</b>
+              <span>Figma Slides · Asleep</span>
+            </div>
+          </div>
+        </div>
+        <div class="strip"><b>Tabs</b><code>"restoreTabs": true</code></div>
+      </div>
+      <div>
+        <h3><svg class="icon"><use href="#i-tabs"/></svg>Tabs, like the desktop app</h3>
+        <p>Every file gets its own tab, with Home pinned on the left. Point at a tab to see how it last looked, and pick up where you left off next time.</p>
+        <ul>
+          <li><b>Pin</b> a tab from its right-click menu, and it shows just its icon.</li>
+          <li><b>Emoji</b> at the start of a file's name becomes its tab icon.</li>
+          <li><b>Shortcuts</b> as usual: <code>Ctrl+T</code>, <code>Ctrl+W</code> and <code>Ctrl+Tab</code> (<code>Cmd</code> on macOS).</li>
+          <li><b>Asleep</b> tabs give their memory back and reload when you open them.</li>
+        </ul>
+      </div>
+    </article>
+
+    <article class="spread flip">
+      <div class="chip">
+        <div class="field">
+          <div class="art" aria-hidden="true">
+            <div class="ui">
+              <div class="rail">
+                <span class="tool on"><svg><use href="#i-layers"/></svg></span>
+                <span class="tool"><svg><use href="#i-assets"/></svg></span>
+                <span class="tool"><svg><use href="#i-search"/></svg></span>
+                <hr>
+                <span class="plug" style="background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
+                <span class="plug big" style="background:#7b61ff"><svg><use href="#i-scale"/></svg></span>
+                <span class="plug" style="background:#14a38b"><svg><use href="#i-text"/></svg></span>
+                <span class="plug" style="background:#f5b400"><svg><use href="#i-star"/></svg></span>
+              </div>
+              <div class="layers">
+                <div class="file">Brand refresh</div>
+                <div class="sub">Drafts</div>
+                <div class="row on"><svg><use href="#i-frame"/></svg>Poster</div>
+                <div class="row"><svg><use href="#i-text"/></svg>Headline</div>
+                <div class="row"><svg><use href="#i-ellipse"/></svg>Sun</div>
+                <div class="row"><svg><use href="#i-rect"/></svg>Background</div>
+              </div>
+              <div></div>
+            </div>
+            <div class="tip">Contrast checker</div>
+          </div>
+        </div>
+        <div class="strip"><b>Plugins in the left rail</b><code>"railPlugins": true</code></div>
+      </div>
+      <div>
+        <h3><svg class="icon"><use href="#i-rail"/></svg>Your plugins, one click away</h3>
+        <p>Every plugin and widget saved to your Figma account sits in the editor's left rail, under Figma's own buttons, with its icon. Click one to run it.</p>
+        <ul>
+          <li><b>Commands</b> show as a menu when a plugin has more than one.</li>
+          <li><b>Widgets</b> go straight onto the canvas.</li>
+          <li><b>Reorder</b> by holding Ctrl and dragging. The order is kept for every file.</li>
+        </ul>
+      </div>
+    </article>
+
+    <article class="spread">
+      <div class="chip">
+        <div class="field">
+          <div class="art" aria-hidden="true">
+            <div class="profile">
+              <div class="banner"></div>
+              <div class="who">
+                <div class="avatar"><span>M</span></div>
+                <div class="name">Mira</div>
+                <div class="handle">mira.designs</div>
+              </div>
+              <div class="activity">
+                <div class="label">Playing</div>
+                <div class="card">
+                  <div class="large"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
+                  <div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div>
+                </div>
+                <div class="join">Ask to Join</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="strip"><b>Discord Rich Presence</b><code>"discordRichPresence": true</code></div>
+      </div>
+      <div>
+        <h3><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</h3>
+        <p>Your profile shows the file you're in, the page or slide, and the tool in your hand. Keep any file private from its tab's right-click menu.</p>
+        <ul>
+          <li><b>Hide files by default</b> and show only the ones you choose.</li>
+          <li><b>Invites</b> (optional) let friends ask to join, and the file opens in their Ligma.</li>
+          <li><b>Every product</b>: Design, FigJam, Slides, Make, Buzz and Sites.</li>
+        </ul>
+      </div>
+    </article>
+
+    <div class="index">
+      <div><h3><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
+      <div><h3><svg class="icon"><use href="#i-key"/></svg>Google sign-in</h3><p>Works like the desktop app's, with or without the official app installed.</p></div>
+      <div><h3><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</h3><p>Import a plugin from its <code>manifest.json</code>, which figma.com doesn't support.</p></div>
+      <div><h3><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</h3><p>Uses Figma's font helper, and starts it when it isn't running.</p></div>
+      <div><h3><svg class="icon"><use href="#i-update"/></svg>Automatic updates</h3><p>Downloaded in the background and installed in place, so you stay signed in.</p></div>
+      <div><h3><svg class="icon"><use href="#i-scale"/></svg>Interface scale</h3><p>Zoom Figma, the tabs and menus together, from 50% to 200%.</p></div>
     </div>
   </section>
 
-  <section id="themes">
-    <h2>Make Figma your own</h2>
-    <p class="lead">Pick one theme for light mode and one for dark. Each one tints Figma's greys and gives every editor's brand color its own.</p>
-    <div class="swatches" id="swatches"></div>
+  <section id="themes" aria-labelledby="themes-heading">
+    <div class="head">
+      <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
+      <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Click a swatch to see it here.</p>
+    </div>
+    <div class="deck" id="deck" role="radiogroup" aria-label="Themes"></div>
+    <div class="now" aria-live="polite">
+      <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
+      <button type="button" id="reset" hidden>Back to your system's look</button>
+    </div>
+
+    <div class="figma" aria-hidden="true">
+      <div class="art">
+        <div class="fg">
+          <div class="panel">
+            <div class="file">Brand refresh</div>
+            <div class="tabs2"><b>File</b><span>Assets</span></div>
+            <div class="row on"><svg><use href="#i-frame"/></svg>Poster</div>
+            <div class="row in"><svg><use href="#i-text"/></svg>Headline</div>
+            <div class="row in"><svg><use href="#i-ellipse"/></svg>Sun</div>
+            <div class="row in"><svg><use href="#i-ellipse"/></svg>Hill</div>
+            <div class="row"><svg><use href="#i-frame"/></svg>Social card</div>
+            <div class="row"><svg><use href="#i-frame"/></svg>Story</div>
+          </div>
+          <div class="stage">
+            <div class="frame-name">Poster</div>
+            <div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div>
+            <div class="selection"><i></i><i></i><i></i><i></i><span>320 × 400</span></div>
+            <div class="toolbar">
+              <span class="on"><svg><use href="#i-move"/></svg></span>
+              <span><svg><use href="#i-frame"/></svg></span>
+              <span><svg><use href="#i-rect"/></svg></span>
+              <span><svg><use href="#i-pen"/></svg></span>
+              <span><svg><use href="#i-text"/></svg></span>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="top"><span class="avatar"></span><span class="share">Share</span></div>
+            <div class="tabs2"><b>Design</b><span>Prototype</span></div>
+            <div class="h4">Frame</div>
+            <div class="prop"><span><i>X</i>240</span><span><i>Y</i>120</span><span><i>W</i>320</span><span><i>H</i>400</span></div>
+            <div class="h4">Fill</div>
+            <div class="fill"><i></i>FF5C39</div>
+            <div class="h4">Export</div>
+            <div class="fill" style="justify-content:space-between">PNG<span>1x</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="figma-caption">Your designs keep their colors. Only Figma's interface changes, and Ligma's with it.</p>
   </section>
 
-  <section id="compare">
-    <h2>Ligma or the official app?</h2>
-    <p class="lead">Both are Figma. Ligma is a lighter shell with a few extras.</p>
-    <table>
-      <tr><th></th><th>Ligma</th><th>Figma desktop</th></tr>
-      <tr><td>Installed size (macOS)</td><td>16 MB</td><td>305 MB</td></tr>
-      <tr><td>Browser engine</td><td>System webview</td><td>Bundled Chromium (Electron)</td></tr>
-      <tr><td>Color themes</td><td>9</td><td>Light and dark</td></tr>
-      <tr><td>Plugins in the left rail</td><td>Yes</td><td>No</td></tr>
-      <tr><td>Discord Rich Presence</td><td>Yes</td><td>No</td></tr>
-      <tr><td>Open source</td><td>Yes (MIT)</td><td>No</td></tr>
+  <section id="compare" aria-labelledby="compare-heading">
+    <div class="head">
+      <h2 id="compare-heading">Ligma or the official app?</h2>
+      <p>Both are Figma. Ligma is a lighter shell with a few extras.</p>
+    </div>
+    <table class="compare">
+      <thead><tr><th scope="col"><span class="sr">Feature</span></th><th scope="col">Ligma</th><th scope="col">Figma desktop</th></tr></thead>
+      <tbody>
+        <tr class="big"><th scope="row">Installed size (macOS)</th><td>16 MB</td><td>305 MB</td></tr>
+        <tr><th scope="row">Browser engine</th><td>System webview</td><td>Bundled Chromium (Electron)</td></tr>
+        <tr><th scope="row">Color themes</th><td>9, light and dark</td><td>Light and dark</td></tr>
+        <tr><th scope="row">Plugins in the left rail</th><td>Yes</td><td>No</td></tr>
+        <tr><th scope="row">Discord Rich Presence</th><td>Yes</td><td>No</td></tr>
+        <tr><th scope="row">Open source</th><td>Yes (MIT)</td><td>No</td></tr>
+      </tbody>
     </table>
   </section>
 
-  <section id="install">
-    <h2>Install</h2>
-    <p class="lead">Builds aren't signed yet, so your system asks once before the first launch. After that, Ligma updates itself.</p>
-    <div class="steps">
-      <div class="card">
-        <h3 style="--dot: var(--blue)">macOS</h3>
-        <p>Download the <code>.dmg</code> and drag Ligma to Applications. The app isn't notarized, so run this once:</p>
-        <p><code>xattr -dr com.apple.quarantine /Applications/Ligma.app</code></p>
-        <p>Or allow it in System Settings → Privacy &amp; Security → Open Anyway.</p>
+  <section id="install" aria-labelledby="install-heading">
+    <div class="head">
+      <h2 id="install-heading">Install</h2>
+      <p>Builds aren't signed yet, so your system asks once before the first launch. After that, Ligma updates itself.</p>
+    </div>
+    <div class="install" id="install-os">
+      <div class="os" data-os="mac">
+        <h3>macOS <small>Apple silicon and Intel</small></h3>
+        <ol>
+          <li>Download the <code>.dmg</code> and drag Ligma to Applications.</li>
+          <li>The app isn't notarized yet, so run this once in Terminal:
+            <div class="cmd"><code id="xattr">xattr -dr com.apple.quarantine /Applications/Ligma.app</code><button type="button" data-copy="xattr"><svg><use href="#i-copy"/></svg><span>Copy</span></button></div>
+          </li>
+          <li>Or open it anyway from <b>System Settings → Privacy &amp; Security</b>.</li>
+        </ol>
       </div>
-      <div class="card">
-        <h3 style="--dot: var(--green)">Windows</h3>
-        <p>Download and run the <code>-setup.exe</code> installer.</p>
-        <p>If SmartScreen warns, choose More info → Run anyway.</p>
+      <div class="os" data-os="win">
+        <h3>Windows</h3>
+        <ol>
+          <li>Download and run the <code>-setup.exe</code> installer.</li>
+          <li>If SmartScreen warns, choose <b>More info → Run anyway</b>.</li>
+        </ol>
       </div>
     </div>
   </section>
+</div>
 
+<div class="closing">
+  <div class="wrap">
+    <img src="logo.png" alt="" width="128" height="128">
+    <div>
+      <h2>Same Figma. Lighter.</h2>
+      <p id="close-meta">Free and open source. Not affiliated with Figma or Discord.</p>
+      <div class="actions">
+        <a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
+        <a class="btn" href="https://github.com/trelakor/ligma"><svg class="icon"><use href="#i-star"/></svg>Star on GitHub</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
   <footer>
     <span>Ligma is MIT licensed. It's not affiliated with Figma or Discord.</span>
-    <span>
-      <a href="https://github.com/trelakor/ligma">GitHub</a> ·
-      <a href="https://github.com/trelakor/ligma/blob/main/CHANGELOG.md">Changelog</a> ·
-      <a href="https://github.com/trelakor/ligma/blob/main/PRIVACY.md">Privacy</a> ·
-      <a href="https://github.com/trelakor/ligma/blob/main/TERMS.md">Terms</a>
-    </span>
+    <ul>
+      <li><a href="https://github.com/trelakor/ligma">GitHub</a></li>
+      <li><a href="https://github.com/trelakor/ligma/blob/main/CHANGELOG.md">Changelog</a></li>
+      <li><a href="https://github.com/trelakor/ligma/blob/main/PRIVACY.md">Privacy</a></li>
+      <li><a href="https://github.com/trelakor/ligma/blob/main/TERMS.md">Terms</a></li>
+    </ul>
   </footer>
 </div>
 
+<!-- The app's own theme code, copied here when the site is published. -->
+<script src="themes.js"></script>
 <script>
-  // Theme swatches, from LIGMA_THEMES in dist/themes.js (accent hue in OKLCH).
-  const themes = [["Figma"], ["Grove", 155], ["Lagoon", 190], ["Ocean", 240], ["Midnight", 275], ["Iris", 305], ["Rose", 0], ["Ember", 42], ["Amber", 72]];
-  document.getElementById("swatches").innerHTML = themes.map(([name, hue]) => {
-    const fill = hue === undefined
-      ? "conic-gradient(#00cc66, #00b9ff, #914fff, #ff0029, #ff7237, #00cc66)"
-      : `oklch(0.62 0.17 ${hue})`;
-    return `<div class="swatch"><i style="background: ${fill}"></i>${name}</div>`;
-  }).join("");
+  const root = document.documentElement;
+  const $ = (id) => document.getElementById(id);
+  const system = matchMedia("(prefers-color-scheme: dark)");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+  // The page's theme: Figma's own colors in the system's mode until a
+  // swatch is clicked. Not remembered.
+  const state = { theme: "figma", mode: system.matches ? "dark" : "light", picked: false };
 
-  // Point the download buttons at the latest release's installer for this OS.
+  // Every step of the grey, accent and pale accent ramps theme `id` gives
+  // Figma in `mode`, as the page's variables.
+  function ramps(id, mode) {
+    const vars = ligmaPalette(id, mode);
+    const out = { "--white": vars["--ramp-white-1000"] ?? "#ffffff" };
+    LIGMA_STEPS.forEach((step, i) => {
+      out[`--g-${step}`] = vars[`--ramp-grey-${step}`] ?? LIGMA_GREY[i];
+      out[`--a-${step}`] = vars[`--ligma-accent-${step}`] ?? LIGMA_BLUE[mode][i];
+    });
+    return out;
+  }
+
+  function paint() {
+    root.className = state.mode;
+    for (const [name, value] of Object.entries(ramps(state.theme, state.mode))) root.style.setProperty(name, value);
+    const theme = LIGMA_THEMES.find((t) => t.id === state.theme);
+    $("now").innerHTML = state.theme === "figma"
+      ? `Showing <b>Figma</b> in ${state.mode} mode, the way Figma ships it.`
+      : `Showing <b>${theme.name}</b> in ${state.mode} mode.`;
+    $("reset").hidden = !state.picked;
+    renderDeck();
+  }
+
+  const SUN = '<svg><use href="#i-sun"/></svg>';
+  const MOON = '<svg><use href="#i-moon"/></svg>';
+  function renderDeck() {
+    const focused = document.activeElement?.closest("#deck") && document.activeElement.getAttribute("aria-label");
+    $("deck").replaceChildren(...LIGMA_THEMES.map((theme) => {
+      const chip = document.createElement("div");
+      chip.className = `theme${theme.id === state.theme ? " picked" : ""}`;
+      const swatch = ramps(theme.id, state.mode);
+      chip.style.setProperty("--chip", swatch["--a-500"]);
+      chip.style.setProperty("--chip-ink", swatch["--a-1000"]);
+      const hue = theme.accent == null ? "Original" : `Hue ${theme.accent}°`;
+      chip.innerHTML = `<div class="swatch"><b>${theme.name}</b><span>${hue}</span></div><div class="orbs"></div>`;
+      for (const mode of ["light", "dark"]) {
+        const orb = document.createElement("button");
+        orb.type = "button";
+        orb.className = "orb";
+        orb.innerHTML = `<span class="mesh"></span><span class="badge">${mode === "light" ? SUN : MOON}</span>`;
+        orb.style.setProperty("--orb", ligmaMesh(theme.id, mode));
+        orb.setAttribute("role", "radio");
+        orb.setAttribute("aria-checked", theme.id === state.theme && mode === state.mode);
+        orb.setAttribute("aria-label", `${theme.name} in ${mode} mode`);
+        orb.title = `${theme.name} in ${mode} mode`;
+        orb.addEventListener("click", () => pick(theme.id, mode, orb));
+        chip.querySelector(".orbs").append(orb);
+      }
+      return chip;
+    }));
+    if (focused) [...$("deck").querySelectorAll("[aria-label]")].find((el) => el.getAttribute("aria-label") === focused)?.focus();
+  }
+
+  // Retint the page, spreading out from `from` where the browser can.
+  function retint(change, from) {
+    if (!document.startViewTransition || reduced.matches || !from) return change();
+    const box = from.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    document.startViewTransition(change).ready.then(() => {
+      root.animate(
+        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+        { duration: 650, easing: "cubic-bezier(0.2, 0.9, 0.3, 1)", pseudoElement: "::view-transition-new(root)" },
+      );
+    });
+  }
+
+  function pick(theme, mode, from) {
+    if (theme === state.theme && mode === state.mode) return;
+    retint(() => {
+      Object.assign(state, { theme, mode, picked: true });
+      paint();
+    }, from);
+  }
+
+  $("reset").addEventListener("click", (event) => retint(() => {
+    Object.assign(state, { theme: "figma", mode: system.matches ? "dark" : "light", picked: false });
+    paint();
+  }, event.currentTarget));
+  system.addEventListener("change", () => {
+    if (state.picked) return;
+    state.mode = system.matches ? "dark" : "light";
+    paint();
+  });
+  if (typeof LIGMA_THEMES !== "undefined") paint();
+
+  // Copy the Terminal command.
+  for (const button of document.querySelectorAll("[data-copy]")) {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText($(button.dataset.copy).textContent);
+        button.innerHTML = '<svg><use href="#i-check"/></svg><span>Copied</span>';
+        setTimeout(() => (button.innerHTML = '<svg><use href="#i-copy"/></svg><span>Copy</span>'), 1800);
+      } catch {}
+    });
+  }
+
+  // Point the download buttons at the latest release's installer for this
+  // OS, and put this OS's install steps first.
   (async () => {
-    const mac = /Mac/i.test(navigator.platform || navigator.userAgent);
-    const win = /Win/i.test(navigator.platform || navigator.userAgent);
-    const primary = document.getElementById("dl-primary");
-    const secondary = document.getElementById("dl-secondary");
-    if (mac) primary.textContent = "Download for macOS";
-    if (win) primary.textContent = "Download for Windows";
+    const ua = navigator.userAgentData?.platform || navigator.platform || navigator.userAgent;
+    const mac = /Mac/i.test(ua);
+    const win = /Win/i.test(ua);
+    const os = mac ? "macOS" : win ? "Windows" : null;
+    const buttons = document.querySelectorAll("[data-download] span");
+    if (os) {
+      buttons.forEach((span) => (span.textContent = `Download for ${os}`));
+      if (win) $("install-os").prepend(document.querySelector('[data-os="win"]'));
+    }
     try {
       const res = await fetch("https://api.github.com/repos/trelakor/ligma/releases/latest");
       if (!res.ok) return;
       const release = await res.json();
       const dmg = release.assets.find((a) => a.name.endsWith(".dmg"));
       const exe = release.assets.find((a) => a.name.endsWith("-setup.exe"));
-      const pick = mac ? dmg : win ? exe : null;
-      if (pick) primary.href = pick.browser_download_url;
+      const mine = mac ? dmg : win ? exe : null;
       const other = mac ? exe : win ? dmg : null;
-      if (other) {
-        secondary.textContent = mac ? "Windows" : "macOS";
-        secondary.href = other.browser_download_url;
+      const mb = (asset) => `${(asset.size / 1e6).toFixed(1)} MB`;
+      if (mine) {
+        for (const link of document.querySelectorAll("[data-download]")) link.href = mine.browser_download_url;
+        document.querySelectorAll("[data-download]:not(nav [data-download])").forEach((link) => {
+          link.insertAdjacentHTML("beforeend", ` <small>${mb(mine)}</small>`);
+        });
       }
-      document.getElementById("dl-meta").textContent =
-        `${release.tag_name}, free and open source (MIT). Updates itself.`;
+      if (other) {
+        $("dl-secondary").textContent = `${mac ? "Windows" : "macOS"} (${mb(other)})`;
+        $("dl-secondary").href = other.browser_download_url;
+      }
+      if (dmg && exe) $("sizes").textContent = `Downloads: ${mb(exe)} on Windows, ${mb(dmg)} on macOS.`;
+      $("dl-meta").textContent = `${release.tag_name}. Free and open source (MIT). Updates itself.`;
+      $("close-meta").textContent = `${release.tag_name}. Free and open source. Not affiliated with Figma or Discord.`;
     } catch {}
   })();
 </script>

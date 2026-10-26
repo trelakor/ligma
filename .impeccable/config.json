@@ -1,0 +1,23 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-10-26T00:57:34.593Z",
+        "reason": "agent decision: Inter is the Ligma app's own UI face (dist/settings.html, dist/preview.html); body only, display is Funnel Display"
+      },
+      {
+        "rule": "nested-cards",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-10-26T00:57:34.762Z",
+        "reason": "agent decision: the nested 'cards' are drawn app UI (tab preview, Discord profile, Figma panels) inside swatch-chip illustrations, not layout containers"
+      }
+    ]
+  }
+}
