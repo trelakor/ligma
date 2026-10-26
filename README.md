@@ -6,9 +6,22 @@
 
 A lightweight desktop app for [Figma](https://www.figma.com), about 4 MB.
 
-[Download](../../releases/latest) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md)
+[![Latest release](https://img.shields.io/github/v/release/trelakor/ligma)](../../releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/trelakor/ligma/total)](../../releases)
+[![License: MIT](https://img.shields.io/github/license/trelakor/ligma)](LICENSE)
+![macOS | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
+
+[Download](../../releases/latest) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md) · [Discussions](../../discussions)
 
 </div>
+
+## How small
+
+|                   | Ligma  | Figma desktop |
+| ----------------- | ------ | ------------- |
+| Installed (macOS) | 16 MB  | 305 MB        |
+
+Ligma's downloads are 2.2 MB on Windows and 7.1 MB on macOS (a universal build for Apple silicon and Intel). It doesn't bundle a browser engine, so it stays small. See [Memory](docs/MEMORY.md) to compare memory use on your own machine.
 
 ## Who it's for
 

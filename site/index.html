@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ligma: a lightweight Figma desktop app for macOS and Windows</title>
+<meta name="description" content="Ligma is a free, open-source Figma desktop app, about 4 MB. Tabs, color themes, plugins in the left rail and Discord Rich Presence. Built with Tauri.">
+<link rel="canonical" href="https://trelakor.github.io/ligma/">
+<link rel="icon" href="logo.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Ligma: a lightweight Figma desktop app">
+<meta property="og:description" content="About 4 MB. Tabs, themes, plugins in the left rail and Discord Rich Presence. Free and open source.">
+<meta property="og:url" content="https://trelakor.github.io/ligma/">
+<meta property="og:image" content="https://trelakor.github.io/ligma/logo.png">
+<meta name="twitter:card" content="summary">
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1e1e1e; --muted: #5f5f5f; --line: #e6e6e6; --card: #f7f7f7;
+    --green: #00cc66; --red: #ff0029; --purple: #914fff; --blue: #00b9ff;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161616; --fg: #f2f2f2; --muted: #a3a3a3; --line: #2c2c2c; --card: #1f1f1f; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: inherit; }
+  code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 0.1em 0.35em; overflow-wrap: anywhere; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; }
+  nav .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; text-decoration: none; }
+  nav .brand img { width: 28px; height: 28px; }
+  nav .links { display: flex; gap: 20px; font-size: 15px; }
+  nav .links a { color: var(--muted); text-decoration: none; }
+  nav .links a:hover { color: var(--fg); }
+
+  .hero { text-align: center; padding: 64px 0 48px; }
+  .hero img { width: 112px; height: 112px; }
+  .hero h1 { font-size: clamp(36px, 6vw, 56px); line-height: 1.1; margin: 16px 0 12px; letter-spacing: -0.02em; }
+  .hero p { font-size: 19px; color: var(--muted); max-width: 560px; margin: 0 auto 32px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 12px 22px; border-radius: 10px;
+    font-weight: 600; text-decoration: none; border: 1px solid var(--line); background: var(--card);
+  }
+  .btn.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .btn:hover { opacity: 0.88; }
+  .meta { margin-top: 14px; font-size: 14px; color: var(--muted); }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0 72px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; text-align: center; }
+  .stat b { display: block; font-size: 30px; letter-spacing: -0.02em; }
+  .stat span { color: var(--muted); font-size: 14px; }
+
+  h2 { font-size: 30px; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .lead { color: var(--muted); margin: 0 0 28px; }
+  section { margin-bottom: 80px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; display: flex; align-items: center; gap: 10px; }
+  .card h3::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--dot); flex: none; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .swatches { display: flex; flex-wrap: wrap; gap: 14px; }
+  .swatch { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .swatch i { width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--line); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  td:first-child { font-weight: 600; }
+
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .steps .card p + p { margin-top: 8px; }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0 48px; color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; }
+  footer a { color: var(--muted); }
+
+  @media (max-width: 640px) {
+    .stats { grid-template-columns: 1fr; }
+    nav .links a.hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="./"><img src="logo.png" alt="">Ligma</a>
+    <div class="links">
+      <a href="#features" class="hide-sm">Features</a>
+      <a href="#install" class="hide-sm">Install</a>
+      <a href="https://github.com/trelakor/ligma">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <img src="logo.png" alt="Ligma logo">
+    <h1>Figma, without the weight</h1>
+    <p>A lightweight desktop app for Figma on macOS and Windows. About 4&nbsp;MB, with tabs, themes, your plugins in the left rail and your file on Discord.</p>
+    <div class="buttons">
+      <a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest">Download</a>
+      <a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a>
+      <a class="btn" href="https://github.com/trelakor/ligma">★ Star on GitHub</a>
+    </div>
+    <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b>2.2 MB</b><span>Windows installer</span></div>
+    <div class="stat"><b>16 MB</b><span>installed on macOS, vs 305 MB for Figma desktop</span></div>
+    <div class="stat"><b>0</b><span>bundled browser engines</span></div>
+  </div>
+
+  <section id="features">
+    <h2>What you get</h2>
+    <p class="lead">Ligma opens figma.com in your system's webview (WebView2 or WKWebView) instead of shipping its own browser, and adds what the web version is missing.</p>
+    <div class="grid">
+      <div class="card" style="--dot: var(--purple)"><h3>Tabs</h3><p>Like the Figma desktop app: pinning, previews on hover, emoji icons, shortcuts and your tabs reopened from last time.</p></div>
+      <div class="card" style="--dot: var(--blue)"><h3>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
+      <div class="card" style="--dot: var(--green)"><h3>Themes</h3><p>Light and dark variants that recolor Figma's interface, never your designs, plus an adjustable interface scale.</p></div>
+      <div class="card" style="--dot: var(--red)"><h3>Plugins in the left rail</h3><p>Your saved and development plugins sit under Figma's own buttons, one click to run.</p></div>
+      <div class="card" style="--dot: var(--purple)"><h3>Development plugins</h3><p>Import a plugin from its <code>manifest.json</code>, which figma.com doesn't support.</p></div>
+      <div class="card" style="--dot: var(--blue)"><h3>Discord Rich Presence</h3><p>Shows your file, page and tool, with per-file hiding and optional invites to files.</p></div>
+      <div class="card" style="--dot: var(--green)"><h3>Google sign-in</h3><p>Works like the desktop app's, with or without the official app installed.</p></div>
+      <div class="card" style="--dot: var(--red)"><h3>Local fonts</h3><p>Uses Figma's font helper, starting it when needed.</p></div>
+      <div class="card" style="--dot: var(--purple)"><h3>Automatic updates</h3><p>Downloaded in the background and installed in place, so you stay signed in.</p></div>
+    </div>
+  </section>
+
+  <section id="themes">
+    <h2>Make Figma your own</h2>
+    <p class="lead">Pick one theme for light mode and one for dark. Each one tints Figma's greys and gives every editor's brand color its own.</p>
+    <div class="swatches" id="swatches"></div>
+  </section>
+
+  <section id="compare">
+    <h2>Ligma or the official app?</h2>
+    <p class="lead">Both are Figma. Ligma is a lighter shell with a few extras.</p>
+    <table>
+      <tr><th></th><th>Ligma</th><th>Figma desktop</th></tr>
+      <tr><td>Installed size (macOS)</td><td>16 MB</td><td>305 MB</td></tr>
+      <tr><td>Browser engine</td><td>System webview</td><td>Bundled Chromium (Electron)</td></tr>
+      <tr><td>Color themes</td><td>9</td><td>Light and dark</td></tr>
+      <tr><td>Plugins in the left rail</td><td>Yes</td><td>No</td></tr>
+      <tr><td>Discord Rich Presence</td><td>Yes</td><td>No</td></tr>
+      <tr><td>Open source</td><td>Yes (MIT)</td><td>No</td></tr>
+    </table>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p class="lead">Builds aren't signed yet, so your system asks once before the first launch. After that, Ligma updates itself.</p>
+    <div class="steps">
+      <div class="card">
+        <h3 style="--dot: var(--blue)">macOS</h3>
+        <p>Download the <code>.dmg</code> and drag Ligma to Applications. The app isn't notarized, so run this once:</p>
+        <p><code>xattr -dr com.apple.quarantine /Applications/Ligma.app</code></p>
+        <p>Or allow it in System Settings → Privacy &amp; Security → Open Anyway.</p>
+      </div>
+      <div class="card">
+        <h3 style="--dot: var(--green)">Windows</h3>
+        <p>Download and run the <code>-setup.exe</code> installer.</p>
+        <p>If SmartScreen warns, choose More info → Run anyway.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Ligma is MIT licensed. It's not affiliated with Figma or Discord.</span>
+    <span>
+      <a href="https://github.com/trelakor/ligma">GitHub</a> ·
+      <a href="https://github.com/trelakor/ligma/blob/main/CHANGELOG.md">Changelog</a> ·
+      <a href="https://github.com/trelakor/ligma/blob/main/PRIVACY.md">Privacy</a> ·
+      <a href="https://github.com/trelakor/ligma/blob/main/TERMS.md">Terms</a>
+    </span>
+  </footer>
+</div>
+
+<script>
+  // Theme swatches, from LIGMA_THEMES in dist/themes.js (accent hue in OKLCH).
+  const themes = [["Figma"], ["Grove", 155], ["Lagoon", 190], ["Ocean", 240], ["Midnight", 275], ["Iris", 305], ["Rose", 0], ["Ember", 42], ["Amber", 72]];
+  document.getElementById("swatches").innerHTML = themes.map(([name, hue]) => {
+    const fill = hue === undefined
+      ? "conic-gradient(#00cc66, #00b9ff, #914fff, #ff0029, #ff7237, #00cc66)"
+      : `oklch(0.62 0.17 ${hue})`;
+    return `<div class="swatch"><i style="background: ${fill}"></i>${name}</div>`;
+  }).join("");
+
+  // Point the download buttons at the latest release's installer for this OS.
+  (async () => {
+    const mac = /Mac/i.test(navigator.platform || navigator.userAgent);
+    const win = /Win/i.test(navigator.platform || navigator.userAgent);
+    const primary = document.getElementById("dl-primary");
+    const secondary = document.getElementById("dl-secondary");
+    if (mac) primary.textContent = "Download for macOS";
+    if (win) primary.textContent = "Download for Windows";
+    try {
+      const res = await fetch("https://api.github.com/repos/trelakor/ligma/releases/latest");
+      if (!res.ok) return;
+      const release = await res.json();
+      const dmg = release.assets.find((a) => a.name.endsWith(".dmg"));
+      const exe = release.assets.find((a) => a.name.endsWith("-setup.exe"));
+      const pick = mac ? dmg : win ? exe : null;
+      if (pick) primary.href = pick.browser_download_url;
+      const other = mac ? exe : win ? dmg : null;
+      if (other) {
+        secondary.textContent = mac ? "Windows" : "macOS";
+        secondary.href = other.browser_download_url;
+      }
+      document.getElementById("dl-meta").textContent =
+        `${release.tag_name}, free and open source (MIT). Updates itself.`;
+    } catch {}
+  })();
+</script>
+</body>
+</html>
