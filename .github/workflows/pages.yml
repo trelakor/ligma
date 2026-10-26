@@ -4,7 +4,7 @@ name: Pages
 on:
   push:
     branches: [main]
-    paths: [site/**, assets/logo.png, .github/workflows/pages.yml]
+    paths: [site/**, assets/logo.png, dist/themes.js, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: cp assets/logo.png site/logo.png
+      - run: cp assets/logo.png site/logo.png && cp dist/themes.js site/themes.js
 
       - uses: actions/configure-pages@v5
 
