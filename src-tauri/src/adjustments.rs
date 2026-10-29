@@ -1,28 +1,28 @@
 //! Image adjustments (Settings > Appearance > Images): copies the seven
-//! sliders of an image fill (Exposure, Contrast, Saturation, Temperature,
-//! Tint, Highlights and Shadows) and pastes them onto every image fill in
-//! the selection, leaving the images themselves alone. Figma's
-//! Copy/Paste Properties brings the whole fill, image and all
+//! sliders of an image fill or stroke (Exposure, Contrast, Saturation,
+//! Temperature, Tint, Highlights and Shadows) and pastes them onto every
+//! image fill and stroke in the selection, leaving the images themselves
+//! alone. Figma's Copy/Paste Properties brings the whole fill, image and
+//! all. Video fills have no sliders
 //!
 //! With the image picker open, Cmd+Shift+C (Ctrl+Shift+C) copies its
 //! adjustments, unless a text field has focus: Figma's Copy as PNG does
 //! nothing then, and Cmd+C goes to Ligma's Edit menu before the page sees
-//! it. Cmd+Shift+V
-//! (Ctrl+Shift+V) pastes them while they're the last thing copied in
-//! Ligma; once anything else is copied or cut, it's Figma's Paste over
-//! Selection again. A button left of the picker's Rotate 90º, and
-//! right-clicking its sliders or an image fill's row in the Fill section,
-//! open a menu with Copy, Paste and Reset (see tab_menu.rs). Copy reads
-//! the fill whose picker is open or row was clicked. `PAGE_JS` asks for
-//! the menu by loading `SIGNAL_HOST`, which `on_signal` handles
+//! it. Cmd+Shift+V (Ctrl+Shift+V) pastes them while they're the last thing
+//! copied in Ligma, or while an image's row in the Fill or Stroke section
+//! is highlighted; otherwise it's Figma's Paste over Selection. A button
+//! left of the picker's Rotate 90º, and right-clicking its sliders or an
+//! image's row, open a menu with Copy, Paste and Reset (see tab_menu.rs).
+//! Copy reads the paint whose picker is open or row was clicked. `PAGE_JS`
+//! asks for the menu by loading `SIGNAL_HOST`, which `on_signal` handles
 //!
 //! What's copied is kept in `localStorage`, so it carries to every tab.
-//! Fills are read and written through Figma's console plugin API,
+//! Paints are read and written through Figma's console plugin API,
 //! `window.figma`, so files that can't be edited are left alone, and each
 //! paste or reset is one step for Figma's undo
 //!
-//! The picker, its buttons and the Fill section's rows are found by
-//! Figma's test ids and class names as seen on 2026-10-29. The sliders
+//! The picker, its buttons and the Fill and Stroke sections' rows are found
+//! by Figma's test ids and class names as seen on 2026-10-29. The sliders
 //! also by seven of them in one box, or by Figma's English labels
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -79,61 +79,78 @@ const PAGE_JS: &str = r##"(() => {
   };
   // Video fills have no sliders
   const adjustable = (paint) => paint?.type === "IMAGE";
+  const LISTS = ["fills", "strokes"];
   // Text with mixed fills has none to adjust
-  const fillsOf = (node) => {
+  const paintsOf = (node, list) => {
     try {
-      return Array.isArray(node.fills) ? node.fills : [];
+      return Array.isArray(node[list]) ? node[list] : [];
     } catch {
       return [];
     }
   };
   const plural = (count) => `${count} image${count === 1 ? "" : "s"}`;
+  // One toast at a time, so quick copies and pastes don't queue behind
+  // each other
+  let toast;
+  const notify = (figma, message) => {
+    try {
+      toast?.cancel();
+    } catch {}
+    toast = figma.notify(message, { timeout: 2000 });
+  };
 
-  // From the first selected layer with an image: its fill at `index`, the
-  // one whose picker is open or row was right-clicked, or else its topmost
+  // From the first selected layer with an image: the paint `at`, `{ list,
+  // index }`, whose picker is open or row was clicked, or else its topmost
   // image fill shown. False with none
-  const copy = (index) => {
+  const copy = (at) => {
     const figma = api();
     if (!figma) return false;
     for (const node of figma.currentPage.selection) {
-      const fills = fillsOf(node);
+      const fills = paintsOf(node, "fills");
+      const chosen = at && paintsOf(node, at.list)[at.index];
       const paint =
-        (adjustable(fills[index]) ? fills[index] : null) ??
+        (adjustable(chosen) ? chosen : null) ??
         fills.findLast((paint) => adjustable(paint) && paint.visible !== false) ??
         fills.findLast(adjustable);
       if (!paint) continue;
       keep({ filters: Object.fromEntries(FILTERS.map((key) => [key, paint.filters?.[key] ?? 0])), armed: true });
-      figma.notify("Adjustments copied");
+      notify(figma, "Adjustments copied");
       return true;
     }
     return false;
   };
 
-  // Sets `filters` on every image fill of the selected layers,
-  // as one undo step
+  // Sets `filters` on every image fill and stroke of the selected layers,
+  // as one undo step. Counts layers
   const adjust = (filters, done) => {
     const figma = api();
     if (!figma) return;
     let images = 0;
     let skipped = 0;
     for (const node of figma.currentPage.selection) {
-      const fills = fillsOf(node);
-      if (!fills.some(adjustable)) continue;
-      try {
-        node.fills = fills.map((paint) => (adjustable(paint) ? { ...paint, filters: { ...filters } } : paint));
-        images++;
-      } catch {
-        skipped++;
+      let changed = false;
+      let failed = false;
+      for (const list of LISTS) {
+        const paints = paintsOf(node, list);
+        if (!paints.some(adjustable)) continue;
+        try {
+          node[list] = paints.map((paint) => (adjustable(paint) ? { ...paint, filters: { ...filters } } : paint));
+          changed = true;
+        } catch {
+          failed = true;
+        }
       }
+      if (changed) images++;
+      else if (failed) skipped++;
     }
     if (!images && !skipped) {
-      figma.notify("No images selected");
+      notify(figma, "No images selected");
       return;
     }
     try {
       figma.commitUndo();
     } catch {}
-    figma.notify(`${done} ${plural(images)}${skipped ? `, ${skipped} skipped` : ""}`);
+    notify(figma, `${done} ${plural(images)}${skipped ? `, ${skipped} skipped` : ""}`);
   };
   const paste = () => {
     const filters = copied()?.filters;
@@ -173,22 +190,35 @@ const PAGE_JS: &str = r##"(() => {
     return null;
   };
 
-  // The Fill section's rows, the one whose picker is open marked
-  // `paintPanelValueSelected`. Each paint's index in the layer's fills is
-  // the last number of its `data-onboarding-key`, `paint-panel-row-paint-1-1`
+  // The Fill and Stroke sections' rows: the one whose picker is open marked
+  // `paintPanelValueSelected`, a highlighted one inside a `rowSelected`.
+  // Each names its section and paint in its `data-onboarding-key`,
+  // `paint-panel-row-paint-<section>-<index>`. Fill comes first on the
+  // page, so its number is the first row's
   const ROW = '[data-testid="paint-panel-color-value-container"]';
-  const rowIndex = (row) => {
-    const match = /-(\d+)$/.exec(row?.dataset.onboardingKey ?? "");
-    return match ? Number(match[1]) : undefined;
+  const KEY_PATTERN = /-(\d+)-(\d+)$/;
+  const rowPaint = (row) => {
+    const match = KEY_PATTERN.exec(row?.dataset.onboardingKey ?? "");
+    if (!match) return null;
+    const first = KEY_PATTERN.exec(document.querySelector(ROW)?.dataset.onboardingKey ?? "");
+    const at = { list: first && first[1] !== match[1] ? "strokes" : "fills", index: Number(match[2]) };
+    // A layer with strokes but no fills: Stroke comes first
+    const nodes = api()?.currentPage.selection ?? [];
+    const other = at.list === "fills" ? "strokes" : "fills";
+    const has = (list) => nodes.some((node) => adjustable(paintsOf(node, list)[at.index]));
+    if (!has(at.list) && has(other)) at.list = other;
+    return at;
   };
-  const openIndex = () => rowIndex(document.querySelector(`${ROW}[class*="paintPanelValueSelected--"]`));
+  const isImage = (at) => !!at && (api()?.currentPage.selection ?? []).some((node) => adjustable(paintsOf(node, at.list)[at.index]));
+  const openPaint = () => rowPaint(document.querySelector(`${ROW}[class*="paintPanelValueSelected--"]`));
+  const highlighted = () => rowPaint(document.querySelector(`[class*="raw_components--rowSelected--"] ${ROW}`));
 
   // Asks Ligma for the menu (see `on_signal`): through `window.open` on
   // Windows, and on macOS as an iframe load, which WKWebView reports to
   // `on_navigation`. Copy then reads the fill at `index`
-  let menuIndex;
-  const openMenu = (index) => {
-    menuIndex = index;
+  let menuPaint;
+  const openMenu = (at) => {
+    menuPaint = at;
     const value = copied();
     const params = { copied: value ? 1 : 0, armed: value?.armed ? 1 : 0, open: adjustments() ? 1 : 0 };
     const url = `https://adjustments.ligma.invalid/menu?${new URLSearchParams(params)}`;
@@ -221,11 +251,11 @@ const PAGE_JS: &str = r##"(() => {
       if (!mod || event.altKey) return;
       const key = letter(event);
       if (key === "c" && event.shiftKey) {
-        if (state.on && !editing(document.activeElement) && adjustments() && copy(openIndex())) stop(event);
+        if (state.on && !editing(document.activeElement) && adjustments() && copy(openPaint())) stop(event);
         else disarm();
       } else if ((key === "c" || key === "x") && !event.shiftKey) {
         disarm();
-      } else if (key === "v" && event.shiftKey && state.on && copied()?.armed && api()) {
+      } else if (key === "v" && event.shiftKey && state.on && api() && (copied()?.armed || (copied() && isImage(highlighted())))) {
         stop(event);
         paste();
       }
@@ -243,26 +273,27 @@ const PAGE_JS: &str = r##"(() => {
       if (!figma) return;
       if (adjustments()?.contains(event.target)) {
         stop(event);
-        openMenu(openIndex());
+        openMenu(openPaint());
         return;
       }
-      // An image fill's row
-      const index = rowIndex(event.target.closest?.(ROW));
-      if (index === undefined || !figma.currentPage.selection.some((node) => adjustable(fillsOf(node)[index]))) return;
+      // An image's row
+      const at = rowPaint(event.target.closest?.(ROW));
+      if (!isImage(at)) return;
       stop(event);
-      openMenu(index);
+      openMenu(at);
     },
     true,
   );
 
   // A button left of the image picker's Rotate 90º, in its look, that opens
-  // the menu
+  // the menu. Not for videos, which share the picker but have no sliders
   const PICKER = '[data-testid="paint-picker-v2-modal"]';
   const BUTTONS = '[class*="image_settings_modal--settingsButtons"]';
   const STROKE = 'stroke="var(--fpl-icon-color, var(--color-icon))"';
   const ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M6 9h6.5m3 0H18M6 15h2.5m3 0H18"/><circle ${STROKE} cx="14" cy="9" r="1.5"/><circle ${STROKE} cx="10" cy="15" r="1.5"/></svg>`;
   const addButton = () => {
-    const buttons = document.querySelector(PICKER)?.querySelector(BUTTONS);
+    const picker = document.querySelector(PICKER);
+    const buttons = picker?.querySelector('fieldset[value="IMAGE"]') && picker.querySelector(BUTTONS);
     const ours = document.querySelector("[data-ligma-adjustments]");
     if (ours && (!state.on || !buttons?.contains(ours))) ours.parentElement.remove();
     if (!state.on || !buttons || buttons.querySelector("[data-ligma-adjustments]")) return;
@@ -279,7 +310,7 @@ const PAGE_JS: &str = r##"(() => {
     button.append(icon);
     button.addEventListener("click", (event) => {
       stop(event);
-      if (api()) openMenu(openIndex());
+      if (api()) openMenu(openPaint());
     });
     const wrap = document.createElement("span");
     wrap.append(button);
@@ -299,7 +330,8 @@ const PAGE_JS: &str = r##"(() => {
   window.__ligmaImageAdjustments = {
     run: (action) => {
       if (!state.on) return;
-      if (action === "copy" && !copy(menuIndex)) api()?.notify("No images selected");
+      const figma = api();
+      if (action === "copy" && !copy(menuPaint) && figma) notify(figma, "No images selected");
       else if (action === "paste") paste();
       else if (action === "reset") reset();
     },
