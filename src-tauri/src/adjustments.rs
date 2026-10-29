@@ -337,8 +337,9 @@ const PAGE_JS: &str = r##"(() => {
 
   // Copy adjustments and Paste adjustments after Crop in the bar Figma shows
   // above the toolbar for a selected image, in its buttons' look. Paste
-  // only once something is copied. Both read and change each layer's top
-  // image fill. Only with the setting for them, `bar`
+  // only once something is copied. Both read and change the image whose
+  // row is highlighted in the Fill or Stroke section, or else each layer's
+  // top image fill. Only with the setting for them, `bar`
   const BAR = '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]';
   const BAR_ICONS = {
     copy: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="9.5" y="9.5" width="9" height="9" rx="1.5"/><path ${STROKE} d="M14.5 9.5V7A1.5 1.5 0 0 0 13 5.5H7A1.5 1.5 0 0 0 5.5 7v6A1.5 1.5 0 0 0 7 14.5h2.5"/></svg>`,
@@ -369,10 +370,17 @@ const PAGE_JS: &str = r##"(() => {
         label.textContent = BAR_LABELS[action];
         button.innerHTML = BAR_ICONS[action];
         button.append(label);
+        // The row highlighted before the click takes focus from it
+        let at = null;
+        button.addEventListener("pointerdown", () => {
+          const row = openPaint() ?? highlighted();
+          at = isImage(row) ? row : null;
+        });
         button.addEventListener("click", (event) => {
           stop(event);
-          if (action === "copy") copy(null);
-          else paste(null);
+          if (action === "copy") copy(at);
+          else paste(at);
+          at = null;
         });
       }
       if (after.nextElementSibling !== button) after.after(button);
