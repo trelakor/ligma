@@ -68,6 +68,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   if (!mount()) new MutationObserver((_, observer) => mount() && observer.disconnect()).observe(document, { childList: true });
 
+  // `document`, not its <html>: WebView2 runs this before there is one
   let queued = false;
   new MutationObserver(() => {
     if (queued) return;
@@ -76,7 +77,7 @@ const PAGE_JS: &str = r##"(() => {
       queued = false;
       tidy();
     });
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  }).observe(document, { childList: true, subtree: true });
 
   // From Ligma, when the setting changes
   window.__ligmaFreeAiActions = (next) => {
