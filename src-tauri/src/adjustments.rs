@@ -19,8 +19,9 @@
 //! `window.figma`, so files that can't be edited are left alone, and each
 //! paste or reset is one step for Figma's undo
 //!
-//! The picker is found by its sliders, seven or more in one box, or by
-//! Figma's English labels for them, not by Figma's class names
+//! The picker is found by its sliders' labels, by Figma's class for them
+//! as seen on 2026-10-29, or else by seven sliders in one box, or by
+//! Figma's English labels
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -141,10 +142,15 @@ const PAGE_JS: &str = r##"(() => {
     }
     return null;
   };
-  // The image picker's sliders on screen: the smallest box around seven
-  // of them, or around the first and last of Figma's English labels
+  // The image picker's sliders on screen: the smallest box around their
+  // labels (`image_settings_modal--colorAdjustLabel`), around seven
+  // sliders, or around the first and last of Figma's English labels
+  const LABEL = '[class*="image_settings_modal--colorAdjustLabel"]';
   const SLIDER = '[role="slider"], input[type="range"]';
   const adjustments = () => {
+    const label = [...document.querySelectorAll(LABEL)].find(visible);
+    const box = label && around(label, (node) => node.querySelectorAll(LABEL).length >= FILTERS.length);
+    if (box) return box;
     for (const slider of document.querySelectorAll(SLIDER)) {
       if (!visible(slider)) continue;
       const box = around(slider, (node) => node.querySelectorAll(SLIDER).length >= FILTERS.length);
