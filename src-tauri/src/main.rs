@@ -24,6 +24,7 @@ mod tab_menu;
 mod tabs;
 #[cfg(target_os = "macos")]
 mod titlebar;
+mod toolbar;
 mod updater;
 #[cfg(windows)]
 mod webview2;
@@ -283,6 +284,7 @@ fn main() {
             appearance::init(app.handle(), &settings);
             layers::init(&settings);
             home::init(&settings);
+            toolbar::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());

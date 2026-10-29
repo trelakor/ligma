@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <title>Tab Menu</title>
-<!-- A tab's right-click menu (see src-tauri/src/tab_menu.rs). The window
+<!-- A tab's right-click menu, or the toolbar's menu of modes (see
+     src-tauri/src/tab_menu.rs). The window
      is exactly the menu: the page draws the items from `get_menu`,
      reports its size with `menu_ready`, and sends the chosen item to
      `menu_pick`. Colors come from the active Figma tab's theme, so the
@@ -46,6 +47,8 @@
     white-space: nowrap;
   }
   .item.selected { background: var(--selected); color: var(--selected-text); }
+  .check { display: flex; width: 16px; margin-right: 4px; visibility: hidden; }
+  [aria-checked="true"] > .check { visibility: visible; }
   .separator { height: 1px; margin: 8px -8px; background: var(--separator); }
 </style>
 </head>
@@ -71,6 +74,9 @@
     }
   };
 
+  // Figma's menu check
+  const CHECK = '<span class="check" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 8.5l2.5 2.5 4.5-5.5"/></svg></span>';
+
   let items = [];
   let selected = -1;
   const select = (index) => {
@@ -95,9 +101,13 @@
       const node = Object.assign(document.createElement("div"), {
         id: `item-${i}`,
         className: "item",
-        role: "menuitem",
+        role: loaded.checked ? "menuitemcheckbox" : "menuitem",
         textContent: text,
       });
+      if (loaded.checked) {
+        node.setAttribute("aria-checked", loaded.checked.includes(action));
+        node.insertAdjacentHTML("afterbegin", CHECK);
+      }
       const index = items.length;
       node.addEventListener("mousemove", () => selected !== index && select(index));
       node.addEventListener("click", () => pick(action));

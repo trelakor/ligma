@@ -431,6 +431,30 @@
       </div>
     </section>
     <section>
+      <h2>Toolbar</h2>
+      <div class="row">
+        <span class="label">Modes to switch between
+          <div class="hint">On the right of Figma Design's toolbar. With one left, the switch is hidden. Hiding the mode a file is in switches it to the first one shown. Right-click the switch to change these there. Hiding one reloads files already open, each when you next look at it.</div>
+        </span>
+      </div>
+      <label class="row nested">
+        <span class="label">Draw</span>
+        <input type="checkbox" class="switch" id="mode-draw">
+      </label>
+      <label class="row nested">
+        <span class="label">Design</span>
+        <input type="checkbox" class="switch" id="mode-design">
+      </label>
+      <label class="row nested">
+        <span class="label">Motion</span>
+        <input type="checkbox" class="switch" id="mode-motion">
+      </label>
+      <label class="row nested">
+        <span class="label">Dev Mode</span>
+        <input type="checkbox" class="switch" id="mode-dev">
+      </label>
+    </section>
+    <section>
       <h2>Layers</h2>
       <label class="row">
         <span class="label">Show layer previews
@@ -649,6 +673,13 @@
     "discord-asset": "discordShowAsset",
     "discord-webpage": "discordShowWebpage",
   };
+  // Modes in Figma Design's toolbar: switch and setting
+  const modeFields = {
+    "mode-draw": "showDrawMode",
+    "mode-design": "showDesignMode",
+    "mode-motion": "showMotionMode",
+    "mode-dev": "showDevMode",
+  };
   // Interface scales − and + step through, like a browser's zoom levels
   // (SCALES in settings.rs)
   const SCALES = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
@@ -805,6 +836,7 @@
     $("discord-invites").checked = settings.discordInvites;
     $("discord-join-requests").checked = settings.discordJoinRequests;
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
+    for (const [id, key] of Object.entries(modeFields)) $(id).checked = settings[key];
     $("restore").checked = settings.restoreTabs;
     $("previews").checked = settings.tabPreviews;
     $("rail-plugins").checked = settings.railPlugins;
@@ -861,6 +893,7 @@
       discordInvites: $("discord-invites").checked,
       discordJoinRequests: $("discord-join-requests").checked,
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
+      ...Object.fromEntries(Object.entries(modeFields).map(([id, key]) => [key, $(id).checked])),
       restoreTabs: $("restore").checked,
       tabPreviews: $("previews").checked,
       railPlugins: $("rail-plugins").checked,
@@ -874,7 +907,7 @@
     await invoke("set_settings", { settings });
   }
 
-  for (const id of [...fields, ...Object.keys(whereFields), "scale"]) $(id).addEventListener("change", () => save());
+  for (const id of [...fields, ...Object.keys(whereFields), ...Object.keys(modeFields), "scale"]) $(id).addEventListener("change", () => save());
 
   // Number fields scrub like Figma's: drag one right to raise its value
   // and left to lower it, with Shift in steps of 10. A click without a
@@ -1012,6 +1045,11 @@
     settings = loaded;
     show();
   });
+  // From Ligma, when settings change elsewhere (the toolbar's menu of modes)
+  window.applySettings = (changed) => {
+    settings = changed;
+    show();
+  };
 </script>
 </body>
 </html>

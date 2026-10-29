@@ -84,6 +84,15 @@ pub struct Settings {
     /// Show each layer's preview in the layers panel in every mode, as in
     /// Draw mode. Figma renders them all, so off by default
     pub layer_previews: bool,
+    /// Show Draw in the mode switch on the right of Figma Design's
+    /// toolbar. With one mode left, the toolbar shows no switch,
+    pub show_draw_mode: bool,
+    /// Design,
+    pub show_design_mode: bool,
+    /// Motion,
+    pub show_motion_mode: bool,
+    /// and Dev Mode
+    pub show_dev_mode: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -117,6 +126,10 @@ impl Default for Settings {
             rail_widgets: true,
             actions_plugins_tab: false,
             layer_previews: false,
+            show_draw_mode: true,
+            show_design_mode: true,
+            show_motion_mode: true,
+            show_dev_mode: true,
             classic_home: false,
         }
     }
@@ -337,18 +350,24 @@ pub async fn get_theme(app: AppHandle, webview: Webview) -> Option<serde_json::V
     from_settings_window(&webview).then(|| crate::tabs::theme(&app)).flatten()
 }
 
-/// Saves `settings` and applies them to the running app
+/// Saves `settings` from the settings window and applies them
 #[tauri::command]
 pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) -> Result<(), String> {
     if !from_settings_window(&webview) {
         return Err("not allowed".into());
     }
-    save(&app, &settings)?;
-    crate::tabs::apply_settings(&app, &settings);
-    crate::appearance::apply_settings(&app, &settings);
-    crate::presence::apply_settings(&app, &settings);
-    crate::layers::apply_settings(&app, &settings);
-    crate::home::apply_settings(&app, &settings);
+    change(&app, settings)
+}
+
+/// Saves `settings` and applies them to the running app
+pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
+    save(app, &settings)?;
+    crate::tabs::apply_settings(app, &settings);
+    crate::appearance::apply_settings(app, &settings);
+    crate::presence::apply_settings(app, &settings);
+    crate::layers::apply_settings(app, &settings);
+    crate::home::apply_settings(app, &settings);
+    crate::toolbar::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
@@ -358,9 +377,16 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
         changed
     };
     if plugins_changed {
-        crate::plugins::push(&app);
+        crate::plugins::push(app);
     }
     Ok(())
+}
+
+/// Shows `settings`, changed elsewhere, in the settings window if open
+pub fn show_in_window(app: &AppHandle, settings: &Settings) {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let _ = window.eval(format!("window.applySettings?.({})", serde_json::to_string(settings).unwrap()));
+    }
 }
 
 #[tauri::command]
