@@ -1,4 +1,4 @@
-// Hide the console window on Windows release builds.
+// Hide the console window on Windows release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod appearance;
@@ -37,10 +37,10 @@ use std::sync::Mutex;
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-/// Font agent process started by Ligma, killed again on exit.
+/// Font agent process started by Ligma, killed again on exit
 struct FontAgent(Mutex<Option<Child>>);
 
-/// Where the Figma desktop app and Figma's font installer put the agent.
+/// Where the Figma desktop app and Figma's font installer put the agent
 #[cfg(target_os = "macos")]
 fn font_agent_path() -> Option<std::path::PathBuf> {
     Some(
@@ -62,7 +62,7 @@ fn font_agent_path() -> Option<std::path::PathBuf> {
 /// Starts Figma's local font helper if it isn't already running. figma.com
 /// asks it (on http://127.0.0.1:44950 or https://figmadaemon.com:44960) for
 /// the user's installed fonts. It normally runs only alongside the Figma
-/// desktop app or Figma's font installer.
+/// desktop app or Figma's font installer
 fn start_font_agent() -> Option<Child> {
     use std::net::{SocketAddr, TcpStream};
     use std::process::{Command, Stdio};
@@ -88,7 +88,7 @@ fn start_font_agent() -> Option<Child> {
 /// updates. File and Window
 /// hold the tab shortcuts, and Help reports a problem; Cmd+W closes the tab, not the window (or the
 /// settings window, when that has focus). Other platforms have no menu bar: on Windows it would
-/// show as a strip inside the window.
+/// show as a strip inside the window
 #[cfg(target_os = "macos")]
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -170,7 +170,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
 }
 
 /// Undoes what Ligma started or borrowed, before it quits. Also run when an
-/// update's installer quits Ligma.
+/// update's installer quits Ligma
 fn shut_down(app: &tauri::AppHandle) {
     if let Some(mut agent) = app.state::<FontAgent>().0.lock().unwrap().take() {
         let _ = agent.kill();
@@ -187,13 +187,13 @@ fn main() {
     builder
         // First, so a second launch exits before anything else starts. It
         // brings this window forward, and on Windows the `figma://` link
-        // that started it to `figma_scheme`.
+        // that started it to `figma_scheme`
         .plugin(tauri_plugin_single_instance::init(|app, _args, _| {
             if let Some(window) = app.get_window("main") {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
-            // Off the main thread: a link may open a tab.
+            // Off the main thread: a link may open a tab
             #[cfg(windows)]
             {
                 let app = app.clone();
@@ -202,12 +202,12 @@ fn main() {
         }))
         // Ligma opens links from Rust. The plugin's own handler would catch
         // `target="_blank"` clicks in Figma tabs, which have no IPC, and drop
-        // them (Add account, for one).
+        // them (Add account, for one)
         .plugin(report::log_plugin())
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         // Only the main window. Settings has a fixed size, which grows with
         // new options, and the plugin would show a new tab menu or prompt
-        // right away, before it's placed.
+        // right away, before it's placed
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_filter(|label| label == "main")
@@ -273,7 +273,7 @@ fn main() {
             app.manage(FontAgent(Mutex::new(start_font_agent())));
             app.manage(auth::Pending::default());
             // A sign-in cut short by a crash may still have Figma's
-            // `figma://` borrowed.
+            // `figma://` borrowed
             #[cfg(windows)]
             {
                 figma_scheme::restore();
@@ -288,7 +288,7 @@ fn main() {
             updater::start(app.handle());
 
             // The window's own webview is the tab bar. Figma tabs are added
-            // as child webviews below it.
+            // as child webviews below it
             #[allow(unused_mut)]
             let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Ligma")
@@ -299,18 +299,18 @@ fn main() {
             {
                 builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
             }
-            // Elsewhere the tab bar draws its own window controls.
+            // Elsewhere the tab bar draws its own window controls
             #[cfg(not(target_os = "macos"))]
             {
                 builder = builder.decorations(false);
             }
             let window = builder.build()?;
-            // Traffic lights centered on the tab bar (see titlebar.rs).
+            // Traffic lights centered on the tab bar (see titlebar.rs)
             #[cfg(target_os = "macos")]
             unsafe {
                 titlebar::center_traffic_lights(window.ns_window()?.cast());
             }
-            // `tabs::layout` sizes the tab bar's webview from here on.
+            // `tabs::layout` sizes the tab bar's webview from here on
             if let Some(bar) = app.get_webview("main") {
                 bar.set_auto_resize(false)?;
                 #[cfg(windows)]
@@ -326,7 +326,7 @@ fn main() {
                 WindowEvent::Moved(_) | WindowEvent::Focused(false) => preview::hide(&handle),
                 // Ligma's other windows go with it: the hidden tab menu or
                 // preview window, a prompt or settings would keep the app
-                // running.
+                // running
                 WindowEvent::Destroyed => {
                     tab_menu::close(&handle);
                     preview::close(&handle);
@@ -338,10 +338,10 @@ fn main() {
 
             tabs::apply_scale(app.handle());
             tabs::restore(app.handle(), &settings)?;
-            // Once there's a window to show it over.
+            // Once there's a window to show it over
             report::offer_last_crash(app.handle());
             updater::offer_last_failure(app.handle());
-            // Started by a `figma://` link.
+            // Started by a `figma://` link
             #[cfg(windows)]
             {
                 let app = app.handle().clone();

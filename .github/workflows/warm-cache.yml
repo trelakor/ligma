@@ -3,7 +3,7 @@
 # so without this every release compiles all its dependencies from scratch.
 # Runs when the Rust dependencies change, weekly so the cache follows new
 # stable Rust versions and isn't evicted, and manually from the Actions tab.
-# The matrix, toolchain and cache settings must match release.yml's build job.
+# The matrix, toolchain and cache settings must match release.yml's build job
 name: Warm cache
 
 on:

@@ -7,9 +7,9 @@
      image, name and product. The window is exactly the card: the page
      draws it from `get_tab_preview` and reports its size with
      `tab_preview_ready`. It never gets the mouse or focus. Colors come
-     from the active Figma tab's theme. -->
+     from the active Figma tab's theme -->
 <style>
-  /* Figma's UI3 dark theme, until the first Figma tab reports its theme. */
+  /* Figma's UI3 dark theme, until the first Figma tab reports its theme */
   :root {
     color-scheme: dark;
     --bg: #2c2c2c;
@@ -31,7 +31,7 @@
     -webkit-font-smoothing: antialiased;
   }
   /* On Windows the window is see-through and the page draws the card's
-     corners and shadow, with room for it all round (INSET). */
+     corners and shadow, with room for it all round (INSET) */
   html.drawn, html.drawn body { background: transparent; }
   html.drawn #card {
     margin: 16px;
@@ -46,7 +46,7 @@
     width: 264px;
     padding: 8px 8px 10px;
   }
-  /* The tab's canvas as it last looked. */
+  /* The tab's canvas as it last looked */
   #image {
     display: block;
     width: 100%;
@@ -85,7 +85,7 @@
   document.documentElement.classList.toggle("drawn", drawn);
   const INSET = drawn ? 16 : 0;
 
-  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables.
+  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables
   const THEME_VARS = {
     "--bg": "bg",
     "--bg-secondary": "bgSecondary",
@@ -100,7 +100,7 @@
     }
   };
 
-  // Tab kinds (`kind` in tabs.rs) by product.
+  // Tab kinds (`kind` in tabs.rs) by product
   const PRODUCTS = {
     design: "Figma Design",
     board: "FigJam",
@@ -114,7 +114,7 @@
   // Draws the `crop` part of `source` (fractions, see CROP_JS in tabs.rs),
   // or all of it, to fill `canvas`, trimming the longer side evenly. Less
   // EDGE pixels all round: the image's outermost rows can hold a line of
-  // Figma's frame, and scaling down would blend it in.
+  // Figma's frame, and scaling down would blend it in
   const EDGE = 2;
   const draw = (canvas, source, crop) => {
     const [cx, cy, cw, ch] = crop ?? [0, 0, 1, 1];
@@ -136,7 +136,7 @@
     context.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   };
 
-  // Only the latest card is drawn, if they come quickly one after another.
+  // Only the latest card is drawn, if they come quickly one after another
   let latest = 0;
   window.refresh = async () => {
     const asked = ++latest;
@@ -148,7 +148,7 @@
     const image = $("image");
     image.hidden = !card.image;
     if (card.image) {
-      // Drawn before it's shown, not after.
+      // Drawn before it's shown, not after
       const loaded = new Image();
       loaded.src = card.image;
       const ok = await loaded.decode().then(() => true, () => false);

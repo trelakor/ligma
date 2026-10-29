@@ -1,6 +1,6 @@
 //! Figma-style tabs. The main window's own webview is the local tab bar
 //! (`dist/index.html`). Each tab is a child webview below it, and only the
-//! active one is visible.
+//! active one is visible
 //!
 //! Hidden tabs are wound down to save memory, since every loaded Figma file
 //! keeps its whole editor in RAM. On hide (Windows) WebView2 is asked to trim
@@ -15,7 +15,7 @@
 //! lost. With `reloadSnapshots` on macOS, a tab's last image is kept when
 //! it's hidden and shown in its place while it reloads after sleep, until
 //! `READY_JS` says Figma has drawn the file. With `tabPreviews` the image
-//! is kept too, for the card hovering a tab shows (see preview.rs).
+//! is kept too, for the card hovering a tab shows (see preview.rs)
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -26,13 +26,13 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, Webv
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
-/// At 100% interface scale; it grows with the scale.
+/// At 100% interface scale; it grows with the scale
 pub const TAB_BAR_HEIGHT: f64 = 38.0;
 pub const HOME_URL: &str = "https://www.figma.com/files";
 const HOME_ID: u32 = 0;
 
 // WKWebView's default UA has no Safari version token, which can trigger
-// Figma's "unsupported browser" notice. Present as current Safari instead.
+// Figma's "unsupported browser" notice. Present as current Safari instead
 #[cfg(target_os = "macos")]
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
@@ -40,7 +40,7 @@ const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 // is "granted". WebView2 doesn't enforce that permission (loopback requests
 // already go through) but still reports "prompt" and never shows a prompt,
 // so Figma would wait forever. Report "prompt" as "granted"; a real "denied"
-// is left alone.
+// is left alone
 #[cfg(windows)]
 const LOCAL_NETWORK_ACCESS_JS: &str = r#"(() => {
   const names = new Set(["loopback-network", "local-network", "local-network-access"]);
@@ -56,7 +56,7 @@ const LOCAL_NETWORK_ACCESS_JS: &str = r#"(() => {
 
 /// Outside Safari, Figma moves a file name's leading emoji out of the page
 /// title and into the favicon (`#custom-emoji-favicon`). Put it back, so
-/// the tab bar can show it like on macOS.
+/// the tab bar can show it like on macOS
 #[cfg(windows)]
 const TITLE_EMOJI_JS: &str = r#"(() => {
   const title = Object.getOwnPropertyDescriptor(Document.prototype, "title");
@@ -74,7 +74,7 @@ const TITLE_EMOJI_JS: &str = r#"(() => {
 /// from script, which WKWebView drops without asking `on_new_window`. Send
 /// those links to `on_navigation` instead, as a hidden iframe load of
 /// `NEW_TAB_HOST`, which macOS reports there. `NEW_WINDOW_JS` opens tabs
-/// the same way, through `__ligmaOpenTab`.
+/// the same way, through `__ligmaOpenTab`
 #[cfg(target_os = "macos")]
 const NEW_TAB_JS: &str = r#"(() => {
   const openTab = (url) => {
@@ -98,7 +98,7 @@ const NEW_TAB_JS: &str = r#"(() => {
 /// opens a blank window and sets its URL once it has one). Hand Figma a
 /// stand-in window instead, which sends any URL it's later given to a new
 /// tab: through `__ligmaOpenTab` on macOS, and on Windows through
-/// `window.open` again, which reaches `on_new_window`.
+/// `window.open` again, which reaches `on_new_window`
 const NEW_WINDOW_JS: &str = r#"(() => {
   const open = window.open;
   const openTab = (url) => {
@@ -143,7 +143,7 @@ const NEW_TAB_HOST: &str = "open.ligma.invalid";
 /// (see `DESKTOP_APP_JS`). A menu group left empty goes with them, separator and
 /// all. Figma's menus are React's, so the items are hidden, not removed.
 /// Figma spaces a group's first and last items from its separators; a
-/// hidden first or last item hands that space to its visible neighbor.
+/// hidden first or last item hands that space to its visible neighbor
 const MAIN_MENU_JS: &str = r#"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
   const HIDE = new Set(["Back to files", "Open in desktop app", "Open links in desktop app"]);
@@ -167,12 +167,12 @@ const MAIN_MENU_JS: &str = r#"(() => {
     }
   };
   const hide = (root) => {
-    // An item, its label as it comes in, or a menu.
+    // An item, its label as it comes in, or a menu
     const items = [root.closest(ITEM), ...root.querySelectorAll(ITEM)];
     for (const item of items) {
       if (!item || item.hasAttribute("data-ligma-hidden")) continue;
       if (!item.closest('[role="menu"]') || !HIDE.has(item.textContent.trim())) continue;
-      // Before it's hidden, while its spacing still shows.
+      // Before it's hidden, while its spacing still shows
       const computed = getComputedStyle(item);
       if (!visible(item, "previousElementSibling")) handOver(item, computed, "nextElementSibling", "top");
       if (!visible(item, "nextElementSibling")) handOver(item, computed, "previousElementSibling", "bottom");
@@ -193,7 +193,7 @@ const MAIN_MENU_JS: &str = r#"(() => {
 /// agent (`/figma/desktop/open-url` on 127.0.0.1:44950 or
 /// figmadaemon.com:44960), which Ligma starts for fonts. Fail its
 /// `/figma/desktop/` requests, as with no desktop app, and Figma stays on
-/// the page instead. Its fonts requests are left alone.
+/// the page instead. Its fonts requests are left alone
 const DESKTOP_APP_JS: &str = r#"(() => {
   const blocked = (url) => {
     try {
@@ -211,14 +211,14 @@ const DESKTOP_APP_JS: &str = r#"(() => {
   };
   const open = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    // An unresolvable host fails the request the way a missing agent would.
+    // An unresolvable host fails the request the way a missing agent would
     return open.call(this, method, blocked(url) ? "https://agent.ligma.invalid/" : url, ...rest);
   };
 })();"#;
 
 /// Remembers the page's `beforeunload` handlers so `CAN_REST_JS` can ask
 /// them, without unloading anything, whether leaving now would lose work.
-/// Figma registers one while edits haven't reached its servers.
+/// Figma registers one while edits haven't reached its servers
 const BEFOREUNLOAD_JS: &str = r#"(() => {
   const handlers = new Set();
   const add = EventTarget.prototype.addEventListener;
@@ -262,22 +262,22 @@ const BEFOREUNLOAD_JS: &str = r#"(() => {
 /// True once a reloading file tab shows its file rather than Figma's loading
 /// screen: the editor canvas is there and Figma's progress bar
 /// (`progress_bar--*` classes) is gone. If Figma renames those classes the
-/// snapshot just goes away early.
+/// snapshot just goes away early
 const READY_JS: &str =
     r#"!!document.querySelector("canvas") && !document.querySelector('[class*="progress_bar--"]')"#;
 
-/// Longest a reloading tab stays behind its snapshot.
+/// Longest a reloading tab stays behind its snapshot
 const REVEAL_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// True if a hidden tab can be frozen or closed without losing work.
+/// True if a hidden tab can be frozen or closed without losing work
 const CAN_REST_JS: &str = "window.__ligmaCanRest?.() ?? false";
 
-/// How long a tab stays hidden before it's frozen (Windows, macOS).
+/// How long a tab stays hidden before it's frozen (Windows, macOS)
 #[cfg(any(windows, target_os = "macos"))]
 const SUSPEND_AFTER: Duration = Duration::from_secs(5 * 60);
 
 /// Longest a tab stays hidden before it's put to sleep while macOS warns of
-/// memory pressure. Under critical pressure every hidden tab sleeps at once.
+/// memory pressure. Under critical pressure every hidden tab sleeps at once
 #[cfg(target_os = "macos")]
 const PRESSURE_SLEEP_AFTER: Duration = Duration::from_secs(10 * 60);
 
@@ -286,32 +286,32 @@ struct Tab {
     id: u32,
     title: String,
     kind: &'static str,
-    /// No webview; reloads from `url` when selected.
+    /// No webview; reloads from `url` when selected
     asleep: bool,
-    /// Kept left of the other tabs, after Home, and shown as its icon only.
+    /// Kept left of the other tabs, after Home, and shown as its icon only
     pinned: bool,
     #[serde(skip)]
     file_key: Option<String>,
-    /// Last known address, to reload an asleep tab.
+    /// Last known address, to reload an asleep tab
     #[serde(skip)]
     url: Url,
     /// Image of the tab from when it was last on screen, as a `data:` URL:
-    /// shown while it reloads after sleep (macOS), and in its preview.
+    /// shown while it reloads after sleep (macOS), and in its preview
     #[serde(skip)]
     snapshot: Option<String>,
     /// Part of `snapshot` that's open canvas, without Figma's panels and
-    /// toolbars (see `CROP_JS`), for the preview to show.
+    /// toolbars (see `CROP_JS`), for the preview to show
     #[serde(skip)]
     crop: Option<[f64; 4]>,
     /// Reloading behind its snapshot: the webview stays hidden until
-    /// `READY_JS` says the file is drawn.
+    /// `READY_JS` says the file is drawn
     #[serde(skip)]
     revealing: bool,
-    /// When the tab was last hidden. None while it's the active tab.
+    /// When the tab was last hidden. None while it's the active tab
     #[serde(skip)]
     hidden_since: Option<Instant>,
     /// Frozen, or freezing or resuming (Windows, macOS). Nothing may `eval`
-    /// in the page meanwhile: on macOS WebKit would throw and abort Ligma.
+    /// in the page meanwhile: on macOS WebKit would throw and abort Ligma
     #[serde(skip)]
     suspended: bool,
 }
@@ -321,36 +321,36 @@ struct TabState {
     tabs: Vec<Tab>,
     active: u32,
     next_id: u32,
-    /// Colors of the active tab's Figma theme, from `THEME_JS`.
+    /// Colors of the active tab's Figma theme, from `THEME_JS`
     theme: Option<serde_json::Value>,
-    /// Hidden time after which a tab is put to sleep. None: never.
+    /// Hidden time after which a tab is put to sleep. None: never
     sleep_after: Option<Duration>,
-    /// Hidden tabs that may stay loaded; older ones sleep. None: no limit.
+    /// Hidden tabs that may stay loaded; older ones sleep. None: no limit
     max_hidden: Option<usize>,
-    /// A snapshot is showing, so the tab bar's webview fills the window.
+    /// A snapshot is showing, so the tab bar's webview fills the window
     snapshot_shown: bool,
-    /// Show a waking tab's snapshot while it reloads (`reloadSnapshots`).
+    /// Show a waking tab's snapshot while it reloads (`reloadSnapshots`)
     snapshots: bool,
-    /// Preview a hovered tab (`tabPreviews`), with its snapshot.
+    /// Preview a hovered tab (`tabPreviews`), with its snapshot
     previews: bool,
-    /// When the active tab's image was last taken for `capture_active`.
+    /// When the active tab's image was last taken for `capture_active`
     last_capture: Option<Instant>,
-    /// Keep the tabs in `SESSION_FILE` for the next launch (`restoreTabs`).
+    /// Keep the tabs in `SESSION_FILE` for the next launch (`restoreTabs`)
     restore: bool,
-    /// Zoom of Figma tabs and Ligma's own pages (`interfaceScale`), 1 at 100%.
+    /// Zoom of Figma tabs and Ligma's own pages (`interfaceScale`), 1 at 100%
     scale: f64,
-    /// What was last written there, to skip writing it again.
+    /// What was last written there, to skip writing it again
     saved_session: Option<String>,
 }
 
-/// Tabs saved for the next launch, in the app data folder.
+/// Tabs saved for the next launch, in the app data folder
 const SESSION_FILE: &str = "session.json";
 
-/// The tabs as `SESSION_FILE` keeps them. Home comes first.
+/// The tabs as `SESSION_FILE` keeps them. Home comes first
 #[derive(Deserialize, Serialize)]
 struct Session {
     tabs: Vec<SavedTab>,
-    /// Index of the active tab.
+    /// Index of the active tab
     active: usize,
 }
 
@@ -375,7 +375,7 @@ impl Tabs {
 impl TabState {
     fn configure(&mut self, settings: &crate::settings::Settings) {
         let minutes = settings.sleep_tabs_after_minutes;
-        // Sleeping turned off means every tab stays loaded, limit or not.
+        // Sleeping turned off means every tab stays loaded, limit or not
         self.sleep_after = (minutes > 0).then(|| Duration::from_secs(minutes * 60));
         self.max_hidden = settings.max_hidden_tabs_loaded.filter(|_| minutes > 0);
         self.snapshots = settings.reload_snapshots;
@@ -394,7 +394,7 @@ impl TabState {
 }
 
 /// Applies changed settings. Tabs now past a shorter timeout or a lower
-/// limit go to sleep right away.
+/// limit go to sleep right away
 pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     let rescaled = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -418,7 +418,7 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
 
 /// Opens the tabs saved by the last session, asleep so none loads until
 /// it's selected, then selects the one that was active. Opens Home alone
-/// if there are none, or `restoreTabs` is off.
+/// if there are none, or `restoreTabs` is off
 pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::Result<()> {
     let session = settings
         .restore_tabs
@@ -464,11 +464,11 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
     select(app, active)
 }
 
-/// Writes the tabs to `SESSION_FILE` if they changed and `restoreTabs` is on.
+/// Writes the tabs to `SESSION_FILE` if they changed and `restoreTabs` is on
 fn save_session(app: &AppHandle) {
     let json = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-        // No tabs yet: launching, and `restore` hasn't read the file.
+        // No tabs yet: launching, and `restore` hasn't read the file
         if !state.restore || state.tabs.is_empty() {
             return;
         }
@@ -502,7 +502,7 @@ fn save_session(app: &AppHandle) {
 /// override them, so this follows the active editor too. Also measures
 /// the editor's left navigation rail, in CSS pixels, for Home to line up
 /// with. The tab bar has the same zoom, so the width holds as is, and
-/// follows a change of interface scale at once.
+/// follows a change of interface scale at once
 const THEME_JS: &str = r#"(() => {
   const el = document.querySelector("[data-preferred-theme]");
   if (!el) return null;
@@ -541,7 +541,7 @@ fn is_figma(url: &Url) -> bool {
 /// Content Figma serves from its own domains inside its pages, like the
 /// `*.figma.site` previews of Make and Sites. On macOS `on_navigation` also
 /// sees iframe loads, so these must stay in the page rather than go to the
-/// browser.
+/// browser
 fn is_figma_content(url: &Url) -> bool {
     url.scheme() == "https"
         && url
@@ -549,7 +549,7 @@ fn is_figma_content(url: &Url) -> bool {
             .is_some_and(|host| host == "figma.site" || host.ends_with(".figma.site"))
 }
 
-/// Tab icon for a Figma URL, from the first path segment (`/design/<key>/...`).
+/// Tab icon for a Figma URL, from the first path segment (`/design/<key>/...`)
 fn kind(url: &Url) -> &'static str {
     match url.path_segments().and_then(|mut s| s.next()) {
         Some("design" | "file") => "design",
@@ -563,7 +563,7 @@ fn kind(url: &Url) -> &'static str {
     }
 }
 
-/// Key of the Figma file an editor URL points at, if any.
+/// Key of the Figma file an editor URL points at, if any
 fn file_key(url: &Url) -> Option<String> {
     if !is_figma(url) || kind(url) == "page" {
         return None;
@@ -576,7 +576,7 @@ fn file_key(url: &Url) -> Option<String> {
 
 /// How a Figma URL shows its file: in its editor, or in one of the
 /// presentations that share the file's key. Slides presents in two: the
-/// presenter view and the audience's slideshow (`deck`).
+/// presenter view and the audience's slideshow (`deck`)
 fn view(url: &Url) -> &'static str {
     match url.path_segments().and_then(|mut s| s.next()) {
         Some("proto") => "proto",
@@ -587,7 +587,7 @@ fn view(url: &Url) -> &'static str {
 }
 
 /// Opens `url` in a new tab, or focuses the tab already showing that file
-/// the same way, so presenting a file again goes back to its presentation.
+/// the same way, so presenting a file again goes back to its presentation
 pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     let key = file_key(&url);
     let id = {
@@ -624,13 +624,13 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     select(app, id)
 }
 
-/// Loads tab `id`'s webview, for a new tab or one waking up.
+/// Loads tab `id`'s webview, for a new tab or one waking up
 fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     let window = app.get_window("main").expect("main window exists");
     let (nav_app, popup_app, title_app) = (app.clone(), app.clone(), app.clone());
     #[allow(unused_mut)]
     let mut builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
-        // Let Figma receive HTML5 drag-and-drop (image/file imports).
+        // Let Figma receive HTML5 drag-and-drop (image/file imports)
         .disable_drag_drop_handler()
         .on_navigation(move |url| on_navigation(&nav_app, id, url))
         .on_new_window(move |url, _| {
@@ -641,7 +641,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .on_document_title_changed(move |webview, title| {
             on_title_changed(&title_app, id, &webview, &title)
         })
-        // In case a new page starts at the default zoom.
+        // In case a new page starts at the default zoom
         .on_page_load(move |webview, payload| {
             if let PageLoadEvent::Finished = payload.event() {
                 let _ = webview.set_zoom(scale(webview.app_handle()));
@@ -684,7 +684,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
 }
 
 /// `open` from a webview callback. Those run on the main thread, and
-/// creating a webview there would block on itself.
+/// creating a webview there would block on itself
 fn open_later(app: &AppHandle, url: Url) {
     let app = app.clone();
     std::thread::spawn(move || {
@@ -721,12 +721,12 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
     }
     match url.scheme() {
         "http" | "https" => {}
-        // Not to the OS, which hands them to the Figma desktop app.
+        // Not to the OS, which hands them to the Figma desktop app
         "figma" => {
             figma_link_later(app, url.clone());
             return false;
         }
-        // blob:, data:, about: and friends stay in the page.
+        // blob:, data:, about: and friends stay in the page
         _ => return true,
     }
     if is_figma_content(url) {
@@ -736,7 +736,7 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         open_in_browser(app, url);
         return false;
     }
-    // Like the desktop app, files opened from Home get their own tab.
+    // Like the desktop app, files opened from Home get their own tab
     if id == HOME_ID && file_key(url).is_some() {
         open_later(app, url.clone());
         return false;
@@ -745,7 +745,7 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
 }
 
 /// Has tab `id` start Google sign-in in the browser (see auth.rs). Not from
-/// within the webview's own callback, which is still deciding on the page.
+/// within the webview's own callback, which is still deciding on the page
 fn sign_in_later(app: &AppHandle, id: u32) {
     let app = app.clone();
     std::thread::spawn(move || {
@@ -755,7 +755,7 @@ fn sign_in_later(app: &AppHandle, id: u32) {
     });
 }
 
-/// Opens a `figma://` link the way Ligma opens one from the OS (see auth.rs).
+/// Opens a `figma://` link the way Ligma opens one from the OS (see auth.rs)
 fn figma_link_later(app: &AppHandle, url: Url) {
     let app = app.clone();
     std::thread::spawn(move || crate::auth::on_figma_link(&app, &url));
@@ -778,7 +778,7 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
 fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
     let url = webview.url().ok();
     // Figma can switch pages client-side without a navigation, so a file
-    // can still end up in Home. Move it to its own tab.
+    // can still end up in Home. Move it to its own tab
     if id == HOME_ID {
         if let Some(url) = url.as_ref().filter(|url| file_key(url).is_some()) {
             let _ = webview.navigate(HOME_URL.parse().unwrap());
@@ -803,13 +803,13 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
     push_state(app);
 }
 
-/// Products Figma ends page titles with ("<name> – FigJam").
+/// Products Figma ends page titles with ("<name> – FigJam")
 const PRODUCTS: [&str; 6] = ["Figma", "FigJam", "Figma Slides", "Figma Make", "Figma Buzz", "Figma Sites"];
 
 /// A tab's title from its page's: without Figma's product suffix, or the
-/// "▶" a prototype's title starts with, which its tab's icon already shows.
+/// "▶" a prototype's title starts with, which its tab's icon already shows
 fn tab_title(title: &str, kind: &str) -> String {
-    // An en dash usually; a hyphen in Slides' presentation titles.
+    // An en dash usually; a hyphen in Slides' presentation titles
     let title = PRODUCTS
         .iter()
         .flat_map(|product| [" – ", " - "].map(move |dash| (dash, product)))
@@ -827,23 +827,23 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let (previous, wake, resume, snapshot) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-        // Previews keep snapshots too; only `reloadSnapshots` shows them here.
+        // Previews keep snapshots too; only `reloadSnapshots` shows them here
         let snapshots = state.snapshots;
         let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == id) else {
             return Ok(());
         };
         tab.hidden_since = None;
         // On macOS resuming takes a round trip; `suspended` stays set until
-        // the page runs again.
+        // the page runs again
         let resume = if cfg!(target_os = "macos") {
             tab.suspended
         } else {
             std::mem::take(&mut tab.suspended)
         };
         let wake = std::mem::take(&mut tab.asleep).then(|| tab.url.clone());
-        // Waking with a snapshot: show it while the page loads.
+        // Waking with a snapshot: show it while the page loads
         tab.revealing |= snapshots && wake.is_some() && tab.snapshot.is_some() && tab.file_key.is_some();
-        // Kept otherwise, for the tab's preview once it's hidden again.
+        // Kept otherwise, for the tab's preview once it's hidden again
         let snapshot = tab.snapshot.clone().filter(|_| tab.revealing);
         let previous = std::mem::replace(&mut state.active, id);
         if previous != id {
@@ -856,7 +856,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     show_snapshot(app, snapshot.as_deref());
     if let Some(url) = wake {
         // Fails if the old webview is still closing. Stay asleep, so
-        // selecting the tab again retries.
+        // selecting the tab again retries
         if create_webview(app, id, url).is_err() {
             with_tab(app, id, |tab| {
                 tab.asleep = true;
@@ -887,21 +887,21 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     if previous != id {
         if let Some(webview) = app.get_webview(&label(previous)) {
             // WebView2 can't be relied on to capture a webview it's hiding;
-            // on Windows the tab bar has `capture_active` take it beforehand.
+            // on Windows the tab bar has `capture_active` take it beforehand
             #[cfg(target_os = "macos")]
             capture(app, previous, &webview);
             webview.hide()?;
             #[cfg(windows)]
             crate::webview2::on_hidden(&webview);
         }
-        // A tab past `max_hidden` sleeps now, not at the next timer tick.
+        // A tab past `max_hidden` sleeps now, not at the next timer tick
         rest_idle(app);
     }
     push_state(app);
     Ok(())
 }
 
-/// Shows `snapshot` where tab webviews go, or hides it.
+/// Shows `snapshot` where tab webviews go, or hides it
 fn show_snapshot(app: &AppHandle, snapshot: Option<&str>) {
     let Some(bar) = app.get_webview("main") else {
         return;
@@ -917,7 +917,7 @@ fn show_snapshot(app: &AppHandle, snapshot: Option<&str>) {
 /// Sizes the tab bar's webview to the bar, or to the whole window while it
 /// shows a snapshot. Kept off the area under the bar otherwise: tab webviews
 /// lie on top of it there, and WebKit would never see the mouse leave the
-/// bar, leaving the last hovered tab highlighted.
+/// bar, leaving the last hovered tab highlighted
 fn fit_tab_bar(app: &AppHandle) {
     let (Some(window), Some(bar)) = (app.get_window("main"), app.get_webview("main")) else {
         return;
@@ -933,7 +933,7 @@ fn fit_tab_bar(app: &AppHandle) {
 
 /// Keeps an image of tab `id` for when it wakes from sleep (file tabs) and
 /// for its preview. Skipped for Home, while frozen (WebKit can't) or
-/// reloading (the old image is better).
+/// reloading (the old image is better)
 fn capture(app: &AppHandle, id: u32, webview: &Webview) {
     let wanted = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -947,7 +947,7 @@ fn capture(app: &AppHandle, id: u32, webview: &Webview) {
         return;
     }
     // Measured alongside, not first: on macOS the image must be taken
-    // before the webview is hidden.
+    // before the webview is hidden
     let crop_app = app.clone();
     let _ = webview.eval_with_callback(CROP_JS, move |json| {
         let crop = serde_json::from_str::<Option<[f64; 4]>>(&json).ok().flatten();
@@ -976,7 +976,7 @@ fn capture(app: &AppHandle, id: u32, webview: &Webview) {
 /// middle, the crop goes a little inside the innermost point where
 /// something other than the canvas (or a layer spanning it, like Figma's
 /// input layer) is on top. The tool bar floats clear of the bottom edge,
-/// so the scan can't stop at the first open point.
+/// so the scan can't stop at the first open point
 const CROP_JS: &str = r#"(() => {
   const area = (r) => r.width * r.height;
   const canvases = [...document.querySelectorAll("canvas")].map((c) => [c, c.getBoundingClientRect()]);
@@ -1006,11 +1006,11 @@ const CROP_JS: &str = r#"(() => {
   return [x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H];
 })()"#;
 
-/// Least time between two `capture_active` images.
+/// Least time between two `capture_active` images
 const CAPTURE_EVERY: Duration = Duration::from_secs(1);
 
 /// Takes an image of the active tab for its preview, at most every
-/// `CAPTURE_EVERY`.
+/// `CAPTURE_EVERY`
 pub fn capture_active(app: &AppHandle) {
     let active = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -1026,13 +1026,13 @@ pub fn capture_active(app: &AppHandle) {
 }
 
 /// True if tab `id` may be previewed: `tabPreviews` is on, and it's open
-/// and neither Home nor the active tab.
+/// and neither Home nor the active tab
 pub fn can_preview(app: &AppHandle, id: u32) -> bool {
     let state = app.state::<Tabs>().inner().0.lock().unwrap();
     state.previews && id != HOME_ID && id != state.active && state.tabs.iter().any(|tab| tab.id == id)
 }
 
-/// What the preview of a tab shows.
+/// What the preview of a tab shows
 #[derive(Serialize)]
 pub struct Preview {
     title: String,
@@ -1040,11 +1040,11 @@ pub struct Preview {
     asleep: bool,
     /// Its last image (see `capture`), as a `data:` URL,
     image: Option<String>,
-    /// and the part of it to show (see `CROP_JS`).
+    /// and the part of it to show (see `CROP_JS`)
     crop: Option<[f64; 4]>,
 }
 
-/// The preview of tab `id`, if it may be previewed (see `can_preview`).
+/// The preview of tab `id`, if it may be previewed (see `can_preview`)
 pub fn preview(app: &AppHandle, id: u32) -> Option<Preview> {
     if !can_preview(app, id) {
         return None;
@@ -1059,7 +1059,7 @@ pub fn preview(app: &AppHandle, id: u32) -> Option<Preview> {
 }
 
 /// Shows reloading tab `id` once `READY_JS` has said the file is drawn
-/// twice in a row, or after `REVEAL_TIMEOUT`.
+/// twice in a row, or after `REVEAL_TIMEOUT`
 fn reveal_when_ready(app: &AppHandle, id: u32) {
     let app = app.clone();
     std::thread::spawn(move || {
@@ -1102,13 +1102,13 @@ fn reveal_when_ready(app: &AppHandle, id: u32) {
     });
 }
 
-/// Closes a tab. Home can't be closed.
+/// Closes a tab. Home can't be closed
 pub fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
     close_tabs(app, &[id])
 }
 
 /// Closes tabs `ids`, except Home. If the active tab is among them, the
-/// nearest open tab to its right is selected, else the last one.
+/// nearest open tab to its right is selected, else the last one
 fn close_tabs(app: &AppHandle, ids: &[u32]) -> tauri::Result<()> {
     let ids: Vec<u32> = ids.iter().copied().filter(|&id| id != HOME_ID).collect();
     let next = {
@@ -1116,7 +1116,7 @@ fn close_tabs(app: &AppHandle, ids: &[u32]) -> tauri::Result<()> {
         let closing = |tab: &Tab| ids.contains(&tab.id);
         let index = state.tabs.iter().position(|tab| tab.id == state.active);
         // Prefer the tab to the right, like the desktop app. Home is always
-        // left and never closed, so one is always left.
+        // left and never closed, so one is always left
         let next = index.filter(|&index| closing(&state.tabs[index])).map(|index| {
             let right = state.tabs[index..].iter().find(|tab| !closing(tab));
             right.or_else(|| state.tabs.iter().rev().find(|tab| !closing(tab))).unwrap().id
@@ -1137,7 +1137,7 @@ fn close_tabs(app: &AppHandle, ids: &[u32]) -> tauri::Result<()> {
 }
 
 /// Pins or unpins tab `id`. Pinned tabs sit left, after Home, in the order
-/// they were pinned; an unpinned tab goes right after them.
+/// they were pinned; an unpinned tab goes right after them
 fn set_pinned(app: &AppHandle, id: u32, pinned: bool) {
     {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -1153,7 +1153,7 @@ fn set_pinned(app: &AppHandle, id: u32, pinned: bool) {
 }
 
 /// Moves tab `id` to `index` among its group: the pinned tabs, or the
-/// others. Home stays first.
+/// others. Home stays first
 fn move_tab(app: &AppHandle, id: u32, index: usize) {
     {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -1172,7 +1172,7 @@ fn move_tab(app: &AppHandle, id: u32, index: usize) {
 }
 
 /// Reloads tab `id`. A frozen tab is put to sleep instead, so it loads
-/// afresh when selected, and an asleep one already will.
+/// afresh when selected, and an asleep one already will
 fn reload(app: &AppHandle, id: u32) {
     let Some(webview) = app.get_webview(&label(id)) else {
         return;
@@ -1204,7 +1204,7 @@ fn reload(app: &AppHandle, id: u32) {
 
 /// Loads `url` in tab `id` and selects it, or in a new tab if `id` is
 /// gone. A frozen tab is put to sleep first, like in `reload`, and wakes
-/// with `url`.
+/// with `url`
 pub fn navigate(app: &AppHandle, id: u32, url: Url) {
     let webview = app.get_webview(&label(id));
     let live = with_tab(app, id, |tab| {
@@ -1234,19 +1234,19 @@ pub fn navigate(app: &AppHandle, id: u32, url: Url) {
     let _ = select(app, id);
 }
 
-/// Address tab `id` shows now, or showed when it went to sleep.
+/// Address tab `id` shows now, or showed when it went to sleep
 fn tab_url(app: &AppHandle, id: u32) -> Option<Url> {
     let live = app.get_webview(&label(id)).and_then(|webview| webview.url().ok());
     live.or_else(|| with_tab(app, id, |tab| tab.url.clone()))
 }
 
 /// Shows the right-click menu of tab `id` (see tab_menu.rs). Its items
-/// run through `on_menu`.
+/// run through `on_menu`
 fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
     let Some((pinned, key)) = with_tab(app, id, |tab| (tab.pinned, tab.file_key.clone())) else {
         return Ok(());
     };
-    // Files only, while Discord is shown anything.
+    // Files only, while Discord is shown anything
     let discord = key.filter(|_| crate::presence::is_on(app)).map(|key| {
         if crate::presence::is_hidden(app, &key) {
             ("discord-show", "Show File on Discord")
@@ -1277,7 +1277,7 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
     crate::tab_menu::show(app, id, items)
 }
 
-/// Runs a tab menu item, given its id without the `tab-menu:` prefix.
+/// Runs a tab menu item, given its id without the `tab-menu:` prefix
 pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
     let Some((action, id)) = item.split_once(':') else {
         return Ok(());
@@ -1285,7 +1285,7 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
     let Ok(id) = id.parse::<u32>() else {
         return Ok(());
     };
-    // All tabs but `keep`, and but pinned ones unless `pinned_too`.
+    // All tabs but `keep`, and but pinned ones unless `pinned_too`
     let others = |keep: u32, pinned_too: bool| -> Vec<u32> {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         let tabs = state.tabs.iter().filter(|tab| pinned_too || !tab.pinned);
@@ -1326,7 +1326,7 @@ pub fn close_active(app: &AppHandle) -> tauri::Result<()> {
     close(app, active)
 }
 
-/// Selects the tab `offset` places from the active one, wrapping around.
+/// Selects the tab `offset` places from the active one, wrapping around
 pub fn cycle(app: &AppHandle, offset: isize) -> tauri::Result<()> {
     let id = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -1342,14 +1342,14 @@ pub fn new_tab(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Webview of tab `id` if its page can run JavaScript now: loaded, and not
-/// frozen or still resuming.
+/// frozen or still resuming
 pub fn scriptable(app: &AppHandle, id: u32) -> Option<Webview> {
     with_tab(app, id, |tab| !tab.asleep && !tab.suspended)?
         .then(|| app.get_webview(&label(id)))
         .flatten()
 }
 
-/// Webviews of the tabs that can run JavaScript now (see `scriptable`).
+/// Webviews of the tabs that can run JavaScript now (see `scriptable`)
 pub fn scriptable_tabs(app: &AppHandle) -> Vec<Webview> {
     let ids: Vec<u32> = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -1358,30 +1358,30 @@ pub fn scriptable_tabs(app: &AppHandle) -> Vec<Webview> {
     ids.into_iter().filter_map(|id| app.get_webview(&label(id))).collect()
 }
 
-/// The file in the active tab.
+/// The file in the active tab
 pub struct ActiveFile {
     pub name: String,
-    /// How it's shown (see `view`).
+    /// How it's shown (see `view`)
     pub view: &'static str,
     pub key: String,
-    /// Product whose editor opens it (see `kind`), presentations aside.
+    /// Product whose editor opens it (see `kind`), presentations aside
     pub editor: &'static str,
     pub webview: Webview,
 }
 
 /// The active tab's file, if it shows a Figma file and can run JavaScript
-/// (not still resuming).
+/// (not still resuming)
 pub fn active_file(app: &AppHandle) -> Option<ActiveFile> {
     let (id, name, view, key, editor) = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         let tab = state.tabs.iter().find(|tab| tab.id == state.active && !tab.suspended)?;
         let key = tab.file_key.clone()?;
         let mut name = tab.title.as_str();
-        // "Presenter · <name>" and "Audience · <name>" in Slides.
+        // "Presenter · <name>" and "Audience · <name>" in Slides
         if matches!(view(&tab.url), "deck" | "presenter") {
             name = name.split_once(" · ").map_or(name, |(_, name)| name);
         }
-        // Prototypes are of Design files.
+        // Prototypes are of Design files
         let editor = match kind(&tab.url) {
             "proto" => "design",
             kind => kind,
@@ -1393,7 +1393,7 @@ pub fn active_file(app: &AppHandle) -> Option<ActiveFile> {
 }
 
 /// Opens the file at `<editor>/<key>` (see `ActiveFile`) in its editor.
-/// From a Discord invite, so anything else is ignored.
+/// From a Discord invite, so anything else is ignored
 pub fn open_shared(app: &AppHandle, path: &str) -> tauri::Result<()> {
     let Some((editor, key)) = path.split_once('/') else {
         return Ok(());
@@ -1405,7 +1405,7 @@ pub fn open_shared(app: &AppHandle, path: &str) -> tauri::Result<()> {
     let Ok(url) = format!("https://www.figma.com/{editor}/{key}").parse() else {
         return Ok(());
     };
-    // Not yet, while a Ligma started for this is still setting up.
+    // Not yet, while a Ligma started for this is still setting up
     let Some(window) = app.get_window("main") else {
         return Ok(());
     };
@@ -1414,7 +1414,7 @@ pub fn open_shared(app: &AppHandle, path: &str) -> tauri::Result<()> {
     open(app, url)
 }
 
-/// Runs `f` on tab `id`, if it's still open.
+/// Runs `f` on tab `id`, if it's still open
 fn with_tab<T>(app: &AppHandle, id: u32, f: impl FnOnce(&mut Tab) -> T) -> Option<T> {
     let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
     state.tabs.iter_mut().find(|tab| tab.id == id).map(f)
@@ -1429,7 +1429,7 @@ enum Rest {
 
 /// Hidden time after which a tab is put to sleep (None: never). Shorter on
 /// macOS while memory is short, but a user who turned sleeping off still
-/// never gets tabs closed.
+/// never gets tabs closed
 fn sleep_after(setting: Option<Duration>) -> Option<Duration> {
     #[cfg(target_os = "macos")]
     {
@@ -1444,7 +1444,7 @@ fn sleep_after(setting: Option<Duration>) -> Option<Duration> {
 }
 
 /// Freezes or closes tabs that have been hidden long enough. Call
-/// periodically, and more often while `under_pressure`.
+/// periodically, and more often while `under_pressure`
 pub fn rest_idle(app: &AppHandle) {
     let now = Instant::now();
     let due: Vec<(u32, Instant, Rest, bool)> = {
@@ -1452,7 +1452,7 @@ pub fn rest_idle(app: &AppHandle) {
         let sleep_after = sleep_after(state.sleep_after);
         // Loaded hidden tabs are ranked most recently hidden first, but Home
         // last: it reloads quickly, so it's the first to sleep. A tab with
-        // `max_hidden` tabs ranked above it sleeps whatever its time.
+        // `max_hidden` tabs ranked above it sleeps whatever its time
         let loaded: Vec<(u32, Instant)> = state
             .tabs
             .iter()
@@ -1487,7 +1487,7 @@ pub fn rest_idle(app: &AppHandle) {
             continue;
         };
         // A frozen page can't answer, and hasn't changed since it last said
-        // it could rest.
+        // it could rest
         if suspended {
             rest_now(app, id, since, rest);
             continue;
@@ -1495,7 +1495,7 @@ pub fn rest_idle(app: &AppHandle) {
         let app = app.clone();
         let _ = webview.eval_with_callback(CAN_REST_JS, move |json| {
             if json == "true" {
-                // Not from inside the webview's own callback.
+                // Not from inside the webview's own callback
                 let app = app.clone();
                 std::thread::spawn(move || rest_now(&app, id, since, rest));
             }
@@ -1504,7 +1504,7 @@ pub fn rest_idle(app: &AppHandle) {
 }
 
 /// True while macOS reports memory pressure, when `rest_idle` should run
-/// more often than usual.
+/// more often than usual
 pub fn under_pressure() -> bool {
     #[cfg(target_os = "macos")]
     return crate::pressure::current() != crate::pressure::Pressure::Normal;
@@ -1512,7 +1512,7 @@ pub fn under_pressure() -> bool {
     false
 }
 
-/// Applies `rest` to tab `id`, unless it was shown again after `since`.
+/// Applies `rest` to tab `id`, unless it was shown again after `since`
 fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
     let Some(webview) = app.get_webview(&label(id)) else {
         return;
@@ -1521,7 +1521,7 @@ fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
     match rest {
         #[cfg(any(windows, target_os = "macos"))]
         Rest::Suspend => {
-            // Marked before freezing, so nothing evals in the page meanwhile.
+            // Marked before freezing, so nothing evals in the page meanwhile
             let marked = with_tab(app, id, |tab| {
                 let hidden = still_hidden(tab);
                 tab.suspended |= hidden;
@@ -1536,7 +1536,7 @@ fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
             #[cfg(target_os = "macos")]
             use crate::wkwebview::try_suspend;
             try_suspend(&webview, move |ok| {
-                // Once shown again, `select` owns the flag.
+                // Once shown again, `select` owns the flag
                 with_tab(&app, id, |tab| {
                     if still_hidden(tab) {
                         tab.suspended = ok;
@@ -1567,7 +1567,7 @@ fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
 }
 
 /// Matches the tab bar to the active tab's Figma theme. Runs on tab switch
-/// and on a timer, since Figma changes theme without any event Ligma sees.
+/// and on a timer, since Figma changes theme without any event Ligma sees
 pub fn sync_theme(app: &AppHandle) {
     let active = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -1581,7 +1581,7 @@ pub fn sync_theme(app: &AppHandle) {
     };
     let app = app.clone();
     let _ = webview.eval_with_callback(THEME_JS, move |json| {
-        // null until Figma has rendered its UI.
+        // null until Figma has rendered its UI
         let Ok(theme @ serde_json::Value::Object(_)) = serde_json::from_str(&json) else {
             return;
         };
@@ -1600,17 +1600,17 @@ pub fn sync_theme(app: &AppHandle) {
     });
 }
 
-/// The active tab's Figma theme colors (see `THEME_JS`), once known.
+/// The active tab's Figma theme colors (see `THEME_JS`), once known
 pub fn theme(app: &AppHandle) -> Option<serde_json::Value> {
     app.state::<Tabs>().inner().0.lock().unwrap().theme.clone()
 }
 
-/// The interface scale (`interfaceScale`), 1 at 100%.
+/// The interface scale (`interfaceScale`), 1 at 100%
 pub fn scale(app: &AppHandle) -> f64 {
     app.state::<Tabs>().inner().0.lock().unwrap().scale
 }
 
-/// The tab bar's height at the interface scale.
+/// The tab bar's height at the interface scale
 fn bar_height(app: &AppHandle) -> f64 {
     TAB_BAR_HEIGHT * scale(app)
 }
@@ -1621,7 +1621,7 @@ fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f
 }
 
 /// Zooms the tab bar, Figma tabs and open prompts to the interface scale,
-/// and fits the tabs under the bar at its new height.
+/// and fits the tabs under the bar at its new height
 pub fn apply_scale(app: &AppHandle) {
     let scale = scale(app);
     if let Some(window) = app.get_window("main") {
@@ -1639,7 +1639,7 @@ pub fn apply_scale(app: &AppHandle) {
     layout(app);
 }
 
-/// Refits tab webviews to the window. Call on resize.
+/// Refits tab webviews to the window. Call on resize
 pub fn layout(app: &AppHandle) {
     let Some(window) = app.get_window("main") else {
         return;
@@ -1658,7 +1658,7 @@ pub fn layout(app: &AppHandle) {
     push_state(app);
 }
 
-/// Sends the tab list to the tab bar.
+/// Sends the tab list to the tab bar
 fn push_state(app: &AppHandle) {
     #[derive(Serialize)]
     struct View<'a> {
@@ -1670,7 +1670,7 @@ fn push_state(app: &AppHandle) {
     }
 
     // Not `get_webview_window`: that returns None once the window holds
-    // more than one webview.
+    // more than one webview
     let (Some(window), Some(bar)) = (app.get_window("main"), app.get_webview("main")) else {
         return;
     };
@@ -1691,7 +1691,7 @@ fn push_state(app: &AppHandle) {
 }
 
 /// Only the local tab bar may drive tabs. Figma pages have no IPC access
-/// anyway (no capability grants it), this is a second fence.
+/// anyway (no capability grants it), this is a second fence
 fn from_tab_bar(webview: &Webview) -> bool {
     webview.label() == "main"
 }
@@ -1739,7 +1739,7 @@ pub async fn open_new_tab(app: AppHandle, webview: Webview) {
 }
 
 /// Minimize, maximize and close buttons the tab bar draws where the window
-/// has no native title bar (Windows, Linux).
+/// has no native title bar (Windows, Linux)
 #[tauri::command]
 pub async fn window_control(webview: Webview, action: String) {
     if !from_tab_bar(&webview) {

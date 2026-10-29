@@ -1,11 +1,11 @@
 //! User settings, from `settings.json` in the app config folder
 //! (`%APPDATA%\dev.ligma.client` on Windows,
 //! `~/Library/Application Support/dev.ligma.client` on macOS). Written
-//! with the defaults on first launch so there's a file to edit.
+//! with the defaults on first launch so there's a file to edit
 //!
 //! The settings window (`dist/settings.html`, Ligma > Settings… on macOS,
 //! the gear by the window controls elsewhere)
-//! edits the same file and applies each change right away.
+//! edits the same file and applies each change right away
 
 use std::sync::Mutex;
 
@@ -18,37 +18,37 @@ pub const WINDOW: &str = "settings";
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Light or dark, for Figma and Ligma alike. System follows the
-    /// system's. Takes the place of Figma's own Theme setting.
+    /// system's. Takes the place of Figma's own Theme setting
     pub color_scheme: ColorScheme,
     /// Color theme in light mode, from `dist/themes.js`: "figma" for
     /// Figma's own colors,
     pub light_theme: String,
-    /// and in dark mode.
+    /// and in dark mode
     pub dark_theme: String,
     /// Size of Figma and Ligma's own interface, in percent, like a
-    /// browser's zoom. The tab bar grows with it.
+    /// browser's zoom. The tab bar grows with it
     pub interface_scale: u32,
     /// Minutes a tab stays hidden before Ligma closes its webview to free
     /// memory. It reloads when selected. On macOS tabs sleep sooner under
-    /// memory pressure. 0 keeps every tab loaded.
+    /// memory pressure. 0 keeps every tab loaded
     pub sleep_tabs_after_minutes: u64,
     /// Hidden tabs that stay loaded, most recently used first and Home last.
     /// The rest go to sleep right away. None (null): no limit. Ignored when
-    /// sleeping is off.
+    /// sleeping is off
     pub max_hidden_tabs_loaded: Option<usize>,
     /// While a file tab reloads after sleep, show its last image instead of
-    /// Figma's loading screen (macOS).
+    /// Figma's loading screen (macOS)
     pub reload_snapshots: bool,
     /// Show the open file, where in it you are and the selected tool on
-    /// Discord.
+    /// Discord
     pub discord_rich_presence: bool,
-    /// Name the open file on Discord; otherwise it says "Editing a file".
+    /// Name the open file on Discord; otherwise it says "Editing a file"
     pub discord_show_file: bool,
     /// Hide every file from Discord, as with `discord_show_file` off, but
     /// those shown from their tab's menu. Otherwise every file shows but
-    /// those hidden there.
+    /// those hidden there
     pub discord_hide_files_by_default: bool,
-    /// Show the selected tool's icon on Discord, named when hovered.
+    /// Show the selected tool's icon on Discord, named when hovered
     pub discord_show_tool: bool,
     /// Under the file's name on Discord, show where in it you are (only
     /// with `discord_show_file`): the page in Figma Design,
@@ -61,28 +61,28 @@ pub struct Settings {
     pub discord_show_chat: bool,
     /// the asset in Figma Buzz,
     pub discord_show_asset: bool,
-    /// and the webpage in Figma Sites.
+    /// and the webpage in Figma Sites
     pub discord_show_webpage: bool,
     /// Let Discord friends join the open file: invite them from the + menu
     /// in a Discord chat, or accept when they ask to join, and it opens in
-    /// their Ligma if they have access. Shows how many are in the file.
+    /// their Ligma if they have access. Shows how many are in the file
     pub discord_invites: bool,
-    /// Reopen the last session's tabs on launch, asleep until selected.
+    /// Reopen the last session's tabs on launch, asleep until selected
     pub restore_tabs: bool,
-    /// Show a tab's last image and name under it while it's hovered.
+    /// Show a tab's last image and name under it while it's hovered
     pub tab_previews: bool,
     /// Show development and saved plugins in the editor's left rail,
     pub rail_plugins: bool,
-    /// and saved widgets.
+    /// and saved widgets
     pub rail_widgets: bool,
     /// Open Figma's Actions menu on its Plugins & widgets tab rather than
-    /// All.
+    /// All
     pub actions_plugins_tab: bool,
     /// Show each layer's preview in the layers panel in every mode, as in
-    /// Draw mode. Figma renders them all, so off by default.
+    /// Draw mode. Figma renders them all, so off by default
     pub layer_previews: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
-    /// trying a newer one on.
+    /// trying a newer one on
     pub classic_home: bool,
 }
 
@@ -129,19 +129,19 @@ pub enum ColorScheme {
 
 /// Interface scales the settings window steps through, in percent, like
 /// a browser's zoom levels. Others typed in are kept within the first and
-/// last.
+/// last
 pub const SCALES: [u32; 11] = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
 
-/// `interfaceScale` as a zoom factor, 1 at 100%.
+/// `interfaceScale` as a zoom factor, 1 at 100%
 pub fn scale(settings: &Settings) -> f64 {
     let (min, max) = (SCALES[0], SCALES[SCALES.len() - 1]);
     f64::from(settings.interface_scale.clamp(min, max)) / 100.0
 }
 
-/// The settings in effect, for the settings window.
+/// The settings in effect, for the settings window
 pub struct Current(Mutex<Settings>);
 
-/// The settings in effect.
+/// The settings in effect
 pub fn current(app: &AppHandle) -> Settings {
     app.state::<Current>().0.lock().unwrap().clone()
 }
@@ -171,9 +171,9 @@ fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Opens the settings window, or focuses it if it's already open.
+/// Opens the settings window, or focuses it if it's already open
 pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
-    // The gear button's clicks can arrive together; one window between them.
+    // The gear button's clicks can arrive together; one window between them
     static OPENING: Mutex<()> = Mutex::new(());
     let _opening = OPENING.lock().unwrap();
     if let Some(window) = app.get_webview_window(WINDOW) {
@@ -181,7 +181,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         return window.set_focus();
     }
     let size = window_size(app);
-    // Shown by `get_settings`, once the page is at the interface scale.
+    // Shown by `get_settings`, once the page is at the interface scale
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title("Settings")
@@ -191,12 +191,12 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         .maximizable(false)
         .minimizable(false)
         .center();
-    // No flash of another color before the page draws.
+    // No flash of another color before the page draws
     if let Some(color) = crate::tabs::theme(app).as_ref().and_then(background) {
         builder = builder.background_color(color);
     }
     // The page draws its own title bar (see settings.html), with the
-    // traffic lights in it on macOS and a close button elsewhere.
+    // traffic lights in it on macOS and a close button elsewhere
     #[cfg(target_os = "macos")]
     {
         builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
@@ -206,7 +206,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
-    // The size it was built with, and no accent-colored border.
+    // The size it was built with, and no accent-colored border
     #[cfg(windows)]
     {
         crate::frame::refresh(&window);
@@ -217,7 +217,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         }
     }
     // Traffic lights centered on the header, like on the tab bar. AppKit
-    // only on the main thread.
+    // only on the main thread
     #[cfg(target_os = "macos")]
     {
         let ns_window = window.clone();
@@ -234,7 +234,7 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
 
 /// The settings window's size at the interface scale: fits the longest page
 /// (Discord). On a small screen it fits the screen instead, and the page
-/// scrolls.
+/// scrolls
 fn window_size(app: &AppHandle) -> LogicalSize<f64> {
     let scale = crate::tabs::scale(app);
     let (mut width, mut height) = (680.0 * scale, 600.0 * scale);
@@ -247,7 +247,7 @@ fn window_size(app: &AppHandle) -> LogicalSize<f64> {
 }
 
 /// Zooms the settings window, if open, to the interface scale and resizes
-/// it around its middle.
+/// it around its middle
 pub fn apply_scale(app: &AppHandle, scale: f64) {
     let Some(window) = app.get_webview_window(WINDOW) else {
         return;
@@ -265,13 +265,13 @@ pub fn apply_scale(app: &AppHandle, scale: f64) {
     let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round().max(0.0) as i32));
 }
 
-/// The theme's background as a window color, if it's `#rrggbb`.
+/// The theme's background as a window color, if it's `#rrggbb`
 fn background(theme: &serde_json::Value) -> Option<tauri::window::Color> {
     theme_color(theme, "bg")
 }
 
 /// Theme color `key` (see `THEME_JS` in tabs.rs) as a window color, if
-/// it's `#rrggbb`.
+/// it's `#rrggbb`
 pub fn theme_color(theme: &serde_json::Value, key: &str) -> Option<tauri::window::Color> {
     let hex = theme.get(key)?.as_str()?.strip_prefix('#')?;
     if hex.len() != 6 {
@@ -281,7 +281,7 @@ pub fn theme_color(theme: &serde_json::Value, key: &str) -> Option<tauri::window
     Some(tauri::window::Color(channel(0)?, channel(2)?, channel(4)?, 255))
 }
 
-/// Passes the active tab's new theme to the settings window, if open.
+/// Passes the active tab's new theme to the settings window, if open
 pub fn apply_theme(app: &AppHandle, theme: &serde_json::Value) {
     if let Some(window) = app.get_webview_window(WINDOW) {
         let _ = window.eval(format!("window.applyTheme?.({theme})"));
@@ -289,7 +289,7 @@ pub fn apply_theme(app: &AppHandle, theme: &serde_json::Value) {
 }
 
 /// True if the settings window has keyboard focus, so Cmd+W closes it
-/// rather than a tab.
+/// rather than a tab
 pub fn close_if_focused(app: &AppHandle) -> bool {
     let Some(window) = app.get_webview_window(WINDOW) else {
         return false;
@@ -301,14 +301,14 @@ pub fn close_if_focused(app: &AppHandle) -> bool {
     true
 }
 
-/// Closes the settings window, if open, for when the main window goes.
+/// Closes the settings window, if open, for when the main window goes
 pub fn close(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(WINDOW) {
         let _ = window.destroy();
     }
 }
 
-/// Only the settings window may read and change settings.
+/// Only the settings window may read and change settings
 fn from_settings_window(webview: &Webview) -> bool {
     webview.label() == WINDOW
 }
@@ -318,7 +318,7 @@ pub async fn get_settings(app: AppHandle, webview: Webview) -> Option<Settings> 
     if !from_settings_window(&webview) {
         return None;
     }
-    // Zoomed now: a zoom set before the page loaded doesn't last.
+    // Zoomed now: a zoom set before the page loaded doesn't last
     if let Some(window) = app.get_webview_window(WINDOW) {
         let _ = window.set_zoom(crate::tabs::scale(&app));
         let _ = window.show();
@@ -327,13 +327,13 @@ pub async fn get_settings(app: AppHandle, webview: Webview) -> Option<Settings> 
     Some(app.state::<Current>().0.lock().unwrap().clone())
 }
 
-/// The active tab's Figma theme colors, for the settings window to match.
+/// The active tab's Figma theme colors, for the settings window to match
 #[tauri::command]
 pub async fn get_theme(app: AppHandle, webview: Webview) -> Option<serde_json::Value> {
     from_settings_window(&webview).then(|| crate::tabs::theme(&app)).flatten()
 }
 
-/// Saves `settings` and applies them to the running app.
+/// Saves `settings` and applies them to the running app
 #[tauri::command]
 pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) -> Result<(), String> {
     if !from_settings_window(&webview) {
@@ -371,7 +371,7 @@ pub async fn check_for_updates(app: AppHandle, webview: Webview) {
     }
 }
 
-/// Opens a new GitHub issue for the user to describe a problem.
+/// Opens a new GitHub issue for the user to describe a problem
 #[tauri::command]
 pub async fn report_problem(app: AppHandle, webview: Webview) {
     if from_settings_window(&webview) {

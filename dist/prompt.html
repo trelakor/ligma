@@ -7,9 +7,9 @@
      The window is exactly the prompt: the page draws the text and buttons
      from `get_prompt`, reports its size with `prompt_ready`, and sends the
      chosen button to `prompt_answer`. Colors come from the active Figma
-     tab's theme, like the settings window's. -->
+     tab's theme, like the settings window's -->
 <style>
-  /* Figma's UI3 palette, until the first Figma tab reports its own. */
+  /* Figma's UI3 palette, until the first Figma tab reports its own */
   :root {
     color-scheme: dark;
     --bg: #2c2c2c;
@@ -31,7 +31,7 @@
       --hover: rgba(0, 0, 0, 0.04);
     }
   }
-  /* Set by `applyTheme` from the theme's background. */
+  /* Set by `applyTheme` from the theme's background */
   :root.dark { color-scheme: dark; --hover: rgba(255, 255, 255, 0.06); }
   :root.light { color-scheme: light; --hover: rgba(0, 0, 0, 0.04); }
 
@@ -48,7 +48,7 @@
     -webkit-font-smoothing: antialiased;
   }
   #prompt { width: 360px; }
-  /* Drags the window. */
+  /* Drags the window */
   header {
     display: flex;
     align-items: center;
@@ -73,7 +73,7 @@
     gap: 8px;
     padding: 16px;
   }
-  /* Figma's buttons: secondary, and primary for the default. */
+  /* Figma's buttons: secondary, and primary for the default */
   button {
     flex: none;
     height: 24px;
@@ -104,7 +104,7 @@
   const $ = (id) => document.getElementById(id);
   const answer = (index) => invoke("prompt_answer", { index });
 
-  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables.
+  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables
   const THEME_VARS = {
     "--bg": "bg",
     "--bg-secondary": "bgSecondary",
@@ -113,7 +113,7 @@
     "--text-secondary": "textSecondary",
     "--brand": "brand",
   };
-  // Relative luminance of a CSS color, 0 to 1, or null.
+  // Relative luminance of a CSS color, 0 to 1, or null
   const luminance = (color) => {
     const probe = document.createElement("canvas").getContext("2d");
     probe.fillStyle = color;
@@ -135,7 +135,7 @@
     }
   };
 
-  // Sizes the window to the prompt, also after the interface scale changes.
+  // Sizes the window to the prompt, also after the interface scale changes
   window.measure = () => {
     const { width, height } = $("prompt").getBoundingClientRect();
     return invoke("prompt_ready", { width: Math.ceil(width), height: Math.ceil(height) });

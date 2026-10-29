@@ -1,6 +1,6 @@
 //! Development plugins: Figma plugins on this computer, imported from their
 //! `manifest.json` like the Figma desktop app's Plugins > Development >
-//! Import plugin from manifest…, which figma.com doesn't have.
+//! Import plugin from manifest…, which figma.com doesn't have
 //!
 //! The list is `plugins.json` next to `settings.json`, and Settings >
 //! Plugins (`dist/settings.html`) imports, switches on and off, and removes
@@ -10,7 +10,7 @@
 //! their … menu. `PAGE_JS` draws them there and reports clicks by opening
 //! `SIGNAL_HOST` links, which `on_signal` handles. It also puts them, and
 //! the plugins and widgets saved to the user's Figma account, in the
-//! editor's left rail.
+//! editor's left rail
 //!
 //! Figma's web editor offers its plugin API on the page as `window.figma`,
 //! for the developer console, in files the user can edit. `RUNNER_JS` runs
@@ -18,7 +18,7 @@
 //! its `ui`, so `figma.showUI` and messages to and from the UI work as in
 //! the desktop app. Unlike there, the code isn't sandboxed: it runs with
 //! the page's own access, which Settings says. The files are read on every
-//! run, so a rebuilt plugin runs its new code.
+//! run, so a rebuilt plugin runs its new code
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -31,37 +31,37 @@ use tauri_plugin_opener::OpenerExt;
 
 const FILE: &str = "plugins.json";
 
-/// An imported plugin, as kept in `plugins.json`.
+/// An imported plugin, as kept in `plugins.json`
 #[derive(Clone, Deserialize, Serialize)]
 struct Entry {
-    /// Its `manifest.json`.
+    /// Its `manifest.json`
     manifest: PathBuf,
     enabled: bool,
 }
 
-/// What a manifest says, with paths resolved next to it.
+/// What a manifest says, with paths resolved next to it
 struct Manifest {
     name: String,
     id: Option<String>,
     main: PathBuf,
     ui: Ui,
-    /// Editors it runs in: "figma", "figjam", "dev", "slides", "buzz".
+    /// Editors it runs in: "figma", "figjam", "dev", "slides", "buzz"
     editor_types: Vec<String>,
     /// Its menu's commands as (text, command), submenus flattened into
     /// "Submenu › Command", and None for a separator. Empty if it has no
-    /// menu.
+    /// menu
     commands: Vec<Option<(String, String)>>,
 }
 
 enum Ui {
     None,
-    /// One page, the plugin's `__html__`.
+    /// One page, the plugin's `__html__`
     Page(PathBuf),
-    /// Named pages, its `__uiFiles__`.
+    /// Named pages, its `__uiFiles__`
     Pages(Vec<(String, PathBuf)>),
 }
 
-/// Reads and checks the manifest at `path`.
+/// Reads and checks the manifest at `path`
 fn read_manifest(path: &Path) -> Result<Manifest, String> {
     let text = std::fs::read_to_string(path).map_err(|error| format!("Can't read manifest.json: {error}"))?;
     let json: Value = serde_json::from_str(&text).map_err(|error| format!("manifest.json isn't valid JSON: {error}"))?;
@@ -118,7 +118,7 @@ fn flatten_menu(menu: &[Value], prefix: &str, commands: &mut Vec<Option<(String,
     }
 }
 
-/// Why a readable manifest's plugin can't run yet, if it can't.
+/// Why a readable manifest's plugin can't run yet, if it can't
 fn problem(manifest: &Manifest) -> Option<String> {
     let file = |path: &Path| path.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned());
     if !manifest.main.is_file() {
@@ -150,19 +150,19 @@ fn save(app: &AppHandle, entries: &[Entry]) -> Result<(), String> {
     }
     std::fs::write(path, serde_json::to_string_pretty(entries).unwrap()).map_err(|e| e.to_string())?;
     push(app);
-    // Settings, if open, lists them too.
+    // Settings, if open, lists them too
     if let Some(window) = app.get_webview_window(crate::settings::WINDOW) {
         let _ = window.eval("window.showPlugins?.()");
     }
     Ok(())
 }
 
-/// Origin of the links `PAGE_JS` opens to report a click.
+/// Origin of the links `PAGE_JS` opens to report a click
 pub const SIGNAL_HOST: &str = "plugins.ligma.invalid";
 
 /// A secret for this run of Ligma, in `PAGE_JS` and every link it opens, so
 /// only that script can run or remove plugins: other frames, like plugin
-/// UIs, can open links too but can't read it.
+/// UIs, can open links too but can't read it
 fn token() -> &'static str {
     static TOKEN: OnceLock<String> = OnceLock::new();
     TOKEN.get_or_init(|| {
@@ -178,12 +178,12 @@ fn token() -> &'static str {
     })
 }
 
-/// Initialization script for Figma tabs (see `PAGE_JS`).
+/// Initialization script for Figma tabs (see `PAGE_JS`)
 pub fn page_js() -> String {
     PAGE_JS.replace("__LIGMA_TOKEN__", token())
 }
 
-/// What `PAGE_JS` shows of the enabled plugins.
+/// What `PAGE_JS` shows of the enabled plugins
 fn page_list(app: &AppHandle) -> Value {
     let plugins = load(app)
         .into_iter()
@@ -208,7 +208,7 @@ fn page_list(app: &AppHandle) -> Value {
 }
 
 /// The script sending `PAGE_JS` the enabled plugins, what the left rail
-/// shows and which tab the Actions panel opens on.
+/// shows and which tab the Actions panel opens on
 fn page_update(app: &AppHandle) -> String {
     let list = page_list(app);
     let settings = crate::settings::current(app);
@@ -217,12 +217,12 @@ fn page_update(app: &AppHandle) -> String {
     format!("window.__ligmaDevPlugins?.set({list}, {rail}, {plugins_tab})")
 }
 
-/// Sends them to Figma tab `webview`.
+/// Sends them to Figma tab `webview`
 pub fn push_to(webview: &Webview) {
     let _ = webview.eval(page_update(webview.app_handle()));
 }
 
-/// Sends them to every loaded Figma tab.
+/// Sends them to every loaded Figma tab
 pub fn push(app: &AppHandle) {
     let script = page_update(app);
     for webview in crate::tabs::scriptable_tabs(app) {
@@ -231,7 +231,7 @@ pub fn push(app: &AppHandle) {
 }
 
 /// A click in the Actions panel, from `PAGE_JS` in tab `tab`:
-/// `/run?manifest=…&command=…`, `/remove?manifest=…` or `/import`.
+/// `/run?manifest=…&command=…`, `/remove?manifest=…` or `/import`
 pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
     let param = |name: &str| {
         url.query_pairs()
@@ -272,7 +272,7 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
 }
 
 /// The script that runs a plugin, from `RUNNER_JS`, its code and what it's
-/// given.
+/// given
 fn script(manifest: &Manifest, command: Option<String>) -> Result<String, String> {
     let read = |path: &Path| {
         std::fs::read_to_string(path).map_err(|error| format!("Can't read {}: {error}", path.display()))
@@ -291,7 +291,7 @@ fn script(manifest: &Manifest, command: Option<String>) -> Result<String, String
     };
     let spec = serde_json::json!({
         "name": manifest.name,
-        // Keeps each plugin's `figma.clientStorage` apart.
+        // Keeps each plugin's `figma.clientStorage` apart
         "storage": manifest.id.clone().unwrap_or_else(|| manifest.name.clone()),
         "editorTypes": manifest.editor_types,
         "command": command.unwrap_or_default(),
@@ -300,13 +300,13 @@ fn script(manifest: &Manifest, command: Option<String>) -> Result<String, String
     });
     // The code goes in as written, not through `eval`, which Figma's
     // content security policy may block. A new line ends a last `//`
-    // comment.
+    // comment
     Ok(format!(
         "({RUNNER_JS})({spec}, function (figma, __html__, __uiFiles__, setTimeout, setInterval, clearTimeout, clearInterval) {{\n{code}\n}})"
     ))
 }
 
-/// Runs the plugin at `manifest` in tab `tab`, with menu command `command`.
+/// Runs the plugin at `manifest` in tab `tab`, with menu command `command`
 fn run(app: &AppHandle, tab: u32, manifest_path: &Path, command: Option<String>) {
     let manifest = match read_manifest(manifest_path) {
         Ok(manifest) => manifest,
@@ -328,7 +328,7 @@ fn run(app: &AppHandle, tab: u32, manifest_path: &Path, command: Option<String>)
             Some("ok") => return,
             Some("unavailable") => "Plugins run in files you can edit, once they've loaded, and not while another plugin is running.",
             Some("reload") => "Figma's plugin connection in this tab was closed. Reload the tab (right-click it, then Reload) and try again.",
-            // A syntax error stops the whole script, so nothing comes back.
+            // A syntax error stops the whole script, so nothing comes back
             _ => "Its code couldn't be loaded. Check that main in manifest.json points to built JavaScript.",
         };
         fail(&handle, &name, message);
@@ -346,7 +346,7 @@ fn fail(app: &AppHandle, name: &str, message: &str) {
 /// Runs a plugin's code against Figma's console plugin API, `window.figma`,
 /// and returns "ok", "unavailable" (no API: the file can't be edited, isn't
 /// loaded, or another plugin is running) or "reload" (the API was closed
-/// and can't be had again).
+/// and can't be had again)
 ///
 /// The API lasts until a plugin closes it, and closing the plugin window's
 /// X closes it for good, so each run starts on a new one: Figma's own code
@@ -355,11 +355,11 @@ fn fail(app: &AppHandle, name: &str, message: &str) {
 /// it falls back on the API as it is. While a plugin from Figma's menu is
 /// open, `window.figma` is instead a stand-in for debugging that plugin
 /// (Figma's "CONSOLE_SHIM", which refuses `figma.ui.onmessage`), so that
-/// plugin is closed first, as Figma does when another plugin starts.
+/// plugin is closed first, as Figma does when another plugin starts
 ///
 /// The plugin gets the API with `figma.command`, the `run` and `close`
 /// events, `closePlugin`, its own `clientStorage` and timers that stop when
-/// it closes. `showUI` titles the window with the plugin's name.
+/// it closes. `showUI` titles the window with the plugin's name
 const RUNNER_JS: &str = r#"(spec, main) => {
   const findHost = () => {
     const chunks = globalThis.rspackChunk_figma_web_bundler ?? globalThis.webpackChunk_figma_web_bundler;
@@ -387,14 +387,14 @@ const RUNNER_JS: &str = r#"(spec, main) => {
       return false;
     }
   };
-  // A new API, unless a plugin from Figma's menu holds it.
+  // A new API, unless a plugin from Figma's menu holds it
   const renew = () => {
     if (!host?.isConsole()) return;
     host.close();
     host.reset();
   };
 
-  // The stand-in for a running plugin from Figma's menu.
+  // The stand-in for a running plugin from Figma's menu
   const isStandIn = (api) => {
     try {
       api.ui.onmessage;
@@ -433,7 +433,7 @@ const RUNNER_JS: &str = r#"(spec, main) => {
   };
   window.__ligmaClosePlugin = close;
   // Closing the plugin's window closes the API. Its close handlers still
-  // run, and its timers stop.
+  // run, and its timers stop
   watch = setInterval(() => { if (!alive(api)) close(); }, 1000);
 
   const listen = (type, handler, once) => {
@@ -449,7 +449,7 @@ const RUNNER_JS: &str = r#"(spec, main) => {
   };
   // The console API has no `clientStorage` (it has no plugin ID). Keep
   // each plugin's in figma.com's IndexedDB instead, which clones values
-  // like Figma does.
+  // like Figma does
   const storagePrefix = `${spec.storage}:`;
   const storage = (mode, use) =>
     new Promise((resolve, reject) => {
@@ -502,7 +502,7 @@ const RUNNER_JS: &str = r#"(spec, main) => {
     },
   };
   // Over an empty object: the API's own properties are frozen, and a proxy
-  // of it would have to return them unchanged.
+  // of it would have to return them unchanged
   const figma = new Proxy({}, {
     get(_, key) {
       if (Object.hasOwn(overrides, key)) return overrides[key];
@@ -533,7 +533,7 @@ const RUNNER_JS: &str = r#"(spec, main) => {
     close();
     return "ok";
   }
-  // Like Figma: `run` comes after the code has set up its handlers.
+  // Like Figma: `run` comes after the code has set up its handlers
   window.setTimeout(() => {
     for (const handler of handlers.run) {
       try {
@@ -551,7 +551,7 @@ const RUNNER_JS: &str = r#"(spec, main) => {
   window.__ligmaClosePlugin?.();
   if (isStandIn(api)) {
     if (!host) return "unavailable";
-    // Its closing finishes later; then a new API takes its place.
+    // Its closing finishes later; then a new API takes its place
     (async () => {
       try {
         await host.close({});
@@ -583,7 +583,7 @@ const RUNNER_JS: &str = r#"(spec, main) => {
 /// Figma's rows and relabels the filter button with CSS, leaving Figma's
 /// nodes alone. Clicks go to Ligma as `SIGNAL_HOST` links: through
 /// `window.open` (`on_new_window`) on Windows, and on macOS as an iframe
-/// load, which WKWebView reports to `on_navigation`.
+/// load, which WKWebView reports to `on_navigation`
 ///
 /// The editor's left rail gets a button under Figma's for each of these
 /// plugins and each plugin and widget saved to the user's account. Clicking
@@ -592,7 +592,7 @@ const RUNNER_JS: &str = r#"(spec, main) => {
 /// details; Ctrl-dragging one moves it, and the order is kept. Saved ones
 /// come from Figma's live view of the user's saves (its store until that
 /// loads) and run, show their details and are removed through Figma's own
-/// code, found by text in its modules.
+/// code, found by text in its modules
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
   const TOKEN = "__LIGMA_TOKEN__";
@@ -610,19 +610,19 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   let plugins = [];
-  // What the left rail shows, from Settings.
+  // What the left rail shows, from Settings
   let railShows = { plugins: true, widgets: true };
-  // The Actions panel opens on Plugins & widgets, from Settings.
+  // The Actions panel opens on Plugins & widgets, from Settings
   let pluginsTab = false;
-  // The panel was open at the last render.
+  // The panel was open at the last render
   let actionsOpen = false;
-  // The Development filter is on.
+  // The Development filter is on
   let devOnly = false;
-  // Figma's own filter: 0 All, 1 Plugins, 2 Widgets.
+  // Figma's own filter: 0 All, 1 Plugins, 2 Widgets
   let figmaFilter = 0;
 
   // Figma's class names, as seen on 2026-10-24. Rows take theirs from a
-  // Figma row on screen, if there is one, in case these change.
+  // Figma row on screen, if there is one, in case these change
   const CLASSES = {
     row: "cx_flex--tV5oZ cx_alignCenter--1v4xl cx_bRadius5--JCLrp cx_ml8--SwsTN cx_mr8--aRua- cx_p4--Ckaol cx_flexGrow1--IRFtW cx_flexShrink1--HTMk6 cx_flexBasis0--xUinj",
     rowHover: "cx_colorBgHover--S-Hsw",
@@ -671,7 +671,7 @@ const PAGE_JS: &str = r##"(() => {
     html.ligma-dev-filter #extensions-filter-dropdown-button [class*="buttonContent"] > div > span:first-child { display: none; }
     html.ligma-dev-filter #extensions-filter-dropdown-button [class*="buttonContent"] > div::before { content: "Development"; white-space: nowrap; }
     html.ligma-dev-filter #extensions-filter-dropdown-menu [role="menuitem"][aria-checked="true"]:not([data-ligma-dev]) > svg { visibility: hidden; }
-    /* Where Figma's 20px plugin icons go, with their 2px margin. */
+    /* Where Figma's 20px plugin icons go, with their 2px margin */
     .ligma-icon { flex: none; box-sizing: border-box; width: 20px; height: 20px; margin: 2px; color: var(--color-icon-tertiary, var(--color-text-tertiary)); }
     .ligma-icon.ligma-glyph { padding: 2px; color: var(--color-icon-secondary, var(--color-text-secondary)); }
     .ligma-text { min-width: 0; }
@@ -688,12 +688,12 @@ const PAGE_JS: &str = r##"(() => {
     html.ligma-selecting [data-testid="extension-list-item"][class*="colorBgHover"] { background-color: transparent !important; }
     html.ligma-selecting [data-testid="extension-list-item"] [data-testid="extension-options-button"] { visibility: hidden; }
     .ligma-menu { position: fixed; z-index: 2147483000; max-width: 400px; }
-    /* Under Figma's rail buttons, scrolling if they don't fit. */
+    /* Under Figma's rail buttons, scrolling if they don't fit */
     #ligma-rail { display: flex; flex-direction: column; align-items: center; flex: 0 1 auto; min-height: 0; margin-bottom: auto; overflow-y: auto; scrollbar-width: none; }
     #ligma-rail > button { flex: none; }
     #ligma-rail .ligma-icon { width: 24px; height: 24px; margin: 0; }
     #ligma-rail button.ligma-open > div { background: var(--color-bg-hover, rgba(127, 127, 127, 0.15)); }
-    /* Icons grow a little under the pointer, and while picked up. */
+    /* Icons grow a little under the pointer, and while picked up */
     #ligma-rail > button > div > * { transition: transform 120ms ease-out; }
     #ligma-rail > button:hover > div > *, #ligma-rail > button.ligma-open > div > *, #ligma-rail > button.ligma-dragging > div > * { transform: scale(1.12); }
     #ligma-rail > button.ligma-dragging { position: relative; z-index: 1; }
@@ -712,11 +712,11 @@ const PAGE_JS: &str = r##"(() => {
   };
   const rowButton = (icon) => el("button", CLASSES.button, icon);
 
-  // Which plugins run in this file's editor.
+  // Which plugins run in this file's editor
   const editorTypes = () =>
     ({ design: ["figma", "dev"], file: ["figma", "dev"], board: ["figjam"], slides: ["slides"], buzz: ["buzz"] })[location.pathname.split("/")[1]] ?? [];
 
-  // Closes the Actions panel, as Figma does when a plugin starts.
+  // Closes the Actions panel, as Figma does when a plugin starts
   const closeActions = () => {
     const button = [...document.querySelectorAll('[aria-label="Actions"]')].find((button) => button.offsetParent);
     if (document.querySelector('[data-testid="tab-extensions"]')) button?.click();
@@ -724,7 +724,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // A menu like Figma's (the … and command menus) under `anchor`, an
   // element or a rect, or `beside` it, to its right. `items` are [text,
-  // action], or null for a separator.
+  // action], or null for a separator
   let menu = null;
   let menuOptions = [];
   let menuIndex = -1;
@@ -744,7 +744,7 @@ const PAGE_JS: &str = r##"(() => {
     menu = el("div", `${CLASSES.menu} ligma-menu`);
     menu.setAttribute("role", "menu");
     const list = el("div");
-    // No separator first, last or after another.
+    // No separator first, last or after another
     items = items.filter((item, i) => item || (i > 0 && items[i - 1] && items.slice(i + 1).some(Boolean)));
     for (const item of items) {
       if (!item) {
@@ -779,7 +779,7 @@ const PAGE_JS: &str = r##"(() => {
     if (byKeyboard) activate(0);
   };
   // A press in the menu mustn't reach Figma or move focus out of its
-  // panel, which closes it.
+  // panel, which closes it
   for (const type of ["pointerdown", "mousedown"]) {
     addEventListener(type, (e) => {
       if (!menu) return;
@@ -797,7 +797,7 @@ const PAGE_JS: &str = r##"(() => {
   // Enter runs the selected one. Ligma's rows come first, so they get the
   // selection first, and give it back to Figma's first row past their last
   // (Figma keeps its selection there meanwhile, its highlight hidden). ↑
-  // from Figma's first row, or with nothing selected, comes back to them.
+  // from Figma's first row, or with nothing selected, comes back to them
   let selected = -1;
   const rows = () => [...(document.getElementById("ligma-dev-plugins")?.querySelectorAll(".ligma-row") ?? [])];
   const figmaRows = () => [...document.querySelectorAll('[data-testid="extension-list-item"]')].filter((node) => node.offsetParent);
@@ -810,7 +810,7 @@ const PAGE_JS: &str = r##"(() => {
     document.documentElement.classList.toggle("ligma-selecting", index >= 0);
     if (index >= 0) rows()[index]?.scrollIntoView({ block: "nearest" });
   };
-  // Pointing at one of Figma's rows selects it, in Figma.
+  // Pointing at one of Figma's rows selects it, in Figma
   addEventListener("mouseover", (e) => {
     if (selected >= 0 && e.target.closest?.('[data-testid="extension-list-item"]')) select(-1);
   }, true);
@@ -887,7 +887,7 @@ const PAGE_JS: &str = r##"(() => {
     button.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!commands.length) return run(plugin);
-      // From Enter (no mouse), with the first command active.
+      // From Enter (no mouse), with the first command active
       openMenu(text, commandItems(plugin), node, { byKeyboard: e.detail === 0 });
     });
     const trail = el("div", "ligma-trail");
@@ -921,7 +921,7 @@ const PAGE_JS: &str = r##"(() => {
     return node;
   };
 
-  // The Development option in the filter's menu, while it's open.
+  // The Development option in the filter's menu, while it's open
   const filterOption = () => {
     const items = document.getElementById("extensions-filter-dropdown-menu")?.firstElementChild;
     if (!items) return;
@@ -947,7 +947,7 @@ const PAGE_JS: &str = r##"(() => {
       option.innerHTML = (devOnly ? ICONS.check : `<span class="${CLASSES.check}"></span>`) + `<div class="${CLASSES.filterLabel}">Development</div>`;
     }
   };
-  // Figma's own filter options turn Development off.
+  // Figma's own filter options turn Development off
   addEventListener("click", (e) => {
     const item = e.target.closest?.('#extensions-filter-dropdown-menu [role="menuitem"]:not([data-ligma-dev])');
     if (!item) return;
@@ -960,7 +960,7 @@ const PAGE_JS: &str = r##"(() => {
   // `RUNNER_JS` finds its plugin host. Each piece is looked up when first
   // needed, as some load with the panels that use them. One pass over the
   // modules (some 60 ms) looks for all that are missing, at most every 5
-  // seconds unless `now`, for a click.
+  // seconds unless `now`, for a click
   const SIGNS = {
     store: "This API is intended only for debugging",
     runner: "runExtensionMenuAction: Expected PluginsMenuArgs",
@@ -993,7 +993,7 @@ const PAGE_JS: &str = r##"(() => {
       for (const name of missing) {
         if (modules[name] || !source.includes(SIGNS[name])) continue;
         // What the module calls `(0,alias.name)(…)` in the part matching
-        // `pattern`, with the alias and name captured in pairs.
+        // `pattern`, with the alias and name captured in pairs
         const imported = (pattern) => {
           const match = source.match(pattern);
           const load = source.match(/^[^(]*\([\w$]+,[\w$]+,([\w$]+)\)/)?.[1];
@@ -1014,7 +1014,7 @@ const PAGE_JS: &str = r##"(() => {
   const functionText = (fn) => Function.prototype.toString.call(fn);
   // The store (not `window.store`, which is for debugging and stalls the
   // page), running a plugin and its menu, as Figma's keyboard shortcuts for
-  // plugins do.
+  // plugins do
   let figmaCore = null;
   const internals = () => {
     if (figmaCore) return figmaCore;
@@ -1037,13 +1037,13 @@ const PAGE_JS: &str = r##"(() => {
     return (figmaCore = core);
   };
 
-  // Which plugins go in the rail: the editor's, Dev Mode's in Dev Mode.
+  // Which plugins go in the rail: the editor's, Dev Mode's in Dev Mode
   const railTypes = () =>
     document.body?.dataset.editorTheme === "dev-handoff" ? ["dev"] : editorTypes().filter((type) => type !== "dev");
   // The saved plugins and widgets, as the Actions panel has them: from
   // Figma's live view of what the user (and their org) saved. The store's
   // `installedPluginVersions` is older and misses newer saves, so it only
-  // stands in until the view loads.
+  // stands in until the view loads
   let saves = {};
   const watchSaves = (core) => {
     const [holder] = figmaModule("livegraph")?.imported(/let [\w$]+=([\w$]+)\.([\w$]+)\.get\(\);if\([\w$]+\)\{if\([\w$]+===[\w$]+\.userId/) ?? [];
@@ -1073,7 +1073,7 @@ const PAGE_JS: &str = r##"(() => {
     );
     let saved;
     if (saves.data && convert) {
-      // Figma's own conversion, into what the store has for each.
+      // Figma's own conversion, into what the store has for each
       saved = [["user", saves.data.currentUser], ["org", saves.data.org]].flatMap(([source, owner]) =>
         (owner?.resourceSaves ?? []).map(({ resource }) => {
           const plugin = resource?.resourceToPluginContent?.plugin;
@@ -1097,7 +1097,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   const isWidget = (plugin) => !!plugin.manifest?.containsWidget;
   // Runs a menu action of a saved plugin, which Figma looks for in the saved
-  // plugins it was given.
+  // plugins it was given
   const runSaved = (plugin, action) => {
     const core = internals();
     try {
@@ -1107,8 +1107,8 @@ const PAGE_JS: &str = r##"(() => {
       console.error("Ligma: couldn't run plugin", error);
     }
   };
-  // Puts a saved widget on the canvas, as its row in the Actions panel does.
-  // Figma fetches the widget's details first if it hasn't yet.
+  // Puts a saved widget on the canvas, as its row in the Actions panel does
+  // Figma fetches the widget's details first if it hasn't yet
   const insertWidget = async (core, widget) => {
     const store = core.store();
     const fetched = () => store.getState().publishedWidgets?.[widget.plugin_id];
@@ -1119,7 +1119,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     runSaved(widget, { type: "insert-installed-widget", pluginId: widget.plugin_id });
   };
-  // A saved plugin's menu as [text, action] items, or null if it has none.
+  // A saved plugin's menu as [text, action] items, or null if it has none
   const savedCommands = (core, plugin) => {
     if (!plugin.manifest?.menu?.length) return null;
     const flatten = (items, prefix = "") =>
@@ -1132,7 +1132,7 @@ const PAGE_JS: &str = r##"(() => {
     return flatten(core.menu(plugin.manifest.menu, plugin).map((item) => core.menuItem(item, ({ menuAction }) => () => runSaved(plugin, menuAction))));
   };
   // Running a saved plugin without a menu, as its row in the Actions panel
-  // does (plugins with parameters ask for them there).
+  // does (plugins with parameters ask for them there)
   const savedAction = (core, plugin) => {
     const { parameters, parameterOnly } = plugin.manifest ?? {};
     return core.menu([{ name: plugin.name, command: "", parameters, parameterOnly }], plugin)[0].menuAction;
@@ -1146,7 +1146,7 @@ const PAGE_JS: &str = r##"(() => {
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   // A press, the way Figma's menus take one: all at once, it closes the
-  // menu without choosing.
+  // menu without choosing
   const press = async (node) => {
     const at = node.getBoundingClientRect();
     const init = { bubbles: true, cancelable: true, button: 0, clientX: at.x + 4, clientY: at.y + 4, pointerId: 1, pointerType: "mouse", isPrimary: true };
@@ -1171,7 +1171,7 @@ const PAGE_JS: &str = r##"(() => {
   // View details: Figma's details view lives in the Actions panel, so this
   // opens Plugins & widgets there and picks View details from the plugin's
   // own … menu, kept out of sight. If its row isn't in the list, it
-  // searches for it first.
+  // searches for it first
   let viewing = false;
   const viewDetails = async (plugin) => {
     if (viewing) return;
@@ -1181,14 +1181,14 @@ const PAGE_JS: &str = r##"(() => {
     try {
       const actions = () => [...document.querySelectorAll('[aria-label="Actions"]')].find((button) => button.offsetParent)?.click();
       // Another plugin's details are open, which has no way to the list
-      // but back: close it to start over.
+      // but back: close it to start over
       const details = () => document.querySelector('[data-testid="extension-details-view"]');
       if (details()) {
         actions();
         await until(() => !details(), 1000);
       }
       if (!document.querySelector('[data-testid="tab-extensions"]')) actions();
-      // The first time, the panel's code loads first.
+      // The first time, the panel's code loads first
       const tab = await until(() => document.querySelector('[data-testid="tab-extensions"]'), 5000);
       if (!tab) return;
       if (tab.getAttribute("aria-selected") !== "true") tab.click();
@@ -1225,14 +1225,14 @@ const PAGE_JS: &str = r##"(() => {
   // The left rail: under Figma's buttons, a button for each plugin, the
   // development plugins first, then the saved ones, in Figma's order.
   // Clicking runs it (or opens its commands), right-clicking opens its …
-  // menu. Its buttons take their class names from Figma's.
+  // menu. Its buttons take their class names from Figma's
   const RAIL = {
     button: "_19xx72g0 x78zum5 x6s0dn4 xl56j7k xh8yej3 xbspwgj xd2jme7 xy8ggh3 xdt5ytf x1dbijih x1ned7t2",
     box: "x1467cpc xej7rzx x7r0jtz x78zum5 x6s0dn4 xl56j7k xkt69y7",
     separator: "xso031l x1q0q8m5 x1hxpj6c xtaulvc x5yfwti x15g3bpb",
   };
   const harvestRail = (top) => {
-    // The box of a button that isn't selected: the most common one.
+    // The box of a button that isn't selected: the most common one
     const buttons = [...top.querySelectorAll(":scope > button")].filter((button) => button.firstElementChild?.tagName === "DIV");
     const count = (className) => buttons.filter((button) => button.firstElementChild.className === className).length;
     const usual = buttons.sort((a, b) => count(b.firstElementChild.className) - count(a.firstElementChild.className))[0];
@@ -1246,7 +1246,7 @@ const PAGE_JS: &str = r##"(() => {
     const button = el("button", RAIL.button);
     button.type = "button";
     button.setAttribute("aria-label", name);
-    // Figma's tooltips, as on its own rail buttons.
+    // Figma's tooltips, as on its own rail buttons
     Object.assign(button.dataset, { tooltip: name, tooltipType: "text", tooltipShowRight: "true", tooltipOffsetY: "0", tooltipTimeoutDelay: "500", showTooltip: "true" });
     const box = el("div", RAIL.box);
     box.append(icon);
@@ -1258,7 +1258,7 @@ const PAGE_JS: &str = r##"(() => {
     button.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      // At the pointer, or beside the button from the keyboard.
+      // At the pointer, or beside the button from the keyboard
       const at = e.clientX || e.clientY ? new DOMRect(e.clientX - 4, e.clientY, 0, 0) : button;
       openMenu(at, options(), button, { beside: true, byKeyboard: !(e.clientX || e.clientY) });
     });
@@ -1303,7 +1303,7 @@ const PAGE_JS: &str = r##"(() => {
     if (core) watchSaves(core);
     if (store && store !== watchedStore) {
       // Saving or removing a plugin shows it here, and switching orgs
-      // changes which are saved.
+      // changes which are saved
       watchedStore = store;
       const watched = (state) => [state.installedPluginVersions, state.currentUserOrgId];
       let last = watched(store.getState());
@@ -1315,7 +1315,7 @@ const PAGE_JS: &str = r##"(() => {
         }
       });
     }
-    // Not while a button is being dragged.
+    // Not while a button is being dragged
     if (dragging) return;
     const types = railTypes();
     const dev = railShows.plugins ? plugins.filter((plugin) => plugin.editorTypes.some((type) => types.includes(type))) : [];
@@ -1326,11 +1326,11 @@ const PAGE_JS: &str = r##"(() => {
       ...saved.map((plugin) => [`saved:${plugin.plugin_id}`, () => savedRailButton(core, plugin)]),
     ];
     // In the order the user dragged them into, ones they haven't placed
-    // (like newly saved plugins) first. Sorting keeps their own order.
+    // (like newly saved plugins) first. Sorting keeps their own order
     const order = railOrder();
     entries.sort(([a], [b]) => order.indexOf(a) - order.indexOf(b));
     // Nothing to show (or all turned off in Settings): no rail, nor its
-    // separator.
+    // separator
     if (!entries.length) {
       rail?.remove();
       railDrawn = "";
@@ -1356,7 +1356,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // Ctrl-dragging a rail button moves it. The order is kept in figma.com's
   // storage, for every file and tab; plugins not in this editor keep their
-  // places after the ones in it.
+  // places after the ones in it
   const ORDER_KEY = "ligma-rail-order";
   const railOrder = () => {
     try {
@@ -1394,7 +1394,7 @@ const PAGE_JS: &str = r##"(() => {
       button.classList.add("ligma-dragging");
       document.documentElement.classList.add("ligma-rail-dragging");
     }
-    // Its place: after every other button whose middle it's past.
+    // Its place: after every other button whose middle it's past
     const rail = button.parentElement;
     const others = railButtons(rail).filter((other) => other !== button);
     const index = others.filter((other) => {
@@ -1402,7 +1402,7 @@ const PAGE_JS: &str = r##"(() => {
       return e.clientY > at.top + at.height / 2;
     }).length;
     if (railButtons(rail).indexOf(button) !== index) {
-      // The others slide into their new places.
+      // The others slide into their new places
       const before = new Map(others.map((other) => [other, other.getBoundingClientRect().top]));
       if (others[index]) rail.insertBefore(button, others[index]);
       else rail.append(button);
@@ -1413,7 +1413,7 @@ const PAGE_JS: &str = r##"(() => {
         }
       }
     }
-    // It follows the pointer, from wherever its place now is.
+    // It follows the pointer, from wherever its place now is
     button.style.transform = `translateY(${e.clientY - dragging.startY - (button.offsetTop - dragging.startTop)}px)`;
   }, true);
   const drop = (e) => {
@@ -1421,7 +1421,7 @@ const PAGE_JS: &str = r##"(() => {
     const { button, moved } = dragging;
     dragging = null;
     if (!moved) return;
-    // Not a click on the button too.
+    // Not a click on the button too
     swallowClick = true;
     button.classList.remove("ligma-dragging");
     document.documentElement.classList.remove("ligma-rail-dragging");
@@ -1439,7 +1439,7 @@ const PAGE_JS: &str = r##"(() => {
     e.preventDefault();
     e.stopPropagation();
   }, true);
-  // With Ctrl held, the buttons show they can be picked up.
+  // With Ctrl held, the buttons show they can be picked up
   const ctrl = (e) => document.documentElement.classList.toggle("ligma-ctrl", e.ctrlKey);
   addEventListener("keydown", ctrl, true);
   addEventListener("keyup", ctrl, true);
@@ -1453,7 +1453,7 @@ const PAGE_JS: &str = r##"(() => {
     renderRail();
     const tab = document.querySelector('[data-testid="tab-extensions"]');
     // Just opened on All: over to Plugins & widgets, if so set. Opened on
-    // another tab (Assets), it stays there.
+    // another tab (Assets), it stays there
     const opened = !!tab && !actionsOpen;
     actionsOpen = !!tab;
     if (opened && pluginsTab && document.querySelector('[data-testid="tab-all"]')?.getAttribute("aria-selected") === "true") {
@@ -1505,7 +1505,7 @@ const PAGE_JS: &str = r##"(() => {
     });
   };
   new MutationObserver((mutations) => {
-    // Not for its own changes.
+    // Not for its own changes
     if (mutations.every((m) => m.target.closest?.("#ligma-dev-plugins, #ligma-rail, .ligma-menu, [data-ligma-dev]"))) return;
     schedule();
   }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
@@ -1524,20 +1524,20 @@ const PAGE_JS: &str = r##"(() => {
   });
 })();"##;
 
-// Settings > Plugins.
+// Settings > Plugins
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plugin {
-    /// Its `manifest.json`, which identifies it here.
+    /// Its `manifest.json`, which identifies it here
     manifest: String,
-    /// The folder it's in, to show.
+    /// The folder it's in, to show
     folder: String,
     name: String,
     enabled: bool,
-    /// Editors it runs in, by name.
+    /// Editors it runs in, by name
     editors: Vec<&'static str>,
-    /// Why it can't run, if it can't.
+    /// Why it can't run, if it can't
     problem: Option<String>,
 }
 
@@ -1590,7 +1590,7 @@ pub async fn get_plugins(app: AppHandle, webview: Webview) -> Vec<Plugin> {
 }
 
 /// Asks for a plugin's `manifest.json`, over `window`, and adds it,
-/// enabled. Ok(false) if the dialog was cancelled.
+/// enabled. Ok(false) if the dialog was cancelled
 async fn import(app: &AppHandle, window: &Window) -> Result<bool, String> {
     let picked = rfd::AsyncFileDialog::new()
         .set_parent(window)
@@ -1609,7 +1609,7 @@ async fn import(app: &AppHandle, window: &Window) -> Result<bool, String> {
     let mut entries = load(app);
     match entries.iter_mut().find(|entry| entry.manifest == manifest) {
         Some(entry) if entry.enabled => return Err(format!("{name} is already imported.")),
-        // Imported but switched off: switch it back on.
+        // Imported but switched off: switch it back on
         Some(entry) => entry.enabled = true,
         None => entries.push(Entry { manifest, enabled: true }),
     }
@@ -1618,7 +1618,7 @@ async fn import(app: &AppHandle, window: &Window) -> Result<bool, String> {
 }
 
 /// Asks for a plugin's `manifest.json` and adds it, enabled. Ok(false) if
-/// the dialog was cancelled.
+/// the dialog was cancelled
 #[tauri::command]
 pub async fn import_plugin(app: AppHandle, webview: Webview) -> Result<bool, String> {
     if !from_settings_window(&webview) {
@@ -1649,7 +1649,7 @@ pub async fn remove_plugin(app: AppHandle, webview: Webview, manifest: String) -
     save(&app, &entries)
 }
 
-/// Shows the plugin's manifest in Explorer or the Finder.
+/// Shows the plugin's manifest in Explorer or the Finder
 #[tauri::command]
 pub async fn reveal_plugin(app: AppHandle, webview: Webview, manifest: String) {
     let known = load(&app).iter().any(|entry| entry.manifest == Path::new(&manifest));

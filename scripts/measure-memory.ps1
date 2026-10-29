@@ -22,7 +22,7 @@ function Measure-Tree {
   $children = @{}
   foreach ($p in $processes) { $children[[int]$p.ParentProcessId] += @($p) }
 
-  # Top of each tree: a matching process whose parent isn't one too.
+  # Top of each tree: a matching process whose parent isn't one too
   $matching = $processes | Where-Object { $_.Name -eq "$Name.exe" }
   $ids = @($matching.ProcessId)
   $queue = [System.Collections.Generic.Queue[object]]::new()

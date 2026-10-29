@@ -1,5 +1,5 @@
 # Licenses the Rust dependencies may use, for THIRD_PARTY_NOTICES.md
-# (`npm run notices`). cargo-about stops if a dependency uses another one.
+# (`npm run notices`). cargo-about stops if a dependency uses another one
 accepted = [
   "MIT",
   "Apache-2.0",

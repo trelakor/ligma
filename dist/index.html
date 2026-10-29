@@ -5,7 +5,7 @@
 <title>Ligma</title>
 <!-- Tab bar. Its webview is 38px tall, and fills the window only while it
      shows a reloading tab's snapshot; Figma tabs are child webviews below
-     it (see src-tauri/src/tabs.rs). -->
+     it (see src-tauri/src/tabs.rs) -->
 <style>
   :root {
     --bar: #383838;
@@ -31,7 +31,7 @@
     background: var(--bar);
   }
   body.fullscreen #bar, body:not(.macos) #bar { padding-left: 0; }
-  /* Window controls where there's no native title bar (Windows, Linux). */
+  /* Window controls where there's no native title bar (Windows, Linux) */
   .control {
     display: grid;
     flex: none;
@@ -52,7 +52,7 @@
   .tab.active, #home.active { background: var(--active); color: var(--text-active); }
   #home { width: 38px; }
   /* Width follows the title, up to max-width. Once the bar is full,
-     tabs switch to equal widths (see `crowded` in render). */
+     tabs switch to equal widths (see `crowded` in render) */
   .tab {
     flex: 0 1 auto;
     min-width: 48px;
@@ -61,7 +61,7 @@
     padding: 0 8px 0 12px;
     justify-content: flex-start;
   }
-  /* Dividers between inactive neighbours. */
+  /* Dividers between inactive neighbours */
   #home::after, .tab::after {
     content: "";
     position: absolute;
@@ -74,14 +74,14 @@
   .active::after, .before-active::after { display: none; }
   /* Without traffic lights, Home sits flush left above Figma's nav rail:
      match its width (measured by THEME_JS in tabs.rs; 48px plus its 1px
-     border at 100%) and run the divider down into the rail's border. */
+     border at 100%) and run the divider down into the rail's border */
   body:not(.macos) #home { width: var(--rail-width, 49px); }
   body:not(.macos) #home::after { top: 0; bottom: 0; }
   body:not(.macos) #home.before-active::after { display: block; }
   .icon { flex: none; width: 16px; height: 16px; }
   .emoji { font-size: 14px; line-height: 16px; text-align: center; }
   .tab.active > .icon { color: var(--accent, currentColor); }
-  /* Unloaded to save memory; reloads when selected. */
+  /* Unloaded to save memory; reloads when selected */
   .asleep:not(.active) > .icon, .asleep:not(.active) > .title { opacity: 0.5; }
   .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .close {
@@ -97,15 +97,15 @@
   .close:hover { background: rgba(255, 255, 255, 0.1); }
   #new { width: 36px; }
   .crowded .tab:not(.pinned) { flex: 1 1 0; }
-  /* While a tab is dragged, the others slide out of its way. */
+  /* While a tab is dragged, the others slide out of its way */
   .dragging .tab { transition: transform 150ms ease; }
   .dragging .tab.dragged { transition: none; z-index: 1; }
-  /* Pinned tabs show only their icon, like Home. */
+  /* Pinned tabs show only their icon, like Home */
   .tab.pinned { flex: none; width: 38px; min-width: 38px; padding: 0; justify-content: center; }
-  /* Always leave room to drag the window. */
+  /* Always leave room to drag the window */
   #drag { flex: 1; min-width: 48px; }
   /* Last image of a tab that's reloading after sleep, shown where its
-     webview goes until Figma has drawn the file again. */
+     webview goes until Figma has drawn the file again */
   #snapshot {
     position: fixed;
     top: 38px;
@@ -118,7 +118,7 @@
   #snapshot[hidden] { display: none; }
   #snapshot > img { width: 100%; height: 100%; object-fit: cover; object-position: top left; }
   /* The image looks live but isn't: a soft light sweeps across it every
-     few seconds while the tab reloads. */
+     few seconds while the tab reloads */
   #snapshot::after {
     content: "";
     position: absolute;
@@ -148,7 +148,7 @@
   const svg = (body, size = 16) =>
     `<svg class="icon" width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 
-  // The title's leading emoji, if any, and the rest of the title.
+  // The title's leading emoji, if any, and the rest of the title
   const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
   const splitEmoji = (title) => {
     const first = graphemes.segment(title)[Symbol.iterator]().next().value?.segment ?? "";
@@ -164,10 +164,10 @@
     slides: svg('<rect x="2.5" y="3.5" width="11" height="8" rx="1"/><path d="M8 11.5v2M5.5 13.5h5"/>'),
     proto: svg('<path d="M5 3.5v9l7-4.5z"/>'),
     // Figma Make's pinwheel, Figma's own glyph (24px, filled), thickened
-    // to the other icons' weight.
+    // to the other icons' weight
     make: svg('<path transform="scale(.6667)" fill="currentColor" stroke-width=".4" d="M13.906 11.632a.174.174 0 0 1 .193-.178q.62.071 1.17.178c.08.015.138.086.14.168l.001.199c0 2.203-.321 4.231-.864 5.734-.27.749-.61 1.407-1.024 1.893-.413.483-.971.872-1.66.872-.69 0-1.248-.39-1.66-.872-.414-.486-.754-1.144-1.024-1.893q-.13-.361-.243-.761a.174.174 0 0 1 .192-.219q.6.078 1.227.123a.18.18 0 0 1 .156.121q.038.116.078.227c.236.653.5 1.13.755 1.428.257.301.435.346.518.346s.263-.044.52-.346c.255-.298.518-.775.754-1.428.47-1.302.775-3.149.775-5.225q0-.185-.004-.367M6.99 9.22a.174.174 0 0 1 .219.19q-.07.6-.107 1.224a.18.18 0 0 1-.121.158l-.207.071c-.653.236-1.13.5-1.428.754-.301.257-.346.436-.346.52 0 .083.045.261.346.518.298.255.775.52 1.428.755 1.302.47 3.149.775 5.225.775q.168 0 .333-.004c.107-.002.191.09.177.196q-.082.626-.2 1.17a.17.17 0 0 1-.168.136l-.142.002c-2.203 0-4.23-.322-5.734-.865-.749-.27-1.407-.61-1.893-1.024-.483-.412-.872-.97-.872-1.66 0-.689.39-1.247.872-1.66.486-.414 1.144-.754 1.893-1.024q.345-.124.725-.232m5.009-.632c2.203 0 4.231.321 5.734.864.749.27 1.407.61 1.893 1.025.483.412.872.97.872 1.66 0 .689-.39 1.247-.872 1.659-.486.415-1.144.754-1.893 1.024q-.49.177-1.05.321a.174.174 0 0 1-.215-.194q.08-.595.127-1.216a.18.18 0 0 1 .126-.157q.263-.078.503-.164c.653-.236 1.13-.5 1.428-.755.301-.257.346-.435.346-.518s-.044-.263-.346-.52c-.298-.255-.775-.518-1.428-.754-1.302-.47-3.149-.775-5.225-.775q-.325 0-.64.01a.175.175 0 0 1-.18-.193q.07-.622.177-1.171a.17.17 0 0 1 .166-.14q.237-.006.477-.006M11.861 3.5c.69 0 1.248.39 1.66.872.415.486.755 1.145 1.025 1.894q.172.473.31 1.011a.174.174 0 0 1-.19.216 22 22 0 0 0-1.214-.11.18.18 0 0 1-.159-.126 9 9 0 0 0-.158-.483c-.236-.653-.5-1.129-.754-1.427-.257-.302-.436-.347-.52-.347-.083 0-.261.046-.518.347-.255.298-.52.774-.755 1.427-.47 1.302-.774 3.149-.775 5.225q0 .306.01.607a.175.175 0 0 1-.197.18 15 15 0 0 1-1.172-.2.17.17 0 0 1-.136-.167q-.005-.21-.005-.42c0-2.203.322-4.23.865-5.733.27-.749.61-1.408 1.024-1.894.412-.483.97-.872 1.66-.872"/>'),
     site: svg('<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11M8 2.5c1.6 1.6 2.3 3.4 2.3 5.5S9.6 11.9 8 13.5C6.4 11.9 5.7 10.1 5.7 8S6.4 4.1 8 2.5"/>'),
-    // A party popper, Figma Buzz's symbol.
+    // A party popper, Figma Buzz's symbol
     buzz: svg('<path d="M2.5 13.5 5.5 4.5l6 6z"/><path d="M4 9l3 3"/><path d="M10 6l1.5-1.5M8.5 4 9 2.5M12 9l1.5-.5"/>'),
     page: svg('<path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M9.5 2.5V5H12"/>'),
     close: svg('<path d="m5 5 6 6M11 5l-6 6"/>', 12),
@@ -179,7 +179,7 @@
     proto: "#0d99ff",
     board: "#9747ff",
     slides: "#ffa629",
-    // Silvery: the bar's text color, softened, so it holds up in light themes.
+    // Silvery: the bar's text color, softened, so it holds up in light themes
     make: "color-mix(in srgb, var(--text-active) 82%, var(--active))",
     site: "#4d49fc",
     buzz: "#ff24bd",
@@ -193,7 +193,7 @@
     return node;
   };
 
-  // Figma theme colors (see THEME_JS in tabs.rs) onto the bar's variables.
+  // Figma theme colors (see THEME_JS in tabs.rs) onto the bar's variables
   const THEME_VARS = {
     "--bar": "bgSecondary",
     "--hover": "bgTertiary",
@@ -204,16 +204,16 @@
   };
 
   const CONTROLS = {
-    // Settings lives in the app menu on macOS; elsewhere it's a button here.
+    // Settings lives in the app menu on macOS; elsewhere it's a button here
     settings: svg('<g transform="scale(.6667)" stroke-width="1.6"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></g>', 14),
     minimize: svg('<path d="M3 8h10"/>', 10),
     maximize: svg('<rect x="3.5" y="3.5" width="9" height="9"/>', 10),
     close: svg('<path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/>', 10),
   };
 
-  // Dragging a tab moves it among its group, the pinned tabs or the rest.
+  // Dragging a tab moves it among its group, the pinned tabs or the rest
   // `drag` holds the press until it moves DRAG_START px, then the drag;
-  // renders wait until the drop, so the tabs don't change under it.
+  // renders wait until the drop, so the tabs don't change under it
   const DRAG_START = 4;
   let drag = null;
   let deferred = null;
@@ -225,9 +225,9 @@
 
   // Pointing at another tab previews it in a card below (see
   // src-tauri/src/preview.rs). Rust skips Home, the active tab, and
-  // everything when `tabPreviews` is off.
+  // everything when `tabPreviews` is off
   let previewing = null;
-  // By id: the bar may have been drawn again since.
+  // By id: the bar may have been drawn again since
   const showPreview = (id) => {
     const node = bar.querySelector(`.tab[data-id="${id}"]:not(.active)`);
     if (!node) return hidePreview();
@@ -244,7 +244,7 @@
     invoke("hide_tab_preview");
   };
   // In the bar, the pointer is likely on its way to another tab: Ligma
-  // keeps an image of the one it would leave (at most every second).
+  // keeps an image of the one it would leave (at most every second)
   bar.addEventListener("pointerenter", () => invoke("capture_active_tab"));
   bar.addEventListener("pointerover", (e) => e.target.closest(".tab") && invoke("capture_active_tab"));
   bar.addEventListener("pointerleave", hidePreview);
@@ -252,7 +252,7 @@
 
   bar.addEventListener("pointermove", (e) => {
     if (!drag) return;
-    // Released outside the bar before the drag began.
+    // Released outside the bar before the drag began
     if (!(e.buttons & 1) && !drag.moving) {
       drag = null;
       return;
@@ -270,7 +270,7 @@
       hidePreview();
       drag.rects = nodes.map((node) => node.getBoundingClientRect());
       drag.to = drag.from;
-      // Keep getting the pointer if it leaves the bar.
+      // Keep getting the pointer if it leaves the bar
       bar.setPointerCapture(e.pointerId);
       bar.classList.add("dragging");
     }
@@ -278,7 +278,7 @@
     const me = rects[from];
     dx = Math.max(rects[0].left - me.left, Math.min(rects[rects.length - 1].right - me.right, dx));
     // A neighbour gives way once the dragged tab's leading edge passes its
-    // middle, so a wide tab can still pass a narrow one at either end.
+    // middle, so a wide tab can still pass a narrow one at either end
     const mid = (rect) => rect.left + rect.width / 2;
     const before = rects.filter((rect, i) => i < from && me.left + dx < mid(rect)).length;
     const after = rects.filter((rect, i) => i > from && me.right + dx > mid(rect)).length;
@@ -298,7 +298,7 @@
     drag = null;
     if (!done?.moving) return;
     bar.classList.remove("dragging");
-    // The tab stays where it was dropped until the reply renders it there.
+    // The tab stays where it was dropped until the reply renders it there
     const state = deferred;
     deferred = null;
     if (done.to !== done.from) invoke("move_tab_to", { id: done.id, index: done.to });
@@ -320,7 +320,7 @@
       if (theme?.[key]) document.documentElement.style.setProperty(cssVar, theme[key]);
     }
     // Home and the Recents page have no rail; keep the last width so Home
-    // doesn't change size when switching to them.
+    // doesn't change size when switching to them
     if (theme?.railWidth) {
       document.documentElement.style.setProperty("--rail-width", `${theme.railWidth}px`);
     }
@@ -346,7 +346,7 @@
       node.dataset.id = tab.id;
       node.style.setProperty("--accent", ACCENTS[tab.kind] ?? "currentColor");
       // A file named "🎨 Thumbnails" shows 🎨 as its icon instead, except
-      // in a prototype, which keeps its play icon.
+      // in a prototype, which keeps its play icon
       const [emoji, title] = tab.kind === "proto" ? ["", tab.title] : splitEmoji(tab.title);
       if (emoji) node.append(el("span", { className: "icon emoji", textContent: emoji }));
       else node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
@@ -361,7 +361,7 @@
       node.addEventListener("mousedown", (e) => {
         if (e.button === 0 && !close.contains(e.target)) invoke("select_tab", { id: tab.id });
       });
-      // Middle click closes, like the desktop app.
+      // Middle click closes, like the desktop app
       node.addEventListener("auxclick", (e) => e.button === 1 && invoke("close_tab", { id: tab.id }));
       close.addEventListener("click", () => invoke("close_tab", { id: tab.id }));
       node.addEventListener("contextmenu", () => invoke("tab_menu", { id: tab.id }));
@@ -383,11 +383,11 @@
     }
 
     // Content-sized tabs only while they fit. Once the drag area is down to
-    // its minimum, the bar is full.
+    // its minimum, the bar is full
     bar.classList.remove("crowded");
     bar.classList.toggle("crowded", drag.getBoundingClientRect().width <= 48);
 
-    // Off the tabs, the card goes. A previewed tab may have moved: follow it.
+    // Off the tabs, the card goes. A previewed tab may have moved: follow it
     for (const other of bar.querySelectorAll(":scope > :not(.tab)")) other.addEventListener("pointerenter", hidePreview);
     if (previewing != null) showPreview(previewing);
   };
@@ -403,7 +403,7 @@
     snapshotImage.removeAttribute("src");
   };
 
-  // Tabs have their own menu (`tab_menu`); nothing else in the bar has one.
+  // Tabs have their own menu (`tab_menu`); nothing else in the bar has one
   document.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     hidePreview();

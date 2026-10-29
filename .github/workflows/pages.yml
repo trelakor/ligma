@@ -1,4 +1,4 @@
-# Publishes site/ to GitHub Pages (https://trelakor.github.io/ligma/).
+# Publishes site/ to GitHub Pages (https://trelakor.github.io/ligma/)
 name: Pages
 
 on:

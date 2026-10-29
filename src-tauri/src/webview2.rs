@@ -1,5 +1,5 @@
 //! WebView2 memory controls for hidden tabs, the tab shortcuts, tab
-//! preview images, and a fix for Figma's plugin downloads (Windows only).
+//! preview images, and a fix for Figma's plugin downloads (Windows only)
 
 use tauri::{AppHandle, Manager, Webview};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -22,7 +22,7 @@ use windows_core::{w, Interface};
 /// `Ctrl+T` new tab, `Ctrl+W` close tab (or the settings window, when that
 /// has focus), `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. Added to every
 /// webview that can have keyboard focus, before the page sees the keys;
-/// figma.com leaves them to the browser anyway.
+/// figma.com leaves them to the browser anyway
 pub fn add_tab_shortcuts(webview: &Webview) {
     let app = webview.app_handle().clone();
     let _ = webview.with_webview(move |platform| unsafe {
@@ -51,12 +51,12 @@ pub fn add_tab_shortcuts(webview: &Webview) {
             };
             args.SetHandled(true)?;
             // Held keys repeat, as menu shortcuts do on macOS, except
-            // closing, which would take every tab with it.
+            // closing, which would take every tab with it
             if status.WasKeyDown.as_bool() && key as u16 == VK_W.0 {
                 return Ok(());
             }
             // Off the main thread: opening or waking a tab creates a
-            // webview, which would block on itself here.
+            // webview, which would block on itself here
             let app = app.clone();
             std::thread::spawn(move || {
                 let _ = action(&app);
@@ -69,21 +69,21 @@ pub fn add_tab_shortcuts(webview: &Webview) {
 }
 
 /// Takes Tauri's request filters off a Figma tab, which never loads
-/// Tauri's own `tauri:`, `ipc:` or `asset:` URLs: Figma pages get no IPC.
+/// Tauri's own `tauri:`, `ipc:` or `asset:` URLs: Figma pages get no IPC
 ///
 /// While a webview has any such filter, WebView2 follows a redirect from
 /// the page's origin to another without an `Origin` header. Figma loads a
 /// community plugin's code that way, from `/community/plugin/<id>/code`
 /// to a signed copy on `s3-alpha-sig.figma.com`, which then answers
 /// without `Access-Control-Allow-Origin`; the read fails and Figma says "An
-/// error occurred while loading the plugin environment".
+/// error occurred while loading the plugin environment"
 pub fn drop_request_filters(webview: &Webview) {
     let _ = webview.with_webview(|platform| unsafe {
         let Ok(core) = platform.controller().CoreWebView2().and_then(|core| core.cast::<ICoreWebView2_22>()) else {
             return;
         };
         // As wry adds them (`custom_protocol_workaround`). Missing ones
-        // (no `asset:` here) just fail.
+        // (no `asset:` here) just fail
         for uri in [w!("http://tauri.*"), w!("http://ipc.*"), w!("http://asset.*")] {
             let _ = core.RemoveWebResourceRequestedFilterWithRequestSourceKinds(
                 uri,
@@ -96,12 +96,12 @@ pub fn drop_request_filters(webview: &Webview) {
 
 /// Asks a hidden tab to give back memory: WebView2 drops caches and trims
 /// what it can without stopping the page. Runtimes older than 1.0.1774
-/// don't have the API and are left alone.
+/// don't have the API and are left alone
 pub fn on_hidden(webview: &Webview) {
     set_memory_target(webview, true);
 }
 
-/// Undoes `on_hidden` and `try_suspend` for a tab that's shown again.
+/// Undoes `on_hidden` and `try_suspend` for a tab that's shown again
 pub fn on_shown(webview: &Webview) {
     set_memory_target(webview, false);
     let _ = webview.with_webview(|platform| unsafe {
@@ -126,7 +126,7 @@ fn set_memory_target(webview: &Webview, low: bool) {
 
 /// Freezes a hidden tab: scripts and timers stop and WebView2 trims its
 /// memory further. Only works while the webview is hidden; showing it
-/// resumes the page. `done` gets whether it worked, on the main thread.
+/// resumes the page. `done` gets whether it worked, on the main thread
 pub fn try_suspend(webview: &Webview, done: impl FnOnce(bool) + Send + 'static) {
     let _ = webview.with_webview(move |platform| unsafe {
         let Ok(core) = platform.controller().CoreWebView2().and_then(|core| core.cast::<ICoreWebView2_3>()) else {
@@ -142,7 +142,7 @@ pub fn try_suspend(webview: &Webview, done: impl FnOnce(bool) + Send + 'static) 
 
 /// Takes an image of what `webview` shows now, for its tab's preview.
 /// `done` gets it as a JPEG `data:` URL, on the main thread; it isn't
-/// called if the image can't be had.
+/// called if the image can't be had
 pub fn capture(webview: &Webview, done: impl FnOnce(String) + Send + 'static) {
     let _ = webview.with_webview(move |platform| unsafe {
         let Ok(core) = platform.controller().CoreWebView2() else {
@@ -162,7 +162,7 @@ pub fn capture(webview: &Webview, done: impl FnOnce(String) + Send + 'static) {
     });
 }
 
-/// What a capture wrote to `stream`, as a `data:` URL.
+/// What a capture wrote to `stream`, as a `data:` URL
 unsafe fn jpeg_data_url(stream: &IStream) -> Option<String> {
     use base64::Engine;
     let mut len = 0u64;

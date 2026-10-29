@@ -1,11 +1,11 @@
 //! Google sign-in on macOS through `ASWebAuthenticationSession`, Apple's
-//! sheet for signing in on the web from an app (see auth.rs).
+//! sheet for signing in on the web from an app (see auth.rs)
 //!
 //! The sheet shows Figma's grant page with Safari's cookies, so a user
 //! signed in to Figma there only approves. Figma then sends the sheet to
 //! `figma://app_auth/redeem`, which the session catches itself because
 //! it's started with `figma` as its callback scheme: the link goes to Ligma
-//! even with the Figma desktop app installed, and Ligma registers nothing.
+//! even with the Figma desktop app installed, and Ligma registers nothing
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -20,15 +20,15 @@ extern "C" {}
 
 /// The running session, released when the next one starts. Kept as an
 /// address: AppKit objects aren't `Send`, but this is only touched on the
-/// main thread.
+/// main thread
 static SESSION: Mutex<usize> = Mutex::new(0);
 
 /// Counts sessions, so a replaced one's completion (it's cancelled) is
-/// ignored.
+/// ignored
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// `ASWebAuthenticationSessionErrorCodeCanceledLogin`: the user closed the
-/// sheet.
+/// sheet
 const CANCELED: isize = 1;
 
 unsafe fn ns_string(text: &str) -> *mut AnyObject {
@@ -37,7 +37,7 @@ unsafe fn ns_string(text: &str) -> *mut AnyObject {
 }
 
 /// The session's presentation context provider: shows the sheet over
-/// Ligma's main window.
+/// Ligma's main window
 fn anchor_provider() -> *mut AnyObject {
     static PROVIDER: Mutex<usize> = Mutex::new(0);
 
@@ -66,7 +66,7 @@ fn anchor_provider() -> *mut AnyObject {
             }
             builder.register()
         });
-        // Kept for the life of Ligma: the session only holds it weakly.
+        // Kept for the life of Ligma: the session only holds it weakly
         let object: *mut AnyObject = unsafe { msg_send![class, new] };
         *provider = object as usize;
     }
@@ -75,7 +75,7 @@ fn anchor_provider() -> *mut AnyObject {
 
 /// Shows Figma's grant page `url` in a sign-in sheet. The `figma://` link
 /// it ends on goes to `auth::on_figma_link`. Closing the sheet cancels the
-/// sign-in. Runs on the main thread.
+/// sign-in. Runs on the main thread
 pub fn start(app: &AppHandle, url: Url) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || unsafe {
@@ -93,7 +93,7 @@ pub fn start(app: &AppHandle, url: Url) {
             });
             let code: isize = if error.is_null() { 0 } else { msg_send![error, code] };
             let app = callback_app.clone();
-            // Off the main thread: it may open a tab.
+            // Off the main thread: it may open a tab
             std::thread::spawn(move || match link.as_deref().map(Url::parse) {
                 Some(Ok(link)) => crate::auth::on_figma_link(&app, &link),
                 _ => crate::auth::cancel(&app, (code != CANCELED).then_some(crate::auth::START_FAILED)),
@@ -112,7 +112,7 @@ pub fn start(app: &AppHandle, url: Url) {
             return;
         }
         let _: () = msg_send![session, setPresentationContextProvider: anchor_provider()];
-        // Share Safari's cookies, so a signed-in user only approves.
+        // Share Safari's cookies, so a signed-in user only approves
         let _: () = msg_send![session, setPrefersEphemeralWebBrowserSession: Bool::NO];
         let previous = std::mem::replace(&mut *SESSION.lock().unwrap(), session as usize);
         if previous != 0 {

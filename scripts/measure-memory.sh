@@ -1,12 +1,12 @@
 #!/bin/zsh
 # Memory use of Ligma (or the Figma desktop app) and the processes it's
-# responsible for, on macOS. The macOS twin of measure-memory.ps1.
+# responsible for, on macOS. The macOS twin of measure-memory.ps1
 #
 # WebKit runs each page in com.apple.WebKit.WebContent processes (plus one
 # GPU and one Networking process). launchd starts those, so they aren't
 # children of the app. Activity Monitor attributes them by "responsible
 # process", and so does this script. Sizes are physical footprint, the
-# number Activity Monitor shows as "Memory".
+# number Activity Monitor shows as "Memory"
 #
 #   ./scripts/measure-memory.sh               # Ligma
 #   ./scripts/measure-memory.sh -n Figma      # Figma desktop, to compare
@@ -37,7 +37,7 @@ measure() {
   # An app started from a terminal (a dev build) isn't responsible for
   # itself: the terminal is, for it and for its WebKit processes. Then count
   # the WebKit processes the terminal is responsible for instead, so close
-  # other WebKit apps started from that terminal.
+  # other WebKit apps started from that terminal
   local pids=($(ps -A -o pid=,comm= | python3 -I -c '
 import ctypes, sys
 lookup = ctypes.CDLL(None).responsibility_get_pid_responsible_for_pid
@@ -58,7 +58,7 @@ for line in sys.stdin:
   local p
   for p in $pids; do args+=(-p $p); done
 
-  # footprint prints "<name> [<pid>]: 64-bit    Footprint: <bytes> B" per process.
+  # footprint prints "<name> [<pid>]: 64-bit    Footprint: <bytes> B" per process
   footprint --noCategories -f bytes $args 2>/dev/null | awk -v name="$name" '
     / Footprint: / && /\[[0-9]+\]/ {
       match($0, /\[[0-9]+\]/)

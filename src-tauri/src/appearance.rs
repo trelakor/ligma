@@ -1,11 +1,11 @@
-//! Color scheme and color themes (Settings > Appearance).
+//! Color scheme and color themes (Settings > Appearance)
 //!
 //! The color scheme (`colorScheme`: system, light or dark) is the app's
 //! theme, which every webview reports to its pages as
 //! `prefers-color-scheme`. Figma follows it once its own Theme setting is
 //! System, which `PAGE_JS` makes it on every load; Figma keeps that
 //! setting in the page's `localStorage` (`global-debug-theme-preference`)
-//! and passes changes between its tabs as `storage` events.
+//! and passes changes between its tabs as `storage` events
 //!
 //! A color theme (`lightTheme`, `darkTheme`, from `dist/themes.js`)
 //! tints the grey `--ramp-*` primitives Figma builds its palette from and
@@ -16,7 +16,7 @@
 //! tab's (`THEME_JS` in tabs.rs), so they follow. Figma copies colors from
 //! `<body>`'s computed style into the editor's canvas, for the selection,
 //! rulers and labels it draws there; `PAGE_JS` hands it themed ones, with
-//! the editor's own color too, but Figma's for new shapes' fills.
+//! the editor's own color too, but Figma's for new shapes' fills
 
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,7 +30,7 @@ const THEMES_JS: &str = include_str!("../../dist/themes.js");
 
 /// Runs in Figma tabs. `__LIGMA_APPEARANCE__` is the `Page` the tab was made
 /// with. A page loaded later in the same tab may find a newer one in
-/// `localStorage`, from another tab; the higher `rev` wins.
+/// `localStorage`, from another tab; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (!/(^|\.)figma\.com$/.test(location.hostname)) return;
   __LIGMA_THEMES__
@@ -49,7 +49,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // Figma's Theme setting to System, so Figma follows the color scheme
   // Ligma gives the page. The event tells this page's Figma, which only
-  // hears other tabs' changes; at load Figma hasn't read it yet.
+  // hears other tabs' changes; at load Figma hasn't read it yet
   const followScheme = () => {
     try {
       if (localStorage.getItem(FIGMA_THEME) === "system") return;
@@ -63,24 +63,24 @@ const PAGE_JS: &str = r##"(() => {
   // purple, Dev Mode green, ...), set by a rule for its
   // `[data-preferred-theme][data-editor-theme]`. Found in Figma's
   // stylesheets: the tokens such a rule takes from its brand ramp (that of
-  // `--color-bg-menu-selected`), which then come from the accent instead.
+  // `--color-bg-menu-selected`), which then come from the accent instead
   // Only in the open editor: on <body>, which carries its theme, and on
   // theme elements of the same editor inside it (FigJam's toolbar). Figma
   // draws each product's icon and button (Home's file tiles and its Design,
   // FigJam, Slides buttons) in a theme element of that product, and those
   // keep their product's color. So do tokens naming a product or a state
-  // (danger red).
+  // (danger red)
   const KEEP = /design|figjam|handoff|component|assistive|measure|template|danger|warning|success|desktop|annotation|multiplayer|voting|inspect|timeline|code|prototype|published|-fs|fs[A-Z]/;
   // The canvas (see `getComputedStyle` below) takes the theme for what Figma
   // draws over your designs, selection and rulers included: also the open
   // editor's product color (Design's blue selection) and canvas tokens. The
   // fills Figma gives new shapes and frames keep Figma's colors, so nothing
-  // themed ends up in a design.
+  // themed ends up in a design
   const CANVAS = /design|figjam|handoff|-fs|fs[A-Z]/;
   const CANVAS_KEEP = /component|assistive|measure|template|danger|warning|success|annotation|multiplayer|voting|code|DefaultFill/;
   const DEFAULT_FILL = /DefaultFill/;
   const AREA = /selectedarea/i;
-  // Figma's own color for `var(--ramp-<name>-<step>)`, where Ligma tints it.
+  // Figma's own color for `var(--ramp-<name>-<step>)`, where Ligma tints it
   const figmaColor = (name, step) =>
     name === "grey" ? LIGMA_GREY[LIGMA_STEPS.indexOf(Number(step))] : name === "white" && step === "1000" ? "#ffffff" : null;
   const brandRules = [];
@@ -107,11 +107,11 @@ const PAGE_JS: &str = r##"(() => {
       .flatMap((part) => {
         const editor = /data-editor-theme="?([\w-]+)/.exec(part)?.[1];
         const inside = editor && `body[data-editor-theme="${editor}"]`;
-        // `:where(<theme> <editor>)`: an editor's theme element inside a theme.
+        // `:where(<theme> <editor>)`: an editor's theme element inside a theme
         const nested = /^:where\((\S+) (.+)\)$/.exec(part);
         if (nested) return editor ? [`body${nested[1]}[data-editor-theme="${editor}"] ${nested[2]}`] : [];
         if (!part.startsWith("[")) return [];
-        // And menus (see `markMenus`), which come in a theme element of their own.
+        // And menus (see `markMenus`), which come in a theme element of their own
         const menu = `${part}[data-ligma-menu]`;
         return editor ? [`body${part}`, `${inside} ${part}`, menu] : [`body${part}`, menu];
       })
@@ -119,7 +119,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // Figma draws each menu in a theme element of its own, dark in light mode
   // too, so it would take the dark theme's colors there. In light mode the
-  // element becomes light; in both, it's marked for the theme's brand.
+  // element becomes light; in both, it's marked for the theme's brand
   const MENU = '[role="menu"], [role="listbox"]';
   const markMenus = (root) => {
     const menus = root.matches(MENU) ? [root] : root.querySelectorAll(MENU);
@@ -142,11 +142,11 @@ const PAGE_JS: &str = r##"(() => {
   // Figma's menu and tooltip colors are dark in light mode too. There, each
   // one (`--color-bg-menu`, `--color-text-tooltip-secondary`, ...) takes the
   // matching color of the page instead, but for a highlighted item, which
-  // keeps the brand color with white on it.
+  // keeps the brand color with white on it
   const POPUP = /-?(menu|tooltip)/;
   const POPUP_KEEP = /^--color-(bg-(menu|tooltip)-selected(-hover|-pressed)?|(text|icon)-(menu|tooltip)-onselected|border-(menu|tooltip)-(on)?selected(-strong)?)$/;
   // A light tooltip on a light panel needs an edge: the shadow of Figma's
-  // other popovers, outline and all, in place of its dark tooltips' own.
+  // other popovers, outline and all, in place of its dark tooltips' own
   const menuRules = ['[data-preferred-theme="light"] { --elevation-300-tooltip: var(--elevation-300) !important; }'];
   const scanMenus = (rule, selector) => {
     const decls = [];
@@ -173,7 +173,7 @@ const PAGE_JS: &str = r##"(() => {
       const value = rule.style.getPropertyValue(name).trim();
       // The fill of a selection box (dragging across Home's files, or the
       // canvas) is the brand color, see-through, written out rather than
-      // taken from the ramp.
+      // taken from the ramp
       const area = AREA.test(name) && /^#[0-9a-f]{6}([0-9a-f]{2})$/i.exec(value);
       if (area) {
         const alpha = Math.round((parseInt(area[1], 16) / 255) * 100);
@@ -219,7 +219,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // The greys and the accent ramps on Figma's theme elements and editors'
   // own inside them, then the brand tokens and the canvas's. Light menus
-  // and tooltips come after, whatever the theme.
+  // and tooltips come after, whatever the theme
   const css = (mode, id) => {
     const vars = Object.entries(ligmaPalette(id, mode)).map(([name, value]) => `${name}: ${value} !important;`);
     if (!vars.length) return "";
@@ -231,11 +231,11 @@ const PAGE_JS: &str = r##"(() => {
   // pixels, the editor's canvas and the panels beside it round to them
   // differently, leaving a pixel-wide gap at a panel's edge. Behind it is
   // the canvas's own black background or, past it, the transparent page
-  // and the webview's white or black. Both take the panels' color.
+  // and the webview's white or black. Both take the panels' color
   const SEAM = "body:has(.gpu-view-content), .gpu-view-content, .gpu-view-content > canvas { background-color: var(--color-bg) !important; }";
   // Home's Design, FigJam and Slides buttons draw their icons, white on the
   // product's color, in the menus' icon color, which light menus above
-  // turn dark. They stay white, as in Figma.
+  // turn dark. They stay white, as in Figma
   const PRODUCT_ICONS = '[data-preferred-theme="light"] :is([data-testid="file-icon"], [data-testid="plus-icon"]) { --color-icon: #ffffff !important; }';
   const render = () => {
     if (current) style.textContent = [css("light", current.light), css("dark", current.dark), ...menuRules, SEAM, PRODUCT_ICONS].join("\n");
@@ -253,9 +253,9 @@ const PAGE_JS: &str = r##"(() => {
 
   // Figma's canvas sync (`updateColorsInFullscreen`) reads every color from
   // <body>'s computed style. Give it a stand-in for <body> instead, with the
-  // canvas's colors (`canvasRules`).
+  // canvas's colors (`canvasRules`)
   let probe = null;
-  // While `redrawCanvas` toggles it: <body>'s `data-enhanced-contrast`.
+  // While `redrawCanvas` toggles it: <body>'s `data-enhanced-contrast`
   let contrast = null;
   const computedStyle = window.getComputedStyle;
   window.getComputedStyle = function (element, pseudo) {
@@ -276,7 +276,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   // Figma copies the colors into the canvas when <body>'s theme attributes
   // change, so it takes a new theme's once one is toggled and put back,
-  // before anything is drawn. The copy keeps the attribute's real value.
+  // before anything is drawn. The copy keeps the attribute's real value
   const redrawCanvas = () => {
     const body = document.body;
     if (!body || !document.querySelector("canvas") || contrast != null) return;
@@ -284,7 +284,7 @@ const PAGE_JS: &str = r##"(() => {
     contrast = body.hasAttribute(name);
     const toggle = (on) => (on ? body.setAttribute(name, "") : body.removeAttribute(name));
     toggle(!contrast);
-    // After Figma's observer has seen it.
+    // After Figma's observer has seen it
     queueMicrotask(() => {
       toggle(contrast);
       setTimeout(() => {
@@ -295,7 +295,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   // The canvas then has the new colors but draws its rulers again only when
   // something on it changes. A move of the pointer, where it already is,
-  // makes it draw everything; a hidden tab gets it once shown.
+  // makes it draw everything; a hidden tab gets it once shown
   let pointer = null;
   addEventListener("pointermove", (event) => event.isTrusted && (pointer = [event.clientX, event.clientY]), { capture: true, passive: true });
   let repaintWhenShown = false;
@@ -304,7 +304,7 @@ const PAGE_JS: &str = r##"(() => {
     repaintWhenShown = !!canvas && document.hidden;
     if (!canvas || document.hidden) return;
     const box = canvas.getBoundingClientRect();
-    // Where the pointer is, if over the canvas; else the rulers' corner.
+    // Where the pointer is, if over the canvas; else the rulers' corner
     const over = pointer && pointer[0] >= box.left && pointer[0] < box.right && pointer[1] >= box.top && pointer[1] < box.bottom;
     const [x, y] = over ? pointer : [box.left + 1, box.top + 1];
     for (const type of ["pointermove", "mousemove"]) {
@@ -321,7 +321,7 @@ const PAGE_JS: &str = r##"(() => {
     return !!parent;
   };
   if (!mount()) new MutationObserver((_, observer) => mount() && observer.disconnect()).observe(document, { childList: true });
-  // Figma's stylesheets, as they arrive.
+  // Figma's stylesheets, as they arrive
   document.addEventListener("DOMContentLoaded", () => {
     scan();
     menuObserver.observe(document.body, { childList: true, subtree: true });
@@ -329,7 +329,7 @@ const PAGE_JS: &str = r##"(() => {
   addEventListener("load", (event) => event.target instanceof HTMLLinkElement && scan(), true);
   addEventListener("load", scan);
 
-  // From Ligma when the settings change, and at each page load.
+  // From Ligma when the settings change, and at each page load
   Object.defineProperty(window, "__ligmaAppearance", {
     value: (page) => {
       if (!apply(page)) return;
@@ -338,21 +338,21 @@ const PAGE_JS: &str = r##"(() => {
       } catch {}
     },
   });
-  // A tab that was frozen meanwhile catches up when shown.
+  // A tab that was frozen meanwhile catches up when shown
   addEventListener("storage", (event) => event.key === KEY && apply(stored()));
   document.addEventListener("visibilitychange", () => {
     if (!apply(stored()) && repaintWhenShown) repaintCanvas();
   });
 })();"##;
 
-/// What Figma tabs get of the appearance settings.
+/// What Figma tabs get of the appearance settings
 #[derive(Clone, PartialEq, Serialize)]
 struct Page {
     /// When these settings took effect, in ms since 1970: Ligma's launch
-    /// or the last change.
+    /// or the last change
     rev: u64,
     /// Not used by the page, but a change makes it set Figma's Theme
-    /// setting to System again, should it have been changed in Figma.
+    /// setting to System again, should it have been changed in Figma
     scheme: ColorScheme,
     light: String,
     dark: String,
@@ -372,7 +372,7 @@ fn theme(scheme: ColorScheme) -> Option<Theme> {
     }
 }
 
-/// Applies the color scheme to the app. Call at launch, before any window.
+/// Applies the color scheme to the app. Call at launch, before any window
 pub fn init(app: &AppHandle, settings: &Settings) {
     app.manage(Appearance(Mutex::new(Page::new(settings))));
     app.set_theme(theme(settings.color_scheme));
@@ -393,19 +393,19 @@ fn page(app: &AppHandle) -> Page {
     app.state::<Appearance>().0.lock().unwrap().clone()
 }
 
-/// `PAGE_JS`, for a new Figma tab.
+/// `PAGE_JS`, for a new Figma tab
 pub fn page_js(app: &AppHandle) -> String {
     let page = serde_json::to_string(&page(app)).unwrap();
     PAGE_JS.replace("__LIGMA_THEMES__", THEMES_JS).replace("__LIGMA_APPEARANCE__", &page)
 }
 
-/// Sends the themes to a Figma tab's page.
+/// Sends the themes to a Figma tab's page
 pub fn push_to(webview: &Webview) {
     let page = serde_json::to_string(&page(webview.app_handle())).unwrap();
     let _ = webview.eval(format!("window.__ligmaAppearance?.({page})"));
 }
 
-/// Applies changed appearance settings to the app and every loaded tab.
+/// Applies changed appearance settings to the app and every loaded tab
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     app.set_theme(theme(settings.color_scheme));
     let state = app.state::<Appearance>();
@@ -427,7 +427,7 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     // Ligma's own windows take the new colors from the active tab, which
     // has a theme right away but Figma redraws for a new color scheme a
     // moment later. Look again a few times rather than at the next
-    // once-a-second check.
+    // once-a-second check
     let app = app.clone();
     std::thread::spawn(move || {
         for wait in [0, 40, 80, 120, 200, 300, 500] {
