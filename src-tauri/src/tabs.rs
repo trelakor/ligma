@@ -92,6 +92,27 @@ const NEW_TAB_JS: &str = r#"(() => {
   };
 })()"#;
 
+/// `wkwebview::pass_undo_to_pages` gives Cmd+Z to the page first, and
+/// WebKit's fallback to Edit > Undo when the page leaves it alone never
+/// arrives in a child webview. So in a text field, such as a layer being
+/// renamed, undo the text here once Figma's listeners have passed on it
+#[cfg(target_os = "macos")]
+const TEXT_UNDO_JS: &str = r#"(() => {
+  const isText = (node) =>
+    node instanceof HTMLTextAreaElement ||
+    (node instanceof HTMLInputElement && !["button", "checkbox", "color", "file", "radio", "range", "reset", "submit"].includes(node.type)) ||
+    node?.isContentEditable;
+  addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() !== "z" || !e.metaKey || e.ctrlKey || e.altKey || !isText(e.target)) return;
+    // Added while the event is still capturing, so it runs after every other listener
+    addEventListener("keydown", (late) => {
+      if (late !== e || e.defaultPrevented) return;
+      e.preventDefault();
+      document.execCommand(e.shiftKey ? "redo" : "undo");
+    }, { once: true });
+  }, true);
+})()"#;
+
 /// Ligma denies every new window and opens Figma URLs as tabs instead, so
 /// `window.open` returns null. Figma then presents a file in place of its
 /// editor (Design), or loses the presentation altogether (Slides, which
@@ -662,7 +683,10 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::toolbar::page_js());
     #[cfg(target_os = "macos")]
     {
-        builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
+        builder = builder
+            .user_agent(USER_AGENT)
+            .initialization_script(NEW_TAB_JS)
+            .initialization_script(TEXT_UNDO_JS);
     }
     #[cfg(windows)]
     {
