@@ -1,7 +1,7 @@
 //! Image adjustments (Settings > Appearance > Images): copies the seven
 //! sliders of an image fill (Exposure, Contrast, Saturation, Temperature,
-//! Tint, Highlights and Shadows) and pastes them onto every image or video
-//! fill in the selection, leaving the images themselves alone. Figma's
+//! Tint, Highlights and Shadows) and pastes them onto every image fill in
+//! the selection, leaving the images themselves alone. Figma's
 //! Copy/Paste Properties brings the whole fill, image and all
 //!
 //! With the image picker open, Cmd+Shift+C (Ctrl+Shift+C) copies its
@@ -77,7 +77,8 @@ const PAGE_JS: &str = r##"(() => {
       return null;
     }
   };
-  const adjustable = (paint) => paint?.type === "IMAGE" || paint?.type === "VIDEO";
+  // Video fills have no sliders
+  const adjustable = (paint) => paint?.type === "IMAGE";
   // Text with mixed fills has none to adjust
   const fillsOf = (node) => {
     try {
@@ -108,7 +109,7 @@ const PAGE_JS: &str = r##"(() => {
     return false;
   };
 
-  // Sets `filters` on every image and video fill of the selected layers,
+  // Sets `filters` on every image fill of the selected layers,
   // as one undo step
   const adjust = (filters, done) => {
     const figma = api();
@@ -189,7 +190,8 @@ const PAGE_JS: &str = r##"(() => {
   const openMenu = (index) => {
     menuIndex = index;
     const value = copied();
-    const url = `https://adjustments.ligma.invalid/menu?${new URLSearchParams({ copied: value ? 1 : 0, armed: value?.armed ? 1 : 0 })}`;
+    const params = { copied: value ? 1 : 0, armed: value?.armed ? 1 : 0, open: adjustments() ? 1 : 0 };
+    const url = `https://adjustments.ligma.invalid/menu?${new URLSearchParams(params)}`;
     if (MAC) {
       const frame = document.createElement("iframe");
       frame.style.display = "none";
@@ -244,7 +246,7 @@ const PAGE_JS: &str = r##"(() => {
         openMenu(openIndex());
         return;
       }
-      // An image or video fill's row
+      // An image fill's row
       const index = rowIndex(event.target.closest?.(ROW));
       if (index === undefined || !figma.currentPage.selection.some((node) => adjustable(fillsOf(node)[index]))) return;
       stop(event);
@@ -357,15 +359,17 @@ const SHORTCUTS: [(&str, &str); 2] = [("copy", "⇧⌘C"), ("paste", "⇧⌘V")]
 const SHORTCUTS: [(&str, &str); 2] = [("copy", "Ctrl+Shift+C"), ("paste", "Ctrl+Shift+V")];
 
 /// The picker's button, or a right-click on its sliders or an image
-/// fill's row, in tab `tab`: opens the menu, with Paste only once something is copied, and its shortcut only
-/// while it's what Cmd+Shift+V pastes. Not from within the webview's own
-/// callback, which is still deciding on the page
+/// fill's row, in tab `tab`: opens the menu, with Paste only once
+/// something is copied. Each shortcut shows only while it does what the
+/// item does: Copy's while the picker is open, Paste's while it's what
+/// Cmd+Shift+V pastes. Not from within the webview's own callback, which
+/// is still deciding on the page
 pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
     if url.path() != "/menu" {
         return;
     }
     let flag = |name: &str| url.query_pairs().any(|(key, value)| key == name && value == "1");
-    let (copied, armed) = (flag("copied"), flag("armed"));
+    let (copied, armed, open) = (flag("copied"), flag("armed"), flag("open"));
     let app = app.clone();
     std::thread::spawn(move || {
         let items = vec![
@@ -376,7 +380,7 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
         ];
         let extras = crate::tab_menu::Extras {
             disabled: if copied { vec![] } else { vec!["paste"] },
-            shortcuts: SHORTCUTS.into_iter().filter(|&(action, _)| action == "copy" || armed).collect(),
+            shortcuts: SHORTCUTS.into_iter().filter(|&(action, _)| if action == "copy" { open } else { armed }).collect(),
             ..Default::default()
         };
         let _ = crate::tab_menu::show(&app, tab, items, extras, on_pick);
