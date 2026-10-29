@@ -1,13 +1,13 @@
 //! The tabs' right-click menu, drawn by Ligma in Figma's style
 //! (`dist/menu.html`) rather than the system's. It's a small frameless
 //! window, made on first use and hidden in between, so later menus open
-//! right away.
+//! right away
 //!
 //! `show` keeps the items and has the page `refresh`. The page fetches
 //! them (`get_menu`), draws them, and reports its size (`menu_ready`);
 //! only then is the window placed at the cursor and shown. It hides when
 //! it loses focus, and `menu_pick` runs the chosen item through
-//! `tabs::on_menu`.
+//! `tabs::on_menu`
 
 use std::sync::Mutex;
 
@@ -17,22 +17,22 @@ use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Webview, WebviewU
 pub const WINDOW: &str = "tab-menu";
 
 /// A menu item: the action `tabs::on_menu` runs, and its text. None is a
-/// separator.
+/// separator
 pub type Item = Option<(&'static str, &'static str)>;
 
-/// The menu being opened or shown.
+/// The menu being opened or shown
 struct Open {
     tab: u32,
     items: Vec<Item>,
-    /// The cursor when it was asked for, in screen pixels.
+    /// The cursor when it was asked for, in screen pixels
     at: PhysicalPosition<f64>,
 }
 
 static OPEN: Mutex<Option<Open>> = Mutex::new(None);
 
-/// Opens the menu of tab `tab` at the cursor.
+/// Opens the menu of tab `tab` at the cursor
 pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
-    // The menu takes the tab preview's place.
+    // The menu takes the tab preview's place
     crate::preview::hide(app);
     let at = app.cursor_position()?;
     *OPEN.lock().unwrap() = Some(Open { tab, items, at });
@@ -40,7 +40,7 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
         window.set_zoom(crate::tabs::scale(app))?;
         return window.eval("window.refresh?.()");
     }
-    // The page fetches the items once it has loaded.
+    // The page fetches the items once it has loaded
     let main = app.get_window("main").expect("main window exists");
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("menu.html".into()))
@@ -48,19 +48,19 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
         .inner_size(200.0, 100.0)
         .visible(false)
         .decorations(false)
-        // Rounded corners on Windows 11, like Figma's menus.
+        // Rounded corners on Windows 11, like Figma's menus
         .shadow(true)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
         .skip_taskbar(true);
     // Light or dark with the editor. Figma's own menus stay dark in light
-    // themes, which looks out of place on a light tab bar.
+    // themes, which looks out of place on a light tab bar
     let color = crate::tabs::theme(app).and_then(|theme| crate::settings::theme_color(&theme, "bg"));
     if let Some(color) = color {
         builder = builder.background_color(color);
     }
-    // Kept above the main window, and closed with it on Windows.
+    // Kept above the main window, and closed with it on Windows
     #[cfg(windows)]
     {
         builder = builder.owner_raw(main.hwnd()?);
@@ -87,7 +87,7 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
     let menu = window.clone();
     window.on_window_event(move |event| {
         // Only a shown menu: the new window can lose focus before it's
-        // shown, while the page is still asking for its items.
+        // shown, while the page is still asking for its items
         if let WindowEvent::Focused(false) = event {
             if menu.is_visible().unwrap_or(false) {
                 hide(&handle);
@@ -97,12 +97,12 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>) -> tauri::Result<()> {
     Ok(())
 }
 
-/// True while a menu is being opened or shown.
+/// True while a menu is being opened or shown
 pub fn is_open() -> bool {
     OPEN.lock().unwrap().is_some()
 }
 
-/// Hides the menu, if shown.
+/// Hides the menu, if shown
 pub fn hide(app: &AppHandle) {
     OPEN.lock().unwrap().take();
     if let Some(window) = app.get_webview_window(WINDOW) {
@@ -110,7 +110,7 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
-/// Closes the menu window, for when the main window goes.
+/// Closes the menu window, for when the main window goes
 pub fn close(app: &AppHandle) {
     OPEN.lock().unwrap().take();
     if let Some(window) = app.get_webview_window(WINDOW) {
@@ -119,7 +119,7 @@ pub fn close(app: &AppHandle) {
 }
 
 /// Clips a borderless window to Figma's menu radius; AppKit gives it a
-/// matching shadow once it's see-through outside the corners.
+/// matching shadow once it's see-through outside the corners
 #[cfg(target_os = "macos")]
 pub unsafe fn round_corners(ns_window: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
@@ -146,25 +146,25 @@ fn from_menu(webview: &Webview) -> bool {
 
 #[derive(Serialize)]
 pub struct Menu {
-    /// `[action, text]`, or null for a separator.
+    /// `[action, text]`, or null for a separator
     items: Vec<Item>,
     theme: Option<serde_json::Value>,
 }
 
-/// The menu to draw, if one is being opened.
+/// The menu to draw, if one is being opened
 #[tauri::command]
 pub async fn get_menu(app: AppHandle, webview: Webview) -> Option<Menu> {
     if !from_menu(&webview) {
         return None;
     }
     let items = OPEN.lock().unwrap().as_ref()?.items.clone();
-    // A zoom set before the page loaded doesn't last.
+    // A zoom set before the page loaded doesn't last
     let _ = webview.set_zoom(crate::tabs::scale(&app));
     Some(Menu { items, theme: crate::tabs::theme(&app) })
 }
 
 /// The page has drawn the menu at `width` by `height` CSS pixels: place it
-/// at the cursor, inside the screen, and show it.
+/// at the cursor, inside the screen, and show it
 #[tauri::command]
 pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f64) {
     if !from_menu(&webview) {
@@ -176,7 +176,7 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
     let Some(window) = app.get_webview_window(WINDOW) else {
         return;
     };
-    // At the interface scale.
+    // At the interface scale
     let zoom = crate::tabs::scale(&app);
     let (width, height) = (width * zoom, height * zoom);
     let monitor = app.monitor_from_point(at.x, at.y).ok().flatten();
@@ -188,7 +188,7 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
         let (left, top) = (area.position.x as f64, area.position.y as f64);
         let (right, bottom) = (left + area.size.width as f64, top + area.size.height as f64);
         // Like system menus: to the cursor's left or above it when there's
-        // no room right of or below it.
+        // no room right of or below it
         if x + w > right {
             x = (x - w).max(left);
         }
@@ -196,7 +196,7 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
             y = (y - h).max(top);
         }
     }
-    // No accent-colored border.
+    // No accent-colored border
     #[cfg(windows)]
     crate::frame::match_theme(&window);
     let _ = window.set_size(LogicalSize::new(width, height));
@@ -205,7 +205,7 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
     let _ = window.set_focus();
 }
 
-/// Runs `action` from the menu, or just closes it when None (Esc).
+/// Runs `action` from the menu, or just closes it when None (Esc)
 #[tauri::command]
 pub async fn menu_pick(app: AppHandle, webview: Webview, action: Option<String>) {
     if !from_menu(&webview) {
@@ -218,7 +218,7 @@ pub async fn menu_pick(app: AppHandle, webview: Webview, action: Option<String>)
     let (Some(open), Some(action)) = (open, action) else {
         return;
     };
-    // Only the actions this menu offered.
+    // Only the actions this menu offered
     if open.items.iter().flatten().any(|(item, _)| *item == action) {
         let _ = crate::tabs::on_menu(&app, &format!("{action}:{}", open.tab));
     }

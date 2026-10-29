@@ -4,7 +4,7 @@
 //! to read and edit before submitting. A report too long for a link is
 //! also put on the clipboard to paste. Nothing is sent otherwise, and the
 //! log keeps no Figma file names or links. A panic is remembered, so the
-//! next launch offers to report it.
+//! next launch offers to report it
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -19,13 +19,13 @@ use tauri_plugin_opener::OpenerExt;
 const NEW_ISSUE: &str = "https://github.com/trelakor/ligma/issues/new";
 const LOG_NAME: &str = "ligma";
 const CRASH_FILE: &str = "crashed.txt";
-/// The log's last lines in a report.
+/// The log's last lines in a report
 const LOG_LINES: usize = 60;
 /// Windows may cut links past 2083 characters when opening them, so a
-/// longer report leaves out older log lines to fit.
+/// longer report leaves out older log lines to fit
 const MAX_URL: usize = 2000;
 
-/// Where a panic is remembered, set once the app's folders are known.
+/// Where a panic is remembered, set once the app's folders are known
 static CRASH_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn log_plugin() -> TauriPlugin<Wry> {
@@ -33,7 +33,7 @@ pub fn log_plugin() -> TauriPlugin<Wry> {
         .clear_targets()
         .target(Target::new(TargetKind::LogDir { file_name: Some(LOG_NAME.into()) }))
         .level(LevelFilter::Info)
-        // Says which installer the updater ran, and how.
+        // Says which installer the updater ran, and how
         .level_for("tauri_plugin_updater", LevelFilter::Debug)
         .max_file_size(1_000_000)
         .rotation_strategy(RotationStrategy::KeepOne)
@@ -44,7 +44,7 @@ pub fn log_plugin() -> TauriPlugin<Wry> {
     builder.build()
 }
 
-/// Logs panics, and remembers the last one to offer a report next launch.
+/// Logs panics, and remembers the last one to offer a report next launch
 pub fn catch_panics(app: &AppHandle) {
     if let Ok(dir) = app.path().app_config_dir() {
         let _ = CRASH_PATH.set(dir.join(CRASH_FILE));
@@ -61,7 +61,7 @@ pub fn catch_panics(app: &AppHandle) {
     log::info!("Ligma {} on {}", app.package_info().version, system());
 }
 
-/// Offers to report a panic from the last run, if there was one.
+/// Offers to report a panic from the last run, if there was one
 pub fn offer_last_crash(app: &AppHandle) {
     let Some(path) = CRASH_PATH.get() else {
         return;
@@ -78,7 +78,7 @@ pub fn offer_last_crash(app: &AppHandle) {
     );
 }
 
-/// An error prompt that offers to report `problem`.
+/// An error prompt that offers to report `problem`
 pub fn offer(app: &AppHandle, title: &str, message: String, problem: String) {
     let handle = app.clone();
     crate::prompt::show(app, title, message, &["Close", "Report…"], move |choice| {
@@ -89,7 +89,7 @@ pub fn offer(app: &AppHandle, title: &str, message: String, problem: String) {
 }
 
 /// Opens a new GitHub issue in the browser, filled in for `problem`, or for
-/// the user to describe one.
+/// the user to describe one
 pub fn open(app: &AppHandle, problem: Option<&str>) {
     let title = problem
         .and_then(|problem| problem.lines().next())
@@ -103,7 +103,7 @@ pub fn open(app: &AppHandle, problem: Option<&str>) {
         .unwrap_or_default();
     let lines: Vec<&str> = log.lines().collect();
     let all = lines.len().saturating_sub(LOG_LINES);
-    // The report from log line `first` on, with the problem cut to `chars`.
+    // The report from log line `first` on, with the problem cut to `chars`
     let body = |first: usize, chars: usize, note: &str| {
         let mut body = format!(
             "<!-- What were you doing when it happened? -->\n\n\n{note}**Ligma** {}\n**System** {}\n",
@@ -129,10 +129,10 @@ pub fn open(app: &AppHandle, problem: Option<&str>) {
     let full = body(all, 2000, "");
     let mut link = url(&full);
     // Too long for a link: the full report goes on the clipboard, and the
-    // link keeps what fits.
+    // link keeps what fits
     if link.as_ref().is_some_and(|link| link.as_str().len() > MAX_URL) {
         let _ = app.clipboard().write_text(full);
-        let note = "<!-- The full report, with more of the log, is on your clipboard. Paste it here in place of what's below. -->\n\n";
+        let note = "<!-- The full report, with more of the log, is on your clipboard. Paste it here in place of what's below -->\n\n";
         let mut first = all;
         loop {
             link = url(&body(first, 300, note));
@@ -148,13 +148,13 @@ pub fn open(app: &AppHandle, problem: Option<&str>) {
     }
 }
 
-/// Hides the user's name in paths and any Figma links.
+/// Hides the user's name in paths and any Figma links
 fn redact(text: &str) -> String {
     let mut text = text.to_string();
     for var in ["USERPROFILE", "HOME"] {
         if let Some(home) = std::env::var_os(var).map(|home| home.to_string_lossy().into_owned()) {
             if home.len() > 3 {
-                // Also as `{:?}` prints it, with backslashes doubled.
+                // Also as `{:?}` prints it, with backslashes doubled
                 text = text.replace(&home.replace('\\', "\\\\"), "~").replace(&home, "~");
             }
         }
@@ -171,7 +171,7 @@ fn redact(text: &str) -> String {
         .collect()
 }
 
-/// The OS, its version and the processor, like "Windows 11 24H2 (26100) x86_64".
+/// The OS, its version and the processor, like "Windows 11 24H2 (26100) x86_64"
 fn system() -> String {
     let arch = std::env::consts::ARCH;
     #[cfg(windows)]
@@ -179,7 +179,7 @@ fn system() -> String {
         let key = windows_registry::LOCAL_MACHINE.open(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
         let get = |name: &str| key.as_ref().ok().and_then(|key| key.get_string(name).ok());
         let build = get("CurrentBuild").unwrap_or_default();
-        // Windows 11 still says "Windows 10" in ProductName.
+        // Windows 11 still says "Windows 10" in ProductName
         let name = if build.parse::<u32>().is_ok_and(|build| build >= 22000) {
             "Windows 11"
         } else {

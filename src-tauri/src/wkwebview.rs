@@ -1,21 +1,21 @@
-//! WKWebView controls for hidden tabs (macOS only).
+//! WKWebView controls for hidden tabs (macOS only)
 //!
 //! Freezing uses `_suspendPage:`/`_resumePage:`, WebKit SPI (macOS 12+) that
 //! moves the page into the back/forward cache: scripts and timers stop. It
 //! saves CPU, not memory, which stays allocated so the page resumes
-//! instantly. Both are looked up at runtime and skipped if missing.
+//! instantly. Both are looked up at runtime and skipped if missing
 //!
 //! WebKit throws an Objective-C exception, which aborts Ligma, if a frozen
 //! page is asked to run JavaScript. Callers must not `eval` in a tab while
 //! it's frozen or still resuming (`Tab::suspended`). The calls here catch
-//! exceptions themselves.
+//! exceptions themselves
 //!
 //! On macOS 27, WebKit's Screen Time setup races with closing a webview: its
 //! KVO observer is removed on the main thread while Screen Time updates it
 //! on a private queue, and the exception aborts Ligma (WebKit bug, see
 //! https://developer.apple.com/forums/thread/809860). `disable_screen_time`
 //! turns that setup off for the whole process, so Screen Time can't block
-//! Figma pages inside Ligma, though it still counts the time spent in it.
+//! Figma pages inside Ligma, though it still counts the time spent in it
 
 use std::ffi::{c_char, c_void, CStr};
 use std::panic::AssertUnwindSafe;
@@ -29,7 +29,7 @@ use tauri::Webview;
 
 /// Replaces `-[WKWebView _installScreenTimeWebpageControllerIfNeeded]`
 /// with a no-op. Call before the first webview is created. Skipped if
-/// WebKit doesn't have it.
+/// WebKit doesn't have it
 pub fn disable_screen_time() {
     unsafe extern "C-unwind" fn install_nothing(_: *mut AnyObject, _: Sel) {}
 
@@ -43,7 +43,7 @@ pub fn disable_screen_time() {
 
 /// Runs WebKit calls so that an Objective-C exception from them is logged
 /// rather than aborting Ligma (Rust can't unwind through one). False if one
-/// was thrown.
+/// was thrown
 unsafe fn catching(what: &str, f: impl FnOnce()) -> bool {
     match objc2::exception::catch(AssertUnwindSafe(f)) {
         Ok(()) => true,
@@ -58,7 +58,7 @@ unsafe fn responds(view: *mut AnyObject, selector: Sel) -> bool {
     !view.is_null() && msg_send![view, respondsToSelector: selector]
 }
 
-/// Wraps `done` in a block WebKit calls once with a BOOL.
+/// Wraps `done` in a block WebKit calls once with a BOOL
 fn bool_block(done: impl FnOnce(bool) + Send + 'static) -> RcBlock<dyn Fn(Bool)> {
     let done = Mutex::new(Some(done));
     RcBlock::new(move |result: Bool| {
@@ -69,7 +69,7 @@ fn bool_block(done: impl FnOnce(bool) + Send + 'static) -> RcBlock<dyn Fn(Bool)>
 }
 
 /// Freezes a hidden tab. `done` gets whether it worked, on the main thread.
-/// Not called if the SPI is missing.
+/// Not called if the SPI is missing
 pub fn try_suspend(webview: &Webview, done: impl FnOnce(bool) + Send + 'static) {
     let _ = webview.with_webview(move |platform| unsafe {
         let view = platform.inner() as *mut AnyObject;
@@ -83,7 +83,7 @@ pub fn try_suspend(webview: &Webview, done: impl FnOnce(bool) + Send + 'static) 
 }
 
 /// Undoes `try_suspend`. `done` runs on the main thread once the page runs
-/// again, and only then may it `eval`. Not called if WebKit threw.
+/// again, and only then may it `eval`. Not called if WebKit threw
 pub fn resume(webview: &Webview, done: impl FnOnce() + Send + 'static) {
     let _ = webview.with_webview(move |platform| unsafe {
         let view = platform.inner() as *mut AnyObject;
@@ -99,7 +99,7 @@ pub fn resume(webview: &Webview, done: impl FnOnce() + Send + 'static) {
 }
 
 /// Image of what the tab shows, as a JPEG `data:` URL, or None if WebKit
-/// couldn't take one. `done` runs on the main thread.
+/// couldn't take one. `done` runs on the main thread
 pub fn snapshot(webview: &Webview, done: impl FnOnce(Option<String>) + Send + 'static) {
     let _ = webview.with_webview(move |platform| unsafe {
         let view = platform.inner() as *mut AnyObject;
@@ -127,7 +127,7 @@ pub fn snapshot(webview: &Webview, done: impl FnOnce(Option<String>) + Send + 's
     });
 }
 
-/// NSImage to a JPEG `data:` URL.
+/// NSImage to a JPEG `data:` URL
 unsafe fn jpeg_data_url(image: *mut AnyObject) -> Option<String> {
     if image.is_null() {
         return None;

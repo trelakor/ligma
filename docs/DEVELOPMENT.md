@@ -24,7 +24,8 @@ npm run icon
 1. Bump `version` in `src-tauri/tauri.conf.json`.
 2. Add a `## <version> - <date>` section with its changes to [`CHANGELOG.md`](../CHANGELOG.md).
 3. If Rust dependencies changed, run `npm run notices` (needs `cargo install --locked cargo-about --features cli`) to refresh [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md), which ships in the installers.
-4. Push a matching tag: `git tag v0.6.0 && git push --tags`.
+4. Commit the release on `main` as `chore(release): v0.6.0`.
+5. Push a matching tag: `git tag v0.6.0 && git push --tags`.
 
 `.github/workflows/release.yml` then:
 

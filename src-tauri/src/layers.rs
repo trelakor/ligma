@@ -1,6 +1,6 @@
 //! Layer previews (Settings > Appearance > Layers): the layers panel shows
 //! each layer's picture in every mode, as Figma's Draw mode does, not only
-//! in Draw mode. Off by default: Figma renders every preview.
+//! in Draw mode. Off by default: Figma renders every preview
 //!
 //! Draw mode has no layers panel of its own. Figma's layers panel takes its
 //! look from a React context, and Draw mode provides another value there:
@@ -10,12 +10,12 @@
 //! older panel builds its rows another way, which makes no previews.
 //! `PAGE_JS` gives the panel Draw mode's rows, and keeps the older panel
 //! building them as in Draw mode, in every mode. Tools and the right
-//! sidebar stay the mode's own.
+//! sidebar stay the mode's own
 //!
 //! `PAGE_JS` wraps the four modules as they load (see `modules.rs`), so
 //! only in pages loaded with the setting on. Turning it off applies right
 //! away. Turning it on in a file already open reloads it, when its tab is
-//! shown and its edits have been saved.
+//! shown and its edits have been saved
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,7 +26,7 @@ use crate::settings::Settings;
 
 /// Runs in Figma tabs. `__LIGMA_LAYER_PREVIEWS__` is `{ on, rev }`: the
 /// setting when the tab was made. A page loaded later in the same tab may
-/// find a newer one in `localStorage`; the higher `rev` wins.
+/// find a newer one in `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window || !window.__ligmaModules) return;
   const KEY = "ligma-layer-previews";
@@ -42,31 +42,31 @@ const PAGE_JS: &str = r##"(() => {
   };
   const getOn = () => state.on;
   // Figma's modules `install` wraps, as seen on 2026-10-25, by what their
-  // source contains.
+  // source contains
   const MODULES = {
-    // Picks Figma's newer layers panel.
+    // Picks Figma's newer layers panel
     choice: (source) => source.includes('"exp_layers_panel_v2"') && source.includes("fplTreeGridMigration"),
-    // How the older layers panel builds its rows.
+    // How the older layers panel builds its rows
     rows: (source) => source.includes("orderedLayersPanelChildren") && source.includes('"0:-2"==='),
-    // The layers panel's looks.
+    // The layers panel's looks
     looks: (source) => source.includes("showVisualLayerIcons:!0"),
-    // The layers panel.
+    // The layers panel
     panel: (source) => source.includes('label:"ObjectsPanel"'),
   };
 
-  // Wraps them as they arrive (see the top and `modules.rs`).
+  // Wraps them as they arrive (see the top and `modules.rs`)
   let patched = false;
   const install = () => {
     patched = true;
-    // Draw mode's layers panel look, and the context Figma passes it in.
+    // Draw mode's layers panel look, and the context Figma passes it in
     let looks = null;
     // Only the parts that make previews: Draw mode also focuses the layers
-    // panel on the selection and doesn't bold names, which stay the mode's.
+    // panel on the selection and doesn't bold names, which stay the mode's
     const PREVIEW_KEYS = ["topLevelObjectRowHeight", "nestedObjectRowHeight", "rowSelectionGap", "insertionLineBoxOffset", "showVisualLayerIcons", "topLevelIconSize", "nestedIconSize"];
 
     // A hook among a module's exports, `pattern` its source, that says false
     // instead while on. Figma's is called every time, so hooks keep their
-    // order.
+    // order
     const falseWhileOn = (pattern) => (value, React) => {
       if (typeof value !== "function" || !React || !pattern.test(String(value))) return value;
       return function () {
@@ -78,20 +78,20 @@ const PAGE_JS: &str = r##"(() => {
     window.__ligmaModules.patch([
       {
         // Picks Figma's newer layers panel, which has no previews, in Design
-        // mode: `function m(){return!0===x()}` among its exports.
+        // mode: `function m(){return!0===x()}` among its exports
         match: MODULES.choice,
         getter: falseWhileOn(/^function [\w$]*\(\)\{return!0===[\w$]+\(\)\}$/),
       },
       {
         // Has the older layers panel build its rows another way in Design
         // mode, which skips making previews: `function c(){let
-        // e=(0,o.Em)(),t=(0,o.E3)()===r.n.Design;return e&&t}`.
+        // e=(0,o.Em)(),t=(0,o.E3)()===r.n.Design;return e&&t}`
         match: MODULES.rows,
         getter: falseWhileOn(/^function [\w$]*\(\)\{let [\w$]+=\(0,[\w$.]+\)\(\),[\w$]+=\(0,[\w$.]+\)\(\)===[\w$.]+\.Design;return [\w$]+&&[\w$]+\}$/),
       },
       {
         // The layers panel's looks: Design mode's, Draw mode's (with
-        // `showVisualLayerIcons`) and the context they're passed in.
+        // `showVisualLayerIcons`) and the context they're passed in
         match: MODULES.looks,
         loaded: (exports) => {
           const values = Object.keys(exports).map((key) => exports[key]);
@@ -101,7 +101,7 @@ const PAGE_JS: &str = r##"(() => {
         },
       },
       {
-        // The layers panel: provides Draw mode's look while on.
+        // The layers panel: provides Draw mode's look while on
         match: MODULES.panel,
         getter: (Panel, React) => {
           if (!Panel?.$$typeof || !React || !looks) return Panel;
@@ -125,11 +125,11 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // Some of the modules `install` wraps have arrived, so it's too late to
-  // wrap them all.
+  // wrap them all
   const figmaLoaded = () => Object.values(MODULES).some((match) => window.__ligmaModules.arrived(match));
 
   // Turned on after the panel loaded without previews: reload, once the
-  // tab is shown and Figma has no edits still saving.
+  // tab is shown and Figma has no edits still saving
   let reloading = false;
   const reloadWhenReady = () => {
     if (reloading || !state.on) return;
@@ -151,14 +151,14 @@ const PAGE_JS: &str = r##"(() => {
     if (figmaLoaded()) reloadWhenReady();
     else install();
   };
-  // From Ligma, when the setting changes.
+  // From Ligma, when the setting changes
   window.__ligmaLayerPreviews = (next) => {
     try {
       localStorage.setItem(KEY, JSON.stringify(next));
     } catch {}
     apply(next);
   };
-  // From another tab, or while this one was frozen and missed it.
+  // From another tab, or while this one was frozen and missed it
   const sync = () => {
     try {
       const stored = JSON.parse(localStorage.getItem(KEY));
@@ -177,7 +177,7 @@ const PAGE_JS: &str = r##"(() => {
 /// The setting,
 static ON: AtomicBool = AtomicBool::new(false);
 /// and when it last changed, for `PAGE_JS` to tell it from an older one in
-/// `localStorage`. Launch counts as a change.
+/// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
 
 fn now() -> u64 {
@@ -189,18 +189,18 @@ fn state() -> String {
     format!(r#"{{"on":{on},"rev":{rev}}}"#)
 }
 
-/// Call at launch, before any tab.
+/// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.layer_previews, Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
 
-/// `PAGE_JS`, for a new Figma tab.
+/// `PAGE_JS`, for a new Figma tab
 pub fn page_js() -> String {
     PAGE_JS.replace("__LIGMA_LAYER_PREVIEWS__", &state())
 }
 
-/// Sends a changed setting to every loaded tab.
+/// Sends a changed setting to every loaded tab
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     if ON.swap(settings.layer_previews, Ordering::Relaxed) == settings.layer_previews {
         return;

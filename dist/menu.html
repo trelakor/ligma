@@ -7,9 +7,9 @@
      is exactly the menu: the page draws the items from `get_menu`,
      reports its size with `menu_ready`, and sends the chosen item to
      `menu_pick`. Colors come from the active Figma tab's theme, so the
-     menu is light or dark with the editor. -->
+     menu is light or dark with the editor -->
 <style>
-  /* Figma's UI3 menu, until the first Figma tab reports its theme. */
+  /* Figma's UI3 menu, until the first Figma tab reports its theme */
   :root {
     color-scheme: dark;
     --menu: #1e1e1e;
@@ -57,7 +57,7 @@
   const pick = (action) => invoke("menu_pick", { action });
 
   // Figma theme colors (see THEME_JS in tabs.rs) onto the variables. The
-  // editor's, not Figma's menu colors: those stay dark in light themes.
+  // editor's, not Figma's menu colors: those stay dark in light themes
   const THEME_VARS = {
     "--menu": "bg",
     "--text": "text",

@@ -2,11 +2,11 @@
 //! (the page, slide, chat, asset or webpage) and the selected tool, as
 //! "Ligma". The tool's icon is the small image, blue while the window has
 //! focus and grey while it doesn't. Discord names the activity after the Discord application, so
-//! the application behind `CLIENT_ID` must be called "Ligma".
+//! the application behind `CLIENT_ID` must be called "Ligma"
 //!
 //! Talking to Discord blocks, so a worker thread owns the connection. The
 //! app sends it the wanted status every second and it forwards changes,
-//! reconnecting whenever Discord is (re)started.
+//! reconnecting whenever Discord is (re)started
 //!
 //! With invites on (`discordInvites`), the open file is also a Discord
 //! party: one per file, sized by the people Figma shows in it. Friends can
@@ -14,12 +14,12 @@
 //! profile (Ligma asks the user first). Joining starts Ligma through the
 //! launch command `register_launch` leaves for Discord, and Discord hands
 //! the party's secret, `<editor>/<file key>`, to `ACTIVITY_JOIN`. Ligma
-//! opens that file, and Figma shows it to whoever has access.
+//! opens that file, and Figma shows it to whoever has access
 //!
 //! Files hidden from their tab's menu (`HIDDEN_FILE`) show as "Designing a
 //! file", without their name or where in them the user is. With
 //! `discordHideFilesByDefault` every file is hidden instead, but those
-//! shown from their tab's menu.
+//! shown from their tab's menu
 
 use std::collections::BTreeSet;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -33,32 +33,32 @@ use tauri::{AppHandle, Manager};
 
 use crate::discord_ipc::Ipc;
 
-/// Application ID from the Discord Developer Portal. Empty: presence off.
+/// Application ID from the Discord Developer Portal. Empty: presence off
 const CLIENT_ID: &str = "1563151879788167309";
 const LOGO_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/discord-logo.png";
 /// Tool icons are art assets of the Discord application, uploaded in the
 /// Developer Portal (Rich Presence > Art Assets) and named
 /// `<product>-<focused|unfocused>-<slug>`. Only Figma Design's are there so
-/// far. `npm run discord-assets` checks that every one is uploaded.
+/// far. `npm run discord-assets` checks that every one is uploaded
 const TOOLS_PRODUCT: &str = "design";
 
-/// Discord allows 5 activity updates per 20 seconds.
+/// Discord allows 5 activity updates per 20 seconds
 const MIN_INTERVAL: Duration = Duration::from_secs(4);
-/// Wait between attempts to reach Discord when it isn't running.
+/// Wait between attempts to reach Discord when it isn't running
 const RETRY_AFTER: Duration = Duration::from_secs(15);
 /// Party sizes Discord shows as the most people a file can hold, the
 /// smallest one with room to spare. Discord only offers invites to a party
-/// with a size and room left in it; Figma has no such limit to report.
+/// with a size and room left in it; Figma has no such limit to report
 const PARTY_SIZES: [i32; 4] = [10, 25, 50, 100];
 
-/// Party size for `people` in a file: "3 of 10", "12 of 25".
+/// Party size for `people` in a file: "3 of 10", "12 of 25"
 fn party_max(people: i32) -> i32 {
     PARTY_SIZES.into_iter().find(|&max| max > people).unwrap_or(people + 1)
 }
 
 /// Name of the selected tool in the toolbar, or null. Figma marks the
 /// active tool button with `aria-pressed` or `aria-checked`; its label may
-/// carry a shortcut ("Pen – P") or name a tool group ("Move tools").
+/// carry a shortcut ("Pen – P") or name a tool group ("Move tools")
 const TOOL_JS: &str = r#"(() => {
   const tools = [
     "Move", "Hand", "Scale", "Frame", "Section", "Slice", "Rectangle", "Line",
@@ -68,7 +68,7 @@ const TOOL_JS: &str = r#"(() => {
     "Measurement",
   ];
   const byName = new Map(tools.map((tool) => [tool.toLowerCase(), tool]));
-  // Dev Mode names these after the action.
+  // Dev Mode names these after the action
   byName.set("annotate", "Annotation");
   byName.set("measure", "Measurement");
   for (const el of document.querySelectorAll('[aria-pressed="true"], [aria-checked="true"]')) {
@@ -86,9 +86,9 @@ const TOOL_JS: &str = r#"(() => {
 /// function of the file's view (see `tabs::view`), reading only what
 /// Figma's panels show: `window.store` is for debugging, and Figma makes
 /// each read of it block the page for 5 seconds. Buzz shows an asset's
-/// name only on the canvas, so it says which asset it is instead.
+/// name only on the canvas, so it says which asset it is instead
 const SUBTEXT_JS: &str = r#"((view) => {
-  // Props of the component `up` levels above `el` in React's tree.
+  // Props of the component `up` levels above `el` in React's tree
   const props = (el, up) => {
     const key = el && Object.keys(el).find((key) => key.startsWith("__reactFiber"));
     let fiber = key && el[key];
@@ -97,7 +97,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
   };
   const text = (selector) => document.querySelector(selector)?.textContent.trim() || null;
   // "3 of 12": the selected item in Slides' or Buzz's carousel. It only
-  // draws the items in view, so they're counted in its data.
+  // draws the items in view, so they're counted in its data
   const position = (carousel) => {
     const item = carousel?.querySelector('[data-testid="carousel-item"]:has([aria-selected="true"])');
     if (!item) return null;
@@ -114,7 +114,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
     case "design":
     case "board": {
       // Design's pages list, else the name on its collapsed header; FigJam's
-      // pages button names the page if the board has more than one.
+      // pages button names the page if the board has more than one
       const toggle = document.querySelector('[data-onboarding-key="pages-panel-toggle"]');
       const page = text('[aria-current="page"] [class*="renameableNodeText"]')
         || text('[class*="pagesDropdownButtonText"]')
@@ -122,7 +122,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
           ? toggle.textContent.trim() : null);
       return page;
     }
-    // Presenting: "3 / 12" under the slide or frame.
+    // Presenting: "3 / 12" under the slide or frame
     case "proto":
     case "deck":
     case "presenter": {
@@ -143,7 +143,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
       return chat;
     }
     case "site": {
-      // The webpage with the selection in it, else the last one that had it.
+      // The webpage with the selection in it, else the last one that had it
       const names = new Map();
       for (const row of document.querySelectorAll('[data-testid="left-panel-body"] [data-fpl-audit]')) {
         const page = props(row, 2);
@@ -160,7 +160,7 @@ const SUBTEXT_JS: &str = r#"((view) => {
 
 /// Number of people in the file: Figma's avatars of live sessions in the
 /// toolbar, the user's own included (Figma shows one per person), and any
-/// "+N" for those that don't fit.
+/// "+N" for those that don't fit
 const PEOPLE_JS: &str = r#"(() => {
   const sessions = new Set();
   for (const el of document.querySelectorAll("[data-tooltip-user-session-id]")) {
@@ -174,56 +174,56 @@ const PEOPLE_JS: &str = r#"(() => {
   return Math.max(1, sessions.size + more);
 })()"#;
 
-/// The open file as a Discord party.
+/// The open file as a Discord party
 #[derive(Clone, PartialEq)]
 struct Invite {
-    /// Same for everyone in the file, without giving its key away.
+    /// Same for everyone in the file, without giving its key away
     party: String,
-    /// Handed to whoever joins: `<editor>/<file key>`.
+    /// Handed to whoever joins: `<editor>/<file key>`
     secret: String,
     people: i32,
 }
 
 #[derive(Clone, Default, PartialEq)]
 struct Status {
-    /// Name of the open file. None outside a file (Home, other pages).
+    /// Name of the open file. None outside a file (Home, other pages)
     file: Option<String>,
-    /// What's done with the file ("Designing", "Presenting", ...).
+    /// What's done with the file ("Designing", "Presenting", ...)
     verb: &'static str,
     /// Where in the file the user is (the page "Cover", "Slide 3 of 12"),
-    /// under its name.
+    /// under its name
     subtext: Option<String>,
     tool: Option<String>,
-    /// Whether the Ligma window has focus.
+    /// Whether the Ligma window has focus
     focused: bool,
-    /// Only with invites on, in a file.
+    /// Only with invites on, in a file
     invite: Option<Invite>,
 }
 
 enum Message {
     Status(Status),
-    /// The user's answer to Discord user `user` asking to join.
+    /// The user's answer to Discord user `user` asking to join
     Answer { user: String, invite: bool },
 }
 
 pub struct Presence {
-    /// Channel to the worker. None when presence is off.
+    /// Channel to the worker. None when presence is off
     tx: Mutex<Option<Sender<Message>>>,
-    /// The settings in effect, for what to show.
+    /// The settings in effect, for what to show
     settings: Mutex<crate::settings::Settings>,
-    /// Files picked from their tab's menu.
+    /// Files picked from their tab's menu
     choices: Mutex<Choices>,
 }
 
 /// Keys of the files picked from their tab's menu, kept in `HIDDEN_FILE`.
 /// Each list counts only while files are shown, or hidden, by default
-/// (`discordHideFilesByDefault`), so switching keeps both.
+/// (`discordHideFilesByDefault`), so switching keeps both
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default)]
 struct Choices {
-    /// Hidden although files are shown by default.
+    /// Hidden although files are shown by default
     hidden: BTreeSet<String>,
-    /// Shown although files are hidden by default.
+    /// Shown although files are hidden by default
     shown: BTreeSet<String>,
 }
 
@@ -237,7 +237,7 @@ impl Choices {
     }
 }
 
-/// The picked files, in the app data folder.
+/// The picked files, in the app data folder
 const HIDDEN_FILE: &str = "discord-hidden.json";
 
 fn load_choices(app: &AppHandle) -> Choices {
@@ -249,7 +249,7 @@ fn load_choices(app: &AppHandle) -> Choices {
         .unwrap_or_default()
 }
 
-/// Whether the file with key `key` is hidden from Discord.
+/// Whether the file with key `key` is hidden from Discord
 pub fn is_hidden(app: &AppHandle, key: &str) -> bool {
     let presence = app.state::<Presence>();
     let by_default = presence.settings.lock().unwrap().discord_hide_files_by_default;
@@ -258,13 +258,13 @@ pub fn is_hidden(app: &AppHandle, key: &str) -> bool {
 }
 
 /// Hides the file with key `key` from Discord, or shows it again, and
-/// saves the change.
+/// saves the change
 pub fn set_hidden(app: &AppHandle, key: &str, hidden: bool) {
     let json = {
         let presence = app.state::<Presence>();
         let by_default = presence.settings.lock().unwrap().discord_hide_files_by_default;
         let mut choices = presence.choices.lock().unwrap();
-        // The exceptions to the default.
+        // The exceptions to the default
         let (keys, add) = if by_default {
             (&mut choices.shown, !hidden)
         } else {
@@ -282,7 +282,7 @@ pub fn set_hidden(app: &AppHandle, key: &str, hidden: bool) {
     }
 }
 
-/// Whether Discord is being shown anything (`discordRichPresence`).
+/// Whether Discord is being shown anything (`discordRichPresence`)
 pub fn is_on(app: &AppHandle) -> bool {
     app.state::<Presence>().tx.lock().unwrap().is_some()
 }
@@ -308,7 +308,7 @@ pub fn start(app: &AppHandle, settings: &crate::settings::Settings) -> Presence 
 
 /// Tells Discord how to start Ligma for someone joining a file, the way
 /// Discord's own RPC library does. Joining while Ligma runs goes straight
-/// to it instead.
+/// to it instead
 fn register_launch(_app: &AppHandle) {
     #[cfg(windows)]
     {
@@ -329,7 +329,7 @@ fn register_launch(_app: &AppHandle) {
             .create(format!(r"{key}\shell\open\command"))
             .and_then(|key| key.set_string("", format!("\"{exe}\"")));
     }
-    // Discord reads the command from its games folder, if it's installed.
+    // Discord reads the command from its games folder, if it's installed
     #[cfg(target_os = "macos")]
     {
         let Some(home) = std::env::var_os("HOME") else {
@@ -350,7 +350,7 @@ fn register_launch(_app: &AppHandle) {
 }
 
 /// Turns presence on or off. Dropping the channel stops the worker, which
-/// disconnects from Discord and so clears the status.
+/// disconnects from Discord and so clears the status
 pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     let presence = app.state::<Presence>();
     *presence.settings.lock().unwrap() = settings.clone();
@@ -360,14 +360,14 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     }
 }
 
-/// Reports the active tab to Discord. Call periodically.
+/// Reports the active tab to Discord. Call periodically
 pub fn sync(app: &AppHandle) {
     let presence = app.state::<Presence>();
     let Some(tx) = presence.tx.lock().unwrap().clone() else {
         return;
     };
     // Not `get_webview_window`: that returns None once the window holds
-    // more than one webview, i.e. whenever a file tab is open.
+    // more than one webview, i.e. whenever a file tab is open
     let focused = app
         .get_window("main")
         .and_then(|window| window.is_focused().ok())
@@ -377,18 +377,18 @@ pub fn sync(app: &AppHandle) {
         return;
     };
     let mut settings = presence.settings.lock().unwrap().clone();
-    // A hidden file shows as if file names were off.
+    // A hidden file shows as if file names were off
     let hidden = presence.choices.lock().unwrap().is_hidden(&active.key, settings.discord_hide_files_by_default);
     settings.discord_show_file &= !hidden;
     let (verb, presenting) = verb(active.view);
-    // An empty name shows as "Designing a file" and so on.
+    // An empty name shows as "Designing a file" and so on
     let file = if settings.discord_show_file { active.name } else { String::new() };
     let invite = settings.discord_invites.then(|| Invite {
         party: party_id(&active.key),
         secret: format!("{}/{}", active.editor, active.key),
         people: 1,
     });
-    // Presentations have no tools.
+    // Presentations have no tools
     let show_tool = !presenting && settings.discord_show_tool;
     let show_subtext = shows_subtext(&settings, active.view);
     if !show_tool && !show_subtext && invite.is_none() {
@@ -413,7 +413,7 @@ pub fn sync(app: &AppHandle) {
 
 /// Whether `settings` show where in the file the user is, for a file shown
 /// in `view` (see `tabs::view`). Never without the file's name, which it
-/// goes under.
+/// goes under
 fn shows_subtext(settings: &crate::settings::Settings, view: &str) -> bool {
     if !settings.discord_show_file {
         return false;
@@ -430,7 +430,7 @@ fn shows_subtext(settings: &crate::settings::Settings, view: &str) -> bool {
 }
 
 /// Discord party of the file with key `key`: an FNV-1a hash, the same in
-/// every Ligma.
+/// every Ligma
 fn party_id(key: &str) -> String {
     let hash = format!("ligma:{key}").bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
@@ -444,7 +444,7 @@ fn now_ms() -> i64 {
         .map_or(0, |time| time.as_millis() as i64)
 }
 
-/// Slug of the tool's icon among the art assets, if it has one.
+/// Slug of the tool's icon among the art assets, if it has one
 fn tool_icon(tool: &str) -> Option<&'static str> {
     Some(match tool {
         "Move" => "move",
@@ -471,7 +471,7 @@ fn tool_icon(tool: &str) -> Option<&'static str> {
 }
 
 /// What's done with a file shown in `view` (see `tabs::view`), and
-/// whether that's presenting it.
+/// whether that's presenting it
 fn verb(view: &str) -> (&'static str, bool) {
     match view {
         "proto" | "deck" | "presenter" => ("Presenting", true),
@@ -484,15 +484,15 @@ fn verb(view: &str) -> (&'static str, bool) {
     }
 }
 
-/// `version` is Ligma's, shown when hovering the logo.
+/// `version` is Ligma's, shown when hovering the logo
 fn activity<'a>(status: &'a Status, started: i64, version: &str) -> Activity<'a> {
-    // "Designing in <file>", but "Presenting <file>".
+    // "Designing in <file>", but "Presenting <file>"
     let verb = match status.verb {
         "Presenting" => "Presenting".to_owned(),
         verb => format!("{verb} in"),
     };
     let details = match status.file.as_deref() {
-        // "Figma" is the title while the file is still loading.
+        // "Figma" is the title while the file is still loading
         Some("" | "Figma") => format!("{verb} a file"),
         Some(file) => format!("{verb} {file}"),
         None => "Browsing files".to_owned(),
@@ -502,14 +502,14 @@ fn activity<'a>(status: &'a Status, started: i64, version: &str) -> Activity<'a>
         .name("Ligma")
         .details(details)
         .timestamps(Timestamps::new().start(started));
-    // The tool is only the small image, named when hovered.
+    // The tool is only the small image, named when hovered
     if let Some((tool, icon)) = status.tool.as_deref().and_then(|tool| Some((tool, tool_icon(tool)?))) {
         let state = if status.focused { "focused" } else { "unfocused" };
         assets = assets
             .small_image(format!("{TOOLS_PRODUCT}-{state}-{icon}"))
             .small_text(format!("{tool} tool"));
     }
-    // Discord takes 2 to 128 characters.
+    // Discord takes 2 to 128 characters
     if let Some(subtext) = status.subtext.as_deref().filter(|subtext| subtext.chars().count() >= 2) {
         activity = activity.state(subtext.chars().take(128).collect::<String>());
     }
@@ -521,19 +521,19 @@ fn activity<'a>(status: &'a Status, started: i64, version: &str) -> Activity<'a>
     activity.assets(assets)
 }
 
-/// Handles an event Discord sent (see `subscribe`).
+/// Handles an event Discord sent (see `subscribe`)
 fn on_event(app: &AppHandle, message: &Value, file: Option<&str>) {
     let data = &message["data"];
     match message["evt"].as_str() {
-        // The user joined a friend's file, maybe starting Ligma for it.
+        // The user joined a friend's file, maybe starting Ligma for it
         Some("ACTIVITY_JOIN") => {
             if let Some(secret) = data["secret"].as_str() {
                 let (app, secret) = (app.clone(), secret.to_owned());
-                // Off this thread: opening a tab waits on the main thread.
+                // Off this thread: opening a tab waits on the main thread
                 std::thread::spawn(move || crate::tabs::open_shared(&app, &secret));
             }
         }
-        // A friend asked to join the user's file.
+        // A friend asked to join the user's file
         Some("ACTIVITY_JOIN_REQUEST") => {
             let user = &data["user"];
             let Some(id) = user["id"].as_str() else {
@@ -569,7 +569,7 @@ fn on_event(app: &AppHandle, message: &Value, file: Option<&str>) {
     }
 }
 
-/// Connects to Discord and subscribes to the events `on_event` handles.
+/// Connects to Discord and subscribes to the events `on_event` handles
 fn connect() -> std::io::Result<Ipc> {
     let mut ipc = Ipc::connect(CLIENT_ID)?;
     ipc.subscribe("ACTIVITY_JOIN")?;
@@ -581,13 +581,13 @@ fn run(app: &AppHandle, rx: Receiver<Message>) {
     let mut client: Option<Ipc> = None;
     let mut retry_at = Instant::now();
     let mut wanted = Status::default();
-    // What Discord shows. None after connecting, so it gets sent again.
+    // What Discord shows. None after connecting, so it gets sent again
     let mut shown: Option<Status> = None;
     let mut sent_at: Option<Instant> = None;
     // The elapsed time restarts with each file, and when presenting starts
-    // or stops.
+    // or stops
     let mut started = ((None, ""), now_ms());
-    // Answers to join requests, to send.
+    // Answers to join requests, to send
     let mut answers = Vec::new();
     loop {
         let mut message = match rx.recv_timeout(Duration::from_secs(1)) {
@@ -613,14 +613,14 @@ fn run(app: &AppHandle, rx: Receiver<Message>) {
                     let cmd = if invite { "SEND_ACTIVITY_JOIN_INVITE" } else { "CLOSE_ACTIVITY_REQUEST" };
                     ipc.command(cmd, json!({ "user_id": user }))?;
                 }
-                // Also Discord's responses to commands, which go unread.
+                // Also Discord's responses to commands, which go unread
                 while let Some(message) = ipc.poll()? {
                     on_event(app, &message, shown.as_ref().and_then(|shown| shown.file.as_deref()));
                 }
                 Ok(())
             };
             if talk().is_err() {
-                // Discord quit. Reconnect on the next tick.
+                // Discord quit. Reconnect on the next tick
                 client = None;
                 shown = None;
             }
@@ -653,7 +653,7 @@ fn run(app: &AppHandle, rx: Receiver<Message>) {
         if ok {
             shown = Some(wanted.clone());
         } else {
-            // Discord quit. Reconnect on the next change or tick.
+            // Discord quit. Reconnect on the next change or tick
             client = None;
             shown = None;
         }

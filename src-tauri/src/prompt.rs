@@ -3,7 +3,7 @@
 //! frameless window centered over the main window, like the tab menu: the
 //! page fetches its text (`get_prompt`), reports its size (`prompt_ready`)
 //! and is shown, then sends the chosen button (`prompt_answer`). Closing it
-//! any other way answers None.
+//! any other way answers None
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -20,14 +20,14 @@ type Done = Box<dyn FnOnce(Option<usize>) + Send>;
 struct Content {
     title: String,
     message: String,
-    /// Left to right; the last is the default.
+    /// Left to right; the last is the default
     buttons: Vec<String>,
 }
 
 struct Open {
     content: Content,
     done: Option<Done>,
-    /// Centered and shown; a rescale keeps it where it is.
+    /// Centered and shown; a rescale keeps it where it is
     placed: bool,
 }
 
@@ -36,7 +36,7 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 
 /// Shows `message` under `title` with `buttons`, left to right, the last
 /// being the default. `done` gets the index of the one chosen, or None if
-/// the prompt was dismissed (Esc, or the app closing).
+/// the prompt was dismissed (Esc, or the app closing)
 pub fn show(
     app: &AppHandle,
     title: &str,
@@ -55,7 +55,7 @@ pub fn show(
         .get_or_insert_with(HashMap::new)
         .insert(label.clone(), Open { content, done: Some(Box::new(done)), placed: false });
     // Off the caller's thread: making a window on the main thread, from a
-    // webview's callback, would wait on itself.
+    // webview's callback, would wait on itself
     let app = app.clone();
     std::thread::spawn(move || {
         if let Err(error) = build(&app, &label) {
@@ -80,7 +80,7 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<()> {
         .inner_size(360.0, 140.0)
         .visible(false)
         .decorations(false)
-        // Rounded corners and a shadow on Windows 11.
+        // Rounded corners and a shadow on Windows 11
         .shadow(true)
         .resizable(false)
         .maximizable(false)
@@ -89,7 +89,7 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<()> {
     if let Some(color) = crate::tabs::theme(app).as_ref().and_then(|theme| crate::settings::theme_color(theme, "bg")) {
         builder = builder.background_color(color);
     }
-    // Kept above the main window.
+    // Kept above the main window
     if let Some(main) = &main {
         #[cfg(windows)]
         {
@@ -126,7 +126,7 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Runs the prompt's `done` with `choice`, once, and closes its window.
+/// Runs the prompt's `done` with `choice`, once, and closes its window
 fn answer(app: &AppHandle, label: &str, choice: Option<usize>) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.destroy();
@@ -134,7 +134,7 @@ fn answer(app: &AppHandle, label: &str, choice: Option<usize>) {
     finish(label, choice);
 }
 
-/// Runs the prompt's `done` with `choice`, unless it has already run.
+/// Runs the prompt's `done` with `choice`, unless it has already run
 fn finish(label: &str, choice: Option<usize>) {
     let done = OPEN
         .lock()
@@ -147,7 +147,7 @@ fn finish(label: &str, choice: Option<usize>) {
     }
 }
 
-/// Dismisses every open prompt, for when the main window goes.
+/// Dismisses every open prompt, for when the main window goes
 pub fn close_all(app: &AppHandle) {
     let labels: Vec<String> = OPEN.lock().unwrap().iter().flat_map(|open| open.keys().cloned()).collect();
     for label in labels {
@@ -155,7 +155,7 @@ pub fn close_all(app: &AppHandle) {
     }
 }
 
-/// Passes the active tab's new theme to open prompts.
+/// Passes the active tab's new theme to open prompts
 pub fn apply_theme(app: &AppHandle, theme: &serde_json::Value) {
     for (label, window) in app.webview_windows() {
         if label.starts_with(LABEL_PREFIX) {
@@ -164,7 +164,7 @@ pub fn apply_theme(app: &AppHandle, theme: &serde_json::Value) {
     }
 }
 
-/// Rescales open prompts to the interface scale.
+/// Rescales open prompts to the interface scale
 pub fn apply_scale(app: &AppHandle, scale: f64) {
     for (label, window) in app.webview_windows() {
         if label.starts_with(LABEL_PREFIX) {
@@ -185,7 +185,7 @@ pub struct Prompt {
     theme: Option<serde_json::Value>,
 }
 
-/// What this prompt says.
+/// What this prompt says
 #[tauri::command]
 pub async fn get_prompt(app: AppHandle, webview: Webview) -> Option<Prompt> {
     if !is_prompt(&webview) {
@@ -193,13 +193,13 @@ pub async fn get_prompt(app: AppHandle, webview: Webview) -> Option<Prompt> {
     }
     let content = OPEN.lock().unwrap().as_ref()?.get(webview.label())?.content.clone();
     // Zoomed now, before the page measures: a zoom set before it loaded
-    // doesn't last.
+    // doesn't last
     let _ = webview.set_zoom(crate::tabs::scale(&app));
     Some(Prompt { content, theme: crate::tabs::theme(&app) })
 }
 
 /// The page has drawn the prompt at `width` by `height` CSS pixels: size
-/// it, center it over the main window (or the screen) and show it.
+/// it, center it over the main window (or the screen) and show it
 #[tauri::command]
 pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: f64) {
     if !is_prompt(&webview) {
@@ -211,7 +211,7 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
     let scale = crate::tabs::scale(&app);
     let size = LogicalSize::new(width * scale, height * scale);
     let _ = window.set_size(size);
-    // Only placed the first time; a rescale keeps it where it is.
+    // Only placed the first time; a rescale keeps it where it is
     let first = OPEN
         .lock()
         .unwrap()
@@ -234,7 +234,7 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
         });
         if let Some((position, outer)) = area {
             let x = position.x as f64 + (outer.width as f64 - w) / 2.0;
-            // A little above the middle, like system alerts.
+            // A little above the middle, like system alerts
             let y = position.y as f64 + (outer.height as f64 - h) / 3.0;
             let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
         }
@@ -243,7 +243,7 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
     let _ = window.set_focus();
 }
 
-/// The user chose button `index`, or dismissed the prompt (None).
+/// The user chose button `index`, or dismissed the prompt (None)
 #[tauri::command]
 pub async fn prompt_answer(app: AppHandle, webview: Webview, index: Option<usize>) {
     if is_prompt(&webview) {

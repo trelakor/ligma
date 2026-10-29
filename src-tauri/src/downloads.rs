@@ -1,9 +1,9 @@
 //! Figma exports by clicking a `download` link. Without a download handler
-//! the webview drops it, so ask where to save, like a browser would.
+//! the webview drops it, so ask where to save, like a browser would
 //!
 //! Exporting several images at once, Figma's web app bundles them into one
 //! zip. The desktop app saves them to a folder instead, so do the same: ask
-//! for a folder, download the zip to a temporary file and unpack it there.
+//! for a folder, download the zip to a temporary file and unpack it there
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -14,12 +14,12 @@ use tauri::webview::DownloadEvent;
 use tauri::{Manager, Url, Webview};
 
 /// Zipped exports on their way: the download's URL, its temporary file and
-/// the folder to unpack it into.
+/// the folder to unpack it into
 static PENDING: Mutex<Vec<(Url, PathBuf, PathBuf)>> = Mutex::new(Vec::new());
 
 pub fn on_download(webview: Webview, event: DownloadEvent) -> bool {
     // These run on the main thread inside the webview's callback, so use
-    // synchronous dialogs; the dialog plugin's wait on the main thread.
+    // synchronous dialogs; the dialog plugin's wait on the main thread
     match event {
         DownloadEvent::Requested { url, destination } => {
             let window = webview.window();
@@ -75,7 +75,7 @@ pub fn on_download(webview: Webview, event: DownloadEvent) -> bool {
     }
 }
 
-/// Figma builds its zips in the page, so they come from a blob: or data: URL.
+/// Figma builds its zips in the page, so they come from a blob: or data: URL
 fn is_export_zip(url: &Url, destination: &Path) -> bool {
     matches!(url.scheme(), "blob" | "data")
         && destination
@@ -83,12 +83,12 @@ fn is_export_zip(url: &Url, destination: &Path) -> bool {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
 }
 
-/// Unpacks `zip` into `folder`, never replacing a file already there.
+/// Unpacks `zip` into `folder`, never replacing a file already there
 fn unpack(zip: &Path, folder: &Path) -> zip::result::ZipResult<()> {
     let mut archive = zip::ZipArchive::new(File::open(zip)?)?;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
-        // Skips folders, and paths that would land outside `folder`.
+        // Skips folders, and paths that would land outside `folder`
         let Some(name) = entry.enclosed_name().filter(|_| entry.is_file()) else {
             continue;
         };
@@ -101,7 +101,7 @@ fn unpack(zip: &Path, folder: &Path) -> zip::result::ZipResult<()> {
     Ok(())
 }
 
-/// `path`, or "name (2).ext", "name (3).ext"… if it's taken.
+/// `path`, or "name (2).ext", "name (3).ext"… if it's taken
 fn free_path(path: &Path) -> PathBuf {
     if !path.exists() {
         return path.to_owned();

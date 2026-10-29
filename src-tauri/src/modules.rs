@@ -1,11 +1,11 @@
 //! Patching Figma's modules as they load, for features that change how a
-//! part of Figma behaves (layer previews, the classic home page).
+//! part of Figma behaves (layer previews, the classic home page)
 //!
 //! Figma's modules export through getters that can't be redefined once
 //! loaded, so `PAGE_JS` wraps a module's factory when its chunk arrives,
 //! found by what its source contains. That means reading every module's
 //! source as it loads (about 60 ms over a file's load), so features only
-//! ask for it in pages loaded with them on.
+//! ask for it in pages loaded with them on
 
 /// Runs in Figma tabs, before the features' own scripts. Sets
 /// `window.__ligmaModules`:
@@ -14,9 +14,9 @@
 ///   `patch.match(source)` accepts, for each patch. `patch.getter(value,
 ///   React)` replaces each of its exports, read as the module's getters
 ///   are; `patch.loaded(exports, React)` sees them once it has run. `React`
-///   is what the module imports, or null.
+///   is what the module imports, or null
 /// - `arrived(match)` says whether a module `match` accepts has already
-///   loaded, so it's too late to patch it.
+///   loaded, so it's too late to patch it
 pub const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window || window.__ligmaModules) return;
   const GLOBAL = "rspackChunk_figma_web_bundler";
@@ -25,7 +25,7 @@ pub const PAGE_JS: &str = r##"(() => {
   let React = null;
 
   // React, from what a module imports: the module `x` whose `x.useState`
-  // and the like it calls.
+  // and the like it calls
   const findReact = (source, require) => {
     for (const [, name, id] of source.matchAll(/([\w$]+)=[\w$]+\((\d+)\)/g)) {
       const escaped = name.replace(/\$/g, "\\$");
@@ -40,7 +40,7 @@ pub const PAGE_JS: &str = r##"(() => {
 
   // An export getter that hands out `wrap(value)` instead, made when the
   // value is first read: modules may export a `let` declared after the
-  // getters.
+  // getters
   const wrapGetter = (get, wrap) => {
     let from;
     let to;
@@ -93,7 +93,7 @@ pub const PAGE_JS: &str = r##"(() => {
 
   // Figma's chunks arrive through `push` on this array: Array's own until
   // the bundler's runtime loads and sets its own (if it hasn't already).
-  // Each push goes through `patchChunk` first.
+  // Each push goes through `patchChunk` first
   const hook = () => {
     hooked = true;
     const chunks = (window[GLOBAL] ??= []);

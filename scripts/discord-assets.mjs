@@ -2,7 +2,7 @@
 // Rich Presence asks for: `<product>-<focused|unfocused>-<slug>`, from
 // TOOLS_PRODUCT and `tool_icon` in src-tauri/src/presence.rs. Upload missing
 // ones in the Developer Portal (Rich Presence > Art Assets), with the key as
-// the file name. Discord lowercases keys.
+// the file name. Discord lowercases keys
 //
 //   npm run discord-assets
 
@@ -21,7 +21,7 @@ const wanted = ["focused", "unfocused"].flatMap((state) =>
   slugs.map((slug) => `${product}-${state}-${slug}`),
 );
 
-// Discord's CDN caches the list for up to 10 minutes; a fresh query skips it.
+// Discord's CDN caches the list for up to 10 minutes; a fresh query skips it
 const response = await fetch(
   `https://discord.com/api/v10/oauth2/applications/${clientId}/assets?t=${Date.now()}`,
 );

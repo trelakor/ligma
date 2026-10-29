@@ -2,13 +2,13 @@
 //! its last image and its name in a card under it (`tabPreviews`). The card
 //! is a small frameless window (`dist/preview.html`), made on first use and
 //! hidden in between. It never takes focus and lets the mouse through to
-//! the page below.
+//! the page below
 //!
 //! The tab bar asks for a card with `show_tab_preview` and drops it with
 //! `hide_tab_preview`. Like the tab menu, the page then fetches what to
 //! draw (`get_tab_preview`) and reports its size (`tab_preview_ready`);
 //! only then is the window placed under the tab and shown. Images come
-//! from `tabs::capture`, taken while a tab was last on screen.
+//! from `tabs::capture`, taken while a tab was last on screen
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -18,15 +18,15 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Webview, Webview
 
 pub const WINDOW: &str = "tab-preview";
 
-/// Space between the tab bar and the card, in CSS pixels.
+/// Space between the tab bar and the card, in CSS pixels
 const GAP: f64 = 4.0;
 
-/// The card being opened or shown.
+/// The card being opened or shown
 struct Open {
     tab: u32,
-    /// Tells a page's answer for this card from one for an earlier card.
+    /// Tells a page's answer for this card from one for an earlier card
     seq: u64,
-    /// The tab's left edge in the tab bar, in CSS pixels.
+    /// The tab's left edge in the tab bar, in CSS pixels
     left: f64,
 }
 
@@ -34,9 +34,9 @@ static OPEN: Mutex<Option<Open>> = Mutex::new(None);
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Opens the card of tab `tab`, whose left edge is `left` CSS pixels into
-/// the tab bar.
+/// the tab bar
 fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
-    // Not over a tab's menu.
+    // Not over a tab's menu
     if !crate::tabs::can_preview(app, tab) || crate::tab_menu::is_open() {
         hide(app);
         return Ok(());
@@ -47,7 +47,7 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
         window.set_zoom(crate::tabs::scale(app))?;
         return window.eval("window.refresh?.()");
     }
-    // The page fetches the card once it has loaded.
+    // The page fetches the card once it has loaded
     let main = app.get_window("main").expect("main window exists");
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("preview.html".into()))
@@ -64,7 +64,7 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
     // Windows gives a window the mouse goes through neither rounded corners
     // nor a shadow, so there it's see-through and the page draws both
     // (`drawn` in preview.html). It's also kept above the main window, and
-    // closed with it.
+    // closed with it
     #[cfg(windows)]
     {
         builder = builder.transparent(true).shadow(false).owner_raw(main.hwnd()?);
@@ -83,7 +83,7 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
     #[cfg(not(any(windows, target_os = "macos")))]
     let _ = main;
     let window = builder.build()?;
-    // Clicks and hovers go to whatever is under the card.
+    // Clicks and hovers go to whatever is under the card
     window.set_ignore_cursor_events(true)?;
     #[cfg(windows)]
     crate::frame::refresh(&window);
@@ -99,7 +99,7 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Hides the card, if shown.
+/// Hides the card, if shown
 pub fn hide(app: &AppHandle) {
     if OPEN.lock().unwrap().take().is_none() {
         return;
@@ -112,7 +112,7 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
-/// Closes the card's window, for when the main window goes.
+/// Closes the card's window, for when the main window goes
 pub fn close(app: &AppHandle) {
     OPEN.lock().unwrap().take();
     if let Some(window) = app.get_webview_window(WINDOW) {
@@ -128,7 +128,7 @@ fn from_preview(webview: &Webview) -> bool {
     webview.label() == WINDOW
 }
 
-/// The tab bar's pointer rests on tab `id`, `left` CSS pixels into the bar.
+/// The tab bar's pointer rests on tab `id`, `left` CSS pixels into the bar
 #[tauri::command]
 pub async fn show_tab_preview(app: AppHandle, webview: Webview, id: u32, left: f64) {
     if from_tab_bar(&webview) {
@@ -144,7 +144,7 @@ pub async fn hide_tab_preview(app: AppHandle, webview: Webview) {
 }
 
 /// The pointer came into the tab bar, likely on its way to another tab:
-/// keep an image of the tab it would leave.
+/// keep an image of the tab it would leave
 #[tauri::command]
 pub async fn capture_active_tab(app: AppHandle, webview: Webview) {
     if from_tab_bar(&webview) {
@@ -160,7 +160,7 @@ pub struct Card {
     theme: Option<serde_json::Value>,
 }
 
-/// The card to draw, if one is being opened.
+/// The card to draw, if one is being opened
 #[tauri::command]
 pub async fn get_tab_preview(app: AppHandle, webview: Webview) -> Option<Card> {
     if !from_preview(&webview) {
@@ -171,7 +171,7 @@ pub async fn get_tab_preview(app: AppHandle, webview: Webview) -> Option<Card> {
         hide(&app);
         return None;
     };
-    // A zoom set before the page loaded doesn't last.
+    // A zoom set before the page loaded doesn't last
     let _ = webview.set_zoom(crate::tabs::scale(&app));
     Some(Card { seq, tab: preview, theme: crate::tabs::theme(&app) })
 }
@@ -179,7 +179,7 @@ pub async fn get_tab_preview(app: AppHandle, webview: Webview) -> Option<Card> {
 /// The page has drawn card `seq` at `width` by `height` CSS pixels, `inset`
 /// pixels into the page on every side (room for the shadow it draws on
 /// Windows): place the card under its tab, inside the main window, and
-/// show it.
+/// show it
 #[tauri::command]
 pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width: f64, height: f64, inset: f64) {
     if !from_preview(&webview) {
@@ -194,7 +194,7 @@ pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width
     let (Ok(origin), Ok(size), Ok(scale)) = (main.inner_position(), main.inner_size(), main.scale_factor()) else {
         return;
     };
-    // CSS pixels at the interface scale, to screen pixels.
+    // CSS pixels at the interface scale, to screen pixels
     let px = scale * crate::tabs::scale(&app);
     let (w, h) = ((width * px).round(), (height * px).round());
     let margin = (GAP * px).round();

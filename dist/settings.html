@@ -11,9 +11,9 @@
      (src-tauri/src/plugins.rs) and switches them on and off. About checks for updates and reports a
      problem (src-tauri/src/report.rs). The window has no native title bar:
      the header is its own, and its colors follow the active Figma tab's
-     theme (`applyTheme`, from `get_theme` and tabs.rs). -->
+     theme (`applyTheme`, from `get_theme` and tabs.rs) -->
 <style>
-  /* Figma's UI3 palette, until the first Figma tab reports its own. */
+  /* Figma's UI3 palette, until the first Figma tab reports its own */
   :root {
     color-scheme: dark;
     --bg: #2c2c2c;
@@ -42,7 +42,7 @@
       --hover: rgba(0, 0, 0, 0.04);
     }
   }
-  /* Set by `applyTheme` from the theme's background. */
+  /* Set by `applyTheme` from the theme's background */
   :root.dark { color-scheme: dark; --switch-off: rgba(255, 255, 255, 0.2); --hover: rgba(255, 255, 255, 0.06); }
   :root.light { color-scheme: light; --switch-off: rgba(0, 0, 0, 0.18); --hover: rgba(0, 0, 0, 0.04); }
 
@@ -63,7 +63,7 @@
   ::selection { background: color-mix(in srgb, var(--brand) 35%, transparent); }
 
   /* The window's title bar. Drags the window; on macOS the traffic
-     lights sit at its left, centered like the tab bar's. */
+     lights sit at its left, centered like the tab bar's */
   header {
     position: relative;
     display: flex;
@@ -90,7 +90,7 @@
 
   #body { display: flex; flex: 1; min-height: 0; }
 
-  /* The categories, one page each. */
+  /* The categories, one page each */
   nav {
     display: flex;
     flex: none;
@@ -141,14 +141,14 @@
   label.row:has(input:not(:disabled)):hover { background: var(--hover); }
   .label { flex: 1; min-width: 0; }
   .hint { margin-top: 1px; color: var(--text-secondary); text-wrap: pretty; }
-  /* Options that depend on the row above. */
+  /* Options that depend on the row above */
   .nested { padding-left: 32px; }
   .nested.deeper { padding-left: 48px; }
   .nested.deepest { padding-left: 64px; }
   .row.disabled .label { color: var(--text-tertiary); }
   .row.disabled .hint { color: var(--text-tertiary); }
 
-  /* Figma's switch. */
+  /* Figma's switch */
   .switch {
     position: relative;
     flex: none;
@@ -177,7 +177,7 @@
   .switch:checked::before { transform: translateX(12px); }
   .switch:disabled { opacity: 0.4; }
 
-  /* Figma's number field, with its unit inside. */
+  /* Figma's number field, with its unit inside */
   .field {
     display: flex;
     flex: none;
@@ -208,13 +208,13 @@
   }
   .field input::-webkit-inner-spin-button, .field input::-webkit-outer-spin-button { -webkit-appearance: none; }
   .row.disabled .field { opacity: 0.4; border-color: transparent; }
-  /* Fields that scrub (`scrub` below): the cursor says so until you type. */
+  /* Fields that scrub (`scrub` below): the cursor says so until you type */
   .scrub, .scrub input { cursor: ew-resize; }
   .scrub:focus-within, .scrub:focus-within input { cursor: text; }
   .row.disabled .scrub, .row.disabled .scrub input { cursor: default; }
   :root.scrubbing, :root.scrubbing * { cursor: ew-resize !important; }
 
-  /* The interface scale: a percentage between − and + buttons. */
+  /* The interface scale: a percentage between − and + buttons */
   .stepper { display: flex; flex: none; align-items: center; gap: 4px; }
   .stepper .field { width: 64px; }
   .stepper .field input { text-align: right; padding-right: 2px; }
@@ -233,7 +233,7 @@
   .icon-button:active:not(:disabled) { background: var(--bg-secondary); }
   .icon-button:disabled { color: var(--text-tertiary); }
 
-  /* Figma's secondary button. */
+  /* Figma's secondary button */
   .button {
     flex: none;
     height: 24px;
@@ -249,7 +249,7 @@
   .button:active { background: var(--bg-secondary); }
 
   /* Color scheme: a card per scheme, each with a small Figma in its colors
-     (the chosen themes', `--s-*` from `ligmaSwatch`). */
+     (the chosen themes', `--s-*` from `ligmaSwatch`) */
   .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 4px 16px 8px; }
   .card {
     display: flex;
@@ -284,12 +284,12 @@
   .mock .line.picked { background: var(--s-soft); }
   .mock .canvas { margin: 6px; border-radius: 2px; background: var(--s-panel); }
   .mock .button { height: 6px; margin-top: auto; border: 0; border-radius: 2px; background: var(--s-accent); }
-  /* System: light on the left, dark on the right. */
+  /* System: light on the left, dark on the right */
   .mock.dark-half { clip-path: inset(0 0 0 50%); }
   .card .name { text-align: center; }
 
   /* Themes: two swatches each, the theme in light and in dark. The one
-     picked for each mode wears a ring and its mode's badge. */
+     picked for each mode wears a ring and its mode's badge */
   .themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 4px 16px 8px; }
   .theme {
     display: flex;
@@ -304,7 +304,7 @@
   .theme.picked .name { color: var(--text); font-weight: 550; }
   .orbs { display: flex; gap: 12px; }
   /* A mesh gradient: `ligmaMesh`'s blobs, blurred together, drifting
-     while hovered. */
+     while hovered */
   .orb {
     position: relative;
     width: 44px;
@@ -350,7 +350,7 @@
   .orb[aria-checked="true"] .badge { display: grid; }
   .themes-hint { padding: 0 16px 4px; }
 
-  /* Imported plugins. */
+  /* Imported plugins */
   .plugin .label { overflow: hidden; }
   .plugin .name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .plugin .path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -417,7 +417,7 @@
       <h2>Interface</h2>
       <div class="row">
         <span class="label">Interface scale
-          <div class="hint">Zooms Figma, the tab bar, menus, prompts and this window together, like a browser's zoom.</div>
+          <div class="hint">Zooms Figma, the tab bar, menus, prompts and this window together, like a browser's zoom</div>
         </span>
         <span class="stepper">
           <button class="icon-button" id="scale-down" title="Smaller" aria-label="Smaller">
@@ -461,7 +461,7 @@
       </label>
       <label class="row">
         <span class="label">Preview tabs on hover
-          <div class="hint">Shows a tab's name and how it last looked when you point at it.</div>
+          <div class="hint">Shows a tab's name and how it last looked when you point at it</div>
         </span>
         <input type="checkbox" class="switch" id="previews">
       </label>
@@ -490,7 +490,7 @@
       </label>
       <label class="row nested" id="snapshots-row">
         <span class="label">Show last image while a tab reloads
-          <div class="hint">In place of Figma's loading screen, after a file tab wakes from sleep.</div>
+          <div class="hint">In place of Figma's loading screen, after a file tab wakes from sleep</div>
         </span>
         <input type="checkbox" class="switch" id="snapshots">
       </label>
@@ -502,13 +502,13 @@
       <h2>Rich Presence</h2>
       <label class="row">
         <span class="label">Show what you're working on
-          <div class="hint">Shows the open file, where you are in it and the selected tool on your Discord profile.</div>
+          <div class="hint">Shows the open file, where you are in it and the selected tool on your Discord profile</div>
         </span>
         <input type="checkbox" class="switch" id="discord">
       </label>
       <label class="row nested" id="discord-file-row">
         <span class="label">Show file name
-          <div class="hint">When off, Discord doesn't name the file.</div>
+          <div class="hint">When off, Discord doesn't name the file</div>
         </span>
         <input type="checkbox" class="switch" id="discord-file">
       </label>
@@ -549,7 +549,7 @@
       </label>
       <label class="row nested" id="discord-tool-row">
         <span class="label">Show selected tool
-          <div class="hint">The tool's icon, named when hovered.</div>
+          <div class="hint">The tool's icon, named when hovered</div>
         </span>
         <input type="checkbox" class="switch" id="discord-tool">
       </label>
@@ -585,7 +585,7 @@
       <h2>Actions menu</h2>
       <label class="row">
         <span class="label">Open on Plugins &amp; widgets
-          <div class="hint">Figma's Actions menu opens on its Plugins &amp; widgets tab rather than All.</div>
+          <div class="hint">Figma's Actions menu opens on its Plugins &amp; widgets tab rather than All</div>
         </span>
         <input type="checkbox" class="switch" id="actions-plugins-tab">
       </label>
@@ -603,7 +603,7 @@
     <section>
       <h2>Imported plugins</h2>
       <div id="plugin-list"></div>
-      <div class="row empty" id="no-plugins">None yet.</div>
+      <div class="row empty" id="no-plugins">None yet</div>
     </section>
   </div>
 
@@ -612,7 +612,7 @@
       <h2>Updates</h2>
       <div class="row">
         <span class="label"><span id="version">Ligma</span>
-          <div class="hint">Ligma checks for updates on launch and every 6 hours.</div>
+          <div class="hint">Ligma checks for updates on launch and every 6 hours</div>
         </span>
         <button class="button" id="check-updates">Check for Updates</button>
       </div>
@@ -634,7 +634,7 @@
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
   const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "classic-home"];
-  // Where you are in the file, per product: switch and setting.
+  // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
     "discord-figjam-page": "discordShowFigjamPage",
@@ -644,23 +644,23 @@
     "discord-webpage": "discordShowWebpage",
   };
   // Interface scales − and + step through, like a browser's zoom levels
-  // (SCALES in settings.rs).
+  // (SCALES in settings.rs)
   const SCALES = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
   const macos = navigator.userAgent.includes("Mac");
   document.documentElement.classList.toggle("macos", macos);
-  // Snapshots only exist on macOS.
+  // Snapshots only exist on macOS
   $("snapshots-row").hidden = !macos;
 
   const close = () => invoke("plugin:window|close", { label: "settings" });
   $("close").addEventListener("click", close);
   addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    // Esc leaves a number field first, then closes.
+    // Esc leaves a number field first, then closes
     if (document.activeElement?.matches("input[type=number]")) document.activeElement.blur();
     else close();
   });
 
-  // The sidebar's pages. The last one shown opens again next time.
+  // The sidebar's pages. The last one shown opens again next time
   const tabs = [...document.querySelectorAll('[role="tab"]')];
   const showPage = (tab, focus = false) => {
     for (const other of tabs) {
@@ -683,7 +683,7 @@
   });
   showPage($(localStorage.getItem("settingsPage")) ?? tabs[0]);
 
-  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables.
+  // Figma theme colors (see THEME_JS in tabs.rs) onto the variables
   const THEME_VARS = {
     "--bg": "bg",
     "--bg-secondary": "bgSecondary",
@@ -694,7 +694,7 @@
     "--text-tertiary": "textTertiary",
     "--brand": "brand",
   };
-  // Relative luminance of a CSS color, 0 to 1, or null.
+  // Relative luminance of a CSS color, 0 to 1, or null
   const luminance = (color) => {
     const probe = document.createElement("canvas").getContext("2d");
     probe.fillStyle = color;
@@ -716,11 +716,11 @@
     }
   };
 
-  // Color scheme and themes (src-tauri/src/appearance.rs, dist/themes.js).
+  // Color scheme and themes (src-tauri/src/appearance.rs, dist/themes.js)
   const SUN = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1 1M11.6 11.6l1 1M3.4 12.6l1-1M11.6 4.4l1-1"/></svg>';
   const MOON = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 1 1 6.5 3a4.5 4.5 0 0 0 6.5 6.5z"/></svg>';
   const SCHEMES = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
-  // A small Figma window in theme `id`'s colors for `mode`.
+  // A small Figma window in theme `id`'s colors for `mode`
   const mock = (id, mode) => {
     const el = document.createElement("div");
     el.className = "mock";
@@ -732,7 +732,7 @@
     return el;
   };
   function showAppearance() {
-    // The controls are made again; keep focus on the one that had it.
+    // The controls are made again; keep focus on the one that had it
     const focused = document.activeElement?.closest("#appearance") && document.activeElement.getAttribute("aria-label");
     $("schemes").replaceChildren(...SCHEMES.map(([scheme, name]) => {
       const card = node("button", { className: "card" });
@@ -773,7 +773,7 @@
 
   let settings;
   // Number fields keep their last value while switched off, so switching
-  // back on restores it.
+  // back on restores it
   let sleepAfter = 30;
   let maxHidden = 3;
 
@@ -805,7 +805,7 @@
     $("actions-plugins-tab").checked = settings.actionsPluginsTab;
     $("layer-previews").checked = settings.layerPreviews;
     $("classic-home").checked = settings.classicHome;
-    // Without sleep nothing is unloaded, so the other memory options do nothing.
+    // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
       ["limit-row", sleeping],
@@ -814,7 +814,7 @@
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
-      // Where you are shows under the file's name, so not without it.
+      // Where you are shows under the file's name, so not without it
       ["discord-hide-files-row", settings.discordRichPresence && settings.discordShowFile],
       ["discord-where-row", settings.discordRichPresence && settings.discordShowFile],
       ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence && settings.discordShowFile]),
@@ -830,7 +830,7 @@
     return Number.isFinite(value) && value >= min ? value : fallback;
   }
 
-  // A typed-in scale, kept within the presets' range.
+  // A typed-in scale, kept within the presets' range
   function typedScale() {
     const value = Math.round(Number($("scale").value));
     if (!$("scale").value || !Number.isFinite(value)) return settings.interfaceScale;
@@ -869,7 +869,7 @@
 
   // Number fields scrub like Figma's: drag one right to raise its value
   // and left to lower it, with Shift in steps of 10. A click without a
-  // drag focuses it for typing, and in a focused field a drag selects text.
+  // drag focuses it for typing, and in a focused field a drag selects text
   const SCRUB_PX = 2;
   const scrub = (input) => (down) => {
     if (down.button !== 0 || input.disabled || document.activeElement === input) return;
@@ -886,7 +886,7 @@
       travel += (e.screenX - lastX) * (e.shiftKey ? 10 : 1);
       lastX = e.screenX;
       const value = Math.max(min, start + Math.trunc(travel / SCRUB_PX));
-      // No travel banked past the minimum, so turning back moves at once.
+      // No travel banked past the minimum, so turning back moves at once
       travel = Math.max(travel, (min - start) * SCRUB_PX);
       input.value = value;
     };
@@ -896,7 +896,7 @@
       removeEventListener("keydown", cancel, true);
       document.documentElement.classList.remove("scrubbing");
     };
-    // Esc puts the value back, rather than closing the window.
+    // Esc puts the value back, rather than closing the window
     const cancel = (e) => {
       if (e.key !== "Escape") return;
       e.stopImmediatePropagation();
@@ -912,7 +912,7 @@
         input.select();
         return;
       }
-      // The click that ends a drag would focus the field through its label.
+      // The click that ends a drag would focus the field through its label
       const swallow = (e) => e.preventDefault();
       addEventListener("click", swallow, { capture: true, once: true });
       setTimeout(() => removeEventListener("click", swallow, true));
@@ -924,7 +924,7 @@
   };
   for (const input of document.querySelectorAll(".scrub input")) input.closest(".scrub").addEventListener("mousedown", scrub(input));
 
-  // − and + go to the next preset down or up, also from a typed-in value.
+  // − and + go to the next preset down or up, also from a typed-in value
   $("scale-down").addEventListener("click", () => {
     const current = settings.interfaceScale;
     save(SCALES.findLast((scale) => scale < current) ?? SCALES[0]);
@@ -940,7 +940,7 @@
     if (version) $("version").textContent = `Ligma ${version}`;
   });
 
-  // Development plugins (src-tauri/src/plugins.rs).
+  // Development plugins (src-tauri/src/plugins.rs)
   const ICON = {
     folder: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 12.5v-8a1 1 0 0 1 1-1h3l1.5 1.5h4.5a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/></svg>',
     remove: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.5 8.5h6l.5-8.5"/></svg>',
@@ -994,7 +994,7 @@
       pluginError(String(error));
     }
   });
-  // A plugin rebuilt meanwhile may have lost or gained a problem.
+  // A plugin rebuilt meanwhile may have lost or gained a problem
   addEventListener("focus", showPlugins);
   showPlugins();
 

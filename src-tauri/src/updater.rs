@@ -10,7 +10,7 @@
 //! version. Each step is logged. On Windows, Ligma winds down (hiding its
 //! windows) before it starts the installer; if Windows then won't start it
 //! (an antivirus or Smart App Control can refuse an unsigned installer),
-//! Ligma restarts itself to say so rather than staying open unseen.
+//! Ligma restarts itself to say so rather than staying open unseen
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -26,33 +26,33 @@ const RELEASES: &str = "https://github.com/trelakor/ligma/releases/latest";
 
 /// Why installing failed, kept in the config folder to say so on the next
 /// launch: on quit, or when Ligma restarted after Windows wouldn't start the
-/// installer.
+/// installer
 const FAILED_FILE: &str = "update-failed.txt";
 
 /// Ligma has wound down for the installer (`on_before_exit`): its windows
 /// are hidden and Tauri can't be used any more, so a failure from here on
-/// is shown after a restart.
+/// is shown after a restart
 static WOUND_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Why the last update failed to install, kept by `start` for
-/// `offer_last_failure` to show once the main window is up.
+/// `offer_last_failure` to show once the main window is up
 static LAST_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
-/// An update that's downloaded but not installed yet, with its package.
+/// An update that's downloaded but not installed yet, with its package
 #[derive(Default)]
 pub struct Pending(Mutex<Option<(Update, Vec<u8>)>>);
 
 /// Held while checking, so a manual check waits for a background one
-/// instead of downloading the same update twice.
+/// instead of downloading the same update twice
 static CHECKING: Mutex<()> = Mutex::new(());
 
 pub fn start(app: &AppHandle) {
     app.manage(Pending::default());
-    // Debug builds would replace themselves with the release build.
+    // Debug builds would replace themselves with the release build
     if cfg!(debug_assertions) {
         return;
     }
-    // After a failure, don't offer the same update again straight away.
+    // After a failure, don't offer the same update again straight away
     let mut skip_check = false;
     if let Some(error) = take_failure(app) {
         *LAST_FAILURE.lock().unwrap() = Some(error);
@@ -60,9 +60,9 @@ pub fn start(app: &AppHandle) {
     }
     let app = app.clone();
     std::thread::spawn(move || loop {
-        // Once one is downloaded, wait for it to be installed.
+        // Once one is downloaded, wait for it to be installed
         if !std::mem::take(&mut skip_check) && app.state::<Pending>().0.lock().unwrap().is_none() {
-            // Offline or no release reachable: try again next time.
+            // Offline or no release reachable: try again next time
             match tauri::async_runtime::block_on(check(&app)) {
                 Ok(true) => ask_to_restart(&app),
                 Ok(false) => {}
@@ -74,26 +74,26 @@ pub fn start(app: &AppHandle) {
 }
 
 /// Says why the last update failed to install, if it did. Call once the
-/// main window is up, so the prompt is centered over it.
+/// main window is up, so the prompt is centered over it
 pub fn offer_last_failure(app: &AppHandle) {
     if let Some(error) = LAST_FAILURE.lock().unwrap().take() {
         install_failed(app, error);
     }
 }
 
-/// Checks right away, for the menu item, and says what it found.
+/// Checks right away, for the menu item, and says what it found
 pub fn check_now(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         if cfg!(debug_assertions) {
-            tell(&app, "Updates are off in debug builds.".into());
+            tell(&app, "Updates are off in debug builds".into());
             return;
         }
         match tauri::async_runtime::block_on(check(&app)) {
             Ok(true) => ask_to_restart(&app),
             Ok(false) => {
                 let version = app.package_info().version.to_string();
-                tell(&app, format!("Ligma {version} is the latest version."));
+                tell(&app, format!("Ligma {version} is the latest version"));
             }
             Err(error) => {
                 let error = format!("Couldn't check for updates: {error}");
@@ -104,14 +104,14 @@ pub fn check_now(app: &AppHandle) {
     });
 }
 
-/// Downloads a newer version, if there is one. True once one is pending.
+/// Downloads a newer version, if there is one. True once one is pending
 async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<bool> {
     let _checking = CHECKING.lock().unwrap();
     if app.state::<Pending>().0.lock().unwrap().is_some() {
         return Ok(true);
     }
     // On Windows the installer quits Ligma without the usual exit, so this
-    // does its cleanup first.
+    // does its cleanup first
     let handle = app.clone();
     let updater = app
         .updater_builder()
@@ -153,14 +153,14 @@ fn ask_to_restart(app: &AppHandle) {
                 return;
             }
             // On Windows a successful install quits Ligma, and the installer
-            // starts the new version.
+            // starts the new version
             match install(&handle) {
                 Ok(()) => relaunch(&handle),
                 Err(error) => {
                     let error = format!("Couldn't install Ligma {version}: {error}");
                     if WOUND_DOWN.load(Ordering::SeqCst) {
                         // The windows are hidden and Tauri is shut down:
-                        // say so from a fresh start instead.
+                        // say so from a fresh start instead
                         log::error!("{error}");
                         remember_failure(&handle, &error);
                         handle.state::<Pending>().0.lock().unwrap().take();
@@ -177,7 +177,7 @@ fn ask_to_restart(app: &AppHandle) {
 /// app again with `open -n` while this one still runs, and the Dock gives
 /// the new one a tile of its own beside the one kept in the Dock. Instead a
 /// detached shell waits for Ligma to quit, then opens the app the usual
-/// way, into its Dock tile.
+/// way, into its Dock tile
 fn relaunch(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     if let Some(bundle) = bundle_path() {
@@ -207,7 +207,7 @@ fn relaunch(app: &AppHandle) {
     app.restart();
 }
 
-/// The `.app` bundle Ligma runs from, if it runs from one.
+/// The `.app` bundle Ligma runs from, if it runs from one
 #[cfg(target_os = "macos")]
 fn bundle_path() -> Option<std::path::PathBuf> {
     let exe = tauri::utils::platform::current_exe().ok()?;
@@ -219,7 +219,7 @@ fn bundle_path() -> Option<std::path::PathBuf> {
 }
 
 /// Says why an update couldn't be installed, and offers its download page
-/// or a report.
+/// or a report
 fn install_failed(app: &AppHandle, error: String) {
     log::error!("{error}");
     let handle = app.clone();
@@ -245,7 +245,7 @@ fn tell(app: &AppHandle, message: String) {
 /// Installs the downloaded update, if there is one. On macOS this replaces
 /// the app bundle; on Windows it runs the installer, which quits Ligma, so it
 /// only returns if that failed. A failed update stays pending, so Check for
-/// Updates… offers it again.
+/// Updates… offers it again
 fn install(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
     let pending = app.state::<Pending>().0.lock().unwrap().take();
     let Some((update, bytes)) = pending else {
@@ -260,7 +260,7 @@ fn install(app: &AppHandle) -> tauri_plugin_updater::Result<()> {
 }
 
 /// Installs an update the user chose to install later. Ligma is quitting
-/// and can't show a dialog, so a failure is shown on the next launch.
+/// and can't show a dialog, so a failure is shown on the next launch
 pub fn install_on_quit(app: &AppHandle) {
     let version = match app.state::<Pending>().0.lock().unwrap().as_ref() {
         Some((update, _)) => update.version.clone(),
@@ -273,7 +273,7 @@ pub fn install_on_quit(app: &AppHandle) {
     }
 }
 
-/// Keeps `message` in `FAILED_FILE`, for the next launch to show.
+/// Keeps `message` in `FAILED_FILE`, for the next launch to show
 fn remember_failure(app: &AppHandle, message: &str) {
     if let Ok(dir) = app.path().app_config_dir() {
         let _ = std::fs::create_dir_all(&dir);
@@ -281,12 +281,12 @@ fn remember_failure(app: &AppHandle, message: &str) {
     }
 }
 
-/// Why an update failed to install, if one did since the last launch.
+/// Why an update failed to install, if one did since the last launch
 fn take_failure(app: &AppHandle) -> Option<String> {
     let path = app.path().app_config_dir().ok()?.join(FAILED_FILE);
     let error = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(path);
-    // The update that failed may be the version running now, installed by hand.
+    // The update that failed may be the version running now, installed by hand
     let version = app.package_info().version.to_string();
     let this_version = [" ", ":"].iter().any(|end| error.contains(&format!("Ligma {version}{end}")));
     (!this_version).then_some(error)

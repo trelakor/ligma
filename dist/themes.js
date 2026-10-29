@@ -3,10 +3,10 @@
 // (buttons, selection, focus) its accent, keeping each step's lightness, so
 // contrast stays as Figma made it. Used by the settings window for its
 // swatches and previews, and by Figma tabs, which get it through
-// src-tauri/src/appearance.rs.
+// src-tauri/src/appearance.rs
 
 const LIGMA_THEMES = [
-  // Figma's own colors. Its swatch mixes the colors of Figma's logo.
+  // Figma's own colors. Its swatch mixes the colors of Figma's logo
   { id: "figma", name: "Figma", mesh: [35, 300, 235, 155, 20] },
   { id: "grove", name: "Grove", hue: 160, accent: 155 },
   { id: "lagoon", name: "Lagoon", hue: 195, accent: 190 },
@@ -19,7 +19,7 @@ const LIGMA_THEMES = [
 ];
 
 // Figma's ramps (UI3), steps 100 to 1000. Blue differs between light and
-// dark; the accent takes its lightness and chroma, step by step.
+// dark; the accent takes its lightness and chroma, step by step
 const LIGMA_STEPS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
 const LIGMA_GREY = ["#f5f5f5", "#e6e6e6", "#d9d9d9", "#b3b3b3", "#757575", "#444444", "#383838", "#2c2c2c", "#1e1e1e", "#111111"];
 const LIGMA_PALE_BLUE = ["#f1f5f8", "#e3ecf2", "#d2dae4", "#afbccf", "#667799", "#536383", "#4a5878", "#394360", "#282e3e", "#14181f"];
@@ -29,7 +29,7 @@ const LIGMA_BLUE = {
 };
 // How far the greys lean toward the theme's hue: OKLCH chroma at mid grey,
 // and for light greys and white in light mode, a share of the most chroma
-// the hue can have there, so every hue shows about as much.
+// the hue can have there, so every hue shows about as much
 const LIGMA_TINT = { light: 0.05, dark: 0.024, lightShare: 0.9, lightMax: 0.034 };
 
 const ligmaOklch = (hex) => {
@@ -43,7 +43,7 @@ const ligmaOklch = (hex) => {
   return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, Math.hypot(a, bb)];
 };
 
-// Linear sRGB of an OKLCH color; channels outside 0 to 1 are out of gamut.
+// Linear sRGB of an OKLCH color; channels outside 0 to 1 are out of gamut
 const ligmaRgb = (L, C, H) => {
   const a = C * Math.cos((H * Math.PI) / 180);
   const b = C * Math.sin((H * Math.PI) / 180);
@@ -58,7 +58,7 @@ const ligmaRgb = (L, C, H) => {
 };
 const ligmaInGamut = (L, C, H) => ligmaRgb(L, C, H).every((x) => x >= 0 && x <= 1);
 
-// The most chroma hue `H` can have at lightness `L` in sRGB.
+// The most chroma hue `H` can have at lightness `L` in sRGB
 const ligmaMaxChroma = (L, H) => {
   let [low, high] = [0, 0.4];
   for (let i = 0; i < 20; i++) {
@@ -69,7 +69,7 @@ const ligmaMaxChroma = (L, H) => {
   return low;
 };
 
-// `#rrggbb` for an OKLCH color, its chroma lowered until it fits in sRGB.
+// `#rrggbb` for an OKLCH color, its chroma lowered until it fits in sRGB
 const ligmaHex = (L, C, H) => {
   const rgb = (c) => ligmaRgb(L, c, H);
   let channels = rgb(C);
@@ -82,14 +82,14 @@ const ligmaHex = (L, C, H) => {
  * The CSS variables theme `id` sets in `mode` ("light" or "dark"): Figma's
  * greys, tinted, and the accent ramps `--ligma-accent-<step>` and
  * `--ligma-pale-accent-<step>`, which stand in for each editor's brand
- * ramps. None for Figma's own colors.
+ * ramps. None for Figma's own colors
  */
 function ligmaPalette(id, mode) {
   const theme = LIGMA_THEMES.find((theme) => theme.id === id);
   if (theme?.hue == null) return {};
   const vars = {};
   // Most tint mid-ramp, less at the near-white and near-black ends. Light
-  // mode's backgrounds and borders, the lightest greys, get a set share.
+  // mode's backgrounds and borders, the lightest greys, get a set share
   const light = (L) => Math.min(LIGMA_TINT.lightMax, LIGMA_TINT.lightShare * ligmaMaxChroma(L, theme.hue));
   const tint = (L) => {
     const curve = LIGMA_TINT[mode] * Math.sqrt(Math.sin(Math.PI * L));
@@ -98,7 +98,7 @@ function ligmaPalette(id, mode) {
   LIGMA_STEPS.forEach((step, i) => {
     let [L] = ligmaOklch(LIGMA_GREY[i]);
     // A tinted white is a little darker than Figma's, so are these, to
-    // stay as far apart.
+    // stay as far apart
     if (mode === "light" && L > 0.85) L -= 0.024;
     vars[`--ramp-grey-${step}`] = ligmaHex(L, tint(L), theme.hue);
     for (const [name, ramp] of [["accent", LIGMA_BLUE[mode]], ["pale-accent", LIGMA_PALE_BLUE]]) {
@@ -107,12 +107,12 @@ function ligmaPalette(id, mode) {
     }
   });
   // The light theme's background is white; tint it too. White stays white
-  // in dark mode, where it's the text.
+  // in dark mode, where it's the text
   if (mode === "light") vars["--ramp-white-1000"] = ligmaHex(0.966, light(0.966), theme.hue);
   return vars;
 }
 
-/** A few of the colors theme `id` gives Figma in `mode`, for previews. */
+/** A few of the colors theme `id` gives Figma in `mode`, for previews */
 function ligmaSwatch(id, mode) {
   const vars = ligmaPalette(id, mode);
   const grey = (step) => vars[`--ramp-grey-${step}`] ?? LIGMA_GREY[LIGMA_STEPS.indexOf(step)];
@@ -124,12 +124,12 @@ function ligmaSwatch(id, mode) {
 
 /**
  * A mesh gradient in theme `id`'s colors for `mode`, as a CSS background:
- * hard-edged blobs on a ground, to be blurred together (see settings.html).
+ * hard-edged blobs on a ground, to be blurred together (see settings.html)
  */
 function ligmaMesh(id, mode) {
   const theme = LIGMA_THEMES.find((theme) => theme.id === id) ?? LIGMA_THEMES[0];
   const hues = theme.mesh ?? [0, 40, -35, 85, -65].map((turn) => theme.accent + turn);
-  // Lightness and chroma of each blob, where it sits and its radius.
+  // Lightness and chroma of each blob, where it sits and its radius
   const blobs = mode === "light"
     ? [[0.72, 0.22, "22% 24%", 34], [0.9, 0.15, "80% 18%", 30], [0.62, 0.24, "78% 80%", 36], [0.86, 0.17, "20% 82%", 28], [0.8, 0.2, "52% 52%", 18]]
     : [[0.72, 0.25, "22% 24%", 34], [0.58, 0.25, "80% 18%", 30], [0.4, 0.22, "78% 80%", 36], [0.82, 0.2, "20% 82%", 28], [0.6, 0.26, "52% 52%", 18]];

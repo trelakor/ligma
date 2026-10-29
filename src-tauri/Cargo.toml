@@ -18,40 +18,40 @@ discord-rich-presence = "1.1"
 tauri-plugin-updater = "2"
 tauri-plugin-clipboard-manager = "2"
 # On Windows a figma:// link starts a second Ligma, which hands it to the
-# running one (src/figma_scheme.rs).
+# running one (src/figma_scheme.rs)
 tauri-plugin-single-instance = "2"
 # Native save and folder pickers, synchronous as downloads need in
-# src/downloads.rs. Prompts are Ligma's own (src/prompt.rs).
+# src/downloads.rs. Prompts are Ligma's own (src/prompt.rs)
 rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
-# The updater's zip, to unpack multi-image exports in src/downloads.rs.
+# The updater's zip, to unpack multi-image exports in src/downloads.rs
 zip = { version = "4", default-features = false, features = ["deflate"] }
-# ligma.log, for problem reports in src/report.rs.
+# ligma.log, for problem reports in src/report.rs
 tauri-plugin-log = "2"
 log = "0.4"
 
 # Same versions Tauri's WebView2 backend uses, for the memory APIs and tab
-# shortcuts in src/webview2.rs.
+# shortcuts in src/webview2.rs
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
 windows-core = "0.62"
 # GetKeyState for the tab shortcuts and the stream tab previews are
-# captured into, in src/webview2.rs.
+# captured into, in src/webview2.rs
 windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage"] }
-# Tab preview images as `data:` URLs (src/webview2.rs).
+# Tab preview images as `data:` URLs (src/webview2.rs)
 base64 = "0.22"
-# figma:// registration in src/figma_scheme.rs.
+# figma:// registration in src/figma_scheme.rs
 windows-registry = "0.6"
 
 # libc for the memory pressure level in src/pressure.rs; objc2 and block2,
 # the same versions wry uses, for the AppKit and WebKit calls in
-# src/titlebar.rs and src/wkwebview.rs.
+# src/titlebar.rs and src/wkwebview.rs
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 objc2 = { version = "0.6", features = ["exception"] }
 block2 = "0.6"
 
 # Small, fast release binary. Thin LTO and the default codegen units keep
-# release builds (and CI) quick for a slightly larger binary than full LTO.
+# release builds (and CI) quick for a slightly larger binary than full LTO
 [profile.release]
 lto = "thin"
 opt-level = "s"

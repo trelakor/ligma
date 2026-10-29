@@ -1,10 +1,10 @@
 //! Connection to the Discord client's IPC socket (a named pipe on
 //! Windows). `discord-rich-presence` only writes to it, but invites need
 //! Discord's events too (`ACTIVITY_JOIN`, `ACTIVITY_JOIN_REQUEST`), read
-//! here without blocking so one thread can both send and receive.
+//! here without blocking so one thread can both send and receive
 //!
 //! Each frame is an opcode and a length, both little-endian u32, then that
-//! many bytes of JSON.
+//! many bytes of JSON
 
 use std::io::{self, Read, Write};
 
@@ -49,7 +49,7 @@ fn nonce() -> String {
 }
 
 impl Ipc {
-    /// Connects as application `client_id` and waits for Discord's READY.
+    /// Connects as application `client_id` and waits for Discord's READY
     pub fn connect(client_id: &str) -> io::Result<Self> {
         let socket = (0..10)
             .find_map(|i| open(i).ok())
@@ -71,17 +71,17 @@ impl Ipc {
         self.socket.write_all(&frame)
     }
 
-    /// Sends RPC command `cmd`. Its response arrives later from `poll`.
+    /// Sends RPC command `cmd`. Its response arrives later from `poll`
     pub fn command(&mut self, cmd: &str, args: Value) -> io::Result<()> {
         self.send(FRAME, &json!({ "cmd": cmd, "args": args, "nonce": nonce() }))
     }
 
-    /// Asks Discord to send event `evt`.
+    /// Asks Discord to send event `evt`
     pub fn subscribe(&mut self, evt: &str) -> io::Result<()> {
         self.send(FRAME, &json!({ "cmd": "SUBSCRIBE", "evt": evt, "nonce": nonce() }))
     }
 
-    /// Next message from Discord, if one has arrived. Answers pings itself.
+    /// Next message from Discord, if one has arrived. Answers pings itself
     pub fn poll(&mut self) -> io::Result<Option<Value>> {
         while let Some(header) = self.try_header()? {
             match self.read_body(header)? {
@@ -109,7 +109,7 @@ impl Ipc {
     }
 
     /// The next frame's header, if one has arrived. Discord writes a frame
-    /// in one go, so its body follows right away.
+    /// in one go, so its body follows right away
     #[cfg(windows)]
     fn try_header(&mut self) -> io::Result<Option<[u8; 8]>> {
         use std::os::windows::io::AsRawHandle;
