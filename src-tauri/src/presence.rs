@@ -11,7 +11,8 @@
 //! With invites on (`discordInvites`), the open file is also a Discord
 //! party: one per file, sized by the people Figma shows in it. Friends can
 //! then be invited from Discord's + menu, or ask to join from the user's
-//! profile (Ligma asks the user first). Joining starts Ligma through the
+//! profile (Ligma asks the user first, unless `discordJoinRequests` is
+//! off, which leaves requests to Discord). Joining starts Ligma through the
 //! launch command `register_launch` leaves for Discord, and Discord hands
 //! the party's secret, `<editor>/<file key>`, to `ACTIVITY_JOIN`. Ligma
 //! opens that file, and Figma shows it to whoever has access
@@ -535,6 +536,9 @@ fn on_event(app: &AppHandle, message: &Value, file: Option<&str>) {
         }
         // A friend asked to join the user's file
         Some("ACTIVITY_JOIN_REQUEST") => {
+            if !app.state::<Presence>().settings.lock().unwrap().discord_join_requests {
+                return;
+            }
             let user = &data["user"];
             let Some(id) = user["id"].as_str() else {
                 return;

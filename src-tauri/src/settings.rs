@@ -67,6 +67,9 @@ pub struct Settings {
     /// in a Discord chat, or accept when they ask to join, and it opens in
     /// their Ligma if they have access. Shows how many are in the file
     pub discord_invites: bool,
+    /// Ask in Ligma when a friend asks to join (only with
+    /// `discord_invites`). Otherwise requests are left to Discord
+    pub discord_join_requests: bool,
     /// Reopen the last session's tabs on launch, asleep until selected
     pub restore_tabs: bool,
     /// Show a tab's last image and name under it while it's hovered
@@ -107,6 +110,7 @@ impl Default for Settings {
             discord_show_asset: true,
             discord_show_webpage: true,
             discord_invites: false,
+            discord_join_requests: true,
             restore_tabs: false,
             tab_previews: true,
             rail_plugins: true,
