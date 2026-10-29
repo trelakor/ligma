@@ -400,7 +400,7 @@ const PAGE_JS: &str = r##"(() => {
       queued = false;
       decorate();
     });
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  }).observe(document, { childList: true, subtree: true });
 
   // From Ligma: a pick from the menu, and the setting when it changes
   window.__ligmaImageAdjustments = {
