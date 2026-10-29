@@ -1,17 +1,23 @@
 //! Copy as code without Dev Mode (Settings > Features > Code): Figma's
 //! right-click menu, under Copy/Paste as > Copy as code, offers CSS, CSS
 //! (all layers), iOS and Android on every plan, then an upsell for Dev
-//! Mode's Tailwind and the rest. In its place go Tailwind, the selected
-//! layers' classes, and Tailwind (all layers), them and everything visible
-//! in them as HTML. With Dev Mode there's no upsell and nothing changes. On
-//! by default
+//! Mode's Tailwind, React and the rest. In its place go Tailwind, the
+//! selected layers' classes; Tailwind (all layers), them and everything
+//! visible in them as HTML; and React, a component for each with Tailwind
+//! classes. With Dev Mode there's no upsell and nothing changes. On by
+//! default
+//!
+//! The items are Figma's own menu items, so they look and work like the
+//! rest, keyboard included: `PAGE_JS` rewrites the part of Figma's context
+//! menu module that adds the upsell as it loads (see `modules.rs`), so
+//! only in pages loaded with the setting on. Turning it off applies right
+//! away; turning it on applies to files opened after
 //!
 //! The classes are made from the CSS Dev Mode shows, read through Figma's
 //! console plugin API, `window.figma`, with `getCSSAsync`. They use
 //! Tailwind's spacing scale and named sizes where they fit, and arbitrary
 //! values otherwise. Figma only offers that API in files that can be
-//! edited, so view-only files keep the upsell. The submenu is found by its
-//! items' test ids and the upsell's class name, as seen on 2026-10-29
+//! edited, so view-only files keep the upsell
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,11 +26,12 @@ use tauri::AppHandle;
 
 use crate::settings::Settings;
 
-/// Runs in Figma tabs. `__LIGMA_COPY_CODE__` is `{ on, rev }`: the setting
-/// when the tab was made. A page loaded later in the same tab may find a
-/// newer one in `localStorage`; the higher `rev` wins
+/// Runs in Figma tabs, after `modules::PAGE_JS`. `__LIGMA_COPY_CODE__` is
+/// `{ on, rev }`: the setting when the tab was made. A page loaded later in
+/// the same tab may find a newer one in `localStorage`; the higher `rev`
+/// wins
 const PAGE_JS: &str = r##"(() => {
-  if (location.hostname !== "www.figma.com" || window.top !== window) return;
+  if (location.hostname !== "www.figma.com" || window.top !== window || !window.__ligmaModules) return;
   const KEY = "ligma-copy-code";
   let state = __LIGMA_COPY_CODE__;
   try {
@@ -201,44 +208,73 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
   const classesOf = (css) => css.flatMap(([property, value]) => tailwind(property, value)).join(" ");
-  const ENTITIES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
-  const escapeText = (text) => text.replace(/[&<>]/g, (char) => ENTITIES[char]);
+  const ENTITIES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "{": '{"{"}', "}": '{"}"}' };
   const escapeAttribute = (text) => text.replace(/[&"]/g, (char) => ENTITIES[char]);
+  // Text content, its line breaks kept, with JSX's braces escaped too
+  const escapeText = (text, jsx) =>
+    text
+      .replace(jsx ? /[&<>{}]/g : /[&<>]/g, (char) => ENTITIES[char])
+      .replace(/\r?\n|\u2028/g, jsx ? "<br />" : "<br>");
 
   // The selected layers' classes, under their names when there are several
-  const selection = async (nodes) => {
+  const classes = async (nodes) => {
     const layers = (await Promise.all(nodes.map(async (node) => ({ name: node.name, css: await cssOf(node) })))).filter((layer) => layer.css);
     return layers
       .map(({ name, css }) => (layers.length > 1 ? `/* ${name.replace(/\*\//g, "* /")} */\n${classesOf(css)}` : classesOf(css)))
       .join("\n\n");
   };
-  // The selected layers and everything visible in them as HTML: text
+  // A layer and everything visible in it as HTML, or JSX with `jsx`: text
   // layers as `<p>` with their text, the rest as `<div>`
-  const markup = async (node, depth = 0) => {
+  const markup = async (node, depth, jsx) => {
     const css = await cssOf(node);
     if (!css) return "";
     const indent = "  ".repeat(depth);
-    const open = `${indent}<${node.type === "TEXT" ? "p" : "div"} class="${escapeAttribute(classesOf(css))}">`;
-    if (node.type === "TEXT") return `${open}${escapeText(node.characters)}</p>`;
+    const tag = node.type === "TEXT" ? "p" : "div";
+    const open = `${indent}<${tag} ${jsx ? "className" : "class"}="${escapeAttribute(classesOf(css))}"`;
+    if (node.type === "TEXT") return `${open}>${escapeText(node.characters, jsx)}</p>`;
     const children = "children" in node ? node.children.filter((child) => child.visible) : [];
-    const inner = (await Promise.all(children.map((child) => markup(child, depth + 1)))).filter(Boolean);
-    return inner.length ? `${open}\n${inner.join("\n")}\n${indent}</div>` : `${open}</div>`;
+    const inner = (await Promise.all(children.map((child) => markup(child, depth + 1, jsx)))).filter(Boolean);
+    if (inner.length) return `${open}>\n${inner.join("\n")}\n${indent}</${tag}>`;
+    return jsx ? `${open} />` : `${open}></${tag}>`;
+  };
+  const html = async (nodes) => (await Promise.all(nodes.map((node) => markup(node, 0, false)))).filter(Boolean).join("\n");
+  // A component for each selected layer, named after it
+  const componentName = (name, taken) => {
+    const words = name.normalize("NFKD").replace(/[^A-Za-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+    let base = words.map((word) => word[0].toUpperCase() + word.slice(1)).join("");
+    if (!/^[A-Z]/.test(base)) base = `Layer${base}`;
+    let unique = base;
+    for (let i = 2; taken.has(unique); i++) unique = `${base}${i}`;
+    taken.add(unique);
+    return unique;
+  };
+  const react = async (nodes) => {
+    const taken = new Set();
+    const components = await Promise.all(
+      nodes.map(async (node) => {
+        const body = await markup(node, 2, true);
+        return body && `export function ${componentName(node.name, taken)}() {\n  return (\n${body}\n  );\n}`;
+      }),
+    );
+    return components.filter(Boolean).join("\n\n");
   };
 
   const KINDS = {
-    tailwind: { label: "Tailwind", make: selection },
-    "tailwind-all": { label: "Tailwind (all layers)", make: async (nodes) => (await Promise.all(nodes.map((node) => markup(node)))).filter(Boolean).join("\n") },
+    tailwind: { label: "Tailwind", text: "Tailwind", make: classes },
+    "tailwind-all": { label: "Tailwind", text: "Tailwind (all layers)", make: html },
+    react: { label: "React", text: "React", make: react },
   };
-  // Started from the click, for the clipboard to accept text that's still
+  // Called from Figma's click, for the clipboard to take text that's still
   // being read. WebKit and Chromium both take a promise in a ClipboardItem
   const copy = (kind) => {
     const figma = api();
     if (!figma) return;
+    const { label, make } = KINDS[kind];
     if (!figma.currentPage.selection.length) {
       notify(figma, "Nothing selected");
       return;
     }
-    const text = KINDS[kind].make([...figma.currentPage.selection]).then((text) => {
+    const text = make([...figma.currentPage.selection]).then((text) => {
       if (!text) throw new Error("no CSS");
       return text;
     });
@@ -248,96 +284,29 @@ const PAGE_JS: &str = r##"(() => {
         : text.then((text) => navigator.clipboard.writeText(text));
     written
       .catch(() => text.then((text) => navigator.clipboard.writeText(text)))
-      .then(() => notify(figma, "Copied as Tailwind"))
-      .catch(() => notify(figma, "Couldn't copy as Tailwind"));
+      .then(() => notify(figma, `Copied as ${label}`))
+      .catch(() => notify(figma, `Couldn't copy as ${label}`));
   };
 
-  // Figma's Copy as code submenu, by its items' test ids. Without Dev Mode
-  // it ends with an upsell for Tailwind and more, after a separator
-  const OPTION = (name) => `[data-testid="dropdown-option-${name}"]`;
-  const UPSELL = '[class*="context_menus_upsells--upsellItem"]';
-  const HIDDEN = "data-ligma-code-hidden";
-
-  // An item like `like` named `name`
-  const makeItem = (like, kind) => {
-    const item = like.cloneNode(true);
-    for (const name of ["id", "data-testid", "aria-haspopup", "aria-expanded"]) item.removeAttribute(name);
-    item.dataset.ligmaCode = kind;
-    item.tabIndex = -1;
-    const name = item.querySelector('[class*="multilevel--name"]') ?? item;
-    name.textContent = KINDS[kind].label;
-    // Figma marks the item under the pointer with its active class, which
-    // ours borrow from the item that opened this submenu
-    const idle = item.className;
-    item.addEventListener("mouseenter", () => {
-      const active = document.querySelector('[role="menuitem"][class*="multilevel--optionActive"]');
-      if (active) item.className = active.className;
-    });
-    item.addEventListener("mouseleave", () => (item.className = idle));
-    return item;
-  };
-
-  const decorate = () => {
-    if (!state.on || !api()) {
-      for (const node of document.querySelectorAll("[data-ligma-code]")) node.remove();
-      for (const node of document.querySelectorAll(`[${HIDDEN}]`)) node.removeAttribute(HIDDEN);
-      return;
-    }
-    const all = document.querySelector(OPTION("CSS (all layers)"));
-    const upsell = all?.parentElement.querySelector(`:scope > [role="menuitem"]:has(${UPSELL})`);
-    if (!upsell || all.parentElement.querySelector(":scope > [data-ligma-code]")) return;
-    upsell.setAttribute(HIDDEN, "");
-    const separator = upsell.previousElementSibling;
-    if (separator?.matches('[data-testid="dropdown-separator"]')) separator.setAttribute(HIDDEN, "");
-    all.after(makeItem(all, "tailwind"), makeItem(all, "tailwind-all"));
-  };
-
-  // Figma closes a menu level on each Escape, sent to the innermost menu
-  // so it doesn't reach the canvas, which would change the selection
-  const closeMenus = (left = 4) => {
-    const menu = [...document.querySelectorAll('[role="menu"]')].at(-1);
-    if (!menu || !left) return;
-    for (const type of ["keydown", "keyup"]) {
-      menu.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true }));
-    }
-    requestAnimationFrame(() => closeMenus(left - 1));
-  };
-  // Ligma's items keep Figma's handlers out, and copy on click
-  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-    addEventListener(
-      type,
-      (event) => {
-        const item = event.target.closest?.("[data-ligma-code]");
-        if (!item) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        if (type !== "click" || event.button !== 0) return;
-        copy(item.dataset.ligmaCode);
-        closeMenus();
+  // Figma's context menu module builds Copy as code's submenu as data, as
+  // seen on 2026-10-29: `{action:"copy-as-code",children:[…,{action:
+  // "copy-as-android"},...!this.props.canAccessDevMode&&this.props.
+  // canAccessDevModeEntryPoint?[{separator:!0},{render:…}]:[]]}`, the last
+  // part the upsell. That part asks `__ligmaCopyCodeMenu` first, which
+  // answers with Ligma's items in its place, or null for Figma's own
+  const MENU = /(\{action:"copy-as-android"\}),\.\.\.(!this\.props\.canAccessDevMode&&this\.props\.canAccessDevModeEntryPoint)\?(\[[^\]]*\]):\[\]/;
+  window.__ligmaCopyCodeMenu = (upsell) =>
+    upsell && state.on && api()
+      ? [{ separator: true }, ...Object.entries(KINDS).map(([kind, { text }]) => ({ name: `ligma-copy-as-${kind}`, displayText: text, callback: () => copy(kind) }))]
+      : null;
+  if (state.on) {
+    window.__ligmaModules.patch([
+      {
+        match: (source) => MENU.test(source),
+        source: (source) => source.replace(MENU, "$1,...(window.__ligmaCopyCodeMenu?.($2)??($2?$3:[]))"),
       },
-      true,
-    );
+    ]);
   }
-
-  const style = document.createElement("style");
-  style.textContent = `[${HIDDEN}] { display: none !important; }`;
-  const mount = () => {
-    if (style.isConnected) return true;
-    const parent = document.head ?? document.documentElement;
-    parent?.append(style);
-    return !!parent;
-  };
-  if (!mount()) new MutationObserver((_, observer) => mount() && observer.disconnect()).observe(document, { childList: true });
-
-  let queued = false;
-  new MutationObserver(() => {
-    if (queued) return;
-    queued = true;
-    requestAnimationFrame(() => {
-      queued = false;
-      decorate();
-    });
-  }).observe(document, { childList: true, subtree: true });
 
   // From Ligma, when the setting changes
   window.__ligmaCopyCode = (next) => {
@@ -345,20 +314,15 @@ const PAGE_JS: &str = r##"(() => {
       localStorage.setItem(KEY, JSON.stringify(next));
     } catch {}
     state = next;
-    decorate();
   };
-  // From another tab, or while this one was frozen and missed it
-  const sync = () => {
+  // From another tab
+  addEventListener("storage", (event) => {
+    if (event.key !== KEY) return;
     try {
-      const stored = JSON.parse(localStorage.getItem(KEY));
-      if (stored?.rev > state.rev) {
-        state = stored;
-        decorate();
-      }
+      const stored = JSON.parse(event.newValue);
+      if (stored?.rev > state.rev) state = stored;
     } catch {}
-  };
-  addEventListener("storage", (event) => event.key === KEY && sync());
-  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && sync());
+  });
 })()"##;
 
 /// The setting,
