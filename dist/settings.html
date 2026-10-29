@@ -562,6 +562,12 @@
         </span>
         <input type="checkbox" class="switch" id="discord-invites">
       </label>
+      <label class="row nested" id="discord-join-requests-row">
+        <span class="label">Ask me about join requests
+          <div class="hint">When a friend asks to join, Ligma asks whether to invite them. Off, requests only show in Discord.</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-join-requests">
+      </label>
     </section>
   </div>
 
@@ -633,7 +639,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -797,6 +803,7 @@
     $("discord-hide-files").checked = settings.discordHideFilesByDefault;
     $("discord-tool").checked = settings.discordShowTool;
     $("discord-invites").checked = settings.discordInvites;
+    $("discord-join-requests").checked = settings.discordJoinRequests;
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
     $("restore").checked = settings.restoreTabs;
     $("previews").checked = settings.tabPreviews;
@@ -814,6 +821,7 @@
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
+      ["discord-join-requests-row", settings.discordRichPresence && settings.discordInvites],
       // Where you are shows under the file's name, so not without it
       ["discord-hide-files-row", settings.discordRichPresence && settings.discordShowFile],
       ["discord-where-row", settings.discordRichPresence && settings.discordShowFile],
@@ -851,6 +859,7 @@
       discordHideFilesByDefault: $("discord-hide-files").checked,
       discordShowTool: $("discord-tool").checked,
       discordInvites: $("discord-invites").checked,
+      discordJoinRequests: $("discord-join-requests").checked,
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
       restoreTabs: $("restore").checked,
       tabPreviews: $("previews").checked,
