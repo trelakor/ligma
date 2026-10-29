@@ -481,6 +481,7 @@ fn verb(view: &str) -> (&'static str, bool) {
         "make" => ("Generating", false),
         "buzz" => ("Buzzing", false),
         "site" => ("Page-building", false),
+        "spec" => ("Writing", false),
         _ => ("Designing", false),
     }
 }
