@@ -141,7 +141,7 @@ impl Default for Settings {
             show_dev_mode: true,
             adjustments_clipboard: true,
             adjustments_bar: true,
-            hide_free_ai_actions: false,
+            hide_free_ai_actions: true,
             classic_home: false,
         }
     }

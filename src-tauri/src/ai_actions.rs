@@ -3,7 +3,7 @@
 //! for a selected image keeps only Crop, and Ligma's Copy and Paste
 //! adjustments (see adjustments.rs). Select area, Remove background, Edit
 //! with prompt and the More menu, all AI actions, are hidden with their
-//! divider. Off by default
+//! divider. On by default
 //!
 //! A file's plan is `INITIAL_OPTIONS.plan_tier` ("starter" when free) while
 //! the page is still on the file it loaded with, and otherwise the "Free"
@@ -101,7 +101,7 @@ const PAGE_JS: &str = r##"(() => {
 })()"##;
 
 /// The setting,
-static ON: AtomicBool = AtomicBool::new(false);
+static ON: AtomicBool = AtomicBool::new(true);
 /// and when it last changed, for `PAGE_JS` to tell it from older ones in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
