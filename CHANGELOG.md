@@ -2,6 +2,15 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.24.0 - 2026-10-29
+
+- Image adjustments: copy the sliders of an image fill or stroke (Exposure, Contrast, Saturation, Temperature, Tint, Highlights and Shadows) and paste them onto other images, keeping each image. With the image picker open, Cmd+Shift+C (Ctrl+Shift+C on Windows) copies, and Cmd+Shift+V (Ctrl+Shift+V) pastes onto the selected layers. Copy and Paste are also in a menu by the picker's Rotate button, on a right-click on the sliders or an image's row, and after Crop in the bar above the toolbar. Paste goes to the image whose row is highlighted, or else each layer's top image fill, as one undo step. Settings > Features > Images.
+- AI actions in free projects: in files from a free project, the bar above the toolbar for a selected image hides Select area, Remove background, Edit with prompt and More. Settings > Features > Images turns it off.
+- Toolbar modes: Settings > Features > Toolbar chooses which of Draw, Design, Motion and Dev Mode the switch on the right of Figma Design's toolbar offers. Right-click the switch to change them there.
+- Settings has a new Features page for the toolbar, layers, images and home page options, and Appearance now starts with interface scale.
+- Discord: Settings > Discord > Invites > Ask me about join requests can be turned off, leaving requests to Discord.
+- macOS: Cmd+Z and Shift+Cmd+Z now go to Figma, and undo and redo text in text fields such as a layer being renamed.
+
 ## 0.23.1 - 2026-10-25
 
 - With Figma's Open links in desktop app preference on, links and files now open in Ligma instead of the Figma desktop app. The preference no longer shows in the Figma logo's menu.
