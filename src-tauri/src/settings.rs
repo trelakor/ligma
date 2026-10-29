@@ -93,8 +93,8 @@ pub struct Settings {
     pub show_motion_mode: bool,
     /// and Dev Mode
     pub show_dev_mode: bool,
-    /// Copy and paste the adjustments of image fills, with Cmd+C in the
-    /// image picker and Cmd+Shift+V, or by right-clicking its sliders
+    /// Copy and paste the adjustments of image fills, with Cmd+Shift+C in
+    /// the image picker and Cmd+Shift+V, or by right-clicking its sliders
     pub adjustments_clipboard: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on

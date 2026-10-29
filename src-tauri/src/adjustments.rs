@@ -4,8 +4,10 @@
 //! fill in the selection, leaving the images themselves alone. Figma's
 //! Copy/Paste Properties brings the whole fill, image and all
 //!
-//! With the image picker open, Cmd+C (Ctrl+C) copies its adjustments
-//! instead of the layer, unless a text field has focus. Cmd+Shift+V
+//! With the image picker open, Cmd+Shift+C (Ctrl+Shift+C) copies its
+//! adjustments, unless a text field has focus: Figma's Copy as PNG does
+//! nothing then, and Cmd+C goes to Ligma's Edit menu before the page sees
+//! it. Cmd+Shift+V
 //! (Ctrl+Shift+V) pastes them while they're the last thing copied in
 //! Ligma; once anything else is copied or cut, it's Figma's Paste over
 //! Selection again. Right-clicking the sliders opens a menu with Copy,
@@ -191,10 +193,10 @@ const PAGE_JS: &str = r##"(() => {
       const mod = MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
       if (!mod || event.altKey) return;
       const key = letter(event);
-      if (key === "c" && !event.shiftKey) {
+      if (key === "c" && event.shiftKey) {
         if (state.on && !editing(document.activeElement) && adjustments() && copy()) stop(event);
         else disarm();
-      } else if (key === "x" && !event.shiftKey) {
+      } else if ((key === "c" || key === "x") && !event.shiftKey) {
         disarm();
       } else if (key === "v" && event.shiftKey && state.on && copied()?.armed && api()) {
         stop(event);
@@ -275,9 +277,9 @@ pub fn page_js() -> String {
 pub const SIGNAL_HOST: &str = "adjustments.ligma.invalid";
 
 #[cfg(target_os = "macos")]
-const SHORTCUTS: [(&str, &str); 2] = [("copy", "⌘C"), ("paste", "⇧⌘V")];
+const SHORTCUTS: [(&str, &str); 2] = [("copy", "⇧⌘C"), ("paste", "⇧⌘V")];
 #[cfg(not(target_os = "macos"))]
-const SHORTCUTS: [(&str, &str); 2] = [("copy", "Ctrl+C"), ("paste", "Ctrl+Shift+V")];
+const SHORTCUTS: [(&str, &str); 2] = [("copy", "Ctrl+Shift+C"), ("paste", "Ctrl+Shift+V")];
 
 /// A right-click on the image picker's sliders in tab `tab`: opens the
 /// menu, with Paste only once something is copied, and its shortcut only
