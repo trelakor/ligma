@@ -1,7 +1,7 @@
 //! Image adjustments (Settings > Appearance > Images): copies the seven
 //! sliders of an image fill or stroke (Exposure, Contrast, Saturation,
-//! Temperature, Tint, Highlights and Shadows) and pastes them onto every
-//! image fill and stroke in the selection, leaving the images themselves
+//! Temperature, Tint, Highlights and Shadows) and pastes them onto the
+//! images of the selected layers, leaving the images themselves
 //! alone. Figma's Copy/Paste Properties brings the whole fill, image and
 //! all. Video fills have no sliders
 //!
@@ -10,11 +10,15 @@
 //! nothing then, and Cmd+C goes to Ligma's Edit menu before the page sees
 //! it. Cmd+Shift+V (Ctrl+Shift+V) pastes them while they're the last thing
 //! copied in Ligma, or while an image's row in the Fill or Stroke section
-//! is highlighted; otherwise it's Figma's Paste over Selection. A button
-//! left of the picker's Rotate 90º, and right-clicking its sliders or an
-//! image's row, open a menu with Copy, Paste and Reset (see tab_menu.rs).
-//! Copy reads the paint whose picker is open or row was clicked. `PAGE_JS`
-//! asks for the menu by loading `SIGNAL_HOST`, which `on_signal` handles
+//! is highlighted; otherwise it's Figma's Paste over Selection. Paste and
+//! Reset change one image in each selected layer: the one whose picker is
+//! open or row is highlighted or was clicked, else its top image fill
+//!
+//! A button left of the picker's Rotate 90º, and right-clicking its
+//! sliders or an image's row, open a menu with Copy, Paste and Reset (see
+//! tab_menu.rs). Copy reads the paint whose picker is open or row was
+//! clicked. `PAGE_JS` asks for the menu by loading `SIGNAL_HOST`, which
+//! `on_signal` handles
 //!
 //! What's copied is kept in `localStorage`, so it carries to every tab.
 //! Paints are read and written through Figma's console plugin API,
@@ -79,7 +83,6 @@ const PAGE_JS: &str = r##"(() => {
   };
   // Video fills have no sliders
   const adjustable = (paint) => paint?.type === "IMAGE";
-  const LISTS = ["fills", "strokes"];
   // Text with mixed fills has none to adjust
   const paintsOf = (node, list) => {
     try {
@@ -120,28 +123,31 @@ const PAGE_JS: &str = r##"(() => {
     return false;
   };
 
-  // Sets `filters` on every image fill and stroke of the selected layers,
-  // as one undo step. Counts layers
-  const adjust = (filters, done) => {
+  // Sets `filters` on one image of each selected layer, as one undo step:
+  // the paint `at`, `{ list, index }`, whose picker is open or row is
+  // highlighted or was clicked, or else, and in layers without it, the
+  // layer's topmost image fill shown
+  const adjust = (filters, done, at) => {
     const figma = api();
     if (!figma) return;
     let images = 0;
     let skipped = 0;
     for (const node of figma.currentPage.selection) {
-      let changed = false;
-      let failed = false;
-      for (const list of LISTS) {
-        const paints = paintsOf(node, list);
-        if (!paints.some(adjustable)) continue;
-        try {
-          node[list] = paints.map((paint) => (adjustable(paint) ? { ...paint, filters: { ...filters } } : paint));
-          changed = true;
-        } catch {
-          failed = true;
-        }
+      let list = "fills";
+      let index;
+      if (at && adjustable(paintsOf(node, at.list)[at.index])) ({ list, index } = at);
+      else {
+        const fills = paintsOf(node, "fills");
+        index = fills.findLastIndex((paint) => adjustable(paint) && paint.visible !== false);
+        if (index < 0) index = fills.findLastIndex(adjustable);
+        if (index < 0) continue;
       }
-      if (changed) images++;
-      else if (failed) skipped++;
+      try {
+        node[list] = paintsOf(node, list).map((paint, i) => (i === index ? { ...paint, filters: { ...filters } } : paint));
+        images++;
+      } catch {
+        skipped++;
+      }
     }
     if (!images && !skipped) {
       notify(figma, "No images selected");
@@ -152,11 +158,11 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
     notify(figma, `${done} ${plural(images)}${skipped ? `, ${skipped} skipped` : ""}`);
   };
-  const paste = () => {
+  const paste = (at) => {
     const filters = copied()?.filters;
-    if (filters) adjust(filters, "Adjustments pasted to");
+    if (filters) adjust(filters, "Adjustments pasted to", at);
   };
-  const reset = () => adjust(Object.fromEntries(FILTERS.map((key) => [key, 0])), "Adjustments reset on");
+  const reset = (at) => adjust(Object.fromEntries(FILTERS.map((key) => [key, 0])), "Adjustments reset on", at);
 
   const visible = (node) => node.getClientRects().length > 0;
   // The nearest box around `start` that `holds`, short of the whole page
@@ -191,7 +197,8 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // The Fill and Stroke sections' rows: the one whose picker is open marked
-  // `paintPanelValueSelected`, a highlighted one inside a `rowSelected`.
+  // `paintPanelValueSelected`, a highlighted one in a row that's
+  // `rowSelected` or `aria-selected`, or has focus.
   // Each names its section and paint in its `data-onboarding-key`,
   // `paint-panel-row-paint-<section>-<index>`. Fill comes first on the
   // page, so its number is the first row's
@@ -211,7 +218,13 @@ const PAGE_JS: &str = r##"(() => {
   };
   const isImage = (at) => !!at && (api()?.currentPage.selection ?? []).some((node) => adjustable(paintsOf(node, at.list)[at.index]));
   const openPaint = () => rowPaint(document.querySelector(`${ROW}[class*="paintPanelValueSelected--"]`));
-  const highlighted = () => rowPaint(document.querySelector(`[class*="raw_components--rowSelected--"] ${ROW}`));
+  const highlighted = () => {
+    const row = [...document.querySelectorAll(ROW)].find((row) => {
+      const line = row.closest('[role="row"]') ?? row;
+      return /rowSelected--/.test(line.className) || line.getAttribute("aria-selected") === "true" || line.contains(document.activeElement);
+    });
+    return rowPaint(row);
+  };
 
   // Asks Ligma for the menu (see `on_signal`): through `window.open` on
   // Windows, and on macOS as an iframe load, which WKWebView reports to
@@ -255,9 +268,11 @@ const PAGE_JS: &str = r##"(() => {
         else disarm();
       } else if ((key === "c" || key === "x") && !event.shiftKey) {
         disarm();
-      } else if (key === "v" && event.shiftKey && state.on && api() && (copied()?.armed || (copied() && isImage(highlighted())))) {
+      } else if (key === "v" && event.shiftKey && state.on && api() && copied()) {
+        const at = openPaint() ?? highlighted();
+        if (!copied().armed && !isImage(at)) return;
         stop(event);
-        paste();
+        paste(isImage(at) ? at : null);
       }
     },
     true,
@@ -332,8 +347,8 @@ const PAGE_JS: &str = r##"(() => {
       if (!state.on) return;
       const figma = api();
       if (action === "copy" && !copy(menuPaint) && figma) notify(figma, "No images selected");
-      else if (action === "paste") paste();
-      else if (action === "reset") reset();
+      else if (action === "paste") paste(menuPaint);
+      else if (action === "reset") reset(menuPaint);
     },
     set: (next) => {
       try {
