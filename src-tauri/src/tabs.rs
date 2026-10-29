@@ -676,6 +676,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         content_size(app, &window)?,
     )?;
     webview.set_zoom(scale(app))?;
+    #[cfg(target_os = "macos")]
+    crate::wkwebview::pass_undo_to_pages(&webview);
     #[cfg(windows)]
     {
         crate::webview2::drop_request_filters(&webview);

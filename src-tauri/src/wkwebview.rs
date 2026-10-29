@@ -16,10 +16,16 @@
 //! https://developer.apple.com/forums/thread/809860). `disable_screen_time`
 //! turns that setup off for the whole process, so Screen Time can't block
 //! Figma pages inside Ligma, though it still counts the time spent in it
+//!
+//! wry keeps Cmd shortcuts from child webviews, the tabs, so the menu bar
+//! gets them. For Cmd+Z that means Edit > Undo runs WebKit's text undo and
+//! Figma never sees the key. `pass_undo_to_pages` gives undo and redo back
+//! to WebKit, which lets the page handle them first, as Safari does, and
+//! passes them on to the menu bar if it doesn't
 
 use std::ffi::{c_char, c_void, CStr};
 use std::panic::AssertUnwindSafe;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained};
@@ -39,6 +45,79 @@ pub fn disable_screen_time() {
         let imp: unsafe extern "C-unwind" fn(*mut AnyObject, Sel) = install_nothing;
         unsafe { method.set_implementation(std::mem::transmute::<_, Imp>(imp)) };
     }
+}
+
+/// IMPs of `performKeyEquivalent:`: wry's override and WebKit's own
+static WRY_KEY_EQUIVALENT: OnceLock<Imp> = OnceLock::new();
+static WEBKIT_KEY_EQUIVALENT: OnceLock<Imp> = OnceLock::new();
+
+type KeyEquivalent = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject) -> Bool;
+
+/// Cmd+Z or Shift+Cmd+Z, by the character typed so other keyboard layouts
+/// match the menu bar
+unsafe fn is_undo_or_redo(event: *mut AnyObject) -> bool {
+    const SHIFT: usize = 1 << 17;
+    const CONTROL: usize = 1 << 18;
+    const OPTION: usize = 1 << 19;
+    const COMMAND: usize = 1 << 20;
+    let flags: usize = msg_send![event, modifierFlags];
+    if flags & (COMMAND | OPTION | CONTROL) != COMMAND {
+        return false;
+    }
+    let chars: *mut AnyObject = msg_send![event, charactersIgnoringModifiers];
+    if chars.is_null() {
+        return false;
+    }
+    let utf8: *const c_char = msg_send![chars, UTF8String];
+    if utf8.is_null() {
+        return false;
+    }
+    match CStr::from_ptr(utf8).to_bytes() {
+        b"z" => true,
+        b"Z" => flags & SHIFT != 0,
+        _ => false,
+    }
+}
+
+unsafe extern "C-unwind" fn perform_key_equivalent(view: *mut AnyObject, selector: Sel, event: *mut AnyObject) -> Bool {
+    let imp = if !event.is_null() && is_undo_or_redo(event) {
+        WEBKIT_KEY_EQUIVALENT.get()
+    } else {
+        WRY_KEY_EQUIVALENT.get()
+    };
+    match imp {
+        Some(imp) => std::mem::transmute::<Imp, KeyEquivalent>(*imp)(view, selector, event),
+        None => Bool::NO,
+    }
+}
+
+/// Lets Figma handle Cmd+Z and Shift+Cmd+Z in tabs. Patches the class of
+/// `webview`, so once is enough. Skipped if wry no longer overrides
+/// `performKeyEquivalent:`
+pub fn pass_undo_to_pages(webview: &Webview) {
+    static PATCHED: Once = Once::new();
+    let _ = webview.with_webview(|platform| unsafe {
+        let view = platform.inner() as *mut AnyObject;
+        if view.is_null() {
+            return;
+        }
+        PATCHED.call_once(|| {
+            let selector = sel!(performKeyEquivalent:);
+            let (Some(wry), Some(webkit)) = (
+                (*view).class().instance_method(selector),
+                AnyClass::get(c"WKWebView").and_then(|class| class.instance_method(selector)),
+            ) else {
+                return;
+            };
+            if wry.implementation() as usize == webkit.implementation() as usize {
+                return;
+            }
+            let _ = WEBKIT_KEY_EQUIVALENT.set(webkit.implementation());
+            let _ = WRY_KEY_EQUIVALENT.set(wry.implementation());
+            let imp: KeyEquivalent = perform_key_equivalent;
+            wry.set_implementation(std::mem::transmute::<KeyEquivalent, Imp>(imp));
+        });
+    });
 }
 
 /// Runs WebKit calls so that an Objective-C exception from them is logged
