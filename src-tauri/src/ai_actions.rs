@@ -1,4 +1,4 @@
-//! AI actions in free projects (Settings > Appearance > Images): in files
+//! AI actions in free projects (Settings > Features > Images): in files
 //! from a free (Starter) project, the bar Figma shows above the toolbar
 //! for a selected image keeps only Crop, and Ligma's Copy and Paste
 //! adjustments (see adjustments.rs). Select area, Remove background, Edit
