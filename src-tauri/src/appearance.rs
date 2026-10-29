@@ -164,7 +164,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!selector?.includes("data-preferred-theme")) return false;
     const mode = /data-preferred-theme="?(light|dark)/.exec(selector)?.[1];
     const menus = mode === "light" && scanMenus(rule, selector);
-    const brand = /--ramp-(?:pale-)?([a-z-]+)-\d+/.exec(rule.style.getPropertyValue("--color-bg-menu-selected"))?.[1];
+    const [, paleBrand, brand] = /--ramp-(pale-)?([a-z-]+)-\d+/.exec(rule.style.getPropertyValue("--color-bg-menu-selected")) ?? [];
     if (!mode || !brand) return menus;
     const decls = [];
     const canvas = [];
@@ -173,16 +173,19 @@ const PAGE_JS: &str = r##"(() => {
       const value = rule.style.getPropertyValue(name).trim();
       // The fill of a selection box (dragging across Home's files, or the
       // canvas) is the brand color, see-through, written out rather than
-      // taken from the ramp
-      const area = AREA.test(name) && /^#[0-9a-f]{6}([0-9a-f]{2})$/i.exec(value);
+      // taken from the ramp, in long hex or short (Specs')
+      const area = AREA.test(name) && /^#(?:[0-9a-f]{6}([0-9a-f]{2})|[0-9a-f]{3}([0-9a-f]))$/i.exec(value);
       if (area) {
-        const alpha = Math.round((parseInt(area[1], 16) / 255) * 100);
+        const alpha = Math.round((parseInt(area[1] ?? area[2].repeat(2), 16) / 255) * 100);
         decls.push(`${name}: color-mix(in srgb, var(--ligma-accent-500) ${alpha}%, transparent) !important;`);
         continue;
       }
       const ramp = /^var\(--ramp-(pale-)?([a-z-]+)-(\d+)\)$/.exec(value);
       if (!ramp) continue;
-      const accent = `${name}: var(--ligma-${ramp[1] ? "pale-" : ""}accent-${ramp[3]}) !important;`;
+      // An editor branded in a pale ramp (Specs' slate blue) takes the
+      // accent itself, else it would stay all but grey in every theme
+      const pale = ramp[1] && !paleBrand;
+      const accent = `${name}: var(--ligma-${pale ? "pale-" : ""}accent-${ramp[3]}) !important;`;
       if (DEFAULT_FILL.test(name)) {
         const figma = !ramp[1] && figmaColor(ramp[2], ramp[3]);
         if (figma) canvas.push(`${name}: ${figma} !important;`);
