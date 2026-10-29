@@ -99,6 +99,9 @@ pub struct Settings {
     /// and with it, show Copy and Paste in the bar Figma shows above the
     /// toolbar for a selected image
     pub adjustments_bar: bool,
+    /// In free (Starter) projects, hide the AI actions from that bar:
+    /// Select area, Remove background, Edit with prompt and More
+    pub hide_free_ai_actions: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -138,6 +141,7 @@ impl Default for Settings {
             show_dev_mode: true,
             adjustments_clipboard: true,
             adjustments_bar: true,
+            hide_free_ai_actions: false,
             classic_home: false,
         }
     }
@@ -377,6 +381,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::home::apply_settings(app, &settings);
     crate::toolbar::apply_settings(app, &settings);
     crate::adjustments::apply_settings(app, &settings);
+    crate::ai_actions::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
