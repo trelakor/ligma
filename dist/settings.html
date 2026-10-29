@@ -477,6 +477,12 @@
         </span>
         <input type="checkbox" class="switch" id="adjustments-bar">
       </label>
+      <label class="row">
+        <span class="label">Hide AI actions in free projects
+          <div class="hint">In files from a free project, the bar above the toolbar for a selected image keeps only Crop and Ligma's adjustments, without Select area, Remove background, Edit with prompt and More</div>
+        </span>
+        <input type="checkbox" class="switch" id="hide-free-ai-actions">
+      </label>
     </section>
     <section>
       <h2>Home</h2>
@@ -678,7 +684,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -863,6 +869,7 @@
     $("layer-previews").checked = settings.layerPreviews;
     $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
     $("adjustments-bar").checked = settings.adjustmentsBar;
+    $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
     $("classic-home").checked = settings.classicHome;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -923,6 +930,7 @@
       layerPreviews: $("layer-previews").checked,
       adjustmentsClipboard: $("adjustments-clipboard").checked,
       adjustmentsBar: $("adjustments-bar").checked,
+      hideFreeAiActions: $("hide-free-ai-actions").checked,
       classicHome: $("classic-home").checked,
       ...changes,
     };
