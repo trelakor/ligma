@@ -339,8 +339,11 @@ const PAGE_JS: &str = r##"(() => {
   // above the toolbar for a selected image, in its buttons' look. Paste
   // only once something is copied. Both read and change the image whose
   // row is highlighted in the Fill or Stroke section, or else each layer's
-  // top image fill. Only with the setting for them, `bar`
+  // top image fill. Only with the setting for them, `bar`. Not while
+  // cropping, when the bar holds Crop's own controls in a group instead.
+  // Crop is told by its icon
   const BAR = '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]';
+  const CROP = 'path[d^="M8.5 5a.5.5 0 0 1 .5.5V15h6V9"]';
   const BAR_ICONS = {
     copy: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="9.5" y="9.5" width="9" height="9" rx="1.5"/><path ${STROKE} d="M14.5 9.5V7A1.5 1.5 0 0 0 13 5.5H7A1.5 1.5 0 0 0 5.5 7v6A1.5 1.5 0 0 0 7 14.5h2.5"/></svg>`,
     paste: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M9.5 6.5H8A1.5 1.5 0 0 0 6.5 8v10A1.5 1.5 0 0 0 8 19.5h8a1.5 1.5 0 0 0 1.5-1.5V8A1.5 1.5 0 0 0 16 6.5h-1.5"/><rect ${STROKE} x="9.5" y="5" width="5" height="3" rx="1"/></svg>`,
@@ -355,7 +358,8 @@ const PAGE_JS: &str = r##"(() => {
     const figma = state.on && state.bar !== false && api();
     const image = !!figma && figma.currentPage.selection.some((node) => paintsOf(node, "fills").some(adjustable));
     const show = { copy: image, paste: image && !!copied() };
-    const crop = bar.querySelector("button:not([data-ligma-adjustments-bar])");
+    let crop = bar.querySelector(CROP)?.closest("button");
+    if (crop?.parentElement !== bar) crop = null;
     let after = crop;
     for (const action of ["copy", "paste"]) {
       let button = bar.querySelector(`[data-ligma-adjustments-bar="${action}"]`);
