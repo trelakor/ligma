@@ -659,7 +659,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::modules::PAGE_JS)
         .initialization_script(crate::layers::page_js())
         .initialization_script(crate::home::page_js())
-        .initialization_script(crate::toolbar::page_js());
+        .initialization_script(crate::toolbar::page_js())
+        .initialization_script(crate::adjustments::page_js());
     #[cfg(target_os = "macos")]
     {
         builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
@@ -720,6 +721,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::toolbar::on_signal(app, id, url);
         return false;
     }
+    if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
+        crate::adjustments::on_signal(app, id, url);
+        return false;
+    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -771,6 +776,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::plugins::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::toolbar::SIGNAL_HOST) {
         crate::toolbar::on_signal(app, id, &url);
+    } else if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
+        crate::adjustments::on_signal(app, id, &url);
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
@@ -1281,7 +1288,7 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
         ]);
         items
     };
-    crate::tab_menu::show(app, id, items, None, |app, id, action| {
+    crate::tab_menu::show(app, id, items, Default::default(), |app, id, action| {
         let _ = on_menu(app, &format!("{action}:{id}"));
     })
 }

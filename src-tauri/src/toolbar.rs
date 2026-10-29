@@ -329,7 +329,7 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
             .map(|&(action, _)| action)
             .filter(|action| shows(&mut settings, action).is_some_and(|shown| *shown))
             .collect();
-        let _ = crate::tab_menu::show(&app, tab, items, Some(checked), on_pick);
+        let _ = crate::tab_menu::show(&app, tab, items, crate::tab_menu::Extras { checked: Some(checked), ..Default::default() }, on_pick);
     });
 }
 

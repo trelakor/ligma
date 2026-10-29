@@ -8,7 +8,8 @@
 //! only then is the window placed at the cursor and shown. It hides when
 //! it loses focus, and `menu_pick` runs the chosen item through the
 //! menu's `Pick`: `tabs::on_menu` for a tab's menu. Toolbar modes (see
-//! toolbar.rs) use it too, with checked items
+//! toolbar.rs) use it too, with checked items, and image adjustments (see
+//! adjustments.rs), with shortcuts and items that can't be picked
 
 use std::sync::Mutex;
 
@@ -24,12 +25,22 @@ pub type Item = Option<(&'static str, &'static str)>;
 /// Runs a menu's chosen item: the tab it was opened for and the action
 pub type Pick = fn(&AppHandle, u32, &str);
 
+/// What a menu shows besides its items
+#[derive(Clone, Default, Serialize)]
+pub struct Extras {
+    /// The actions checked, if its items can be
+    pub checked: Option<Vec<&'static str>>,
+    /// The actions shown but not offered
+    pub disabled: Vec<&'static str>,
+    /// `[action, shortcut]`, shown right of the item
+    pub shortcuts: Vec<(&'static str, &'static str)>,
+}
+
 /// The menu being opened or shown
 struct Open {
     tab: u32,
     items: Vec<Item>,
-    /// The actions checked, if its items can be
-    checked: Option<Vec<&'static str>>,
+    extras: Extras,
     pick: Pick,
     /// The cursor when it was asked for, in screen pixels
     at: PhysicalPosition<f64>,
@@ -37,13 +48,13 @@ struct Open {
 
 static OPEN: Mutex<Option<Open>> = Mutex::new(None);
 
-/// Opens a menu for tab `tab` at the cursor. With `checked`, every item
-/// can be checked, and those it names are
-pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>, checked: Option<Vec<&'static str>>, pick: Pick) -> tauri::Result<()> {
+/// Opens a menu for tab `tab` at the cursor. With `extras.checked`, every
+/// item can be checked, and those it names are
+pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>, extras: Extras, pick: Pick) -> tauri::Result<()> {
     // The menu takes the tab preview's place
     crate::preview::hide(app);
     let at = app.cursor_position()?;
-    *OPEN.lock().unwrap() = Some(Open { tab, items, checked, pick, at });
+    *OPEN.lock().unwrap() = Some(Open { tab, items, extras, pick, at });
     if let Some(window) = app.get_webview_window(WINDOW) {
         window.set_zoom(crate::tabs::scale(app))?;
         return window.eval("window.refresh?.()");
@@ -156,8 +167,8 @@ fn from_menu(webview: &Webview) -> bool {
 pub struct Menu {
     /// `[action, text]`, or null for a separator
     items: Vec<Item>,
-    /// The actions checked, or null if items can't be
-    checked: Option<Vec<&'static str>>,
+    #[serde(flatten)]
+    extras: Extras,
     theme: Option<serde_json::Value>,
 }
 
@@ -167,10 +178,10 @@ pub async fn get_menu(app: AppHandle, webview: Webview) -> Option<Menu> {
     if !from_menu(&webview) {
         return None;
     }
-    let (items, checked) = OPEN.lock().unwrap().as_ref().map(|open| (open.items.clone(), open.checked.clone()))?;
+    let (items, extras) = OPEN.lock().unwrap().as_ref().map(|open| (open.items.clone(), open.extras.clone()))?;
     // A zoom set before the page loaded doesn't last
     let _ = webview.set_zoom(crate::tabs::scale(&app));
-    Some(Menu { items, checked, theme: crate::tabs::theme(&app) })
+    Some(Menu { items, extras, theme: crate::tabs::theme(&app) })
 }
 
 /// The page has drawn the menu at `width` by `height` CSS pixels: place it
@@ -229,7 +240,7 @@ pub async fn menu_pick(app: AppHandle, webview: Webview, action: Option<String>)
         return;
     };
     // Only the actions this menu offered
-    if open.items.iter().flatten().any(|(item, _)| *item == action) {
+    if open.items.iter().flatten().any(|(item, _)| *item == action) && !open.extras.disabled.contains(&action.as_str()) {
         (open.pick)(&app, open.tab, &action);
     }
 }

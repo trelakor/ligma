@@ -1,6 +1,7 @@
 // Hide the console window on Windows release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod adjustments;
 mod appearance;
 mod auth;
 mod discord_ipc;
@@ -285,6 +286,7 @@ fn main() {
             layers::init(&settings);
             home::init(&settings);
             toolbar::init(&settings);
+            adjustments::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
