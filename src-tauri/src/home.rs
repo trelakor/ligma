@@ -1,4 +1,4 @@
-//! Classic home (Settings > Appearance > Home): Figma's file browser keeps
+//! Classic home (Settings > Features > Home): Figma's file browser keeps
 //! its long-standing layout for every account. Off by default
 //!
 //! Figma is trying a newer layout on some accounts (the `exp_fb_plan_scoped_ia`

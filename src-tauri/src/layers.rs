@@ -1,4 +1,4 @@
-//! Layer previews (Settings > Appearance > Layers): the layers panel shows
+//! Layer previews (Settings > Features > Layers): the layers panel shows
 //! each layer's picture in every mode, as Figma's Draw mode does, not only
 //! in Draw mode. Off by default: Figma renders every preview
 //!

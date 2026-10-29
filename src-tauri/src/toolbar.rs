@@ -1,4 +1,4 @@
-//! Toolbar modes (Settings > Appearance > Toolbar): hides modes from the
+//! Toolbar modes (Settings > Features > Toolbar): hides modes from the
 //! switch on the right of Figma Design's toolbar (Draw, Design, Motion and
 //! Dev Mode), and from the picker Figma's mode quick toggle shows. With one
 //! left, the toolbar shows no switch. The mode you're in always shows, so

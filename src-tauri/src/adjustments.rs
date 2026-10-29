@@ -1,4 +1,4 @@
-//! Image adjustments (Settings > Appearance > Images): copies the seven
+//! Image adjustments (Settings > Features > Images): copies the seven
 //! sliders of an image fill or stroke (Exposure, Contrast, Saturation,
 //! Temperature, Tint, Highlights and Shadows) and pastes them onto the
 //! images of the selected layers, leaving the images themselves

@@ -385,6 +385,10 @@
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 6h11"/></svg>
     Appearance
   </button>
+  <button role="tab" id="tab-features" aria-controls="features">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5l1.4 3.6 3.6 1.4-3.6 1.4L8 12.5 6.6 8.9 3 7.5l3.6-1.4z"/></svg>
+    Features
+  </button>
   <button role="tab" id="tab-tabs" aria-controls="tabs">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M2.5 13h11"/></svg>
     Tabs &amp; Memory
@@ -405,15 +409,6 @@
 <main>
   <div role="tabpanel" id="appearance" aria-labelledby="tab-appearance">
     <section>
-      <h2 id="scheme-heading">Color scheme</h2>
-      <div class="cards" id="schemes" role="radiogroup" aria-labelledby="scheme-heading"></div>
-    </section>
-    <section>
-      <h2 id="themes-heading">Themes</h2>
-      <div class="hint themes-hint">Pick a theme for light mode and one for dark mode. It colors Figma's panels, toolbars and menus and Ligma's tabs, but not the canvas.</div>
-      <div class="themes" id="themes" aria-labelledby="themes-heading"></div>
-    </section>
-    <section>
       <h2>Interface</h2>
       <div class="row">
         <span class="label">Interface scale
@@ -430,6 +425,18 @@
         </span>
       </div>
     </section>
+    <section>
+      <h2 id="scheme-heading">Color scheme</h2>
+      <div class="cards" id="schemes" role="radiogroup" aria-labelledby="scheme-heading"></div>
+    </section>
+    <section>
+      <h2 id="themes-heading">Themes</h2>
+      <div class="hint themes-hint">Pick a theme for light mode and one for dark mode. It colors Figma's panels, toolbars and menus and Ligma's tabs, but not the canvas.</div>
+      <div class="themes" id="themes" aria-labelledby="themes-heading"></div>
+    </section>
+  </div>
+
+  <div role="tabpanel" id="features" aria-labelledby="tab-features" hidden>
     <section>
       <h2>Toolbar</h2>
       <div class="row">
