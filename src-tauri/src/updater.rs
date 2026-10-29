@@ -86,14 +86,14 @@ pub fn check_now(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         if cfg!(debug_assertions) {
-            tell(&app, "Updates are off in debug builds.".into());
+            tell(&app, "Updates are off in debug builds".into());
             return;
         }
         match tauri::async_runtime::block_on(check(&app)) {
             Ok(true) => ask_to_restart(&app),
             Ok(false) => {
                 let version = app.package_info().version.to_string();
-                tell(&app, format!("Ligma {version} is the latest version."));
+                tell(&app, format!("Ligma {version} is the latest version"));
             }
             Err(error) => {
                 let error = format!("Couldn't check for updates: {error}");

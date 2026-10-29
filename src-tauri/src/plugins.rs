@@ -129,7 +129,7 @@ fn problem(manifest: &Manifest) -> Option<String> {
         Ui::Page(page) => vec![page],
         Ui::Pages(pages) => pages.iter().map(|(_, page)| page).collect(),
     };
-    pages.into_iter().find(|page| !page.is_file()).map(|page| format!("{} not found.", file(page)))
+    pages.into_iter().find(|page| !page.is_file()).map(|page| format!("{} not found", file(page)))
 }
 
 fn path(app: &AppHandle) -> Option<PathBuf> {
@@ -1603,12 +1603,12 @@ async fn import(app: &AppHandle, window: &Window) -> Result<bool, String> {
     };
     let manifest = picked.path().to_path_buf();
     if manifest.file_name().is_some_and(|name| name != "manifest.json") {
-        return Err("Pick the plugin's manifest.json.".into());
+        return Err("Pick the plugin's manifest.json".into());
     }
     let name = read_manifest(&manifest)?.name;
     let mut entries = load(app);
     match entries.iter_mut().find(|entry| entry.manifest == manifest) {
-        Some(entry) if entry.enabled => return Err(format!("{name} is already imported.")),
+        Some(entry) if entry.enabled => return Err(format!("{name} is already imported")),
         // Imported but switched off: switch it back on
         Some(entry) => entry.enabled = true,
         None => entries.push(Entry { manifest, enabled: true }),
