@@ -14,6 +14,8 @@
 //! Reset change one image in each selected layer: the one whose picker is
 //! open or row is highlighted or was clicked, else its top image fill
 //!
+//! Copy adjustments and Paste adjustments also show after Crop in the bar
+//! above the toolbar for a selected image, Paste once something is copied.
 //! A button left of the picker's Rotate 90º, and right-clicking its
 //! sliders or an image's row, open a menu with Copy, Paste and Reset (see
 //! tab_menu.rs). Copy reads the paint whose picker is open or row was
@@ -66,6 +68,7 @@ const PAGE_JS: &str = r##"(() => {
     try {
       localStorage.setItem(COPIED, JSON.stringify(value));
     } catch {}
+    window.__ligmaImageAdjustments?.decorate();
   };
   const disarm = () => {
     const value = copied();
@@ -331,18 +334,69 @@ const PAGE_JS: &str = r##"(() => {
     wrap.append(button);
     buttons.prepend(wrap);
   };
+
+  // Copy adjustments and Paste adjustments after Crop in the bar Figma shows
+  // above the toolbar for a selected image, in its buttons' look. Paste
+  // only once something is copied. Both read and change each layer's top
+  // image fill
+  const BAR = '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]';
+  const BAR_ICONS = {
+    copy: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="9.5" y="9.5" width="9" height="9" rx="1.5"/><path ${STROKE} d="M14.5 9.5V7A1.5 1.5 0 0 0 13 5.5H7A1.5 1.5 0 0 0 5.5 7v6A1.5 1.5 0 0 0 7 14.5h2.5"/></svg>`,
+    paste: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M9.5 6.5H8A1.5 1.5 0 0 0 6.5 8v10A1.5 1.5 0 0 0 8 19.5h8a1.5 1.5 0 0 0 1.5-1.5V8A1.5 1.5 0 0 0 16 6.5h-1.5"/><rect ${STROKE} x="9.5" y="5" width="5" height="3" rx="1"/></svg>`,
+  };
+  const BAR_LABELS = { copy: "Copy adjustments", paste: "Paste adjustments" };
+  const addBarButtons = () => {
+    const bar = document.querySelector(BAR);
+    for (const ours of document.querySelectorAll("[data-ligma-adjustments-bar]")) {
+      if (ours.parentElement !== bar) ours.remove();
+    }
+    if (!bar) return;
+    const figma = state.on && api();
+    const image = !!figma && figma.currentPage.selection.some((node) => paintsOf(node, "fills").some(adjustable));
+    const show = { copy: image, paste: image && !!copied() };
+    const crop = bar.querySelector("button:not([data-ligma-adjustments-bar])");
+    let after = crop;
+    for (const action of ["copy", "paste"]) {
+      let button = bar.querySelector(`[data-ligma-adjustments-bar="${action}"]`);
+      if (!show[action] || !crop) {
+        button?.remove();
+        continue;
+      }
+      if (!button) {
+        button = Object.assign(document.createElement("button"), { type: "button", className: crop.className });
+        button.dataset.ligmaAdjustmentsBar = action;
+        const label = crop.querySelector("span")?.cloneNode(false) ?? document.createElement("span");
+        label.textContent = BAR_LABELS[action];
+        button.innerHTML = BAR_ICONS[action];
+        button.append(label);
+        button.addEventListener("click", (event) => {
+          stop(event);
+          if (action === "copy") copy(null);
+          else paste(null);
+        });
+      }
+      if (after.nextElementSibling !== button) after.after(button);
+      after = button;
+    }
+  };
+  const decorate = () => {
+    addButton();
+    addBarButtons();
+  };
+
   let queued = false;
   new MutationObserver(() => {
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      addButton();
+      decorate();
     });
   }).observe(document.documentElement, { childList: true, subtree: true });
 
   // From Ligma: a pick from the menu, and the setting when it changes
   window.__ligmaImageAdjustments = {
+    decorate: () => decorate(),
     run: (action) => {
       if (!state.on) return;
       const figma = api();
@@ -355,7 +409,7 @@ const PAGE_JS: &str = r##"(() => {
         localStorage.setItem(KEY, JSON.stringify(next));
       } catch {}
       state = next;
-      addButton();
+      decorate();
     },
   };
   // From another tab, or while this one was frozen and missed it
@@ -364,11 +418,15 @@ const PAGE_JS: &str = r##"(() => {
       const stored = JSON.parse(localStorage.getItem(KEY));
       if (stored?.rev > state.rev) {
         state = stored;
-        addButton();
+        decorate();
       }
     } catch {}
   };
-  addEventListener("storage", (event) => event.key === KEY && sync());
+  addEventListener("storage", (event) => {
+    if (event.key === KEY) sync();
+    // Copied in another tab
+    if (event.key === COPIED) decorate();
+  });
   document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && sync());
 })()"##;
 
