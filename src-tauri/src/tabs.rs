@@ -92,6 +92,27 @@ const NEW_TAB_JS: &str = r#"(() => {
   };
 })()"#;
 
+/// `wkwebview::pass_undo_to_pages` gives Cmd+Z to the page first, and
+/// WebKit's fallback to Edit > Undo when the page leaves it alone never
+/// arrives in a child webview. So in a text field, such as a layer being
+/// renamed, undo the text here once Figma's listeners have passed on it
+#[cfg(target_os = "macos")]
+const TEXT_UNDO_JS: &str = r#"(() => {
+  const isText = (node) =>
+    node instanceof HTMLTextAreaElement ||
+    (node instanceof HTMLInputElement && !["button", "checkbox", "color", "file", "radio", "range", "reset", "submit"].includes(node.type)) ||
+    node?.isContentEditable;
+  addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() !== "z" || !e.metaKey || e.ctrlKey || e.altKey || !isText(e.target)) return;
+    // Added while the event is still capturing, so it runs after every other listener
+    addEventListener("keydown", (late) => {
+      if (late !== e || e.defaultPrevented) return;
+      e.preventDefault();
+      document.execCommand(e.shiftKey ? "redo" : "undo");
+    }, { once: true });
+  }, true);
+})()"#;
+
 /// Ligma denies every new window and opens Figma URLs as tabs instead, so
 /// `window.open` returns null. Figma then presents a file in place of its
 /// editor (Design), or loses the presentation altogether (Slides, which
@@ -659,10 +680,14 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::modules::PAGE_JS)
         .initialization_script(crate::layers::page_js())
         .initialization_script(crate::home::page_js())
-        .initialization_script(crate::toolbar::page_js());
+        .initialization_script(crate::toolbar::page_js())
+        .initialization_script(crate::adjustments::page_js());
     #[cfg(target_os = "macos")]
     {
-        builder = builder.user_agent(USER_AGENT).initialization_script(NEW_TAB_JS);
+        builder = builder
+            .user_agent(USER_AGENT)
+            .initialization_script(NEW_TAB_JS)
+            .initialization_script(TEXT_UNDO_JS);
     }
     #[cfg(windows)]
     {
@@ -676,6 +701,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         content_size(app, &window)?,
     )?;
     webview.set_zoom(scale(app))?;
+    #[cfg(target_os = "macos")]
+    crate::wkwebview::pass_undo_to_pages(&webview);
     #[cfg(windows)]
     {
         crate::webview2::drop_request_filters(&webview);
@@ -718,6 +745,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
     }
     if url.host_str() == Some(crate::toolbar::SIGNAL_HOST) {
         crate::toolbar::on_signal(app, id, url);
+        return false;
+    }
+    if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
+        crate::adjustments::on_signal(app, id, url);
         return false;
     }
     if crate::auth::is_google_sign_in(url) {
@@ -771,6 +802,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::plugins::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::toolbar::SIGNAL_HOST) {
         crate::toolbar::on_signal(app, id, &url);
+    } else if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
+        crate::adjustments::on_signal(app, id, &url);
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
@@ -1281,7 +1314,7 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
         ]);
         items
     };
-    crate::tab_menu::show(app, id, items, None, |app, id, action| {
+    crate::tab_menu::show(app, id, items, Default::default(), |app, id, action| {
         let _ = on_menu(app, &format!("{action}:{id}"));
     })
 }

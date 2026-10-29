@@ -464,6 +464,21 @@
       </label>
     </section>
     <section>
+      <h2>Images</h2>
+      <label class="row">
+        <span class="label">Copy and paste adjustments
+          <div class="hint" id="adjustments-hint">With an image's fill open, MOD+Shift+C copies its exposure, contrast and other sliders. MOD+Shift+V then pastes them onto every selected image, keeping each image. The button by Rotate, or a right-click on the sliders or an image's row, also offers Copy, Paste and Reset.</div>
+        </span>
+        <input type="checkbox" class="switch" id="adjustments-clipboard">
+      </label>
+      <label class="row nested" id="adjustments-bar-row">
+        <span class="label">Show in the image bar
+          <div class="hint">Copy adjustments and Paste adjustments after Crop, above the toolbar</div>
+        </span>
+        <input type="checkbox" class="switch" id="adjustments-bar">
+      </label>
+    </section>
+    <section>
       <h2>Home</h2>
       <label class="row">
         <span class="label">Use the classic home page
@@ -663,7 +678,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -687,6 +702,9 @@
   document.documentElement.classList.toggle("macos", macos);
   // Snapshots only exist on macOS
   $("snapshots-row").hidden = !macos;
+  // The platform's shortcuts
+  const adjustmentsHint = $("adjustments-hint");
+  adjustmentsHint.textContent = adjustmentsHint.textContent.replace("MOD+Shift+C", macos ? "⇧⌘C" : "Ctrl+Shift+C").replace("MOD+Shift+V", macos ? "⇧⌘V" : "Ctrl+Shift+V");
 
   const close = () => invoke("plugin:window|close", { label: "settings" });
   $("close").addEventListener("click", close);
@@ -843,6 +861,8 @@
     $("rail-widgets").checked = settings.railWidgets;
     $("actions-plugins-tab").checked = settings.actionsPluginsTab;
     $("layer-previews").checked = settings.layerPreviews;
+    $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
+    $("adjustments-bar").checked = settings.adjustmentsBar;
     $("classic-home").checked = settings.classicHome;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -850,6 +870,7 @@
       ["limit-row", sleeping],
       ["max-hidden-row", sleeping && limited],
       ["snapshots-row", sleeping],
+      ["adjustments-bar-row", settings.adjustmentsClipboard],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -900,6 +921,8 @@
       railWidgets: $("rail-widgets").checked,
       actionsPluginsTab: $("actions-plugins-tab").checked,
       layerPreviews: $("layer-previews").checked,
+      adjustmentsClipboard: $("adjustments-clipboard").checked,
+      adjustmentsBar: $("adjustments-bar").checked,
       classicHome: $("classic-home").checked,
       ...changes,
     };

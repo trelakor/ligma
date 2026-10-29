@@ -93,6 +93,12 @@ pub struct Settings {
     pub show_motion_mode: bool,
     /// and Dev Mode
     pub show_dev_mode: bool,
+    /// Copy and paste the adjustments of image fills, with Cmd+Shift+C in
+    /// the image picker and Cmd+Shift+V, or from the picker's menu
+    pub adjustments_clipboard: bool,
+    /// and with it, show Copy and Paste in the bar Figma shows above the
+    /// toolbar for a selected image
+    pub adjustments_bar: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -130,6 +136,8 @@ impl Default for Settings {
             show_design_mode: true,
             show_motion_mode: true,
             show_dev_mode: true,
+            adjustments_clipboard: true,
+            adjustments_bar: true,
             classic_home: false,
         }
     }
@@ -368,6 +376,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::layers::apply_settings(app, &settings);
     crate::home::apply_settings(app, &settings);
     crate::toolbar::apply_settings(app, &settings);
+    crate::adjustments::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
