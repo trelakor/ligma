@@ -1,16 +1,17 @@
-//! Copy as code without Dev Mode (Settings > Features > Code): in Figma's
-//! right-click menu, Copy/Paste as > Copy as code, which asks for Dev Mode
-//! on plans without it, gives way to Copy as CSS and Copy as Tailwind.
-//! Each copies the selected layers' CSS, as Dev Mode shows it, from the
-//! plugin API's `getCSSAsync`, which every plan has. Tailwind is made from
-//! that CSS, with arbitrary values where Tailwind's scale has none. On by
-//! default
+//! Copy as code without Dev Mode (Settings > Features > Code): Figma's
+//! right-click menu, under Copy/Paste as > Copy as code, offers CSS, CSS
+//! (all layers), iOS and Android on every plan, then an upsell for Dev
+//! Mode's Tailwind and the rest. In its place go Tailwind, the selected
+//! layers' classes, and Tailwind (all layers), them and everything visible
+//! in them as HTML. With Dev Mode there's no upsell and nothing changes. On
+//! by default
 //!
-//! The CSS is read through Figma's console plugin API, `window.figma`,
-//! which Figma only offers in files that can be edited, so view-only files
-//! keep Figma's own item. Menu items are found by role and Figma's English
-//! labels, Copy as code or else Copy as PNG to go next to, as seen on
-//! 2026-10-29
+//! The classes are made from the CSS Dev Mode shows, read through Figma's
+//! console plugin API, `window.figma`, with `getCSSAsync`. They use
+//! Tailwind's spacing scale and named sizes where they fit, and arbitrary
+//! values otherwise. Figma only offers that API in files that can be
+//! edited, so view-only files keep the upsell. The submenu is found by its
+//! items' test ids and the upsell's class name, as seen on 2026-10-29
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -188,37 +189,46 @@ const PAGE_JS: &str = r##"(() => {
     return [`[${property}:${bracket(value).slice(1)}`];
   };
 
-  // `{ name, css }` for each selected layer, `css` as `getCSSAsync` gives it
-  // with Dev Mode's `/* … */` notes left out. Layers it can't read are
-  // skipped
-  const read = async (nodes) => {
-    const layers = [];
-    for (const node of nodes) {
-      let raw;
-      try {
-        raw = await node.getCSSAsync();
-      } catch {
-        continue;
-      }
-      const css = Object.entries(raw)
+  // A layer's CSS as `getCSSAsync` gives it, with Dev Mode's `/* … */`
+  // notes left out. None for layers it can't read
+  const cssOf = async (node) => {
+    try {
+      return Object.entries(await node.getCSSAsync())
         .map(([property, value]) => [property, String(value).replace(/\/\*.*?\*\//g, "").trim()])
         .filter(([, value]) => value);
-      layers.push({ name: node.name, css });
+    } catch {
+      return null;
     }
-    return layers;
   };
-  const format = (layers, kind) =>
-    layers
-      .map(({ name, css }) => {
-        const body =
-          kind === "tailwind"
-            ? css.flatMap(([property, value]) => tailwind(property, value)).join(" ")
-            : css.map(([property, value]) => `${property}: ${value};`).join("\n");
-        return layers.length > 1 ? `/* ${name.replace(/\*\//g, "*\\/")} */\n${body}` : body;
-      })
-      .join("\n\n");
+  const classesOf = (css) => css.flatMap(([property, value]) => tailwind(property, value)).join(" ");
+  const ENTITIES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+  const escapeText = (text) => text.replace(/[&<>]/g, (char) => ENTITIES[char]);
+  const escapeAttribute = (text) => text.replace(/[&"]/g, (char) => ENTITIES[char]);
 
-  const LABELS = { css: "CSS", tailwind: "Tailwind" };
+  // The selected layers' classes, under their names when there are several
+  const selection = async (nodes) => {
+    const layers = (await Promise.all(nodes.map(async (node) => ({ name: node.name, css: await cssOf(node) })))).filter((layer) => layer.css);
+    return layers
+      .map(({ name, css }) => (layers.length > 1 ? `/* ${name.replace(/\*\//g, "* /")} */\n${classesOf(css)}` : classesOf(css)))
+      .join("\n\n");
+  };
+  // The selected layers and everything visible in them as HTML: text
+  // layers as `<p>` with their text, the rest as `<div>`
+  const markup = async (node, depth = 0) => {
+    const css = await cssOf(node);
+    if (!css) return "";
+    const indent = "  ".repeat(depth);
+    const open = `${indent}<${node.type === "TEXT" ? "p" : "div"} class="${escapeAttribute(classesOf(css))}">`;
+    if (node.type === "TEXT") return `${open}${escapeText(node.characters)}</p>`;
+    const children = "children" in node ? node.children.filter((child) => child.visible) : [];
+    const inner = (await Promise.all(children.map((child) => markup(child, depth + 1)))).filter(Boolean);
+    return inner.length ? `${open}\n${inner.join("\n")}\n${indent}</div>` : `${open}</div>`;
+  };
+
+  const KINDS = {
+    tailwind: { label: "Tailwind", make: selection },
+    "tailwind-all": { label: "Tailwind (all layers)", make: async (nodes) => (await Promise.all(nodes.map((node) => markup(node)))).filter(Boolean).join("\n") },
+  };
   // Started from the click, for the clipboard to accept text that's still
   // being read. WebKit and Chromium both take a promise in a ClipboardItem
   const copy = (kind) => {
@@ -228,9 +238,9 @@ const PAGE_JS: &str = r##"(() => {
       notify(figma, "Nothing selected");
       return;
     }
-    const text = read([...figma.currentPage.selection]).then((layers) => {
-      if (!layers.length) throw new Error("no CSS");
-      return format(layers, kind);
+    const text = KINDS[kind].make([...figma.currentPage.selection]).then((text) => {
+      if (!text) throw new Error("no CSS");
+      return text;
     });
     const written =
       typeof ClipboardItem === "function"
@@ -238,71 +248,59 @@ const PAGE_JS: &str = r##"(() => {
         : text.then((text) => navigator.clipboard.writeText(text));
     written
       .catch(() => text.then((text) => navigator.clipboard.writeText(text)))
-      .then(() => notify(figma, `Copied as ${LABELS[kind]}`))
-      .catch(() => notify(figma, `Couldn't copy as ${LABELS[kind]}`));
+      .then(() => notify(figma, "Copied as Tailwind"))
+      .catch(() => notify(figma, "Couldn't copy as Tailwind"));
   };
 
-  // Figma's menu items, by role and class. `label` reads an item's name
-  // without its shortcut
-  const ITEM = '[role="menuitem"], [class*="multilevel--option"]';
-  const nameOf = (item) => {
-    const walker = document.createTreeWalker(item, NodeFilter.SHOW_TEXT);
-    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-      if (text.data.trim()) return text;
-    }
-    return null;
-  };
-  const label = (item) => nameOf(item)?.data.trim() ?? "";
+  // Figma's Copy as code submenu, by its items' test ids. Without Dev Mode
+  // it ends with an upsell for Tailwind and more, after a separator
+  const OPTION = (name) => `[data-testid="dropdown-option-${name}"]`;
+  const UPSELL = '[class*="context_menus_upsells--upsellItem"]';
   const HIDDEN = "data-ligma-code-hidden";
 
-  // An item like `like`, with its spacing and name but without its
-  // shortcut, badge or arrow
+  // An item like `like` named `name`
   const makeItem = (like, kind) => {
     const item = like.cloneNode(true);
-    item.removeAttribute(HIDDEN);
-    item.removeAttribute("id");
-    item.removeAttribute("aria-haspopup");
-    item.removeAttribute("aria-expanded");
-    item.removeAttribute("data-testid");
+    for (const name of ["id", "data-testid", "aria-haspopup", "aria-expanded"]) item.removeAttribute(name);
     item.dataset.ligmaCode = kind;
-    const name = nameOf(item);
-    if (name) {
-      name.data = `Copy as ${LABELS[kind]}`;
-      for (let node = name; node !== item; node = node.parentNode) {
-        while (node.nextSibling) node.nextSibling.remove();
-      }
-    } else {
-      item.textContent = `Copy as ${LABELS[kind]}`;
-    }
+    item.tabIndex = -1;
+    const name = item.querySelector('[class*="multilevel--name"]') ?? item;
+    name.textContent = KINDS[kind].label;
+    // Figma marks the item under the pointer with its active class, which
+    // ours borrow from the item that opened this submenu
+    const idle = item.className;
+    item.addEventListener("mouseenter", () => {
+      const active = document.querySelector('[role="menuitem"][class*="multilevel--optionActive"]');
+      if (active) item.className = active.className;
+    });
+    item.addEventListener("mouseleave", () => (item.className = idle));
     return item;
   };
 
   const decorate = () => {
-    const on = state.on && !!api();
-    if (!on) {
+    if (!state.on || !api()) {
       for (const node of document.querySelectorAll("[data-ligma-code]")) node.remove();
       for (const node of document.querySelectorAll(`[${HIDDEN}]`)) node.removeAttribute(HIDDEN);
       return;
     }
-    const items = [...document.querySelectorAll(ITEM)].filter((item) => !item.dataset.ligmaCode);
-    // Figma's Copy as code, or else Copy as PNG to follow
-    const code = items.find((item) => /^Copy as code\b/i.test(label(item)));
-    const anchor = code ?? items.find((item) => /^Copy as PNG\b/i.test(label(item)));
-    if (!anchor || anchor.parentElement.querySelector(":scope > [data-ligma-code]")) return;
-    if (code) code.setAttribute(HIDDEN, "");
-    const css = makeItem(anchor, "css");
-    const tailwind = makeItem(anchor, "tailwind");
-    if (code) code.before(css, tailwind);
-    else anchor.after(css, tailwind);
+    const all = document.querySelector(OPTION("CSS (all layers)"));
+    const upsell = all?.parentElement.querySelector(`:scope > [role="menuitem"]:has(${UPSELL})`);
+    if (!upsell || all.parentElement.querySelector(":scope > [data-ligma-code]")) return;
+    upsell.setAttribute(HIDDEN, "");
+    const separator = upsell.previousElementSibling;
+    if (separator?.matches('[data-testid="dropdown-separator"]')) separator.setAttribute(HIDDEN, "");
+    all.after(makeItem(all, "tailwind"), makeItem(all, "tailwind-all"));
   };
 
-  // Figma closes its menu on Escape, sent from within the menu so it
-  // doesn't reach the canvas first
-  const closeMenu = (item) => {
-    const target = item.closest('[role="menu"]') ?? item.parentElement;
+  // Figma closes a menu level on each Escape, sent to the innermost menu
+  // so it doesn't reach the canvas, which would change the selection
+  const closeMenus = (left = 4) => {
+    const menu = [...document.querySelectorAll('[role="menu"]')].at(-1);
+    if (!menu || !left) return;
     for (const type of ["keydown", "keyup"]) {
-      target.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      menu.dispatchEvent(new KeyboardEvent(type, { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true }));
     }
+    requestAnimationFrame(() => closeMenus(left - 1));
   };
   // Ligma's items keep Figma's handlers out, and copy on click
   for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
@@ -315,17 +313,14 @@ const PAGE_JS: &str = r##"(() => {
         event.stopImmediatePropagation();
         if (type !== "click" || event.button !== 0) return;
         copy(item.dataset.ligmaCode);
-        closeMenu(item);
+        closeMenus();
       },
       true,
     );
   }
 
   const style = document.createElement("style");
-  style.textContent = `
-    [${HIDDEN}] { display: none !important; }
-    [data-ligma-code]:hover { background-color: var(--color-bg-menu-selected, var(--color-bg-brand, #0d99ff)) !important; color: var(--color-text-menu-selected, var(--color-text-onbrand, #fff)) !important; }
-  `;
+  style.textContent = `[${HIDDEN}] { display: none !important; }`;
   const mount = () => {
     if (style.isConnected) return true;
     const parent = document.head ?? document.documentElement;
@@ -342,7 +337,7 @@ const PAGE_JS: &str = r##"(() => {
       queued = false;
       decorate();
     });
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  }).observe(document, { childList: true, subtree: true });
 
   // From Ligma, when the setting changes
   window.__ligmaCopyCode = (next) => {
