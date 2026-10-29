@@ -434,7 +434,7 @@
       <h2>Toolbar</h2>
       <div class="row">
         <span class="label">Modes to switch between
-          <div class="hint">On the right of Figma Design's toolbar. With one left, the switch is hidden. The mode you're in always shows. Hiding one reloads files already open, each when you next look at it.</div>
+          <div class="hint">On the right of Figma Design's toolbar. With one left, the switch is hidden. Hiding the mode a file is in switches it to the next one. Right-click the switch to change these there. Hiding one reloads files already open, each when you next look at it.</div>
         </span>
       </div>
       <label class="row nested">
@@ -1045,6 +1045,11 @@
     settings = loaded;
     show();
   });
+  // From Ligma, when settings change elsewhere (the toolbar's menu of modes)
+  window.applySettings = (changed) => {
+    settings = changed;
+    show();
+  };
 </script>
 </body>
 </html>

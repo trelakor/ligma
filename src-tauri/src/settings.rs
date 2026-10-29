@@ -350,19 +350,24 @@ pub async fn get_theme(app: AppHandle, webview: Webview) -> Option<serde_json::V
     from_settings_window(&webview).then(|| crate::tabs::theme(&app)).flatten()
 }
 
-/// Saves `settings` and applies them to the running app
+/// Saves `settings` from the settings window and applies them
 #[tauri::command]
 pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) -> Result<(), String> {
     if !from_settings_window(&webview) {
         return Err("not allowed".into());
     }
-    save(&app, &settings)?;
-    crate::tabs::apply_settings(&app, &settings);
-    crate::appearance::apply_settings(&app, &settings);
-    crate::presence::apply_settings(&app, &settings);
-    crate::layers::apply_settings(&app, &settings);
-    crate::home::apply_settings(&app, &settings);
-    crate::toolbar::apply_settings(&app, &settings);
+    change(&app, settings)
+}
+
+/// Saves `settings` and applies them to the running app
+pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
+    save(app, &settings)?;
+    crate::tabs::apply_settings(app, &settings);
+    crate::appearance::apply_settings(app, &settings);
+    crate::presence::apply_settings(app, &settings);
+    crate::layers::apply_settings(app, &settings);
+    crate::home::apply_settings(app, &settings);
+    crate::toolbar::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
@@ -372,9 +377,16 @@ pub async fn set_settings(app: AppHandle, webview: Webview, settings: Settings) 
         changed
     };
     if plugins_changed {
-        crate::plugins::push(&app);
+        crate::plugins::push(app);
     }
     Ok(())
+}
+
+/// Shows `settings`, changed elsewhere, in the settings window if open
+pub fn show_in_window(app: &AppHandle, settings: &Settings) {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let _ = window.eval(format!("window.applySettings?.({})", serde_json::to_string(settings).unwrap()));
+    }
 }
 
 #[tauri::command]

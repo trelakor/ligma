@@ -15,6 +15,15 @@
 //! Mode toggle. A stylesheet hides it, with no reload, when the mode it
 //! goes to is hidden
 //!
+//! Hiding the mode a file is in switches it to the next one shown, in the
+//! switch's order. Only then: Figma puts some accounts in a mode on its
+//! own, and would put them back
+//!
+//! Right-clicking the switch opens a menu of the four modes (see
+//! tab_menu.rs), checked when shown. `PAGE_JS` asks for it by loading
+//! `SIGNAL_HOST`, which `on_signal` handles, and picking one turns it on
+//! or off as in Settings
+//!
 //! Figma's shortcuts and the Actions menu still switch to hidden modes:
 //! they're handled where Ligma can't reach
 
@@ -22,7 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Url};
 
 use crate::settings::Settings;
 
@@ -45,6 +54,17 @@ const PAGE_JS: &str = r##"(() => {
   };
   // A string, so React sees the same value until it changes
   const getHidden = () => state.hidden.join(" ");
+  // The switch on screen: its modes, the one the file is in and how it
+  // switches, for leaving a mode as it's hidden
+  let shown = null;
+  // Modes hidden while this page couldn't leave them, for the page it
+  // reloads into to leave
+  const LEAVE_KEY = "ligma-toolbar-leave";
+  let leaving = [];
+  try {
+    leaving = JSON.parse(sessionStorage.getItem(LEAVE_KEY)) ?? [];
+    sessionStorage.removeItem(LEAVE_KEY);
+  } catch {}
   // The switch's module, as seen on 2026-10-29: `function f(e){let{modes:
   // t,activeMode:n,onModeSwitch:l,...}=e;...}`, its only export. Each mode
   // is `{ mode, icon, label }`, `mode` one of "illustration" (Draw),
@@ -66,6 +86,16 @@ const PAGE_JS: &str = r##"(() => {
           if (typeof Switch !== "function" || !React || !String(Switch).includes("activeMode")) return Switch;
           const Modes = (props) => {
             const hidden = React.useSyncExternalStore(subscribe, getHidden).split(" ");
+            shown = props;
+            React.useEffect(() => () => {
+              if (shown === props) shown = null;
+            });
+            // Once, as the page reloaded for a hidden mode first draws it
+            React.useEffect(() => {
+              const left = leaving;
+              leaving = [];
+              if (left.includes(props.activeMode)) leave(left);
+            }, []);
             const modes = Array.isArray(props.modes)
               ? props.modes.filter((item) => item.mode === props.activeMode || !hidden.includes(item.mode))
               : props.modes;
@@ -101,11 +131,55 @@ const PAGE_JS: &str = r##"(() => {
   // when in Dev Mode, to Dev Mode otherwise. The divider before it goes
   // with it
   const TOGGLE = '[class*="mode_switcher_toggle--toggleWrapper"]';
+  const TO_DESIGN = '[data-tooltip-shortcut-key="enter-design-mode"]';
+
+  // Switches out of the mode the file is in if it's one of `hidden`, to
+  // the next one shown after it, wrapping around
+  const leave = (hidden) => {
+    if (shown) {
+      const { modes, activeMode, onModeSwitch } = shown;
+      if (!hidden.includes(activeMode) || !Array.isArray(modes) || typeof onModeSwitch !== "function") return;
+      const at = modes.findIndex((item) => item.mode === activeMode);
+      const next = [...modes.slice(at + 1), ...modes.slice(0, at)].find((item) => !item.disabled && !state.hidden.includes(item.mode));
+      if (next) onModeSwitch(next.mode);
+      return;
+    }
+    // The older switch has only the other mode to go to
+    const toggle = document.querySelector(TOGGLE);
+    if (!toggle) return;
+    const inDev = toggle.matches(TO_DESIGN);
+    const [from, to] = inDev ? ["handoff", "design"] : ["design", "handoff"];
+    if (hidden.includes(from) && !state.hidden.includes(to)) toggle.querySelector('button, [role="switch"], input')?.click();
+  };
+
+  // Right-clicking the switch asks Ligma for its menu (see `on_signal`):
+  // through `window.open` on Windows, and on macOS as an iframe load,
+  // which WKWebView reports to `on_navigation`
+  const SWITCH = `[class*="toolbelt_mode_segmented_control--container"], [data-testid="toolbelt-mode-segmented-control"], ${TOGGLE}`;
+  addEventListener(
+    "contextmenu",
+    (event) => {
+      if (!event.target.closest?.(SWITCH)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const url = "https://toolbar.ligma.invalid/menu";
+      if (navigator.userAgent.includes("Mac")) {
+        const frame = document.createElement("iframe");
+        frame.style.display = "none";
+        frame.src = url;
+        document.documentElement.appendChild(frame);
+        setTimeout(() => frame.remove(), 1000);
+      } else {
+        window.open(url, "_blank");
+      }
+    },
+    true,
+  );
   const style = document.createElement("style");
   const restyle = () => {
     const toggles = [];
-    if (state.hidden.includes("handoff")) toggles.push(`${TOGGLE}:not([data-tooltip-shortcut-key="enter-design-mode"])`);
-    if (state.hidden.includes("design")) toggles.push(`${TOGGLE}[data-tooltip-shortcut-key="enter-design-mode"]`);
+    if (state.hidden.includes("handoff")) toggles.push(`${TOGGLE}:not(${TO_DESIGN})`);
+    if (state.hidden.includes("design")) toggles.push(`${TOGGLE}${TO_DESIGN}`);
     const hidden = toggles.join(", ");
     style.textContent = hidden
       ? `:is(${hidden}), [class*="mode_toggle_switch_divider--hideIfLast"]:has(+ :is(${hidden})) { display: none !important; }`
@@ -131,15 +205,23 @@ const PAGE_JS: &str = r##"(() => {
       return;
     }
     reloading = true;
+    try {
+      sessionStorage.setItem(LEAVE_KEY, JSON.stringify(leaving));
+    } catch {}
     location.reload();
   };
 
   const apply = (next) => {
     const changed = next.hidden.join(" ") !== state.hidden.join(" ");
+    const newly = next.hidden.filter((mode) => !state.hidden.includes(mode));
     state = next;
     if (!changed) return;
     restyle();
     for (const listener of listeners) listener();
+    if (newly.length) {
+      if (patched || !window.__ligmaModules.arrived(MODULE)) leave(newly);
+      else leaving = [...new Set([...leaving, ...newly])].filter((mode) => state.hidden.includes(mode));
+    }
     if (!state.hidden.length || patched) return;
     if (window.__ligmaModules.arrived(MODULE)) reloadWhenReady();
     else install();
@@ -204,6 +286,57 @@ pub fn init(settings: &Settings) {
 /// `PAGE_JS`, for a new Figma tab
 pub fn page_js() -> String {
     PAGE_JS.replace("__LIGMA_TOOLBAR_MODES__", &state())
+}
+
+/// Origin of the links `PAGE_JS` opens to ask for the menu
+pub const SIGNAL_HOST: &str = "toolbar.ligma.invalid";
+
+/// The menu's items, in the switch's order: their actions and text
+const MODES: [(&str, &str); 4] = [("draw", "Draw"), ("design", "Design"), ("motion", "Motion"), ("dev", "Dev Mode")];
+
+/// The setting that shows mode `action` (see `MODES`)
+fn shows<'a>(settings: &'a mut Settings, action: &str) -> Option<&'a mut bool> {
+    match action {
+        "draw" => Some(&mut settings.show_draw_mode),
+        "design" => Some(&mut settings.show_design_mode),
+        "motion" => Some(&mut settings.show_motion_mode),
+        "dev" => Some(&mut settings.show_dev_mode),
+        _ => None,
+    }
+}
+
+/// A right-click on the switch in tab `tab`: opens the menu of modes. Not
+/// from within the webview's own callback, which is still deciding on the
+/// page
+pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
+    if url.path() != "/menu" {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut settings = crate::settings::current(&app);
+        let items = MODES.iter().map(|&item| Some(item)).collect();
+        let checked = MODES
+            .iter()
+            .map(|&(action, _)| action)
+            .filter(|action| shows(&mut settings, action).is_some_and(|shown| *shown))
+            .collect();
+        let _ = crate::tab_menu::show(&app, tab, items, Some(checked), on_pick);
+    });
+}
+
+/// Turns the mode picked in the menu on or off
+fn on_pick(app: &AppHandle, _tab: u32, action: &str) {
+    let mut settings = crate::settings::current(app);
+    let Some(shown) = shows(&mut settings, action) else {
+        return;
+    };
+    *shown = !*shown;
+    if let Err(error) = crate::settings::change(app, settings.clone()) {
+        log::error!("Couldn't save settings: {error}");
+        return;
+    }
+    crate::settings::show_in_window(app, &settings);
 }
 
 /// Sends changed settings to every loaded tab

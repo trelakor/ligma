@@ -716,6 +716,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::plugins::on_signal(app, id, url);
         return false;
     }
+    if url.host_str() == Some(crate::toolbar::SIGNAL_HOST) {
+        crate::toolbar::on_signal(app, id, url);
+        return false;
+    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -765,6 +769,8 @@ fn figma_link_later(app: &AppHandle, url: Url) {
 fn on_new_window(app: &AppHandle, id: u32, url: Url) {
     if url.host_str() == Some(crate::plugins::SIGNAL_HOST) {
         crate::plugins::on_signal(app, id, &url);
+    } else if url.host_str() == Some(crate::toolbar::SIGNAL_HOST) {
+        crate::toolbar::on_signal(app, id, &url);
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
@@ -1275,7 +1281,9 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
         ]);
         items
     };
-    crate::tab_menu::show(app, id, items)
+    crate::tab_menu::show(app, id, items, None, |app, id, action| {
+        let _ = on_menu(app, &format!("{action}:{id}"));
+    })
 }
 
 /// Runs a tab menu item, given its id without the `tab-menu:` prefix
