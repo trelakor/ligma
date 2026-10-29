@@ -96,6 +96,9 @@ pub struct Settings {
     /// Copy and paste the adjustments of image fills, with Cmd+Shift+C in
     /// the image picker and Cmd+Shift+V, or from the picker's menu
     pub adjustments_clipboard: bool,
+    /// and with it, show Copy and Paste in the bar Figma shows above the
+    /// toolbar for a selected image
+    pub adjustments_bar: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -134,6 +137,7 @@ impl Default for Settings {
             show_motion_mode: true,
             show_dev_mode: true,
             adjustments_clipboard: true,
+            adjustments_bar: true,
             classic_home: false,
         }
     }

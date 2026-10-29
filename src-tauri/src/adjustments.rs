@@ -38,8 +38,8 @@ use tauri::{AppHandle, Url};
 
 use crate::settings::Settings;
 
-/// Runs in Figma tabs. `__LIGMA_IMAGE_ADJUSTMENTS__` is `{ on, rev }`: the
-/// setting when the tab was made. A page loaded later in the same tab may
+/// Runs in Figma tabs. `__LIGMA_IMAGE_ADJUSTMENTS__` is `{ on, bar, rev }`:
+/// the settings when the tab was made. A page loaded later in the same tab may
 /// find a newer one in `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
@@ -338,7 +338,7 @@ const PAGE_JS: &str = r##"(() => {
   // Copy adjustments and Paste adjustments after Crop in the bar Figma shows
   // above the toolbar for a selected image, in its buttons' look. Paste
   // only once something is copied. Both read and change each layer's top
-  // image fill
+  // image fill. Only with the setting for them, `bar`
   const BAR = '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]';
   const BAR_ICONS = {
     copy: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="9.5" y="9.5" width="9" height="9" rx="1.5"/><path ${STROKE} d="M14.5 9.5V7A1.5 1.5 0 0 0 13 5.5H7A1.5 1.5 0 0 0 5.5 7v6A1.5 1.5 0 0 0 7 14.5h2.5"/></svg>`,
@@ -351,7 +351,7 @@ const PAGE_JS: &str = r##"(() => {
       if (ours.parentElement !== bar) ours.remove();
     }
     if (!bar) return;
-    const figma = state.on && api();
+    const figma = state.on && state.bar !== false && api();
     const image = !!figma && figma.currentPage.selection.some((node) => paintsOf(node, "fills").some(adjustable));
     const show = { copy: image, paste: image && !!copied() };
     const crop = bar.querySelector("button:not([data-ligma-adjustments-bar])");
@@ -430,9 +430,11 @@ const PAGE_JS: &str = r##"(() => {
   document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && sync());
 })()"##;
 
-/// The setting,
+/// The settings: copy and paste,
 static ON: AtomicBool = AtomicBool::new(true);
-/// and when it last changed, for `PAGE_JS` to tell it from older ones in
+/// the image bar's buttons,
+static BAR: AtomicBool = AtomicBool::new(true);
+/// and when they last changed, for `PAGE_JS` to tell it from older ones in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
 
@@ -441,12 +443,14 @@ fn now() -> u64 {
 }
 
 fn state() -> String {
-    format!(r#"{{"on":{},"rev":{}}}"#, ON.load(Ordering::Relaxed), REV.load(Ordering::Relaxed))
+    let (on, bar) = (ON.load(Ordering::Relaxed), BAR.load(Ordering::Relaxed));
+    format!(r#"{{"on":{on},"bar":{bar},"rev":{}}}"#, REV.load(Ordering::Relaxed))
 }
 
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.adjustments_clipboard, Ordering::Relaxed);
+    BAR.store(settings.adjustments_bar, Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
 
@@ -499,9 +503,11 @@ fn on_pick(app: &AppHandle, tab: u32, action: &str) {
     }
 }
 
-/// Sends a changed setting to every loaded tab
+/// Sends changed settings to every loaded tab
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
-    if ON.swap(settings.adjustments_clipboard, Ordering::Relaxed) == settings.adjustments_clipboard {
+    let on = ON.swap(settings.adjustments_clipboard, Ordering::Relaxed) != settings.adjustments_clipboard;
+    let bar = BAR.swap(settings.adjustments_bar, Ordering::Relaxed) != settings.adjustments_bar;
+    if !on && !bar {
         return;
     }
     REV.store(now(), Ordering::Relaxed);
