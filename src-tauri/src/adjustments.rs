@@ -10,18 +10,20 @@
 //! it. Cmd+Shift+V
 //! (Ctrl+Shift+V) pastes them while they're the last thing copied in
 //! Ligma; once anything else is copied or cut, it's Figma's Paste over
-//! Selection again. Right-clicking the sliders opens a menu with Copy,
-//! Paste and Reset (see tab_menu.rs). `PAGE_JS` asks for it by loading
-//! `SIGNAL_HOST`, which `on_signal` handles
+//! Selection again. A button left of the picker's Rotate 90º, and
+//! right-clicking its sliders or an image fill's row in the Fill section,
+//! open a menu with Copy, Paste and Reset (see tab_menu.rs). Copy reads
+//! the fill whose picker is open or row was clicked. `PAGE_JS` asks for
+//! the menu by loading `SIGNAL_HOST`, which `on_signal` handles
 //!
 //! What's copied is kept in `localStorage`, so it carries to every tab.
 //! Fills are read and written through Figma's console plugin API,
 //! `window.figma`, so files that can't be edited are left alone, and each
 //! paste or reset is one step for Figma's undo
 //!
-//! The picker is found by its sliders' labels, by Figma's class for them
-//! as seen on 2026-10-29, or else by seven sliders in one box, or by
-//! Figma's English labels
+//! The picker, its buttons and the Fill section's rows are found by
+//! Figma's test ids and class names as seen on 2026-10-29. The sliders
+//! also by seven of them in one box, or by Figma's English labels
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -86,14 +88,18 @@ const PAGE_JS: &str = r##"(() => {
   };
   const plural = (count) => `${count} image${count === 1 ? "" : "s"}`;
 
-  // From the first selected layer with an image: its topmost image fill
-  // shown, as the picker usually holds. False with none
-  const copy = () => {
+  // From the first selected layer with an image: its fill at `index`, the
+  // one whose picker is open or row was right-clicked, or else its topmost
+  // image fill shown. False with none
+  const copy = (index) => {
     const figma = api();
     if (!figma) return false;
     for (const node of figma.currentPage.selection) {
       const fills = fillsOf(node);
-      const paint = fills.findLast((paint) => adjustable(paint) && paint.visible !== false) ?? fills.findLast(adjustable);
+      const paint =
+        (adjustable(fills[index]) ? fills[index] : null) ??
+        fills.findLast((paint) => adjustable(paint) && paint.visible !== false) ??
+        fills.findLast(adjustable);
       if (!paint) continue;
       keep({ filters: Object.fromEntries(FILTERS.map((key) => [key, paint.filters?.[key] ?? 0])), armed: true });
       figma.notify("Adjustments copied");
@@ -166,11 +172,24 @@ const PAGE_JS: &str = r##"(() => {
     return null;
   };
 
+  // The Fill section's rows, the one whose picker is open marked
+  // `paintPanelValueSelected`. Each paint's index in the layer's fills is
+  // the last number of its `data-onboarding-key`, `paint-panel-row-paint-1-1`
+  const ROW = '[data-testid="paint-panel-color-value-container"]';
+  const rowIndex = (row) => {
+    const match = /-(\d+)$/.exec(row?.dataset.onboardingKey ?? "");
+    return match ? Number(match[1]) : undefined;
+  };
+  const openIndex = () => rowIndex(document.querySelector(`${ROW}[class*="paintPanelValueSelected--"]`));
+
   // Asks Ligma for the menu (see `on_signal`): through `window.open` on
   // Windows, and on macOS as an iframe load, which WKWebView reports to
-  // `on_navigation`
-  const signal = (path, params) => {
-    const url = `https://adjustments.ligma.invalid/${path}?${new URLSearchParams(params)}`;
+  // `on_navigation`. Copy then reads the fill at `index`
+  let menuIndex;
+  const openMenu = (index) => {
+    menuIndex = index;
+    const value = copied();
+    const url = `https://adjustments.ligma.invalid/menu?${new URLSearchParams({ copied: value ? 1 : 0, armed: value?.armed ? 1 : 0 })}`;
     if (MAC) {
       const frame = document.createElement("iframe");
       frame.style.display = "none";
@@ -200,7 +219,7 @@ const PAGE_JS: &str = r##"(() => {
       if (!mod || event.altKey) return;
       const key = letter(event);
       if (key === "c" && event.shiftKey) {
-        if (state.on && !editing(document.activeElement) && adjustments() && copy()) stop(event);
+        if (state.on && !editing(document.activeElement) && adjustments() && copy(openIndex())) stop(event);
         else disarm();
       } else if ((key === "c" || key === "x") && !event.shiftKey) {
         disarm();
@@ -218,21 +237,67 @@ const PAGE_JS: &str = r##"(() => {
   addEventListener(
     "contextmenu",
     (event) => {
-      if (!state.on || !api()) return;
-      const box = adjustments();
-      if (!box?.contains(event.target)) return;
+      const figma = state.on && api();
+      if (!figma) return;
+      if (adjustments()?.contains(event.target)) {
+        stop(event);
+        openMenu(openIndex());
+        return;
+      }
+      // An image or video fill's row
+      const index = rowIndex(event.target.closest?.(ROW));
+      if (index === undefined || !figma.currentPage.selection.some((node) => adjustable(fillsOf(node)[index]))) return;
       stop(event);
-      const value = copied();
-      signal("menu", { copied: value ? 1 : 0, armed: value?.armed ? 1 : 0 });
+      openMenu(index);
     },
     true,
   );
+
+  // A button left of the image picker's Rotate 90º, in its look, that opens
+  // the menu
+  const PICKER = '[data-testid="paint-picker-v2-modal"]';
+  const BUTTONS = '[class*="image_settings_modal--settingsButtons"]';
+  const STROKE = 'stroke="var(--fpl-icon-color, var(--color-icon))"';
+  const ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M6 9h6.5m3 0H18M6 15h2.5m3 0H18"/><circle ${STROKE} cx="14" cy="9" r="1.5"/><circle ${STROKE} cx="10" cy="15" r="1.5"/></svg>`;
+  const addButton = () => {
+    const buttons = document.querySelector(PICKER)?.querySelector(BUTTONS);
+    const ours = document.querySelector("[data-ligma-adjustments]");
+    if (ours && (!state.on || !buttons?.contains(ours))) ours.parentElement.remove();
+    if (!state.on || !buttons || buttons.querySelector("[data-ligma-adjustments]")) return;
+    const rotate = buttons.querySelector("button");
+    if (!rotate) return;
+    const button = Object.assign(document.createElement("button"), { type: "button", className: rotate.className });
+    button.dataset.ligmaAdjustments = "";
+    button.dataset.tooltip = "Adjustments";
+    button.dataset.tooltipType = "text";
+    button.setAttribute("aria-label", "Adjustments");
+    const icon = rotate.querySelector("span")?.cloneNode(false) ?? document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = ICON;
+    button.append(icon);
+    button.addEventListener("click", (event) => {
+      stop(event);
+      if (api()) openMenu(openIndex());
+    });
+    const wrap = document.createElement("span");
+    wrap.append(button);
+    buttons.prepend(wrap);
+  };
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      addButton();
+    });
+  }).observe(document.documentElement, { childList: true, subtree: true });
 
   // From Ligma: a pick from the menu, and the setting when it changes
   window.__ligmaImageAdjustments = {
     run: (action) => {
       if (!state.on) return;
-      if (action === "copy" && !copy()) api()?.notify("No images selected");
+      if (action === "copy" && !copy(menuIndex)) api()?.notify("No images selected");
       else if (action === "paste") paste();
       else if (action === "reset") reset();
     },
@@ -241,13 +306,17 @@ const PAGE_JS: &str = r##"(() => {
         localStorage.setItem(KEY, JSON.stringify(next));
       } catch {}
       state = next;
+      addButton();
     },
   };
   // From another tab, or while this one was frozen and missed it
   const sync = () => {
     try {
       const stored = JSON.parse(localStorage.getItem(KEY));
-      if (stored?.rev > state.rev) state = stored;
+      if (stored?.rev > state.rev) {
+        state = stored;
+        addButton();
+      }
     } catch {}
   };
   addEventListener("storage", (event) => event.key === KEY && sync());
@@ -287,8 +356,8 @@ const SHORTCUTS: [(&str, &str); 2] = [("copy", "⇧⌘C"), ("paste", "⇧⌘V")]
 #[cfg(not(target_os = "macos"))]
 const SHORTCUTS: [(&str, &str); 2] = [("copy", "Ctrl+Shift+C"), ("paste", "Ctrl+Shift+V")];
 
-/// A right-click on the image picker's sliders in tab `tab`: opens the
-/// menu, with Paste only once something is copied, and its shortcut only
+/// The picker's button, or a right-click on its sliders or an image
+/// fill's row, in tab `tab`: opens the menu, with Paste only once something is copied, and its shortcut only
 /// while it's what Cmd+Shift+V pastes. Not from within the webview's own
 /// callback, which is still deciding on the page
 pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
