@@ -15,9 +15,9 @@
 //! Mode toggle. A stylesheet hides it, with no reload, when the mode it
 //! goes to is hidden
 //!
-//! Hiding the mode a file is in switches it to the next one shown, in the
-//! switch's order. Only then: Figma puts some accounts in a mode on its
-//! own, and would put them back
+//! Hiding the mode a file is in switches it to the first one shown, in the
+//! switch's order, or the next if Figma doesn't take it. Only then: Figma
+//! puts some accounts in a mode on its own, and would put them back
 //!
 //! Right-clicking the switch opens a menu of the four modes (see
 //! tab_menu.rs), checked when shown. `PAGE_JS` asks for it by loading
@@ -90,11 +90,15 @@ const PAGE_JS: &str = r##"(() => {
             React.useEffect(() => () => {
               if (shown === props) shown = null;
             });
-            // Once, as the page reloaded for a hidden mode first draws it
+            // Once, when the page reloaded for a hidden mode has drawn the
+            // file: Figma doesn't take a switch before
             React.useEffect(() => {
               const left = leaving;
               leaving = [];
-              if (left.includes(props.activeMode)) leave(left);
+              if (!left.length) return;
+              const ready = () => document.querySelector("canvas") && !document.querySelector('[class*="progress_bar--"]');
+              const wait = () => (ready() ? leave(left) : setTimeout(wait, 500));
+              wait();
             }, []);
             const modes = Array.isArray(props.modes)
               ? props.modes.filter((item) => item.mode === props.activeMode || !hidden.includes(item.mode))
@@ -134,16 +138,20 @@ const PAGE_JS: &str = r##"(() => {
   const TO_DESIGN = '[data-tooltip-shortcut-key="enter-design-mode"]';
 
   // Switches out of the mode the file is in if it's one of `hidden`, to
-  // the next one shown after it, wrapping around
-  const leave = (hidden) => {
+  // the first one shown. Figma doesn't always take a switch (Motion from
+  // Design wants something to animate), so if the file is still in a
+  // hidden mode a while later, to the one after it, and so on
+  const leave = (hidden, tried = 0) => {
     if (shown) {
       const { modes, activeMode, onModeSwitch } = shown;
       if (!hidden.includes(activeMode) || !Array.isArray(modes) || typeof onModeSwitch !== "function") return;
-      const at = modes.findIndex((item) => item.mode === activeMode);
-      const next = [...modes.slice(at + 1), ...modes.slice(0, at)].find((item) => !item.disabled && !state.hidden.includes(item.mode));
-      if (next) onModeSwitch(next.mode);
+      const next = modes.filter((item) => !item.disabled && !state.hidden.includes(item.mode))[tried];
+      if (!next) return;
+      onModeSwitch(next.mode);
+      setTimeout(() => leave(hidden, tried + 1), 3000);
       return;
     }
+    if (tried) return;
     // The older switch has only the other mode to go to
     const toggle = document.querySelector(TOGGLE);
     if (!toggle) return;
