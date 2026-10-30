@@ -800,7 +800,7 @@ const PAGE_JS: &str = r##"(() => {
 
 
 /// The setting,
-static ON: AtomicBool = AtomicBool::new(true);
+static ON: AtomicBool = AtomicBool::new(false);
 /// and when it last changed, for `PAGE_JS` to tell it from older ones in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);

@@ -145,7 +145,7 @@ impl Default for Settings {
             adjustments_clipboard: true,
             adjustments_bar: true,
             hide_free_ai_actions: true,
-            color_contrast: true,
+            color_contrast: false,
             classic_home: false,
         }
     }
