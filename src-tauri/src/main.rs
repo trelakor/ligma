@@ -5,6 +5,7 @@ mod adjustments;
 mod ai_actions;
 mod appearance;
 mod auth;
+mod background;
 mod copy_code;
 mod contrast;
 mod discord_ipc;

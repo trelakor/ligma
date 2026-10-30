@@ -490,6 +490,12 @@
         </span>
         <input type="checkbox" class="switch" id="hide-free-ai-actions">
       </label>
+      <label class="row nested" id="local-remove-background-row">
+        <span class="label"><span id="local-remove-background-label">Remove backgrounds on this Mac</span>
+          <div class="hint" id="local-remove-background-hint">Ligma's own Remove background takes the place of Figma's and finds the subject on your Mac, as Preview does. Needs macOS 14 or later.</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-remove-background">
+      </label>
     </section>
     <section>
       <h2>Code</h2>
@@ -709,7 +715,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "copy-as-code", "color-contrast", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "copy-as-code", "color-contrast", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -733,6 +739,12 @@
   document.documentElement.classList.toggle("macos", macos);
   // Snapshots only exist on macOS
   $("snapshots-row").hidden = !macos;
+  // Removing backgrounds uses macOS's Vision, or on Windows a model
+  // downloaded the first time
+  if (!macos) {
+    $("local-remove-background-label").textContent = "Remove backgrounds on this PC";
+    $("local-remove-background-hint").textContent = "Ligma's own Remove background takes the place of Figma's and finds the subject on your PC. The first time, it downloads a 224 MB model from Hugging Face.";
+  }
   // The platform's shortcuts
   const adjustmentsHint = $("adjustments-hint");
   adjustmentsHint.textContent = adjustmentsHint.textContent.replace("MOD+Shift+C", macos ? "⇧⌘C" : "Ctrl+Shift+C").replace("MOD+Shift+V", macos ? "⇧⌘V" : "Ctrl+Shift+V");
@@ -895,6 +907,7 @@
     $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
     $("adjustments-bar").checked = settings.adjustmentsBar;
     $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
+    $("local-remove-background").checked = settings.localRemoveBackground;
     $("copy-as-code").checked = settings.copyAsCode;
     $("color-contrast").checked = settings.colorContrast;
     $("classic-home").checked = settings.classicHome;
@@ -905,6 +918,7 @@
       ["max-hidden-row", sleeping && limited],
       ["snapshots-row", sleeping],
       ["adjustments-bar-row", settings.adjustmentsClipboard],
+      ["local-remove-background-row", settings.hideFreeAiActions],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -958,6 +972,7 @@
       adjustmentsClipboard: $("adjustments-clipboard").checked,
       adjustmentsBar: $("adjustments-bar").checked,
       hideFreeAiActions: $("hide-free-ai-actions").checked,
+      localRemoveBackground: $("local-remove-background").checked,
       copyAsCode: $("copy-as-code").checked,
       colorContrast: $("color-contrast").checked,
       classicHome: $("classic-home").checked,
