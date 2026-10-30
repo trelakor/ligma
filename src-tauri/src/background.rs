@@ -3,8 +3,11 @@
 //! place of Figma's (see ai_actions.rs). On macOS 14 and later, Apple's
 //! Vision finds the image's subject, as Preview's Remove Background does.
 //! On Windows it's BiRefNet (MIT), an ONNX model run on the CPU with ONNX
-//! Runtime, which is linked in. The model is 224 MB, so it's downloaded
-//! the first time it's needed, once asked, and checked against its SHA-256
+//! Runtime, which is linked in. Macs with Apple silicon can use BiRefNet
+//! instead of Vision, with ONNX Runtime downloaded along with it. The model
+//! is 224 MB, so it's downloaded when it's first needed, once asked, or
+//! from Settings, which can also remove it. Downloads are checked against
+//! their SHA-256
 //!
 //! Figma tabs get no IPC, so the page hands the image over as a download
 //! named `ligma-background-<job>`, which `on_requested` saves to a
@@ -18,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
 use tauri::{AppHandle, Manager, Url, Webview};
 
 const PREFIX: &str = "ligma-background-";
@@ -40,16 +44,24 @@ pub fn available() -> bool {
     true
 }
 
+/// Whether this device can run BiRefNet. ONNX Runtime needs macOS 14, as
+/// Vision does
+pub fn model_supported() -> bool {
+    cfg!(birefnet) && available()
+}
+
 /// An image a tab hands over: saved to a temporary file. False for other
 /// downloads
 pub fn on_requested(webview: &Webview, url: &Url, destination: &mut PathBuf) -> bool {
     if url.scheme() != "blob" {
         return false;
     }
-    let Some(job) = destination
-        .file_name()
-        .and_then(|name| name.to_str()?.strip_prefix(PREFIX)?.parse::<u64>().ok())
-    else {
+    // WebView2 may add an extension, like ".txt", or " (1)" to the name
+    let Some(job) = destination.file_name().and_then(|name| {
+        let rest = name.to_str()?.strip_prefix(PREFIX)?;
+        let digits = rest.find(|char: char| !char.is_ascii_digit()).unwrap_or(rest.len());
+        rest[..digits].parse::<u64>().ok()
+    }) else {
         return false;
     };
     let Some(tab) = webview.label().strip_prefix("tab-").and_then(|id| id.parse().ok()) else {
@@ -89,7 +101,7 @@ enum Failure {
     /// Nothing to keep was found
     NoSubject,
     /// The model wasn't downloaded
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(birefnet), allow(dead_code))]
     Cancelled,
     Failed,
 }
@@ -102,16 +114,20 @@ fn remove(app: &AppHandle, tab: u32, job: u64, path: &Path) -> Result<String, Fa
     }
     let bytes = std::fs::read(path).map_err(|_| Failure::Failed)?;
     #[cfg(target_os = "macos")]
-    return {
+    if !(cfg!(birefnet) && crate::settings::current(app).use_background_model) {
+        return vision::remove(&bytes);
+    }
+    #[cfg(birefnet)]
+    return birefnet::remove(app, tab, job, &bytes);
+    #[cfg(not(birefnet))]
+    {
         let _ = (app, tab, job);
-        vision::remove(&bytes)
-    };
-    #[cfg(windows)]
-    return birefnet::remove(app, &bytes, |text| progress(app, tab, job, text));
+        Err(Failure::Failed)
+    }
 }
 
 /// Tells the page in tab `tab` how far `job` has got
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(birefnet), allow(dead_code))]
 fn progress(app: &AppHandle, tab: u32, job: u64, text: &str) {
     if let Some(webview) = crate::tabs::scriptable(app, tab) {
         let _ = webview.eval(format!("window.__ligmaRemoveBackground?.progress({job}, {text:?})"));
@@ -131,6 +147,75 @@ fn reply(app: &AppHandle, tab: u32, job: u64, result: Result<String, Failure>) {
         Err(Failure::Failed) => format!("window.__ligmaRemoveBackground?.failed({job}, \"failed\")"),
     };
     let _ = webview.eval(script);
+}
+
+/// The model as Settings shows it
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelState {
+    /// This device can run it
+    supported: bool,
+    installed: bool,
+    /// On disk once installed, otherwise to download
+    bytes: u64,
+    /// Percent downloaded, while it downloads
+    downloading: Option<u8>,
+}
+
+fn model_state(app: &AppHandle) -> ModelState {
+    #[cfg(birefnet)]
+    if model_supported() {
+        return birefnet::state(app);
+    }
+    let _ = app;
+    ModelState::default()
+}
+
+/// Shows the model's state in the settings window, if open
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn show_model_state(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(crate::settings::WINDOW) {
+        let state = serde_json::to_string(&model_state(app)).unwrap();
+        let _ = window.eval(format!("window.applyBackgroundModel?.({state})"));
+    }
+}
+
+#[tauri::command]
+pub async fn get_background_model(app: AppHandle, webview: Webview) -> Option<ModelState> {
+    crate::settings::from_settings_window(&webview).then(|| model_state(&app))
+}
+
+/// Downloads the model from Settings
+#[tauri::command]
+pub async fn install_background_model(app: AppHandle, webview: Webview) {
+    if !crate::settings::from_settings_window(&webview) || !model_supported() {
+        return;
+    }
+    #[cfg(birefnet)]
+    birefnet::install(&app);
+    #[cfg(not(birefnet))]
+    let _ = app;
+}
+
+/// Stops the model's download
+#[tauri::command]
+pub async fn cancel_background_model(webview: Webview) {
+    if crate::settings::from_settings_window(&webview) {
+        #[cfg(birefnet)]
+        birefnet::cancel();
+    }
+}
+
+/// Removes the model from Settings
+#[tauri::command]
+pub async fn uninstall_background_model(app: AppHandle, webview: Webview) {
+    if !crate::settings::from_settings_window(&webview) {
+        return;
+    }
+    #[cfg(birefnet)]
+    birefnet::uninstall(&app);
+    #[cfg(not(birefnet))]
+    let _ = app;
 }
 
 /// Apple's Vision, through `VNGenerateForegroundInstanceMaskRequest`
@@ -303,17 +388,19 @@ mod vision {
     }
 }
 
+
 /// BiRefNet-lite (https://github.com/ZhengPeng7/BiRefNet, MIT), as ONNX
 /// from https://huggingface.co/onnx-community/BiRefNet_lite-ONNX. It takes
 /// a 1024 × 1024 RGB image normalized as for ImageNet and gives the
 /// foreground's logits at the same size, which are scaled back to the
 /// image as its alpha
-#[cfg(windows)]
+#[cfg(birefnet)]
 mod birefnet {
     use std::fs::File;
     use std::io::{Cursor, Write};
     use std::path::{Path, PathBuf};
-    use std::sync::{mpsc, Mutex, OnceLock};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Mutex, MutexGuard, OnceLock};
 
     use base64::Engine;
     use image::imageops::{self, FilterType};
@@ -325,113 +412,304 @@ mod birefnet {
     use sha2::{Digest, Sha256};
     use tauri::{AppHandle, Manager};
 
-    use super::Failure;
+    use super::{Failure, ModelState};
 
-    /// Pinned to one revision, which `SHA256` is the hash of
-    const URL: &str =
-        "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model.onnx";
-    const SHA256: &str = "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333";
-    const SIZE: u64 = 224_005_088;
+    /// A file the model needs, downloaded into the models folder as `file`,
+    /// or as `entry` taken out of a .tgz. `size` and `sha256` are the
+    /// download's
+    struct Download {
+        url: &'static str,
+        sha256: &'static str,
+        size: u64,
+        file: &'static str,
+        entry: Option<&'static str>,
+    }
+
+    /// Pinned to one revision
+    const MODEL: Download = Download {
+        url: "https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model.onnx",
+        sha256: "5600024376f572a557870a5eb0afb1e5961636bef4e1e22132025467d0f03333",
+        size: 224_005_088,
+        file: "birefnet-lite.onnx",
+        entry: None,
+    };
+
+    /// Microsoft's build, which needs macOS 14
+    #[cfg(target_os = "macos")]
+    const RUNTIME: Download = Download {
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.31.1/onnxruntime-osx-arm64-1.31.1.tgz",
+        sha256: "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f",
+        size: 36_936_435,
+        file: "libonnxruntime.dylib",
+        entry: Some("onnxruntime-osx-arm64-1.31.1/lib/libonnxruntime.1.31.1.dylib"),
+    };
+
+    #[cfg(windows)]
+    const DOWNLOADS: &[&Download] = &[&MODEL];
+    #[cfg(target_os = "macos")]
+    const DOWNLOADS: &[&Download] = &[&RUNTIME, &MODEL];
+
     const SIDE: u32 = 1024;
     const MEAN: [f32; 3] = [0.485, 0.456, 0.406];
     const STD: [f32; 3] = [0.229, 0.224, 0.225];
 
-    /// Held while the model is looked for or downloaded, so two images wait
-    /// for one download
-    static MODEL: Mutex<()> = Mutex::new(());
+    /// Held while the model is looked for, downloaded, used or removed, so
+    /// two images wait for one download and it isn't removed while in use
+    static LOCK: Mutex<()> = Mutex::new(());
+    /// Percent downloaded, while it downloads
+    static DOWNLOADING: Mutex<Option<u8>> = Mutex::new(None);
+    /// Settings' Cancel
+    static CANCEL: AtomicBool = AtomicBool::new(false);
+    /// Jobs waiting on the model, told how far its download has got: tab
+    /// and job
+    static WATCHERS: Mutex<Vec<(u32, u64)>> = Mutex::new(Vec::new());
+
+    fn lock() -> MutexGuard<'static, ()> {
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn failed(error: impl std::fmt::Display) -> Failure {
         log::warn!("Remove background: {error}");
         Failure::Failed
     }
 
-    pub fn remove(app: &AppHandle, bytes: &[u8], progress: impl Fn(&str)) -> Result<String, Failure> {
-        let model = model(app, &progress)?;
-        cut_out(&model, bytes)
+    fn folder(app: &AppHandle) -> Result<PathBuf, String> {
+        Ok(app.path().app_local_data_dir().map_err(|error| error.to_string())?.join("models"))
     }
 
-    /// The model's file, downloaded first if it isn't there yet
-    fn model(app: &AppHandle, progress: &impl Fn(&str)) -> Result<PathBuf, Failure> {
-        let _held = MODEL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let path = app.path().app_local_data_dir().map_err(failed)?.join("models").join("birefnet-lite.onnx");
-        if path.is_file() {
-            return Ok(path);
+    fn installed(folder: &Path) -> bool {
+        DOWNLOADS.iter().all(|download| folder.join(download.file).is_file())
+    }
+
+    pub fn state(app: &AppHandle) -> ModelState {
+        let downloading = *DOWNLOADING.lock().unwrap();
+        let Ok(folder) = folder(app) else {
+            return ModelState { supported: true, downloading, ..Default::default() };
+        };
+        let installed = installed(&folder);
+        let bytes = if installed {
+            DOWNLOADS
+                .iter()
+                .filter_map(|download| std::fs::metadata(folder.join(download.file)).ok())
+                .map(|metadata| metadata.len())
+                .sum()
+        } else {
+            DOWNLOADS.iter().map(|download| download.size).sum()
+        };
+        ModelState { supported: true, installed, bytes, downloading }
+    }
+
+    /// While a job waits on the model, it's told how far its download has got
+    struct Watching(u32, u64);
+
+    impl Watching {
+        fn new(tab: u32, job: u64) -> Self {
+            WATCHERS.lock().unwrap().push((tab, job));
+            Self(tab, job)
         }
-        if !ask(app) {
-            return Err(Failure::Cancelled);
+    }
+
+    impl Drop for Watching {
+        fn drop(&mut self) {
+            WATCHERS.lock().unwrap().retain(|&watcher| watcher != (self.0, self.1));
         }
-        if let Err(error) = download(&path, progress) {
-            crate::prompt::show(
-                app,
-                "Download Failed",
-                format!("Couldn't download the background model: {error}"),
-                &["OK"],
-                |_| {},
-            );
-            return Err(failed(error));
+    }
+
+    fn tell_watchers(app: &AppHandle, text: &str) {
+        let watchers = WATCHERS.lock().unwrap().clone();
+        for (tab, job) in watchers {
+            super::progress(app, tab, job, text);
         }
-        progress("Removing background…");
-        Ok(path)
+    }
+
+    pub fn remove(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<String, Failure> {
+        let _watching = Watching::new(tab, job);
+        let _held = lock();
+        let folder = folder(app).map_err(failed)?;
+        if !installed(&folder) {
+            if !ask(app) {
+                return Err(Failure::Cancelled);
+            }
+            match download(app, &folder) {
+                Ok(()) => {}
+                Err(None) => return Err(Failure::Cancelled),
+                Err(Some(error)) => {
+                    download_failed(app, &error);
+                    return Err(failed(error));
+                }
+            }
+        }
+        cut_out(&folder, bytes)
+    }
+
+    /// Downloads the model, unless it's there or on its way
+    pub fn install(app: &AppHandle) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let Ok(_held) = LOCK.try_lock() else {
+                return;
+            };
+            let result = folder(&app).map_err(Some).and_then(|folder| {
+                if installed(&folder) {
+                    return Ok(());
+                }
+                download(&app, &folder)
+            });
+            if let Err(Some(error)) = result {
+                log::warn!("Remove background: {error}");
+                download_failed(&app, &error);
+            }
+        });
+    }
+
+    pub fn cancel() {
+        CANCEL.store(true, Ordering::SeqCst);
+    }
+
+    /// Removes the model, once it's not in use
+    pub fn uninstall(app: &AppHandle) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let _held = lock();
+            if let Ok(folder) = folder(&app) {
+                for download in DOWNLOADS {
+                    let path = folder.join(download.file);
+                    if let Err(error) = std::fs::remove_file(&path) {
+                        if error.kind() != std::io::ErrorKind::NotFound {
+                            log::warn!("Couldn't remove {}: {error}", path.display());
+                        }
+                    }
+                }
+            }
+            super::show_model_state(&app);
+        });
+    }
+
+    fn download_failed(app: &AppHandle, error: &str) {
+        crate::prompt::show(
+            app,
+            "Download Failed",
+            format!("Couldn't download the background model: {error}"),
+            &["OK"],
+            |_| {},
+        );
     }
 
     /// Whether the person agrees to download the model
     fn ask(app: &AppHandle) -> bool {
+        #[cfg(windows)]
+        let message = "Removing backgrounds on this PC needs BiRefNet, a 224 MB model that Ligma downloads once from Hugging Face. You can remove it in Settings.";
+        #[cfg(target_os = "macos")]
+        let message = "Removing backgrounds with BiRefNet needs the 224 MB model and ONNX Runtime to run it, 261 MB in all, that Ligma downloads once from Hugging Face and GitHub. You can remove them in Settings.";
         let (send, receive) = mpsc::channel();
-        crate::prompt::show(
-            app,
-            "Download Background Model",
-            "Removing backgrounds on this PC needs BiRefNet, a 224 MB model that Ligma downloads once from Hugging Face.",
-            &["Cancel", "Download"],
-            move |choice| {
-                let _ = send.send(choice == Some(1));
-            },
-        );
+        crate::prompt::show(app, "Download Background Model", message, &["Cancel", "Download"], move |choice| {
+            let _ = send.send(choice == Some(1));
+        });
         receive.recv().unwrap_or(false)
     }
 
-    /// Downloads the model to `path`, through a `.part` file that's only
-    /// renamed once its hash matches
-    fn download(path: &Path, progress: &impl Fn(&str)) -> Result<(), String> {
-        let folder = path.parent().ok_or("no folder for it")?;
-        std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
-        let part = path.with_extension("onnx.part");
+    /// Downloads what's missing into `folder`, telling Settings and the
+    /// jobs waiting how far it's got. `Err(None)` when cancelled
+    fn download(app: &AppHandle, folder: &Path) -> Result<(), Option<String>> {
+        CANCEL.store(false, Ordering::SeqCst);
+        let missing: Vec<&Download> = DOWNLOADS.iter().copied().filter(|download| !folder.join(download.file).is_file()).collect();
+        let total = missing.iter().map(|download| download.size).sum::<u64>().max(1);
+        let mut before = 0;
+        let mut told = None;
+        let mut report = |got: u64| {
+            let percent = (got * 100 / total).min(100) as u8;
+            if *DOWNLOADING.lock().unwrap() != Some(percent) {
+                *DOWNLOADING.lock().unwrap() = Some(percent);
+                super::show_model_state(app);
+            }
+            // In steps of 5%, so Figma's toast isn't redrawn too often
+            if told != Some(percent / 5) {
+                told = Some(percent / 5);
+                tell_watchers(app, &format!("Downloading the background model… {}%", percent / 5 * 5));
+            }
+        };
+        report(0);
+        let mut result = std::fs::create_dir_all(folder).map_err(|error| Some(error.to_string()));
+        for download in missing {
+            if result.is_err() {
+                break;
+            }
+            result = fetch(download, folder, &mut |got| report(before + got));
+            before += download.size;
+        }
+        *DOWNLOADING.lock().unwrap() = None;
+        super::show_model_state(app);
+        if result.is_ok() {
+            tell_watchers(app, "Removing background…");
+        }
+        result
+    }
+
+    /// Downloads `download` into `folder`, through a `.part` file that's
+    /// only kept once its hash matches. `Err(None)` when cancelled
+    fn fetch(download: &Download, folder: &Path, report: &mut impl FnMut(u64)) -> Result<(), Option<String>> {
+        let path = folder.join(download.file);
+        let part = folder.join(format!("{}.part", download.file));
         let result = tauri::async_runtime::block_on(async {
-            let client = reqwest::Client::builder().tls_backend_native().build().map_err(|error| error.to_string())?;
+            let error = |error: &dyn std::fmt::Display| Some(error.to_string());
+            let client = reqwest::Client::builder().tls_backend_native().build().map_err(|e| error(&e))?;
             let mut response = client
-                .get(URL)
+                .get(download.url)
                 .send()
                 .await
                 .and_then(|response| response.error_for_status())
-                .map_err(|error| error.to_string())?;
-            let total = response.content_length().unwrap_or(SIZE).max(1);
-            let mut file = File::create(&part).map_err(|error| error.to_string())?;
+                .map_err(|e| error(&e))?;
+            let mut file = File::create(&part).map_err(|e| error(&e))?;
             let mut hash = Sha256::new();
             let mut got = 0u64;
-            let mut shown = None;
-            while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
-                file.write_all(&chunk).map_err(|error| error.to_string())?;
+            while let Some(chunk) = response.chunk().await.map_err(|e| error(&e))? {
+                if CANCEL.load(Ordering::SeqCst) {
+                    return Err(None);
+                }
+                file.write_all(&chunk).map_err(|e| error(&e))?;
                 hash.update(&chunk);
                 got += chunk.len() as u64;
-                // In steps of 5%, so Figma's toast isn't redrawn too often
-                let percent = (got * 100 / total).min(100) / 5 * 5;
-                if shown != Some(percent) {
-                    shown = Some(percent);
-                    progress(&format!("Downloading the background model… {percent}%"));
-                }
+                report(got.min(download.size));
             }
-            file.sync_all().map_err(|error| error.to_string())?;
-            if format!("{:x}", hash.finalize()) != SHA256 {
-                return Err("the file didn't match".to_owned());
+            file.sync_all().map_err(|e| error(&e))?;
+            if format!("{:x}", hash.finalize()) != download.sha256 {
+                return Err(Some("the file didn't match".to_owned()));
             }
             Ok(())
         });
-        match result.and_then(|()| std::fs::rename(&part, path).map_err(|error| error.to_string())) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let _ = std::fs::remove_file(&part);
-                Err(error)
+        let result = result.and_then(|()| match download.entry {
+            Some(entry) => extract(&part, entry, &path).map_err(Some),
+            None => std::fs::rename(&part, &path).map_err(|error| Some(error.to_string())),
+        });
+        let _ = std::fs::remove_file(&part);
+        result
+    }
+
+    /// Takes `entry` out of the .tgz `archive`, into `path`
+    #[cfg(target_os = "macos")]
+    fn extract(archive: &Path, entry: &str, path: &Path) -> Result<(), String> {
+        let temp = path.with_extension("tmp");
+        let result = (|| {
+            let archive = File::open(archive).map_err(|error| error.to_string())?;
+            let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+            for file in archive.entries().map_err(|error| error.to_string())? {
+                let mut file = file.map_err(|error| error.to_string())?;
+                if file.path().map_err(|error| error.to_string())?.as_ref() == Path::new(entry) {
+                    file.unpack(&temp).map_err(|error| error.to_string())?;
+                    return std::fs::rename(&temp, path).map_err(|error| error.to_string());
+                }
             }
+            Err("ONNX Runtime wasn't in the download".to_owned())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temp);
         }
+        result
+    }
+
+    #[cfg(windows)]
+    fn extract(_: &Path, _: &str, _: &Path) -> Result<(), String> {
+        Err("nothing to extract on Windows".to_owned())
     }
 
     /// The image in `bytes`, turned as its orientation says, as Figma shows
@@ -449,18 +727,27 @@ mod birefnet {
         Ok((image.into_rgba8(), profile))
     }
 
-    fn environment() -> Result<&'static Environment, Failure> {
+    /// ONNX Runtime, loaded from `folder` on macOS. Once loaded it stays,
+    /// even if the files are removed
+    fn environment(folder: &Path) -> Result<&'static Environment, Failure> {
         static ENVIRONMENT: OnceLock<Environment> = OnceLock::new();
         if let Some(environment) = ENVIRONMENT.get() {
             return Ok(environment);
         }
-        let environment = ort::init().with_name("ligma").build().map_err(failed)?;
+        #[cfg(target_os = "macos")]
+        let builder = ort::init_from(folder.join(RUNTIME.file)).map_err(failed)?;
+        #[cfg(windows)]
+        let builder = {
+            let _ = folder;
+            ort::init()
+        };
+        let environment = builder.with_name("ligma").build().map_err(failed)?;
         Ok(ENVIRONMENT.get_or_init(|| environment))
     }
 
     /// The model is loaded for each image and let go after, as it takes
     /// hundreds of MB
-    fn cut_out(model: &Path, bytes: &[u8]) -> Result<String, Failure> {
+    fn cut_out(folder: &Path, bytes: &[u8]) -> Result<String, Failure> {
         let (mut image, profile) = decode(bytes)?;
         let (width, height) = image.dimensions();
         let plane = (SIDE * SIDE) as usize;
@@ -473,11 +760,11 @@ mod birefnet {
             }
         }
 
-        let mut session = Session::builder(environment()?)
+        let mut session = Session::builder(environment(folder)?)
             .map_err(failed)?
             .with_auto_device(AutoDevicePolicy::PreferCPU)
             .map_err(failed)?
-            .commit_from_file(model)
+            .commit_from_file(folder.join(MODEL.file))
             .map_err(failed)?;
         let tensor = TensorRef::from_array_view(([1usize, 3, SIDE as usize, SIDE as usize], &*input)).map_err(failed)?;
         let outputs = session.run(ort::inputs![tensor]).map_err(failed)?;

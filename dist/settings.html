@@ -496,6 +496,18 @@
         </span>
         <input type="checkbox" class="switch" id="local-remove-background">
       </label>
+      <label class="row nested deeper" id="use-background-model-row" hidden>
+        <span class="label">Use BiRefNet instead of Vision
+          <div class="hint">BiRefNet, the open model Ligma uses on Windows, finds the subject in place of Apple's Vision. It needs a download the first time.</div>
+        </span>
+        <input type="checkbox" class="switch" id="use-background-model">
+      </label>
+      <div class="row nested deeper" id="background-model-row" hidden>
+        <span class="label">Background model
+          <div class="hint" id="background-model-hint"></div>
+        </span>
+        <button class="button" id="background-model-button"></button>
+      </div>
     </section>
     <section>
       <h2>Code</h2>
@@ -715,7 +727,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "copy-as-code", "color-contrast", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "copy-as-code", "color-contrast", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -908,6 +920,7 @@
     $("adjustments-bar").checked = settings.adjustmentsBar;
     $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
     $("local-remove-background").checked = settings.localRemoveBackground;
+    $("use-background-model").checked = settings.useBackgroundModel;
     $("copy-as-code").checked = settings.copyAsCode;
     $("color-contrast").checked = settings.colorContrast;
     $("classic-home").checked = settings.classicHome;
@@ -919,6 +932,7 @@
       ["snapshots-row", sleeping],
       ["adjustments-bar-row", settings.adjustmentsClipboard],
       ["local-remove-background-row", settings.hideFreeAiActions],
+      ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -973,6 +987,7 @@
       adjustmentsBar: $("adjustments-bar").checked,
       hideFreeAiActions: $("hide-free-ai-actions").checked,
       localRemoveBackground: $("local-remove-background").checked,
+      useBackgroundModel: $("use-background-model").checked,
       copyAsCode: $("copy-as-code").checked,
       colorContrast: $("color-contrast").checked,
       classicHome: $("classic-home").checked,
@@ -1052,6 +1067,36 @@
   });
 
   $("check-updates").addEventListener("click", () => invoke("check_for_updates"));
+
+  // The background model (src-tauri/src/background.rs), to download ahead
+  // of time or remove. Macs can use it in place of Vision
+  let model;
+  const megabytes = (bytes) => `${Math.round(bytes / 1e6)} MB`;
+  window.applyBackgroundModel = (state) => {
+    model = state;
+    $("background-model-row").hidden = !state.supported;
+    $("use-background-model-row").hidden = !state.supported || !macos;
+    const button = $("background-model-button");
+    let hint;
+    if (state.downloading != null) {
+      hint = `Downloading… ${state.downloading}%`;
+      button.textContent = "Cancel";
+    } else if (state.installed) {
+      hint = `Installed, ${megabytes(state.bytes)}`;
+      button.textContent = "Remove";
+    } else {
+      const what = macos ? "BiRefNet and ONNX Runtime to run it" : "BiRefNet";
+      const from = macos ? "Hugging Face and GitHub" : "Hugging Face";
+      hint = `${what}, ${megabytes(state.bytes)} from ${from}. Without it, Ligma asks to download it when it's first needed.`;
+      button.textContent = "Download";
+    }
+    $("background-model-hint").textContent = hint;
+  };
+  $("background-model-button").addEventListener("click", () => {
+    if (!model) return;
+    invoke(model.downloading != null ? "cancel_background_model" : model.installed ? "uninstall_background_model" : "install_background_model");
+  });
+  invoke("get_background_model").then((state) => state && window.applyBackgroundModel(state));
   $("report").addEventListener("click", () => invoke("report_problem"));
   invoke("get_version").then((version) => {
     if (version) $("version").textContent = `Ligma ${version}`;

@@ -105,6 +105,9 @@ pub struct Settings {
     /// and put Ligma's own Remove background in their place, which works
     /// on this device (macOS 14 and later, and Windows, see background.rs)
     pub local_remove_background: bool,
+    /// On a Mac with Apple silicon, remove backgrounds with BiRefNet, the
+    /// model Windows uses, rather than Apple's Vision
+    pub use_background_model: bool,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
@@ -152,6 +155,7 @@ impl Default for Settings {
             adjustments_bar: true,
             hide_free_ai_actions: true,
             local_remove_background: true,
+            use_background_model: false,
             copy_as_code: true,
             color_contrast: false,
             classic_home: false,
@@ -350,7 +354,7 @@ pub fn close(app: &AppHandle) {
 }
 
 /// Only the settings window may read and change settings
-fn from_settings_window(webview: &Webview) -> bool {
+pub fn from_settings_window(webview: &Webview) -> bool {
     webview.label() == WINDOW
 }
 

@@ -6,9 +6,10 @@
 //! divider. On by default
 //!
 //! In their place goes Ligma's own Remove background, which works on this
-//! device (see background.rs), where it can. It changes the top image fill
-//! of each selected layer through Figma's console plugin API,
-//! `window.figma`, as one undo step. On by default
+//! device (see background.rs), where it can. It hides the top image fill
+//! of each selected layer and adds its cut-out as a new fill above it,
+//! through Figma's console plugin API, `window.figma`, as one undo step.
+//! On by default
 //!
 //! A file's plan is `INITIAL_OPTIONS.plan_tier` ("starter" when free) while
 //! the page is still on the file it loaded with, and otherwise the "Free"
@@ -73,7 +74,8 @@ const PAGE_JS: &str = r##"(() => {
   const cutOut = (bytes, onProgress) =>
     new Promise((resolve, reject) => {
       const job = ++lastJob;
-      const url = URL.createObjectURL(new Blob([bytes]));
+      // Typed, or WebView2 sniffs it and names it as text
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
       let timer;
       const finish = () => {
         clearTimeout(timer);
@@ -116,9 +118,61 @@ const PAGE_JS: &str = r##"(() => {
     failed: (job, reason) => jobs.get(job)?.failed(reason),
   };
 
-  // Replaces the top image fill of each selected layer with its cut-out,
-  // as one undo step. Each image is cut out once, however many layers
-  // show it
+  // A white shimmer over each of `nodes` on the canvas, as Figma shows
+  // while its own Remove background works, kept on them as the canvas
+  // pans and zooms. Returns what stops it
+  const SHIMMER = "data-ligma-shimmer";
+  const shimmer = (figma, nodes) => {
+    const canvas = [...document.querySelectorAll("canvas")].reduce(
+      (best, canvas) => (canvas.offsetWidth * canvas.offsetHeight > (best ? best.offsetWidth * best.offsetHeight : 0) ? canvas : best),
+      null,
+    );
+    if (!canvas) return () => {};
+    const layer = document.createElement("div");
+    layer.setAttribute(SHIMMER, "");
+    canvas.after(layer);
+    const boxes = nodes.map(() => layer.appendChild(document.createElement("div")));
+    let frame;
+    const place = () => {
+      Object.assign(layer.style, {
+        left: `${canvas.offsetLeft}px`,
+        top: `${canvas.offsetTop}px`,
+        width: `${canvas.offsetWidth}px`,
+        height: `${canvas.offsetHeight}px`,
+      });
+      try {
+        const { bounds } = figma.viewport;
+        const zoom = figma.viewport.zoom;
+        nodes.forEach((node, i) => {
+          const box = boxes[i];
+          if (node.removed) {
+            box.hidden = true;
+            return;
+          }
+          const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+          const radius = typeof node.cornerRadius === "number" ? node.cornerRadius * zoom : 0;
+          box.hidden = false;
+          Object.assign(box.style, {
+            width: `${node.width * zoom}px`,
+            height: `${node.height * zoom}px`,
+            borderRadius: `${radius}px`,
+            transform: `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`,
+          });
+        });
+      } catch {}
+      frame = requestAnimationFrame(place);
+    };
+    place();
+    return () => {
+      cancelAnimationFrame(frame);
+      layer.classList.add("done");
+      setTimeout(() => layer.remove(), 200);
+    };
+  };
+
+  // Hides the top image fill of each selected layer and adds its cut-out
+  // above it, as one undo step. Each image is cut out once, however many
+  // layers show it
   let busy = false;
   const removeBackground = async () => {
     const figma = api();
@@ -137,6 +191,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     busy = true;
     tidy();
+    const stopShimmer = shimmer(figma, targets.map((target) => target.node));
     let progress;
     const show = (text) => {
       try {
@@ -169,7 +224,14 @@ const PAGE_JS: &str = r##"(() => {
         // Unless the layer changed in the meantime
         const fills = fillsOf(node);
         if (fills[index]?.imageHash !== hash) continue;
-        node.fills = fills.map((paint, i) => (i === index ? { ...paint, imageHash: cut.get(hash) } : paint));
+        // The original stays, hidden, under the cut-out
+        const original = fills[index];
+        node.fills = [
+          ...fills.slice(0, index),
+          { ...original, visible: false },
+          { ...original, imageHash: cut.get(hash), visible: true },
+          ...fills.slice(index + 1),
+        ];
         images++;
       } catch {
         failed++;
@@ -181,6 +243,7 @@ const PAGE_JS: &str = r##"(() => {
       } catch {}
     }
     busy = false;
+    stopShimmer();
     tidy();
     try {
       progress.cancel();
@@ -243,7 +306,17 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const style = document.createElement("style");
-  style.textContent = `[${HIDDEN}] { display: none !important; }`;
+  style.textContent = `[${HIDDEN}] { display: none !important; }
+    [${SHIMMER}] { position: absolute; overflow: hidden; pointer-events: none; transition: opacity 200ms ease-out; }
+    [${SHIMMER}].done { opacity: 0; }
+    [${SHIMMER}] > div { position: absolute; left: 0; top: 0; overflow: hidden; transform-origin: 0 0; background: rgb(255 255 255 / 0.12); }
+    [${SHIMMER}] > div::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.45) 50%, transparent 80%);
+      animation: ligma-shimmer 1.6s ease-in-out infinite;
+    }
+    @keyframes ligma-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+    @media (prefers-reduced-motion: reduce) { [${SHIMMER}] > div::after { animation: none; opacity: 0; } }`;
   const mount = () => {
     if (style.isConnected) return true;
     const parent = document.head ?? document.documentElement;
