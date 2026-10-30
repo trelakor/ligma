@@ -5,6 +5,7 @@ mod adjustments;
 mod ai_actions;
 mod appearance;
 mod auth;
+mod contrast;
 mod discord_ipc;
 mod downloads;
 #[cfg(windows)]
@@ -289,6 +290,7 @@ fn main() {
             toolbar::init(&settings);
             adjustments::init(&settings);
             ai_actions::init(&settings);
+            contrast::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());

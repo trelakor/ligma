@@ -492,6 +492,15 @@
       </label>
     </section>
     <section>
+      <h2>Colors</h2>
+      <label class="row">
+        <span class="label">Show contrast in the color picker
+          <div class="hint">For a solid fill or stroke, its WCAG contrast ratio against what's behind the layer, and whether it passes AA or AAA</div>
+        </span>
+        <input type="checkbox" class="switch" id="color-contrast">
+      </label>
+    </section>
+    <section>
       <h2>Home</h2>
       <label class="row">
         <span class="label">Use the classic home page
@@ -691,7 +700,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "color-contrast", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -877,6 +886,7 @@
     $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
     $("adjustments-bar").checked = settings.adjustmentsBar;
     $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
+    $("color-contrast").checked = settings.colorContrast;
     $("classic-home").checked = settings.classicHome;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -938,6 +948,7 @@
       adjustmentsClipboard: $("adjustments-clipboard").checked,
       adjustmentsBar: $("adjustments-bar").checked,
       hideFreeAiActions: $("hide-free-ai-actions").checked,
+      colorContrast: $("color-contrast").checked,
       classicHome: $("classic-home").checked,
       ...changes,
     };
