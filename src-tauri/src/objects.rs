@@ -19,8 +19,14 @@
 //! - `{"op":"close","session":<job>}` lets the image go
 //!
 //! A pick is `{"point":[x,y]}` or `{"box":[left,top,right,bottom]}`, in
-//! fractions of the image, with `"subtract":true` to take it away from the
-//! picks before it rather than add it. One image is kept at a time
+//! fractions of the image, a stroke of the brush,
+//! `{"stroke":[[x,y],…],"radius":r}`, whose radius is a fraction of the
+//! image's width, or what's inside a lasso, `{"lasso":[[x,y],…]}`, a
+//! closed outline. `"subtract":true` takes it away from the picks before it
+//! rather than adds it. `"edge":{"shift":s,"feather":f}` on "outline" and
+//! "isolate" moves the edge out by `s` pixels of the image the request is
+//! about, or in when it's negative, and softens it over `f` pixels either
+//! side. One image is kept at a time
 
 use serde::Deserialize;
 use tauri::AppHandle;
@@ -33,6 +39,8 @@ struct Request {
     session: u64,
     #[serde(default)]
     picks: Vec<Pick>,
+    #[serde(default)]
+    edge: Edge,
 }
 
 #[derive(Clone, Deserialize)]
@@ -41,8 +49,21 @@ struct Pick {
     point: Option<[f32; 2]>,
     #[serde(rename = "box")]
     rect: Option<[f32; 4]>,
+    stroke: Option<Vec<[f32; 2]>>,
+    #[serde(default)]
+    radius: f32,
+    lasso: Option<Vec<[f32; 2]>>,
     #[serde(default)]
     subtract: bool,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[cfg_attr(not(birefnet), allow(dead_code))]
+struct Edge {
+    #[serde(default)]
+    shift: f32,
+    #[serde(default)]
+    feather: f32,
 }
 
 /// What `bytes` asks for, done for `job` in tab `tab`: the result as JSON,
@@ -68,6 +89,302 @@ pub fn unload() {
     sam::unload();
 }
 
+/// The picks, over an image `width` by `height`, as how far inside them
+/// each pixel is: positive inside and negative outside, in any units, as
+/// long as they're smooth near the edge
+#[cfg_attr(not(birefnet), allow(dead_code))]
+struct Field {
+    values: Vec<f32>,
+    width: usize,
+    height: usize,
+}
+
+/// Outside anything painted, before anything else is picked
+#[cfg_attr(not(birefnet), allow(dead_code))]
+const FAR: f32 = -1e4;
+
+#[cfg_attr(not(birefnet), allow(dead_code))]
+impl Field {
+    fn empty(width: usize, height: usize) -> Self {
+        Self { values: vec![FAR; width * height], width, height }
+    }
+
+    /// Adds `other` to the picks, or takes it away
+    fn combine(&mut self, other: &[f32], subtract: bool) {
+        for (value, &other) in self.values.iter_mut().zip(other) {
+            *value = if subtract { value.min(-other) } else { value.max(other) };
+        }
+    }
+
+    /// Adds a stroke of the brush through `points`, in fractions of the
+    /// image, `radius` pixels wide either side, or takes it away. Only the
+    /// pixels near it change, as nothing farther away is affected
+    fn paint(&mut self, points: &[[f32; 2]], radius: f32, subtract: bool) {
+        let (width, height) = (self.width, self.height);
+        let points: Vec<[f32; 2]> = points.iter().map(|&[x, y]| [x * width as f32, y * height as f32]).collect();
+        let segments: Vec<([f32; 2], [f32; 2])> = match points.len() {
+            0 => return,
+            1 => vec![(points[0], points[0])],
+            _ => points.windows(2).map(|pair| (pair[0], pair[1])).collect(),
+        };
+        // Two pixels more, so the edge's slope is known either side of it
+        let reach = radius + 2.0;
+        for (a, b) in segments {
+            for y in span(a[1], b[1], reach, height) {
+                for x in span(a[0], b[0], reach, width) {
+                    let inside = radius - from_segment([x as f32 + 0.5, y as f32 + 0.5], a, b);
+                    let value = &mut self.values[y * width + x];
+                    *value = if subtract { value.min(-inside) } else { value.max(inside) };
+                }
+            }
+        }
+    }
+
+    /// Adds what's inside `points`, a closed outline in fractions of the
+    /// image, or takes it away. Each row is filled between where it crosses
+    /// the outline, and near the outline, how far from it each pixel is
+    /// gives the edge's slope
+    fn lasso(&mut self, points: &[[f32; 2]], subtract: bool) {
+        const NEAR: f32 = 2.0;
+        let (width, height) = (self.width, self.height);
+        let points: Vec<[f32; 2]> = points.iter().map(|&[x, y]| [x * width as f32, y * height as f32]).collect();
+        if points.len() < 3 {
+            return;
+        }
+        let edges: Vec<([f32; 2], [f32; 2])> = (0..points.len()).map(|i| (points[i], points[(i + 1) % points.len()])).collect();
+        let lowest = |axis: usize| points.iter().map(|point| point[axis]).fold(f32::INFINITY, f32::min);
+        let highest = |axis: usize| points.iter().map(|point| point[axis]).fold(f32::NEG_INFINITY, f32::max);
+        let (columns, rows) = (span(lowest(0), highest(0), NEAR, width), span(lowest(1), highest(1), NEAR, height));
+        if columns.is_empty() || rows.is_empty() {
+            return;
+        }
+        let across = columns.len();
+        let at = |x: usize, y: usize| (y - rows.start) * across + x - columns.start;
+        let mut shape = vec![-NEAR; across * rows.len()];
+        let mut crossings = Vec::new();
+        for y in rows.clone() {
+            let middle = y as f32 + 0.5;
+            crossings.clear();
+            for &(a, b) in &edges {
+                if (a[1] <= middle) != (b[1] <= middle) {
+                    crossings.push(a[0] + (middle - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+                }
+            }
+            crossings.sort_by(f32::total_cmp);
+            for &[from, to] in crossings.as_chunks::<2>().0 {
+                for x in columns.clone().filter(|&x| (from..to).contains(&(x as f32 + 0.5))) {
+                    shape[at(x, y)] = NEAR;
+                }
+            }
+        }
+        for &(a, b) in &edges {
+            for y in span(a[1], b[1], NEAR, height) {
+                for x in span(a[0], b[0], NEAR, width) {
+                    let value = &mut shape[at(x, y)];
+                    *value = value.signum() * value.abs().min(from_segment([x as f32 + 0.5, y as f32 + 0.5], a, b));
+                }
+            }
+        }
+        for y in rows.clone() {
+            for x in columns.clone() {
+                let (inside, value) = (shape[at(x, y)], &mut self.values[y * width + x]);
+                *value = if subtract { value.min(-inside) } else { value.max(inside) };
+            }
+        }
+    }
+
+    /// How far inside the picks each pixel's center is, in pixels, and
+    /// negative outside: as far as the nearest pixel on the other side less
+    /// half a pixel, and along the edge, to a fraction of a pixel, from the
+    /// field's slope there
+    fn distances(&self) -> Vec<f32> {
+        let (width, height) = (self.width, self.height);
+        let inside: Vec<bool> = self.values.iter().map(|&value| value > 0.0).collect();
+        let mut distances = squared_distances(&inside, false, width, height);
+        let to_inside = squared_distances(&inside, true, width, height);
+        for ((distance, &other), &inside) in distances.iter_mut().zip(&to_inside).zip(&inside) {
+            *distance = if inside { distance.sqrt() - 0.5 } else { 0.5 - other.sqrt() };
+        }
+        drop(to_inside);
+        let value = |x: usize, y: usize| self.values[y * width + x];
+        for y in 0..height {
+            for x in 0..width {
+                let distance = &mut distances[y * width + x];
+                if distance.abs() >= 1.0 {
+                    continue;
+                }
+                let dx = (value((x + 1).min(width - 1), y) - value(x.saturating_sub(1), y)) / ((x + 1).min(width - 1) - x.saturating_sub(1)).max(1) as f32;
+                let dy = (value(x, (y + 1).min(height - 1)) - value(x, y.saturating_sub(1))) / ((y + 1).min(height - 1) - y.saturating_sub(1)).max(1) as f32;
+                let slope = dx.hypot(dy);
+                if slope > 1e-6 {
+                    let finer = value(x, y) / slope;
+                    if finer.abs() < 1.0 && (finer > 0.0) == (*distance > 0.0) {
+                        *distance = finer;
+                    }
+                }
+            }
+        }
+        distances
+    }
+}
+
+/// The pixels from `from` to `to` along one side of an image `size`
+/// pixels across, and `reach` more either way
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn span(from: f32, to: f32, reach: f32, size: usize) -> std::ops::Range<usize> {
+    let low = (from.min(to) - reach).floor().max(0.0) as usize;
+    let high = ((from.max(to) + reach).ceil().max(0.0) as usize).min(size);
+    low.min(high)..high
+}
+
+/// How far `point` is from the segment from `a` to `b`
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn from_segment(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let (at, along) = ([point[0] - a[0], point[1] - a[1]], [b[0] - a[0], b[1] - a[1]]);
+    let length = along[0] * along[0] + along[1] * along[1];
+    let t = if length > 0.0 { ((at[0] * along[0] + at[1] * along[1]) / length).clamp(0.0, 1.0) } else { 0.0 };
+    (at[0] - t * along[0]).hypot(at[1] - t * along[1])
+}
+
+/// How much of a pixel `distance` inside the picks' edge is kept, with the
+/// edge moved and softened as `edge` says: half a pixel either side of it
+/// at least, so it's antialiased
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn kept(distance: f32, edge: Edge) -> f32 {
+    let width = (2.0 * edge.feather).max(1.0);
+    let t = ((distance + edge.shift) / width + 0.5).clamp(0.0, 1.0);
+    if width > 1.0 {
+        t * t * (3.0 - 2.0 * t)
+    } else {
+        t
+    }
+}
+
+/// The squared distance from each pixel's center to the nearest one's
+/// that's `set` in `mask`, as Felzenszwalb and Huttenlocher find it
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn squared_distances(mask: &[bool], set: bool, width: usize, height: usize) -> Vec<f32> {
+    const NONE: f32 = 1e20;
+    let mut distances: Vec<f32> = mask.iter().map(|&value| if value == set { 0.0 } else { NONE }).collect();
+    let longest = width.max(height);
+    let (mut line, mut out) = (vec![0f32; longest], vec![0f32; longest]);
+    let (mut hulls, mut bounds) = (vec![0usize; longest], vec![0f32; longest + 1]);
+    for x in 0..width {
+        for y in 0..height {
+            line[y] = distances[y * width + x];
+        }
+        lower_envelope(&line[..height], &mut out, &mut hulls, &mut bounds);
+        for y in 0..height {
+            distances[y * width + x] = out[y];
+        }
+    }
+    for y in 0..height {
+        let row = &mut distances[y * width..(y + 1) * width];
+        line[..width].copy_from_slice(row);
+        lower_envelope(&line[..width], row, &mut hulls, &mut bounds);
+    }
+    distances
+}
+
+/// The squared distance transform of one line, `f`, into `out`
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn lower_envelope(f: &[f32], out: &mut [f32], hulls: &mut [usize], bounds: &mut [f32]) {
+    let n = f.len();
+    if n == 0 {
+        return;
+    }
+    let meet = |q: usize, p: usize| ((f[q] + (q * q) as f32) - (f[p] + (p * p) as f32)) / (2.0 * (q as f32 - p as f32));
+    let mut k = 0;
+    hulls[0] = 0;
+    bounds[0] = f32::NEG_INFINITY;
+    bounds[1] = f32::INFINITY;
+    for q in 1..n {
+        let mut s = meet(q, hulls[k]);
+        while k > 0 && s <= bounds[k] {
+            k -= 1;
+            s = meet(q, hulls[k]);
+        }
+        k += 1;
+        hulls[k] = q;
+        bounds[k] = s;
+        bounds[k + 1] = f32::INFINITY;
+    }
+    k = 0;
+    for (q, out) in out.iter_mut().enumerate().take(n) {
+        while bounds[k + 1] < q as f32 {
+            k += 1;
+        }
+        let p = hulls[k];
+        let d = q as f32 - p as f32;
+        *out = d * d + f[p];
+    }
+}
+
+/// Blurs `logits`, `side` square, a cell either way: SAM's masks are
+/// checkered where it's unsure, from how it scales them up itself
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn smooth(logits: &mut [f32], side: usize) {
+    let mut across = vec![0f32; logits.len()];
+    for y in 0..side {
+        for x in 0..side {
+            let at = |x: usize| logits[y * side + x];
+            across[y * side + x] = (at(x.saturating_sub(1)) + 2.0 * at(x) + at((x + 1).min(side - 1))) / 4.0;
+        }
+    }
+    for y in 0..side {
+        for x in 0..side {
+            let at = |y: usize| across[y * side + x];
+            logits[y * side + x] = (at(y.saturating_sub(1)) + 2.0 * at(y) + at((y + 1).min(side - 1))) / 4.0;
+        }
+    }
+}
+
+/// Takes specks out of the mask in `logits`, `side` square, and fills its
+/// pinholes, smaller than `least` cells: the noise SAM leaves where it's
+/// unsure
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn despeckle(logits: &mut [f32], side: usize, least: usize) {
+    let mut seen = vec![false; logits.len()];
+    let mut piece = Vec::new();
+    for start in 0..logits.len() {
+        if seen[start] {
+            continue;
+        }
+        let inside = logits[start] > 0.0;
+        seen[start] = true;
+        piece.clear();
+        piece.push(start);
+        let mut edge = false;
+        let mut next = 0;
+        while next < piece.len() {
+            let i = piece[next];
+            next += 1;
+            let (x, y) = ((i % side) as isize, (i / side) as isize);
+            edge |= x == 0 || y == 0 || x as usize == side - 1 || y as usize == side - 1;
+            // Pieces touch at corners, holes only at sides
+            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                if !inside && dx != 0 && dy != 0 {
+                    continue;
+                }
+                let (x, y) = (x + dx, y + dy);
+                if x < 0 || y < 0 || x as usize >= side || y as usize >= side {
+                    continue;
+                }
+                let j = y as usize * side + x as usize;
+                if !seen[j] && (logits[j] > 0.0) == inside {
+                    seen[j] = true;
+                    piece.push(j);
+                }
+            }
+        }
+        if piece.len() < least && (inside || !edge) {
+            for &i in &piece {
+                logits[i] = if inside { -logits[i] } else { (-logits[i]).max(f32::MIN_POSITIVE) };
+            }
+        }
+    }
+}
+
 #[cfg(birefnet)]
 mod sam {
     use std::collections::HashMap;
@@ -83,7 +400,7 @@ mod sam {
     use ort::value::TensorRef;
     use tauri::AppHandle;
 
-    use super::{Pick, Request};
+    use super::{despeckle, kept, smooth, Edge, Field, Pick, Request};
     use crate::models::{Missing, OBJECTS, SAM_DECODER, SAM_ENCODER};
 
     /// SAM takes the image stretched to a square this size, normalized as
@@ -97,6 +414,9 @@ mod sam {
     /// Masks found, kept for the picks they were found for, so the outline
     /// of several picks only finds the new one
     const KEPT: usize = 64;
+    /// Specks and pinholes smaller than this many of a mask's cells are
+    /// left out of it
+    const SPECK: usize = MASK * MASK / 4000;
 
     struct Image {
         session: u64,
@@ -137,10 +457,9 @@ mod sam {
             op => {
                 let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 let loaded = loaded.as_mut().filter(|loaded| loaded.image.session == request.session).ok_or("closed")?;
-                let logits = picked(loaded, &request.picks)?;
                 match op {
-                    "outline" => Ok(outline(&loaded.image, &logits)),
-                    "isolate" => isolate(&logits, image),
+                    "outline" => outline(loaded, &request.picks, request.edge),
+                    "isolate" => isolate(loaded, &request.picks, request.edge, image),
                     _ => Err("failed"),
                 }
             }
@@ -217,28 +536,65 @@ mod sam {
         Ok(image.into_rgba8())
     }
 
-    /// The picks as one mask, in logits: each added to those before it, or
-    /// taken away from them
-    fn picked(loaded: &mut Loaded, picks: &[Pick]) -> Result<Vec<f32>, &'static str> {
-        let mut logits: Option<Vec<f32>> = None;
+    /// The picks over an image `width` by `height`, each added to those
+    /// before it or taken away from them. SAM's masks are combined in its
+    /// logits, as far as they can be, and scaled up together, then strokes
+    /// and lassos with them
+    fn picked(loaded: &mut Loaded, picks: &[Pick], width: usize, height: usize) -> Result<Field, &'static str> {
+        let mut field: Option<Field> = None;
+        // Masks since the last stroke, to add to `field`
+        let mut masks: Option<Vec<f32>> = None;
+        let flush = |field: &mut Option<Field>, masks: &mut Option<Vec<f32>>| {
+            let Some(masks) = masks.take() else { return };
+            let stretched = stretched(&masks, width, height);
+            match field {
+                Some(field) => field.combine(&stretched, false),
+                None => *field = Some(Field { values: stretched, width, height }),
+            }
+        };
         for pick in picks {
+            if let Some(points) = &pick.stroke {
+                flush(&mut field, &mut masks);
+                if field.is_none() && pick.subtract {
+                    continue;
+                }
+                field.get_or_insert_with(|| Field::empty(width, height)).paint(points, pick.radius * width as f32, pick.subtract);
+                continue;
+            }
+            if let Some(points) = &pick.lasso {
+                flush(&mut field, &mut masks);
+                if field.is_none() && pick.subtract {
+                    continue;
+                }
+                field.get_or_insert_with(|| Field::empty(width, height)).lasso(points, pick.subtract);
+                continue;
+            }
             let mask = mask(loaded, pick)?;
-            logits = Some(match logits {
+            if pick.subtract && field.is_some() {
+                flush(&mut field, &mut masks);
+                if let Some(field) = &mut field {
+                    field.combine(&stretched(&mask, width, height), true);
+                }
+                continue;
+            }
+            masks = Some(match masks {
                 None if pick.subtract => continue,
                 None => mask,
-                Some(mut logits) => {
-                    for (logit, &other) in logits.iter_mut().zip(&mask) {
+                Some(mut masks) => {
+                    for (logit, &other) in masks.iter_mut().zip(&mask) {
                         *logit = if pick.subtract { logit.min(-other) } else { logit.max(other) };
                     }
-                    logits
+                    masks
                 }
             });
         }
-        logits.ok_or("empty")
+        flush(&mut field, &mut masks);
+        field.ok_or("empty")
     }
 
-    /// The mask SAM finds for `pick`, `MASK` square, in logits. Of the three
-    /// it gives, from the whole to a part, the one it scores best
+    /// The mask SAM finds for `pick`, `MASK` square, in logits, smoothed,
+    /// without specks or pinholes. Of the three it gives, from the whole to
+    /// a part, the one it scores best
     fn mask(loaded: &mut Loaded, pick: &Pick) -> Result<Vec<f32>, &'static str> {
         let scale = SIDE as f32;
         let key = match (pick.point, pick.rect) {
@@ -278,8 +634,10 @@ mod sam {
             return Err(failed("unexpected output"));
         }
         let best = (0..scores.len()).max_by(|&a, &b| scores[a].total_cmp(&scores[b])).unwrap_or(0);
-        let mask = masks[best * side..(best + 1) * side].to_vec();
+        let mut mask = masks[best * side..(best + 1) * side].to_vec();
         drop(outputs);
+        smooth(&mut mask, MASK);
+        despeckle(&mut mask, MASK, SPECK);
         let masks = &mut loaded.image.masks;
         if masks.len() >= KEPT {
             masks.clear();
@@ -308,25 +666,31 @@ mod sam {
         out
     }
 
-    /// The outline of the mask in `logits` over the image, without specks
-    fn outline(image: &Image, logits: &[f32]) -> String {
-        let (width, height) = (image.width, image.height);
-        let mask: Vec<bool> = stretched(logits, width, height).iter().zip(&image.opaque).map(|(&logit, &opaque)| logit > 0.0 && opaque).collect();
-        let d = crate::vectorize::outline(&mask, width, height, (width * height / 4000).max(4));
-        serde_json::json!({ "d": d }).to_string()
+    /// The outline of the picks over the image, with the edge moved as
+    /// `edge` says, where the image shows
+    fn outline(loaded: &mut Loaded, picks: &[Pick], edge: Edge) -> Result<String, &'static str> {
+        let (width, height) = (loaded.image.width, loaded.image.height);
+        let field = picked(loaded, picks, width, height)?;
+        let inside: Vec<bool> = if edge.shift == 0.0 {
+            field.values.iter().map(|&value| value > 0.0).collect()
+        } else {
+            field.distances().iter().map(|&distance| distance + edge.shift > 0.0).collect()
+        };
+        let mask: Vec<bool> = inside.iter().zip(&loaded.image.opaque).map(|(&inside, &opaque)| inside && opaque).collect();
+        let d = crate::vectorize::outline(&mask, width, height, 4);
+        Ok(serde_json::json!({ "d": d }).to_string())
     }
 
-    /// The image in `bytes`, the layer drawn larger, with only what the mask
-    /// in `logits` covers, cropped to it. Its edge is antialiased, a pixel or
-    /// two wide however large the image
-    fn isolate(logits: &[f32], bytes: &[u8]) -> Result<String, &'static str> {
+    /// The image in `bytes`, the layer drawn larger, with only what's
+    /// picked, its edge moved and softened as `edge` says, cropped to it.
+    /// The edge is antialiased, however large the image
+    fn isolate(loaded: &mut Loaded, picks: &[Pick], edge: Edge, bytes: &[u8]) -> Result<String, &'static str> {
         let mut picture = decode(bytes)?;
         let (width, height) = (picture.width() as usize, picture.height() as usize);
-        let sharpness = (width.max(height) as f32 / MASK as f32 / 4.0).max(1.0);
+        let distances = picked(loaded, picks, width, height)?.distances();
         let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
-        for (i, (pixel, &logit)) in picture.pixels_mut().zip(&stretched(logits, width, height)).enumerate() {
-            let kept = 1.0 / (1.0 + (-logit * sharpness).exp());
-            pixel[3] = (pixel[3] as f32 * kept).round() as u8;
+        for (i, (pixel, &distance)) in picture.pixels_mut().zip(&distances).enumerate() {
+            pixel[3] = (pixel[3] as f32 * kept(distance, edge)).round() as u8;
             if pixel[3] > 0 {
                 let (x, y) = (i % width, i / width);
                 (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1));
@@ -349,5 +713,93 @@ mod sam {
             "height": (bottom - top) as f64 / height,
         })
         .to_string())
+    }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A disc of radius 20 in a 64 square, painted
+    fn disc() -> Field {
+        let mut field = Field::empty(64, 64);
+        field.paint(&[[0.5, 0.5]], 20.0, false);
+        field
+    }
+
+    #[test]
+    fn measures_distances_from_the_edge() {
+        let distances = disc().distances();
+        let at = |x: usize, y: usize| distances[y * 64 + x];
+        // Pixel centers are half a pixel in, so (32, 32) is 19.5 inside,
+        // and away from the edge it's to within a pixel
+        assert!((at(32, 32) - 19.5).abs() < 1.0, "{}", at(32, 32));
+        assert!((at(52, 32) + 0.5).abs() < 0.1, "{}", at(52, 32));
+        assert!((at(51, 32) - 0.5).abs() < 0.1, "{}", at(51, 32));
+        assert!((at(62, 32) + 10.5).abs() < 0.6, "{}", at(62, 32));
+    }
+
+    #[test]
+    fn edges_are_hard_unless_feathered() {
+        let edge = Edge::default();
+        assert_eq!(kept(3.0, edge), 1.0);
+        assert_eq!(kept(-3.0, edge), 0.0);
+        assert_eq!(kept(0.0, edge), 0.5);
+        let shifted = Edge { shift: 2.0, feather: 0.0 };
+        assert_eq!(kept(-1.0, shifted), 1.0);
+        assert_eq!(kept(-3.0, shifted), 0.0);
+        let feathered = Edge { shift: 0.0, feather: 4.0 };
+        assert!(kept(-2.0, feathered) > 0.0 && kept(-2.0, feathered) < 0.5);
+        assert!(kept(2.0, feathered) > 0.5 && kept(2.0, feathered) < 1.0);
+        assert_eq!(kept(5.0, feathered), 1.0);
+    }
+
+    #[test]
+    fn strokes_add_and_take_away() {
+        let mut field = disc();
+        field.paint(&[[0.5, 0.0], [0.5, 1.0]], 4.0, true);
+        let inside = |field: &Field, x: usize, y: usize| field.values[y * 64 + x] > 0.0;
+        assert!(inside(&field, 20, 32) && inside(&field, 44, 32));
+        assert!(!inside(&field, 32, 32) && !inside(&field, 30, 20));
+        field.paint(&[[0.0, 0.05], [1.0, 0.05]], 1.0, false);
+        assert!(inside(&field, 5, 3) && inside(&field, 60, 3) && !inside(&field, 5, 6));
+    }
+
+    #[test]
+    fn lassos_add_and_take_away() {
+        // A triangle, then a square taken out of its middle
+        let mut field = Field::empty(64, 64);
+        field.lasso(&[[0.1, 0.9], [0.5, 0.1], [0.9, 0.9]], false);
+        let inside = |field: &Field, x: usize, y: usize| field.values[y * 64 + x] > 0.0;
+        assert!(inside(&field, 32, 40) && inside(&field, 10, 56) && inside(&field, 53, 56));
+        assert!(!inside(&field, 10, 20) && !inside(&field, 32, 60) && !inside(&field, 2, 2));
+        field.lasso(&[[0.4, 0.5], [0.6, 0.5], [0.6, 0.7], [0.4, 0.7]], true);
+        assert!(!inside(&field, 32, 40) && inside(&field, 20, 50));
+        // Near the outline, how far in to a fraction of a pixel: the
+        // center of (32, 57) is 0.1 above the bottom edge, at 57.6
+        let distances = field.distances();
+        assert!((distances[57 * 64 + 32] - 0.1).abs() < 0.15, "{}", distances[57 * 64 + 32]);
+        // Off the image, it's left as it was
+        field.lasso(&[[1.5, 1.5], [2.0, 1.5], [2.0, 2.0]], false);
+        assert!(!inside(&field, 63, 63));
+    }
+
+    #[test]
+    fn despeckles_masks() {
+        let side = 16;
+        let mut logits = vec![-1.0f32; side * side];
+        // A block with a pinhole, and a speck
+        for y in 4..12 {
+            for x in 4..12 {
+                logits[y * side + x] = 1.0;
+            }
+        }
+        logits[7 * side + 7] = -1.0;
+        logits[side + 14] = 1.0;
+        despeckle(&mut logits, side, 4);
+        assert!(logits[7 * side + 7] > 0.0);
+        assert!(logits[side + 14] < 0.0);
+        assert!(logits[4 * side + 4] > 0.0 && logits[0] < 0.0);
     }
 }
