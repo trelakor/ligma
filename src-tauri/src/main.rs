@@ -14,6 +14,7 @@ mod downloads;
 mod figma_scheme;
 #[cfg(windows)]
 mod frame;
+mod handoff;
 mod home;
 mod layers;
 mod modules;
@@ -31,6 +32,7 @@ mod tabs;
 mod titlebar;
 mod toolbar;
 mod updater;
+mod vectorize;
 #[cfg(windows)]
 mod webview2;
 #[cfg(target_os = "macos")]

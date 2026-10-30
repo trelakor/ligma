@@ -9,28 +9,11 @@
 //! from Settings, which can also remove it. Downloads are checked against
 //! their SHA-256
 //!
-//! Figma tabs get no IPC, so the page hands the image over as a download
-//! named `ligma-background-<job>`, which `on_requested` saves to a
-//! temporary file instead of asking where. Once it's saved, the cut-out
-//! goes back to the page as a PNG, through
-//! `window.__ligmaRemoveBackground.done(job, base64)`, or `failed(job,
-//! reason)`. While the model downloads, `progress(job, text)` says how far
-//! it's got
-
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+//! The page hands the image over and gets the cut-out back as a PNG in
+//! base64 (see handoff.rs)
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, Url, Webview};
-
-const PREFIX: &str = "ligma-background-";
-/// Larger than Figma accepts, so anything bigger isn't an image of a file
-const MAX_BYTES: u64 = 64 << 20;
-
-/// Images on their way: the download's URL, the tab and job it's for and
-/// its temporary file
-static PENDING: Mutex<Vec<(Url, u32, u64, PathBuf)>> = Mutex::new(Vec::new());
+use tauri::{AppHandle, Manager, Webview};
 
 /// Whether this Mac can remove backgrounds
 #[cfg(target_os = "macos")]
@@ -50,53 +33,6 @@ pub fn model_supported() -> bool {
     cfg!(birefnet) && available()
 }
 
-/// An image a tab hands over: saved to a temporary file. False for other
-/// downloads
-pub fn on_requested(webview: &Webview, url: &Url, destination: &mut PathBuf) -> bool {
-    if url.scheme() != "blob" {
-        return false;
-    }
-    // WebView2 may add an extension, like ".txt", or " (1)" to the name
-    let Some(job) = destination.file_name().and_then(|name| {
-        let rest = name.to_str()?.strip_prefix(PREFIX)?;
-        let digits = rest.find(|char: char| !char.is_ascii_digit()).unwrap_or(rest.len());
-        rest[..digits].parse::<u64>().ok()
-    }) else {
-        return false;
-    };
-    let Some(tab) = webview.label().strip_prefix("tab-").and_then(|id| id.parse().ok()) else {
-        return false;
-    };
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_nanos());
-    let temp = std::env::temp_dir().join(format!("{PREFIX}{nanos}"));
-    PENDING.lock().unwrap().push((url.clone(), tab, job, temp.clone()));
-    *destination = temp;
-    true
-}
-
-/// A download `on_requested` took is saved: removes the background off the
-/// main thread and sends the result to its tab. False for other downloads
-pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
-    let pending = {
-        let mut pending = PENDING.lock().unwrap();
-        let index = pending.iter().position(|(pending, ..)| pending == url);
-        index.map(|index| pending.remove(index))
-    };
-    let Some((_, tab, job, temp)) = pending else {
-        return false;
-    };
-    let app = webview.app_handle().clone();
-    std::thread::spawn(move || {
-        let result = if success { remove(&app, tab, job, &temp) } else { Err(Failure::Failed) };
-        let _ = std::fs::remove_file(&temp);
-        if let Err(Failure::Failed) = result {
-            log::warn!("Couldn't remove the background of an image");
-        }
-        reply(&app, tab, job, result);
-    });
-    true
-}
-
 enum Failure {
     /// Nothing to keep was found
     NoSubject,
@@ -106,47 +42,34 @@ enum Failure {
     Failed,
 }
 
-/// The image in `path` with its background made transparent, as a PNG
-/// in base64, for `job` in tab `tab`
-fn remove(app: &AppHandle, tab: u32, job: u64, path: &Path) -> Result<String, Failure> {
-    if std::fs::metadata(path).map_err(|_| Failure::Failed)?.len() > MAX_BYTES {
-        return Err(Failure::Failed);
+/// The image in `bytes` with its background made transparent, as a PNG
+/// in base64, for `job` in tab `tab`, or why there's none: "subject" when
+/// there's nothing to keep, "cancelled" when the model wasn't downloaded
+/// and "failed" otherwise
+pub fn remove(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
+    match cut_out(app, tab, job, bytes) {
+        Ok(png) => Ok(png),
+        Err(Failure::NoSubject) => Err("subject"),
+        Err(Failure::Cancelled) => Err("cancelled"),
+        Err(Failure::Failed) => {
+            log::warn!("Couldn't remove the background of an image");
+            Err("failed")
+        }
     }
-    let bytes = std::fs::read(path).map_err(|_| Failure::Failed)?;
+}
+
+fn cut_out(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<String, Failure> {
     #[cfg(target_os = "macos")]
     if !(cfg!(birefnet) && crate::settings::current(app).use_background_model) {
-        return vision::remove(&bytes);
+        return vision::remove(bytes);
     }
     #[cfg(birefnet)]
-    return birefnet::remove(app, tab, job, &bytes);
+    return birefnet::remove(app, tab, job, bytes);
     #[cfg(not(birefnet))]
     {
         let _ = (app, tab, job);
         Err(Failure::Failed)
     }
-}
-
-/// Tells the page in tab `tab` how far `job` has got
-#[cfg_attr(not(birefnet), allow(dead_code))]
-fn progress(app: &AppHandle, tab: u32, job: u64, text: &str) {
-    if let Some(webview) = crate::tabs::scriptable(app, tab) {
-        let _ = webview.eval(format!("window.__ligmaRemoveBackground?.progress({job}, {text:?})"));
-    }
-}
-
-/// Sends `result` for `job` to tab `tab`, if it can still run JavaScript.
-/// Otherwise the page gives up on it in time
-fn reply(app: &AppHandle, tab: u32, job: u64, result: Result<String, Failure>) {
-    let Some(webview) = crate::tabs::scriptable(app, tab) else {
-        return;
-    };
-    let script = match result {
-        Ok(png) => format!("window.__ligmaRemoveBackground?.done({job}, {png:?})"),
-        Err(Failure::NoSubject) => format!("window.__ligmaRemoveBackground?.failed({job}, \"subject\")"),
-        Err(Failure::Cancelled) => format!("window.__ligmaRemoveBackground?.failed({job}, \"cancelled\")"),
-        Err(Failure::Failed) => format!("window.__ligmaRemoveBackground?.failed({job}, \"failed\")"),
-    };
-    let _ = webview.eval(script);
 }
 
 /// The model as Settings shows it
@@ -518,7 +441,7 @@ mod birefnet {
     fn tell_watchers(app: &AppHandle, text: &str) {
         let watchers = WATCHERS.lock().unwrap().clone();
         for (tab, job) in watchers {
-            super::progress(app, tab, job, text);
+            crate::handoff::progress(app, tab, job, text);
         }
     }
 

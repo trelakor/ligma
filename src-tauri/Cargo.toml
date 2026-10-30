@@ -28,6 +28,9 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 # ligma.log, for problem reports in src/report.rs
 tauri-plugin-log = "2"
 log = "0.4"
+# Vectorize in src/vectorize.rs: reading the image and tracing it
+image = { version = "0.25", default-features = false, features = ["png"] }
+visioncortex = "0.9"
 
 # Same versions Tauri's WebView2 backend uses, for the memory APIs and tab
 # shortcuts in src/webview2.rs

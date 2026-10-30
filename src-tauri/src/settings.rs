@@ -108,6 +108,9 @@ pub struct Settings {
     /// On a Mac with Apple silicon, remove backgrounds with BiRefNet, the
     /// model Windows uses, rather than Apple's Vision
     pub use_background_model: bool,
+    /// With `hide_free_ai_actions`, also put Ligma's own Vectorize in the
+    /// image bar, which traces the image on this device (see vectorize.rs)
+    pub local_vectorize: bool,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
@@ -156,6 +159,7 @@ impl Default for Settings {
             hide_free_ai_actions: true,
             local_remove_background: true,
             use_background_model: false,
+            local_vectorize: true,
             copy_as_code: true,
             color_contrast: false,
             classic_home: false,

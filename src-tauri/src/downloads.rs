@@ -22,7 +22,7 @@ pub fn on_download(webview: Webview, event: DownloadEvent) -> bool {
     // synchronous dialogs; the dialog plugin's wait on the main thread
     match event {
         DownloadEvent::Requested { url, destination } => {
-            if crate::background::on_requested(&webview, &url, destination) {
+            if crate::handoff::on_requested(&webview, &url, destination) {
                 return true;
             }
             let window = webview.window();
@@ -54,7 +54,7 @@ pub fn on_download(webview: Webview, event: DownloadEvent) -> bool {
             }
         }
         DownloadEvent::Finished { url, success, .. } => {
-            if crate::background::on_finished(&webview, &url, success) {
+            if crate::handoff::on_finished(&webview, &url, success) {
                 return true;
             }
             let pending = {
