@@ -102,8 +102,8 @@ pub struct Settings {
     /// In free (Starter) projects, hide the AI actions from that bar:
     /// Select area, Remove background, Edit with prompt and More
     pub hide_free_ai_actions: bool,
-    /// In the color picker of a solid fill or stroke, show its contrast
-    /// ratio against what's behind the layer
+    /// In the color picker of a solid fill or stroke of text or a vector,
+    /// show its contrast against what's behind the layer
     pub color_contrast: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
