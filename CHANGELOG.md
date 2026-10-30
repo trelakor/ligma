@@ -2,6 +2,15 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.25.0 - 2026-10-29
+
+- Remove background in free projects: Ligma's own Remove background takes the place of Figma's in the bar above the toolbar for a selected image, and runs on your device. On macOS 14 and later it uses Apple's Vision, as Preview does. On Windows it runs the BiRefNet model, which Ligma asks before downloading (224 MB) the first time. The image is replaced with the cut-out as one undo step, keeping its crop and adjustments. Settings > Features > Images.
+- Copy as code without Dev Mode: Copy/Paste as > Copy as code in the right-click menu offers Tailwind, Tailwind (all layers) and React on every plan, in place of the ad for Dev Mode, in files you can edit. Settings > Features > Code.
+- Color contrast: the color picker of a text layer, shape or vector can show a solid color's WCAG contrast against what's behind the layer, under the hex field, with lines on the color square where it starts to pass AA and AAA. Settings > Features > Colors. Off by default.
+- Figma Specs open in their own tab, with their own icon and color, show on Discord, and take the theme's accent.
+- Plugin and widget icons in the left rail that fail to load at first are tried again.
+- Windows: the image bar's adjustments buttons and the hiding of AI actions in free projects now work. On both platforms, the adjustments buttons hide while cropping.
+
 ## 0.24.0 - 2026-10-29
 
 - Image adjustments: copy the sliders of an image fill or stroke (Exposure, Contrast, Saturation, Temperature, Tint, Highlights and Shadows) and paste them onto other images, keeping each image. With the image picker open, Cmd+Shift+C (Ctrl+Shift+C on Windows) copies, and Cmd+Shift+V (Ctrl+Shift+V) pastes onto the selected layers. Copy and Paste are also in a menu by the picker's Rotate button, on a right-click on the sliders or an image's row, and after Crop in the bar above the toolbar. Paste goes to the image whose row is highlighted, or else each layer's top image fill, as one undo step. Settings > Features > Images.
