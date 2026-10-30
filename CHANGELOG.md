@@ -2,6 +2,14 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.26.0 - 2026-10-29
+
+- Remove background keeps the original image: its fill stays, hidden, under a new fill with the cut-out, so showing it again brings the background back.
+- A white shimmer runs over each layer while its background is removed, as with Figma's own.
+- Settings > Features > Images > Background model downloads the model ahead of time, shows its size and removes it.
+- Macs with Apple silicon can remove backgrounds with BiRefNet, the model Ligma uses on Windows, instead of Apple's Vision. Settings > Features > Images > Use BiRefNet instead of Vision. Off by default.
+- Windows: Remove background no longer asks where to save a text file and then stalls.
+
 ## 0.25.0 - 2026-10-29
 
 - Remove background in free projects: Ligma's own Remove background takes the place of Figma's in the bar above the toolbar for a selected image, and runs on your device. On macOS 14 and later it uses Apple's Vision, as Preview does. On Windows it runs the BiRefNet model, which Ligma asks before downloading (224 MB) the first time. The image is replaced with the cut-out as one undo step, keeping its crop and adjustments. Settings > Features > Images.
