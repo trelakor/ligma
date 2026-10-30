@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.27.0 - 2026-10-30
+
+- Vectorize in free projects: Ligma's own Vectorize joins the bar above the toolbar for a selected image, after Remove background, and runs on your device on Mac and Windows with nothing to download. It traces the image into flat-colored vector shapes in a frame right under the layer, which is hidden, as Figma's does, as one undo step. Edges follow the image and antialiasing is split halfway, so logos keep their own colors with clean outlines, and photos become flat tones without halos. Settings > Features > Images.
+- After vectorizing, a bar like Figma's recolors the shapes in full color, grayscale or black and white, and merges them down to fewer colors, those that look most alike first. Each change is an undo step.
+
 ## 0.26.0 - 2026-10-29
 
 - Remove background keeps the original image: its fill stays, hidden, under a new fill with the cut-out, so showing it again brings the background back.
