@@ -72,8 +72,9 @@ const PAGE_JS: &str = r##"(() => {
   const plural = (count) => `${count} image${count === 1 ? "" : "s"}`;
 
   // Hands an image to Ligma as a download, for `kind` ("background" or
-  // "vectorize"), and resolves to what Ligma sends back: the cut-out as a
-  // PNG in base64, or the SVG. Rejects with the reason there's none, such
+  // "vectorize"), with `suffix` after the job in its name, and resolves to
+  // what Ligma sends back: the cut-out as a PNG in base64, or the traced
+  // shapes as JSON. Rejects with the reason there's none, such
   // as "subject" when there's nothing to keep, "cancelled" when the model
   // wasn't downloaded or "failed". `onProgress` gets what Ligma says while
   // it downloads the model (see handoff.rs). Job numbers start from the
@@ -81,7 +82,7 @@ const PAGE_JS: &str = r##"(() => {
   // new job
   const jobs = new Map();
   let lastJob = Date.now() * 1000;
-  const handOff = (kind, bytes, onProgress) =>
+  const handOff = (kind, bytes, onProgress, suffix = "") =>
     new Promise((resolve, reject) => {
       const job = ++lastJob;
       // Typed, or WebView2 sniffs it and names it as text
@@ -116,7 +117,7 @@ const PAGE_JS: &str = r##"(() => {
           reject(reason);
         },
       });
-      const link = Object.assign(document.createElement("a"), { href: url, download: `ligma-${kind}-${job}`, hidden: true });
+      const link = Object.assign(document.createElement("a"), { href: url, download: `ligma-${kind}-${job}${suffix}`, hidden: true });
       document.documentElement.append(link);
       link.click();
       link.remove();
@@ -276,14 +277,32 @@ const PAGE_JS: &str = r##"(() => {
     figma.notify(message, { timeout: 3000 });
   };
 
+  // How wide a pixel of the layer's top image is, drawn `scale` times as
+  // large: more than 1 for a small image drawn large, whose steps along
+  // edges Ligma then smooths as such
+  const pixelSize = async (figma, node, scale) => {
+    const paint = fillsOf(node).findLast((fill) => fill.type === "IMAGE" && fill.imageHash && fill.visible !== false);
+    try {
+      const size = figma.getImageByHash(paint.imageHash).getSizeAsync();
+      const { width, height } = await Promise.race([size, new Promise((_, reject) => setTimeout(reject, 2000))]);
+      if (paint.scaleMode === "TILE") return Math.max(1, scale * (paint.scalingFactor ?? 1));
+      // Fitted, the image fits inside the layer, and otherwise covers it
+      const fit = paint.scaleMode === "FIT" ? Math.min : Math.max;
+      return Math.max(1, scale * fit(node.width / width, node.height / height));
+    } catch {
+      return 1;
+    }
+  };
+
   // The layer as Figma draws it, unturned, at a size worth tracing: up to
   // 4x for small layers, down to 1024 pixels on the longer side for large
-  // ones
+  // ones. With how wide a pixel of its image is in it
   const render = async (figma, node) => {
     const scale = Math.min(4, 1024 / Math.max(node.width, node.height, 1));
+    const pixel = await pixelSize(figma, node, scale);
     const settings = { format: "PNG", constraint: { type: "SCALE", value: scale }, useAbsoluteBounds: true };
     const [[a, c], [b, d]] = node.absoluteTransform;
-    if (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return node.exportAsync(settings);
+    if (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return { bytes: await node.exportAsync(settings), pixel };
     // Turned or flipped, here or by a parent: a copy that isn't
     const copy = node.clone();
     try {
@@ -292,7 +311,7 @@ const PAGE_JS: &str = r##"(() => {
         [1, 0, 0],
         [0, 1, 0],
       ];
-      return await copy.exportAsync(settings);
+      return { bytes: await copy.exportAsync(settings), pixel };
     } finally {
       copy.remove();
     }
@@ -342,13 +361,18 @@ const PAGE_JS: &str = r##"(() => {
     const { show, hide } = toast(figma);
     show("Vectorizing…");
     const frames = [];
+    // How many pixels of each fill show, for the recolor bar
+    const areas = new Map();
     let empty = 0;
     let failed = 0;
     for (const node of nodes) {
       try {
-        const svg = await handOff("vectorize", await render(figma, node), show);
+        const { bytes, pixel } = await render(figma, node);
+        const traced = JSON.parse(await handOff("vectorize", bytes, show, `@${Math.round(pixel * 100)}`));
         // Unless it was deleted in the meantime
-        if (!node.removed) frames.push(place(figma, node, svg));
+        if (node.removed) continue;
+        frames.push(place(figma, node, traced.svg));
+        for (const [fill, area] of Object.entries(traced.areas)) areas.set(fill, (areas.get(fill) ?? 0) + area);
       } catch (reason) {
         if (reason === "empty") empty++;
         else failed++;
@@ -365,7 +389,7 @@ const PAGE_JS: &str = r##"(() => {
     tidy();
     hide();
     // The recolor bar says it worked, where Figma's toast would cover it
-    if (frames.length) openRecolor(figma, frames);
+    if (frames.length) openRecolor(figma, frames, areas);
     if (frames.length === nodes.length) return;
     const message = frames.length
       ? `Vectorized ${plural(frames.length)}${empty ? `, nothing to trace in ${empty}` : ""}${failed ? `, ${failed} failed` : ""}`
@@ -375,35 +399,50 @@ const PAGE_JS: &str = r##"(() => {
     figma.notify(message, { timeout: 3000 });
   };
 
-  // The colors of `palette` ({ key, color, weight } for each) in `count`
-  // groups, by median cut weighted by how much of the image each covers,
-  // each color mapped by key to the most used one in its group
-  const reduce = (palette, count) => {
-    const boxes = [palette];
-    while (boxes.length < count) {
-      // Splits the box with the widest channel
-      let widest = null;
-      for (const box of boxes) {
-        if (box.length < 2) continue;
-        for (const channel of ["r", "g", "b"]) {
-          const values = box.map((entry) => entry.color[channel]);
-          const range = Math.max(...values) - Math.min(...values);
-          if (!widest || range > widest.range) widest = { box, channel, range };
+  // An sRGB color, channels 0 to 1, in CIELAB, where how far apart two
+  // colors are matches how different they look
+  const lab = ({ r, g, b }) => {
+    const linear = (value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    const [lr, lg, lb] = [r, g, b].map(linear);
+    const f = (t) => (t > 216 / 24389 ? Math.cbrt(t) : ((24389 / 27) * t + 16) / 116);
+    const x = f((0.4124 * lr + 0.3576 * lg + 0.1805 * lb) / 0.95047);
+    const y = f(0.2126 * lr + 0.7152 * lg + 0.0722 * lb);
+    const z = f((0.0193 * lr + 0.1192 * lg + 0.9505 * lb) / 1.08883);
+    return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
+  };
+
+  // The colors of `palette` ({ key, color, area } for each) merged down to
+  // each count from all of them to one: for each count, a map from each
+  // key to the color it's shown in. The two groups that cost least to
+  // merge go first, by Ward's method in CIELAB: those that look most alike
+  // and cover least. Area counts by its square root, so a small accent
+  // that stands out isn't merged away before large areas that look alike.
+  // A group shows its color that covers most, as it is
+  const reductions = (palette) => {
+    const maps = [];
+    let groups = palette.map((entry) => ({ members: [entry], weight: Math.sqrt(Math.max(entry.area, 1)), lab: lab(entry.color) }));
+    for (;;) {
+      const map = new Map();
+      for (const { members } of groups) {
+        const top = members.reduce((a, b) => (b.area > a.area ? b : a));
+        for (const member of members) map.set(member.key, top.color);
+      }
+      maps[groups.length] = map;
+      if (groups.length === 1) return maps;
+      let best = null;
+      for (let i = 0; i < groups.length; i++) {
+        for (let j = i + 1; j < groups.length; j++) {
+          const [a, b] = [groups[i], groups[j]];
+          const distance = a.lab.reduce((sum, value, c) => sum + (value - b.lab[c]) ** 2, 0);
+          const cost = ((a.weight * b.weight) / (a.weight + b.weight)) * distance;
+          if (!best || cost < best.cost) best = { i, j, cost };
         }
       }
-      if (!widest) break;
-      const sorted = [...widest.box].sort((a, b) => a.color[widest.channel] - b.color[widest.channel]);
-      const half = sorted.reduce((sum, entry) => sum + entry.weight, 0) / 2;
-      let cut = 1;
-      for (let sum = sorted[0].weight; cut < sorted.length - 1 && sum < half; cut++) sum += sorted[cut].weight;
-      boxes.splice(boxes.indexOf(widest.box), 1, sorted.slice(0, cut), sorted.slice(cut));
+      const [a, b] = [groups[best.i], groups[best.j]];
+      const weight = a.weight + b.weight;
+      groups = groups.filter((_, index) => index !== best.j);
+      groups[best.i] = { members: [...a.members, ...b.members], weight, lab: a.lab.map((value, c) => (value * a.weight + b.lab[c] * b.weight) / weight) };
     }
-    const map = new Map();
-    for (const box of boxes) {
-      const top = box.reduce((a, b) => (b.weight > a.weight ? b : a));
-      for (const entry of box) map.set(entry.key, top.color);
-    }
-    return map;
   };
 
   // Figma leaves a bar after its Vectorize to recolor the result: its
@@ -424,7 +463,12 @@ const PAGE_JS: &str = r##"(() => {
   let barClasses = null;
   let recolor = null;
   const luma = ({ r, g, b }) => 0.299 * r + 0.587 * g + 0.114 * b;
-  const colorKey = ({ r, g, b }) => [r, g, b].map((value) => Math.round(value * 255)).join(",");
+  // A color as hex, as Ligma names fills
+  const colorKey = ({ r, g, b }) =>
+    [r, g, b]
+      .map((value) => Math.round(value * 255).toString(16).padStart(2, "0"))
+      .join("")
+      .toUpperCase();
 
   const closeRecolor = () => {
     if (!recolor) return;
@@ -434,7 +478,8 @@ const PAGE_JS: &str = r##"(() => {
     recolor = null;
   };
 
-  const openRecolor = (figma, frames) => {
+  // `areas` is how many pixels of each fill show, by hex
+  const openRecolor = (figma, frames, areas) => {
     closeRecolor();
     const paints = [];
     const palette = new Map();
@@ -444,15 +489,13 @@ const PAGE_JS: &str = r##"(() => {
         if (!paint) continue;
         const key = colorKey(paint.color);
         paints.push({ node, paint, key, shown: key });
-        const entry = palette.get(key) ?? { key, color: paint.color, weight: 0 };
-        entry.weight += node.width * node.height;
-        palette.set(key, entry);
+        if (!palette.has(key)) palette.set(key, { key, color: paint.color, area: areas.get(`#${key}`) ?? 0 });
       }
     }
     if (!paints.length) return;
     const colors = palette.size;
     // What the bar shows, and the colors each count maps to, once worked out
-    const state = { palette: [...palette.values()], count: colors, mode: "COLOR", maps: new Map() };
+    const state = { palette: [...palette.values()], count: colors, mode: "COLOR", maps: null };
 
     const root = document.createElement("div");
     root.setAttribute(RECOLOR, "");
@@ -534,8 +577,8 @@ const PAGE_JS: &str = r##"(() => {
       });
     };
     const apply = () => {
-      let map = state.maps.get(state.count);
-      if (!map) state.maps.set(state.count, (map = reduce(state.palette, state.count)));
+      state.maps ??= reductions(state.palette);
+      const map = state.maps[state.count];
       for (const entry of paints) {
         let color = map.get(entry.key);
         if (state.mode !== "COLOR") {

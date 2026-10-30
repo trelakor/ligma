@@ -1,11 +1,12 @@
 //! Figma tabs get no IPC, so the image bar's Remove background and Vectorize
 //! (see ai_actions.rs) hand Ligma an image as a download named
-//! `ligma-background-<job>` or `ligma-vectorize-<job>`, which
+//! `ligma-background-<job>` or `ligma-vectorize-<job>@<pixel>`, which
 //! `on_requested` saves to a temporary file instead of asking where. Once
 //! it's saved, it's handled off the main thread and the result goes back to
 //! the page through `window.__ligmaJob.done(job, result)`, or `failed(job,
 //! reason)`. While a model downloads, `progress(job, text)` says how far
-//! it's got
+//! it's got. `<pixel>` is how wide a pixel of the original image is in the
+//! one handed over, in hundredths (see vectorize.rs)
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -30,6 +31,8 @@ struct Pending {
     kind: Kind,
     tab: u32,
     job: u64,
+    /// After `@` in the name, in hundredths
+    pixel: Option<u64>,
     temp: PathBuf,
 }
 
@@ -42,12 +45,12 @@ pub fn on_requested(webview: &Webview, url: &Url, destination: &mut PathBuf) -> 
         return false;
     }
     // WebView2 may add an extension, like ".txt", or " (1)" to the name
-    let Some((prefix, kind, job)) = destination.file_name().and_then(|name| {
+    let Some((prefix, kind, job, pixel)) = destination.file_name().and_then(|name| {
         let name = name.to_str()?;
         let (prefix, kind) = KINDS.iter().find(|(prefix, _)| name.starts_with(prefix))?;
-        let rest = &name[prefix.len()..];
-        let digits = rest.find(|char: char| !char.is_ascii_digit()).unwrap_or(rest.len());
-        Some((*prefix, *kind, rest[..digits].parse::<u64>().ok()?))
+        let (job, rest) = number(&name[prefix.len()..]);
+        let pixel = rest.strip_prefix('@').and_then(|rest| number(rest).0);
+        Some((*prefix, *kind, job?, pixel))
     }) else {
         return false;
     };
@@ -56,9 +59,15 @@ pub fn on_requested(webview: &Webview, url: &Url, destination: &mut PathBuf) -> 
     };
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_nanos());
     let temp = std::env::temp_dir().join(format!("{prefix}{nanos}"));
-    PENDING.lock().unwrap().push(Pending { url: url.clone(), kind, tab, job, temp: temp.clone() });
+    PENDING.lock().unwrap().push(Pending { url: url.clone(), kind, tab, job, pixel, temp: temp.clone() });
     *destination = temp;
     true
+}
+
+/// The number `text` starts with, and the rest
+fn number(text: &str) -> (Option<u64>, &str) {
+    let digits = text.find(|char: char| !char.is_ascii_digit()).unwrap_or(text.len());
+    (text[..digits].parse().ok(), &text[digits..])
 }
 
 /// A download `on_requested` took is saved: handles it off the main thread
@@ -69,7 +78,7 @@ pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
         let index = pending.iter().position(|pending| pending.url == *url);
         index.map(|index| pending.remove(index))
     };
-    let Some(Pending { kind, tab, job, temp, .. }) = pending else {
+    let Some(Pending { kind, tab, job, pixel, temp, .. }) = pending else {
         return false;
     };
     let app = webview.app_handle().clone();
@@ -79,7 +88,7 @@ pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
         let reply = match (kind, bytes) {
             (_, None) => Err("failed"),
             (Kind::Background, Some(bytes)) => crate::background::remove(&app, tab, job, &bytes),
-            (Kind::Vectorize, Some(bytes)) => crate::vectorize::trace(&bytes),
+            (Kind::Vectorize, Some(bytes)) => crate::vectorize::trace(&bytes, pixel.unwrap_or(100) as f64 / 100.0),
         };
         send(&app, tab, job, reply);
     });
