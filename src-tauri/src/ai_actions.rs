@@ -728,7 +728,7 @@ const PAGE_JS: &str = r##"(() => {
   const HINTS = {
     reading: "Reading the image…",
     ready: "Click an object, or drag a box around it",
-    picked: MAC ? "Shift to add, Option to take away" : "Shift to add, Alt to take away",
+    picked: MAC ? "Shift to add, Option to take away, ⌘Z to undo" : "Shift to add, Alt to take away, Ctrl+Z to undo",
   };
   const ISOLATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="4.5" y="7.5" width="12" height="12" rx="1.5" stroke-dasharray="2 2"/><rect ${STROKE} x="8.5" y="4.5" width="11" height="11" rx="1.5"/></svg>`;
 
@@ -797,6 +797,9 @@ const PAGE_JS: &str = r##"(() => {
       width: 0,
       height: 0,
       picks: [],
+      // The picks before each change, and those undone, for Undo and Redo
+      undone: [],
+      redone: [],
       // The point to find the object at, once the last request is back,
       // and the one shown
       wanted: null,
@@ -967,11 +970,23 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const pick = (pick, mode) => {
-    if (mode === "add") picking.picks.push(pick);
-    else if (mode === "subtract") {
-      if (!picking.picks.length) return;
-      picking.picks.push({ ...pick, subtract: true });
-    } else picking.picks = [pick];
+    const { picks } = picking;
+    if (mode === "subtract" && !picks.length) return;
+    picking.undone.push(picks);
+    picking.redone = [];
+    if (mode === "add") picking.picks = [...picks, pick];
+    else if (mode === "subtract") picking.picks = [...picks, { ...pick, subtract: true }];
+    else picking.picks = [pick];
+    showPicks();
+  };
+
+  // Steps back through the picks, or forward again after that, as
+  // Photoshop's undo does while selecting
+  const undoPick = (redo) => {
+    const [from, to] = redo ? [picking.redone, picking.undone] : [picking.undone, picking.redone];
+    if (!from.length || picking.working) return;
+    to.push(picking.picks);
+    picking.picks = from.pop();
     showPicks();
   };
 
@@ -1091,9 +1106,10 @@ const PAGE_JS: &str = r##"(() => {
 
   addEventListener("blur", () => (space = false));
 
-  // While it's open, Escape leaves, Enter isolates, and Delete does
-  // nothing rather than delete the image. Shift and Alt change the cursor,
-  // and Space is left to Figma, to pan
+  // While it's open, Escape leaves, Enter isolates, Undo and Redo step
+  // through the picks rather than the file, and Delete does nothing rather
+  // than delete the image. Shift and Alt change the cursor, and Space is
+  // left to Figma, to pan
   for (const type of ["keydown", "keyup"]) {
     addEventListener(
       type,
@@ -1109,6 +1125,9 @@ const PAGE_JS: &str = r##"(() => {
         } else if (event.key === "Enter") {
           swallow(event);
           isolate();
+        } else if ((MAC ? event.metaKey : event.ctrlKey) && !event.altKey && /^[zy]$/i.test(event.key)) {
+          swallow(event);
+          undoPick(event.key.toLowerCase() === "y" || event.shiftKey);
         } else if (event.key === "Delete" || event.key === "Backspace") swallow(event);
       },
       true,
