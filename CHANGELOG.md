@@ -2,6 +2,14 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.29.0 - 2026-10-30
+
+- Select object's Isolate keeps a crisp edge: where the model was unsure, it no longer leaves the background faintly showing in a grid pattern or makes what's picked slightly see-through, and the new layer is cropped to what's picked.
+- A brush in Select object's bar paints in what it missed, or paints out what it overshot. `[` and `]` resize it.
+- A lasso picks what's drawn around, or takes it away.
+- New, Add and Take away buttons in the bar do what clicking, Shift-clicking and Alt-clicking (Option-clicking) do, and Shift and Alt still work.
+- Expand moves the edge out by a number of pixels, or in when it's negative, without fading it, and Feather softens it.
+
 ## 0.28.0 - 2026-10-30
 
 - Select object in free projects: Ligma's own Select object takes the place of Select area in the bar above the toolbar for a selected image, and picks out objects in it as Photoshop's Object Selection does. Point at an object to see it outlined, click to pick it, Shift-click to add another, Alt-click (Option-click) to take one away, or drag a box around one. Ctrl+Z (Cmd+Z) undoes picks while it's open. Isolate, or Enter, puts what's picked in a new layer right above, cropped to it and transparent around it, as one undo step, leaving the image alone. Settings > Features > Images.
