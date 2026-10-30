@@ -491,8 +491,8 @@
         <input type="checkbox" class="switch" id="hide-free-ai-actions">
       </label>
       <label class="row nested" id="local-remove-background-row">
-        <span class="label">Remove backgrounds on this Mac
-          <div class="hint">Ligma's own Remove background takes the place of Figma's and finds the subject on your Mac, as Preview does. Needs macOS 14 or later.</div>
+        <span class="label"><span id="local-remove-background-label">Remove backgrounds on this Mac</span>
+          <div class="hint" id="local-remove-background-hint">Ligma's own Remove background takes the place of Figma's and finds the subject on your Mac, as Preview does. Needs macOS 14 or later.</div>
         </span>
         <input type="checkbox" class="switch" id="local-remove-background">
       </label>
@@ -721,8 +721,12 @@
   document.documentElement.classList.toggle("macos", macos);
   // Snapshots only exist on macOS
   $("snapshots-row").hidden = !macos;
-  // Removing backgrounds needs macOS's Vision
-  $("local-remove-background-row").hidden = !macos;
+  // Removing backgrounds uses macOS's Vision, or on Windows a model
+  // downloaded the first time
+  if (!macos) {
+    $("local-remove-background-label").textContent = "Remove backgrounds on this PC";
+    $("local-remove-background-hint").textContent = "Ligma's own Remove background takes the place of Figma's and finds the subject on your PC. The first time, it downloads a 224 MB model from Hugging Face.";
+  }
   // The platform's shortcuts
   const adjustmentsHint = $("adjustments-hint");
   adjustmentsHint.textContent = adjustmentsHint.textContent.replace("MOD+Shift+C", macos ? "⇧⌘C" : "Ctrl+Shift+C").replace("MOD+Shift+V", macos ? "⇧⌘V" : "Ctrl+Shift+V");

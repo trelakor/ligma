@@ -103,7 +103,7 @@ pub struct Settings {
     /// Select area, Remove background, Edit with prompt and More
     pub hide_free_ai_actions: bool,
     /// and put Ligma's own Remove background in their place, which works
-    /// on this device (macOS 14 and later, see background.rs)
+    /// on this device (macOS 14 and later, and Windows, see background.rs)
     pub local_remove_background: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on

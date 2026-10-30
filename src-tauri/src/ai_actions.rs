@@ -64,26 +64,37 @@ const PAGE_JS: &str = r##"(() => {
 
   // Hands an image to Ligma as a download, and resolves to the cut-out
   // Ligma sends back, as PNG bytes, or rejects with "subject" when there's
-  // nothing to keep and "failed" otherwise
-  // Job numbers start from the time, so a result meant for the page before
-  // a reload can't land on a new job
+  // nothing to keep, "cancelled" when the model wasn't downloaded and
+  // "failed" otherwise. `onProgress` gets what Ligma says while it
+  // downloads the model. Job numbers start from the time, so a result
+  // meant for the page before a reload can't land on a new job
   const jobs = new Map();
   let lastJob = Date.now() * 1000;
-  const cutOut = (bytes) =>
+  const cutOut = (bytes, onProgress) =>
     new Promise((resolve, reject) => {
       const job = ++lastJob;
       const url = URL.createObjectURL(new Blob([bytes]));
+      let timer;
       const finish = () => {
         clearTimeout(timer);
         jobs.delete(job);
         URL.revokeObjectURL(url);
       };
-      // A tab frozen in the meantime never hears back
-      const timer = setTimeout(() => {
-        finish();
-        reject("failed");
-      }, 60000);
+      // A tab frozen in the meantime never hears back. On Windows the
+      // model takes a while on the CPU, and longer the first time
+      const wait = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          finish();
+          reject("failed");
+        }, 300000);
+      };
+      wait();
       jobs.set(job, {
+        progress: (text) => {
+          wait();
+          onProgress(text);
+        },
         done: (png) => {
           finish();
           resolve(png);
@@ -98,8 +109,9 @@ const PAGE_JS: &str = r##"(() => {
       link.click();
       link.remove();
     });
-  // From Ligma, with a job's result
+  // From Ligma, with a job's progress and result
   window.__ligmaRemoveBackground = {
+    progress: (job, text) => jobs.get(job)?.progress(text),
     done: (job, base64) => jobs.get(job)?.done(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))),
     failed: (job, reason) => jobs.get(job)?.failed(reason),
   };
@@ -125,15 +137,27 @@ const PAGE_JS: &str = r##"(() => {
     }
     busy = true;
     tidy();
-    const progress = figma.notify("Removing background…", { timeout: Infinity });
+    let progress;
+    const show = (text) => {
+      try {
+        progress?.cancel();
+      } catch {}
+      progress = figma.notify(text, { timeout: Infinity });
+    };
+    show("Removing background…");
     const cut = new Map();
     let missing = 0;
     let failed = 0;
+    let cancelled = false;
     for (const hash of new Set(targets.map((target) => target.hash))) {
       try {
         const bytes = await figma.getImageByHash(hash).getBytesAsync();
-        cut.set(hash, figma.createImage(await cutOut(bytes)).hash);
+        cut.set(hash, figma.createImage(await cutOut(bytes, show)).hash);
       } catch (reason) {
+        if (reason === "cancelled") {
+          cancelled = true;
+          break;
+        }
         if (reason === "subject") missing++;
         else failed++;
       }
@@ -161,6 +185,7 @@ const PAGE_JS: &str = r##"(() => {
     try {
       progress.cancel();
     } catch {}
+    if (cancelled && !images) return;
     const message = images
       ? `Background removed${targets.length > 1 ? ` from ${plural(images)}` : ""}${missing ? `, no subject in ${missing}` : ""}${failed ? `, ${failed} failed` : ""}`
       : missing && !failed

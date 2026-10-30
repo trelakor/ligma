@@ -41,6 +41,13 @@ windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Wi
 base64 = "0.22"
 # figma:// registration in src/figma_scheme.rs
 windows-registry = "0.6"
+# Remove background in src/background.rs: ONNX Runtime, linked in, to run
+# the model on the CPU, the model's download and check, and reading and
+# writing the images
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-22"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 # libc for the memory pressure level in src/pressure.rs; objc2 and block2,
 # the same versions wry uses, for the AppKit and WebKit calls in
