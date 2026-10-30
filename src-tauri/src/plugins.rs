@@ -1231,6 +1231,9 @@ const PAGE_JS: &str = r##"(() => {
     box: "x1467cpc xej7rzx x7r0jtz x78zum5 x6s0dn4 xl56j7k xkt69y7",
     separator: "xso031l x1q0q8m5 x1hxpj6c xtaulvc x5yfwti x15g3bpb",
   };
+  // How often, and how many times, an icon that didn't load is tried again
+  const ICON_RETRY_DELAY = 3000;
+  const ICON_RETRIES = 20;
   const harvestRail = (top) => {
     // The box of a button that isn't selected: the most common one
     const buttons = [...top.querySelectorAll(":scope > button")].filter((button) => button.firstElementChild?.tagName === "DIV");
@@ -1273,11 +1276,29 @@ const PAGE_JS: &str = r##"(() => {
     }, () => devOptions(plugin));
   };
   const savedRailButton = (core, plugin) => {
-    const icon = el("img", "ligma-rail-image");
-    icon.alt = "";
-    icon.draggable = false;
-    icon.src = plugin.redirect_icon_url;
-    icon.addEventListener("error", () => icon.replaceWith(el("span", "", ICONS.plugin).firstChild), { once: true });
+    const image = () => {
+      const icon = el("img", "ligma-rail-image");
+      icon.alt = "";
+      icon.draggable = false;
+      icon.src = plugin.redirect_icon_url;
+      return icon;
+    };
+    const icon = image();
+    icon.addEventListener("error", () => {
+      const placeholder = el("span", "", ICONS.plugin).firstChild;
+      icon.replaceWith(placeholder);
+      // Community icons sometimes fail to load at first, so keep trying for a
+      // while and swap the real one in once it comes. Stops if the rail
+      // redraws this button away
+      let tries = 0;
+      const retry = () => {
+        if (!placeholder.isConnected || ++tries > ICON_RETRIES) return;
+        const next = image();
+        next.addEventListener("load", () => placeholder.isConnected && placeholder.replaceWith(next), { once: true });
+        next.addEventListener("error", () => setTimeout(retry, ICON_RETRY_DELAY), { once: true });
+      };
+      setTimeout(retry, ICON_RETRY_DELAY);
+    }, { once: true });
     return railButton(plugin.name, icon, (button, byKeyboard) => {
       if (isWidget(plugin)) return insertWidget(core, plugin);
       const commands = savedCommands(core, plugin);
