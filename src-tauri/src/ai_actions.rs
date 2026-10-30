@@ -6,9 +6,10 @@
 //! divider. On by default
 //!
 //! In their place goes Ligma's own Remove background, which works on this
-//! device (see background.rs), where it can. It changes the top image fill
-//! of each selected layer through Figma's console plugin API,
-//! `window.figma`, as one undo step. On by default
+//! device (see background.rs), where it can. It hides the top image fill
+//! of each selected layer and adds its cut-out as a new fill above it,
+//! through Figma's console plugin API, `window.figma`, as one undo step.
+//! On by default
 //!
 //! A file's plan is `INITIAL_OPTIONS.plan_tier` ("starter" when free) while
 //! the page is still on the file it loaded with, and otherwise the "Free"
@@ -169,9 +170,9 @@ const PAGE_JS: &str = r##"(() => {
     };
   };
 
-  // Replaces the top image fill of each selected layer with its cut-out,
-  // as one undo step. Each image is cut out once, however many layers
-  // show it
+  // Hides the top image fill of each selected layer and adds its cut-out
+  // above it, as one undo step. Each image is cut out once, however many
+  // layers show it
   let busy = false;
   const removeBackground = async () => {
     const figma = api();
@@ -223,7 +224,14 @@ const PAGE_JS: &str = r##"(() => {
         // Unless the layer changed in the meantime
         const fills = fillsOf(node);
         if (fills[index]?.imageHash !== hash) continue;
-        node.fills = fills.map((paint, i) => (i === index ? { ...paint, imageHash: cut.get(hash) } : paint));
+        // The original stays, hidden, under the cut-out
+        const original = fills[index];
+        node.fills = [
+          ...fills.slice(0, index),
+          { ...original, visible: false },
+          { ...original, imageHash: cut.get(hash), visible: true },
+          ...fills.slice(index + 1),
+        ];
         images++;
       } catch {
         failed++;
