@@ -17,7 +17,9 @@ mod frame;
 mod handoff;
 mod home;
 mod layers;
+mod models;
 mod modules;
+mod objects;
 mod plugins;
 mod presence;
 mod preview;
@@ -257,10 +259,10 @@ fn main() {
             settings::get_version,
             settings::check_for_updates,
             settings::report_problem,
-            background::get_background_model,
-            background::install_background_model,
-            background::cancel_background_model,
-            background::uninstall_background_model,
+            models::get_model,
+            models::install_model,
+            models::cancel_model,
+            models::uninstall_model,
             plugins::get_plugins,
             plugins::import_plugin,
             plugins::set_plugin_enabled,

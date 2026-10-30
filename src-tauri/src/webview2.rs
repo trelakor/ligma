@@ -1,15 +1,20 @@
 //! WebView2 memory controls for hidden tabs, the tab shortcuts, tab
-//! preview images, and a fix for Figma's plugin downloads (Windows only)
+//! preview images, a fix for Figma's plugin downloads, and the downloads
+//! Figma tabs hand Ligma their images with (Windows only)
 
 use tauri::{AppHandle, Manager, Webview};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
-    COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS,
+    COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
     COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
-use webview2_com::{AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, TrySuspendCompletedHandler};
+use webview2_com::{
+    AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, PermissionRequestedEventHandler,
+    TrySuspendCompletedHandler,
+};
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 use windows::Win32::System::Com::{IStream, STREAM_SEEK_CUR, STREAM_SEEK_SET};
@@ -91,6 +96,30 @@ pub fn drop_request_filters(webview: &Webview) {
                 COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
             );
         }
+    });
+}
+
+/// Lets a Figma tab start downloads one after another without a click in
+/// between. WebView2, like Chrome, asks first for the second and stops it
+/// meanwhile, and Select object hands Ligma a request each time the
+/// pointer moves over the image (see handoff.rs). Other downloads still
+/// ask where to save (see downloads.rs)
+pub fn allow_downloads(webview: &Webview) {
+    let _ = webview.with_webview(|platform| unsafe {
+        let Ok(core) = platform.controller().CoreWebView2() else {
+            return;
+        };
+        let handler = PermissionRequestedEventHandler::create(Box::new(|_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+            args.PermissionKind(&mut kind)?;
+            if kind == COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS {
+                args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+            }
+            Ok(())
+        }));
+        let mut token = 0;
+        let _ = core.add_PermissionRequested(&handler, &mut token);
     });
 }
 

@@ -18,6 +18,14 @@
 //! vectors: in full color, grayscale or black and white, keeping fewer
 //! colors. On by default
 //!
+//! First of them goes Ligma's own Select object, in place of Select area,
+//! which picks out objects in the selected image as Photoshop's Object
+//! Selection does, with SAM on this device (see objects.rs): the object
+//! under the pointer shows as it moves, a click picks it, Shift adds,
+//! Alt (Option) takes away and a box picks the object in it. Isolate puts
+//! the picked objects in a new layer above, cropped to them, as one undo
+//! step. On by default, where the model runs
+//!
 //! A file's plan is `INITIAL_OPTIONS.plan_tier` ("starter" when free) while
 //! the page is still on the file it loaded with, and otherwise the "Free"
 //! badge Figma shows by the file's name. The bar is told by Crop's icon,
@@ -31,10 +39,10 @@ use tauri::AppHandle;
 use crate::settings::Settings;
 
 /// Runs in Figma tabs. `__LIGMA_FREE_AI_ACTIONS__` is `{ on, local,
-/// vectorize, rev }`: the settings when the tab was made, `local` only
-/// where this device can remove backgrounds. A page loaded later in the
-/// same tab may
-/// find a newer one in `localStorage`; the higher `rev` wins
+/// vectorize, objects, rev }`: the settings when the tab was made, `local`
+/// and `objects` only where this device can remove backgrounds and select
+/// objects. A page loaded later in the same tab may find a newer one in
+/// `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
   const KEY = "ligma-free-ai-actions";
@@ -70,6 +78,9 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
   const plural = (count) => `${count} image${count === 1 ? "" : "s"}`;
+  // Icons drawn in Figma's icon color
+  const STROKE = 'stroke="var(--fpl-icon-color, var(--color-icon))"';
+  const FILL = 'fill="var(--fpl-icon-color, var(--color-icon))"';
 
   // Hands an image to Ligma as a download, for `kind` ("background" or
   // "vectorize"), with `suffix` after the job in its name, and resolves to
@@ -129,16 +140,20 @@ const PAGE_JS: &str = r##"(() => {
     failed: (job, reason) => jobs.get(job)?.failed(reason),
   };
 
-  // A shimmer over each of `nodes` on the canvas, as Figma shows while its
-  // own AI actions work, white for Remove background and blue for
-  // Vectorize, kept on them as the canvas pans and zooms. Returns what
-  // stops it
-  const SHIMMER = "data-ligma-shimmer";
-  const shimmer = (figma, nodes, kind) => {
-    const canvas = [...document.querySelectorAll("canvas")].reduce(
+  // Figma's canvas, the largest
+  const mainCanvas = () =>
+    [...document.querySelectorAll("canvas")].reduce(
       (best, canvas) => (canvas.offsetWidth * canvas.offsetHeight > (best ? best.offsetWidth * best.offsetHeight : 0) ? canvas : best),
       null,
     );
+
+  // A shimmer over each of `nodes` on the canvas, as Figma shows while its
+  // own AI actions work, white for Remove background and blue for
+  // Vectorize and Select object, kept on them as the canvas pans and zooms.
+  // Returns what stops it
+  const SHIMMER = "data-ligma-shimmer";
+  const shimmer = (figma, nodes, kind) => {
+    const canvas = mainCanvas();
     if (!canvas) return () => {};
     const layer = document.createElement("div");
     layer.setAttribute(SHIMMER, kind);
@@ -294,15 +309,11 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
-  // The layer as Figma draws it, unturned, at a size worth tracing: up to
-  // 4x for small layers, down to 1024 pixels on the longer side for large
-  // ones. With how wide a pixel of its image is in it
-  const render = async (figma, node) => {
-    const scale = Math.min(4, 1024 / Math.max(node.width, node.height, 1));
-    const pixel = await pixelSize(figma, node, scale);
+  // The layer as Figma draws it, unturned, `scale` times as large, as a PNG
+  const drawn = async (figma, node, scale) => {
     const settings = { format: "PNG", constraint: { type: "SCALE", value: scale }, useAbsoluteBounds: true };
     const [[a, c], [b, d]] = node.absoluteTransform;
-    if (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return { bytes: await node.exportAsync(settings), pixel };
+    if (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return node.exportAsync(settings);
     // Turned or flipped, here or by a parent: a copy that isn't
     const copy = node.clone();
     try {
@@ -311,10 +322,21 @@ const PAGE_JS: &str = r##"(() => {
         [1, 0, 0],
         [0, 1, 0],
       ];
-      return { bytes: await copy.exportAsync(settings), pixel };
+      return await copy.exportAsync(settings);
     } finally {
       copy.remove();
     }
+  };
+
+  // How large to draw a layer to trace it or find objects in it: up to 4x
+  // for small layers, down to 1024 pixels on the longer side for large ones
+  const workingScale = (node) => Math.min(4, 1024 / Math.max(node.width, node.height, 1));
+
+  // The layer drawn to trace it, with how wide a pixel of its image is in it
+  const render = async (figma, node) => {
+    const scale = workingScale(node);
+    const pixel = await pixelSize(figma, node, scale);
+    return { bytes: await drawn(figma, node, scale), pixel };
   };
 
   // The SVG Ligma traced from `node`, as a frame of vectors in its place,
@@ -634,11 +656,476 @@ const PAGE_JS: &str = r##"(() => {
     );
   }
 
-  // Ligma's Remove background and Vectorize, after Crop and Ligma's
-  // adjustments, each where it's on
-  const STROKE = 'stroke="var(--fpl-icon-color, var(--color-icon))"';
-  const FILL = 'fill="var(--fpl-icon-color, var(--color-icon))"';
+  // Select object picks out objects in one image as Photoshop's Object
+  // Selection does, in place of Figma's Select area, whose bar its own
+  // follows: the object under the pointer shows as it moves, a click picks
+  // it, Shift adds, Alt (Option) takes away and dragging a box picks the
+  // object in it. Isolate, or Enter, puts what's picked in a new layer
+  // above, cropped to it; Cancel, Escape or a click on the canvas off the
+  // image leaves. Ligma's SAM finds the objects (see objects.rs): it reads
+  // the image once when the mode opens, then gives outlines as SVG paths in
+  // the pixels of the image it read
+  const OBJECTS = "data-ligma-objects";
+  // On <html> while it's open, to hide Figma's own bars, and while the
+  // pointer is over the image, with the cursor for what a click does
+  const PICKING = "data-ligma-picking";
+  const POINTER = "data-ligma-pick-pointer";
+  const MAC = navigator.userAgent.includes("Mac");
+  let picking = null;
+
+  // A request for objects.rs: a line of JSON, then the image if any
+  const request = (header, bytes) => {
+    const line = new TextEncoder().encode(`${JSON.stringify(header)}\n`);
+    if (!bytes) return line;
+    const all = new Uint8Array(line.length + bytes.length);
+    all.set(line);
+    all.set(bytes, line.length);
+    return all;
+  };
+
+  // How large to draw the layer to isolate objects in it: as large as its
+  // image, up to 4096 pixels across, and no smaller than what was read
+  const fullScale = async (figma, node) => {
+    let scale = 1;
+    const paint = fillsOf(node).findLast((fill) => fill.type === "IMAGE" && fill.imageHash && fill.visible !== false);
+    try {
+      const size = figma.getImageByHash(paint.imageHash).getSizeAsync();
+      const { width, height } = await Promise.race([size, new Promise((_, reject) => setTimeout(reject, 2000))]);
+      const fit = paint.scaleMode === "FIT" ? Math.min : Math.max;
+      scale = paint.scaleMode === "TILE" ? 1 / (paint.scalingFactor ?? 1) : 1 / fit(node.width / width, node.height / height);
+    } catch {}
+    const largest = 4096 / Math.max(node.width, node.height, 1);
+    return Math.min(largest, Math.max(scale, workingScale(node)));
+  };
+
+  // The cut-out objects.rs sent, as a new image layer right above `node`,
+  // where they were in it
+  const placeIsolated = (figma, node, { png, x, y, width, height }) => {
+    const hash = figma.createImage(Uint8Array.from(atob(png), (char) => char.charCodeAt(0))).hash;
+    const layer = figma.createRectangle();
+    try {
+      const parent = node.parent;
+      parent.insertChild(parent.children.indexOf(node) + 1, layer);
+      layer.name = `${node.name} [Isolated]`;
+      layer.resize(Math.max(width * node.width, 0.01), Math.max(height * node.height, 0.01));
+      layer.fills = [{ type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+      if (parent.layoutMode && parent.layoutMode !== "NONE") layer.layoutPositioning = "ABSOLUTE";
+      const [[a, c, e], [b, d, f]] = node.relativeTransform;
+      const [left, top] = [x * node.width, y * node.height];
+      layer.relativeTransform = [
+        [a, c, a * left + c * top + e],
+        [b, d, b * left + d * top + f],
+      ];
+      if (node.constraints) layer.constraints = node.constraints;
+      return layer;
+    } catch (error) {
+      layer.remove();
+      throw error;
+    }
+  };
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const HINTS = {
+    reading: "Reading the image…",
+    ready: "Click an object, or drag a box around it",
+    picked: MAC ? "Shift to add, Option to take away" : "Shift to add, Alt to take away",
+  };
+  const ISOLATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="4.5" y="7.5" width="12" height="12" rx="1.5" stroke-dasharray="2 2"/><rect ${STROKE} x="8.5" y="4.5" width="11" height="11" rx="1.5"/></svg>`;
+
+  const selectObject = async (bar, crop) => {
+    const figma = api();
+    if (!figma || busy || picking) return;
+    const image = (paint) => paint?.type === "IMAGE" && !!paint.imageHash && paint.visible !== false;
+    const selection = figma.currentPage.selection;
+    if (selection.length !== 1 || !fillsOf(selection[0]).some(image)) {
+      figma.notify(selection.length > 1 ? "Select one image to pick objects in" : "No images selected", { timeout: 2000 });
+      return;
+    }
+    const node = selection[0];
+    const canvas = mainCanvas();
+    if (!canvas) return;
+    closeRecolor();
+    barClasses = { root: bar.closest("[data-secondary-toolbelt]")?.className ?? "", bar: bar.className };
+
+    // The bar, as Figma's Select area has it: Isolate, then Cancel
+    const root = document.createElement("div");
+    root.setAttribute(OBJECTS, "");
+    root.setAttribute("data-fullscreen-prevent-event-capture", "true");
+    root.className = barClasses.root;
+    const strip = root.appendChild(Object.assign(document.createElement("div"), { className: barClasses.bar }));
+    const hint = strip.appendChild(Object.assign(document.createElement("span"), { className: "hint", textContent: HINTS.reading }));
+    hint.setAttribute("aria-live", "polite");
+    const labelled = (label, icon) => {
+      const button = Object.assign(document.createElement("button"), { type: "button", className: crop.className });
+      const text = crop.querySelector("span")?.cloneNode(false) ?? document.createElement("span");
+      text.textContent = label;
+      if (icon) button.innerHTML = icon;
+      button.append(text);
+      return button;
+    };
+    const isolateButton = strip.appendChild(labelled("Isolate", ISOLATE_ICON));
+    Object.assign(isolateButton.dataset, { tooltip: "Isolate in a new layer", tooltipType: "text", tooltipShowAbove: "true" });
+    isolateButton.disabled = true;
+    isolateButton.addEventListener("click", () => isolate());
+    strip.append(Object.assign(document.createElement("span"), { className: "divider" }));
+    const cancel = strip.appendChild(labelled("Cancel"));
+    cancel.addEventListener("click", () => closePicking());
+
+    // The outlines over the image, in the pixels of the image Ligma read
+    const layer = document.createElement("div");
+    layer.setAttribute(OBJECTS, "overlay");
+    canvas.after(layer);
+    const svg = layer.appendChild(document.createElementNS(SVG_NS, "svg"));
+    const shape = (className) => {
+      const element = svg.appendChild(document.createElementNS(SVG_NS, className === "band" ? "rect" : "path"));
+      element.setAttribute("class", className);
+      return element;
+    };
+    const paths = { picked: shape("picked"), ants: shape("ants"), hover: shape("hover"), band: shape("band") };
+
+    picking = {
+      figma,
+      node,
+      canvas,
+      root,
+      layer,
+      svg,
+      paths,
+      hint,
+      isolateButton,
+      session: null,
+      width: 0,
+      height: 0,
+      picks: [],
+      // The point to find the object at, once the last request is back,
+      // and the one shown
+      wanted: null,
+      asking: false,
+      shown: null,
+      // How many times the picks changed, so a late outline is dropped
+      version: 0,
+      drag: null,
+      working: false,
+      frame: 0,
+    };
+    document.documentElement.setAttribute(PICKING, "");
+    placePicking();
+    placeOverlay();
+
+    const current = picking;
+    const stopShimmer = shimmer(figma, [node], "objects");
+    const { show, hide } = toast(figma);
+    try {
+      const bytes = await drawn(figma, node, workingScale(node));
+      const opened = JSON.parse(await handOff("object", request({ op: "open" }, bytes), show));
+      if (picking !== current) {
+        handOff("object", request({ op: "close", session: opened.session })).catch(() => {});
+        return;
+      }
+      Object.assign(current, { session: opened.session, width: opened.width, height: opened.height });
+      svg.setAttribute("viewBox", `0 0 ${opened.width} ${opened.height}`);
+      hint.textContent = HINTS.ready;
+    } catch (reason) {
+      if (picking !== current) return;
+      closePicking();
+      if (reason !== "cancelled") figma.notify("Couldn't read the image", { timeout: 3000 });
+    } finally {
+      stopShimmer();
+      hide();
+    }
+  };
+
+  const closePicking = () => {
+    if (!picking) return;
+    const { root, layer, session, frame } = picking;
+    cancelAnimationFrame(frame);
+    root.remove();
+    layer.remove();
+    if (session) handOff("object", request({ op: "close", session })).catch(() => {});
+    document.documentElement.removeAttribute(PICKING);
+    document.documentElement.removeAttribute(POINTER);
+    picking = null;
+  };
+
+  // Keeps the bar above the toolbar, and closes it once the image isn't
+  // what's selected
+  const placePicking = () => {
+    if (!picking) return;
+    const selection = api()?.currentPage.selection ?? [];
+    if (!state.objects || picking.node.removed || selection.length !== 1 || selection[0] !== picking.node) {
+      if (!picking.working) closePicking();
+      return;
+    }
+    const wrapper = document.querySelector('[data-testid="design-toolbelt-wrapper"]');
+    picking.root.classList.toggle("floating", !wrapper);
+    const parent = wrapper ?? document.body;
+    if (picking.root.parentElement !== parent) parent.append(picking.root);
+  };
+
+  // Keeps the outlines on the image as the canvas pans and zooms
+  const placeOverlay = () => {
+    if (!picking) return;
+    const { figma, node, canvas, layer, svg } = picking;
+    Object.assign(layer.style, {
+      left: `${canvas.offsetLeft}px`,
+      top: `${canvas.offsetTop}px`,
+      width: `${canvas.offsetWidth}px`,
+      height: `${canvas.offsetHeight}px`,
+    });
+    try {
+      const { bounds } = figma.viewport;
+      const zoom = figma.viewport.zoom;
+      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+      svg.setAttribute("width", node.width * zoom);
+      svg.setAttribute("height", node.height * zoom);
+      svg.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`;
+    } catch {}
+    picking.frame = requestAnimationFrame(placeOverlay);
+  };
+
+  // Where `event` is on the image, in fractions of it, or null when it's
+  // not over the canvas
+  const onImage = (event) => {
+    const { figma, node, canvas } = picking;
+    const box = canvas.getBoundingClientRect();
+    const [x, y] = [event.clientX - box.left, event.clientY - box.top];
+    if (x < 0 || y < 0 || x > box.width || y > box.height) return null;
+    const target = event.target;
+    if (target instanceof Element && target !== canvas && target.closest(`[${OBJECTS}], [data-secondary-toolbelt], [data-testid="design-toolbelt-wrapper"], [role="toolbar"], [role="dialog"], [role="menu"]`)) return null;
+    try {
+      const { bounds } = figma.viewport;
+      const zoom = figma.viewport.zoom;
+      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+      const [dx, dy] = [bounds.x + x / zoom - e, bounds.y + y / zoom - f];
+      const det = a * d - b * c;
+      const u = (d * dx - c * dy) / det / node.width;
+      const v = (a * dy - b * dx) / det / node.height;
+      return { u, v, inside: u >= 0 && u <= 1 && v >= 0 && v <= 1, x: event.clientX, y: event.clientY };
+    } catch {
+      return null;
+    }
+  };
+
+  const clamp = (value) => Math.min(1, Math.max(0, value));
+
+  // The outline of the object at `wanted`, one request at a time, the
+  // latest point winning
+  const askHover = async () => {
+    const current = picking;
+    if (!current?.session || current.asking || !current.wanted) return;
+    const point = current.wanted;
+    current.wanted = null;
+    current.asking = true;
+    try {
+      const { d } = JSON.parse(await handOff("object", request({ op: "outline", session: current.session, picks: [{ point }] })));
+      if (picking === current && current.shown === point && !current.drag) current.paths.hover.setAttribute("d", d);
+    } catch {}
+    current.asking = false;
+    if (picking === current) askHover();
+  };
+
+  const hoverAt = (at) => {
+    if (!picking.session || picking.working) return;
+    if (!at) {
+      picking.shown = null;
+      picking.wanted = null;
+      picking.paths.hover.removeAttribute("d");
+      return;
+    }
+    // Pixels apart in the image read, so small moves don't ask again
+    const last = picking.shown;
+    if (last && Math.hypot((at.u - last[0]) * picking.width, (at.v - last[1]) * picking.height) < 3) return;
+    const point = [clamp(at.u), clamp(at.v)];
+    picking.shown = point;
+    picking.wanted = point;
+    askHover();
+  };
+
+  // The picks outlined, and the bar told
+  const showPicks = async () => {
+    const current = picking;
+    const version = ++current.version;
+    const { picks, paths } = current;
+    current.isolateButton.disabled = !picks.length || current.working;
+    current.hint.textContent = picks.length ? HINTS.picked : HINTS.ready;
+    if (!picks.length) {
+      paths.picked.removeAttribute("d");
+      paths.ants.removeAttribute("d");
+      return;
+    }
+    try {
+      const { d } = JSON.parse(await handOff("object", request({ op: "outline", session: current.session, picks })));
+      if (picking !== current || current.version !== version) return;
+      paths.picked.setAttribute("d", d);
+      paths.ants.setAttribute("d", d);
+      // Taking away everything leaves nothing to isolate
+      if (!d) {
+        current.picks = [];
+        showPicks();
+      }
+    } catch {}
+  };
+
+  const pick = (pick, mode) => {
+    if (mode === "add") picking.picks.push(pick);
+    else if (mode === "subtract") {
+      if (!picking.picks.length) return;
+      picking.picks.push({ ...pick, subtract: true });
+    } else picking.picks = [pick];
+    showPicks();
+  };
+
+  const isolate = async () => {
+    const current = picking;
+    if (!current?.session || !current.picks.length || current.working) return;
+    const { figma, node, session, picks } = current;
+    current.working = true;
+    current.isolateButton.disabled = true;
+    hoverAt(null);
+    const stopShimmer = shimmer(figma, [node], "objects");
+    let layer = null;
+    try {
+      const bytes = await drawn(figma, node, await fullScale(figma, node));
+      const result = JSON.parse(await handOff("object", request({ op: "isolate", session, picks }, bytes)));
+      if (node.removed) throw "failed";
+      layer = placeIsolated(figma, node, result);
+      try {
+        figma.commitUndo();
+      } catch {}
+    } catch (reason) {
+      figma.notify(reason === "empty" ? "Nothing picked to isolate" : "Couldn't isolate the object", { timeout: 3000 });
+    }
+    stopShimmer();
+    current.working = false;
+    if (picking !== current) return;
+    if (layer) {
+      closePicking();
+      figma.currentPage.selection = [layer];
+    } else showPicks();
+  };
+
+  // The cursor for what a click on the image does: Ligma's arrow with a
+  // dashed box, as Photoshop's Object Selection has, and + or − with Shift
+  // or Alt
+  const cursor = (mark) => {
+    const extra =
+      mark === "add" ? '<path d="M19 3v6M16 6h6" stroke="#fff" stroke-width="3.5"/><path d="M19 3v6M16 6h6" stroke="#000" stroke-width="1.5"/>'
+      : mark === "subtract" ? '<path d="M16 6h6" stroke="#fff" stroke-width="3.5"/><path d="M16 6h6" stroke="#000" stroke-width="1.5"/>'
+      : "";
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none"><path d="M4.5 3.5v12.6l3.2-3 2.2 4.9 2.1-.9-2.2-4.8h4.4z" fill="#000" stroke="#fff" stroke-linejoin="round"/><rect x="13.5" y="13.5" width="8" height="8" rx="1" stroke="#fff" stroke-width="2.5"/><rect x="13.5" y="13.5" width="8" height="8" rx="1" stroke="#000" stroke-dasharray="2 1.5"/>${extra}</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 4 3, crosshair`;
+  };
+  const modeOf = (event) => (event.shiftKey ? "add" : event.altKey ? "subtract" : "replace");
+  const showPointer = (event, over) => {
+    const root = document.documentElement;
+    const value = !over ? null : !picking.session || picking.working ? "wait" : modeOf(event);
+    if (value) root.setAttribute(POINTER, value);
+    else root.removeAttribute(POINTER);
+  };
+
+  // Pointer events over the image are Select object's while it's open:
+  // this runs before Figma's own scripts, so it comes first. Space held, or
+  // a button other than the main one, leaves them to Figma to pan
+  let space = false;
+  const POINTER_TYPES = ["pointerdown", "pointermove", "pointerup", "mousedown", "mousemove", "mouseup", "click", "dblclick", "auxclick"];
+  const swallow = (event) => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  for (const type of POINTER_TYPES) {
+    addEventListener(
+      type,
+      (event) => {
+        if (!picking) return;
+        const drag = picking.drag;
+        if (drag) {
+          swallow(event);
+          if (type === "pointermove") {
+            const at = onImage(event);
+            if (!at) return;
+            drag.end = at;
+            drag.moved ||= Math.hypot(at.x - drag.start.x, at.y - drag.start.y) > 4;
+            if (drag.moved) {
+              const [left, top] = [clamp(Math.min(drag.start.u, at.u)), clamp(Math.min(drag.start.v, at.v))];
+              const [right, bottom] = [clamp(Math.max(drag.start.u, at.u)), clamp(Math.max(drag.start.v, at.v))];
+              const band = picking.paths.band;
+              band.setAttribute("x", left * picking.width);
+              band.setAttribute("y", top * picking.height);
+              band.setAttribute("width", (right - left) * picking.width);
+              band.setAttribute("height", (bottom - top) * picking.height);
+              band.style.display = "block";
+            }
+          } else if (type === "pointerup") {
+            picking.drag = null;
+            picking.paths.band.style.display = "";
+            const { start, end = start, moved, mode } = drag;
+            if (!moved) pick({ point: [clamp(start.u), clamp(start.v)] }, mode);
+            else {
+              const rect = [Math.min(start.u, end.u), Math.min(start.v, end.v), Math.max(start.u, end.u), Math.max(start.v, end.v)].map(clamp);
+              if (rect[2] - rect[0] > 0.005 && rect[3] - rect[1] > 0.005) pick({ box: rect }, mode);
+            }
+          }
+          return;
+        }
+        const at = onImage(event);
+        if (type === "pointermove") {
+          showPointer(event, at?.inside);
+          hoverAt(at?.inside && !space && !event.buttons ? at : null);
+        }
+        if (!at?.inside) {
+          // A click on the canvas off the image leaves, and goes to Figma
+          if (type === "pointerdown" && at && event.button === 0 && !space) closePicking();
+          return;
+        }
+        // A button other than the main one, pressed or held, pans
+        if (space || event.button > 0 || (event.buttons & ~1) !== 0) return;
+        swallow(event);
+        if (type === "pointerdown" && picking.session && !picking.working) {
+          picking.drag = { start: at, end: at, moved: false, mode: modeOf(event) };
+          picking.paths.hover.removeAttribute("d");
+        }
+      },
+      true,
+    );
+  }
+
+  addEventListener("blur", () => (space = false));
+
+  // While it's open, Escape leaves, Enter isolates, and Delete does
+  // nothing rather than delete the image. Shift and Alt change the cursor,
+  // and Space is left to Figma, to pan
+  for (const type of ["keydown", "keyup"]) {
+    addEventListener(
+      type,
+      (event) => {
+        if (event.key === " ") space = type === "keydown";
+        // Figma keeps focus in a read-only input of its own, which isn't typing
+        if (!picking || event.target.closest?.(':is(input, textarea):not([readonly]), [contenteditable]:not([contenteditable="false"])')) return;
+        if (document.documentElement.hasAttribute(POINTER)) showPointer(event, true);
+        if (type !== "keydown") return;
+        if (event.key === "Escape") {
+          swallow(event);
+          closePicking();
+        } else if (event.key === "Enter") {
+          swallow(event);
+          isolate();
+        } else if (event.key === "Delete" || event.key === "Backspace") swallow(event);
+      },
+      true,
+    );
+  }
+
+  // Ligma's Select object, Remove background and Vectorize, after Crop and
+  // Ligma's adjustments, each where it's on
   const BUTTONS = [
+    {
+      attribute: "data-ligma-select-object",
+      on: () => state.objects,
+      label: "Select object",
+      // An arrow on a dashed box, as Photoshop's Object Selection has it
+      icon: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} stroke-dasharray="2 2" d="M10.5 16.5h-3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3"/><path ${STROKE} stroke-linejoin="round" d="m12.5 12.5 6.5 2.4-2.9 1.2-1.2 2.9z"/></svg>`,
+      run: (bar, crop) => selectObject(bar, crop),
+    },
     {
       attribute: "data-ligma-background",
       on: () => state.local,
@@ -677,7 +1164,7 @@ const PAGE_JS: &str = r##"(() => {
         button.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopImmediatePropagation();
-          run(bar);
+          run(bar, crop);
         });
       }
       if (last.nextElementSibling !== button) last.after(button);
@@ -693,8 +1180,10 @@ const PAGE_JS: &str = r##"(() => {
   const HIDDEN = "data-ligma-ai-hidden";
   const tidy = () => {
     placeRecolor();
+    placePicking();
     const hide = state.on && free();
     if (!hide) {
+      if (!picking?.working) closePicking();
       for (const node of document.querySelectorAll(`[${HIDDEN}]`)) node.removeAttribute(HIDDEN);
       for (const { attribute } of BUTTONS) for (const node of document.querySelectorAll(`[${attribute}]`)) node.remove();
       return;
@@ -715,24 +1204,39 @@ const PAGE_JS: &str = r##"(() => {
     [${SHIMMER}] { position: absolute; overflow: hidden; pointer-events: none; transition: opacity 200ms ease-out; }
     [${SHIMMER}].done { opacity: 0; }
     [${SHIMMER}] > div { position: absolute; left: 0; top: 0; overflow: hidden; transform-origin: 0 0; background: rgb(255 255 255 / 0.12); }
-    [${SHIMMER}="vectorize"] > div { background: rgb(24 160 251 / 0.16); }
+    :is([${SHIMMER}="vectorize"], [${SHIMMER}="objects"]) > div { background: rgb(24 160 251 / 0.16); }
     [${SHIMMER}] > div::after {
       content: ""; position: absolute; inset: 0;
       background: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.45) 50%, transparent 80%);
       animation: ligma-shimmer 1.6s ease-in-out infinite;
     }
-    [${SHIMMER}="vectorize"] > div::after { background: linear-gradient(100deg, transparent 20%, rgb(190 226 255 / 0.4) 50%, transparent 80%); }
+    :is([${SHIMMER}="vectorize"], [${SHIMMER}="objects"]) > div::after { background: linear-gradient(100deg, transparent 20%, rgb(190 226 255 / 0.4) 50%, transparent 80%); }
     @keyframes ligma-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
     @media (prefers-reduced-motion: reduce) { [${SHIMMER}] > div::after { animation: none; opacity: 0; } }
-    html[${RECOLORING}] [data-secondary-toolbelt] { display: none !important; }
-    [${RECOLOR}].floating { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 10; }
-    [${RECOLOR}] > div {
+    :is(html[${RECOLORING}], html[${PICKING}]) [data-secondary-toolbelt] { display: none !important; }
+    :is([${RECOLOR}], [${OBJECTS}=""]).floating { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 10; }
+    :is([${RECOLOR}], [${OBJECTS}=""]) > div {
       display: flex; align-items: center; gap: 4px; height: 40px; box-sizing: border-box; padding: 8px; border-radius: 13px;
       background: var(--color-bg-toolbar, var(--color-bg, #2c2c2c)); color: var(--color-text, #fff);
       box-shadow: var(--elevation-200-canvas, 0 3px 8px rgb(0 0 0 / 0.35)); font: 500 11px/16px Inter, system-ui, sans-serif;
     }
     [${RECOLOR}] .title { padding: 0 4px; white-space: nowrap; }
-    [${RECOLOR}] .divider { align-self: stretch; width: 1px; margin: 0 4px; background: var(--color-border, #444); }
+    [${OBJECTS}=""] .hint { padding: 0 8px 0 4px; color: var(--color-text-secondary, #b3b3b3); white-space: nowrap; }
+    [${OBJECTS}=""] button:disabled { opacity: 0.4; pointer-events: none; }
+    [${OBJECTS}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
+    [${OBJECTS}="overlay"] svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }
+    [${OBJECTS}="overlay"] :is(path, rect) { vector-effect: non-scaling-stroke; fill-rule: evenodd; stroke-linejoin: round; }
+    [${OBJECTS}="overlay"] .hover { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 18%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1.5px; }
+    [${OBJECTS}="overlay"] .picked { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 30%, transparent); stroke: #fff; stroke-width: 1.5px; }
+    [${OBJECTS}="overlay"] .ants { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1.5px; stroke-dasharray: 4 4; animation: ligma-ants 400ms linear infinite; }
+    [${OBJECTS}="overlay"] .band { display: none; fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 8%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 4 3; }
+    @keyframes ligma-ants { to { stroke-dashoffset: -8; } }
+    @media (prefers-reduced-motion: reduce) { [${OBJECTS}="overlay"] .ants { animation: none; } }
+    html[${POINTER}="replace"], html[${POINTER}="replace"] * { cursor: ${cursor("replace")} !important; }
+    html[${POINTER}="add"], html[${POINTER}="add"] * { cursor: ${cursor("add")} !important; }
+    html[${POINTER}="subtract"], html[${POINTER}="subtract"] * { cursor: ${cursor("subtract")} !important; }
+    html[${POINTER}="wait"], html[${POINTER}="wait"] * { cursor: progress !important; }
+    :is([${RECOLOR}], [${OBJECTS}=""]) .divider { align-self: stretch; width: 1px; margin: 0 4px; background: var(--color-border, #444); }
     [${RECOLOR}] .modes { display: flex; gap: 2px; }
     [${RECOLOR}] button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--color-icon, #fff); }
     [${RECOLOR}] button:hover { background: var(--color-bg-hover, #383838); }
@@ -796,6 +1300,8 @@ static ON: AtomicBool = AtomicBool::new(true);
 static LOCAL: AtomicBool = AtomicBool::new(true);
 /// and its Vectorize,
 static VECTORIZE: AtomicBool = AtomicBool::new(true);
+/// and its Select object, where it works,
+static OBJECTS: AtomicBool = AtomicBool::new(true);
 /// and when they last changed, for `PAGE_JS` to tell it from older ones in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
@@ -806,11 +1312,16 @@ fn now() -> u64 {
 
 fn state() -> String {
     let (on, local, vectorize) = (ON.load(Ordering::Relaxed), LOCAL.load(Ordering::Relaxed), VECTORIZE.load(Ordering::Relaxed));
-    format!(r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"rev":{}}}"#, REV.load(Ordering::Relaxed))
+    let objects = OBJECTS.load(Ordering::Relaxed);
+    format!(r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"rev":{}}}"#, REV.load(Ordering::Relaxed))
 }
 
 fn local(settings: &Settings) -> bool {
     settings.local_remove_background && crate::background::available()
+}
+
+fn objects(settings: &Settings) -> bool {
+    settings.local_select_object && crate::models::supported()
 }
 
 /// Call at launch, before any tab
@@ -818,6 +1329,7 @@ pub fn init(settings: &Settings) {
     ON.store(settings.hide_free_ai_actions, Ordering::Relaxed);
     LOCAL.store(local(settings), Ordering::Relaxed);
     VECTORIZE.store(settings.local_vectorize, Ordering::Relaxed);
+    OBJECTS.store(objects(settings), Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
 
@@ -831,7 +1343,8 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     let on = ON.swap(settings.hide_free_ai_actions, Ordering::Relaxed) != settings.hide_free_ai_actions;
     let local = LOCAL.swap(local(settings), Ordering::Relaxed) != local(settings);
     let vectorize = VECTORIZE.swap(settings.local_vectorize, Ordering::Relaxed) != settings.local_vectorize;
-    if !on && !local && !vectorize {
+    let objects = OBJECTS.swap(objects(settings), Ordering::Relaxed) != objects(settings);
+    if !on && !local && !vectorize && !objects {
         return;
     }
     REV.store(now(), Ordering::Relaxed);

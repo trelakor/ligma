@@ -711,6 +711,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     {
         crate::webview2::drop_request_filters(&webview);
         crate::webview2::add_tab_shortcuts(&webview);
+        crate::webview2::allow_downloads(&webview);
     }
     Ok(())
 }

@@ -111,6 +111,10 @@ pub struct Settings {
     /// With `hide_free_ai_actions`, also put Ligma's own Vectorize in the
     /// image bar, which traces the image on this device (see vectorize.rs)
     pub local_vectorize: bool,
+    /// With `hide_free_ai_actions`, also put Ligma's own Select object in
+    /// the image bar, which picks out objects with a model on this device
+    /// (see objects.rs)
+    pub local_select_object: bool,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
@@ -160,6 +164,7 @@ impl Default for Settings {
             local_remove_background: true,
             use_background_model: false,
             local_vectorize: true,
+            local_select_object: true,
             copy_as_code: true,
             color_contrast: false,
             classic_home: false,

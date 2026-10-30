@@ -490,6 +490,18 @@
         </span>
         <input type="checkbox" class="switch" id="hide-free-ai-actions">
       </label>
+      <label class="row nested" id="local-select-object-row" hidden>
+        <span class="label"><span id="local-select-object-label">Select objects on this Mac</span>
+          <div class="hint" id="local-select-object-hint">Ligma's own Select object takes the place of Select area: point at an object in the image to see it, click to pick it, and Isolate puts it in a new layer. SAM 2.1 finds the objects on your Mac, once downloaded.</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-select-object">
+      </label>
+      <div class="row nested deeper" id="objects-model-row" hidden>
+        <span class="label">Object model
+          <div class="hint" id="objects-model-hint"></div>
+        </span>
+        <button class="button" id="objects-model-button"></button>
+      </div>
       <label class="row nested" id="local-remove-background-row">
         <span class="label"><span id="local-remove-background-label">Remove backgrounds on this Mac</span>
           <div class="hint" id="local-remove-background-hint">Ligma's own Remove background takes the place of Figma's and finds the subject on your Mac, as Preview does. Needs macOS 14 or later.</div>
@@ -733,7 +745,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "copy-as-code", "color-contrast", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "color-contrast", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -764,6 +776,8 @@
     $("local-remove-background-hint").textContent = "Ligma's own Remove background takes the place of Figma's and finds the subject on your PC. The first time, it downloads a 224 MB model from Hugging Face.";
     $("local-vectorize-label").textContent = "Vectorize on this PC";
     $("local-vectorize-hint").textContent = $("local-vectorize-hint").textContent.replace("your Mac", "your PC");
+    $("local-select-object-label").textContent = "Select objects on this PC";
+    $("local-select-object-hint").textContent = $("local-select-object-hint").textContent.replace("your Mac, once downloaded.", "your PC. The first time, it downloads a 74 MB model from Hugging Face.");
   }
   // The platform's shortcuts
   const adjustmentsHint = $("adjustments-hint");
@@ -930,6 +944,7 @@
     $("local-remove-background").checked = settings.localRemoveBackground;
     $("use-background-model").checked = settings.useBackgroundModel;
     $("local-vectorize").checked = settings.localVectorize;
+    $("local-select-object").checked = settings.localSelectObject;
     $("copy-as-code").checked = settings.copyAsCode;
     $("color-contrast").checked = settings.colorContrast;
     $("classic-home").checked = settings.classicHome;
@@ -943,6 +958,7 @@
       ["local-remove-background-row", settings.hideFreeAiActions],
       ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
       ["local-vectorize-row", settings.hideFreeAiActions],
+      ["local-select-object-row", settings.hideFreeAiActions],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -999,6 +1015,7 @@
       localRemoveBackground: $("local-remove-background").checked,
       useBackgroundModel: $("use-background-model").checked,
       localVectorize: $("local-vectorize").checked,
+      localSelectObject: $("local-select-object").checked,
       copyAsCode: $("copy-as-code").checked,
       colorContrast: $("color-contrast").checked,
       classicHome: $("classic-home").checked,
@@ -1079,15 +1096,21 @@
 
   $("check-updates").addEventListener("click", () => invoke("check_for_updates"));
 
-  // The background model (src-tauri/src/background.rs), to download ahead
-  // of time or remove. Macs can use it in place of Vision
-  let model;
+  // The models Ligma runs (src-tauri/src/models.rs), to download ahead of
+  // time or remove: BiRefNet, which Macs can use in place of Vision, and
+  // SAM, for Select object
+  const models = {};
+  const MODELS = {
+    background: { what: "BiRefNet" },
+    objects: { what: "SAM 2.1" },
+  };
   const megabytes = (bytes) => `${Math.round(bytes / 1e6)} MB`;
-  window.applyBackgroundModel = (state) => {
-    model = state;
-    $("background-model-row").hidden = !state.supported;
-    $("use-background-model-row").hidden = !state.supported || !macos;
-    const button = $("background-model-button");
+  window.applyModel = (name, state) => {
+    models[name] = state;
+    $(`${name}-model-row`).hidden = !state.supported;
+    if (name === "background") $("use-background-model-row").hidden = !state.supported || !macos;
+    if (name === "objects") $("local-select-object-row").hidden = !state.supported;
+    const button = $(`${name}-model-button`);
     let hint;
     if (state.downloading != null) {
       hint = `Downloading… ${state.downloading}%`;
@@ -1096,18 +1119,21 @@
       hint = `Installed, ${megabytes(state.bytes)}`;
       button.textContent = "Remove";
     } else {
-      const what = macos ? "BiRefNet and ONNX Runtime to run it" : "BiRefNet";
+      const what = MODELS[name].what + (macos ? " and ONNX Runtime to run it" : "");
       const from = macos ? "Hugging Face and GitHub" : "Hugging Face";
       hint = `${what}, ${megabytes(state.bytes)} from ${from}. Without it, Ligma asks to download it when it's first needed.`;
       button.textContent = "Download";
     }
-    $("background-model-hint").textContent = hint;
+    $(`${name}-model-hint`).textContent = hint;
   };
-  $("background-model-button").addEventListener("click", () => {
-    if (!model) return;
-    invoke(model.downloading != null ? "cancel_background_model" : model.installed ? "uninstall_background_model" : "install_background_model");
-  });
-  invoke("get_background_model").then((state) => state && window.applyBackgroundModel(state));
+  for (const name of Object.keys(MODELS)) {
+    $(`${name}-model-button`).addEventListener("click", () => {
+      const model = models[name];
+      if (!model) return;
+      invoke(model.downloading != null ? "cancel_model" : model.installed ? "uninstall_model" : "install_model", { name });
+    });
+    invoke("get_model", { name }).then((state) => state && window.applyModel(name, state));
+  }
   $("report").addEventListener("click", () => invoke("report_problem"));
   invoke("get_version").then((version) => {
     if (version) $("version").textContent = `Ligma ${version}`;
