@@ -2263,7 +2263,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e9ec52138abedcc58dc17a7c6c0c00a2bdb4f3427c7f63fa97fd0d859155caf"
 dependencies = [
  "gtk-sys",
- "libloading",
+ "libloading 0.7.4",
  "once_cell",
 ]
 
@@ -2293,6 +2293,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2308,6 +2318,7 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "discord-rich-presence",
+ "flate2",
  "image",
  "libc",
  "log",
@@ -2318,6 +2329,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -2909,6 +2921,7 @@ version = "2.0.0-rc.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37c87aa7a90b7ff3e0fe36cccd475df8d67f15f07f4d6c370c4b38464232813c"
 dependencies = [
+ "libloading 0.9.0",
  "ndarray",
  "ort-sys",
  "smallvec",
