@@ -423,7 +423,7 @@ const PAGE_JS: &str = r##"(() => {
       queued = false;
       watch();
     });
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  }).observe(document, { childList: true, subtree: true });
 
   // From Ligma, when the setting changes
   window.__ligmaColorContrast = (next) => {
