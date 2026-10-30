@@ -5,6 +5,7 @@ mod adjustments;
 mod ai_actions;
 mod appearance;
 mod auth;
+mod background;
 mod discord_ipc;
 mod downloads;
 #[cfg(windows)]

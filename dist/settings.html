@@ -490,6 +490,12 @@
         </span>
         <input type="checkbox" class="switch" id="hide-free-ai-actions">
       </label>
+      <label class="row nested" id="local-remove-background-row">
+        <span class="label">Remove backgrounds on this Mac
+          <div class="hint">Ligma's own Remove background takes the place of Figma's and finds the subject on your Mac, as Preview does. Needs macOS 14 or later.</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-remove-background">
+      </label>
     </section>
     <section>
       <h2>Home</h2>
@@ -691,7 +697,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "classic-home"];
+  const fields = ["restore", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -715,6 +721,8 @@
   document.documentElement.classList.toggle("macos", macos);
   // Snapshots only exist on macOS
   $("snapshots-row").hidden = !macos;
+  // Removing backgrounds needs macOS's Vision
+  $("local-remove-background-row").hidden = !macos;
   // The platform's shortcuts
   const adjustmentsHint = $("adjustments-hint");
   adjustmentsHint.textContent = adjustmentsHint.textContent.replace("MOD+Shift+C", macos ? "⇧⌘C" : "Ctrl+Shift+C").replace("MOD+Shift+V", macos ? "⇧⌘V" : "Ctrl+Shift+V");
@@ -877,6 +885,7 @@
     $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
     $("adjustments-bar").checked = settings.adjustmentsBar;
     $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
+    $("local-remove-background").checked = settings.localRemoveBackground;
     $("classic-home").checked = settings.classicHome;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -885,6 +894,7 @@
       ["max-hidden-row", sleeping && limited],
       ["snapshots-row", sleeping],
       ["adjustments-bar-row", settings.adjustmentsClipboard],
+      ["local-remove-background-row", settings.hideFreeAiActions],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -938,6 +948,7 @@
       adjustmentsClipboard: $("adjustments-clipboard").checked,
       adjustmentsBar: $("adjustments-bar").checked,
       hideFreeAiActions: $("hide-free-ai-actions").checked,
+      localRemoveBackground: $("local-remove-background").checked,
       classicHome: $("classic-home").checked,
       ...changes,
     };

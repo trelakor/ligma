@@ -102,6 +102,9 @@ pub struct Settings {
     /// In free (Starter) projects, hide the AI actions from that bar:
     /// Select area, Remove background, Edit with prompt and More
     pub hide_free_ai_actions: bool,
+    /// and put Ligma's own Remove background in their place, which works
+    /// on this device (macOS 14 and later, see background.rs)
+    pub local_remove_background: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -142,6 +145,7 @@ impl Default for Settings {
             adjustments_clipboard: true,
             adjustments_bar: true,
             hide_free_ai_actions: true,
+            local_remove_background: true,
             classic_home: false,
         }
     }
