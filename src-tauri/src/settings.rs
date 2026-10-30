@@ -103,7 +103,7 @@ pub struct Settings {
     /// Select area, Remove background, Edit with prompt and More
     pub hide_free_ai_actions: bool,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
-    /// in place of the upsell for Dev Mode
+    /// on every plan
     pub copy_as_code: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on

@@ -1,15 +1,14 @@
 //! Copy as code without Dev Mode (Settings > Features > Code): Figma's
 //! right-click menu, under Copy/Paste as > Copy as code, offers CSS, CSS
 //! (all layers), iOS and Android on every plan, then an upsell for Dev
-//! Mode's Tailwind, React and the rest. In its place go Tailwind, the
-//! selected layers' classes; Tailwind (all layers), them and everything
-//! visible in them as HTML; and React, a component for each with Tailwind
-//! classes. With Dev Mode there's no upsell and nothing changes. On by
-//! default
+//! Mode's Tailwind, React and the rest. After them, in place of the upsell
+//! when there is one, go Tailwind, the selected layers' classes; Tailwind
+//! (all layers), them and everything visible in them as HTML; and React, a
+//! component for each with Tailwind classes. On by default, on every plan
 //!
 //! The items are Figma's own menu items, so they look and work like the
 //! rest, keyboard included: `PAGE_JS` rewrites the part of Figma's context
-//! menu module that adds the upsell as it loads (see `modules.rs`), so
+//! menu module that builds that submenu as it loads (see `modules.rs`), so
 //! only in pages loaded with the setting on. Turning it off applies right
 //! away; turning it on applies to files opened after
 //!
@@ -17,7 +16,7 @@
 //! console plugin API, `window.figma`, with `getCSSAsync`. They use
 //! Tailwind's spacing scale and named sizes where they fit, and arbitrary
 //! values otherwise. Figma only offers that API in files that can be
-//! edited, so view-only files keep the upsell
+//! edited, so view-only files keep Figma's own menu
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -293,10 +292,11 @@ const PAGE_JS: &str = r##"(() => {
   // "copy-as-android"},...!this.props.canAccessDevMode&&this.props.
   // canAccessDevModeEntryPoint?[{separator:!0},{render:…}]:[]]}`, the last
   // part the upsell. That part asks `__ligmaCopyCodeMenu` first, which
-  // answers with Ligma's items in its place, or null for Figma's own
+  // answers with Ligma's items, in place of the upsell if there is one, or
+  // null for Figma's own
   const MENU = /(\{action:"copy-as-android"\}),\.\.\.(!this\.props\.canAccessDevMode&&this\.props\.canAccessDevModeEntryPoint)\?(\[[^\]]*\]):\[\]/;
-  window.__ligmaCopyCodeMenu = (upsell) =>
-    upsell && state.on && api()
+  window.__ligmaCopyCodeMenu = () =>
+    state.on && api()
       ? [{ separator: true }, ...Object.entries(KINDS).map(([kind, { text }]) => ({ name: `ligma-copy-as-${kind}`, displayText: text, callback: () => copy(kind) }))]
       : null;
   if (state.on) {
