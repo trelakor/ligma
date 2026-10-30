@@ -580,6 +580,7 @@ fn kind(url: &Url) -> &'static str {
         Some("make") => "make",
         Some("site") => "site",
         Some("buzz") => "buzz",
+        Some("spec") => "spec",
         _ => "page",
     }
 }
@@ -845,7 +846,8 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
 }
 
 /// Products Figma ends page titles with ("<name> – FigJam")
-const PRODUCTS: [&str; 6] = ["Figma", "FigJam", "Figma Slides", "Figma Make", "Figma Buzz", "Figma Sites"];
+const PRODUCTS: [&str; 7] =
+    ["Figma", "FigJam", "Figma Slides", "Figma Make", "Figma Buzz", "Figma Sites", "Figma Specs"];
 
 /// A tab's title from its page's: without Figma's product suffix, or the
 /// "▶" a prototype's title starts with, which its tab's icon already shows
@@ -1441,7 +1443,7 @@ pub fn open_shared(app: &AppHandle, path: &str) -> tauri::Result<()> {
     let Some((editor, key)) = path.split_once('/') else {
         return Ok(());
     };
-    let editors = ["design", "board", "slides", "make", "site", "buzz"];
+    let editors = ["design", "board", "slides", "make", "site", "buzz", "spec"];
     if !editors.contains(&editor) || key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Ok(());
     }
