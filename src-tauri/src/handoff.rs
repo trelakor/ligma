@@ -1,6 +1,7 @@
-//! Figma tabs get no IPC, so the image bar's Remove background and Vectorize
-//! (see ai_actions.rs) hand Ligma an image as a download named
-//! `ligma-background-<job>` or `ligma-vectorize-<job>@<pixel>`, which
+//! Figma tabs get no IPC, so the image bar's Remove background, Vectorize
+//! and Select object (see ai_actions.rs) hand Ligma an image or a request
+//! as a download named `ligma-background-<job>`,
+//! `ligma-vectorize-<job>@<pixel>` or `ligma-object-<job>`, which
 //! `on_requested` saves to a temporary file instead of asking where. Once
 //! it's saved, it's handled off the main thread and the result goes back to
 //! the page through `window.__ligmaJob.done(job, result)`, or `failed(job,
@@ -21,9 +22,11 @@ pub const MAX_BYTES: u64 = 64 << 20;
 enum Kind {
     Background,
     Vectorize,
+    Object,
 }
 
-const KINDS: [(&str, Kind); 2] = [("ligma-background-", Kind::Background), ("ligma-vectorize-", Kind::Vectorize)];
+const KINDS: [(&str, Kind); 3] =
+    [("ligma-background-", Kind::Background), ("ligma-vectorize-", Kind::Vectorize), ("ligma-object-", Kind::Object)];
 
 /// An image on its way
 struct Pending {
@@ -89,6 +92,7 @@ pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
             (_, None) => Err("failed"),
             (Kind::Background, Some(bytes)) => crate::background::remove(&app, tab, job, &bytes),
             (Kind::Vectorize, Some(bytes)) => crate::vectorize::trace(&bytes, pixel.unwrap_or(100) as f64 / 100.0),
+            (Kind::Object, Some(bytes)) => crate::objects::handle(&app, tab, job, &bytes),
         };
         send(&app, tab, job, reply);
     });

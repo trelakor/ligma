@@ -15,7 +15,7 @@ Ligma keeps a few files in its app data folder (`%APPDATA%\dev.ligma.client` on 
 - `settings.json`: your settings.
 - `session.json`: your open and pinned tabs, if Reopen tabs from last time is on.
 - The window's size and position.
-- `models`, in the local app data folder (`%LOCALAPPDATA%\dev.ligma.client` on Windows), if you download the model Remove background uses. Settings > Features can remove it.
+- `models`, in the local app data folder (`%LOCALAPPDATA%\dev.ligma.client` on Windows), if you download the models Remove background and Select object use. Settings > Features can remove them.
 - `ligma.log`, a log of what Ligma did, such as checking for and installing updates, and errors. It's in Ligma's log folder (`%LOCALAPPDATA%\dev.ligma.client\logs` on Windows, `~/Library/Logs/dev.ligma.client` on macOS) and holds no Figma file names or links.
 
 Figma's own data, such as cookies and your signed-in session, is kept by the system webview (WebView2 on Windows, WKWebView on macOS) on your computer. Uninstalling Ligma and deleting its app data folder removes all of it.
@@ -52,7 +52,7 @@ If that's too long for a link, Ligma also copies the full report to your clipboa
 
 - **Figma.** Ligma opens figma.com. Everything you do in Figma, including signing in, goes to Figma under [Figma's Privacy Policy](https://www.figma.com/legal/privacy/). With Continue with Google, your browser or Apple's sign-in sheet opens Figma's own page, and Figma hands the sign-in back to Ligma on your computer.
 - **GitHub.** On launch and every 6 hours, Ligma checks GitHub Releases for an update and downloads it from there. GitHub sees a normal web request, including your IP address, under [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
-- **Hugging Face and GitHub.** If you use Ligma's own Remove background on Windows, or choose BiRefNet for it on a Mac, Ligma downloads the model from Hugging Face once you agree, and on a Mac ONNX Runtime from Microsoft's releases on GitHub. They see a normal web request, including your IP address. Your images never leave your computer.
+- **Hugging Face and GitHub.** If you use Ligma's own Remove background on Windows, or choose BiRefNet for it on a Mac, or Ligma's own Select object, Ligma downloads the model from Hugging Face once you agree, and on a Mac ONNX Runtime from Microsoft's releases on GitHub. They see a normal web request, including your IP address. Your images never leave your computer.
 - **Figma's font helper.** If installed, Ligma starts Figma's `FigmaAgent` on your computer so Figma can use your local fonts.
 
 Links outside figma.com open in your default browser.

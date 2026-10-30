@@ -2356,7 +2356,7 @@ Used by:
 
 ## ONNX Runtime
 
-Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet is used, to remove backgrounds.
+Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet or SAM 2.1 is used, to remove backgrounds and select objects.
 
 ```
 MIT License
@@ -9799,7 +9799,7 @@ the following restrictions:
 
 ## ONNX Runtime
 
-Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet is used, to remove backgrounds.
+Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet or SAM 2.1 is used, to remove backgrounds and select objects.
 
 ```
 MIT License

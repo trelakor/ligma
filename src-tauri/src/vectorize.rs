@@ -897,26 +897,7 @@ fn shapes(regions: &Regions, width: usize, height: usize, fitting: &Fitting) -> 
             }
         }
 
-        // Pixels that touch only at a corner can't be followed round, so
-        // they're joined by one more
-        loop {
-            let mut changed = false;
-            for y in 0..h - 1 {
-                for x in 0..w - 1 {
-                    let (a, b, c, e) = (y * w + x, y * w + x + 1, (y + 1) * w + x, (y + 1) * w + x + 1);
-                    if mask[a] && mask[e] && !mask[b] && !mask[c] {
-                        mask[b] = true;
-                        changed = true;
-                    } else if mask[b] && mask[c] && !mask[a] && !mask[e] {
-                        mask[a] = true;
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
+        join_corners(&mut mask, w, h);
         let mut image = BinaryImage::new_w_h(w, h);
         for (i, &set) in mask.iter().enumerate() {
             if set {
@@ -944,6 +925,60 @@ fn shapes(regions: &Regions, width: usize, height: usize, fitting: &Fitting) -> 
         shapes.count += 1;
     }
     shapes
+}
+
+/// Pixels that touch only at a corner can't be followed round, so they're
+/// joined by one more
+fn join_corners(mask: &mut [bool], w: usize, h: usize) {
+    loop {
+        let mut changed = false;
+        for y in 0..h - 1 {
+            for x in 0..w - 1 {
+                let (a, b, c, e) = (y * w + x, y * w + x + 1, (y + 1) * w + x, (y + 1) * w + x + 1);
+                if mask[a] && mask[e] && !mask[b] && !mask[c] {
+                    mask[b] = true;
+                    changed = true;
+                } else if mask[b] && mask[c] && !mask[a] && !mask[e] {
+                    mask[a] = true;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// The outlines of `mask`, `width` pixels wide, as smooth SVG path
+/// commands, fitted as Vectorize fits its shapes, holes and all, for
+/// Select object (see objects.rs). Specks under `least` pixels are left out
+pub fn outline(mask: &[bool], width: usize, height: usize, least: usize) -> String {
+    let mut image = BinaryImage::new_w_h(width, height);
+    for (i, _) in mask.iter().enumerate().filter(|(_, &set)| set) {
+        image.set_pixel(i % width, i / width, true);
+    }
+    let fitting = Fitting::new(1.0);
+    let mut d = String::new();
+    for cluster in image.to_clusters(false).iter().filter(|cluster| cluster.size() >= least) {
+        // A pixel of space all round, as in `shapes`
+        let (left, top) = (cluster.rect.left, cluster.rect.top);
+        let (w, h) = (cluster.rect.width() as usize + 2, cluster.rect.height() as usize + 2);
+        let mut mask = vec![false; w * h];
+        for point in cluster.iter() {
+            mask[(point.y - top + 1) as usize * w + (point.x - left + 1) as usize] = true;
+        }
+        join_corners(&mut mask, w, h);
+        let mut image = BinaryImage::new_w_h(w, h);
+        for (i, _) in mask.iter().enumerate().filter(|(_, &set)| set) {
+            image.set_pixel(i % w, i / w, true);
+        }
+        for mut outline in Cluster::image_to_paths(&image, PathSimplifyMode::None) {
+            outline.offset(&PointI32 { x: left - 1, y: top - 1 });
+            curve(&outline.path, &fitting, &mut d);
+        }
+    }
+    d
 }
 
 /// An outline turning sharper than this, in degrees, has a corner there
@@ -1344,5 +1379,24 @@ mod tests {
     fn fully_transparent_is_empty() {
         let bytes = png(16, 16, |_, _| [0, 0, 0, 0]);
         assert_eq!(trace(&bytes, 1.0), Err("empty"));
+    }
+
+    #[test]
+    fn outlines_each_piece_and_leaves_out_specks() {
+        let (width, height) = (64, 32);
+        let mask: Vec<bool> = (0..width * height)
+            .map(|i| {
+                let (x, y) = (i % width, i / width);
+                let square = (4..20).contains(&x) && (4..20).contains(&y);
+                let other = (30..50).contains(&x) && (8..28).contains(&y);
+                let speck = x == 60 && y == 2;
+                square || other || speck
+            })
+            .collect();
+        let d = outline(&mask, width, height, 4);
+        assert_eq!(d.matches('M').count(), 2, "{d}");
+        // Along the edge of the image too
+        let full = outline(&[true; 16 * 16], 16, 16, 1);
+        assert_eq!(full.matches('M').count(), 1, "{full}");
     }
 }
