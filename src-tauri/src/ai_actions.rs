@@ -73,7 +73,8 @@ const PAGE_JS: &str = r##"(() => {
   const cutOut = (bytes, onProgress) =>
     new Promise((resolve, reject) => {
       const job = ++lastJob;
-      const url = URL.createObjectURL(new Blob([bytes]));
+      // Typed, or WebView2 sniffs it and names it as text
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
       let timer;
       const finish = () => {
         clearTimeout(timer);

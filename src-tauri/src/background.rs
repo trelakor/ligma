@@ -46,10 +46,12 @@ pub fn on_requested(webview: &Webview, url: &Url, destination: &mut PathBuf) -> 
     if url.scheme() != "blob" {
         return false;
     }
-    let Some(job) = destination
-        .file_name()
-        .and_then(|name| name.to_str()?.strip_prefix(PREFIX)?.parse::<u64>().ok())
-    else {
+    // WebView2 may add an extension, like ".txt", or " (1)" to the name
+    let Some(job) = destination.file_name().and_then(|name| {
+        let rest = name.to_str()?.strip_prefix(PREFIX)?;
+        let digits = rest.find(|char: char| !char.is_ascii_digit()).unwrap_or(rest.len());
+        rest[..digits].parse::<u64>().ok()
+    }) else {
         return false;
     };
     let Some(tab) = webview.label().strip_prefix("tab-").and_then(|id| id.parse().ok()) else {
