@@ -1,5 +1,6 @@
 //! Patching Figma's modules as they load, for features that change how a
-//! part of Figma behaves (layer previews, the classic home page)
+//! part of Figma behaves (layer previews, the classic home page, copy as
+//! code)
 //!
 //! Figma's modules export through getters that can't be redefined once
 //! loaded, so `PAGE_JS` wraps a module's factory when its chunk arrives,
@@ -14,7 +15,9 @@
 ///   `patch.match(source)` accepts, for each patch. `patch.getter(value,
 ///   React)` replaces each of its exports, read as the module's getters
 ///   are; `patch.loaded(exports, React)` sees them once it has run. `React`
-///   is what the module imports, or null
+///   is what the module imports, or null. `patch.source(source)` instead
+///   rewrites the module's code before it runs, for what isn't exported;
+///   if it throws or the code doesn't parse, the module runs as it was
 /// - `arrived(match)` says whether a module `match` accepts has already
 ///   loaded, so it's too late to patch it
 pub const PAGE_JS: &str = r##"(() => {
@@ -76,6 +79,19 @@ pub const PAGE_JS: &str = r##"(() => {
       return result;
     };
 
+  // A factory's source is `id(module, exports, require) {…}` or
+  // `function (…) {…}`, either of which reads as a method in an object
+  const rewrite = (factory, patch, source) => {
+    try {
+      const next = patch.source(source);
+      if (typeof next !== "string" || next === source) return factory;
+      const made = Object.values((0, eval)(`({${next}})`))[0];
+      return typeof made === "function" ? made : factory;
+    } catch {
+      return factory;
+    }
+  };
+
   const patchChunk = (chunk) => {
     const modules = Array.isArray(chunk) ? chunk[1] : null;
     if (!modules || typeof modules !== "object" || !patches.some((patch) => !patch.done)) return;
@@ -86,7 +102,7 @@ pub const PAGE_JS: &str = r##"(() => {
       const patch = patches.find((patch) => !patch.done && patch.match(source));
       if (!patch) continue;
       patch.done = true;
-      modules[id] = wrapFactory(factory, patch, source);
+      modules[id] = patch.source ? rewrite(factory, patch, source) : wrapFactory(factory, patch, source);
       if (!patches.some((patch) => !patch.done)) return;
     }
   };

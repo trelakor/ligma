@@ -683,7 +683,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::home::page_js())
         .initialization_script(crate::toolbar::page_js())
         .initialization_script(crate::adjustments::page_js())
-        .initialization_script(crate::ai_actions::page_js());
+        .initialization_script(crate::ai_actions::page_js())
+        .initialization_script(crate::copy_code::page_js());
     #[cfg(target_os = "macos")]
     {
         builder = builder
