@@ -117,6 +117,58 @@ const PAGE_JS: &str = r##"(() => {
     failed: (job, reason) => jobs.get(job)?.failed(reason),
   };
 
+  // A white shimmer over each of `nodes` on the canvas, as Figma shows
+  // while its own Remove background works, kept on them as the canvas
+  // pans and zooms. Returns what stops it
+  const SHIMMER = "data-ligma-shimmer";
+  const shimmer = (figma, nodes) => {
+    const canvas = [...document.querySelectorAll("canvas")].reduce(
+      (best, canvas) => (canvas.offsetWidth * canvas.offsetHeight > (best ? best.offsetWidth * best.offsetHeight : 0) ? canvas : best),
+      null,
+    );
+    if (!canvas) return () => {};
+    const layer = document.createElement("div");
+    layer.setAttribute(SHIMMER, "");
+    canvas.after(layer);
+    const boxes = nodes.map(() => layer.appendChild(document.createElement("div")));
+    let frame;
+    const place = () => {
+      Object.assign(layer.style, {
+        left: `${canvas.offsetLeft}px`,
+        top: `${canvas.offsetTop}px`,
+        width: `${canvas.offsetWidth}px`,
+        height: `${canvas.offsetHeight}px`,
+      });
+      try {
+        const { bounds } = figma.viewport;
+        const zoom = figma.viewport.zoom;
+        nodes.forEach((node, i) => {
+          const box = boxes[i];
+          if (node.removed) {
+            box.hidden = true;
+            return;
+          }
+          const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+          const radius = typeof node.cornerRadius === "number" ? node.cornerRadius * zoom : 0;
+          box.hidden = false;
+          Object.assign(box.style, {
+            width: `${node.width * zoom}px`,
+            height: `${node.height * zoom}px`,
+            borderRadius: `${radius}px`,
+            transform: `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`,
+          });
+        });
+      } catch {}
+      frame = requestAnimationFrame(place);
+    };
+    place();
+    return () => {
+      cancelAnimationFrame(frame);
+      layer.classList.add("done");
+      setTimeout(() => layer.remove(), 200);
+    };
+  };
+
   // Replaces the top image fill of each selected layer with its cut-out,
   // as one undo step. Each image is cut out once, however many layers
   // show it
@@ -138,6 +190,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     busy = true;
     tidy();
+    const stopShimmer = shimmer(figma, targets.map((target) => target.node));
     let progress;
     const show = (text) => {
       try {
@@ -182,6 +235,7 @@ const PAGE_JS: &str = r##"(() => {
       } catch {}
     }
     busy = false;
+    stopShimmer();
     tidy();
     try {
       progress.cancel();
@@ -244,7 +298,17 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const style = document.createElement("style");
-  style.textContent = `[${HIDDEN}] { display: none !important; }`;
+  style.textContent = `[${HIDDEN}] { display: none !important; }
+    [${SHIMMER}] { position: absolute; overflow: hidden; pointer-events: none; transition: opacity 200ms ease-out; }
+    [${SHIMMER}].done { opacity: 0; }
+    [${SHIMMER}] > div { position: absolute; left: 0; top: 0; overflow: hidden; transform-origin: 0 0; background: rgb(255 255 255 / 0.12); }
+    [${SHIMMER}] > div::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.45) 50%, transparent 80%);
+      animation: ligma-shimmer 1.6s ease-in-out infinite;
+    }
+    @keyframes ligma-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+    @media (prefers-reduced-motion: reduce) { [${SHIMMER}] > div::after { animation: none; opacity: 0; } }`;
   const mount = () => {
     if (style.isConnected) return true;
     const parent = document.head ?? document.documentElement;
