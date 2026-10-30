@@ -19,9 +19,10 @@
 //! - `{"op":"close","session":<job>}` lets the image go
 //!
 //! A pick is `{"point":[x,y]}` or `{"box":[left,top,right,bottom]}`, in
-//! fractions of the image, or a stroke of the brush,
+//! fractions of the image, a stroke of the brush,
 //! `{"stroke":[[x,y],…],"radius":r}`, whose radius is a fraction of the
-//! image's width. `"subtract":true` takes it away from the picks before it
+//! image's width, or what's inside a lasso, `{"lasso":[[x,y],…]}`, a
+//! closed outline. `"subtract":true` takes it away from the picks before it
 //! rather than adds it. `"edge":{"shift":s,"feather":f}` on "outline" and
 //! "isolate" moves the edge out by `s` pixels of the image the request is
 //! about, or in when it's negative, and softens it over `f` pixels either
@@ -51,6 +52,7 @@ struct Pick {
     stroke: Option<Vec<[f32; 2]>>,
     #[serde(default)]
     radius: f32,
+    lasso: Option<Vec<[f32; 2]>>,
     #[serde(default)]
     subtract: bool,
 }
@@ -128,21 +130,65 @@ impl Field {
         // Two pixels more, so the edge's slope is known either side of it
         let reach = radius + 2.0;
         for (a, b) in segments {
-            let span = |from: f32, to: f32, size: usize| {
-                let low = (from.min(to) - reach).floor().max(0.0) as usize;
-                let high = ((from.max(to) + reach).ceil().max(0.0) as usize).min(size);
-                low..high
-            };
-            let along = [b[0] - a[0], b[1] - a[1]];
-            let length = along[0] * along[0] + along[1] * along[1];
-            for y in span(a[1], b[1], height) {
-                for x in span(a[0], b[0], width) {
-                    let at = [x as f32 + 0.5 - a[0], y as f32 + 0.5 - a[1]];
-                    let t = if length > 0.0 { ((at[0] * along[0] + at[1] * along[1]) / length).clamp(0.0, 1.0) } else { 0.0 };
-                    let inside = radius - (at[0] - t * along[0]).hypot(at[1] - t * along[1]);
+            for y in span(a[1], b[1], reach, height) {
+                for x in span(a[0], b[0], reach, width) {
+                    let inside = radius - from_segment([x as f32 + 0.5, y as f32 + 0.5], a, b);
                     let value = &mut self.values[y * width + x];
                     *value = if subtract { value.min(-inside) } else { value.max(inside) };
                 }
+            }
+        }
+    }
+
+    /// Adds what's inside `points`, a closed outline in fractions of the
+    /// image, or takes it away. Each row is filled between where it crosses
+    /// the outline, and near the outline, how far from it each pixel is
+    /// gives the edge's slope
+    fn lasso(&mut self, points: &[[f32; 2]], subtract: bool) {
+        const NEAR: f32 = 2.0;
+        let (width, height) = (self.width, self.height);
+        let points: Vec<[f32; 2]> = points.iter().map(|&[x, y]| [x * width as f32, y * height as f32]).collect();
+        if points.len() < 3 {
+            return;
+        }
+        let edges: Vec<([f32; 2], [f32; 2])> = (0..points.len()).map(|i| (points[i], points[(i + 1) % points.len()])).collect();
+        let lowest = |axis: usize| points.iter().map(|point| point[axis]).fold(f32::INFINITY, f32::min);
+        let highest = |axis: usize| points.iter().map(|point| point[axis]).fold(f32::NEG_INFINITY, f32::max);
+        let (columns, rows) = (span(lowest(0), highest(0), NEAR, width), span(lowest(1), highest(1), NEAR, height));
+        if columns.is_empty() || rows.is_empty() {
+            return;
+        }
+        let across = columns.len();
+        let at = |x: usize, y: usize| (y - rows.start) * across + x - columns.start;
+        let mut shape = vec![-NEAR; across * rows.len()];
+        let mut crossings = Vec::new();
+        for y in rows.clone() {
+            let middle = y as f32 + 0.5;
+            crossings.clear();
+            for &(a, b) in &edges {
+                if (a[1] <= middle) != (b[1] <= middle) {
+                    crossings.push(a[0] + (middle - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
+                }
+            }
+            crossings.sort_by(f32::total_cmp);
+            for &[from, to] in crossings.as_chunks::<2>().0 {
+                for x in columns.clone().filter(|&x| (from..to).contains(&(x as f32 + 0.5))) {
+                    shape[at(x, y)] = NEAR;
+                }
+            }
+        }
+        for &(a, b) in &edges {
+            for y in span(a[1], b[1], NEAR, height) {
+                for x in span(a[0], b[0], NEAR, width) {
+                    let value = &mut shape[at(x, y)];
+                    *value = value.signum() * value.abs().min(from_segment([x as f32 + 0.5, y as f32 + 0.5], a, b));
+                }
+            }
+        }
+        for y in rows.clone() {
+            for x in columns.clone() {
+                let (inside, value) = (shape[at(x, y)], &mut self.values[y * width + x]);
+                *value = if subtract { value.min(-inside) } else { value.max(inside) };
             }
         }
     }
@@ -180,6 +226,24 @@ impl Field {
         }
         distances
     }
+}
+
+/// The pixels from `from` to `to` along one side of an image `size`
+/// pixels across, and `reach` more either way
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn span(from: f32, to: f32, reach: f32, size: usize) -> std::ops::Range<usize> {
+    let low = (from.min(to) - reach).floor().max(0.0) as usize;
+    let high = ((from.max(to) + reach).ceil().max(0.0) as usize).min(size);
+    low.min(high)..high
+}
+
+/// How far `point` is from the segment from `a` to `b`
+#[cfg_attr(not(birefnet), allow(dead_code))]
+fn from_segment(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let (at, along) = ([point[0] - a[0], point[1] - a[1]], [b[0] - a[0], b[1] - a[1]]);
+    let length = along[0] * along[0] + along[1] * along[1];
+    let t = if length > 0.0 { ((at[0] * along[0] + at[1] * along[1]) / length).clamp(0.0, 1.0) } else { 0.0 };
+    (at[0] - t * along[0]).hypot(at[1] - t * along[1])
 }
 
 /// How much of a pixel `distance` inside the picks' edge is kept, with the
@@ -474,7 +538,8 @@ mod sam {
 
     /// The picks over an image `width` by `height`, each added to those
     /// before it or taken away from them. SAM's masks are combined in its
-    /// logits, as far as they can be, and scaled up together
+    /// logits, as far as they can be, and scaled up together, then strokes
+    /// and lassos with them
     fn picked(loaded: &mut Loaded, picks: &[Pick], width: usize, height: usize) -> Result<Field, &'static str> {
         let mut field: Option<Field> = None;
         // Masks since the last stroke, to add to `field`
@@ -494,6 +559,14 @@ mod sam {
                     continue;
                 }
                 field.get_or_insert_with(|| Field::empty(width, height)).paint(points, pick.radius * width as f32, pick.subtract);
+                continue;
+            }
+            if let Some(points) = &pick.lasso {
+                flush(&mut field, &mut masks);
+                if field.is_none() && pick.subtract {
+                    continue;
+                }
+                field.get_or_insert_with(|| Field::empty(width, height)).lasso(points, pick.subtract);
                 continue;
             }
             let mask = mask(loaded, pick)?;
@@ -691,6 +764,25 @@ mod tests {
         assert!(!inside(&field, 32, 32) && !inside(&field, 30, 20));
         field.paint(&[[0.0, 0.05], [1.0, 0.05]], 1.0, false);
         assert!(inside(&field, 5, 3) && inside(&field, 60, 3) && !inside(&field, 5, 6));
+    }
+
+    #[test]
+    fn lassos_add_and_take_away() {
+        // A triangle, then a square taken out of its middle
+        let mut field = Field::empty(64, 64);
+        field.lasso(&[[0.1, 0.9], [0.5, 0.1], [0.9, 0.9]], false);
+        let inside = |field: &Field, x: usize, y: usize| field.values[y * 64 + x] > 0.0;
+        assert!(inside(&field, 32, 40) && inside(&field, 10, 56) && inside(&field, 53, 56));
+        assert!(!inside(&field, 10, 20) && !inside(&field, 32, 60) && !inside(&field, 2, 2));
+        field.lasso(&[[0.4, 0.5], [0.6, 0.5], [0.6, 0.7], [0.4, 0.7]], true);
+        assert!(!inside(&field, 32, 40) && inside(&field, 20, 50));
+        // Near the outline, how far in to a fraction of a pixel: the
+        // center of (32, 57) is 0.1 above the bottom edge, at 57.6
+        let distances = field.distances();
+        assert!((distances[57 * 64 + 32] - 0.1).abs() < 0.15, "{}", distances[57 * 64 + 32]);
+        // Off the image, it's left as it was
+        field.lasso(&[[1.5, 1.5], [2.0, 1.5], [2.0, 2.0]], false);
+        assert!(!inside(&field, 63, 63));
     }
 
     #[test]

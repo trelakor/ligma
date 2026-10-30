@@ -23,7 +23,8 @@
 //! Selection does, with SAM on this device (see objects.rs): the object
 //! under the pointer shows as it moves, a click picks it, Shift adds,
 //! Alt (Option) takes away and a box picks the object in it. A brush
-//! paints in what it missed or takes away what it overshot. Isolate puts
+//! paints in what it missed or takes away what it overshot, and a lasso
+//! picks or takes away what's drawn around. Isolate puts
 //! the picked objects in a new layer above, cropped to them, with their
 //! edge moved and feathered as the bar says, as one undo step. On by
 //! default, where the model runs
@@ -662,8 +663,9 @@ const PAGE_JS: &str = r##"(() => {
   // Selection does, in place of Figma's Select area, whose bar its own
   // follows: the object under the pointer shows as it moves, a click picks
   // it, Shift adds, Alt (Option) takes away and dragging a box picks the
-  // object in it. The bar's brush paints picks in or out instead, and its
-  // modes do what Shift and Alt do. Isolate, or Enter, puts what's picked
+  // object in it. The bar's brush paints picks in or out instead, its
+  // lasso picks what's drawn around, and its modes do what Shift and Alt
+  // do. Isolate, or Enter, puts what's picked
   // in a new layer above, cropped to it, its edge moved and feathered as
   // the bar says; Cancel, Escape or a click on the canvas off the image
   // leaves. Ligma's SAM finds the objects (see objects.rs): it reads the
@@ -743,6 +745,8 @@ const PAGE_JS: &str = r##"(() => {
   const TOOLS = [
     ["object", "Click an object, or drag a box around it", OBJECT_ICON],
     ["brush", "Paint over what to pick, [ and ] to resize", icon(`<path ${STROKE} stroke-linecap="round" d="m18.5 5.5-6.5 7.5"/><path ${STROKE} stroke-linejoin="round" d="M11.5 12.5c1 .7 1.4 1.7 1 2.8-.6 1.8-2.8 3-6.5 2.7 1.2-.8 1-2 1.4-3.2.5-1.6 2.6-3.1 4.1-2.3z"/>`)],
+    // A loop of rope with its end hanging, as Photoshop's Lasso has it
+    ["lasso", "Draw around what to pick", icon(`<path ${STROKE} stroke-linecap="round" d="M8.5 14.6C6 13.8 4.5 12.2 4.5 10.5c0-2.8 3.4-5 7.5-5s7.5 2.2 7.5 5-3.4 5-7.5 5c-.9 0-1.8-.1-2.6-.3"/><circle ${STROKE} cx="8.5" cy="15.5" r="1.5"/><path ${STROKE} stroke-linecap="round" d="M8 17c-.3 1 0 1.8.8 2.5"/>`)],
   ];
   // Photoshop's selection modes: a new selection, added to it and taken
   // away from it
@@ -853,7 +857,7 @@ const PAGE_JS: &str = r##"(() => {
       element.setAttribute("class", className);
       return element;
     };
-    const paths = { picked: shape("picked"), ants: shape("ants"), hover: shape("hover"), band: shape("band"), stroke: shape("stroke") };
+    const paths = { picked: shape("picked"), ants: shape("ants"), hover: shape("hover"), band: shape("band"), stroke: shape("stroke"), lasso: shape("lasso") };
     const brush = svg.appendChild(document.createElementNS(SVG_NS, "circle"));
     brush.setAttribute("class", "brush");
 
@@ -1087,6 +1091,7 @@ const PAGE_JS: &str = r##"(() => {
       paths.picked.removeAttribute("d");
       paths.ants.removeAttribute("d");
       paths.stroke.removeAttribute("d");
+      paths.lasso.removeAttribute("d");
       return;
     }
     try {
@@ -1095,7 +1100,10 @@ const PAGE_JS: &str = r##"(() => {
       if (picking !== current || current.version !== version) return;
       paths.picked.setAttribute("d", d);
       paths.ants.setAttribute("d", d);
-      if (!current.drag) paths.stroke.removeAttribute("d");
+      if (!current.drag) {
+        paths.stroke.removeAttribute("d");
+        paths.lasso.removeAttribute("d");
+      }
       // Taking away everything leaves nothing to isolate, though
       // contracting the edge only hides it
       if (!d && edge.shift >= 0) {
@@ -1111,6 +1119,7 @@ const PAGE_JS: &str = r##"(() => {
     if (pick.stroke && mode === "replace") mode = "add";
     if (mode === "subtract" && !picks.length) {
       picking.paths.stroke.removeAttribute("d");
+      picking.paths.lasso.removeAttribute("d");
       return;
     }
     picking.undone.push(picks);
@@ -1164,23 +1173,28 @@ const PAGE_JS: &str = r##"(() => {
   // The cursor for what a click on the image does: Ligma's arrow with a
   // dashed box, as Photoshop's Object Selection has, and + or − with Shift
   // or Alt
-  const cursor = (mark) => {
+  const cursor = (mark, drawing) => {
     const extra =
       mark === "add" ? '<path d="M19 3v6M16 6h6" stroke="#fff" stroke-width="3.5"/><path d="M19 3v6M16 6h6" stroke="#000" stroke-width="1.5"/>'
       : mark === "subtract" ? '<path d="M16 6h6" stroke="#fff" stroke-width="3.5"/><path d="M16 6h6" stroke="#000" stroke-width="1.5"/>'
       : "";
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none"><path d="M4.5 3.5v12.6l3.2-3 2.2 4.9 2.1-.9-2.2-4.8h4.4z" fill="#000" stroke="#fff" stroke-linejoin="round"/><rect x="13.5" y="13.5" width="8" height="8" rx="1" stroke="#fff" stroke-width="2.5"/><rect x="13.5" y="13.5" width="8" height="8" rx="1" stroke="#000" stroke-dasharray="2 1.5"/>${extra}</svg>`;
-    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 4 3, crosshair`;
+    // The brush and lasso have a crosshair instead
+    const glyph = drawing
+      ? '<path d="M9 2v14M2 9h14" stroke="#fff" stroke-width="3"/><path d="M9 2v14M2 9h14" stroke="#000"/>'
+      : '<path d="M4.5 3.5v12.6l3.2-3 2.2 4.9 2.1-.9-2.2-4.8h4.4z" fill="#000" stroke="#fff" stroke-linejoin="round"/><rect x="13.5" y="13.5" width="8" height="8" rx="1" stroke="#fff" stroke-width="2.5"/><rect x="13.5" y="13.5" width="8" height="8" rx="1" stroke="#000" stroke-dasharray="2 1.5"/>';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none">${glyph}${extra}</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${drawing ? "9 9" : "4 3"}, crosshair`;
   };
   // Shift and Alt add and take away, whatever the bar's mode
   const modeOf = (event) => (event.shiftKey ? "add" : event.altKey ? "subtract" : picking.values.mode === "new" ? "replace" : picking.values.mode);
   const showPointer = (event, over) => {
     const root = document.documentElement;
-    const value = !over ? null : !picking.session || picking.working ? "wait" : picking.values.tool === "brush" ? "brush" : modeOf(event);
+    const tool = picking.values.tool;
+    const value = !over ? null : !picking.session || picking.working ? "wait" : tool === "object" ? modeOf(event) : `draw-${modeOf(event)}`;
     if (value) root.setAttribute(POINTER, value);
     else root.removeAttribute(POINTER);
     // The brush shows as a circle its size, dashed where it takes away
-    const shown = over && value === "brush";
+    const shown = over && value !== "wait" && tool === "brush";
     picking.brush.style.display = shown ? "block" : "";
     if (shown) picking.brush.classList.toggle("subtract", modeOf(event) === "subtract");
   };
@@ -1192,6 +1206,14 @@ const PAGE_JS: &str = r##"(() => {
     paths.stroke.setAttribute("d", `M${points.join("L")}`);
     paths.stroke.setAttribute("stroke-width", brushRadius() * 2 * width);
     paths.stroke.classList.toggle("subtract", drag.mode === "subtract");
+  };
+
+  // The lasso being drawn, closed, in the image's pixels
+  const showLasso = () => {
+    const { drag, paths, width, height } = picking;
+    const points = drag.points.map(([u, v]) => `${u * width} ${v * height}`);
+    paths.lasso.setAttribute("d", `M${points.join("L")}Z`);
+    paths.lasso.classList.toggle("subtract", drag.mode === "subtract");
   };
 
   // Pointer events over the image are Select object's while it's open:
@@ -1211,7 +1233,22 @@ const PAGE_JS: &str = r##"(() => {
         const drag = picking.drag;
         if (drag) {
           swallow(event);
-          if (drag.points && type === "pointermove") {
+          if (drag.tool === "lasso" && type === "pointermove") {
+            const at = onImage(event);
+            if (!at) return;
+            // A point every 2 pixels of the image read
+            const [u, v] = drag.points.at(-1);
+            if (Math.hypot((at.u - u) * picking.width, (at.v - v) * picking.height) < 2) return;
+            drag.points.push([at.u, at.v]);
+            showLasso();
+          } else if (drag.tool === "lasso" && type === "pointerup") {
+            picking.drag = null;
+            const at = onImage(event);
+            if (at) drag.points.push([at.u, at.v]);
+            // A click, or a line, has nothing inside it
+            if (drag.points.length >= 3) pick({ lasso: drag.points }, drag.mode);
+            else picking.paths.lasso.removeAttribute("d");
+          } else if (drag.tool === "brush" && type === "pointermove") {
             const at = onImage(event);
             if (!at) return;
             placeBrush(at);
@@ -1221,7 +1258,7 @@ const PAGE_JS: &str = r##"(() => {
             if (Math.hypot((at.u - u) * picking.width, (at.v - v) * picking.height) < step) return;
             drag.points.push([at.u, at.v]);
             showStroke();
-          } else if (drag.points && type === "pointerup") {
+          } else if (drag.tool === "brush" && type === "pointerup") {
             picking.drag = null;
             const at = onImage(event);
             if (at) drag.points.push([at.u, at.v]);
@@ -1254,11 +1291,11 @@ const PAGE_JS: &str = r##"(() => {
           return;
         }
         const at = onImage(event);
-        const painting = picking.values.tool === "brush";
+        const tool = picking.values.tool;
         if (type === "pointermove") {
           showPointer(event, at?.inside);
-          if (painting && at) placeBrush(at);
-          hoverAt(at?.inside && !space && !event.buttons && !painting ? at : null);
+          if (tool === "brush" && at) placeBrush(at);
+          hoverAt(at?.inside && !space && !event.buttons && tool === "object" ? at : null);
         }
         if (!at?.inside) {
           // A click on the canvas off the image leaves, and goes to Figma
@@ -1269,12 +1306,10 @@ const PAGE_JS: &str = r##"(() => {
         if (space || event.button > 0 || (event.buttons & ~1) !== 0) return;
         swallow(event);
         if (type === "pointerdown" && picking.session && !picking.working) {
-          picking.drag = { start: at, end: at, moved: false, mode: modeOf(event) };
+          picking.drag = { tool, start: at, end: at, moved: false, mode: modeOf(event) };
           picking.paths.hover.removeAttribute("d");
-          if (painting) {
-            picking.drag.points = [[at.u, at.v]];
-            showStroke();
-          }
+          if (tool !== "object") picking.drag.points = [[at.u, at.v]];
+          if (tool === "brush") showStroke();
         }
       },
       true,
@@ -1462,6 +1497,8 @@ const PAGE_JS: &str = r##"(() => {
     [${OBJECTS}="overlay"] .ants { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1.5px; stroke-dasharray: 4 4; animation: ligma-ants 400ms linear infinite; }
     [${OBJECTS}="overlay"] .stroke { vector-effect: none; fill: none; stroke: color-mix(in srgb, var(--color-border-selected, #0d99ff) 40%, transparent); stroke-linecap: round; }
     [${OBJECTS}="overlay"] .stroke.subtract { stroke: rgb(0 0 0 / 0.4); }
+    [${OBJECTS}="overlay"] .lasso { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 15%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1.5px; stroke-dasharray: 4 3; }
+    [${OBJECTS}="overlay"] .lasso.subtract { fill: rgb(0 0 0 / 0.3); stroke: #fff; }
     [${OBJECTS}="overlay"] .brush { display: none; vector-effect: non-scaling-stroke; fill: none; stroke: #fff; stroke-width: 1.5px; filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.8)); }
     [${OBJECTS}="overlay"] .brush.subtract { stroke-dasharray: 4 3; }
     [${OBJECTS}="overlay"] .band { display: none; fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 8%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 4 3; }
@@ -1471,7 +1508,9 @@ const PAGE_JS: &str = r##"(() => {
     html[${POINTER}="add"], html[${POINTER}="add"] * { cursor: ${cursor("add")} !important; }
     html[${POINTER}="subtract"], html[${POINTER}="subtract"] * { cursor: ${cursor("subtract")} !important; }
     html[${POINTER}="wait"], html[${POINTER}="wait"] * { cursor: progress !important; }
-    html[${POINTER}="brush"], html[${POINTER}="brush"] * { cursor: crosshair !important; }
+    html[${POINTER}="draw-replace"], html[${POINTER}="draw-replace"] * { cursor: ${cursor("replace", true)} !important; }
+    html[${POINTER}="draw-add"], html[${POINTER}="draw-add"] * { cursor: ${cursor("add", true)} !important; }
+    html[${POINTER}="draw-subtract"], html[${POINTER}="draw-subtract"] * { cursor: ${cursor("subtract", true)} !important; }
     :is([${RECOLOR}], [${OBJECTS}=""]) .divider { align-self: stretch; width: 1px; margin: 0 4px; background: var(--color-border, #444); }
     [${RECOLOR}] .modes { display: flex; gap: 2px; }
     [${RECOLOR}] button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--color-icon, #fff); }
