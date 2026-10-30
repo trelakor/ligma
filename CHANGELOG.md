@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.28.0 - 2026-10-30
+
+- Select object in free projects: Ligma's own Select object takes the place of Select area in the bar above the toolbar for a selected image, and picks out objects in it as Photoshop's Object Selection does. Point at an object to see it outlined, click to pick it, Shift-click to add another, Alt-click (Option-click) to take one away, or drag a box around one. Ctrl+Z (Cmd+Z) undoes picks while it's open. Isolate, or Enter, puts what's picked in a new layer right above, cropped to it and transparent around it, as one undo step, leaving the image alone. Settings > Features > Images.
+- It runs on your device with SAM 2.1, which Ligma asks before downloading (74 MB) the first time. Settings > Features > Images > Object model downloads it ahead of time or removes it. Windows and Macs with Apple silicon on macOS 14 and later.
+
 ## 0.27.0 - 2026-10-30
 
 - Vectorize in free projects: Ligma's own Vectorize joins the bar above the toolbar for a selected image, after Remove background, and runs on your device on Mac and Windows with nothing to download. It traces the image into flat-colored vector shapes in a frame right under the layer, which is hidden, as Figma's does, as one undo step. Edges follow the image and antialiasing is split halfway, so logos keep their own colors with clean outlines, and photos become flat tones without halos. Settings > Features > Images.
