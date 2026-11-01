@@ -321,33 +321,16 @@ const GEOMETRY_JS: &str = r#"(() => {
   const left = Math.max(0, r.left), top = Math.max(0, r.top);
   const right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
   const floating = [];
-  // The image bar's box reaches down behind the toolbar, past what it
-  // draws: it's taken to end as far below its buttons as it starts above
-  // them
-  const BAR = '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]';
-  const drawn = (el, e) => {
-    if (!el.matches(BAR)) return e;
-    let below = -Infinity, above = Infinity;
-    for (const child of el.children) {
-      const c = child.getBoundingClientRect();
-      if (!area(c)) continue;
-      above = Math.min(above, c.top);
-      below = Math.max(below, c.bottom);
-    }
-    if (!Number.isFinite(below)) return e;
-    return { left: e.left, top: e.top, right: e.right, bottom: Math.min(e.bottom, below + (above - e.top)) };
-  };
   const add = (el) => {
     const style = getComputedStyle(el);
-    const box = el.getBoundingClientRect();
-    if (style.display === "none" || style.visibility === "hidden" || !area(box)) return;
-    if (area(box) > innerWidth * innerHeight * 0.4) return;
-    const e = drawn(el, box);
+    const e = el.getBoundingClientRect();
+    if (style.display === "none" || style.visibility === "hidden" || !area(e)) return;
+    if (area(e) > innerWidth * innerHeight * 0.4) return;
     floating.push([e.left, e.top, e.right, e.bottom, parseFloat(style.borderTopLeftRadius) || 0]);
   };
   const SHAPES = [
     '[data-testid="design-toolbelt-wrapper"] [role="toolbar"]',
-    BAR,
+    '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]',
     // Ligma's own bars in its place, while recoloring or picking objects
     "[data-ligma-recolor] > div",
     '[data-ligma-objects=""] > div',
@@ -355,7 +338,21 @@ const GEOMETRY_JS: &str = r#"(() => {
     '[role="menu"]',
     '[role="listbox"]',
   ];
-  for (const el of document.querySelectorAll(SHAPES.join(", "))) add(el);
+  const selector = SHAPES.join(", ");
+  const holds = (el) => !!el.querySelector(selector);
+  // A shape holding another, like the toolbar's once the image bar is in
+  // it, would cover the space between them: it's taken by its parts
+  const addParts = (el) => {
+    for (const child of el.children) {
+      if (child.matches(selector)) continue;
+      if (holds(child)) addParts(child);
+      else add(child);
+    }
+  };
+  for (const el of document.querySelectorAll(selector)) {
+    if (holds(el)) addParts(el);
+    else add(el);
+  }
   return { canvas: [left, top, right, bottom], floating };
 })()"#;
 
