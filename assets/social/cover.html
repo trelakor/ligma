@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- The social cover (site/social-cover.png), drawn like the site's hero. Render it with `npm run social-cover` -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ligma social cover</title>
+<style>
+  @font-face { font-family: "Funnel Display"; src: url(../../site/fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; }
+  @font-face { font-family: "Inter"; src: url(../../site/fonts/inter.woff2) format("woff2"); font-weight: 400 700; }
+
+  :root {
+    --bg: #ffffff; --ink: #1e1e1e; --ink-2: #444444; --ink-3: #757575;
+    --weight: #f5f5f5; --weight-rule: #e6e6e6; --field: #0d99ff;
+    --display: "Funnel Display", "Inter", sans-serif;
+    --text: "Inter", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--bg); }
+  body {
+    display: flex; flex-direction: column; padding: 48px 56px 56px;
+    color: var(--ink); font-family: var(--text); font-feature-settings: "cv11", "calt";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .top { display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 14px; font: 650 30px/1 var(--display); letter-spacing: -0.02em; }
+  .brand img { width: 44px; height: 44px; }
+  .platforms { font-size: 20px; font-weight: 500; color: var(--ink-2); }
+
+  .masthead { display: flex; align-items: flex-end; justify-content: space-between; gap: 48px; margin-top: 40px; }
+  h1 { margin: 0; font: 700 92px/0.92 var(--display); letter-spacing: -0.04em; }
+  .pitch { width: 340px; margin-bottom: 4px; font-size: 21px; line-height: 1.45; color: var(--ink-2); }
+
+  /* Both apps' installed size on macOS, to scale by area, as on the site */
+  .weight {
+    position: relative; flex: 1; margin-top: 36px; border-radius: 20px; overflow: hidden;
+    background:
+      linear-gradient(to right, var(--weight-rule) 1px, transparent 1px) 0 0 / 10% 100%,
+      linear-gradient(to bottom, var(--weight-rule) 1px, transparent 1px) 0 0 / 100% 10%,
+      var(--weight);
+  }
+  .them { position: absolute; top: 24px; left: 28px; right: 28px; display: flex; justify-content: space-between; align-items: flex-start; }
+  .them span, .us-label span { font-size: 18px; font-weight: 600; color: var(--ink-2); }
+  .them b { font: 700 128px/0.8 var(--display); letter-spacing: -0.05em; color: var(--ink-3); }
+  /* 16 MB of 305 MB by area: each side at sqrt(16 / 305) */
+  .us { position: absolute; left: 0; bottom: 0; width: 22.9%; height: 22.9%; background: var(--field); border-top-right-radius: 12px; }
+  .us-label { position: absolute; left: calc(22.9% + 18px); bottom: 12px; display: flex; align-items: baseline; gap: 12px; }
+  .us-label b { font: 700 48px/1 var(--display); letter-spacing: -0.04em; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="brand"><img src="../logo.png" alt="">Ligma</div>
+    <div class="platforms">macOS and Windows · Free and open source</div>
+  </div>
+  <div class="masthead">
+    <h1>Figma, without<br>the weight.</h1>
+    <p class="pitch">A desktop app for Figma that uses your system's own webview instead of shipping a browser.</p>
+  </div>
+  <div class="weight">
+    <div class="them"><span>Figma desktop</span><b>305 MB</b></div>
+    <div class="us"></div>
+    <div class="us-label"><b>16 MB</b><span>Ligma</span></div>
+  </div>
+</body>
+</html>
