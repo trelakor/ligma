@@ -19,6 +19,17 @@ Regenerate icons after editing `assets/icon.png` (macOS) or `assets/icon-windows
 npm run icon
 ```
 
+## Cleaning up branches and worktrees
+
+Each feature gets its own branch, and often its own worktree. Once a branch's PR is merged, clear out everything that has landed on `main`:
+
+```sh
+npm run prune           # lists what would go
+npm run prune -- --yes  # removes it
+```
+
+This removes worktrees and local branches whose commits are all on `origin/main`, squash merges included. Worktrees with uncommitted changes or unmerged commits stay, as do the main checkout and the worktree you run it from. Build output in `src-tauri/target*/` is ignored, so a separate `--target-dir` won't show up as a change.
+
 ## Releasing
 
 1. Bump `version` in `src-tauri/tauri.conf.json`.
