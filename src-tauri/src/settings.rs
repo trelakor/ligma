@@ -74,6 +74,13 @@ pub struct Settings {
     pub restore_tabs: bool,
     /// Show a tab's last image and name under it while it's hovered
     pub tab_previews: bool,
+    /// Split a window between two file tabs, from a tab's menu or by
+    /// dragging one over the canvas (see split.rs). Off ends any split
+    pub split_view: bool,
+    /// Split under one set of Figma's panels and one toolbar, the focused
+    /// tab's. Otherwise each tab takes its half of the window whole, panels
+    /// and toolbar and all
+    pub uniform_split: bool,
     /// Show development and saved plugins in the editor's left rail,
     pub rail_plugins: bool,
     /// and saved widgets
@@ -150,6 +157,8 @@ impl Default for Settings {
             discord_join_requests: true,
             restore_tabs: false,
             tab_previews: true,
+            split_view: true,
+            uniform_split: true,
             rail_plugins: true,
             rail_widgets: true,
             actions_plugins_tab: false,
