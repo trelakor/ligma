@@ -20,7 +20,7 @@ A lightweight desktop app for [Figma](https://www.figma.com), about 4 MB. Built 
 
 Ligma is for people who use Figma all day and want a desktop app that's lighter than the official one. It's built with [Tauri 2](https://tauri.app) and opens `figma.com` in the system webview (WebView2 on Windows, WKWebView on macOS) instead of bundling a browser engine, so it stays small.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/compare-dark.png"><img src="assets/readme/compare-light.png" width="880" alt="Ligma or Figma desktop. Installed size on macOS: Ligma 16 MB, Figma desktop 305 MB. Browser engine: system webview, or bundled Chromium. Color themes: 9 in light and dark, or light and dark. Plugins in the left rail, Discord Rich Presence and open source (MIT): Ligma yes, Figma desktop no"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/compare-dark.png"><img src="assets/readme/compare-light.png" width="880" alt="Ligma or Figma desktop. Installed size on macOS: Ligma 16 MB, Figma desktop 305 MB. Browser engine: system webview, or bundled Chromium. Color themes: 9 in light and dark, or light and dark. AI image tools: free and on your device, or paid plans only. Plugins in the left rail, Discord Rich Presence and open source (MIT): Ligma yes, Figma desktop no"></picture>
 
 Downloads are 2.2 MB on Windows and 7.1 MB on macOS (a universal build for Apple silicon and Intel). See [Memory](docs/MEMORY.md) to compare memory use on your own machine.
 

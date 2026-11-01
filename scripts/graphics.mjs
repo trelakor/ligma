@@ -28,7 +28,7 @@ if (!browser) {
 const readme = [
   { name: "download-macos", width: 236, height: 48 },
   { name: "download-windows", width: 252, height: 48 },
-  { name: "compare", width: 880, height: 452 },
+  { name: "compare", width: 880, height: 508 },
   { name: "image-tools", width: 880, height: 300 },
 ];
 
