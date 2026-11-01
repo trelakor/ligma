@@ -299,18 +299,23 @@ mod download {
 
         /// The models folder, once the model is in it, for `job` in tab
         /// `tab`, which is told how its download goes. Asks first. Holds the
-        /// lock while it's used
+        /// lock while it's used. A download it starts stops once every job
+        /// waiting on it is cancelled
         pub fn ensure(&'static self, app: &AppHandle, tab: u32, job: u64) -> Result<(MutexGuard<'static, ()>, PathBuf), Missing> {
             self.watchers.lock().unwrap().push((tab, job));
             let _watching = Watching(self, tab, job);
             let cancels = self.cancels.load(Ordering::SeqCst);
             let held = lock();
+            let cancelled = || crate::handoff::cancelled(tab, job);
+            if cancelled() {
+                return Err(Missing::Cancelled);
+            }
             let folder = folder(app).map_err(|error| failed(self, error))?;
             if !self.installed(&folder) {
-                if self.cancels.load(Ordering::SeqCst) != cancels || !self.ask(app, &folder) {
+                if self.cancels.load(Ordering::SeqCst) != cancels || !self.ask(app, &folder) || cancelled() {
                     return Err(Missing::Cancelled);
                 }
-                match self.download(app, &folder) {
+                match self.download(app, &folder, true) {
                     Ok(()) => {}
                     Err(None) => return Err(Missing::Cancelled),
                     Err(Some(error)) => {
@@ -333,7 +338,7 @@ mod download {
                     if self.installed(&folder) {
                         return Ok(());
                     }
-                    self.download(&app, &folder)
+                    self.download(&app, &folder, false)
                 });
                 if let Err(Some(error)) = result {
                     log::warn!("{}: {error}", self.model);
@@ -405,9 +410,14 @@ mod download {
         }
 
         /// Downloads what's missing into `folder`, telling Settings and the
-        /// jobs waiting how far it's got. `Err(None)` when cancelled
-        fn download(&self, app: &AppHandle, folder: &Path) -> Result<(), Option<String>> {
+        /// jobs waiting how far it's got. `Err(None)` when cancelled in
+        /// Settings, or, `for_jobs`, once every job waiting is
+        fn download(&self, app: &AppHandle, folder: &Path, for_jobs: bool) -> Result<(), Option<String>> {
             let cancels = self.cancels.load(Ordering::SeqCst);
+            let stopped = || {
+                self.cancels.load(Ordering::SeqCst) != cancels
+                    || for_jobs && self.watchers.lock().unwrap().iter().all(|&(tab, job)| crate::handoff::cancelled(tab, job))
+            };
             let missing: Vec<&Download> = self.downloads().filter(|download| !folder.join(download.file).is_file()).collect();
             let total = missing.iter().map(|download| download.size).sum::<u64>().max(1);
             let mut before = 0;
@@ -430,7 +440,7 @@ mod download {
                 let path = folder.join(download.file);
                 result = std::fs::create_dir_all(path.parent().unwrap_or(folder)).map_err(|error| Some(error.to_string()));
                 if result.is_ok() {
-                    result = self.fetch(download, &path, cancels, &mut |got| report(before + got));
+                    result = self.fetch(download, &path, &stopped, &mut |got| report(before + got));
                 }
                 if result.is_err() {
                     break;
@@ -449,9 +459,14 @@ mod download {
         }
 
         /// Downloads `download` to `path`, through a `.part` file that's
-        /// only kept once its hash matches. `Err(None)` when cancelled since
-        /// `cancels`
-        fn fetch(&self, download: &Download, path: &Path, cancels: u32, report: &mut impl FnMut(u64)) -> Result<(), Option<String>> {
+        /// only kept once its hash matches. `Err(None)` once `stopped`
+        fn fetch(
+            &self,
+            download: &Download,
+            path: &Path,
+            stopped: &dyn Fn() -> bool,
+            report: &mut impl FnMut(u64),
+        ) -> Result<(), Option<String>> {
             let part = path.with_file_name(format!("{}.part", path.file_name().unwrap_or_default().to_string_lossy()));
             let result = tauri::async_runtime::block_on(async {
                 let error = |error: &dyn std::fmt::Display| Some(error.to_string());
@@ -466,7 +481,7 @@ mod download {
                 let mut hash = Sha256::new();
                 let mut got = 0u64;
                 while let Some(chunk) = response.chunk().await.map_err(|e| error(&e))? {
-                    if self.cancels.load(Ordering::SeqCst) != cancels {
+                    if stopped() {
                         return Err(None);
                     }
                     file.write_all(&chunk).map_err(|e| error(&e))?;

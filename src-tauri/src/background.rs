@@ -27,7 +27,7 @@ pub fn available() -> bool {
 enum Failure {
     /// Nothing to keep was found
     NoSubject,
-    /// The model wasn't downloaded
+    /// The model wasn't downloaded, or the page cancelled the job
     #[cfg_attr(not(birefnet), allow(dead_code))]
     Cancelled,
     Failed,
@@ -36,7 +36,7 @@ enum Failure {
 /// The image in `bytes` with its background made transparent, as a PNG
 /// in base64, for `job` in tab `tab`, or why there's none: "subject" when
 /// there's nothing to keep, "cancelled" when the model wasn't downloaded
-/// and "failed" otherwise
+/// or the job was cancelled and "failed" otherwise
 pub fn remove(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
     match cut_out(app, tab, job, bytes) {
         Ok(png) => Ok(png),
@@ -240,12 +240,13 @@ mod vision {
 mod birefnet {
     use std::io::Cursor;
     use std::path::Path;
+    use std::sync::Arc;
 
     use base64::Engine;
     use image::imageops::{self, FilterType};
     use image::{DynamicImage, GrayImage, ImageDecoder, ImageEncoder, ImageReader, RgbaImage};
     use ort::session::builder::AutoDevicePolicy;
-    use ort::session::Session;
+    use ort::session::{RunOptions, Session};
     use ort::value::TensorRef;
     use tauri::AppHandle;
 
@@ -266,7 +267,7 @@ mod birefnet {
             Missing::Cancelled => Failure::Cancelled,
             Missing::Failed => Failure::Failed,
         })?;
-        cut_out(&folder, bytes)
+        cut_out(&folder, tab, job, bytes)
     }
 
     /// The image in `bytes`, turned as its orientation says, as Figma shows
@@ -285,8 +286,8 @@ mod birefnet {
     }
 
     /// The model is loaded for each image and let go after, as it takes
-    /// hundreds of MB
-    fn cut_out(folder: &Path, bytes: &[u8]) -> Result<String, Failure> {
+    /// hundreds of MB. Cancelling the job stops it as it runs
+    fn cut_out(folder: &Path, tab: u32, job: u64, bytes: &[u8]) -> Result<String, Failure> {
         let (mut image, profile) = decode(bytes)?;
         let (width, height) = image.dimensions();
         let plane = (SIDE * SIDE) as usize;
@@ -306,7 +307,18 @@ mod birefnet {
             .commit_from_file(folder.join(BIREFNET.file))
             .map_err(failed)?;
         let tensor = TensorRef::from_array_view(([1usize, 3, SIDE as usize, SIDE as usize], &*input)).map_err(failed)?;
-        let outputs = session.run(ort::inputs![tensor]).map_err(failed)?;
+        let options = Arc::new(RunOptions::new().map_err(failed)?);
+        let terminate = options.clone();
+        crate::handoff::on_cancel(tab, job, move || {
+            let _ = terminate.terminate();
+        });
+        let outputs = session.run_with_options(ort::inputs![tensor], &*options).map_err(|error| {
+            if crate::handoff::cancelled(tab, job) {
+                Failure::Cancelled
+            } else {
+                failed(error)
+            }
+        })?;
         let (_, logits) = outputs[outputs.len() - 1].try_extract_tensor::<f32>().map_err(failed)?;
         if logits.len() != plane {
             return Err(failed("unexpected output"));
