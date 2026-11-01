@@ -1351,7 +1351,15 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize) -> tauri
         // Hidden while it moves, so `select` shows it afresh in its new
         // window, rather than a stale image of it
         webview.hide()?;
-        webview.reparent(&target_window)?;
+        // On the main thread: elsewhere `reparent` holds the webview's lock
+        // while it waits for the main thread, which hangs Ligma if the main
+        // thread needs the webview meanwhile (a title change, a move)
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (moving, to) = (webview.clone(), target_window.clone());
+        app.run_on_main_thread(move || {
+            let _ = tx.send(moving.reparent(&to));
+        })?;
+        rx.recv().map_err(|_| tauri::Error::FailedToReceiveMessage)??;
         webview.set_position(LogicalPosition::new(0.0, bar_height(app)))?;
         webview.set_size(content_size(app, &target_window)?)?;
         #[cfg(windows)]
@@ -1465,7 +1473,7 @@ fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
                 let _ = window.set_position(grip_position(app, &window, at));
             }
         }
-        std::thread::sleep(Duration::from_millis(4));
+        std::thread::sleep(Duration::from_millis(8));
     }
     if let Ok(at) = app.cursor_position() {
         drop_on_bar(app, id, label, at);
