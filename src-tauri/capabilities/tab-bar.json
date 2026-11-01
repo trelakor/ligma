@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "tab-bar",
-  "description": "Lets the local tab bar drag and zoom the window. Figma tabs get no permissions.",
-  "webviews": ["main"],
+  "description": "Lets the local tab bars drag and zoom their window. Figma tabs get no permissions.",
+  "webviews": ["main", "window-*"],
   "permissions": [
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize"

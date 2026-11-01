@@ -6,7 +6,7 @@
 //! no border, just the system shadow, and the strip takes the page's
 //! background so it doesn't show. Windows 10 has neither and ignores this
 
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow, Window};
 
 /// DWMWA_BORDER_COLOR
 const BORDER_COLOR: u32 = 34;
@@ -26,7 +26,11 @@ extern "system" {
 extern "system" {
     fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
     fn ShowWindow(hwnd: isize, command: i32) -> i32;
+    fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
 }
+
+/// The owner, in `SetWindowLongPtrW`
+const GWLP_HWNDPARENT: i32 = -8;
 
 const SW_HIDE: i32 = 0;
 const SW_SHOWNOACTIVATE: i32 = 4;
@@ -55,6 +59,16 @@ pub fn refresh(window: &WebviewWindow) {
             0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
+    }
+}
+
+/// Makes `owner` the window `window` is kept above and closed with
+pub fn set_owner(window: &WebviewWindow, owner: &Window) {
+    let (Ok(hwnd), Ok(owner)) = (window.hwnd(), owner.hwnd()) else {
+        return;
+    };
+    unsafe {
+        SetWindowLongPtrW(hwnd.0 as isize, GWLP_HWNDPARENT, owner.0 as isize);
     }
 }
 
@@ -88,10 +102,11 @@ pub fn match_theme(window: &WebviewWindow) {
     }
 }
 
-/// `match_theme` for every window but the main one, after the theme changed
+/// `match_theme` for every window but those with tabs, after the theme
+/// changed
 pub fn match_theme_all(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
-        if label != "main" {
+        if !crate::tabs::is_tab_window(&label) {
             match_theme(&window);
         }
     }

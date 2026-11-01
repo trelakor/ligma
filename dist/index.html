@@ -100,6 +100,9 @@
   /* While a tab is dragged, the others slide out of its way */
   .dragging .tab { transition: transform 150ms ease; }
   .dragging .tab.dragged { transition: none; z-index: 1; }
+  /* Dragged out of the bar: let go, it moves to a window of its own, or
+     to the bar of the window it's over */
+  .dragging .tab.detached { opacity: 0.4; }
   /* Pinned tabs show only their icon, like Home */
   .tab.pinned { flex: none; width: 38px; min-width: 38px; padding: 0; justify-content: center; }
   /* Always leave room to drag the window */
@@ -216,15 +219,26 @@
 
   // Dragging a tab moves it among its group, the pinned tabs or the rest
   // `drag` holds the press until it moves DRAG_START px, then the drag;
-  // renders wait until the drop, so the tabs don't change under it
+  // renders wait until the drop, so the tabs don't change under it.
+  // Dragged DETACH px off the bar, the tab is let go of in another window
+  // (see `drop_tab` in tabs.rs)
   const DRAG_START = 4;
+  const DETACH = 24;
   let drag = null;
   let deferred = null;
   const groupNodes = (pinned) => [...bar.querySelectorAll(pinned ? ".tab.pinned" : ".tab:not(.pinned)")];
 
   const startPress = (e, tab) => {
-    if (e.button === 0) drag = { id: tab.id, pinned: tab.pinned, startX: e.clientX, moving: false };
+    if (e.button === 0) drag = { id: tab.id, pinned: tab.pinned, startX: e.clientX, startY: e.clientY, moving: false };
   };
+
+  // Where a tab let go of at `x` in this bar goes among its group, for a
+  // tab dragged in from another window
+  window.dropIndex = (x, pinned) =>
+    groupNodes(pinned).filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.left + rect.width / 2 < x;
+    }).length;
 
   // Pointing at another tab previews it in a card below (see
   // src-tauri/src/preview.rs). Rust skips Home, the active tab, and
@@ -262,10 +276,10 @@
     }
     let dx = e.clientX - drag.startX;
     if (!drag.moving) {
-      if (Math.abs(dx) < DRAG_START) return;
+      if (Math.hypot(dx, e.clientY - drag.startY) < DRAG_START) return;
       const nodes = groupNodes(drag.pinned);
       drag.from = nodes.findIndex((node) => Number(node.dataset.id) === drag.id);
-      if (drag.from < 0 || nodes.length < 2) {
+      if (drag.from < 0) {
         drag = null;
         return;
       }
@@ -278,6 +292,18 @@
       bar.classList.add("dragging");
     }
     const { from, rects } = drag;
+    const height = bar.getBoundingClientRect().height;
+    drag.detached = e.clientY < -DETACH || e.clientY > height + DETACH || e.clientX < 0 || e.clientX > innerWidth;
+    if (drag.detached) {
+      // The others go back where they were, as if it had left
+      drag.to = from;
+      groupNodes(drag.pinned).forEach((node, i) => {
+        node.classList.toggle("dragged", i === from);
+        node.classList.toggle("detached", i === from);
+        node.style.transform = "";
+      });
+      return;
+    }
     const me = rects[from];
     dx = Math.max(rects[0].left - me.left, Math.min(rects[rects.length - 1].right - me.right, dx));
     // A neighbour gives way once the dragged tab's leading edge passes its
@@ -292,15 +318,19 @@
         : drag.to <= i && i < from ? me.width
         : 0;
       node.classList.toggle("dragged", i === from);
+      node.classList.remove("detached");
       node.style.transform = shift ? `translateX(${shift}px)` : "";
     });
   });
 
-  const endPress = () => {
+  const endPress = (e) => {
     const done = drag;
     drag = null;
     if (!done?.moving) return;
     bar.classList.remove("dragging");
+    groupNodes(done.pinned).forEach((node) => node.classList.remove("detached"));
+    // Off the bar the tab stays put here (`to` is `from`) until it's gone
+    if (done.detached && e.type === "pointerup") invoke("drop_tab", { id: done.id });
     // The tab stays where it was dropped until the reply renders it there
     const state = deferred;
     deferred = null;
