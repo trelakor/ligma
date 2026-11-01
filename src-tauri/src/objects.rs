@@ -91,6 +91,14 @@ pub fn unload() {
     sam::unload();
 }
 
+/// Lets the image go, if it's `session`'s
+pub fn close(session: u64) {
+    #[cfg(birefnet)]
+    sam::close(session);
+    #[cfg(not(birefnet))]
+    let _ = session;
+}
+
 /// The picks, over an image `width` by `height`, as how far inside them
 /// each pixel is: positive inside and negative outside, in any units, as
 /// long as they're smooth near the edge
@@ -392,13 +400,13 @@ mod sam {
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::path::Path;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use base64::Engine;
     use image::imageops::{self, FilterType};
     use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageReader, RgbaImage};
     use ort::session::builder::AutoDevicePolicy;
-    use ort::session::Session;
+    use ort::session::{RunOptions, Session};
     use ort::value::TensorRef;
     use tauri::AppHandle;
 
@@ -446,14 +454,18 @@ mod sam {
         *LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
+    pub fn close(session: u64) {
+        let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if loaded.as_ref().is_some_and(|loaded| loaded.image.session == session) {
+            *loaded = None;
+        }
+    }
+
     pub fn handle(app: &AppHandle, tab: u32, job: u64, request: Request, image: &[u8]) -> Result<String, &'static str> {
         match request.op.as_str() {
             "open" => open(app, tab, job, image),
             "close" => {
-                let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                if loaded.as_ref().is_some_and(|loaded| loaded.image.session == request.session) {
-                    *loaded = None;
-                }
+                close(request.session);
                 Ok("{}".to_owned())
             }
             op => {
@@ -491,7 +503,18 @@ mod sam {
             // The encoder takes hundreds of MB while it runs, so it's let go
             let mut encoder = session(&folder, SAM_ENCODER.file)?;
             let tensor = TensorRef::from_array_view(([1usize, 3, SIDE, SIDE], &*input)).map_err(failed)?;
-            let outputs = encoder.run(ort::inputs![tensor]).map_err(failed)?;
+            let options = Arc::new(RunOptions::new().map_err(failed)?);
+            let terminate = options.clone();
+            crate::handoff::on_cancel(tab, job, move || {
+                let _ = terminate.terminate();
+            });
+            let outputs = encoder.run_with_options(ort::inputs![tensor], &*options).map_err(|error| {
+                if crate::handoff::cancelled(tab, job) {
+                    "cancelled"
+                } else {
+                    failed(error)
+                }
+            })?;
             EMBEDDINGS
                 .iter()
                 .map(|name| {
@@ -508,7 +531,11 @@ mod sam {
             embeddings,
             masks: HashMap::new(),
         };
+        // Checked with the image held, as cancelling lets it go
         let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if crate::handoff::cancelled(tab, job) {
+            return Err("cancelled");
+        }
         let decoder = match loaded.take() {
             Some(Loaded { decoder, .. }) => decoder,
             None => session(&folder, SAM_DECODER.file)?,
