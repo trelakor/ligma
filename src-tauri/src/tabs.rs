@@ -1360,8 +1360,7 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize) -> tauri
             let _ = tx.send(moving.reparent(&to));
         })?;
         rx.recv().map_err(|_| tauri::Error::FailedToReceiveMessage)??;
-        webview.set_position(LogicalPosition::new(0.0, bar_height(app)))?;
-        webview.set_size(content_size(app, &target_window)?)?;
+        webview.set_bounds(tab_bounds(app, &target_window)?)?;
         #[cfg(windows)]
         crate::webview2::on_moved(&webview);
     }
@@ -2052,6 +2051,17 @@ fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f
     Ok(LogicalSize::new(size.width, (size.height - bar_height(app)).max(0.0)))
 }
 
+/// Where tab webviews go in `window`: below the tab bar. Set as one, not
+/// with `set_position` and `set_size`: on Windows a webview moved to another
+/// window measures its position against the old one, so `set_size` would
+/// put it back out of place
+fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
+    Ok(tauri::Rect {
+        position: LogicalPosition::new(0.0, bar_height(app)).into(),
+        size: content_size(app, window)?.into(),
+    })
+}
+
 /// Zooms the tab bar, Figma tabs and open prompts to the interface scale,
 /// and fits the tabs under the bar at its new height
 pub fn apply_scale(app: &AppHandle) {
@@ -2074,14 +2084,12 @@ pub fn apply_scale(app: &AppHandle) {
 /// Refits tab webviews to their windows. Call on resize
 pub fn layout(app: &AppHandle) {
     for window in tab_windows(app) {
-        let Ok(size) = content_size(app, &window) else {
+        let Ok(bounds) = tab_bounds(app, &window) else {
             continue;
         };
-        let top = LogicalPosition::new(0.0, bar_height(app));
         for webview in window.webviews() {
             if webview.label().starts_with("tab-") {
-                let _ = webview.set_position(top);
-                let _ = webview.set_size(size);
+                let _ = webview.set_bounds(bounds);
             }
         }
         fit_tab_bar(app, window.label());
@@ -2137,8 +2145,8 @@ pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visibl
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
-    // Built hidden, it would keep a title bar's worth of frame, so its page
-    // came out the wrong size, and fought every resize until maximized
+    // Built hidden, it would keep a title bar's worth of frame until shown
+    // (see frame.rs)
     #[cfg(windows)]
     if !visible {
         crate::frame::refresh(&window);
