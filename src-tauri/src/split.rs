@@ -59,7 +59,9 @@ pub const PAGE_JS: &str = r#"(() => {
   const style = document.createElement("style");
   style.textContent = `
     .ligma-split-other [data-testid="design-toolbelt-wrapper"],
-    .ligma-split-other [data-secondary-toolbelt] { visibility: hidden !important; }
+    .ligma-split-other [data-secondary-toolbelt],
+    .ligma-split-other [data-ligma-recolor],
+    .ligma-split-other [data-ligma-objects=""] { visibility: hidden !important; }
   `;
   const mount = () => (document.head ? (document.head.append(style), true) : false);
   if (!mount()) document.addEventListener("DOMContentLoaded", mount, { once: true });
@@ -319,16 +321,36 @@ const GEOMETRY_JS: &str = r#"(() => {
   const left = Math.max(0, r.left), top = Math.max(0, r.top);
   const right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
   const floating = [];
+  // The image bar's box reaches down behind the toolbar, past what it
+  // draws: it's taken to end as far below its buttons as it starts above
+  // them
+  const BAR = '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]';
+  const drawn = (el, e) => {
+    if (!el.matches(BAR)) return e;
+    let below = -Infinity, above = Infinity;
+    for (const child of el.children) {
+      const c = child.getBoundingClientRect();
+      if (!area(c)) continue;
+      above = Math.min(above, c.top);
+      below = Math.max(below, c.bottom);
+    }
+    if (!Number.isFinite(below)) return e;
+    return { left: e.left, top: e.top, right: e.right, bottom: Math.min(e.bottom, below + (above - e.top)) };
+  };
   const add = (el) => {
     const style = getComputedStyle(el);
-    const e = el.getBoundingClientRect();
-    if (style.display === "none" || style.visibility === "hidden" || !area(e)) return;
-    if (area(e) > innerWidth * innerHeight * 0.4) return;
+    const box = el.getBoundingClientRect();
+    if (style.display === "none" || style.visibility === "hidden" || !area(box)) return;
+    if (area(box) > innerWidth * innerHeight * 0.4) return;
+    const e = drawn(el, box);
     floating.push([e.left, e.top, e.right, e.bottom, parseFloat(style.borderTopLeftRadius) || 0]);
   };
   const SHAPES = [
     '[data-testid="design-toolbelt-wrapper"] [role="toolbar"]',
-    '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]',
+    BAR,
+    // Ligma's own bars in its place, while recoloring or picking objects
+    "[data-ligma-recolor] > div",
+    '[data-ligma-objects=""] > div',
     "[data-is-the-tooltip]",
     '[role="menu"]',
     '[role="listbox"]',
