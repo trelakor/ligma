@@ -1081,9 +1081,9 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
 }
 
 /// Splits window `window` between tabs `first` and `second`, in that
-/// order, and focuses `second`. Both must be file tabs in it, and neither
-/// Home
-fn split_pair(app: &AppHandle, window: &str, first: u32, second: u32) -> tauri::Result<()> {
+/// order, and focuses `focus`, one of them. Both must be file tabs in it,
+/// and neither Home
+fn split_pair(app: &AppHandle, window: &str, first: u32, second: u32, focus: u32) -> tauri::Result<()> {
     {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         let fits = |id: u32| state.tabs_in(window).any(|tab| tab.id == id && tab.file_key.is_some());
@@ -1095,8 +1095,8 @@ fn split_pair(app: &AppHandle, window: &str, first: u32, second: u32) -> tauri::
     app.state::<Tabs>().inner().0.lock().unwrap().splits.insert(window.to_owned(), [first, second]);
     fit_tab_bar(app, window);
     // Each selected in turn, so both are awake and shown
-    select(app, first)?;
-    select(app, second)
+    select(app, if focus == first { second } else { first })?;
+    select(app, focus)
 }
 
 /// Ends window `window`'s split view, if it has one: its active tab fills
@@ -1648,13 +1648,15 @@ impl Bar {
     }
 }
 
-/// The far half of a window's canvas, where a dragged file tab splits it
-/// with the window's active tab (see split.rs)
+/// A half of a window's canvas, where a dragged file tab splits it with
+/// the window's active tab (see split.rs)
 struct Zone {
     window: String,
     partner: u32,
     /// In screen pixels
     rect: crate::split::Rect,
+    /// The dragged tab goes in the first half, not the second
+    first: bool,
 }
 
 impl Zone {
@@ -1664,7 +1666,7 @@ impl Zone {
         if with_tab(app, id, |tab| tab.file_key.is_none()).unwrap_or(true) {
             return Vec::new();
         }
-        let zone = |window: Window| {
+        let zones = |window: Window| {
             if window.label() == except || !window.is_visible().ok()? || window.is_minimized().ok()? {
                 return None;
             }
@@ -1675,9 +1677,11 @@ impl Zone {
             };
             let canvas = crate::split::canvas_on_screen(app, &window, partner)?;
             let (halves, _) = crate::split::halves(canvas, 0.5, 0.0);
-            Some(Zone { window: window.label().to_owned(), partner, rect: halves[1] })
+            let label = window.label().to_owned();
+            let zone = |index: usize| Zone { window: label.clone(), partner, rect: halves[index], first: index == 0 };
+            Some([zone(0), zone(1)])
         };
-        tab_windows(app).into_iter().filter_map(zone).collect()
+        tab_windows(app).into_iter().filter_map(zones).flatten().collect()
     }
 
     fn contains(&self, at: PhysicalPosition<f64>) -> bool {
@@ -1720,7 +1724,7 @@ fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
                     let _ = webview.eval("window.dragOver?.(null)");
                 }
             }
-            if zone.map(|zone| &zone.window) != now_zone.map(|zone| &zone.window) {
+            if zone.map(|zone| (&zone.window, zone.first)) != now_zone.map(|zone| (&zone.window, zone.first)) {
                 match now_zone.and_then(|zone| Some((zone, app.get_window(&zone.window)?))) {
                     Some((zone, owner)) => crate::split::show_hint(app, &owner, zone.rect),
                     None => crate::split::hide_hint(app),
@@ -1751,7 +1755,8 @@ fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
         drop_on_bar(app, id, label, &bar.label, x);
     } else if let Some(zone) = zone {
         if move_to_window(app, id, &zone.window, usize::MAX, false).is_ok() {
-            let _ = split_pair(app, &zone.window, zone.partner, id);
+            let (first, second) = if zone.first { (id, zone.partner) } else { (zone.partner, id) };
+            let _ = split_pair(app, &zone.window, first, second, id);
         } else {
             let _ = window.show();
         }
@@ -1956,7 +1961,7 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
                 (window, active)
             });
             if let Some((window, active)) = pair {
-                split_pair(app, &window, active, id)?;
+                split_pair(app, &window, active, id, id)?;
             }
         }
         "unsplit" => {
@@ -2299,7 +2304,7 @@ fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f
 /// with `set_position` and `set_size`: on Windows a webview moved to another
 /// window measures its position against the old one, so `set_size` would
 /// put it back out of place
-fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
+pub fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
     Ok(tauri::Rect {
         position: LogicalPosition::new(0.0, bar_height(app)).into(),
         size: content_size(app, window)?.into(),
@@ -2332,7 +2337,9 @@ pub fn layout(app: &AppHandle) {
             continue;
         };
         for webview in window.webviews() {
-            if webview.label().starts_with("tab-") {
+            // Split tabs are placed by their split, from `refresh_splits`
+            let split = webview.label()["tab-".len().min(webview.label().len())..].parse().is_ok_and(crate::split::places);
+            if webview.label().starts_with("tab-") && !split {
                 let _ = webview.set_bounds(bounds);
             }
         }
