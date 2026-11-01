@@ -31,9 +31,11 @@
 //! as the drag crosses over, the page they're in copies them, through
 //! Figma's own copy, to a clipboard of its own rather than the system's,
 //! and asks Ligma to `carry` them. The other page pastes them, by the same
-//! means, focused, as Figma only pastes then, and moves them with the
-//! pointer, Ligma telling it where that is, until the button's let go. Then
-//! the first page deletes them
+//! means, focused, as Figma only pastes then. Until the button's let go,
+//! both pages keep their copy under the pointer, Ligma telling them where
+//! it is, so it shows on whichever side of the split it's over, and the
+//! half the pointer's in is focused. Let go, the page whose half it's in
+//! keeps it and the other deletes its own
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -150,11 +152,15 @@ pub const CARRY_JS: &str = r#"(() => {
     if (e.button !== 0 || !figma || !inside(window.__ligmaSplitHalves?.mine, e.clientX, e.clientY)) return;
     const selection = figma.currentPage.selection;
     const pointer = world(figma, e.clientX, e.clientY);
+    if (!pointer || !selection.length) return;
+    // A frame at the top level is dragged by its name too, above it
+    const label = 24 / figma.viewport.zoom;
     const on = (n) => {
       const b = n.absoluteBoundingBox;
-      return b && pointer.x >= b.x && pointer.x <= b.x + b.width && pointer.y >= b.y && pointer.y <= b.y + b.height;
+      const above = n.parent?.type === "PAGE" && ["FRAME", "SECTION", "COMPONENT", "COMPONENT_SET"].includes(n.type) ? label : 0;
+      return b && pointer.x >= b.x && pointer.x <= b.x + b.width && pointer.y >= b.y - above && pointer.y <= b.y + b.height;
     };
-    if (pointer && selection.some(on)) press = { nodes: selection, at: box(selection), pointer };
+    press = { nodes: selection, at: box(selection), pointer, on: selection.some(on) };
   }, true);
   addEventListener("pointermove", (e) => {
     const figma = api();
@@ -162,6 +168,11 @@ pub const CARRY_JS: &str = r#"(() => {
     if (!press || !figma || !halves || !(e.buttons & 1)) return;
     if (!inside(halves.theirs, e.clientX, e.clientY)) return;
     const nodes = press.nodes.filter((n) => !n.removed);
+    // Pressed on the selection, or Figma's moving it: not a selection box
+    // or a pan
+    const now = nodes.length && box(nodes);
+    const moving = now && (Math.abs(now.x - press.at.x) > 0.01 || Math.abs(now.y - press.at.y) > 0.01);
+    if (!press.on && !moving) return;
     const data = new DataTransfer();
     if (!nodes.length || !clipboard("copy", data) || !data.getData("text/html")) return;
     // Where it was grabbed, from where it was when pressed
@@ -177,13 +188,39 @@ pub const CARRY_JS: &str = r#"(() => {
   Object.defineProperty(window, "__ligmaCarryOut", {
     value: () => out && { html: out.html, offset: out.offset },
   });
+  // Puts `nodes` with `offset` from the point of the canvas at `x`, `y`
+  const follow = (figma, nodes, offset, x, y) => {
+    const pointer = world(figma, x, y);
+    nodes = nodes.filter((n) => !n.removed);
+    if (!pointer || !nodes.length) return;
+    const now = box(nodes);
+    const dx = pointer.x + offset.x - now.x;
+    const dy = pointer.y + offset.y - now.y;
+    if (Math.abs(dx) < 1e-6 && Math.abs(dy) < 1e-6) return;
+    for (const node of nodes) {
+      node.x += dx;
+      node.y += dy;
+    }
+  };
+  // Keeps what's carried out under the pointer too, for it coming back
+  Object.defineProperty(window, "__ligmaCarryFollow", {
+    value: (x, y) => {
+      const figma = api();
+      if (figma && out) follow(figma, out.nodes, out.offset, x, y);
+    },
+  });
   // Once they're in the other file, after Figma has finished the drag here:
   // it won't take them away mid-drag
   Object.defineProperty(window, "__ligmaCarryDone", {
     value: (moved) => {
       const nodes = out?.nodes ?? [];
       out = null;
-      if (!moved) return;
+      if (!moved) {
+        const figma = api();
+        const kept = nodes.filter((n) => !n.removed);
+        if (figma && kept.length) figma.currentPage.selection = kept;
+        return;
+      }
       // Tried until they're gone: once the drag here has ended, or after a
       // while if this page never hears of the button going up
       const started = performance.now();
@@ -233,23 +270,13 @@ pub const CARRY_JS: &str = r#"(() => {
       const figma = api();
       if (!figma || !carried) return;
       carried.at = [x, y];
-      if (!landed(figma)) return;
-      const pointer = world(figma, x, y);
-      const nodes = carried.nodes.filter((n) => !n.removed);
-      if (!pointer || !nodes.length) return;
-      const now = box(nodes);
-      const dx = pointer.x + carried.offset.x - now.x;
-      const dy = pointer.y + carried.offset.y - now.y;
-      for (const node of nodes) {
-        node.x += dx;
-        node.y += dy;
-      }
+      if (landed(figma)) follow(figma, carried.nodes, carried.offset, x, y);
     },
   });
-  // True if what was carried came in, false if not, or null while the
-  // paste is still landing, for a while
+  // With `keep`, true if what was carried came in, false if not; without,
+  // it's deleted again. Null while the paste is still landing, for a while
   Object.defineProperty(window, "__ligmaCarryEnd", {
-    value: () => {
+    value: (keep) => {
       const figma = api();
       if (!carried) return false;
       // Figma's API can be out of reach for a moment while it pastes
@@ -261,6 +288,10 @@ pub const CARRY_JS: &str = r#"(() => {
       }
       const nodes = carried.nodes?.filter((n) => !n.removed) ?? [];
       carried = null;
+      if (!keep) {
+        for (const node of nodes) node.remove();
+        return false;
+      }
       if (nodes.length) figma.currentPage.selection = nodes;
       return nodes.length > 0;
     },
@@ -470,6 +501,12 @@ pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool, rati
         // Each page's half and the other's, in its CSS pixels: the same for
         // both, as both fill where tabs go
         let (both, _) = halves(canvas, ratio, GAP * zoom);
+        {
+            let mut placed = HALVES.lock().unwrap();
+            let placed = placed.get_or_insert_with(HashMap::new);
+            placed.insert(other, both[other_half]);
+            placed.insert(focused, both[1 - other_half]);
+        }
         let both = both.map(|half| half.map(|v| v / zoom));
         let shared = |mine: usize| serde_json::json!({ "mine": both[mine], "theirs": both[1 - mine] });
         let _ = focused_view.eval(format!("window.__ligmaSplit?.(false, {})", shared(1 - other_half)));
@@ -630,17 +667,33 @@ fn carry(app: &AppHandle, from: u32) {
     let window = target.window();
     let zoom = crate::tabs::scale(app);
     let top = crate::tabs::bar_height(app);
+    let (from_half, to_half) = (half_of(from), half_of(to));
     let mut last = None;
+    // In the target's half, or else the source's
+    let mut there = true;
     while crate::tabs::mouse_down() {
         let (Ok(at), Ok(origin), Ok(factor)) = (app.cursor_position(), window.inner_position(), window.scale_factor()) else {
             break;
         };
         if last != Some(at) {
             last = Some(at);
-            // In the page's CSS pixels
-            let x = (at.x - origin.x as f64) / factor / zoom;
-            let y = ((at.y - origin.y as f64) / factor - top) / zoom;
+            // Where tabs go, in logical pixels, then in the pages' CSS pixels
+            let (lx, ly) = ((at.x - origin.x as f64) / factor, (at.y - origin.y as f64) / factor - top);
+            let (x, y) = (lx / zoom, ly / zoom);
+            let inside = |half: Option<Rect>| half.is_some_and(|r| lx >= r[0] && lx < r[2] && ly >= r[1] && ly < r[3]);
+            let now = if inside(to_half) {
+                true
+            } else if inside(from_half) {
+                false
+            } else {
+                there
+            };
+            if now != there {
+                there = now;
+                let _ = crate::tabs::select(app, if there { to } else { from });
+            }
             let _ = target.eval(format!("window.__ligmaCarryMove?.({x}, {y})"));
+            let _ = source.eval(format!("window.__ligmaCarryFollow?.({x}, {y})"));
         }
         std::thread::sleep(std::time::Duration::from_millis(8));
     }
@@ -648,7 +701,8 @@ fn carry(app: &AppHandle, from: u32) {
     let moved = loop {
         let (tx, rx) = std::sync::mpsc::channel();
         // Not `?? false`: null is the page's "not yet"
-        let _ = target.eval_with_callback("window.__ligmaCarryEnd ? window.__ligmaCarryEnd() : false", move |json| {
+        let script = format!("window.__ligmaCarryEnd ? window.__ligmaCarryEnd({there}) : false");
+        let _ = target.eval_with_callback(script, move |json| {
             let _ = tx.send(json);
         });
         match rx.recv_timeout(std::time::Duration::from_secs(2)).as_deref() {
@@ -658,7 +712,14 @@ fn carry(app: &AppHandle, from: u32) {
         }
     };
     let _ = source.eval(format!("window.__ligmaCarryDone?.({moved})"));
-    if !moved {
-        let _ = crate::tabs::select(app, from);
-    }
+    let _ = crate::tabs::select(app, if moved { to } else { from });
 }
+
+/// Where tab `id`'s half of its split was last laid out, in logical pixels
+/// from the top left of where tabs go
+fn half_of(id: u32) -> Option<Rect> {
+    HALVES.lock().unwrap().as_ref()?.get(&id).copied()
+}
+
+/// Each split tab's half, as `layout` last placed it
+static HALVES: Mutex<Option<HashMap<u32, Rect>>> = Mutex::new(None);
