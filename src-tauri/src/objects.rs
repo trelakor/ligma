@@ -6,8 +6,8 @@
 //! the object under the pointer as it moves
 //!
 //! The page hands requests over as downloads (see handoff.rs): a line of
-//! JSON, followed by the layer as Figma draws it, as a PNG, for "open" and
-//! "isolate":
+//! JSON, followed by the layer as Figma draws it, as a PNG, for "open",
+//! "isolate" and "erase":
 //!
 //! - `{"op":"open"}` reads the image, for the requests after it, and gives
 //!   its size and the session that names it in those: the job's number
@@ -16,6 +16,8 @@
 //! - `{"op":"isolate","session":<job>,"picks":[…]}` gives the image after
 //!   the line, larger, with only the picked objects, cropped to them, as a
 //!   PNG in base64, and where it was cropped, in fractions of the image
+//! - `{"op":"erase","session":<job>,"picks":[…]}` gives the image after the
+//!   line with the picked objects cut out of it, as a PNG in base64
 //! - `{"op":"close","session":<job>}` lets the image go
 //!
 //! A pick is `{"point":[x,y]}` or `{"box":[left,top,right,bottom]}`, in
@@ -23,8 +25,8 @@
 //! `{"stroke":[[x,y],…],"radius":r}`, whose radius is a fraction of the
 //! image's width, or what's inside a lasso, `{"lasso":[[x,y],…]}`, a
 //! closed outline. `"subtract":true` takes it away from the picks before it
-//! rather than adds it. `"edge":{"shift":s,"feather":f}` on "outline" and
-//! "isolate" moves the edge out by `s` pixels of the image the request is
+//! rather than adds it. `"edge":{"shift":s,"feather":f}` on "outline",
+//! "isolate" and "erase" moves the edge out by `s` pixels of the image the request is
 //! about, or in when it's negative, and softens it over `f` pixels either
 //! side. One image is kept at a time
 
@@ -87,6 +89,14 @@ pub fn handle(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<Strin
 pub fn unload() {
     #[cfg(birefnet)]
     sam::unload();
+}
+
+/// Lets the image go, if it's `session`'s
+pub fn close(session: u64) {
+    #[cfg(birefnet)]
+    sam::close(session);
+    #[cfg(not(birefnet))]
+    let _ = session;
 }
 
 /// The picks, over an image `width` by `height`, as how far inside them
@@ -390,13 +400,13 @@ mod sam {
     use std::collections::HashMap;
     use std::io::Cursor;
     use std::path::Path;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use base64::Engine;
     use image::imageops::{self, FilterType};
     use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageReader, RgbaImage};
     use ort::session::builder::AutoDevicePolicy;
-    use ort::session::Session;
+    use ort::session::{RunOptions, Session};
     use ort::value::TensorRef;
     use tauri::AppHandle;
 
@@ -444,14 +454,18 @@ mod sam {
         *LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
+    pub fn close(session: u64) {
+        let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if loaded.as_ref().is_some_and(|loaded| loaded.image.session == session) {
+            *loaded = None;
+        }
+    }
+
     pub fn handle(app: &AppHandle, tab: u32, job: u64, request: Request, image: &[u8]) -> Result<String, &'static str> {
         match request.op.as_str() {
             "open" => open(app, tab, job, image),
             "close" => {
-                let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                if loaded.as_ref().is_some_and(|loaded| loaded.image.session == request.session) {
-                    *loaded = None;
-                }
+                close(request.session);
                 Ok("{}".to_owned())
             }
             op => {
@@ -460,6 +474,7 @@ mod sam {
                 match op {
                     "outline" => outline(loaded, &request.picks, request.edge),
                     "isolate" => isolate(loaded, &request.picks, request.edge, image),
+                    "erase" => erase(loaded, &request.picks, request.edge, image),
                     _ => Err("failed"),
                 }
             }
@@ -488,7 +503,18 @@ mod sam {
             // The encoder takes hundreds of MB while it runs, so it's let go
             let mut encoder = session(&folder, SAM_ENCODER.file)?;
             let tensor = TensorRef::from_array_view(([1usize, 3, SIDE, SIDE], &*input)).map_err(failed)?;
-            let outputs = encoder.run(ort::inputs![tensor]).map_err(failed)?;
+            let options = Arc::new(RunOptions::new().map_err(failed)?);
+            let terminate = options.clone();
+            crate::handoff::on_cancel(tab, job, move || {
+                let _ = terminate.terminate();
+            });
+            let outputs = encoder.run_with_options(ort::inputs![tensor], &*options).map_err(|error| {
+                if crate::handoff::cancelled(tab, job) {
+                    "cancelled"
+                } else {
+                    failed(error)
+                }
+            })?;
             EMBEDDINGS
                 .iter()
                 .map(|name| {
@@ -505,7 +531,11 @@ mod sam {
             embeddings,
             masks: HashMap::new(),
         };
+        // Checked with the image held, as cancelling lets it go
         let mut loaded = LOADED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if crate::handoff::cancelled(tab, job) {
+            return Err("cancelled");
+        }
         let decoder = match loaded.take() {
             Some(Loaded { decoder, .. }) => decoder,
             None => session(&folder, SAM_DECODER.file)?,
@@ -700,13 +730,9 @@ mod sam {
             return Err("empty");
         }
         let cropped = imageops::crop_imm(&picture, left as u32, top as u32, (right - left) as u32, (bottom - top) as u32).to_image();
-        let mut png = Vec::new();
-        image::codecs::png::PngEncoder::new(&mut png)
-            .write_image(cropped.as_raw(), cropped.width(), cropped.height(), image::ExtendedColorType::Rgba8)
-            .map_err(failed)?;
         let (width, height) = (width as f64, height as f64);
         Ok(serde_json::json!({
-            "png": base64::engine::general_purpose::STANDARD.encode(png),
+            "png": encode(&cropped)?,
             "x": left as f64 / width,
             "y": top as f64 / height,
             "width": (right - left) as f64 / width,
@@ -715,6 +741,27 @@ mod sam {
         .to_string())
     }
 
+    /// The image in `bytes`, the layer's fills drawn larger, with what's
+    /// picked cut out, its edge moved and softened as `edge` says, as
+    /// Isolate keeps it
+    fn erase(loaded: &mut Loaded, picks: &[Pick], edge: Edge, bytes: &[u8]) -> Result<String, &'static str> {
+        let mut picture = decode(bytes)?;
+        let (width, height) = (picture.width() as usize, picture.height() as usize);
+        let distances = picked(loaded, picks, width, height)?.distances();
+        for (pixel, &distance) in picture.pixels_mut().zip(&distances) {
+            pixel[3] = (pixel[3] as f32 * (1.0 - kept(distance, edge))).round() as u8;
+        }
+        Ok(serde_json::json!({ "png": encode(&picture)? }).to_string())
+    }
+
+    /// `picture` as a PNG, in base64
+    fn encode(picture: &RgbaImage) -> Result<String, &'static str> {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(picture.as_raw(), picture.width(), picture.height(), image::ExtendedColorType::Rgba8)
+            .map_err(failed)?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(png))
+    }
 }
 
 #[cfg(test)]

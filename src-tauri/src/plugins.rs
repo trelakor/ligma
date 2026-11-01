@@ -259,7 +259,7 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
         "/import" => {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
-                let Some(window) = app.get_window("main") else {
+                let Some(window) = crate::tabs::focused_window(&app) else {
                     return;
                 };
                 if let Err(error) = import(&app, &window).await {

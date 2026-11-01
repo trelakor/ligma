@@ -14,7 +14,10 @@
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Webview, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, LogicalSize, Manager, PhysicalPosition, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window,
+    WindowEvent,
+};
 
 pub const WINDOW: &str = "tab-menu";
 
@@ -44,6 +47,8 @@ struct Open {
     pick: Pick,
     /// The cursor when it was asked for, in screen pixels
     at: PhysicalPosition<f64>,
+    /// The window it's for, which it's kept above
+    owner: Window,
 }
 
 static OPEN: Mutex<Option<Open>> = Mutex::new(None);
@@ -54,13 +59,16 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>, extras: Extras, pick: P
     // The menu takes the tab preview's place
     crate::preview::hide(app);
     let at = app.cursor_position()?;
-    *OPEN.lock().unwrap() = Some(Open { tab, items, extras, pick, at });
+    let Some(owner) = crate::tabs::window_of(app, tab).or_else(|| crate::tabs::focused_window(app)) else {
+        return Ok(());
+    };
+    *OPEN.lock().unwrap() = Some(Open { tab, items, extras, pick, at, owner: owner.clone() });
     if let Some(window) = app.get_webview_window(WINDOW) {
         window.set_zoom(crate::tabs::scale(app))?;
         return window.eval("window.refresh?.()");
     }
     // The page fetches the items once it has loaded
-    let main = app.get_window("main").expect("main window exists");
+    let main = owner;
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("menu.html".into()))
         .title("Tab Menu")
@@ -79,7 +87,7 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>, extras: Extras, pick: P
     if let Some(color) = color {
         builder = builder.background_color(color);
     }
-    // Kept above the main window, and closed with it on Windows
+    // Kept above the window it's for, and closed with it on Windows
     #[cfg(windows)]
     {
         builder = builder.owner_raw(main.hwnd()?);
@@ -191,7 +199,7 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
     if !from_menu(&webview) {
         return;
     }
-    let Some(at) = OPEN.lock().unwrap().as_ref().map(|open| open.at) else {
+    let Some((at, owner)) = OPEN.lock().unwrap().as_ref().map(|open| (open.at, open.owner.clone())) else {
         return;
     };
     let Some(window) = app.get_webview_window(WINDOW) else {
@@ -222,8 +230,44 @@ pub async fn menu_ready(app: AppHandle, webview: Webview, width: f64, height: f6
     crate::frame::match_theme(&window);
     let _ = window.set_size(LogicalSize::new(width, height));
     let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    set_owner(&window, &owner);
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+/// Keeps `window`, the tab menu or preview, above `owner` from now on, for
+/// a tab in another window than the last one
+pub fn set_owner(window: &WebviewWindow, owner: &Window) {
+    #[cfg(windows)]
+    crate::frame::set_owner(window, owner);
+    #[cfg(target_os = "macos")]
+    {
+        let (child, parent) = (window.clone(), owner.clone());
+        let _ = window.run_on_main_thread(move || {
+            if let (Ok(child), Ok(parent)) = (child.ns_window(), parent.ns_window()) {
+                unsafe { set_parent(child.cast(), parent.cast()) };
+            }
+        });
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = (window, owner);
+}
+
+/// Makes `ns_window` a child window of `parent`, unless it is already.
+/// Call on the main thread
+#[cfg(target_os = "macos")]
+unsafe fn set_parent(ns_window: *mut objc2::runtime::AnyObject, parent: *mut objc2::runtime::AnyObject) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let current: *mut AnyObject = msg_send![ns_window, parentWindow];
+    if current == parent {
+        return;
+    }
+    if !current.is_null() {
+        let _: () = msg_send![current, removeChildWindow: ns_window];
+    }
+    // NSWindowAbove
+    let _: () = msg_send![parent, addChildWindow: ns_window, ordered: 1isize];
 }
 
 /// Runs `action` from the menu, or just closes it when None (Esc)

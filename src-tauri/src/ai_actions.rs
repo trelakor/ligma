@@ -90,23 +90,41 @@ const PAGE_JS: &str = r##"(() => {
   // what Ligma sends back: the cut-out as a PNG in base64, or the traced
   // shapes as JSON. Rejects with the reason there's none, such
   // as "subject" when there's nothing to keep, "cancelled" when the model
-  // wasn't downloaded or "failed". `onProgress` gets what Ligma says while
-  // it downloads the model (see handoff.rs). Job numbers start from the
-  // time, so a result meant for the page before a reload can't land on a
-  // new job
+  // wasn't downloaded or `signal` aborted, or "failed". `onProgress` gets
+  // what Ligma says while it downloads the model (see handoff.rs). Job
+  // numbers start from the time, so a result meant for the page before a
+  // reload can't land on a new job
   const jobs = new Map();
   let lastJob = Date.now() * 1000;
-  const handOff = (kind, bytes, onProgress, suffix = "") =>
+  const download = (name, bytes) => {
+    // Typed, or WebView2 sniffs it and names it as text
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    const link = Object.assign(document.createElement("a"), { href: url, download: name, hidden: true });
+    document.documentElement.append(link);
+    link.click();
+    link.remove();
+    return url;
+  };
+  const handOff = (kind, bytes, onProgress, suffix = "", signal) =>
     new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject("cancelled");
       const job = ++lastJob;
-      // Typed, or WebView2 sniffs it and names it as text
-      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      let url;
       let timer;
       const finish = () => {
         clearTimeout(timer);
         jobs.delete(job);
         URL.revokeObjectURL(url);
+        signal?.removeEventListener("abort", abort);
       };
+      // Ligma stops working on it, and doesn't send its result
+      const abort = () => {
+        finish();
+        reject("cancelled");
+        const cancel = download(`ligma-cancel-${job}`, "cancel");
+        setTimeout(() => URL.revokeObjectURL(cancel), 10000);
+      };
+      signal?.addEventListener("abort", abort);
       // A tab frozen in the meantime never hears back. On Windows the
       // model takes a while on the CPU, and longer the first time
       const wait = () => {
@@ -131,10 +149,7 @@ const PAGE_JS: &str = r##"(() => {
           reject(reason);
         },
       });
-      const link = Object.assign(document.createElement("a"), { href: url, download: `ligma-${kind}-${job}${suffix}`, hidden: true });
-      document.documentElement.append(link);
-      link.click();
-      link.remove();
+      url = download(`ligma-${kind}-${job}${suffix}`, bytes);
     });
   // From Ligma, with a job's progress and result
   window.__ligmaJob = {
@@ -200,17 +215,32 @@ const PAGE_JS: &str = r##"(() => {
     };
   };
 
-  // Figma's toast, kept up while an action works, with what it's doing
-  const toast = (figma) => {
+  // Figma's toast, kept up while an action works, with what it's doing.
+  // Its X calls `onDismiss`, which cancels the action, and it's not shown
+  // again after
+  const toast = (figma, onDismiss) => {
     let current;
+    let dismissed = false;
     const hide = () => {
+      const shown = current;
+      current = null;
       try {
-        current?.cancel();
+        shown?.cancel();
       } catch {}
     };
     const show = (text) => {
+      if (dismissed) return;
       hide();
-      current = figma.notify(text, { timeout: Infinity });
+      const shown = figma.notify(text, {
+        timeout: Infinity,
+        onDequeue: (reason) => {
+          if (reason !== "dismiss" || current !== shown) return;
+          current = null;
+          dismissed = true;
+          onDismiss();
+        },
+      });
+      current = shown;
     };
     return { show, hide };
   };
@@ -237,7 +267,8 @@ const PAGE_JS: &str = r##"(() => {
     busy = true;
     tidy();
     const stopShimmer = shimmer(figma, targets.map((target) => target.node), "background");
-    const { show, hide } = toast(figma);
+    const controller = new AbortController();
+    const { show, hide } = toast(figma, () => controller.abort());
     show("Removing background…");
     const cut = new Map();
     let missing = 0;
@@ -246,7 +277,7 @@ const PAGE_JS: &str = r##"(() => {
     for (const hash of new Set(targets.map((target) => target.hash))) {
       try {
         const bytes = await figma.getImageByHash(hash).getBytesAsync();
-        const base64 = await handOff("background", bytes, show);
+        const base64 = await handOff("background", bytes, show, "", controller.signal);
         cut.set(hash, figma.createImage(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))).hash);
       } catch (reason) {
         if (reason === "cancelled") {
@@ -257,6 +288,8 @@ const PAGE_JS: &str = r##"(() => {
         else failed++;
       }
     }
+    // Nothing changes once cancelled
+    if (cancelled) cut.clear();
     let images = 0;
     for (const { node, index, hash } of targets) {
       if (!cut.has(hash)) continue;
@@ -312,11 +345,12 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
-  // The layer as Figma draws it, unturned, `scale` times as large, as a PNG
-  const drawn = async (figma, node, scale) => {
+  // The layer as Figma draws it, unturned, `scale` times as large, as a PNG.
+  // Only its fills, fully opaque, when `fillsOnly`, to stand in for them
+  const drawn = async (figma, node, scale, fillsOnly = false) => {
     const settings = { format: "PNG", constraint: { type: "SCALE", value: scale }, useAbsoluteBounds: true };
     const [[a, c], [b, d]] = node.absoluteTransform;
-    if (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return node.exportAsync(settings);
+    if (!fillsOnly && Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return node.exportAsync(settings);
     // Turned or flipped, here or by a parent: a copy that isn't
     const copy = node.clone();
     try {
@@ -325,6 +359,11 @@ const PAGE_JS: &str = r##"(() => {
         [1, 0, 0],
         [0, 1, 0],
       ];
+      if (fillsOnly) {
+        if ("strokes" in copy) copy.strokes = [];
+        if ("effects" in copy) copy.effects = [];
+        copy.opacity = 1;
+      }
       return await copy.exportAsync(settings);
     } finally {
       copy.remove();
@@ -383,25 +422,44 @@ const PAGE_JS: &str = r##"(() => {
     closeRecolor();
     tidy();
     const stopShimmer = shimmer(figma, nodes, "vectorize");
-    const { show, hide } = toast(figma);
+    const controller = new AbortController();
+    const { show, hide } = toast(figma, () => controller.abort());
     show("Vectorizing…");
-    const frames = [];
+    let frames = [];
+    // The layers traced, for each frame
+    const traced = [];
     // How many pixels of each fill show, for the recolor bar
     const areas = new Map();
     let empty = 0;
     let failed = 0;
+    let cancelled = false;
     for (const node of nodes) {
       try {
         const { bytes, pixel } = await render(figma, node);
-        const traced = JSON.parse(await handOff("vectorize", bytes, show, `@${Math.round(pixel * 100)}`));
+        const result = JSON.parse(await handOff("vectorize", bytes, show, `@${Math.round(pixel * 100)}`, controller.signal));
         // Unless it was deleted in the meantime
         if (node.removed) continue;
-        frames.push(place(figma, node, traced.svg));
-        for (const [fill, area] of Object.entries(traced.areas)) areas.set(fill, (areas.get(fill) ?? 0) + area);
+        frames.push(place(figma, node, result.svg));
+        traced.push(node);
+        for (const [fill, area] of Object.entries(result.areas)) areas.set(fill, (areas.get(fill) ?? 0) + area);
       } catch (reason) {
+        if (reason === "cancelled") {
+          cancelled = true;
+          break;
+        }
         if (reason === "empty") empty++;
         else failed++;
       }
+    }
+    // Cancelled, the layers already traced are put back
+    if (cancelled) {
+      frames.forEach((frame, i) => {
+        try {
+          frame.remove();
+          traced[i].visible = true;
+        } catch {}
+      });
+      frames = [];
     }
     if (frames.length) {
       try {
@@ -415,7 +473,7 @@ const PAGE_JS: &str = r##"(() => {
     hide();
     // The recolor bar says it worked, where Figma's toast would cover it
     if (frames.length) openRecolor(figma, frames, areas);
-    if (frames.length === nodes.length) return;
+    if (cancelled || frames.length === nodes.length) return;
     const message = frames.length
       ? `Vectorized ${plural(frames.length)}${empty ? `, nothing to trace in ${empty}` : ""}${failed ? `, ${failed} failed` : ""}`
       : empty && !failed
@@ -667,7 +725,7 @@ const PAGE_JS: &str = r##"(() => {
   // lasso picks what's drawn around, and its modes do what Shift and Alt
   // do. Isolate, or Enter, puts what's picked
   // in a new layer above, cropped to it, its edge moved and feathered as
-  // the bar says; Cancel, Escape or a click on the canvas off the image
+  // the bar says, and Erase, or Delete, cuts it out of the image; Cancel, Escape or a click on the canvas off the image
   // leaves. Ligma's SAM finds the objects (see objects.rs): it reads the
   // image once when the mode opens, then gives outlines as SVG paths in
   // the pixels of the image it read
@@ -736,10 +794,21 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
+  // The image objects.rs sent, with what's picked cut out, in place of
+  // `node`'s fills, which stay under it, hidden, as Remove background
+  // leaves them
+  const placeErased = (figma, node, { png }) => {
+    const hash = figma.createImage(Uint8Array.from(atob(png), (char) => char.charCodeAt(0))).hash;
+    node.fills = [...fillsOf(node).map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+    return node;
+  };
+
   const SVG_NS = "http://www.w3.org/2000/svg";
   const ALT = MAC ? "Option" : "Alt";
   const icon = (paths) => `<svg width="24" height="24" fill="none" viewBox="0 0 24 24">${paths}</svg>`;
   const ISOLATE_ICON = icon(`<rect ${STROKE} x="4.5" y="7.5" width="12" height="12" rx="1.5" stroke-dasharray="2 2"/><rect ${STROKE} x="8.5" y="4.5" width="11" height="11" rx="1.5"/>`);
+  // An eraser, as Photoshop's has it
+  const ERASE_ICON = icon(`<path ${STROKE} stroke-linejoin="round" d="m13.5 5.5 5 5-7.5 7.5h-3l-3-3a1.4 1.4 0 0 1 0-2z"/><path ${STROKE} d="m9.5 9.5 5 5M11 18h7.5"/>`);
   // An arrow on a dashed box, as Photoshop's Object Selection has it
   const OBJECT_ICON = icon(`<path ${STROKE} stroke-dasharray="2 2" d="M10.5 16.5h-3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3"/><path ${STROKE} stroke-linejoin="round" d="m12.5 12.5 6.5 2.4-2.9 1.2-1.2 2.9z"/>`);
   const TOOLS = [
@@ -778,8 +847,8 @@ const PAGE_JS: &str = r##"(() => {
     closeRecolor();
     barClasses = { root: bar.closest("[data-secondary-toolbelt]")?.className ?? "", bar: bar.className };
 
-    // The bar, as Figma's Select area has it, Isolate then Cancel, after
-    // the tools, modes and fields
+    // The bar, as Figma's Select area has it, Isolate and Erase then
+    // Cancel, after the tools, modes and fields
     const root = document.createElement("div");
     root.setAttribute(OBJECTS, "");
     root.setAttribute("data-fullscreen-prevent-event-capture", "true");
@@ -842,7 +911,11 @@ const PAGE_JS: &str = r##"(() => {
     const isolateButton = strip.appendChild(labelled("Isolate", ISOLATE_ICON));
     Object.assign(isolateButton.dataset, { tooltip: "Isolate in a new layer", tooltipType: "text", tooltipShowAbove: "true" });
     isolateButton.disabled = true;
-    isolateButton.addEventListener("click", () => isolate());
+    isolateButton.addEventListener("click", () => cut("isolate"));
+    const eraseButton = strip.appendChild(labelled("Erase", ERASE_ICON));
+    Object.assign(eraseButton.dataset, { tooltip: "Erase from the image", tooltipType: "text", tooltipShowAbove: "true" });
+    eraseButton.disabled = true;
+    eraseButton.addEventListener("click", () => cut("erase"));
     strip.append(Object.assign(document.createElement("span"), { className: "divider" }));
     const cancel = strip.appendChild(labelled("Cancel"));
     cancel.addEventListener("click", () => closePicking());
@@ -875,6 +948,7 @@ const PAGE_JS: &str = r##"(() => {
       modes,
       fields,
       isolateButton,
+      eraseButton,
       session: null,
       width: 0,
       height: 0,
@@ -906,11 +980,15 @@ const PAGE_JS: &str = r##"(() => {
     const current = picking;
     showOptions();
     const stopShimmer = shimmer(figma, [node], "objects");
-    const { show, hide } = toast(figma);
+    const controller = new AbortController();
+    const { show, hide } = toast(figma, () => {
+      if (picking === current) closePicking();
+      controller.abort();
+    });
     try {
       const scales = imageScales(figma, node);
       const bytes = await drawn(figma, node, workingScale(node));
-      const opened = JSON.parse(await handOff("object", request({ op: "open" }, bytes), show));
+      const opened = JSON.parse(await handOff("object", request({ op: "open" }, bytes), show, "", controller.signal));
       if (picking !== current) {
         handOff("object", request({ op: "close", session: opened.session })).catch(() => {});
         return;
@@ -1085,7 +1163,7 @@ const PAGE_JS: &str = r##"(() => {
     const current = picking;
     const version = ++current.version;
     const { picks, paths, node } = current;
-    current.isolateButton.disabled = !picks.length || current.working;
+    current.isolateButton.disabled = current.eraseButton.disabled = !picks.length || current.working;
     showOptions();
     if (!picks.length) {
       paths.picked.removeAttribute("d");
@@ -1140,26 +1218,30 @@ const PAGE_JS: &str = r##"(() => {
     showPicks();
   };
 
-  const isolate = async () => {
+  // Isolates what's picked in a new layer, or erases it from the image,
+  // as `op` says
+  const cut = async (op) => {
     const current = picking;
     if (!current?.session || !current.picks.length || current.working) return;
     const { figma, node, session, picks } = current;
+    const erase = op === "erase";
     current.working = true;
-    current.isolateButton.disabled = true;
+    current.isolateButton.disabled = current.eraseButton.disabled = true;
     hoverAt(null);
     const stopShimmer = shimmer(figma, [node], "objects");
     let layer = null;
     try {
       const { full } = current.scales;
-      const bytes = await drawn(figma, node, full);
-      const result = JSON.parse(await handOff("object", request({ op: "isolate", session, picks, edge: edgeAt(full) }, bytes)));
+      const bytes = await drawn(figma, node, full, erase);
+      const result = JSON.parse(await handOff("object", request({ op, session, picks, edge: edgeAt(full) }, bytes)));
       if (node.removed) throw "failed";
-      layer = placeIsolated(figma, node, result);
+      layer = erase ? placeErased(figma, node, result) : placeIsolated(figma, node, result);
       try {
         figma.commitUndo();
       } catch {}
     } catch (reason) {
-      figma.notify(reason === "empty" ? "Nothing picked to isolate" : "Couldn't isolate the object", { timeout: 3000 });
+      const message = reason === "empty" ? `Nothing picked to ${op}` : erase ? "Couldn't erase the object" : "Couldn't isolate the object";
+      figma.notify(message, { timeout: 3000 });
     }
     stopShimmer();
     current.working = false;
@@ -1324,9 +1406,9 @@ const PAGE_JS: &str = r##"(() => {
     picking.brush.setAttribute("cy", at.v * picking.height);
   };
 
-  // While it's open, Escape leaves, Enter isolates, Undo and Redo step
-  // through the picks rather than the file, [ and ] resize the brush, and
-  // Delete does nothing rather than delete the image. Shift and Alt change
+  // While it's open, Escape leaves, Enter isolates, Delete erases rather
+  // than delete the image, Undo and Redo step through the picks rather than
+  // the file and [ and ] resize the brush. Shift and Alt change
   // the cursor, and Space is left to Figma, to pan. Keys typed in the
   // bar's fields stop here, before Figma sees them
   for (const type of ["keydown", "keypress", "keyup"]) {
@@ -1355,7 +1437,7 @@ const PAGE_JS: &str = r##"(() => {
           closePicking();
         } else if (event.key === "Enter") {
           swallow(event);
-          isolate();
+          cut("isolate");
         } else if ((MAC ? event.metaKey : event.ctrlKey) && !event.altKey && /^[zy]$/i.test(event.key)) {
           swallow(event);
           undoPick(event.key.toLowerCase() === "y" || event.shiftKey);
@@ -1363,7 +1445,10 @@ const PAGE_JS: &str = r##"(() => {
           swallow(event);
           const size = picking.values.size;
           choose("size", Math.max(1, Math.round(event.key === "]" ? Math.max(size + 1, size * 1.2) : Math.min(size - 1, size / 1.2))));
-        } else if (event.key === "Delete" || event.key === "Backspace") swallow(event);
+        } else if (event.key === "Delete" || event.key === "Backspace") {
+          swallow(event);
+          if (!event.repeat) cut("erase");
+        }
       },
       true,
     );

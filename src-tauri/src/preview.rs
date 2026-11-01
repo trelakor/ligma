@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Webview, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Webview, WebviewUrl, WebviewWindowBuilder, Window};
 
 pub const WINDOW: &str = "tab-preview";
 
@@ -28,6 +28,8 @@ struct Open {
     seq: u64,
     /// The tab's left edge in the tab bar, in CSS pixels
     left: f64,
+    /// The tab's window
+    owner: Window,
 }
 
 static OPEN: Mutex<Option<Open>> = Mutex::new(None);
@@ -41,14 +43,17 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
         hide(app);
         return Ok(());
     }
+    let Some(owner) = crate::tabs::window_of(app, tab) else {
+        return Ok(());
+    };
     let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-    *OPEN.lock().unwrap() = Some(Open { tab, seq, left });
+    *OPEN.lock().unwrap() = Some(Open { tab, seq, left, owner: owner.clone() });
     if let Some(window) = app.get_webview_window(WINDOW) {
         window.set_zoom(crate::tabs::scale(app))?;
         return window.eval("window.refresh?.()");
     }
     // The page fetches the card once it has loaded
-    let main = app.get_window("main").expect("main window exists");
+    let main = owner;
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("preview.html".into()))
         .title("Tab Preview")
@@ -63,7 +68,7 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
         .skip_taskbar(true);
     // Windows gives a window the mouse goes through neither rounded corners
     // nor a shadow, so there it's see-through and the page draws both
-    // (`drawn` in preview.html). It's also kept above the main window, and
+    // (`drawn` in preview.html). It's also kept above the tab's window, and
     // closed with it
     #[cfg(windows)]
     {
@@ -120,10 +125,6 @@ pub fn close(app: &AppHandle) {
     }
 }
 
-fn from_tab_bar(webview: &Webview) -> bool {
-    webview.label() == "main"
-}
-
 fn from_preview(webview: &Webview) -> bool {
     webview.label() == WINDOW
 }
@@ -131,14 +132,14 @@ fn from_preview(webview: &Webview) -> bool {
 /// The tab bar's pointer rests on tab `id`, `left` CSS pixels into the bar
 #[tauri::command]
 pub async fn show_tab_preview(app: AppHandle, webview: Webview, id: u32, left: f64) {
-    if from_tab_bar(&webview) {
+    if crate::tabs::from_tab_bar(&webview) {
         let _ = show(&app, id, left);
     }
 }
 
 #[tauri::command]
 pub async fn hide_tab_preview(app: AppHandle, webview: Webview) {
-    if from_tab_bar(&webview) {
+    if crate::tabs::from_tab_bar(&webview) {
         hide(&app);
     }
 }
@@ -147,7 +148,7 @@ pub async fn hide_tab_preview(app: AppHandle, webview: Webview) {
 /// keep an image of the tab it would leave
 #[tauri::command]
 pub async fn capture_active_tab(app: AppHandle, webview: Webview) {
-    if from_tab_bar(&webview) {
+    if crate::tabs::from_tab_bar(&webview) {
         crate::tabs::capture_active(&app);
     }
 }
@@ -178,17 +179,18 @@ pub async fn get_tab_preview(app: AppHandle, webview: Webview) -> Option<Card> {
 
 /// The page has drawn card `seq` at `width` by `height` CSS pixels, `inset`
 /// pixels into the page on every side (room for the shadow it draws on
-/// Windows): place the card under its tab, inside the main window, and
+/// Windows): place the card under its tab, inside the tab's window, and
 /// show it
 #[tauri::command]
 pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width: f64, height: f64, inset: f64) {
     if !from_preview(&webview) {
         return;
     }
-    let Some(left) = OPEN.lock().unwrap().as_ref().filter(|open| open.seq == seq).map(|open| open.left) else {
+    let open = OPEN.lock().unwrap().as_ref().filter(|open| open.seq == seq).map(|open| (open.left, open.owner.clone()));
+    let Some((left, main)) = open else {
         return;
     };
-    let (Some(main), Some(window)) = (app.get_window("main"), app.get_webview_window(WINDOW)) else {
+    let Some(window) = app.get_webview_window(WINDOW) else {
         return;
     };
     let (Ok(origin), Ok(size), Ok(scale)) = (main.inner_position(), main.inner_size(), main.scale_factor()) else {
@@ -204,6 +206,7 @@ pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width
     let inset = (inset * px).round();
     let _ = window.set_size(PhysicalSize::new((w + 2.0 * inset) as u32, (h + 2.0 * inset) as u32));
     let _ = window.set_position(PhysicalPosition::new((x.round() - inset) as i32, (y - inset) as i32));
+    crate::tab_menu::set_owner(&window, &main);
     #[cfg(windows)]
     crate::frame::show_inactive(&window, true);
     #[cfg(not(windows))]

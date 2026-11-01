@@ -178,7 +178,7 @@ pub fn cancel(app: &AppHandle, error: Option<&str>) {
 /// handle the scheme, from the OS), opened in a tab. Not on the main
 /// thread: it may open one
 pub fn on_figma_link(app: &AppHandle, url: &Url) {
-    if let Some(window) = app.get_window("main") {
+    if let Some(window) = crate::tabs::focused_window(app) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }

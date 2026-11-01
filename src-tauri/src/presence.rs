@@ -367,12 +367,7 @@ pub fn sync(app: &AppHandle) {
     let Some(tx) = presence.tx.lock().unwrap().clone() else {
         return;
     };
-    // Not `get_webview_window`: that returns None once the window holds
-    // more than one webview, i.e. whenever a file tab is open
-    let focused = app
-        .get_window("main")
-        .and_then(|window| window.is_focused().ok())
-        .unwrap_or(false);
+    let focused = crate::tabs::any_focused(app);
     let Some(active) = crate::tabs::active_file(app) else {
         let _ = tx.send(Message::Status(Status { focused, ..Status::default() }));
         return;
