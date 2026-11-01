@@ -1,30 +1,43 @@
 //! Keeps where you were in a file across reloads: its page, where the
-//! canvas is and its zoom, the toolbar's mode (Design, Draw, Motion or Dev
-//! Mode) and the tool. A sleeping tab's webview is closed outright and
-//! reloads from its address, as do tabs reopened from the last session,
-//! and Figma only goes by that address: the layer or page in its
-//! `node-id`, zoomed to fit, with the Move tool
+//! canvas is and its zoom, and the toolbar's mode (Design, Draw, Motion or
+//! Dev Mode). A sleeping tab's webview is closed outright and reloads from
+//! its address, as do tabs reopened from the last session, and Figma only
+//! goes by that address: the layer or page in its `node-id`, zoomed to fit
 //!
 //! `PAGE_JS` keeps them per file in `localStorage`, every second while the
 //! tab is shown and as it's hidden, and puts them back once the file has
 //! loaded again: in a tab waking from sleep or reopened from the last
 //! session, one reloaded, and a file opened without a `node-id`. A link
-//! to a layer still goes to that layer
+//! to a layer still goes to that layer. Off with `keepFileView`
 //!
 //! The page and canvas go through Figma's console plugin API,
 //! `window.figma`. The mode is read from and switched with the toolbar's
-//! switch, by its test ids. The tool is read from Figma's Redux store and
-//! set with Figma's action for it, both found by text in Figma's modules,
-//! as seen on 2026-11-01
+//! switch, by its test ids
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use tauri::AppHandle;
+
+use crate::settings::Settings;
 
 /// Runs in Figma tabs. `__LIGMA_RETURNING__` is true in a tab waking from
-/// sleep or reopened from the last session
+/// sleep or reopened from the last session. `__LIGMA_KEEP_VIEW__` is
+/// `{ on, rev }`: the setting when the tab was made. A page loaded later in
+/// the same tab may find a newer one in `localStorage`; the higher `rev`
+/// wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
   const KEY = "ligma-view-state";
+  const SETTING_KEY = "ligma-keep-view";
   // Files kept, the most recently seen
   const LIMIT = 200;
   const returning = __LIGMA_RETURNING__ || performance.getEntriesByType?.("navigation")[0]?.type === "reload";
+  let setting = __LIGMA_KEEP_VIEW__;
+  try {
+    const stored = JSON.parse(localStorage.getItem(SETTING_KEY));
+    if (stored?.rev > setting.rev) setting = stored;
+  } catch {}
 
   // The open file's key, or its branch's
   const fileKey = () => {
@@ -54,15 +67,18 @@ const PAGE_JS: &str = r##"(() => {
   };
   const ready = () => !!document.querySelector("canvas") && !document.querySelector('[class*="progress_bar--"]') && !!api();
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  // Until the file has been drawn twice in a row, for at most a minute
-  const loaded = async () => {
-    for (let count = 0, tries = 0; tries < 120; tries++) {
-      count = ready() ? count + 1 : 0;
-      if (count >= 2) return true;
-      await wait(500);
+  // Until `check` has held three times in a row, 100ms apart, for at most
+  // `limit` ms
+  const until = async (check, limit) => {
+    for (let count = 0, tries = 0; tries < limit / 100; tries++) {
+      count = check() ? count + 1 : 0;
+      if (count >= 3) return true;
+      await wait(100);
     }
     return false;
   };
+  // Until the file has been drawn, for at most a minute
+  const loaded = () => until(ready, 60000);
 
   // The mode the toolbar's switch shows, or null without one (FigJam,
   // Slides)
@@ -71,110 +87,16 @@ const PAGE_JS: &str = r##"(() => {
     document.querySelector('[data-toolbelt-mode][class*="--selected--"]')?.dataset.toolbeltMode ??
     null;
 
-  // Figma's Redux store, its tools by number and the function its menus
-  // and shortcuts run actions with: `function p(e,t){...n.get(e);if(i)
-  // {...handler...}else n.reportUnregisteredTrigger(e);...}`. Looked for
-  // once, in a file that has loaded
-  let internals;
-  const figmaInternals = () => {
-    if (internals !== undefined) return internals;
-    internals = null;
-    let require = null;
-    try {
-      const chunks = globalThis.rspackChunk_figma_web_bundler ?? globalThis.webpackChunk_figma_web_bundler;
-      chunks?.push([[Symbol("ligma")], {}, (r) => { require = r; }]);
-    } catch {}
-    if (!require?.m) return null;
-    const exportsOf = (id) => {
-      try {
-        const exports = require(id);
-        return exports ? Object.keys(exports).map((key) => exports[key]) : [];
-      } catch {
-        return [];
-      }
-    };
-    let storeModule, run, tools;
-    for (const id of Object.keys(require.m)) {
-      const source = String(require.m[id]);
-      if (!storeModule && source.includes("This API is intended only for debugging")) {
-        try {
-          storeModule = require(id);
-        } catch {}
-      }
-      if (!run && source.includes("reportUnregisteredTrigger")) {
-        // Not the class of Figma's action registry, also in modules that
-        // call it
-        run = exportsOf(id).find((value) => {
-          const text = typeof value === "function" ? String(value) : "";
-          return text.startsWith("function") && text.includes(".handler") && text.includes("reportUnregisteredTrigger");
-        });
-      }
-      if (!tools && /\.SHAPE_RECTANGLE=\d+\]="SHAPE_RECTANGLE"/.test(source)) {
-        tools = exportsOf(id).find((value) => value && typeof value === "object" && value[value.SHAPE_RECTANGLE] === "SHAPE_RECTANGLE");
-      }
-      if (storeModule && run && tools) break;
-    }
-    if (!storeModule || !run || !tools) return null;
-    return (internals = { store: () => storeModule.globalReduxStore, run, tools });
-  };
-
-  // Figma's actions for the tools worth putting back, by Figma's names for
-  // the tools. A file opens with the Move tool anyway, and the tools that
-  // edit a vector need one being edited
-  const ACTIONS = {
-    HAND: "hand",
-    COMMENTS: "comments",
-    FRAME: "frame",
-    SECTION: "section",
-    SLICE: "slice",
-    SHAPE_RECTANGLE: "rectangle",
-    SHAPE_ELLIPSE: "ellipse",
-    SHAPE_LINE: "line",
-    SHAPE_ARROW: "arrow",
-    SHAPE_STAR: "star",
-    SHAPE_REGULAR_POLYGON: "regular-polygon",
-    VECTOR_PEN: "pen",
-    VECTOR_PENCIL: "pencil",
-    BRUSH: "brush",
-    TYPE: "type",
-    SCALE: "scale",
-    ANNOTATE: "annotate",
-    MEASURE: "measure",
-    STICKY: "sticky",
-    STAMP: "stamp",
-    HIGHLIGHTER: "highlighter",
-    ERASER: "eraser",
-    WASHI_TAPE: "washi-tape",
-    LASSO: "lasso",
-    MULTISELECT: "multiselect",
-    TABLE: "table",
-    CODE_BLOCK: "code-block",
-    CONNECTOR_ELBOWED: "connector-elbowed",
-    CONNECTOR_STRAIGHT: "connector-straight",
-    CONNECTOR_CURVED: "connector-curved",
-  };
-  // The action for the tool in use, or null
-  const tool = () => {
-    const core = figmaInternals();
-    try {
-      const name = core?.tools[core.store()?.getState().mirror.appModel.currentTool];
-      const action = ACTIONS[name] ?? (name?.startsWith("SHAPE_WHITEBOARD_") ? name.toLowerCase().replaceAll("_", "-") : null);
-      return action ? `set-tool-${action}` : null;
-    } catch {
-      return null;
-    }
-  };
-
   // The file this page keeps the state of, once it's been put back
   let key = null;
   let last = null;
   const save = () => {
     const figma = api();
-    if (!key || key !== fileKey() || !figma) return;
+    if (!setting.on || !key || key !== fileKey() || !figma) return;
     let state;
     try {
       const { x, y } = figma.viewport.center;
-      state = { page: figma.currentPage.id, x, y, zoom: figma.viewport.zoom, mode: mode(), tool: tool() };
+      state = { page: figma.currentPage.id, x, y, zoom: figma.viewport.zoom, mode: mode() };
     } catch {
       return;
     }
@@ -197,7 +119,7 @@ const PAGE_JS: &str = r##"(() => {
     const option = state.mode && mode() && state.mode !== mode() && document.querySelector(`[data-toolbelt-mode="${CSS.escape(state.mode)}"]`);
     if (option && !option.disabled && option.getAttribute("aria-disabled") !== "true") {
       option.click();
-      await wait(1000);
+      await until(() => mode() === state.mode, 3000);
       await loaded();
     }
     const figma = api();
@@ -210,12 +132,12 @@ const PAGE_JS: &str = r##"(() => {
       figma.viewport.zoom = state.zoom;
       figma.viewport.center = { x: state.x, y: state.y };
     };
-    place();
     // Figma may still be zooming to the layer in the address
-    await wait(1000);
-    const { x, y } = figma.viewport.center;
-    if (Math.abs(figma.viewport.zoom - state.zoom) > 1e-6 || Math.hypot(x - state.x, y - state.y) > 1) place();
-    if (state.tool && state.tool !== tool()) figmaInternals()?.run(state.tool);
+    for (let tries = 0; tries < 10; tries++) {
+      const { x, y } = figma.viewport.center;
+      if (Math.abs(figma.viewport.zoom - state.zoom) > 1e-6 || Math.hypot(x - state.x, y - state.y) > 1) place();
+      await wait(100);
+    }
   };
 
   // Puts back the state of file `current` once it has loaded, then keeps it
@@ -232,7 +154,7 @@ const PAGE_JS: &str = r##"(() => {
     if (pending !== current || fileKey() !== current) return;
     const linked = current === first.key ? first.linked : new URLSearchParams(location.search).has("node-id");
     const state = stored()[current];
-    if (state && (returning || !linked)) {
+    if (setting.on && state && (returning || !linked)) {
       try {
         await putBack(state);
       } catch {}
@@ -242,6 +164,7 @@ const PAGE_JS: &str = r##"(() => {
     if (fileKey() === current) key = current;
   };
 
+  begin(first.key);
   // Figma can switch files without loading a page
   setInterval(() => {
     if (document.visibilityState !== "visible") return;
@@ -251,10 +174,60 @@ const PAGE_JS: &str = r##"(() => {
   }, 1000);
   document.addEventListener("visibilitychange", () => document.visibilityState === "hidden" && save());
   addEventListener("pagehide", save);
+
+  // From Ligma, when the setting changes
+  window.__ligmaKeepView = (next) => {
+    try {
+      localStorage.setItem(SETTING_KEY, JSON.stringify(next));
+    } catch {}
+    setting = next;
+  };
+  // From another tab
+  addEventListener("storage", (event) => {
+    if (event.key !== SETTING_KEY) return;
+    try {
+      const stored = JSON.parse(event.newValue);
+      if (stored?.rev > setting.rev) setting = stored;
+    } catch {}
+  });
 })()"##;
+
+/// The setting,
+static ON: AtomicBool = AtomicBool::new(true);
+/// and when it last changed, for `PAGE_JS` to tell it from older ones in
+/// `localStorage`. Launch counts as a change
+static REV: AtomicU64 = AtomicU64::new(0);
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_millis() as u64)
+}
+
+fn state() -> String {
+    format!(r#"{{"on":{},"rev":{}}}"#, ON.load(Ordering::Relaxed), REV.load(Ordering::Relaxed))
+}
+
+/// Call at launch, before any tab
+pub fn init(settings: &Settings) {
+    ON.store(settings.keep_file_view, Ordering::Relaxed);
+    REV.store(now(), Ordering::Relaxed);
+}
 
 /// `PAGE_JS`, for a Figma tab. `returning` for one waking from sleep or
 /// reopened from the last session
 pub fn page_js(returning: bool) -> String {
-    PAGE_JS.replace("__LIGMA_RETURNING__", if returning { "true" } else { "false" })
+    PAGE_JS
+        .replace("__LIGMA_RETURNING__", if returning { "true" } else { "false" })
+        .replace("__LIGMA_KEEP_VIEW__", &state())
+}
+
+/// Sends a changed setting to every loaded tab
+pub fn apply_settings(app: &AppHandle, settings: &Settings) {
+    if ON.swap(settings.keep_file_view, Ordering::Relaxed) == settings.keep_file_view {
+        return;
+    }
+    REV.store(now(), Ordering::Relaxed);
+    let script = format!("window.__ligmaKeepView?.({})", state());
+    for webview in crate::tabs::scriptable_tabs(app) {
+        let _ = webview.eval(&script);
+    }
 }

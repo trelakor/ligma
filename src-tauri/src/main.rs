@@ -305,6 +305,7 @@ fn main() {
             adjustments::init(&settings);
             ai_actions::init(&settings);
             copy_code::init(&settings);
+            view_state::init(&settings);
             contrast::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
