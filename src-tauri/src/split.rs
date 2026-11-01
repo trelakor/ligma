@@ -10,8 +10,14 @@
 //! in the other half reaches that tab's page, which tells Ligma
 //! (`PAGE_JS`), and the two swap. The halves sit side by side, or stacked
 //! when the canvas is no wider than 10:9. `layout` runs every
-//! `LAYOUT_EVERY` while a window is split, to follow the toolbar, image bar
-//! and menus as they come and go
+//! `LAYOUT_EVERY` while a window is split, to follow the toolbar, image bar,
+//! menus and tooltips as they come and go. Those are cut out to their own
+//! rounded shapes, so nothing of the page around them shows
+//!
+//! A gap between the halves shows the tab bar's page, which fills the
+//! window behind the tabs while it's split, and draws the divider there
+//! (`showDivider` in index.html). Dragging it sets how the canvas is shared
+//! (`set_split_ratio` in tabs.rs)
 //!
 //! Clipping takes a window region on Windows, which clips clicks too. On
 //! macOS it takes a layer mask, with `hitTest:` patched to match (see
@@ -68,11 +74,11 @@ pub const PAGE_JS: &str = r#"(() => {
   );
 })();"#;
 
-/// Where Figma's canvas is, as `{ canvas, toolbar, popups }` in CSS
-/// pixels, each rect `[left, top, right, bottom]`, or null outside an
-/// editor. The canvas is the largest `<canvas>`, as in `CROP_JS` (tabs.rs).
-/// The toolbar is the parts of Figma's toolbar and of the bars above it,
-/// like the image bar. Popups are its open menus and tooltips
+/// Where Figma's canvas is, as `{ canvas, floating }` in CSS pixels, or
+/// null outside an editor. The canvas is the largest `<canvas>`, as in
+/// `CROP_JS` (tabs.rs), as `[left, top, right, bottom]`. What floats over it
+/// is the toolbar, the bars above it, like the image bar, and open menus
+/// and tooltips, each as `[left, top, right, bottom, corner radius]`
 const GEOMETRY_JS: &str = r#"(() => {
   const area = (r) => r.width * r.height;
   let canvas = null, r = null;
@@ -83,41 +89,68 @@ const GEOMETRY_JS: &str = r#"(() => {
   if (!canvas || area(r) < innerWidth * innerHeight * 0.2) return null;
   const left = Math.max(0, r.left), top = Math.max(0, r.top);
   const right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
-  const rect = (e) => [e.left, e.top, e.right, e.bottom];
-  const shown = (el) => {
+  const floating = [];
+  const add = (el) => {
     const style = getComputedStyle(el);
-    return style.display !== "none" && style.visibility !== "hidden" && area(el.getBoundingClientRect()) > 0;
-  };
-  // A container as wide as the canvas is a layout box: its parts count
-  const toolbar = [];
-  const add = (el, depth) => {
     const e = el.getBoundingClientRect();
-    if (!shown(el)) return;
-    if (e.width >= (right - left) * 0.8 || e.height >= (bottom - top) * 0.5) {
-      if (depth < 4) for (const child of el.children) add(child, depth + 1);
-      return;
-    }
-    toolbar.push(rect(e));
+    if (style.display === "none" || style.visibility === "hidden" || !area(e)) return;
+    if (area(e) > innerWidth * innerHeight * 0.4) return;
+    floating.push([e.left, e.top, e.right, e.bottom, parseFloat(style.borderTopLeftRadius) || 0]);
   };
-  for (const el of document.querySelectorAll('[data-testid="design-toolbelt-wrapper"], [data-secondary-toolbelt="true"]')) add(el, 0);
-  const popups = [];
-  for (const el of document.querySelectorAll('[role="menu"], [role="listbox"], [role="tooltip"]')) {
-    if (shown(el) && area(el.getBoundingClientRect()) < innerWidth * innerHeight * 0.4) popups.push(rect(el.getBoundingClientRect()));
-  }
-  return { canvas: [left, top, right, bottom], toolbar, popups };
+  const SHAPES = [
+    '[data-testid="design-toolbelt-wrapper"] [role="toolbar"]',
+    '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]',
+    "[data-is-the-tooltip]",
+    '[role="menu"]',
+    '[role="listbox"]',
+  ];
+  for (const el of document.querySelectorAll(SHAPES.join(", "))) add(el);
+  return { canvas: [left, top, right, bottom], floating };
 })()"#;
 
-/// Room left around the toolbar, in CSS pixels
-const TOOLBAR_MARGIN: f64 = 6.0;
+/// The gap between the halves, where the divider shows, in CSS pixels
+const GAP: f64 = 6.0;
+
+/// How far either half may be dragged to: its share of the canvas
+const RATIO: (f64, f64) = (0.15, 0.85);
 
 /// `[left, top, right, bottom]`
 pub type Rect = [f64; 4];
 
+/// A rect with rounded corners: `[left, top, right, bottom, radius]`
+pub type Shape = [f64; 5];
+
 #[derive(serde::Deserialize)]
 struct Geometry {
     canvas: Rect,
-    toolbar: Vec<Rect>,
-    popups: Vec<Rect>,
+    floating: Vec<Shape>,
+}
+
+/// What of a tab's webview shows: the union of `add` less `cut`, in its
+/// logical pixels from its top left
+#[derive(Clone, PartialEq)]
+pub struct Region {
+    pub add: Vec<Shape>,
+    pub cut: Vec<Shape>,
+}
+
+impl Region {
+    /// As rects alone, corners square
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn rects(&self) -> Vec<Rect> {
+        let rect = |s: &Shape| [s[0], s[1], s[2], s[3]];
+        let cut: Vec<Rect> = self.cut.iter().map(rect).collect();
+        subtract_all(self.add.iter().map(rect).collect(), &cut)
+    }
+
+    fn scaled(&self, by: f64) -> Region {
+        let scale = |shapes: &[Shape]| shapes.iter().map(|s| s.map(|v| v * by)).collect();
+        Region { add: scale(&self.add), cut: scale(&self.cut) }
+    }
+}
+
+fn square(r: Rect) -> Shape {
+    [r[0], r[1], r[2], r[3], 0.0]
 }
 
 /// How often a split window's layout is checked
@@ -146,62 +179,70 @@ fn subtract_all(rects: Vec<Rect>, cut: &[Rect]) -> Vec<Rect> {
     cut.iter().fold(rects, |rects, &b| rects.into_iter().flat_map(|a| subtract(a, b)).collect())
 }
 
-/// The two halves of `canvas`, first then second: side by side, or stacked
-/// when it's no wider than 10:9
-pub fn halves(canvas: Rect) -> [Rect; 2] {
+/// Whether `canvas` splits side by side: unless it's no wider than 10:9
+fn side_by_side(canvas: Rect) -> bool {
+    (canvas[2] - canvas[0]) * 9.0 > (canvas[3] - canvas[1]) * 10.0
+}
+
+/// The two halves of `canvas`, first then second, the first taking `ratio`
+/// of it, side by side or stacked, and the `gap` between them
+pub fn halves(canvas: Rect, ratio: f64, gap: f64) -> ([Rect; 2], Rect) {
     let [l, t, r, b] = canvas;
-    if (r - l) * 9.0 <= (b - t) * 10.0 {
-        let mid = (t + b) / 2.0;
-        [[l, t, r, mid], [l, mid, r, b]]
+    let ratio = ratio.clamp(RATIO.0, RATIO.1);
+    if side_by_side(canvas) {
+        let mid = l + (r - l) * ratio;
+        let (a, z) = (mid - gap / 2.0, mid + gap / 2.0);
+        ([[l, t, a, b], [z, t, r, b]], [a, t, z, b])
     } else {
-        let mid = (l + r) / 2.0;
-        [[l, t, mid, b], [mid, t, r, b]]
+        let mid = t + (b - t) * ratio;
+        let (a, z) = (mid - gap / 2.0, mid + gap / 2.0);
+        ([[l, t, r, a], [l, z, r, b]], [l, a, r, z])
     }
 }
 
-/// The parts of a tab's webview each of a split's tabs shows, in logical
-/// pixels from its top left, the focused one's then the other's: the other
-/// gets its half of the canvas, less what of the focused tab's floats over
-/// it
-fn regions(size: (f64, f64), geometry: Option<Geometry>, zoom: f64, other_half: usize) -> (Vec<Rect>, Vec<Rect>) {
+/// What each of a split's tabs shows, in logical pixels from its top left,
+/// the focused one's then the other's, and the gap: the other gets its half
+/// of the canvas, less what of the focused tab's floats over it, and the
+/// focused one the rest but the gap
+fn regions(size: (f64, f64), geometry: Option<Geometry>, zoom: f64, ratio: f64, other_half: usize) -> (Region, Region, Rect, Rect) {
     let full = [0.0, 0.0, size.0, size.1];
-    let scaled = |r: &Rect, margin: f64| [r[0] - margin, r[1] - margin, r[2] + margin, r[3] + margin].map(|v| v * zoom);
-    let canvas = geometry.as_ref().map_or(full, |g| scaled(&g.canvas, 0.0));
-    let floating: Vec<Rect> = geometry.iter().flat_map(|g| {
-        let toolbar = g.toolbar.iter().map(|t| scaled(t, TOOLBAR_MARGIN));
-        toolbar.chain(g.popups.iter().map(|p| scaled(p, 0.0)))
-    }).collect();
-    let theirs = subtract_all(vec![halves(canvas)[other_half]], &floating);
-    let mine = subtract_all(vec![full], &theirs);
-    (mine, theirs)
+    let canvas = geometry.as_ref().map_or(full, |g| g.canvas.map(|v| v * zoom));
+    let floating: Vec<Shape> = geometry.iter().flat_map(|g| g.floating.iter().map(|s| s.map(|v| v * zoom))).collect();
+    let (halves, gap) = halves(canvas, ratio, GAP * zoom);
+    let half = halves[other_half];
+    let theirs = Region { add: vec![square(half)], cut: floating.clone() };
+    let around = subtract_all(vec![full], &[half, gap]);
+    let mine = Region { add: around.into_iter().map(square).chain(floating).collect(), cut: Vec::new() };
+    (mine, theirs, gap, canvas)
 }
 
 /// Regions last applied, by tab, so an unchanged one isn't set again: that
 /// repaints the page
-static APPLIED: Mutex<Option<HashMap<u32, Option<Vec<Rect>>>>> = Mutex::new(None);
+static APPLIED: Mutex<Option<HashMap<u32, Option<Region>>>> = Mutex::new(None);
 
-/// Clips tab `id`'s `webview` to `rects`, in logical pixels, or unclips it
-fn clip(id: u32, webview: &Webview, rects: Option<Vec<Rect>>) {
+/// Clips tab `id`'s `webview` to `region`, or unclips it. On Windows with
+/// its rounded corners; on macOS square
+fn clip(id: u32, webview: &Webview, region: Option<Region>) {
     {
         let mut applied = APPLIED.lock().unwrap();
         let applied = applied.get_or_insert_with(HashMap::new);
-        if applied.get(&id) == Some(&rects) || (rects.is_none() && !applied.contains_key(&id)) {
+        if applied.get(&id) == Some(&region) || (region.is_none() && !applied.contains_key(&id)) {
             return;
         }
-        match &rects {
-            Some(_) => applied.insert(id, rects.clone()),
+        match &region {
+            Some(_) => applied.insert(id, region.clone()),
             None => applied.remove(&id),
         };
     }
     #[cfg(windows)]
     {
         let factor = webview.window().scale_factor().unwrap_or(1.0);
-        crate::webview2::clip(webview, rects.map(|rects| rects.into_iter().map(|r| r.map(|v| v * factor)).collect()));
+        crate::webview2::clip(webview, region.map(|region| region.scaled(factor)));
     }
     #[cfg(target_os = "macos")]
-    crate::wkwebview::clip(webview, rects);
+    crate::wkwebview::clip(webview, region.map(|region| region.rects()));
     #[cfg(not(any(windows, target_os = "macos")))]
-    let _ = (webview, rects);
+    let _ = (webview, region);
 }
 
 /// Unclips tab `id`, which left a split, and stops treating its page as
@@ -211,10 +252,11 @@ pub fn unclip(id: u32, webview: &Webview) {
     let _ = webview.eval("window.__ligmaSplit?.(false)");
 }
 
-/// Lays out a split: `focused` and `other` are the tabs' ids, and the
-/// other's in the first half if `other_first`. Measures the focused tab's
-/// page first
-pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool) {
+/// Lays out a split: `focused` and `other` are the tabs' ids, the other's
+/// in the first half if `other_first`, and the first half takes `ratio` of
+/// the canvas. Measures the focused tab's page first, then has the tab bar
+/// draw the divider
+pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool, ratio: f64) {
     let (Some(focused_view), Some(other_view)) =
         (crate::tabs::scriptable(app, focused), crate::tabs::scriptable(app, other))
     else {
@@ -228,12 +270,28 @@ pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool) {
         };
         let factor = focused_view.window().scale_factor().unwrap_or(1.0);
         let size = size.to_logical::<f64>(factor);
-        let (mine, theirs) = regions((size.width, size.height), geometry, zoom, if other_first { 0 } else { 1 });
+        let other_half = if other_first { 0 } else { 1 };
+        let (mine, theirs, gap, canvas) = regions((size.width, size.height), geometry, zoom, ratio, other_half);
         clip(focused, &focused_view, Some(mine));
         clip(other, &other_view, Some(theirs));
         let _ = focused_view.eval("window.__ligmaSplit?.(false)");
         let _ = other_view.eval("window.__ligmaSplit?.(true)");
+        // In the tab bar's CSS pixels: it's at the window's top, at the same
+        // zoom, and the tabs are below it
+        let bar = |r: Rect| [r[0] / zoom, r[1] / zoom + crate::tabs::TAB_BAR_HEIGHT, r[2] / zoom, r[3] / zoom + crate::tabs::TAB_BAR_HEIGHT];
+        let divider = serde_json::json!({ "gap": bar(gap), "canvas": bar(canvas), "sideBySide": side_by_side(canvas) });
+        if let Some(bar) = focused_view.app_handle().get_webview(focused_view.window().label()) {
+            let _ = bar.eval(format!("window.showDivider?.({divider})"));
+        }
     });
+}
+
+/// Takes the divider away from window `window`'s tab bar, once it's not
+/// split
+pub fn hide_divider(app: &AppHandle, window: &str) {
+    if let Some(bar) = app.get_webview(window) {
+        let _ = bar.eval("window.hideDivider?.()");
+    }
 }
 
 /// The canvas of the active tab of `window`, in screen pixels, for a tab

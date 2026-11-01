@@ -254,6 +254,7 @@ fn main() {
             tabs::tab_menu,
             tabs::move_tab_to,
             tabs::tear_off_tab,
+            tabs::set_split_ratio,
             tabs::window_control,
             settings::get_settings,
             settings::get_theme,

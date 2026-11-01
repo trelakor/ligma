@@ -370,6 +370,9 @@ struct TabState {
     /// Each window's split view, if any: its tabs in the first and second
     /// half (see split.rs)
     splits: HashMap<String, [u32; 2]>,
+    /// The share of the canvas each split view's first half takes, as last
+    /// dragged. A half otherwise
+    split_ratios: HashMap<String, f64>,
     /// The window last focused, where new tabs open and the tab shortcuts
     /// act
     focused: String,
@@ -999,6 +1002,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
             Some(pair) if pair.contains(&id) => (Some(pair), None),
             Some(pair) => {
                 state.splits.remove(&window);
+                state.split_ratios.remove(&window);
                 (None, Some(pair))
             }
             None => (None, None),
@@ -1020,6 +1024,8 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
                 crate::split::unclip(tab, &webview);
             }
         }
+        crate::split::hide_divider(app, &window);
+        fit_tab_bar(app, &window);
     }
     show_snapshot(app, &window, snapshot.as_deref());
     if let Some(url) = wake {
@@ -1087,6 +1093,7 @@ fn split_pair(app: &AppHandle, window: &str, first: u32, second: u32) -> tauri::
     }
     end_split(app, window);
     app.state::<Tabs>().inner().0.lock().unwrap().splits.insert(window.to_owned(), [first, second]);
+    fit_tab_bar(app, window);
     // Each selected in turn, so both are awake and shown
     select(app, first)?;
     select(app, second)
@@ -1100,6 +1107,7 @@ fn end_split(app: &AppHandle, window: &str) {
         let Some(pair) = state.splits.remove(window) else {
             return;
         };
+        state.split_ratios.remove(window);
         let active = state.active_in(window);
         let other = pair.into_iter().find(|&tab| tab != active);
         if let Some(tab) = state.tabs.iter_mut().find(|tab| Some(tab.id) == other) {
@@ -1117,6 +1125,8 @@ fn end_split(app: &AppHandle, window: &str) {
             }
         }
     }
+    crate::split::hide_divider(app, window);
+    fit_tab_bar(app, window);
     push_state(app);
 }
 
@@ -1139,11 +1149,12 @@ fn layout_split(app: &AppHandle, window: &str) {
         state.splits.get(window).copied().and_then(|pair| {
             let active = state.active_in(window);
             let other = pair.into_iter().find(|&tab| tab != active).filter(|_| pair.contains(&active))?;
-            Some((active, other, pair[0] == other))
+            let ratio = state.split_ratios.get(window).copied().unwrap_or(0.5);
+            Some((active, other, pair[0] == other, ratio))
         })
     };
-    if let Some((focused, other, other_first)) = found {
-        crate::split::layout(app, focused, other, other_first);
+    if let Some((focused, other, other_first, ratio)) = found {
+        crate::split::layout(app, focused, other, other_first, ratio);
     }
 }
 
@@ -1187,7 +1198,11 @@ fn fit_tab_bar(app: &AppHandle, label: &str) {
         return;
     };
     let size = size.to_logical::<f64>(scale);
-    let full = app.state::<Tabs>().inner().0.lock().unwrap().snapshot_shown.iter().any(|shown| shown == label);
+    let full = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        // Split, it shows between the halves (see split.rs)
+        state.snapshot_shown.iter().any(|shown| shown == label) || state.splits.contains_key(label)
+    };
     let height = if full { size.height } else { bar_height(app).min(size.height) };
     let _ = bar.set_size(LogicalSize::new(size.width, height));
 }
@@ -1659,7 +1674,8 @@ impl Zone {
                 state.tabs.iter().find(|tab| tab.id == active && tab.file_key.is_some() && active != id)?.id
             };
             let canvas = crate::split::canvas_on_screen(app, &window, partner)?;
-            Some(Zone { window: window.label().to_owned(), partner, rect: crate::split::halves(canvas)[1] })
+            let (halves, _) = crate::split::halves(canvas, 0.5, 0.0);
+            Some(Zone { window: window.label().to_owned(), partner, rect: halves[1] })
         };
         tab_windows(app).into_iter().filter_map(zone).collect()
     }
@@ -2442,6 +2458,7 @@ fn forget_window(app: &AppHandle, label: &str) {
         state.actives.remove(label);
         state.previous.remove(label);
         state.splits.remove(label);
+        state.split_ratios.remove(label);
         state.snapshot_shown.retain(|shown| shown != label);
         if state.focused == label {
             state.focused = MAIN.to_owned();
@@ -2542,6 +2559,24 @@ pub async fn open_new_tab(app: AppHandle, webview: Webview) {
         app.state::<Tabs>().inner().0.lock().unwrap().focused = webview.label().to_owned();
         let _ = new_tab(&app);
     }
+}
+
+/// The divider of the tab bar's window's split view was dragged: its first
+/// half now takes `ratio` of the canvas
+#[tauri::command]
+pub async fn set_split_ratio(app: AppHandle, webview: Webview, ratio: f64) {
+    if !from_tab_bar(&webview) || !ratio.is_finite() {
+        return;
+    }
+    let window = webview.label().to_owned();
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        if !state.splits.contains_key(&window) {
+            return;
+        }
+        state.split_ratios.insert(window.clone(), ratio);
+    }
+    layout_split(&app, &window);
 }
 
 /// Tab `id` was dragged off its bar, the mouse button still held. It goes

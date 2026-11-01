@@ -121,6 +121,27 @@
     cursor: progress;
   }
   #snapshot[hidden] { display: none; }
+  /* Between a split view's halves, where the window shows this page (see
+     src-tauri/src/split.rs). Drag it to share the canvas otherwise */
+  #divider {
+    position: fixed;
+    display: grid;
+    place-items: center;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  #divider[hidden] { display: none; }
+  #divider.stacked { cursor: row-resize; }
+  #divider::after {
+    content: "";
+    width: 1px;
+    height: 100%;
+    background: var(--divider);
+    transition: background 120ms ease;
+  }
+  #divider.stacked::after { width: 100%; height: 1px; }
+  #divider:hover::after, #divider.dragging::after { width: 2px; background: #0d99ff; }
+  #divider.stacked:hover::after, #divider.stacked.dragging::after { width: 100%; height: 2px; }
   #snapshot > img { width: 100%; height: 100%; object-fit: cover; object-position: top left; }
   /* The image looks live but isn't: a soft light sweeps across it every
      few seconds while the tab reloads */
@@ -147,6 +168,7 @@
 <body>
 <div id="bar" data-tauri-drag-region></div>
 <div id="snapshot" hidden><img alt=""></div>
+<div id="divider" hidden></div>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
 
@@ -466,6 +488,59 @@
     snapshot.hidden = true;
     snapshotImage.removeAttribute("src");
   };
+
+  // A split view's divider, placed by `showDivider` in CSS pixels: `gap`
+  // where it goes and `canvas` what it shares, `[left, top, right,
+  // bottom]`. Dragged, it moves at once and tells Ligma each frame
+  const divider = document.getElementById("divider");
+  let shared = null;
+  let resizing = null;
+  const placeDivider = ([left, top, right, bottom]) =>
+    Object.assign(divider.style, { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
+  window.showDivider = (shown) => {
+    shared = shown;
+    divider.hidden = false;
+    divider.classList.toggle("stacked", !shown.sideBySide);
+    if (!resizing) placeDivider(shown.gap);
+  };
+  window.hideDivider = () => {
+    shared = null;
+    resizing = null;
+    divider.hidden = true;
+  };
+  divider.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !shared) return;
+    divider.setPointerCapture(e.pointerId);
+    divider.classList.add("dragging");
+    resizing = { frame: 0, ratio: null };
+  });
+  divider.addEventListener("pointermove", (e) => {
+    if (!resizing || !shared) return;
+    const [left, top, right, bottom] = shared.canvas;
+    const [gl, gt, gr, gb] = shared.gap;
+    const ratio = Math.min(0.85, Math.max(0.15, shared.sideBySide
+      ? (e.clientX - left) / (right - left)
+      : (e.clientY - top) / (bottom - top)));
+    const half = shared.sideBySide ? (gr - gl) / 2 : (gb - gt) / 2;
+    const at = shared.sideBySide ? left + (right - left) * ratio : top + (bottom - top) * ratio;
+    placeDivider(shared.sideBySide ? [at - half, gt, at + half, gb] : [gl, at - half, gr, at + half]);
+    resizing.ratio = ratio;
+    if (!resizing.frame) {
+      resizing.frame = requestAnimationFrame(() => {
+        if (!resizing) return;
+        resizing.frame = 0;
+        invoke("set_split_ratio", { ratio: resizing.ratio });
+      });
+    }
+  });
+  const stopResizing = () => {
+    if (!resizing) return;
+    if (resizing.ratio != null) invoke("set_split_ratio", { ratio: resizing.ratio });
+    resizing = null;
+    divider.classList.remove("dragging");
+  };
+  divider.addEventListener("pointerup", stopResizing);
+  divider.addEventListener("pointercancel", stopResizing);
 
   // Tabs have their own menu (`tab_menu`); nothing else in the bar has one
   document.addEventListener("contextmenu", (e) => {
