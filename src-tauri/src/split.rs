@@ -3,12 +3,18 @@
 //!
 //! Both tabs' webviews fill the window below the tab bar, as any tab's
 //! does, and are clipped to their parts of it: the other tab to its half of
-//! the focused tab's canvas, less the toolbar floating over it, and the
-//! focused tab to everything else. So the other tab's panels and toolbar
-//! are clipped away, and the focused tab's show where they always do. A
-//! click in the other half reaches that tab's page, which tells Ligma
-//! (`PAGE_JS`), and the two swap. The halves sit side by side, or stacked
-//! when the canvas is no wider than 10:9
+//! the focused tab's canvas, and the focused tab to everything else. So the
+//! other tab's panels are clipped away, and the focused tab's show where
+//! they always do. A click in the other half reaches that tab's page, which
+//! tells Ligma (`PAGE_JS`), and the two swap. The halves sit side by side,
+//! or stacked when the canvas is no wider than 10:9
+//!
+//! The toolbar floating over the canvas shows once, that of the half the
+//! pointer was last in, so it shows and sets that tab's tool. It stays put
+//! while the pointer is on it. What else floats over a page, such as its
+//! tooltips, menus and the image bar, shows in full over the other half.
+//! `layout` runs every `LAYOUT_EVERY` while a window is split, to follow
+//! the pointer and what floats
 //!
 //! Clipping takes a window region on Windows, which clips clicks too. On
 //! macOS it takes a layer mask, with `hitTest:` patched to match (see
@@ -50,11 +56,13 @@ pub const PAGE_JS: &str = r#"(() => {
   );
 })();"#;
 
-/// Where Figma's canvas is, and what floats over the middle of its bottom
-/// edge: the toolbar, and any bar above it (the image bar, for one), as
-/// `{ canvas, toolbar }`, each `[left, top, right, bottom]` in CSS pixels
-/// (toolbar null if there's none). Null outside an editor. The canvas is
-/// the largest `<canvas>`, as in `CROP_JS` (tabs.rs)
+/// Where Figma's canvas is, as `{ canvas, toolbar, overlays }`, each a
+/// `[left, top, right, bottom]` in CSS pixels, or null outside an editor.
+/// The canvas is the largest `<canvas>`, as in `CROP_JS` (tabs.rs). The
+/// toolbar is what floats over the middle of its bottom edge, and any bar
+/// above it, like the image bar (null if there's none). Overlays are what
+/// shows outside the app's own tree: tooltips, menus, popovers and the like,
+/// which pages put in containers of their own on <body>
 const GEOMETRY_JS: &str = r#"(() => {
   const area = (r) => r.width * r.height;
   let canvas = null, r = null;
@@ -86,7 +94,22 @@ const GEOMETRY_JS: &str = r#"(() => {
       ? [Math.min(box[0], e.left), Math.min(box[1], e.top), Math.max(box[2], e.right), Math.max(box[3], e.bottom)]
       : [e.left, e.top, e.right, e.bottom];
   }
-  return { canvas: [left, top, right, bottom], toolbar: box };
+  // A layer as large as the page is a container: what's in it counts
+  const overlays = [];
+  const whole = innerWidth * innerHeight * 0.6;
+  const collect = (el, depth) => {
+    if (overlays.length >= 24 || ["SCRIPT", "STYLE", "LINK"].includes(el.tagName)) return;
+    const style = getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return;
+    const e = el.getBoundingClientRect();
+    if (!area(e) || area(e) > whole) {
+      if (depth < 4) for (const child of el.children) collect(child, depth + 1);
+      return;
+    }
+    overlays.push([e.left, e.top, e.right, e.bottom]);
+  };
+  for (const child of document.body?.children ?? []) if (!child.contains(canvas)) collect(child, 0);
+  return { canvas: [left, top, right, bottom], toolbar: box, overlays };
 })()"#;
 
 /// Room left around the toolbar, in CSS pixels
@@ -95,11 +118,15 @@ const TOOLBAR_MARGIN: f64 = 6.0;
 /// `[left, top, right, bottom]`
 pub type Rect = [f64; 4];
 
-#[derive(Clone, Copy, serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 struct Geometry {
     canvas: Rect,
     toolbar: Option<Rect>,
+    overlays: Vec<Rect>,
 }
+
+/// How often a split window's layout is checked
+pub const LAYOUT_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
 
 fn is_empty(r: &Rect) -> bool {
     r[2] <= r[0] || r[3] <= r[1]
@@ -137,20 +164,80 @@ pub fn halves(canvas: Rect) -> [Rect; 2] {
     }
 }
 
-/// The parts of a tab's webview each of a split's tabs shows, in logical
-/// pixels: the focused one, then the other, in the `other_half`
-fn regions(size: (f64, f64), geometry: Option<Geometry>, zoom: f64, other_half: usize) -> (Vec<Rect>, Vec<Rect>) {
-    let full = [0.0, 0.0, size.0, size.1];
-    let scaled = |r: Rect| r.map(|v| v * zoom);
-    let canvas = geometry.map_or(full, |g| scaled(g.canvas));
-    let toolbar = geometry.and_then(|g| g.toolbar).map(|t| {
-        let m = TOOLBAR_MARGIN;
-        scaled([t[0] - m, t[1] - m, t[2] + m, t[3] + m])
-    });
-    let other = subtract_all(vec![halves(canvas)[other_half]], toolbar.as_slice());
-    let focused = subtract_all(vec![full], &other);
-    (focused, other)
+fn overlaps(a: &Rect, b: &Rect) -> bool {
+    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
+
+fn contains(r: &Rect, x: f64, y: f64) -> bool {
+    x >= r[0] && x < r[2] && y >= r[1] && y < r[3]
+}
+
+/// A split's layout, in a tab webview's logical pixels from its top left
+struct Layout {
+    /// Each tab's geometry, scaled (see `GEOMETRY_JS`)
+    focused: Option<Geometry>,
+    other: Option<Geometry>,
+    /// The other tab's half of the canvas
+    half: Rect,
+}
+
+impl Layout {
+    fn new(size: (f64, f64), focused: Option<Geometry>, other: Option<Geometry>, zoom: f64, other_half: usize) -> Self {
+        let scale = |g: Geometry| Geometry {
+            canvas: g.canvas.map(|v| v * zoom),
+            toolbar: g.toolbar.map(|t| {
+                let m = TOOLBAR_MARGIN;
+                [t[0] - m, t[1] - m, t[2] + m, t[3] + m].map(|v| v * zoom)
+            }),
+            overlays: g.overlays.into_iter().map(|o| o.map(|v| v * zoom)).collect(),
+        };
+        let (focused, other) = (focused.map(scale), other.map(scale));
+        let canvas = focused.as_ref().map_or([0.0, 0.0, size.0, size.1], |g| g.canvas);
+        Self { focused, other, half: halves(canvas)[other_half] }
+    }
+
+    fn toolbar(&self, other: bool) -> Option<Rect> {
+        if other { &self.other } else { &self.focused }.as_ref()?.toolbar
+    }
+
+    /// Whose toolbar shows (true: the other tab's), for the pointer at
+    /// `at`: the half it's in, or the same as `before` while it's on that
+    /// toolbar
+    fn toolbar_owner(&self, at: Option<(f64, f64)>, before: bool) -> bool {
+        let Some((x, y)) = at else {
+            return before;
+        };
+        if self.toolbar(before).is_some_and(|t| contains(&t, x, y)) {
+            return before;
+        }
+        contains(&self.half, x, y)
+    }
+
+    /// The parts each tab shows, the focused one's then the other's, with
+    /// the other's toolbar if `other_toolbar`
+    fn regions(&self, size: (f64, f64), other_toolbar: bool) -> (Vec<Rect>, Vec<Rect>) {
+        let mut theirs = vec![self.half];
+        if other_toolbar {
+            theirs.extend(self.toolbar(true));
+        } else {
+            theirs = subtract_all(theirs, self.toolbar(false).as_slice());
+        }
+        // Only what floats from the other half, so nothing the other page
+        // keeps around elsewhere covers the focused one
+        let shown = theirs.clone();
+        if let Some(other) = &self.other {
+            theirs.extend(other.overlays.iter().filter(|o| shown.iter().any(|s| overlaps(o, s))));
+        }
+        if let Some(focused) = &self.focused {
+            theirs = subtract_all(theirs, &focused.overlays);
+        }
+        let mine = subtract_all(vec![[0.0, 0.0, size.0, size.1]], &theirs);
+        (mine, theirs)
+    }
+}
+
+/// Whose toolbar each split window shows: the tab's id, by window label
+static TOOLBARS: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
 
 /// Regions last applied, by tab, so an unchanged one isn't set again: that
 /// repaints the page
@@ -187,29 +274,59 @@ pub fn unclip(id: u32, webview: &Webview) {
     let _ = webview.eval("window.__ligmaSplitOther = false");
 }
 
-/// Lays out a split: `focused` and `other` are the tabs' ids, and the
-/// other's in the first half if `other_first`. Measures the focused tab's
-/// canvas first
-pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool) {
+/// Lays out window `window`'s split: `focused` and `other` are the tabs'
+/// ids, and the other's in the first half if `other_first`. Measures both
+/// tabs' pages first
+pub fn layout(app: &AppHandle, window: &str, focused: u32, other: u32, other_first: bool) {
     let (Some(focused_view), Some(other_view)) =
         (crate::tabs::scriptable(app, focused), crate::tabs::scriptable(app, other))
     else {
         return;
     };
-    let zoom = crate::tabs::scale(app);
-    let _ = focused_view.clone().eval_with_callback(GEOMETRY_JS, move |json| {
-        let geometry = serde_json::from_str::<Option<Geometry>>(&json).ok().flatten();
-        let Ok(size) = focused_view.size() else {
-            return;
-        };
-        let factor = focused_view.window().scale_factor().unwrap_or(1.0);
-        let size = size.to_logical::<f64>(factor);
-        let (mine, theirs) = regions((size.width, size.height), geometry, zoom, if other_first { 0 } else { 1 });
-        clip(focused, &focused_view, Some(mine));
-        clip(other, &other_view, Some(theirs));
-        let _ = focused_view.eval("window.__ligmaSplitOther = false");
-        let _ = other_view.eval("window.__ligmaSplitOther = true");
+    let (app, window) = (app.clone(), window.to_owned());
+    let measure_other = focused_view.clone();
+    let _ = focused_view.eval_with_callback(GEOMETRY_JS, move |json| {
+        let focused_geometry = serde_json::from_str::<Option<Geometry>>(&json).ok().flatten();
+        let (app, window, view, other_view) = (app.clone(), window.clone(), measure_other.clone(), other_view.clone());
+        let other_measured = other_view.clone();
+        let _ = other_measured.eval_with_callback(GEOMETRY_JS, move |json| {
+            let other_geometry = serde_json::from_str::<Option<Geometry>>(&json).ok().flatten();
+            let focused_geometry = focused_geometry.clone();
+            let (Ok(size), Ok(origin)) = (view.size(), view.window().inner_position()) else {
+                return;
+            };
+            let factor = view.window().scale_factor().unwrap_or(1.0);
+            let size = size.to_logical::<f64>(factor);
+            let size = (size.width, size.height);
+            let zoom = crate::tabs::scale(&app);
+            let layout = Layout::new(size, focused_geometry, other_geometry, zoom, if other_first { 0 } else { 1 });
+            // The pointer, in the tabs' logical pixels
+            let top = crate::tabs::bar_height(&app);
+            let at = app.cursor_position().ok().map(|at| {
+                ((at.x - origin.x as f64) / factor, (at.y - origin.y as f64) / factor - top)
+            });
+            let owner = {
+                let mut toolbars = TOOLBARS.lock().unwrap();
+                let toolbars = toolbars.get_or_insert_with(HashMap::new);
+                let before = toolbars.get(&window).is_some_and(|&owner| owner == other);
+                let owner = if layout.toolbar_owner(at, before) { other } else { focused };
+                toolbars.insert(window.clone(), owner);
+                owner
+            };
+            let (mine, theirs) = layout.regions(size, owner == other);
+            clip(focused, &view, Some(mine));
+            clip(other, &other_view, Some(theirs));
+            let _ = view.eval("window.__ligmaSplitOther = false");
+            let _ = other_view.eval("window.__ligmaSplitOther = true");
+        });
     });
+}
+
+/// Forgets whose toolbar window `window`'s split showed, once it ends
+pub fn forget(window: &str) {
+    if let Some(toolbars) = TOOLBARS.lock().unwrap().as_mut() {
+        toolbars.remove(window);
+    }
 }
 
 /// The canvas of the active tab of `window`, in screen pixels, for a tab

@@ -999,6 +999,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
             Some(pair) if pair.contains(&id) => (Some(pair), None),
             Some(pair) => {
                 state.splits.remove(&window);
+                crate::split::forget(&window);
                 (None, Some(pair))
             }
             None => (None, None),
@@ -1100,6 +1101,7 @@ fn end_split(app: &AppHandle, window: &str) {
         let Some(pair) = state.splits.remove(window) else {
             return;
         };
+        crate::split::forget(window);
         let active = state.active_in(window);
         let other = pair.into_iter().find(|&tab| tab != active);
         if let Some(tab) = state.tabs.iter_mut().find(|tab| Some(tab.id) == other) {
@@ -1143,12 +1145,12 @@ fn layout_split(app: &AppHandle, window: &str) {
         })
     };
     if let Some((focused, other, other_first)) = found {
-        crate::split::layout(app, focused, other, other_first);
+        crate::split::layout(app, window, focused, other, other_first);
     }
 }
 
-/// Lays out every split view again, for Figma's panels changing size.
-/// Call periodically
+/// Lays out every split view again, for the pointer moving and Figma's
+/// panels changing size. Call every `split::LAYOUT_EVERY`
 pub fn refresh_splits(app: &AppHandle) {
     let windows: Vec<String> = app.state::<Tabs>().inner().0.lock().unwrap().splits.keys().cloned().collect();
     for window in windows {

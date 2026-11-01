@@ -337,11 +337,16 @@ fn main() {
             }
 
             let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(split::LAYOUT_EVERY);
+                tabs::refresh_splits(&handle);
+            });
+
+            let handle = app.handle().clone();
             std::thread::spawn(move || {
                 for second in 1u64.. {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     tabs::sync_theme(&handle);
-                    tabs::refresh_splits(&handle);
                     presence::sync(&handle);
                     if second % 30 == 0 || (second % 5 == 0 && tabs::under_pressure()) {
                         tabs::rest_idle(&handle);
