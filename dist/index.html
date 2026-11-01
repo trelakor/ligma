@@ -100,6 +100,8 @@
   /* While a tab is dragged, the others slide out of its way */
   .dragging .tab { transition: transform 150ms ease; }
   .dragging .tab.dragged { transition: none; z-index: 1; }
+  /* Where a tab dragged in from another window would go */
+  .tab.ghost { opacity: 0.6; }
   /* Pinned tabs show only their icon, like Home */
   .tab.pinned { flex: none; width: 38px; min-width: 38px; padding: 0; justify-content: center; }
   /* Always leave room to drag the window */
@@ -223,7 +225,7 @@
   const DETACH = 24;
   let drag = null;
   let deferred = null;
-  const groupNodes = (pinned) => [...bar.querySelectorAll(pinned ? ".tab.pinned" : ".tab:not(.pinned)")];
+  const groupNodes = (pinned) => [...bar.querySelectorAll(pinned ? ".tab.pinned:not(.ghost)" : ".tab:not(.pinned):not(.ghost)")];
 
   const startPress = (e, tab) => {
     if (e.button === 0) drag = { id: tab.id, pinned: tab.pinned, startX: e.clientX, startY: e.clientY, moving: false };
@@ -236,6 +238,30 @@
       const rect = node.getBoundingClientRect();
       return rect.left + rect.width / 2 < x;
     }).length;
+
+  // A tab dragged over this bar from another window shows where it would
+  // go, as `tab` ({ title, kind, pinned }) at `x`, until called with null
+  // (see `follow_cursor` in tabs.rs)
+  let ghost = null;
+  window.dragOver = (x, tab) => {
+    ghost = x == null ? null : { x, tab };
+    placeGhost();
+  };
+  const placeGhost = () => {
+    bar.querySelector(".ghost")?.remove();
+    if (!ghost) return;
+    const { x, tab } = ghost;
+    // Worked out without the ghost, so it doesn't push the tabs it's
+    // measured against
+    const index = window.dropIndex(x, tab.pinned);
+    const node = el("div", { className: `tab ghost active${tab.pinned ? " pinned" : ""}` }, ICONS[tab.kind] ?? ICONS.page);
+    node.style.setProperty("--accent", ACCENTS[tab.kind] ?? "currentColor");
+    if (!tab.pinned) node.append(el("span", { className: "title", textContent: tab.title || "Loading…" }));
+    const before = groupNodes(tab.pinned)[index]
+      || (tab.pinned && groupNodes(false)[0])
+      || bar.querySelector("#new");
+    bar.insertBefore(node, before);
+  };
 
   // Pointing at another tab previews it in a card below (see
   // src-tauri/src/preview.rs). Rust skips Home, the active tab, and
@@ -415,6 +441,7 @@
     bar.classList.remove("crowded");
     bar.classList.toggle("crowded", drag.getBoundingClientRect().width <= 48);
 
+    placeGhost();
     // Off the tabs, the card goes. A previewed tab may have moved: follow it
     for (const other of bar.querySelectorAll(":scope > :not(.tab)")) other.addEventListener("pointerenter", hidePreview);
     if (previewing != null) showPreview(previewing);

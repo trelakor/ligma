@@ -1437,6 +1437,8 @@ fn move_to_new_window(app: &AppHandle, id: u32, at: PhysicalPosition<f64>) -> ta
     move_to_window(app, id, &label, 0)?;
     window.show()?;
     window.set_focus()?;
+    // Fitted again to the size it has now it's shown
+    layout(app);
     Ok(Some(label))
 }
 
@@ -1458,56 +1460,119 @@ fn mouse_down() -> bool {
     false
 }
 
+/// A window's tab bar, as `follow_cursor` finds it under the cursor
+struct Bar {
+    label: String,
+    origin: PhysicalPosition<i32>,
+    width: f64,
+    /// Screen pixels per CSS pixel in the bar
+    px: f64,
+}
+
+impl Bar {
+    /// Every visible window's tab bar but window `except`'s
+    fn all(app: &AppHandle, except: &str) -> Vec<Bar> {
+        let bar = |window: Window| {
+            if window.label() == except || !window.is_visible().ok()? || window.is_minimized().ok()? {
+                return None;
+            }
+            Some(Bar {
+                label: window.label().to_owned(),
+                origin: window.inner_position().ok()?,
+                width: window.inner_size().ok()?.width as f64,
+                px: window.scale_factor().ok()? * scale(app),
+            })
+        };
+        tab_windows(app).into_iter().filter_map(bar).collect()
+    }
+
+    /// The CSS pixel in the bar `at` is on, in screen pixels, if it's on it
+    fn x_at(&self, at: PhysicalPosition<f64>) -> Option<f64> {
+        let (x, y) = (at.x - self.origin.x as f64, at.y - self.origin.y as f64);
+        (x >= 0.0 && x < self.width && y >= 0.0 && y < TAB_BAR_HEIGHT * self.px).then(|| x / self.px)
+    }
+}
+
 /// Keeps window `label`, holding dragged tab `id`, under the cursor until
-/// the mouse button is let go. Let go over another window's tab bar, the
-/// tab moves in there
+/// the mouse button is let go. Over another window's tab bar the window
+/// hides, and the bar shows where the tab would go (`dragOver` in
+/// index.html); let go there, it moves in
 fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
     let Some(window) = app.get_window(label) else {
         return;
     };
+    let Some(tab) = with_tab(app, id, |tab| {
+        serde_json::json!({ "title": tab.title, "kind": tab.kind, "pinned": tab.pinned })
+    }) else {
+        return;
+    };
+    // The other windows stay put meanwhile
+    let bars = Bar::all(app, label);
     let mut last = None;
+    // The bar the tab is over, and where in it
+    let mut over: Option<(&Bar, f64)> = None;
     while mouse_down() {
-        if let Ok(at) = app.cursor_position() {
-            if last != Some(at) {
-                last = Some(at);
-                let _ = window.set_position(grip_position(app, &window, at));
+        let at = app.cursor_position().ok();
+        if let Some(at) = at.filter(|&at| last != Some(at)) {
+            last = Some(at);
+            let now = bars.iter().find_map(|bar| Some((bar, bar.x_at(at)?)));
+            let moved_bar = over.map(|(bar, _)| &bar.label) != now.map(|(bar, _)| &bar.label);
+            if moved_bar {
+                if let Some(webview) = over.and_then(|(bar, _)| app.get_webview(&bar.label)) {
+                    let _ = webview.eval("window.dragOver?.(null)");
+                }
             }
+            match now {
+                Some((bar, x)) => {
+                    if let Some(webview) = app.get_webview(&bar.label) {
+                        let _ = webview.eval(format!("window.dragOver?.({x}, {tab})"));
+                    }
+                }
+                None => {
+                    let _ = window.set_position(grip_position(app, &window, at));
+                }
+            }
+            // Shown again once it's back under the cursor
+            if moved_bar {
+                let _ = if now.is_some() { window.hide() } else { window.show() };
+            }
+            over = now;
         }
         std::thread::sleep(Duration::from_millis(8));
     }
-    if let Ok(at) = app.cursor_position() {
-        drop_on_bar(app, id, label, at);
+    if let Some((bar, x)) = over {
+        drop_on_bar(app, id, label, &bar.label, x);
     }
 }
 
-/// Moves tab `id` into the window whose tab bar is at `at`, in screen
-/// pixels, other than window `from`, where among its tabs it was let go
-fn drop_on_bar(app: &AppHandle, id: u32, from: &str, at: PhysicalPosition<f64>) {
-    let pinned = with_tab(app, id, |tab| tab.pinned).unwrap_or(false);
-    let over = tab_windows(app).into_iter().find_map(|window| {
-        if window.label() == from || !window.is_visible().ok()? || window.is_minimized().ok()? {
-            return None;
+/// Moves dragged tab `id` into window `target`, let go `x` CSS pixels into
+/// its tab bar, from window `from`, hidden meanwhile. If it can't, `from`
+/// shows again
+fn drop_on_bar(app: &AppHandle, id: u32, from: &str, target: &str, x: f64) {
+    fn show(app: &AppHandle, label: &str) {
+        if let Some(window) = app.get_window(label) {
+            let _ = window.show();
         }
-        let (origin, size, factor) = (window.inner_position().ok()?, window.inner_size().ok()?, window.scale_factor().ok()?);
-        let px = factor * scale(app);
-        let (x, y) = (at.x - origin.x as f64, at.y - origin.y as f64);
-        (x >= 0.0 && x < size.width as f64 && y >= 0.0 && y < TAB_BAR_HEIGHT * px).then(|| (window, x / px))
-    });
-    let Some((window, x)) = over else {
-        return;
+    }
+    let pinned = with_tab(app, id, |tab| tab.pinned).unwrap_or(false);
+    let Some(bar) = app.get_webview(target) else {
+        return show(app, from);
     };
-    let Some(bar) = app.get_webview(window.label()) else {
-        return;
-    };
-    let (app, target) = (app.clone(), window.label().to_owned());
-    let _ = bar.eval_with_callback(format!("window.dropIndex?.({x}, {pinned}) ?? 1e9"), move |json| {
+    let (handle, target_label, from_label) = (app.clone(), target.to_owned(), from.to_owned());
+    let script = format!("(() => {{ window.dragOver?.(null); return window.dropIndex?.({x}, {pinned}) ?? 1e9; }})()");
+    let sent = bar.eval_with_callback(script, move |json| {
         let index = json.parse::<f64>().map_or(usize::MAX, |index| index.max(0.0) as usize);
         // Not from inside the webview's own callback
-        let (app, target) = (app.clone(), target.clone());
+        let (app, target, from) = (handle.clone(), target_label.clone(), from_label.clone());
         std::thread::spawn(move || {
-            let _ = move_to_window(&app, id, &target, index);
+            if move_to_window(&app, id, &target, index).is_err() {
+                show(&app, &from);
+            }
         });
     });
+    if sent.is_err() {
+        show(app, from);
+    }
 }
 
 /// Reloads tab `id`. A frozen tab is put to sleep instead, so it loads
@@ -2072,6 +2137,12 @@ pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visibl
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
+    // Built hidden, it would keep a title bar's worth of frame, so its page
+    // came out the wrong size, and fought every resize until maximized
+    #[cfg(windows)]
+    if !visible {
+        crate::frame::refresh(&window);
+    }
     // Traffic lights centered on the tab bar (see titlebar.rs)
     #[cfg(target_os = "macos")]
     {
