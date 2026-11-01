@@ -19,7 +19,7 @@ use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 use windows::Win32::System::Com::{IStream, STREAM_SEEK_CUR, STREAM_SEEK_SET};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_T, VK_TAB, VK_W,
+    GetAsyncKeyState, GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_MENU, VK_SHIFT, VK_T, VK_TAB, VK_W,
 };
 use windows_core::{w, Interface};
 
@@ -128,6 +128,61 @@ pub fn allow_downloads(webview: &Webview) {
 /// don't have the API and are left alone
 pub fn on_hidden(webview: &Webview) {
     set_memory_target(webview, true);
+}
+
+/// Tells WebView2 that tab `webview`'s window moved, or that it moved to
+/// another window. Tauri only does that for a window's own webview, and
+/// without it the page's popups and input go where the window was
+pub fn on_moved(webview: &Webview) {
+    let _ = webview.with_webview(|platform| unsafe {
+        let _ = platform.controller().NotifyParentWindowPositionChanged();
+    });
+}
+
+/// Clips tab `webview` to `region`, in physical pixels from its top left,
+/// or unclips it with None (see split.rs). A window region on wry's window
+/// around the webview, which clips clicks too
+pub fn clip(webview: &Webview, region: Option<crate::split::Region>) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, HRGN, RGN_COMBINE_MODE, RGN_DIFF,
+        RGN_OR,
+    };
+    unsafe fn combine(region: HRGN, [left, top, right, bottom, radius]: crate::split::Shape, mode: RGN_COMBINE_MODE) {
+        let (l, t, r, b) = (left.round() as i32, top.round() as i32, right.round() as i32, bottom.round() as i32);
+        let part = if radius > 0.0 {
+            // Its corners' ellipses, which reach a pixel short
+            let d = (radius * 2.0).round() as i32;
+            CreateRoundRectRgn(l, t, r + 1, b + 1, d, d)
+        } else {
+            CreateRectRgn(l, t, r, b)
+        };
+        CombineRgn(Some(region), Some(region), Some(part), mode);
+        let _ = DeleteObject(part.into());
+    }
+    let _ = webview.with_webview(move |platform| unsafe {
+        let mut hwnd = HWND::default();
+        if platform.controller().ParentWindow(&mut hwnd).is_err() {
+            return;
+        }
+        let region = region.map(|region| {
+            let hrgn = CreateRectRgn(0, 0, 0, 0);
+            for shape in region.add {
+                combine(hrgn, shape, RGN_OR);
+            }
+            for shape in region.cut {
+                combine(hrgn, shape, RGN_DIFF);
+            }
+            hrgn
+        });
+        // Windows owns the region from here on
+        SetWindowRgn(hwnd, region, true);
+    });
+}
+
+/// True while the left mouse button is held down, anywhere
+pub fn left_button_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 }
 }
 
 /// Undoes `on_hidden` and `try_suspend` for a tab that's shown again

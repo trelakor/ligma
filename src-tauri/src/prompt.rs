@@ -73,7 +73,7 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<()> {
         .and_then(|open| open.get(label))
         .map(|open| open.content.title.clone())
         .unwrap_or_default();
-    let main = app.get_window("main");
+    let main = crate::tabs::focused_window(app);
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("prompt.html".into()))
         .title(title)
@@ -89,7 +89,7 @@ fn build(app: &AppHandle, label: &str) -> tauri::Result<()> {
     if let Some(color) = crate::tabs::theme(app).as_ref().and_then(|theme| crate::settings::theme_color(theme, "bg")) {
         builder = builder.background_color(color);
     }
-    // Kept above the main window
+    // Kept above the window last used
     if let Some(main) = &main {
         #[cfg(windows)]
         {
@@ -221,7 +221,7 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
     if first {
         let factor = window.scale_factor().unwrap_or(1.0);
         let (w, h) = (size.width * factor, size.height * factor);
-        let area = match app.get_window("main") {
+        let area = match crate::tabs::focused_window(&app) {
             Some(main) if !main.is_minimized().unwrap_or(false) => {
                 main.outer_position().ok().zip(main.outer_size().ok())
             }

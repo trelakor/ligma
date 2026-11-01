@@ -28,6 +28,7 @@ mod pressure;
 mod prompt;
 mod report;
 mod settings;
+mod split;
 mod tab_menu;
 mod tabs;
 #[cfg(target_os = "macos")]
@@ -45,7 +46,7 @@ mod wkwebview;
 use std::process::Child;
 use std::sync::Mutex;
 
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 /// Font agent process started by Ligma, killed again on exit
 struct FontAgent(Mutex<Option<Child>>);
@@ -199,7 +200,7 @@ fn main() {
         // brings this window forward, and on Windows the `figma://` link
         // that started it to `figma_scheme`
         .plugin(tauri_plugin_single_instance::init(|app, _args, _| {
-            if let Some(window) = app.get_window("main") {
+            if let Some(window) = tabs::focused_window(app) {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
@@ -220,7 +221,7 @@ fn main() {
         // right away, before it's placed
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_filter(|label| label == "main")
+                .with_filter(|label| label == tabs::MAIN)
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -252,6 +253,8 @@ fn main() {
             tabs::open_new_tab,
             tabs::tab_menu,
             tabs::move_tab_to,
+            tabs::tear_off_tab,
+            tabs::set_split_ratio,
             tabs::window_control,
             settings::get_settings,
             settings::get_theme,
@@ -306,53 +309,20 @@ fn main() {
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
 
-            // The window's own webview is the tab bar. Figma tabs are added
-            // as child webviews below it
-            #[allow(unused_mut)]
-            let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("Ligma")
-                .inner_size(1440.0, 900.0)
-                .min_inner_size(800.0, 600.0)
-                .background_color(tauri::window::Color(44, 44, 44, 255));
-            #[cfg(target_os = "macos")]
-            {
-                builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
-            }
-            // Elsewhere the tab bar draws its own window controls
-            #[cfg(not(target_os = "macos"))]
-            {
-                builder = builder.decorations(false);
-            }
-            let window = builder.build()?;
-            // Traffic lights centered on the tab bar (see titlebar.rs)
-            #[cfg(target_os = "macos")]
-            unsafe {
-                titlebar::center_traffic_lights(window.ns_window()?.cast());
-            }
-            // `tabs::layout` sizes the tab bar's webview from here on
-            if let Some(bar) = app.get_webview("main") {
-                bar.set_auto_resize(false)?;
-                #[cfg(windows)]
-                webview2::add_tab_shortcuts(&bar);
-            }
-
+            let window = tabs::build_window(app.handle(), tabs::MAIN, tauri::LogicalSize::new(1440.0, 900.0), true)?;
             let handle = app.handle().clone();
-            window.on_window_event(move |event| match event {
-                WindowEvent::Resized(_) => {
-                    preview::hide(&handle);
-                    tabs::layout(&handle);
-                }
-                WindowEvent::Moved(_) | WindowEvent::Focused(false) => preview::hide(&handle),
-                // Ligma's other windows go with it: the hidden tab menu or
-                // preview window, a prompt or settings would keep the app
-                // running
-                WindowEvent::Destroyed => {
+            window.on_window_event(move |event| {
+                // Ligma's other windows go with it: other windows' tabs, the
+                // hidden tab menu or preview window, a prompt or settings
+                // would keep the app running
+                if let WindowEvent::Destroyed = event {
+                    tabs::close_other_windows(&handle);
                     tab_menu::close(&handle);
                     preview::close(&handle);
+                    split::close(&handle);
                     prompt::close_all(&handle);
                     settings::close(&handle);
                 }
-                _ => {}
             });
 
             tabs::apply_scale(app.handle());
@@ -366,6 +336,14 @@ fn main() {
                 let app = app.handle().clone();
                 std::thread::spawn(move || figma_scheme::on_args(&app, std::env::args().skip(1)));
             }
+
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(split::LAYOUT_EVERY);
+                tabs::refresh_splits(&handle);
+            });
+            let handle = app.handle().clone();
+            std::thread::spawn(move || split::watch(handle));
 
             let handle = app.handle().clone();
             std::thread::spawn(move || {

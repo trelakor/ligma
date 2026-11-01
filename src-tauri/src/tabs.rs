@@ -16,13 +16,27 @@
 //! it's hidden and shown in its place while it reloads after sleep, until
 //! `READY_JS` says Figma has drawn the file. With `tabPreviews` the image
 //! is kept too, for the card hovering a tab shows (see preview.rs)
+//!
+//! Tabs can be dragged out of the bar into a window of their own, or into
+//! another window's bar. Each window has its own tab bar and active tab;
+//! Home stays in the main window. A moved tab's webview is reparented, so
+//! its page carries on where it was. A window other than the main one
+//! closes with its last tab
+//!
+//! Two file tabs of a window can share its canvas in a split view (see
+//! split.rs). Selecting either keeps the split; selecting another tab ends
+//! it
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, Url, Webview, WebviewUrl, WebviewWindowBuilder,
+    Window, WindowEvent,
+};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -30,6 +44,11 @@ use tauri_plugin_opener::OpenerExt;
 pub const TAB_BAR_HEIGHT: f64 = 38.0;
 pub const HOME_URL: &str = "https://www.figma.com/files";
 const HOME_ID: u32 = 0;
+/// The window Ligma opens with, which holds Home. Its own webview, like
+/// every window's, is its tab bar and has its label
+pub const MAIN: &str = "main";
+/// Label prefix of the windows tabs are moved into
+const WINDOW_PREFIX: &str = "window-";
 
 // WKWebView's default UA has no Safari version token, which can trigger
 // Figma's "unsupported browser" notice. Present as current Safari instead
@@ -335,21 +354,39 @@ struct Tab {
     /// in the page meanwhile: on macOS WebKit would throw and abort Ligma
     #[serde(skip)]
     suspended: bool,
+    /// Label of the window it's in
+    #[serde(skip)]
+    window: String,
 }
 
 #[derive(Default)]
 struct TabState {
+    /// Every window's tabs, each window's in the order its bar shows them
     tabs: Vec<Tab>,
-    active: u32,
+    /// Each window's active tab, by window label
+    actives: HashMap<String, u32>,
+    /// Each window's tab that was active before its active one
+    previous: HashMap<String, u32>,
+    /// Each window's split view, if any: its tabs in the first and second
+    /// half (see split.rs)
+    splits: HashMap<String, [u32; 2]>,
+    /// The share of the canvas each split view's first half takes, as last
+    /// dragged. A half otherwise
+    split_ratios: HashMap<String, f64>,
+    /// The window last focused, where new tabs open and the tab shortcuts
+    /// act
+    focused: String,
     next_id: u32,
+    /// Number of the next window tabs are moved into
+    next_window: u32,
     /// Colors of the active tab's Figma theme, from `THEME_JS`
     theme: Option<serde_json::Value>,
     /// Hidden time after which a tab is put to sleep. None: never
     sleep_after: Option<Duration>,
     /// Hidden tabs that may stay loaded; older ones sleep. None: no limit
     max_hidden: Option<usize>,
-    /// A snapshot is showing, so the tab bar's webview fills the window
-    snapshot_shown: bool,
+    /// Windows showing a snapshot, whose tab bar's webview fills them
+    snapshot_shown: Vec<String>,
     /// Show a waking tab's snapshot while it reloads (`reloadSnapshots`)
     snapshots: bool,
     /// Preview a hovered tab (`tabPreviews`), with its snapshot
@@ -387,7 +424,7 @@ pub struct Tabs(Mutex<TabState>);
 
 impl Tabs {
     pub fn new(settings: &crate::settings::Settings) -> Self {
-        let mut state = TabState::default();
+        let mut state = TabState { focused: MAIN.to_owned(), next_window: 1, ..Default::default() };
         state.configure(settings);
         Self(Mutex::new(state))
     }
@@ -411,6 +448,45 @@ impl TabState {
                 tab.snapshot = None;
             }
         }
+    }
+
+    /// The focused window's active tab
+    fn active(&self) -> u32 {
+        self.active_in(&self.focused)
+    }
+
+    fn active_in(&self, window: &str) -> u32 {
+        self.actives.get(window).copied().unwrap_or(HOME_ID)
+    }
+
+    fn is_active(&self, tab: &Tab) -> bool {
+        self.actives.get(&tab.window) == Some(&tab.id)
+    }
+
+    /// Window `window`'s tabs, in order
+    fn tabs_in<'a>(&'a self, window: &'a str) -> impl Iterator<Item = &'a Tab> + 'a {
+        self.tabs.iter().filter(move |tab| tab.window == window)
+    }
+
+    /// Puts `tab` at `index` among its window's tabs in its group: the
+    /// pinned tabs, or the others. Home stays first
+    fn insert(&mut self, tab: Tab, index: usize) {
+        let same = |other: &Tab| other.window == tab.window && other.id != HOME_ID;
+        let group: Vec<usize> = (0..self.tabs.len())
+            .filter(|&i| same(&self.tabs[i]) && self.tabs[i].pinned == tab.pinned)
+            .collect();
+        let last = (0..self.tabs.len()).rev().find(|&i| self.tabs[i].window == tab.window);
+        let at = match (group.get(index), group.last()) {
+            (Some(&i), _) => i,
+            (None, Some(&i)) => i + 1,
+            // The first pinned tab goes before the others
+            (None, None) if tab.pinned => (0..self.tabs.len())
+                .find(|&i| same(&self.tabs[i]))
+                .or(last.map(|i| i + 1))
+                .unwrap_or(self.tabs.len()),
+            (None, None) => last.map_or(self.tabs.len(), |i| i + 1),
+        };
+        self.tabs.insert(at, tab);
     }
 }
 
@@ -478,6 +554,7 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
                 snapshot: None,
                 crop: None,
                 revealing: false,
+                window: MAIN.to_owned(),
             });
         }
         active
@@ -493,17 +570,17 @@ fn save_session(app: &AppHandle) {
         if !state.restore || state.tabs.is_empty() {
             return;
         }
+        // All in the main window next time, its own first
+        let tabs = state.tabs_in(MAIN).chain(state.tabs.iter().filter(|tab| tab.window != MAIN));
         let session = Session {
-            tabs: state
-                .tabs
-                .iter()
+            tabs: tabs
                 .map(|tab| SavedTab {
                     url: tab.url.to_string(),
                     title: tab.title.clone(),
                     pinned: tab.pinned,
                 })
                 .collect(),
-            active: state.tabs.iter().position(|tab| tab.id == state.active).unwrap_or(0),
+            active: state.tabs_in(MAIN).position(|tab| tab.id == state.active_in(MAIN)).unwrap_or(0),
         };
         let json = serde_json::to_string_pretty(&session).unwrap();
         if state.saved_session.as_ref() == Some(&json) {
@@ -608,8 +685,9 @@ fn view(url: &Url) -> &'static str {
     }
 }
 
-/// Opens `url` in a new tab, or focuses the tab already showing that file
-/// the same way, so presenting a file again goes back to its presentation
+/// Opens `url` in a new tab in the focused window, or focuses the tab
+/// already showing that file the same way, in whichever window, so
+/// presenting a file again goes back to its presentation
 pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     let key = file_key(&url);
     let id = {
@@ -618,12 +696,18 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             let tab = state.tabs.iter().find(|tab| {
                 tab.file_key.as_ref() == Some(key) && view(&tab.url) == view(&url)
             })?;
-            Some(tab.id)
+            Some((tab.id, tab.window.clone()))
         });
-        if let Some(id) = existing {
+        if let Some((id, window)) = existing {
             drop(state);
+            if let Some(window) = app.get_window(&window) {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
             return select(app, id);
         }
+        // Not into a window that's going
+        let window = if app.get_window(&state.focused).is_some() { state.focused.clone() } else { MAIN.to_owned() };
         let id = state.next_id;
         state.next_id += 1;
         state.tabs.push(Tab {
@@ -639,6 +723,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             snapshot: None,
             crop: None,
             revealing: false,
+            window,
         });
         id
     };
@@ -648,7 +733,10 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
 
 /// Loads tab `id`'s webview, for a new tab or one waking up
 fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
-    let window = app.get_window("main").expect("main window exists");
+    let window = with_tab(app, id, |tab| tab.window.clone())
+        .and_then(|label| app.get_window(&label))
+        .or_else(|| app.get_window(MAIN))
+        .expect("main window exists");
     let (nav_app, popup_app, title_app) = (app.clone(), app.clone(), app.clone());
     #[allow(unused_mut)]
     let mut builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
@@ -685,7 +773,9 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::adjustments::page_js())
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
-        .initialization_script(crate::contrast::page_js());
+        .initialization_script(crate::contrast::page_js())
+        .initialization_script(crate::split::PAGE_JS)
+        .initialization_script(crate::split::CARRY_JS);
     #[cfg(target_os = "macos")]
     {
         builder = builder
@@ -809,6 +899,7 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::toolbar::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
         crate::adjustments::on_signal(app, id, &url);
+
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
@@ -869,9 +960,11 @@ fn tab_title(title: &str, kind: &str) -> String {
     title.to_owned()
 }
 
+/// Makes tab `id` the active one of its window, and that window the
+/// focused one
 pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-    let (previous, wake, resume, snapshot) = {
+    let (window, previous, wake, resume, snapshot, split, unsplit) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
         // Previews keep snapshots too; only `reloadSnapshots` shows them here
         let snapshots = state.snapshots;
@@ -891,15 +984,46 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         tab.revealing |= snapshots && wake.is_some() && tab.snapshot.is_some() && tab.file_key.is_some();
         // Kept otherwise, for the tab's preview once it's hidden again
         let snapshot = tab.snapshot.clone().filter(|_| tab.revealing);
-        let previous = std::mem::replace(&mut state.active, id);
-        if previous != id {
-            if let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == previous) {
-                tab.hidden_since = Some(Instant::now());
+        let window = tab.window.clone();
+        // Only a tab still in this window: one moved out carries on there
+        let previous = state.actives.insert(window.clone(), id).filter(|&previous| {
+            previous != id && state.tabs.iter().any(|tab| tab.id == previous && tab.window == window)
+        });
+        if let Some(previous) = previous {
+            state.previous.insert(window.clone(), previous);
+        }
+        // Within a split, the tab it leaves stays shown in its half. Any
+        // other tab ends the split, and both its tabs go
+        let (split, unsplit) = match state.splits.get(&window).copied() {
+            Some(pair) if pair.contains(&id) => (Some(pair), None),
+            Some(pair) => {
+                state.splits.remove(&window);
+                state.split_ratios.remove(&window);
+                (None, Some(pair))
+            }
+            None => (None, None),
+        };
+        let previous = previous.filter(|previous| !split.is_some_and(|pair| pair.contains(previous)));
+        let hiding: Vec<u32> = previous
+            .into_iter()
+            .chain(unsplit.into_iter().flatten().filter(|&tab| tab != id && Some(tab) != previous))
+            .collect();
+        for tab in state.tabs.iter_mut().filter(|tab| hiding.contains(&tab.id)) {
+            tab.hidden_since = Some(Instant::now());
+        }
+        state.focused = window.clone();
+        (window, hiding, wake, resume, snapshot, split, unsplit)
+    };
+    if let Some(pair) = unsplit {
+        for tab in pair {
+            if let Some(webview) = app.get_webview(&label(tab)) {
+                crate::split::unclip(tab, &webview);
             }
         }
-        (previous, wake, resume, snapshot)
-    };
-    show_snapshot(app, snapshot.as_deref());
+        crate::split::hide_divider(app, &window);
+        fit_tab_bar(app, &window);
+    }
+    show_snapshot(app, &window, snapshot.as_deref());
     if let Some(url) = wake {
         // Fails if the old webview is still closing. Stay asleep, so
         // selecting the tab again retries
@@ -930,7 +1054,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         }
     }
     sync_theme(app);
-    if previous != id {
+    for &previous in &previous {
         if let Some(webview) = app.get_webview(&label(previous)) {
             // WebView2 can't be relied on to capture a webview it's hiding;
             // on Windows the tab bar has `capture_active` take it beforehand
@@ -940,39 +1064,154 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
             #[cfg(windows)]
             crate::webview2::on_hidden(&webview);
         }
-        // A tab past `max_hidden` sleeps now, not at the next timer tick
+    }
+    // A tab past `max_hidden` sleeps now, not at the next timer tick
+    if !previous.is_empty() {
         rest_idle(app);
+    }
+    if split.is_some() {
+        layout_split(app, &window);
     }
     push_state(app);
     Ok(())
 }
 
-/// Shows `snapshot` where tab webviews go, or hides it
-fn show_snapshot(app: &AppHandle, snapshot: Option<&str>) {
-    let Some(bar) = app.get_webview("main") else {
+/// Splits window `window` between tabs `first` and `second`, in that
+/// order, and focuses `focus`, one of them. Both must be file tabs in it,
+/// and neither Home
+fn split_pair(app: &AppHandle, window: &str, first: u32, second: u32, focus: u32) -> tauri::Result<()> {
+    {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let fits = |id: u32| state.tabs_in(window).any(|tab| tab.id == id && tab.file_key.is_some());
+        if first == second || first == HOME_ID || second == HOME_ID || !fits(first) || !fits(second) {
+            return Ok(());
+        }
+    }
+    end_split(app, window);
+    app.state::<Tabs>().inner().0.lock().unwrap().splits.insert(window.to_owned(), [first, second]);
+    fit_tab_bar(app, window);
+    // Each selected in turn, so both are awake and shown
+    select(app, if focus == first { second } else { first })?;
+    select(app, focus)
+}
+
+/// Ends window `window`'s split view, if it has one: its active tab fills
+/// the canvas again and the other hides
+fn end_split(app: &AppHandle, window: &str) {
+    let (pair, other) = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let Some(pair) = state.splits.remove(window) else {
+            return;
+        };
+        state.split_ratios.remove(window);
+        let active = state.active_in(window);
+        let other = pair.into_iter().find(|&tab| tab != active);
+        if let Some(tab) = state.tabs.iter_mut().find(|tab| Some(tab.id) == other) {
+            tab.hidden_since = Some(Instant::now());
+        }
+        (pair, other)
+    };
+    for tab in pair {
+        if let Some(webview) = app.get_webview(&label(tab)) {
+            crate::split::unclip(tab, &webview);
+            if Some(tab) == other {
+                let _ = webview.hide();
+                #[cfg(windows)]
+                crate::webview2::on_hidden(&webview);
+            }
+        }
+    }
+    crate::split::hide_divider(app, window);
+    fit_tab_bar(app, window);
+    push_state(app);
+}
+
+/// The tabs in split views, in every window
+pub fn split_tabs(app: &AppHandle) -> Vec<u32> {
+    let state = app.state::<Tabs>().inner().0.lock().unwrap();
+    state.splits.values().flatten().copied().collect()
+}
+
+/// The other tab of the split view tab `id` is in, if any
+pub fn split_partner(app: &AppHandle, id: u32) -> Option<u32> {
+    let state = app.state::<Tabs>().inner().0.lock().unwrap();
+    let window = &state.tabs.iter().find(|tab| tab.id == id)?.window;
+    state.splits.get(window)?.iter().copied().find(|&tab| tab != id)
+}
+
+/// Ends the split views tabs `ids` are in
+fn end_splits_of(app: &AppHandle, ids: &[u32]) {
+    let windows: Vec<String> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let split = |(_, pair): &(&String, &[u32; 2])| pair.iter().any(|tab| ids.contains(tab));
+        state.splits.iter().filter(split).map(|(window, _)| window.clone()).collect()
+    };
+    for window in windows {
+        end_split(app, &window);
+    }
+}
+
+/// Clips window `window`'s split tabs to their halves, for its focused one
+fn layout_split(app: &AppHandle, window: &str) {
+    let found = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.splits.get(window).copied().and_then(|pair| {
+            let active = state.active_in(window);
+            let other = pair.into_iter().find(|&tab| tab != active).filter(|_| pair.contains(&active))?;
+            let ratio = state.split_ratios.get(window).copied().unwrap_or(0.5);
+            Some((active, other, pair[0] == other, ratio))
+        })
+    };
+    if let Some((focused, other, other_first, ratio)) = found {
+        crate::split::layout(app, focused, other, other_first, ratio);
+    }
+}
+
+/// Lays out every split view again, for Figma's toolbar, menus and panels
+/// changing. Call every `split::LAYOUT_EVERY`
+pub fn refresh_splits(app: &AppHandle) {
+    let windows: Vec<String> = app.state::<Tabs>().inner().0.lock().unwrap().splits.keys().cloned().collect();
+    for window in windows {
+        layout_split(app, &window);
+    }
+}
+
+/// Shows `snapshot` where tab webviews go in window `window`, or hides it
+fn show_snapshot(app: &AppHandle, window: &str, snapshot: Option<&str>) {
+    let Some(bar) = app.get_webview(window) else {
         return;
     };
-    app.state::<Tabs>().inner().0.lock().unwrap().snapshot_shown = snapshot.is_some();
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.snapshot_shown.retain(|shown| shown != window);
+        if snapshot.is_some() {
+            state.snapshot_shown.push(window.to_owned());
+        }
+    }
     let _ = match snapshot {
         Some(url) => bar.eval(format!("window.showSnapshot?.({})", serde_json::to_string(url).unwrap())),
         None => bar.eval("window.hideSnapshot?.()"),
     };
-    fit_tab_bar(app);
+    fit_tab_bar(app, window);
 }
 
 /// Sizes the tab bar's webview to the bar, or to the whole window while it
 /// shows a snapshot. Kept off the area under the bar otherwise: tab webviews
 /// lie on top of it there, and WebKit would never see the mouse leave the
 /// bar, leaving the last hovered tab highlighted
-fn fit_tab_bar(app: &AppHandle) {
-    let (Some(window), Some(bar)) = (app.get_window("main"), app.get_webview("main")) else {
+fn fit_tab_bar(app: &AppHandle, label: &str) {
+    let (Some(window), Some(bar)) = (app.get_window(label), app.get_webview(label)) else {
         return;
     };
     let (Ok(size), Ok(scale)) = (window.inner_size(), window.scale_factor()) else {
         return;
     };
     let size = size.to_logical::<f64>(scale);
-    let full = app.state::<Tabs>().inner().0.lock().unwrap().snapshot_shown;
+    let full = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        // Split, it shows between the halves (see split.rs)
+        state.snapshot_shown.iter().any(|shown| shown == label) || state.splits.contains_key(label)
+    };
     let height = if full { size.height } else { bar_height(app).min(size.height) };
     let _ = bar.set_size(LogicalSize::new(size.width, height));
 }
@@ -1064,7 +1303,7 @@ pub fn capture_active(app: &AppHandle) {
             return;
         }
         state.last_capture = Some(Instant::now());
-        state.active
+        state.active()
     };
     if let Some(webview) = app.get_webview(&label(active)) {
         capture(app, active, &webview);
@@ -1072,10 +1311,11 @@ pub fn capture_active(app: &AppHandle) {
 }
 
 /// True if tab `id` may be previewed: `tabPreviews` is on, and it's open
-/// and neither Home nor the active tab
+/// and neither Home nor its window's active tab
 pub fn can_preview(app: &AppHandle, id: u32) -> bool {
     let state = app.state::<Tabs>().inner().0.lock().unwrap();
-    state.previews && id != HOME_ID && id != state.active && state.tabs.iter().any(|tab| tab.id == id)
+    let split = |tab: &Tab| state.splits.get(&tab.window).is_some_and(|pair| pair.contains(&tab.id));
+    state.previews && id != HOME_ID && state.tabs.iter().any(|tab| tab.id == id && !state.is_active(tab) && !split(tab))
 }
 
 /// What the preview of a tab shows
@@ -1129,21 +1369,21 @@ fn reveal_when_ready(app: &AppHandle, id: u32) {
                 break;
             }
         }
-        let active = {
+        let window = {
             let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-            let active = state.active;
             let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == id) else {
                 return;
             };
             tab.revealing = false;
-            active == id
+            let window = tab.window.clone();
+            state.actives.get(&window).is_some_and(|&active| active == id).then_some(window)
         };
-        if active {
+        if let Some(window) = window {
             if let Some(webview) = app.get_webview(&label(id)) {
                 let _ = webview.show();
                 let _ = webview.set_focus();
             }
-            show_snapshot(&app, None);
+            show_snapshot(&app, &window, None);
         }
     });
 }
@@ -1153,29 +1393,46 @@ pub fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
     close_tabs(app, &[id])
 }
 
-/// Closes tabs `ids`, except Home. If the active tab is among them, the
-/// nearest open tab to its right is selected, else the last one
+/// Closes tabs `ids`, except Home. If a window's active tab is among them,
+/// the nearest open tab to its right is selected, else the last one. A
+/// window left without tabs closes
 fn close_tabs(app: &AppHandle, ids: &[u32]) -> tauri::Result<()> {
     let ids: Vec<u32> = ids.iter().copied().filter(|&id| id != HOME_ID).collect();
-    let next = {
+    end_splits_of(app, &ids);
+    let (next, emptied) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
         let closing = |tab: &Tab| ids.contains(&tab.id);
-        let index = state.tabs.iter().position(|tab| tab.id == state.active);
-        // Prefer the tab to the right, like the desktop app. Home is always
-        // left and never closed, so one is always left
-        let next = index.filter(|&index| closing(&state.tabs[index])).map(|index| {
-            let right = state.tabs[index..].iter().find(|tab| !closing(tab));
-            right.or_else(|| state.tabs.iter().rev().find(|tab| !closing(tab))).unwrap().id
-        });
+        let (mut next, mut emptied) = (Vec::new(), Vec::new());
+        for (window, &active) in &state.actives {
+            let tabs: Vec<&Tab> = state.tabs_in(window).collect();
+            let Some(index) = tabs.iter().position(|tab| tab.id == active && closing(tab)) else {
+                continue;
+            };
+            // Prefer the tab to the right, like the desktop app. Home is
+            // always left and never closed, so the main window keeps one
+            let right = tabs[index..].iter().find(|tab| !closing(tab));
+            match right.or_else(|| tabs.iter().rev().find(|tab| !closing(tab))) {
+                Some(tab) => next.push(tab.id),
+                None => emptied.push(window.clone()),
+            }
+        }
         state.tabs.retain(|tab| !closing(tab));
-        next
+        for window in &emptied {
+            state.actives.remove(window);
+        }
+        (next, emptied)
     };
-    if let Some(next) = next {
+    for next in next {
         select(app, next)?;
     }
     for id in ids {
         if let Some(webview) = app.get_webview(&label(id)) {
             webview.close()?;
+        }
+    }
+    for window in emptied.iter().filter(|window| *window != MAIN) {
+        if let Some(window) = app.get_window(window) {
+            window.destroy()?;
         }
     }
     push_state(app);
@@ -1192,29 +1449,357 @@ fn set_pinned(app: &AppHandle, id: u32, pinned: bool) {
         };
         let mut tab = state.tabs.remove(index);
         tab.pinned = pinned;
-        let pinned_count = state.tabs.iter().filter(|tab| tab.pinned).count();
-        state.tabs.insert(1 + pinned_count, tab);
+        let index = if pinned { usize::MAX } else { 0 };
+        state.insert(tab, index);
     }
     push_state(app);
 }
 
-/// Moves tab `id` to `index` among its group: the pinned tabs, or the
-/// others. Home stays first
+/// Moves tab `id` to `index` among its window's tabs in its group: the
+/// pinned tabs, or the others. Home stays first
 fn move_tab(app: &AppHandle, id: u32, index: usize) {
     {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
         if let Some(from) = state.tabs.iter().position(|tab| tab.id == id && id != HOME_ID) {
             let tab = state.tabs.remove(from);
-            let pinned_count = state.tabs.iter().filter(|tab| tab.pinned).count();
-            let (start, len) = if tab.pinned {
-                (1, pinned_count)
-            } else {
-                (1 + pinned_count, state.tabs.len() - 1 - pinned_count)
-            };
-            state.tabs.insert(start + index.min(len), tab);
+            state.insert(tab, index);
         }
     }
     push_state(app);
+}
+
+/// Moves tab `id` into window `target`, at `index` among its group there
+/// (see `move_tab`), and selects it. Its webview is reparented, so the page
+/// carries on. The window it leaves selects its neighbor, or with `back`
+/// the tab active before it, or closes if that was its last tab
+fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize, back: bool) -> tauri::Result<()> {
+    let Some(target_window) = app.get_window(target) else {
+        return Ok(());
+    };
+    end_splits_of(app, &[id]);
+    let (source, next) = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let Some(from) = state.tabs.iter().position(|tab| tab.id == id && id != HOME_ID) else {
+            return Ok(());
+        };
+        let source = state.tabs[from].window.clone();
+        if source == target {
+            drop(state);
+            move_tab(app, id, index);
+            return Ok(());
+        }
+        let next = (state.actives.get(&source) == Some(&id)).then(|| {
+            let tabs: Vec<&Tab> = state.tabs_in(&source).collect();
+            let before = state.previous.get(&source).filter(|&&before| before != id);
+            let before = before.filter(|&&before| back && tabs.iter().any(|tab| tab.id == before));
+            // Else the neighbor to the right, like closing it would select
+            let at = tabs.iter().position(|tab| tab.id == id).unwrap_or(0);
+            let neighbor = || tabs.get(at + 1).or_else(|| at.checked_sub(1).and_then(|at| tabs.get(at))).map(|tab| tab.id);
+            before.copied().or_else(neighbor)
+        });
+        if next.is_some() {
+            state.actives.remove(&source);
+        }
+        let mut tab = state.tabs.remove(from);
+        tab.window = target.to_owned();
+        state.insert(tab, index);
+        (source, next)
+    };
+    if let Some(webview) = app.get_webview(&label(id)) {
+        // Hidden while it moves, so `select` shows it afresh in its new
+        // window, rather than a stale image of it
+        webview.hide()?;
+        // On the main thread: elsewhere `reparent` holds the webview's lock
+        // while it waits for the main thread, which hangs Ligma if the main
+        // thread needs the webview meanwhile (a title change, a move)
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (moving, to) = (webview.clone(), target_window.clone());
+        app.run_on_main_thread(move || {
+            let _ = tx.send(moving.reparent(&to));
+        })?;
+        rx.recv().map_err(|_| tauri::Error::FailedToReceiveMessage)??;
+        webview.set_bounds(tab_bounds(app, &target_window)?)?;
+        #[cfg(windows)]
+        crate::webview2::on_moved(&webview);
+    }
+    match next {
+        Some(Some(next)) => select(app, next)?,
+        Some(None) if source != MAIN => {
+            if let Some(window) = app.get_window(&source) {
+                window.destroy()?;
+            }
+        }
+        _ => {}
+    }
+    select(app, id)?;
+    // A new window is shown once it's ready, by `move_to_new_window`
+    if target_window.is_visible()? {
+        let _ = target_window.unminimize();
+        let _ = target_window.set_focus();
+    }
+    push_state(app);
+    Ok(())
+}
+
+/// Where a window's first tab is held when it's dragged, in CSS pixels
+/// from the window's top left: past the traffic lights on macOS
+const GRIP: (f64, f64) = (if cfg!(target_os = "macos") { 118.0 } else { 40.0 }, TAB_BAR_HEIGHT / 2.0);
+
+/// Where a window goes to have its first tab under the cursor at `at`, in
+/// screen pixels
+fn grip_position(app: &AppHandle, window: &Window, at: PhysicalPosition<f64>) -> PhysicalPosition<i32> {
+    let monitor = app.monitor_from_point(at.x, at.y).ok().flatten();
+    let factor = monitor.map_or_else(|| window.scale_factor().unwrap_or(1.0), |monitor| monitor.scale_factor());
+    let px = factor * scale(app);
+    PhysicalPosition::new(at.x - GRIP.0 * px, at.y - GRIP.1 * px).cast::<i32>()
+}
+
+/// Moves tab `id` into a new window, with its first tab under the cursor at
+/// `at`, in screen pixels. A window's only tab stays, and the window moves
+/// there instead. With `back`, the window it leaves goes back to the tab
+/// active before it (see `move_to_window`). Gives the label of the window
+/// the tab is now in
+fn move_to_new_window(
+    app: &AppHandle,
+    id: u32,
+    at: PhysicalPosition<f64>,
+    back: bool,
+) -> tauri::Result<Option<String>> {
+    let Some((source, alone)) = ({
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.tabs.iter().find(|tab| tab.id == id && id != HOME_ID).map(|tab| {
+            (tab.window.clone(), state.tabs_in(&tab.window).count() == 1)
+        })
+    }) else {
+        return Ok(None);
+    };
+    let Some(source_window) = app.get_window(&source) else {
+        return Ok(None);
+    };
+    let position = grip_position(app, &source_window, at);
+    // Never the main window, which keeps Home
+    if alone {
+        source_window.set_position(position)?;
+        source_window.set_focus()?;
+        return Ok(Some(source));
+    }
+    // As large as the window it leaves, unless that fills the screen
+    let size = if source_window.is_maximized()? || source_window.is_fullscreen()? {
+        LogicalSize::new(1200.0, 800.0)
+    } else {
+        source_window.inner_size()?.to_logical::<f64>(source_window.scale_factor()?)
+    };
+    let label = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.next_window += 1;
+        format!("{WINDOW_PREFIX}{}", state.next_window - 1)
+    };
+    // Shown only once it's in place with its tab, so it doesn't come
+    // together on screen
+    let window = build_window(app, &label, size, false)?;
+    window.set_position(position)?;
+    move_to_window(app, id, &label, 0, back)?;
+    window.show()?;
+    window.set_focus()?;
+    // Fitted again to the size it has now it's shown
+    layout(app);
+    Ok(Some(label))
+}
+
+/// True while the main mouse button is held down, anywhere
+#[cfg(windows)]
+pub fn mouse_down() -> bool {
+    crate::webview2::left_button_down()
+}
+
+#[cfg(target_os = "macos")]
+pub fn mouse_down() -> bool {
+    use objc2::{class, msg_send};
+    let buttons: usize = unsafe { msg_send![class!(NSEvent), pressedMouseButtons] };
+    buttons & 1 != 0
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn mouse_down() -> bool {
+    false
+}
+
+/// A window's tab bar, as `follow_cursor` finds it under the cursor
+struct Bar {
+    label: String,
+    origin: PhysicalPosition<i32>,
+    width: f64,
+    /// Screen pixels per CSS pixel in the bar
+    px: f64,
+}
+
+impl Bar {
+    /// Every visible window's tab bar but window `except`'s
+    fn all(app: &AppHandle, except: &str) -> Vec<Bar> {
+        let bar = |window: Window| {
+            if window.label() == except || !window.is_visible().ok()? || window.is_minimized().ok()? {
+                return None;
+            }
+            Some(Bar {
+                label: window.label().to_owned(),
+                origin: window.inner_position().ok()?,
+                width: window.inner_size().ok()?.width as f64,
+                px: window.scale_factor().ok()? * scale(app),
+            })
+        };
+        tab_windows(app).into_iter().filter_map(bar).collect()
+    }
+
+    /// The CSS pixel in the bar `at` is on, in screen pixels, if it's on it
+    fn x_at(&self, at: PhysicalPosition<f64>) -> Option<f64> {
+        let (x, y) = (at.x - self.origin.x as f64, at.y - self.origin.y as f64);
+        (x >= 0.0 && x < self.width && y >= 0.0 && y < TAB_BAR_HEIGHT * self.px).then(|| x / self.px)
+    }
+}
+
+/// A half of a window's canvas, where a dragged file tab splits it with
+/// the window's active tab (see split.rs)
+struct Zone {
+    window: String,
+    partner: u32,
+    /// In screen pixels
+    rect: crate::split::Rect,
+    /// The dragged tab goes in the first half, not the second
+    first: bool,
+}
+
+impl Zone {
+    /// Every visible window's zone but window `except`'s, for dragged tab
+    /// `id`. None if it's no file
+    fn all(app: &AppHandle, except: &str, id: u32) -> Vec<Zone> {
+        if with_tab(app, id, |tab| tab.file_key.is_none()).unwrap_or(true) {
+            return Vec::new();
+        }
+        let zones = |window: Window| {
+            if window.label() == except || !window.is_visible().ok()? || window.is_minimized().ok()? {
+                return None;
+            }
+            let partner = {
+                let state = app.state::<Tabs>().inner().0.lock().unwrap();
+                let active = state.active_in(window.label());
+                state.tabs.iter().find(|tab| tab.id == active && tab.file_key.is_some() && active != id)?.id
+            };
+            let canvas = crate::split::canvas_on_screen(app, &window, partner)?;
+            let (halves, _) = crate::split::halves(canvas, 0.5, 0.0);
+            let label = window.label().to_owned();
+            let zone = |index: usize| Zone { window: label.clone(), partner, rect: halves[index], first: index == 0 };
+            Some([zone(0), zone(1)])
+        };
+        tab_windows(app).into_iter().filter_map(zones).flatten().collect()
+    }
+
+    fn contains(&self, at: PhysicalPosition<f64>) -> bool {
+        let [l, t, r, b] = self.rect;
+        at.x >= l && at.x < r && at.y >= t && at.y < b
+    }
+}
+
+/// Keeps window `label`, holding dragged tab `id`, under the cursor until
+/// the mouse button is let go. Over another window's tab bar the window
+/// hides, and the bar shows where the tab would go (`dragOver` in
+/// index.html); let go there, it moves in. Over the far half of a window's
+/// canvas it hides too, and a hint marks the half; let go there, the tab
+/// moves in and splits the canvas with the tab there
+fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
+    let Some(window) = app.get_window(label) else {
+        return;
+    };
+    let Some(tab) = with_tab(app, id, |tab| {
+        serde_json::json!({ "title": tab.title, "kind": tab.kind, "pinned": tab.pinned })
+    }) else {
+        return;
+    };
+    // The other windows stay put meanwhile
+    let bars = Bar::all(app, label);
+    let zones = Zone::all(app, label, id);
+    let mut last = None;
+    // The bar the tab is over, and where in it, or else the zone
+    let mut over: Option<(&Bar, f64)> = None;
+    let mut zone: Option<&Zone> = None;
+    while mouse_down() {
+        let at = app.cursor_position().ok();
+        if let Some(at) = at.filter(|&at| last != Some(at)) {
+            last = Some(at);
+            let now = bars.iter().find_map(|bar| Some((bar, bar.x_at(at)?)));
+            let now_zone = zones.iter().find(|zone| now.is_none() && zone.contains(at));
+            let hidden = over.is_some() || zone.is_some();
+            if over.map(|(bar, _)| &bar.label) != now.map(|(bar, _)| &bar.label) {
+                if let Some(webview) = over.and_then(|(bar, _)| app.get_webview(&bar.label)) {
+                    let _ = webview.eval("window.dragOver?.(null)");
+                }
+            }
+            if zone.map(|zone| (&zone.window, zone.first)) != now_zone.map(|zone| (&zone.window, zone.first)) {
+                match now_zone.and_then(|zone| Some((zone, app.get_window(&zone.window)?))) {
+                    Some((zone, owner)) => crate::split::show_hint(app, &owner, zone.rect),
+                    None => crate::split::hide_hint(app),
+                }
+            }
+            match now {
+                Some((bar, x)) => {
+                    if let Some(webview) = app.get_webview(&bar.label) {
+                        let _ = webview.eval(format!("window.dragOver?.({x}, {tab})"));
+                    }
+                }
+                None => {
+                    let _ = window.set_position(grip_position(app, &window, at));
+                }
+            }
+            // Shown again once it's back under the cursor
+            let hide = now.is_some() || now_zone.is_some();
+            if hide != hidden {
+                let _ = if hide { window.hide() } else { window.show() };
+            }
+            over = now;
+            zone = now_zone;
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+    crate::split::hide_hint(app);
+    if let Some((bar, x)) = over {
+        drop_on_bar(app, id, label, &bar.label, x);
+    } else if let Some(zone) = zone {
+        if move_to_window(app, id, &zone.window, usize::MAX, false).is_ok() {
+            let (first, second) = if zone.first { (id, zone.partner) } else { (zone.partner, id) };
+            let _ = split_pair(app, &zone.window, first, second, id);
+        } else {
+            let _ = window.show();
+        }
+    }
+}
+
+/// Moves dragged tab `id` into window `target`, let go `x` CSS pixels into
+/// its tab bar, from window `from`, hidden meanwhile. If it can't, `from`
+/// shows again
+fn drop_on_bar(app: &AppHandle, id: u32, from: &str, target: &str, x: f64) {
+    fn show(app: &AppHandle, label: &str) {
+        if let Some(window) = app.get_window(label) {
+            let _ = window.show();
+        }
+    }
+    let pinned = with_tab(app, id, |tab| tab.pinned).unwrap_or(false);
+    let Some(bar) = app.get_webview(target) else {
+        return show(app, from);
+    };
+    let (handle, target_label, from_label) = (app.clone(), target.to_owned(), from.to_owned());
+    let script = format!("(() => {{ window.dragOver?.(null); return window.dropIndex?.({x}, {pinned}) ?? 1e9; }})()");
+    let sent = bar.eval_with_callback(script, move |json| {
+        let index = json.parse::<f64>().map_or(usize::MAX, |index| index.max(0.0) as usize);
+        // Not from inside the webview's own callback
+        let (app, target, from) = (handle.clone(), target_label.clone(), from_label.clone());
+        std::thread::spawn(move || {
+            if move_to_window(&app, id, &target, index, false).is_err() {
+                show(&app, &from);
+            }
+        });
+    });
+    if sent.is_err() {
+        show(app, from);
+    }
 }
 
 /// Reloads tab `id`. A frozen tab is put to sleep instead, so it loads
@@ -1289,8 +1874,24 @@ fn tab_url(app: &AppHandle, id: u32) -> Option<Url> {
 /// Shows the right-click menu of tab `id` (see tab_menu.rs). Its items
 /// run through `on_menu`
 fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
-    let Some((pinned, key)) = with_tab(app, id, |tab| (tab.pinned, tab.file_key.clone())) else {
+    let Some((pinned, key, window)) = with_tab(app, id, |tab| (tab.pinned, tab.file_key.clone(), tab.window.clone()))
+    else {
         return Ok(());
+    };
+    let (alone, split) = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        // Already in a window of its own
+        let alone = state.tabs_in(&window).count() == 1;
+        let pair = state.splits.get(&window).copied();
+        let active = state.active_in(&window);
+        let file = |id: u32| state.tabs.iter().any(|tab| tab.id == id && tab.file_key.is_some());
+        let split = if pair.is_some_and(|pair| pair.contains(&id)) {
+            Some(("unsplit", "End Split View"))
+        } else {
+            // With the active file tab
+            (id != active && active != HOME_ID && file(id) && file(active)).then_some(("split", "Split View"))
+        };
+        (alone, split)
     };
     // Files only, while Discord is shown anything
     let discord = key.filter(|_| crate::presence::is_on(app)).map(|key| {
@@ -1309,6 +1910,12 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
             Some(("browser", "Open in Browser")),
             Some(("reload", "Reload")),
         ];
+        if !alone {
+            items.push(Some(("new-window", "Move to New Window")));
+        }
+        if split.is_some() {
+            items.push(split);
+        }
         if discord.is_some() {
             items.extend([None, discord]);
         }
@@ -1333,10 +1940,14 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
     let Ok(id) = id.parse::<u32>() else {
         return Ok(());
     };
-    // All tabs but `keep`, and but pinned ones unless `pinned_too`
+    // All tabs in tab `id`'s window but `keep`, and but pinned ones unless
+    // `pinned_too`
     let others = |keep: u32, pinned_too: bool| -> Vec<u32> {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let tabs = state.tabs.iter().filter(|tab| pinned_too || !tab.pinned);
+        let Some(window) = state.tabs.iter().find(|tab| tab.id == id).map(|tab| tab.window.clone()) else {
+            return Vec::new();
+        };
+        let tabs = state.tabs_in(&window).filter(|tab| pinned_too || !tab.pinned);
         tabs.map(|tab| tab.id).filter(|&other| other != keep).collect()
     };
     match action {
@@ -1353,6 +1964,31 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
             }
         }
         "reload" => reload(app, id),
+        "split" => {
+            let pair = with_tab(app, id, |tab| tab.window.clone()).map(|window| {
+                let active = app.state::<Tabs>().inner().0.lock().unwrap().active_in(&window);
+                (window, active)
+            });
+            if let Some((window, active)) = pair {
+                split_pair(app, &window, active, id, id)?;
+            }
+        }
+        "unsplit" => {
+            if let Some(window) = with_tab(app, id, |tab| tab.window.clone()) {
+                end_split(app, &window);
+            }
+        }
+        "new-window" => {
+            // A little right of and below the window it leaves
+            if let Some(window) = window_of(app, id) {
+                let (origin, px) = (window.inner_position()?, window.scale_factor()? * scale(app));
+                let at = PhysicalPosition::new(
+                    origin.x as f64 + (GRIP.0 + 32.0) * px,
+                    origin.y as f64 + (GRIP.1 + 32.0) * px,
+                );
+                move_to_new_window(app, id, at, false)?;
+            }
+        }
         "discord-hide" | "discord-show" => {
             if let Some(Some(key)) = with_tab(app, id, |tab| tab.file_key.clone()) {
                 crate::presence::set_hidden(app, &key, action == "discord-hide");
@@ -1370,17 +2006,21 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
 }
 
 pub fn close_active(app: &AppHandle) -> tauri::Result<()> {
-    let active = app.state::<Tabs>().inner().0.lock().unwrap().active;
+    let active = app.state::<Tabs>().inner().0.lock().unwrap().active();
     close(app, active)
 }
 
-/// Selects the tab `offset` places from the active one, wrapping around
+/// Selects the tab `offset` places from the focused window's active one,
+/// wrapping around
 pub fn cycle(app: &AppHandle, offset: isize) -> tauri::Result<()> {
     let id = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let len = state.tabs.len() as isize;
-        let index = state.tabs.iter().position(|tab| tab.id == state.active).unwrap_or(0) as isize;
-        state.tabs[(index + offset).rem_euclid(len) as usize].id
+        let tabs: Vec<&Tab> = state.tabs_in(&state.focused).collect();
+        if tabs.is_empty() {
+            return Ok(());
+        }
+        let index = tabs.iter().position(|tab| tab.id == state.active()).unwrap_or(0) as isize;
+        tabs[(index + offset).rem_euclid(tabs.len() as isize) as usize].id
     };
     select(app, id)
 }
@@ -1417,12 +2057,12 @@ pub struct ActiveFile {
     pub webview: Webview,
 }
 
-/// The active tab's file, if it shows a Figma file and can run JavaScript
-/// (not still resuming)
+/// The focused window's active tab's file, if it shows a Figma file and
+/// can run JavaScript (not still resuming)
 pub fn active_file(app: &AppHandle) -> Option<ActiveFile> {
     let (id, name, view, key, editor) = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
-        let tab = state.tabs.iter().find(|tab| tab.id == state.active && !tab.suspended)?;
+        let tab = state.tabs.iter().find(|tab| tab.id == state.active() && !tab.suspended)?;
         let key = tab.file_key.clone()?;
         let mut name = tab.title.as_str();
         // "Presenter · <name>" and "Audience · <name>" in Slides
@@ -1454,7 +2094,7 @@ pub fn open_shared(app: &AppHandle, path: &str) -> tauri::Result<()> {
         return Ok(());
     };
     // Not yet, while a Ligma started for this is still setting up
-    let Some(window) = app.get_window("main") else {
+    let Some(window) = focused_window(app) else {
         return Ok(());
     };
     let _ = window.unminimize();
@@ -1614,15 +2254,16 @@ fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
     }
 }
 
-/// Matches the tab bar to the active tab's Figma theme. Runs on tab switch
-/// and on a timer, since Figma changes theme without any event Ligma sees
+/// Matches the tab bars to the focused window's active tab's Figma theme.
+/// Runs on tab switch and on a timer, since Figma changes theme without any
+/// event Ligma sees
 pub fn sync_theme(app: &AppHandle) {
     let active = {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
-        if state.tabs.iter().any(|tab| tab.id == state.active && tab.suspended) {
+        if state.tabs.iter().any(|tab| tab.id == state.active() && tab.suspended) {
             return;
         }
-        state.active
+        state.active()
     };
     let Some(webview) = app.get_webview(&label(active)) else {
         return;
@@ -1635,7 +2276,7 @@ pub fn sync_theme(app: &AppHandle) {
         };
         {
             let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
-            if state.active != active || state.theme.as_ref() == Some(&theme) {
+            if state.active() != active || state.theme.as_ref() == Some(&theme) {
                 return;
             }
             state.theme = Some(theme.clone());
@@ -1659,7 +2300,7 @@ pub fn scale(app: &AppHandle) -> f64 {
 }
 
 /// The tab bar's height at the interface scale
-fn bar_height(app: &AppHandle) -> f64 {
+pub fn bar_height(app: &AppHandle) -> f64 {
     TAB_BAR_HEIGHT * scale(app)
 }
 
@@ -1668,14 +2309,25 @@ fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f
     Ok(LogicalSize::new(size.width, (size.height - bar_height(app)).max(0.0)))
 }
 
+/// Where tab webviews go in `window`: below the tab bar. Set as one, not
+/// with `set_position` and `set_size`: on Windows a webview moved to another
+/// window measures its position against the old one, so `set_size` would
+/// put it back out of place
+fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
+    Ok(tauri::Rect {
+        position: LogicalPosition::new(0.0, bar_height(app)).into(),
+        size: content_size(app, window)?.into(),
+    })
+}
+
 /// Zooms the tab bar, Figma tabs and open prompts to the interface scale,
 /// and fits the tabs under the bar at its new height
 pub fn apply_scale(app: &AppHandle) {
     let scale = scale(app);
-    if let Some(window) = app.get_window("main") {
+    for window in tab_windows(app) {
         for webview in window.webviews() {
             let label = webview.label();
-            if label == "main" || label.starts_with("tab-") {
+            if is_tab_window(label) || label.starts_with("tab-") {
                 let _ = webview.set_zoom(scale);
             }
         }
@@ -1687,61 +2339,197 @@ pub fn apply_scale(app: &AppHandle) {
     layout(app);
 }
 
-/// Refits tab webviews to the window. Call on resize
+/// Refits tab webviews to their windows. Call on resize
 pub fn layout(app: &AppHandle) {
-    let Some(window) = app.get_window("main") else {
-        return;
-    };
-    let Ok(size) = content_size(app, &window) else {
-        return;
-    };
-    let top = LogicalPosition::new(0.0, bar_height(app));
-    for webview in window.webviews() {
-        if webview.label().starts_with("tab-") {
-            let _ = webview.set_position(top);
-            let _ = webview.set_size(size);
+    for window in tab_windows(app) {
+        let Ok(bounds) = tab_bounds(app, &window) else {
+            continue;
+        };
+        for webview in window.webviews() {
+            if webview.label().starts_with("tab-") {
+                let _ = webview.set_bounds(bounds);
+            }
+        }
+        fit_tab_bar(app, window.label());
+    }
+    refresh_splits(app);
+    push_state(app);
+}
+
+/// True for the label of a window with tabs, and of its tab bar
+pub fn is_tab_window(label: &str) -> bool {
+    label == MAIN || label.starts_with(WINDOW_PREFIX)
+}
+
+/// The windows with tabs, the main one first
+fn tab_windows(app: &AppHandle) -> Vec<Window> {
+    let mut windows: Vec<Window> = app.windows().into_values().filter(|window| is_tab_window(window.label())).collect();
+    windows.sort_by_key(|window| window.label() != MAIN);
+    windows
+}
+
+/// The window with tabs last focused, for what Ligma shows over it
+pub fn focused_window(app: &AppHandle) -> Option<Window> {
+    let focused = app.state::<Tabs>().inner().0.lock().unwrap().focused.clone();
+    app.get_window(&focused).or_else(|| app.get_window(MAIN))
+}
+
+/// The window tab `id` is in
+pub fn window_of(app: &AppHandle, id: u32) -> Option<Window> {
+    with_tab(app, id, |tab| tab.window.clone()).and_then(|label| app.get_window(&label))
+}
+
+/// True while any window with tabs has focus
+pub fn any_focused(app: &AppHandle) -> bool {
+    tab_windows(app).iter().any(|window| window.is_focused().unwrap_or(false))
+}
+
+/// Makes a window for tabs, `size` within. Its own webview is the tab bar;
+/// tabs are added as child webviews below it
+pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visible: bool) -> tauri::Result<Window> {
+    #[allow(unused_mut)]
+    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .title("Ligma")
+        .inner_size(size.width, size.height)
+        .min_inner_size(800.0, 600.0)
+        .visible(visible)
+        .background_color(tauri::window::Color(44, 44, 44, 255));
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    }
+    // Elsewhere the tab bar draws its own window controls
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.decorations(false);
+    }
+    let window = builder.build()?;
+    // Built hidden, it would keep a title bar's worth of frame until shown
+    // (see frame.rs)
+    #[cfg(windows)]
+    if !visible {
+        crate::frame::refresh(&window);
+    }
+    // Traffic lights centered on the tab bar (see titlebar.rs)
+    #[cfg(target_os = "macos")]
+    {
+        let ns_window = window.clone();
+        window.run_on_main_thread(move || {
+            if let Ok(ns_window) = ns_window.ns_window() {
+                unsafe { crate::titlebar::center_traffic_lights(ns_window.cast()) };
+            }
+        })?;
+    }
+    // `layout` sizes the tab bar's webview from here on
+    if let Some(bar) = app.get_webview(label) {
+        bar.set_auto_resize(false)?;
+        bar.set_zoom(scale(app))?;
+        #[cfg(windows)]
+        crate::webview2::add_tab_shortcuts(&bar);
+    }
+    let handle = app.clone();
+    let label = label.to_owned();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Resized(_) => {
+            crate::preview::hide(&handle);
+            layout(&handle);
+        }
+        WindowEvent::Moved(_) => {
+            crate::preview::hide(&handle);
+            #[cfg(windows)]
+            if let Some(window) = handle.get_window(&label) {
+                for webview in window.webviews().iter().filter(|webview| webview.label().starts_with("tab-")) {
+                    crate::webview2::on_moved(webview);
+                }
+            }
+        }
+        WindowEvent::Focused(false) => crate::preview::hide(&handle),
+        WindowEvent::Focused(true) => {
+            let changed = {
+                let mut state = handle.state::<Tabs>().inner().0.lock().unwrap();
+                std::mem::replace(&mut state.focused, label.clone()) != label
+            };
+            if changed {
+                sync_theme(&handle);
+            }
+        }
+        WindowEvent::Destroyed => forget_window(&handle, &label),
+        _ => {}
+    });
+    Ok(window.as_ref().window())
+}
+
+/// Drops the tabs of window `label`, which is gone along with their
+/// webviews
+fn forget_window(app: &AppHandle, label: &str) {
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        // The main window's tabs are kept for the next launch
+        if label == MAIN {
+            return;
+        }
+        state.tabs.retain(|tab| tab.window != label);
+        state.actives.remove(label);
+        state.previous.remove(label);
+        state.splits.remove(label);
+        state.split_ratios.remove(label);
+        state.snapshot_shown.retain(|shown| shown != label);
+        if state.focused == label {
+            state.focused = MAIN.to_owned();
         }
     }
-    fit_tab_bar(app);
     push_state(app);
+}
+
+/// Closes every window with tabs but the main one, for when that goes
+pub fn close_other_windows(app: &AppHandle) {
+    for window in tab_windows(app).into_iter().filter(|window| window.label() != MAIN) {
+        let _ = window.destroy();
+    }
 }
 
 /// Sends the tab list to the tab bar
 fn push_state(app: &AppHandle) {
     #[derive(Serialize)]
     struct View<'a> {
-        tabs: &'a [Tab],
+        tabs: &'a [&'a Tab],
         active: u32,
         fullscreen: bool,
         theme: &'a Option<serde_json::Value>,
         platform: &'static str,
+        /// The window's split view's tabs, if any
+        split: Option<[u32; 2]>,
     }
 
     // Not `get_webview_window`: that returns None once the window holds
     // more than one webview
-    let (Some(window), Some(bar)) = (app.get_window("main"), app.get_webview("main")) else {
-        return;
-    };
-    let fullscreen = window.is_fullscreen().unwrap_or(false);
-    let json = {
-        let state = app.state::<Tabs>().inner().0.lock().unwrap();
-        serde_json::to_string(&View {
-            tabs: &state.tabs,
-            active: state.active,
-            fullscreen,
-            theme: &state.theme,
-            platform: std::env::consts::OS,
-        })
-        .unwrap()
-    };
-    let _ = bar.eval(format!("window.render?.({json})"));
+    for window in tab_windows(app) {
+        let Some(bar) = app.get_webview(window.label()) else {
+            continue;
+        };
+        let fullscreen = window.is_fullscreen().unwrap_or(false);
+        let json = {
+            let state = app.state::<Tabs>().inner().0.lock().unwrap();
+            let tabs: Vec<&Tab> = state.tabs_in(window.label()).collect();
+            serde_json::to_string(&View {
+                tabs: &tabs,
+                active: state.active_in(window.label()),
+                fullscreen,
+                theme: &state.theme,
+                platform: std::env::consts::OS,
+                split: state.splits.get(window.label()).copied(),
+            })
+            .unwrap()
+        };
+        let _ = bar.eval(format!("window.render?.({json})"));
+    }
     save_session(app);
 }
 
 /// Only the local tab bar may drive tabs. Figma pages have no IPC access
 /// anyway (no capability grants it), this is a second fence
-fn from_tab_bar(webview: &Webview) -> bool {
-    webview.label() == "main"
+pub fn from_tab_bar(webview: &Webview) -> bool {
+    is_tab_window(webview.label())
 }
 
 #[tauri::command]
@@ -1782,7 +2570,44 @@ pub async fn move_tab_to(app: AppHandle, webview: Webview, id: u32, index: usize
 #[tauri::command]
 pub async fn open_new_tab(app: AppHandle, webview: Webview) {
     if from_tab_bar(&webview) {
+        app.state::<Tabs>().inner().0.lock().unwrap().focused = webview.label().to_owned();
         let _ = new_tab(&app);
+    }
+}
+
+/// The divider of the tab bar's window's split view was dragged: its first
+/// half now takes `ratio` of the canvas
+#[tauri::command]
+pub async fn set_split_ratio(app: AppHandle, webview: Webview, ratio: f64) {
+    if !from_tab_bar(&webview) || !ratio.is_finite() {
+        return;
+    }
+    let window = webview.label().to_owned();
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        if !state.splits.contains_key(&window) {
+            return;
+        }
+        state.split_ratios.insert(window.clone(), ratio);
+    }
+    layout_split(&app, &window);
+}
+
+/// Tab `id` was dragged off its bar, the mouse button still held. It goes
+/// into a window of its own right away, which follows the cursor until
+/// it's let go (see `follow_cursor`). A tab that wasn't `was_active` was
+/// only selected by pressing it, so its window goes back to the tab it
+/// showed before
+#[tauri::command]
+pub async fn tear_off_tab(app: AppHandle, webview: Webview, id: u32, was_active: bool) {
+    if !from_tab_bar(&webview) {
+        return;
+    }
+    let Ok(at) = app.cursor_position() else {
+        return;
+    };
+    if let Ok(Some(label)) = move_to_new_window(&app, id, at, !was_active) {
+        std::thread::spawn(move || follow_cursor(&app, id, &label));
     }
 }
 

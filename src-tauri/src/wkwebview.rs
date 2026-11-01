@@ -22,6 +22,10 @@
 //! Figma never sees the key. `pass_undo_to_pages` gives undo and redo back
 //! to WebKit, which lets the page handle them first, as Safari does, and
 //! passes them on to the menu bar if it doesn't
+//!
+//! `clip` shows only parts of a tab, for split view (see split.rs): a layer
+//! mask hides the rest, and a patched `hitTest:` lets clicks there through
+//! to the tab below
 
 use std::ffi::{c_char, c_void, CStr};
 use std::panic::AssertUnwindSafe;
@@ -235,4 +239,140 @@ unsafe fn jpeg_data_url(image: *mut AnyObject) -> Option<String> {
         return None;
     }
     Some(format!("data:image/jpeg;base64,{}", CStr::from_ptr(utf8).to_str().ok()?))
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+unsafe impl objc2::Encode for Point {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGPoint", &[f64::ENCODING, f64::ENCODING]);
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Size {
+    width: f64,
+    height: f64,
+}
+
+unsafe impl objc2::Encode for Size {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGSize", &[f64::ENCODING, f64::ENCODING]);
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Rect {
+    origin: Point,
+    size: Size,
+}
+
+unsafe impl objc2::Encode for Rect {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGRect", &[Point::ENCODING, Size::ENCODING]);
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPathCreateMutable() -> *mut c_void;
+    fn CGPathAddRect(path: *mut c_void, transform: *const c_void, rect: Rect);
+    fn CGPathRelease(path: *const c_void);
+}
+
+extern "C" {
+    fn class_addMethod(class: *const AnyClass, name: Sel, imp: Imp, types: *const c_char) -> Bool;
+}
+
+/// Each clipped tab's WKWebView and the parts it shows, `[left, top,
+/// right, bottom]` in points from its top left
+static CLIPS: Mutex<Vec<(usize, Vec<[f64; 4]>)>> = Mutex::new(Vec::new());
+
+/// `hitTest:` of the tabs' class before `patch_hit_test`
+static VIEW_HIT_TEST: OnceLock<Imp> = OnceLock::new();
+
+type HitTest = unsafe extern "C-unwind" fn(*mut AnyObject, Sel, Point) -> *mut AnyObject;
+
+/// A clipped tab takes no clicks outside the parts it shows
+unsafe extern "C-unwind" fn hit_test(view: *mut AnyObject, selector: Sel, point: Point) -> *mut AnyObject {
+    let shown = CLIPS.lock().unwrap().iter().find(|(clipped, _)| *clipped == view as usize).map(|(_, rects)| rects.clone());
+    if let Some(rects) = shown {
+        // `point` is in the superview's coordinates
+        let superview: *mut AnyObject = msg_send![view, superview];
+        let local: Point = msg_send![view, convertPoint: point, fromView: superview];
+        let flipped: Bool = msg_send![view, isFlipped];
+        let bounds: Rect = msg_send![view, bounds];
+        let y = if flipped.as_bool() { local.y } else { bounds.size.height - local.y };
+        if !rects.iter().any(|r| local.x >= r[0] && local.x < r[2] && y >= r[1] && y < r[3]) {
+            return std::ptr::null_mut();
+        }
+    }
+    match VIEW_HIT_TEST.get() {
+        Some(imp) => std::mem::transmute::<Imp, HitTest>(*imp)(view, selector, point),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Gives the class of tab `view` its own `hitTest:`, once
+unsafe fn patch_hit_test(view: *mut AnyObject) {
+    static PATCHED: Once = Once::new();
+    PATCHED.call_once(|| {
+        let class = (*view).class();
+        let selector = sel!(hitTest:);
+        let Some(inherited) = class.instance_method(selector) else {
+            return;
+        };
+        let _ = VIEW_HIT_TEST.set(inherited.implementation());
+        let imp: HitTest = hit_test;
+        let imp = std::mem::transmute::<HitTest, Imp>(imp);
+        // Added to the tabs' class alone, unless it has its own already
+        if !class_addMethod(class, selector, imp, c"@@:{CGPoint=dd}".as_ptr()).as_bool() {
+            inherited.set_implementation(imp);
+        }
+    });
+}
+
+/// Shows only `rects` of tab `webview`, `[left, top, right, bottom]` in
+/// points from its top left, or all of it with None (see split.rs)
+pub fn clip(webview: &Webview, rects: Option<Vec<[f64; 4]>>) {
+    let _ = webview.with_webview(move |platform| unsafe {
+        let view = platform.inner() as *mut AnyObject;
+        if view.is_null() {
+            return;
+        }
+        patch_hit_test(view);
+        {
+            let mut clips = CLIPS.lock().unwrap();
+            clips.retain(|(clipped, _)| *clipped != view as usize);
+            if let Some(rects) = &rects {
+                clips.push((view as usize, rects.clone()));
+            }
+        }
+        catching("split view mask", || {
+            let _: () = msg_send![view, setWantsLayer: true];
+            let layer: *mut AnyObject = msg_send![view, layer];
+            if layer.is_null() {
+                return;
+            }
+            let Some(rects) = &rects else {
+                let none: *mut AnyObject = std::ptr::null_mut();
+                let _: () = msg_send![layer, setMask: none];
+                return;
+            };
+            let bounds: Rect = msg_send![view, bounds];
+            let flipped: Bool = msg_send![layer, contentsAreFlipped];
+            let path = CGPathCreateMutable();
+            for r in rects {
+                let y = if flipped.as_bool() { r[1] } else { bounds.size.height - r[3] };
+                let rect = Rect { origin: Point { x: r[0], y }, size: Size { width: r[2] - r[0], height: r[3] - r[1] } };
+                CGPathAddRect(path, std::ptr::null(), rect);
+            }
+            let mask: *mut AnyObject = msg_send![class!(CAShapeLayer), layer];
+            let _: () = msg_send![mask, setFrame: bounds];
+            let _: () = msg_send![mask, setPath: path];
+            CGPathRelease(path);
+            let _: () = msg_send![layer, setMask: mask];
+        });
+    });
 }
