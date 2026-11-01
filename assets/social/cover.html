@@ -13,25 +13,25 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: #fff; }
   body {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; padding-top: 30px;
     color: var(--ink); font-family: "Inter", sans-serif; -webkit-font-smoothing: antialiased;
     background: radial-gradient(circle, var(--dot) 1.3px, transparent 1.8px) 4px 4px / 24px 24px, #fff;
   }
 
   /* The lockup, selected: Figma's frame label, outline and corner handles */
-  .layer { position: relative; display: flex; align-items: center; gap: 20px; padding: 18px 48px 26px 30px; background: #fff; }
-  .layer::before { content: ""; position: absolute; inset: 0; border: 2px solid var(--select); }
-  .layer .label { position: absolute; left: 0; bottom: calc(100% + 10px); font-size: 17px; font-weight: 500; color: #0768cf; }
-  .layer i { position: absolute; width: 14px; height: 14px; background: #fff; border: 2px solid var(--select); border-radius: 2px; }
-  .layer i:nth-of-type(1) { left: -6px; top: -6px; } .layer i:nth-of-type(2) { right: -6px; top: -6px; }
-  .layer i:nth-of-type(3) { left: -6px; bottom: -6px; } .layer i:nth-of-type(4) { right: -6px; bottom: -6px; }
-  .layer img { width: 168px; height: 168px; margin: -14px -26px -14px -18px; }
-  .layer b { font: 700 156px/1 "Funnel Display", sans-serif; letter-spacing: -0.045em; padding-bottom: 14px; }
+  .layer { position: relative; display: flex; align-items: center; gap: 28px; padding: 22px 64px 34px 40px; background: #fff; }
+  .layer::before { content: ""; position: absolute; inset: 0; border: 2.5px solid var(--select); }
+  .layer .label { position: absolute; left: 0; bottom: calc(100% + 12px); font-size: 20px; font-weight: 500; color: #0768cf; }
+  .layer i { position: absolute; width: 16px; height: 16px; background: #fff; border: 2.5px solid var(--select); border-radius: 2px; }
+  .layer i:nth-of-type(1) { left: -7px; top: -7px; } .layer i:nth-of-type(2) { right: -7px; top: -7px; }
+  .layer i:nth-of-type(3) { left: -7px; bottom: -7px; } .layer i:nth-of-type(4) { right: -7px; bottom: -7px; }
+  .layer img { width: 240px; height: 240px; margin: -20px -38px -20px -26px; }
+  .layer b { font: 700 224px/1 "Funnel Display", sans-serif; letter-spacing: -0.045em; padding-bottom: 20px; }
 
-  h1 { margin: 56px 0 0; font: 600 46px/1 "Funnel Display", sans-serif; letter-spacing: -0.025em; }
-  .os { display: flex; align-items: center; gap: 12px; margin-top: 24px; font-size: 21px; font-weight: 500; color: var(--ink-2); }
-  .os svg { width: 22px; height: 22px; fill: currentColor; }
-  .os em { width: 4px; height: 4px; margin: 0 6px; border-radius: 50%; background: currentColor; }
+  h1 { margin: 60px 0 0; font: 600 64px/1 "Funnel Display", sans-serif; letter-spacing: -0.025em; }
+  .os { display: flex; align-items: center; gap: 14px; margin-top: 26px; font-size: 26px; font-weight: 500; color: var(--ink-2); }
+  .os svg { width: 27px; height: 27px; fill: currentColor; }
+  .os em { width: 5px; height: 5px; margin: 0 8px; border-radius: 50%; background: currentColor; }
 </style>
 </head>
 <body>
