@@ -2304,7 +2304,7 @@ fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f
 /// with `set_position` and `set_size`: on Windows a webview moved to another
 /// window measures its position against the old one, so `set_size` would
 /// put it back out of place
-pub fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
+fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
     Ok(tauri::Rect {
         position: LogicalPosition::new(0.0, bar_height(app)).into(),
         size: content_size(app, window)?.into(),
@@ -2337,9 +2337,7 @@ pub fn layout(app: &AppHandle) {
             continue;
         };
         for webview in window.webviews() {
-            // Split tabs are placed by their split, from `refresh_splits`
-            let split = webview.label()["tab-".len().min(webview.label().len())..].parse().is_ok_and(crate::split::places);
-            if webview.label().starts_with("tab-") && !split {
+            if webview.label().starts_with("tab-") {
                 let _ = webview.set_bounds(bounds);
             }
         }

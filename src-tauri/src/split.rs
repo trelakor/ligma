@@ -1,16 +1,10 @@
 //! Split view: two file tabs of a window share its canvas, each in its own
 //! half, under one set of Figma's panels and one toolbar, the focused tab's
 //!
-//! The focused tab's webview fills the window below the tab bar, as any
-//! tab's does. The other tab's is sized so its canvas covers its half of
-//! the focused tab's canvas exactly, its panels beyond it, so its rulers,
-//! scrollbars and zoom to fit are its half's. Each is clipped to its part:
-//! the other tab to its half, less the focused tab's toolbar and the menus
-//! and tooltips it has open, and the focused tab to everything else. Figma
-//! keeps its canvas between its panels, so the focused tab's canvas still
-//! spans both halves. A tab resized as the two swap is panned to match
-//! (`__ligmaSplitKeep` and `__ligmaSplitRestore`), so what it shows stays
-//! put. So
+//! Both tabs' webviews fill the window below the tab bar, as any tab's
+//! does, and are clipped to their parts of it: the other tab to its half of
+//! the focused tab's canvas, less the focused tab's toolbar and the menus
+//! and tooltips it has open, and the focused tab to everything else. So
 //! there's one set of panels and one toolbar, the focused tab's, where they
 //! always are, and the other tab's toolbar is hidden in its page. A click
 //! in the other half reaches that tab's page, which tells Ligma
@@ -53,59 +47,6 @@ pub const PAGE_JS: &str = r#"(() => {
   `;
   const mount = () => (document.head ? (document.head.append(style), true) : false);
   if (!mount()) document.addEventListener("DOMContentLoaded", mount, { once: true });
-  // Keeps what shows at the middle of `rect`, `[left, top, right,
-  // bottom]` in CSS pixels, there while the page is resized, by panning
-  // Figma's viewport once it has laid out its canvas again: the world point
-  // there is kept first, then moved to the middle of the rect it takes after
-  const figmaViewport = () => {
-    try {
-      return window.figma?.viewport ?? null;
-    } catch {
-      return null;
-    }
-  };
-  const canvasMiddle = () => {
-    let best = null;
-    for (const c of document.querySelectorAll("canvas")) {
-      const r = c.getBoundingClientRect();
-      if (!best || r.width * r.height > best.width * best.height) best = r;
-    }
-    return best && [best.left + best.width / 2, best.top + best.height / 2];
-  };
-  const middle = (rect) => [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2];
-  let anchor = null;
-  Object.defineProperty(window, "__ligmaSplitKeep", {
-    value: (rect) => {
-      const viewport = figmaViewport();
-      const canvas = canvasMiddle();
-      if (!viewport || !canvas) return (anchor = null);
-      const [x, y] = middle(rect);
-      const { center, zoom } = viewport;
-      anchor = { x: center.x + (x - canvas[0]) / zoom, y: center.y + (y - canvas[1]) / zoom, size: [innerWidth, innerHeight] };
-    },
-  });
-  Object.defineProperty(window, "__ligmaSplitRestore", {
-    value: (rect) => {
-      const kept = anchor;
-      anchor = null;
-      if (!kept) return;
-      const started = performance.now();
-      const pan = () => {
-        const viewport = figmaViewport();
-        const canvas = canvasMiddle();
-        if (!viewport || !canvas) return;
-        const [x, y] = middle(rect);
-        viewport.center = { x: kept.x - (x - canvas[0]) / viewport.zoom, y: kept.y - (y - canvas[1]) / viewport.zoom };
-      };
-      // Once the page has its new size, and Figma a frame or two to follow
-      const wait = () => {
-        const resized = innerWidth !== kept.size[0] || innerHeight !== kept.size[1];
-        if (!resized && performance.now() - started < 600) return requestAnimationFrame(wait);
-        requestAnimationFrame(() => requestAnimationFrame(pan));
-      };
-      wait();
-    },
-  });
   let other = false;
   Object.defineProperty(window, "__ligmaSplit", {
     value: (value) => {
@@ -133,12 +74,11 @@ pub const PAGE_JS: &str = r#"(() => {
   );
 })();"#;
 
-/// Where Figma's canvas is, as `{ canvas, floating, size }` in CSS pixels, or
+/// Where Figma's canvas is, as `{ canvas, floating }` in CSS pixels, or
 /// null outside an editor. The canvas is the largest `<canvas>`, as in
 /// `CROP_JS` (tabs.rs), as `[left, top, right, bottom]`. What floats over it
 /// is the toolbar, the bars above it, like the image bar, and open menus
-/// and tooltips, each as `[left, top, right, bottom, corner radius]`. The
-/// size is the page's
+/// and tooltips, each as `[left, top, right, bottom, corner radius]`
 const GEOMETRY_JS: &str = r#"(() => {
   const area = (r) => r.width * r.height;
   let canvas = null, r = null;
@@ -165,7 +105,7 @@ const GEOMETRY_JS: &str = r#"(() => {
     '[role="listbox"]',
   ];
   for (const el of document.querySelectorAll(SHAPES.join(", "))) add(el);
-  return { canvas: [left, top, right, bottom], floating, size: [innerWidth, innerHeight] };
+  return { canvas: [left, top, right, bottom], floating };
 })()"#;
 
 /// The gap between the halves, where the divider shows, in CSS pixels
@@ -184,7 +124,6 @@ pub type Shape = [f64; 5];
 struct Geometry {
     canvas: Rect,
     floating: Vec<Shape>,
-    size: [f64; 2],
 }
 
 /// What of a tab's webview shows: the union of `add` less `cut`, in its
@@ -261,64 +200,20 @@ pub fn halves(canvas: Rect, ratio: f64, gap: f64) -> ([Rect; 2], Rect) {
     }
 }
 
-fn offset(r: Rect, by: (f64, f64)) -> Rect {
-    [r[0] + by.0, r[1] + by.1, r[2] + by.0, r[3] + by.1]
-}
-
-fn same(a: &Rect, b: &Rect) -> bool {
-    a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.5)
-}
-
-/// Where each split tab's webview is and what of it shows, in logical
-/// pixels from the top left of where tabs go, by tab. A tab missing from
-/// `BOUNDS` fills it, as any tab does
-static BOUNDS: Mutex<Option<HashMap<u32, Rect>>> = Mutex::new(None);
-static VISIBLE: Mutex<Option<HashMap<u32, Rect>>> = Mutex::new(None);
-
-fn get(map: &Mutex<Option<HashMap<u32, Rect>>>, id: u32) -> Option<Rect> {
-    map.lock().unwrap().as_ref()?.get(&id).copied()
-}
-
-fn set(map: &Mutex<Option<HashMap<u32, Rect>>>, id: u32, rect: Option<Rect>) {
-    let mut map = map.lock().unwrap();
-    let map = map.get_or_insert_with(HashMap::new);
-    match rect {
-        Some(rect) => map.insert(id, rect),
-        None => map.remove(&id),
-    };
-}
-
-/// True if tab `id`'s webview is placed by its split, not as any tab's
-pub fn places(id: u32) -> bool {
-    get(&BOUNDS, id).is_some()
-}
-
-/// Moves tab `id`'s `webview` to `to`, in logical pixels from the top left
-/// of where tabs go, or back to filling it, keeping what shows at the
-/// middle of `visible` there, from where it was
-fn place(id: u32, webview: &Webview, to: Option<Rect>, visible: Rect) {
-    let app = webview.app_handle().clone();
-    let Ok(full) = crate::tabs::tab_bounds(&app, &webview.window()) else {
-        return;
-    };
-    let zoom = crate::tabs::scale(&app);
-    let top = crate::tabs::bar_height(&app);
-    let from = get(&BOUNDS, id);
-    set(&BOUNDS, id, to);
-    let page = |at: Option<Rect>| offset(visible, at.map_or((0.0, 0.0), |at| (-at[0], -at[1]))).map(|v| v / zoom);
-    let (before, after) = (page(from), page(to));
-    let moved = webview.clone();
-    let _ = webview.eval_with_callback(format!("window.__ligmaSplitKeep?.({before:?})"), move |_| {
-        let bounds = match to {
-            Some(r) => tauri::Rect {
-                position: tauri::LogicalPosition::new(r[0], r[1] + top).into(),
-                size: tauri::LogicalSize::new(r[2] - r[0], r[3] - r[1]).into(),
-            },
-            None => full,
-        };
-        let _ = moved.set_bounds(bounds);
-        let _ = moved.eval(format!("window.__ligmaSplitRestore?.({after:?})"));
-    });
+/// What each of a split's tabs shows, in logical pixels from its top left,
+/// the focused one's then the other's, and the gap: the other gets its half
+/// of the canvas, less what of the focused tab's floats over it, and the
+/// focused one the rest but the gap
+fn regions(size: (f64, f64), geometry: Option<Geometry>, zoom: f64, ratio: f64, other_half: usize) -> (Region, Region, Rect, Rect) {
+    let full = [0.0, 0.0, size.0, size.1];
+    let canvas = geometry.as_ref().map_or(full, |g| g.canvas.map(|v| v * zoom));
+    let floating: Vec<Shape> = geometry.iter().flat_map(|g| g.floating.iter().map(|s| s.map(|v| v * zoom))).collect();
+    let (halves, gap) = halves(canvas, ratio, GAP * zoom);
+    let half = halves[other_half];
+    let theirs = Region { add: vec![square(half)], cut: floating.clone() };
+    let around = subtract_all(vec![full], &[half, gap]);
+    let mine = Region { add: around.into_iter().map(square).chain(floating).collect(), cut: Vec::new() };
+    (mine, theirs, gap, canvas)
 }
 
 /// Regions last applied, by tab, so an unchanged one isn't set again: that
@@ -350,107 +245,45 @@ fn clip(id: u32, webview: &Webview, region: Option<Region>) {
     let _ = (webview, region);
 }
 
-/// Unclips tab `id`, which left a split, fills where tabs go with it
-/// again, and stops treating its page as the other half
+/// Unclips tab `id`, which left a split, and stops treating its page as
+/// the other half
 pub fn unclip(id: u32, webview: &Webview) {
     clip(id, webview, None);
-    if let Some(visible) = get(&VISIBLE, id).filter(|_| places(id)) {
-        place(id, webview, None, visible);
-    }
-    set(&VISIBLE, id, None);
     let _ = webview.eval("window.__ligmaSplit?.(false)");
 }
 
 /// Lays out a split: `focused` and `other` are the tabs' ids, the other's
 /// in the first half if `other_first`, and the first half takes `ratio` of
-/// the canvas. Measures both tabs' pages first, then places and clips them
-/// and has the tab bar draw the divider
+/// the canvas. Measures the focused tab's page first, then has the tab bar
+/// draw the divider
 pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool, ratio: f64) {
     let (Some(focused_view), Some(other_view)) =
         (crate::tabs::scriptable(app, focused), crate::tabs::scriptable(app, other))
     else {
         return;
     };
-    let measured = focused_view.clone();
-    let _ = measured.eval_with_callback(GEOMETRY_JS, move |json| {
-        let focused_geometry = serde_json::from_str::<Option<Geometry>>(&json).ok().flatten();
-        let (focused_view, other_view) = (focused_view.clone(), other_view.clone());
-        let measured = other_view.clone();
-        let _ = measured.eval_with_callback(GEOMETRY_JS, move |json| {
-            let other_geometry = serde_json::from_str::<Option<Geometry>>(&json).ok().flatten();
-            let tabs = [(focused, &focused_view), (other, &other_view)];
-            let geometry = [focused_geometry.as_ref(), other_geometry.as_ref()];
-            arrange(tabs, geometry, other_first, ratio);
-        });
-    });
-}
-
-/// `layout`, once both pages are measured: the focused tab's, then the
-/// other's
-fn arrange(tabs: [(u32, &Webview); 2], geometry: [Option<&Geometry>; 2], other_first: bool, ratio: f64) {
-    let [(focused, focused_view), (other, other_view)] = tabs;
-    let app = focused_view.app_handle().clone();
-    let Ok(full) = crate::tabs::tab_bounds(&app, &focused_view.window()) else {
-        return;
-    };
-    let size = match full.size {
-        tauri::Size::Logical(size) => (size.width, size.height),
-        tauri::Size::Physical(size) => {
-            let factor = focused_view.window().scale_factor().unwrap_or(1.0);
-            (size.width as f64 / factor, size.height as f64 / factor)
+    let zoom = crate::tabs::scale(app);
+    let _ = focused_view.clone().eval_with_callback(GEOMETRY_JS, move |json| {
+        let geometry = serde_json::from_str::<Option<Geometry>>(&json).ok().flatten();
+        let Ok(size) = focused_view.size() else {
+            return;
+        };
+        let factor = focused_view.window().scale_factor().unwrap_or(1.0);
+        let size = size.to_logical::<f64>(factor);
+        let other_half = if other_first { 0 } else { 1 };
+        let (mine, theirs, gap, canvas) = regions((size.width, size.height), geometry, zoom, ratio, other_half);
+        clip(focused, &focused_view, Some(mine));
+        clip(other, &other_view, Some(theirs));
+        let _ = focused_view.eval("window.__ligmaSplit?.(false)");
+        let _ = other_view.eval("window.__ligmaSplit?.(true)");
+        // In the tab bar's CSS pixels: it's at the window's top, at the same
+        // zoom, and the tabs are below it
+        let bar = |r: Rect| [r[0] / zoom, r[1] / zoom + crate::tabs::TAB_BAR_HEIGHT, r[2] / zoom, r[3] / zoom + crate::tabs::TAB_BAR_HEIGHT];
+        let divider = serde_json::json!({ "gap": bar(gap), "canvas": bar(canvas), "sideBySide": side_by_side(canvas) });
+        if let Some(bar) = focused_view.app_handle().get_webview(focused_view.window().label()) {
+            let _ = bar.eval(format!("window.showDivider?.({divider})"));
         }
-    };
-    let zoom = crate::tabs::scale(&app);
-    // The tab that was the other one fills where tabs go again first, and
-    // the split is laid out from it once it has
-    if let Some(visible) = get(&VISIBLE, focused).filter(|_| places(focused)) {
-        place(focused, focused_view, None, visible);
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            crate::tabs::refresh_splits(&app);
-        });
-        return;
-    }
-    let all = [0.0, 0.0, size.0, size.1];
-    let canvas = geometry[0].map_or(all, |g| g.canvas.map(|v| v * zoom));
-    let floating: Vec<Shape> = geometry[0].iter().flat_map(|g| g.floating.iter().map(|s| s.map(|v| v * zoom))).collect();
-    let (halves, gap) = halves(canvas, ratio, GAP * zoom);
-    let (theirs, mine) = if other_first { (halves[0], halves[1]) } else { (halves[1], halves[0]) };
-    set(&VISIBLE, focused, Some(mine));
-    // The other tab's canvas on its half, its panels around it
-    let placed = get(&BOUNDS, other);
-    let at = placed.unwrap_or(all);
-    let wanted = geometry[1].map(|g| {
-        let c = g.canvas.map(|v| v * zoom);
-        let (w, h) = (g.size[0] * zoom, g.size[1] * zoom);
-        [theirs[0] - c[0], theirs[1] - c[1], theirs[2] + (w - c[2]), theirs[3] + (h - c[3])].map(f64::round)
     });
-    let at = match wanted {
-        Some(wanted) if !same(&wanted, &at) || placed.is_none() => {
-            let visible = get(&VISIBLE, other).unwrap_or(theirs);
-            place(other, other_view, Some(wanted), visible);
-            wanted
-        }
-        _ => at,
-    };
-    set(&VISIBLE, other, Some(theirs));
-    let mine_region = Region {
-        add: subtract_all(vec![all], &[theirs, gap]).into_iter().map(square).chain(floating.iter().copied()).collect(),
-        cut: Vec::new(),
-    };
-    let local = |s: &Shape| [s[0] - at[0], s[1] - at[1], s[2] - at[0], s[3] - at[1], s[4]];
-    let theirs_region = Region { add: vec![local(&square(theirs))], cut: floating.iter().map(local).collect() };
-    clip(focused, focused_view, Some(mine_region));
-    clip(other, other_view, Some(theirs_region));
-    let _ = focused_view.eval("window.__ligmaSplit?.(false)");
-    let _ = other_view.eval("window.__ligmaSplit?.(true)");
-    // In the tab bar's CSS pixels: it's at the window's top, at the same
-    // zoom, and the tabs are below it
-    let bar = |r: Rect| [r[0] / zoom, r[1] / zoom + crate::tabs::TAB_BAR_HEIGHT, r[2] / zoom, r[3] / zoom + crate::tabs::TAB_BAR_HEIGHT];
-    let divider = serde_json::json!({ "gap": bar(gap), "canvas": bar(canvas), "sideBySide": side_by_side(canvas) });
-    if let Some(bar) = app.get_webview(focused_view.window().label()) {
-        let _ = bar.eval(format!("window.showDivider?.({divider})"));
-    }
 }
 
 /// Takes the divider away from window `window`'s tab bar, once it's not
