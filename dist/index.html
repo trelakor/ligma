@@ -14,6 +14,7 @@
     --divider: #4d4d4d;
     --text: #b3b3b3;
     --text-active: #fff;
+    --brand: #0d99ff;
   }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; overflow: hidden; background: var(--active); }
@@ -140,7 +141,7 @@
     transition: background 120ms ease;
   }
   #divider.stacked::after { width: 100%; height: 1px; }
-  #divider:hover::after, #divider.dragging::after { width: 2px; background: #0d99ff; }
+  #divider:hover::after, #divider.dragging::after { width: 2px; background: var(--brand); }
   #divider.stacked:hover::after, #divider.stacked.dragging::after { width: 100%; height: 2px; }
   #snapshot > img { width: 100%; height: 100%; object-fit: cover; object-position: top left; }
   /* The image looks live but isn't: a soft light sweeps across it every
@@ -231,6 +232,7 @@
     "--divider": "border",
     "--text": "textSecondary",
     "--text-active": "text",
+    "--brand": "brand",
   };
 
   const CONTROLS = {

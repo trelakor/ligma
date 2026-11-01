@@ -7,14 +7,16 @@
      src-tauri/src/split.rs). The window is see-through on Windows; on
      macOS it's faded instead -->
 <style>
+  /* The theme's accent, set by split.rs */
+  :root { --brand: #0d99ff; }
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; overflow: hidden; background: transparent; }
   #hint {
     position: fixed;
     inset: 6px;
-    border: 2px solid #0d99ff;
+    border: 2px solid var(--brand);
     border-radius: 8px;
-    background: rgba(13, 153, 255, 0.16);
+    background: color-mix(in srgb, var(--brand) 16%, transparent);
   }
 </style>
 </head>

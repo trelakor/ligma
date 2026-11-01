@@ -342,6 +342,8 @@ fn main() {
                 std::thread::sleep(split::LAYOUT_EVERY);
                 tabs::refresh_splits(&handle);
             });
+            let handle = app.handle().clone();
+            std::thread::spawn(move || split::watch(handle));
 
             let handle = app.handle().clone();
             std::thread::spawn(move || {

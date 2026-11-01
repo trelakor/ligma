@@ -30,7 +30,7 @@
 //! Objects dragged from one half into the other move files (`CARRY_JS`):
 //! as the drag crosses over, the page they're in copies them, through
 //! Figma's own copy, to a clipboard of its own rather than the system's,
-//! and asks Ligma to `carry` them. The other page pastes them, by the same
+//! and asks Ligma (see `watch`) to `carry` them. The other page pastes them, by the same
 //! means, focused, as Figma only pastes then. Until the button's let go,
 //! both pages keep their copy under the pointer, Ligma telling them where
 //! it is, so it shows on whichever side of the split it's over, and the
@@ -40,14 +40,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Url, Webview, WebviewUrl, WebviewWindowBuilder, Window};
-
-pub const SIGNAL_HOST: &str = "split.ligma.invalid";
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Webview, WebviewUrl, WebviewWindowBuilder, Window};
 
 /// In every tab. Ligma marks the tab in the half that isn't focused
 /// (`__ligmaSplit`), which hides its toolbar and image bar; pressing in it
-/// asks Ligma to focus it: through `window.open` on Windows, and on macOS
-/// as an iframe load, which WKWebView reports to `on_navigation`
+/// asks Ligma to focus it. Asking is leaving a request for `watch` to take:
+/// a page can only open windows, Ligma's usual way in, so many times per
+/// click, and a drag may come long after it
 pub const PAGE_JS: &str = r#"(() => {
   if (window.top !== window) return;
   const style = document.createElement("style");
@@ -69,21 +68,27 @@ pub const PAGE_JS: &str = r#"(() => {
     },
   });
   Object.defineProperty(window, "__ligmaSplitHalves", { get: () => halves });
+  // What the page asks of Ligma, which `watch` takes while a button's
+  // held: "focus", or "carry", which focuses too
+  let request = null;
+  Object.defineProperty(window, "__ligmaSplitAsk", {
+    value: (asked) => {
+      if (request !== "carry") request = asked;
+    },
+  });
+  Object.defineProperty(window, "__ligmaSplitTake", {
+    value: () => {
+      const asked = request;
+      request = null;
+      return asked;
+    },
+  });
   addEventListener(
     "pointerdown",
     () => {
       if (!other) return;
       other = false;
-      const url = "https://split.ligma.invalid/focus";
-      if (navigator.userAgent.includes("Mac")) {
-        const frame = document.createElement("iframe");
-        frame.style.display = "none";
-        frame.src = url;
-        document.documentElement.appendChild(frame);
-        setTimeout(() => frame.remove(), 1000);
-      } else {
-        window.open(url, "_blank");
-      }
+      window.__ligmaSplitAsk("focus");
     },
     true,
   );
@@ -126,19 +131,6 @@ pub const CARRY_JS: &str = r#"(() => {
     target.focus();
     return !target.dispatchEvent(new ClipboardEvent(type, { clipboardData: data, bubbles: true, cancelable: true }));
   };
-  const signal = (path) => {
-    const url = "https://split.ligma.invalid/" + path;
-    if (navigator.userAgent.includes("Mac")) {
-      const frame = document.createElement("iframe");
-      frame.style.display = "none";
-      frame.src = url;
-      document.documentElement.appendChild(frame);
-      setTimeout(() => frame.remove(), 1000);
-    } else {
-      window.open(url, "_blank");
-    }
-  };
-
   // Out: a press on something selected on the canvas, as Figma sees it,
   // starts a drag of the selection. Crossing into the other half carries it
   // over
@@ -179,7 +171,7 @@ pub const CARRY_JS: &str = r#"(() => {
     const offset = { x: press.at.x - press.pointer.x, y: press.at.y - press.pointer.y };
     out = { nodes, html: data.getData("text/html"), offset };
     press = null;
-    signal("carry");
+    window.__ligmaSplitAsk?.("carry");
   }, true);
   addEventListener("pointerup", () => {
     press = null;
@@ -575,7 +567,8 @@ pub fn show_hint(app: &AppHandle, owner: &Window, rect: Rect) {
             }
             #[cfg(not(windows))]
             {
-                builder = builder.background_color(tauri::window::Color(13, 153, 255, 255));
+                let brand = crate::tabs::theme(app).and_then(|theme| crate::settings::theme_color(&theme, "brand"));
+                builder = builder.background_color(brand.unwrap_or(tauri::window::Color(13, 153, 255, 255)));
             }
             let Ok(window) = builder.build() else {
                 return;
@@ -597,6 +590,11 @@ pub fn show_hint(app: &AppHandle, owner: &Window, rect: Rect) {
             window
         }
     };
+    // In the theme's accent, as the divider
+    if let Some(brand) = crate::tabs::theme(app).and_then(|theme| theme.get("brand")?.as_str().map(str::to_owned)) {
+        let brand = serde_json::to_string(&brand).unwrap();
+        let _ = window.eval(format!("document.documentElement.style.setProperty('--brand', {brand})"));
+    }
     let [l, t, r, b] = rect;
     let _ = window.set_position(PhysicalPosition::new(l.round() as i32, t.round() as i32));
     let _ = window.set_size(PhysicalSize::new((r - l).round().max(1.0) as u32, (b - t).round().max(1.0) as u32));
@@ -623,19 +621,39 @@ pub fn close(app: &AppHandle) {
     }
 }
 
-/// A tab's page asks to be focused: it's the other half of a split
-pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
-    let app = app.clone();
-    match url.path() {
-        "/focus" => {
-            std::thread::spawn(move || {
-                let _ = crate::tabs::select(&app, tab);
+/// Takes what split tabs' pages ask (see `PAGE_JS`) while a mouse button
+/// is held, and once more as it's let go: focusing a half, or carrying what
+/// was dragged out of it. Runs for good
+pub fn watch(app: AppHandle) {
+    let mut was_down = false;
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        let down = crate::tabs::mouse_down();
+        if !down && !was_down {
+            continue;
+        }
+        was_down = down;
+        for tab in crate::tabs::split_tabs(&app) {
+            let Some(webview) = crate::tabs::scriptable(&app, tab) else {
+                continue;
+            };
+            let app = app.clone();
+            let _ = webview.eval_with_callback("window.__ligmaSplitTake?.() ?? null", move |json| {
+                // Not from inside the webview's own callback
+                let app = app.clone();
+                match json.as_str() {
+                    "\"focus\"" => {
+                        std::thread::spawn(move || {
+                            let _ = crate::tabs::select(&app, tab);
+                        });
+                    }
+                    "\"carry\"" => {
+                        std::thread::spawn(move || carry(&app, tab));
+                    }
+                    _ => {}
+                }
             });
         }
-        "/carry" => {
-            std::thread::spawn(move || carry(&app, tab));
-        }
-        _ => {}
     }
 }
 

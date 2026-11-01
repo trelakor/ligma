@@ -846,10 +846,6 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::adjustments::on_signal(app, id, url);
         return false;
     }
-    if url.host_str() == Some(crate::split::SIGNAL_HOST) {
-        crate::split::on_signal(app, id, url);
-        return false;
-    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -903,8 +899,7 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::toolbar::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
         crate::adjustments::on_signal(app, id, &url);
-    } else if url.host_str() == Some(crate::split::SIGNAL_HOST) {
-        crate::split::on_signal(app, id, &url);
+
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
@@ -1129,6 +1124,12 @@ fn end_split(app: &AppHandle, window: &str) {
     crate::split::hide_divider(app, window);
     fit_tab_bar(app, window);
     push_state(app);
+}
+
+/// The tabs in split views, in every window
+pub fn split_tabs(app: &AppHandle) -> Vec<u32> {
+    let state = app.state::<Tabs>().inner().0.lock().unwrap();
+    state.splits.values().flatten().copied().collect()
 }
 
 /// The other tab of the split view tab `id` is in, if any
