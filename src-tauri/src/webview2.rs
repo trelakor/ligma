@@ -19,7 +19,7 @@ use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 use windows::Win32::System::Com::{IStream, STREAM_SEEK_CUR, STREAM_SEEK_SET};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_T, VK_TAB, VK_W,
+    GetAsyncKeyState, GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LBUTTON, VK_MENU, VK_SHIFT, VK_T, VK_TAB, VK_W,
 };
 use windows_core::{w, Interface};
 
@@ -128,6 +128,20 @@ pub fn allow_downloads(webview: &Webview) {
 /// don't have the API and are left alone
 pub fn on_hidden(webview: &Webview) {
     set_memory_target(webview, true);
+}
+
+/// Tells WebView2 that tab `webview`'s window moved, or that it moved to
+/// another window. Tauri only does that for a window's own webview, and
+/// without it the page's popups and input go where the window was
+pub fn on_moved(webview: &Webview) {
+    let _ = webview.with_webview(|platform| unsafe {
+        let _ = platform.controller().NotifyParentWindowPositionChanged();
+    });
+}
+
+/// True while the left mouse button is held down, anywhere
+pub fn left_button_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 }
 }
 
 /// Undoes `on_hidden` and `try_suspend` for a tab that's shown again

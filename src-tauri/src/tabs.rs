@@ -1348,9 +1348,14 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize) -> tauri
         (source, next)
     };
     if let Some(webview) = app.get_webview(&label(id)) {
+        // Hidden while it moves, so `select` shows it afresh in its new
+        // window, rather than a stale image of it
+        webview.hide()?;
         webview.reparent(&target_window)?;
         webview.set_position(LogicalPosition::new(0.0, bar_height(app)))?;
         webview.set_size(content_size(app, &target_window)?)?;
+        #[cfg(windows)]
+        crate::webview2::on_moved(&webview);
     }
     match next {
         Some(Some(next)) => select(app, next)?,
@@ -1362,8 +1367,11 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize) -> tauri
         _ => {}
     }
     select(app, id)?;
-    let _ = target_window.unminimize();
-    let _ = target_window.set_focus();
+    // A new window is shown once it's ready, by `move_to_new_window`
+    if target_window.is_visible()? {
+        let _ = target_window.unminimize();
+        let _ = target_window.set_focus();
+    }
     push_state(app);
     Ok(())
 }
@@ -1372,29 +1380,36 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize) -> tauri
 /// from the window's top left: past the traffic lights on macOS
 const GRIP: (f64, f64) = (if cfg!(target_os = "macos") { 118.0 } else { 40.0 }, TAB_BAR_HEIGHT / 2.0);
 
+/// Where a window goes to have its first tab under the cursor at `at`, in
+/// screen pixels
+fn grip_position(app: &AppHandle, window: &Window, at: PhysicalPosition<f64>) -> PhysicalPosition<i32> {
+    let monitor = app.monitor_from_point(at.x, at.y).ok().flatten();
+    let factor = monitor.map_or_else(|| window.scale_factor().unwrap_or(1.0), |monitor| monitor.scale_factor());
+    let px = factor * scale(app);
+    PhysicalPosition::new(at.x - GRIP.0 * px, at.y - GRIP.1 * px).cast::<i32>()
+}
+
 /// Moves tab `id` into a new window, with its first tab under the cursor at
 /// `at`, in screen pixels. A window's only tab stays, and the window moves
-/// there instead
-fn move_to_new_window(app: &AppHandle, id: u32, at: PhysicalPosition<f64>) -> tauri::Result<()> {
+/// there instead. Gives the label of the window the tab is now in
+fn move_to_new_window(app: &AppHandle, id: u32, at: PhysicalPosition<f64>) -> tauri::Result<Option<String>> {
     let Some((source, alone)) = ({
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         state.tabs.iter().find(|tab| tab.id == id && id != HOME_ID).map(|tab| {
             (tab.window.clone(), state.tabs_in(&tab.window).count() == 1)
         })
     }) else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(source_window) = app.get_window(&source) else {
-        return Ok(());
+        return Ok(None);
     };
-    let monitor = app.monitor_from_point(at.x, at.y).ok().flatten();
-    let factor = monitor.map_or(source_window.scale_factor()?, |monitor| monitor.scale_factor());
-    let px = factor * scale(app);
-    let position = PhysicalPosition::new(at.x - GRIP.0 * px, at.y - GRIP.1 * px).cast::<i32>();
+    let position = grip_position(app, &source_window, at);
     // Never the main window, which keeps Home
     if alone {
         source_window.set_position(position)?;
-        return source_window.set_focus();
+        source_window.set_focus()?;
+        return Ok(Some(source));
     }
     // As large as the window it leaves, unless that fills the screen
     let size = if source_window.is_maximized()? || source_window.is_fullscreen()? {
@@ -1407,9 +1422,84 @@ fn move_to_new_window(app: &AppHandle, id: u32, at: PhysicalPosition<f64>) -> ta
         state.next_window += 1;
         format!("{WINDOW_PREFIX}{}", state.next_window - 1)
     };
-    let window = build_window(app, &label, size)?;
+    // Shown only once it's in place with its tab, so it doesn't come
+    // together on screen
+    let window = build_window(app, &label, size, false)?;
     window.set_position(position)?;
-    move_to_window(app, id, &label, 0)
+    move_to_window(app, id, &label, 0)?;
+    window.show()?;
+    window.set_focus()?;
+    Ok(Some(label))
+}
+
+/// True while the main mouse button is held down, anywhere
+#[cfg(windows)]
+fn mouse_down() -> bool {
+    crate::webview2::left_button_down()
+}
+
+#[cfg(target_os = "macos")]
+fn mouse_down() -> bool {
+    use objc2::{class, msg_send};
+    let buttons: usize = unsafe { msg_send![class!(NSEvent), pressedMouseButtons] };
+    buttons & 1 != 0
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn mouse_down() -> bool {
+    false
+}
+
+/// Keeps window `label`, holding dragged tab `id`, under the cursor until
+/// the mouse button is let go. Let go over another window's tab bar, the
+/// tab moves in there
+fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
+    let Some(window) = app.get_window(label) else {
+        return;
+    };
+    let mut last = None;
+    while mouse_down() {
+        if let Ok(at) = app.cursor_position() {
+            if last != Some(at) {
+                last = Some(at);
+                let _ = window.set_position(grip_position(app, &window, at));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(4));
+    }
+    if let Ok(at) = app.cursor_position() {
+        drop_on_bar(app, id, label, at);
+    }
+}
+
+/// Moves tab `id` into the window whose tab bar is at `at`, in screen
+/// pixels, other than window `from`, where among its tabs it was let go
+fn drop_on_bar(app: &AppHandle, id: u32, from: &str, at: PhysicalPosition<f64>) {
+    let pinned = with_tab(app, id, |tab| tab.pinned).unwrap_or(false);
+    let over = tab_windows(app).into_iter().find_map(|window| {
+        if window.label() == from || !window.is_visible().ok()? || window.is_minimized().ok()? {
+            return None;
+        }
+        let (origin, size, factor) = (window.inner_position().ok()?, window.inner_size().ok()?, window.scale_factor().ok()?);
+        let px = factor * scale(app);
+        let (x, y) = (at.x - origin.x as f64, at.y - origin.y as f64);
+        (x >= 0.0 && x < size.width as f64 && y >= 0.0 && y < TAB_BAR_HEIGHT * px).then(|| (window, x / px))
+    });
+    let Some((window, x)) = over else {
+        return;
+    };
+    let Some(bar) = app.get_webview(window.label()) else {
+        return;
+    };
+    let (app, target) = (app.clone(), window.label().to_owned());
+    let _ = bar.eval_with_callback(format!("window.dropIndex?.({x}, {pinned}) ?? 1e9"), move |json| {
+        let index = json.parse::<f64>().map_or(usize::MAX, |index| index.max(0.0) as usize);
+        // Not from inside the webview's own callback
+        let (app, target) = (app.clone(), target.clone());
+        std::thread::spawn(move || {
+            let _ = move_to_window(&app, id, &target, index);
+        });
+    });
 }
 
 /// Reloads tab `id`. A frozen tab is put to sleep instead, so it loads
@@ -1956,12 +2046,13 @@ pub fn any_focused(app: &AppHandle) -> bool {
 
 /// Makes a window for tabs, `size` within. Its own webview is the tab bar;
 /// tabs are added as child webviews below it
-pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>) -> tauri::Result<Window> {
+pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visible: bool) -> tauri::Result<Window> {
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("Ligma")
         .inner_size(size.width, size.height)
         .min_inner_size(800.0, 600.0)
+        .visible(visible)
         .background_color(tauri::window::Color(44, 44, 44, 255));
     #[cfg(target_os = "macos")]
     {
@@ -1997,7 +2088,16 @@ pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>) -> tau
             crate::preview::hide(&handle);
             layout(&handle);
         }
-        WindowEvent::Moved(_) | WindowEvent::Focused(false) => crate::preview::hide(&handle),
+        WindowEvent::Moved(_) => {
+            crate::preview::hide(&handle);
+            #[cfg(windows)]
+            if let Some(window) = handle.get_window(&label) {
+                for webview in window.webviews().iter().filter(|webview| webview.label().starts_with("tab-")) {
+                    crate::webview2::on_moved(webview);
+                }
+            }
+        }
+        WindowEvent::Focused(false) => crate::preview::hide(&handle),
         WindowEvent::Focused(true) => {
             let changed = {
                 let mut state = handle.state::<Tabs>().inner().0.lock().unwrap();
@@ -2123,44 +2223,20 @@ pub async fn open_new_tab(app: AppHandle, webview: Webview) {
     }
 }
 
-/// Tab `id` was dragged out of its bar and let go. Over another window's
-/// tab bar it moves in there, where it was let go; anywhere else it gets a
-/// window of its own
+/// Tab `id` was dragged off its bar, the mouse button still held. It goes
+/// into a window of its own right away, which follows the cursor until
+/// it's let go (see `follow_cursor`)
 #[tauri::command]
-pub async fn drop_tab(app: AppHandle, webview: Webview, id: u32) {
+pub async fn tear_off_tab(app: AppHandle, webview: Webview, id: u32) {
     if !from_tab_bar(&webview) {
         return;
     }
     let Ok(at) = app.cursor_position() else {
         return;
     };
-    let pinned = with_tab(&app, id, |tab| tab.pinned).unwrap_or(false);
-    let over = tab_windows(&app).into_iter().find_map(|window| {
-        if window.label() == webview.label() || !window.is_visible().ok()? || window.is_minimized().ok()? {
-            return None;
-        }
-        let (origin, size, factor) = (window.inner_position().ok()?, window.inner_size().ok()?, window.scale_factor().ok()?);
-        let px = factor * scale(&app);
-        let (x, y) = (at.x - origin.x as f64, at.y - origin.y as f64);
-        (x >= 0.0 && x < size.width as f64 && y >= 0.0 && y < TAB_BAR_HEIGHT * px).then(|| (window, x / px))
-    });
-    let Some((window, x)) = over else {
-        let _ = move_to_new_window(&app, id, at);
-        return;
-    };
-    let Some(bar) = app.get_webview(window.label()) else {
-        return;
-    };
-    // Where among its tabs, from where they are in its bar
-    let target = window.label().to_owned();
-    let _ = bar.eval_with_callback(format!("window.dropIndex?.({x}, {pinned}) ?? 1e9"), move |json| {
-        let index = json.parse::<f64>().map_or(usize::MAX, |index| index.max(0.0) as usize);
-        // Not from inside the webview's own callback
-        let (app, target) = (app.clone(), target.clone());
-        std::thread::spawn(move || {
-            let _ = move_to_window(&app, id, &target, index);
-        });
-    });
+    if let Ok(Some(label)) = move_to_new_window(&app, id, at) {
+        std::thread::spawn(move || follow_cursor(&app, id, &label));
+    }
 }
 
 /// Minimize, maximize and close buttons the tab bar draws where the window

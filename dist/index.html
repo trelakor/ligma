@@ -100,9 +100,6 @@
   /* While a tab is dragged, the others slide out of its way */
   .dragging .tab { transition: transform 150ms ease; }
   .dragging .tab.dragged { transition: none; z-index: 1; }
-  /* Dragged out of the bar: let go, it moves to a window of its own, or
-     to the bar of the window it's over */
-  .dragging .tab.detached { opacity: 0.4; }
   /* Pinned tabs show only their icon, like Home */
   .tab.pinned { flex: none; width: 38px; min-width: 38px; padding: 0; justify-content: center; }
   /* Always leave room to drag the window */
@@ -220,8 +217,8 @@
   // Dragging a tab moves it among its group, the pinned tabs or the rest
   // `drag` holds the press until it moves DRAG_START px, then the drag;
   // renders wait until the drop, so the tabs don't change under it.
-  // Dragged DETACH px off the bar, the tab is let go of in another window
-  // (see `drop_tab` in tabs.rs)
+  // Dragged DETACH px off the bar, the tab goes into a window of its own,
+  // which follows the pointer from there (see `tear_off_tab` in tabs.rs)
   const DRAG_START = 4;
   const DETACH = 24;
   let drag = null;
@@ -293,15 +290,17 @@
     }
     const { from, rects } = drag;
     const height = bar.getBoundingClientRect().height;
-    drag.detached = e.clientY < -DETACH || e.clientY > height + DETACH || e.clientX < 0 || e.clientX > innerWidth;
-    if (drag.detached) {
-      // The others go back where they were, as if it had left
-      drag.to = from;
-      groupNodes(drag.pinned).forEach((node, i) => {
-        node.classList.toggle("dragged", i === from);
-        node.classList.toggle("detached", i === from);
-        node.style.transform = "";
-      });
+    if (e.clientY < -DETACH || e.clientY > height + DETACH || e.clientX < 0 || e.clientX > innerWidth) {
+      const { id, pinned } = drag;
+      drag = null;
+      bar.classList.remove("dragging");
+      if (bar.hasPointerCapture(e.pointerId)) bar.releasePointerCapture(e.pointerId);
+      // The others go back where they were until the tab's gone
+      const state = deferred;
+      deferred = null;
+      if (state) renderBar(state);
+      else groupNodes(pinned).forEach((node) => (node.style.transform = ""));
+      invoke("tear_off_tab", { id });
       return;
     }
     const me = rects[from];
@@ -318,19 +317,15 @@
         : drag.to <= i && i < from ? me.width
         : 0;
       node.classList.toggle("dragged", i === from);
-      node.classList.remove("detached");
       node.style.transform = shift ? `translateX(${shift}px)` : "";
     });
   });
 
-  const endPress = (e) => {
+  const endPress = () => {
     const done = drag;
     drag = null;
     if (!done?.moving) return;
     bar.classList.remove("dragging");
-    groupNodes(done.pinned).forEach((node) => node.classList.remove("detached"));
-    // Off the bar the tab stays put here (`to` is `from`) until it's gone
-    if (done.detached && e.type === "pointerup") invoke("drop_tab", { id: done.id });
     // The tab stays where it was dropped until the reply renders it there
     const state = deferred;
     deferred = null;

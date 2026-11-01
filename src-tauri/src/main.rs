@@ -252,7 +252,7 @@ fn main() {
             tabs::open_new_tab,
             tabs::tab_menu,
             tabs::move_tab_to,
-            tabs::drop_tab,
+            tabs::tear_off_tab,
             tabs::window_control,
             settings::get_settings,
             settings::get_theme,
@@ -307,7 +307,7 @@ fn main() {
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
 
-            let window = tabs::build_window(app.handle(), tabs::MAIN, tauri::LogicalSize::new(1440.0, 900.0))?;
+            let window = tabs::build_window(app.handle(), tabs::MAIN, tauri::LogicalSize::new(1440.0, 900.0), true)?;
             let handle = app.handle().clone();
             window.on_window_event(move |event| {
                 // Ligma's other windows go with it: other windows' tabs, the
