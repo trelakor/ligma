@@ -774,7 +774,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
         .initialization_script(crate::contrast::page_js())
-        .initialization_script(crate::split::PAGE_JS);
+        .initialization_script(crate::split::PAGE_JS)
+        .initialization_script(crate::split::CARRY_JS);
     #[cfg(target_os = "macos")]
     {
         builder = builder
@@ -1128,6 +1129,13 @@ fn end_split(app: &AppHandle, window: &str) {
     crate::split::hide_divider(app, window);
     fit_tab_bar(app, window);
     push_state(app);
+}
+
+/// The other tab of the split view tab `id` is in, if any
+pub fn split_partner(app: &AppHandle, id: u32) -> Option<u32> {
+    let state = app.state::<Tabs>().inner().0.lock().unwrap();
+    let window = &state.tabs.iter().find(|tab| tab.id == id)?.window;
+    state.splits.get(window)?.iter().copied().find(|&tab| tab != id)
 }
 
 /// Ends the split views tabs `ids` are in
@@ -1599,19 +1607,19 @@ fn move_to_new_window(
 
 /// True while the main mouse button is held down, anywhere
 #[cfg(windows)]
-fn mouse_down() -> bool {
+pub fn mouse_down() -> bool {
     crate::webview2::left_button_down()
 }
 
 #[cfg(target_os = "macos")]
-fn mouse_down() -> bool {
+pub fn mouse_down() -> bool {
     use objc2::{class, msg_send};
     let buttons: usize = unsafe { msg_send![class!(NSEvent), pressedMouseButtons] };
     buttons & 1 != 0
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-fn mouse_down() -> bool {
+pub fn mouse_down() -> bool {
     false
 }
 

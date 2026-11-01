@@ -24,8 +24,16 @@
 //! wkwebview.rs)
 //!
 //! Which tabs are split lives with the tabs (see tabs.rs). A tab dragged
-//! over the far half of a window's canvas splits it with the tab there;
+//! over either half of a window's canvas splits it with the tab there;
 //! `show_hint` marks where it would go
+//!
+//! Objects dragged from one half into the other move files (`CARRY_JS`):
+//! as the drag crosses over, the page they're in copies them, through
+//! Figma's own copy, to a clipboard of its own rather than the system's,
+//! and asks Ligma to `carry` them. The other page pastes them, by the same
+//! means, focused, as Figma only pastes then, and moves them with the
+//! pointer, Ligma telling it where that is, until the button's let go. Then
+//! the first page deletes them
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -48,12 +56,17 @@ pub const PAGE_JS: &str = r#"(() => {
   const mount = () => (document.head ? (document.head.append(style), true) : false);
   if (!mount()) document.addEventListener("DOMContentLoaded", mount, { once: true });
   let other = false;
+  // This page's half and the other's, `[left, top, right, bottom]` in CSS
+  // pixels, while split
+  let halves = null;
   Object.defineProperty(window, "__ligmaSplit", {
-    value: (value) => {
+    value: (value, shared = null) => {
       other = value;
+      halves = shared;
       document.documentElement.classList.toggle("ligma-split-other", value);
     },
   });
+  Object.defineProperty(window, "__ligmaSplitHalves", { get: () => halves });
   addEventListener(
     "pointerdown",
     () => {
@@ -72,6 +85,186 @@ pub const PAGE_JS: &str = r#"(() => {
     },
     true,
   );
+})();"#;
+
+/// In every tab, after `PAGE_JS`: objects dragged across a split (see the
+/// module's doc). Uses the Plugin API Figma exposes on the page, and its
+/// `focus-target` input, which its copy and paste listen on
+pub const CARRY_JS: &str = r#"(() => {
+  if (window.top !== window) return;
+  const api = () => {
+    try {
+      return window.figma?.currentPage && window.figma.editorType === "figma" ? window.figma : null;
+    } catch {
+      return null;
+    }
+  };
+  const inside = (r, x, y) => r && x >= r[0] && x < r[2] && y >= r[1] && y < r[3];
+  const canvasMiddle = () => {
+    let best = null;
+    for (const c of document.querySelectorAll("canvas")) {
+      const r = c.getBoundingClientRect();
+      if (!best || r.width * r.height > best.width * best.height) best = r;
+    }
+    return best && [best.left + best.width / 2, best.top + best.height / 2];
+  };
+  // The point of the canvas at `x`, `y` in CSS pixels
+  const world = (figma, x, y) => {
+    const middle = canvasMiddle();
+    const { center, zoom } = figma.viewport;
+    return middle && { x: center.x + (x - middle[0]) / zoom, y: center.y + (y - middle[1]) / zoom };
+  };
+  const box = (nodes) => {
+    const boxes = nodes.map((n) => n.absoluteBoundingBox ?? { x: n.x, y: n.y, width: n.width, height: n.height });
+    return { x: Math.min(...boxes.map((b) => b.x)), y: Math.min(...boxes.map((b) => b.y)) };
+  };
+  const clipboard = (type, data) => {
+    const target = document.querySelector("input.focus-target");
+    if (!target) return false;
+    target.focus();
+    return !target.dispatchEvent(new ClipboardEvent(type, { clipboardData: data, bubbles: true, cancelable: true }));
+  };
+  const signal = (path) => {
+    const url = "https://split.ligma.invalid/" + path;
+    if (navigator.userAgent.includes("Mac")) {
+      const frame = document.createElement("iframe");
+      frame.style.display = "none";
+      frame.src = url;
+      document.documentElement.appendChild(frame);
+      setTimeout(() => frame.remove(), 1000);
+    } else {
+      window.open(url, "_blank");
+    }
+  };
+
+  // Out: a press on something selected on the canvas, as Figma sees it,
+  // starts a drag of the selection. Crossing into the other half carries it
+  // over
+  let press = null;
+  let out = null;
+  let held = false;
+  addEventListener("pointerdown", (e) => {
+    const figma = api();
+    press = null;
+    held = e.button === 0;
+    if (e.button !== 0 || !figma || !inside(window.__ligmaSplitHalves?.mine, e.clientX, e.clientY)) return;
+    const selection = figma.currentPage.selection;
+    const pointer = world(figma, e.clientX, e.clientY);
+    const on = (n) => {
+      const b = n.absoluteBoundingBox;
+      return b && pointer.x >= b.x && pointer.x <= b.x + b.width && pointer.y >= b.y && pointer.y <= b.y + b.height;
+    };
+    if (pointer && selection.some(on)) press = { nodes: selection, at: box(selection), pointer };
+  }, true);
+  addEventListener("pointermove", (e) => {
+    const figma = api();
+    const halves = window.__ligmaSplitHalves;
+    if (!press || !figma || !halves || !(e.buttons & 1)) return;
+    if (!inside(halves.theirs, e.clientX, e.clientY)) return;
+    const nodes = press.nodes.filter((n) => !n.removed);
+    const data = new DataTransfer();
+    if (!nodes.length || !clipboard("copy", data) || !data.getData("text/html")) return;
+    // Where it was grabbed, from where it was when pressed
+    const offset = { x: press.at.x - press.pointer.x, y: press.at.y - press.pointer.y };
+    out = { nodes, html: data.getData("text/html"), offset };
+    press = null;
+    signal("carry");
+  }, true);
+  addEventListener("pointerup", () => {
+    press = null;
+    held = false;
+  }, true);
+  Object.defineProperty(window, "__ligmaCarryOut", {
+    value: () => out && { html: out.html, offset: out.offset },
+  });
+  // Once they're in the other file, after Figma has finished the drag here:
+  // it won't take them away mid-drag
+  Object.defineProperty(window, "__ligmaCarryDone", {
+    value: (moved) => {
+      const nodes = out?.nodes ?? [];
+      out = null;
+      if (!moved) return;
+      // Tried until they're gone: once the drag here has ended, or after a
+      // while if this page never hears of the button going up
+      const started = performance.now();
+      const remove = () => {
+        const waiting = held && performance.now() - started < 1500;
+        if (!waiting) {
+          for (const node of nodes) {
+            try {
+              if (!node.removed) node.remove();
+            } catch {}
+          }
+        }
+        if (nodes.some((n) => !n.removed) && performance.now() - started < 5000) setTimeout(remove, 100);
+      };
+      setTimeout(remove, 50);
+    },
+  });
+
+  // In: pasted at the top level, then kept under the pointer. What came
+  // in is what's new at the top level
+  let carried = null;
+  Object.defineProperty(window, "__ligmaCarryIn", {
+    value: ({ html, offset }) => {
+      const figma = api();
+      carried = null;
+      if (!figma) return;
+      figma.currentPage.selection = [];
+      const data = new DataTransfer();
+      data.setData("text/html", html);
+      data.setData("text/plain", "");
+      const before = new Set(figma.currentPage.children.map((n) => n.id));
+      // Figma doesn't always mark the paste as handled: what lands tells
+      clipboard("paste", data);
+      carried = { offset, before, nodes: null, at: null, started: performance.now() };
+    },
+  });
+  // Pasting can take a moment
+  const landed = (figma) => {
+    if (!carried.nodes) {
+      const fresh = figma.currentPage.children.filter((n) => !carried.before.has(n.id));
+      if (fresh.length) carried.nodes = fresh;
+    }
+    return carried.nodes;
+  };
+  Object.defineProperty(window, "__ligmaCarryMove", {
+    value: (x, y) => {
+      const figma = api();
+      if (!figma || !carried) return;
+      carried.at = [x, y];
+      if (!landed(figma)) return;
+      const pointer = world(figma, x, y);
+      const nodes = carried.nodes.filter((n) => !n.removed);
+      if (!pointer || !nodes.length) return;
+      const now = box(nodes);
+      const dx = pointer.x + carried.offset.x - now.x;
+      const dy = pointer.y + carried.offset.y - now.y;
+      for (const node of nodes) {
+        node.x += dx;
+        node.y += dy;
+      }
+    },
+  });
+  // True if what was carried came in, false if not, or null while the
+  // paste is still landing, for a while
+  Object.defineProperty(window, "__ligmaCarryEnd", {
+    value: () => {
+      const figma = api();
+      if (!carried) return false;
+      // Figma's API can be out of reach for a moment while it pastes
+      if (!figma) return performance.now() - carried.started < 3000 ? null : ((carried = null), false);
+      if (!landed(figma)) {
+        if (performance.now() - carried.started < 3000) return null;
+      } else if (carried.at) {
+        window.__ligmaCarryMove(...carried.at);
+      }
+      const nodes = carried.nodes?.filter((n) => !n.removed) ?? [];
+      carried = null;
+      if (nodes.length) figma.currentPage.selection = nodes;
+      return nodes.length > 0;
+    },
+  });
 })();"#;
 
 /// Where Figma's canvas is, as `{ canvas, floating }` in CSS pixels, or
@@ -274,8 +467,13 @@ pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool, rati
         let (mine, theirs, gap, canvas) = regions((size.width, size.height), geometry, zoom, ratio, other_half);
         clip(focused, &focused_view, Some(mine));
         clip(other, &other_view, Some(theirs));
-        let _ = focused_view.eval("window.__ligmaSplit?.(false)");
-        let _ = other_view.eval("window.__ligmaSplit?.(true)");
+        // Each page's half and the other's, in its CSS pixels: the same for
+        // both, as both fill where tabs go
+        let (both, _) = halves(canvas, ratio, GAP * zoom);
+        let both = both.map(|half| half.map(|v| v / zoom));
+        let shared = |mine: usize| serde_json::json!({ "mine": both[mine], "theirs": both[1 - mine] });
+        let _ = focused_view.eval(format!("window.__ligmaSplit?.(false, {})", shared(1 - other_half)));
+        let _ = other_view.eval(format!("window.__ligmaSplit?.(true, {})", shared(other_half)));
         // In the tab bar's CSS pixels: it's at the window's top, at the same
         // zoom, and the tabs are below it
         let bar = |r: Rect| [r[0] / zoom, r[1] / zoom + crate::tabs::TAB_BAR_HEIGHT, r[2] / zoom, r[3] / zoom + crate::tabs::TAB_BAR_HEIGHT];
@@ -390,10 +588,77 @@ pub fn close(app: &AppHandle) {
 
 /// A tab's page asks to be focused: it's the other half of a split
 pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
-    if url.path() == "/focus" {
-        let app = app.clone();
-        std::thread::spawn(move || {
-            let _ = crate::tabs::select(&app, tab);
+    let app = app.clone();
+    match url.path() {
+        "/focus" => {
+            std::thread::spawn(move || {
+                let _ = crate::tabs::select(&app, tab);
+            });
+        }
+        "/carry" => {
+            std::thread::spawn(move || carry(&app, tab));
+        }
+        _ => {}
+    }
+}
+
+/// Carries what's being dragged in tab `from` into the other tab of its
+/// split, which keeps it under the pointer until the button's let go (see
+/// `CARRY_JS`)
+fn carry(app: &AppHandle, from: u32) {
+    let Some(to) = crate::tabs::split_partner(app, from) else {
+        return;
+    };
+    let (Some(source), Some(target)) = (crate::tabs::scriptable(app, from), crate::tabs::scriptable(app, to)) else {
+        return;
+    };
+    // Through a channel: the page's answer comes on the main thread
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = source.eval_with_callback("window.__ligmaCarryOut?.() ?? null", move |json| {
+        let _ = tx.send(json);
+    });
+    let Ok(json) = rx.recv_timeout(std::time::Duration::from_secs(2)) else {
+        return;
+    };
+    if json == "null" || json.is_empty() {
+        return;
+    }
+    // Figma only takes a paste with the page focused: the other half is
+    // focused as the drag crosses into it
+    let _ = crate::tabs::select(app, to);
+    let _ = target.eval(format!("window.__ligmaCarryIn?.({json})"));
+    let window = target.window();
+    let zoom = crate::tabs::scale(app);
+    let top = crate::tabs::bar_height(app);
+    let mut last = None;
+    while crate::tabs::mouse_down() {
+        let (Ok(at), Ok(origin), Ok(factor)) = (app.cursor_position(), window.inner_position(), window.scale_factor()) else {
+            break;
+        };
+        if last != Some(at) {
+            last = Some(at);
+            // In the page's CSS pixels
+            let x = (at.x - origin.x as f64) / factor / zoom;
+            let y = ((at.y - origin.y as f64) / factor - top) / zoom;
+            let _ = target.eval(format!("window.__ligmaCarryMove?.({x}, {y})"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    // Asked again while the paste is still landing
+    let moved = loop {
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Not `?? false`: null is the page's "not yet"
+        let _ = target.eval_with_callback("window.__ligmaCarryEnd ? window.__ligmaCarryEnd() : false", move |json| {
+            let _ = tx.send(json);
         });
+        match rx.recv_timeout(std::time::Duration::from_secs(2)).as_deref() {
+            Ok("null") => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Ok(answer) => break answer == "true",
+            Err(_) => break false,
+        }
+    };
+    let _ = source.eval(format!("window.__ligmaCarryDone?.({moved})"));
+    if !moved {
+        let _ = crate::tabs::select(app, from);
     }
 }
