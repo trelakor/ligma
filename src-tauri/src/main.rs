@@ -35,6 +35,7 @@ mod titlebar;
 mod toolbar;
 mod updater;
 mod vectorize;
+mod view_state;
 #[cfg(windows)]
 mod webview2;
 #[cfg(target_os = "macos")]

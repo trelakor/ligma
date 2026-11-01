@@ -642,12 +642,13 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         });
         id
     };
-    create_webview(app, id, url)?;
+    create_webview(app, id, url, false)?;
     select(app, id)
 }
 
-/// Loads tab `id`'s webview, for a new tab or one waking up
-fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
+/// Loads tab `id`'s webview, for a new tab or one `waking` from sleep or
+/// reopened from the last session
+fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Result<()> {
     let window = app.get_window("main").expect("main window exists");
     let (nav_app, popup_app, title_app) = (app.clone(), app.clone(), app.clone());
     #[allow(unused_mut)]
@@ -685,7 +686,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::adjustments::page_js())
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
-        .initialization_script(crate::contrast::page_js());
+        .initialization_script(crate::contrast::page_js())
+        .initialization_script(crate::view_state::page_js(waking));
     #[cfg(target_os = "macos")]
     {
         builder = builder
@@ -903,7 +905,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     if let Some(url) = wake {
         // Fails if the old webview is still closing. Stay asleep, so
         // selecting the tab again retries
-        if create_webview(app, id, url).is_err() {
+        if create_webview(app, id, url, true).is_err() {
             with_tab(app, id, |tab| {
                 tab.asleep = true;
                 tab.revealing = false;
