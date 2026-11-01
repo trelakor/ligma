@@ -8,7 +8,7 @@ Ligma is a lightweight desktop app for Figma on macOS and Windows, built with Ta
 - `wkwebview.rs`, `titlebar.rs`, `pressure.rs` and `web_auth.rs` are macOS only, `webview2.rs` and `frame.rs` are Windows only
 - `dist/` holds Ligma's own pages: the tab bar (`index.html`), settings, menus, tab previews and prompts. `dist/themes.js` is the source of truth for themes
 - `site/` is the project website, published to GitHub Pages from `main`
-- `scripts/` holds the release notes, Discord asset and memory measuring scripts, `docs/` the feature, memory and development docs
+- `scripts/` holds the release notes, Discord asset, memory measuring and worktree pruning scripts, `docs/` the feature, memory and development docs
 - `PRODUCT.md` describes the product, its users and its voice, read it before UI or copy changes
 - Every release needs a `## <version> - <date>` section in `CHANGELOG.md`, the release workflow fails without it. See `docs/DEVELOPMENT.md` for releasing
 - Both platforms are supported, keep `cfg(target_os = ...)` paths in step and don't break the other platform's build
@@ -28,6 +28,7 @@ Ligma is a lightweight desktop app for Figma on macOS and Windows, built with Ta
 - If you're already on a branch for the same work, keep using it. If it's for different work, ask before switching
 - Commit to the branch and push it with `git push -u origin <branch>`. Open a PR against `main` only when asked, and don't merge it yourself
 - Release commits and tags are the one exception: they're made on `main` after the feature branch has been merged
+- After a merge or release, run `npm run prune -- --yes` to remove worktrees and local branches already on `main`. See `docs/DEVELOPMENT.md`
 
 ## Text Conventions
 
