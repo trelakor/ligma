@@ -102,7 +102,7 @@ mod download {
     use std::fs::File;
     use std::io::Write;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{mpsc, Mutex, MutexGuard, OnceLock};
 
     use ort::environment::Environment;
@@ -196,8 +196,9 @@ mod download {
         after: &'static str,
         /// Percent downloaded, while it downloads
         downloading: Mutex<Option<u8>>,
-        /// Settings' Cancel
-        cancel: AtomicBool,
+        /// How many times Settings' Cancel was chosen, so a job waiting on
+        /// a download that's cancelled stops too, rather than asking again
+        cancels: AtomicU32,
         /// Jobs waiting on it, told how far its download has got: tab and
         /// job
         watchers: Mutex<Vec<(u32, u64)>>,
@@ -212,7 +213,7 @@ mod download {
         progress: "Downloading the background model…",
         after: "Removing background…",
         downloading: Mutex::new(None),
-        cancel: AtomicBool::new(false),
+        cancels: AtomicU32::new(0),
         watchers: Mutex::new(Vec::new()),
     };
 
@@ -225,7 +226,7 @@ mod download {
         progress: "Downloading the object model…",
         after: "Reading the image…",
         downloading: Mutex::new(None),
-        cancel: AtomicBool::new(false),
+        cancels: AtomicU32::new(0),
         watchers: Mutex::new(Vec::new()),
     };
 
@@ -302,10 +303,11 @@ mod download {
         pub fn ensure(&'static self, app: &AppHandle, tab: u32, job: u64) -> Result<(MutexGuard<'static, ()>, PathBuf), Missing> {
             self.watchers.lock().unwrap().push((tab, job));
             let _watching = Watching(self, tab, job);
+            let cancels = self.cancels.load(Ordering::SeqCst);
             let held = lock();
             let folder = folder(app).map_err(|error| failed(self, error))?;
             if !self.installed(&folder) {
-                if !self.ask(app, &folder) {
+                if self.cancels.load(Ordering::SeqCst) != cancels || !self.ask(app, &folder) {
                     return Err(Missing::Cancelled);
                 }
                 match self.download(app, &folder) {
@@ -341,7 +343,7 @@ mod download {
         }
 
         pub fn cancel(&self) {
-            self.cancel.store(true, Ordering::SeqCst);
+            self.cancels.fetch_add(1, Ordering::SeqCst);
         }
 
         /// Removes it, once it's not in use. On macOS ONNX Runtime goes too,
@@ -405,7 +407,7 @@ mod download {
         /// Downloads what's missing into `folder`, telling Settings and the
         /// jobs waiting how far it's got. `Err(None)` when cancelled
         fn download(&self, app: &AppHandle, folder: &Path) -> Result<(), Option<String>> {
-            self.cancel.store(false, Ordering::SeqCst);
+            let cancels = self.cancels.load(Ordering::SeqCst);
             let missing: Vec<&Download> = self.downloads().filter(|download| !folder.join(download.file).is_file()).collect();
             let total = missing.iter().map(|download| download.size).sum::<u64>().max(1);
             let mut before = 0;
@@ -428,7 +430,7 @@ mod download {
                 let path = folder.join(download.file);
                 result = std::fs::create_dir_all(path.parent().unwrap_or(folder)).map_err(|error| Some(error.to_string()));
                 if result.is_ok() {
-                    result = self.fetch(download, &path, &mut |got| report(before + got));
+                    result = self.fetch(download, &path, cancels, &mut |got| report(before + got));
                 }
                 if result.is_err() {
                     break;
@@ -447,8 +449,9 @@ mod download {
         }
 
         /// Downloads `download` to `path`, through a `.part` file that's
-        /// only kept once its hash matches. `Err(None)` when cancelled
-        fn fetch(&self, download: &Download, path: &Path, report: &mut impl FnMut(u64)) -> Result<(), Option<String>> {
+        /// only kept once its hash matches. `Err(None)` when cancelled since
+        /// `cancels`
+        fn fetch(&self, download: &Download, path: &Path, cancels: u32, report: &mut impl FnMut(u64)) -> Result<(), Option<String>> {
             let part = path.with_file_name(format!("{}.part", path.file_name().unwrap_or_default().to_string_lossy()));
             let result = tauri::async_runtime::block_on(async {
                 let error = |error: &dyn std::fmt::Display| Some(error.to_string());
@@ -463,7 +466,7 @@ mod download {
                 let mut hash = Sha256::new();
                 let mut got = 0u64;
                 while let Some(chunk) = response.chunk().await.map_err(|e| error(&e))? {
-                    if self.cancel.load(Ordering::SeqCst) {
+                    if self.cancels.load(Ordering::SeqCst) != cancels {
                         return Err(None);
                     }
                     file.write_all(&chunk).map_err(|e| error(&e))?;
