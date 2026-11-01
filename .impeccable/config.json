@@ -17,6 +17,15 @@
         ],
         "createdAt": "2026-10-26T00:57:34.762Z",
         "reason": "agent decision: the nested 'cards' are drawn app UI (tab preview, Discord profile, Figma panels) inside swatch-chip illustrations, not layout containers"
+      },
+      {
+        "rule": "radial-halo",
+        "value": "*",
+        "files": [
+          "assets/social/cover.html"
+        ],
+        "createdAt": "2026-11-01T23:34:16.060Z",
+        "reason": "agent decided: PRODUCT.md brand commitments name blurred mesh-gradient orbs as the themes' visual signature; the cover's glow is the Figma theme's ligmaMesh orb"
       }
     ]
   }
