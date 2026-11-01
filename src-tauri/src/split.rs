@@ -36,11 +36,18 @@
 //! it is, so it shows on whichever side of the split it's over, and the
 //! half the pointer's in is focused. Let go, the page whose half it's in
 //! keeps it and the other deletes its own
+//!
+//! With `uniformSplit` off, neither webview is clipped: each is placed in
+//! its half of where tabs go, with its own panels and toolbar, and nothing
+//! is carried between them. With `splitView` off, no window is split
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Webview, WebviewUrl, WebviewWindowBuilder, Window};
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Webview, WebviewUrl, WebviewWindowBuilder,
+    Window,
+};
 
 /// In every tab. Ligma marks the tab in the half that isn't focused
 /// (`__ligmaSplit`), which hides its toolbar and image bar; pressing in it
@@ -52,7 +59,9 @@ pub const PAGE_JS: &str = r#"(() => {
   const style = document.createElement("style");
   style.textContent = `
     .ligma-split-other [data-testid="design-toolbelt-wrapper"],
-    .ligma-split-other [data-secondary-toolbelt] { visibility: hidden !important; }
+    .ligma-split-other [data-secondary-toolbelt],
+    .ligma-split-other [data-ligma-recolor],
+    .ligma-split-other [data-ligma-objects=""] { visibility: hidden !important; }
   `;
   const mount = () => (document.head ? (document.head.append(style), true) : false);
   if (!mount()) document.addEventListener("DOMContentLoaded", mount, { once: true });
@@ -61,10 +70,10 @@ pub const PAGE_JS: &str = r#"(() => {
   // pixels, while split
   let halves = null;
   Object.defineProperty(window, "__ligmaSplit", {
-    value: (value, shared = null) => {
+    value: (value, shared = null, uniform = true) => {
       other = value;
       halves = shared;
-      document.documentElement.classList.toggle("ligma-split-other", value);
+      document.documentElement.classList.toggle("ligma-split-other", value && uniform);
     },
   });
   Object.defineProperty(window, "__ligmaSplitHalves", { get: () => halves });
@@ -322,11 +331,28 @@ const GEOMETRY_JS: &str = r#"(() => {
   const SHAPES = [
     '[data-testid="design-toolbelt-wrapper"] [role="toolbar"]',
     '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]',
+    // Ligma's own bars in its place, while recoloring or picking objects
+    "[data-ligma-recolor] > div",
+    '[data-ligma-objects=""] > div',
     "[data-is-the-tooltip]",
     '[role="menu"]',
     '[role="listbox"]',
   ];
-  for (const el of document.querySelectorAll(SHAPES.join(", "))) add(el);
+  const selector = SHAPES.join(", ");
+  const holds = (el) => !!el.querySelector(selector);
+  // A shape holding another, like the toolbar's once the image bar is in
+  // it, would cover the space between them: it's taken by its parts
+  const addParts = (el) => {
+    for (const child of el.children) {
+      if (child.matches(selector)) continue;
+      if (holds(child)) addParts(child);
+      else add(child);
+    }
+  };
+  for (const el of document.querySelectorAll(selector)) {
+    if (holds(el)) addParts(el);
+    else add(el);
+  }
   return { canvas: [left, top, right, bottom], floating };
 })()"#;
 
@@ -467,23 +493,69 @@ fn clip(id: u32, webview: &Webview, region: Option<Region>) {
     let _ = (webview, region);
 }
 
+/// Halves tab webviews were last placed in, by tab, without uniform
+/// layout, in logical pixels from the top left of where tabs go
+static PLACED: Mutex<Option<HashMap<u32, Rect>>> = Mutex::new(None);
+
+/// Places tab `id`'s webview in `half` of where tabs go, or back over all
+/// of it
+fn place(id: u32, webview: &Webview, half: Option<Rect>) {
+    {
+        let mut placed = PLACED.lock().unwrap();
+        let placed = placed.get_or_insert_with(HashMap::new);
+        if placed.get(&id) == half.as_ref() || (half.is_none() && !placed.contains_key(&id)) {
+            return;
+        }
+        match half {
+            Some(half) => placed.insert(id, half),
+            None => placed.remove(&id),
+        };
+    }
+    let app = webview.app_handle();
+    let bounds = match half {
+        Some([l, t, r, b]) => tauri::Rect {
+            position: LogicalPosition::new(l, crate::tabs::bar_height(app) + t).into(),
+            size: LogicalSize::new(r - l, b - t).into(),
+        },
+        None => match crate::tabs::tab_bounds(app, &webview.window()) {
+            Ok(bounds) => bounds,
+            Err(_) => return,
+        },
+    };
+    let _ = webview.set_bounds(bounds);
+}
+
+/// Forgets where tab webviews were placed, once they've all been fit to
+/// their windows again
+pub fn forget_placed() {
+    PLACED.lock().unwrap().take();
+}
+
 /// Unclips tab `id`, which left a split, and stops treating its page as
 /// the other half
 pub fn unclip(id: u32, webview: &Webview) {
     clip(id, webview, None);
+    place(id, webview, None);
     let _ = webview.eval("window.__ligmaSplit?.(false)");
 }
 
 /// Lays out a split: `focused` and `other` are the tabs' ids, the other's
 /// in the first half if `other_first`, and the first half takes `ratio` of
 /// the canvas. Measures the focused tab's page first, then has the tab bar
-/// draw the divider
-pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool, ratio: f64) {
+/// draw the divider. Without `uniform`, each tab's webview takes its half
+/// of where tabs go instead, whole
+pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool, ratio: f64, uniform: bool) {
     let (Some(focused_view), Some(other_view)) =
         (crate::tabs::scriptable(app, focused), crate::tabs::scriptable(app, other))
     else {
         return;
     };
+    if !uniform {
+        layout_whole(app, (focused, &focused_view), (other, &other_view), other_first, ratio);
+        return;
+    }
+    place(focused, &focused_view, None);
+    place(other, &other_view, None);
     let zoom = crate::tabs::scale(app);
     let _ = focused_view.clone().eval_with_callback(GEOMETRY_JS, move |json| {
         let geometry = serde_json::from_str::<Option<Geometry>>(&json).ok().flatten();
@@ -512,11 +584,42 @@ pub fn layout(app: &AppHandle, focused: u32, other: u32, other_first: bool, rati
         // In the tab bar's CSS pixels: it's at the window's top, at the same
         // zoom, and the tabs are below it
         let bar = |r: Rect| [r[0] / zoom, r[1] / zoom + crate::tabs::TAB_BAR_HEIGHT, r[2] / zoom, r[3] / zoom + crate::tabs::TAB_BAR_HEIGHT];
-        let divider = serde_json::json!({ "gap": bar(gap), "canvas": bar(canvas), "sideBySide": side_by_side(canvas) });
-        if let Some(bar) = focused_view.app_handle().get_webview(focused_view.window().label()) {
-            let _ = bar.eval(format!("window.showDivider?.({divider})"));
-        }
+        show_divider(&focused_view, bar(gap), bar(canvas), side_by_side(canvas));
     });
+}
+
+/// `layout` without uniform layout: the webviews are placed in their halves
+/// of where tabs go, unclipped, with their own panels and toolbars. Nothing
+/// is carried between them
+fn layout_whole(app: &AppHandle, focused: (u32, &Webview), other: (u32, &Webview), other_first: bool, ratio: f64) {
+    let Ok(size) = crate::tabs::content_size(app, &focused.1.window()) else {
+        return;
+    };
+    let area = [0.0, 0.0, size.width, size.height];
+    let (both, gap) = halves(area, ratio, GAP * crate::tabs::scale(app));
+    let other_half = if other_first { 0 } else { 1 };
+    for ((id, webview), half, is_other) in [(focused, both[1 - other_half], false), (other, both[other_half], true)] {
+        clip(id, webview, None);
+        place(id, webview, Some(half));
+        if let Some(halves) = HALVES.lock().unwrap().as_mut() {
+            halves.remove(&id);
+        }
+        let _ = webview.eval(format!("window.__ligmaSplit?.({is_other}, null, false)"));
+    }
+    // In the tab bar's CSS pixels, from logical ones
+    let top = crate::tabs::TAB_BAR_HEIGHT;
+    let zoom = crate::tabs::scale(app);
+    let bar = |r: Rect| [r[0] / zoom, r[1] / zoom + top, r[2] / zoom, r[3] / zoom + top];
+    show_divider(focused.1, bar(gap), bar(area), side_by_side(area));
+}
+
+/// Has the tab bar of `webview`'s window draw the divider in `gap` across
+/// `canvas`, in its CSS pixels
+fn show_divider(webview: &Webview, gap: Rect, canvas: Rect, side_by_side: bool) {
+    let divider = serde_json::json!({ "gap": gap, "canvas": canvas, "sideBySide": side_by_side });
+    if let Some(bar) = webview.app_handle().get_webview(webview.window().label()) {
+        let _ = bar.eval(format!("window.showDivider?.({divider})"));
+    }
 }
 
 /// Takes the divider away from window `window`'s tab bar, once it's not

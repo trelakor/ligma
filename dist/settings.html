@@ -577,6 +577,18 @@
         </span>
         <input type="checkbox" class="switch" id="previews">
       </label>
+      <label class="row">
+        <span class="label">Split view
+          <div class="hint">Shows two files side by side, from a tab's menu or by dragging a tab onto the canvas</div>
+        </span>
+        <input type="checkbox" class="switch" id="split-view">
+      </label>
+      <label class="row nested" id="uniform-split-row">
+        <span class="label">Share panels and toolbar
+          <div class="hint">Both files share one layers panel, properties panel and toolbar, the focused file's. Otherwise each half is a whole Figma window, and objects can't be dragged between them.</div>
+        </span>
+        <input type="checkbox" class="switch" id="uniform-split">
+      </label>
     </section>
     <section>
       <h2>Memory</h2>
@@ -751,7 +763,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "color-contrast", "classic-home"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "color-contrast", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -941,6 +953,8 @@
     $("restore").checked = settings.restoreTabs;
     $("keep-view").checked = settings.keepFileView;
     $("previews").checked = settings.tabPreviews;
+    $("split-view").checked = settings.splitView;
+    $("uniform-split").checked = settings.uniformSplit;
     $("rail-plugins").checked = settings.railPlugins;
     $("rail-widgets").checked = settings.railWidgets;
     $("actions-plugins-tab").checked = settings.actionsPluginsTab;
@@ -961,6 +975,7 @@
       ["limit-row", sleeping],
       ["max-hidden-row", sleeping && limited],
       ["snapshots-row", sleeping],
+      ["uniform-split-row", settings.splitView],
       ["adjustments-bar-row", settings.adjustmentsClipboard],
       ["local-remove-background-row", settings.hideFreeAiActions],
       ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
@@ -1013,6 +1028,8 @@
       restoreTabs: $("restore").checked,
       keepFileView: $("keep-view").checked,
       tabPreviews: $("previews").checked,
+      splitView: $("split-view").checked,
+      uniformSplit: $("uniform-split").checked,
       railPlugins: $("rail-plugins").checked,
       railWidgets: $("rail-widgets").checked,
       actionsPluginsTab: $("actions-plugins-tab").checked,

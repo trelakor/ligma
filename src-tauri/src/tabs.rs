@@ -395,6 +395,10 @@ struct TabState {
     last_capture: Option<Instant>,
     /// Keep the tabs in `SESSION_FILE` for the next launch (`restoreTabs`)
     restore: bool,
+    /// Windows may be split (`splitView`),
+    split_view: bool,
+    /// under one set of Figma's panels (`uniformSplit`)
+    uniform_split: bool,
     /// Zoom of Figma tabs and Ligma's own pages (`interfaceScale`), 1 at 100%
     scale: f64,
     /// What was last written there, to skip writing it again
@@ -439,6 +443,8 @@ impl TabState {
         self.snapshots = settings.reload_snapshots;
         self.previews = settings.tab_previews;
         self.restore = settings.restore_tabs;
+        self.split_view = settings.split_view;
+        self.uniform_split = settings.uniform_split;
         self.scale = crate::settings::scale(settings);
         if !self.restore {
             self.saved_session = None;
@@ -504,6 +510,12 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     }
     if !settings.tab_previews {
         crate::preview::hide(app);
+    }
+    if !settings.split_view {
+        let windows: Vec<String> = app.state::<Tabs>().inner().0.lock().unwrap().splits.keys().cloned().collect();
+        for window in windows {
+            end_split(app, &window);
+        }
     }
     if settings.restore_tabs {
         save_session(app);
@@ -1085,7 +1097,7 @@ fn split_pair(app: &AppHandle, window: &str, first: u32, second: u32, focus: u32
     {
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         let fits = |id: u32| state.tabs_in(window).any(|tab| tab.id == id && tab.file_key.is_some());
-        if first == second || first == HOME_ID || second == HOME_ID || !fits(first) || !fits(second) {
+        if !state.split_view || first == second || first == HOME_ID || second == HOME_ID || !fits(first) || !fits(second) {
             return Ok(());
         }
     }
@@ -1161,11 +1173,11 @@ fn layout_split(app: &AppHandle, window: &str) {
             let active = state.active_in(window);
             let other = pair.into_iter().find(|&tab| tab != active).filter(|_| pair.contains(&active))?;
             let ratio = state.split_ratios.get(window).copied().unwrap_or(0.5);
-            Some((active, other, pair[0] == other, ratio))
+            Some((active, other, pair[0] == other, ratio, state.uniform_split))
         })
     };
-    if let Some((focused, other, other_first, ratio)) = found {
-        crate::split::layout(app, focused, other, other_first, ratio);
+    if let Some((focused, other, other_first, ratio, uniform)) = found {
+        crate::split::layout(app, focused, other, other_first, ratio, uniform);
     }
 }
 
@@ -1674,7 +1686,11 @@ impl Zone {
     /// Every visible window's zone but window `except`'s, for dragged tab
     /// `id`. None if it's no file
     fn all(app: &AppHandle, except: &str, id: u32) -> Vec<Zone> {
-        if with_tab(app, id, |tab| tab.file_key.is_none()).unwrap_or(true) {
+        let (split_view, uniform) = {
+            let state = app.state::<Tabs>().inner().0.lock().unwrap();
+            (state.split_view, state.uniform_split)
+        };
+        if !split_view || with_tab(app, id, |tab| tab.file_key.is_none()).unwrap_or(true) {
             return Vec::new();
         }
         let zones = |window: Window| {
@@ -1686,7 +1702,12 @@ impl Zone {
                 let active = state.active_in(window.label());
                 state.tabs.iter().find(|tab| tab.id == active && tab.file_key.is_some() && active != id)?.id
             };
-            let canvas = crate::split::canvas_on_screen(app, &window, partner)?;
+            // Without uniform layout, the halves are of where tabs go
+            let canvas = if uniform {
+                crate::split::canvas_on_screen(app, &window, partner)?
+            } else {
+                tabs_on_screen(app, &window)?
+            };
             let (halves, _) = crate::split::halves(canvas, 0.5, 0.0);
             let label = window.label().to_owned();
             let zone = |index: usize| Zone { window: label.clone(), partner, rect: halves[index], first: index == 0 };
@@ -1699,6 +1720,15 @@ impl Zone {
         let [l, t, r, b] = self.rect;
         at.x >= l && at.x < r && at.y >= t && at.y < b
     }
+}
+
+/// Where tabs go in `window`, in screen pixels
+fn tabs_on_screen(app: &AppHandle, window: &Window) -> Option<crate::split::Rect> {
+    let origin = window.inner_position().ok()?;
+    let factor = window.scale_factor().ok()?;
+    let size = content_size(app, window).ok()?;
+    let (left, top) = (origin.x as f64, origin.y as f64 + bar_height(app) * factor);
+    Some([left, top, left + size.width * factor, top + size.height * factor])
 }
 
 /// Keeps window `label`, holding dragged tab `id`, under the cursor until
@@ -1891,7 +1921,7 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
             Some(("unsplit", "End Split View"))
         } else {
             // With the active file tab
-            (id != active && active != HOME_ID && file(id) && file(active)).then_some(("split", "Split View"))
+            (state.split_view && id != active && active != HOME_ID && file(id) && file(active)).then_some(("split", "Split View"))
         };
         (alone, split)
     };
@@ -2306,7 +2336,7 @@ pub fn bar_height(app: &AppHandle) -> f64 {
     TAB_BAR_HEIGHT * scale(app)
 }
 
-fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f64>> {
+pub fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f64>> {
     let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
     Ok(LogicalSize::new(size.width, (size.height - bar_height(app)).max(0.0)))
 }
@@ -2315,7 +2345,7 @@ fn content_size(app: &AppHandle, window: &Window) -> tauri::Result<LogicalSize<f
 /// with `set_position` and `set_size`: on Windows a webview moved to another
 /// window measures its position against the old one, so `set_size` would
 /// put it back out of place
-fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
+pub fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect> {
     Ok(tauri::Rect {
         position: LogicalPosition::new(0.0, bar_height(app)).into(),
         size: content_size(app, window)?.into(),
@@ -2354,6 +2384,7 @@ pub fn layout(app: &AppHandle) {
         }
         fit_tab_bar(app, window.label());
     }
+    crate::split::forget_placed();
     refresh_splits(app);
     push_state(app);
 }
