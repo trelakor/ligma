@@ -72,6 +72,9 @@ pub struct Settings {
     pub discord_join_requests: bool,
     /// Reopen the last session's tabs on launch, asleep until selected
     pub restore_tabs: bool,
+    /// Bring a file back on the page, view and mode it was left in after
+    /// its tab sleeps, reloads or is reopened (see view_state.rs)
+    pub keep_file_view: bool,
     /// Show a tab's last image and name under it while it's hovered
     pub tab_previews: bool,
     /// Split a window between two file tabs, from a tab's menu or by
@@ -156,6 +159,7 @@ impl Default for Settings {
             discord_invites: false,
             discord_join_requests: true,
             restore_tabs: false,
+            keep_file_view: true,
             tab_previews: true,
             split_view: true,
             uniform_split: true,
@@ -417,6 +421,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::adjustments::apply_settings(app, &settings);
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
+    crate::view_state::apply_settings(app, &settings);
     crate::contrast::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
