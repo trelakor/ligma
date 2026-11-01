@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.31.0 - 2026-11-01
+
+- A file comes back where you left it faster after its tab sleeps, is reloaded or is reopened, and keeps its mode but no longer its tool. Settings > Tabs > Remember where you were in files turns it off.
+- Settings > Tabs > Split view turns split view off. Under it, turning off Share panels and toolbar gives each file its own panels and toolbar in its half of the window.
+- In split view, the bar above the toolbar for a selected image no longer cuts out a box over the other half, and Ligma's Recolor and Select object bars show in full over both halves.
+
 ## 0.30.0 - 2026-11-01
 
 - Drag a tab out of the bar to give it a window of its own, or onto another Ligma window's bar to move it there. The file carries on where it was, without reloading. A tab's menu also has Move to New Window.
