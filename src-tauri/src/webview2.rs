@@ -139,6 +139,31 @@ pub fn on_moved(webview: &Webview) {
     });
 }
 
+/// Clips tab `webview` to `rects`, `[left, top, right, bottom]` in physical
+/// pixels from its top left, or unclips it with None (see split.rs). A
+/// window region on wry's window around the webview, which clips clicks too
+pub fn clip(webview: &Webview, rects: Option<Vec<[f64; 4]>>) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_OR};
+    let _ = webview.with_webview(move |platform| unsafe {
+        let mut hwnd = HWND::default();
+        if platform.controller().ParentWindow(&mut hwnd).is_err() {
+            return;
+        }
+        let region = rects.map(|rects| {
+            let region = CreateRectRgn(0, 0, 0, 0);
+            for [left, top, right, bottom] in rects {
+                let part = CreateRectRgn(left.round() as i32, top.round() as i32, right.round() as i32, bottom.round() as i32);
+                CombineRgn(Some(region), Some(region), Some(part), RGN_OR);
+                let _ = DeleteObject(part.into());
+            }
+            region
+        });
+        // Windows owns the region from here on
+        SetWindowRgn(hwnd, region, true);
+    });
+}
+
 /// True while the left mouse button is held down, anywhere
 pub fn left_button_down() -> bool {
     unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 }

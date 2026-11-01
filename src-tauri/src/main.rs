@@ -28,6 +28,7 @@ mod pressure;
 mod prompt;
 mod report;
 mod settings;
+mod split;
 mod tab_menu;
 mod tabs;
 #[cfg(target_os = "macos")]
@@ -317,6 +318,7 @@ fn main() {
                     tabs::close_other_windows(&handle);
                     tab_menu::close(&handle);
                     preview::close(&handle);
+                    split::close(&handle);
                     prompt::close_all(&handle);
                     settings::close(&handle);
                 }
@@ -339,6 +341,7 @@ fn main() {
                 for second in 1u64.. {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     tabs::sync_theme(&handle);
+                    tabs::refresh_splits(&handle);
                     presence::sync(&handle);
                     if second % 30 == 0 || (second % 5 == 0 && tabs::under_pressure()) {
                         tabs::rest_idle(&handle);

@@ -22,6 +22,10 @@
 //! Home stays in the main window. A moved tab's webview is reparented, so
 //! its page carries on where it was. A window other than the main one
 //! closes with its last tab
+//!
+//! Two file tabs of a window can share its canvas in a split view (see
+//! split.rs). Selecting either keeps the split; selecting another tab ends
+//! it
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -363,6 +367,9 @@ struct TabState {
     actives: HashMap<String, u32>,
     /// Each window's tab that was active before its active one
     previous: HashMap<String, u32>,
+    /// Each window's split view, if any: its tabs in the first and second
+    /// half (see split.rs)
+    splits: HashMap<String, [u32; 2]>,
     /// The window last focused, where new tabs open and the tab shortcuts
     /// act
     focused: String,
@@ -763,7 +770,8 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::adjustments::page_js())
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
-        .initialization_script(crate::contrast::page_js());
+        .initialization_script(crate::contrast::page_js())
+        .initialization_script(crate::split::PAGE_JS);
     #[cfg(target_os = "macos")]
     {
         builder = builder
@@ -834,6 +842,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::adjustments::on_signal(app, id, url);
         return false;
     }
+    if url.host_str() == Some(crate::split::SIGNAL_HOST) {
+        crate::split::on_signal(app, id, url);
+        return false;
+    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -887,6 +899,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::toolbar::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
         crate::adjustments::on_signal(app, id, &url);
+    } else if url.host_str() == Some(crate::split::SIGNAL_HOST) {
+        crate::split::on_signal(app, id, &url);
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
@@ -951,7 +965,7 @@ fn tab_title(title: &str, kind: &str) -> String {
 /// focused one
 pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-    let (window, previous, wake, resume, snapshot) = {
+    let (window, previous, wake, resume, snapshot, split, unsplit) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
         // Previews keep snapshots too; only `reloadSnapshots` shows them here
         let snapshots = state.snapshots;
@@ -976,15 +990,37 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         let previous = state.actives.insert(window.clone(), id).filter(|&previous| {
             previous != id && state.tabs.iter().any(|tab| tab.id == previous && tab.window == window)
         });
-        if let Some(tab) = previous.and_then(|previous| state.tabs.iter_mut().find(|tab| tab.id == previous)) {
-            tab.hidden_since = Some(Instant::now());
-        }
         if let Some(previous) = previous {
             state.previous.insert(window.clone(), previous);
         }
+        // Within a split, the tab it leaves stays shown in its half. Any
+        // other tab ends the split, and both its tabs go
+        let (split, unsplit) = match state.splits.get(&window).copied() {
+            Some(pair) if pair.contains(&id) => (Some(pair), None),
+            Some(pair) => {
+                state.splits.remove(&window);
+                (None, Some(pair))
+            }
+            None => (None, None),
+        };
+        let previous = previous.filter(|previous| !split.is_some_and(|pair| pair.contains(previous)));
+        let hiding: Vec<u32> = previous
+            .into_iter()
+            .chain(unsplit.into_iter().flatten().filter(|&tab| tab != id && Some(tab) != previous))
+            .collect();
+        for tab in state.tabs.iter_mut().filter(|tab| hiding.contains(&tab.id)) {
+            tab.hidden_since = Some(Instant::now());
+        }
         state.focused = window.clone();
-        (window, previous, wake, resume, snapshot)
+        (window, hiding, wake, resume, snapshot, split, unsplit)
     };
+    if let Some(pair) = unsplit {
+        for tab in pair {
+            if let Some(webview) = app.get_webview(&label(tab)) {
+                crate::split::unclip(tab, &webview);
+            }
+        }
+    }
     show_snapshot(app, &window, snapshot.as_deref());
     if let Some(url) = wake {
         // Fails if the old webview is still closing. Stay asleep, so
@@ -1016,7 +1052,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         }
     }
     sync_theme(app);
-    if let Some(previous) = previous {
+    for &previous in &previous {
         if let Some(webview) = app.get_webview(&label(previous)) {
             // WebView2 can't be relied on to capture a webview it's hiding;
             // on Windows the tab bar has `capture_active` take it beforehand
@@ -1026,11 +1062,98 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
             #[cfg(windows)]
             crate::webview2::on_hidden(&webview);
         }
-        // A tab past `max_hidden` sleeps now, not at the next timer tick
+    }
+    // A tab past `max_hidden` sleeps now, not at the next timer tick
+    if !previous.is_empty() {
         rest_idle(app);
+    }
+    if split.is_some() {
+        layout_split(app, &window);
     }
     push_state(app);
     Ok(())
+}
+
+/// Splits window `window` between tabs `first` and `second`, in that
+/// order, and focuses `second`. Both must be file tabs in it, and neither
+/// Home
+fn split_pair(app: &AppHandle, window: &str, first: u32, second: u32) -> tauri::Result<()> {
+    {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let fits = |id: u32| state.tabs_in(window).any(|tab| tab.id == id && tab.file_key.is_some());
+        if first == second || first == HOME_ID || second == HOME_ID || !fits(first) || !fits(second) {
+            return Ok(());
+        }
+    }
+    end_split(app, window);
+    app.state::<Tabs>().inner().0.lock().unwrap().splits.insert(window.to_owned(), [first, second]);
+    // Each selected in turn, so both are awake and shown
+    select(app, first)?;
+    select(app, second)
+}
+
+/// Ends window `window`'s split view, if it has one: its active tab fills
+/// the canvas again and the other hides
+fn end_split(app: &AppHandle, window: &str) {
+    let (pair, other) = {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let Some(pair) = state.splits.remove(window) else {
+            return;
+        };
+        let active = state.active_in(window);
+        let other = pair.into_iter().find(|&tab| tab != active);
+        if let Some(tab) = state.tabs.iter_mut().find(|tab| Some(tab.id) == other) {
+            tab.hidden_since = Some(Instant::now());
+        }
+        (pair, other)
+    };
+    for tab in pair {
+        if let Some(webview) = app.get_webview(&label(tab)) {
+            crate::split::unclip(tab, &webview);
+            if Some(tab) == other {
+                let _ = webview.hide();
+                #[cfg(windows)]
+                crate::webview2::on_hidden(&webview);
+            }
+        }
+    }
+    push_state(app);
+}
+
+/// Ends the split views tabs `ids` are in
+fn end_splits_of(app: &AppHandle, ids: &[u32]) {
+    let windows: Vec<String> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let split = |(_, pair): &(&String, &[u32; 2])| pair.iter().any(|tab| ids.contains(tab));
+        state.splits.iter().filter(split).map(|(window, _)| window.clone()).collect()
+    };
+    for window in windows {
+        end_split(app, &window);
+    }
+}
+
+/// Clips window `window`'s split tabs to their halves, for its focused one
+fn layout_split(app: &AppHandle, window: &str) {
+    let found = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.splits.get(window).copied().and_then(|pair| {
+            let active = state.active_in(window);
+            let other = pair.into_iter().find(|&tab| tab != active).filter(|_| pair.contains(&active))?;
+            Some((active, other, pair[0] == other))
+        })
+    };
+    if let Some((focused, other, other_first)) = found {
+        crate::split::layout(app, focused, other, other_first);
+    }
+}
+
+/// Lays out every split view again, for Figma's panels changing size.
+/// Call periodically
+pub fn refresh_splits(app: &AppHandle) {
+    let windows: Vec<String> = app.state::<Tabs>().inner().0.lock().unwrap().splits.keys().cloned().collect();
+    for window in windows {
+        layout_split(app, &window);
+    }
 }
 
 /// Shows `snapshot` where tab webviews go in window `window`, or hides it
@@ -1167,7 +1290,8 @@ pub fn capture_active(app: &AppHandle) {
 /// and neither Home nor its window's active tab
 pub fn can_preview(app: &AppHandle, id: u32) -> bool {
     let state = app.state::<Tabs>().inner().0.lock().unwrap();
-    state.previews && id != HOME_ID && state.tabs.iter().any(|tab| tab.id == id && !state.is_active(tab))
+    let split = |tab: &Tab| state.splits.get(&tab.window).is_some_and(|pair| pair.contains(&tab.id));
+    state.previews && id != HOME_ID && state.tabs.iter().any(|tab| tab.id == id && !state.is_active(tab) && !split(tab))
 }
 
 /// What the preview of a tab shows
@@ -1250,6 +1374,7 @@ pub fn close(app: &AppHandle, id: u32) -> tauri::Result<()> {
 /// window left without tabs closes
 fn close_tabs(app: &AppHandle, ids: &[u32]) -> tauri::Result<()> {
     let ids: Vec<u32> = ids.iter().copied().filter(|&id| id != HOME_ID).collect();
+    end_splits_of(app, &ids);
     let (next, emptied) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
         let closing = |tab: &Tab| ids.contains(&tab.id);
@@ -1327,6 +1452,7 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize, back: bo
     let Some(target_window) = app.get_window(target) else {
         return Ok(());
     };
+    end_splits_of(app, &[id]);
     let (source, next) = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
         let Some(from) = state.tabs.iter().position(|tab| tab.id == id && id != HOME_ID) else {
@@ -1507,10 +1633,49 @@ impl Bar {
     }
 }
 
+/// The far half of a window's canvas, where a dragged file tab splits it
+/// with the window's active tab (see split.rs)
+struct Zone {
+    window: String,
+    partner: u32,
+    /// In screen pixels
+    rect: crate::split::Rect,
+}
+
+impl Zone {
+    /// Every visible window's zone but window `except`'s, for dragged tab
+    /// `id`. None if it's no file
+    fn all(app: &AppHandle, except: &str, id: u32) -> Vec<Zone> {
+        if with_tab(app, id, |tab| tab.file_key.is_none()).unwrap_or(true) {
+            return Vec::new();
+        }
+        let zone = |window: Window| {
+            if window.label() == except || !window.is_visible().ok()? || window.is_minimized().ok()? {
+                return None;
+            }
+            let partner = {
+                let state = app.state::<Tabs>().inner().0.lock().unwrap();
+                let active = state.active_in(window.label());
+                state.tabs.iter().find(|tab| tab.id == active && tab.file_key.is_some() && active != id)?.id
+            };
+            let canvas = crate::split::canvas_on_screen(app, &window, partner)?;
+            Some(Zone { window: window.label().to_owned(), partner, rect: crate::split::halves(canvas)[1] })
+        };
+        tab_windows(app).into_iter().filter_map(zone).collect()
+    }
+
+    fn contains(&self, at: PhysicalPosition<f64>) -> bool {
+        let [l, t, r, b] = self.rect;
+        at.x >= l && at.x < r && at.y >= t && at.y < b
+    }
+}
+
 /// Keeps window `label`, holding dragged tab `id`, under the cursor until
 /// the mouse button is let go. Over another window's tab bar the window
 /// hides, and the bar shows where the tab would go (`dragOver` in
-/// index.html); let go there, it moves in
+/// index.html); let go there, it moves in. Over the far half of a window's
+/// canvas it hides too, and a hint marks the half; let go there, the tab
+/// moves in and splits the canvas with the tab there
 fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
     let Some(window) = app.get_window(label) else {
         return;
@@ -1522,18 +1687,27 @@ fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
     };
     // The other windows stay put meanwhile
     let bars = Bar::all(app, label);
+    let zones = Zone::all(app, label, id);
     let mut last = None;
-    // The bar the tab is over, and where in it
+    // The bar the tab is over, and where in it, or else the zone
     let mut over: Option<(&Bar, f64)> = None;
+    let mut zone: Option<&Zone> = None;
     while mouse_down() {
         let at = app.cursor_position().ok();
         if let Some(at) = at.filter(|&at| last != Some(at)) {
             last = Some(at);
             let now = bars.iter().find_map(|bar| Some((bar, bar.x_at(at)?)));
-            let moved_bar = over.map(|(bar, _)| &bar.label) != now.map(|(bar, _)| &bar.label);
-            if moved_bar {
+            let now_zone = zones.iter().find(|zone| now.is_none() && zone.contains(at));
+            let hidden = over.is_some() || zone.is_some();
+            if over.map(|(bar, _)| &bar.label) != now.map(|(bar, _)| &bar.label) {
                 if let Some(webview) = over.and_then(|(bar, _)| app.get_webview(&bar.label)) {
                     let _ = webview.eval("window.dragOver?.(null)");
+                }
+            }
+            if zone.map(|zone| &zone.window) != now_zone.map(|zone| &zone.window) {
+                match now_zone.and_then(|zone| Some((zone, app.get_window(&zone.window)?))) {
+                    Some((zone, owner)) => crate::split::show_hint(app, &owner, zone.rect),
+                    None => crate::split::hide_hint(app),
                 }
             }
             match now {
@@ -1547,15 +1721,24 @@ fn follow_cursor(app: &AppHandle, id: u32, label: &str) {
                 }
             }
             // Shown again once it's back under the cursor
-            if moved_bar {
-                let _ = if now.is_some() { window.hide() } else { window.show() };
+            let hide = now.is_some() || now_zone.is_some();
+            if hide != hidden {
+                let _ = if hide { window.hide() } else { window.show() };
             }
             over = now;
+            zone = now_zone;
         }
         std::thread::sleep(Duration::from_millis(8));
     }
+    crate::split::hide_hint(app);
     if let Some((bar, x)) = over {
         drop_on_bar(app, id, label, &bar.label, x);
+    } else if let Some(zone) = zone {
+        if move_to_window(app, id, &zone.window, usize::MAX, false).is_ok() {
+            let _ = split_pair(app, &zone.window, zone.partner, id);
+        } else {
+            let _ = window.show();
+        }
     }
 }
 
@@ -1665,8 +1848,21 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
     else {
         return Ok(());
     };
-    // Already in a window of its own
-    let alone = app.state::<Tabs>().inner().0.lock().unwrap().tabs_in(&window).count() == 1;
+    let (alone, split) = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        // Already in a window of its own
+        let alone = state.tabs_in(&window).count() == 1;
+        let pair = state.splits.get(&window).copied();
+        let active = state.active_in(&window);
+        let file = |id: u32| state.tabs.iter().any(|tab| tab.id == id && tab.file_key.is_some());
+        let split = if pair.is_some_and(|pair| pair.contains(&id)) {
+            Some(("unsplit", "End Split View"))
+        } else {
+            // With the active file tab
+            (id != active && active != HOME_ID && file(id) && file(active)).then_some(("split", "Split View"))
+        };
+        (alone, split)
+    };
     // Files only, while Discord is shown anything
     let discord = key.filter(|_| crate::presence::is_on(app)).map(|key| {
         if crate::presence::is_hidden(app, &key) {
@@ -1686,6 +1882,9 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
         ];
         if !alone {
             items.push(Some(("new-window", "Move to New Window")));
+        }
+        if split.is_some() {
+            items.push(split);
         }
         if discord.is_some() {
             items.extend([None, discord]);
@@ -1735,6 +1934,20 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
             }
         }
         "reload" => reload(app, id),
+        "split" => {
+            let pair = with_tab(app, id, |tab| tab.window.clone()).map(|window| {
+                let active = app.state::<Tabs>().inner().0.lock().unwrap().active_in(&window);
+                (window, active)
+            });
+            if let Some((window, active)) = pair {
+                split_pair(app, &window, active, id)?;
+            }
+        }
+        "unsplit" => {
+            if let Some(window) = with_tab(app, id, |tab| tab.window.clone()) {
+                end_split(app, &window);
+            }
+        }
         "new-window" => {
             // A little right of and below the window it leaves
             if let Some(window) = window_of(app, id) {
@@ -2057,7 +2270,7 @@ pub fn scale(app: &AppHandle) -> f64 {
 }
 
 /// The tab bar's height at the interface scale
-fn bar_height(app: &AppHandle) -> f64 {
+pub fn bar_height(app: &AppHandle) -> f64 {
     TAB_BAR_HEIGHT * scale(app)
 }
 
@@ -2109,6 +2322,7 @@ pub fn layout(app: &AppHandle) {
         }
         fit_tab_bar(app, window.label());
     }
+    refresh_splits(app);
     push_state(app);
 }
 
@@ -2227,6 +2441,7 @@ fn forget_window(app: &AppHandle, label: &str) {
         state.tabs.retain(|tab| tab.window != label);
         state.actives.remove(label);
         state.previous.remove(label);
+        state.splits.remove(label);
         state.snapshot_shown.retain(|shown| shown != label);
         if state.focused == label {
             state.focused = MAIN.to_owned();
@@ -2251,6 +2466,8 @@ fn push_state(app: &AppHandle) {
         fullscreen: bool,
         theme: &'a Option<serde_json::Value>,
         platform: &'static str,
+        /// The window's split view's tabs, if any
+        split: Option<[u32; 2]>,
     }
 
     // Not `get_webview_window`: that returns None once the window holds
@@ -2269,6 +2486,7 @@ fn push_state(app: &AppHandle) {
                 fullscreen,
                 theme: &state.theme,
                 platform: std::env::consts::OS,
+                split: state.splits.get(window.label()).copied(),
             })
             .unwrap()
         };

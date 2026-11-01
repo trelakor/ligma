@@ -72,6 +72,9 @@
     background: var(--divider);
   }
   .active::after, .before-active::after { display: none; }
+  /* The other tab of a split view, on screen beside the active one */
+  .tab.split { background: var(--active); }
+  .split::after, .before-split::after { display: none; }
   /* Without traffic lights, Home sits flush left above Figma's nav rail:
      match its width (measured by THEME_JS in tabs.rs; 48px plus its 1px
      border at 100%) and run the divider down into the rail's border */
@@ -370,7 +373,7 @@
     else renderBar(state);
   };
 
-  const renderBar = ({ tabs, active, fullscreen, theme, platform }) => {
+  const renderBar = ({ tabs, active, fullscreen, theme, platform, split }) => {
     document.body.classList.toggle("fullscreen", fullscreen);
     document.body.classList.toggle("macos", platform === "macos");
     for (const [cssVar, key] of Object.entries(THEME_VARS)) {
@@ -382,12 +385,15 @@
       document.documentElement.style.setProperty("--rail-width", `${theme.railWidth}px`);
     }
     const activeIndex = tabs.findIndex((tab) => tab.id === active);
+    const splitIndex = tabs.findIndex((tab) => tab.id !== active && split?.includes(tab.id));
     bar.replaceChildren();
 
     tabs.forEach((tab, index) => {
       const classes = [];
       if (tab.id === active) classes.push("active");
       if (index === activeIndex - 1) classes.push("before-active");
+      if (index === splitIndex) classes.push("split");
+      if (index === splitIndex - 1) classes.push("before-split");
       if (tab.asleep) classes.push("asleep");
 
       if (tab.kind === "home") {
