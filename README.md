@@ -41,7 +41,7 @@ Downloads are 2.2 MB on Windows and 7.1 MB on macOS (a universal build for Apple
 - **Tabs** like the Figma desktop app, with pinning, emoji icons, keyboard shortcuts and your tabs reopened from last time
 - **Tab previews** on hover, showing how a tab last looked and whether it's asleep
 - **Multiple windows:** drag a tab out of the bar for a window of its own, or onto another window to move it, without reloading
-- **Split view:** two files side by side under one set of Figma's panels, and drag a selection from one into the other to move it
+- **Split view:** two files side by side under one set of Figma's panels. Drag a selection from one into the other to move it
 - **Files reopen where you left them,** on the same page, position, zoom and mode
 - **Low memory use:** tabs you aren't looking at are trimmed, frozen and put to sleep ([details](docs/MEMORY.md))
 
@@ -53,15 +53,15 @@ Downloads are 2.2 MB on Windows and 7.1 MB on macOS (a universal build for Apple
 - **Layer previews** in the layers panel in every mode, as Figma shows only in Draw
 - **Classic home** keeps Figma's long-standing home page on accounts trying the new one
 
-### Local AI, in place of Figma's paid features
+### Image tools on your computer
 
-In free projects, Figma's AI image actions are locked behind a paid plan. Ligma puts its own in the same spots in the image bar, running on your computer, so your images never leave it.
+In free projects, Figma's AI image actions need a paid plan. Ligma puts its own in the same spots in the image bar. They run on your computer, so your images never leave it.
 
-| Ligma, on your device | In place of Figma's | Runs on |
-| --------------------- | ------------------- | ------- |
+| Ligma's tool | In place of Figma's | Runs on |
+| ------------ | ------------------- | ------- |
 | **Remove background**, keeping the original hidden underneath | Remove background | Apple's Vision on macOS 14 and later, BiRefNet on Windows |
 | **Vectorize** into flat-colored shapes, then recolor or cut down the colors | Vectorize | Ligma's own tracer, no download |
-| **Select object** with a brush, lasso, Expand and Feather, to isolate or erase what's picked | Select area | SAM 2.1, on Windows and Apple silicon |
+| **Select object** with a click, brush or lasso, then isolate or erase it | Select area | SAM 2.1, on Windows and Apple silicon |
 
 Ligma asks before downloading a model the first time one is needed.
 
@@ -109,7 +109,7 @@ npm run dev     # debug build, opens the app
 npm run build   # release bundle
 ```
 
-See [Development](docs/DEVELOPMENT.md) for icons and releasing, and [Contributing](CONTRIBUTING.md) before opening a pull request.
+See [Development](docs/DEVELOPMENT.md) for icons, the social cover and releasing, and [Contributing](CONTRIBUTING.md) before opening a pull request.
 
 ## Legal
 

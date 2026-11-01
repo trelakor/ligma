@@ -1,71 +1,63 @@
 <!doctype html>
-<!-- The social cover (site/social-cover.png): the logo over the Figma theme's mesh orb, as the site and settings draw it. Render it with `npm run social-cover` -->
+<!-- The social cover (site/social-cover.png): the site's hero as a poster, in its light Figma theme. Render it with `npm run social-cover` -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>Ligma social cover</title>
 <style>
   @font-face { font-family: "Funnel Display"; src: url(../../site/fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; }
+  @font-face { font-family: "Inter"; src: url(../../site/fonts/inter.woff2) format("woff2"); font-weight: 400 700; }
 
+  /* The site's light Figma theme (site/index.html, dist/themes.js) */
   :root {
-    --ground: #111111;
-    --ink: #ffffff;
-    --unit: 104px;
-    /* The Figma theme's dark mesh (ligmaMesh in dist/themes.js): its five
-       hues, at the lightness and chroma each blob has in dark mode */
-    --mesh:
-      radial-gradient(circle at 22% 24%, oklch(0.72 0.25 35) 34%, transparent 34.5%),
-      radial-gradient(circle at 80% 18%, oklch(0.58 0.25 300) 30%, transparent 30.5%),
-      radial-gradient(circle at 78% 80%, oklch(0.40 0.22 235) 36%, transparent 36.5%),
-      radial-gradient(circle at 20% 82%, oklch(0.82 0.20 155) 28%, transparent 28.5%),
-      radial-gradient(circle at 52% 52%, oklch(0.60 0.26 20) 18%, transparent 18.5%),
-      oklch(0.32 0.16 5);
+    --bg: #ffffff; --ink: #1e1e1e; --ink-2: #444444;
+    --weight: #f5f5f5; --weight-rule: #e6e6e6; --weight-ink: #757575;
+    --field: #0d99ff;
+    --display: "Funnel Display", sans-serif;
+    --text: "Inter", sans-serif;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--ground); }
-  body { position: relative; color: var(--ink); -webkit-font-smoothing: antialiased; }
-
-  /* The orb, blown up and blurred into a glow that sits behind the mark */
-  .orb {
-    position: absolute; left: 640px; top: 320px; width: 1180px; height: 760px; translate: -50% -50%;
-    border-radius: 50%; overflow: hidden; isolation: isolate;
-    mask: radial-gradient(closest-side, #000 50%, transparent 100%);
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--bg); }
+  body {
+    display: flex; flex-direction: column; padding: 56px 64px 64px;
+    color: var(--ink); font-family: var(--text); -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "calt";
   }
-  .orb::before {
-    content: ""; position: absolute; inset: -18%; background: var(--mesh);
-    filter: blur(70px) saturate(1.25); rotate: -12deg; opacity: 0.8;
-  }
-  /* Film grain over the glow, so the gradient doesn't band */
-  .grain { position: absolute; inset: 0; opacity: 0.18; mix-blend-mode: overlay; }
 
-  .lockup { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 44px; }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 14px; font: 650 32px/1 var(--display); letter-spacing: -0.02em; }
+  .brand img { width: 56px; height: 56px; margin: -6px -4px -6px -8px; }
+  .os { font-size: 22px; font-weight: 500; color: var(--ink-2); }
 
-  /* The logo, drawn from assets/logo.png's geometry so it sits on any ground */
-  .mark {
-    display: grid; grid-template-columns: repeat(2, var(--unit)); grid-template-rows: repeat(3, var(--unit));
-    filter: drop-shadow(0 18px 40px rgb(0 0 0 / 0.45));
-  }
-  .mark i { display: block; }
-  .mark .g { background: #00cc66; border-radius: 50% 50% 0 50%; }
-  .mark .r { grid-row: 2; background: #ff002e; border-radius: 50% 0 0 50%; }
-  .mark .p { grid-row: 3; background: #8f4fff; border-radius: 50% 0 0 50%; }
-  .mark .b { grid-row: 3; grid-column: 2; background: #00b9ff; border-radius: 50%; }
+  h1 { margin: 40px 0 0; font: 700 92px/0.92 var(--display); letter-spacing: -0.04em; white-space: nowrap; }
 
-  .name {
-    font: 700 200px/1 "Funnel Display", sans-serif; letter-spacing: -0.04em;
-    padding-bottom: 18px; text-shadow: 0 10px 40px rgb(0 0 0 / 0.35);
+  /* 16 MB of 305 MB, by area: each side at sqrt(16 / 305) */
+  .weight {
+    position: relative; flex: 1; margin-top: 40px; border-radius: 24px; overflow: hidden;
+    background:
+      linear-gradient(to right, var(--weight-rule) 1.5px, transparent 1.5px) 0 0 / 10% 100%,
+      linear-gradient(to bottom, var(--weight-rule) 1.5px, transparent 1.5px) 0 0 / 100% 10%,
+      var(--weight);
   }
+  .them { position: absolute; top: 28px; left: 32px; right: 32px; display: flex; justify-content: space-between; align-items: flex-start; }
+  .them span { font-size: 22px; font-weight: 600; color: var(--ink-2); }
+  .them b { font: 700 136px/0.8 var(--display); letter-spacing: -0.05em; color: var(--weight-ink); font-variant-numeric: tabular-nums; }
+  .us { position: absolute; left: 0; bottom: 0; width: 22.9%; height: 22.9%; background: var(--field); border-top-right-radius: 14px; }
+  .us-label { position: absolute; left: calc(22.9% + 20px); bottom: 14px; display: flex; align-items: baseline; gap: 14px; }
+  .us-label b { font: 700 60px/1 var(--display); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  .us-label span { font-size: 22px; font-weight: 600; color: var(--ink-2); }
 </style>
 </head>
 <body>
-  <div class="orb"></div>
-  <svg class="grain" width="1280" height="640" aria-hidden="true">
-    <filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0"/></filter>
-    <rect width="100%" height="100%" filter="url(#n)"/>
-  </svg>
-  <div class="lockup">
-    <div class="mark" role="img" aria-label="Ligma logo"><i class="g"></i><i class="r"></i><i class="p"></i><i class="b"></i></div>
-    <div class="name">Ligma</div>
+  <header>
+    <div class="brand"><img src="../logo.png" alt="">Ligma</div>
+    <div class="os">Free for macOS and Windows</div>
+  </header>
+  <h1>Figma, without the weight.</h1>
+  <div class="weight" role="img" aria-label="Installed size on macOS, drawn to scale by area: Figma desktop 305 MB, Ligma 16 MB">
+    <div class="them"><span>Figma desktop, installed on macOS</span><b>305 MB</b></div>
+    <div class="us"></div>
+    <div class="us-label"><b>16 MB</b><span>Ligma</span></div>
   </div>
 </body>
 </html>
