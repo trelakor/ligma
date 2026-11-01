@@ -1,8 +1,10 @@
 <div align="center">
 
-<a href="https://trelakor.github.io/ligma/"><img src="site/social-cover.png" width="840" alt="Ligma"></a>
+<img src="assets/logo.png" width="64" height="64" alt="">
 
-### A lightweight desktop app for [Figma](https://www.figma.com) on macOS and Windows, about 4 MB
+# Ligma
+
+A lightweight desktop app for [Figma](https://www.figma.com) on macOS and Windows, about 4 MB
 
 [![Latest release](https://img.shields.io/github/v/release/trelakor/ligma)](../../releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/trelakor/ligma/total)](../../releases)
@@ -10,6 +12,10 @@
 ![macOS | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
 
 **[Download](../../releases/latest)** · [Website](https://trelakor.github.io/ligma/) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md) · [Discussions](../../discussions)
+
+<br>
+
+<a href="https://trelakor.github.io/ligma/"><img src="site/social-cover.png" width="840" alt="Figma, without the weight. Installed on macOS, Figma desktop is 305 MB and Ligma is 16 MB"></a>
 
 </div>
 
@@ -22,7 +28,6 @@ Ligma is for people who use Figma all day and want a desktop app that's lighter 
 | Installed (macOS)        | **16 MB**         | 305 MB                      |
 | Browser engine           | System webview    | Bundled Chromium (Electron) |
 | Color themes             | 9, light and dark | Light and dark              |
-| AI image tools           | Local, any plan   | Paid plans                  |
 | Plugins in the left rail | Yes               | No                          |
 | Discord Rich Presence    | Yes               | No                          |
 | Open source              | Yes (MIT)         | No                          |
@@ -48,19 +53,21 @@ Downloads are 2.2 MB on Windows and 7.1 MB on macOS (a universal build for Apple
 - **Layer previews** in the layers panel in every mode, as Figma shows only in Draw
 - **Classic home** keeps Figma's long-standing home page on accounts trying the new one
 
-### Figma's paid AI tools, free and on your device
+### Local AI, in place of Figma's paid features
 
-Figma keeps its AI image tools for paid plans, and code export for Dev Mode. Ligma puts its own in their place in free projects, running locally: no AI credits, no subscription, and your images never leave your machine.
+In free projects, Figma's AI image actions are locked behind a paid plan. Ligma puts its own in the same spots in the image bar, running on your computer, so your images never leave it.
 
-- **Remove background** with Apple's Vision on macOS 14 and later, or BiRefNet on Windows
-- **Select object** with Meta's SAM 2.1, plus a brush, lasso, Expand and Feather, to isolate or erase what's picked
-- **Vectorize** an image into flat-colored shapes, then recolor it or reduce its colors
-- **Copy as code** to Tailwind and React from the right-click menu, on any plan
+| Ligma, on your device | In place of Figma's | Runs on |
+| --------------------- | ------------------- | ------- |
+| **Remove background**, keeping the original hidden underneath | Remove background | Apple's Vision on macOS 14 and later, BiRefNet on Windows |
+| **Vectorize** into flat-colored shapes, then recolor or cut down the colors | Vectorize | Ligma's own tracer, no download |
+| **Select object** with a brush, lasso, Expand and Feather, to isolate or erase what's picked | Select area | SAM 2.1, on Windows and Apple silicon |
 
-Ligma asks before downloading a model the first time one is needed. Vectorize needs no download.
+Ligma asks before downloading a model the first time one is needed.
 
-### Design tools
+### Design and code
 
+- **Copy as code** to Tailwind and React from the right-click menu, without Dev Mode
 - **Image adjustments** copied and pasted between images, without the image itself
 - **Color contrast:** WCAG ratios in the color picker against what's behind the layer, with AA and AAA lines on the color square
 

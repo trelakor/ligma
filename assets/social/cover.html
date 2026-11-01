@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- The social cover (site/social-cover.png): the logo selected on a dark Figma canvas. Render it with `npm run social-cover` -->
+<!-- The social cover (site/social-cover.png): the logo over the Figma theme's mesh orb, as the site and settings draw it. Render it with `npm run social-cover` -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -8,59 +8,64 @@
   @font-face { font-family: "Funnel Display"; src: url(../../site/fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; }
 
   :root {
-    --canvas: #1e1e1e; --dot: #4a4a4a; --ink: #ffffff; --select: #0d99ff;
-    --display: "Funnel Display", "Inter", sans-serif;
+    --ground: #111111;
+    --ink: #ffffff;
+    --unit: 104px;
+    /* The Figma theme's dark mesh (ligmaMesh in dist/themes.js): its five
+       hues, at the lightness and chroma each blob has in dark mode */
+    --mesh:
+      radial-gradient(circle at 22% 24%, oklch(0.72 0.25 35) 34%, transparent 34.5%),
+      radial-gradient(circle at 80% 18%, oklch(0.58 0.25 300) 30%, transparent 30.5%),
+      radial-gradient(circle at 78% 80%, oklch(0.40 0.22 235) 36%, transparent 36.5%),
+      radial-gradient(circle at 20% 82%, oklch(0.82 0.20 155) 28%, transparent 28.5%),
+      radial-gradient(circle at 52% 52%, oklch(0.60 0.26 20) 18%, transparent 18.5%),
+      oklch(0.32 0.16 5);
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--canvas); }
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--ground); }
   body { position: relative; color: var(--ink); -webkit-font-smoothing: antialiased; }
 
-  /* Figma's canvas dot grid, fading out from the middle */
-  .grid {
-    position: absolute; inset: 0;
-    background: radial-gradient(circle, var(--dot) 1.2px, transparent 1.6px) 4px 4px / 24px 24px;
-    mask: radial-gradient(ellipse 70% 80% at 50% 50%, #000 20%, transparent 75%);
+  /* The orb, blown up and blurred into a glow that sits behind the mark */
+  .orb {
+    position: absolute; left: 640px; top: 320px; width: 1180px; height: 760px; translate: -50% -50%;
+    border-radius: 50%; overflow: hidden; isolation: isolate;
+    mask: radial-gradient(closest-side, #000 50%, transparent 100%);
   }
-
-  /* The logo's own colors, bloomed behind it */
-  .bloom { position: absolute; left: 50%; top: 50%; width: 1100px; height: 760px; transform: translate(-50%, -50%); filter: blur(100px) saturate(1.6); opacity: 0.6; }
-  .bloom i { position: absolute; border-radius: 50%; }
-
-  .lockup {
-    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    display: flex; align-items: center; gap: 44px; padding: 40px 64px 40px 52px;
+  .orb::before {
+    content: ""; position: absolute; inset: -18%; background: var(--mesh);
+    filter: blur(70px) saturate(1.25); rotate: -12deg; opacity: 0.8;
   }
-  .lockup svg { display: block; width: 196px; height: auto; filter: drop-shadow(0 18px 40px rgb(0 0 0 / 0.45)); }
-  .lockup b { font: 700 216px/1 var(--display); letter-spacing: -0.045em; margin-top: -18px; }
+  /* Film grain over the glow, so the gradient doesn't band */
+  .grain { position: absolute; inset: 0; opacity: 0.18; mix-blend-mode: overlay; }
 
-  /* A Figma selection around the lockup */
-  .selection { position: absolute; inset: 0; border: 2px solid var(--select); }
-  .selection i { position: absolute; width: 14px; height: 14px; background: #fff; border: 2px solid var(--select); border-radius: 2px; }
-  .selection i:nth-child(1) { left: -8px; top: -8px; }
-  .selection i:nth-child(2) { right: -8px; top: -8px; }
-  .selection i:nth-child(3) { left: -8px; bottom: -8px; }
-  .selection i:nth-child(4) { right: -8px; bottom: -8px; }
+  .lockup { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 44px; }
+
+  /* The logo, drawn from assets/logo.png's geometry so it sits on any ground */
+  .mark {
+    display: grid; grid-template-columns: repeat(2, var(--unit)); grid-template-rows: repeat(3, var(--unit));
+    filter: drop-shadow(0 18px 40px rgb(0 0 0 / 0.45));
+  }
+  .mark i { display: block; }
+  .mark .g { background: #00cc66; border-radius: 50% 50% 0 50%; }
+  .mark .r { grid-row: 2; background: #ff002e; border-radius: 50% 0 0 50%; }
+  .mark .p { grid-row: 3; background: #8f4fff; border-radius: 50% 0 0 50%; }
+  .mark .b { grid-row: 3; grid-column: 2; background: #00b9ff; border-radius: 50%; }
+
+  .name {
+    font: 700 200px/1 "Funnel Display", sans-serif; letter-spacing: -0.04em;
+    padding-bottom: 18px; text-shadow: 0 10px 40px rgb(0 0 0 / 0.35);
+  }
 </style>
 </head>
 <body>
-  <div class="grid"></div>
-  <div class="bloom" aria-hidden="true">
-    <i style="left:22%;top:-4%;width:320px;height:280px;background:#00cc66"></i>
-    <i style="left:0%;top:44%;width:320px;height:300px;background:#ff0033"></i>
-    <i style="left:32%;top:58%;width:380px;height:320px;background:#9050ff"></i>
-    <i style="left:56%;top:22%;width:420px;height:380px;background:#00b8ff"></i>
-  </div>
-
+  <div class="orb"></div>
+  <svg class="grain" width="1280" height="640" aria-hidden="true">
+    <filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="3" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0"/></filter>
+    <rect width="100%" height="100%" filter="url(#n)"/>
+  </svg>
   <div class="lockup">
-    <div class="selection"><i></i><i></i><i></i><i></i></div>
-    <!-- assets/logo.png, redrawn in its own 193-unit grid -->
-    <svg viewBox="0 0 386 579" aria-label="Ligma logo">
-      <path fill="#00cc66" d="M96.5 0A96.5 96.5 0 0 1 193 96.5V193H96.5A96.5 96.5 0 0 1 96.5 0z"/>
-      <path fill="#ff0033" d="M96.5 193H193V386H96.5A96.5 96.5 0 0 1 96.5 193z"/>
-      <path fill="#9050ff" d="M96.5 386H193V579H96.5A96.5 96.5 0 0 1 96.5 386z"/>
-      <circle fill="#00b8ff" cx="289.5" cy="482.5" r="96.5"/>
-    </svg>
-    <b>Ligma</b>
+    <div class="mark" role="img" aria-label="Ligma logo"><i class="g"></i><i class="r"></i><i class="p"></i><i class="b"></i></div>
+    <div class="name">Ligma</div>
   </div>
 </body>
 </html>
