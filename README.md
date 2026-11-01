@@ -1,21 +1,18 @@
 <div align="center">
 
-<img src="assets/logo.png" width="64" height="64" alt="">
+<a href="https://trelakor.github.io/ligma/"><img src="site/social-cover.png" width="840" alt="Ligma. Same Figma. Lighter. For macOS and Windows"></a>
 
-# Ligma
+<br><br>
 
-A lightweight desktop app for [Figma](https://www.figma.com) on macOS and Windows, about 4 MB
-
-[![Latest release](https://img.shields.io/github/v/release/trelakor/ligma)](../../releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/trelakor/ligma/total)](../../releases)
-[![License: MIT](https://img.shields.io/github/license/trelakor/ligma)](LICENSE)
-![macOS | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)
-
-**[Download](../../releases/latest)** · [Website](https://trelakor.github.io/ligma/) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md) · [Discussions](../../discussions)
+A lightweight desktop app for [Figma](https://www.figma.com), about 4 MB. Built on your system's own webview, with tabs, themes, plugins in the left rail and your file on Discord.
 
 <br>
 
-<a href="https://trelakor.github.io/ligma/"><img src="site/social-cover.png" width="840" alt="Figma, without the weight. Installed on macOS, Figma desktop is 305 MB and Ligma is 16 MB"></a>
+<a href="../../releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-macos-dark.png"><img src="assets/readme/download-macos-light.png" width="236" height="48" alt="Download for macOS"></picture></a>&nbsp;&nbsp;<a href="../../releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-windows-dark.png"><img src="assets/readme/download-windows-light.png" width="252" height="48" alt="Download for Windows"></picture></a>
+
+<br>
+
+[Website](https://trelakor.github.io/ligma/) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md) · [Discussions](../../discussions)
 
 </div>
 
@@ -23,14 +20,7 @@ A lightweight desktop app for [Figma](https://www.figma.com) on macOS and Window
 
 Ligma is for people who use Figma all day and want a desktop app that's lighter than the official one. It's built with [Tauri 2](https://tauri.app) and opens `figma.com` in the system webview (WebView2 on Windows, WKWebView on macOS) instead of bundling a browser engine, so it stays small.
 
-|                          | Ligma             | Figma desktop               |
-| ------------------------ | ----------------- | --------------------------- |
-| Installed (macOS)        | **16 MB**         | 305 MB                      |
-| Browser engine           | System webview    | Bundled Chromium (Electron) |
-| Color themes             | 9, light and dark | Light and dark              |
-| Plugins in the left rail | Yes               | No                          |
-| Discord Rich Presence    | Yes               | No                          |
-| Open source              | Yes (MIT)         | No                          |
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/compare-dark.png"><img src="assets/readme/compare-light.png" width="880" alt="Ligma or Figma desktop. Installed size on macOS: Ligma 16 MB, Figma desktop 305 MB. Browser engine: system webview, or bundled Chromium. Color themes: 9 in light and dark, or light and dark. Plugins in the left rail, Discord Rich Presence and open source (MIT): Ligma yes, Figma desktop no"></picture>
 
 Downloads are 2.2 MB on Windows and 7.1 MB on macOS (a universal build for Apple silicon and Intel). See [Memory](docs/MEMORY.md) to compare memory use on your own machine.
 
@@ -57,11 +47,7 @@ Downloads are 2.2 MB on Windows and 7.1 MB on macOS (a universal build for Apple
 
 In free projects, Figma's AI image actions need a paid plan. Ligma puts its own in the same spots in the image bar. They run on your computer, so your images never leave it.
 
-| Ligma's tool | In place of Figma's | Runs on |
-| ------------ | ------------------- | ------- |
-| **Remove background**, keeping the original hidden underneath | Remove background | Apple's Vision on macOS 14 and later, BiRefNet on Windows |
-| **Vectorize** into flat-colored shapes, then recolor or cut down the colors | Vectorize | Ligma's own tracer, no download |
-| **Select object** with a click, brush or lasso, then isolate or erase it | Select area | SAM 2.1, on Windows and Apple silicon |
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/image-tools-dark.png"><img src="assets/readme/image-tools-light.png" width="880" alt="Remove background cuts out the subject and keeps the original hidden underneath, using Vision on macOS and BiRefNet on Windows. Vectorize traces an image into flat-colored shapes with Ligma's own tracer, no download. Select object picks an object with a click, brush or lasso, then isolates or erases it, using SAM 2.1 on Windows and Apple silicon"></picture>
 
 Ligma asks before downloading a model the first time one is needed.
 
@@ -109,7 +95,7 @@ npm run dev     # debug build, opens the app
 npm run build   # release bundle
 ```
 
-See [Development](docs/DEVELOPMENT.md) for icons, the social cover and releasing, and [Contributing](CONTRIBUTING.md) before opening a pull request.
+See [Development](docs/DEVELOPMENT.md) for icons, the README graphics and releasing, and [Contributing](CONTRIBUTING.md) before opening a pull request.
 
 ## Legal
 

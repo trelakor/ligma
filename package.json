@@ -11,7 +11,7 @@
     "notices": "cargo about generate --manifest-path src-tauri/Cargo.toml -c src-tauri/about.toml -o THIRD_PARTY_NOTICES.md src-tauri/about.hbs",
     "discord-assets": "node scripts/discord-assets.mjs",
     "prune": "node scripts/prune-worktrees.mjs",
-    "social-cover": "node scripts/social-cover.mjs"
+    "graphics": "node scripts/graphics.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

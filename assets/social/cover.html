@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- The social cover (site/social-cover.png): the site's hero as a poster, in its light Figma theme. Render it with `npm run social-cover` -->
+<!-- The social cover (site/social-cover.png): the site's closing field, with the nine themes fanned out as a swatch book. Render it with `npm run graphics` -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -8,56 +8,69 @@
   @font-face { font-family: "Funnel Display"; src: url(../../site/fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; }
   @font-face { font-family: "Inter"; src: url(../../site/fonts/inter.woff2) format("woff2"); font-weight: 400 700; }
 
-  /* The site's light Figma theme (site/index.html, dist/themes.js) */
-  :root {
-    --bg: #ffffff; --ink: #1e1e1e; --ink-2: #444444;
-    --weight: #f5f5f5; --weight-rule: #e6e6e6; --weight-ink: #757575;
-    --field: #0d99ff;
-    --display: "Funnel Display", sans-serif;
-    --text: "Inter", sans-serif;
-  }
+  /* The site's closing field in the light Figma theme: accent 500, inked in accent 1000 */
+  :root { --field: #0d99ff; --ink: #0d193f; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--bg); }
-  body {
-    display: flex; flex-direction: column; padding: 56px 64px 64px;
-    color: var(--ink); font-family: var(--text); -webkit-font-smoothing: antialiased;
-    font-feature-settings: "cv11", "calt";
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--field); }
+  body { position: relative; color: var(--ink); font-family: "Inter", sans-serif; -webkit-font-smoothing: antialiased; }
+
+  .copy { position: absolute; left: 88px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; }
+  .brand { display: flex; align-items: center; gap: 18px; font: 650 36px/1 "Funnel Display", sans-serif; letter-spacing: -0.02em; }
+  .brand img { width: 72px; height: 72px; padding: 11px; border-radius: 24%; background: #fff; box-shadow: 0 10px 28px -10px rgb(13 25 63 / 0.45); }
+  h1 { margin: 40px 0 0; font: 700 124px/0.9 "Funnel Display", sans-serif; letter-spacing: -0.045em; }
+  .os { display: flex; align-items: center; gap: 14px; margin-top: 44px; font-size: 24px; font-weight: 550; }
+  .os svg { width: 26px; height: 26px; fill: currentColor; }
+  .os i { width: 5px; height: 5px; margin: 0 4px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+
+  /* The fan deck: each theme's accent ramp on a strip, riveted at the foot,
+     its name running up the edge the next strip leaves showing */
+  .deck { position: absolute; left: 1128px; top: 604px; }
+  .strip {
+    position: absolute; left: -70px; bottom: -34px; width: 140px; height: 452px; padding: 8px 8px 8px 0;
+    display: grid; grid-template-columns: 36px 1fr; grid-template-rows: repeat(4, 1fr) 52px; gap: 4px 0;
+    border-radius: 16px; background: #fff;
+    transform-origin: 50% calc(100% - 34px); transform: rotate(var(--turn));
+    box-shadow: 0 2px 4px rgb(13 25 63 / 0.12), 0 18px 40px -12px rgb(13 25 63 / 0.4);
   }
-
-  header { display: flex; align-items: center; justify-content: space-between; }
-  .brand { display: flex; align-items: center; gap: 14px; font: 650 32px/1 var(--display); letter-spacing: -0.02em; }
-  .brand img { width: 56px; height: 56px; margin: -6px -4px -6px -8px; }
-  .os { font-size: 22px; font-weight: 500; color: var(--ink-2); }
-
-  h1 { margin: 40px 0 0; font: 700 92px/0.92 var(--display); letter-spacing: -0.04em; white-space: nowrap; }
-
-  /* 16 MB of 305 MB, by area: each side at sqrt(16 / 305) */
-  .weight {
-    position: relative; flex: 1; margin-top: 40px; border-radius: 24px; overflow: hidden;
-    background:
-      linear-gradient(to right, var(--weight-rule) 1.5px, transparent 1.5px) 0 0 / 10% 100%,
-      linear-gradient(to bottom, var(--weight-rule) 1.5px, transparent 1.5px) 0 0 / 100% 10%,
-      var(--weight);
+  .strip b {
+    grid-row: 1 / 5; writing-mode: vertical-rl; padding: 12px 0 0;
+    font: 650 19px/36px "Funnel Display", sans-serif; letter-spacing: -0.005em; color: #1e1e1e;
   }
-  .them { position: absolute; top: 28px; left: 32px; right: 32px; display: flex; justify-content: space-between; align-items: flex-start; }
-  .them span { font-size: 22px; font-weight: 600; color: var(--ink-2); }
-  .them b { font: 700 136px/0.8 var(--display); letter-spacing: -0.05em; color: var(--weight-ink); font-variant-numeric: tabular-nums; }
-  .us { position: absolute; left: 0; bottom: 0; width: 22.9%; height: 22.9%; background: var(--field); border-top-right-radius: 14px; }
-  .us-label { position: absolute; left: calc(22.9% + 20px); bottom: 14px; display: flex; align-items: baseline; gap: 14px; }
-  .us-label b { font: 700 60px/1 var(--display); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
-  .us-label span { font-size: 22px; font-weight: 600; color: var(--ink-2); }
+  .strip i { border-radius: 6px; }
+  .strip i:nth-of-type(1) { border-top-right-radius: 9px; }
+  .strip .foot { grid-column: 1 / 3; display: grid; place-items: center; }
+  .strip .foot::after { content: ""; width: 16px; height: 16px; border-radius: 50%; background: #e6e6e6; box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.25); }
 </style>
 </head>
 <body>
-  <header>
+  <div class="copy">
     <div class="brand"><img src="../logo.png" alt="">Ligma</div>
-    <div class="os">Free for macOS and Windows</div>
-  </header>
-  <h1>Figma, without the weight.</h1>
-  <div class="weight" role="img" aria-label="Installed size on macOS, drawn to scale by area: Figma desktop 305 MB, Ligma 16 MB">
-    <div class="them"><span>Figma desktop, installed on macOS</span><b>305 MB</b></div>
-    <div class="us"></div>
-    <div class="us-label"><b>16 MB</b><span>Ligma</span></div>
+    <h1>Same Figma.<br>Lighter.</h1>
+    <div class="os">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
+      macOS
+      <i></i>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 2h9.5v9.5H2zM12.5 2H22v9.5h-9.5zM2 12.5h9.5V22H2zM12.5 12.5H22V22h-9.5z"/></svg>
+      Windows
+    </div>
   </div>
+  <div class="deck" id="deck"></div>
+
+  <script src="../../dist/themes.js"></script>
+  <script>
+    // Strips from the back of the fan to the front, Figma's own on top
+    const order = ["amber", "ember", "rose", "iris", "midnight", "ocean", "lagoon", "grove", "figma"];
+    const steps = [300, 500, 700, 1000];
+    order.forEach((id, i) => {
+      const theme = LIGMA_THEMES.find((theme) => theme.id === id);
+      const palette = ligmaPalette(id, "light");
+      const color = (step) => palette[`--ligma-accent-${step}`] ?? LIGMA_BLUE.light[LIGMA_STEPS.indexOf(step)];
+      const strip = document.createElement("div");
+      strip.className = "strip";
+      strip.style.setProperty("--turn", `${-74 + i * 9.5}deg`);
+      strip.innerHTML = `<b>${theme.name}</b>${steps.map((step) => `<i style="background:${color(step)}"></i>`).join("")}<span class="foot"></span>`;
+      document.getElementById("deck").append(strip);
+    });
+  </script>
 </body>
 </html>
