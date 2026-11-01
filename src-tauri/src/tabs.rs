@@ -361,6 +361,8 @@ struct TabState {
     tabs: Vec<Tab>,
     /// Each window's active tab, by window label
     actives: HashMap<String, u32>,
+    /// Each window's tab that was active before its active one
+    previous: HashMap<String, u32>,
     /// The window last focused, where new tabs open and the tab shortcuts
     /// act
     focused: String,
@@ -977,6 +979,9 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         if let Some(tab) = previous.and_then(|previous| state.tabs.iter_mut().find(|tab| tab.id == previous)) {
             tab.hidden_since = Some(Instant::now());
         }
+        if let Some(previous) = previous {
+            state.previous.insert(window.clone(), previous);
+        }
         state.focused = window.clone();
         (window, previous, wake, resume, snapshot)
     };
@@ -1316,9 +1321,9 @@ fn move_tab(app: &AppHandle, id: u32, index: usize) {
 
 /// Moves tab `id` into window `target`, at `index` among its group there
 /// (see `move_tab`), and selects it. Its webview is reparented, so the page
-/// carries on. The window it leaves selects its neighbor, or closes if
-/// that was its last tab
-fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize) -> tauri::Result<()> {
+/// carries on. The window it leaves selects its neighbor, or with `back`
+/// the tab active before it, or closes if that was its last tab
+fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize, back: bool) -> tauri::Result<()> {
     let Some(target_window) = app.get_window(target) else {
         return Ok(());
     };
@@ -1333,11 +1338,14 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize) -> tauri
             move_tab(app, id, index);
             return Ok(());
         }
-        // The neighbor to the right, like closing it would select
         let next = (state.actives.get(&source) == Some(&id)).then(|| {
             let tabs: Vec<&Tab> = state.tabs_in(&source).collect();
+            let before = state.previous.get(&source).filter(|&&before| before != id);
+            let before = before.filter(|&&before| back && tabs.iter().any(|tab| tab.id == before));
+            // Else the neighbor to the right, like closing it would select
             let at = tabs.iter().position(|tab| tab.id == id).unwrap_or(0);
-            tabs.get(at + 1).or_else(|| at.checked_sub(1).and_then(|at| tabs.get(at))).map(|tab| tab.id)
+            let neighbor = || tabs.get(at + 1).or_else(|| at.checked_sub(1).and_then(|at| tabs.get(at))).map(|tab| tab.id);
+            before.copied().or_else(neighbor)
         });
         if next.is_some() {
             state.actives.remove(&source);
@@ -1398,8 +1406,15 @@ fn grip_position(app: &AppHandle, window: &Window, at: PhysicalPosition<f64>) ->
 
 /// Moves tab `id` into a new window, with its first tab under the cursor at
 /// `at`, in screen pixels. A window's only tab stays, and the window moves
-/// there instead. Gives the label of the window the tab is now in
-fn move_to_new_window(app: &AppHandle, id: u32, at: PhysicalPosition<f64>) -> tauri::Result<Option<String>> {
+/// there instead. With `back`, the window it leaves goes back to the tab
+/// active before it (see `move_to_window`). Gives the label of the window
+/// the tab is now in
+fn move_to_new_window(
+    app: &AppHandle,
+    id: u32,
+    at: PhysicalPosition<f64>,
+    back: bool,
+) -> tauri::Result<Option<String>> {
     let Some((source, alone)) = ({
         let state = app.state::<Tabs>().inner().0.lock().unwrap();
         state.tabs.iter().find(|tab| tab.id == id && id != HOME_ID).map(|tab| {
@@ -1433,7 +1448,7 @@ fn move_to_new_window(app: &AppHandle, id: u32, at: PhysicalPosition<f64>) -> ta
     // together on screen
     let window = build_window(app, &label, size, false)?;
     window.set_position(position)?;
-    move_to_window(app, id, &label, 0)?;
+    move_to_window(app, id, &label, 0, back)?;
     window.show()?;
     window.set_focus()?;
     // Fitted again to the size it has now it's shown
@@ -1564,7 +1579,7 @@ fn drop_on_bar(app: &AppHandle, id: u32, from: &str, target: &str, x: f64) {
         // Not from inside the webview's own callback
         let (app, target, from) = (handle.clone(), target_label.clone(), from_label.clone());
         std::thread::spawn(move || {
-            if move_to_window(&app, id, &target, index).is_err() {
+            if move_to_window(&app, id, &target, index, false).is_err() {
                 show(&app, &from);
             }
         });
@@ -1728,7 +1743,7 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
                     origin.x as f64 + (GRIP.0 + 32.0) * px,
                     origin.y as f64 + (GRIP.1 + 32.0) * px,
                 );
-                move_to_new_window(app, id, at)?;
+                move_to_new_window(app, id, at, false)?;
             }
         }
         "discord-hide" | "discord-show" => {
@@ -2211,6 +2226,7 @@ fn forget_window(app: &AppHandle, label: &str) {
         }
         state.tabs.retain(|tab| tab.window != label);
         state.actives.remove(label);
+        state.previous.remove(label);
         state.snapshot_shown.retain(|shown| shown != label);
         if state.focused == label {
             state.focused = MAIN.to_owned();
@@ -2312,16 +2328,18 @@ pub async fn open_new_tab(app: AppHandle, webview: Webview) {
 
 /// Tab `id` was dragged off its bar, the mouse button still held. It goes
 /// into a window of its own right away, which follows the cursor until
-/// it's let go (see `follow_cursor`)
+/// it's let go (see `follow_cursor`). A tab that wasn't `was_active` was
+/// only selected by pressing it, so its window goes back to the tab it
+/// showed before
 #[tauri::command]
-pub async fn tear_off_tab(app: AppHandle, webview: Webview, id: u32) {
+pub async fn tear_off_tab(app: AppHandle, webview: Webview, id: u32, was_active: bool) {
     if !from_tab_bar(&webview) {
         return;
     }
     let Ok(at) = app.cursor_position() else {
         return;
     };
-    if let Ok(Some(label)) = move_to_new_window(&app, id, at) {
+    if let Ok(Some(label)) = move_to_new_window(&app, id, at, !was_active) {
         std::thread::spawn(move || follow_cursor(&app, id, &label));
     }
 }

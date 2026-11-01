@@ -227,8 +227,11 @@
   let deferred = null;
   const groupNodes = (pinned) => [...bar.querySelectorAll(pinned ? ".tab.pinned:not(.ghost)" : ".tab:not(.pinned):not(.ghost)")];
 
+  // Before the press selects it, whether the tab was the active one
   const startPress = (e, tab) => {
-    if (e.button === 0) drag = { id: tab.id, pinned: tab.pinned, startX: e.clientX, startY: e.clientY, moving: false };
+    if (e.button !== 0) return;
+    const wasActive = e.currentTarget.classList.contains("active");
+    drag = { id: tab.id, pinned: tab.pinned, wasActive, startX: e.clientX, startY: e.clientY, moving: false };
   };
 
   // Where a tab let go of at `x` in this bar goes among its group, for a
@@ -317,7 +320,7 @@
     const { from, rects } = drag;
     const height = bar.getBoundingClientRect().height;
     if (e.clientY < -DETACH || e.clientY > height + DETACH || e.clientX < 0 || e.clientX > innerWidth) {
-      const { id, pinned } = drag;
+      const { id, pinned, wasActive } = drag;
       drag = null;
       bar.classList.remove("dragging");
       if (bar.hasPointerCapture(e.pointerId)) bar.releasePointerCapture(e.pointerId);
@@ -326,7 +329,7 @@
       deferred = null;
       if (state) renderBar(state);
       else groupNodes(pinned).forEach((node) => (node.style.transform = ""));
-      invoke("tear_off_tab", { id });
+      invoke("tear_off_tab", { id, wasActive });
       return;
     }
     const me = rects[from];
