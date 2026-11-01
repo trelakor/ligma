@@ -131,9 +131,11 @@ pub const CARRY_JS: &str = r#"(() => {
     target.focus();
     return !target.dispatchEvent(new ClipboardEvent(type, { clipboardData: data, bubbles: true, cancelable: true }));
   };
-  // Out: a press on something selected on the canvas, as Figma sees it,
-  // starts a drag of the selection. Crossing into the other half carries it
-  // over
+  // Out: a press on the canvas that Figma makes a drag of the selection:
+  // pressed on it, or moving it, not a selection box or a pan. Crossing
+  // into the other half carries it over. The selection is read as the
+  // pointer first moves, once Figma has selected what was pressed on and
+  // before it moves it
   let press = null;
   let out = null;
   let held = false;
@@ -142,34 +144,38 @@ pub const CARRY_JS: &str = r#"(() => {
     press = null;
     held = e.button === 0;
     if (e.button !== 0 || !figma || !inside(window.__ligmaSplitHalves?.mine, e.clientX, e.clientY)) return;
-    const selection = figma.currentPage.selection;
     const pointer = world(figma, e.clientX, e.clientY);
-    if (!pointer || !selection.length) return;
-    // A frame at the top level is dragged by its name too, above it
+    if (pointer) press = { pointer, nodes: null };
+  }, true);
+  // A frame at the top level is dragged by its name too, above it
+  const under = (figma, nodes, point) => {
     const label = 24 / figma.viewport.zoom;
-    const on = (n) => {
+    return nodes.some((n) => {
       const b = n.absoluteBoundingBox;
       const above = n.parent?.type === "PAGE" && ["FRAME", "SECTION", "COMPONENT", "COMPONENT_SET"].includes(n.type) ? label : 0;
-      return b && pointer.x >= b.x && pointer.x <= b.x + b.width && pointer.y >= b.y - above && pointer.y <= b.y + b.height;
-    };
-    press = { nodes: selection, at: box(selection), pointer, on: selection.some(on) };
-  }, true);
+      return b && point.x >= b.x && point.x <= b.x + b.width && point.y >= b.y - above && point.y <= b.y + b.height;
+    });
+  };
   addEventListener("pointermove", (e) => {
     const figma = api();
     const halves = window.__ligmaSplitHalves;
     if (!press || !figma || !halves || !(e.buttons & 1)) return;
+    if (!press.nodes) {
+      const selection = figma.currentPage.selection;
+      if (!selection.length) return (press = null);
+      press.nodes = selection;
+      press.at = box(selection);
+      press.on = under(figma, selection, press.pointer);
+    }
     if (!inside(halves.theirs, e.clientX, e.clientY)) return;
     const nodes = press.nodes.filter((n) => !n.removed);
-    // Pressed on the selection, or Figma's moving it: not a selection box
-    // or a pan
     const now = nodes.length && box(nodes);
     const moving = now && (Math.abs(now.x - press.at.x) > 0.01 || Math.abs(now.y - press.at.y) > 0.01);
     if (!press.on && !moving) return;
     const data = new DataTransfer();
-    if (!nodes.length || !clipboard("copy", data) || !data.getData("text/html")) return;
+    if (!clipboard("copy", data) || !data.getData("text/html")) return;
     // Where it was grabbed, from where it was when pressed
-    const offset = { x: press.at.x - press.pointer.x, y: press.at.y - press.pointer.y };
-    out = { nodes, html: data.getData("text/html"), offset };
+    out = { nodes, html: data.getData("text/html"), offset: { x: press.at.x - press.pointer.x, y: press.at.y - press.pointer.y } };
     press = null;
     window.__ligmaSplitAsk?.("carry");
   }, true);
@@ -621,15 +627,16 @@ pub fn close(app: &AppHandle) {
     }
 }
 
-/// Takes what split tabs' pages ask (see `PAGE_JS`) while a mouse button
-/// is held, and once more as it's let go: focusing a half, or carrying what
-/// was dragged out of it. Runs for good
+/// Takes what split tabs' pages ask (see `PAGE_JS`): focusing a half, or
+/// carrying what was dragged out of it. Every 16ms while a mouse button is
+/// held and once more as it's let go, and every 96ms otherwise, in case
+/// one was missed. Runs for good
 pub fn watch(app: AppHandle) {
     let mut was_down = false;
-    loop {
+    for tick in 0u64.. {
         std::thread::sleep(std::time::Duration::from_millis(16));
         let down = crate::tabs::mouse_down();
-        if !down && !was_down {
+        if !down && !was_down && tick % 6 != 0 {
             continue;
         }
         was_down = down;
