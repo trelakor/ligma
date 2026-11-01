@@ -2,6 +2,15 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.30.0 - 2026-11-01
+
+- Drag a tab out of the bar to give it a window of its own, or onto another Ligma window's bar to move it there. The file carries on where it was, without reloading. A tab's menu also has Move to New Window.
+- Split view: right-click a file tab and choose Split View, or drag a file tab over either half of the canvas, to work on two files side by side under one set of Figma's panels. Click in a half to switch to it, and drag the divider to resize them. End Split View in either tab's menu ends it.
+- Drag a selection from one half of a split view into the other to move it to that file, frames included.
+- A file comes back where you left it after its tab sleeps, is reloaded or is reopened from last time: the same page, position and zoom, mode and tool.
+- Select object's Erase, or Delete, cuts what's picked out of the image, with the same edge as Isolate. The original stays under it, hidden, as one undo step.
+- The X on Figma's toast cancels Remove background, Vectorize and Select object, and cancelling a model download stops the jobs waiting on it.
+
 ## 0.29.0 - 2026-10-30
 
 - Select object's Isolate keeps a crisp edge: where the model was unsure, it no longer leaves the background faintly showing in a grid pattern or makes what's picked slightly see-through, and the new layer is cropped to what's picked.
