@@ -6,8 +6,8 @@
 //! the object under the pointer as it moves
 //!
 //! The page hands requests over as downloads (see handoff.rs): a line of
-//! JSON, followed by the layer as Figma draws it, as a PNG, for "open" and
-//! "isolate":
+//! JSON, followed by the layer as Figma draws it, as a PNG, for "open",
+//! "isolate" and "erase":
 //!
 //! - `{"op":"open"}` reads the image, for the requests after it, and gives
 //!   its size and the session that names it in those: the job's number
@@ -16,6 +16,8 @@
 //! - `{"op":"isolate","session":<job>,"picks":[…]}` gives the image after
 //!   the line, larger, with only the picked objects, cropped to them, as a
 //!   PNG in base64, and where it was cropped, in fractions of the image
+//! - `{"op":"erase","session":<job>,"picks":[…]}` gives the image after the
+//!   line with the picked objects cut out of it, as a PNG in base64
 //! - `{"op":"close","session":<job>}` lets the image go
 //!
 //! A pick is `{"point":[x,y]}` or `{"box":[left,top,right,bottom]}`, in
@@ -23,8 +25,8 @@
 //! `{"stroke":[[x,y],…],"radius":r}`, whose radius is a fraction of the
 //! image's width, or what's inside a lasso, `{"lasso":[[x,y],…]}`, a
 //! closed outline. `"subtract":true` takes it away from the picks before it
-//! rather than adds it. `"edge":{"shift":s,"feather":f}` on "outline" and
-//! "isolate" moves the edge out by `s` pixels of the image the request is
+//! rather than adds it. `"edge":{"shift":s,"feather":f}` on "outline",
+//! "isolate" and "erase" moves the edge out by `s` pixels of the image the request is
 //! about, or in when it's negative, and softens it over `f` pixels either
 //! side. One image is kept at a time
 
@@ -460,6 +462,7 @@ mod sam {
                 match op {
                     "outline" => outline(loaded, &request.picks, request.edge),
                     "isolate" => isolate(loaded, &request.picks, request.edge, image),
+                    "erase" => erase(loaded, &request.picks, request.edge, image),
                     _ => Err("failed"),
                 }
             }
@@ -700,13 +703,9 @@ mod sam {
             return Err("empty");
         }
         let cropped = imageops::crop_imm(&picture, left as u32, top as u32, (right - left) as u32, (bottom - top) as u32).to_image();
-        let mut png = Vec::new();
-        image::codecs::png::PngEncoder::new(&mut png)
-            .write_image(cropped.as_raw(), cropped.width(), cropped.height(), image::ExtendedColorType::Rgba8)
-            .map_err(failed)?;
         let (width, height) = (width as f64, height as f64);
         Ok(serde_json::json!({
-            "png": base64::engine::general_purpose::STANDARD.encode(png),
+            "png": encode(&cropped)?,
             "x": left as f64 / width,
             "y": top as f64 / height,
             "width": (right - left) as f64 / width,
@@ -715,6 +714,27 @@ mod sam {
         .to_string())
     }
 
+    /// The image in `bytes`, the layer's fills drawn larger, with what's
+    /// picked cut out, its edge moved and softened as `edge` says, as
+    /// Isolate keeps it
+    fn erase(loaded: &mut Loaded, picks: &[Pick], edge: Edge, bytes: &[u8]) -> Result<String, &'static str> {
+        let mut picture = decode(bytes)?;
+        let (width, height) = (picture.width() as usize, picture.height() as usize);
+        let distances = picked(loaded, picks, width, height)?.distances();
+        for (pixel, &distance) in picture.pixels_mut().zip(&distances) {
+            pixel[3] = (pixel[3] as f32 * (1.0 - kept(distance, edge))).round() as u8;
+        }
+        Ok(serde_json::json!({ "png": encode(&picture)? }).to_string())
+    }
+
+    /// `picture` as a PNG, in base64
+    fn encode(picture: &RgbaImage) -> Result<String, &'static str> {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(picture.as_raw(), picture.width(), picture.height(), image::ExtendedColorType::Rgba8)
+            .map_err(failed)?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(png))
+    }
 }
 
 #[cfg(test)]

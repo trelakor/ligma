@@ -312,11 +312,12 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
-  // The layer as Figma draws it, unturned, `scale` times as large, as a PNG
-  const drawn = async (figma, node, scale) => {
+  // The layer as Figma draws it, unturned, `scale` times as large, as a PNG.
+  // Only its fills, fully opaque, when `fillsOnly`, to stand in for them
+  const drawn = async (figma, node, scale, fillsOnly = false) => {
     const settings = { format: "PNG", constraint: { type: "SCALE", value: scale }, useAbsoluteBounds: true };
     const [[a, c], [b, d]] = node.absoluteTransform;
-    if (Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return node.exportAsync(settings);
+    if (!fillsOnly && Math.abs(b) < 1e-6 && Math.abs(c) < 1e-6 && a > 0 && d > 0) return node.exportAsync(settings);
     // Turned or flipped, here or by a parent: a copy that isn't
     const copy = node.clone();
     try {
@@ -325,6 +326,11 @@ const PAGE_JS: &str = r##"(() => {
         [1, 0, 0],
         [0, 1, 0],
       ];
+      if (fillsOnly) {
+        if ("strokes" in copy) copy.strokes = [];
+        if ("effects" in copy) copy.effects = [];
+        copy.opacity = 1;
+      }
       return await copy.exportAsync(settings);
     } finally {
       copy.remove();
@@ -667,7 +673,7 @@ const PAGE_JS: &str = r##"(() => {
   // lasso picks what's drawn around, and its modes do what Shift and Alt
   // do. Isolate, or Enter, puts what's picked
   // in a new layer above, cropped to it, its edge moved and feathered as
-  // the bar says; Cancel, Escape or a click on the canvas off the image
+  // the bar says, and Erase, or Delete, cuts it out of the image; Cancel, Escape or a click on the canvas off the image
   // leaves. Ligma's SAM finds the objects (see objects.rs): it reads the
   // image once when the mode opens, then gives outlines as SVG paths in
   // the pixels of the image it read
@@ -736,10 +742,21 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
+  // The image objects.rs sent, with what's picked cut out, in place of
+  // `node`'s fills, which stay under it, hidden, as Remove background
+  // leaves them
+  const placeErased = (figma, node, { png }) => {
+    const hash = figma.createImage(Uint8Array.from(atob(png), (char) => char.charCodeAt(0))).hash;
+    node.fills = [...fillsOf(node).map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+    return node;
+  };
+
   const SVG_NS = "http://www.w3.org/2000/svg";
   const ALT = MAC ? "Option" : "Alt";
   const icon = (paths) => `<svg width="24" height="24" fill="none" viewBox="0 0 24 24">${paths}</svg>`;
   const ISOLATE_ICON = icon(`<rect ${STROKE} x="4.5" y="7.5" width="12" height="12" rx="1.5" stroke-dasharray="2 2"/><rect ${STROKE} x="8.5" y="4.5" width="11" height="11" rx="1.5"/>`);
+  // An eraser, as Photoshop's has it
+  const ERASE_ICON = icon(`<path ${STROKE} stroke-linejoin="round" d="m13.5 5.5 5 5-7.5 7.5h-3l-3-3a1.4 1.4 0 0 1 0-2z"/><path ${STROKE} d="m9.5 9.5 5 5M11 18h7.5"/>`);
   // An arrow on a dashed box, as Photoshop's Object Selection has it
   const OBJECT_ICON = icon(`<path ${STROKE} stroke-dasharray="2 2" d="M10.5 16.5h-3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3"/><path ${STROKE} stroke-linejoin="round" d="m12.5 12.5 6.5 2.4-2.9 1.2-1.2 2.9z"/>`);
   const TOOLS = [
@@ -778,8 +795,8 @@ const PAGE_JS: &str = r##"(() => {
     closeRecolor();
     barClasses = { root: bar.closest("[data-secondary-toolbelt]")?.className ?? "", bar: bar.className };
 
-    // The bar, as Figma's Select area has it, Isolate then Cancel, after
-    // the tools, modes and fields
+    // The bar, as Figma's Select area has it, Isolate and Erase then
+    // Cancel, after the tools, modes and fields
     const root = document.createElement("div");
     root.setAttribute(OBJECTS, "");
     root.setAttribute("data-fullscreen-prevent-event-capture", "true");
@@ -842,7 +859,11 @@ const PAGE_JS: &str = r##"(() => {
     const isolateButton = strip.appendChild(labelled("Isolate", ISOLATE_ICON));
     Object.assign(isolateButton.dataset, { tooltip: "Isolate in a new layer", tooltipType: "text", tooltipShowAbove: "true" });
     isolateButton.disabled = true;
-    isolateButton.addEventListener("click", () => isolate());
+    isolateButton.addEventListener("click", () => cut("isolate"));
+    const eraseButton = strip.appendChild(labelled("Erase", ERASE_ICON));
+    Object.assign(eraseButton.dataset, { tooltip: "Erase from the image", tooltipType: "text", tooltipShowAbove: "true" });
+    eraseButton.disabled = true;
+    eraseButton.addEventListener("click", () => cut("erase"));
     strip.append(Object.assign(document.createElement("span"), { className: "divider" }));
     const cancel = strip.appendChild(labelled("Cancel"));
     cancel.addEventListener("click", () => closePicking());
@@ -875,6 +896,7 @@ const PAGE_JS: &str = r##"(() => {
       modes,
       fields,
       isolateButton,
+      eraseButton,
       session: null,
       width: 0,
       height: 0,
@@ -1085,7 +1107,7 @@ const PAGE_JS: &str = r##"(() => {
     const current = picking;
     const version = ++current.version;
     const { picks, paths, node } = current;
-    current.isolateButton.disabled = !picks.length || current.working;
+    current.isolateButton.disabled = current.eraseButton.disabled = !picks.length || current.working;
     showOptions();
     if (!picks.length) {
       paths.picked.removeAttribute("d");
@@ -1140,26 +1162,30 @@ const PAGE_JS: &str = r##"(() => {
     showPicks();
   };
 
-  const isolate = async () => {
+  // Isolates what's picked in a new layer, or erases it from the image,
+  // as `op` says
+  const cut = async (op) => {
     const current = picking;
     if (!current?.session || !current.picks.length || current.working) return;
     const { figma, node, session, picks } = current;
+    const erase = op === "erase";
     current.working = true;
-    current.isolateButton.disabled = true;
+    current.isolateButton.disabled = current.eraseButton.disabled = true;
     hoverAt(null);
     const stopShimmer = shimmer(figma, [node], "objects");
     let layer = null;
     try {
       const { full } = current.scales;
-      const bytes = await drawn(figma, node, full);
-      const result = JSON.parse(await handOff("object", request({ op: "isolate", session, picks, edge: edgeAt(full) }, bytes)));
+      const bytes = await drawn(figma, node, full, erase);
+      const result = JSON.parse(await handOff("object", request({ op, session, picks, edge: edgeAt(full) }, bytes)));
       if (node.removed) throw "failed";
-      layer = placeIsolated(figma, node, result);
+      layer = erase ? placeErased(figma, node, result) : placeIsolated(figma, node, result);
       try {
         figma.commitUndo();
       } catch {}
     } catch (reason) {
-      figma.notify(reason === "empty" ? "Nothing picked to isolate" : "Couldn't isolate the object", { timeout: 3000 });
+      const message = reason === "empty" ? `Nothing picked to ${op}` : erase ? "Couldn't erase the object" : "Couldn't isolate the object";
+      figma.notify(message, { timeout: 3000 });
     }
     stopShimmer();
     current.working = false;
@@ -1324,9 +1350,9 @@ const PAGE_JS: &str = r##"(() => {
     picking.brush.setAttribute("cy", at.v * picking.height);
   };
 
-  // While it's open, Escape leaves, Enter isolates, Undo and Redo step
-  // through the picks rather than the file, [ and ] resize the brush, and
-  // Delete does nothing rather than delete the image. Shift and Alt change
+  // While it's open, Escape leaves, Enter isolates, Delete erases rather
+  // than delete the image, Undo and Redo step through the picks rather than
+  // the file and [ and ] resize the brush. Shift and Alt change
   // the cursor, and Space is left to Figma, to pan. Keys typed in the
   // bar's fields stop here, before Figma sees them
   for (const type of ["keydown", "keypress", "keyup"]) {
@@ -1355,7 +1381,7 @@ const PAGE_JS: &str = r##"(() => {
           closePicking();
         } else if (event.key === "Enter") {
           swallow(event);
-          isolate();
+          cut("isolate");
         } else if ((MAC ? event.metaKey : event.ctrlKey) && !event.altKey && /^[zy]$/i.test(event.key)) {
           swallow(event);
           undoPick(event.key.toLowerCase() === "y" || event.shiftKey);
@@ -1363,7 +1389,10 @@ const PAGE_JS: &str = r##"(() => {
           swallow(event);
           const size = picking.values.size;
           choose("size", Math.max(1, Math.round(event.key === "]" ? Math.max(size + 1, size * 1.2) : Math.min(size - 1, size / 1.2))));
-        } else if (event.key === "Delete" || event.key === "Backspace") swallow(event);
+        } else if (event.key === "Delete" || event.key === "Backspace") {
+          swallow(event);
+          if (!event.repeat) cut("erase");
+        }
       },
       true,
     );
