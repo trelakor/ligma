@@ -1403,10 +1403,12 @@
       <thead><tr><th scope="col"><span class="sr">Feature</span></th><th scope="col"><span class="who"><img src="logo.png" alt="">Ligma</span></th><th scope="col">Figma desktop</th></tr></thead>
       <tbody>
         <tr class="big"><th scope="row">Installed size on macOS</th><td>16 MB</td><td>305 MB</td></tr>
+        <tr><th scope="row">Memory use</th><td>Less, clutter cut</td><td>More, piled on</td></tr>
         <tr><th scope="row">Browser engine</th><td>System webview</td><td>Bundled Chromium</td></tr>
         <tr><th scope="row">Color themes</th><td>9, light and dark</td><td>Light and dark</td></tr>
         <tr><th scope="row">AI image tools</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Free, on your device</span></td><td><span class="no"><svg><use href="#i-lock"/></svg>Paid plans</span></td></tr>
-        <tr><th scope="row">Split view</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Yes</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
+        <tr><th scope="row">Split view</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Shared panels, more canvas</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>Two full windows</span></td></tr>
+        <tr><th scope="row">Layer previews</th><td><span class="yes"><svg><use href="#i-tick"/></svg>In every mode</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>Draw mode only</span></td></tr>
         <tr><th scope="row">Plugins in the left sidebar</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Yes</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
         <tr><th scope="row">Discord Rich Presence</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Yes</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
         <tr><th scope="row">Open source</th><td><span class="yes"><svg><use href="#i-tick"/></svg>MIT</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
@@ -1887,13 +1889,13 @@
   }, { passive: false });
   for (const button of layerButtons) button.addEventListener("click", () => flyTo(button.dataset.frame));
   // The reel's feature chips scroll here and fly to their frame
-  for (const link of document.querySelectorAll('.reel a[href^="#f-"]')) {
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      cv.scrollIntoView({ behavior: reduced.matches ? "auto" : "smooth", block: "center" });
-      flyTo(link.getAttribute("href").slice(1));
-    });
-  }
+  document.querySelector(".reel").addEventListener("click", (event) => {
+    const link = event.target.closest('a[href^="#f-"]');
+    if (!link) return;
+    event.preventDefault();
+    cv.scrollIntoView({ behavior: reduced.matches ? "auto" : "smooth", block: "center" });
+    flyTo(link.getAttribute("href").slice(1));
+  });
   function start() {
     view.z = Math.min(1, Math.max(0.5, (cv.clientWidth - padL()) / 1600));
     view.x = padL() + 8 - 160 * view.z;
@@ -1903,6 +1905,28 @@
   start();
   addEventListener("resize", draw);
 
+
+  // Each reel row slides by half its width, so that half has to be at least
+  // as wide as the window or the row's end shows before it wraps around.
+  // Repeat the chips until it is, and slow the slide to keep the same speed
+  for (const row of document.querySelectorAll(".reel-row")) {
+    const track = row.querySelector(".reel-track:not([aria-hidden])");
+    const base = parseFloat(getComputedStyle(row).animationDuration) || 70;
+    let half = 1;
+    const fill = () => {
+      const width = track.offsetWidth;
+      if (!width) return;
+      const need = Math.ceil(innerWidth / width);
+      if (need <= half) return;
+      const copy = row.querySelector(".reel-track[aria-hidden]");
+      for (let i = row.children.length; i < need * 2; i++) row.append(copy.cloneNode(true));
+      half = need;
+      row.style.animationDuration = base * half + "s";
+    };
+    fill();
+    document.fonts.ready.then(fill);
+    addEventListener("resize", fill);
+  }
 
   // Copy the Terminal command
   for (const button of document.querySelectorAll("[data-copy]")) {
