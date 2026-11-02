@@ -182,6 +182,61 @@
   .cv-tools .f-bar { position: absolute; bottom: 12px; }
   .cv-zoom { position: absolute; z-index: 2; right: 12px; bottom: 12px; display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--panel); box-shadow: var(--pop); font-variant-numeric: tabular-nums; }
   .cv-hint { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+  /* The smaller features, under their own heading */
+  .index-head { margin-top: clamp(96px, 12vw, 160px); }
+  .index-head h2 { font-size: clamp(2rem, 3.6vw, 3rem); }
+  .index-head p { margin-top: 12px; max-width: 34em; font-size: 18px; color: var(--ink-2); }
+  .index-head + .index { margin-top: clamp(32px, 4vw, 48px); }
+
+  /* The designs on the canvas: someone's work, in its own colors whatever
+     the theme */
+  .d { position: absolute; inset: 0; overflow: hidden; white-space: normal; letter-spacing: 0; font-family: var(--text); }
+  .d-sprout { display: flex; flex-direction: column; padding: 14px 14px 16px; background: #f4efe6; color: #1f3d33; }
+  .d-sprout .ill { position: relative; flex: none; height: 160px; overflow: hidden; border-radius: 14px; background: #dfe7d6; }
+  .d-sprout .pot { position: absolute; left: 50%; bottom: 0; width: 64px; height: 50px; margin-left: -32px; border-radius: 3px 3px 14px 14px; background: #c8643b; }
+  .d-sprout .leaf { position: absolute; bottom: 44px; left: 50%; width: 40px; height: 74px; background: #2f5d50; }
+  .d-sprout .l1 { margin-left: -40px; border-radius: 40px 0; rotate: -16deg; transform-origin: 100% 100%; }
+  .d-sprout .l2 { border-radius: 0 40px; background: #5f8f6a; rotate: 16deg; transform-origin: 0 100%; }
+  .d-sprout .sun { position: absolute; right: 16px; top: 14px; width: 28px; height: 28px; border-radius: 50%; background: #e9b44c; }
+  .d-sprout b { margin-top: 18px; font: 700 26px/1 var(--display); letter-spacing: -0.035em; }
+  .d-sprout p { margin-top: 8px; font-size: 12px; line-height: 16px; opacity: 0.72; }
+  .d-sprout .cta { display: grid; place-items: center; height: 36px; margin-top: auto; border-radius: 18px; background: #1f3d33; color: #f4efe6; font-size: 12px; font-weight: 600; }
+  .d-sprout .dots { display: flex; justify-content: center; gap: 5px; margin-top: 12px; }
+  .d-sprout .dots i { width: 5px; height: 5px; border-radius: 50%; background: #1f3d33; opacity: 0.25; }
+  .d-sprout .dots i:first-child { opacity: 1; }
+  .d-post { padding: 16px 18px; background: #2f5d50; color: #f4efe6; }
+  .d-post .leaf { position: absolute; right: -24px; top: -18px; width: 104px; height: 150px; border-radius: 104px 0; background: #5f8f6a; rotate: 24deg; }
+  .d-post .tag { position: relative; font-size: 10px; opacity: 0.75; }
+  .d-post b { position: relative; display: block; margin-top: 92px; font: 700 50px/0.86 var(--display); letter-spacing: -0.045em; }
+  .d-post .sub { position: relative; display: block; margin-top: 10px; font-size: 11px; opacity: 0.8; }
+  .d-story { padding: 14px; background: #e9b44c; color: #1f3d33; }
+  .d-story b { display: block; font: 700 21px/0.95 var(--display); letter-spacing: -0.03em; }
+  .d-story i { position: absolute; left: 50%; bottom: -30px; width: 96px; height: 96px; margin-left: -48px; border-radius: 50%; background: #c8643b; }
+  .d-sticker { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; background: #e9b44c; color: #1f3d33; font: 800 14px/1 var(--display); letter-spacing: 0.02em; rotate: -12deg; box-shadow: 0 6px 16px rgb(0 0 0 / 0.2); }
+  .d-kiln { background: #f6f1ea; color: #2a1d16; }
+  .d-kiln .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 18px; border-bottom: 1px solid rgb(42 29 22 / 0.1); }
+  .d-kiln .nav b { margin-right: auto; font: 800 16px/1 var(--display); letter-spacing: -0.04em; }
+  .d-kiln .nav i { width: 26px; height: 4px; border-radius: 2px; background: #2a1d16; opacity: 0.3; }
+  .d-kiln .nav span { padding: 5px 10px; border-radius: 12px; background: #2a1d16; color: #f6f1ea; font-size: 10px; font-weight: 600; }
+  .d-kiln .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 22px 18px; }
+  .d-kiln .hero b { display: block; font: 700 30px/0.94 var(--display); letter-spacing: -0.045em; }
+  .d-kiln .hero p { margin-top: 10px; font-size: 11px; line-height: 15px; opacity: 0.7; }
+  .d-kiln .cta { display: inline-block; margin-top: 16px; padding: 7px 14px; border-radius: 16px; background: #c2562b; color: #fff; font-size: 11px; font-weight: 600; }
+  .d-kiln .photo { position: relative; height: 236px; overflow: hidden; border-radius: 12px; background: #c2562b; }
+  .d-kiln .cup { position: absolute; left: 50%; top: 98px; width: 80px; height: 64px; margin-left: -48px; border-radius: 4px 4px 32px 32px; background: #f6f1ea; }
+  .d-kiln .handle { position: absolute; left: 50%; top: 108px; width: 32px; height: 34px; margin-left: 18px; border: 8px solid #f6f1ea; border-radius: 50%; }
+  .d-kiln .saucer { position: absolute; left: 50%; top: 152px; width: 150px; height: 22px; margin-left: -83px; border-radius: 50%; background: #e3cdb4; }
+  .d-icons { display: grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: 1fr; gap: 4px; padding: 12px; background: #fff; color: #1e1e1e; }
+  .d-icons span { display: grid; place-items: center; border-radius: 6px; }
+  .d-icons span.on { box-shadow: inset 0 0 0 1px var(--field); background: color-mix(in srgb, var(--field) 8%, #fff); }
+  .d-icons svg { width: 22px !important; height: 22px !important; }
+  .d-price { background: #f3f4f6; }
+  .d-price .card { position: absolute; inset: 16px 22px; display: flex; flex-direction: column; padding: 14px; border-radius: 14px; background: #fff; color: #111827; box-shadow: 0 0 0 1px #e5e7eb, 0 10px 15px -3px rgb(0 0 0 / 0.1); }
+  .d-price span { font-size: 11px; font-weight: 600; color: #6b7280; }
+  .d-price b { font: 800 24px/1.1 var(--text); letter-spacing: -0.02em; }
+  .d-price small { font-size: 11px; font-weight: 500; color: #6b7280; }
+  .d-price i { display: grid; place-items: center; height: 26px; margin-top: auto; border-radius: 8px; background: #111827; color: #fff; font-size: 11px; font-style: normal; font-weight: 600; }
+
 
   .chip { border-radius: 12px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
   .chip .field { position: relative; aspect-ratio: 4 / 3; background: var(--canvas); container-type: inline-size; overflow: hidden; }
@@ -913,7 +968,7 @@
       <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
     </div>
 
-    <div class="cv" id="cv" data-lenis-prevent role="region" aria-label="Features, as frames on a Figma canvas. Drag to look around">
+    <div class="cv" id="cv" data-lenis-prevent-horizontal role="region" aria-label="Features, as frames on a Figma canvas. Drag to look around">
       <div class="cv-board" style="width:4000px;height:1520px">
         <div class="cv-frame" id="f-split" style="left:160px;top:140px;width:900px;height:640px">
           <span class="nm">Split view</span>
@@ -921,28 +976,32 @@
             <div class="shot" style="--w:900;--h:1000">
               <div class="lg-tabs">
                 <div class="home"><svg><use href="#i-home"/></svg></div>
-                <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Brand refresh</div>
-                <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Social kit<svg class="x"><use href="#i-x"/></svg></div>
+                <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Sprout app</div>
+                <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Sprout social<svg class="x"><use href="#i-x"/></svg></div>
                 <div class="new"><svg><use href="#i-plus"/></svg></div>
               </div>
               <div class="f-panel l" style="top:38px">
                 <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
-                <div class="f-file"><b>Brand refresh<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                <div class="f-file"><b>Sprout app<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
                 <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
                 <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
                 <div class="f-page on">Page 1</div>
                 <div class="f-page">Drafts</div>
                 <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
-                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Poster</span></div>
-                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Social card</span></div>
-                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Story</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Onboarding</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Home</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Settings</span></div>
               </div>
               <div class="sv-halves">
-                <div><div class="f-frame rv" style="--d:.1;left:56px;top:150px;width:216px;height:270px"><span class="nm">Poster</span><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div></div></div>
-                <div><div class="f-frame rv" style="--d:.2;left:40px;top:150px;width:250px;height:131px"><span class="nm">Social card</span><div class="card-art"><i style="left:16px;top:18px;width:120px;height:12px;background:#fff4e0"></i><i style="left:16px;top:38px;width:80px;height:8px"></i><i style="left:150px;top:18px;width:84px;height:96px;background:#ff5c39"></i><i style="left:16px;top:88px;width:110px;height:26px"></i></div></div></div>
+                <div><div class="f-frame rv" style="--d:.1;left:64px;top:96px;width:200px;height:400px"><span class="nm">Onboarding</span>
+                  <div class="d d-sprout"><div class="ill"><i class="leaf l1"></i><i class="leaf l2"></i><i class="pot"></i><i class="sun"></i></div><b>Plan less.<br>Plant more.</b><p>Watering reminders for every pot on the sill</p><span class="cta">Get started</span><span class="dots"><i></i><i></i><i></i></span></div></div></div>
+                <div><div class="f-frame rv" style="--d:.2;left:40px;top:96px;width:250px;height:250px"><span class="nm">Post</span>
+                  <div class="d d-post"><i class="leaf"></i><span class="tag">sprout.shop</span><b>Spring<br>drop</b><span class="sub">12 new pots, glazed by hand</span></div></div>
+                <div class="f-frame rv" style="--d:.25;left:40px;top:390px;width:120px;height:214px"><span class="nm">Story</span>
+                  <div class="d d-story"><b>48 hours only</b><i></i></div></div></div>
               </div>
-              <div class="f-frame sel rv pop" style="--d:.4;left:533px;top:330px;width:72px;height:72px"><div style="position:absolute;inset:0;border-radius:50%;background:#ffd23f"></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i></div>
-              <svg class="f-cursor rv" style="--d:.4;left:583px;top:380px"><use href="#i-cursor"/></svg>
+              <div class="f-frame sel rv pop" style="--d:.4;left:536px;top:290px;width:70px;height:70px"><div class="d-sticker">NEW</div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i></div>
+              <svg class="f-cursor rv" style="--d:.4;left:586px;top:338px"><use href="#i-cursor"/></svg>
             </div>
           </div>
         </div>
@@ -1005,20 +1064,23 @@
             <div class="shot tall" style="--w:752;--h:1000">
               <div class="f-panel l">
                 <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
-                <div class="f-file"><b>Brand refresh<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                <div class="f-file"><b>Kiln website<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
                 <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
                 <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
                 <div class="f-page on">Page 1</div>
                 <div class="f-page">Drafts</div>
                 <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
-                <div class="f-layer on ex rv" style="--d:.1;--in:0"><svg class="ch"><use href="#i-chev-down"/></svg><svg><use href="#i-frame"/></svg><span class="th"><span style="position:absolute;inset:2px 4px;overflow:hidden;background:#ff5c39"><i style="left:12%;top:10%;width:50%;height:40%;border-radius:50%;background:#ffd23f"></i><i style="left:-25%;right:-25%;bottom:-24%;height:52%;border-radius:50%;background:#1f1d2b"></i></span></span><span>Poster</span></div>
-                <div class="f-layer kid rv" style="--d:.15;--in:1"><span class="sp"></span><svg><use href="#i-text"/></svg><span class="th" style="background:#ff5c39"><i style="left:4px;top:8px;width:14px;height:3px;background:#fff4e0"></i><i style="left:4px;top:13px;width:11px;height:3px;background:#fff4e0"></i></span><span>Headline</span></div>
-                <div class="f-layer kid rv" style="--d:.2;--in:1"><span class="sp"></span><svg><use href="#i-ellipse"/></svg><span class="th"><i style="left:4px;top:4px;width:16px;height:16px;border-radius:50%;background:#ffd23f"></i></span><span>Sun</span></div>
-                <div class="f-layer kid last rv" style="--d:.25;--in:1"><span class="sp"></span><svg><use href="#i-ellipse"/></svg><span class="th"><i style="left:1px;right:1px;top:8px;height:10px;border-radius:50% 50% 2px 2px;background:#1f1d2b"></i></span><span>Hill</span></div>
-                <div class="f-layer rv" style="--d:.3;--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="left:2px;top:6px;width:20px;height:11px;border-radius:1px;background:#1f1d2b"></i><i style="left:4px;top:8px;width:9px;height:2px;background:#fff4e0"></i><i style="left:15px;top:8px;width:5px;height:7px;background:#ff5c39"></i></span><span>Social card</span></div>
-                <div class="f-layer rv" style="--d:.35;--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="left:7px;top:2px;width:10px;height:20px;border-radius:1px;background:#ff5c39"></i><i style="left:7px;top:14px;width:10px;height:8px;background:#1f1d2b"></i></span><span>Story</span></div>
+                <div class="f-layer on ex rv" style="--d:.1;--in:0"><svg class="ch"><use href="#i-chev-down"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="inset:3px 2px;background:#f6f1ea"></i><i style="left:4px;top:8px;width:7px;height:2px;background:#2a1d16"></i><i style="left:4px;top:11px;width:6px;height:2px;background:#2a1d16"></i><i style="left:13px;top:7px;width:8px;height:10px;border-radius:1px;background:#c2562b"></i></span><span>Home</span></div>
+                <div class="f-layer kid rv" style="--d:.14;--in:1"><span class="sp"></span><svg><use href="#i-frame"/></svg><span class="th"><i style="left:2px;right:2px;top:10px;height:4px;background:#f6f1ea"></i><i style="left:3px;top:11px;width:5px;height:2px;background:#2a1d16"></i></span><span>Nav</span></div>
+                <div class="f-layer kid rv" style="--d:.18;--in:1"><span class="sp"></span><svg><use href="#i-text"/></svg><span class="th" style="background:#f6f1ea"><i style="left:3px;top:7px;width:17px;height:3px;background:#2a1d16"></i><i style="left:3px;top:12px;width:12px;height:3px;background:#2a1d16"></i></span><span>Headline</span></div>
+                <div class="f-layer kid rv" style="--d:.22;--in:1"><span class="sp"></span><svg><use href="#i-rect"/></svg><span class="th" style="background:#f6f1ea"><i style="left:3px;top:8px;width:18px;height:8px;border-radius:4px;background:#c2562b"></i></span><span>Shop beans</span></div>
+                <div class="f-layer kid last rv" style="--d:.26;--in:1"><span class="sp"></span><svg><use href="#i-rect"/></svg><span class="th" style="background:#c2562b"><i style="left:8px;top:8px;width:9px;height:8px;border-radius:0 0 4px 4px;background:#f6f1ea"></i></span><span>Photo</span></div>
+                <div class="f-layer rv" style="--d:.3;--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="inset:3px 2px;background:#2a1d16"></i><i style="left:5px;top:7px;width:14px;height:2px;background:#f6f1ea"></i><i style="left:5px;top:11px;width:10px;height:2px;background:#f6f1ea;opacity:.5"></i><i style="left:5px;top:15px;width:12px;height:2px;background:#f6f1ea;opacity:.5"></i></span><span>Menu</span></div>
+                <div class="f-layer rv" style="--d:.34;--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="inset:3px 2px;background:#fff"></i><i style="left:5px;top:7px;width:14px;height:3px;background:#e6e6e6"></i><i style="left:5px;top:12px;width:14px;height:3px;background:#e6e6e6"></i><i style="left:5px;top:17px;width:14px;height:3px;border-radius:1px;background:#c2562b"></i></span><span>Checkout</span></div>
               </div>
-              <div class="f-frame sel rv" style="--d:.05;left:351px;top:96px;width:288px;height:360px"><span class="nm">Poster</span><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><span class="f-size">320 × 400</span></div>
+              <div class="f-frame sel rv" style="--d:.05;left:276px;top:110px;width:440px;height:330px"><span class="nm">Home</span>
+                <div class="d d-kiln"><div class="nav"><b>kiln</b><i></i><i></i><i></i><span>Order</span></div><div class="hero"><div><b>Roasted slowly, sipped fast.</b><p>Small-batch beans at your door, every other Friday</p><span class="cta">Shop beans</span></div><div class="photo"><i class="saucer"></i><i class="handle"></i><i class="cup"></i></div></div></div>
+                <i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><span class="f-size">440 × 330</span></div>
             </div>
           </div>
         </div>
@@ -1079,19 +1141,19 @@
                 <span class="plug rv" style="--d:.32"><i style="background:#14a38b"><svg><use href="#i-text"/></svg></i></span>
                 <span class="plug rv" style="--d:.38"><i style="background:#f5b400"><svg><use href="#i-star"/></svg></i></span>
               </div>
-              <div class="f-frame rv" style="--d:.1;left:340px;top:56px;width:216px;height:270px"><span class="nm">Poster</span><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div></div>
+              <div class="f-frame rv" style="--d:.1;left:330px;top:56px;width:200px;height:250px"><span class="nm">Icons</span><div class="d d-icons"><span><svg><use href="#i-home"/></svg></span><span><svg><use href="#i-search"/></svg></span><span><svg><use href="#i-star"/></svg></span><span><svg><use href="#i-sun"/></svg></span><span><svg><use href="#i-moon"/></svg></span><span><svg><use href="#i-key"/></svg></span><span class="on"><svg><use href="#i-palette"/></svg></span><span><svg><use href="#i-layers"/></svg></span><span><svg><use href="#i-comment"/></svg></span><span><svg><use href="#i-code"/></svg></span><span><svg><use href="#i-file"/></svg></span><span><svg><use href="#i-import"/></svg></span></div></div>
               <div class="f-tip rv" style="--d:.48;left:52px;top:316px">Contrast checker</div>
               <div class="f-panel" style="left:48px;border-right:1px solid var(--bd)">
                 <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
-                <div class="f-file"><b>Brand refresh<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                <div class="f-file"><b>Icon kit<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
                 <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
                 <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
                 <div class="f-page on">Page 1</div>
                 <div class="f-page">Drafts</div>
                 <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
-                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Poster</span></div>
-                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Social card</span></div>
-                <div class="f-layer" style="--in:0"><span class="sp"></span><svg><use href="#i-rect"/></svg><span>Background</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Icons</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Icons / filled</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Cover</span></div>
               </div>
             </div>
           </div>
@@ -1145,7 +1207,7 @@
           <span class="nm">Copy as code</span>
           <div class="cv-art" aria-hidden="true">
             <div class="shot" style="--w:440">
-              <div class="f-frame sel" style="left:20px;top:36px;width:200px;height:150px"><span class="nm">Card</span><div style="position:absolute;inset:0;background:#fff"><div style="position:absolute;left:24px;top:24px;right:24px;bottom:24px;border-radius:16px;background:#fff;box-shadow:0 0 0 1px #eee,0 10px 15px -3px rgb(0 0 0/.1)"></div></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i></div>
+              <div class="f-frame sel" style="left:76px;top:28px;width:200px;height:150px"><span class="nm">Card</span><div class="d d-price"><div class="card"><span>Pro</span><b>$12<small>/mo</small></b><i>Upgrade</i></div></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i></div>
               <div class="f-menu rv" style="--d:0;left:-128px;top:52px;width:200px">
                 <div>Copy<span>Ctrl+C</span></div>
                 <div>Paste here</div>
@@ -1245,7 +1307,10 @@
     </div>
     <p class="cv-hint">Drag the canvas to look around, or pick a frame from Layers</p>
 
-    <div class="index" id="more">
+    <div class="index-head" id="more">
+      <h2>And the smaller things</h2>
+    </div>
+    <div class="index">
       <div><h3><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
       <div><h3><svg class="icon"><use href="#i-key"/></svg>Google sign-in</h3><p>Works like the desktop app's, with or without the official app installed.</p></div>
       <div><h3><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</h3><p>Uses Figma's font helper, and starts it when it isn't running.</p></div>
@@ -1640,6 +1705,7 @@
       x: padL() + (w - (frame.offsetWidth + note) * z) / 2 - frame.offsetLeft * z,
       y: padT() + 12 + (h - frame.offsetHeight * z) / 2 - frame.offsetTop * z,
     };
+    zoom.running = false;
     const from = { ...view };
     const begin = performance.now();
     const run = ++flight;
@@ -1657,6 +1723,7 @@
   cv.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || event.target.closest(".cv-ui, .cv-card")) return;
     flight++;
+    zoom.running = false;
     drag = { id: event.pointerId, x: event.clientX, y: event.clientY, vx: view.x, vy: view.y };
     cv.setPointerCapture(event.pointerId);
     cv.classList.add("dragging");
@@ -1674,16 +1741,38 @@
   };
   cv.addEventListener("pointerup", release);
   cv.addEventListener("pointercancel", release);
+  // Zoom eases toward where the wheel or pinch asked for, about the pointer.
+  // A mouse wheel's notch is about 10%, a pinch follows the fingers
+  const zoom = { goal: 1, px: 0, py: 0, last: 0, running: false };
+  function zoomStep(now) {
+    if (!zoom.running) return;
+    const dt = Math.min(64, now - (zoom.last || now - 16));
+    zoom.last = now;
+    const k = reduced.matches ? 1 : 1 - Math.exp(-dt / 70);
+    const z = view.z + (zoom.goal - view.z) * k;
+    zoomAt(Math.abs(zoom.goal - z) < 0.0005 ? zoom.goal : z, zoom.px, zoom.py);
+    if (view.z !== zoom.goal) requestAnimationFrame(zoomStep);
+    else zoom.running = false;
+  }
   cv.addEventListener("wheel", (event) => {
     const box = cv.getBoundingClientRect();
     if (event.ctrlKey) {
       event.preventDefault();
       flight++;
-      zoomAt(view.z * Math.exp(-event.deltaY * 0.01), event.clientX - box.left, event.clientY - box.top);
+      const rate = Math.abs(event.deltaY) < 40 ? 0.008 : 0.001;
+      zoom.goal = Math.min(1.5, Math.max(0.3, (zoom.running ? zoom.goal : view.z) * Math.exp(-event.deltaY * rate)));
+      zoom.px = event.clientX - box.left;
+      zoom.py = event.clientY - box.top;
+      if (!zoom.running) {
+        zoom.running = true;
+        zoom.last = 0;
+        requestAnimationFrame(zoomStep);
+      }
     } else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      // Sideways (Shift and the wheel arrives as deltaX in some browsers)
       event.preventDefault();
       flight++;
-      view.x -= event.shiftKey ? event.deltaY : event.deltaX;
+      view.x -= event.deltaX || event.deltaY;
       draw();
     }
   }, { passive: false });
