@@ -52,6 +52,7 @@ function render(page, hash, out, width, height, scale, transparent) {
 }
 
 render(join(root, "assets", "social", "cover.html"), "", join(root, "site", "social-cover.png"), 1280, 640, 1, false);
+render(join(root, "assets", "social", "cover.html"), "#light", join(root, "site", "social-cover-light.png"), 1280, 640, 1, false);
 render(join(root, "assets", "social", "banner.html"), "", join(root, "assets", "social", "banner.png"), 1500, 500, 2, false);
 render(join(root, "assets", "social", "banner.html"), "#light", join(root, "assets", "social", "banner-light.png"), 1500, 500, 2, false);
 for (const theme of ["", "-light"]) {
