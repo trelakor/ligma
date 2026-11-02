@@ -473,7 +473,7 @@
   .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
   .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
 
-  /* Themes: Figma Draw's pencils, one for each theme, standing in a row
+  /* Themes: Figma Draw's brushes, one for each theme, standing in a row
      behind the editor with their tips peeking over its top edge. Pointing
      at one lifts it a little, picking it pokes it up and it stays there,
      and the page takes its theme */
@@ -495,8 +495,8 @@
   .tray button:focus-visible { outline: none; }
   .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
   .tray .gloss { opacity: 0; }
-  :root.dark .tray .gloss { opacity: 0.5; }
-  :root.dark .tray svg { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 45%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
+  :root.dark .tray .gloss { opacity: 0.35; }
+  :root.dark .tray svg { filter: saturate(1.25) drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 40%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
   .tray .tip {
     position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
     background: #1e1e1e; color: #fff; font: 500 11px/16px var(--text); white-space: nowrap; opacity: 0; pointer-events: none;
@@ -850,7 +850,7 @@
     <div class="themes-top">
       <div class="themes-copy">
         <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
-        <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick a pencil to see one here.</p>
+        <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick a brush to see one here.</p>
       </div>
       <div class="themes-side">
         <div class="modes"><div role="radiogroup" aria-label="Mode">
@@ -1472,20 +1472,26 @@
     renderDeck();
   }
 
-  // A pencil for each theme, as Figma Draw draws its pencil: a round body,
-  // the sharpened wood and the lead, the body and lead in the theme's color
-  // for the page's mode. Made once, recolored when the mode changes
+  // A brush for each theme, as Figma Draw draws its brush: a flat tuft of
+  // bristles dipped in paint, a metal ferrule with its crimps and Draw's
+  // little grid, and the handle. The paint and handle are the theme's
+  // color for the page's mode. Made once, recolored when the mode changes
   const pencil = (id) => `<svg viewBox="0 0 30 102" aria-hidden="true">
     <defs>
       <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p3)"/><stop offset=".45" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:var(--p7)"/></linearGradient>
-      <linearGradient id="pw-${id}" x1="0" x2="1"><stop offset="0" stop-color="#fbf6ef"/><stop offset=".5" stop-color="#efe5d8"/><stop offset="1" stop-color="#d8c9b5"/></linearGradient>
+      <linearGradient id="pf-${id}" x1="0" x2="1"><stop offset="0" stop-color="#f7f7f7"/><stop offset=".35" stop-color="#dedede"/><stop offset="1" stop-color="#9a9a9a"/></linearGradient>
+      <linearGradient id="pt-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".48" stop-color="#eadfcd" stop-opacity="0"/><stop offset=".72" stop-color="#eadfcd"/><stop offset="1" stop-color="#cdbda4"/></linearGradient>
     </defs>
-    <path d="M1 36h28v66H1z" fill="url(#pb-${id})"/>
-    <path class="gloss" d="M6.5 39v63" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
-    <path d="M1 36 15 4l14 32c-2.8 1.8-6 1.8-9.3 0-3 1.8-6.4 1.8-9.4 0-3 1.8-6.3 1.8-9.3 0z" fill="url(#pw-${id})"/>
-    <path d="M10.2 15 15 4l4.8 11c-3.2 1.1-6.4 1.1-9.6 0z" fill="url(#pb-${id})"/>
-    <path d="M1 72h28M1 75h28" stroke="#fff" stroke-opacity=".35" stroke-width="1"/>
-    <path d="M15 78v12" stroke="#000" stroke-opacity=".18" stroke-width="1.2" stroke-linecap="round"/>
+    <path d="M3 56h24v46H3z" fill="url(#pb-${id})"/>
+    <path class="gloss" d="M7.5 59v43" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M6.5 42C5.2 33 3.4 24 3.2 15.5 3 10 4.6 6 7.6 4.6c1.4.9 2.3-.9 3.7-.4 1.3.5 2-.9 3.4-1 1.5.1 2 1.3 3.4.8 1.4-.4 2.4.7 3.6.5 2.9 1.3 4.6 5.3 4.6 10.9-.2 8.5-2 17.5-3.3 26.6z" fill="url(#pb-${id})"/>
+    <path d="M6.5 42C5.2 33 3.4 24 3.2 15.5 3 10 4.6 6 7.6 4.6c1.4.9 2.3-.9 3.7-.4 1.3.5 2-.9 3.4-1 1.5.1 2 1.3 3.4.8 1.4-.4 2.4.7 3.6.5 2.9 1.3 4.6 5.3 4.6 10.9-.2 8.5-2 17.5-3.3 26.6z" fill="url(#pt-${id})"/>
+    <path d="M8.2 8.5c.4 11 1 22 1.6 33M11.6 5.5c.2 12 .4 24 .7 36.5M15 4.5v37.5M18.4 5.5c-.2 12-.4 24-.7 36.5M21.8 8.5c-.4 11-1 22-1.6 33" stroke="#000" stroke-opacity=".13" stroke-width=".7" stroke-linecap="round" fill="none"/>
+    <path d="M9.9 7c.3 11.5.7 23 1.1 35M16.7 5c-.1 12-.2 24.5-.4 37" stroke="#fff" stroke-opacity=".3" stroke-width=".7" stroke-linecap="round" fill="none"/>
+    <path d="M4.5 41h21l1 15h-23z" fill="url(#pf-${id})"/>
+    <path d="M4.5 41.5h21" stroke="#000" stroke-opacity=".3" stroke-width="1"/>
+    <path d="M4 51h22.2M3.8 53.5h22.6" stroke="#000" stroke-opacity=".15" stroke-width=".9"/>
+    <path d="M13.3 44.3h1.5v1.5h-1.5zM15.2 44.3h1.5v1.5h-1.5zM13.3 46.2h1.5v1.5h-1.5zM15.2 46.2h1.5v1.5h-1.5z" fill="#000" fill-opacity=".3"/>
   </svg>`;
   const pencils = LIGMA_THEMES.map((theme) => {
     const button = document.createElement("button");
@@ -1501,12 +1507,12 @@
   function renderDeck() {
     for (const button of pencils) {
       const ramp = ramps(button.dataset.theme, state.mode);
-      // Shaded round bodies on light; on dark, brighter and glossy. Figma's
-      // own is the grey pencil Draw shows, so blue reads as a theme
+      // Shaded on light; on dark, richer and lighter but not pastel. Figma's
+      // own is Draw's grey, so blue reads as a theme
       const dark = state.mode === "dark";
       const stops = button.dataset.theme === "figma"
-        ? (dark ? ["#ffffff", "#e6e6e6", "#c2c2c2"] : ["#f5f5f5", "#d9d9d9", "#a8a8a8"])
-        : (dark ? [ramp["--a-200"], ramp["--a-400"], ramp["--a-500"]] : [ramp["--a-300"], ramp["--a-500"], ramp["--a-700"]]);
+        ? (dark ? ["#f2f2f2", "#d6d6d6", "#ababab"] : ["#f5f5f5", "#d9d9d9", "#a8a8a8"])
+        : (dark ? [ramp["--a-400"], ramp["--a-500"], ramp["--a-600"]] : [ramp["--a-300"], ramp["--a-500"], ramp["--a-700"]]);
       stops.forEach((color, i) => button.style.setProperty(`--p${[3, 5, 7][i]}`, color));
       button.setAttribute("aria-checked", button.dataset.theme === state.theme);
     }

@@ -64,3 +64,5 @@ Themes (2026-11-02, refined): the pencils stand in a row behind the editor windo
 Pencils (2026-11-02): 50px wide (32px on phones), almost touching, peeking 1.9 widths over the window. Figma's own pencil is Draw's neutral grey with a graphite lead, so blue is never mistaken for it
 
 Pencils (2026-11-02): 58px wide (34px on phones), the body the full width of the wood. The lead is the body's own color. Light mode shades the round body (accent 300, 500, 700); dark mode is brighter (200, 400, 500) with a glossy streak and a soft glow in the pencil's color
+
+Brushes (2026-11-02, replacing the pencils): Figma Draw's flat brush, a flared tuft with ragged ends dipped in the theme's color and natural bristle below, a silver ferrule with crimps and Draw's little grid, the handle in the theme's color (seen when picked). Dark mode is saturated (accent 400, 500, 600 and a saturate filter) with a soft glow, not pastel. Copy says brush
