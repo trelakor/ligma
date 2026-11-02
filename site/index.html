@@ -114,10 +114,13 @@
 
   /* Hero: the headline, the download, and both apps drawn to scale */
   .hero .masthead { margin-top: clamp(32px, 6vw, 72px); }
-  .masthead { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 32px 48px; align-items: end; }
+  /* The hero: the headline, what it is and the download, centered, with
+     the reel straight under them */
+  .masthead { display: flex; flex-direction: column; align-items: center; text-align: center; }
   .hero h1 { font-size: clamp(3.25rem, 8.4vw, 6rem); line-height: 0.92; letter-spacing: -0.04em; font-weight: 700; }
-  .pitch p { font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 30em; }
-  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  .pitch { display: flex; flex-direction: column; align-items: center; margin-top: 24px; }
+  .pitch p { font-size: clamp(19px, 1.8vw, 22px); line-height: 1.45; color: var(--ink-2); max-width: 26em; text-wrap: balance; }
+  .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 28px; }
   .meta { margin-top: 12px; font-size: 14px; color: var(--ink-2); }
 
 
@@ -520,10 +523,9 @@
   .story .scene { height: var(--len, 240svh); }
   .story .scene > .pin { position: sticky; top: 0; height: 100svh; }
 
-  /* The hero fills the first screen, with a reel of what's inside at its
-     foot, two rows drifting opposite ways. They stop while pointed at */
-  .hero { display: flex; flex-direction: column; min-height: min(100svh, 1100px); padding-bottom: clamp(24px, 4vh, 48px); }
-  .reel { display: grid; gap: 12px; width: 100vw; margin: auto 0 0 calc(50% - 50vw); padding-top: clamp(40px, 6vh, 72px); overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent); }
+  /* The reel: what's inside, two rows drifting opposite ways. They stop
+     while pointed at */
+  .reel { display: grid; gap: 12px; width: 100vw; margin: clamp(48px, 7vw, 88px) 0 0 calc(50% - 50vw); overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent); }
   .reel-row { display: flex; width: max-content; animation: reel 70s linear infinite; }
   .reel-row.back { animation-direction: reverse; animation-duration: 85s; }
   .reel:hover .reel-row, .reel:focus-within .reel-row { animation-play-state: paused; }
@@ -581,13 +583,13 @@
   .rv { --t: clamp(0, (var(--v, 1) - var(--d, 0)) * 3.2, 1); opacity: var(--t); translate: 0 calc((1 - var(--t)) * 1.6em); }
   .rv.pop { translate: none; scale: calc(0.6 + 0.4 * var(--t)); }
 
-  /* Retinting: the new theme spreads out from the swatch clicked */
-  ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+  /* Retinting: the old theme crossfades into the new */
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 320ms; animation-timing-function: ease; }
 
   @media (max-width: 1080px) {
   }
   @media (max-width: 900px) {
-    .masthead, .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
+    .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
     .fan-wrap, .modes { display: none; }
     .grid-deck { display: grid; margin-top: 8px; }
     .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "s s" "t d" "p k" "c c" "v l"; }
@@ -757,7 +759,7 @@
     </div>
   </header>
 
-  <section class="ai-scene scene" id="ai" data-scene="ai" data-step="1" style="--len: 960svh" aria-labelledby="ai-heading">
+  <section class="ai-scene scene" id="ai" data-scene="ai" data-step="1" style="--len: 600svh" aria-labelledby="ai-heading">
     <div class="pin">
       <div class="ai">
         <div>
@@ -1380,16 +1382,7 @@
   // Retint the page, spreading out from `from` where the browser can
   function retint(change, event) {
     if (!document.startViewTransition || reduced.matches || !event) return change();
-    // From the side of the page the control is on: the fan's, or the words'
-    const box = event.currentTarget.getBoundingClientRect();
-    const x = event.detail ? event.clientX : box.left + box.width / 2;
-    const from = x > innerWidth / 2 ? "inset(0 0 0 100%)" : "inset(0 100% 0 0)";
-    document.startViewTransition(change).ready.then(() => {
-      root.animate(
-        { clipPath: [from, "inset(0 0 0 0)"] },
-        { duration: 640, easing: "cubic-bezier(0.65, 0, 0.35, 1)", pseudoElement: "::view-transition-new(root)" },
-      );
-    });
+    document.startViewTransition(change);
   }
 
   function pick(theme, mode, event) {
@@ -1425,7 +1418,7 @@
       const at = Math.min(3, Math.floor(p * 3) + 1);
       el.dataset.step = at;
       [0, 0.333, 0.666].forEach((start, i) => {
-        const s = reduced.matches ? Number(at > i + 0.5) : clamp((p - start - 0.04) / 0.16);
+        const s = reduced.matches ? Number(at > i + 0.5) : clamp((p - start - 0.03) / 0.12);
         el.style.setProperty(`--s${i + 1}`, s.toFixed(4));
       });
       steps.forEach((li, i) => {
