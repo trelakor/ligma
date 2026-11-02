@@ -92,16 +92,17 @@
   /* Buttons */
   .btn {
     display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 24px;
-    border-radius: 12px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink);
+    border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink);
     font: 600 16px/1 var(--text); text-decoration: none; white-space: nowrap; cursor: pointer;
     transition: background-color 160ms var(--ease), transform 160ms var(--ease), border-color 160ms var(--ease);
   }
   .btn:hover { background: var(--surface); text-decoration: none; }
   .btn:active { transform: translateY(1px); }
-  .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
-  .btn.primary:hover { background: color-mix(in oklab, var(--ink) 86%, var(--bg)); }
+  .btn.primary { background: var(--field); color: #fff; border-color: transparent; box-shadow: inset 0 -1px 0 rgb(0 0 0 / 0.12); }
+  .btn.primary:hover { background: color-mix(in oklab, var(--field) 88%, #000); }
+  .btn.primary:focus-visible { outline-color: var(--ink); }
   .btn .icon { width: 18px; height: 18px; }
-  .btn small { font-weight: 450; opacity: 0.75; font-size: 14px; }
+  .btn small { font-weight: 450; opacity: 0.8; font-size: 14px; }
 
   /* Nav */
   nav { display: flex; align-items: center; justify-content: space-between; gap: 24px; height: 80px; }
@@ -110,7 +111,7 @@
   nav ul { display: flex; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; }
   nav ul a { display: block; padding: 8px 12px; border-radius: 8px; color: var(--ink-2); text-decoration: none; font-size: 15px; font-weight: 500; }
   nav ul a:hover { color: var(--ink); background: var(--surface); }
-  nav .btn { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 10px; margin-left: 8px; }
+  nav .btn { height: 36px; padding: 0 14px; font-size: 14px; border-radius: 7px; margin-left: 8px; }
 
   /* Hero: the headline, the download, and both apps drawn to scale */
   /* The hero: a Figma canvas in the page's theme, the lockup selected on
@@ -133,223 +134,338 @@
   .head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr); gap: 16px 48px; align-items: end; margin-bottom: clamp(40px, 5vw, 64px); }
   .head p { color: var(--ink-2); font-size: 18px; max-width: 34em; }
 
-  /* Features: a bento of tiles, each a feature's drawing and a line about
-     it. The plus opens the full details in a sheet */
-  .bento {
-    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px;
-    grid-template-areas: "s s s s t t" "s s s s d d" "p p c c c c" "k k c c c c" "v v v l l l";
+  /* Features: a Figma canvas, each feature a frame drawn at its real size
+     with a comment pinned to it. Dragged to pan, zoomed with a pinch or
+     Ctrl and the wheel, and the Layers panel flies to a frame */
+  .cv {
+    --bx: 0px; --by: 0px; --gs: 24px;
+    position: relative; width: 100vw; height: min(82svh, 800px); min-height: 520px; margin-left: calc(50% - 50vw); overflow: hidden;
+    background: radial-gradient(circle, var(--line-strong) 1px, transparent 1.5px) var(--bx) var(--by) / var(--gs) var(--gs), var(--canvas);
+    border-block: 1px solid var(--line); cursor: grab; touch-action: pan-y; user-select: none; -webkit-user-select: none;
   }
-  .tile { position: relative; display: flex; flex-direction: column; padding: 8px; border-radius: 24px; background: var(--surface); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
-  .tile:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
-  .tile-head { padding: 16px 52px 18px 16px; }
-  .tile h3 { display: flex; align-items: center; gap: 10px; font-size: clamp(1.25rem, 1.7vw, 1.5rem); letter-spacing: -0.025em; }
-  .tile.big h3 { font-size: clamp(1.6rem, 2.6vw, 2.25rem); letter-spacing: -0.035em; }
-  .tile h3 .icon { width: 22px; height: 22px; color: var(--field); }
-  .tile.big h3 .icon { width: 28px; height: 28px; }
-  .tile-head p { margin-top: 6px; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
-  .tile.big .tile-head p { font-size: 17px; }
-  /* The big tiles' drawings grow to the height of the tiles beside them */
-  .tile.big .tile-art { flex: 1 0 auto; }
-  .tile-art { position: relative; margin-top: auto; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 16px; background: var(--field); color: var(--field-ink); container-type: inline-size; }
-  /* The plus covers the tile, so the whole tile opens it */
-  .tile .open { position: absolute; inset: 0; display: flex; justify-content: flex-end; align-items: flex-start; padding: 18px; border: 0; border-radius: inherit; background: none; color: var(--ink); cursor: pointer; }
-  .tile .open .icon { width: 32px; height: 32px; padding: 7px; border-radius: 50%; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: rotate 240ms var(--ease), background-color 200ms, color 200ms; }
-  .tile:hover .open .icon, .tile .open:focus-visible .icon { rotate: 90deg; background: var(--ink); color: var(--bg); }
-  .tile .open:focus-visible { outline-offset: -2px; border-radius: 24px; }
-
-  .sheet {
-    width: min(1120px, 100vw - 32px); max-width: none; max-height: min(760px, 100dvh - 32px); padding: 0; border: 0; border-radius: 24px; overflow: auto;
-    background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 40px 80px -20px rgb(0 0 0 / 0.5);
+  .cv.dragging { cursor: grabbing; }
+  .cv-board { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  .cv-frame { position: absolute; }
+  .cv-frame > .nm { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; font: 500 11px/1 var(--text); letter-spacing: 0.005em; color: var(--ink-2); white-space: nowrap; }
+  .cv-frame.on > .nm { color: var(--field); }
+  .cv-art { position: relative; width: 100%; height: 100%; overflow: hidden; container-type: inline-size; background: var(--canvas); box-shadow: 0 0 0 1px var(--line); }
+  .cv-frame.on .cv-art { box-shadow: 0 0 0 1px var(--field); }
+  .cv-note { position: absolute; display: flex; align-items: flex-start; gap: 8px; width: 320px; }
+  .cv-pin { flex: none; display: grid; place-items: center; width: 34px; height: 34px; margin-top: -34px; border-radius: 50% 50% 50% 0; background: var(--panel); box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.2), 0 2px 6px rgb(0 0 0 / 0.16); }
+  .cv-pin img { width: 26px; height: 26px; border-radius: 50%; background: #fff; }
+  .cv-card {
+    flex: 1; margin-top: -40px; padding: 12px 16px 14px; border-radius: 13px; background: var(--panel); color: var(--ink);
+    box-shadow: 0 0 0.5px rgb(0 0 0 / 0.18), 0 3px 8px rgb(0 0 0 / 0.1), 0 1px 3px rgb(0 0 0 / 0.1);
+    font: 450 13px/19px var(--text); cursor: auto; user-select: text; -webkit-user-select: text;
   }
-  .sheet[open] { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); animation: sheet-in 320ms var(--ease); }
-  .sheet::backdrop { background: rgb(0 0 0 / 0.45); backdrop-filter: blur(6px); }
-  @keyframes sheet-in { from { opacity: 0; translate: 0 24px; scale: 0.98; } }
-  .sheet-art { padding: 10px; }
-  .sheet-art .tile-art { border-radius: 16px; }
-  .sheet-copy { display: flex; flex-direction: column; padding: 40px 36px 28px 20px; }
-  .sheet h3 { display: flex; align-items: center; gap: 12px; padding-right: 40px; font-size: clamp(1.75rem, 2.8vw, 2.5rem); letter-spacing: -0.035em; line-height: 1.05; }
-  .sheet h3 .icon { width: 30px; height: 30px; color: var(--field); }
-  .sheet-copy p { margin-top: 14px; font-size: 17px; line-height: 1.55; color: var(--ink-2); }
-  .sheet-copy ul { margin: 20px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-  .sheet-copy li { padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.5; color: var(--ink-2); }
-  .sheet-copy li b { font-weight: 600; color: var(--ink); }
-  .setting { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-top: auto; padding-top: 24px; font-size: 13px; color: var(--ink-3); }
-  .setting code { background: none; border: 0; padding: 0; color: var(--ink-2); font-size: 13px; }
-  .sheet .close { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--surface); color: var(--ink); cursor: pointer; }
-  .sheet .close .icon { width: 18px; height: 18px; }
-  .sheet .close:hover { background: var(--line); }
+  :root.dark .cv-card, :root.dark .cv-pin { box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 3px 10px rgb(0 0 0 / 0.4); }
+  .cv-card .who { font-size: 11px; line-height: 16px; color: var(--ink-2); }
+  .cv-card .who b { font-weight: 600; color: var(--ink); }
+  .cv-card h3 { margin: 6px 0 2px; font: 600 15px/20px var(--text); letter-spacing: -0.01em; }
+  .cv-card p { color: var(--ink-2); }
+  .cv-card ul { margin: 8px 0 0; padding: 0 0 0 16px; color: var(--ink-2); }
+  .cv-card li + li { margin-top: 2px; }
+  .cv-card code { display: inline-block; margin-top: 10px; padding: 0; border: 0; background: none; color: var(--ink-3); font-size: 11px; }
+  .cv-ui {
+    --t1: var(--g-900); --t2: var(--g-500); --t3: var(--g-400); --bd: var(--g-200); --hov: var(--g-100); --inp: var(--g-100);
+    --pop: 0 0 0.5px rgb(0 0 0 / 0.18), 0 3px 8px rgb(0 0 0 / 0.1), 0 1px 3px rgb(0 0 0 / 0.1);
+    font: 450 11px/16px var(--text); letter-spacing: 0.005em; color: var(--t1); cursor: default;
+  }
+  :root.dark .cv-ui { --t1: #ffffff; --t2: var(--g-400); --t3: var(--g-500); --bd: var(--g-600); --hov: var(--g-700); --inp: var(--g-700); --pop: 0 0 0 0.5px rgb(0 0 0 / 0.5), 0 3px 10px rgb(0 0 0 / 0.35); }
+  .cv-ui svg { flex: none; width: 16px; height: 16px; }
+  .cv-layers { position: absolute; z-index: 2; left: 12px; top: 12px; width: 240px; padding-bottom: 8px; border-radius: 13px; background: var(--panel); box-shadow: var(--pop); }
+  .cv-layers .f-file span { display: block; }
+  .cv-layers .f-layer { width: calc(100% - 16px); border: 0; background: none; font: inherit; cursor: pointer; text-align: left; }
+  .cv-layers .f-layer:hover { background: var(--hov); }
+  .cv-layers .f-layer[aria-current="true"] { background: var(--select); font-weight: 550; }
+  .cv-layers .f-layer[aria-current="true"] svg { color: var(--t1); }
+  .cv-layers .f-layer:focus-visible { outline-offset: -2px; }
+  .cv-tools .f-bar { position: absolute; bottom: 12px; }
+  .cv-zoom { position: absolute; z-index: 2; right: 12px; bottom: 12px; display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--panel); box-shadow: var(--pop); font-variant-numeric: tabular-nums; }
+  .cv-hint { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+  /* The smaller features, under their own heading */
+  .index-head { margin-top: clamp(96px, 12vw, 160px); }
+  .index-head h2 { font-size: clamp(2rem, 3.6vw, 3rem); }
+  .index-head p { margin-top: 12px; max-width: 34em; font-size: 18px; color: var(--ink-2); }
+  .index-head + .index { margin-top: clamp(32px, 4vw, 48px); }
 
-  /* Split view drawing */
-  .sv { position: absolute; left: 5em; top: 7em; right: -4em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
-  .sv .tabbar .on + .on { box-shadow: inset 1px 0 0 var(--tb-divider); }
-  .sv-body { position: absolute; top: 4.56em; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 13em 1fr 1fr; }
-  .sv-body .side { background: var(--panel); border-right: 1px solid var(--line); padding: 1.6em 1.4em; display: flex; flex-direction: column; gap: 1em; }
-  .half { position: relative; }
-  .half + .half { border-left: 0.2em solid var(--line-strong); }
-  .half.on { box-shadow: inset 0 0 0 0.15em var(--field); }
-  .half .fname { position: absolute; left: 2.4em; top: 2.2em; font-size: 1.05em; color: var(--ink-2); }
-  .half .art-a { position: absolute; left: 2.4em; top: 4.4em; width: 16em; height: 20em; border-radius: 0.2em; overflow: hidden; background: #ff5c39; }
-  .half .art-a::after { content: ""; position: absolute; left: -3em; right: -3em; bottom: -7em; height: 14em; border-radius: 50%; background: #1f1d2b; }
-  .half .art-b { position: absolute; left: 2.4em; top: 4.4em; width: 16em; height: 20em; border-radius: 0.2em; background: #1f1d2b; }
-  .half .art-b i { position: absolute; left: 1.6em; right: 1.6em; height: 1.4em; border-radius: 0.3em; background: #3b3752; }
-  .drag { position: absolute; left: 39.5em; top: 15em; width: 7em; height: 7em; border-radius: 50%; background: #ffd23f; box-shadow: 0 0 0 0.15em var(--field), 0 0.6em 1.4em rgb(0 0 0 / 0.25); }
-  .drag-cursor { position: absolute; left: 45em; top: 20.6em; width: 2.2em; height: 2.2em; color: #1e1e1e; }
+  /* The designs on the canvas: someone's work, in its own colors whatever
+     the theme */
+  .d { position: absolute; inset: 0; overflow: hidden; white-space: normal; letter-spacing: 0; font-family: var(--text); }
+  .d-sprout { display: flex; flex-direction: column; padding: 14px 14px 16px; background: #f4efe6; color: #1f3d33; }
+  .d-sprout .ill { position: relative; flex: none; height: 160px; overflow: hidden; border-radius: 14px; background: #dfe7d6; }
+  .d-sprout .pot { position: absolute; left: 50%; bottom: 0; width: 64px; height: 50px; margin-left: -32px; border-radius: 3px 3px 14px 14px; background: #c8643b; }
+  .d-sprout .leaf { position: absolute; bottom: 44px; left: 50%; width: 40px; height: 74px; background: #2f5d50; }
+  .d-sprout .l1 { margin-left: -40px; border-radius: 40px 0; rotate: -16deg; transform-origin: 100% 100%; }
+  .d-sprout .l2 { border-radius: 0 40px; background: #5f8f6a; rotate: 16deg; transform-origin: 0 100%; }
+  .d-sprout .sun { position: absolute; right: 16px; top: 14px; width: 28px; height: 28px; border-radius: 50%; background: #e9b44c; }
+  .d-sprout b { margin-top: 18px; font: 700 26px/1 var(--display); letter-spacing: -0.035em; }
+  .d-sprout p { margin-top: 8px; font-size: 12px; line-height: 16px; opacity: 0.72; }
+  .d-sprout .cta { display: grid; place-items: center; height: 36px; margin-top: auto; border-radius: 18px; background: #1f3d33; color: #f4efe6; font-size: 12px; font-weight: 600; }
+  .d-sprout .dots { display: flex; justify-content: center; gap: 5px; margin-top: 12px; }
+  .d-sprout .dots i { width: 5px; height: 5px; border-radius: 50%; background: #1f3d33; opacity: 0.25; }
+  .d-sprout .dots i:first-child { opacity: 1; }
+  .d-post { padding: 16px 18px; background: #2f5d50; color: #f4efe6; }
+  .d-post .leaf { position: absolute; right: -24px; top: -18px; width: 104px; height: 150px; border-radius: 104px 0; background: #5f8f6a; rotate: 24deg; }
+  .d-post .tag { position: relative; font-size: 10px; opacity: 0.75; }
+  .d-post b { position: relative; display: block; margin-top: 92px; font: 700 50px/0.86 var(--display); letter-spacing: -0.045em; }
+  .d-post .sub { position: relative; display: block; margin-top: 10px; font-size: 11px; opacity: 0.8; }
+  .d-story { padding: 14px; background: #e9b44c; color: #1f3d33; }
+  .d-story b { display: block; font: 700 21px/0.95 var(--display); letter-spacing: -0.03em; }
+  .d-story i { position: absolute; left: 50%; bottom: -30px; width: 96px; height: 96px; margin-left: -48px; border-radius: 50%; background: #c8643b; }
+  .d-sticker { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 50%; background: #e9b44c; color: #1f3d33; font: 800 14px/1 var(--display); letter-spacing: 0.02em; rotate: -12deg; box-shadow: 0 6px 16px rgb(0 0 0 / 0.2); }
+  .d-kiln { background: #f6f1ea; color: #2a1d16; }
+  .d-kiln .nav { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 18px; border-bottom: 1px solid rgb(42 29 22 / 0.1); }
+  .d-kiln .nav b { margin-right: auto; font: 800 16px/1 var(--display); letter-spacing: -0.04em; }
+  .d-kiln .nav i { width: 26px; height: 4px; border-radius: 2px; background: #2a1d16; opacity: 0.3; }
+  .d-kiln .nav span { padding: 5px 10px; border-radius: 12px; background: #2a1d16; color: #f6f1ea; font-size: 10px; font-weight: 600; }
+  .d-kiln .k-hero { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 22px 18px; }
+  .d-kiln .k-hero b { display: block; font: 700 30px/0.94 var(--display); letter-spacing: -0.045em; }
+  .d-kiln .k-hero p { margin-top: 10px; font-size: 11px; line-height: 15px; opacity: 0.7; }
+  .d-kiln .cta { display: inline-block; margin-top: 16px; padding: 7px 14px; border-radius: 16px; background: #c2562b; color: #fff; font-size: 11px; font-weight: 600; }
+  .d-kiln .k-photo { position: relative; height: 236px; overflow: hidden; border-radius: 12px; background: #c2562b; }
+  .d-kiln .cup { position: absolute; left: 50%; top: 98px; width: 80px; height: 64px; margin-left: -48px; border-radius: 4px 4px 32px 32px; background: #f6f1ea; }
+  .d-kiln .handle { position: absolute; left: 50%; top: 108px; width: 32px; height: 34px; margin-left: 18px; border: 8px solid #f6f1ea; border-radius: 50%; }
+  .d-kiln .saucer { position: absolute; left: 50%; top: 152px; width: 150px; height: 22px; margin-left: -83px; border-radius: 50%; background: #e3cdb4; }
+  .d-icons { display: grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: 1fr; gap: 4px; padding: 12px; background: #fff; color: #1e1e1e; }
+  .d-icons span { display: grid; place-items: center; border-radius: 6px; }
+  .d-icons span.on { box-shadow: inset 0 0 0 1px var(--field); background: color-mix(in srgb, var(--field) 8%, #fff); }
+  .d-icons svg { width: 22px !important; height: 22px !important; }
+  .d-price { background: #f3f4f6; }
+  .d-price .card { position: absolute; inset: 16px 22px; display: flex; flex-direction: column; padding: 14px; border-radius: 14px; background: #fff; color: #111827; box-shadow: 0 0 0 1px #e5e7eb, 0 10px 15px -3px rgb(0 0 0 / 0.1); }
+  .d-price span { font-size: 11px; font-weight: 600; color: #6b7280; }
+  .d-price b { font: 800 24px/1.1 var(--text); letter-spacing: -0.02em; }
+  .d-price small { font-size: 11px; font-weight: 500; color: #6b7280; }
+  .d-price i { display: grid; place-items: center; height: 26px; margin-top: auto; border-radius: 8px; background: #111827; color: #fff; font-size: 11px; font-style: normal; font-weight: 600; }
 
-  /* Development plugins drawing: Figma's Actions panel */
-  .actions-panel { position: absolute; left: 9em; top: 4em; right: 9em; padding: 1.2em; border-radius: 1.4em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); font-size: 1.1em; }
-  .actions-panel .search { display: flex; align-items: center; gap: 0.8em; height: 3em; padding: 0 1em; border-radius: 0.7em; background: var(--input); color: var(--ink-3); }
-  .actions-panel .search svg { width: 1.4em; height: 1.4em; }
-  .ap-tabs { display: flex; align-items: center; gap: 0.3em; margin: 0.9em 0 0.7em; color: var(--ink-2); }
-  .ap-tabs span, .ap-tabs b { padding: 0.45em 0.7em; border-radius: 0.5em; }
-  .ap-tabs b { background: var(--surface); color: var(--ink); font-weight: 600; }
-  .ap-tabs em { display: flex; align-items: center; gap: 0.3em; margin-left: auto; padding: 0.4em 0.5em 0.4em 0.7em; border-radius: 0.5em; box-shadow: inset 0 0 0 0.12em var(--field); color: var(--ink); font-style: normal; font-weight: 600; }
-  .ap-tabs em svg { width: 1.1em; height: 1.1em; }
-  .ap-row { display: flex; align-items: center; gap: 0.9em; min-height: 4.2em; padding: 0.5em 0.7em; border-radius: 0.6em; }
-  .ap-row.hover { background: var(--surface); }
-  .ap-row .pi { flex: none; display: grid; place-items: center; width: 2.4em; height: 2.4em; border-radius: 0.6em; color: #fff; }
-  .ap-row .pi svg { width: 1.4em; height: 1.4em; }
-  .ap-row .nm { display: flex; flex-direction: column; min-width: 0; gap: 0.15em; font-weight: 500; }
-  .ap-row .nm small { margin-left: 0.6em; padding: 0 0.4em; border-radius: 0.3em; box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink-2); font-size: 0.82em; font-weight: 500; }
-  .ap-row .nm i { font-style: normal; font-size: 0.85em; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .ap-row .more-dots { margin-left: auto; color: var(--ink-2); letter-spacing: 0.05em; }
-  .ap-row.import svg { width: 1.4em; height: 1.4em; }
-  .ap-row.import { min-height: 3.4em; color: var(--ink); }
-  .tb-dev { left: 50%; top: auto; bottom: 3.4em; transform: translateX(-50%); }
 
-  /* Copy as code drawing: Figma's right-click menu */
-  .menu { position: absolute; width: 21em; padding: 0.7em 0; border-radius: 1em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); font-size: 1.15em; }
-  .menu div { display: flex; justify-content: space-between; align-items: center; height: 2.5em; margin: 0 0.6em; padding: 0 0.8em; border-radius: 0.5em; }
-  .menu div.on { background: var(--field); color: #fff; font-weight: 500; }
-  .menu div span { opacity: 0.6; }
-  .menu hr { border: 0; border-top: 1px solid var(--line); margin: 0.5em 0; }
-  .menu.one { left: 4em; top: 4.5em; }
-  .menu.two { left: 23.5em; top: 11.5em; }
-  .snippet { position: absolute; left: 6em; right: -2em; bottom: -2em; padding: 1.4em 1.6em 3em; border-radius: 1em 0 0 0; background: #1e1e1e; color: #d4d4d4; font: 1.12em/1.6 var(--mono); box-shadow: var(--shadow); white-space: pre; }
-  .snippet .k { color: #7cc4f8; } .snippet .s { color: #ffc470; } .snippet .c { color: #8a8a8a; }
-
-  /* Color contrast drawing: Figma's color picker */
-  .picker { position: absolute; left: 13em; top: 6em; width: 34em; padding: 1.4em; border-radius: 1.2em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); font-size: 1.1em; }
-  .picker .tabs2 { display: flex; gap: 1.6em; margin-bottom: 1em; color: var(--ink-2); }
-  .picker .tabs2 b { color: var(--ink); font-weight: 600; }
-  .square { position: relative; height: 17em; border-radius: 0.5em; overflow: hidden; background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue)); }
-  .square svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .square .knob { position: absolute; left: 70%; top: 34%; width: 1.4em; height: 1.4em; margin: -0.7em; border-radius: 50%; border: 0.2em solid #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3); background: var(--pick); }
-  .hue { height: 1em; margin: 1.1em 0; border-radius: 0.5em; background: linear-gradient(to right, red, #ff0, lime, cyan, blue, #f0f, red); }
-  .hexrow { display: flex; gap: 0.5em; }
-  .hexrow span { display: flex; align-items: center; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); font-variant-numeric: tabular-nums; }
-  .hexrow span:nth-child(2) { flex: 1; }
-  .ratio { display: flex; align-items: center; gap: 0.8em; margin-top: 1em; padding-top: 1em; border-top: 1px solid var(--line); }
-  .ratio .aa { display: grid; place-items: center; width: 2.6em; height: 2.6em; border-radius: 0.5em; background: #fff; box-shadow: inset 0 0 0 1px var(--line); color: var(--pick); font-weight: 700; }
-  .ratio b { font-variant-numeric: tabular-nums; }
-  .ratio .lv { margin-left: auto; display: flex; gap: 0.4em; }
-  .ratio .lv span { padding: 0.2em 0.6em; border-radius: 0.4em; background: var(--surface); font-size: 0.9em; font-weight: 600; }
-  .ratio .lv .pass { background: color-mix(in oklab, #14ae5c 22%, var(--panel)); color: color-mix(in oklab, #14ae5c, var(--ink) 35%); }
-
-  /* Layer previews drawing */
-  .lp { position: absolute; left: 6em; top: 6em; right: -4em; bottom: -4em; display: grid; grid-template-columns: 26em 1fr; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
-  .lp .layers { gap: 0.15em; }
-  .sect { margin: 0.4em -1.4em 0.5em; padding: 1em 1.6em 0; border-top: 1px solid var(--line); font-size: 1.1em; font-weight: 600; color: var(--ink); }
-  .lrow { display: flex; align-items: center; gap: 0.55em; height: 3.9em; padding: 0 0.6em; border-radius: 0.5em; font-size: 1.1em; color: var(--ink-2); white-space: nowrap; }
-  .lrow b { font-weight: 600; color: var(--ink); }
-  .lrow.on { background: var(--select); }
-  .lrow.in { padding-left: 3.2em; }
-  .lrow .chev { flex: none; width: 1em; height: 1em; color: var(--ink-3); }
-  .lrow .ty { flex: none; width: 1.2em; height: 1.2em; }
-  .lrow .th { flex: none; position: relative; display: grid; place-items: center; width: 2.9em; height: 2.9em; border-radius: 0.45em; overflow: hidden; background: #d4d4d4; }
-  .lrow .th i { position: absolute; display: block; }
-  .poster-th { position: relative; width: 62%; height: 78%; overflow: hidden; background: #ff5c39; }
-  .lp .stage2 { position: relative; }
-  .lp .stage2 .poster { transform: translate(-50%, -50%) scale(0.68); }
-
-  .chip { border-radius: 20px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
-  .chip .field { position: relative; aspect-ratio: 4 / 3; background: var(--field); container-type: inline-size; overflow: hidden; }
-  .chip .strip { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; padding: 14px 20px 16px; }
+  .chip { border-radius: 12px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
+  .chip .field { position: relative; aspect-ratio: 4 / 3; background: var(--canvas); container-type: inline-size; overflow: hidden; }
+  .chip .strip { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px; padding: 14px 20px 16px; border-top: 1px solid var(--line); }
   .chip .strip b { font: 650 17px/1.2 var(--display); letter-spacing: -0.01em; }
   .chip .strip code { background: none; border: 0; padding: 0; color: var(--ink-2); font-size: 13px; white-space: nowrap; }
-  /* Drawings scale with their chip: 1em is a hundredth of its width at 640px wide */
-  .art { position: absolute; inset: 0; font-size: 1.5625cqw; font-family: var(--text); line-height: 1.3; }
+  .art { position: absolute; inset: 0; overflow: hidden; }
 
-  /* Tabs drawing */
-  .window { position: absolute; left: 6em; right: -4em; top: 9em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
-  .tabbar { display: flex; height: 3.8em; background: var(--tb-bar); color: var(--tb-text); font-size: 1.2em; font-weight: 500; }
-  /* A little more room after a tab's label than before its icon, so it
-     looks even. The close button has room inside it, so that side pads less */
-  .tabbar > div { position: relative; display: flex; align-items: center; gap: 0.75em; flex: none; padding: 0 1.4em 0 0.95em; }
-  .tabbar > div:has(.x) { padding-right: 1.1em; }
-  .tabbar > div::after { content: ""; position: absolute; right: 0; top: 0.9em; bottom: 0.9em; width: 1px; background: var(--tb-divider); }
-  .tabbar .sq { width: 3.6em; padding: 0; justify-content: center; }
-  .tabbar .on { background: var(--tb-active); color: var(--tb-text-active); }
-  .tabbar .on::after, .tabbar .pre::after { display: none; }
-  .tabbar .hover { background: color-mix(in oklab, var(--tb-bar) 88%, var(--tb-text)); }
-  .tabbar .sleep .glyph, .tabbar .sleep span { opacity: 0.5; }
-  .tabbar .glyph { width: 1.33em; height: 1.33em; }
-  .tabbar .emoji { font-size: 1.15em; line-height: 1; }
-  .tabbar .x { width: 1em; height: 1em; opacity: 0.7; }
-  .editor { display: grid; grid-template-columns: 22em 1fr; height: calc(100% - 4.56em); }
-  .editor .side { background: var(--panel); border-right: 1px solid var(--line); padding: 1.6em 1.4em; display: flex; flex-direction: column; gap: 1em; }
-  .bar { height: 0.8em; border-radius: 0.4em; background: var(--line); }
-  .bar.short { width: 60%; }
-  .bar.picked { background: var(--select); }
-  .tabpreview {
-    position: absolute; top: 12.8em; left: 37em; width: 24em; padding: 0.8em 0.8em 1em; border-radius: 1.3em;
-    background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink);
+  /* The drawings: Figma's UI3 and Ligma's own windows at their real size in
+     px (11px Inter, 32px rows, 241px panels), each a crop --w px wide,
+     scaled to fit its frame like a screenshot. --h is the crop's height */
+  .shot {
+    --t1: var(--g-900); --t2: var(--g-500); --t3: var(--g-400); --bd: var(--g-200); --hov: var(--g-100); --inp: var(--g-100);
+    --pop: 0 0 0.5px rgb(0 0 0 / 0.18), 0 3px 8px rgb(0 0 0 / 0.1), 0 1px 3px rgb(0 0 0 / 0.1);
+    position: absolute; left: 0; top: 0; width: calc(var(--w) * 1px); height: calc(var(--h, calc(var(--w) * 0.75)) * 1px);
+    transform-origin: 0 0; scale: tan(atan2(100cqw, calc(var(--view, var(--w)) * 1px)));
+    overflow: hidden; background: var(--canvas); color: var(--t1);
+    font: 450 11px/16px var(--text); letter-spacing: 0.005em; text-align: left; white-space: nowrap;
   }
-  .tabpreview .shot { aspect-ratio: 16 / 9; border-radius: 0.6em; background: #1f1d2b; position: relative; overflow: hidden; }
-  .tabpreview .shot i { position: absolute; display: block; border-radius: 0.3em; }
-  .tabpreview b { display: block; margin: 0.7em 0.4em 0; font-size: 1.3em; font-weight: 600; }
-  .tabpreview span { display: block; margin: 0 0.4em; font-size: 1.1em; color: var(--ink-2); }
+  :root.dark .shot { --t1: #ffffff; --t2: var(--g-400); --t3: var(--g-500); --bd: var(--g-600); --hov: var(--g-700); --inp: var(--g-700); --pop: 0 0 0 0.5px rgb(0 0 0 / 0.5), 0 3px 10px rgb(0 0 0 / 0.35); }
+  .shot svg { flex: none; width: 16px; height: 16px; }
+  .shot b { font-weight: 550; }
 
-  /* The left sidebar drawing */
-  .ui { position: absolute; left: 7em; top: 5em; right: -4em; bottom: -4em; display: grid; grid-template-columns: 5.8em 25em 1fr; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
-  .navcol { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 0.35em; padding: 1em 0; background: var(--panel); border-right: 1px solid var(--line); color: var(--ink); }
-  .navcol .t { display: grid; place-items: center; width: 3.2em; height: 3.2em; border-radius: 0.8em; }
-  .navcol .t svg { width: 1.8em; height: 1.8em; }
-  .navcol .t.on { background: var(--select); }
-  .navcol hr { width: 2.6em; border: 0; border-top: 1px solid var(--line); margin: 0.2em 0; }
-  .navcol .plug { position: relative; display: grid; place-items: center; width: 2.9em; height: 2.9em; margin-top: 0.15em; border-radius: 0.75em; color: #fff; transition: transform 200ms var(--ease); }
-  .navcol .plug svg { width: 1.7em; height: 1.7em; }
-  .navcol .plug.big { transform: scale(1.18); box-shadow: 0 0.3em 0.9em rgb(0 0 0 / 0.25); }
-  .ph { display: flex; align-items: center; gap: 0.4em; font-size: 1.25em; font-weight: 600; color: var(--ink); }
-  .ph svg { width: 1.1em; height: 1.1em; color: var(--ink-2); }
-  .ph .sp { margin-left: auto; }
-  .ui .sub { margin: 0.1em 0 0.4em; }
-  .ui .sub em { margin-left: 0.7em; font-style: normal; color: #9747ff; }
-  .ui .sect { display: flex; align-items: center; justify-content: space-between; margin-left: -1.2em; margin-right: -1.2em; padding-left: 1.6em; padding-right: 1.6em; }
-  .ui .sect span { display: flex; gap: 0.8em; color: var(--ink-2); }
-  .ui .sect svg { width: 1.2em; height: 1.2em; }
-  .pg { display: flex; align-items: center; height: 2.6em; padding: 0 0.6em; border-radius: 0.5em; font-size: 1.1em; color: var(--ink); }
-  .pg.on { background: var(--surface); font-weight: 600; }
-  .ui .layers { padding: 1.4em 1.2em; gap: 0.25em; }
-  .layers .row b { font-weight: 600; color: var(--ink); }
-  .layers { background: var(--panel); border-right: 1px solid var(--line); padding: 1.6em 1.4em; display: flex; flex-direction: column; gap: 0.6em; }
-  .layers .file { font-size: 1.3em; font-weight: 600; color: var(--ink); }
-  .layers .sub { font-size: 1.1em; color: var(--ink-2); margin-bottom: 1em; }
-  .layers .row { display: flex; align-items: center; gap: 0.8em; height: 2.6em; padding: 0 0.6em; border-radius: 0.5em; font-size: 1.1em; color: var(--ink-2); }
-  .layers .row svg { width: 1.3em; height: 1.3em; }
-  .layers .row.on { background: var(--select); color: var(--ink); }
-  .tip { position: absolute; left: calc(100% + 1em); top: 50%; margin-top: -1.15em; padding: 0.6em 1em; border-radius: 0.6em; background: #1e1e1e; color: #fff; font-size: 1.2em; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow); }
-  .tip::before { content: ""; position: absolute; left: -0.4em; top: 50%; width: 0.8em; height: 0.8em; background: inherit; transform: translateY(-50%) rotate(45deg); border-radius: 0.1em; }
+  /* Ligma's tab bar (dist/index.html) */
+  .lg-tabs { position: absolute; left: 0; right: 0; top: 0; display: flex; height: 38px; background: var(--tb-bar); color: var(--tb-text); font: 500 12px/1 var(--text); letter-spacing: 0; }
+  .lg-tabs > div { position: relative; display: flex; align-items: center; justify-content: center; gap: 8px; flex: none; }
+  .lg-tabs > div:not(.on, .pre)::after { content: ""; position: absolute; right: 0; top: 11px; bottom: 11px; width: 1px; background: var(--tb-divider); }
+  .lg-tabs .home { width: 38px; }
+  .lg-tabs .new { width: 36px; }
+  .lg-tabs .pin { width: 38px; }
+  .lg-tabs .tab { justify-content: flex-start; padding: 0 8px 0 12px; }
+  .lg-tabs .tab:not(:has(.x)) { padding-right: 12px; }
+  .lg-tabs .on + .on { box-shadow: inset 1px 0 0 var(--tb-divider); }
+  .lg-tabs .on { background: var(--tb-active); color: var(--tb-text-active); }
+  .lg-tabs .hover { background: color-mix(in oklab, var(--tb-bar) 90%, var(--tb-text)); }
+  .lg-tabs .sleep > :not(.x) { opacity: 0.5; }
+  .lg-tabs .x { width: 20px; height: 20px; padding: 3px; margin-left: -2px; border-radius: 4px; }
+  .lg-tabs .emoji { font-size: 14px; line-height: 16px; }
 
-  /* Discord drawing (Discord's own dark colors) */
-  .profile { position: absolute; left: 50%; top: 7em; width: 40em; transform: translateX(-50%); border-radius: 1.6em; overflow: hidden; background: #232428; color: #f2f3f5; box-shadow: 0 2em 4em -1em rgb(0 0 0 / 0.45); }
-  .profile .banner { height: 7em; background: var(--field-ink); }
-  .profile .who { position: relative; padding: 0 2em; }
-  .profile .avatar { position: absolute; top: -4em; width: 8em; height: 8em; border-radius: 50%; border: 0.6em solid #232428; background: #f0b232; display: grid; place-items: center; color: #3a2a06; }
-  .profile .avatar span { font: 700 3.2em/1 var(--display); }
-  .profile .avatar::after { content: ""; position: absolute; right: -0.3em; bottom: -0.3em; width: 2.4em; height: 2.4em; border-radius: 50%; background: #23a55a; border: 0.5em solid #232428; }
-  .profile .name { padding-top: 2.4em; font-size: 2em; font-weight: 700; line-height: 1.2; }
-  .profile .handle { font-size: 1.3em; color: #b5bac1; }
-  .activity { margin: 1.6em 1.6em 1.8em; padding: 1.4em; border-radius: 1em; background: #111214; }
-  .activity .label { font-size: 1.1em; font-weight: 700; color: #b5bac1; }
-  .activity .card2 { display: flex; gap: 1.4em; margin-top: 1em; }
-  .activity .large { position: relative; flex: none; width: 7.2em; height: 7.2em; }
-  .activity .large img { width: 100%; height: 100%; border-radius: 0.8em; background: #fff; }
-  .activity .small { position: absolute; right: -0.6em; bottom: -0.6em; display: grid; place-items: center; width: 2.8em; height: 2.8em; border-radius: 50%; background: #0d99ff; color: #fff; border: 0.3em solid #111214; }
-  .activity .small svg { width: 1.5em; height: 1.5em; }
-  .activity .lines { font-size: 1.3em; line-height: 1.45; color: #dbdee1; min-width: 0; }
-  .activity .lines b { display: block; color: #f2f3f5; }
-  .activity .lines span { display: block; color: #b5bac1; }
-  .activity .join { display: grid; place-items: center; height: 3.2em; margin-top: 1.2em; border-radius: 0.6em; background: #4e5058; font-size: 1.2em; font-weight: 600; }
+  /* Tab preview (dist/preview.html) */
+  .lg-preview { position: absolute; display: flex; flex-direction: column; gap: 8px; width: 264px; padding: 8px 8px 10px; border-radius: 13px; background: var(--panel); box-shadow: 0 0 0 0.5px var(--bd), 0 2px 5px rgb(0 0 0 / 0.15), 0 6px 14px rgb(0 0 0 / 0.2); }
+  .lg-preview .img { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px; background: var(--hov); box-shadow: inset 0 0 0 1px var(--bd); }
+  .lg-preview .img i { position: absolute; display: block; }
+  .lg-preview .txt { padding: 0 4px; }
+  .lg-preview .txt b { display: block; font-size: 13px; line-height: 20px; letter-spacing: -0.0025em; }
+  .lg-preview .txt span { color: var(--t2); }
+
+  /* Panels */
+  .f-panel { position: absolute; top: 0; bottom: 0; width: 241px; display: flex; flex-direction: column; background: var(--panel); }
+  .f-panel.l { left: 0; border-right: 1px solid var(--bd); }
+  .f-panel.r { right: 0; border-left: 1px solid var(--bd); }
+  .f-head { display: flex; align-items: center; justify-content: space-between; flex: none; height: 48px; padding: 0 8px; }
+  .f-logo { display: flex; align-items: center; height: 32px; padding: 0 2px 0 6px; border-radius: 5px; }
+  .f-logo svg + svg { width: 12px; height: 12px; color: var(--t2); }
+  .f-ib { display: grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 5px; color: var(--t1); }
+  .f-file { padding: 0 16px 12px; }
+  .f-file b { display: flex; align-items: center; gap: 2px; font-size: 13px; line-height: 22px; }
+  .f-file b svg { width: 12px; height: 12px; color: var(--t2); }
+  .f-file span { display: flex; align-items: center; gap: 6px; color: var(--t2); }
+  .f-file em { padding: 0 4px; border-radius: 3px; box-shadow: inset 0 0 0 1px var(--bd); font: 500 10px/14px var(--text); font-style: normal; }
+  .f-tabs { display: flex; align-items: center; gap: 2px; flex: none; height: 40px; padding: 0 8px; border-bottom: 1px solid var(--bd); color: var(--t2); }
+  .f-tabs span { display: flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 5px; font-weight: 550; }
+  .f-tabs .on { background: var(--hov); color: var(--t1); }
+  .f-tabs .end { margin-left: auto; padding: 0 4px 0 8px; font-weight: 450; color: var(--t1); }
+  .f-tabs .end svg { width: 12px; height: 12px; color: var(--t2); }
+  .f-sec { display: flex; align-items: center; justify-content: space-between; flex: none; height: 40px; padding: 0 8px 0 16px; font-weight: 550; }
+  .f-sec > span { display: flex; }
+  .f-sec + .f-sec, .f-rule { border-top: 1px solid var(--bd); }
+  .f-page { display: flex; align-items: center; height: 32px; margin: 0 8px; padding: 0 8px; border-radius: 5px; }
+  .f-page.on { font-weight: 550; }
+  .f-page.on::before { content: ""; width: 0; }
+  .f-layer { display: flex; align-items: center; gap: 4px; flex: none; height: 32px; margin: 0 8px; padding: 0 8px 0 calc(4px + var(--in, 0) * 16px); border-radius: 5px; color: var(--t1); }
+  .f-layer svg { color: var(--t2); }
+  .f-layer .sp { width: 16px; }
+  .f-layer svg.ch { width: 16px; height: 16px; margin-right: -4px; }
+  .f-layer.on { background: var(--select); font-weight: 550; }
+  .f-layer.on svg { color: var(--t1); }
+  .f-layer.on.ex { border-radius: 5px 5px 0 0; }
+  .f-layer.kid { border-radius: 0; background: color-mix(in oklab, var(--select) 45%, var(--panel)); }
+  .f-layer.kid.last { border-radius: 0 0 5px 5px; }
+  .f-layer .th { position: relative; flex: none; width: 24px; height: 24px; margin: 0 4px 0 2px; overflow: hidden; border-radius: 3px; background: var(--g-300); box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.15); }
+  .f-layer .th i { position: absolute; display: block; }
+  .tall .f-layer { height: 40px; }
+
+  /* The right sidebar */
+  .f-top { display: flex; align-items: center; gap: 8px; flex: none; height: 48px; padding: 0 8px 0 16px; }
+  .f-av { width: 24px; height: 24px; border-radius: 50%; background: #f0b232; color: #3a2a06; font: 600 11px/24px var(--text); text-align: center; }
+  .f-play { display: flex; align-items: center; margin-left: auto; height: 24px; padding: 0 2px 0 4px; border-radius: 5px; }
+  .f-play svg + svg { width: 12px; height: 12px; color: var(--t2); }
+  .f-share { display: flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 5px; background: var(--field); color: #fff; font-weight: 550; }
+  .f-prop { flex: none; padding: 0 16px 12px; border-bottom: 1px solid var(--bd); }
+  .f-prop > b { display: flex; align-items: center; justify-content: space-between; height: 40px; margin-right: -8px; }
+  .f-prop > b.sel { justify-content: flex-start; gap: 2px; }
+  .f-prop > b svg { color: var(--t1); }
+  .f-prop > b.sel svg { width: 12px; height: 12px; color: var(--t2); }
+  .f-prop.closed { padding-bottom: 0; }
+  .f-cap { margin: 2px 0 6px; color: var(--t2); }
+  .f-grid { display: grid; grid-template-columns: 1fr 1fr 24px; gap: 8px; align-items: center; }
+  .f-grid + .f-grid, .f-grid + .f-cap { margin-top: 8px; }
+  .f-in { display: flex; align-items: center; min-width: 0; height: 24px; padding-right: 8px; border-radius: 5px; background: var(--inp); font-variant-numeric: tabular-nums; }
+  .f-in > i { display: grid; place-items: center; flex: none; height: 24px; width: 24px; color: var(--t2); font-style: normal; text-align: center; }
+  .f-in > i.sw { width: 14px; height: 14px; margin: 0 6px 0 5px; border-radius: 2px; box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.2); }
+  .f-in .pc { margin-left: auto; padding-left: 8px; border-left: 1px solid var(--panel); color: var(--t1); }
+  .f-al { display: flex; gap: 0; height: 24px; border-radius: 5px; background: var(--inp); }
+  .f-al span { display: grid; place-items: center; width: 28px; color: var(--t1); }
+
+  /* The canvas: frames, the selection and its size, Figma's own way */
+  .f-frame { position: absolute; }
+  .f-frame > .nm { position: absolute; left: 0; bottom: 100%; margin-bottom: 4px; color: var(--t2); }
+  .f-frame.sel > .nm { color: var(--field); }
+  .f-frame.sel::after { content: ""; position: absolute; inset: 0; box-shadow: 0 0 0 1px var(--field); pointer-events: none; }
+  .f-h { position: absolute; z-index: 1; width: 8px; height: 8px; margin: -4px; background: #fff; box-shadow: inset 0 0 0 1px var(--field); }
+  .f-h:nth-of-type(1) { left: 0; top: 0; } .f-h:nth-of-type(2) { left: 100%; top: 0; }
+  .f-h:nth-of-type(3) { left: 0; top: 100%; } .f-h:nth-of-type(4) { left: 100%; top: 100%; }
+  .f-size { position: absolute; left: 50%; top: calc(100% + 8px); translate: -50% 0; padding: 0 4px; border-radius: 2px; background: var(--field); color: #fff; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .f-cursor { position: absolute; z-index: 3; width: 18px !important; height: 18px !important; color: #000; }
+
+  /* The toolbar, floating at the foot of the canvas */
+  .f-bar { position: absolute; z-index: 2; left: 50%; bottom: 12px; translate: -50% 0; display: flex; align-items: center; height: 48px; padding: 0 8px; border-radius: 13px; background: var(--panel); box-shadow: var(--pop); color: var(--t1); }
+  .f-bar span { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 5px; }
+  .f-bar span svg { width: 18px; height: 18px; }
+  .f-bar span.on { background: var(--field); color: #fff; }
+  .f-bar .dd { width: 10px; height: 10px; margin: 0 2px 0 -2px; color: var(--t2); }
+  .f-bar hr { width: 1px; height: 24px; margin: 0 8px; border: 0; background: var(--bd); }
+  .f-bar .mode { display: flex; gap: 0; width: auto; padding: 2px; border-radius: 6px; background: var(--hov); }
+  .f-bar .mode i { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 5px; color: var(--t2); }
+  .f-bar .mode i.on { background: var(--panel); color: var(--t1); box-shadow: 0 0 0 0.5px var(--bd), 0 1px 2px rgb(0 0 0 / 0.1); }
+  .f-bar .mode svg { width: 16px; height: 16px; }
+
+  /* Menus and tooltips are dark in either mode, as in Figma */
+  .f-menu { position: absolute; z-index: 2; width: 200px; padding: 8px; border-radius: 13px; background: #1e1e1e; color: #fff; box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.6), 0 5px 17px rgb(0 0 0 / 0.2), 0 2px 7px rgb(0 0 0 / 0.15); }
+  .f-menu div { display: flex; align-items: center; justify-content: space-between; height: 24px; padding: 0 8px 0 24px; border-radius: 5px; }
+  .f-menu div.on { background: var(--field); }
+  .f-menu div span { color: rgb(255 255 255 / 0.5); }
+  .f-menu div.on span { color: #fff; }
+  .f-menu div svg { width: 12px; height: 12px; }
+  .f-menu hr { height: 1px; margin: 8px -8px; border: 0; background: #383838; }
+  .f-tip { position: absolute; z-index: 3; display: flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 5px; background: #1e1e1e; color: #fff; }
+
+  /* Popovers: the color picker and the Actions panel */
+  .f-pop { position: absolute; z-index: 2; border-radius: 13px; background: var(--panel); box-shadow: var(--pop); overflow: hidden; }
+
+  /* Ligma's split view: one set of panels, two canvases */
+  .sv-halves { position: absolute; left: 241px; right: 0; top: 38px; bottom: 0; display: grid; grid-template-columns: 1fr 1fr; }
+  .sv-halves > div { position: relative; overflow: hidden; }
+  .sv-halves > div + div { box-shadow: inset 1px 0 0 var(--bd); }
+
+  /* The poster that stands in for someone's design. It keeps its own
+     colors in every theme, as designs do in Ligma */
+  .poster { position: absolute; inset: 0; overflow: hidden; background: #ff5c39; container-type: inline-size; }
+  .poster .sun { position: absolute; left: 12.5cqw; top: 10cqw; width: 50cqw; height: 50cqw; border-radius: 50%; background: #ffd23f; }
+  .poster .hill { position: absolute; left: -18cqw; right: -18cqw; bottom: -44cqw; height: 88cqw; border-radius: 50%; background: #1f1d2b; }
+  .poster .type { position: absolute; left: 9cqw; bottom: 9cqw; color: #fff4e0; font: 700 13.5cqw/0.9 var(--display); letter-spacing: -0.04em; white-space: normal; }
+  .card-art { position: absolute; inset: 0; overflow: hidden; background: #1f1d2b; }
+  .card-art i { position: absolute; display: block; border-radius: 2px; background: #3b3752; }
+
+  /* Copy as code: the code it gave, in an editor */
+  .snippet { position: absolute; padding: 12px 16px; border-radius: 8px 0 0 0; background: #1e1e1e; color: #d4d4d4; font: 12px/19px var(--mono); box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.6), 0 6px 18px rgb(0 0 0 / 0.25); white-space: pre; }
+  .snippet .s { color: #ce9178; } .snippet .c { color: #6a9955; } .snippet .k { color: #569cd6; } .snippet .a { color: #9cdcfe; }
+
+  /* Color contrast: Figma's color picker, with Ligma's ratio under it */
+  .picker .sq { position: relative; height: 240px; background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue)); }
+  .picker .sq svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .picker .knob { position: absolute; width: 14px; height: 14px; margin: -7px; border-radius: 50%; background: var(--pick); box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgb(0 0 0 / 0.2), inset 0 0 0 1px rgb(0 0 0 / 0.1); }
+  .picker .sliders { display: grid; grid-template-columns: 24px 1fr; gap: 8px 8px; align-items: center; padding: 16px 16px 8px 12px; }
+  .picker .sliders svg { grid-row: span 2; color: var(--t1); }
+  .picker .bar { position: relative; height: 12px; border-radius: 6px; box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.15); }
+  .picker .bar i { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px; border-radius: 50%; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgb(0 0 0 / 0.2); }
+  .picker .hexrow { display: grid; grid-template-columns: 56px 1fr; gap: 8px; padding: 0 16px 12px; }
+  /* Ligma's row, as src-tauri/src/contrast.rs draws it */
+  .picker .ratio { display: flex; align-items: center; gap: 8px; height: 32px; margin-bottom: 8px; padding: 0 16px; color: var(--t2); }
+  .picker .aa { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 4px; background: #fff; box-shadow: inset 0 0 0 1px var(--bd); color: var(--pick); font-weight: 600; letter-spacing: -0.01em; }
+  .picker .ratio b { font-weight: 500; color: var(--t1); font-variant-numeric: tabular-nums; }
+  .picker .lv { display: flex; gap: 10px; margin-left: auto; }
+  .picker .lv > span { display: flex; align-items: center; gap: 4px; }
+
+  /* The left sidebar, with your plugins under Figma's own buttons */
+  .f-nav { position: absolute; left: 0; top: 0; bottom: 0; width: 48px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; background: var(--panel); border-right: 1px solid var(--bd); }
+  .f-nav > span { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 5px; color: var(--t1); }
+  .f-nav > span.on { background: var(--hov); }
+  .f-nav hr { width: 24px; height: 1px; margin: 4px 0; border: 0; background: var(--bd); }
+  .f-nav .plug { position: relative; }
+  .f-nav .plug i { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; color: #fff; }
+  .f-nav .plug i svg { width: 14px; height: 14px; }
+  .f-nav .plug.hover { background: var(--hov); }
+
+  /* Development plugins: the Actions panel */
+  .actions { width: 400px; padding: 8px 0 4px; }
+  .actions .search { display: flex; align-items: center; gap: 8px; height: 32px; margin: 0 8px; padding: 0 8px; color: var(--t3); font-size: 13px; }
+  .actions .tabs { display: flex; align-items: center; gap: 2px; padding: 4px 8px 8px; border-bottom: 1px solid var(--bd); color: var(--t2); }
+  .actions .tabs span { display: flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 5px; font-weight: 550; }
+  .actions .tabs .on { background: var(--hov); color: var(--t1); }
+  .actions .tabs .dev { gap: 2px; margin-left: auto; padding: 0 4px 0 8px; box-shadow: inset 0 0 0 1px var(--bd); color: var(--t1); font-weight: 450; }
+  .actions .tabs .dev svg { width: 12px; height: 12px; color: var(--t2); }
+  .actions .row { display: flex; align-items: center; gap: 8px; height: 48px; margin: 4px 8px 0; padding: 0 8px; border-radius: 5px; }
+  .actions .row.hover { background: var(--hov); }
+  .actions .row .pi { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 6px; color: #fff; }
+  .actions .row .nm { display: flex; flex-direction: column; min-width: 0; }
+  .actions .row .nm small { margin-left: 6px; padding: 0 4px; border-radius: 3px; box-shadow: inset 0 0 0 1px var(--bd); color: var(--t2); font: 500 10px/14px var(--text); }
+  .actions .row .nm i { color: var(--t2); font-style: normal; overflow: hidden; text-overflow: ellipsis; }
+  .actions .row .more { margin-left: auto; color: var(--t2); }
+  .actions .row.import { height: 32px; margin-top: 4px; border-top: 0; }
+
+  /* Discord's profile, in Discord's own dark colors */
+  .dc { position: absolute; width: 300px; overflow: hidden; border-radius: 8px; background: #232428; color: #f2f3f5; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3), 0 8px 16px rgb(0 0 0 / 0.24); font-size: 14px; line-height: 18px; letter-spacing: 0; }
+  .dc .banner { height: 60px; background: var(--a-700); }
+  .dc .avatar { position: absolute; left: 16px; top: 16px; width: 80px; height: 80px; border-radius: 50%; border: 6px solid #232428; background: #f0b232; color: #3a2a06; font: 700 32px/68px var(--text); text-align: center; }
+  .dc .avatar::after { content: ""; position: absolute; right: -4px; bottom: -4px; width: 16px; height: 16px; border-radius: 50%; background: #23a55a; border: 4px solid #232428; }
+  .dc .who { padding: 40px 16px 0; }
+  .dc .who b { display: block; font-size: 20px; line-height: 24px; font-weight: 700; }
+  .dc .who span { color: #b5bac1; }
+  .dc .act { margin: 12px 12px 12px; padding: 12px; border-radius: 8px; background: #111214; }
+  .dc .act > span { font-size: 12px; line-height: 16px; font-weight: 700; color: #b5bac1; }
+  .dc .act .row { display: flex; gap: 12px; margin-top: 8px; }
+  .dc .act .big { position: relative; flex: none; width: 60px; height: 60px; }
+  .dc .act .big img { width: 100%; height: 100%; border-radius: 8px; background: #fff; }
+  .dc .act .small { position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #0d99ff; color: #fff; border: 3px solid #111214; }
+  .dc .act .small svg { width: 12px; height: 12px; }
+  .dc .act .lines { display: flex; flex-direction: column; font-size: 12px; line-height: 16px; color: #dbdee1; }
+  .dc .act .lines b { color: #f2f3f5; font-size: 14px; line-height: 18px; font-weight: 600; }
+  .dc .act .lines span { color: #b5bac1; }
+  .dc .act .join { display: grid; place-items: center; height: 32px; margin-top: 12px; border-radius: 4px; background: #4e5058; font-weight: 500; }
+
+  /* Image tools: Figma's image bar over the photo */
+  .imagebar { position: absolute; z-index: 2; display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 4px; border-radius: 13px; background: var(--panel); box-shadow: var(--pop); }
+  .imagebar span { display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 8px 0 4px; border-radius: 5px; transition: background-color 200ms, color 200ms; }
+  .imagebar svg { width: 24px !important; height: 24px !important; }
+  .imagebar hr { width: 1px; height: 24px; margin: 0 4px; border: 0; background: var(--bd); }
 
   /* The rest, as an index */
   .index { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 48px); margin-top: clamp(80px, 10vw, 128px); border-top: 2px solid var(--ink); }
@@ -358,77 +474,58 @@
   .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
   .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
 
-  /* Themes: the words on the left, a fan deck on the right. Each blade is
-     a theme: its accent ramp and its mesh, its name along the top, riveted
-     at the left. Pointing at one slides it out of the fan, clicking it
-     retints the page. 1em is a unit of the fan's 530-wide drawing */
-  .themes-top { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 40px 48px; align-items: center; }
-  .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 30em; }
-  .fan-wrap { container-type: inline-size; }
-  .fan { --spread: 11deg; position: relative; height: 740em; font-size: min(1px, 100cqw / 530); }
-  .blade {
-    --lift: 0em; position: absolute; left: 0; top: 50%; width: 440em; height: 112em; margin-top: -56em; padding: 8em 8em 8em 0;
-    display: grid; grid-template-columns: 52em repeat(4, minmax(0, 1fr)) 128em; grid-template-rows: 30em minmax(0, 1fr); gap: 6em 5em;
-    border: 0; border-radius: 16em; background: var(--bg); color: var(--ink); cursor: pointer; font: inherit; text-align: left;
-    transform-origin: 26em 50%; transform: rotate(calc((var(--i) - 4) * var(--spread))) translateX(var(--lift));
-    box-shadow: 0 0 0 1px var(--line), 0 2em 4em rgb(0 0 0 / 0.1), 0 18em 40em -12em rgb(0 0 0 / 0.35);
-    transition: transform 420ms var(--ease), box-shadow 200ms;
+  /* Themes: Figma Draw's brushes, one for each theme, standing in a row
+     behind the editor with their tips peeking over its top edge. Pointing
+     at one lifts it a little, picking it pokes it up and it stays there,
+     and the page takes its theme */
+  .themes-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 48px; align-items: end; }
+  .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 32em; }
+  .themes-side { display: flex; flex-direction: column; align-items: flex-start; }
+  .pencil-stage { --pw: calc((min(100vw, var(--wrap)) - 2 * var(--gutter)) * 0.94 / 9 - 4px); --peek: calc(var(--pw) * 1.08); --head: calc(var(--pw) * 0.7); position: relative; margin-top: 32px; padding-top: calc(var(--peek) + var(--head)); }
+  .pencil-stage .figma { position: relative; z-index: 1; margin-top: 0; }
+  .tray {
+    position: absolute; left: 50%; top: var(--head); translate: -50% 0; display: flex; gap: 4px;
+    height: calc(var(--pw) * 3.4); pointer-events: none;
   }
-  .blade:hover, .blade:focus-visible { --lift: 34em; z-index: 10; }
-  .blade[aria-checked="true"] { --lift: 52em; z-index: 11; box-shadow: 0 0 0 2.5em var(--field), 0 18em 40em -12em rgb(0 0 0 / 0.35); }
-  .blade:focus-visible { outline: none; box-shadow: 0 0 0 2.5em var(--ink), 0 18em 40em -12em rgb(0 0 0 / 0.35); }
-  .blade b {
-    grid-column: 2 / -1; grid-row: 1; display: flex; align-items: baseline; justify-content: flex-end; gap: 0.5em;
-    padding: 0.3em 0.2em 0 0; font: 650 22em/1 var(--display); letter-spacing: -0.01em; white-space: nowrap;
+  .tray button {
+    position: relative; flex: none; width: var(--pw); height: 100%; padding: 0; border: 0; background: none; cursor: pointer; pointer-events: auto;
+    translate: 0 0; transition: translate 420ms cubic-bezier(0.3, 1.5, 0.5, 1);
   }
-  .blade b small { font: 500 0.6em/1 var(--text); color: var(--ink-3); }
-  .blade .mesh { grid-column: -2; grid-row: 2; position: relative; overflow: hidden; border-radius: 9em; isolation: isolate; }
-  .blade .mesh::before { content: ""; position: absolute; inset: -18%; background: var(--orb); filter: blur(6px) saturate(1.2); animation: drift 4s ease-in-out infinite alternate paused; }
-  .blade:hover .mesh::before, .blade:focus-visible .mesh::before { animation-play-state: running; }
-  @keyframes drift {
-    33% { transform: rotate(40deg) scale(1.1); filter: blur(6px) saturate(1.4) hue-rotate(-10deg); }
-    66% { transform: rotate(-25deg) scale(1.05); filter: blur(6px) saturate(1.3) hue-rotate(8deg); }
-    100% { transform: rotate(70deg) scale(1.12); filter: blur(6px) saturate(1.45); }
+  .tray button:hover, .tray button:focus-visible { translate: 0 calc(var(--pw) * -0.1); }
+  .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -0.6); }
+  .tray button:focus-visible { outline: none; }
+  .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
+  /* Picking a brush: the new theme shows through the strokes' mask, over
+     the page as it was, held still while the strokes are painted */
+  html.brushing::view-transition-old(root) { animation: brush-hold 1000ms linear both; }
+  html.brushing::view-transition-new(root) {
+    animation: brush-hold 1000ms linear both;
+    -webkit-mask-image: var(--brush-mask); mask-image: var(--brush-mask);
+    -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   }
-  .blade i { grid-row: 2; border-radius: 5em; }
-  .blade .foot { grid-column: 1; grid-row: 1 / -1; display: grid; place-items: center; }
-  .blade .foot::after { content: ""; width: 16em; height: 16em; border-radius: 50%; background: var(--line); box-shadow: inset 0 1em 2em rgb(0 0 0 / 0.25); }
-  /* Narrow screens: a grid of swatches instead of the fan, each a theme's
-     accent, its name and hue, and its light and dark versions to click */
-  .grid-deck { display: none; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 20px 10px; }
-  .theme { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
-  .theme.picked { transform: translateY(-10px); box-shadow: 0 0 0 2px var(--ink), var(--shadow); }
-  .theme .swatch { display: flex; flex-direction: column; justify-content: flex-end; aspect-ratio: 1 / 1.15; padding: 10px 12px; background: var(--chip); color: #fff; }
-  .theme .swatch b { font: 650 17px/1.1 var(--display); letter-spacing: -0.01em; }
-  .theme .swatch span { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .orbs { display: flex; justify-content: center; gap: 10px; padding: 14px 6px; }
-  /* As in the settings window (dist/settings.html): ligmaMesh's blobs,
-     blurred together, drifting while hovered */
-  .orb {
-    position: relative; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%;
-    background: none; cursor: pointer; box-shadow: 0 0 0 1px rgb(127 127 127 / 0.25);
-    transition: transform 160ms var(--ease), box-shadow 120ms ease-out;
+  @keyframes brush-hold { from { opacity: 1; } to { opacity: 1; } }
+  /* The editor is its own layer, so it gets the same mask, lined up with the page */
+  html.brushing::view-transition-group(brush-editor) { animation-duration: 1000ms; }
+  html.brushing::view-transition-old(brush-editor) { animation: brush-hold 1000ms linear both; }
+  html.brushing::view-transition-new(brush-editor) {
+    animation: brush-hold 1000ms linear both;
+    -webkit-mask-image: var(--brush-mask); mask-image: var(--brush-mask);
+    -webkit-mask-size: 100vw 100vh; mask-size: 100vw 100vh; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: calc(var(--ed-x) * -1) calc(var(--ed-y) * -1); mask-position: calc(var(--ed-x) * -1) calc(var(--ed-y) * -1);
   }
-  .orb .mesh { position: absolute; inset: 0; overflow: hidden; border-radius: 50%; isolation: isolate; }
-  .orb .mesh::before {
-    content: ""; position: absolute; inset: -18%; background: var(--orb);
-    filter: blur(5px) saturate(1.2); animation: drift-orb 4s ease-in-out infinite alternate paused;
+  /* The brushes move from where they were to where they end, with the
+     same spring as on the page, while the reveal plays */
+  html.brushing .tray button { transition: none; }
+  html.brushing::view-transition-group(brush-up), html.brushing::view-transition-group(brush-down) { animation-duration: 420ms; animation-timing-function: cubic-bezier(0.3, 1.5, 0.5, 1); }
+  html.brushing::view-transition-old(brush-up), html.brushing::view-transition-old(brush-down) { animation: none; opacity: 0; }
+  html.brushing::view-transition-new(brush-up), html.brushing::view-transition-new(brush-down) { animation: none; }
+  :root.dark .tray svg { filter: saturate(1.25) drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 40%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
+  .tray .tip {
+    position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
+    background: #1e1e1e; color: #fff; font: 500 11px/16px var(--text); white-space: nowrap; opacity: 0; pointer-events: none;
+    transition: opacity 120ms, translate 160ms var(--ease);
   }
-  .orb:hover { transform: scale(1.1); }
-  .orb:hover .mesh::before, .orb:focus-visible .mesh::before { animation-play-state: running; }
-  @keyframes drift-orb {
-    33% { transform: rotate(40deg) scale(1.1); filter: blur(5px) saturate(1.4) hue-rotate(-10deg); }
-    66% { transform: rotate(-25deg) scale(1.05); filter: blur(5px) saturate(1.3) hue-rotate(8deg); }
-    100% { transform: rotate(70deg) scale(1.12); filter: blur(5px) saturate(1.45); }
-  }
-  .orb:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ink); }
-  .orb[aria-checked="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--field); }
-  .orb .badge {
-    position: absolute; z-index: 1; right: -5px; bottom: -5px; display: none; place-items: center;
-    width: 16px; height: 16px; border-radius: 50%; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1.5px var(--field);
-  }
-  .orb .badge svg { width: 10px; height: 10px; }
-  .orb[aria-checked="true"] .badge { display: grid; }
+  .tray button:hover .tip, .tray button:focus-visible .tip { opacity: 1; translate: -50% 0; }
   .modes { display: flex; margin-top: 28px; }
   #themes .now { margin-top: 12px; }
   .modes div { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
@@ -442,44 +539,9 @@
 
   /* Figma, drawn in the page's theme. The design on the canvas keeps its
      own colors, as it does in Ligma */
-  .figma { position: relative; margin-top: 32px; border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px var(--line), var(--shadow); container-type: inline-size; aspect-ratio: 1240 / 600; }
-  .figma .art { font-size: 0.8065cqw; } /* 1em is 10px at 1240px wide */
-  .fg { position: absolute; inset: 0; display: grid; grid-template-columns: 24em 1fr 24em; background: var(--canvas); }
-  .fg .panel { background: var(--panel); display: flex; flex-direction: column; gap: 0.8em; padding: 1.6em; color: var(--ink-2); font-size: 1.1em; }
-  .fg .panel:first-child { border-right: 1px solid var(--line); }
-  .fg .panel:last-child { border-left: 1px solid var(--line); }
-  .fg .file { font-size: 1.2em; font-weight: 600; color: var(--ink); }
-  .fg .tabs2 { display: flex; gap: 1.6em; padding-bottom: 1em; border-bottom: 1px solid var(--line); margin-bottom: 0.4em; }
-  .fg .tabs2 b { color: var(--ink); font-weight: 600; }
-  .fg .row { display: flex; align-items: center; gap: 0.8em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; }
-  .fg .row svg { width: 1.3em; height: 1.3em; }
-  .fg .row.on { background: var(--select); color: var(--ink); }
-  .fg .row.in { padding-left: 2.6em; }
-  .fg .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6em; }
-  .fg .avatar { width: 2.6em; height: 2.6em; border-radius: 50%; background: #f0b232; }
-  .fg .share { padding: 0.6em 1.2em; border-radius: 0.6em; background: var(--field); color: #fff; font-weight: 600; }
-  .fg .prop { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6em; }
-  .fg .prop span { display: flex; align-items: center; gap: 0.6em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); color: var(--ink); font-variant-numeric: tabular-nums; }
-  .fg .prop span i { font-style: normal; color: var(--ink-3); }
-  .fg .h4 { margin: 1em 0 0.2em; font-size: 1em; font-weight: 600; color: var(--ink); }
-  .fg .fill { display: flex; align-items: center; gap: 0.8em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); color: var(--ink); }
-  .fg .fill i { width: 1.4em; height: 1.4em; border-radius: 0.3em; background: #ff5c39; }
+  .figma { position: relative; margin-top: 32px; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px var(--line), var(--shadow); container-type: inline-size; aspect-ratio: 1240 / 600; }
+  .figma .shot { --w: 1240; --h: 600; }
   .stage { position: relative; }
-  .poster { position: absolute; left: 50%; top: 50%; width: 32em; height: 40em; transform: translate(-50%, -54%); background: #ff5c39; border-radius: 0.2em; overflow: hidden; }
-  .poster .sun { position: absolute; left: 4em; top: 4em; width: 16em; height: 16em; border-radius: 50%; background: #ffd23f; }
-  .poster .hill { position: absolute; left: -6em; right: -6em; bottom: -14em; height: 28em; border-radius: 50%; background: #1f1d2b; }
-  .poster .type { position: absolute; left: 3em; bottom: 3em; color: #fff4e0; font: 700 4.4em/0.9 var(--display); letter-spacing: -0.04em; }
-  .frame-name { position: absolute; left: calc(50% - 16em / 1.1); top: calc(50% - 21.6em / 1.1); translate: 0 calc(-100% - 0.45em); font-size: 1.1em; line-height: 1.2; color: var(--ink-2); }
-  .selection { position: absolute; left: 50%; top: 50%; width: 32em; height: 40em; transform: translate(-50%, -54%); box-shadow: 0 0 0 0.15em var(--field); }
-  .selection i { position: absolute; width: 0.9em; height: 0.9em; background: #fff; border: 0.15em solid var(--field); }
-  .selection i:nth-child(1) { left: -0.5em; top: -0.5em; } .selection i:nth-child(2) { right: -0.5em; top: -0.5em; }
-  .selection i:nth-child(3) { left: -0.5em; bottom: -0.5em; } .selection i:nth-child(4) { right: -0.5em; bottom: -0.5em; }
-  .selection span { position: absolute; left: 50%; bottom: -3em; transform: translateX(-50%); padding: 0.2em 0.6em; border-radius: 0.3em; background: var(--field); color: #fff; font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .toolbar { position: absolute; left: 50%; bottom: 2.4em; transform: translateX(-50%); display: flex; align-items: center; gap: 0.15em; padding: 0.5em; border-radius: 1.2em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); white-space: nowrap; }
-  .toolbar span { display: grid; place-items: center; width: 3.4em; height: 3.4em; border-radius: 0.8em; }
-  .toolbar span.on { background: var(--field); color: #fff; }
-  .toolbar span svg { width: 1.9em; height: 1.9em; }
-  .toolbar .dd { flex: none; width: 1.1em; height: 1.1em; margin: 0 0.25em 0 -0.15em; color: var(--ink-2); }
   .figma-caption { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
 
   /* Compare */
@@ -518,13 +580,13 @@
 
   /* The lockup, selected as a layer on the canvas */
   .sign-layer { position: relative; display: flex; align-items: center; gap: 0.12em; padding: 0.1em 0.35em 0.16em 0.22em; background: var(--bg); font: 700 clamp(4rem, min(12vw, 17vh), 10.5rem)/1 var(--display); letter-spacing: -0.045em; color: var(--ink); }
-  .sign-layer::before { content: ""; position: absolute; inset: 0; border: 2px solid var(--field); pointer-events: none; }
-  .sign-layer > span { position: absolute; left: 0; bottom: calc(100% + 8px); font: 500 14px/1 var(--text); letter-spacing: 0; color: var(--link); }
+  .sign-layer::before { content: ""; position: absolute; inset: 0; border: 1px solid var(--field); pointer-events: none; }
+  .sign-layer > span { position: absolute; left: 0; bottom: calc(100% + 6px); font: 500 12px/1 var(--text); letter-spacing: 0.005em; color: var(--field); }
   .sign-layer img { width: 1.05em; height: 1.05em; margin: -0.08em -0.16em -0.08em -0.1em; }
   .sign-layer b { font-weight: 700; padding-bottom: 0.08em; }
-  .sign-layer i { position: absolute; width: 12px; height: 12px; background: #fff; border: 2px solid var(--field); border-radius: 2px; }
-  .sign-layer i:nth-of-type(1) { left: -5px; top: -5px; } .sign-layer i:nth-of-type(2) { right: -5px; top: -5px; }
-  .sign-layer i:nth-of-type(3) { left: -5px; bottom: -5px; } .sign-layer i:nth-of-type(4) { right: -5px; bottom: -5px; }
+  .sign-layer i { position: absolute; width: 9px; height: 9px; background: #fff; border: 1px solid var(--field); }
+  .sign-layer i:nth-of-type(1) { left: -4px; top: -4px; } .sign-layer i:nth-of-type(2) { right: -4px; top: -4px; }
+  .sign-layer i:nth-of-type(3) { left: -4px; bottom: -4px; } .sign-layer i:nth-of-type(4) { right: -4px; bottom: -4px; }
   .frames { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: clamp(32px, 5vh, 44px); }
   .frame { position: relative; }
   .you { position: absolute; left: 30%; top: 58%; display: flex; align-items: flex-start; pointer-events: none; animation: you 9s var(--ease) infinite; }
@@ -539,7 +601,7 @@
   .closing { display: flex; flex-direction: column; align-items: center; margin-top: clamp(120px, 14vw, 200px); padding: 0 var(--gutter) 32px; text-align: center; }
   .closing h2 { font-size: clamp(3rem, 8vw, 6rem); line-height: 0.95; letter-spacing: -0.04em; font-weight: 700; }
   .closing > p { margin-top: 16px; font-size: 16px; color: var(--ink-2); }
-  .closing .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 32px; }
+  .closing .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; width: max-content; max-width: 100%; margin-top: 32px; }
   .site-links { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 20px; width: 100%; max-width: calc(var(--wrap) - 2 * var(--gutter)); margin-top: clamp(96px, 12vw, 144px); padding-top: 24px; border-top: 1px solid var(--line); font-size: 14px; }
   .site-links a { color: var(--ink-2); text-decoration: none; }
   .site-links a:hover { color: var(--ink); }
@@ -590,20 +652,11 @@
   .steps small { font-size: 13px; color: var(--ink-3); }
   .ai .note { margin-top: 16px; font-size: 14px; color: var(--ink-2); }
 
-  .canvas { position: absolute; left: 5em; top: 5em; right: -4em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
-  .imagebar { position: absolute; left: 50%; top: 7.6em; translate: -50% 0; display: flex; gap: 0.3em; padding: 0.5em; border-radius: 1.1em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); white-space: nowrap; }
-  .imagebar span { display: flex; align-items: center; gap: 0.5em; height: 3em; padding: 0 0.9em; border-radius: 0.7em; font-size: 1.15em; font-weight: 500; color: var(--ink); transition: background-color 200ms, color 200ms; }
-  .imagebar svg { width: 1.9em; height: 1.9em; margin: 0 -0.2em; }
-  .imagebar .sep { width: 1px; height: auto; margin: 0.6em 0.2em; padding: 0; background: var(--line); }
+  .photo { position: absolute; }
   .ai-scene .strip [data-tool] { display: none; }
   .ai-scene[data-step="1"] .strip [data-tool="1"], .ai-scene[data-step="2"] .strip [data-tool="2"], .ai-scene[data-step="3"] .strip [data-tool="3"] { display: inline; }
   .ai-scene[data-step="1"] .imagebar [data-tool="1"], .ai-scene[data-step="2"] .imagebar [data-tool="2"], .ai-scene[data-step="3"] .imagebar [data-tool="3"] { background: var(--field); color: #fff; }
-  .photo { position: absolute; left: 11em; top: 14.4em; width: 40em; height: 30em; }
   .photo svg { display: block; width: 100%; height: 100%; overflow: visible; }
-  .photo .sel { position: absolute; inset: 0; box-shadow: 0 0 0 0.15em var(--field); pointer-events: none; }
-  .photo .sel i { position: absolute; width: 0.9em; height: 0.9em; background: #fff; border: 0.15em solid var(--field); }
-  .photo .sel i:nth-child(1) { left: -0.5em; top: -0.5em; } .photo .sel i:nth-child(2) { right: -0.5em; top: -0.5em; }
-  .photo .sel i:nth-child(3) { left: -0.5em; bottom: -0.5em; } .photo .sel i:nth-child(4) { right: -0.5em; bottom: -0.5em; }
   .photo .bg { opacity: calc(1 - var(--s2, 0)); }
   .photo .pick { opacity: calc(var(--s1, 0) * (1 - var(--s2, 0))); }
   .photo .real { opacity: calc(1 - var(--s3, 0)); }
@@ -623,28 +676,24 @@
   }
   @media (max-width: 900px) {
     .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
-    .fan-wrap, .modes { display: none; }
-    .grid-deck { display: grid; margin-top: 8px; }
-    .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "s s" "t d" "p k" "c c" "v l"; }
-    .sheet[open] { grid-template-columns: minmax(0, 1fr); }
-    .sheet-copy { padding: 8px 24px 24px; }
+    .pencil-stage { --pw: calc((100vw - 2 * var(--gutter)) / 9 - 2px); }
+    .tray { gap: 2px; }
+    .tray .tip { display: none; }
+    .cv-layers { left: 8px; right: 8px; top: 8px; width: auto; display: flex; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
+    .cv-layers > :not(.f-layer) { display: none; }
+    .cv-layers .f-layer { flex: none; width: auto; margin: 0; padding: 0 10px 0 6px; }
     .ai { row-gap: 0; }
     .ai > div:first-child { display: contents; }
     .ai .chip { order: 1; margin-top: 28px; position: sticky; top: 12px; z-index: 1; }
     .ai .steps { order: 2; }
     .ai .note { order: 3; }
     .index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .figma { aspect-ratio: 4 / 3; }
-    .figma .art { font-size: 1.25cqw; }
-    .fg { grid-template-columns: 24em 1fr; }
-    .fg .panel:last-child { display: none; }
+    .figma { aspect-ratio: 1000 / 600; }
+    .figma .shot { --view: 1000; }
   }
   @media (max-width: 640px) {
     nav ul li:not(:last-child) { display: none; }
     .index { grid-template-columns: minmax(0, 1fr); }
-    .grid-deck { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .bento { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; }
-    .tile { grid-area: auto !important; }
     .install { grid-template-columns: minmax(0, 1fr); }
     .you { display: none; }
     .site-links .brand, .site-links small { margin: 0; width: 100%; justify-content: center; }
@@ -654,8 +703,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .blade, .tile, .btn, .rail .plug, .orb, .theme, .reel a { transition: none; }
-    .blade .mesh::before, .orb .mesh::before, .photo .ants, .you, .sheet[open] { animation: none; }
+    .tray button, .btn, .orb, .theme, .reel a { transition: none; }
+    .orb .mesh::before, .photo .ants, .you, .sheet[open] { animation: none; }
     .reel { mask-image: none; width: auto; margin-left: 0; }
     .reel-row { width: auto; animation: none; }
     .reel-track { flex-wrap: wrap; }
@@ -712,6 +761,11 @@
     <symbol id="i-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></symbol>
     <symbol id="i-dash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 8h7"/></symbol>
     <symbol id="i-tick" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
+    <symbol id="i-play" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M5.5 3.8v8.4L12 8z"/></symbol>
+    <symbol id="i-pick" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m8.5 5 2.5 2.5M3.5 12.5l.5-2 5.2-5.2 2.5 2.5L6.5 13z"/><path d="m9.8 4.2 1.3-1.3a1.3 1.3 0 0 1 1.9 1.9l-1.3 1.3"/></symbol>
+    <symbol id="i-opacity" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/><path d="M3.5 12.5 12.5 3.5v9z" fill="currentColor" stroke="none" opacity=".45"/></symbol>
+    <symbol id="i-radius" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M3.5 12.5V7.5a4 4 0 0 1 4-4h5"/></symbol>
+    <symbol id="i-hand" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8.5V4a1 1 0 0 1 2 0v3.5M7.5 7V3a1 1 0 0 1 2 0v4M9.5 7V4a1 1 0 0 1 2 0v5c0 2.8-1.7 4.5-4.2 4.5-1.6 0-2.6-.7-3.4-1.9L2.6 9.5a1 1 0 0 1 1.6-1.2l1.3 1.4"/></symbol>
     <!-- A multiplayer cursor, rounded as Figma draws them -->
     <symbol id="i-cursor" viewBox="0 0 16 16"><path d="M3.4 2.2c-.7-.3-1.4.4-1.1 1.1l4.3 10.3c.3.7 1.3.7 1.6-.1l1.3-3.7c.1-.3.3-.5.6-.6l3.7-1.3c.8-.3.8-1.3.1-1.6z" fill="currentColor" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/></symbol>
     <!-- From the tab bar -->
@@ -741,8 +795,8 @@
   <nav aria-label="Main">
     <a class="brand" href="./"><img src="logo.png" alt="" width="30" height="30">Ligma</a>
     <ul>
-      <li><a href="#features">Features</a></li>
       <li><a href="#themes">Themes</a></li>
+      <li><a href="#features">Features</a></li>
       <li><a href="#install">Install</a></li>
       <li><a href="https://github.com/trelakor/ligma">GitHub</a></li>
       <li><a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download>Download</a></li>
@@ -768,8 +822,8 @@
         <ul class="reel-track">
           <li><a href="#f-split"><svg class="icon"><use href="#i-split"/></svg>Split view</a></li>
           <li><a href="#f-tabs"><svg class="icon"><use href="#i-tabs"/></svg>Tabs</a></li>
-          <li><a href="#ai"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
           <li><a href="#themes"><svg class="icon"><use href="#i-palette"/></svg>Nine themes</a></li>
+          <li><a href="#ai"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
           <li><a href="#f-rail"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the sidebar</a></li>
           <li><a href="#f-previews"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
           <li><a href="#f-copy"><svg class="icon"><use href="#i-code"/></svg>Copy as code</a></li>
@@ -778,8 +832,8 @@
         <ul class="reel-track" aria-hidden="true">
           <li><a href="#f-split" tabindex="-1"><svg class="icon"><use href="#i-split"/></svg>Split view</a></li>
           <li><a href="#f-tabs" tabindex="-1"><svg class="icon"><use href="#i-tabs"/></svg>Tabs</a></li>
-          <li><a href="#ai" tabindex="-1"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
           <li><a href="#themes" tabindex="-1"><svg class="icon"><use href="#i-palette"/></svg>Nine themes</a></li>
+          <li><a href="#ai" tabindex="-1"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
           <li><a href="#f-rail" tabindex="-1"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the sidebar</a></li>
           <li><a href="#f-previews" tabindex="-1"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
           <li><a href="#f-copy" tabindex="-1"><svg class="icon"><use href="#i-code"/></svg>Copy as code</a></li>
@@ -815,6 +869,444 @@
     </div>
   </header>
 
+  <section id="themes" aria-labelledby="themes-heading">
+    <div class="themes-top">
+      <div class="themes-copy">
+        <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
+        <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick a brush to see one here.</p>
+      </div>
+      <div class="themes-side">
+        <div class="modes"><div role="radiogroup" aria-label="Mode">
+          <button type="button" role="radio" data-mode="light"><svg><use href="#i-sun"/></svg>Light</button>
+          <button type="button" role="radio" data-mode="dark"><svg><use href="#i-moon"/></svg>Dark</button>
+        </div></div>
+        <div class="now" aria-live="polite">
+          <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
+          <button type="button" id="reset" hidden>Back to your system's look</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pencil-stage">
+      <div class="tray" id="tray" role="radiogroup" aria-label="Themes"></div>
+    <div class="figma">
+      <div class="art" aria-hidden="true">
+        <div class="shot" style="--w:1240;--h:600">
+          <div class="f-panel l">
+                    <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
+                    <div class="f-file"><b>Brand refresh<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                    <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
+                    <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
+                    <div class="f-page on">Page 1</div>
+                    <div class="f-page">Drafts</div>
+                    <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
+            <div class="f-layer on ex" style="--in:0"><svg class="ch"><use href="#i-chev-down"/></svg><svg><use href="#i-frame"/></svg><span>Poster</span></div>
+            <div class="f-layer kid" style="--in:1"><span class="sp"></span><svg><use href="#i-text"/></svg><span>Headline</span></div>
+            <div class="f-layer kid" style="--in:1"><span class="sp"></span><svg><use href="#i-ellipse"/></svg><span>Sun</span></div>
+            <div class="f-layer kid last" style="--in:1"><span class="sp"></span><svg><use href="#i-ellipse"/></svg><span>Hill</span></div>
+            <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Social card</span></div>
+            <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Story</span></div>
+          </div>
+          <div class="f-frame sel" style="left:460px;top:84px;width:320px;height:400px"><span class="nm">Poster</span><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><span class="f-size">320 × 400</span></div>
+          
+                  <div class="f-bar">
+                    <span class="on"><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                    <span><svg><use href="#i-frame"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                    <span><svg><use href="#i-rect"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                    <span><svg><use href="#i-pen3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                    <span><svg><use href="#i-text"/></svg></span>
+                    <span><svg><use href="#i-comment"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                    <span><svg><use href="#i-actions"/></svg></span>
+                    <hr>
+                    <span class="mode"><i class="on"><svg><use href="#i-design"/></svg></i><i><svg><use href="#i-braces"/></svg></i></span>
+                  </div>
+          <div class="f-panel r">
+            <div class="f-top"><span class="f-av">M</span><span class="f-play"><svg><use href="#i-play"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-share">Share</span></div>
+            <div class="f-tabs"><span class="on">Design</span><span>Prototype</span><span class="end">100%<svg><use href="#i-chev-down"/></svg></span></div>
+            <div class="f-prop"><b class="sel">Frame<svg><use href="#i-chev-down"/></svg></b>
+              <div class="f-cap">Position</div>
+              <div class="f-grid"><span class="f-in"><i>X</i>240</span><span class="f-in"><i>Y</i>120</span></div>
+            </div>
+            <div class="f-prop"><b>Layout</b>
+              <div class="f-grid"><span class="f-in"><i>W</i>320</span><span class="f-in"><i>H</i>400</span></div>
+            </div>
+            <div class="f-prop"><b>Appearance</b>
+              <div class="f-grid"><span class="f-in"><i><svg><use href="#i-opacity"/></svg></i>100%</span><span class="f-in"><i><svg><use href="#i-radius"/></svg></i>0</span></div>
+            </div>
+            <div class="f-prop"><b>Fill<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b>
+              <div class="f-grid" style="grid-template-columns:1fr 24px"><span class="f-in"><i class="sw" style="background:#ff5c39"></i>FF5C39<span class="pc">100 %</span></span></div>
+            </div>
+            <div class="f-prop closed"><b>Stroke<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b></div>
+            <div class="f-prop closed"><b>Effects<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b></div>
+            <div class="f-prop closed"><b>Export<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+    <p class="figma-caption">Your designs keep their colors. Only Figma's interface changes, and Ligma's with it.</p>
+  </section>
+
+  <section id="features" aria-labelledby="features-heading">
+    <div class="head">
+      <h2 id="features-heading">Everything the browser tab is missing</h2>
+      <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
+    </div>
+
+    <div class="cv" id="cv" data-lenis-prevent-horizontal role="region" aria-label="Features, as frames on a Figma canvas. Drag to look around">
+      <div class="cv-board" style="width:4000px;height:1520px">
+        <div class="cv-frame" id="f-split" style="left:160px;top:140px;width:900px;height:640px">
+          <span class="nm">Split view</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot" style="--w:900;--h:1000">
+              <div class="lg-tabs">
+                <div class="home"><svg><use href="#i-home"/></svg></div>
+                <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Sprout app</div>
+                <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Sprout social<svg class="x"><use href="#i-x"/></svg></div>
+                <div class="new"><svg><use href="#i-plus"/></svg></div>
+              </div>
+              <div class="f-panel l" style="top:38px">
+                <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
+                <div class="f-file"><b>Sprout app<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
+                <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
+                <div class="f-page on">Page 1</div>
+                <div class="f-page">Drafts</div>
+                <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Onboarding</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Home</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Settings</span></div>
+              </div>
+              <div class="sv-halves">
+                <div><div class="f-frame rv" style="--d:.1;left:64px;top:96px;width:200px;height:400px"><span class="nm">Onboarding</span>
+                  <div class="d d-sprout"><div class="ill"><i class="leaf l1"></i><i class="leaf l2"></i><i class="pot"></i><i class="sun"></i></div><b>Plan less.<br>Plant more.</b><p>Watering reminders for every pot on the sill</p><span class="cta">Get started</span><span class="dots"><i></i><i></i><i></i></span></div></div></div>
+                <div><div class="f-frame rv" style="--d:.2;left:40px;top:96px;width:250px;height:250px"><span class="nm">Post</span>
+                  <div class="d d-post"><i class="leaf"></i><span class="tag">sprout.shop</span><b>Spring<br>drop</b><span class="sub">12 new pots, glazed by hand</span></div></div>
+                <div class="f-frame rv" style="--d:.25;left:40px;top:390px;width:120px;height:214px"><span class="nm">Story</span>
+                  <div class="d d-story"><b>48 hours only</b><i></i></div></div></div>
+              </div>
+              <div class="f-frame sel rv pop" style="--d:.4;left:536px;top:290px;width:70px;height:70px"><div class="d-sticker">NEW</div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i></div>
+              <svg class="f-cursor rv" style="--d:.4;left:586px;top:338px"><use href="#i-cursor"/></svg>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:1010px;top:460px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Split view, and windows</h3>
+            <p>Two files side by side under one set of Figma's panels. Drag a selection from one into the other.</p>
+            <ul><li>Split from a tab's menu, or drop a tab on either half</li><li>Drag a tab out of the bar for a window of its own</li></ul>
+            <code>"splitView": true</code>
+          </div>
+        </div>
+        <div class="cv-frame" id="f-tabs" style="left:1440px;top:140px;width:480px;height:360px">
+          <span class="nm">Tabs</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot" style="--w:480">
+              <div class="lg-tabs rv" style="--d:0">
+                <div class="home"><svg><use href="#i-home"/></svg></div>
+                <div class="pin"><span class="emoji">🎨</span></div>
+                <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Brand refresh<svg class="x"><use href="#i-x"/></svg></div>
+                <div class="tab hover sleep pre"><svg style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
+                <div class="tab"><svg style="color:#9747ff"><use href="#i-board"/></svg>Onboarding map</div>
+              </div>
+              <div class="f-panel l" style="top:38px">
+                <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
+                <div class="f-file"><b>Brand refresh<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
+                <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
+                <div class="f-page on">Page 1</div>
+                <div class="f-page">Drafts</div>
+                <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Poster</span></div>
+              </div>
+              <div class="lg-preview rv" style="--d:.3;left:208px;top:42px">
+                <div class="img" style="background:#1f1d2b">
+                  <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
+                  <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
+                  <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
+                  <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
+                </div>
+                <div class="txt"><b>Q3 pitch</b><span>Figma Slides · Asleep</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:1880px;top:300px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Tabs, like the desktop app</h3>
+            <p>Every file in its own tab, with Home pinned on the left. Point at one to see how it last looked.</p>
+            <ul><li>Start a file's name with an emoji to make it the icon</li><li>Asleep tabs give their memory back</li></ul>
+            <code>"restoreTabs": true</code>
+          </div>
+        </div>
+        <div class="cv-frame" id="f-previews" style="left:2360px;top:140px;width:752px;height:600px">
+          <span class="nm">Layer previews</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot tall" style="--w:752;--h:1000">
+              <div class="f-panel l">
+                <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
+                <div class="f-file"><b>Kiln website<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
+                <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
+                <div class="f-page on">Page 1</div>
+                <div class="f-page">Drafts</div>
+                <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
+                <div class="f-layer on ex rv" style="--d:.1;--in:0"><svg class="ch"><use href="#i-chev-down"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="inset:3px 2px;background:#f6f1ea"></i><i style="left:4px;top:8px;width:7px;height:2px;background:#2a1d16"></i><i style="left:4px;top:11px;width:6px;height:2px;background:#2a1d16"></i><i style="left:13px;top:7px;width:8px;height:10px;border-radius:1px;background:#c2562b"></i></span><span>Home</span></div>
+                <div class="f-layer kid rv" style="--d:.14;--in:1"><span class="sp"></span><svg><use href="#i-frame"/></svg><span class="th"><i style="left:2px;right:2px;top:10px;height:4px;background:#f6f1ea"></i><i style="left:3px;top:11px;width:5px;height:2px;background:#2a1d16"></i></span><span>Nav</span></div>
+                <div class="f-layer kid rv" style="--d:.18;--in:1"><span class="sp"></span><svg><use href="#i-text"/></svg><span class="th" style="background:#f6f1ea"><i style="left:3px;top:7px;width:17px;height:3px;background:#2a1d16"></i><i style="left:3px;top:12px;width:12px;height:3px;background:#2a1d16"></i></span><span>Headline</span></div>
+                <div class="f-layer kid rv" style="--d:.22;--in:1"><span class="sp"></span><svg><use href="#i-rect"/></svg><span class="th" style="background:#f6f1ea"><i style="left:3px;top:8px;width:18px;height:8px;border-radius:4px;background:#c2562b"></i></span><span>Shop beans</span></div>
+                <div class="f-layer kid last rv" style="--d:.26;--in:1"><span class="sp"></span><svg><use href="#i-rect"/></svg><span class="th" style="background:#c2562b"><i style="left:8px;top:8px;width:9px;height:8px;border-radius:0 0 4px 4px;background:#f6f1ea"></i></span><span>Photo</span></div>
+                <div class="f-layer rv" style="--d:.3;--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="inset:3px 2px;background:#2a1d16"></i><i style="left:5px;top:7px;width:14px;height:2px;background:#f6f1ea"></i><i style="left:5px;top:11px;width:10px;height:2px;background:#f6f1ea;opacity:.5"></i><i style="left:5px;top:15px;width:12px;height:2px;background:#f6f1ea;opacity:.5"></i></span><span>Menu</span></div>
+                <div class="f-layer rv" style="--d:.34;--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="inset:3px 2px;background:#fff"></i><i style="left:5px;top:7px;width:14px;height:3px;background:#e6e6e6"></i><i style="left:5px;top:12px;width:14px;height:3px;background:#e6e6e6"></i><i style="left:5px;top:17px;width:14px;height:3px;border-radius:1px;background:#c2562b"></i></span><span>Checkout</span></div>
+              </div>
+              <div class="f-frame sel rv" style="--d:.05;left:276px;top:110px;width:440px;height:330px"><span class="nm">Home</span>
+                <div class="d d-kiln"><div class="nav"><b>kiln</b><i></i><i></i><i></i><span>Order</span></div><div class="k-hero"><div><b>Roasted slowly, sipped fast.</b><p>Small-batch beans at your door, every other Friday</p><span class="cta">Shop beans</span></div><div class="k-photo"><i class="saucer"></i><i class="handle"></i><i class="cup"></i></div></div></div>
+                <i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><span class="f-size">440 × 330</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:3080px;top:300px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Layer previews</h3>
+            <p>A small picture of each layer in the layers panel, in every mode, as Figma shows only in Draw.</p>
+            <code>"layerPreviews": true</code>
+          </div>
+        </div>
+        <div class="cv-frame" id="f-discord" style="left:1440px;top:640px;width:420px;height:315px">
+          <span class="nm">Discord</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot" style="--w:420;background:#313338">
+              <div class="dc rv" style="--d:0;left:50px;top:14px">
+                <div class="banner"></div>
+                <div class="avatar">M</div>
+                <div class="who"><b>Mira</b><span>mira.designs</span></div>
+                <div class="act rv" style="--d:.25">
+                  <span>Playing</span>
+                  <div class="row">
+                    <div class="big"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
+                    <div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div>
+                  </div>
+                  <div class="join">Ask to Join</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:1820px;top:760px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Your file on Discord</h3>
+            <p>Your profile shows the file you're in, the page or slide, and the tool in your hand.</p>
+            <ul><li>Keep any file private from its tab's menu</li><li>Invites let friends ask to join</li></ul>
+            <code>"discordRichPresence": true</code>
+          </div>
+        </div>
+        <div class="cv-frame" id="f-rail" style="left:160px;top:1000px;width:556px;height:417px">
+          <span class="nm">Plugins in the sidebar</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot" style="--w:556">
+              <div class="f-nav rv" style="--d:0">
+                <span><svg><use href="#i-figma"/></svg></span>
+                <span class="on"><svg><use href="#i-file"/></svg></span>
+                <span><svg><use href="#i-assets"/></svg></span>
+                <span><svg><use href="#i-plus-circle"/></svg></span>
+                <span><svg><use href="#i-briefcase"/></svg></span>
+                <hr>
+                <span><svg><use href="#i-hex"/></svg></span>
+                <span><svg><use href="#i-dev"/></svg></span>
+                <span class="plug rv" style="--d:.2"><i style="background:#ff5c39"><svg><use href="#i-ellipse"/></svg></i></span>
+                <span class="plug hover rv" style="--d:.26"><i style="background:#7b61ff"><svg><use href="#i-contrast"/></svg></i></span>
+                <span class="plug rv" style="--d:.32"><i style="background:#14a38b"><svg><use href="#i-text"/></svg></i></span>
+                <span class="plug rv" style="--d:.38"><i style="background:#f5b400"><svg><use href="#i-star"/></svg></i></span>
+              </div>
+              <div class="f-frame rv" style="--d:.1;left:330px;top:56px;width:200px;height:250px"><span class="nm">Icons</span><div class="d d-icons"><span><svg><use href="#i-home"/></svg></span><span><svg><use href="#i-search"/></svg></span><span><svg><use href="#i-star"/></svg></span><span><svg><use href="#i-sun"/></svg></span><span><svg><use href="#i-moon"/></svg></span><span><svg><use href="#i-key"/></svg></span><span class="on"><svg><use href="#i-palette"/></svg></span><span><svg><use href="#i-layers"/></svg></span><span><svg><use href="#i-comment"/></svg></span><span><svg><use href="#i-code"/></svg></span><span><svg><use href="#i-file"/></svg></span><span><svg><use href="#i-import"/></svg></span></div></div>
+              <div class="f-tip rv" style="--d:.48;left:52px;top:316px">Contrast checker</div>
+              <div class="f-panel" style="left:48px;border-right:1px solid var(--bd)">
+                <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
+                <div class="f-file"><b>Icon kit<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+                <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
+                <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
+                <div class="f-page on">Page 1</div>
+                <div class="f-page">Drafts</div>
+                <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Icons</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Icons / filled</span></div>
+                <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Cover</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:690px;top:1080px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Your plugins, one click away</h3>
+            <p>Every plugin and widget saved to your account sits in the left sidebar. Click one to run it.</p>
+            <ul><li>Reorder by holding Ctrl and dragging</li></ul>
+            <code>"railPlugins": true</code>
+          </div>
+        </div>
+        <div class="cv-frame" id="f-dev" style="left:1160px;top:1000px;width:556px;height:417px">
+          <span class="nm">Development plugins</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot" style="--w:556">
+              <div class="f-pop actions rv" style="--d:0;left:78px;top:40px">
+                <div class="search"><svg><use href="#i-search"/></svg>Search</div>
+                <div class="tabs"><span>All</span><span>Assets</span><span class="on">Plugins &amp; widgets</span><span class="dev">Development<svg><use href="#i-chev-down"/></svg></span></div>
+                <div class="row hover rv" style="--d:.18"><span class="pi" style="background:#7b61ff"><svg><use href="#i-code"/></svg></span><span class="nm"><span>Token sync<small>Development</small></span><i>~/plugins/token-sync/manifest.json</i></span><span class="more"><svg><use href="#i-chev-right"/></svg></span></div>
+                <div class="row rv" style="--d:.26"><span class="pi" style="background:#14a38b"><svg><use href="#i-contrast"/></svg></span><span class="nm"><span>Contrast audit<small>Development</small></span><i>~/plugins/contrast-audit/manifest.json</i></span></div>
+                <div class="row import rv" style="--d:.34"><svg><use href="#i-import"/></svg>Import from manifest…</div>
+              </div>
+              <div class="f-bar">
+                <span><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                <span><svg><use href="#i-frame"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                <span><svg><use href="#i-rect"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                <span><svg><use href="#i-pen3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                <span><svg><use href="#i-text"/></svg></span>
+                <span><svg><use href="#i-comment"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                <span class="on"><svg><use href="#i-actions"/></svg></span>
+                <hr>
+                <span class="mode"><i class="on"><svg><use href="#i-design"/></svg></i><i><svg><use href="#i-braces"/></svg></i></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:1690px;top:1080px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Development plugins</h3>
+            <p>Import a plugin from its manifest.json, as in the desktop app. figma.com can't do this.</p>
+            <ul><li>Not sandboxed, so import only ones you trust</li></ul>
+            <code>plugins.json</code>
+          </div>
+        </div>
+        <div class="cv-frame" id="f-copy" style="left:2360px;top:900px;width:440px;height:330px">
+          <span class="nm">Copy as code</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot" style="--w:440">
+              <div class="f-frame sel" style="left:76px;top:28px;width:200px;height:150px"><span class="nm">Card</span><div class="d d-price"><div class="card"><span>Pro</span><b>$12<small>/mo</small></b><i>Upgrade</i></div></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i></div>
+              <div class="f-menu rv" style="--d:0;left:-128px;top:52px;width:200px">
+                <div>Copy<span>Ctrl+C</span></div>
+                <div>Paste here</div>
+                <div class="on">Copy/Paste as<svg><use href="#i-chev-right"/></svg></div>
+                <hr>
+                <div>Bring to front<span>]</span></div>
+                <div>Send to back<span>[</span></div>
+              </div>
+              <div class="f-menu rv" style="--d:.12;left:68px;top:108px;width:210px">
+                <div>Copy as text</div>
+                <div class="on">Copy as code<svg><use href="#i-chev-right"/></svg></div>
+                <div>Copy as PNG<span>Shift+Ctrl+C</span></div>
+                <div>Copy as SVG</div>
+                <hr>
+                <div>Copy link to selection</div>
+              </div>
+              <div class="f-menu rv" style="--d:.24;left:274px;top:132px;width:180px">
+                <div>CSS</div>
+                <div>CSS (all layers)</div>
+                <div>iOS</div>
+                <div>Android</div>
+                <hr>
+                <div class="on">Tailwind</div>
+                <div>Tailwind (all layers)</div>
+                <div>React</div>
+              </div>
+              <div class="snippet rv" style="--d:.4;left:-8px;top:228px;width:290px;height:120px"><span class="c">// Card</span>
+<span class="a">className</span>=<span class="s">"flex flex-col gap-4</span>
+<span class="s">  rounded-2xl bg-white p-6</span>
+<span class="s">  shadow-lg"</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:2770px;top:1000px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Copy as code</h3>
+            <p>Tailwind and React in Figma's right-click menu, in every file you can edit, on any plan. No Dev Mode needed.</p>
+            <code>"copyAsCode": true</code>
+          </div>
+        </div>
+        <div class="cv-frame" id="f-contrast" style="left:3240px;top:900px;width:400px;height:300px">
+          <span class="nm">Color contrast</span>
+          <div class="cv-art" aria-hidden="true">
+            <div class="shot" style="--w:400">
+              <div class="f-pop picker rv" style="--d:0;left:50px;top:-76px;width:240px;--hue:#ff4d00;--pick:#b83a0d">
+                <div class="sq">
+                  <span class="knob" style="left:70%;top:55%"></span>
+                  <svg viewBox="0 0 1 1" preserveAspectRatio="none" fill="none" stroke-linecap="round">
+                    <path d="M0 .50C.3 .48.6 .42 1 .34" stroke="rgb(0 0 0/.35)" stroke-width="3" vector-effect="non-scaling-stroke"/><path d="M0 .50C.3 .48.6 .42 1 .34" stroke="#fff" stroke-width="1.25" vector-effect="non-scaling-stroke"/>
+                    <path d="M0 .70C.3 .68.6 .63 1 .57" stroke="rgb(0 0 0/.35)" stroke-width="3" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/><path d="M0 .70C.3 .68.6 .63 1 .57" stroke="#fff" stroke-width="1.25" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>
+                  </svg>
+                </div>
+                <div class="sliders">
+                  <svg><use href="#i-pick"/></svg>
+                  <div class="bar" style="background:linear-gradient(to right,red,#ff0,lime,cyan,blue,#f0f,red)"><i style="left:4.5%;background:#ff4d00"></i></div>
+                  <div class="bar" style="background:linear-gradient(to right,transparent,#b83a0d),repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/8px 8px"><i style="left:calc(100% - 6px);background:#b83a0d"></i></div>
+                </div>
+                <div class="hexrow"><span class="f-in" style="padding:0 4px 0 8px;justify-content:space-between">Hex<svg style="width:12px;height:12px;color:var(--t2)"><use href="#i-chev-down"/></svg></span><span class="f-in" style="padding-left:8px">B83A0D<span class="pc">100 %</span></span></div>
+                <div class="ratio rv" style="--d:.3">
+                  <span class="aa">Aa</span><b>5.40:1</b>
+                  <span class="lv"><span class="pass"><svg viewBox="0 0 12 2" style="width:12px;height:2px;opacity:.6"><path d="M0 1h12" stroke="currentColor" stroke-width="1.5"/></svg>AA<svg viewBox="0 0 12 12" style="width:12px;height:12px;color:#14ae5c"><path d="m3 6.2 2 2L9 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="short"><svg viewBox="0 0 12 2" style="width:12px;height:2px;opacity:.6"><path d="M0 1h12" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/></svg>AAA<svg viewBox="0 0 12 12" style="width:12px;height:12px;color:var(--t3)"><path d="m4 4 4 4m0-4L4 8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cv-note" style="left:3610px;top:1000px">
+          <span class="cv-pin"><img src="logo.png" alt=""></span>
+          <div class="cv-card">
+            <div class="who"><b>Ligma</b></div>
+            <h3>Color contrast</h3>
+            <p>The color picker shows the WCAG ratio against what's behind the layer, worked out from every layer under it.</p>
+            <ul><li>Lines on the square mark where AA and AAA start to pass</li></ul>
+            <code>"colorContrast": true</code>
+          </div>
+        </div>
+      </div>
+      <div class="cv-layers cv-ui" role="group" aria-label="Frames">
+        <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span></div>
+        <div class="f-file"><b>Ligma<svg><use href="#i-chev-down"/></svg></b><span>What it adds to Figma</span></div>
+        <div class="f-sec f-rule">Layers</div>
+        <button type="button" class="f-layer" data-frame="f-split"><svg><use href="#i-frame"/></svg><span>Split view</span></button>
+        <button type="button" class="f-layer" data-frame="f-tabs"><svg><use href="#i-frame"/></svg><span>Tabs</span></button>
+        <button type="button" class="f-layer" data-frame="f-previews"><svg><use href="#i-frame"/></svg><span>Layer previews</span></button>
+        <button type="button" class="f-layer" data-frame="f-discord"><svg><use href="#i-frame"/></svg><span>Discord</span></button>
+        <button type="button" class="f-layer" data-frame="f-rail"><svg><use href="#i-frame"/></svg><span>Plugins in the sidebar</span></button>
+        <button type="button" class="f-layer" data-frame="f-dev"><svg><use href="#i-frame"/></svg><span>Development plugins</span></button>
+        <button type="button" class="f-layer" data-frame="f-copy"><svg><use href="#i-frame"/></svg><span>Copy as code</span></button>
+        <button type="button" class="f-layer" data-frame="f-contrast"><svg><use href="#i-frame"/></svg><span>Color contrast</span></button>
+      </div>
+      <div class="cv-tools cv-ui" aria-hidden="true">
+        <div class="f-bar"><span><svg><use href="#i-move3"/></svg></span><span class="on"><svg><use href="#i-hand"/></svg></span><span><svg><use href="#i-comment"/></svg></span></div>
+        <div class="cv-zoom"><span id="cv-zoom">100%</span></div>
+      </div>
+    </div>
+    <p class="cv-hint">Drag the canvas to look around, or pick a frame from Layers</p>
+
+    <div class="index-head" id="more">
+      <h2>And the smaller things</h2>
+    </div>
+    <div class="index">
+      <div><h3><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
+      <div><h3><svg class="icon"><use href="#i-key"/></svg>Google sign-in</h3><p>Works like the desktop app's, with or without the official app installed.</p></div>
+      <div><h3><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</h3><p>Uses Figma's font helper, and starts it when it isn't running.</p></div>
+      <div><h3><svg class="icon"><use href="#i-update"/></svg>Automatic updates</h3><p>Downloaded in the background and installed in place, so you stay signed in.</p></div>
+      <div><h3><svg class="icon"><use href="#i-scale"/></svg>Interface scale</h3><p>Zoom Figma, the tabs and menus together, from 50% to 200%.</p></div>
+      <div><h3><svg class="icon"><use href="#i-sliders"/></svg>Image adjustments</h3><p>Copy an image's exposure, contrast and the rest, and paste them onto another without the image.</p></div>
+      <div><h3><svg class="icon"><use href="#i-modes"/></svg>Toolbar modes</h3><p>Choose which of Draw, Design, Motion and Dev Mode the toolbar's switch offers.</p></div>
+      <div><h3><svg class="icon"><use href="#i-home"/></svg>Classic home</h3><p>Keeps Figma's long-standing home page on accounts trying the new one.</p></div>
+    </div>
+  </section>
+
   <section class="ai-scene scene" id="ai" data-scene="ai" data-step="1" style="--len: 600svh" aria-labelledby="ai-heading">
     <div class="pin">
       <div class="ai">
@@ -831,15 +1323,15 @@
         <div class="chip">
           <div class="field">
             <div class="art" aria-hidden="true">
-              <div class="canvas"></div>
-              <div class="imagebar">
-                <span><svg><use href="#i-crop"/></svg>Crop</span>
-                <span class="sep"></span>
-                <span data-tool="1"><svg><use href="#i-object"/></svg>Select object</span>
-                <span data-tool="2"><svg><use href="#i-cutout"/></svg>Remove background</span>
-                <span data-tool="3"><svg><use href="#i-vector"/></svg>Vectorize</span>
-              </div>
-              <div class="photo">
+              <div class="shot" style="--w:640">
+                <div class="imagebar" style="left:50%;translate:-50% 0;top:32px">
+                  <span><svg><use href="#i-crop"/></svg>Crop</span>
+                  <hr>
+                  <span data-tool="1"><svg><use href="#i-object"/></svg>Select object</span>
+                  <span data-tool="2"><svg><use href="#i-cutout"/></svg>Remove background</span>
+                  <span data-tool="3"><svg><use href="#i-vector"/></svg>Vectorize</span>
+                </div>
+                <div class="photo f-frame sel" style="left:120px;top:116px;width:400px;height:300px"><span class="nm">Photo</span>
                 <svg viewBox="0 0 400 300">
                   <defs>
                     <pattern id="checker" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="#ffffff"/><path d="M0 0h10v10H0zM10 10h10v10H10z" fill="#e3e3e3"/></pattern>
@@ -888,7 +1380,7 @@
                     <path d="M292 100l11 4.5-5 2.2-2.2 5z" fill="#1e1e1e" stroke="#ffffff" stroke-width="1"/>
                   </g>
                 </svg>
-                <div class="sel"><i></i><i></i><i></i><i></i></div>
+                <i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i></div>
               </div>
             </div>
           </div>
@@ -899,400 +1391,6 @@
         </div>
       </div>
     </div>
-  </section>
-
-  <section id="features" aria-labelledby="features-heading">
-    <div class="head">
-      <h2 id="features-heading">Everything the browser tab is missing</h2>
-      <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
-    </div>
-
-    <div class="bento">
-      <article class="tile big" id="f-split" style="grid-area: s" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-split"/></svg>Split view, and windows</h3>
-          <p>Two files side by side under one set of Figma's panels. Drag between them.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="sv rv" style="--d: 0">
-                  <div class="tabbar">
-                    <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
-                    <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span></div>
-                    <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Social kit</span></div>
-                    <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
-                  </div>
-                  <div class="sv-body">
-                    <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div></div>
-                    <div class="half on"><span class="fname">Brand refresh</span><div class="art-a"></div></div>
-                    <div class="half"><span class="fname">Social kit</span><div class="art-b"><i style="top:2em;width:60%"></i><i style="top:4.4em;width:40%"></i><i style="bottom:2em;height:6em"></i></div></div>
-                  </div>
-                </div>
-                <div class="drag rv pop" style="--d: .35"></div>
-                <svg class="drag-cursor rv" style="--d: .35"><use href="#i-cursor"/></svg>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about split view"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>Two files side by side under one set of Figma's panels. Drag a selection from one into the other to move it there.</p>
-          <ul>
-            <li><b>Split</b> from a tab's menu, or drop a tab onto either half of the canvas</li>
-            <li><b>Windows</b>: drag a tab out of the bar for a window of its own, without reloading</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>"splitView": true</code></div>
-        </div>
-      </article>
-
-      <article class="tile" id="f-tabs" style="grid-area: t" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-tabs"/></svg>Tabs, like the desktop app</h3>
-          <p>Every file in its own tab, with a look at how it last looked.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="window rv" style="--d: 0">
-                  <div class="tabbar">
-                    <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
-                    <div class="sq rv" style="--d: .12"><span class="emoji">🎨</span></div>
-                    <div class="on rv" style="--d: .18"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
-                    <div class="rv" style="--d: .24"><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
-                    <div class="hover sleep pre rv" style="--d: .3"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
-                    <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
-                  </div>
-                  <div class="editor">
-                    <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div><div class="bar short"></div></div>
-                    <div></div>
-                  </div>
-                </div>
-                <div class="tabpreview rv" style="--d: .42">
-                  <div class="shot">
-                    <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
-                    <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
-                    <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
-                    <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
-                  </div>
-                  <b>Q3 pitch</b>
-                  <span>Figma Slides · Asleep</span>
-                </div>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about tabs"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>Every file gets its own tab, with Home pinned on the left. Point at one to see how it last looked.</p>
-          <ul>
-            <li><b>Pin</b> a tab, or start a file's name with an emoji to make it the icon</li>
-            <li><b>Asleep</b> tabs give their memory back and reload when you open them</li>
-            <li><b>Reopen</b> your tabs next time, each on the same page, position and zoom</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>"restoreTabs": true</code></div>
-        </div>
-      </article>
-
-      <article class="tile" id="f-discord" style="grid-area: d" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</h3>
-          <p>The file, page and tool you're in, on your Discord profile.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="profile rv" style="--d: 0">
-                  <div class="banner"></div>
-                  <div class="who">
-                    <div class="avatar"><span>M</span></div>
-                    <div class="name">Mira</div>
-                    <div class="handle">mira.designs</div>
-                  </div>
-                  <div class="activity rv" style="--d: .25">
-                    <div class="label">Playing</div>
-                    <div class="card2">
-                      <div class="large"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
-                      <div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div>
-                    </div>
-                    <div class="join">Ask to Join</div>
-                  </div>
-                </div>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about Discord"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>Your profile shows the file you're in, the page or slide, and the tool in your hand. Keep any file private from its tab's menu.</p>
-          <ul>
-            <li><b>Hide files by default</b> and show only the ones you choose</li>
-            <li><b>Invites</b> let friends ask to join, and the file opens in their Ligma</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>"discordRichPresence": true</code></div>
-        </div>
-      </article>
-
-      <article class="tile" id="f-copy" style="grid-area: p" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-code"/></svg>Copy as code</h3>
-          <p>Tailwind and React in Figma's right-click menu, on any plan. No Dev Mode needed.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="menu one rv" style="--d: 0">
-                  <div>Copy<span>Ctrl+C</span></div>
-                  <div>Paste here</div>
-                  <div class="on">Copy/Paste as<span>›</span></div>
-                  <hr>
-                  <div>Bring to front</div>
-                  <div>Send to back</div>
-                </div>
-                <div class="menu two rv" style="--d: .15">
-                  <div>CSS</div>
-                  <div>CSS (all layers)</div>
-                  <div>iOS</div>
-                  <div>Android</div>
-                  <hr>
-                  <div class="on">Tailwind</div>
-                  <div>Tailwind (all layers)</div>
-                  <div>React</div>
-                </div>
-                <div class="snippet rv" style="--d: .32"><span class="c">/* Card */</span>
-  <span class="s">flex flex-col gap-4 rounded-2xl</span>
-  <span class="s">bg-white p-6 shadow-lg</span></div>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about copy as code"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>Tailwind and React in Figma's own right-click menu, in every file you can edit, on any plan. No Dev Mode needed.</p>
-          <ul>
-            <li><b>Tailwind</b> classes from the CSS Dev Mode shows, on Tailwind's own scale</li>
-            <li><b>React</b> copies a component for each selected layer, named after it</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>"copyAsCode": true</code></div>
-        </div>
-      </article>
-
-      <article class="tile big" id="f-previews" style="grid-area: c" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-layers"/></svg>Layer previews</h3>
-          <p>A small picture beside every layer, in every mode.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="lp rv" style="--d: 0">
-                  <div class="layers">
-                    <div class="file">Brand refresh</div>
-                    <div class="sub">Design</div>
-                    <div class="sect">Layers</div>
-                    <div class="lrow on rv" style="--d: .12"><svg class="chev"><use href="#i-chev-down"/></svg><svg class="ty"><use href="#i-frame"/></svg><span class="th"><span class="poster-th"><i style="left:12%;top:10%;width:46%;height:37%;border-radius:50%;background:#ffd23f"></i><i style="left:-25%;right:-25%;bottom:-24%;height:52%;border-radius:50%;background:#1f1d2b"></i></span></span><b>Poster</b></div>
-                    <div class="lrow in rv" style="--d: .17"><svg class="ty"><use href="#i-text"/></svg><span class="th"><i style="left:22%;top:34%;width:56%;height:12%;background:#fff4e0"></i><i style="left:22%;top:54%;width:44%;height:12%;background:#fff4e0"></i></span>Headline</div>
-                    <div class="lrow in rv" style="--d: .22"><svg class="ty"><use href="#i-ellipse"/></svg><span class="th"><i style="left:20%;top:20%;width:60%;height:60%;border-radius:50%;background:#ffd23f"></i></span>Sun</div>
-                    <div class="lrow in rv" style="--d: .27"><svg class="ty"><use href="#i-ellipse"/></svg><span class="th"><i style="left:4%;right:4%;top:34%;height:34%;border-radius:50% 50% 0.2em 0.2em;background:#1f1d2b"></i></span>Hill</div>
-                    <div class="lrow rv" style="--d: .32"><svg class="chev"><use href="#i-chev-right"/></svg><svg class="ty"><use href="#i-frame"/></svg><span class="th"><i style="left:10%;top:24%;width:80%;height:52%;border-radius:0.15em;background:#1f1d2b"></i><i style="left:20%;top:36%;width:44%;height:8%;background:#3b3752"></i></span><b>Social card</b></div>
-                    <div class="lrow rv" style="--d: .37"><svg class="chev"><use href="#i-chev-right"/></svg><svg class="ty"><use href="#i-frame"/></svg><span class="th"><i style="left:30%;top:10%;width:40%;height:80%;border-radius:0.15em;background:#ff5c39"></i><i style="left:30%;top:58%;width:40%;height:32%;background:#1f1d2b"></i></span><b>Story</b></div>
-                  </div>
-                  <div class="stage2"><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div></div>
-                </div>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about layer previews"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>A small picture of each layer in the layers panel, in every mode, as Figma shows only in Draw.</p>
-          <ul>
-            <li><b>Every mode</b> keeps its own tools and right sidebar</li>
-            <li><b>Toolbar modes</b>: choose which of Draw, Design, Motion and Dev Mode the switch offers</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>"layerPreviews": true</code></div>
-        </div>
-      </article>
-
-      <article class="tile" id="f-contrast" style="grid-area: k" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</h3>
-          <p>The WCAG ratio, right in the color picker.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="picker rv" style="--d: 0; --hue: #ff4d00; --pick: #b83a0d">
-                  <div class="tabs2"><b>Custom</b><span>Libraries</span></div>
-                  <div class="square">
-                    <svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0 52 C30 50 60 44 100 36" fill="none" stroke="#fff" stroke-width="0.8" vector-effect="non-scaling-stroke"/><path d="M0 70 C30 68 60 63 100 57" fill="none" stroke="#fff" stroke-width="0.8" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/></svg>
-                    <span class="knob"></span>
-                  </div>
-                  <div class="hue"></div>
-                  <div class="hexrow"><span>Hex</span><span>B83A0D</span><span>100%</span></div>
-                  <div class="ratio rv" style="--d: .3"><span class="aa">Aa</span><b>5.4:1</b><div class="lv"><span class="pass">AA</span><span>AAA</span></div></div>
-                </div>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about color contrast"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>The color picker shows the WCAG ratio against what's behind the layer, worked out from every layer under it.</p>
-          <ul>
-            <li><b>AA and AAA</b> for text, large text and shapes, as you pick</li>
-            <li><b>Lines</b> on the color square mark where each level starts to pass</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>"colorContrast": true</code></div>
-        </div>
-      </article>
-
-      <article class="tile" id="f-rail" style="grid-area: v" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-rail"/></svg>Your plugins, one click away</h3>
-          <p>Your saved plugins and widgets in the left sidebar, a click away.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="ui rv" style="--d: 0">
-                  <div class="navcol">
-                    <span class="t"><svg><use href="#i-figma"/></svg></span>
-                    <span class="t on"><svg><use href="#i-file"/></svg></span>
-                    <span class="t"><svg><use href="#i-sparkle"/></svg></span>
-                    <span class="t"><svg><use href="#i-plus-circle"/></svg></span>
-                    <span class="t"><svg><use href="#i-briefcase"/></svg></span>
-                    <hr>
-                    <span class="t"><svg><use href="#i-hex"/></svg></span>
-                    <span class="t"><svg><use href="#i-dev"/></svg></span>
-                    <span class="plug rv pop" style="--d: .2;background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
-                    <span class="plug big rv pop" style="--d: .26;background:#7b61ff"><svg><use href="#i-scale"/></svg><span class="tip rv" style="--d: .48">Contrast checker</span></span>
-                    <span class="plug rv pop" style="--d: .32;background:#14a38b"><svg><use href="#i-text"/></svg></span>
-                    <span class="plug rv pop" style="--d: .38;background:#f5b400"><svg><use href="#i-star"/></svg></span>
-                  </div>
-                  <div class="layers">
-                    <div class="ph">Brand refresh<svg><use href="#i-chev-down"/></svg><svg class="sp"><use href="#i-panel"/></svg></div>
-                    <div class="sub">Team project<em>Free</em></div>
-                    <div class="sect">Pages<span><svg><use href="#i-search"/></svg><svg><use href="#i-plus"/></svg></span></div>
-                    <div class="pg on">Page 1</div>
-                    <div class="pg">Drafts</div>
-                    <div class="sect">Layers</div>
-                    <div class="row"><svg><use href="#i-frame"/></svg><b>Poster</b></div>
-                    <div class="row"><svg><use href="#i-frame"/></svg><b>Social card</b></div>
-                    <div class="row"><svg><use href="#i-rect"/></svg>Background</div>
-                  </div>
-                  <div></div>
-                </div>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about plugins in the sidebar"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>Every plugin and widget saved to your Figma account sits in the editor's left sidebar, under Figma's own buttons. Click one to run it.</p>
-          <ul>
-            <li><b>Commands</b> show as a menu when a plugin has more than one</li>
-            <li><b>Reorder</b> by holding Ctrl and dragging. The order is kept for every file</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>"railPlugins": true</code></div>
-        </div>
-      </article>
-
-      <article class="tile" id="f-dev" style="grid-area: l" data-reveal>
-        <div class="tile-head">
-          <h3><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</h3>
-          <p>Import a plugin from its manifest, as in Figma's desktop app.</p>
-        </div>
-        <div class="tile-art">
-              <div class="art" aria-hidden="true">
-                <div class="actions-panel rv" style="--d: 0">
-                  <div class="search"><svg><use href="#i-search"/></svg>Search</div>
-                  <div class="ap-tabs"><span>All</span><span>Assets</span><b>Plugins &amp; widgets</b><em>Development<svg><use href="#i-chev-down"/></svg></em></div>
-                  <div class="ap-row hover rv" style="--d: .18"><span class="pi" style="background:#7b61ff"><svg><use href="#i-code"/></svg></span><span class="nm"><span>Token sync<small>Development</small></span><i>~/plugins/token-sync/manifest.json</i></span><span class="more-dots">•••</span></div>
-                  <div class="ap-row rv" style="--d: .26"><span class="pi" style="background:#14a38b"><svg><use href="#i-contrast"/></svg></span><span class="nm"><span>Contrast audit<small>Development</small></span><i>~/plugins/contrast-audit/manifest.json</i></span></div>
-                  <div class="ap-row import rv" style="--d: .34"><svg><use href="#i-import"/></svg>Import from manifest…</div>
-                </div>
-                <div class="toolbar tb-dev rv" style="--d: .1">
-                  <span class="on"><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-                  <span><svg><use href="#i-frame"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-                  <span><svg><use href="#i-rect"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-                  <span><svg><use href="#i-pen3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-                  <span><svg><use href="#i-text"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-                  <span><svg><use href="#i-braces"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-                  <span><svg><use href="#i-comment"/></svg></span>
-                  <span class="on"><svg><use href="#i-actions"/></svg></span>
-                </div>
-              </div>
-        </div>
-        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about development plugins"><svg class="icon"><use href="#i-plus"/></svg></button>
-        <div class="more" hidden>
-          <p>Import a plugin from its <code>manifest.json</code>, as in the Figma desktop app. figma.com can't do this.</p>
-          <ul>
-            <li><b>Rebuilt</b> plugins run their new code, as their files are read on every run</li>
-            <li><b>Not sandboxed</b>, unlike the desktop app, so import only ones you trust</li>
-          </ul>
-          <div class="setting"><span>Setting</span><code>plugins.json</code></div>
-        </div>
-      </article>
-    </div>
-
-    <dialog class="sheet" id="sheet" aria-labelledby="sheet-title" data-lenis-prevent>
-      <div class="sheet-art"><div class="tile-art"></div></div>
-      <div class="sheet-copy"></div>
-      <button type="button" class="close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
-    </dialog>
-
-    <div class="index" id="more">
-      <div><h3><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
-      <div><h3><svg class="icon"><use href="#i-key"/></svg>Google sign-in</h3><p>Works like the desktop app's, with or without the official app installed.</p></div>
-      <div><h3><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</h3><p>Uses Figma's font helper, and starts it when it isn't running.</p></div>
-      <div><h3><svg class="icon"><use href="#i-update"/></svg>Automatic updates</h3><p>Downloaded in the background and installed in place, so you stay signed in.</p></div>
-      <div><h3><svg class="icon"><use href="#i-scale"/></svg>Interface scale</h3><p>Zoom Figma, the tabs and menus together, from 50% to 200%.</p></div>
-      <div><h3><svg class="icon"><use href="#i-sliders"/></svg>Image adjustments</h3><p>Copy an image's exposure, contrast and the rest, and paste them onto another without the image.</p></div>
-      <div><h3><svg class="icon"><use href="#i-modes"/></svg>Toolbar modes</h3><p>Choose which of Draw, Design, Motion and Dev Mode the toolbar's switch offers.</p></div>
-      <div><h3><svg class="icon"><use href="#i-home"/></svg>Classic home</h3><p>Keeps Figma's long-standing home page on accounts trying the new one.</p></div>
-    </div>
-  </section>
-
-  <section id="themes" aria-labelledby="themes-heading">
-    <div class="themes-top">
-      <div class="themes-copy">
-        <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
-        <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick one to see it here.</p>
-        <div class="modes"><div role="radiogroup" aria-label="Mode">
-          <button type="button" role="radio" data-mode="light"><svg><use href="#i-sun"/></svg>Light</button>
-          <button type="button" role="radio" data-mode="dark"><svg><use href="#i-moon"/></svg>Dark</button>
-        </div></div>
-        <div class="now" aria-live="polite">
-          <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
-          <button type="button" id="reset" hidden>Back to your system's look</button>
-        </div>
-      </div>
-      <div class="fan-wrap"><div class="fan" id="deck" role="radiogroup" aria-label="Themes"></div></div>
-      <div class="grid-deck" id="grid" role="radiogroup" aria-label="Themes"></div>
-    </div>
-
-    <div class="figma" aria-hidden="true">
-      <div class="art">
-        <div class="fg">
-          <div class="panel">
-            <div class="file">Brand refresh</div>
-            <div class="tabs2"><b>File</b><span>Assets</span></div>
-            <div class="row on"><svg><use href="#i-frame"/></svg>Poster</div>
-            <div class="row in"><svg><use href="#i-text"/></svg>Headline</div>
-            <div class="row in"><svg><use href="#i-ellipse"/></svg>Sun</div>
-            <div class="row in"><svg><use href="#i-ellipse"/></svg>Hill</div>
-            <div class="row"><svg><use href="#i-frame"/></svg>Social card</div>
-            <div class="row"><svg><use href="#i-frame"/></svg>Story</div>
-          </div>
-          <div class="stage">
-            <div class="frame-name">Poster</div>
-            <div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div>
-            <div class="selection"><i></i><i></i><i></i><i></i><span>320 × 400</span></div>
-            <div class="toolbar">
-              <span class="on"><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-              <span><svg><use href="#i-frame"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-              <span><svg><use href="#i-rect"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-              <span><svg><use href="#i-pen3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-              <span><svg><use href="#i-text"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-              <span><svg><use href="#i-braces"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
-              <span><svg><use href="#i-comment"/></svg></span>
-              <span><svg><use href="#i-actions"/></svg></span>
-            </div>
-          </div>
-          <div class="panel">
-            <div class="top"><span class="avatar"></span><span class="share">Share</span></div>
-            <div class="tabs2"><b>Design</b><span>Prototype</span></div>
-            <div class="h4">Frame</div>
-            <div class="prop"><span><i>X</i>240</span><span><i>Y</i>120</span><span><i>W</i>320</span><span><i>H</i>400</span></div>
-            <div class="h4">Fill</div>
-            <div class="fill"><i></i>FF5C39</div>
-            <div class="h4">Export</div>
-            <div class="fill" style="justify-content:space-between">PNG<span>1x</span></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <p class="figma-caption">Your designs keep their colors. Only Figma's interface changes, and Ligma's with it.</p>
   </section>
 
   <section id="compare" aria-labelledby="compare-heading">
@@ -1397,57 +1495,179 @@
     renderDeck();
   }
 
-  // The fan: a blade for each theme, Figma's own in the middle, in the page's mode
-  const FAN = [1, 2, 3, 4, 0, 5, 6, 7, 8].map((i) => LIGMA_THEMES[i]);
+  // A brush for each theme, as Figma Draw draws its flat brush: a square
+  // tip of paint on a tuft that fans out from the ferrule, fine streaked bristles darkening toward a thin ferrule,
+  // and the handle with Figma's mark, all shaded with soft gradients. The
+  // paint and handle are the theme's color for the page's mode. Made once,
+  // recolored when the mode changes
+  // The bristles' streaks: many fine hairs of varied weight, the same on
+  // every brush
+  const hairs = (() => {
+    let seed = 7, out = "";
+    const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+    for (let n = 0; n < 34; n++) {
+      const t = n / 33, x = 3.6 + t * 22.8 + (rnd() - 0.5) * 0.4, xb = 6.4 + t * 17.2;
+      const dark = rnd() > 0.38;
+      out += `<path d="M${x.toFixed(2)} ${(7 + rnd() * 5).toFixed(1)}L${xb.toFixed(2)} 31" stroke="${dark ? "#000" : "#fff"}" stroke-opacity="${(dark ? 0.1 + rnd() * 0.22 : 0.06 + rnd() * 0.12).toFixed(2)}" stroke-width="${(0.25 + rnd() * 0.55).toFixed(2)}"/>`;
+    }
+    return out;
+  })();
+  const pencil = (id) => `<svg viewBox="0 0 30 102" aria-hidden="true">
+    <defs>
+      <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p5)"/><stop offset=".26" style="stop-color:color-mix(in srgb, var(--p3) 45%, var(--p5))"/><stop offset=".62" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:color-mix(in srgb, var(--p7) 70%, var(--p5))"/></linearGradient>
+      <linearGradient id="pg-${id}" x1="0" x2="1"><stop offset="0" stop-color="#5e5e5e"/><stop offset=".26" stop-color="#8c8c8c"/><stop offset=".62" stop-color="#5b5b5b"/><stop offset="1" stop-color="#363636"/></linearGradient>
+      <linearGradient id="pd-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".12" stop-color="#fff" stop-opacity=".18"/><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".5"/></linearGradient>
+      <linearGradient id="pc-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".2"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></linearGradient>
+      <linearGradient id="pm-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1f1f1f"/><stop offset=".45" stop-color="#4c4c4c"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient>
+      <linearGradient id="ph-${id}" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".22" stop-color="#fff" stop-opacity=".22"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <filter id="ps-${id}" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation=".18"/></filter>
+      <clipPath id="pk-${id}"><path d="M5.8 31C4.8 24.4 3.8 14.6 3.2 3.6 11 2.1 19 2.1 26.8 3.6 26.2 14.6 25.2 24.4 24.2 31z"/></clipPath>
+    </defs>
+    <path d="M5.6 36h18.8v66H5.6z" fill="url(#pb-${id})"/>
+    <svg x="10" y="40" width="10" height="10" viewBox="0 0 16 16" style="color:var(--logo);opacity:var(--logo-o)"><use href="#i-figma"/></svg>
+    <g clip-path="url(#pk-${id})">
+      <path d="M5.8 31C4.8 24.4 3.8 14.6 3.2 3.6 11 2.1 19 2.1 26.8 3.6 26.2 14.6 25.2 24.4 24.2 31z" fill="url(#pg-${id})"/>
+      <g filter="url(#ps-${id})">${hairs}</g>
+      <path d="M5.8 31C4.8 24.4 3.8 14.6 3.2 3.6 11 2.1 19 2.1 26.8 3.6 26.2 14.6 25.2 24.4 24.2 31z" fill="url(#pd-${id})"/>
+      <path d="M-1 0H31V11.6C24.6 14.6 19.4 10.6 14 12.5 8.9 14.2 4.6 14-1 12z" fill="url(#pb-${id})"/>
+      <path d="M-1 0H31V11.6C24.6 14.6 19.4 10.6 14 12.5 8.9 14.2 4.6 14-1 12z" fill="url(#pc-${id})"/>
+    </g>
+    <path d="M5.2 30.6h19.6v5.6H5.2z" fill="url(#pm-${id})"/>
+  </svg>`;
+  const pencils = LIGMA_THEMES.map((theme) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.theme = theme.id;
+    button.setAttribute("role", "radio");
+    button.setAttribute("aria-label", theme.name);
+    button.innerHTML = `${pencil(theme.id)}<span class="tip" aria-hidden="true">${theme.name}</span>`;
+    button.addEventListener("click", (event) => pick(theme.id, state.mode, event));
+    return button;
+  });
+  $("tray").replaceChildren(...pencils);
   function renderDeck() {
-    const focused = document.activeElement?.closest("#deck")?.dataset.theme;
-    $("deck").replaceChildren(...FAN.map((theme, i) => {
-      const blade = document.createElement("button");
-      blade.type = "button";
-      blade.className = "blade";
-      blade.dataset.theme = theme.id;
-      blade.style.setProperty("--i", i);
-      blade.style.setProperty("--orb", ligmaMesh(theme.id, state.mode));
-      blade.setAttribute("role", "radio");
-      blade.setAttribute("aria-checked", theme.id === state.theme);
-      const ramp = ramps(theme.id, state.mode);
-      const hue = theme.accent == null ? "Original" : `Hue ${theme.accent}°`;
-      blade.innerHTML = `<b>${theme.name}<small>${hue}</small></b><span class="mesh"></span>${[300, 500, 700, 1000].map((step) => `<i style="background:${ramp[`--a-${step}`]}"></i>`).join("")}<span class="foot"></span>`;
-      blade.addEventListener("click", (event) => pick(theme.id, state.mode, event));
-      return blade;
-    }));
-    if (focused) $("deck").querySelector(`[data-theme="${focused}"]`)?.focus();
-    renderGrid();
+    for (const button of pencils) {
+      const ramp = ramps(button.dataset.theme, state.mode);
+      // Shaded on light; on dark, richer and lighter but not pastel. Figma's
+      // own is Draw's grey, so blue reads as a theme
+      const dark = state.mode === "dark";
+      const stops = button.dataset.theme === "figma"
+        ? (dark ? ["#f2f2f2", "#d6d6d6", "#ababab"] : ["#f5f5f5", "#d9d9d9", "#a8a8a8"])
+        : (dark ? [ramp["--a-400"], ramp["--a-500"], ramp["--a-600"]] : [ramp["--a-300"], ramp["--a-500"], ramp["--a-700"]]);
+      stops.forEach((color, i) => button.style.setProperty(`--p${[3, 5, 7][i]}`, color));
+      button.style.setProperty("--logo", button.dataset.theme === "figma" ? "#000" : "#fff");
+      button.style.setProperty("--logo-o", button.dataset.theme === "figma" ? "0.26" : "0.4");
+      button.setAttribute("aria-checked", button.dataset.theme === state.theme);
+    }
     for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
   }
-  const SUN = '<svg><use href="#i-sun"/></svg>';
-  const MOON = '<svg><use href="#i-moon"/></svg>';
-  function renderGrid() {
-    const focused = document.activeElement?.closest("#grid") && document.activeElement.getAttribute("aria-label");
-    $("grid").replaceChildren(...LIGMA_THEMES.map((theme) => {
-      const chip = document.createElement("div");
-      chip.className = `theme${theme.id === state.theme ? " picked" : ""}`;
-      const swatch = ramps(theme.id, state.mode);
-      chip.style.setProperty("--chip", swatch["--a-500"]);
-      chip.style.setProperty("--chip-ink", swatch["--a-1000"]);
-      const hue = theme.accent == null ? "Original" : `Hue ${theme.accent}°`;
-      chip.innerHTML = `<div class="swatch"><b>${theme.name}</b><span>${hue}</span></div><div class="orbs"></div>`;
-      for (const mode of ["light", "dark"]) {
-        const orb = document.createElement("button");
-        orb.type = "button";
-        orb.className = "orb";
-        orb.innerHTML = `<span class="mesh"></span><span class="badge">${mode === "light" ? SUN : MOON}</span>`;
-        orb.style.setProperty("--orb", ligmaMesh(theme.id, mode));
-        orb.setAttribute("role", "radio");
-        orb.setAttribute("aria-checked", theme.id === state.theme && mode === state.mode);
-        orb.setAttribute("aria-label", `${theme.name} in ${mode} mode`);
-        orb.title = `${theme.name} in ${mode} mode`;
-        orb.addEventListener("click", (event) => pick(theme.id, mode, event));
-        chip.querySelector(".orbs").append(orb);
-      }
-      return chip;
+
+  // Picking a brush reveals the new theme through brush strokes: the page
+  // in its new theme shows through a mask painted in big curved strokes,
+  // back and forth from the top down, over the page as it was. The strokes
+  // are sized from the window so they always end up covering all of it
+  const BLANK = "url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)";
+  // The picked brush rising, the last one sinking and the editor they stand
+  // behind get layers of their own in the transition, so the brushes move
+  // while the reveal plays and still tuck behind the window
+  function brushOver(change, event) {
+    if (!document.startViewTransition) return change();
+    const up = event.currentTarget;
+    const down = pencils.find((button) => button.getAttribute("aria-checked") === "true");
+    const editor = up.closest(".pencil-stage").querySelector(".figma");
+    const box = editor.getBoundingClientRect();
+    root.style.setProperty("--ed-x", `${box.left}px`);
+    root.style.setProperty("--ed-y", `${box.top}px`);
+    up.style.viewTransitionName = "brush-up";
+    if (down) down.style.viewTransitionName = "brush-down";
+    editor.style.viewTransitionName = "brush-editor";
+    reveal(change, () => {
+      for (const el of [up, down, editor]) if (el) el.style.viewTransitionName = "";
+    });
+  }
+  function reveal(change, after) {
+    const w = innerWidth, h = innerHeight, k = 0.25;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(w * k);
+    canvas.height = Math.ceil(h * k);
+    const g = canvas.getContext("2d");
+    g.scale(k, k);
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    const rows = Math.max(3, Math.round(h / Math.max(220, w * 0.22)));
+    const band = h / rows, width = band * 1.75;
+    const strokes = Array.from({ length: rows }, (_, r) => {
+      const y = band * (r + 0.5), ltr = r % 2 === 1;
+      const x0 = ltr ? -0.2 * w : 1.2 * w, x1 = ltr ? 1.2 * w : -0.2 * w;
+      return { x0, y0: y - band * 0.22, cx: w / 2, cy: y + band * 0.4, x1, y1: y - band * 0.12 };
+    });
+    const at = (s, t) => {
+      const u = 1 - t;
+      return [u * u * s.x0 + 2 * u * t * s.cx + t * t * s.x1, u * u * s.y0 + 2 * u * t * s.cy + t * t * s.y1];
+    };
+    // The bristles leave a few thinner streaks in each stroke, where the old
+    // page still shows faintly until the next stroke covers it
+    const streaks = Array.from({ length: 16 }, (_, n) => ({
+      k: -0.42 + (n / 15) * 0.84 + (Math.random() - 0.5) * 0.03,
+      alpha: 0.15 + Math.random() * 0.3,
+      weight: 0.006 + Math.random() * 0.016,
     }));
-    if (focused) [...$("grid").querySelectorAll("[aria-label]")].find((el) => el.getAttribute("aria-label") === focused)?.focus();
+    function draw(progress) {
+      g.clearRect(0, 0, w, h);
+      const total = progress * strokes.length;
+      strokes.forEach((s, i) => {
+        const end = Math.min(1, total - i);
+        if (end <= 0) return;
+        const steps = Math.max(2, Math.ceil(end * 40));
+        const line = (offset) => {
+          g.beginPath();
+          for (let n = 0; n <= steps; n++) {
+            const [x, y] = at(s, (n / steps) * end);
+            n ? g.lineTo(x, y + offset) : g.moveTo(x, y + offset);
+          }
+          g.stroke();
+        };
+        g.globalCompositeOperation = "source-over";
+        g.lineWidth = width;
+        g.strokeStyle = "#fff";
+        line(0);
+        // Streaks only in the stroke being painted; the ones before are solid
+        if (end < 1 || i === strokes.length - 1) {
+          g.globalCompositeOperation = "destination-out";
+          for (const st of streaks) {
+            g.lineWidth = Math.max(1, width * st.weight);
+            g.strokeStyle = `rgb(0 0 0 / ${st.alpha * (1 - progress)})`;
+            line(st.k * width);
+          }
+        }
+      });
+      g.globalCompositeOperation = "source-over";
+    }
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    const mask = (value) => root.style.setProperty("--brush-mask", value);
+    mask(BLANK);
+    root.classList.add("brushing");
+    const transition = document.startViewTransition(change);
+    transition.ready.then(() => new Promise((done) => {
+      const begin = performance.now();
+      const tick = (now) => {
+        const t = Math.min(1, (now - begin) / 820);
+        if (t < 1) {
+          draw(ease(t));
+          mask(`url(${canvas.toDataURL()})`);
+          requestAnimationFrame(tick);
+        } else {
+          mask("none");
+          done();
+        }
+      };
+      requestAnimationFrame(tick);
+    })).catch(() => {});
+    transition.finished.finally(() => {
+      root.classList.remove("brushing");
+      root.style.removeProperty("--brush-mask");
+      after?.();
+    });
   }
 
   for (const button of document.querySelectorAll(".modes button")) {
@@ -1462,7 +1682,9 @@
 
   function pick(theme, mode, event) {
     if (theme === state.theme && mode === state.mode) return;
-    retint(() => {
+    // A brush paints the new theme over the screen; anything else crossfades
+    const brushed = event?.currentTarget?.closest?.("#tray") && !reduced.matches;
+    (brushed ? brushOver : retint)(() => {
       Object.assign(state, { theme, mode, picked: true });
       paint();
     }, event);
@@ -1537,44 +1759,150 @@
 
   const lenis = window.Lenis && !reduced.matches ? new Lenis({ autoRaf: true, anchors: true }) : null;
 
-  // A tile's plus opens its details in the sheet, the drawing building up.
-  // So does the feature's chip in the reel
-  const sheet = $("sheet");
-  let opener = null;
-  function openSheet(tile, from) {
-    opener = from;
-    const art = tile.querySelector(".tile-art .art").cloneNode(true);
-    sheet.querySelector(".sheet-art .tile-art").replaceChildren(art);
-    const title = tile.querySelector("h3").cloneNode(true);
-    title.id = "sheet-title";
-    sheet.querySelector(".sheet-copy").replaceChildren(title, ...[...tile.querySelector(".more").children].map((el) => el.cloneNode(true)));
-    sheet.showModal();
-    lenis?.stop();
-    if (reduced.matches) return art.style.setProperty("--v", 1);
-    const begin = performance.now();
-    const step = (now) => {
-      const v = clamp((now - begin) / 900);
-      art.style.setProperty("--v", v.toFixed(4));
-      if (v < 1 && sheet.open) requestAnimationFrame(step);
+  // The features canvas: drag to pan, pinch or Ctrl and the wheel to zoom,
+  // a sideways wheel pans, and Layers flies to a frame. Up and down scroll
+  // the page as usual
+  const cv = $("cv");
+  const board = cv.querySelector(".cv-board");
+  const cvFrames = [...cv.querySelectorAll(".cv-frame")];
+  const layerButtons = [...cv.querySelectorAll("[data-frame]")];
+  const view = { x: 0, y: 0, z: 1 };
+  let flight = 0;
+  const padL = () => (innerWidth > 900 ? 264 : 16);
+  const padT = () => (innerWidth > 900 ? 40 : 60);
+  function fit() {
+    const w = cv.clientWidth, h = cv.clientHeight;
+    const bw = board.offsetWidth * view.z, bh = board.offsetHeight * view.z;
+    view.x = Math.min(padL() - 60 * view.z, Math.max(w - bw, view.x));
+    view.y = Math.min(padT(), Math.max(h - bh, view.y));
+  }
+  function draw() {
+    fit();
+    board.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
+    cv.style.setProperty("--bx", `${view.x}px`);
+    cv.style.setProperty("--by", `${view.y}px`);
+    cv.style.setProperty("--gs", `${24 * view.z}px`);
+    $("cv-zoom").textContent = `${Math.round(view.z * 100)}%`;
+    // The frame nearest the middle of the view is the current one
+    const cx = (padL() + cv.clientWidth) / 2, cy = cv.clientHeight / 2;
+    let near = null, best = Infinity;
+    for (const frame of cvFrames) {
+      const fx = view.x + (frame.offsetLeft + frame.offsetWidth / 2) * view.z;
+      const fy = view.y + (frame.offsetTop + frame.offsetHeight / 2) * view.z;
+      const d = Math.hypot(fx - cx, fy - cy);
+      if (d < best) [near, best] = [frame, d];
+    }
+    for (const frame of cvFrames) frame.classList.toggle("on", frame === near);
+    for (const button of layerButtons) button.setAttribute("aria-current", button.dataset.frame === near?.id);
+  }
+  function zoomAt(z, px, py) {
+    z = Math.min(1.5, Math.max(0.3, z));
+    view.x = px - ((px - view.x) * z) / view.z;
+    view.y = py - ((py - view.y) * z) / view.z;
+    view.z = z;
+    draw();
+  }
+  // Glide to frame `id`, fitted beside the Layers panel
+  function flyTo(id) {
+    const frame = $(id);
+    // Room for the comment beside it, where there is room
+    const note = innerWidth > 900 ? 340 : 0;
+    const w = cv.clientWidth - padL() - 32, h = cv.clientHeight - padT() - 40;
+    const z = Math.min(1, Math.max(0.4, Math.min(w / (frame.offsetWidth + note + 40), h / (frame.offsetHeight + 40))));
+    const to = {
+      z,
+      x: padL() + (w - (frame.offsetWidth + note) * z) / 2 - frame.offsetLeft * z,
+      y: padT() + 12 + (h - frame.offsetHeight * z) / 2 - frame.offsetTop * z,
     };
-    art.style.setProperty("--v", 0);
+    zoom.running = false;
+    const from = { ...view };
+    const begin = performance.now();
+    const run = ++flight;
+    const step = (now) => {
+      if (run !== flight) return;
+      const t = reduced.matches ? 1 : Math.min(1, (now - begin) / 650);
+      const k = 1 - Math.pow(1 - t, 4);
+      for (const key of ["x", "y", "z"]) view[key] = from[key] + (to[key] - from[key]) * k;
+      draw();
+      if (t < 1) requestAnimationFrame(step);
+    };
     requestAnimationFrame(step);
   }
-  for (const tile of document.querySelectorAll(".tile")) {
-    tile.querySelector(".open").addEventListener("click", (event) => openSheet(tile, event.currentTarget));
+  let drag = null;
+  cv.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest(".cv-ui, .cv-card")) return;
+    flight++;
+    zoom.running = false;
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, vx: view.x, vy: view.y };
+    cv.setPointerCapture(event.pointerId);
+    cv.classList.add("dragging");
+  });
+  cv.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    view.x = drag.vx + event.clientX - drag.x;
+    view.y = drag.vy + event.clientY - drag.y;
+    draw();
+  });
+  const release = (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    drag = null;
+    cv.classList.remove("dragging");
+  };
+  cv.addEventListener("pointerup", release);
+  cv.addEventListener("pointercancel", release);
+  // Zoom eases toward where the wheel or pinch asked for, about the pointer.
+  // A mouse wheel's notch is about 10%, a pinch follows the fingers
+  const zoom = { goal: 1, px: 0, py: 0, last: 0, running: false };
+  function zoomStep(now) {
+    if (!zoom.running) return;
+    const dt = Math.min(64, now - (zoom.last || now - 16));
+    zoom.last = now;
+    const k = reduced.matches ? 1 : 1 - Math.exp(-dt / 70);
+    const z = view.z + (zoom.goal - view.z) * k;
+    zoomAt(Math.abs(zoom.goal - z) < 0.0005 ? zoom.goal : z, zoom.px, zoom.py);
+    if (view.z !== zoom.goal) requestAnimationFrame(zoomStep);
+    else zoom.running = false;
   }
+  cv.addEventListener("wheel", (event) => {
+    const box = cv.getBoundingClientRect();
+    if (event.ctrlKey) {
+      event.preventDefault();
+      flight++;
+      const rate = Math.abs(event.deltaY) < 40 ? 0.008 : 0.001;
+      zoom.goal = Math.min(1.5, Math.max(0.3, (zoom.running ? zoom.goal : view.z) * Math.exp(-event.deltaY * rate)));
+      zoom.px = event.clientX - box.left;
+      zoom.py = event.clientY - box.top;
+      if (!zoom.running) {
+        zoom.running = true;
+        zoom.last = 0;
+        requestAnimationFrame(zoomStep);
+      }
+    } else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      // Sideways (Shift and the wheel arrives as deltaX in some browsers)
+      event.preventDefault();
+      flight++;
+      view.x -= event.deltaX || event.deltaY;
+      draw();
+    }
+  }, { passive: false });
+  for (const button of layerButtons) button.addEventListener("click", () => flyTo(button.dataset.frame));
+  // The reel's feature chips scroll here and fly to their frame
   for (const link of document.querySelectorAll('.reel a[href^="#f-"]')) {
     link.addEventListener("click", (event) => {
       event.preventDefault();
-      openSheet(document.querySelector(link.getAttribute("href")), link);
+      cv.scrollIntoView({ behavior: reduced.matches ? "auto" : "smooth", block: "center" });
+      flyTo(link.getAttribute("href").slice(1));
     });
   }
-  sheet.querySelector(".close").addEventListener("click", () => sheet.close());
-  sheet.addEventListener("click", (event) => event.target === sheet && sheet.close());
-  sheet.addEventListener("close", () => {
-    lenis?.start();
-    opener?.focus({ preventScroll: true });
-  });
+  function start() {
+    view.z = Math.min(1, Math.max(0.5, (cv.clientWidth - padL()) / 1600));
+    view.x = padL() + 8 - 160 * view.z;
+    view.y = padT() + 36 - 140 * view.z;
+    draw();
+  }
+  start();
+  addEventListener("resize", draw);
+
 
   // Copy the Terminal command
   for (const button of document.querySelectorAll("[data-copy]")) {
