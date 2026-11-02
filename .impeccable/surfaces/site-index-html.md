@@ -25,6 +25,8 @@ Scroll story (added 2026-11-01): momentum scrolling (site/vendor/lenis.min.js, o
 
 Signature interaction: clicking a theme orb retints the whole page and switches light or dark. The new palette spreads as a circle from the orb (View Transitions), and a large Figma editor mock in the themes section shows the theme on Figma's interface while the canvas design stays untouched.
 
-Features (2026-11-01): a bento of eight tiles in the page's theme, so the theme switcher recolors them. Split view and Copy as code get the big tiles. Each tile is a drawing and one line; the plus opens a sheet with the drawing building up, the full details and the settings key. Tried and dropped: a theme per feature (fought the switcher) and a pinned scroll-through window (too much scrolling)
+Features (2026-11-01): a bento of eight tiles in the page's theme, so the theme switcher recolors them. Split view and Copy as code get the big tiles, Plugins in the rail and Layer previews the halves. Each tile is a drawing and one line; the plus opens a sheet with the drawing building up, the full details and the settings key. Tried and dropped: a theme per feature (fought the switcher) and a pinned scroll-through window (too much scrolling)
 
-Themes (2026-11-01): a fan deck of nine blades, Figma's own in the middle, each its mesh, accent ramp and name. Pointing at a blade lifts it, clicking it retints the page, and a Light and Dark switch sits under the fan
+Themes (2026-11-01): the words on the left, a fan deck on the right opening rightward, Figma's own in the middle. Each blade is its name and hue along the top, its accent ramp and mesh, riveted at the left. Pointing at a blade slides it out, clicking it retints the page in a circle from the pointer, and a Light and Dark switch sits under the words. The upward fan with names up the edges was dropped as hard to read
+
+Hero (2026-11-01): the size is one number, "19× smaller", at the foot of the first screen, with 16 MB against 305 MB beside it. The hero no longer pins. The shrinking square chart was dropped: it scaled badly on some screens and was hard to read at first
