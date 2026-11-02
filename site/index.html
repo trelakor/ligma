@@ -473,29 +473,27 @@
   .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
   .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
 
-  /* Themes: the editor's toolbar is Figma Draw's, a pencil for each theme
-     standing in it. Pointing at one lifts it a little, picking it pokes it
-     out and it stays there, and the page takes its theme */
+  /* Themes: Figma Draw's pencils, one for each theme, standing in a row
+     behind the editor with their tips peeking over its top edge. Pointing
+     at one lifts it a little, picking it pokes it up and it stays there,
+     and the page takes its theme */
   .themes-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 48px; align-items: end; }
   .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 32em; }
   .themes-side { display: flex; flex-direction: column; align-items: flex-start; }
-  #themes .figma .f-bar { display: none; }
+  .pencil-stage { --pw: 36px; --peek: 68px; position: relative; margin-top: 40px; padding-top: calc(var(--peek) + 44px); }
+  .pencil-stage .figma { position: relative; z-index: 1; margin-top: 0; }
   .tray {
-    --pw: 30px;
-    position: absolute; z-index: 2; left: var(--tx, 50%); bottom: 2%; translate: -50% 0; display: flex; align-items: flex-end; gap: 8px;
-    height: 76px; padding: 0 16px; border-radius: 13px; background: var(--panel);
-    box-shadow: 0 0 0.5px rgb(0 0 0 / 0.18), 0 3px 8px rgb(0 0 0 / 0.1), 0 1px 3px rgb(0 0 0 / 0.1);
-    clip-path: inset(-160px -40px 0 -40px round 13px);
+    position: absolute; left: 50%; top: 44px; translate: -50% 0; display: flex; gap: clamp(10px, 2.4vw, 30px);
+    height: calc(var(--pw) * 3.4); pointer-events: none;
   }
-  :root.dark .tray { box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.1), 0 3px 10px rgb(0 0 0 / 0.4); }
   .tray button {
-    position: relative; flex: none; width: var(--pw); height: calc(var(--pw) * 3.4); margin-bottom: calc(var(--pw) * -1.35); padding: 0; border: 0; background: none; cursor: pointer;
-    translate: 0 0; transition: translate 380ms cubic-bezier(0.3, 1.6, 0.5, 1);
+    position: relative; flex: none; width: var(--pw); height: 100%; padding: 0; border: 0; background: none; cursor: pointer; pointer-events: auto;
+    translate: 0 0; transition: translate 420ms cubic-bezier(0.3, 1.5, 0.5, 1);
   }
-  .tray button:hover, .tray button:focus-visible { translate: 0 -7px; }
-  .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -0.8); }
+  .tray button:hover, .tray button:focus-visible { translate: 0 -8px; }
+  .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -1.15); }
   .tray button:focus-visible { outline: none; }
-  .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.22)); }
+  .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
   .tray .tip {
     position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
     background: #1e1e1e; color: #fff; font: 500 11px/16px var(--text); white-space: nowrap; opacity: 0; pointer-events: none;
@@ -652,7 +650,8 @@
   }
   @media (max-width: 900px) {
     .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
-    .tray { --tx: 62%; --pw: 20px; height: 54px; gap: 5px; padding: 0 10px; }
+    .pencil-stage { --pw: 24px; --peek: 46px; padding-top: calc(var(--peek) + 32px); }
+    .tray { top: 32px; gap: 10px; }
     .tray .tip { display: none; }
     .cv-layers { left: 8px; right: 8px; top: 8px; width: auto; display: flex; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
     .cv-layers > :not(.f-layer) { display: none; }
@@ -862,6 +861,8 @@
       </div>
     </div>
 
+    <div class="pencil-stage">
+      <div class="tray" id="tray" role="radiogroup" aria-label="Themes"></div>
     <div class="figma">
       <div class="art" aria-hidden="true">
         <div class="shot" style="--w:1240;--h:600">
@@ -880,7 +881,7 @@
             <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Social card</span></div>
             <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span>Story</span></div>
           </div>
-          <div class="f-frame sel" style="left:484px;top:52px;width:272px;height:340px"><span class="nm">Poster</span><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><span class="f-size">320 × 400</span></div>
+          <div class="f-frame sel" style="left:460px;top:84px;width:320px;height:400px"><span class="nm">Poster</span><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><i class="f-h"></i><span class="f-size">320 × 400</span></div>
           
                   <div class="f-bar">
                     <span class="on"><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
@@ -915,7 +916,7 @@
           </div>
         </div>
       </div>
-      <div class="tray" id="tray" role="radiogroup" aria-label="Themes"></div>
+    </div>
     </div>
     <p class="figma-caption">Your designs keep their colors. Only Figma's interface changes, and Ligma's with it.</p>
   </section>
