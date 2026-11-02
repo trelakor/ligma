@@ -49,7 +49,6 @@ Ligma asks before downloading a model the first time one is needed.
 
 - **Copy as code** to Tailwind and React from the right-click menu, without Dev Mode
 - **Image adjustments** copied and pasted between images, without the image itself
-- **Color contrast:** WCAG ratios in the color picker against what's behind the layer, with AA and AAA lines on the color square
 
 ### Plugins
 

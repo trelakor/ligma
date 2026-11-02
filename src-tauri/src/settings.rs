@@ -128,9 +128,6 @@ pub struct Settings {
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
-    /// In the color picker of a solid fill or stroke of text or a vector,
-    /// show its contrast against what's behind the layer
-    pub color_contrast: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -179,7 +176,6 @@ impl Default for Settings {
             local_vectorize: true,
             local_select_object: true,
             copy_as_code: true,
-            color_contrast: false,
             classic_home: false,
         }
     }
@@ -422,7 +418,6 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
     crate::view_state::apply_settings(app, &settings);
-    crate::contrast::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
