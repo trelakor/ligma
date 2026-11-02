@@ -29,6 +29,10 @@ Features (2026-11-01): a bento of eight tiles in the page's theme, so the theme 
 
 Themes (2026-11-01): the words on the left, a fan deck on the right opening rightward, Figma's own in the middle. Each blade is its name and hue along the top, its accent ramp and mesh, riveted at the left. Pointing at a blade slides it out, clicking it retints the page with a short crossfade. A Light and Dark switch sits under the words. Below 900px wide the fan becomes the grid of swatches, each with light and dark orbs. A circle from the pointer and a wipe were both dropped. The upward fan with names up the edges was dropped as hard to read
 
-Hero (2026-11-01): a centered stack, the headline, the one-liner and the download, with a reel of what's inside straight under it, two rows of chips drifting opposite ways, each linking to its tile or section, paused while pointed at and still for reduced motion. Dropped: the shrinking size square (hard to read, scaled badly) and "19× smaller" (not compelling)
+Hero (2026-11-01): the Figma canvas that was the sign-off, now at the top: the Ligma lockup selected as a layer, "Same Figma. Lighter." and the one-liner under it, the downloads drawn as frames with a "You" cursor, and the reel of what's inside along its foot. Reel chips for features with a tile open that tile's sheet; the rest scroll to their section. The reel never pauses
+
+Footer (2026-11-01): a centered stack, "Figma, without the weight.", the download and Star on GitHub, then a row of links
+
+Highlighted controls on the accent, on the page and in the drawings, carry white text and icons
 
 AI image tools (2026-11-01): pinned for 600svh (960 felt too slow), and the label under the picture follows the tool and its setting

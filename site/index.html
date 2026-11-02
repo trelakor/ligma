@@ -113,15 +113,19 @@
   nav .btn { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 10px; margin-left: 8px; }
 
   /* Hero: the headline, the download, and both apps drawn to scale */
-  .hero .masthead { margin-top: clamp(32px, 6vw, 72px); }
-  /* The hero: the headline, what it is and the download, centered, with
-     the reel straight under them */
-  .masthead { display: flex; flex-direction: column; align-items: center; text-align: center; }
-  .hero h1 { font-size: clamp(3.25rem, 8.4vw, 6rem); line-height: 0.92; letter-spacing: -0.04em; font-weight: 700; }
-  .pitch { display: flex; flex-direction: column; align-items: center; margin-top: 24px; }
-  .pitch p { font-size: clamp(19px, 1.8vw, 22px); line-height: 1.45; color: var(--ink-2); max-width: 26em; text-wrap: balance; }
-  .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 28px; }
-  .meta { margin-top: 12px; font-size: 14px; color: var(--ink-2); }
+  /* The hero: a Figma canvas in the page's theme, the lockup selected on
+     it, the downloads drawn as frames and you as a multiplayer cursor, with
+     the reel of what's inside along its foot */
+  .hero { position: relative; isolation: isolate; display: flex; flex-direction: column; min-height: min(100svh, 1040px); padding-bottom: 28px; }
+  .hero::before {
+    content: ""; position: absolute; z-index: -1; top: 0; bottom: 0; left: calc(50% - 50vw); right: calc(50% - 50vw);
+    background: radial-gradient(circle, var(--line-strong) 1.2px, transparent 1.7px) 12px 12px / 24px 24px, var(--canvas);
+    border-bottom: 1px solid var(--line);
+  }
+  .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: clamp(40px, 6vh, 72px) 0 8px; text-align: center; }
+  .hero h1 { margin-top: clamp(28px, 4vh, 44px); font-size: clamp(2.5rem, 5.6vw, 4.5rem); line-height: 1; letter-spacing: -0.04em; font-weight: 700; }
+  .stage .pitch { margin-top: 14px; max-width: 26em; font-size: clamp(18px, 1.7vw, 21px); line-height: 1.45; color: var(--ink-2); text-wrap: balance; }
+  .meta { margin-top: 20px; font-size: 14px; color: var(--ink-2); }
 
 
   section { padding-top: clamp(96px, 12vw, 160px); }
@@ -198,7 +202,7 @@
   .ap-tabs b { color: var(--ink); font-weight: 600; }
   .ap-chips { display: flex; gap: 0.5em; margin-bottom: 0.8em; }
   .ap-chips span { padding: 0.4em 0.9em; border-radius: 2em; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-2); }
-  .ap-chips span.on { background: var(--field); box-shadow: none; color: var(--field-ink); font-weight: 600; }
+  .ap-chips span.on { background: var(--field); box-shadow: none; color: #fff; font-weight: 600; }
   .ap-row { display: flex; align-items: center; gap: 1em; height: 3.6em; padding: 0 0.6em; border-radius: 0.6em; }
   .ap-row.hover { background: var(--select); }
   .ap-row .pi { display: grid; place-items: center; width: 2.4em; height: 2.4em; border-radius: 0.6em; color: #fff; }
@@ -209,7 +213,7 @@
   /* Copy as code drawing: Figma's right-click menu */
   .menu { position: absolute; width: 21em; padding: 0.7em 0; border-radius: 1em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); font-size: 1.15em; }
   .menu div { display: flex; justify-content: space-between; align-items: center; height: 2.5em; margin: 0 0.6em; padding: 0 0.8em; border-radius: 0.5em; }
-  .menu div.on { background: var(--field); color: var(--field-ink); font-weight: 500; }
+  .menu div.on { background: var(--field); color: #fff; font-weight: 500; }
   .menu div span { opacity: 0.6; }
   .menu hr { border: 0; border-top: 1px solid var(--line); margin: 0.5em 0; }
   .menu.one { left: 4em; top: 4.5em; }
@@ -366,10 +370,9 @@
   .grid-deck { display: none; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 20px 10px; }
   .theme { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
   .theme.picked { transform: translateY(-10px); box-shadow: 0 0 0 2px var(--ink), var(--shadow); }
-  .theme .swatch { display: flex; flex-direction: column; justify-content: flex-end; aspect-ratio: 1 / 1.15; padding: 10px 12px; background: var(--chip); color: var(--chip-ink); }
+  .theme .swatch { display: flex; flex-direction: column; justify-content: flex-end; aspect-ratio: 1 / 1.15; padding: 10px 12px; background: var(--chip); color: #fff; }
   .theme .swatch b { font: 650 17px/1.1 var(--display); letter-spacing: -0.01em; }
   .theme .swatch span { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .dark .theme .swatch { color: color-mix(in oklab, var(--chip-ink), #000 40%); }
   .orbs { display: flex; justify-content: center; gap: 10px; padding: 14px 6px; }
   /* As in the settings window (dist/settings.html): ligmaMesh's blobs,
      blurred together, drifting while hovered */
@@ -426,7 +429,7 @@
   .fg .row.in { padding-left: 2.6em; }
   .fg .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6em; }
   .fg .avatar { width: 2.6em; height: 2.6em; border-radius: 50%; background: #f0b232; }
-  .fg .share { padding: 0.6em 1.2em; border-radius: 0.6em; background: var(--field); color: var(--field-ink); font-weight: 600; }
+  .fg .share { padding: 0.6em 1.2em; border-radius: 0.6em; background: var(--field); color: #fff; font-weight: 600; }
   .fg .prop { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6em; }
   .fg .prop span { display: flex; align-items: center; gap: 0.6em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); color: var(--ink); font-variant-numeric: tabular-nums; }
   .fg .prop span i { font-style: normal; color: var(--ink-3); }
@@ -443,10 +446,10 @@
   .selection i { position: absolute; width: 0.9em; height: 0.9em; background: #fff; border: 0.15em solid var(--field); }
   .selection i:nth-child(1) { left: -0.5em; top: -0.5em; } .selection i:nth-child(2) { right: -0.5em; top: -0.5em; }
   .selection i:nth-child(3) { left: -0.5em; bottom: -0.5em; } .selection i:nth-child(4) { right: -0.5em; bottom: -0.5em; }
-  .selection span { position: absolute; left: 50%; bottom: -3em; transform: translateX(-50%); padding: 0.2em 0.6em; border-radius: 0.3em; background: var(--field); color: var(--field-ink); font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .selection span { position: absolute; left: 50%; bottom: -3em; transform: translateX(-50%); padding: 0.2em 0.6em; border-radius: 0.3em; background: var(--field); color: #fff; font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .toolbar { position: absolute; left: 50%; bottom: 2.4em; transform: translateX(-50%); display: flex; gap: 0.4em; padding: 0.6em; border-radius: 1.2em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); }
   .toolbar span { display: grid; place-items: center; width: 3.6em; height: 3.6em; border-radius: 0.8em; }
-  .toolbar span.on { background: var(--field); color: var(--field-ink); }
+  .toolbar span.on { background: var(--field); color: #fff; }
   .toolbar svg { width: 2em; height: 2em; }
   .figma-caption { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
 
@@ -476,15 +479,8 @@
   .cmd button:hover { background: var(--line); }
   .cmd button svg { width: 14px; height: 14px; }
 
-  /* The sign-off: a Figma canvas in the page's theme, the lockup selected on
-     it, the downloads drawn as frames, and you, as a multiplayer cursor */
-  .signoff {
-    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
-    min-height: 100svh; margin-top: clamp(96px, 12vw, 160px); padding: 120px var(--gutter) 150px; overflow: hidden; text-align: center;
-    background: radial-gradient(circle, var(--line-strong) 1.2px, transparent 1.7px) 12px 12px / 24px 24px, var(--canvas);
-    border-top: 1px solid var(--line);
-  }
-  .sign-layer { position: relative; display: flex; align-items: center; gap: 0.12em; padding: 0.1em 0.35em 0.16em 0.22em; background: var(--bg); font: 700 clamp(4.5rem, 13vw, 11.5rem)/1 var(--display); letter-spacing: -0.045em; color: var(--ink); }
+  /* The lockup, selected as a layer on the canvas */
+  .sign-layer { position: relative; display: flex; align-items: center; gap: 0.12em; padding: 0.1em 0.35em 0.16em 0.22em; background: var(--bg); font: 700 clamp(4rem, min(12vw, 17vh), 10.5rem)/1 var(--display); letter-spacing: -0.045em; color: var(--ink); }
   .sign-layer::before { content: ""; position: absolute; inset: 0; border: 2px solid var(--field); pointer-events: none; }
   .sign-layer > span { position: absolute; left: 0; bottom: calc(100% + 8px); font: 500 14px/1 var(--text); letter-spacing: 0; color: var(--link); }
   .sign-layer img { width: 1.05em; height: 1.05em; margin: -0.08em -0.16em -0.08em -0.1em; }
@@ -492,9 +488,7 @@
   .sign-layer i { position: absolute; width: 12px; height: 12px; background: #fff; border: 2px solid var(--field); border-radius: 2px; }
   .sign-layer i:nth-of-type(1) { left: -5px; top: -5px; } .sign-layer i:nth-of-type(2) { right: -5px; top: -5px; }
   .sign-layer i:nth-of-type(3) { left: -5px; bottom: -5px; } .sign-layer i:nth-of-type(4) { right: -5px; bottom: -5px; }
-  .signoff h2 { margin-top: clamp(32px, 4vw, 48px); font-size: clamp(2rem, 4.4vw, 3.5rem); }
-  .signoff > p { margin-top: 12px; font-size: 16px; color: var(--ink-2); }
-  .frames { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 40px 16px; margin-top: 56px; }
+  .frames { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 40px 16px; margin-top: clamp(40px, 6vh, 56px); }
   .frame { position: relative; }
   .frame > span { position: absolute; left: 0; bottom: calc(100% + 6px); font-size: 12px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
   .you { position: absolute; left: 30%; top: 58%; display: flex; align-items: flex-start; pointer-events: none; animation: you 9s var(--ease) infinite; }
@@ -505,12 +499,17 @@
     38%, 62% { translate: 0 0; }
     50% { translate: 6px 4px; }
   }
-  .dock { position: absolute; left: 50%; bottom: 28px; translate: -50% 0; display: flex; align-items: center; gap: 2px; padding: 6px; border-radius: 16px; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); white-space: nowrap; }
-  .dock a { display: flex; align-items: center; height: 36px; padding: 0 12px; border-radius: 10px; color: var(--ink); font-size: 14px; font-weight: 500; text-decoration: none; }
-  .dock a:hover { background: var(--surface); }
-  .dock img { width: 22px; height: 22px; margin: 0 6px 0 4px; }
-  .dock .sep { width: 1px; height: 22px; margin: 0 6px; background: var(--line); }
-  .dock small { padding: 0 12px 0 6px; font-size: 13px; color: var(--ink-2); }
+  /* The footer: the closing line and the download, centered, then the links */
+  .closing { display: flex; flex-direction: column; align-items: center; margin-top: clamp(120px, 14vw, 200px); padding: 0 var(--gutter) 32px; text-align: center; }
+  .closing h2 { font-size: clamp(3rem, 8vw, 6rem); line-height: 0.95; letter-spacing: -0.04em; font-weight: 700; }
+  .closing > p { margin-top: 16px; font-size: 16px; color: var(--ink-2); }
+  .closing .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 32px; }
+  .foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 20px; width: 100%; max-width: calc(var(--wrap) - 2 * var(--gutter)); margin-top: clamp(96px, 12vw, 144px); padding-top: 24px; border-top: 1px solid var(--line); font-size: 14px; }
+  .foot a { color: var(--ink-2); text-decoration: none; }
+  .foot a:hover { color: var(--ink); }
+  .foot .brand { margin-right: auto; font-size: 17px; color: var(--ink); }
+  .foot .brand img { width: 24px; height: 24px; }
+  .foot small { margin-left: auto; font-size: 13px; color: var(--ink-3); }
 
   /* Momentum scrolling (vendor/lenis.min.js) */
   html.lenis, html.lenis body { height: auto; }
@@ -523,12 +522,10 @@
   .story .scene { height: var(--len, 240svh); }
   .story .scene > .pin { position: sticky; top: 0; height: 100svh; }
 
-  /* The reel: what's inside, two rows drifting opposite ways. They stop
-     while pointed at */
-  .reel { display: grid; gap: 12px; width: 100vw; margin: clamp(48px, 7vw, 88px) 0 0 calc(50% - 50vw); overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent); }
+  /* The reel: what's inside, two rows drifting opposite ways */
+  .reel { display: grid; gap: 12px; width: 100vw; margin: clamp(32px, 5vh, 56px) 0 0 calc(50% - 50vw); overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent); }
   .reel-row { display: flex; width: max-content; animation: reel 70s linear infinite; }
   .reel-row.back { animation-direction: reverse; animation-duration: 85s; }
-  .reel:hover .reel-row, .reel:focus-within .reel-row { animation-play-state: paused; }
   @keyframes reel { to { translate: -50% 0; } }
   .reel-track { display: flex; gap: 12px; margin: 0; padding: 0 12px 0 0; list-style: none; }
   .reel a {
@@ -537,7 +534,7 @@
     transition: background-color 200ms var(--ease), color 200ms var(--ease);
   }
   .reel a .icon { width: 22px; height: 22px; color: var(--field); transition: color 200ms var(--ease); }
-  .reel a:hover, .reel a:focus-visible { background: var(--field); color: var(--field-ink); }
+  .reel a:hover, .reel a:focus-visible { background: var(--field); color: #fff; }
   .reel a:hover .icon, .reel a:focus-visible .icon { color: currentColor; }
 
   /* Image tools: three steps on one image, under Figma's image bar */
@@ -601,7 +598,6 @@
     .ai .steps { order: 2; }
     .ai .note { order: 3; }
     .index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .dock small { display: none; }
     .figma { aspect-ratio: 4 / 3; }
     .figma .art { font-size: 1.25cqw; }
     .fg { grid-template-columns: 24em 1fr; }
@@ -614,9 +610,8 @@
     .bento { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; }
     .tile { grid-area: auto !important; }
     .install { grid-template-columns: minmax(0, 1fr); }
-    .dock { position: static; translate: none; margin-top: 64px; flex-wrap: wrap; justify-content: center; white-space: normal; }
-    .signoff { padding-bottom: 32px; }
-    .you, .dock img, .dock .sep { display: none; }
+    .you { display: none; }
+    .foot .brand, .foot small { margin: 0; width: 100%; justify-content: center; }
     .compare tbody th { width: 40%; }
     .compare th, .compare td { padding-right: 10px; }
     .btn { height: 48px; padding: 0 18px; }
@@ -660,6 +655,7 @@
     <symbol id="i-object" viewBox="0 0 24 24" fill="none"><path stroke="currentColor" stroke-dasharray="2 2" d="M10.5 16.5h-3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3"/><path stroke="currentColor" stroke-linejoin="round" d="m12.5 12.5 6.5 2.4-2.9 1.2-1.2 2.9z"/></symbol>
     <symbol id="i-crop" viewBox="0 0 24 24" fill="none"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="M8.5 5.5v10h10M5.5 8.5h10v10"/></symbol>
     <symbol id="i-palette" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5a5.5 5.5 0 0 0 0 11c.8 0 1.2-.5 1.2-1.1 0-.7-.5-.9-.5-1.5s.5-1 1.1-1h1.3c1.5 0 2.4-1 2.4-2.4 0-2.8-2.4-5-5.5-5z"/><circle cx="5.2" cy="7.2" r=".8" fill="currentColor" stroke="none"/><circle cx="7.6" cy="4.9" r=".8" fill="currentColor" stroke="none"/><circle cx="10.4" cy="5.8" r=".8" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-ai" viewBox="4 4 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M5.5 8.5v-2a1 1 0 0 1 1-1h2m7 0h2a1 1 0 0 1 1 1v2m0 7v2a1 1 0 0 1-1 1h-2m-7 0h-2a1 1 0 0 1-1-1v-2"/><circle cx="12" cy="10" r="2.5"/><path d="M8.5 17a3.5 3.5 0 0 1 7 0"/></symbol>
     <!-- From the tab bar -->
     <symbol id="i-home" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/></symbol>
     <symbol id="i-design" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(135 8 8)"><path d="M8 13.5 3.5 7a4.5 4.5 0 0 1 9 0z"/><circle cx="8" cy="7" r="1.2"/><path d="M8 8.2v5.3"/></g></symbol>
@@ -695,16 +691,16 @@
     </ul>
   </nav>
 
-    <div class="masthead">
+    <div class="stage">
+      <div class="sign-layer" role="img" aria-label="Ligma"><span>Ligma</span><img src="logo.png" alt=""><b>Ligma</b><i></i><i></i><i></i><i></i></div>
       <h1>Same Figma. Lighter.</h1>
-      <div class="pitch">
-        <p>A lightweight desktop app for Figma, with far more to work with</p>
-        <div class="actions">
-          <a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
-          <a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a>
-        </div>
-        <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
+      <p class="pitch">A lightweight desktop app for Figma, with far more to work with</p>
+      <div class="frames">
+        <div class="frame"><span>Download</span><a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a></div>
+        <div class="frame"><span>Other platform</span><a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a></div>
+        <div class="you" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 2l9.5 7-4.3.6L6 13.5z" fill="currentColor" stroke="#fff" stroke-width="1"/></svg><span>You</span></div>
       </div>
+      <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
     </div>
 
     <div class="reel">
@@ -712,7 +708,7 @@
         <ul class="reel-track">
           <li><a href="#f-split"><svg class="icon"><use href="#i-split"/></svg>Split view</a></li>
           <li><a href="#f-tabs"><svg class="icon"><use href="#i-tabs"/></svg>Tabs</a></li>
-          <li><a href="#ai"><svg class="icon"><use href="#i-cutout"/></svg>Free AI image tools</a></li>
+          <li><a href="#ai"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
           <li><a href="#themes"><svg class="icon"><use href="#i-palette"/></svg>Nine themes</a></li>
           <li><a href="#f-rail"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the rail</a></li>
           <li><a href="#f-previews"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
@@ -722,7 +718,7 @@
         <ul class="reel-track" aria-hidden="true">
           <li><a href="#f-split" tabindex="-1"><svg class="icon"><use href="#i-split"/></svg>Split view</a></li>
           <li><a href="#f-tabs" tabindex="-1"><svg class="icon"><use href="#i-tabs"/></svg>Tabs</a></li>
-          <li><a href="#ai" tabindex="-1"><svg class="icon"><use href="#i-cutout"/></svg>Free AI image tools</a></li>
+          <li><a href="#ai" tabindex="-1"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
           <li><a href="#themes" tabindex="-1"><svg class="icon"><use href="#i-palette"/></svg>Nine themes</a></li>
           <li><a href="#f-rail" tabindex="-1"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the rail</a></li>
           <li><a href="#f-previews" tabindex="-1"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
@@ -1266,22 +1262,19 @@
   </section>
 </div>
 
-<footer class="signoff">
-  <div class="sign-layer" role="img" aria-label="Ligma"><span>Ligma</span><img src="logo.png" alt=""><b>Ligma</b><i></i><i></i><i></i><i></i></div>
+<footer class="closing">
   <h2>Figma, without the weight.</h2>
-  <p id="close-meta">Free and open source. Not affiliated with Figma or Discord.</p>
-  <div class="frames">
-    <div class="frame"><span>Download</span><a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a></div>
-    <div class="frame"><span>GitHub</span><a class="btn" href="https://github.com/trelakor/ligma"><svg class="icon"><use href="#i-star"/></svg>Star on GitHub</a></div>
-    <div class="you" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3 2l9.5 7-4.3.6L6 13.5z" fill="currentColor" stroke="#fff" stroke-width="1"/></svg><span>You</span></div>
+  <p id="close-meta">Free and open source (MIT). Updates itself.</p>
+  <div class="actions">
+    <a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
+    <a class="btn" href="https://github.com/trelakor/ligma"><svg class="icon"><use href="#i-star"/></svg>Star on GitHub</a>
   </div>
-  <div class="dock">
-    <img src="logo.png" alt="">
+  <div class="foot">
+    <a class="brand" href="./"><img src="logo.png" alt="" width="24" height="24">Ligma</a>
     <a href="https://github.com/trelakor/ligma">GitHub</a>
     <a href="https://github.com/trelakor/ligma/blob/main/CHANGELOG.md">Changelog</a>
     <a href="https://github.com/trelakor/ligma/blob/main/PRIVACY.md">Privacy</a>
     <a href="https://github.com/trelakor/ligma/blob/main/TERMS.md">Terms</a>
-    <span class="sep"></span>
     <small>MIT licensed. Not affiliated with Figma or Discord</small>
   </div>
 </footer>
@@ -1462,35 +1455,43 @@
 
   const lenis = window.Lenis && !reduced.matches ? new Lenis({ autoRaf: true, anchors: true }) : null;
 
-  // A tile's plus opens its details in the sheet, the drawing building up
+  // A tile's plus opens its details in the sheet, the drawing building up.
+  // So does the feature's chip in the reel
   const sheet = $("sheet");
   let opener = null;
+  function openSheet(tile, from) {
+    opener = from;
+    const art = tile.querySelector(".tile-art .art").cloneNode(true);
+    sheet.querySelector(".sheet-art .tile-art").replaceChildren(art);
+    const title = tile.querySelector("h3").cloneNode(true);
+    title.id = "sheet-title";
+    sheet.querySelector(".sheet-copy").replaceChildren(title, ...[...tile.querySelector(".more").children].map((el) => el.cloneNode(true)));
+    sheet.showModal();
+    lenis?.stop();
+    if (reduced.matches) return art.style.setProperty("--v", 1);
+    const begin = performance.now();
+    const step = (now) => {
+      const v = clamp((now - begin) / 900);
+      art.style.setProperty("--v", v.toFixed(4));
+      if (v < 1 && sheet.open) requestAnimationFrame(step);
+    };
+    art.style.setProperty("--v", 0);
+    requestAnimationFrame(step);
+  }
   for (const tile of document.querySelectorAll(".tile")) {
-    tile.querySelector(".open").addEventListener("click", (event) => {
-      opener = event.currentTarget;
-      const art = tile.querySelector(".tile-art .art").cloneNode(true);
-      sheet.querySelector(".sheet-art .tile-art").replaceChildren(art);
-      const title = tile.querySelector("h3").cloneNode(true);
-      title.id = "sheet-title";
-      sheet.querySelector(".sheet-copy").replaceChildren(title, ...[...tile.querySelector(".more").children].map((el) => el.cloneNode(true)));
-      sheet.showModal();
-      lenis?.stop();
-      if (reduced.matches) return art.style.setProperty("--v", 1);
-      const begin = performance.now();
-      const step = (now) => {
-        const v = clamp((now - begin) / 900);
-        art.style.setProperty("--v", v.toFixed(4));
-        if (v < 1 && sheet.open) requestAnimationFrame(step);
-      };
-      art.style.setProperty("--v", 0);
-      requestAnimationFrame(step);
+    tile.querySelector(".open").addEventListener("click", (event) => openSheet(tile, event.currentTarget));
+  }
+  for (const link of document.querySelectorAll('.reel a[href^="#f-"]')) {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      openSheet(document.querySelector(link.getAttribute("href")), link);
     });
   }
   sheet.querySelector(".close").addEventListener("click", () => sheet.close());
   sheet.addEventListener("click", (event) => event.target === sheet && sheet.close());
   sheet.addEventListener("close", () => {
     lenis?.start();
-    opener?.focus();
+    opener?.focus({ preventScroll: true });
   });
 
   // Copy the Terminal command
@@ -1536,7 +1537,7 @@
         $("dl-secondary").href = other.browser_download_url;
       }
       $("dl-meta").textContent = `${release.tag_name}. Free and open source (MIT). Updates itself.`;
-      $("close-meta").textContent = `${release.tag_name}. Free and open source. Not affiliated with Figma or Discord.`;
+      $("close-meta").textContent = `${release.tag_name}. Free and open source (MIT). Updates itself.`;
     } catch {}
   })();
 </script>
