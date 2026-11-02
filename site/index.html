@@ -272,7 +272,10 @@
   /* Tabs drawing */
   .window { position: absolute; left: 6em; right: -4em; top: 9em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
   .tabbar { display: flex; height: 3.8em; background: var(--tb-bar); color: var(--tb-text); font-size: 1.2em; font-weight: 500; }
-  .tabbar > div { position: relative; display: flex; align-items: center; gap: 0.75em; flex: none; padding: 0 1.15em 0 1.3em; }
+  /* Even space either side of a tab's contents. The file icon and the close
+     button have room inside them, so their sides pad less */
+  .tabbar > div { position: relative; display: flex; align-items: center; gap: 0.75em; flex: none; padding: 0 1.15em 0 0.95em; }
+  .tabbar > div:has(.x) { padding-right: 0.85em; }
   .tabbar > div::after { content: ""; position: absolute; right: 0; top: 0.9em; bottom: 0.9em; width: 1px; background: var(--tb-divider); }
   .tabbar .sq { width: 3.6em; padding: 0; justify-content: center; }
   .tabbar .on { background: var(--tb-active); color: var(--tb-text-active); }
@@ -480,8 +483,8 @@
   .figma-caption { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
 
   /* Compare */
-  /* Ligma or Figma desktop, as the README's card */
-  .compare-card { padding: clamp(20px, 3vw, 36px) clamp(20px, 3.4vw, 40px) clamp(4px, 1vw, 12px); border-radius: 24px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); overflow-x: auto; }
+  /* Ligma or Figma desktop, as in the README */
+  .compare-card { overflow-x: auto; }
   .compare { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   .compare th, .compare td { padding: 0 16px 0 0; height: 64px; text-align: left; border-bottom: 1px solid var(--line); }
   .compare tbody tr:last-child > * { border-bottom: 0; }
@@ -522,9 +525,8 @@
   .sign-layer i { position: absolute; width: 12px; height: 12px; background: #fff; border: 2px solid var(--field); border-radius: 2px; }
   .sign-layer i:nth-of-type(1) { left: -5px; top: -5px; } .sign-layer i:nth-of-type(2) { right: -5px; top: -5px; }
   .sign-layer i:nth-of-type(3) { left: -5px; bottom: -5px; } .sign-layer i:nth-of-type(4) { right: -5px; bottom: -5px; }
-  .frames { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 40px 16px; margin-top: clamp(40px, 6vh, 56px); }
+  .frames { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: clamp(32px, 5vh, 44px); }
   .frame { position: relative; }
-  .frame > span { position: absolute; left: 0; bottom: calc(100% + 6px); font-size: 12px; font-weight: 500; color: var(--ink-2); white-space: nowrap; }
   .you { position: absolute; left: 30%; top: 58%; display: flex; align-items: flex-start; pointer-events: none; animation: you 9s var(--ease) infinite; }
   .you svg { width: 22px; height: 22px; color: #9747ff; filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.25)); }
   .you span { margin: 18px 0 0 -2px; padding: 3px 7px; border-radius: 4px; background: #9747ff; color: #fff; font-size: 13px; font-weight: 600; }
@@ -563,7 +565,7 @@
   @keyframes reel { to { translate: -50% 0; } }
   .reel-track { display: flex; gap: 12px; margin: 0; padding: 0 12px 0 0; list-style: none; }
   .reel a {
-    display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 22px 0 16px; border-radius: 999px;
+    display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 20px 0 16px; border-radius: 10px;
     background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 17px; font-weight: 500; text-decoration: none; white-space: nowrap;
     transition: background-color 200ms var(--ease), color 200ms var(--ease);
   }
@@ -692,7 +694,7 @@
     <symbol id="i-ai" viewBox="4 4 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M5.5 8.5v-2a1 1 0 0 1 1-1h2m7 0h2a1 1 0 0 1 1 1v2m0 7v2a1 1 0 0 1-1 1h-2m-7 0h-2a1 1 0 0 1-1-1v-2"/><circle cx="12" cy="10" r="2.5"/><path d="M8.5 17a3.5 3.5 0 0 1 7 0"/></symbol>
     <!-- Figma's UI3: the toolbar, the left sidebar and the Actions panel -->
     <symbol id="i-move3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M4.2 3.1 12.6 6.5c.5.2.5.9 0 1.1L9.3 8.8c-.2.1-.4.3-.5.5l-1.2 3.3c-.2.5-.9.5-1.1 0L3.1 4.2c-.2-.6.4-1.2 1.1-1.1z"/></symbol>
-    <symbol id="i-pen3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.8 13.5h4.4M6 13.5 3.8 8.4 8 2.5l4.2 5.9-2.2 5.1"/><circle cx="8" cy="8.7" r="1"/><path d="M8 2.5v5.2"/></symbol>
+    <symbol id="i-pen3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(-45 8 8)"><path d="M5.8 13.5h4.4M6 13.5 3.8 8.4 8 2.5l4.2 5.9-2.2 5.1"/><circle cx="8" cy="8.7" r="1"/><path d="M8 2.5v5.2"/></g></symbol>
     <symbol id="i-braces" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3c-1.2 0-1.6.6-1.6 1.6v1.6c0 .9-.4 1.6-1.4 1.8 1 .2 1.4.9 1.4 1.8v1.6C4.4 12.4 4.8 13 6 13M10 3c1.2 0 1.6.6 1.6 1.6v1.6c0 .9.4 1.6 1.4 1.8-1 .2-1.4.9-1.4 1.8v1.6c0 1-.4 1.6-1.6 1.6"/></symbol>
     <symbol id="i-comment" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.8a5.2 5.2 0 0 0-4.5 7.8l-.7 2.6 2.6-.7A5.2 5.2 0 1 0 8 2.8z"/></symbol>
     <symbol id="i-actions" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2"/><circle cx="11.25" cy="4.75" r="2.25"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2"/><path d="M11.25 9v4.5M9 11.25h4.5" stroke-linecap="round"/></symbol>
@@ -754,8 +756,8 @@
         <p class="pitch">A lightweight desktop app for Figma, with far more to work with</p>
       </div>
       <div class="frames">
-        <div class="frame"><span>Download</span><a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a></div>
-        <div class="frame"><span>Other platform</span><a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a></div>
+        <div class="frame"><a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a></div>
+        <div class="frame"><a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a></div>
         <div class="you" aria-hidden="true"><svg><use href="#i-cursor"/></svg><span>You</span></div>
       </div>
       <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
