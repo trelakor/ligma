@@ -1892,8 +1892,12 @@
   document.querySelector(".reel").addEventListener("click", (event) => {
     const link = event.target.closest('a[href^="#f-"]');
     if (!link) return;
+    // Kept from Lenis's anchor handling on window, which would scroll to the
+    // frame's spot on the unpanned board, well past the canvas
     event.preventDefault();
-    cv.scrollIntoView({ behavior: reduced.matches ? "auto" : "smooth", block: "center" });
+    event.stopPropagation();
+    if (lenis) lenis.scrollTo(scrollY + cv.getBoundingClientRect().top - Math.max(0, (innerHeight - cv.offsetHeight) / 2));
+    else cv.scrollIntoView({ behavior: reduced.matches ? "auto" : "smooth", block: "center" });
     flyTo(link.getAttribute("href").slice(1));
   });
   function start() {
