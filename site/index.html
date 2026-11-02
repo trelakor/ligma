@@ -494,8 +494,8 @@
   .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -0.72); }
   .tray button:focus-visible { outline: none; }
   .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
-  .tray .gloss { opacity: 0; }
-  :root.dark .tray .gloss { opacity: 0.35; }
+  .tray .gloss { opacity: 0.6; }
+  :root.dark .tray .gloss { opacity: 1; }
   :root.dark .tray svg { filter: saturate(1.25) drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 40%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
   .tray .tip {
     position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
@@ -1472,27 +1472,45 @@
     renderDeck();
   }
 
-  // A brush for each theme, as Figma Draw draws its flat brush: a domed
-  // tip of paint, streaked dark bristles, a thin dark ferrule and the
-  // handle with Figma's mark. The paint and the handle are the theme's
-  // color for the page's mode. Made once, recolored when the mode changes
+  // A brush for each theme, as Figma Draw draws its flat brush: a rounded
+  // tip of paint, fine streaked bristles darkening toward a thin ferrule,
+  // and the handle with Figma's mark, all shaded with soft gradients. The
+  // paint and handle are the theme's color for the page's mode. Made once,
+  // recolored when the mode changes
+  // The bristles' streaks: many fine hairs of varied weight, the same on
+  // every brush
+  const hairs = (() => {
+    let seed = 7, out = "";
+    const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+    for (let n = 0; n < 34; n++) {
+      const x = 1.4 + (n / 33) * 27.2 + (rnd() - 0.5) * 0.5;
+      const dark = rnd() > 0.38;
+      out += `<path d="M${x.toFixed(2)} ${(9 + rnd() * 6).toFixed(1)}V41" stroke="${dark ? "#000" : "#fff"}" stroke-opacity="${(dark ? 0.1 + rnd() * 0.22 : 0.06 + rnd() * 0.12).toFixed(2)}" stroke-width="${(0.25 + rnd() * 0.55).toFixed(2)}"/>`;
+    }
+    return out;
+  })();
   const pencil = (id) => `<svg viewBox="0 0 30 102" aria-hidden="true">
     <defs>
-      <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p3)"/><stop offset=".45" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:var(--p7)"/></linearGradient>
-      <linearGradient id="pg-${id}" x1="0" x2="1"><stop offset="0" stop-color="#9a9a9a"/><stop offset=".45" stop-color="#6e6e6e"/><stop offset="1" stop-color="#3f3f3f"/></linearGradient>
-      <linearGradient id="pd-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".25" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".45"/></linearGradient>
+      <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p5)"/><stop offset=".24" style="stop-color:var(--p3)"/><stop offset=".6" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:var(--p7)"/></linearGradient>
+      <linearGradient id="pg-${id}" x1="0" x2="1"><stop offset="0" stop-color="#5e5e5e"/><stop offset=".26" stop-color="#8c8c8c"/><stop offset=".62" stop-color="#5b5b5b"/><stop offset="1" stop-color="#363636"/></linearGradient>
+      <linearGradient id="pd-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".12" stop-color="#fff" stop-opacity=".18"/><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".5"/></linearGradient>
+      <linearGradient id="pc-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".4"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></linearGradient>
+      <linearGradient id="pm-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1f1f1f"/><stop offset=".45" stop-color="#4c4c4c"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient>
+      <linearGradient id="ph-${id}" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".22" stop-color="#fff" stop-opacity=".22"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
+      <filter id="ps-${id}" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation=".18"/></filter>
+      <clipPath id="pk-${id}"><path d="M1.6 41C.9 31 .5 21 .6 12.6.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6.1 8.4-.3 18.4-1 28.4z"/></clipPath>
     </defs>
-    <path d="M.5 46h29v56H.5z" fill="url(#pb-${id})"/>
-    <path class="gloss" d="M5 49v53" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
-    <svg x="8.5" y="51" width="13" height="13" viewBox="0 0 16 16" style="color:var(--logo)"><use href="#i-figma"/></svg>
-    <path d="M.5 8.2C.5 5 2 3.6 4.6 3.2 11.5 2.1 18.5 2.1 25.4 3.2 28 3.6 29.5 5 29.5 8.2V41H.5z" fill="url(#pg-${id})"/>
-    <path d="M.5 8.2C.5 5 2 3.6 4.6 3.2 11.5 2.1 18.5 2.1 25.4 3.2 28 3.6 29.5 5 29.5 8.2V41H.5z" fill="url(#pd-${id})"/>
-    <path d="M3.8 12v28.5M7.4 13v27.5M11 12.5v28M14.6 13.5V41M18.2 12.5v28M21.8 13v27.5M25.4 12v28.5" stroke="#000" stroke-opacity=".22" stroke-width=".8"/>
-    <path d="M5.6 13v27.5M12.8 13v27.5M20 13v27.5M27 12.5v28" stroke="#fff" stroke-opacity=".12" stroke-width=".7"/>
-    <path d="M.5 8.2C.5 5 2 3.6 4.6 3.2 11.5 2.1 18.5 2.1 25.4 3.2 28 3.6 29.5 5 29.5 8.2V14.6C26.2 16.8 23.1 13.2 19.6 15.1 16.1 17.1 12.9 13.5 9.4 15.3 5.9 17 3.1 13.6.5 15.2z" fill="url(#pb-${id})"/>
-    <path d="M2.6 5.6C9.2 3.9 20.8 3.9 27.4 5.6" stroke="#fff" stroke-opacity=".45" stroke-width="1" fill="none" stroke-linecap="round"/>
-    <path d="M.5 41h29v5H.5z" fill="#2c2c2c"/>
-    <path d="M.5 42.6h29" stroke="#777" stroke-width=".9"/>
+    <path d="M1.2 46h27.6v56H1.2z" fill="url(#pb-${id})"/>
+    <path d="M1.2 46h27.6v56H1.2z" fill="url(#ph-${id})" class="gloss"/>
+    <svg x="9.5" y="52" width="11" height="11" viewBox="0 0 16 16" style="color:var(--logo)"><use href="#i-figma"/></svg>
+    <g clip-path="url(#pk-${id})">
+      <path d="M1.6 41C.9 31 .5 21 .6 12.6.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6.1 8.4-.3 18.4-1 28.4z" fill="url(#pg-${id})"/>
+      <g filter="url(#ps-${id})">${hairs}</g>
+      <path d="M1.6 41C.9 31 .5 21 .6 12.6.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6.1 8.4-.3 18.4-1 28.4z" fill="url(#pd-${id})"/>
+      <path d="M.6 12.6C.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6v2.2C24.6 18.2 19.4 13.4 14 15.6 8.9 17.6 4.6 17.4.6 15.2z" fill="url(#pb-${id})"/>
+      <path d="M.6 12.6C.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6v2.2C24.6 18.2 19.4 13.4 14 15.6 8.9 17.6 4.6 17.4.6 15.2z" fill="url(#pc-${id})"/>
+    </g>
+    <path d="M1.4 40.6h27.2v5.6H1.4z" fill="url(#pm-${id})"/>
   </svg>`;
   const pencils = LIGMA_THEMES.map((theme) => {
     const button = document.createElement("button");
@@ -1515,7 +1533,7 @@
         ? (dark ? ["#f2f2f2", "#d6d6d6", "#ababab"] : ["#f5f5f5", "#d9d9d9", "#a8a8a8"])
         : (dark ? [ramp["--a-400"], ramp["--a-500"], ramp["--a-600"]] : [ramp["--a-300"], ramp["--a-500"], ramp["--a-700"]]);
       stops.forEach((color, i) => button.style.setProperty(`--p${[3, 5, 7][i]}`, color));
-      button.style.setProperty("--logo", button.dataset.theme === "figma" ? "#555" : "rgb(255 255 255 / 0.8)");
+      button.style.setProperty("--logo", button.dataset.theme === "figma" ? "rgb(0 0 0 / 0.28)" : "rgb(255 255 255 / 0.42)");
       button.setAttribute("aria-checked", button.dataset.theme === state.theme);
     }
     for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
