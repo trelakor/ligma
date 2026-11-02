@@ -21,4 +21,6 @@ FORM: Swatch book / fan deck, #4 of the ordered list. seed:f28eea57c344b988. Rai
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
 
+Scroll story (added 2026-11-01): momentum scrolling (site/vendor/lenis.min.js, off for reduced motion and on touch). On screens at least 900 × 700 the hero and the AI image tools pin while they play out: the grey 305 MB Figma desktop block shrinks by area to the 16 MB corner and turns into the blue Ligma chip; the image tools step through Select object, Remove background and Vectorize on one photo under Figma's image bar. Feature drawings build up as they come into view. Reduced motion shows every scene finished.
+
 Signature interaction: clicking a theme orb retints the whole page and switches light or dark. The new palette spreads as a circle from the orb (View Transitions), and a large Figma editor mock in the themes section shows the theme on Figma's interface while the canvas design stays untouched.

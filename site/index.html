@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ligma: a lightweight Figma desktop app for macOS and Windows</title>
-<meta name="description" content="Ligma is a free, open-source Figma desktop app, about 4 MB. Tabs, color themes, plugins in the left rail and Discord Rich Presence. Built with Tauri.">
+<meta name="description" content="Ligma is a free, open-source desktop app for Figma on macOS and Windows: lightweight, with far more to work with. Tabs and split view, nine color themes, plugins in the left rail and AI image tools that run on your computer.">
 <link rel="canonical" href="https://trelakor.github.io/ligma/">
 <link rel="icon" href="logo.png">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Ligma: a lightweight Figma desktop app">
-<meta property="og:description" content="About 4 MB. Tabs, themes, plugins in the left rail and Discord Rich Presence. Free and open source.">
+<meta property="og:description" content="A lightweight desktop app for Figma, with far more to work with. Tabs and split view, nine themes and free AI image tools that run on your computer.">
 <meta property="og:url" content="https://trelakor.github.io/ligma/">
 <meta property="og:image" content="https://trelakor.github.io/ligma/social-cover.png">
 <meta property="og:image:width" content="1280">
@@ -20,7 +20,7 @@
 <link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
 <script>
   // Light or dark before first paint; the themes below can change it
-  document.documentElement.className = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.classList.add(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 </script>
 <style>
   @font-face { font-family: "Funnel Display"; src: url(fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; font-display: swap; }
@@ -49,7 +49,7 @@
     --ink: var(--g-900); --ink-2: var(--g-600); --ink-3: var(--g-500);
     --field: var(--a-500); --field-ink: var(--a-1000);
     --link: var(--a-700); --select: var(--a-200); --input: var(--g-100);
-    --weight: var(--g-100); --weight-rule: var(--g-200); --weight-ink: var(--g-500);
+    --weight: var(--g-100); --weight-rule: var(--g-200); --weight-ink: var(--g-500); --weight-block: var(--g-300);
     --tb-bar: var(--g-100); --tb-active: var(--white); --tb-text: var(--g-500); --tb-text-active: var(--g-900); --tb-divider: var(--g-200);
     --panel: var(--white); --canvas: var(--g-100);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 12px 32px -8px rgb(0 0 0 / 0.22);
@@ -60,7 +60,7 @@
     --ink: #ffffff; --ink-2: var(--g-400); --ink-3: var(--g-500);
     --field: var(--a-500); --field-ink: color-mix(in oklab, var(--a-1000), #000 40%);
     --link: var(--a-300); --select: var(--a-800); --input: var(--g-700);
-    --weight: var(--g-800); --weight-rule: var(--g-700); --weight-ink: var(--g-500);
+    --weight: var(--g-800); --weight-rule: var(--g-700); --weight-ink: var(--g-500); --weight-block: var(--g-600);
     --tb-bar: var(--g-700); --tb-active: var(--g-800); --tb-text: var(--g-400); --tb-text-active: #ffffff; --tb-divider: var(--g-600);
     --panel: var(--g-800); --canvas: var(--g-900);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 40px -8px rgb(0 0 0 / 0.55);
@@ -114,7 +114,7 @@
   nav .btn { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 10px; margin-left: 8px; }
 
   /* Hero: the headline, the download, and both apps drawn to scale */
-  .hero { padding: clamp(32px, 6vw, 72px) 0 0; }
+  .hero .masthead { margin-top: clamp(32px, 6vw, 72px); }
   .masthead { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 32px 48px; align-items: end; }
   .hero h1 { font-size: clamp(3.25rem, 8.4vw, 6rem); line-height: 0.92; letter-spacing: -0.04em; font-weight: 700; }
   .pitch p { font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 30em; }
@@ -132,11 +132,6 @@
   .weight .them { position: absolute; top: clamp(16px, 2.6cqw, 32px); left: clamp(16px, 2.6cqw, 32px); right: clamp(16px, 2.6cqw, 32px); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
   .weight .them span { font-size: 15px; font-weight: 600; color: var(--ink-2); }
   .weight .them b { font: 700 clamp(3.5rem, 12cqw, 9.5rem)/0.8 var(--display); letter-spacing: -0.05em; color: var(--weight-ink); font-variant-numeric: tabular-nums; }
-  /* 16 MB of 305 MB, by area: each side at sqrt(16 / 305) */
-  .weight .us { position: absolute; left: 0; bottom: 0; width: 22.9%; height: 22.9%; background: var(--field); border-top-right-radius: 12px; }
-  .weight .us-label { position: absolute; left: calc(22.9% + 16px); bottom: 14px; display: flex; align-items: baseline; gap: 12px; }
-  .weight .us-label b { font: 700 clamp(2rem, 4.6cqw, 3.5rem)/1 var(--display); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
-  .weight .us-label span { font-size: 15px; font-weight: 600; color: var(--ink-2); }
   .caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 24px; margin-top: 12px; font-size: 14px; color: var(--ink-2); }
 
   section { padding-top: clamp(96px, 12vw, 160px); }
@@ -366,6 +361,80 @@
   footer a { color: var(--ink-2); }
   footer a:hover { color: var(--ink); }
 
+  /* Momentum scrolling (vendor/lenis.min.js) */
+  html.lenis, html.lenis body { height: auto; }
+  .lenis.lenis-smooth { scroll-behavior: auto !important; }
+  .lenis.lenis-stopped { overflow: hidden; }
+
+  /* Scenes: on large screens each pins while it plays out, its progress
+     through the scroll as --p (0 to 1). Elsewhere they sit in the flow,
+     played out by how far they've come into view */
+  .story .scene { height: var(--len, 240svh); }
+  .story .scene > .pin { position: sticky; top: 0; height: 100svh; }
+
+  /* The hero: Figma desktop's 305 MB, shrunk down to Ligma's 16 MB, by area.
+     --k is how far it has shrunk */
+  .story .hero { padding: 0; }
+  .story .hero .pin { display: flex; flex-direction: column; padding-bottom: 28px; }
+  .story .hero .masthead { margin-top: clamp(8px, 3vh, 40px); }
+  .story .hero .weight { flex: 1; aspect-ratio: auto; min-height: 240px; margin-top: clamp(24px, 4vh, 48px); }
+  .weight .them { opacity: clamp(0, (var(--k, 1) - 0.25) * 2.5, 1); }
+  .weight .block {
+    --side: calc(100% - 77.1% * var(--k, 1));
+    position: absolute; left: 0; bottom: 0; width: var(--side); height: var(--side);
+    container-type: size; border-top-right-radius: calc(12px + 8px * (1 - var(--k, 1)));
+    background: var(--weight-block); color: var(--ink);
+    transition: background-color 420ms var(--ease), color 420ms var(--ease);
+  }
+  .weight .block[data-who="ligma"] { background: var(--field); color: var(--field-ink); }
+  .weight .block .label { position: absolute; left: min(5cqw, 24px); bottom: min(8cqh, 20px); display: flex; align-items: baseline; gap: 0.3em; white-space: nowrap; }
+  .weight .block b { font: 700 clamp(2rem, min(44cqh, 15cqw), 9.5rem)/1 var(--display); letter-spacing: -0.05em; font-variant-numeric: tabular-nums; }
+  .weight .block span { position: relative; font-size: clamp(14px, min(5cqh, 2.4cqw), 22px); font-weight: 600; }
+  .weight .block span i { font-style: normal; transition: opacity 200ms; }
+  .weight .block span i + i { position: absolute; left: 0; }
+  .weight .block[data-who="ligma"] span i:first-child, .weight .block:not([data-who="ligma"]) span i + i { opacity: 0; }
+
+  /* Image tools: three steps on one image, under Figma's image bar */
+  .ai-scene { padding-top: clamp(96px, 12vw, 160px); }
+  .story .ai-scene { padding-top: 0; margin-top: clamp(48px, 6vw, 96px); }
+  .ai { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 32px clamp(32px, 5vw, 72px); align-items: center; }
+  .story .ai { height: 100%; }
+  .ai h2 { font-size: clamp(2.25rem, 3.6vw, 3.25rem); }
+  .ai .lede { margin-top: 16px; color: var(--ink-2); font-size: 18px; max-width: 30em; }
+  .steps { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .steps li { position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 2px 14px; padding: 13px 0 14px; border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: 15px; line-height: 1.5; opacity: 0.5; transition: opacity 240ms var(--ease); }
+  .steps li.on { opacity: 1; }
+  .steps li::after { content: ""; position: absolute; left: 0; bottom: -1px; height: 2px; width: calc(var(--fill, 0) * 100%); background: var(--field); }
+  .steps .icon { grid-row: span 3; width: 28px; height: 28px; padding: 5px; border-radius: 8px; background: var(--surface); color: var(--ink); transition: background-color 240ms var(--ease), color 240ms var(--ease); }
+  .steps li.on .icon { background: var(--field); color: #fff; }
+  .steps b { font: 650 19px/1.25 var(--display); letter-spacing: -0.01em; color: var(--ink); }
+  .steps small { font-size: 13px; color: var(--ink-3); }
+  .ai .note { margin-top: 16px; font-size: 14px; color: var(--ink-2); }
+
+  .canvas { position: absolute; left: 5em; top: 5em; right: -4em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
+  .imagebar { position: absolute; left: 50%; top: 7.6em; translate: -50% 0; display: flex; gap: 0.3em; padding: 0.5em; border-radius: 1.1em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); white-space: nowrap; }
+  .imagebar span { display: flex; align-items: center; gap: 0.5em; height: 3em; padding: 0 0.9em; border-radius: 0.7em; font-size: 1.15em; font-weight: 500; color: var(--ink); transition: background-color 200ms, color 200ms; }
+  .imagebar svg { width: 1.3em; height: 1.3em; }
+  .imagebar .sep { width: 1px; height: auto; margin: 0.6em 0.2em; padding: 0; background: var(--line); }
+  .ai-scene[data-step="1"] .imagebar [data-tool="1"], .ai-scene[data-step="2"] .imagebar [data-tool="2"], .ai-scene[data-step="3"] .imagebar [data-tool="3"] { background: var(--field); color: #fff; }
+  .photo { position: absolute; left: 11em; top: 14.4em; width: 40em; height: 30em; }
+  .photo svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .photo .sel { position: absolute; inset: 0; box-shadow: 0 0 0 0.15em var(--field); pointer-events: none; }
+  .photo .sel i { position: absolute; width: 0.9em; height: 0.9em; background: #fff; border: 0.15em solid var(--field); }
+  .photo .sel i:nth-child(1) { left: -0.5em; top: -0.5em; } .photo .sel i:nth-child(2) { right: -0.5em; top: -0.5em; }
+  .photo .sel i:nth-child(3) { left: -0.5em; bottom: -0.5em; } .photo .sel i:nth-child(4) { right: -0.5em; bottom: -0.5em; }
+  .photo .bg { opacity: calc(1 - var(--s2, 0)); }
+  .photo .pick { opacity: calc(var(--s1, 0) * (1 - var(--s2, 0))); }
+  .photo .real { opacity: calc(1 - var(--s3, 0)); }
+  .photo .flat, .photo .paths { opacity: var(--s3, 0); }
+  .photo .ants { animation: ants 0.6s linear infinite; }
+  @keyframes ants { to { stroke-dashoffset: -8; } }
+
+  /* Drawings build up as they come into view, from --v (0 to 1), each part
+     after its delay --d */
+  .rv { --t: clamp(0, (var(--v, 1) - var(--d, 0)) * 3.2, 1); opacity: var(--t); translate: 0 calc((1 - var(--t)) * 1.6em); }
+  .rv.pop { translate: none; scale: calc(0.6 + 0.4 * var(--t)); }
+
   /* Retinting: the new theme spreads out from the swatch clicked */
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 
@@ -373,8 +442,13 @@
     .deck { grid-template-columns: repeat(5, minmax(0, 1fr)); row-gap: 20px; }
   }
   @media (max-width: 900px) {
-    .masthead, .head, .spread, .spread.flip { grid-template-columns: minmax(0, 1fr); }
+    .masthead, .head, .spread, .spread.flip, .ai { grid-template-columns: minmax(0, 1fr); }
     .spread.flip .chip { order: 0; }
+    .ai { row-gap: 0; }
+    .ai > div:first-child { display: contents; }
+    .ai .chip { order: 1; margin-top: 28px; position: sticky; top: 12px; z-index: 1; }
+    .ai .steps { order: 2; }
+    .ai .note { order: 3; }
     .index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .figma { aspect-ratio: 4 / 3; }
     .figma .art { font-size: 1.25cqw; }
@@ -384,7 +458,6 @@
   @media (max-width: 640px) {
     nav ul li:not(:last-child) { display: none; }
     .weight { aspect-ratio: 3 / 4; min-height: 0; }
-    .weight .us-label { left: 16px; bottom: calc(22.9% + 12px); }
     .deck { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .index { grid-template-columns: minmax(0, 1fr); }
     .install { grid-template-columns: minmax(0, 1fr); }
@@ -396,7 +469,7 @@
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     .orb, .theme, .btn, .rail .plug { transition: none; }
-    .orb .mesh::before { animation: none; }
+    .orb .mesh::before, .photo .ants { animation: none; }
   }
 </style>
 </head>
@@ -417,6 +490,16 @@
     <symbol id="i-scale" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.3 10.3 3.2 3.2M7 5v4M5 7h4"/></symbol>
     <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></symbol>
     <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
+    <symbol id="i-split" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M8 3v10"/></symbol>
+    <symbol id="i-window" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="5" width="9" height="8" rx="1.5"/><path d="M5.5 5V4a1.5 1.5 0 0 1 1.5-1.5h6A1.5 1.5 0 0 1 14.5 4v5A1.5 1.5 0 0 1 13 10.5h-2.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+    <symbol id="i-contrast" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.5 4.5h11M2.5 11.5h11"/><circle cx="10.5" cy="4.5" r="1.6" fill="var(--bg, #fff)"/><circle cx="5.5" cy="11.5" r="1.6" fill="var(--bg, #fff)"/></symbol>
+    <symbol id="i-modes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="1.5" y="4.5" width="13" height="7" rx="3.5"/><rect x="2.8" y="5.8" width="5.4" height="4.4" rx="2.2" fill="currentColor"/></symbol>
+    <symbol id="i-cutout" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5" stroke-dasharray="1.6 2.2"/><circle cx="8" cy="6.2" r="2.2"/><path d="M4 13.5c.5-2.2 2-3.6 4-3.6s3.5 1.4 4 3.6"/></symbol>
+    <symbol id="i-vector" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12.5C4 6 12 10 13 3.5"/><path d="M3 12.5 7.5 9.8M13 3.5 8.5 6.2" stroke-dasharray="1 1.6"/><rect x="1.5" y="11" width="3" height="3" rx=".6"/><rect x="11.5" y="2" width="3" height="3" rx=".6"/></symbol>
+    <symbol id="i-object" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="5.2" stroke-dasharray="1.6 2.1"/><circle cx="7" cy="7" r="2"/><path d="m9.6 9.6 4.6 1.6-2 .9-.9 2z" fill="currentColor"/></symbol>
+    <symbol id="i-crop" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 1.5v10h10M1.5 4.5h10v10"/></symbol>
     <!-- From the tab bar -->
     <symbol id="i-home" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/></symbol>
     <symbol id="i-design" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(135 8 8)"><path d="M8 13.5 3.5 7a4.5 4.5 0 0 1 9 0z"/><circle cx="8" cy="7" r="1.2"/><path d="M8 8.2v5.3"/></g></symbol>
@@ -440,6 +523,8 @@
 </svg>
 
 <div class="wrap">
+  <header class="hero scene" data-scene="hero" style="--len: 230svh">
+  <div class="pin">
   <nav aria-label="Main">
     <a class="brand" href="./"><img src="logo.png" alt="" width="30" height="30">Ligma</a>
     <ul>
@@ -451,11 +536,10 @@
     </ul>
   </nav>
 
-  <header class="hero">
     <div class="masthead">
       <h1>Figma, without the weight.</h1>
       <div class="pitch">
-        <p>A desktop app for Figma on macOS and Windows that uses your system's own webview instead of shipping a browser. Tabs, themes, your plugins in the left rail and your file on Discord.</p>
+        <p>A lightweight desktop app for Figma on macOS and Windows, with far more to work with: split view, nine themes, your plugins in the left rail and free AI image tools.</p>
         <div class="actions">
           <a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
           <a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a>
@@ -466,14 +550,97 @@
 
     <figure class="weight" role="img" aria-label="Installed size on macOS, drawn to scale by area: Figma desktop 305 MB, Ligma 16 MB.">
       <div class="them" aria-hidden="true"><span>Figma desktop</span><b>305 MB</b></div>
-      <div class="us" aria-hidden="true"></div>
-      <div class="us-label" aria-hidden="true"><b>16 MB</b><span>Ligma</span></div>
+      <div class="block" aria-hidden="true" data-who="ligma"><div class="label"><b id="count">16 MB</b><span><i>Figma desktop</i><i>Ligma</i></span></div></div>
     </figure>
     <div class="caption">
       <span>Installed on macOS, drawn to scale by area.</span>
       <span id="sizes">Downloads: 2.2 MB on Windows, 7.1 MB on macOS.</span>
     </div>
+  </div>
   </header>
+
+  <section class="ai-scene scene" id="ai" data-scene="ai" data-step="1" style="--len: 340svh" aria-labelledby="ai-heading">
+    <div class="pin">
+      <div class="ai">
+        <div>
+          <h2 id="ai-heading">Free AI image tools, on your computer</h2>
+          <p class="lede">Figma asks for a paid plan in free projects. Ligma puts its own in the same spots in the image bar, running on your computer, so your images never leave it.</p>
+          <ol class="steps">
+            <li data-step="1"><svg class="icon"><use href="#i-object"/></svg><b>Select object</b><span>Click, brush or lasso an object, then isolate it on its own layer or erase it</span><small>SAM 2.1, on Windows and Apple silicon</small></li>
+            <li data-step="2"><svg class="icon"><use href="#i-cutout"/></svg><b>Remove background</b><span>Cuts out the subject and keeps the original hidden underneath</span><small>Apple's Vision on macOS 14 and later, BiRefNet on Windows</small></li>
+            <li data-step="3"><svg class="icon"><use href="#i-vector"/></svg><b>Vectorize</b><span>Traces it into flat-colored shapes, then recolor or cut down the colors</span><small>Ligma's own tracer, nothing to download</small></li>
+          </ol>
+          <p class="note">Ligma asks before downloading a model the first time one is needed.</p>
+        </div>
+        <div class="chip">
+          <div class="field">
+            <div class="art" aria-hidden="true">
+              <div class="canvas"></div>
+              <div class="imagebar">
+                <span><svg><use href="#i-crop"/></svg>Crop</span>
+                <span class="sep"></span>
+                <span data-tool="1"><svg><use href="#i-object"/></svg>Select object</span>
+                <span data-tool="2"><svg><use href="#i-cutout"/></svg>Remove background</span>
+                <span data-tool="3"><svg><use href="#i-vector"/></svg>Vectorize</span>
+              </div>
+              <div class="photo">
+                <svg viewBox="0 0 400 300">
+                  <defs>
+                    <pattern id="checker" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="#ffffff"/><path d="M0 0h10v10H0zM10 10h10v10H10z" fill="#e3e3e3"/></pattern>
+                    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd9b8"/><stop offset="1" stop-color="#ff9aa9"/></linearGradient>
+                    <linearGradient id="table" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d79a78"/><stop offset="1" stop-color="#a5664c"/></linearGradient>
+                    <radialGradient id="glaze" cx="0.32" cy="0.3" r="0.85"><stop offset="0" stop-color="#9cc4ff"/><stop offset="0.45" stop-color="#3f6fd1"/><stop offset="1" stop-color="#1a3170"/></radialGradient>
+                    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8ee09a"/><stop offset="1" stop-color="#23804c"/></linearGradient>
+                    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="7"/></filter>
+                  </defs>
+                  <rect width="400" height="300" fill="url(#checker)"/>
+                  <g class="bg">
+                    <rect width="400" height="300" fill="url(#sky)"/>
+                    <circle cx="318" cy="78" r="44" fill="#fff3d6" filter="url(#soft)"/>
+                    <rect y="226" width="400" height="74" fill="url(#table)"/>
+                    <ellipse cx="200" cy="236" rx="74" ry="9" fill="#5a2c1c" opacity="0.35" filter="url(#soft)"/>
+                  </g>
+                  <g class="real">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60z" fill="url(#leaf)"/>
+                    <path d="M200 126c4-40 26-70 56-84-2 38-24 66-56 84z" fill="url(#leaf)"/>
+                    <path d="M200 126c16-20 52-30 86-22-22 20-54 28-86 22z" fill="url(#leaf)"/>
+                    <path d="M150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82z" fill="url(#glaze)"/>
+                    <rect x="175" y="130" width="50" height="26" rx="4" fill="url(#glaze)"/>
+                    <rect x="168" y="123" width="64" height="11" rx="5.5" fill="#2a4fa8"/>
+                  </g>
+                  <g class="flat">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60z" fill="#4cb874"/>
+                    <path d="M200 126c4-40 26-70 56-84-2 38-24 66-56 84z" fill="#2f9358"/>
+                    <path d="M200 126c16-20 52-30 86-22-22 20-54 28-86 22z" fill="#68cc87"/>
+                    <path d="M150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82z" fill="#2c56b8"/>
+                    <path d="M163 160c-7 22-6 48 6 68h14c-10-20-11-46-5-68z" fill="#7aa8f2"/>
+                    <rect x="175" y="130" width="50" height="26" rx="4" fill="#24489c"/>
+                    <rect x="168" y="123" width="64" height="11" rx="5.5" fill="#1b3474"/>
+                  </g>
+                  <g class="paths" fill="none" stroke="#0d99ff" stroke-width="1.2">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60z"/>
+                    <path d="M200 126c4-40 26-70 56-84-2 38-24 66-56 84z"/>
+                    <path d="M200 126c16-20 52-30 86-22-22 20-54 28-86 22z"/>
+                    <path d="M150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82z"/>
+                    <path d="M163 160c-7 22-6 48 6 68h14c-10-20-11-46-5-68z"/>
+                    <g fill="#ffffff"><rect x="115.5" y="63.5" width="5" height="5"/><rect x="253.5" y="39.5" width="5" height="5"/><rect x="283.5" y="101.5" width="5" height="5"/><rect x="197.5" y="123.5" width="5" height="5"/><rect x="147.5" y="149.5" width="5" height="5"/><rect x="247.5" y="149.5" width="5" height="5"/><rect x="157.5" y="231.5" width="5" height="5"/><rect x="237.5" y="231.5" width="5" height="5"/></g>
+                  </g>
+                  <g class="pick">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60zM200 126c4-40 26-70 56-84-2 38-24 66-56 84zM200 126c16-20 52-30 86-22-22 20-54 28-86 22zM150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82zM175 130h50v26h-50zM168 123h64v11h-64z" fill="#0d99ff" opacity="0.28"/>
+                    <path d="M110 60c40-28 140-34 182 40 6 16-24 34-38 50 16 34 10 76-12 88h-88c-22-12-26-56-10-88-26-24-46-66-34-90z" fill="none" stroke="#ffffff" stroke-width="1.6"/>
+                    <path class="ants" d="M110 60c40-28 140-34 182 40 6 16-24 34-38 50 16 34 10 76-12 88h-88c-22-12-26-56-10-88-26-24-46-66-34-90z" fill="none" stroke="#1e1e1e" stroke-width="1.6" stroke-dasharray="4 4"/>
+                    <path d="M292 100l11 4.5-5 2.2-2.2 5z" fill="#1e1e1e" stroke="#ffffff" stroke-width="1"/>
+                  </g>
+                </svg>
+                <div class="sel"><i></i><i></i><i></i><i></i></div>
+              </div>
+            </div>
+          </div>
+          <div class="strip"><b>AI image tools</b><code>"localVectorize": true</code></div>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section id="features" aria-labelledby="features-heading">
     <div class="head">
@@ -481,17 +648,17 @@
       <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
     </div>
 
-    <article class="spread">
+    <article class="spread" data-reveal>
       <div class="chip">
         <div class="field">
           <div class="art" aria-hidden="true">
-            <div class="window">
+            <div class="window rv" style="--d: 0">
               <div class="tabbar">
                 <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
-                <div class="sq"><span class="emoji">🎨</span></div>
-                <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
-                <div><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
-                <div class="hover sleep pre"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
+                <div class="sq rv" style="--d: .12"><span class="emoji">🎨</span></div>
+                <div class="on rv" style="--d: .18"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
+                <div class="rv" style="--d: .24"><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
+                <div class="hover sleep pre rv" style="--d: .3"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
                 <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
               </div>
               <div class="editor">
@@ -499,7 +666,7 @@
                 <div></div>
               </div>
             </div>
-            <div class="tabpreview">
+            <div class="tabpreview rv" style="--d: .42">
               <div class="shot">
                 <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
                 <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
@@ -515,8 +682,10 @@
       </div>
       <div>
         <h3><svg class="icon"><use href="#i-tabs"/></svg>Tabs, like the desktop app</h3>
-        <p>Every file gets its own tab, with Home pinned on the left. Point at a tab to see how it last looked, and pick up where you left off next time.</p>
+        <p>Every file gets its own tab, with Home pinned on the left. Point at a tab to see how it last looked, and pick up where you left off next time, on the same page, position and zoom.</p>
         <ul>
+          <li><b>Split view</b> puts two files side by side under one set of Figma's panels. Drag a selection from one into the other to move it.</li>
+          <li><b>Windows</b>: drag a tab out of the bar for a window of its own, without reloading.</li>
           <li><b>Pin</b> a tab from its right-click menu, and it shows just its icon.</li>
           <li><b>Emoji</b> at the start of a file's name becomes its tab icon.</li>
           <li><b>Shortcuts</b> as usual: <code>Ctrl+T</code>, <code>Ctrl+W</code> and <code>Ctrl+Tab</code> (<code>Cmd</code> on macOS).</li>
@@ -525,20 +694,20 @@
       </div>
     </article>
 
-    <article class="spread flip">
+    <article class="spread flip" data-reveal>
       <div class="chip">
         <div class="field">
           <div class="art" aria-hidden="true">
-            <div class="ui">
+            <div class="ui rv" style="--d: 0">
               <div class="rail">
                 <span class="tool on"><svg><use href="#i-layers"/></svg></span>
                 <span class="tool"><svg><use href="#i-assets"/></svg></span>
                 <span class="tool"><svg><use href="#i-search"/></svg></span>
                 <hr>
-                <span class="plug" style="background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
-                <span class="plug big" style="background:#7b61ff"><svg><use href="#i-scale"/></svg></span>
-                <span class="plug" style="background:#14a38b"><svg><use href="#i-text"/></svg></span>
-                <span class="plug" style="background:#f5b400"><svg><use href="#i-star"/></svg></span>
+                <span class="plug rv pop" style="--d: .2;background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
+                <span class="plug big rv pop" style="--d: .26;background:#7b61ff"><svg><use href="#i-scale"/></svg></span>
+                <span class="plug rv pop" style="--d: .32;background:#14a38b"><svg><use href="#i-text"/></svg></span>
+                <span class="plug rv pop" style="--d: .38;background:#f5b400"><svg><use href="#i-star"/></svg></span>
               </div>
               <div class="layers">
                 <div class="file">Brand refresh</div>
@@ -550,7 +719,7 @@
               </div>
               <div></div>
             </div>
-            <div class="tip">Contrast checker</div>
+            <div class="tip rv" style="--d: .48">Contrast checker</div>
           </div>
         </div>
         <div class="strip"><b>Plugins in the left rail</b><code>"railPlugins": true</code></div>
@@ -566,18 +735,18 @@
       </div>
     </article>
 
-    <article class="spread">
+    <article class="spread" data-reveal>
       <div class="chip">
         <div class="field">
           <div class="art" aria-hidden="true">
-            <div class="profile">
+            <div class="profile rv" style="--d: 0">
               <div class="banner"></div>
               <div class="who">
                 <div class="avatar"><span>M</span></div>
                 <div class="name">Mira</div>
                 <div class="handle">mira.designs</div>
               </div>
-              <div class="activity">
+              <div class="activity rv" style="--d: .25">
                 <div class="label">Playing</div>
                 <div class="card">
                   <div class="large"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
@@ -608,6 +777,12 @@
       <div><h3><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</h3><p>Uses Figma's font helper, and starts it when it isn't running.</p></div>
       <div><h3><svg class="icon"><use href="#i-update"/></svg>Automatic updates</h3><p>Downloaded in the background and installed in place, so you stay signed in.</p></div>
       <div><h3><svg class="icon"><use href="#i-scale"/></svg>Interface scale</h3><p>Zoom Figma, the tabs and menus together, from 50% to 200%.</p></div>
+      <div><h3><svg class="icon"><use href="#i-code"/></svg>Copy as code</h3><p>Tailwind and React from the right-click menu, without Dev Mode.</p></div>
+      <div><h3><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</h3><p>WCAG ratios in the color picker against what's behind the layer, with AA and AAA lines on the color square.</p></div>
+      <div><h3><svg class="icon"><use href="#i-sliders"/></svg>Image adjustments</h3><p>Copy an image's exposure, contrast and the rest, and paste them onto another without the image.</p></div>
+      <div><h3><svg class="icon"><use href="#i-layers"/></svg>Layer previews</h3><p>A small picture of each layer in the layers panel in every mode, as Figma shows only in Draw.</p></div>
+      <div><h3><svg class="icon"><use href="#i-modes"/></svg>Toolbar modes</h3><p>Choose which of Draw, Design, Motion and Dev Mode the toolbar's switch offers.</p></div>
+      <div><h3><svg class="icon"><use href="#i-home"/></svg>Classic home</h3><p>Keeps Figma's long-standing home page on accounts trying the new one.</p></div>
     </div>
   </section>
 
@@ -674,6 +849,8 @@
         <tr class="big"><th scope="row">Installed size (macOS)</th><td>16 MB</td><td>305 MB</td></tr>
         <tr><th scope="row">Browser engine</th><td>System webview</td><td>Bundled Chromium (Electron)</td></tr>
         <tr><th scope="row">Color themes</th><td>9, light and dark</td><td>Light and dark</td></tr>
+        <tr><th scope="row">AI image tools</th><td>Free, on your computer</td><td>Paid plans</td></tr>
+        <tr><th scope="row">Split view</th><td>Yes</td><td>No</td></tr>
         <tr><th scope="row">Plugins in the left rail</th><td>Yes</td><td>No</td></tr>
         <tr><th scope="row">Discord Rich Presence</th><td>Yes</td><td>No</td></tr>
         <tr><th scope="row">Open source</th><td>Yes (MIT)</td><td>No</td></tr>
@@ -736,6 +913,7 @@
 
 <!-- The app's own theme code, copied here when the site is published -->
 <script src="themes.js"></script>
+<script src="vendor/lenis.min.js"></script>
 <script>
   const root = document.documentElement;
   const $ = (id) => document.getElementById(id);
@@ -758,7 +936,8 @@
   }
 
   function paint() {
-    root.className = state.mode;
+    root.classList.remove("light", "dark");
+    root.classList.add(state.mode);
     for (const [name, value] of Object.entries(ramps(state.theme, state.mode))) root.style.setProperty(name, value);
     const theme = LIGMA_THEMES.find((t) => t.id === state.theme);
     $("now").innerHTML = state.theme === "figma"
@@ -831,6 +1010,70 @@
     paint();
   });
   if (typeof LIGMA_THEMES !== "undefined") paint();
+
+  // The story: momentum scrolling, and scenes that play out as you scroll.
+  // Large screens pin each scene while it plays; reduced motion shows each
+  // finished
+  const large = matchMedia("(min-width: 900px) and (min-height: 700px)");
+  const clamp = (x) => Math.min(1, Math.max(0, x));
+  const ease = (x) => (x < 0.5 ? 4 * x ** 3 : 1 - (2 - 2 * x) ** 3 / 2);
+  const scenes = [...document.querySelectorAll("[data-scene]")];
+  const reveals = [...document.querySelectorAll("[data-reveal]")];
+  const steps = [...document.querySelectorAll(".steps li")];
+
+  function scene(el, p) {
+    if (el.dataset.scene === "hero") {
+      const k = reduced.matches || !root.classList.contains("story") ? 1 : ease(clamp((p - 0.1) / 0.75));
+      el.style.setProperty("--k", k.toFixed(4));
+      $("count").textContent = `${Math.round(305 - (305 - 16) * k)} MB`;
+      el.querySelector(".block").dataset.who = k > 0.94 ? "ligma" : "figma";
+    } else if (el.dataset.scene === "ai") {
+      const at = Math.min(3, Math.floor(p * 3) + 1);
+      el.dataset.step = at;
+      [0, 0.333, 0.666].forEach((start, i) => {
+        const s = reduced.matches ? Number(at > i + 0.5) : clamp((p - start - 0.03) / 0.12);
+        el.style.setProperty(`--s${i + 1}`, s.toFixed(4));
+      });
+      steps.forEach((li, i) => {
+        li.classList.toggle("on", at === i + 1);
+        li.style.setProperty("--fill", at === i + 1 ? clamp(p * 3 - i).toFixed(4) : at > i + 1 ? 1 : 0);
+      });
+    }
+  }
+
+  function update() {
+    const vh = innerHeight;
+    const pinned = root.classList.contains("story");
+    for (const el of scenes) {
+      const box = el.getBoundingClientRect();
+      // Unpinned, the image tools follow their steps as they scroll under the image
+      const list = el.dataset.scene === "ai" && !pinned && el.querySelector(".steps").getBoundingClientRect();
+      const p = pinned ? -box.top / (box.height - vh) : list ? (vh * 0.62 - list.top) / list.height : (vh * 0.8 - box.top) / (box.height * 0.9);
+      scene(el, clamp(p));
+    }
+    for (const el of reveals) {
+      const v = reduced.matches ? 1 : clamp((vh - el.getBoundingClientRect().top) / (vh * 0.7));
+      el.style.setProperty("--v", v.toFixed(4));
+    }
+  }
+
+  let queued = false;
+  const queue = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => ((queued = false), update()));
+  };
+  function arrange() {
+    root.classList.toggle("story", large.matches && !reduced.matches);
+    update();
+  }
+  addEventListener("scroll", queue, { passive: true });
+  addEventListener("resize", queue);
+  large.addEventListener("change", arrange);
+  reduced.addEventListener("change", arrange);
+  arrange();
+
+  if (window.Lenis && !reduced.matches) new Lenis({ autoRaf: true, anchors: true });
 
   // Copy the Terminal command
   for (const button of document.querySelectorAll("[data-copy]")) {
