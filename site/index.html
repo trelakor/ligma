@@ -407,6 +407,62 @@
   .imagebar svg { width: 24px !important; height: 24px !important; }
   .imagebar hr { width: 1px; height: 24px; margin: 0 4px; border: 0; background: var(--bd); }
 
+  /* Features: Ligma's window pulled apart into its layers, each the feature
+     it adds, coming together into one window as you scroll. --e is how far
+     apart (1 to 0). Where it doesn't pin, the list of tiles instead */
+  .xp, .xp-labels { display: none; }
+  .story .bento-wrap { display: none; }
+  .story .xp-scene { padding-top: 0; }
+  .story #features { padding-top: clamp(48px, 6vw, 96px); }
+  .story .xp-scene > .pin { display: flex; flex-direction: column; padding: clamp(24px, 4vh, 48px) 0 24px; }
+  .story .xp-scene .head { flex: none; margin-bottom: 0; transition: opacity 300ms; }
+  .story .xp { position: relative; display: block; flex: 1; min-height: 0; container-type: size; }
+  .story .xp-labels { display: block; }
+  .xp-fit {
+    --k: min(tan(atan2(100cqw, 1400px)), tan(atan2(100cqh, 820px)));
+    position: absolute; left: 50%; top: 50%; width: 1400px; height: 820px; margin: -410px 0 0 -700px;
+    scale: var(--k); perspective: 3600px; perspective-origin: 50% 30%;
+  }
+  .xp-win {
+    position: absolute; inset: 0; transform-style: preserve-3d;
+    transform: translateY(calc(var(--e) * 70px)) scale(calc(1 - var(--e) * 0.52)) rotateX(calc(var(--e) * 54deg)) rotateZ(calc(var(--e) * -32deg));
+  }
+  .xp-plane {
+    position: absolute; inset: 0; border-radius: 12px; transform-style: preserve-3d;
+    transform: translateZ(calc(var(--e) * var(--i) * 120px));
+    box-shadow: 0 0 0 calc(var(--e) * 2px) color-mix(in srgb, var(--field) calc(var(--e) * 100%), transparent);
+    background: color-mix(in srgb, var(--field) calc(var(--e) * 4%), transparent);
+  }
+  .xp-plane:first-child { box-shadow: 0 0 0 1px var(--line), 0 calc(8px + var(--e) * 60px) calc(24px + var(--e) * 80px) rgb(0 0 0 / 0.18); background: none; }
+  .xp-plane .shot { overflow: visible; background: none; border-radius: 12px; }
+  .xp-plane:first-child .shot { overflow: hidden; }
+  .xp-plane.pop, .xp-pop { opacity: clamp(0, var(--e) * 3 - 0.2, 1); }
+  .xp-canvas { position: absolute; inset: 38px 0 0; background: var(--canvas); }
+  .xp-divider { position: absolute; left: 724px; top: 38px; bottom: 0; width: 1px; background: var(--bd); }
+  .xp-anchor { position: absolute; width: 0; height: 0; }
+  /* Together, drawn flat so the text is sharp */
+  .xp-scene.flat .xp-fit { perspective: none; }
+  .xp-scene.flat .xp-win, .xp-scene.flat .xp-plane { transform: none; transform-style: flat; }
+  .lg-tabs .ctl { width: 46px; color: var(--tb-text-active); }
+  .lg-tabs .ctl svg { width: 12px; height: 12px; }
+  .xp-labels { position: absolute; inset: 0; margin: 0; padding: 0; list-style: none; pointer-events: none; }
+  .xp-labels li {
+    position: absolute; left: 0; top: 0; width: 220px; pointer-events: auto;
+    translate: var(--x, 0) calc(var(--y, 0) - 50%); opacity: clamp(0, var(--e) * 2.4 - 0.6, 1); visibility: var(--seen, visible);
+  }
+  .xp-labels li[data-side="r"] { padding-left: 14px; }
+  .xp-labels li[data-side="l"] { padding-right: 14px; text-align: right; }
+  .xp-labels li::before { content: ""; position: absolute; top: 50%; width: var(--lead, 0); height: 1px; background: var(--field); }
+  .xp-labels li::after { content: ""; position: absolute; top: 50%; width: 7px; height: 7px; margin: -3px; border-radius: 50%; background: var(--field); }
+  .xp-labels li[data-side="r"]::before { right: 100%; }
+  .xp-labels li[data-side="r"]::after { right: calc(100% + var(--lead, 0px)); }
+  .xp-labels li[data-side="l"]::before { left: 100%; }
+  .xp-labels li[data-side="l"]::after { left: calc(100% + var(--lead, 0px)); }
+  .xp-labels h3 { font-size: 1.125rem; letter-spacing: -0.015em; }
+  .xp-labels p { margin-top: 2px; font-size: 14px; line-height: 1.4; color: var(--ink-2); }
+  .xp-labels button { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--link); font: 500 13px/1.4 var(--text); cursor: pointer; }
+  .xp-labels button:hover { text-decoration: underline; text-underline-offset: 0.2em; }
+
   /* The rest, as an index */
   .index { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 48px); margin-top: clamp(80px, 10vw, 128px); border-top: 2px solid var(--ink); }
   .index > div { padding: 24px 0 32px; border-bottom: 1px solid var(--line); }
@@ -905,12 +961,160 @@
   </section>
 
   <section id="features" aria-labelledby="features-heading">
+    <div class="xp-scene scene" data-scene="xp" style="--len: 340svh">
+    <div class="pin">
     <div class="head">
       <h2 id="features-heading">Everything the browser tab is missing</h2>
       <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
     </div>
+      <div class="xp" aria-hidden="true">
+        <div class="xp-fit"><div class="xp-win">
+          <div class="xp-plane" style="--i:0"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="xp-canvas"></div>
+        <div class="xp-divider"></div>
+        <div class="f-frame" style="left:385px;top:230px;width:240px;height:300px"><span class="nm">Poster</span><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div></div>
+        <div class="f-frame" style="left:790px;top:200px;width:300px;height:158px"><span class="nm">Social card</span><div class="card-art"><i style="left:20px;top:22px;width:144px;height:14px;background:#fff4e0"></i><i style="left:20px;top:46px;width:96px;height:10px"></i><i style="left:180px;top:22px;width:100px;height:114px;background:#ff5c39"></i><i style="left:20px;top:104px;width:132px;height:32px"></i></div></div>
+        <div class="f-frame" style="left:820px;top:420px;width:150px;height:267px"><span class="nm">Story</span><div class="poster" style="background:#ff5c39"><div class="hill" style="bottom:-60cqw"></div></div></div>
+          </div><span class="xp-anchor" style="left:940px;top:640px"></span></div>
+          <div class="xp-plane" style="--i:1"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="f-panel l tall" style="left:48px;top:38px">
+          <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
+          <div class="f-file"><b>Brand refresh<svg><use href="#i-chev-down"/></svg></b><span>Team project<em>Free</em></span></div>
+          <div class="f-tabs"><span class="on">File</span><span>Assets</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-search"/></svg></div>
+          <div class="f-sec">Pages<span class="f-ib"><svg><use href="#i-plus"/></svg></span></div>
+          <div class="f-page on">Page 1</div>
+          <div class="f-page">Drafts</div>
+          <div class="f-sec f-rule" style="margin-top:8px">Layers</div>
+          <div class="f-layer on ex" style="--in:0"><svg class="ch"><use href="#i-chev-down"/></svg><svg><use href="#i-frame"/></svg><span class="th"><span style="position:absolute;inset:2px 4px;overflow:hidden;background:#ff5c39"><i style="left:12%;top:10%;width:50%;height:40%;border-radius:50%;background:#ffd23f"></i><i style="left:-25%;right:-25%;bottom:-24%;height:52%;border-radius:50%;background:#1f1d2b"></i></span></span><span>Poster</span></div>
+          <div class="f-layer kid" style="--in:1"><span class="sp"></span><svg><use href="#i-text"/></svg><span class="th" style="background:#ff5c39"><i style="left:4px;top:8px;width:14px;height:3px;background:#fff4e0"></i><i style="left:4px;top:13px;width:11px;height:3px;background:#fff4e0"></i></span><span>Headline</span></div>
+          <div class="f-layer kid" style="--in:1"><span class="sp"></span><svg><use href="#i-ellipse"/></svg><span class="th"><i style="left:4px;top:4px;width:16px;height:16px;border-radius:50%;background:#ffd23f"></i></span><span>Sun</span></div>
+          <div class="f-layer kid last" style="--in:1"><span class="sp"></span><svg><use href="#i-ellipse"/></svg><span class="th"><i style="left:1px;right:1px;top:8px;height:10px;border-radius:50% 50% 2px 2px;background:#1f1d2b"></i></span><span>Hill</span></div>
+          <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="left:2px;top:6px;width:20px;height:11px;border-radius:1px;background:#1f1d2b"></i><i style="left:4px;top:8px;width:9px;height:2px;background:#fff4e0"></i><i style="left:15px;top:8px;width:5px;height:7px;background:#ff5c39"></i></span><span>Social card</span></div>
+          <div class="f-layer" style="--in:0"><svg class="ch"><use href="#i-chev-right"/></svg><svg><use href="#i-frame"/></svg><span class="th"><i style="left:7px;top:2px;width:10px;height:20px;border-radius:1px;background:#ff5c39"></i><i style="left:7px;top:14px;width:10px;height:8px;background:#1f1d2b"></i></span><span>Story</span></div>
+        </div>
+        <div class="f-panel r" style="top:38px">
+          <div class="f-top"><span class="f-av">M</span><span class="f-play"><svg><use href="#i-play"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-share">Share</span></div>
+          <div class="f-tabs"><span class="on">Design</span><span>Prototype</span><span class="end">100%<svg><use href="#i-chev-down"/></svg></span></div>
+          <div class="f-prop"><b class="sel">Frame<svg><use href="#i-chev-down"/></svg></b>
+            <div class="f-cap">Position</div>
+            <div class="f-grid"><span class="f-in"><i>X</i>240</span><span class="f-in"><i>Y</i>120</span></div>
+          </div>
+          <div class="f-prop"><b>Layout</b><div class="f-grid"><span class="f-in"><i>W</i>320</span><span class="f-in"><i>H</i>400</span></div></div>
+          <div class="f-prop"><b>Appearance</b><div class="f-grid"><span class="f-in"><i><svg><use href="#i-opacity"/></svg></i>100%</span><span class="f-in"><i><svg><use href="#i-radius"/></svg></i>0</span></div></div>
+          <div class="f-prop"><b>Fill<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b><div class="f-grid" style="grid-template-columns:1fr 24px"><span class="f-in"><i class="sw" style="background:#ff5c39"></i>FF5C39<span class="pc">100 %</span></span></div></div>
+          <div class="f-prop closed"><b>Stroke<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b></div>
+          <div class="f-prop closed"><b>Effects<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b></div>
+          <div class="f-prop closed"><b>Export<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b></div>
+        </div>
+        <div class="f-bar" style="left:724px">
+          <span class="on"><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+          <span><svg><use href="#i-frame"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+          <span><svg><use href="#i-rect"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+          <span><svg><use href="#i-pen3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+          <span><svg><use href="#i-text"/></svg></span>
+          <span><svg><use href="#i-comment"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+          <span><svg><use href="#i-actions"/></svg></span>
+          <hr>
+          <span class="mode"><i class="on"><svg><use href="#i-design"/></svg></i><i><svg><use href="#i-braces"/></svg></i></span>
+        </div>
+          </div><span class="xp-anchor" style="left:289px;top:560px"></span></div>
+          <div class="xp-plane" style="--i:2"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="f-nav" style="top:38px">
+          <span><svg><use href="#i-figma"/></svg></span><span class="on"><svg><use href="#i-file"/></svg></span><span><svg><use href="#i-assets"/></svg></span><span><svg><use href="#i-plus-circle"/></svg></span><span><svg><use href="#i-briefcase"/></svg></span>
+          <hr>
+          <span><svg><use href="#i-hex"/></svg></span><span><svg><use href="#i-dev"/></svg></span>
+          <span class="plug"><i style="background:#ff5c39"><svg><use href="#i-ellipse"/></svg></i></span>
+          <span class="plug"><i style="background:#7b61ff"><svg><use href="#i-contrast"/></svg></i></span>
+          <span class="plug"><i style="background:#14a38b"><svg><use href="#i-text"/></svg></i></span>
+          <span class="plug"><i style="background:#f5b400"><svg><use href="#i-star"/></svg></i></span>
+        </div>
+          </div><span class="xp-anchor" style="left:48px;top:380px"></span></div>
+          <div class="xp-plane" style="--i:3"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="lg-tabs">
+          <div class="home"><svg><use href="#i-home"/></svg></div>
+          <div class="pin"><span class="emoji">🎨</span></div>
+          <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Brand refresh</div>
+          <div class="tab on"><svg style="color:var(--field)"><use href="#i-design"/></svg>Social kit<svg class="x"><use href="#i-x"/></svg></div>
+          <div class="tab hover sleep pre"><svg style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
+          <div class="tab"><svg style="color:#9747ff"><use href="#i-board"/></svg>Onboarding map</div>
+          <div class="new"><svg><use href="#i-plus"/></svg></div>
+          <div class="ctl" style="margin-left:auto"><svg><use href="#i-dash"/></svg></div><div class="ctl"><svg><use href="#i-rect"/></svg></div><div class="ctl"><svg><use href="#i-x"/></svg></div>
+        </div>
+        <div class="lg-preview xp-pop" style="left:406px;top:42px">
+          <div class="img" style="background:#1f1d2b">
+            <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
+            <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
+            <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
+            <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
+          </div>
+          <div class="txt"><b>Q3 pitch</b><span>Figma Slides · Asleep</span></div>
+        </div>
+          </div><span class="xp-anchor" style="left:700px;top:19px"></span></div>
+          <div class="xp-plane pop" style="--i:4"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="f-pop actions" style="left:524px;top:532px">
+          <div class="search"><svg><use href="#i-search"/></svg>Search</div>
+          <div class="tabs"><span>All</span><span>Assets</span><span class="on">Plugins &amp; widgets</span><span class="dev">Development<svg><use href="#i-chev-down"/></svg></span></div>
+          <div class="row hover"><span class="pi" style="background:#7b61ff"><svg><use href="#i-code"/></svg></span><span class="nm"><span>Token sync<small>Development</small></span><i>~/plugins/token-sync/manifest.json</i></span><span class="more"><svg><use href="#i-chev-right"/></svg></span></div>
+          <div class="row"><span class="pi" style="background:#14a38b"><svg><use href="#i-contrast"/></svg></span><span class="nm"><span>Contrast audit<small>Development</small></span><i>~/plugins/contrast-audit/manifest.json</i></span></div>
+          <div class="row import"><svg><use href="#i-import"/></svg>Import from manifest…</div>
+        </div>
+          </div><span class="xp-anchor" style="left:524px;top:620px"></span></div>
+          <div class="xp-plane pop" style="--i:5"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="f-menu" style="left:900px;top:262px;width:200px">
+          <div>Copy<span>Ctrl+C</span></div><div>Paste here</div><div class="on">Copy/Paste as<svg><use href="#i-chev-right"/></svg></div><hr><div>Bring to front<span>]</span></div><div>Send to back<span>[</span></div>
+        </div>
+        <div class="f-menu" style="left:1092px;top:302px;width:210px">
+          <div>Copy as text</div><div class="on">Copy as code<svg><use href="#i-chev-right"/></svg></div><div>Copy as PNG<span>Shift+Ctrl+C</span></div><div>Copy as SVG</div><hr><div>Copy link to selection</div>
+        </div>
+        <div class="f-menu" style="left:1294px;top:334px;width:180px">
+          <div>CSS</div><div>CSS (all layers)</div><div>iOS</div><div>Android</div><hr><div class="on">Tailwind</div><div>Tailwind (all layers)</div><div>React</div>
+        </div>
+          </div><span class="xp-anchor" style="left:1354px;top:400px"></span></div>
+          <div class="xp-plane pop" style="--i:6"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="f-pop picker" style="left:905px;top:150px;width:240px;--hue:#ff4d00;--pick:#b83a0d">
+          <div class="f-tabs" style="border:0"><span class="on">Custom</span><span>Libraries</span><svg style="margin:0 4px 0 auto;color:var(--t1)"><use href="#i-x"/></svg></div>
+          <div class="sq" style="height:200px">
+            <span class="knob" style="left:70%;top:55%"></span>
+            <svg viewBox="0 0 1 1" preserveAspectRatio="none" fill="none" stroke-linecap="round">
+              <path d="M0 .50C.3 .48.6 .42 1 .34" stroke="rgb(0 0 0/.35)" stroke-width="3" vector-effect="non-scaling-stroke"/><path d="M0 .50C.3 .48.6 .42 1 .34" stroke="#fff" stroke-width="1.25" vector-effect="non-scaling-stroke"/>
+              <path d="M0 .70C.3 .68.6 .63 1 .57" stroke="rgb(0 0 0/.35)" stroke-width="3" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/><path d="M0 .70C.3 .68.6 .63 1 .57" stroke="#fff" stroke-width="1.25" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>
+            </svg>
+          </div>
+          <div class="sliders">
+            <svg><use href="#i-pick"/></svg>
+            <div class="bar" style="background:linear-gradient(to right,red,#ff0,lime,cyan,blue,#f0f,red)"><i style="left:4.5%;background:#ff4d00"></i></div>
+            <div class="bar" style="background:linear-gradient(to right,transparent,#b83a0d),repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/8px 8px"><i style="left:calc(100% - 6px);background:#b83a0d"></i></div>
+          </div>
+          <div class="hexrow"><span class="f-in" style="padding:0 4px 0 8px;justify-content:space-between">Hex<svg style="width:12px;height:12px;color:var(--t2)"><use href="#i-chev-down"/></svg></span><span class="f-in" style="padding-left:8px">B83A0D<span class="pc">100 %</span></span></div>
+          <div class="ratio"><span class="aa">Aa</span><b>5.40:1</b><span class="lv"><span>AA<svg viewBox="0 0 12 12" style="width:12px;height:12px;color:#14ae5c"><path d="m3 6.2 2 2L9 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>AAA<svg viewBox="0 0 12 12" style="width:12px;height:12px;color:var(--t3)"><path d="m4 4 4 4m0-4L4 8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span></span></div>
+        </div>
+          </div><span class="xp-anchor" style="left:905px;top:300px"></span></div>
+          <div class="xp-plane pop" style="--i:7"><div class="shot" style="--w:1400;--h:820;scale:none">
+        <div class="dc" style="left:1060px;top:440px">
+          <div class="banner"></div><div class="avatar">M</div>
+          <div class="who"><b>Mira</b><span>mira.designs</span></div>
+          <div class="act"><span>Playing</span>
+            <div class="row"><div class="big"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div><div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div></div>
+            <div class="join">Ask to Join</div>
+          </div>
+        </div>
+          </div><span class="xp-anchor" style="left:1360px;top:600px"></span></div>
+        </div></div>
+      </div>
+      <ol class="xp-labels">
+        <li style="--i:7" data-side="l"><h3>Your file on Discord</h3><p>The file, page and tool you're in, on your profile</p><button type="button" data-sheet="f-discord" aria-haspopup="dialog">Details<span class="sr"> about your file on discord</span></button></li>
+        <li style="--i:6" data-side="r"><h3>Color contrast</h3><p>The WCAG ratio, right in the color picker</p><button type="button" data-sheet="f-contrast" aria-haspopup="dialog">Details<span class="sr"> about color contrast</span></button></li>
+        <li style="--i:5" data-side="l"><h3>Copy as code</h3><p>Tailwind and React in the right-click menu, on any plan</p><button type="button" data-sheet="f-copy" aria-haspopup="dialog">Details<span class="sr"> about copy as code</span></button></li>
+        <li style="--i:4" data-side="r"><h3>Development plugins</h3><p>Import a plugin from its manifest, as in the desktop app</p><button type="button" data-sheet="f-dev" aria-haspopup="dialog">Details<span class="sr"> about development plugins</span></button></li>
+        <li style="--i:3" data-side="l"><h3>Tabs, like the desktop app</h3><p>Every file in its own tab, with a look at how it last looked</p><button type="button" data-sheet="f-tabs" aria-haspopup="dialog">Details<span class="sr"> about tabs, like the desktop app</span></button></li>
+        <li style="--i:2" data-side="r"><h3>Your plugins, one click away</h3><p>Saved plugins and widgets in the left sidebar</p><button type="button" data-sheet="f-rail" aria-haspopup="dialog">Details<span class="sr"> about your plugins, one click away</span></button></li>
+        <li style="--i:1" data-side="l"><h3>Layer previews</h3><p>A small picture beside every layer, in every mode</p><button type="button" data-sheet="f-previews" aria-haspopup="dialog">Details<span class="sr"> about layer previews</span></button></li>
+        <li style="--i:0" data-side="r"><h3>Split view, and windows</h3><p>Two files side by side under one set of Figma's panels</p><button type="button" data-sheet="f-split" aria-haspopup="dialog">Details<span class="sr"> about split view, and windows</span></button></li>
+      </ol>
+    </div>
+    </div>
 
-    <div class="bento">
+    <div class="bento-wrap"><div class="bento">
       <article class="tile big" id="f-split" style="grid-area: s" data-reveal>
         <div class="tile-head">
           <h3><svg class="icon"><use href="#i-split"/></svg>Split view, and windows</h3>
@@ -1264,6 +1468,7 @@
       </article>
     </div>
 
+    </div>
     <dialog class="sheet" id="sheet" aria-labelledby="sheet-title" data-lenis-prevent>
       <div class="sheet-art"><div class="tile-art"></div></div>
       <div class="sheet-copy"></div>
@@ -1561,7 +1766,40 @@
   const reveals = [...document.querySelectorAll("[data-reveal]")];
   const steps = [...document.querySelectorAll(".steps li")];
 
+  const xpLabels = [...document.querySelectorAll(".xp-labels li")];
+  const xpAnchors = [...document.querySelectorAll(".xp-anchor")];
   function scene(el, p) {
+    if (el.dataset.scene === "xp") {
+      // Apart while it arrives, together by three quarters of the way
+      const t = clamp((p - 0.12) / 0.62);
+      const e = 1 - t * t * (3 - 2 * t);
+      el.style.setProperty("--e", e.toFixed(4));
+      el.classList.toggle("flat", e < 0.002);
+      if (!root.classList.contains("story")) return;
+      const box = el.querySelector(".xp-labels").getBoundingClientRect();
+      const W = box.width, LW = 220, GAP = 104;
+      // Each label beside the stack on the side its plane's point is on,
+      // pushed apart so none overlap, its line running to the point
+      const rows = xpLabels.map((li) => {
+        const a = xpAnchors[li.style.getPropertyValue("--i")].getBoundingClientRect();
+        return { li, ax: a.left - box.left, y: a.top - box.top, side: a.left - box.left > W / 2 ? "r" : "l" };
+      });
+      for (const side of ["l", "r"]) {
+        const col = rows.filter((r) => r.side === side).sort((m, n) => m.y - n.y);
+        col.forEach((r, n) => { r.at = n ? Math.max(r.y, col[n - 1].at + GAP) : r.y; });
+        const over = col.length ? col[col.length - 1].at - (box.height - 40) : 0;
+        if (over > 0) col.forEach((r) => (r.at -= over));
+      }
+      for (const r of rows) {
+        const x = r.side === "r" ? W - LW : 0;
+        r.li.dataset.side = r.side;
+        r.li.style.setProperty("--x", `${x}px`);
+        r.li.style.setProperty("--y", `${r.at}px`);
+        r.li.style.setProperty("--lead", `${Math.max(0, r.side === "r" ? x - r.ax : r.ax - LW)}px`);
+        r.li.style.setProperty("--seen", e > 0.02 ? "visible" : "hidden");
+      }
+      return;
+    }
     if (el.dataset.scene === "ai") {
       const at = Math.min(3, Math.floor(p * 3) + 1);
       el.dataset.step = at;
@@ -1635,6 +1873,9 @@
   }
   for (const tile of document.querySelectorAll(".tile")) {
     tile.querySelector(".open").addEventListener("click", (event) => openSheet(tile, event.currentTarget));
+  }
+  for (const button of document.querySelectorAll("[data-sheet]")) {
+    button.addEventListener("click", () => openSheet(document.getElementById(button.dataset.sheet), button));
   }
   for (const link of document.querySelectorAll('.reel a[href^="#f-"]')) {
     link.addEventListener("click", (event) => {
