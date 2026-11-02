@@ -473,53 +473,46 @@
   .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
   .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
 
-  /* Themes: the words, then the editor with a cursor for each theme in
-     it, drifting like collaborators in a shared file. Clicking one spreads
-     its theme from where it is, and it becomes you. The same themes as a
-     plain list under it, for keyboards and small screens */
+  /* Themes: the words, the editor in the page's theme, and Figma's
+     Variables window over its foot. Each theme is a mode of a "Ligma
+     themes" collection, a column of the real colors it gives Figma; Light
+     and Dark are its groups. Picking a column or a group retints the page */
   .themes-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 48px; align-items: end; }
   .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 32em; }
   .themes-side { display: flex; flex-direction: column; align-items: flex-start; }
-  .mp { position: absolute; inset: 0; pointer-events: none; }
-  .mp button {
-    --c: var(--field);
-    position: absolute; left: min(calc(var(--x) * var(--kx, 1)), 80%); top: var(--y); display: flex; align-items: flex-start; padding: 0; border: 0; background: none;
-    font: 600 12px/1 var(--text); color: #fff; cursor: pointer; pointer-events: auto;
-    animation: wander var(--t, 9s) ease-in-out var(--delay, 0s) infinite alternate;
-    transition: scale 200ms var(--ease);
+  .vars {
+    position: relative; z-index: 1; width: calc(100% - 64px); margin: -66px auto 0; overflow: hidden;
+    border-radius: 13px; background: var(--panel); box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.2), 0 12px 32px -6px rgb(0 0 0 / 0.25), 0 2px 6px rgb(0 0 0 / 0.08);
   }
-  .mp button svg { width: 20px; height: 20px; color: var(--c); filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.25)); }
-  .mp button span { margin: 15px 0 0 -3px; padding: 4px 7px 4px 6px; border-radius: 4px 4px 4px 4px; background: var(--c); white-space: nowrap; box-shadow: 0 1px 2px rgb(0 0 0 / 0.2); }
-  .mp button:hover { scale: 1.08; animation-play-state: paused; z-index: 2; }
-  .mp button[aria-checked="true"] { z-index: 3; animation-play-state: paused; }
-  .mp button[aria-checked="true"] span::after { content: " · " attr(data-name); font-weight: 450; opacity: 0.85; }
-  @keyframes wander {
-    0% { translate: 0 0; }
-    35% { translate: var(--dx) calc(var(--dy) * -0.5); }
-    70% { translate: calc(var(--dx) * -0.4) var(--dy); }
-    100% { translate: calc(var(--dx) * 0.6) calc(var(--dy) * 0.3); }
-  }
-  /* Where the editor is cropped to its first 1000px, the cursors stay on the canvas, smaller */
-  @media (max-width: 900px) {
-    .mp button { --kx: 1.24; font-size: 10px; }
-    .mp button svg { width: 15px; height: 15px; }
-    .mp button span { margin: 11px 0 0 -3px; padding: 3px 5px; }
-  }
-  .theme-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-  .theme-list button {
-    display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 8px; border: 0; border-radius: 18px;
-    background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-2); font: 500 14px/1 var(--text); cursor: pointer;
-  }
-  .theme-list button:hover { color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); }
-  .theme-list button[aria-checked="true"] { background: var(--bg); color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--field); }
-  .theme-list .mesh { position: relative; width: 20px; height: 20px; overflow: hidden; border-radius: 50%; isolation: isolate; }
-  .theme-list .mesh::before { content: ""; position: absolute; inset: -18%; background: var(--orb); filter: blur(3px) saturate(1.2); }
-  .modes { display: flex; }
-  #themes .now { margin-top: 12px; min-height: 0; }
-  .modes div { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
-  .modes button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: 9px; background: none; color: var(--ink-2); font: 500 14px/1 var(--text); cursor: pointer; }
-  .modes button svg { width: 15px; height: 15px; }
-  .modes button[aria-checked="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 0.1); }
+  :root.dark .vars { box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 16px 40px -6px rgb(0 0 0 / 0.6); }
+  .vars-head { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--bd); }
+  .vars-head b { font-size: 13px; font-weight: 600; }
+  .vars-x { display: grid; place-items: center; width: 28px; height: 28px; color: var(--t2); }
+  .vars-body { display: grid; grid-template-columns: 152px minmax(0, 1fr); }
+  .vars-side { padding: 8px; border-right: 1px solid var(--bd); }
+  .vs-cap { padding: 10px 8px 6px; color: var(--t2); }
+  .vs-item, .vs-groups button { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--t1); font: inherit; text-align: left; cursor: pointer; }
+  .vs-item { cursor: default; }
+  .vs-item.on { background: var(--hov); font-weight: 550; }
+  .vs-groups button i { margin-left: auto; color: var(--t3); font-style: normal; }
+  .vs-groups button:hover { background: var(--hov); }
+  .vs-groups button[aria-checked="true"] { background: var(--select); font-weight: 550; }
+  .vars-table { display: flex; overflow-x: auto; scrollbar-width: thin; }
+  .vars-table > div, .vars-table > button { display: flex; flex-direction: column; flex: 1 0 84px; min-width: 84px; padding: 0 0 8px; }
+  .vars-table .names { flex: 0 0 136px; position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--bd); }
+  .vars-table button { border: 0; background: none; color: var(--t1); font: inherit; text-align: left; cursor: pointer; transition: background-color 160ms; }
+  .vars-table span { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .vars-table span + span { box-shadow: inset 0 1px 0 var(--bd); }
+  .vars-table .hd { height: 36px; color: var(--t2); font-weight: 550; box-shadow: inset 0 -1px 0 var(--bd); }
+  .vars-table .names span:not(.hd) svg { width: 14px; height: 14px; color: var(--t2); }
+  .vars-table i { flex: none; width: 14px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12); }
+  :root.dark .vars-table i { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14); }
+  .vars-table button:hover { background: var(--hov); }
+  .vars-table button[aria-checked="true"] { background: var(--select); }
+  .vars-table button[aria-checked="true"] .hd { color: var(--t1); }
+  .vars-table button[aria-checked="true"] .hd::after { content: ""; width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--field); }
+  .vars-table button:focus-visible { outline-offset: -2px; }
+  #themes .now { margin-top: 0; min-height: 0; }
   .now { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 28px; font-size: 15px; color: var(--ink-2); min-height: 40px; }
   .now b { color: var(--ink); font-weight: 600; }
   .now button { font: inherit; font-weight: 600; color: var(--link); background: none; border: 0; padding: 4px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; }
@@ -659,17 +652,19 @@
 
   /* Retinting: the old theme crossfades into the new */
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 320ms; animation-timing-function: ease; }
-  html.spread::view-transition-old(root) { animation: none; }
-  html.spread::view-transition-new(root) { animation: spread 700ms var(--ease); }
-  @keyframes spread {
-    from { clip-path: circle(0 at var(--rx) var(--ry)); }
-    to { clip-path: circle(150vmax at var(--rx) var(--ry)); }
-  }
 
   @media (max-width: 1080px) {
   }
   @media (max-width: 900px) {
     .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
+    .vars { width: 100%; margin-top: 16px; }
+    .vars-body { grid-template-columns: minmax(0, 1fr); }
+    .vars-side { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--bd); }
+    .vars-side > :not(.vs-groups) { display: none; }
+    .vs-groups { display: flex; gap: 4px; }
+    .vs-groups button { width: auto; }
+    .vs-groups button i { display: none; }
+    .vars-table .names { flex-basis: 120px; }
     .cv-layers { left: 8px; right: 8px; top: 8px; width: auto; display: flex; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
     .cv-layers > :not(.f-layer) { display: none; }
     .cv-layers .f-layer { flex: none; width: auto; margin: 0; padding: 0 10px 0 6px; }
@@ -695,7 +690,7 @@
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     .btn, .orb, .theme, .reel a { transition: none; }
-    .mp button, .orb .mesh::before, .photo .ants, .you, .sheet[open] { animation: none; }
+    .orb .mesh::before, .photo .ants, .you, .sheet[open] { animation: none; }
     .reel { mask-image: none; width: auto; margin-left: 0; }
     .reel-row { width: auto; animation: none; }
     .reel-track { flex-wrap: wrap; }
@@ -864,13 +859,9 @@
     <div class="themes-top">
       <div class="themes-copy">
         <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
-        <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Click a cursor to see one here.</p>
+        <p>Each theme is a mode of the same few colors, in a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick a column to see it here.</p>
       </div>
       <div class="themes-side">
-        <div class="modes"><div role="radiogroup" aria-label="Mode">
-          <button type="button" role="radio" data-mode="light"><svg><use href="#i-sun"/></svg>Light</button>
-          <button type="button" role="radio" data-mode="dark"><svg><use href="#i-moon"/></svg>Dark</button>
-        </div></div>
         <div class="now" aria-live="polite">
           <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
           <button type="button" id="reset" hidden>Back to your system's look</button>
@@ -878,8 +869,8 @@
       </div>
     </div>
 
-    <div class="figma">
-      <div class="art" aria-hidden="true">
+    <div class="figma" aria-hidden="true">
+      <div class="art">
         <div class="shot" style="--w:1240;--h:600">
           <div class="f-panel l">
                     <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span><span class="f-ib"><svg><use href="#i-panel"/></svg></span></div>
@@ -931,9 +922,22 @@
           </div>
         </div>
       </div>
-      <div class="mp" id="mp" aria-hidden="true"></div>
     </div>
-    <div class="theme-list" id="theme-list" role="radiogroup" aria-label="Themes"></div>
+    <div class="vars cv-ui">
+      <div class="vars-head"><b>Local variables</b><span class="vars-x" aria-hidden="true"><svg><use href="#i-x"/></svg></span></div>
+      <div class="vars-body">
+        <div class="vars-side">
+          <div class="vs-cap">Collections</div>
+          <div class="vs-item on"><svg><use href="#i-hex"/></svg>Ligma themes</div>
+          <div class="vs-cap">Groups</div>
+          <div class="vs-groups" role="radiogroup" aria-label="Mode">
+            <button type="button" role="radio" data-mode="light">Light<i>8</i></button>
+            <button type="button" role="radio" data-mode="dark">Dark<i>8</i></button>
+          </div>
+        </div>
+        <div class="vars-table" id="vars" role="radiogroup" aria-label="Themes"></div>
+      </div>
+    </div>
     <p class="figma-caption">Your designs keep their colors. Only Figma's interface changes, and Ligma's with it.</p>
   </section>
 
@@ -1485,58 +1489,53 @@
     renderDeck();
   }
 
-  // A cursor for each theme, in its own accent for the page's mode, each
-  // with a spot on the canvas and its own way of wandering. The one in use
-  // is you
-  const SPOTS = {
-    figma: [31, 27, 18, 10, 11], grove: [67, 19, -16, 12, 13], lagoon: [26, 63, 14, -12, 10],
-    ocean: [71, 56, -12, -14, 12], midnight: [33, 79, 16, -8, 14], iris: [61, 73, -18, 10, 9],
-    rose: [34, 44, 12, 14, 15], ember: [64, 37, -14, -10, 11], amber: [51, 9, 18, 8, 13],
-  };
+  // The Variables table: the colors a theme gives Figma, named as a
+  // designer would name them, a column for each theme in the page's mode
+  const VARS = [
+    ["accent/default", (r) => r["--a-500"]],
+    ["accent/pressed", (r) => r["--a-700"]],
+    ["selection", (r, dark) => (dark ? r["--a-800"] : r["--a-200"])],
+    ["bg/panel", (r, dark) => (dark ? r["--g-800"] : r["--white"])],
+    ["bg/canvas", (r, dark) => (dark ? r["--g-900"] : r["--g-100"])],
+    ["border", (r, dark) => (dark ? r["--g-600"] : r["--g-200"])],
+    ["text/primary", (r, dark) => (dark ? "#ffffff" : r["--g-900"])],
+    ["text/secondary", (r, dark) => (dark ? r["--g-400"] : r["--g-500"])],
+  ];
+  const hex = (color) => (color.startsWith("#") ? color.slice(1, 7).toUpperCase() : color);
   function renderDeck() {
-    $("mp").replaceChildren(...LIGMA_THEMES.map((theme, i) => {
-      const [x, y, dx, dy, t] = SPOTS[theme.id] ?? [50, 50, 10, 10, 10];
-      const button = document.createElement("button");
-      button.type = "button";
-      button.tabIndex = -1;
-      button.setAttribute("aria-checked", theme.id === state.theme);
-      button.style.cssText = `--x:${x}%;--y:${y}%;--dx:${dx}px;--dy:${dy}px;--t:${t}s;--delay:${-i * 1.7}s;--c:${ramps(theme.id, state.mode)["--a-500"]}`;
-      button.innerHTML = `<svg><use href="#i-cursor"/></svg><span data-name="${theme.name}">${theme.id === state.theme ? "You" : theme.name}</span>`;
-      button.addEventListener("click", (event) => pick(theme.id, state.mode, event));
-      return button;
+    const dark = state.mode === "dark";
+    const focused = document.activeElement?.closest("#vars")?.dataset.theme;
+    const names = document.createElement("div");
+    names.className = "names";
+    names.setAttribute("aria-hidden", "true");
+    names.innerHTML = `<span class="hd">Name</span>${VARS.map(([name]) => `<span><svg><use href="#i-palette"/></svg>${name}</span>`).join("")}`;
+    $("vars").replaceChildren(names, ...LIGMA_THEMES.map((theme) => {
+      const ramp = ramps(theme.id, state.mode);
+      const column = document.createElement("button");
+      column.type = "button";
+      column.dataset.theme = theme.id;
+      column.setAttribute("role", "radio");
+      column.setAttribute("aria-checked", theme.id === state.theme);
+      column.setAttribute("aria-label", theme.name);
+      column.innerHTML = `<span class="hd">${theme.name}</span>${VARS.map(([, get]) => {
+        const color = get(ramp, dark);
+        return `<span><i style="background:${color}"></i>${hex(color)}</span>`;
+      }).join("")}`;
+      column.addEventListener("click", (event) => pick(theme.id, state.mode, event));
+      return column;
     }));
-    // The same themes as a list, each with its mesh
-    const focused = document.activeElement?.closest("#theme-list")?.dataset.theme;
-    $("theme-list").replaceChildren(...LIGMA_THEMES.map((theme) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.dataset.theme = theme.id;
-      button.setAttribute("role", "radio");
-      button.setAttribute("aria-checked", theme.id === state.theme);
-      button.style.setProperty("--orb", ligmaMesh(theme.id, state.mode));
-      button.innerHTML = `<span class="mesh"></span>${theme.name}`;
-      button.addEventListener("click", (event) => pick(theme.id, state.mode, event));
-      return button;
-    }));
-    if (focused) $("theme-list").querySelector(`[data-theme="${focused}"]`)?.focus();
-    for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
+    if (focused) $("vars").querySelector(`[data-theme="${focused}"]`)?.focus();
+    for (const button of document.querySelectorAll(".vs-groups button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
   }
 
-  for (const button of document.querySelectorAll(".modes button")) {
+  for (const button of document.querySelectorAll(".vs-groups button")) {
     button.addEventListener("click", (event) => pick(state.theme, button.dataset.mode, event));
   }
 
   // Retint the page, spreading out from `from` where the browser can
   function retint(change, event) {
     if (!document.startViewTransition || reduced.matches || !event) return change();
-    // From the cursor that was clicked, crossfading otherwise
-    const from = event.currentTarget?.closest?.(".mp") && event.currentTarget.getBoundingClientRect();
-    root.classList.toggle("spread", !!from);
-    if (from) {
-      root.style.setProperty("--rx", `${from.left + 4}px`);
-      root.style.setProperty("--ry", `${from.top + 4}px`);
-    }
-    document.startViewTransition(change).finished.finally(() => root.classList.remove("spread"));
+    document.startViewTransition(change);
   }
 
   function pick(theme, mode, event) {
