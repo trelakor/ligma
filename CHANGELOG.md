@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.32.0 - 2026-11-02
+
+- Color contrast is gone from the color picker, as Figma now shows contrast in its own. Settings > Features > Colors goes with it.
+
 ## 0.31.0 - 2026-11-01
 
 - A file comes back where you left it faster after its tab sleeps, is reloaded or is reopened, and keeps its mode but no longer its tool. Settings > Tabs > Remember where you were in files turns it off.
