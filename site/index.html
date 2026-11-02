@@ -480,18 +480,18 @@
   .themes-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 48px; align-items: end; }
   .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 32em; }
   .themes-side { display: flex; flex-direction: column; align-items: flex-start; }
-  .pencil-stage { --pw: 58px; --peek: calc(var(--pw) * 1.9); --head: 64px; position: relative; margin-top: 32px; padding-top: calc(var(--peek) + var(--head)); }
+  .pencil-stage { --pw: calc((min(100vw, var(--wrap)) - 2 * var(--gutter)) * 0.94 / 9 - 4px); --peek: calc(var(--pw) * 1.5); --head: calc(var(--pw) * 0.85); position: relative; margin-top: 32px; padding-top: calc(var(--peek) + var(--head)); }
   .pencil-stage .figma { position: relative; z-index: 1; margin-top: 0; }
   .tray {
-    position: absolute; left: 50%; top: var(--head); translate: -50% 0; display: flex; gap: clamp(2px, 0.6vw, 8px);
+    position: absolute; left: 50%; top: var(--head); translate: -50% 0; display: flex; gap: 4px;
     height: calc(var(--pw) * 3.4); pointer-events: none;
   }
   .tray button {
     position: relative; flex: none; width: var(--pw); height: 100%; padding: 0; border: 0; background: none; cursor: pointer; pointer-events: auto;
     translate: 0 0; transition: translate 420ms cubic-bezier(0.3, 1.5, 0.5, 1);
   }
-  .tray button:hover, .tray button:focus-visible { translate: 0 -8px; }
-  .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -1.15); }
+  .tray button:hover, .tray button:focus-visible { translate: 0 calc(var(--pw) * -0.1); }
+  .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -0.72); }
   .tray button:focus-visible { outline: none; }
   .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
   .tray .gloss { opacity: 0; }
@@ -653,7 +653,7 @@
   }
   @media (max-width: 900px) {
     .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
-    .pencil-stage { --pw: 34px; --head: 44px; }
+    .pencil-stage { --pw: calc((100vw - 2 * var(--gutter)) / 9 - 2px); }
     .tray { gap: 2px; }
     .tray .tip { display: none; }
     .cv-layers { left: 8px; right: 8px; top: 8px; width: auto; display: flex; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
@@ -1472,26 +1472,27 @@
     renderDeck();
   }
 
-  // A brush for each theme, as Figma Draw draws its brush: a flat tuft of
-  // bristles dipped in paint, a metal ferrule with its crimps and Draw's
-  // little grid, and the handle. The paint and handle are the theme's
+  // A brush for each theme, as Figma Draw draws its flat brush: a domed
+  // tip of paint, streaked dark bristles, a thin dark ferrule and the
+  // handle with Figma's mark. The paint and the handle are the theme's
   // color for the page's mode. Made once, recolored when the mode changes
   const pencil = (id) => `<svg viewBox="0 0 30 102" aria-hidden="true">
     <defs>
       <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p3)"/><stop offset=".45" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:var(--p7)"/></linearGradient>
-      <linearGradient id="pf-${id}" x1="0" x2="1"><stop offset="0" stop-color="#f7f7f7"/><stop offset=".35" stop-color="#dedede"/><stop offset="1" stop-color="#9a9a9a"/></linearGradient>
-      <linearGradient id="pt-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".48" stop-color="#eadfcd" stop-opacity="0"/><stop offset=".72" stop-color="#eadfcd"/><stop offset="1" stop-color="#cdbda4"/></linearGradient>
+      <linearGradient id="pg-${id}" x1="0" x2="1"><stop offset="0" stop-color="#9a9a9a"/><stop offset=".45" stop-color="#6e6e6e"/><stop offset="1" stop-color="#3f3f3f"/></linearGradient>
+      <linearGradient id="pd-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".25" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".45"/></linearGradient>
     </defs>
-    <path d="M3 56h24v46H3z" fill="url(#pb-${id})"/>
-    <path class="gloss" d="M7.5 59v43" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
-    <path d="M6.5 42C5.2 33 3.4 24 3.2 15.5 3 10 4.6 6 7.6 4.6c1.4.9 2.3-.9 3.7-.4 1.3.5 2-.9 3.4-1 1.5.1 2 1.3 3.4.8 1.4-.4 2.4.7 3.6.5 2.9 1.3 4.6 5.3 4.6 10.9-.2 8.5-2 17.5-3.3 26.6z" fill="url(#pb-${id})"/>
-    <path d="M6.5 42C5.2 33 3.4 24 3.2 15.5 3 10 4.6 6 7.6 4.6c1.4.9 2.3-.9 3.7-.4 1.3.5 2-.9 3.4-1 1.5.1 2 1.3 3.4.8 1.4-.4 2.4.7 3.6.5 2.9 1.3 4.6 5.3 4.6 10.9-.2 8.5-2 17.5-3.3 26.6z" fill="url(#pt-${id})"/>
-    <path d="M8.2 8.5c.4 11 1 22 1.6 33M11.6 5.5c.2 12 .4 24 .7 36.5M15 4.5v37.5M18.4 5.5c-.2 12-.4 24-.7 36.5M21.8 8.5c-.4 11-1 22-1.6 33" stroke="#000" stroke-opacity=".13" stroke-width=".7" stroke-linecap="round" fill="none"/>
-    <path d="M9.9 7c.3 11.5.7 23 1.1 35M16.7 5c-.1 12-.2 24.5-.4 37" stroke="#fff" stroke-opacity=".3" stroke-width=".7" stroke-linecap="round" fill="none"/>
-    <path d="M4.5 41h21l1 15h-23z" fill="url(#pf-${id})"/>
-    <path d="M4.5 41.5h21" stroke="#000" stroke-opacity=".3" stroke-width="1"/>
-    <path d="M4 51h22.2M3.8 53.5h22.6" stroke="#000" stroke-opacity=".15" stroke-width=".9"/>
-    <path d="M13.3 44.3h1.5v1.5h-1.5zM15.2 44.3h1.5v1.5h-1.5zM13.3 46.2h1.5v1.5h-1.5zM15.2 46.2h1.5v1.5h-1.5z" fill="#000" fill-opacity=".3"/>
+    <path d="M.5 46h29v56H.5z" fill="url(#pb-${id})"/>
+    <path class="gloss" d="M5 49v53" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+    <svg x="8.5" y="51" width="13" height="13" viewBox="0 0 16 16" style="color:var(--logo)"><use href="#i-figma"/></svg>
+    <path d="M.5 8.2C.5 5 2 3.6 4.6 3.2 11.5 2.1 18.5 2.1 25.4 3.2 28 3.6 29.5 5 29.5 8.2V41H.5z" fill="url(#pg-${id})"/>
+    <path d="M.5 8.2C.5 5 2 3.6 4.6 3.2 11.5 2.1 18.5 2.1 25.4 3.2 28 3.6 29.5 5 29.5 8.2V41H.5z" fill="url(#pd-${id})"/>
+    <path d="M3.8 12v28.5M7.4 13v27.5M11 12.5v28M14.6 13.5V41M18.2 12.5v28M21.8 13v27.5M25.4 12v28.5" stroke="#000" stroke-opacity=".22" stroke-width=".8"/>
+    <path d="M5.6 13v27.5M12.8 13v27.5M20 13v27.5M27 12.5v28" stroke="#fff" stroke-opacity=".12" stroke-width=".7"/>
+    <path d="M.5 8.2C.5 5 2 3.6 4.6 3.2 11.5 2.1 18.5 2.1 25.4 3.2 28 3.6 29.5 5 29.5 8.2V14.6C26.2 16.8 23.1 13.2 19.6 15.1 16.1 17.1 12.9 13.5 9.4 15.3 5.9 17 3.1 13.6.5 15.2z" fill="url(#pb-${id})"/>
+    <path d="M2.6 5.6C9.2 3.9 20.8 3.9 27.4 5.6" stroke="#fff" stroke-opacity=".45" stroke-width="1" fill="none" stroke-linecap="round"/>
+    <path d="M.5 41h29v5H.5z" fill="#2c2c2c"/>
+    <path d="M.5 42.6h29" stroke="#777" stroke-width=".9"/>
   </svg>`;
   const pencils = LIGMA_THEMES.map((theme) => {
     const button = document.createElement("button");
@@ -1514,6 +1515,7 @@
         ? (dark ? ["#f2f2f2", "#d6d6d6", "#ababab"] : ["#f5f5f5", "#d9d9d9", "#a8a8a8"])
         : (dark ? [ramp["--a-400"], ramp["--a-500"], ramp["--a-600"]] : [ramp["--a-300"], ramp["--a-500"], ramp["--a-700"]]);
       stops.forEach((color, i) => button.style.setProperty(`--p${[3, 5, 7][i]}`, color));
+      button.style.setProperty("--logo", button.dataset.theme === "figma" ? "#555" : "rgb(255 255 255 / 0.8)");
       button.setAttribute("aria-checked", button.dataset.theme === state.theme);
     }
     for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);

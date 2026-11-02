@@ -66,3 +66,5 @@ Pencils (2026-11-02): 50px wide (32px on phones), almost touching, peeking 1.9 w
 Pencils (2026-11-02): 58px wide (34px on phones), the body the full width of the wood. The lead is the body's own color. Light mode shades the round body (accent 300, 500, 700); dark mode is brighter (200, 400, 500) with a glossy streak and a soft glow in the pencil's color
 
 Brushes (2026-11-02, replacing the pencils): Figma Draw's flat brush, a flared tuft with ragged ends dipped in the theme's color and natural bristle below, a silver ferrule with crimps and Draw's little grid, the handle in the theme's color (seen when picked). Dark mode is saturated (accent 400, 500, 600 and a saturate filter) with a soft glow, not pastel. Copy says brush
+
+Brushes (2026-11-02, redrawn from Draw's brush): straight sided, the width of the handle; a domed tip of paint with a wavy edge, streaked dark grey bristles darkening toward a thin dark ferrule, and the handle with Figma's outlined mark. Tip and handle are the theme's color. Together they span about 94% of the window's width, 4px apart (a ninth of the width each on phones), peeking 1.5 widths over it
