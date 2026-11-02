@@ -4,20 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ligma: a lightweight Figma desktop app for macOS and Windows</title>
-<meta name="description" content="Ligma is a free, open-source Figma desktop app, about 4 MB. Tabs, color themes, plugins in the left rail and Discord Rich Presence. Built with Tauri.">
+<meta name="description" content="Ligma is a free, open-source desktop app for Figma on macOS and Windows: lightweight, with far more to work with. Tabs and split view, nine color themes, plugins in the left sidebar and AI image tools that run on your computer.">
 <link rel="canonical" href="https://trelakor.github.io/ligma/">
 <link rel="icon" href="logo.png">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Ligma: a lightweight Figma desktop app">
-<meta property="og:description" content="About 4 MB. Tabs, themes, plugins in the left rail and Discord Rich Presence. Free and open source.">
+<meta property="og:description" content="A lightweight desktop app for Figma, with far more to work with. Tabs and split view, nine themes and free AI image tools that run on your computer.">
 <meta property="og:url" content="https://trelakor.github.io/ligma/">
-<meta property="og:image" content="https://trelakor.github.io/ligma/logo.png">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://trelakor.github.io/ligma/social-cover.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Ligma. Same Figma. Lighter. For macOS and Windows">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preload" href="fonts/funnel-display.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
 <script>
   // Light or dark before first paint; the themes below can change it
-  document.documentElement.className = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.classList.add(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
 </script>
 <style>
   @font-face { font-family: "Funnel Display"; src: url(fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; font-display: swap; }
@@ -46,7 +49,6 @@
     --ink: var(--g-900); --ink-2: var(--g-600); --ink-3: var(--g-500);
     --field: var(--a-500); --field-ink: var(--a-1000);
     --link: var(--a-700); --select: var(--a-200); --input: var(--g-100);
-    --weight: var(--g-100); --weight-rule: var(--g-200); --weight-ink: var(--g-500);
     --tb-bar: var(--g-100); --tb-active: var(--white); --tb-text: var(--g-500); --tb-text-active: var(--g-900); --tb-divider: var(--g-200);
     --panel: var(--white); --canvas: var(--g-100);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 12px 32px -8px rgb(0 0 0 / 0.22);
@@ -57,7 +59,6 @@
     --ink: #ffffff; --ink-2: var(--g-400); --ink-3: var(--g-500);
     --field: var(--a-500); --field-ink: color-mix(in oklab, var(--a-1000), #000 40%);
     --link: var(--a-300); --select: var(--a-800); --input: var(--g-700);
-    --weight: var(--g-800); --weight-rule: var(--g-700); --weight-ink: var(--g-500);
     --tb-bar: var(--g-700); --tb-active: var(--g-800); --tb-text: var(--g-400); --tb-text-active: #ffffff; --tb-divider: var(--g-600);
     --panel: var(--g-800); --canvas: var(--g-900);
     --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 16px 40px -8px rgb(0 0 0 / 0.55);
@@ -66,6 +67,7 @@
   * { box-sizing: border-box; }
   html { background: var(--bg); scroll-behavior: smooth; scroll-padding-top: 24px; }
   body {
+    overflow-x: clip;
     margin: 0; color: var(--ink); background: var(--bg);
     font: 400 17px/1.6 var(--text); font-feature-settings: "cv11", "calt";
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
@@ -111,47 +113,153 @@
   nav .btn { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 10px; margin-left: 8px; }
 
   /* Hero: the headline, the download, and both apps drawn to scale */
-  .hero { padding: clamp(32px, 6vw, 72px) 0 0; }
-  .masthead { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 32px 48px; align-items: end; }
-  .hero h1 { font-size: clamp(3.25rem, 8.4vw, 6rem); line-height: 0.92; letter-spacing: -0.04em; font-weight: 700; }
-  .pitch p { font-size: 19px; line-height: 1.5; color: var(--ink-2); max-width: 30em; }
-  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
-  .meta { margin-top: 12px; font-size: 14px; color: var(--ink-2); }
-
-  .weight {
-    position: relative; margin: clamp(40px, 6vw, 64px) 0 0; aspect-ratio: 1240 / 420; min-height: 280px;
-    border-radius: 20px; overflow: hidden; container-type: inline-size;
-    background:
-      linear-gradient(to right, var(--weight-rule) 1px, transparent 1px) 0 0 / 10% 100%,
-      linear-gradient(to bottom, var(--weight-rule) 1px, transparent 1px) 0 0 / 100% 10%,
-      var(--weight);
+  /* The hero: a Figma canvas in the page's theme, the lockup selected on
+     it, the downloads drawn as frames and you as a multiplayer cursor, with
+     the reel of what's inside along its foot */
+  .hero { position: relative; isolation: isolate; display: flex; flex-direction: column; min-height: min(100svh, 1040px); padding-bottom: 28px; }
+  .hero::before {
+    content: ""; position: absolute; z-index: -1; top: 0; bottom: 0; left: calc(50% - 50vw); right: calc(50% - 50vw);
+    background: radial-gradient(circle, var(--line-strong) 1.2px, transparent 1.7px) 12px 12px / 24px 24px, var(--canvas);
+    border-bottom: 1px solid var(--line);
   }
-  .weight .them { position: absolute; top: clamp(16px, 2.6cqw, 32px); left: clamp(16px, 2.6cqw, 32px); right: clamp(16px, 2.6cqw, 32px); display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-  .weight .them span { font-size: 15px; font-weight: 600; color: var(--ink-2); }
-  .weight .them b { font: 700 clamp(3.5rem, 12cqw, 9.5rem)/0.8 var(--display); letter-spacing: -0.05em; color: var(--weight-ink); font-variant-numeric: tabular-nums; }
-  /* 16 MB of 305 MB, by area: each side at sqrt(16 / 305) */
-  .weight .us { position: absolute; left: 0; bottom: 0; width: 22.9%; height: 22.9%; background: var(--field); border-top-right-radius: 12px; }
-  .weight .us-label { position: absolute; left: calc(22.9% + 16px); bottom: 14px; display: flex; align-items: baseline; gap: 12px; }
-  .weight .us-label b { font: 700 clamp(2rem, 4.6cqw, 3.5rem)/1 var(--display); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
-  .weight .us-label span { font-size: 15px; font-weight: 600; color: var(--ink-2); }
-  .caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 24px; margin-top: 12px; font-size: 14px; color: var(--ink-2); }
+  .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: clamp(40px, 6vh, 72px) 0 8px; text-align: center; }
+  .hero h1 { margin-top: clamp(28px, 4vh, 44px); font-size: clamp(2.5rem, 5.6vw, 4.5rem); line-height: 1; letter-spacing: -0.04em; font-weight: 700; }
+  .title { display: grid; justify-items: center; width: max-content; max-width: 100%; }
+  .stage .pitch { width: 0; min-width: 100%; margin-top: 14px; font-size: clamp(18px, 1.7vw, 21px); line-height: 1.45; color: var(--ink-2); text-wrap: balance; }
+  .meta { margin-top: 20px; font-size: 14px; color: var(--ink-2); }
+
 
   section { padding-top: clamp(96px, 12vw, 160px); }
   .head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr); gap: 16px 48px; align-items: end; margin-bottom: clamp(40px, 5vw, 64px); }
   .head p { color: var(--ink-2); font-size: 18px; max-width: 34em; }
 
-  /* Feature spreads: a swatch chip with the feature drawn in it, beside
-     what it does */
-  .spread { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 32px clamp(32px, 5vw, 72px); align-items: center; }
-  .spread + .spread { margin-top: clamp(64px, 8vw, 112px); }
-  .spread.flip { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
-  .spread.flip .chip { order: 2; }
-  .spread h3 { display: flex; align-items: center; gap: 12px; font-size: clamp(1.75rem, 3vw, 2.5rem); letter-spacing: -0.03em; }
-  .spread h3 .icon { width: 28px; height: 28px; color: var(--field); }
-  .spread p { margin-top: 16px; color: var(--ink-2); font-size: 18px; }
-  .spread ul { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-  .spread li { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; color: var(--ink-2); }
-  .spread li b { color: var(--ink); font-weight: 600; }
+  /* Features: a bento of tiles, each a feature's drawing and a line about
+     it. The plus opens the full details in a sheet */
+  .bento {
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px;
+    grid-template-areas: "s s s s t t" "s s s s d d" "p p c c c c" "k k c c c c" "v v v l l l";
+  }
+  .tile { position: relative; display: flex; flex-direction: column; padding: 8px; border-radius: 24px; background: var(--surface); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
+  .tile:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+  .tile-head { padding: 16px 52px 18px 16px; }
+  .tile h3 { display: flex; align-items: center; gap: 10px; font-size: clamp(1.25rem, 1.7vw, 1.5rem); letter-spacing: -0.025em; }
+  .tile.big h3 { font-size: clamp(1.6rem, 2.6vw, 2.25rem); letter-spacing: -0.035em; }
+  .tile h3 .icon { width: 22px; height: 22px; color: var(--field); }
+  .tile.big h3 .icon { width: 28px; height: 28px; }
+  .tile-head p { margin-top: 6px; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+  .tile.big .tile-head p { font-size: 17px; }
+  /* The big tiles' drawings grow to the height of the tiles beside them */
+  .tile.big .tile-art { flex: 1 0 auto; }
+  .tile-art { position: relative; margin-top: auto; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 16px; background: var(--field); color: var(--field-ink); container-type: inline-size; }
+  /* The plus covers the tile, so the whole tile opens it */
+  .tile .open { position: absolute; inset: 0; display: flex; justify-content: flex-end; align-items: flex-start; padding: 18px; border: 0; border-radius: inherit; background: none; color: var(--ink); cursor: pointer; }
+  .tile .open .icon { width: 32px; height: 32px; padding: 7px; border-radius: 50%; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: rotate 240ms var(--ease), background-color 200ms, color 200ms; }
+  .tile:hover .open .icon, .tile .open:focus-visible .icon { rotate: 90deg; background: var(--ink); color: var(--bg); }
+  .tile .open:focus-visible { outline-offset: -2px; border-radius: 24px; }
+
+  .sheet {
+    width: min(1120px, 100vw - 32px); max-width: none; max-height: min(760px, 100dvh - 32px); padding: 0; border: 0; border-radius: 24px; overflow: auto;
+    background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 40px 80px -20px rgb(0 0 0 / 0.5);
+  }
+  .sheet[open] { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); animation: sheet-in 320ms var(--ease); }
+  .sheet::backdrop { background: rgb(0 0 0 / 0.45); backdrop-filter: blur(6px); }
+  @keyframes sheet-in { from { opacity: 0; translate: 0 24px; scale: 0.98; } }
+  .sheet-art { padding: 10px; }
+  .sheet-art .tile-art { border-radius: 16px; }
+  .sheet-copy { display: flex; flex-direction: column; padding: 40px 36px 28px 20px; }
+  .sheet h3 { display: flex; align-items: center; gap: 12px; padding-right: 40px; font-size: clamp(1.75rem, 2.8vw, 2.5rem); letter-spacing: -0.035em; line-height: 1.05; }
+  .sheet h3 .icon { width: 30px; height: 30px; color: var(--field); }
+  .sheet-copy p { margin-top: 14px; font-size: 17px; line-height: 1.55; color: var(--ink-2); }
+  .sheet-copy ul { margin: 20px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .sheet-copy li { padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+  .sheet-copy li b { font-weight: 600; color: var(--ink); }
+  .setting { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-top: auto; padding-top: 24px; font-size: 13px; color: var(--ink-3); }
+  .setting code { background: none; border: 0; padding: 0; color: var(--ink-2); font-size: 13px; }
+  .sheet .close { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--surface); color: var(--ink); cursor: pointer; }
+  .sheet .close .icon { width: 18px; height: 18px; }
+  .sheet .close:hover { background: var(--line); }
+
+  /* Split view drawing */
+  .sv { position: absolute; left: 5em; top: 7em; right: -4em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
+  .sv .tabbar .on + .on { box-shadow: inset 1px 0 0 var(--tb-divider); }
+  .sv-body { position: absolute; top: 4.56em; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: 13em 1fr 1fr; }
+  .sv-body .side { background: var(--panel); border-right: 1px solid var(--line); padding: 1.6em 1.4em; display: flex; flex-direction: column; gap: 1em; }
+  .half { position: relative; }
+  .half + .half { border-left: 0.2em solid var(--line-strong); }
+  .half.on { box-shadow: inset 0 0 0 0.15em var(--field); }
+  .half .fname { position: absolute; left: 2.4em; top: 2.2em; font-size: 1.05em; color: var(--ink-2); }
+  .half .art-a { position: absolute; left: 2.4em; top: 4.4em; width: 16em; height: 20em; border-radius: 0.2em; overflow: hidden; background: #ff5c39; }
+  .half .art-a::after { content: ""; position: absolute; left: -3em; right: -3em; bottom: -7em; height: 14em; border-radius: 50%; background: #1f1d2b; }
+  .half .art-b { position: absolute; left: 2.4em; top: 4.4em; width: 16em; height: 20em; border-radius: 0.2em; background: #1f1d2b; }
+  .half .art-b i { position: absolute; left: 1.6em; right: 1.6em; height: 1.4em; border-radius: 0.3em; background: #3b3752; }
+  .drag { position: absolute; left: 39.5em; top: 15em; width: 7em; height: 7em; border-radius: 50%; background: #ffd23f; box-shadow: 0 0 0 0.15em var(--field), 0 0.6em 1.4em rgb(0 0 0 / 0.25); }
+  .drag-cursor { position: absolute; left: 45em; top: 20.6em; width: 2.2em; height: 2.2em; color: #1e1e1e; }
+
+  /* Development plugins drawing: Figma's Actions panel */
+  .actions-panel { position: absolute; left: 9em; top: 4em; right: 9em; padding: 1.2em; border-radius: 1.4em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); font-size: 1.1em; }
+  .actions-panel .search { display: flex; align-items: center; gap: 0.8em; height: 3em; padding: 0 1em; border-radius: 0.7em; background: var(--input); color: var(--ink-3); }
+  .actions-panel .search svg { width: 1.4em; height: 1.4em; }
+  .ap-tabs { display: flex; align-items: center; gap: 0.3em; margin: 0.9em 0 0.7em; color: var(--ink-2); }
+  .ap-tabs span, .ap-tabs b { padding: 0.45em 0.7em; border-radius: 0.5em; }
+  .ap-tabs b { background: var(--surface); color: var(--ink); font-weight: 600; }
+  .ap-tabs em { display: flex; align-items: center; gap: 0.3em; margin-left: auto; padding: 0.4em 0.5em 0.4em 0.7em; border-radius: 0.5em; box-shadow: inset 0 0 0 0.12em var(--field); color: var(--ink); font-style: normal; font-weight: 600; }
+  .ap-tabs em svg { width: 1.1em; height: 1.1em; }
+  .ap-row { display: flex; align-items: center; gap: 0.9em; min-height: 4.2em; padding: 0.5em 0.7em; border-radius: 0.6em; }
+  .ap-row.hover { background: var(--surface); }
+  .ap-row .pi { flex: none; display: grid; place-items: center; width: 2.4em; height: 2.4em; border-radius: 0.6em; color: #fff; }
+  .ap-row .pi svg { width: 1.4em; height: 1.4em; }
+  .ap-row .nm { display: flex; flex-direction: column; min-width: 0; gap: 0.15em; font-weight: 500; }
+  .ap-row .nm small { margin-left: 0.6em; padding: 0 0.4em; border-radius: 0.3em; box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink-2); font-size: 0.82em; font-weight: 500; }
+  .ap-row .nm i { font-style: normal; font-size: 0.85em; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ap-row .more-dots { margin-left: auto; color: var(--ink-2); letter-spacing: 0.05em; }
+  .ap-row.import svg { width: 1.4em; height: 1.4em; }
+  .ap-row.import { min-height: 3.4em; color: var(--ink); }
+  .tb-dev { left: 50%; top: auto; bottom: 3.4em; transform: translateX(-50%); }
+
+  /* Copy as code drawing: Figma's right-click menu */
+  .menu { position: absolute; width: 21em; padding: 0.7em 0; border-radius: 1em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); font-size: 1.15em; }
+  .menu div { display: flex; justify-content: space-between; align-items: center; height: 2.5em; margin: 0 0.6em; padding: 0 0.8em; border-radius: 0.5em; }
+  .menu div.on { background: var(--field); color: #fff; font-weight: 500; }
+  .menu div span { opacity: 0.6; }
+  .menu hr { border: 0; border-top: 1px solid var(--line); margin: 0.5em 0; }
+  .menu.one { left: 4em; top: 4.5em; }
+  .menu.two { left: 23.5em; top: 11.5em; }
+  .snippet { position: absolute; left: 6em; right: -2em; bottom: -2em; padding: 1.4em 1.6em 3em; border-radius: 1em 0 0 0; background: #1e1e1e; color: #d4d4d4; font: 1.12em/1.6 var(--mono); box-shadow: var(--shadow); white-space: pre; }
+  .snippet .k { color: #7cc4f8; } .snippet .s { color: #ffc470; } .snippet .c { color: #8a8a8a; }
+
+  /* Color contrast drawing: Figma's color picker */
+  .picker { position: absolute; left: 13em; top: 6em; width: 34em; padding: 1.4em; border-radius: 1.2em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); font-size: 1.1em; }
+  .picker .tabs2 { display: flex; gap: 1.6em; margin-bottom: 1em; color: var(--ink-2); }
+  .picker .tabs2 b { color: var(--ink); font-weight: 600; }
+  .square { position: relative; height: 17em; border-radius: 0.5em; overflow: hidden; background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue)); }
+  .square svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .square .knob { position: absolute; left: 70%; top: 34%; width: 1.4em; height: 1.4em; margin: -0.7em; border-radius: 50%; border: 0.2em solid #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3); background: var(--pick); }
+  .hue { height: 1em; margin: 1.1em 0; border-radius: 0.5em; background: linear-gradient(to right, red, #ff0, lime, cyan, blue, #f0f, red); }
+  .hexrow { display: flex; gap: 0.5em; }
+  .hexrow span { display: flex; align-items: center; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); font-variant-numeric: tabular-nums; }
+  .hexrow span:nth-child(2) { flex: 1; }
+  .ratio { display: flex; align-items: center; gap: 0.8em; margin-top: 1em; padding-top: 1em; border-top: 1px solid var(--line); }
+  .ratio .aa { display: grid; place-items: center; width: 2.6em; height: 2.6em; border-radius: 0.5em; background: #fff; box-shadow: inset 0 0 0 1px var(--line); color: var(--pick); font-weight: 700; }
+  .ratio b { font-variant-numeric: tabular-nums; }
+  .ratio .lv { margin-left: auto; display: flex; gap: 0.4em; }
+  .ratio .lv span { padding: 0.2em 0.6em; border-radius: 0.4em; background: var(--surface); font-size: 0.9em; font-weight: 600; }
+  .ratio .lv .pass { background: color-mix(in oklab, #14ae5c 22%, var(--panel)); color: color-mix(in oklab, #14ae5c, var(--ink) 35%); }
+
+  /* Layer previews drawing */
+  .lp { position: absolute; left: 6em; top: 6em; right: -4em; bottom: -4em; display: grid; grid-template-columns: 26em 1fr; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
+  .lp .layers { gap: 0.15em; }
+  .sect { margin: 0.4em -1.4em 0.5em; padding: 1em 1.6em 0; border-top: 1px solid var(--line); font-size: 1.1em; font-weight: 600; color: var(--ink); }
+  .lrow { display: flex; align-items: center; gap: 0.55em; height: 3.9em; padding: 0 0.6em; border-radius: 0.5em; font-size: 1.1em; color: var(--ink-2); white-space: nowrap; }
+  .lrow b { font-weight: 600; color: var(--ink); }
+  .lrow.on { background: var(--select); }
+  .lrow.in { padding-left: 3.2em; }
+  .lrow .chev { flex: none; width: 1em; height: 1em; color: var(--ink-3); }
+  .lrow .ty { flex: none; width: 1.2em; height: 1.2em; }
+  .lrow .th { flex: none; position: relative; display: grid; place-items: center; width: 2.9em; height: 2.9em; border-radius: 0.45em; overflow: hidden; background: #d4d4d4; }
+  .lrow .th i { position: absolute; display: block; }
+  .poster-th { position: relative; width: 62%; height: 78%; overflow: hidden; background: #ff5c39; }
+  .lp .stage2 { position: relative; }
+  .lp .stage2 .poster { transform: translate(-50%, -50%) scale(0.68); }
 
   .chip { border-radius: 20px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); }
   .chip .field { position: relative; aspect-ratio: 4 / 3; background: var(--field); container-type: inline-size; overflow: hidden; }
@@ -164,9 +272,12 @@
   /* Tabs drawing */
   .window { position: absolute; left: 6em; right: -4em; top: 9em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
   .tabbar { display: flex; height: 3.8em; background: var(--tb-bar); color: var(--tb-text); font-size: 1.2em; font-weight: 500; }
-  .tabbar > div { position: relative; display: flex; align-items: center; gap: 0.66em; flex: none; padding: 0 0.66em 0 1em; }
+  /* A little more room after a tab's label than before its icon, so it
+     looks even. The close button has room inside it, so that side pads less */
+  .tabbar > div { position: relative; display: flex; align-items: center; gap: 0.75em; flex: none; padding: 0 1.4em 0 0.95em; }
+  .tabbar > div:has(.x) { padding-right: 1.1em; }
   .tabbar > div::after { content: ""; position: absolute; right: 0; top: 0.9em; bottom: 0.9em; width: 1px; background: var(--tb-divider); }
-  .tabbar .sq { width: 3.17em; padding: 0; justify-content: center; }
+  .tabbar .sq { width: 3.6em; padding: 0; justify-content: center; }
   .tabbar .on { background: var(--tb-active); color: var(--tb-text-active); }
   .tabbar .on::after, .tabbar .pre::after { display: none; }
   .tabbar .hover { background: color-mix(in oklab, var(--tb-bar) 88%, var(--tb-text)); }
@@ -180,7 +291,7 @@
   .bar.short { width: 60%; }
   .bar.picked { background: var(--select); }
   .tabpreview {
-    position: absolute; top: 12.8em; left: 33em; width: 24em; padding: 0.8em 0.8em 1em; border-radius: 1.3em;
+    position: absolute; top: 12.8em; left: 37em; width: 24em; padding: 0.8em 0.8em 1em; border-radius: 1.3em;
     background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink);
   }
   .tabpreview .shot { aspect-ratio: 16 / 9; border-radius: 0.6em; background: #1f1d2b; position: relative; overflow: hidden; }
@@ -188,23 +299,35 @@
   .tabpreview b { display: block; margin: 0.7em 0.4em 0; font-size: 1.3em; font-weight: 600; }
   .tabpreview span { display: block; margin: 0 0.4em; font-size: 1.1em; color: var(--ink-2); }
 
-  /* Left rail drawing */
-  .ui { position: absolute; left: 7em; top: 7em; right: -4em; bottom: -4em; display: grid; grid-template-columns: 6em 24em 1fr; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
-  .rail { display: flex; flex-direction: column; align-items: center; gap: 0.9em; padding: 1.4em 0; background: var(--panel); border-right: 1px solid var(--line); color: var(--ink-2); }
-  .rail .tool { display: grid; place-items: center; width: 3.6em; height: 3.6em; border-radius: 0.8em; }
-  .rail .tool.on { background: var(--surface); color: var(--ink); }
-  .rail .tool svg { width: 2em; height: 2em; }
-  .rail hr { width: 2.8em; border: 0; border-top: 1px solid var(--line); margin: 0.3em 0; }
-  .rail .plug { display: grid; place-items: center; width: 3.2em; height: 3.2em; border-radius: 0.8em; color: #fff; transition: transform 200ms var(--ease); }
-  .rail .plug svg { width: 1.8em; height: 1.8em; }
-  .rail .plug.big { transform: scale(1.18); box-shadow: 0 0.3em 0.9em rgb(0 0 0 / 0.25); }
+  /* The left sidebar drawing */
+  .ui { position: absolute; left: 7em; top: 5em; right: -4em; bottom: -4em; display: grid; grid-template-columns: 5.8em 25em 1fr; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
+  .navcol { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 0.35em; padding: 1em 0; background: var(--panel); border-right: 1px solid var(--line); color: var(--ink); }
+  .navcol .t { display: grid; place-items: center; width: 3.2em; height: 3.2em; border-radius: 0.8em; }
+  .navcol .t svg { width: 1.8em; height: 1.8em; }
+  .navcol .t.on { background: var(--select); }
+  .navcol hr { width: 2.6em; border: 0; border-top: 1px solid var(--line); margin: 0.2em 0; }
+  .navcol .plug { position: relative; display: grid; place-items: center; width: 2.9em; height: 2.9em; margin-top: 0.15em; border-radius: 0.75em; color: #fff; transition: transform 200ms var(--ease); }
+  .navcol .plug svg { width: 1.7em; height: 1.7em; }
+  .navcol .plug.big { transform: scale(1.18); box-shadow: 0 0.3em 0.9em rgb(0 0 0 / 0.25); }
+  .ph { display: flex; align-items: center; gap: 0.4em; font-size: 1.25em; font-weight: 600; color: var(--ink); }
+  .ph svg { width: 1.1em; height: 1.1em; color: var(--ink-2); }
+  .ph .sp { margin-left: auto; }
+  .ui .sub { margin: 0.1em 0 0.4em; }
+  .ui .sub em { margin-left: 0.7em; font-style: normal; color: #9747ff; }
+  .ui .sect { display: flex; align-items: center; justify-content: space-between; margin-left: -1.2em; margin-right: -1.2em; padding-left: 1.6em; padding-right: 1.6em; }
+  .ui .sect span { display: flex; gap: 0.8em; color: var(--ink-2); }
+  .ui .sect svg { width: 1.2em; height: 1.2em; }
+  .pg { display: flex; align-items: center; height: 2.6em; padding: 0 0.6em; border-radius: 0.5em; font-size: 1.1em; color: var(--ink); }
+  .pg.on { background: var(--surface); font-weight: 600; }
+  .ui .layers { padding: 1.4em 1.2em; gap: 0.25em; }
+  .layers .row b { font-weight: 600; color: var(--ink); }
   .layers { background: var(--panel); border-right: 1px solid var(--line); padding: 1.6em 1.4em; display: flex; flex-direction: column; gap: 0.6em; }
   .layers .file { font-size: 1.3em; font-weight: 600; color: var(--ink); }
   .layers .sub { font-size: 1.1em; color: var(--ink-2); margin-bottom: 1em; }
   .layers .row { display: flex; align-items: center; gap: 0.8em; height: 2.6em; padding: 0 0.6em; border-radius: 0.5em; font-size: 1.1em; color: var(--ink-2); }
   .layers .row svg { width: 1.3em; height: 1.3em; }
   .layers .row.on { background: var(--select); color: var(--ink); }
-  .tip { position: absolute; left: 13.6em; top: 23.3em; padding: 0.6em 1em; border-radius: 0.6em; background: #1e1e1e; color: #fff; font-size: 1.2em; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow); }
+  .tip { position: absolute; left: calc(100% + 1em); top: 50%; margin-top: -1.15em; padding: 0.6em 1em; border-radius: 0.6em; background: #1e1e1e; color: #fff; font-size: 1.2em; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow); }
   .tip::before { content: ""; position: absolute; left: -0.4em; top: 50%; width: 0.8em; height: 0.8em; background: inherit; transform: translateY(-50%) rotate(45deg); border-radius: 0.1em; }
 
   /* Discord drawing (Discord's own dark colors) */
@@ -218,7 +341,7 @@
   .profile .handle { font-size: 1.3em; color: #b5bac1; }
   .activity { margin: 1.6em 1.6em 1.8em; padding: 1.4em; border-radius: 1em; background: #111214; }
   .activity .label { font-size: 1.1em; font-weight: 700; color: #b5bac1; }
-  .activity .card { display: flex; gap: 1.4em; margin-top: 1em; }
+  .activity .card2 { display: flex; gap: 1.4em; margin-top: 1em; }
   .activity .large { position: relative; flex: none; width: 7.2em; height: 7.2em; }
   .activity .large img { width: 100%; height: 100%; border-radius: 0.8em; background: #fff; }
   .activity .small { position: absolute; right: -0.6em; bottom: -0.6em; display: grid; place-items: center; width: 2.8em; height: 2.8em; border-radius: 50%; background: #0d99ff; color: #fff; border: 0.3em solid #111214; }
@@ -229,21 +352,55 @@
   .activity .join { display: grid; place-items: center; height: 3.2em; margin-top: 1.2em; border-radius: 0.6em; background: #4e5058; font-size: 1.2em; font-weight: 600; }
 
   /* The rest, as an index */
-  .index { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 48px); margin-top: clamp(80px, 10vw, 128px); border-top: 2px solid var(--ink); }
+  .index { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 clamp(24px, 4vw, 48px); margin-top: clamp(80px, 10vw, 128px); border-top: 2px solid var(--ink); }
   .index > div { padding: 24px 0 32px; border-bottom: 1px solid var(--line); }
   .index h3 { display: flex; align-items: center; gap: 10px; font-size: 1.375rem; }
   .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
   .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
 
-  /* Themes: the fan deck. Each chip is a theme's accent, its name and
-     hue, and the app's two swatches, light and dark, to click */
-  .deck { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 10px; }
+  /* Themes: the words on the left, a fan deck on the right. Each blade is
+     a theme: its accent ramp and its mesh, its name along the top, riveted
+     at the left. Pointing at one slides it out of the fan, clicking it
+     retints the page. 1em is a unit of the fan's 530-wide drawing */
+  .themes-top { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 40px 48px; align-items: center; }
+  .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 30em; }
+  .fan-wrap { container-type: inline-size; }
+  .fan { --spread: 11deg; position: relative; height: 740em; font-size: min(1px, 100cqw / 530); }
+  .blade {
+    --lift: 0em; position: absolute; left: 0; top: 50%; width: 440em; height: 112em; margin-top: -56em; padding: 8em 8em 8em 0;
+    display: grid; grid-template-columns: 52em repeat(4, minmax(0, 1fr)) 128em; grid-template-rows: 30em minmax(0, 1fr); gap: 6em 5em;
+    border: 0; border-radius: 16em; background: var(--bg); color: var(--ink); cursor: pointer; font: inherit; text-align: left;
+    transform-origin: 26em 50%; transform: rotate(calc((var(--i) - 4) * var(--spread))) translateX(var(--lift));
+    box-shadow: 0 0 0 1px var(--line), 0 2em 4em rgb(0 0 0 / 0.1), 0 18em 40em -12em rgb(0 0 0 / 0.35);
+    transition: transform 420ms var(--ease), box-shadow 200ms;
+  }
+  .blade:hover, .blade:focus-visible { --lift: 34em; z-index: 10; }
+  .blade[aria-checked="true"] { --lift: 52em; z-index: 11; box-shadow: 0 0 0 2.5em var(--field), 0 18em 40em -12em rgb(0 0 0 / 0.35); }
+  .blade:focus-visible { outline: none; box-shadow: 0 0 0 2.5em var(--ink), 0 18em 40em -12em rgb(0 0 0 / 0.35); }
+  .blade b {
+    grid-column: 2 / -1; grid-row: 1; display: flex; align-items: baseline; justify-content: flex-end; gap: 0.5em;
+    padding: 0.3em 0.2em 0 0; font: 650 22em/1 var(--display); letter-spacing: -0.01em; white-space: nowrap;
+  }
+  .blade b small { font: 500 0.6em/1 var(--text); color: var(--ink-3); }
+  .blade .mesh { grid-column: -2; grid-row: 2; position: relative; overflow: hidden; border-radius: 9em; isolation: isolate; }
+  .blade .mesh::before { content: ""; position: absolute; inset: -18%; background: var(--orb); filter: blur(6px) saturate(1.2); animation: drift 4s ease-in-out infinite alternate paused; }
+  .blade:hover .mesh::before, .blade:focus-visible .mesh::before { animation-play-state: running; }
+  @keyframes drift {
+    33% { transform: rotate(40deg) scale(1.1); filter: blur(6px) saturate(1.4) hue-rotate(-10deg); }
+    66% { transform: rotate(-25deg) scale(1.05); filter: blur(6px) saturate(1.3) hue-rotate(8deg); }
+    100% { transform: rotate(70deg) scale(1.12); filter: blur(6px) saturate(1.45); }
+  }
+  .blade i { grid-row: 2; border-radius: 5em; }
+  .blade .foot { grid-column: 1; grid-row: 1 / -1; display: grid; place-items: center; }
+  .blade .foot::after { content: ""; width: 16em; height: 16em; border-radius: 50%; background: var(--line); box-shadow: inset 0 1em 2em rgb(0 0 0 / 0.25); }
+  /* Narrow screens: a grid of swatches instead of the fan, each a theme's
+     accent, its name and hue, and its light and dark versions to click */
+  .grid-deck { display: none; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 20px 10px; }
   .theme { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
   .theme.picked { transform: translateY(-10px); box-shadow: 0 0 0 2px var(--ink), var(--shadow); }
-  .theme .swatch { display: flex; flex-direction: column; justify-content: flex-end; aspect-ratio: 1 / 1.15; padding: 10px 12px; background: var(--chip); color: var(--chip-ink); }
+  .theme .swatch { display: flex; flex-direction: column; justify-content: flex-end; aspect-ratio: 1 / 1.15; padding: 10px 12px; background: var(--chip); color: #fff; }
   .theme .swatch b { font: 650 17px/1.1 var(--display); letter-spacing: -0.01em; }
   .theme .swatch span { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .dark .theme .swatch { color: color-mix(in oklab, var(--chip-ink), #000 40%); }
   .orbs { display: flex; justify-content: center; gap: 10px; padding: 14px 6px; }
   /* As in the settings window (dist/settings.html): ligmaMesh's blobs,
      blurred together, drifting while hovered */
@@ -255,11 +412,11 @@
   .orb .mesh { position: absolute; inset: 0; overflow: hidden; border-radius: 50%; isolation: isolate; }
   .orb .mesh::before {
     content: ""; position: absolute; inset: -18%; background: var(--orb);
-    filter: blur(5px) saturate(1.2); animation: drift 4s ease-in-out infinite alternate paused;
+    filter: blur(5px) saturate(1.2); animation: drift-orb 4s ease-in-out infinite alternate paused;
   }
   .orb:hover { transform: scale(1.1); }
   .orb:hover .mesh::before, .orb:focus-visible .mesh::before { animation-play-state: running; }
-  @keyframes drift {
+  @keyframes drift-orb {
     33% { transform: rotate(40deg) scale(1.1); filter: blur(5px) saturate(1.4) hue-rotate(-10deg); }
     66% { transform: rotate(-25deg) scale(1.05); filter: blur(5px) saturate(1.3) hue-rotate(8deg); }
     100% { transform: rotate(70deg) scale(1.12); filter: blur(5px) saturate(1.45); }
@@ -272,6 +429,12 @@
   }
   .orb .badge svg { width: 10px; height: 10px; }
   .orb[aria-checked="true"] .badge { display: grid; }
+  .modes { display: flex; margin-top: 28px; }
+  #themes .now { margin-top: 12px; }
+  .modes div { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+  .modes button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: 9px; background: none; color: var(--ink-2); font: 500 14px/1 var(--text); cursor: pointer; }
+  .modes button svg { width: 15px; height: 15px; }
+  .modes button[aria-checked="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 0.1); }
   .now { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 28px; font-size: 15px; color: var(--ink-2); min-height: 40px; }
   .now b { color: var(--ink); font-weight: 600; }
   .now button { font: inherit; font-weight: 600; color: var(--link); background: none; border: 0; padding: 4px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; }
@@ -294,7 +457,7 @@
   .fg .row.in { padding-left: 2.6em; }
   .fg .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6em; }
   .fg .avatar { width: 2.6em; height: 2.6em; border-radius: 50%; background: #f0b232; }
-  .fg .share { padding: 0.6em 1.2em; border-radius: 0.6em; background: var(--field); color: var(--field-ink); font-weight: 600; }
+  .fg .share { padding: 0.6em 1.2em; border-radius: 0.6em; background: var(--field); color: #fff; font-weight: 600; }
   .fg .prop { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6em; }
   .fg .prop span { display: flex; align-items: center; gap: 0.6em; height: 2.6em; padding: 0 0.8em; border-radius: 0.5em; background: var(--input); color: var(--ink); font-variant-numeric: tabular-nums; }
   .fg .prop span i { font-style: normal; color: var(--ink-3); }
@@ -306,28 +469,37 @@
   .poster .sun { position: absolute; left: 4em; top: 4em; width: 16em; height: 16em; border-radius: 50%; background: #ffd23f; }
   .poster .hill { position: absolute; left: -6em; right: -6em; bottom: -14em; height: 28em; border-radius: 50%; background: #1f1d2b; }
   .poster .type { position: absolute; left: 3em; bottom: 3em; color: #fff4e0; font: 700 4.4em/0.9 var(--display); letter-spacing: -0.04em; }
-  .frame-name { position: absolute; left: calc(50% - 16em); top: calc(50% - 22.4em - 2.4em); font-size: 1.1em; color: var(--ink-2); }
+  .frame-name { position: absolute; left: calc(50% - 16em / 1.1); top: calc(50% - 21.6em / 1.1); translate: 0 calc(-100% - 0.45em); font-size: 1.1em; line-height: 1.2; color: var(--ink-2); }
   .selection { position: absolute; left: 50%; top: 50%; width: 32em; height: 40em; transform: translate(-50%, -54%); box-shadow: 0 0 0 0.15em var(--field); }
   .selection i { position: absolute; width: 0.9em; height: 0.9em; background: #fff; border: 0.15em solid var(--field); }
   .selection i:nth-child(1) { left: -0.5em; top: -0.5em; } .selection i:nth-child(2) { right: -0.5em; top: -0.5em; }
   .selection i:nth-child(3) { left: -0.5em; bottom: -0.5em; } .selection i:nth-child(4) { right: -0.5em; bottom: -0.5em; }
-  .selection span { position: absolute; left: 50%; bottom: -3em; transform: translateX(-50%); padding: 0.2em 0.6em; border-radius: 0.3em; background: var(--field); color: var(--field-ink); font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .toolbar { position: absolute; left: 50%; bottom: 2.4em; transform: translateX(-50%); display: flex; gap: 0.4em; padding: 0.6em; border-radius: 1.2em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); }
-  .toolbar span { display: grid; place-items: center; width: 3.6em; height: 3.6em; border-radius: 0.8em; }
-  .toolbar span.on { background: var(--field); color: var(--field-ink); }
-  .toolbar svg { width: 2em; height: 2em; }
+  .selection span { position: absolute; left: 50%; bottom: -3em; transform: translateX(-50%); padding: 0.2em 0.6em; border-radius: 0.3em; background: var(--field); color: #fff; font-size: 1.1em; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .toolbar { position: absolute; left: 50%; bottom: 2.4em; transform: translateX(-50%); display: flex; align-items: center; gap: 0.15em; padding: 0.5em; border-radius: 1.2em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); color: var(--ink); white-space: nowrap; }
+  .toolbar span { display: grid; place-items: center; width: 3.4em; height: 3.4em; border-radius: 0.8em; }
+  .toolbar span.on { background: var(--field); color: #fff; }
+  .toolbar span svg { width: 1.9em; height: 1.9em; }
+  .toolbar .dd { flex: none; width: 1.1em; height: 1.1em; margin: 0 0.25em 0 -0.15em; color: var(--ink-2); }
   .figma-caption { margin-top: 14px; font-size: 14px; color: var(--ink-2); }
 
   /* Compare */
+  /* Ligma or Figma desktop, as in the README */
+  .compare-card { overflow-x: auto; }
   .compare { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  .compare th, .compare td { padding: 20px 16px 20px 0; text-align: left; border-bottom: 1px solid var(--line); vertical-align: baseline; }
-  .compare thead th { padding-top: 0; font: 650 clamp(1.25rem, 2.2vw, 1.75rem)/1.1 var(--display); letter-spacing: -0.02em; border-bottom: 2px solid var(--ink); }
-  .compare thead th:nth-child(2) { color: var(--ink); }
-  .compare tbody th { font-weight: 500; color: var(--ink-2); font-size: 16px; width: 34%; }
-  .compare td { font-size: 17px; }
-  .compare td:nth-child(2) { font-weight: 600; }
-  .compare .big td { font: 700 clamp(1.75rem, 3.6vw, 2.75rem)/1 var(--display); letter-spacing: -0.03em; }
+  .compare th, .compare td { padding: 0 16px 0 0; height: 64px; text-align: left; border-bottom: 1px solid var(--line); }
+  .compare tbody tr:last-child > * { border-bottom: 0; }
+  .compare thead th { height: auto; padding-bottom: 18px; font: 650 clamp(1.25rem, 2.2vw, 1.75rem)/1.1 var(--display); letter-spacing: -0.02em; color: var(--ink); border-bottom: 2px solid var(--ink); }
+  .compare .who { display: flex; align-items: center; gap: 10px; }
+  .compare .who img { width: 28px; height: 28px; }
+  .compare tbody th { width: 36%; font-weight: 500; color: var(--ink-2); font-size: 16px; }
+  .compare td { width: 32%; font-size: 17px; color: var(--ink-2); }
+  .compare td:nth-child(2) { font-weight: 600; color: var(--ink); }
+  .compare .big > * { height: 96px; }
+  .compare .big td { font: 700 clamp(1.75rem, 3.6vw, 2.75rem)/1 var(--display); letter-spacing: -0.035em; }
   .compare .big td:nth-child(3) { color: var(--ink-3); }
+  .compare .yes, .compare .no { display: inline-flex; align-items: center; gap: 10px; }
+  .compare .yes svg { flex: none; width: 24px; height: 24px; padding: 5px; border-radius: 50%; background: var(--field); color: #fff; }
+  .compare .no svg { flex: none; width: 22px; height: 22px; color: var(--ink-3); }
 
   /* Install */
   .install { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(24px, 4vw, 48px); }
@@ -344,34 +516,123 @@
   .cmd button:hover { background: var(--line); }
   .cmd button svg { width: 14px; height: 14px; }
 
-  /* Close: the whole field in the theme's color */
-  .closing { margin-top: clamp(96px, 12vw, 160px); background: var(--field); color: var(--field-ink); }
-  .closing .wrap { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 32px 48px; align-items: center; padding-top: clamp(56px, 8vw, 96px); padding-bottom: clamp(56px, 8vw, 96px); }
-  .closing img { width: clamp(80px, 10vw, 136px); height: auto; padding: 14%; border-radius: 24%; background: #fff; box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.35); }
-  .closing h2 { font-size: clamp(2.5rem, 6.4vw, 5rem); }
-  .closing p { margin-top: 12px; font-size: 18px; }
-  .closing .actions { margin-top: 28px; }
-  .closing .btn { border-color: var(--field-ink); color: var(--field-ink); }
-  .closing .btn:hover { background: color-mix(in oklab, var(--field-ink) 10%, transparent); }
-  .closing .btn.primary { background: var(--field-ink); color: var(--field); }
-  .closing .btn.primary:hover { background: color-mix(in oklab, var(--field-ink) 88%, var(--field)); }
-  .closing :focus-visible { outline-color: var(--field-ink); }
-  .closing ::selection { background: var(--field-ink); color: var(--field); }
+  /* The lockup, selected as a layer on the canvas */
+  .sign-layer { position: relative; display: flex; align-items: center; gap: 0.12em; padding: 0.1em 0.35em 0.16em 0.22em; background: var(--bg); font: 700 clamp(4rem, min(12vw, 17vh), 10.5rem)/1 var(--display); letter-spacing: -0.045em; color: var(--ink); }
+  .sign-layer::before { content: ""; position: absolute; inset: 0; border: 2px solid var(--field); pointer-events: none; }
+  .sign-layer > span { position: absolute; left: 0; bottom: calc(100% + 8px); font: 500 14px/1 var(--text); letter-spacing: 0; color: var(--link); }
+  .sign-layer img { width: 1.05em; height: 1.05em; margin: -0.08em -0.16em -0.08em -0.1em; }
+  .sign-layer b { font-weight: 700; padding-bottom: 0.08em; }
+  .sign-layer i { position: absolute; width: 12px; height: 12px; background: #fff; border: 2px solid var(--field); border-radius: 2px; }
+  .sign-layer i:nth-of-type(1) { left: -5px; top: -5px; } .sign-layer i:nth-of-type(2) { right: -5px; top: -5px; }
+  .sign-layer i:nth-of-type(3) { left: -5px; bottom: -5px; } .sign-layer i:nth-of-type(4) { right: -5px; bottom: -5px; }
+  .frames { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: clamp(32px, 5vh, 44px); }
+  .frame { position: relative; }
+  .you { position: absolute; left: 30%; top: 58%; display: flex; align-items: flex-start; pointer-events: none; animation: you 9s var(--ease) infinite; }
+  .you svg { width: 22px; height: 22px; color: #9747ff; filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.25)); }
+  .you span { margin: 18px 0 0 -2px; padding: 3px 7px; border-radius: 4px; background: #9747ff; color: #fff; font-size: 13px; font-weight: 600; }
+  @keyframes you {
+    0%, 100% { translate: 170px 70px; }
+    38%, 62% { translate: 0 0; }
+    50% { translate: 6px 4px; }
+  }
+  /* The footer: the closing line and the download, centered, then the links */
+  .closing { display: flex; flex-direction: column; align-items: center; margin-top: clamp(120px, 14vw, 200px); padding: 0 var(--gutter) 32px; text-align: center; }
+  .closing h2 { font-size: clamp(3rem, 8vw, 6rem); line-height: 0.95; letter-spacing: -0.04em; font-weight: 700; }
+  .closing > p { margin-top: 16px; font-size: 16px; color: var(--ink-2); }
+  .closing .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 32px; }
+  .site-links { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 20px; width: 100%; max-width: calc(var(--wrap) - 2 * var(--gutter)); margin-top: clamp(96px, 12vw, 144px); padding-top: 24px; border-top: 1px solid var(--line); font-size: 14px; }
+  .site-links a { color: var(--ink-2); text-decoration: none; }
+  .site-links a:hover { color: var(--ink); }
+  .site-links .brand { margin-right: auto; font-size: 17px; color: var(--ink); }
+  .site-links .brand img { width: 24px; height: 24px; }
+  .site-links small { margin-left: auto; font-size: 13px; color: var(--ink-3); }
 
-  footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 32px; padding: 32px 0 48px; font-size: 14px; color: var(--ink-2); }
-  footer ul { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 0; padding: 0; list-style: none; }
-  footer a { color: var(--ink-2); }
-  footer a:hover { color: var(--ink); }
+  /* Momentum scrolling (vendor/lenis.min.js) */
+  html.lenis, html.lenis body { height: auto; }
+  .lenis.lenis-smooth { scroll-behavior: auto !important; }
+  .lenis.lenis-stopped { overflow: hidden; }
 
-  /* Retinting: the new theme spreads out from the swatch clicked */
-  ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+  /* Scenes: on large screens each pins while it plays out, its progress
+     through the scroll as --p (0 to 1). Elsewhere they sit in the flow,
+     played out by how far they've come into view */
+  .story .scene { height: var(--len, 240svh); }
+  .story .scene > .pin { position: sticky; top: 0; height: 100svh; }
+
+  /* The reel: what's inside, two rows drifting opposite ways */
+  .reel { display: grid; gap: 12px; width: 100vw; margin: clamp(32px, 5vh, 56px) 0 0 calc(50% - 50vw); overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 10%, #000 90%, transparent); }
+  .reel-row { display: flex; width: max-content; animation: reel 70s linear infinite; }
+  .reel-row.back { animation-direction: reverse; animation-duration: 85s; }
+  @keyframes reel { to { translate: -50% 0; } }
+  .reel-track { display: flex; gap: 12px; margin: 0; padding: 0 12px 0 0; list-style: none; }
+  .reel a {
+    display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 20px 0 16px; border-radius: 10px;
+    background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink); font-size: 17px; font-weight: 500; text-decoration: none; white-space: nowrap;
+    transition: background-color 200ms var(--ease), color 200ms var(--ease);
+  }
+  .reel a .icon { width: 22px; height: 22px; color: var(--field); transition: color 200ms var(--ease); }
+  .reel a:hover, .reel a:focus-visible { background: var(--field); color: #fff; }
+  .reel a:hover .icon, .reel a:focus-visible .icon { color: currentColor; }
+
+  /* Image tools: three steps on one image, under Figma's image bar */
+  .ai-scene { padding-top: clamp(96px, 12vw, 160px); }
+  .story .ai-scene { padding-top: 0; margin-top: clamp(48px, 6vw, 96px); }
+  .ai { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 32px clamp(32px, 5vw, 72px); align-items: center; }
+  .story .ai { height: 100%; }
+  .ai h2 { font-size: clamp(2.25rem, 3.6vw, 3.25rem); }
+  .ai .lede { margin-top: 16px; color: var(--ink-2); font-size: 18px; max-width: 30em; }
+  .steps { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .steps li { position: relative; display: grid; grid-template-columns: 28px 1fr; gap: 2px 14px; padding: 13px 0 14px; border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: 15px; line-height: 1.5; opacity: 0.5; transition: opacity 240ms var(--ease); }
+  .steps li.on { opacity: 1; }
+  .steps li::after { content: ""; position: absolute; left: 0; bottom: -1px; height: 2px; width: calc(var(--fill, 0) * 100%); background: var(--field); }
+  .steps .icon { grid-row: span 3; width: 28px; height: 28px; padding: 2px; border-radius: 8px; background: var(--surface); color: var(--ink); transition: background-color 240ms var(--ease), color 240ms var(--ease); }
+  .steps li.on .icon { background: var(--field); color: #fff; }
+  .steps b { font: 650 19px/1.25 var(--display); letter-spacing: -0.01em; color: var(--ink); }
+  .steps small { font-size: 13px; color: var(--ink-3); }
+  .ai .note { margin-top: 16px; font-size: 14px; color: var(--ink-2); }
+
+  .canvas { position: absolute; left: 5em; top: 5em; right: -4em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
+  .imagebar { position: absolute; left: 50%; top: 7.6em; translate: -50% 0; display: flex; gap: 0.3em; padding: 0.5em; border-radius: 1.1em; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow); white-space: nowrap; }
+  .imagebar span { display: flex; align-items: center; gap: 0.5em; height: 3em; padding: 0 0.9em; border-radius: 0.7em; font-size: 1.15em; font-weight: 500; color: var(--ink); transition: background-color 200ms, color 200ms; }
+  .imagebar svg { width: 1.9em; height: 1.9em; margin: 0 -0.2em; }
+  .imagebar .sep { width: 1px; height: auto; margin: 0.6em 0.2em; padding: 0; background: var(--line); }
+  .ai-scene .strip [data-tool] { display: none; }
+  .ai-scene[data-step="1"] .strip [data-tool="1"], .ai-scene[data-step="2"] .strip [data-tool="2"], .ai-scene[data-step="3"] .strip [data-tool="3"] { display: inline; }
+  .ai-scene[data-step="1"] .imagebar [data-tool="1"], .ai-scene[data-step="2"] .imagebar [data-tool="2"], .ai-scene[data-step="3"] .imagebar [data-tool="3"] { background: var(--field); color: #fff; }
+  .photo { position: absolute; left: 11em; top: 14.4em; width: 40em; height: 30em; }
+  .photo svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .photo .sel { position: absolute; inset: 0; box-shadow: 0 0 0 0.15em var(--field); pointer-events: none; }
+  .photo .sel i { position: absolute; width: 0.9em; height: 0.9em; background: #fff; border: 0.15em solid var(--field); }
+  .photo .sel i:nth-child(1) { left: -0.5em; top: -0.5em; } .photo .sel i:nth-child(2) { right: -0.5em; top: -0.5em; }
+  .photo .sel i:nth-child(3) { left: -0.5em; bottom: -0.5em; } .photo .sel i:nth-child(4) { right: -0.5em; bottom: -0.5em; }
+  .photo .bg { opacity: calc(1 - var(--s2, 0)); }
+  .photo .pick { opacity: calc(var(--s1, 0) * (1 - var(--s2, 0))); }
+  .photo .real { opacity: calc(1 - var(--s3, 0)); }
+  .photo .flat, .photo .paths { opacity: var(--s3, 0); }
+  .photo .ants { animation: ants 0.6s linear infinite; }
+  @keyframes ants { to { stroke-dashoffset: -8; } }
+
+  /* Drawings build up as they come into view, from --v (0 to 1), each part
+     after its delay --d */
+  .rv { --t: clamp(0, (var(--v, 1) - var(--d, 0)) * 3.2, 1); opacity: var(--t); translate: 0 calc((1 - var(--t)) * 1.6em); }
+  .rv.pop { translate: none; scale: calc(0.6 + 0.4 * var(--t)); }
+
+  /* Retinting: the old theme crossfades into the new */
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 320ms; animation-timing-function: ease; }
 
   @media (max-width: 1080px) {
-    .deck { grid-template-columns: repeat(5, minmax(0, 1fr)); row-gap: 20px; }
   }
   @media (max-width: 900px) {
-    .masthead, .head, .spread, .spread.flip { grid-template-columns: minmax(0, 1fr); }
-    .spread.flip .chip { order: 0; }
+    .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
+    .fan-wrap, .modes { display: none; }
+    .grid-deck { display: grid; margin-top: 8px; }
+    .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "s s" "t d" "p k" "c c" "v l"; }
+    .sheet[open] { grid-template-columns: minmax(0, 1fr); }
+    .sheet-copy { padding: 8px 24px 24px; }
+    .ai { row-gap: 0; }
+    .ai > div:first-child { display: contents; }
+    .ai .chip { order: 1; margin-top: 28px; position: sticky; top: 12px; z-index: 1; }
+    .ai .steps { order: 2; }
+    .ai .note { order: 3; }
     .index { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .figma { aspect-ratio: 4 / 3; }
     .figma .art { font-size: 1.25cqw; }
@@ -380,20 +641,25 @@
   }
   @media (max-width: 640px) {
     nav ul li:not(:last-child) { display: none; }
-    .weight { aspect-ratio: 3 / 4; min-height: 0; }
-    .weight .us-label { left: 16px; bottom: calc(22.9% + 12px); }
-    .deck { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .index { grid-template-columns: minmax(0, 1fr); }
+    .grid-deck { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .bento { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; }
+    .tile { grid-area: auto !important; }
     .install { grid-template-columns: minmax(0, 1fr); }
-    .closing .wrap { grid-template-columns: minmax(0, 1fr); }
+    .you { display: none; }
+    .site-links .brand, .site-links small { margin: 0; width: 100%; justify-content: center; }
     .compare tbody th { width: 40%; }
     .compare th, .compare td { padding-right: 10px; }
     .btn { height: 48px; padding: 0 18px; }
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .orb, .theme, .btn, .rail .plug { transition: none; }
-    .orb .mesh::before { animation: none; }
+    .blade, .tile, .btn, .rail .plug, .orb, .theme, .reel a { transition: none; }
+    .blade .mesh::before, .orb .mesh::before, .photo .ants, .you, .sheet[open] { animation: none; }
+    .reel { mask-image: none; width: auto; margin-left: 0; }
+    .reel-row { width: auto; animation: none; }
+    .reel-track { flex-wrap: wrap; }
+    .reel-track[aria-hidden] { display: none; }
   }
 </style>
 </head>
@@ -414,6 +680,40 @@
     <symbol id="i-scale" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="4.5"/><path d="m10.3 10.3 3.2 3.2M7 5v4M5 7h4"/></symbol>
     <symbol id="i-copy" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/></symbol>
     <symbol id="i-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
+    <symbol id="i-split" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M8 3v10"/></symbol>
+    <symbol id="i-window" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="5" width="9" height="8" rx="1.5"/><path d="M5.5 5V4a1.5 1.5 0 0 1 1.5-1.5h6A1.5 1.5 0 0 1 14.5 4v5A1.5 1.5 0 0 1 13 10.5h-2.5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/></symbol>
+    <symbol id="i-contrast" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.5 4.5h11M2.5 11.5h11"/><circle cx="10.5" cy="4.5" r="1.6" fill="var(--bg, #fff)"/><circle cx="5.5" cy="11.5" r="1.6" fill="var(--bg, #fff)"/></symbol>
+    <symbol id="i-modes" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="1.5" y="4.5" width="13" height="7" rx="3.5"/><rect x="2.8" y="5.8" width="5.4" height="4.4" rx="2.2" fill="currentColor"/></symbol>
+    <!-- As the app draws it (src-tauri/src/ai_actions.rs) --><symbol id="i-cutout" viewBox="0 0 24 24" fill="none"><path stroke="currentColor" d="M5.5 8.5v-2a1 1 0 0 1 1-1h2m7 0h2a1 1 0 0 1 1 1v2m0 7v2a1 1 0 0 1-1 1h-2m-7 0h-2a1 1 0 0 1-1-1v-2"/><circle stroke="currentColor" cx="12" cy="10" r="2.5"/><path stroke="currentColor" d="M8.5 17a3.5 3.5 0 0 1 7 0"/></symbol>
+    <symbol id="i-vector" viewBox="0 0 24 24" fill="none"><path fill="currentColor" d="M6.5 5.001c.654 0 1.208.42 1.413 1.004L8 6h5.5a.5.5 0 0 1 0 1H8q-.045 0-.089.004a1.5 1.5 0 0 1-.907.907L7 8.001v8q0 .045.004.088c.423.15.756.485.907.907q.045.005.09.005h8q.044 0 .087-.005c.151-.422.486-.756.907-.907Q17 16.046 17 16v-5.5a.5.5 0 0 1 1 0V16l-.005.085a1.5 1.5 0 1 1-1.91 1.91L16 18H8l-.086-.005a1.5 1.5 0 1 1-1.91-1.91L6 16V8q.001-.044.004-.086A1.5 1.5 0 0 1 6.5 5.001m0 12a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1m11 0a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1m-7.776-5.418a.5.5 0 0 1 .629.065l3.5 3.5a.5.5 0 0 1-.707.707l-3.112-3.112a.05.05 0 0 0-.07 0l-1.111 1.111a.5.5 0 0 1-.707-.706l1.5-1.5zm3.775-2.582a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3m0 1a.5.5 0 1 0 .001 1 .5.5 0 0 0 0-1m3.516-5.563c.126-.505.843-.505.97 0l.315 1.26 1.26.314c.505.126.505.844 0 .97l-1.26.315-.315 1.26c-.127.504-.844.504-.97 0l-.316-1.26-1.26-.315c-.504-.126-.503-.844 0-.97l1.26-.315zM6.499 6A.5.5 0 1 0 6.5 7.002a.5.5 0 0 0 0-1.001"/></symbol>
+    <symbol id="i-object" viewBox="0 0 24 24" fill="none"><path stroke="currentColor" stroke-dasharray="2 2" d="M10.5 16.5h-3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3"/><path stroke="currentColor" stroke-linejoin="round" d="m12.5 12.5 6.5 2.4-2.9 1.2-1.2 2.9z"/></symbol>
+    <symbol id="i-crop" viewBox="0 0 24 24" fill="none"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="M8.5 5.5v10h10M5.5 8.5h10v10"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5a5.5 5.5 0 0 0 0 11c.8 0 1.2-.5 1.2-1.1 0-.7-.5-.9-.5-1.5s.5-1 1.1-1h1.3c1.5 0 2.4-1 2.4-2.4 0-2.8-2.4-5-5.5-5z"/><circle cx="5.2" cy="7.2" r=".8" fill="currentColor" stroke="none"/><circle cx="7.6" cy="4.9" r=".8" fill="currentColor" stroke="none"/><circle cx="10.4" cy="5.8" r=".8" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-ai" viewBox="4 4 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M5.5 8.5v-2a1 1 0 0 1 1-1h2m7 0h2a1 1 0 0 1 1 1v2m0 7v2a1 1 0 0 1-1 1h-2m-7 0h-2a1 1 0 0 1-1-1v-2"/><circle cx="12" cy="10" r="2.5"/><path d="M8.5 17a3.5 3.5 0 0 1 7 0"/></symbol>
+    <!-- Figma's UI3: the toolbar, the left sidebar and the Actions panel -->
+    <symbol id="i-move3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M4.2 3.1 12.6 6.5c.5.2.5.9 0 1.1L9.3 8.8c-.2.1-.4.3-.5.5l-1.2 3.3c-.2.5-.9.5-1.1 0L3.1 4.2c-.2-.6.4-1.2 1.1-1.1z"/></symbol>
+    <symbol id="i-pen3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(-45 8 8)"><path d="M5.8 13.5h4.4M6 13.5 3.8 8.4 8 2.5l4.2 5.9-2.2 5.1"/><circle cx="8" cy="8.7" r="1"/><path d="M8 2.5v5.2"/></g></symbol>
+    <symbol id="i-braces" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3c-1.2 0-1.6.6-1.6 1.6v1.6c0 .9-.4 1.6-1.4 1.8 1 .2 1.4.9 1.4 1.8v1.6C4.4 12.4 4.8 13 6 13M10 3c1.2 0 1.6.6 1.6 1.6v1.6c0 .9.4 1.6 1.4 1.8-1 .2-1.4.9-1.4 1.8v1.6c0 1-.4 1.6-1.6 1.6"/></symbol>
+    <symbol id="i-comment" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.8a5.2 5.2 0 0 0-4.5 7.8l-.7 2.6 2.6-.7A5.2 5.2 0 1 0 8 2.8z"/></symbol>
+    <symbol id="i-actions" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1.2"/><circle cx="11.25" cy="4.75" r="2.25"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1.2"/><path d="M11.25 9v4.5M9 11.25h4.5" stroke-linecap="round"/></symbol>
+    <symbol id="i-chev-down" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5.5 6.75 2.5 2.5 2.5-2.5"/></symbol>
+    <symbol id="i-chev-right" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6.75 5.5 2.5 2.5-2.5 2.5"/></symbol>
+    <symbol id="i-figma" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M8 2.5H6a1.75 1.75 0 0 0 0 3.5h2zM8 2.5h2a1.75 1.75 0 0 1 0 3.5H8zM8 6H6a1.75 1.75 0 0 0 0 3.5h2zM8 9.5H6a1.75 1.75 0 1 0 2 1.75z"/><circle cx="10" cy="7.75" r="1.75"/></symbol>
+    <symbol id="i-file" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M4.5 2.5h4.4l2.6 2.6v8.4h-7z"/><path d="M8.9 2.5v2.6h2.6"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5C8.4 6 10 7.6 13.5 8 10 8.4 8.4 10 8 13.5 7.6 10 6 8.4 2.5 8 6 7.6 7.6 6 8 2.5z"/></symbol>
+    <symbol id="i-plus-circle" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 5.6v4.8M5.6 8h4.8"/></symbol>
+    <symbol id="i-briefcase" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="5" width="11" height="8" rx="1.5"/><path d="M6 5V3.8c0-.4.3-.8.8-.8h2.4c.5 0 .8.4.8.8V5M2.5 8.5h11"/></symbol>
+    <symbol id="i-hex" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.2 13 5.1v5.8L8 13.8 3 10.9V5.1z"/><circle cx="8" cy="8" r="1.8"/></symbol>
+    <symbol id="i-dev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke-dasharray="1.8 1.6"/><path d="M6.5 6.5 5 8l1.5 1.5M9.5 6.5 11 8l-1.5 1.5"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10"/></symbol>
+    <symbol id="i-import" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7M5 7l3 3 3-3M3 12.5h10"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></symbol>
+    <symbol id="i-dash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 8h7"/></symbol>
+    <symbol id="i-tick" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
+    <!-- A multiplayer cursor, rounded as Figma draws them -->
+    <symbol id="i-cursor" viewBox="0 0 16 16"><path d="M3.4 2.2c-.7-.3-1.4.4-1.1 1.1l4.3 10.3c.3.7 1.3.7 1.6-.1l1.3-3.7c.1-.3.3-.5.6-.6l3.7-1.3c.8-.3.8-1.3.1-1.6z" fill="currentColor" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/></symbol>
     <!-- From the tab bar -->
     <symbol id="i-home" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/></symbol>
     <symbol id="i-design" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(135 8 8)"><path d="M8 13.5 3.5 7a4.5 4.5 0 0 1 9 0z"/><circle cx="8" cy="7" r="1.2"/><path d="M8 8.2v5.3"/></g></symbol>
@@ -437,6 +737,7 @@
 </svg>
 
 <div class="wrap">
+  <header class="hero">
   <nav aria-label="Main">
     <a class="brand" href="./"><img src="logo.png" alt="" width="30" height="30">Ligma</a>
     <ul>
@@ -448,29 +749,157 @@
     </ul>
   </nav>
 
-  <header class="hero">
-    <div class="masthead">
-      <h1>Figma, without the weight.</h1>
-      <div class="pitch">
-        <p>A desktop app for Figma on macOS and Windows that uses your system's own webview instead of shipping a browser. Tabs, themes, your plugins in the left rail and your file on Discord.</p>
-        <div class="actions">
-          <a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
-          <a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a>
-        </div>
-        <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
+    <div class="stage">
+      <div class="sign-layer" role="img" aria-label="Ligma"><span>Ligma</span><img src="logo.png" alt=""><b>Ligma</b><i></i><i></i><i></i><i></i></div>
+      <div class="title">
+        <h1>Same Figma. Lighter.</h1>
+        <p class="pitch">A lightweight desktop app for Figma, with far more to work with</p>
       </div>
+      <div class="frames">
+        <div class="frame"><a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a></div>
+        <div class="frame"><a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a></div>
+        <div class="you" aria-hidden="true"><svg><use href="#i-cursor"/></svg><span>You</span></div>
+      </div>
+      <div class="meta" id="dl-meta">Free and open source (MIT). Updates itself.</div>
     </div>
 
-    <figure class="weight" role="img" aria-label="Installed size on macOS, drawn to scale by area: Figma desktop 305 MB, Ligma 16 MB.">
-      <div class="them" aria-hidden="true"><span>Figma desktop</span><b>305 MB</b></div>
-      <div class="us" aria-hidden="true"></div>
-      <div class="us-label" aria-hidden="true"><b>16 MB</b><span>Ligma</span></div>
-    </figure>
-    <div class="caption">
-      <span>Installed on macOS, drawn to scale by area.</span>
-      <span id="sizes">Downloads: 2.2 MB on Windows, 7.1 MB on macOS.</span>
+    <div class="reel">
+      <div class="reel-row">
+        <ul class="reel-track">
+          <li><a href="#f-split"><svg class="icon"><use href="#i-split"/></svg>Split view</a></li>
+          <li><a href="#f-tabs"><svg class="icon"><use href="#i-tabs"/></svg>Tabs</a></li>
+          <li><a href="#ai"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
+          <li><a href="#themes"><svg class="icon"><use href="#i-palette"/></svg>Nine themes</a></li>
+          <li><a href="#f-rail"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the sidebar</a></li>
+          <li><a href="#f-previews"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
+          <li><a href="#f-copy"><svg class="icon"><use href="#i-code"/></svg>Copy as code</a></li>
+          <li><a href="#f-contrast"><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</a></li>
+        </ul>
+        <ul class="reel-track" aria-hidden="true">
+          <li><a href="#f-split" tabindex="-1"><svg class="icon"><use href="#i-split"/></svg>Split view</a></li>
+          <li><a href="#f-tabs" tabindex="-1"><svg class="icon"><use href="#i-tabs"/></svg>Tabs</a></li>
+          <li><a href="#ai" tabindex="-1"><svg class="icon"><use href="#i-ai"/></svg>Free AI image tools</a></li>
+          <li><a href="#themes" tabindex="-1"><svg class="icon"><use href="#i-palette"/></svg>Nine themes</a></li>
+          <li><a href="#f-rail" tabindex="-1"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the sidebar</a></li>
+          <li><a href="#f-previews" tabindex="-1"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
+          <li><a href="#f-copy" tabindex="-1"><svg class="icon"><use href="#i-code"/></svg>Copy as code</a></li>
+          <li><a href="#f-contrast" tabindex="-1"><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</a></li>
+        </ul>
+      </div>
+      <div class="reel-row back">
+        <ul class="reel-track">
+          <li><a href="#f-dev"><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</a></li>
+          <li><a href="#f-discord"><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-key"/></svg>Google sign-in</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-update"/></svg>Automatic updates</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-scale"/></svg>Interface scale</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-sliders"/></svg>Image adjustments</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-modes"/></svg>Toolbar modes</a></li>
+          <li><a href="#more"><svg class="icon"><use href="#i-home"/></svg>Classic home</a></li>
+        </ul>
+        <ul class="reel-track" aria-hidden="true">
+          <li><a href="#f-dev" tabindex="-1"><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</a></li>
+          <li><a href="#f-discord" tabindex="-1"><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-key"/></svg>Google sign-in</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-update"/></svg>Automatic updates</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-scale"/></svg>Interface scale</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-sliders"/></svg>Image adjustments</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-modes"/></svg>Toolbar modes</a></li>
+          <li><a href="#more" tabindex="-1"><svg class="icon"><use href="#i-home"/></svg>Classic home</a></li>
+        </ul>
+      </div>
     </div>
   </header>
+
+  <section class="ai-scene scene" id="ai" data-scene="ai" data-step="1" style="--len: 600svh" aria-labelledby="ai-heading">
+    <div class="pin">
+      <div class="ai">
+        <div>
+          <h2 id="ai-heading">Free AI image tools, on your computer</h2>
+          <p class="lede">Figma asks for a paid plan in free projects. Ligma puts its own in the same spots in the image bar, running on your computer, so your images never leave it.</p>
+          <ol class="steps">
+            <li data-step="1"><svg class="icon"><use href="#i-object"/></svg><b>Select object</b><span>Click, brush or lasso an object, then isolate it on its own layer or erase it</span><small>SAM 2.1, on Windows and Apple silicon</small></li>
+            <li data-step="2"><svg class="icon"><use href="#i-cutout"/></svg><b>Remove background</b><span>Cuts out the subject and keeps the original hidden underneath</span><small>Apple's Vision on macOS 14 and later, BiRefNet on Windows</small></li>
+            <li data-step="3"><svg class="icon"><use href="#i-vector"/></svg><b>Vectorize</b><span>Traces it into flat-colored shapes, then recolor or cut down the colors</span><small>Ligma's own tracer, nothing to download</small></li>
+          </ol>
+          <p class="note">Ligma asks before downloading a model the first time one is needed.</p>
+        </div>
+        <div class="chip">
+          <div class="field">
+            <div class="art" aria-hidden="true">
+              <div class="canvas"></div>
+              <div class="imagebar">
+                <span><svg><use href="#i-crop"/></svg>Crop</span>
+                <span class="sep"></span>
+                <span data-tool="1"><svg><use href="#i-object"/></svg>Select object</span>
+                <span data-tool="2"><svg><use href="#i-cutout"/></svg>Remove background</span>
+                <span data-tool="3"><svg><use href="#i-vector"/></svg>Vectorize</span>
+              </div>
+              <div class="photo">
+                <svg viewBox="0 0 400 300">
+                  <defs>
+                    <pattern id="checker" width="20" height="20" patternUnits="userSpaceOnUse"><rect width="20" height="20" fill="#ffffff"/><path d="M0 0h10v10H0zM10 10h10v10H10z" fill="#e3e3e3"/></pattern>
+                    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd9b8"/><stop offset="1" stop-color="#ff9aa9"/></linearGradient>
+                    <linearGradient id="table" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d79a78"/><stop offset="1" stop-color="#a5664c"/></linearGradient>
+                    <radialGradient id="glaze" cx="0.32" cy="0.3" r="0.85"><stop offset="0" stop-color="#9cc4ff"/><stop offset="0.45" stop-color="#3f6fd1"/><stop offset="1" stop-color="#1a3170"/></radialGradient>
+                    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8ee09a"/><stop offset="1" stop-color="#23804c"/></linearGradient>
+                    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="7"/></filter>
+                  </defs>
+                  <rect width="400" height="300" fill="url(#checker)"/>
+                  <g class="bg">
+                    <rect width="400" height="300" fill="url(#sky)"/>
+                    <circle cx="318" cy="78" r="44" fill="#fff3d6" filter="url(#soft)"/>
+                    <rect y="226" width="400" height="74" fill="url(#table)"/>
+                    <ellipse cx="200" cy="236" rx="74" ry="9" fill="#5a2c1c" opacity="0.35" filter="url(#soft)"/>
+                  </g>
+                  <g class="real">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60z" fill="url(#leaf)"/>
+                    <path d="M200 126c4-40 26-70 56-84-2 38-24 66-56 84z" fill="url(#leaf)"/>
+                    <path d="M200 126c16-20 52-30 86-22-22 20-54 28-86 22z" fill="url(#leaf)"/>
+                    <path d="M150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82z" fill="url(#glaze)"/>
+                    <rect x="175" y="130" width="50" height="26" rx="4" fill="url(#glaze)"/>
+                    <rect x="168" y="123" width="64" height="11" rx="5.5" fill="#2a4fa8"/>
+                  </g>
+                  <g class="flat">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60z" fill="#4cb874"/>
+                    <path d="M200 126c4-40 26-70 56-84-2 38-24 66-56 84z" fill="#2f9358"/>
+                    <path d="M200 126c16-20 52-30 86-22-22 20-54 28-86 22z" fill="#68cc87"/>
+                    <path d="M150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82z" fill="#2c56b8"/>
+                    <path d="M163 160c-7 22-6 48 6 68h14c-10-20-11-46-5-68z" fill="#7aa8f2"/>
+                    <rect x="175" y="130" width="50" height="26" rx="4" fill="#24489c"/>
+                    <rect x="168" y="123" width="64" height="11" rx="5.5" fill="#1b3474"/>
+                  </g>
+                  <g class="paths" fill="none" stroke="#0d99ff" stroke-width="1.2">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60z"/>
+                    <path d="M200 126c4-40 26-70 56-84-2 38-24 66-56 84z"/>
+                    <path d="M200 126c16-20 52-30 86-22-22 20-54 28-86 22z"/>
+                    <path d="M150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82z"/>
+                    <path d="M163 160c-7 22-6 48 6 68h14c-10-20-11-46-5-68z"/>
+                    <g fill="#ffffff"><rect x="115.5" y="63.5" width="5" height="5"/><rect x="253.5" y="39.5" width="5" height="5"/><rect x="283.5" y="101.5" width="5" height="5"/><rect x="197.5" y="123.5" width="5" height="5"/><rect x="147.5" y="149.5" width="5" height="5"/><rect x="247.5" y="149.5" width="5" height="5"/><rect x="157.5" y="231.5" width="5" height="5"/><rect x="237.5" y="231.5" width="5" height="5"/></g>
+                  </g>
+                  <g class="pick">
+                    <path d="M200 126C180 92 150 72 118 66c14 30 46 54 82 60zM200 126c4-40 26-70 56-84-2 38-24 66-56 84zM200 126c16-20 52-30 86-22-22 20-54 28-86 22zM150 152c-12 25-10 64 10 82h80c20-18 22-57 10-82zM175 130h50v26h-50zM168 123h64v11h-64z" fill="#0d99ff" opacity="0.28"/>
+                    <path d="M110 60c40-28 140-34 182 40 6 16-24 34-38 50 16 34 10 76-12 88h-88c-22-12-26-56-10-88-26-24-46-66-34-90z" fill="none" stroke="#ffffff" stroke-width="1.6"/>
+                    <path class="ants" d="M110 60c40-28 140-34 182 40 6 16-24 34-38 50 16 34 10 76-12 88h-88c-22-12-26-56-10-88-26-24-46-66-34-90z" fill="none" stroke="#1e1e1e" stroke-width="1.6" stroke-dasharray="4 4"/>
+                    <path d="M292 100l11 4.5-5 2.2-2.2 5z" fill="#1e1e1e" stroke="#ffffff" stroke-width="1"/>
+                  </g>
+                </svg>
+                <div class="sel"><i></i><i></i><i></i><i></i></div>
+              </div>
+            </div>
+          </div>
+          <div class="strip" aria-hidden="true">
+            <b><span data-tool="1">Select object</span><span data-tool="2">Remove background</span><span data-tool="3">Vectorize</span></b>
+            <code><span data-tool="1">"localSelectObject": true</span><span data-tool="2">"localRemoveBackground": true</span><span data-tool="3">"localVectorize": true</span></code>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section id="features" aria-labelledby="features-heading">
     <div class="head">
@@ -478,145 +907,348 @@
       <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
     </div>
 
-    <article class="spread">
-      <div class="chip">
-        <div class="field">
-          <div class="art" aria-hidden="true">
-            <div class="window">
-              <div class="tabbar">
-                <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
-                <div class="sq"><span class="emoji">🎨</span></div>
-                <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
-                <div><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
-                <div class="hover sleep pre"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
-                <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
-              </div>
-              <div class="editor">
-                <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div><div class="bar short"></div></div>
-                <div></div>
-              </div>
-            </div>
-            <div class="tabpreview">
-              <div class="shot">
-                <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
-                <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
-                <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
-                <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
-              </div>
-              <b>Q3 pitch</b>
-              <span>Figma Slides · Asleep</span>
-            </div>
-          </div>
+    <div class="bento">
+      <article class="tile big" id="f-split" style="grid-area: s" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-split"/></svg>Split view, and windows</h3>
+          <p>Two files side by side under one set of Figma's panels. Drag between them.</p>
         </div>
-        <div class="strip"><b>Tabs</b><code>"restoreTabs": true</code></div>
-      </div>
-      <div>
-        <h3><svg class="icon"><use href="#i-tabs"/></svg>Tabs, like the desktop app</h3>
-        <p>Every file gets its own tab, with Home pinned on the left. Point at a tab to see how it last looked, and pick up where you left off next time.</p>
-        <ul>
-          <li><b>Pin</b> a tab from its right-click menu, and it shows just its icon.</li>
-          <li><b>Emoji</b> at the start of a file's name becomes its tab icon.</li>
-          <li><b>Shortcuts</b> as usual: <code>Ctrl+T</code>, <code>Ctrl+W</code> and <code>Ctrl+Tab</code> (<code>Cmd</code> on macOS).</li>
-          <li><b>Asleep</b> tabs give their memory back and reload when you open them.</li>
-        </ul>
-      </div>
-    </article>
-
-    <article class="spread flip">
-      <div class="chip">
-        <div class="field">
-          <div class="art" aria-hidden="true">
-            <div class="ui">
-              <div class="rail">
-                <span class="tool on"><svg><use href="#i-layers"/></svg></span>
-                <span class="tool"><svg><use href="#i-assets"/></svg></span>
-                <span class="tool"><svg><use href="#i-search"/></svg></span>
-                <hr>
-                <span class="plug" style="background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
-                <span class="plug big" style="background:#7b61ff"><svg><use href="#i-scale"/></svg></span>
-                <span class="plug" style="background:#14a38b"><svg><use href="#i-text"/></svg></span>
-                <span class="plug" style="background:#f5b400"><svg><use href="#i-star"/></svg></span>
-              </div>
-              <div class="layers">
-                <div class="file">Brand refresh</div>
-                <div class="sub">Drafts</div>
-                <div class="row on"><svg><use href="#i-frame"/></svg>Poster</div>
-                <div class="row"><svg><use href="#i-text"/></svg>Headline</div>
-                <div class="row"><svg><use href="#i-ellipse"/></svg>Sun</div>
-                <div class="row"><svg><use href="#i-rect"/></svg>Background</div>
-              </div>
-              <div></div>
-            </div>
-            <div class="tip">Contrast checker</div>
-          </div>
-        </div>
-        <div class="strip"><b>Plugins in the left rail</b><code>"railPlugins": true</code></div>
-      </div>
-      <div>
-        <h3><svg class="icon"><use href="#i-rail"/></svg>Your plugins, one click away</h3>
-        <p>Every plugin and widget saved to your Figma account sits in the editor's left rail, under Figma's own buttons, with its icon. Click one to run it.</p>
-        <ul>
-          <li><b>Commands</b> show as a menu when a plugin has more than one.</li>
-          <li><b>Widgets</b> go straight onto the canvas.</li>
-          <li><b>Reorder</b> by holding Ctrl and dragging. The order is kept for every file.</li>
-        </ul>
-      </div>
-    </article>
-
-    <article class="spread">
-      <div class="chip">
-        <div class="field">
-          <div class="art" aria-hidden="true">
-            <div class="profile">
-              <div class="banner"></div>
-              <div class="who">
-                <div class="avatar"><span>M</span></div>
-                <div class="name">Mira</div>
-                <div class="handle">mira.designs</div>
-              </div>
-              <div class="activity">
-                <div class="label">Playing</div>
-                <div class="card">
-                  <div class="large"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
-                  <div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="sv rv" style="--d: 0">
+                  <div class="tabbar">
+                    <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
+                    <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span></div>
+                    <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Social kit</span></div>
+                    <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
+                  </div>
+                  <div class="sv-body">
+                    <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div></div>
+                    <div class="half on"><span class="fname">Brand refresh</span><div class="art-a"></div></div>
+                    <div class="half"><span class="fname">Social kit</span><div class="art-b"><i style="top:2em;width:60%"></i><i style="top:4.4em;width:40%"></i><i style="bottom:2em;height:6em"></i></div></div>
+                  </div>
                 </div>
-                <div class="join">Ask to Join</div>
+                <div class="drag rv pop" style="--d: .35"></div>
+                <svg class="drag-cursor rv" style="--d: .35"><use href="#i-cursor"/></svg>
               </div>
-            </div>
-          </div>
         </div>
-        <div class="strip"><b>Discord Rich Presence</b><code>"discordRichPresence": true</code></div>
-      </div>
-      <div>
-        <h3><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</h3>
-        <p>Your profile shows the file you're in, the page or slide, and the tool in your hand. Keep any file private from its tab's right-click menu.</p>
-        <ul>
-          <li><b>Hide files by default</b> and show only the ones you choose.</li>
-          <li><b>Invites</b> (optional) let friends ask to join, and the file opens in their Ligma.</li>
-          <li><b>Every product</b>: Design, FigJam, Slides, Make, Buzz and Sites.</li>
-        </ul>
-      </div>
-    </article>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about split view"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Two files side by side under one set of Figma's panels. Drag a selection from one into the other to move it there.</p>
+          <ul>
+            <li><b>Split</b> from a tab's menu, or drop a tab onto either half of the canvas</li>
+            <li><b>Windows</b>: drag a tab out of the bar for a window of its own, without reloading</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"splitView": true</code></div>
+        </div>
+      </article>
 
-    <div class="index">
+      <article class="tile" id="f-tabs" style="grid-area: t" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-tabs"/></svg>Tabs, like the desktop app</h3>
+          <p>Every file in its own tab, with a look at how it last looked.</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="window rv" style="--d: 0">
+                  <div class="tabbar">
+                    <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
+                    <div class="sq rv" style="--d: .12"><span class="emoji">🎨</span></div>
+                    <div class="on rv" style="--d: .18"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
+                    <div class="rv" style="--d: .24"><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
+                    <div class="hover sleep pre rv" style="--d: .3"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
+                    <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
+                  </div>
+                  <div class="editor">
+                    <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div><div class="bar short"></div></div>
+                    <div></div>
+                  </div>
+                </div>
+                <div class="tabpreview rv" style="--d: .42">
+                  <div class="shot">
+                    <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
+                    <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
+                    <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
+                    <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
+                  </div>
+                  <b>Q3 pitch</b>
+                  <span>Figma Slides · Asleep</span>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about tabs"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Every file gets its own tab, with Home pinned on the left. Point at one to see how it last looked.</p>
+          <ul>
+            <li><b>Pin</b> a tab, or start a file's name with an emoji to make it the icon</li>
+            <li><b>Asleep</b> tabs give their memory back and reload when you open them</li>
+            <li><b>Reopen</b> your tabs next time, each on the same page, position and zoom</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"restoreTabs": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" id="f-discord" style="grid-area: d" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</h3>
+          <p>The file, page and tool you're in, on your Discord profile.</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="profile rv" style="--d: 0">
+                  <div class="banner"></div>
+                  <div class="who">
+                    <div class="avatar"><span>M</span></div>
+                    <div class="name">Mira</div>
+                    <div class="handle">mira.designs</div>
+                  </div>
+                  <div class="activity rv" style="--d: .25">
+                    <div class="label">Playing</div>
+                    <div class="card2">
+                      <div class="large"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
+                      <div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div>
+                    </div>
+                    <div class="join">Ask to Join</div>
+                  </div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about Discord"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Your profile shows the file you're in, the page or slide, and the tool in your hand. Keep any file private from its tab's menu.</p>
+          <ul>
+            <li><b>Hide files by default</b> and show only the ones you choose</li>
+            <li><b>Invites</b> let friends ask to join, and the file opens in their Ligma</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"discordRichPresence": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" id="f-copy" style="grid-area: p" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-code"/></svg>Copy as code</h3>
+          <p>Tailwind and React in Figma's right-click menu, on any plan. No Dev Mode needed.</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="menu one rv" style="--d: 0">
+                  <div>Copy<span>Ctrl+C</span></div>
+                  <div>Paste here</div>
+                  <div class="on">Copy/Paste as<span>›</span></div>
+                  <hr>
+                  <div>Bring to front</div>
+                  <div>Send to back</div>
+                </div>
+                <div class="menu two rv" style="--d: .15">
+                  <div>CSS</div>
+                  <div>CSS (all layers)</div>
+                  <div>iOS</div>
+                  <div>Android</div>
+                  <hr>
+                  <div class="on">Tailwind</div>
+                  <div>Tailwind (all layers)</div>
+                  <div>React</div>
+                </div>
+                <div class="snippet rv" style="--d: .32"><span class="c">/* Card */</span>
+  <span class="s">flex flex-col gap-4 rounded-2xl</span>
+  <span class="s">bg-white p-6 shadow-lg</span></div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about copy as code"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Tailwind and React in Figma's own right-click menu, in every file you can edit, on any plan. No Dev Mode needed.</p>
+          <ul>
+            <li><b>Tailwind</b> classes from the CSS Dev Mode shows, on Tailwind's own scale</li>
+            <li><b>React</b> copies a component for each selected layer, named after it</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"copyAsCode": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile big" id="f-previews" style="grid-area: c" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-layers"/></svg>Layer previews</h3>
+          <p>A small picture beside every layer, in every mode.</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="lp rv" style="--d: 0">
+                  <div class="layers">
+                    <div class="file">Brand refresh</div>
+                    <div class="sub">Design</div>
+                    <div class="sect">Layers</div>
+                    <div class="lrow on rv" style="--d: .12"><svg class="chev"><use href="#i-chev-down"/></svg><svg class="ty"><use href="#i-frame"/></svg><span class="th"><span class="poster-th"><i style="left:12%;top:10%;width:46%;height:37%;border-radius:50%;background:#ffd23f"></i><i style="left:-25%;right:-25%;bottom:-24%;height:52%;border-radius:50%;background:#1f1d2b"></i></span></span><b>Poster</b></div>
+                    <div class="lrow in rv" style="--d: .17"><svg class="ty"><use href="#i-text"/></svg><span class="th"><i style="left:22%;top:34%;width:56%;height:12%;background:#fff4e0"></i><i style="left:22%;top:54%;width:44%;height:12%;background:#fff4e0"></i></span>Headline</div>
+                    <div class="lrow in rv" style="--d: .22"><svg class="ty"><use href="#i-ellipse"/></svg><span class="th"><i style="left:20%;top:20%;width:60%;height:60%;border-radius:50%;background:#ffd23f"></i></span>Sun</div>
+                    <div class="lrow in rv" style="--d: .27"><svg class="ty"><use href="#i-ellipse"/></svg><span class="th"><i style="left:4%;right:4%;top:34%;height:34%;border-radius:50% 50% 0.2em 0.2em;background:#1f1d2b"></i></span>Hill</div>
+                    <div class="lrow rv" style="--d: .32"><svg class="chev"><use href="#i-chev-right"/></svg><svg class="ty"><use href="#i-frame"/></svg><span class="th"><i style="left:10%;top:24%;width:80%;height:52%;border-radius:0.15em;background:#1f1d2b"></i><i style="left:20%;top:36%;width:44%;height:8%;background:#3b3752"></i></span><b>Social card</b></div>
+                    <div class="lrow rv" style="--d: .37"><svg class="chev"><use href="#i-chev-right"/></svg><svg class="ty"><use href="#i-frame"/></svg><span class="th"><i style="left:30%;top:10%;width:40%;height:80%;border-radius:0.15em;background:#ff5c39"></i><i style="left:30%;top:58%;width:40%;height:32%;background:#1f1d2b"></i></span><b>Story</b></div>
+                  </div>
+                  <div class="stage2"><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div></div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about layer previews"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>A small picture of each layer in the layers panel, in every mode, as Figma shows only in Draw.</p>
+          <ul>
+            <li><b>Every mode</b> keeps its own tools and right sidebar</li>
+            <li><b>Toolbar modes</b>: choose which of Draw, Design, Motion and Dev Mode the switch offers</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"layerPreviews": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" id="f-contrast" style="grid-area: k" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</h3>
+          <p>The WCAG ratio, right in the color picker.</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="picker rv" style="--d: 0; --hue: #ff4d00; --pick: #b83a0d">
+                  <div class="tabs2"><b>Custom</b><span>Libraries</span></div>
+                  <div class="square">
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0 52 C30 50 60 44 100 36" fill="none" stroke="#fff" stroke-width="0.8" vector-effect="non-scaling-stroke"/><path d="M0 70 C30 68 60 63 100 57" fill="none" stroke="#fff" stroke-width="0.8" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/></svg>
+                    <span class="knob"></span>
+                  </div>
+                  <div class="hue"></div>
+                  <div class="hexrow"><span>Hex</span><span>B83A0D</span><span>100%</span></div>
+                  <div class="ratio rv" style="--d: .3"><span class="aa">Aa</span><b>5.4:1</b><div class="lv"><span class="pass">AA</span><span>AAA</span></div></div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about color contrast"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>The color picker shows the WCAG ratio against what's behind the layer, worked out from every layer under it.</p>
+          <ul>
+            <li><b>AA and AAA</b> for text, large text and shapes, as you pick</li>
+            <li><b>Lines</b> on the color square mark where each level starts to pass</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"colorContrast": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" id="f-rail" style="grid-area: v" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-rail"/></svg>Your plugins, one click away</h3>
+          <p>Your saved plugins and widgets in the left sidebar, a click away.</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="ui rv" style="--d: 0">
+                  <div class="navcol">
+                    <span class="t"><svg><use href="#i-figma"/></svg></span>
+                    <span class="t on"><svg><use href="#i-file"/></svg></span>
+                    <span class="t"><svg><use href="#i-sparkle"/></svg></span>
+                    <span class="t"><svg><use href="#i-plus-circle"/></svg></span>
+                    <span class="t"><svg><use href="#i-briefcase"/></svg></span>
+                    <hr>
+                    <span class="t"><svg><use href="#i-hex"/></svg></span>
+                    <span class="t"><svg><use href="#i-dev"/></svg></span>
+                    <span class="plug rv pop" style="--d: .2;background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
+                    <span class="plug big rv pop" style="--d: .26;background:#7b61ff"><svg><use href="#i-scale"/></svg><span class="tip rv" style="--d: .48">Contrast checker</span></span>
+                    <span class="plug rv pop" style="--d: .32;background:#14a38b"><svg><use href="#i-text"/></svg></span>
+                    <span class="plug rv pop" style="--d: .38;background:#f5b400"><svg><use href="#i-star"/></svg></span>
+                  </div>
+                  <div class="layers">
+                    <div class="ph">Brand refresh<svg><use href="#i-chev-down"/></svg><svg class="sp"><use href="#i-panel"/></svg></div>
+                    <div class="sub">Team project<em>Free</em></div>
+                    <div class="sect">Pages<span><svg><use href="#i-search"/></svg><svg><use href="#i-plus"/></svg></span></div>
+                    <div class="pg on">Page 1</div>
+                    <div class="pg">Drafts</div>
+                    <div class="sect">Layers</div>
+                    <div class="row"><svg><use href="#i-frame"/></svg><b>Poster</b></div>
+                    <div class="row"><svg><use href="#i-frame"/></svg><b>Social card</b></div>
+                    <div class="row"><svg><use href="#i-rect"/></svg>Background</div>
+                  </div>
+                  <div></div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about plugins in the sidebar"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Every plugin and widget saved to your Figma account sits in the editor's left sidebar, under Figma's own buttons. Click one to run it.</p>
+          <ul>
+            <li><b>Commands</b> show as a menu when a plugin has more than one</li>
+            <li><b>Reorder</b> by holding Ctrl and dragging. The order is kept for every file</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"railPlugins": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" id="f-dev" style="grid-area: l" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</h3>
+          <p>Import a plugin from its manifest, as in Figma's desktop app.</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="actions-panel rv" style="--d: 0">
+                  <div class="search"><svg><use href="#i-search"/></svg>Search</div>
+                  <div class="ap-tabs"><span>All</span><span>Assets</span><b>Plugins &amp; widgets</b><em>Development<svg><use href="#i-chev-down"/></svg></em></div>
+                  <div class="ap-row hover rv" style="--d: .18"><span class="pi" style="background:#7b61ff"><svg><use href="#i-code"/></svg></span><span class="nm"><span>Token sync<small>Development</small></span><i>~/plugins/token-sync/manifest.json</i></span><span class="more-dots">•••</span></div>
+                  <div class="ap-row rv" style="--d: .26"><span class="pi" style="background:#14a38b"><svg><use href="#i-contrast"/></svg></span><span class="nm"><span>Contrast audit<small>Development</small></span><i>~/plugins/contrast-audit/manifest.json</i></span></div>
+                  <div class="ap-row import rv" style="--d: .34"><svg><use href="#i-import"/></svg>Import from manifest…</div>
+                </div>
+                <div class="toolbar tb-dev rv" style="--d: .1">
+                  <span class="on"><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                  <span><svg><use href="#i-frame"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                  <span><svg><use href="#i-rect"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                  <span><svg><use href="#i-pen3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                  <span><svg><use href="#i-text"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                  <span><svg><use href="#i-braces"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+                  <span><svg><use href="#i-comment"/></svg></span>
+                  <span class="on"><svg><use href="#i-actions"/></svg></span>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about development plugins"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Import a plugin from its <code>manifest.json</code>, as in the Figma desktop app. figma.com can't do this.</p>
+          <ul>
+            <li><b>Rebuilt</b> plugins run their new code, as their files are read on every run</li>
+            <li><b>Not sandboxed</b>, unlike the desktop app, so import only ones you trust</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>plugins.json</code></div>
+        </div>
+      </article>
+    </div>
+
+    <dialog class="sheet" id="sheet" aria-labelledby="sheet-title" data-lenis-prevent>
+      <div class="sheet-art"><div class="tile-art"></div></div>
+      <div class="sheet-copy"></div>
+      <button type="button" class="close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
+    </dialog>
+
+    <div class="index" id="more">
       <div><h3><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
       <div><h3><svg class="icon"><use href="#i-key"/></svg>Google sign-in</h3><p>Works like the desktop app's, with or without the official app installed.</p></div>
-      <div><h3><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</h3><p>Import a plugin from its <code>manifest.json</code>, which figma.com doesn't support.</p></div>
       <div><h3><svg class="icon"><use href="#i-fonts"/></svg>Local fonts</h3><p>Uses Figma's font helper, and starts it when it isn't running.</p></div>
       <div><h3><svg class="icon"><use href="#i-update"/></svg>Automatic updates</h3><p>Downloaded in the background and installed in place, so you stay signed in.</p></div>
       <div><h3><svg class="icon"><use href="#i-scale"/></svg>Interface scale</h3><p>Zoom Figma, the tabs and menus together, from 50% to 200%.</p></div>
+      <div><h3><svg class="icon"><use href="#i-sliders"/></svg>Image adjustments</h3><p>Copy an image's exposure, contrast and the rest, and paste them onto another without the image.</p></div>
+      <div><h3><svg class="icon"><use href="#i-modes"/></svg>Toolbar modes</h3><p>Choose which of Draw, Design, Motion and Dev Mode the toolbar's switch offers.</p></div>
+      <div><h3><svg class="icon"><use href="#i-home"/></svg>Classic home</h3><p>Keeps Figma's long-standing home page on accounts trying the new one.</p></div>
     </div>
   </section>
 
   <section id="themes" aria-labelledby="themes-heading">
-    <div class="head">
-      <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
-      <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Click a swatch to see it here.</p>
-    </div>
-    <div class="deck" id="deck" role="radiogroup" aria-label="Themes"></div>
-    <div class="now" aria-live="polite">
-      <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
-      <button type="button" id="reset" hidden>Back to your system's look</button>
+    <div class="themes-top">
+      <div class="themes-copy">
+        <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
+        <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick one to see it here.</p>
+        <div class="modes"><div role="radiogroup" aria-label="Mode">
+          <button type="button" role="radio" data-mode="light"><svg><use href="#i-sun"/></svg>Light</button>
+          <button type="button" role="radio" data-mode="dark"><svg><use href="#i-moon"/></svg>Dark</button>
+        </div></div>
+        <div class="now" aria-live="polite">
+          <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
+          <button type="button" id="reset" hidden>Back to your system's look</button>
+        </div>
+      </div>
+      <div class="fan-wrap"><div class="fan" id="deck" role="radiogroup" aria-label="Themes"></div></div>
+      <div class="grid-deck" id="grid" role="radiogroup" aria-label="Themes"></div>
     </div>
 
     <div class="figma" aria-hidden="true">
@@ -637,11 +1269,14 @@
             <div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div>
             <div class="selection"><i></i><i></i><i></i><i></i><span>320 × 400</span></div>
             <div class="toolbar">
-              <span class="on"><svg><use href="#i-move"/></svg></span>
-              <span><svg><use href="#i-frame"/></svg></span>
-              <span><svg><use href="#i-rect"/></svg></span>
-              <span><svg><use href="#i-pen"/></svg></span>
-              <span><svg><use href="#i-text"/></svg></span>
+              <span class="on"><svg><use href="#i-move3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+              <span><svg><use href="#i-frame"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+              <span><svg><use href="#i-rect"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+              <span><svg><use href="#i-pen3"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+              <span><svg><use href="#i-text"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+              <span><svg><use href="#i-braces"/></svg></span><svg class="dd"><use href="#i-chev-down"/></svg>
+              <span><svg><use href="#i-comment"/></svg></span>
+              <span><svg><use href="#i-actions"/></svg></span>
             </div>
           </div>
           <div class="panel">
@@ -665,17 +1300,21 @@
       <h2 id="compare-heading">Ligma or the official app?</h2>
       <p>Both are Figma. Ligma is a lighter shell with a few extras.</p>
     </div>
+    <div class="compare-card">
     <table class="compare">
-      <thead><tr><th scope="col"><span class="sr">Feature</span></th><th scope="col">Ligma</th><th scope="col">Figma desktop</th></tr></thead>
+      <thead><tr><th scope="col"><span class="sr">Feature</span></th><th scope="col"><span class="who"><img src="logo.png" alt="">Ligma</span></th><th scope="col">Figma desktop</th></tr></thead>
       <tbody>
-        <tr class="big"><th scope="row">Installed size (macOS)</th><td>16 MB</td><td>305 MB</td></tr>
-        <tr><th scope="row">Browser engine</th><td>System webview</td><td>Bundled Chromium (Electron)</td></tr>
+        <tr class="big"><th scope="row">Installed size on macOS</th><td>16 MB</td><td>305 MB</td></tr>
+        <tr><th scope="row">Browser engine</th><td>System webview</td><td>Bundled Chromium</td></tr>
         <tr><th scope="row">Color themes</th><td>9, light and dark</td><td>Light and dark</td></tr>
-        <tr><th scope="row">Plugins in the left rail</th><td>Yes</td><td>No</td></tr>
-        <tr><th scope="row">Discord Rich Presence</th><td>Yes</td><td>No</td></tr>
-        <tr><th scope="row">Open source</th><td>Yes (MIT)</td><td>No</td></tr>
+        <tr><th scope="row">AI image tools</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Free, on your device</span></td><td><span class="no"><svg><use href="#i-lock"/></svg>Paid plans</span></td></tr>
+        <tr><th scope="row">Split view</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Yes</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
+        <tr><th scope="row">Plugins in the left sidebar</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Yes</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
+        <tr><th scope="row">Discord Rich Presence</th><td><span class="yes"><svg><use href="#i-tick"/></svg>Yes</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
+        <tr><th scope="row">Open source</th><td><span class="yes"><svg><use href="#i-tick"/></svg>MIT</span></td><td><span class="no"><svg><use href="#i-dash"/></svg>No</span></td></tr>
       </tbody>
     </table>
+    </div>
   </section>
 
   <section id="install" aria-labelledby="install-heading">
@@ -705,34 +1344,26 @@
   </section>
 </div>
 
-<div class="closing">
-  <div class="wrap">
-    <img src="logo.png" alt="" width="128" height="128">
-    <div>
-      <h2>Same Figma. Lighter.</h2>
-      <p id="close-meta">Free and open source. Not affiliated with Figma or Discord.</p>
-      <div class="actions">
-        <a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
-        <a class="btn" href="https://github.com/trelakor/ligma"><svg class="icon"><use href="#i-star"/></svg>Star on GitHub</a>
-      </div>
-    </div>
+<footer class="closing">
+  <h2>Figma, without the weight.</h2>
+  <p id="close-meta">Free and open source (MIT). Updates itself.</p>
+  <div class="actions">
+    <a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
+    <a class="btn" href="https://github.com/trelakor/ligma"><svg class="icon"><use href="#i-star"/></svg>Star on GitHub</a>
   </div>
-</div>
-
-<div class="wrap">
-  <footer>
-    <span>Ligma is MIT licensed. It's not affiliated with Figma or Discord.</span>
-    <ul>
-      <li><a href="https://github.com/trelakor/ligma">GitHub</a></li>
-      <li><a href="https://github.com/trelakor/ligma/blob/main/CHANGELOG.md">Changelog</a></li>
-      <li><a href="https://github.com/trelakor/ligma/blob/main/PRIVACY.md">Privacy</a></li>
-      <li><a href="https://github.com/trelakor/ligma/blob/main/TERMS.md">Terms</a></li>
-    </ul>
-  </footer>
-</div>
+  <div class="site-links">
+    <a class="brand" href="./"><img src="logo.png" alt="" width="24" height="24">Ligma</a>
+    <a href="https://github.com/trelakor/ligma">GitHub</a>
+    <a href="https://github.com/trelakor/ligma/blob/main/CHANGELOG.md">Changelog</a>
+    <a href="https://github.com/trelakor/ligma/blob/main/PRIVACY.md">Privacy</a>
+    <a href="https://github.com/trelakor/ligma/blob/main/TERMS.md">Terms</a>
+    <small>MIT licensed. Not affiliated with Figma or Discord</small>
+  </div>
+</footer>
 
 <!-- The app's own theme code, copied here when the site is published -->
 <script src="themes.js"></script>
+<script src="vendor/lenis.min.js"></script>
 <script>
   const root = document.documentElement;
   const $ = (id) => document.getElementById(id);
@@ -755,7 +1386,8 @@
   }
 
   function paint() {
-    root.className = state.mode;
+    root.classList.remove("light", "dark");
+    root.classList.add(state.mode);
     for (const [name, value] of Object.entries(ramps(state.theme, state.mode))) root.style.setProperty(name, value);
     const theme = LIGMA_THEMES.find((t) => t.id === state.theme);
     $("now").innerHTML = state.theme === "figma"
@@ -765,11 +1397,34 @@
     renderDeck();
   }
 
+  // The fan: a blade for each theme, Figma's own in the middle, in the page's mode
+  const FAN = [1, 2, 3, 4, 0, 5, 6, 7, 8].map((i) => LIGMA_THEMES[i]);
+  function renderDeck() {
+    const focused = document.activeElement?.closest("#deck")?.dataset.theme;
+    $("deck").replaceChildren(...FAN.map((theme, i) => {
+      const blade = document.createElement("button");
+      blade.type = "button";
+      blade.className = "blade";
+      blade.dataset.theme = theme.id;
+      blade.style.setProperty("--i", i);
+      blade.style.setProperty("--orb", ligmaMesh(theme.id, state.mode));
+      blade.setAttribute("role", "radio");
+      blade.setAttribute("aria-checked", theme.id === state.theme);
+      const ramp = ramps(theme.id, state.mode);
+      const hue = theme.accent == null ? "Original" : `Hue ${theme.accent}°`;
+      blade.innerHTML = `<b>${theme.name}<small>${hue}</small></b><span class="mesh"></span>${[300, 500, 700, 1000].map((step) => `<i style="background:${ramp[`--a-${step}`]}"></i>`).join("")}<span class="foot"></span>`;
+      blade.addEventListener("click", (event) => pick(theme.id, state.mode, event));
+      return blade;
+    }));
+    if (focused) $("deck").querySelector(`[data-theme="${focused}"]`)?.focus();
+    renderGrid();
+    for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
+  }
   const SUN = '<svg><use href="#i-sun"/></svg>';
   const MOON = '<svg><use href="#i-moon"/></svg>';
-  function renderDeck() {
-    const focused = document.activeElement?.closest("#deck") && document.activeElement.getAttribute("aria-label");
-    $("deck").replaceChildren(...LIGMA_THEMES.map((theme) => {
+  function renderGrid() {
+    const focused = document.activeElement?.closest("#grid") && document.activeElement.getAttribute("aria-label");
+    $("grid").replaceChildren(...LIGMA_THEMES.map((theme) => {
       const chip = document.createElement("div");
       chip.className = `theme${theme.id === state.theme ? " picked" : ""}`;
       const swatch = ramps(theme.id, state.mode);
@@ -787,47 +1442,139 @@
         orb.setAttribute("aria-checked", theme.id === state.theme && mode === state.mode);
         orb.setAttribute("aria-label", `${theme.name} in ${mode} mode`);
         orb.title = `${theme.name} in ${mode} mode`;
-        orb.addEventListener("click", () => pick(theme.id, mode, orb));
+        orb.addEventListener("click", (event) => pick(theme.id, mode, event));
         chip.querySelector(".orbs").append(orb);
       }
       return chip;
     }));
-    if (focused) [...$("deck").querySelectorAll("[aria-label]")].find((el) => el.getAttribute("aria-label") === focused)?.focus();
+    if (focused) [...$("grid").querySelectorAll("[aria-label]")].find((el) => el.getAttribute("aria-label") === focused)?.focus();
+  }
+
+  for (const button of document.querySelectorAll(".modes button")) {
+    button.addEventListener("click", (event) => pick(state.theme, button.dataset.mode, event));
   }
 
   // Retint the page, spreading out from `from` where the browser can
-  function retint(change, from) {
-    if (!document.startViewTransition || reduced.matches || !from) return change();
-    const box = from.getBoundingClientRect();
-    const x = box.left + box.width / 2;
-    const y = box.top + box.height / 2;
-    const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
-    document.startViewTransition(change).ready.then(() => {
-      root.animate(
-        { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
-        { duration: 650, easing: "cubic-bezier(0.2, 0.9, 0.3, 1)", pseudoElement: "::view-transition-new(root)" },
-      );
-    });
+  function retint(change, event) {
+    if (!document.startViewTransition || reduced.matches || !event) return change();
+    document.startViewTransition(change);
   }
 
-  function pick(theme, mode, from) {
+  function pick(theme, mode, event) {
     if (theme === state.theme && mode === state.mode) return;
     retint(() => {
       Object.assign(state, { theme, mode, picked: true });
       paint();
-    }, from);
+    }, event);
   }
 
   $("reset").addEventListener("click", (event) => retint(() => {
     Object.assign(state, { theme: "figma", mode: system.matches ? "dark" : "light", picked: false });
     paint();
-  }, event.currentTarget));
+  }, event));
   system.addEventListener("change", () => {
     if (state.picked) return;
     state.mode = system.matches ? "dark" : "light";
     paint();
   });
   if (typeof LIGMA_THEMES !== "undefined") paint();
+
+  // The story: momentum scrolling, and scenes that play out as you scroll.
+  // Large screens pin each scene while it plays; reduced motion shows each
+  // finished
+  const large = matchMedia("(min-width: 900px) and (min-height: 700px)");
+  const clamp = (x) => Math.min(1, Math.max(0, x));
+  const scenes = [...document.querySelectorAll("[data-scene]")];
+  const reveals = [...document.querySelectorAll("[data-reveal]")];
+  const steps = [...document.querySelectorAll(".steps li")];
+
+  function scene(el, p) {
+    if (el.dataset.scene === "ai") {
+      const at = Math.min(3, Math.floor(p * 3) + 1);
+      el.dataset.step = at;
+      [0, 0.333, 0.666].forEach((start, i) => {
+        const s = reduced.matches ? Number(at > i + 0.5) : clamp((p - start - 0.03) / 0.12);
+        el.style.setProperty(`--s${i + 1}`, s.toFixed(4));
+      });
+      steps.forEach((li, i) => {
+        li.classList.toggle("on", at === i + 1);
+        li.style.setProperty("--fill", at === i + 1 ? clamp(p * 3 - i).toFixed(4) : at > i + 1 ? 1 : 0);
+      });
+    }
+  }
+
+  function update() {
+    const vh = innerHeight;
+    const pinned = root.classList.contains("story");
+    for (const el of scenes) {
+      const box = el.getBoundingClientRect();
+      // Unpinned, the image tools follow their steps as they scroll under the image
+      const list = el.dataset.scene === "ai" && !pinned && el.querySelector(".steps").getBoundingClientRect();
+      const p = pinned ? -box.top / (box.height - vh) : list ? (vh * 0.62 - list.top) / list.height : (vh * 0.8 - box.top) / (box.height * 0.9);
+      scene(el, clamp(p));
+    }
+    for (const el of reveals) {
+      const v = reduced.matches ? 1 : clamp((vh - el.getBoundingClientRect().top) / (vh * 0.7));
+      el.style.setProperty("--v", v.toFixed(4));
+    }
+  }
+
+  let queued = false;
+  const queue = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => ((queued = false), update()));
+  };
+  function arrange() {
+    root.classList.toggle("story", large.matches && !reduced.matches);
+    update();
+  }
+  addEventListener("scroll", queue, { passive: true });
+  addEventListener("resize", queue);
+  large.addEventListener("change", arrange);
+  reduced.addEventListener("change", arrange);
+  arrange();
+
+  const lenis = window.Lenis && !reduced.matches ? new Lenis({ autoRaf: true, anchors: true }) : null;
+
+  // A tile's plus opens its details in the sheet, the drawing building up.
+  // So does the feature's chip in the reel
+  const sheet = $("sheet");
+  let opener = null;
+  function openSheet(tile, from) {
+    opener = from;
+    const art = tile.querySelector(".tile-art .art").cloneNode(true);
+    sheet.querySelector(".sheet-art .tile-art").replaceChildren(art);
+    const title = tile.querySelector("h3").cloneNode(true);
+    title.id = "sheet-title";
+    sheet.querySelector(".sheet-copy").replaceChildren(title, ...[...tile.querySelector(".more").children].map((el) => el.cloneNode(true)));
+    sheet.showModal();
+    lenis?.stop();
+    if (reduced.matches) return art.style.setProperty("--v", 1);
+    const begin = performance.now();
+    const step = (now) => {
+      const v = clamp((now - begin) / 900);
+      art.style.setProperty("--v", v.toFixed(4));
+      if (v < 1 && sheet.open) requestAnimationFrame(step);
+    };
+    art.style.setProperty("--v", 0);
+    requestAnimationFrame(step);
+  }
+  for (const tile of document.querySelectorAll(".tile")) {
+    tile.querySelector(".open").addEventListener("click", (event) => openSheet(tile, event.currentTarget));
+  }
+  for (const link of document.querySelectorAll('.reel a[href^="#f-"]')) {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      openSheet(document.querySelector(link.getAttribute("href")), link);
+    });
+  }
+  sheet.querySelector(".close").addEventListener("click", () => sheet.close());
+  sheet.addEventListener("click", (event) => event.target === sheet && sheet.close());
+  sheet.addEventListener("close", () => {
+    lenis?.start();
+    opener?.focus({ preventScroll: true });
+  });
 
   // Copy the Terminal command
   for (const button of document.querySelectorAll("[data-copy]")) {
@@ -871,9 +1618,8 @@
         $("dl-secondary").textContent = `${mac ? "Windows" : "macOS"} (${mb(other)})`;
         $("dl-secondary").href = other.browser_download_url;
       }
-      if (dmg && exe) $("sizes").textContent = `Downloads: ${mb(exe)} on Windows, ${mb(dmg)} on macOS.`;
       $("dl-meta").textContent = `${release.tag_name}. Free and open source (MIT). Updates itself.`;
-      $("close-meta").textContent = `${release.tag_name}. Free and open source. Not affiliated with Figma or Discord.`;
+      $("close-meta").textContent = `${release.tag_name}. Free and open source (MIT). Updates itself.`;
     } catch {}
   })();
 </script>

@@ -17,6 +17,14 @@
         ],
         "createdAt": "2026-10-26T00:57:34.762Z",
         "reason": "agent decision: the nested 'cards' are drawn app UI (tab preview, Discord profile, Figma panels) inside swatch-chip illustrations, not layout containers"
+      },
+      {
+        "rule": "ai-color-palette",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-11-02T03:31:16.943Z"
       }
     ]
   }

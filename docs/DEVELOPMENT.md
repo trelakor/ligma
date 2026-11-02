@@ -19,6 +19,12 @@ Regenerate icons after editing `assets/icon.png` (macOS) or `assets/icon-windows
 npm run icon
 ```
 
+The social cover, `site/social-cover.png`, is the site's `og:image`, the README's header and the repo's social preview. It's drawn in `assets/social/cover.html`. The README's other graphics (the download buttons and the cards) are drawn in `assets/readme/readme.html`, each in a light and a dark version. After editing either, render them again with a local Chrome or Edge (set `CHROME` to its path if it isn't found). Upload a new cover in the repo's Settings > General > Social preview:
+
+```sh
+npm run graphics
+```
+
 ## Cleaning up branches and worktrees
 
 Each feature gets its own branch, and often its own worktree. Once a branch's PR is merged, clear out everything that has landed on `main`:

@@ -1,0 +1,124 @@
+<!doctype html>
+<!-- The README's graphics, in the site's language. Each renders alone, as #<name>-<light|dark>, with `npm run graphics` -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ligma README graphics</title>
+<style>
+  @font-face { font-family: "Funnel Display"; src: url(../../site/fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; }
+  @font-face { font-family: "Inter"; src: url(../../site/fonts/inter.woff2) format("woff2"); font-weight: 400 700; }
+
+  /* The site's light and dark Figma theme (site/index.html) */
+  :root.light {
+    --card: #ffffff; --line: #e6e6e6; --ink: #1e1e1e; --ink-2: #5c5c5c; --ink-3: #8a8a8a;
+    --field: #0d99ff; --field-ink: #0d193f; --button: #1e1e1e; --button-ink: #ffffff;
+  }
+  :root.dark {
+    --card: #1e1e1e; --line: #383838; --ink: #ffffff; --ink-2: #b3b3b3; --ink-3: #8a8a8a;
+    --field: #0c8ce9; --field-ink: #0b1224; --button: #ffffff; --button-ink: #1e1e1e;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: transparent; }
+  body {
+    color: var(--ink); font: 400 16px/1.4 "Inter", sans-serif; font-feature-settings: "cv11", "calt";
+    -webkit-font-smoothing: antialiased;
+  }
+  [data-asset] { display: none; height: 100%; }
+  [data-asset].on { display: flex; }
+  svg { flex: none; }
+  .card { flex: 1; border-radius: 20px; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); }
+
+  /* Download pills, as the site's primary button */
+  .pill {
+    flex: 1; display: flex; align-items: center; justify-content: center; gap: 10px; border-radius: 12px;
+    background: var(--button); color: var(--button-ink); font-size: 16px; font-weight: 600; letter-spacing: -0.005em;
+  }
+  .pill svg { width: 19px; height: 19px; fill: currentColor; margin-top: -1px; }
+
+  /* Ligma or Figma desktop */
+  .compare { flex-direction: column; padding: 30px 36px 14px; }
+  .compare .row { display: grid; grid-template-columns: 36% 32% 32%; align-items: center; min-height: 56px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  .compare .row:last-child { border-bottom: 0; }
+  .compare .row > :first-child { color: var(--ink-2); font-weight: 500; }
+  .compare .row > :nth-child(2) { font-weight: 600; }
+  .compare .row > :nth-child(3) { color: var(--ink-2); }
+  .compare .head { min-height: 0; padding-bottom: 16px; border-bottom: 2px solid var(--ink); }
+  .compare .head > * { display: flex; align-items: center; gap: 10px; font: 650 26px/1.1 "Funnel Display", sans-serif; letter-spacing: -0.02em; color: var(--ink) !important; }
+  .compare .head img { width: 28px; height: 28px; }
+  .compare .big { min-height: 84px; }
+  .compare .big > :not(:first-child) { font: 700 40px/1 "Funnel Display", sans-serif; letter-spacing: -0.035em; }
+  .compare .big > :nth-child(3) { color: var(--ink-3); }
+  .yes, .no { display: flex; align-items: center; gap: 10px; }
+  .yes svg { width: 22px; height: 22px; padding: 4px; border-radius: 50%; background: var(--field); color: #fff; }
+  .no svg { width: 22px; height: 22px; color: var(--ink-3); }
+
+  /* Image tools that run on your computer */
+  .tools { gap: 16px; }
+  .tool { display: flex; flex-direction: column; padding: 24px; }
+  .tool .mark { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 12px; background: var(--field); color: #fff; }
+  .tool .mark svg { width: 34px; height: 34px; }
+  .tool h3 { margin: 22px 0 0; white-space: nowrap; font: 650 22px/1.1 "Funnel Display", sans-serif; letter-spacing: -0.02em; }
+  .tool p { margin: 8px 0 0; color: var(--ink-2); font-size: 15px; line-height: 1.45; }
+  .tool dl { margin: auto 0 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+  .tool dt { color: var(--ink-3); }
+  .tool dd { margin: 0; color: var(--ink); font-weight: 500; }
+</style>
+<script>
+  const [, name, theme] = location.hash.match(/^#(.+)-(light|dark)$/) ?? [, "compare", "light"];
+  document.documentElement.className = theme;
+  addEventListener("DOMContentLoaded", () => document.querySelector(`[data-asset="${name}"]`).classList.add("on"));
+</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="apple" viewBox="0 0 24 24"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></symbol>
+    <symbol id="windows" viewBox="0 0 24 24"><path d="M2 2h9.5v9.5H2zM12.5 2H22v9.5h-9.5zM2 12.5h9.5V22H2zM12.5 12.5H22V22h-9.5z"/></symbol>
+    <!-- The site's icon grammar: 16px, 1.2 stroke -->
+    <symbol id="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
+    <symbol id="lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7"/></symbol>
+    <symbol id="dash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 8h7"/></symbol>
+    <symbol id="cutout" viewBox="0 0 24 24" fill="none"><path stroke="currentColor" d="M5.5 8.5v-2a1 1 0 0 1 1-1h2m7 0h2a1 1 0 0 1 1 1v2m0 7v2a1 1 0 0 1-1 1h-2m-7 0h-2a1 1 0 0 1-1-1v-2"/><circle stroke="currentColor" cx="12" cy="10" r="2.5"/><path stroke="currentColor" d="M8.5 17a3.5 3.5 0 0 1 7 0"/></symbol>
+    <symbol id="vector" viewBox="0 0 24 24" fill="none"><path fill="currentColor" d="M6.5 5.001c.654 0 1.208.42 1.413 1.004L8 6h5.5a.5.5 0 0 1 0 1H8q-.045 0-.089.004a1.5 1.5 0 0 1-.907.907L7 8.001v8q0 .045.004.088c.423.15.756.485.907.907q.045.005.09.005h8q.044 0 .087-.005c.151-.422.486-.756.907-.907Q17 16.046 17 16v-5.5a.5.5 0 0 1 1 0V16l-.005.085a1.5 1.5 0 1 1-1.91 1.91L16 18H8l-.086-.005a1.5 1.5 0 1 1-1.91-1.91L6 16V8q.001-.044.004-.086A1.5 1.5 0 0 1 6.5 5.001m0 12a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1m11 0a.5.5 0 1 0 0 1 .5.5 0 0 0 0-1m-7.776-5.418a.5.5 0 0 1 .629.065l3.5 3.5a.5.5 0 0 1-.707.707l-3.112-3.112a.05.05 0 0 0-.07 0l-1.111 1.111a.5.5 0 0 1-.707-.706l1.5-1.5zm3.775-2.582a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3m0 1a.5.5 0 1 0 .001 1 .5.5 0 0 0 0-1m3.516-5.563c.126-.505.843-.505.97 0l.315 1.26 1.26.314c.505.126.505.844 0 .97l-1.26.315-.315 1.26c-.127.504-.844.504-.97 0l-.316-1.26-1.26-.315c-.504-.126-.503-.844 0-.97l1.26-.315zM6.499 6A.5.5 0 1 0 6.5 7.002a.5.5 0 0 0 0-1.001"/></symbol>
+    <symbol id="lasso" viewBox="0 0 24 24" fill="none"><path stroke="currentColor" stroke-dasharray="2 2" d="M10.5 16.5h-3a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v3"/><path stroke="currentColor" stroke-linejoin="round" d="m12.5 12.5 6.5 2.4-2.9 1.2-1.2 2.9z"/></symbol>
+  </defs>
+</svg>
+
+<div data-asset="download-macos"><div class="pill"><svg><use href="#apple"/></svg>Download for macOS</div></div>
+<div data-asset="download-windows"><div class="pill"><svg><use href="#windows"/></svg>Download for Windows</div></div>
+
+<div data-asset="compare">
+  <div class="card compare">
+    <div class="row head"><span></span><span><img src="../logo.png" alt="">Ligma</span><span>Figma desktop</span></div>
+    <div class="row big"><span>Installed size on macOS</span><span>16 MB</span><span>305 MB</span></div>
+    <div class="row"><span>Browser engine</span><span>System webview</span><span>Bundled Chromium</span></div>
+    <div class="row"><span>Color themes</span><span>9, light and dark</span><span>Light and dark</span></div>
+    <div class="row"><span>AI image tools</span><span class="yes"><svg><use href="#check"/></svg>Free, on your device</span><span class="no"><svg><use href="#lock"/></svg>Paid plans</span></div>
+    <div class="row"><span>Plugins in the left sidebar</span><span class="yes"><svg><use href="#check"/></svg>Yes</span><span class="no"><svg><use href="#dash"/></svg>No</span></div>
+    <div class="row"><span>Discord Rich Presence</span><span class="yes"><svg><use href="#check"/></svg>Yes</span><span class="no"><svg><use href="#dash"/></svg>No</span></div>
+    <div class="row"><span>Open source</span><span class="yes"><svg><use href="#check"/></svg>MIT</span><span class="no"><svg><use href="#dash"/></svg>No</span></div>
+  </div>
+</div>
+
+<div data-asset="image-tools" class="tools">
+  <div class="card tool">
+    <span class="mark"><svg><use href="#cutout"/></svg></span>
+    <h3>Remove background</h3>
+    <p>Cuts out the subject and keeps the original hidden underneath</p>
+    <dl><dt>Replaces</dt><dd>Remove background</dd><dt>Runs on</dt><dd>Vision on macOS, BiRefNet on Windows</dd></dl>
+  </div>
+  <div class="card tool">
+    <span class="mark"><svg><use href="#vector"/></svg></span>
+    <h3>Vectorize</h3>
+    <p>Traces an image into flat-colored shapes, then recolors or cuts down the colors</p>
+    <dl><dt>Replaces</dt><dd>Vectorize</dd><dt>Runs on</dt><dd>Ligma's own tracer, no download</dd></dl>
+  </div>
+  <div class="card tool">
+    <span class="mark"><svg><use href="#lasso"/></svg></span>
+    <h3>Select object</h3>
+    <p>Picks an object with a click, brush or lasso, then isolates or erases it</p>
+    <dl><dt>Replaces</dt><dd>Select area</dd><dt>Runs on</dt><dd>SAM 2.1 on Windows and Apple silicon</dd></dl>
+  </div>
+</div>
+</body>
+</html>
