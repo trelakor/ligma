@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- The social cover (site/social-cover.png): the lockup as a selected layer on a white Figma canvas. Render it with `npm run graphics` -->
+<!-- The social cover (site/social-cover.png): the lockup as a selected layer on a dark Figma canvas, with you on it as a multiplayer cursor. Render it with `npm run graphics` -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -8,25 +8,30 @@
   @font-face { font-family: "Funnel Display"; src: url(../../site/fonts/funnel-display.woff2) format("woff2"); font-weight: 300 800; }
   @font-face { font-family: "Inter"; src: url(../../site/fonts/inter.woff2) format("woff2"); font-weight: 400 700; }
 
-  /* Figma's light UI: grey ramp, selection blue #0d99ff */
-  :root { --ink: #1e1e1e; --ink-2: #757575; --dot: #dedede; --select: #0d99ff; }
+  /* Figma's dark UI: grey ramp, selection blue #0c8ce9, multiplayer purple #9747ff */
+  :root { --canvas: #1e1e1e; --ink: #ffffff; --ink-2: #b3b3b3; --dot: #383838; --select: #0c8ce9; --you: #9747ff; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: #fff; }
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--canvas); }
   body {
     display: flex; flex-direction: column; align-items: center; justify-content: center; padding-top: 30px;
     color: var(--ink); font-family: "Inter", sans-serif; -webkit-font-smoothing: antialiased;
-    background: radial-gradient(circle, var(--dot) 1.3px, transparent 1.8px) 4px 4px / 24px 24px, #fff;
+    background: radial-gradient(circle, var(--dot) 1.3px, transparent 1.8px) 4px 4px / 24px 24px, var(--canvas);
   }
 
   /* The lockup, selected: Figma's frame label, outline and corner handles */
-  .layer { position: relative; display: flex; align-items: center; gap: 28px; padding: 22px 64px 34px 40px; background: #fff; }
+  .layer { position: relative; display: flex; align-items: center; gap: 28px; padding: 22px 64px 34px 40px; background: var(--canvas); }
   .layer::before { content: ""; position: absolute; inset: 0; border: 2.5px solid var(--select); }
-  .layer .label { position: absolute; left: 0; bottom: calc(100% + 12px); font-size: 20px; font-weight: 500; color: #0768cf; }
+  .layer .label { position: absolute; left: 0; bottom: calc(100% + 12px); font-size: 20px; font-weight: 500; color: #7cc4f8; }
   .layer i { position: absolute; width: 16px; height: 16px; background: #fff; border: 2.5px solid var(--select); border-radius: 2px; }
   .layer i:nth-of-type(1) { left: -7px; top: -7px; } .layer i:nth-of-type(2) { right: -7px; top: -7px; }
   .layer i:nth-of-type(3) { left: -7px; bottom: -7px; } .layer i:nth-of-type(4) { right: -7px; bottom: -7px; }
   .layer img { width: 240px; height: 240px; margin: -20px -38px -20px -26px; }
   .layer b { font: 700 224px/1 "Funnel Display", sans-serif; letter-spacing: -0.045em; padding-bottom: 20px; }
+
+  /* You, as Figma draws a multiplayer cursor: a rounded arrow and a name tag */
+  .you { position: absolute; right: -86px; bottom: -66px; display: flex; align-items: flex-start; }
+  .you svg { width: 40px; height: 40px; color: var(--you); filter: drop-shadow(0 2px 3px rgb(0 0 0 / 0.4)); }
+  .you span { margin: 32px 0 0 -4px; padding: 5px 12px; border-radius: 6px; background: var(--you); color: #fff; font-size: 22px; font-weight: 600; }
 
   h1 { margin: 60px 0 0; font: 600 64px/1 "Funnel Display", sans-serif; letter-spacing: -0.025em; }
   .os { display: flex; align-items: center; gap: 14px; margin-top: 26px; font-size: 26px; font-weight: 500; color: var(--ink-2); }
@@ -40,6 +45,7 @@
     <img src="../logo.png" alt="">
     <b>Ligma</b>
     <i></i><i></i><i></i><i></i>
+    <div class="you"><svg viewBox="0 0 16 16"><path d="M3.4 2.2c-.7-.3-1.4.4-1.1 1.1l4.3 10.3c.3.7 1.3.7 1.6-.1l1.3-3.7c.1-.3.3-.5.6-.6l3.7-1.3c.8-.3.8-1.3.1-1.6z" fill="currentColor" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/></svg><span>You</span></div>
   </div>
   <h1>Same Figma. Lighter.</h1>
   <div class="os">
