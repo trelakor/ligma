@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- The social cover (site/social-cover.png): the lockup as a selected layer on a dark Figma canvas, with you on it as a multiplayer cursor. Render it with `npm run graphics` -->
+<!-- The social cover (site/social-cover.png, and social-cover-light.png from #light for the README on GitHub's light theme): the lockup as a selected layer on a Figma canvas, with you on it as a multiplayer cursor. Render it with `npm run graphics` -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -9,7 +9,10 @@
   @font-face { font-family: "Inter"; src: url(../../site/fonts/inter.woff2) format("woff2"); font-weight: 400 700; }
 
   /* Figma's dark UI: grey ramp, selection blue #0c8ce9, multiplayer purple #9747ff */
-  :root { --canvas: #1e1e1e; --ink: #ffffff; --ink-2: #b3b3b3; --dot: #383838; --select: #0c8ce9; --you: #9747ff; }
+  :root { --canvas: #1e1e1e; --ink: #ffffff; --ink-2: #b3b3b3; --dot: #383838; --select: #0c8ce9; --you: #9747ff; --label: #7cc4f8; }
+  /* Figma's light UI */
+  :root.light { --canvas: #f5f5f5; --ink: #1e1e1e; --ink-2: #757575; --dot: #d6d6d6; --label: #0c8ce9; }
+  :root.light .layer { background: #fff; }
   * { box-sizing: border-box; }
   html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; background: var(--canvas); }
   body {
@@ -21,7 +24,7 @@
   /* The lockup, selected: Figma's frame label, outline and corner handles */
   .layer { position: relative; display: flex; align-items: center; gap: 28px; padding: 22px 64px 34px 40px; background: var(--canvas); }
   .layer::before { content: ""; position: absolute; inset: 0; border: 2.5px solid var(--select); }
-  .layer .label { position: absolute; left: 0; bottom: calc(100% + 12px); font-size: 20px; font-weight: 500; color: #7cc4f8; }
+  .layer .label { position: absolute; left: 0; bottom: calc(100% + 12px); font-size: 20px; font-weight: 500; color: var(--label); }
   .layer i { position: absolute; width: 16px; height: 16px; background: #fff; border: 2.5px solid var(--select); border-radius: 2px; }
   .layer i:nth-of-type(1) { left: -7px; top: -7px; } .layer i:nth-of-type(2) { right: -7px; top: -7px; }
   .layer i:nth-of-type(3) { left: -7px; bottom: -7px; } .layer i:nth-of-type(4) { right: -7px; bottom: -7px; }
@@ -40,6 +43,7 @@
 </style>
 </head>
 <body>
+  <script>if (location.hash === "#light") document.documentElement.classList.add("light")</script>
   <div class="layer">
     <span class="label">Ligma</span>
     <img src="../logo.png" alt="">

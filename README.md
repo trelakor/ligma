@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://trelakor.github.io/ligma/"><img src="site/social-cover.png" width="840" alt="Ligma. Same Figma. Lighter. For macOS and Windows"></a>
+<a href="https://trelakor.github.io/ligma/"><picture><source media="(prefers-color-scheme: dark)" srcset="site/social-cover.png"><img src="site/social-cover-light.png" width="840" alt="Ligma. Same Figma. Lighter. For macOS and Windows"></picture></a>
 
 A lightweight desktop app for [Figma](https://www.figma.com), with far more to work with
 
@@ -14,7 +14,7 @@ A lightweight desktop app for [Figma](https://www.figma.com), with far more to w
 
 Ligma is for people who use Figma all day and want a desktop app that's lighter than the official one. It's built with [Tauri 2](https://tauri.app) and opens `figma.com` in the system webview (WebView2 on Windows, WKWebView on macOS) instead of bundling a browser engine, so it stays small.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/compare-dark.png"><img src="assets/readme/compare-light.png" width="880" alt="Ligma or Figma desktop. Installed size on macOS: Ligma 16 MB, Figma desktop 305 MB. Memory use: Ligma less, cuts clutter, Figma desktop more, piles on. Browser engine: system webview, or bundled Chromium. Color themes: 9 in light and dark, or light and dark. AI image tools: free and on your device, or paid plans only. Split view: Ligma shares one set of panels between both files for more canvas, Figma desktop opens two full windows, each with its own panels. Layer previews: Ligma in every mode, Figma desktop in Draw mode only. Plugins in the left sidebar, Discord Rich Presence and open source (MIT): Ligma yes, Figma desktop no"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/compare-dark.png"><img src="assets/readme/compare-light.png" width="880" alt="Ligma or Figma desktop. Installed size on macOS: Ligma 16 MB, Figma desktop 305 MB. Memory use: Ligma less, cuts clutter, Figma desktop more, piles on. Browser engine: system webview, or bundled Chromium. Color themes: 9 in light and dark, or light and dark. AI image tools: free and on your device, or paid plans only. Split view: Ligma shares one set of panels between both files for more canvas, Figma desktop opens two paneled windows, each with its own panels. Layer previews: Ligma in every mode, Figma desktop in Draw mode only. Plugins in the left sidebar, Discord Rich Presence and open source (MIT): Ligma yes, Figma desktop no"></picture>
 
 Downloads are 7.7 MB on Windows and 8.2 MB on macOS (a universal build for Apple silicon and Intel). See [Memory](docs/MEMORY.md) to compare memory use on your own machine.
 
