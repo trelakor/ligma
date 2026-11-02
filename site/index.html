@@ -1472,8 +1472,8 @@
     renderDeck();
   }
 
-  // A brush for each theme, as Figma Draw draws its flat brush: a rounded
-  // tip of paint, fine streaked bristles darkening toward a thin ferrule,
+  // A brush for each theme, as Figma Draw draws its flat brush: a square
+  // tip of paint on a tuft pinched in at the sides, fine streaked bristles darkening toward a thin ferrule,
   // and the handle with Figma's mark, all shaded with soft gradients. The
   // paint and handle are the theme's color for the page's mode. Made once,
   // recolored when the mode changes
@@ -1498,17 +1498,17 @@
       <linearGradient id="pm-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1f1f1f"/><stop offset=".45" stop-color="#4c4c4c"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient>
       <linearGradient id="ph-${id}" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".22" stop-color="#fff" stop-opacity=".22"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
       <filter id="ps-${id}" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation=".18"/></filter>
-      <clipPath id="pk-${id}"><path d="M1.6 41C.9 31 .5 21 .6 12.6.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6.1 8.4-.3 18.4-1 28.4z"/></clipPath>
+      <clipPath id="pk-${id}"><path d="M1.1 41C2.5 37.6 3.4 32.6 3.5 27 3.6 19.6 2.6 11.6.6 3.6 10 1.9 20 1.9 29.4 3.6 27.4 11.6 26.4 19.6 26.5 27 26.6 32.6 27.5 37.6 28.9 41z"/></clipPath>
     </defs>
     <path d="M1.2 46h27.6v56H1.2z" fill="url(#pb-${id})"/>
     <path d="M1.2 46h27.6v56H1.2z" fill="url(#ph-${id})" class="gloss"/>
     <svg x="9.5" y="52" width="11" height="11" viewBox="0 0 16 16" style="color:var(--logo)"><use href="#i-figma"/></svg>
     <g clip-path="url(#pk-${id})">
-      <path d="M1.6 41C.9 31 .5 21 .6 12.6.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6.1 8.4-.3 18.4-1 28.4z" fill="url(#pg-${id})"/>
+      <path d="M1.1 41C2.5 37.6 3.4 32.6 3.5 27 3.6 19.6 2.6 11.6.6 3.6 10 1.9 20 1.9 29.4 3.6 27.4 11.6 26.4 19.6 26.5 27 26.6 32.6 27.5 37.6 28.9 41z" fill="url(#pg-${id})"/>
       <g filter="url(#ps-${id})">${hairs}</g>
-      <path d="M1.6 41C.9 31 .5 21 .6 12.6.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6.1 8.4-.3 18.4-1 28.4z" fill="url(#pd-${id})"/>
-      <path d="M.6 12.6C.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6v2.2C24.6 18.2 19.4 13.4 14 15.6 8.9 17.6 4.6 17.4.6 15.2z" fill="url(#pb-${id})"/>
-      <path d="M.6 12.6C.7 6.4 3 3.5 7.2 3 12.4 2.4 17.6 2.4 22.8 3c4.2.5 6.5 3.4 6.6 9.6v2.2C24.6 18.2 19.4 13.4 14 15.6 8.9 17.6 4.6 17.4.6 15.2z" fill="url(#pc-${id})"/>
+      <path d="M1.1 41C2.5 37.6 3.4 32.6 3.5 27 3.6 19.6 2.6 11.6.6 3.6 10 1.9 20 1.9 29.4 3.6 27.4 11.6 26.4 19.6 26.5 27 26.6 32.6 27.5 37.6 28.9 41z" fill="url(#pd-${id})"/>
+      <path d="M-1 0H31V14.8C24.6 18.2 19.4 13.4 14 15.6 8.9 17.6 4.6 17.4-1 15.2z" fill="url(#pb-${id})"/>
+      <path d="M-1 0H31V14.8C24.6 18.2 19.4 13.4 14 15.6 8.9 17.6 4.6 17.4-1 15.2z" fill="url(#pc-${id})"/>
     </g>
     <path d="M1.4 40.6h27.2v5.6H1.4z" fill="url(#pm-${id})"/>
   </svg>`;

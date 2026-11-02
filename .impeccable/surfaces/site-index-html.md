@@ -70,3 +70,5 @@ Brushes (2026-11-02, replacing the pencils): Figma Draw's flat brush, a flared t
 Brushes (2026-11-02, redrawn from Draw's brush): straight sided, the width of the handle; a domed tip of paint with a wavy edge, streaked dark grey bristles darkening toward a thin dark ferrule, and the handle with Figma's outlined mark. Tip and handle are the theme's color. Together they span about 94% of the window's width, 4px apart (a ninth of the width each on phones), peeking 1.5 widths over it
 
 Brushes (2026-11-02, refined): no flat cel shading anywhere. The tuft has gently curved sides and rounded shoulders, filled with a soft cylindrical grey gradient, 34 fine hairs of varied weight and opacity (slightly blurred), and a vertical gradient darkening toward the ferrule. The paint ends in one smooth curve and is shaded with the same cylindrical gradient plus a soft top light. Ferrule and handle are gradients too; the Figma mark is faint (white at 42% on color, black at 28% on grey)
+
+Brushes (2026-11-02): the tuft has sharp top corners on a barely domed top, and its sides pinch in toward two thirds of the way down (about 9% each side) before flaring back out to the ferrule
