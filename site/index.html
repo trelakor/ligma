@@ -92,16 +92,17 @@
   /* Buttons */
   .btn {
     display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 24px;
-    border-radius: 12px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink);
+    border-radius: 8px; border: 1px solid var(--line-strong); background: transparent; color: var(--ink);
     font: 600 16px/1 var(--text); text-decoration: none; white-space: nowrap; cursor: pointer;
     transition: background-color 160ms var(--ease), transform 160ms var(--ease), border-color 160ms var(--ease);
   }
   .btn:hover { background: var(--surface); text-decoration: none; }
   .btn:active { transform: translateY(1px); }
-  .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
-  .btn.primary:hover { background: color-mix(in oklab, var(--ink) 86%, var(--bg)); }
+  .btn.primary { background: var(--field); color: #fff; border-color: transparent; box-shadow: inset 0 -1px 0 rgb(0 0 0 / 0.12); }
+  .btn.primary:hover { background: color-mix(in oklab, var(--field) 88%, #000); }
+  .btn.primary:focus-visible { outline-color: var(--ink); }
   .btn .icon { width: 18px; height: 18px; }
-  .btn small { font-weight: 450; opacity: 0.75; font-size: 14px; }
+  .btn small { font-weight: 450; opacity: 0.8; font-size: 14px; }
 
   /* Nav */
   nav { display: flex; align-items: center; justify-content: space-between; gap: 24px; height: 80px; }
@@ -110,7 +111,7 @@
   nav ul { display: flex; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; }
   nav ul a { display: block; padding: 8px 12px; border-radius: 8px; color: var(--ink-2); text-decoration: none; font-size: 15px; font-weight: 500; }
   nav ul a:hover { color: var(--ink); background: var(--surface); }
-  nav .btn { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 10px; margin-left: 8px; }
+  nav .btn { height: 36px; padding: 0 14px; font-size: 14px; border-radius: 7px; margin-left: 8px; }
 
   /* Hero: the headline, the download, and both apps drawn to scale */
   /* The hero: a Figma canvas in the page's theme, the lockup selected on
@@ -585,7 +586,7 @@
   .closing { display: flex; flex-direction: column; align-items: center; margin-top: clamp(120px, 14vw, 200px); padding: 0 var(--gutter) 32px; text-align: center; }
   .closing h2 { font-size: clamp(3rem, 8vw, 6rem); line-height: 0.95; letter-spacing: -0.04em; font-weight: 700; }
   .closing > p { margin-top: 16px; font-size: 16px; color: var(--ink-2); }
-  .closing .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 32px; }
+  .closing .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; width: max-content; max-width: 100%; margin-top: 32px; }
   .site-links { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 20px; width: 100%; max-width: calc(var(--wrap) - 2 * var(--gutter)); margin-top: clamp(96px, 12vw, 144px); padding-top: 24px; border-top: 1px solid var(--line); font-size: 14px; }
   .site-links a { color: var(--ink-2); text-decoration: none; }
   .site-links a:hover { color: var(--ink); }
@@ -1551,8 +1552,14 @@
   // back and forth from the top down, over the page as it was. The strokes
   // are sized from the window so they always end up covering all of it
   const BLANK = "url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)";
-  function brushOver(change) {
+  function brushOver(change, event) {
+    // The brush pops up at once; the reveal starts as it does
+    const picked = event.currentTarget;
+    for (const button of pencils) button.setAttribute("aria-checked", button === picked);
     if (!document.startViewTransition) return change();
+    setTimeout(() => reveal(change), 240);
+  }
+  function reveal(change) {
     const w = innerWidth, h = innerHeight, k = 0.25;
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(w * k);
