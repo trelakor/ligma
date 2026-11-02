@@ -494,8 +494,7 @@
   .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -0.6); }
   .tray button:focus-visible { outline: none; }
   .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
-  .tray .gloss { opacity: 0.6; }
-  :root.dark .tray .gloss { opacity: 1; }
+  .brush-over { position: fixed; inset: 0; z-index: 2147483647; width: 100vw; height: 100vh; pointer-events: none; }
   :root.dark .tray svg { filter: saturate(1.25) drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 40%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
   .tray .tip {
     position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
@@ -1491,18 +1490,17 @@
   })();
   const pencil = (id) => `<svg viewBox="0 0 30 102" aria-hidden="true">
     <defs>
-      <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p5)"/><stop offset=".24" style="stop-color:var(--p3)"/><stop offset=".6" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:var(--p7)"/></linearGradient>
+      <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p5)"/><stop offset=".26" style="stop-color:color-mix(in srgb, var(--p3) 45%, var(--p5))"/><stop offset=".62" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:color-mix(in srgb, var(--p7) 70%, var(--p5))"/></linearGradient>
       <linearGradient id="pg-${id}" x1="0" x2="1"><stop offset="0" stop-color="#5e5e5e"/><stop offset=".26" stop-color="#8c8c8c"/><stop offset=".62" stop-color="#5b5b5b"/><stop offset="1" stop-color="#363636"/></linearGradient>
       <linearGradient id="pd-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset=".12" stop-color="#fff" stop-opacity=".18"/><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".5"/></linearGradient>
-      <linearGradient id="pc-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".4"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></linearGradient>
+      <linearGradient id="pc-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".2"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></linearGradient>
       <linearGradient id="pm-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1f1f1f"/><stop offset=".45" stop-color="#4c4c4c"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient>
       <linearGradient id="ph-${id}" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".22" stop-color="#fff" stop-opacity=".22"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
       <filter id="ps-${id}" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation=".18"/></filter>
       <clipPath id="pk-${id}"><path d="M5.8 31C4 24.2 2 14.4.5 3.6 10 1.9 20 1.9 29.5 3.6 28 14.4 26 24.2 24.2 31z"/></clipPath>
     </defs>
     <path d="M5.6 36h18.8v66H5.6z" fill="url(#pb-${id})"/>
-    <path d="M5.6 36h18.8v66H5.6z" fill="url(#ph-${id})" class="gloss"/>
-    <svg x="10" y="40" width="10" height="10" viewBox="0 0 16 16" style="color:var(--logo)"><use href="#i-figma"/></svg>
+    <svg x="10" y="40" width="10" height="10" viewBox="0 0 16 16" style="color:var(--logo);opacity:var(--logo-o)"><use href="#i-figma"/></svg>
     <g clip-path="url(#pk-${id})">
       <path d="M5.8 31C4 24.2 2 14.4.5 3.6 10 1.9 20 1.9 29.5 3.6 28 14.4 26 24.2 24.2 31z" fill="url(#pg-${id})"/>
       <g filter="url(#ps-${id})">${hairs}</g>
@@ -1533,10 +1531,93 @@
         ? (dark ? ["#f2f2f2", "#d6d6d6", "#ababab"] : ["#f5f5f5", "#d9d9d9", "#a8a8a8"])
         : (dark ? [ramp["--a-400"], ramp["--a-500"], ramp["--a-600"]] : [ramp["--a-300"], ramp["--a-500"], ramp["--a-700"]]);
       stops.forEach((color, i) => button.style.setProperty(`--p${[3, 5, 7][i]}`, color));
-      button.style.setProperty("--logo", button.dataset.theme === "figma" ? "rgb(0 0 0 / 0.28)" : "rgb(255 255 255 / 0.42)");
+      button.style.setProperty("--logo", button.dataset.theme === "figma" ? "#000" : "#fff");
+      button.style.setProperty("--logo-o", button.dataset.theme === "figma" ? "0.26" : "0.4");
       button.setAttribute("aria-checked", button.dataset.theme === state.theme);
     }
     for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
+  }
+
+  // Picking a brush paints the screen over in its color, in big curved
+  // strokes back and forth from the top down, switches the theme while it's
+  // covered, then the same strokes wipe the paint off. The strokes are sized
+  // from the window so they always cover all of it
+  function brushOver(change, event) {
+    const color = getComputedStyle(event.currentTarget).getPropertyValue("--p5").trim() || "#888";
+    const w = innerWidth, h = innerHeight, dpr = Math.min(2, devicePixelRatio || 1);
+    const canvas = document.createElement("canvas");
+    canvas.className = "brush-over";
+    canvas.width = Math.ceil(w * dpr);
+    canvas.height = Math.ceil(h * dpr);
+    document.body.append(canvas);
+    const g = canvas.getContext("2d");
+    g.scale(dpr, dpr);
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    // Four rows, each an arc sagging a little, starting and ending past the edges
+    const rows = Math.max(3, Math.round(h / Math.max(220, w * 0.22)));
+    const band = h / rows, width = band * 1.75;
+    const strokes = Array.from({ length: rows }, (_, r) => {
+      const y = band * (r + 0.5), ltr = r % 2 === 1;
+      const x0 = ltr ? -0.2 * w : 1.2 * w, x1 = ltr ? 1.2 * w : -0.2 * w;
+      return { x0, y0: y - band * 0.22, cx: w / 2, cy: y + band * 0.4, x1, y1: y - band * 0.12 };
+    });
+    const at = (s, t) => {
+      const u = 1 - t;
+      return [u * u * s.x0 + 2 * u * t * s.cx + t * t * s.x1, u * u * s.y0 + 2 * u * t * s.cy + t * t * s.y1];
+    };
+    // The bristles leave faint streaks of varied weight along each stroke
+    const streaks = Array.from({ length: 22 }, (_, n) => ({
+      k: -0.44 + (n / 21) * 0.88 + (Math.random() - 0.5) * 0.03,
+      light: Math.random() > 0.5,
+      alpha: 0.03 + Math.random() * 0.06,
+      weight: 0.004 + Math.random() * 0.012,
+    }));
+    function draw(progress) {
+      const total = progress * strokes.length;
+      strokes.forEach((s, i) => {
+        const end = Math.min(1, total - i);
+        if (end <= 0) return;
+        const steps = Math.max(2, Math.ceil(end * 48));
+        const line = (offset) => {
+          g.beginPath();
+          for (let n = 0; n <= steps; n++) {
+            const [x, y] = at(s, (n / steps) * end);
+            n ? g.lineTo(x, y + offset) : g.moveTo(x, y + offset);
+          }
+          g.stroke();
+        };
+        g.lineWidth = width;
+        g.strokeStyle = color;
+        line(0);
+        if (g.globalCompositeOperation === "source-over") {
+          for (const s of streaks) {
+            g.lineWidth = Math.max(1, width * s.weight);
+            g.strokeStyle = s.light ? `rgb(255 255 255 / ${s.alpha})` : `rgb(0 0 0 / ${s.alpha})`;
+            line(s.k * width);
+          }
+        }
+      });
+    }
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    const run = (ms, frame) => new Promise((done) => {
+      const begin = performance.now();
+      const tick = (now) => {
+        const t = Math.min(1, (now - begin) / ms);
+        frame(ease(t));
+        t < 1 ? requestAnimationFrame(tick) : done();
+      };
+      requestAnimationFrame(tick);
+    });
+    run(560, (t) => { g.clearRect(0, 0, w, h); draw(t); })
+      .then(() => {
+        g.fillStyle = color;
+        g.fillRect(0, 0, w, h);
+        change();
+        g.globalCompositeOperation = "destination-out";
+        return run(520, (t) => draw(t));
+      })
+      .then(() => canvas.remove());
   }
 
   for (const button of document.querySelectorAll(".modes button")) {
@@ -1551,7 +1632,9 @@
 
   function pick(theme, mode, event) {
     if (theme === state.theme && mode === state.mode) return;
-    retint(() => {
+    // A brush paints the new theme over the screen; anything else crossfades
+    const brushed = event?.currentTarget?.closest?.("#tray") && !reduced.matches;
+    (brushed ? brushOver : retint)(() => {
       Object.assign(state, { theme, mode, picked: true });
       paint();
     }, event);

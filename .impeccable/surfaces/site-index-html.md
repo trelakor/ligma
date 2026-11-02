@@ -74,3 +74,5 @@ Brushes (2026-11-02, refined): no flat cel shading anywhere. The tuft has gently
 Brushes (2026-11-02): the tuft has sharp top corners on a barely domed top, and its sides pinch in toward two thirds of the way down (about 9% each side) before flaring back out to the ferrule
 
 Brushes (2026-11-02): fan shaped and shorter. The tuft is widest at its square-cornered top and narrows in a gentle curve to a slimmer ferrule and handle (about 63% of the width); the hairs fan out from the ferrule. They peek 1.08 widths over the window, and a picked one rises 0.6 widths to show the handle and its mark
+
+Brush-over (2026-11-02): picking a brush paints the whole window over in its paint color, in curved strokes back and forth from the top down (rows and stroke width sized from the window so it always covers it, ends past the edges), with faint streaks of varied weight; the theme switches while covered and the same strokes wipe the paint off. About 1.1s; reduced motion and everything else keep the crossfade. Brush shading softened: half the highlight on handle and paint, no handle streak; the Figma mark is drawn solid and faded as a whole so its overlaps don't show
