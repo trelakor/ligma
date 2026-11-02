@@ -272,8 +272,8 @@
   /* Tabs drawing */
   .window { position: absolute; left: 6em; right: -4em; top: 9em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
   .tabbar { display: flex; height: 3.8em; background: var(--tb-bar); color: var(--tb-text); font-size: 1.2em; font-weight: 500; }
-  /* Even space either side of a tab's contents. The file icon and the close
-     button have room inside them, so their sides pad less */
+  /* A little more room after a tab's label than before its icon, so it
+     looks even. The close button has room inside it, so that side pads less */
   .tabbar > div { position: relative; display: flex; align-items: center; gap: 0.75em; flex: none; padding: 0 1.4em 0 0.95em; }
   .tabbar > div:has(.x) { padding-right: 1.1em; }
   .tabbar > div::after { content: ""; position: absolute; right: 0; top: 0.9em; bottom: 0.9em; width: 1px; background: var(--tb-divider); }
