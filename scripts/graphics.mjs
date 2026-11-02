@@ -1,5 +1,8 @@
 // Renders the social cover and the README's graphics with a local Chrome or
-// Edge: assets/social/cover.html to site/social-cover.png, and each graphic
+// Edge: assets/social/cover.html to site/social-cover.png, the 3:1 banner in
+// assets/social/banner.html to assets/social/banner.png and banner-light.png,
+// the 16:9 cover in assets/social/cover-16x9.html to cover-16x9.png and
+// cover-16x9-light.png, and each graphic
 // in assets/readme/readme.html to assets/readme/<name>-<light|dark>.png
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -49,6 +52,11 @@ function render(page, hash, out, width, height, scale, transparent) {
 }
 
 render(join(root, "assets", "social", "cover.html"), "", join(root, "site", "social-cover.png"), 1280, 640, 1, false);
+render(join(root, "assets", "social", "banner.html"), "", join(root, "assets", "social", "banner.png"), 1500, 500, 2, false);
+render(join(root, "assets", "social", "banner.html"), "#light", join(root, "assets", "social", "banner-light.png"), 1500, 500, 2, false);
+for (const theme of ["", "-light"]) {
+  render(join(root, "assets", "social", "cover-16x9.html"), theme && "#light", join(root, "assets", "social", `cover-16x9${theme}.png`), 1600, 900, 2, false);
+}
 for (const { name, width, height } of readme) {
   for (const theme of ["light", "dark"]) {
     render(join(root, "assets", "readme", "readme.html"), `#${name}-${theme}`, join(root, "assets", "readme", `${name}-${theme}.png`), width, height, 2, true);
