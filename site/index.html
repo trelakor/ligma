@@ -377,7 +377,7 @@
   .f-menu hr { height: 1px; margin: 8px -8px; border: 0; background: #383838; }
   .f-tip { position: absolute; z-index: 3; display: flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 5px; background: #1e1e1e; color: #fff; }
 
-  /* Popovers: the color picker and the Actions panel */
+  /* Popovers: the Actions panel */
   .f-pop { position: absolute; z-index: 2; border-radius: 13px; background: var(--panel); box-shadow: var(--pop); overflow: hidden; }
 
   /* Ligma's split view: one set of panels, two canvases */
@@ -397,22 +397,6 @@
   /* Copy as code: the code it gave, in an editor */
   .snippet { position: absolute; padding: 12px 16px; border-radius: 8px 0 0 0; background: #1e1e1e; color: #d4d4d4; font: 12px/19px var(--mono); box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.6), 0 6px 18px rgb(0 0 0 / 0.25); white-space: pre; }
   .snippet .s { color: #ce9178; } .snippet .c { color: #6a9955; } .snippet .k { color: #569cd6; } .snippet .a { color: #9cdcfe; }
-
-  /* Color contrast: Figma's color picker, with Ligma's ratio under it */
-  .picker .sq { position: relative; height: 240px; background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue)); }
-  .picker .sq svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .picker .knob { position: absolute; width: 14px; height: 14px; margin: -7px; border-radius: 50%; background: var(--pick); box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgb(0 0 0 / 0.2), inset 0 0 0 1px rgb(0 0 0 / 0.1); }
-  .picker .sliders { display: grid; grid-template-columns: 24px 1fr; gap: 8px 8px; align-items: center; padding: 16px 16px 8px 12px; }
-  .picker .sliders svg { grid-row: span 2; color: var(--t1); }
-  .picker .bar { position: relative; height: 12px; border-radius: 6px; box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.15); }
-  .picker .bar i { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px; border-radius: 50%; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgb(0 0 0 / 0.2); }
-  .picker .hexrow { display: grid; grid-template-columns: 56px 1fr; gap: 8px; padding: 0 16px 12px; }
-  /* Ligma's row, as src-tauri/src/contrast.rs draws it */
-  .picker .ratio { display: flex; align-items: center; gap: 8px; height: 32px; margin-bottom: 8px; padding: 0 16px; color: var(--t2); }
-  .picker .aa { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 4px; background: #fff; box-shadow: inset 0 0 0 1px var(--bd); color: var(--pick); font-weight: 600; letter-spacing: -0.01em; }
-  .picker .ratio b { font-weight: 500; color: var(--t1); font-variant-numeric: tabular-nums; }
-  .picker .lv { display: flex; gap: 10px; margin-left: auto; }
-  .picker .lv > span { display: flex; align-items: center; gap: 4px; }
 
   /* The left sidebar, with your plugins under Figma's own buttons */
   .f-nav { position: absolute; left: 0; top: 0; bottom: 0; width: 48px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; background: var(--panel); border-right: 1px solid var(--bd); }
@@ -762,7 +746,6 @@
     <symbol id="i-dash" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4.5 8h7"/></symbol>
     <symbol id="i-tick" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8.5 3.2 3L13 4.5"/></symbol>
     <symbol id="i-play" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M5.5 3.8v8.4L12 8z"/></symbol>
-    <symbol id="i-pick" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m8.5 5 2.5 2.5M3.5 12.5l.5-2 5.2-5.2 2.5 2.5L6.5 13z"/><path d="m9.8 4.2 1.3-1.3a1.3 1.3 0 0 1 1.9 1.9l-1.3 1.3"/></symbol>
     <symbol id="i-opacity" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/><path d="M3.5 12.5 12.5 3.5v9z" fill="currentColor" stroke="none" opacity=".45"/></symbol>
     <symbol id="i-radius" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M3.5 12.5V7.5a4 4 0 0 1 4-4h5"/></symbol>
     <symbol id="i-hand" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8.5V4a1 1 0 0 1 2 0v3.5M7.5 7V3a1 1 0 0 1 2 0v4M9.5 7V4a1 1 0 0 1 2 0v5c0 2.8-1.7 4.5-4.2 4.5-1.6 0-2.6-.7-3.4-1.9L2.6 9.5a1 1 0 0 1 1.6-1.2l1.3 1.4"/></symbol>
@@ -827,7 +810,6 @@
           <li><a href="#f-rail"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the sidebar</a></li>
           <li><a href="#f-previews"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
           <li><a href="#f-copy"><svg class="icon"><use href="#i-code"/></svg>Copy as code</a></li>
-          <li><a href="#f-contrast"><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</a></li>
         </ul>
         <ul class="reel-track" aria-hidden="true">
           <li><a href="#f-split" tabindex="-1"><svg class="icon"><use href="#i-split"/></svg>Split view</a></li>
@@ -837,7 +819,6 @@
           <li><a href="#f-rail" tabindex="-1"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the sidebar</a></li>
           <li><a href="#f-previews" tabindex="-1"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</a></li>
           <li><a href="#f-copy" tabindex="-1"><svg class="icon"><use href="#i-code"/></svg>Copy as code</a></li>
-          <li><a href="#f-contrast" tabindex="-1"><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</a></li>
         </ul>
       </div>
       <div class="reel-row back">
@@ -954,7 +935,7 @@
     </div>
 
     <div class="cv" id="cv" data-lenis-prevent-horizontal role="region" aria-label="Features, as frames on a Figma canvas. Drag to look around">
-      <div class="cv-board" style="width:4000px;height:1520px">
+      <div class="cv-board" style="width:3480px;height:1520px">
         <div class="cv-frame" id="f-split" style="left:160px;top:140px;width:900px;height:640px">
           <span class="nm">Split view</span>
           <div class="cv-art" aria-hidden="true">
@@ -1235,42 +1216,6 @@
             <code>"copyAsCode": true</code>
           </div>
         </div>
-        <div class="cv-frame" id="f-contrast" style="left:3240px;top:900px;width:400px;height:300px">
-          <span class="nm">Color contrast</span>
-          <div class="cv-art" aria-hidden="true">
-            <div class="shot" style="--w:400">
-              <div class="f-pop picker rv" style="--d:0;left:50px;top:-76px;width:240px;--hue:#ff4d00;--pick:#b83a0d">
-                <div class="sq">
-                  <span class="knob" style="left:70%;top:55%"></span>
-                  <svg viewBox="0 0 1 1" preserveAspectRatio="none" fill="none" stroke-linecap="round">
-                    <path d="M0 .50C.3 .48.6 .42 1 .34" stroke="rgb(0 0 0/.35)" stroke-width="3" vector-effect="non-scaling-stroke"/><path d="M0 .50C.3 .48.6 .42 1 .34" stroke="#fff" stroke-width="1.25" vector-effect="non-scaling-stroke"/>
-                    <path d="M0 .70C.3 .68.6 .63 1 .57" stroke="rgb(0 0 0/.35)" stroke-width="3" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/><path d="M0 .70C.3 .68.6 .63 1 .57" stroke="#fff" stroke-width="1.25" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>
-                  </svg>
-                </div>
-                <div class="sliders">
-                  <svg><use href="#i-pick"/></svg>
-                  <div class="bar" style="background:linear-gradient(to right,red,#ff0,lime,cyan,blue,#f0f,red)"><i style="left:4.5%;background:#ff4d00"></i></div>
-                  <div class="bar" style="background:linear-gradient(to right,transparent,#b83a0d),repeating-conic-gradient(#ddd 0 25%,#fff 0 50%) 0 0/8px 8px"><i style="left:calc(100% - 6px);background:#b83a0d"></i></div>
-                </div>
-                <div class="hexrow"><span class="f-in" style="padding:0 4px 0 8px;justify-content:space-between">Hex<svg style="width:12px;height:12px;color:var(--t2)"><use href="#i-chev-down"/></svg></span><span class="f-in" style="padding-left:8px">B83A0D<span class="pc">100 %</span></span></div>
-                <div class="ratio rv" style="--d:.3">
-                  <span class="aa">Aa</span><b>5.40:1</b>
-                  <span class="lv"><span class="pass"><svg viewBox="0 0 12 2" style="width:12px;height:2px;opacity:.6"><path d="M0 1h12" stroke="currentColor" stroke-width="1.5"/></svg>AA<svg viewBox="0 0 12 12" style="width:12px;height:12px;color:#14ae5c"><path d="m3 6.2 2 2L9 4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="short"><svg viewBox="0 0 12 2" style="width:12px;height:2px;opacity:.6"><path d="M0 1h12" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/></svg>AAA<svg viewBox="0 0 12 12" style="width:12px;height:12px;color:var(--t3)"><path d="m4 4 4 4m0-4L4 8" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span></span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="cv-note" style="left:3610px;top:1000px">
-          <span class="cv-pin"><img src="logo.png" alt=""></span>
-          <div class="cv-card">
-            <div class="who"><b>Ligma</b></div>
-            <h3>Color contrast</h3>
-            <p>The color picker shows the WCAG ratio against what's behind the layer, worked out from every layer under it.</p>
-            <ul><li>Lines on the square mark where AA and AAA start to pass</li></ul>
-            <code>"colorContrast": true</code>
-          </div>
-        </div>
       </div>
       <div class="cv-layers cv-ui" role="group" aria-label="Frames">
         <div class="f-head"><span class="f-logo"><svg><use href="#i-figma"/></svg><svg><use href="#i-chev-down"/></svg></span></div>
@@ -1283,7 +1228,6 @@
         <button type="button" class="f-layer" data-frame="f-rail"><svg><use href="#i-frame"/></svg><span>Plugins in the sidebar</span></button>
         <button type="button" class="f-layer" data-frame="f-dev"><svg><use href="#i-frame"/></svg><span>Development plugins</span></button>
         <button type="button" class="f-layer" data-frame="f-copy"><svg><use href="#i-frame"/></svg><span>Copy as code</span></button>
-        <button type="button" class="f-layer" data-frame="f-contrast"><svg><use href="#i-frame"/></svg><span>Color contrast</span></button>
       </div>
       <div class="cv-tools cv-ui" aria-hidden="true">
         <div class="f-bar"><span><svg><use href="#i-move3"/></svg></span><span class="on"><svg><use href="#i-hand"/></svg></span><span><svg><use href="#i-comment"/></svg></span></div>

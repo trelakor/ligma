@@ -786,7 +786,6 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
         .initialization_script(crate::adjustments::page_js())
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
-        .initialization_script(crate::contrast::page_js())
         .initialization_script(crate::split::PAGE_JS)
         .initialization_script(crate::split::CARRY_JS)
         .initialization_script(crate::view_state::page_js(waking));

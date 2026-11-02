@@ -7,7 +7,6 @@ mod appearance;
 mod auth;
 mod background;
 mod copy_code;
-mod contrast;
 mod discord_ipc;
 mod downloads;
 #[cfg(windows)]
@@ -306,7 +305,6 @@ fn main() {
             ai_actions::init(&settings);
             copy_code::init(&settings);
             view_state::init(&settings);
-            contrast::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());

@@ -537,15 +537,6 @@
       </label>
     </section>
     <section>
-      <h2>Colors</h2>
-      <label class="row">
-        <span class="label">Show contrast in the color picker
-          <div class="hint">For text, shapes and vectors, the WCAG contrast of a solid color against what's behind the layer, under the hex field, with lines on the color square where it starts to pass AA and AAA</div>
-        </span>
-        <input type="checkbox" class="switch" id="color-contrast">
-      </label>
-    </section>
-    <section>
       <h2>Home</h2>
       <label class="row">
         <span class="label">Use the classic home page
@@ -763,7 +754,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "color-contrast", "classic-home"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -967,7 +958,6 @@
     $("local-vectorize").checked = settings.localVectorize;
     $("local-select-object").checked = settings.localSelectObject;
     $("copy-as-code").checked = settings.copyAsCode;
-    $("color-contrast").checked = settings.colorContrast;
     $("classic-home").checked = settings.classicHome;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -1042,7 +1032,6 @@
       localVectorize: $("local-vectorize").checked,
       localSelectObject: $("local-select-object").checked,
       copyAsCode: $("copy-as-code").checked,
-      colorContrast: $("color-contrast").checked,
       classicHome: $("classic-home").checked,
       ...changes,
     };
