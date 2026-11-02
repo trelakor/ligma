@@ -504,6 +504,21 @@
     -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   }
   @keyframes brush-hold { from { opacity: 1; } to { opacity: 1; } }
+  /* The editor is its own layer, so it gets the same mask, lined up with the page */
+  html.brushing::view-transition-group(brush-editor) { animation-duration: 1000ms; }
+  html.brushing::view-transition-old(brush-editor) { animation: brush-hold 1000ms linear both; }
+  html.brushing::view-transition-new(brush-editor) {
+    animation: brush-hold 1000ms linear both;
+    -webkit-mask-image: var(--brush-mask); mask-image: var(--brush-mask);
+    -webkit-mask-size: 100vw 100vh; mask-size: 100vw 100vh; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: calc(var(--ed-x) * -1) calc(var(--ed-y) * -1); mask-position: calc(var(--ed-x) * -1) calc(var(--ed-y) * -1);
+  }
+  /* The brushes move from where they were to where they end, with the
+     same spring as on the page, while the reveal plays */
+  html.brushing .tray button { transition: none; }
+  html.brushing::view-transition-group(brush-up), html.brushing::view-transition-group(brush-down) { animation-duration: 420ms; animation-timing-function: cubic-bezier(0.3, 1.5, 0.5, 1); }
+  html.brushing::view-transition-old(brush-up), html.brushing::view-transition-old(brush-down) { animation: none; opacity: 0; }
+  html.brushing::view-transition-new(brush-up), html.brushing::view-transition-new(brush-down) { animation: none; }
   :root.dark .tray svg { filter: saturate(1.25) drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 40%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
   .tray .tip {
     position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
@@ -1552,14 +1567,25 @@
   // back and forth from the top down, over the page as it was. The strokes
   // are sized from the window so they always end up covering all of it
   const BLANK = "url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)";
+  // The picked brush rising, the last one sinking and the editor they stand
+  // behind get layers of their own in the transition, so the brushes move
+  // while the reveal plays and still tuck behind the window
   function brushOver(change, event) {
-    // The brush pops up at once; the reveal starts as it does
-    const picked = event.currentTarget;
-    for (const button of pencils) button.setAttribute("aria-checked", button === picked);
     if (!document.startViewTransition) return change();
-    setTimeout(() => reveal(change), 240);
+    const up = event.currentTarget;
+    const down = pencils.find((button) => button.getAttribute("aria-checked") === "true");
+    const editor = up.closest(".pencil-stage").querySelector(".figma");
+    const box = editor.getBoundingClientRect();
+    root.style.setProperty("--ed-x", `${box.left}px`);
+    root.style.setProperty("--ed-y", `${box.top}px`);
+    up.style.viewTransitionName = "brush-up";
+    if (down) down.style.viewTransitionName = "brush-down";
+    editor.style.viewTransitionName = "brush-editor";
+    reveal(change, () => {
+      for (const el of [up, down, editor]) if (el) el.style.viewTransitionName = "";
+    });
   }
-  function reveal(change) {
+  function reveal(change, after) {
     const w = innerWidth, h = innerHeight, k = 0.25;
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(w * k);
@@ -1640,6 +1666,7 @@
     transition.finished.finally(() => {
       root.classList.remove("brushing");
       root.style.removeProperty("--brush-mask");
+      after?.();
     });
   }
 
