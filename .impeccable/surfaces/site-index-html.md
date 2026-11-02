@@ -25,4 +25,6 @@ Scroll story (added 2026-11-01): momentum scrolling (site/vendor/lenis.min.js, o
 
 Signature interaction: clicking a theme orb retints the whole page and switches light or dark. The new palette spreads as a circle from the orb (View Transitions), and a large Figma editor mock in the themes section shows the theme on Figma's interface while the canvas design stays untouched.
 
-Features (2026-11-01): one Figma window, all in the page's theme so the theme switcher recolors it. On large screens it pins, and the scroll selects each of the eight features as a layer in the left panel; the canvas shows its drawing in a selected frame and the properties panel its copy and settings key. Clicking a layer scrolls to it. Elsewhere the features are a list of frames with their copy. Per-feature themes were tried and dropped: they fought the theme switcher
+Features (2026-11-01): a bento of eight tiles in the page's theme, so the theme switcher recolors them. Split view and Copy as code get the big tiles. Each tile is a drawing and one line; the plus opens a sheet with the drawing building up, the full details and the settings key. Tried and dropped: a theme per feature (fought the switcher) and a pinned scroll-through window (too much scrolling)
+
+Themes (2026-11-01): a fan deck of nine blades, Figma's own in the middle, each its mesh, accent ramp and name. Pointing at a blade lifts it, clicking it retints the page, and a Light and Dark switch sits under the fan

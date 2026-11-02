@@ -138,72 +138,51 @@
   .head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr); gap: 16px 48px; align-items: end; margin-bottom: clamp(40px, 5vw, 64px); }
   .head p { color: var(--ink-2); font-size: 18px; max-width: 34em; }
 
-  /* Features: a Figma window. Each feature is a layer, selected in turn as
-     you scroll on large screens, with its drawing on the canvas and its
-     details in the properties panel. Elsewhere they're a list */
-  .studio-bar, .layers-panel { display: none; }
-  .feats { display: grid; gap: 20px; }
-  .feat { display: grid; border-radius: 20px; overflow: hidden; background: var(--panel); box-shadow: 0 0 0 1px var(--line); }
-  .feat-canvas {
-    position: relative; display: grid; place-items: center; padding: 48px clamp(20px, 4vw, 40px) clamp(20px, 4vw, 40px);
-    background: radial-gradient(circle, var(--line-strong) 1px, transparent 1.4px) 10px 10px / 20px 20px, var(--canvas);
+  /* Features: a bento of tiles, each a feature's drawing and a line about
+     it. The plus opens the full details in a sheet */
+  .bento {
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px;
+    grid-template-areas: "s s s s t t" "s s s s d d" "p p c c c c" "k k c c c c" "v v v l l l";
   }
-  .feat-frame { position: relative; width: 100%; }
-  .feat-frame > .label { position: absolute; left: 0; bottom: calc(100% + 8px); font-size: 13px; font-weight: 500; color: var(--link); white-space: nowrap; }
-  .feat-frame::after { content: ""; position: absolute; inset: 0; box-shadow: 0 0 0 1.5px var(--link); pointer-events: none; }
-  .feat-frame > i { position: absolute; z-index: 1; width: 9px; height: 9px; background: var(--panel); border: 1.5px solid var(--link); border-radius: 1px; }
-  .feat-frame > i:nth-of-type(1) { left: -4px; top: -4px; } .feat-frame > i:nth-of-type(2) { right: -4px; top: -4px; }
-  .feat-frame > i:nth-of-type(3) { left: -4px; bottom: -4px; } .feat-frame > i:nth-of-type(4) { right: -4px; bottom: -4px; }
-  .feat-art { position: relative; aspect-ratio: 4 / 3; overflow: hidden; background: var(--field); color: var(--field-ink); container-type: inline-size; }
-  .feat-props { display: flex; flex-direction: column; padding: 20px clamp(20px, 3vw, 28px) 24px; }
-  .props-tabs { display: none; }
-  .feat h3 { display: flex; align-items: center; gap: 12px; font-size: clamp(1.75rem, 2.6vw, 2.25rem); letter-spacing: -0.03em; line-height: 1.05; }
-  .feat h3 .icon { width: 28px; height: 28px; color: var(--field); }
-  .feat p { margin-top: 12px; font-size: 16px; line-height: 1.55; color: var(--ink-2); }
-  .feat ul { margin: 18px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-  .feat li { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; line-height: 1.5; color: var(--ink-2); }
-  .feat li b { font-weight: 600; color: var(--ink); }
-  .setting { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-top: auto; padding-top: 20px; font-size: 13px; color: var(--ink-3); }
+  .tile { position: relative; display: flex; flex-direction: column; padding: 8px; border-radius: 24px; background: var(--surface); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
+  .tile:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+  .tile-head { padding: 16px 52px 18px 16px; }
+  .tile h3 { display: flex; align-items: center; gap: 10px; font-size: clamp(1.25rem, 1.7vw, 1.5rem); letter-spacing: -0.025em; }
+  .tile.big h3 { font-size: clamp(1.6rem, 2.6vw, 2.25rem); letter-spacing: -0.035em; }
+  .tile h3 .icon { width: 22px; height: 22px; color: var(--field); }
+  .tile.big h3 .icon { width: 28px; height: 28px; }
+  .tile-head p { margin-top: 6px; font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+  .tile.big .tile-head p { font-size: 17px; }
+  /* The big tiles' drawings grow to the height of the tiles beside them */
+  .tile.big .tile-art { flex: 1 0 auto; }
+  .tile-art { position: relative; margin-top: auto; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 16px; background: var(--field); color: var(--field-ink); container-type: inline-size; }
+  /* The plus covers the tile, so the whole tile opens it */
+  .tile .open { position: absolute; inset: 0; display: flex; justify-content: flex-end; align-items: flex-start; padding: 18px; border: 0; border-radius: inherit; background: none; color: var(--ink); cursor: pointer; }
+  .tile .open .icon { width: 32px; height: 32px; padding: 7px; border-radius: 50%; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: rotate 240ms var(--ease), background-color 200ms, color 200ms; }
+  .tile:hover .open .icon, .tile .open:focus-visible .icon { rotate: 90deg; background: var(--ink); color: var(--bg); }
+  .tile .open:focus-visible { outline-offset: -2px; border-radius: 24px; }
+
+  .sheet {
+    width: min(1120px, 100vw - 32px); max-width: none; max-height: min(760px, 100dvh - 32px); padding: 0; border: 0; border-radius: 24px; overflow: auto;
+    background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 40px 80px -20px rgb(0 0 0 / 0.5);
+  }
+  .sheet[open] { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); animation: sheet-in 320ms var(--ease); }
+  .sheet::backdrop { background: rgb(0 0 0 / 0.45); backdrop-filter: blur(6px); }
+  @keyframes sheet-in { from { opacity: 0; translate: 0 24px; scale: 0.98; } }
+  .sheet-art { padding: 10px; }
+  .sheet-art .tile-art { border-radius: 16px; }
+  .sheet-copy { display: flex; flex-direction: column; padding: 40px 36px 28px 20px; }
+  .sheet h3 { display: flex; align-items: center; gap: 12px; padding-right: 40px; font-size: clamp(1.75rem, 2.8vw, 2.5rem); letter-spacing: -0.035em; line-height: 1.05; }
+  .sheet h3 .icon { width: 30px; height: 30px; color: var(--field); }
+  .sheet-copy p { margin-top: 14px; font-size: 17px; line-height: 1.55; color: var(--ink-2); }
+  .sheet-copy ul { margin: 20px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .sheet-copy li { padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.5; color: var(--ink-2); }
+  .sheet-copy li b { font-weight: 600; color: var(--ink); }
+  .setting { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; margin-top: auto; padding-top: 24px; font-size: 13px; color: var(--ink-3); }
   .setting code { background: none; border: 0; padding: 0; color: var(--ink-2); font-size: 13px; }
-
-  @media (min-width: 900px) {
-    .feat { grid-template-columns: minmax(0, 1fr) 340px; }
-    .feat-props { border-left: 1px solid var(--line); }
-  }
-
-  /* The window runs wider than the page's column, to give the canvas room */
-  .story .feat-scene .pin { display: flex; align-items: center; justify-content: center; }
-  .story .studio {
-    flex: none; width: min(100vw - 2 * var(--gutter) - 20px, 1480px); height: min(calc(100svh - 56px), 880px); display: grid;
-    grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: 44px minmax(0, 1fr);
-    border-radius: 16px; overflow: hidden; background: var(--panel); box-shadow: 0 0 0 1px var(--line), var(--shadow);
-  }
-  .story .studio-bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 0 10px; background: var(--tb-bar); border-bottom: 1px solid var(--tb-divider); }
-  .studio-bar img { width: 22px; height: 22px; margin: 0 4px; }
-  .studio-bar .tab { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px; border-radius: 8px; background: var(--tb-active); color: var(--tb-text-active); font-size: 13px; font-weight: 500; }
-  .studio-bar .tab .icon { width: 15px; height: 15px; color: var(--a-500); }
-  .story .layers-panel { display: flex; flex-direction: column; min-height: 0; padding: 14px 8px; border-right: 1px solid var(--line); }
-  .lp-head { padding: 0 10px 10px; font-size: 13px; font-weight: 600; }
-  .layers-panel ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
-  .layers-panel button {
-    position: relative; display: flex; align-items: center; gap: 10px; width: 100%; height: 36px; padding: 0 10px; overflow: hidden;
-    border: 0; border-radius: 6px; background: none; color: var(--ink-2); font: 500 14px/1 var(--text); text-align: left; cursor: pointer;
-    transition: background-color 200ms var(--ease), color 200ms var(--ease);
-  }
-  .layers-panel button:hover { background: var(--surface); }
-  .layers-panel button[aria-current] { background: var(--select); color: var(--ink); }
-  .layers-panel button::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: calc(var(--fill, 0) * 100%); background: var(--field); }
-  .layers-panel .icon { width: 16px; height: 16px; }
-  .lp-hint { margin-top: auto; padding: 0 10px; font-size: 12px; color: var(--ink-3); }
-  .story .feats { display: grid; min-height: 0; }
-  .story .feat { grid-area: 1 / 1; grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 360px); border-radius: 0; box-shadow: none; opacity: 0; visibility: hidden; transition: opacity 280ms var(--ease), visibility 280ms; }
-  .story .feat.on { opacity: 1; visibility: visible; }
-  .story .feat-canvas { container-type: size; padding: 36px 40px; }
-  .story .feat-frame { width: min(100cqw, (100cqh - 40px) * 4 / 3); margin-top: 16px; }
-  .story .feat-props { overflow: auto; padding-top: 0; }
-  .story .props-tabs { display: flex; align-items: center; gap: 16px; height: 44px; margin: 0 -28px 20px; padding: 0 28px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--ink-3); }
-  .props-tabs b { font-weight: 600; color: var(--ink); }
-  .props-tabs small { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .sheet .close { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--surface); color: var(--ink); cursor: pointer; }
+  .sheet .close .icon { width: 18px; height: 18px; }
+  .sheet .close:hover { background: var(--line); }
 
   /* Split view drawing */
   .sv { position: absolute; left: 5em; top: 7em; right: -4em; bottom: -4em; border-radius: 1.2em 0 0 0; overflow: hidden; background: var(--canvas); box-shadow: var(--shadow); }
@@ -357,43 +336,45 @@
   .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
   .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
 
-  /* Themes: the fan deck. Each chip is a theme's accent, its name and
-     hue, and the app's two swatches, light and dark, to click */
-  .deck { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 10px; }
-  .theme { display: flex; flex-direction: column; border-radius: 14px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--line); transition: transform 240ms var(--ease), box-shadow 240ms var(--ease); }
-  .theme.picked { transform: translateY(-10px); box-shadow: 0 0 0 2px var(--ink), var(--shadow); }
-  .theme .swatch { display: flex; flex-direction: column; justify-content: flex-end; aspect-ratio: 1 / 1.15; padding: 10px 12px; background: var(--chip); color: var(--chip-ink); }
-  .theme .swatch b { font: 650 17px/1.1 var(--display); letter-spacing: -0.01em; }
-  .theme .swatch span { font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .dark .theme .swatch { color: color-mix(in oklab, var(--chip-ink), #000 40%); }
-  .orbs { display: flex; justify-content: center; gap: 10px; padding: 14px 6px; }
-  /* As in the settings window (dist/settings.html): ligmaMesh's blobs,
-     blurred together, drifting while hovered */
-  .orb {
-    position: relative; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%;
-    background: none; cursor: pointer; box-shadow: 0 0 0 1px rgb(127 127 127 / 0.25);
-    transition: transform 160ms var(--ease), box-shadow 120ms ease-out;
+  /* Themes: a fan deck. Each blade is a theme: its mesh, its accent ramp
+     and its name up the edge, riveted at the foot. Pointing at one lifts it
+     out of the fan, clicking it retints the page. 1em is a unit of the
+     fan's 760-wide drawing */
+  .fan-wrap { container-type: inline-size; }
+  .fan { --spread: 12.5deg; position: relative; height: 440em; margin: 0 auto 40em; font-size: min(1px, 100cqw / 760); }
+  .blade {
+    --lift: 0em; position: absolute; left: 50%; bottom: 0; width: 124em; height: 400em; margin-left: -62em; padding: 8em 8em 0 0;
+    display: grid; grid-template-columns: 38em 1fr; grid-template-rows: 110em repeat(4, 1fr) 54em; gap: 5em 0;
+    border: 0; border-radius: 16em; background: var(--bg); color: var(--ink); cursor: pointer; font: inherit;
+    transform-origin: 50% calc(100% - 30em); transform: rotate(calc((var(--i) - 4) * var(--spread))) translateY(calc(var(--lift) * -1));
+    box-shadow: 0 0 0 1px var(--line), 0 2em 4em rgb(0 0 0 / 0.1), 0 18em 40em -12em rgb(0 0 0 / 0.35);
+    transition: transform 420ms var(--ease), box-shadow 200ms;
   }
-  .orb .mesh { position: absolute; inset: 0; overflow: hidden; border-radius: 50%; isolation: isolate; }
-  .orb .mesh::before {
-    content: ""; position: absolute; inset: -18%; background: var(--orb);
-    filter: blur(5px) saturate(1.2); animation: drift 4s ease-in-out infinite alternate paused;
+  .blade:hover, .blade:focus-visible { --lift: 34em; z-index: 10; }
+  .blade[aria-checked="true"] { --lift: 52em; z-index: 11; box-shadow: 0 0 0 2.5em var(--field), 0 18em 40em -12em rgb(0 0 0 / 0.35); }
+  .blade:focus-visible { outline: none; box-shadow: 0 0 0 2.5em var(--ink), 0 18em 40em -12em rgb(0 0 0 / 0.35); }
+  .blade b {
+    grid-row: 1 / 6; align-self: start; writing-mode: vertical-rl; padding-top: 0.6em; text-align: start;
+    font: 650 20em/1.9 var(--display); letter-spacing: -0.005em; white-space: nowrap;
   }
-  .orb:hover { transform: scale(1.1); }
-  .orb:hover .mesh::before, .orb:focus-visible .mesh::before { animation-play-state: running; }
+  .blade b small { font: 500 0.62em/1 var(--text); color: var(--ink-3); margin-top: 0.8em; }
+  .blade .mesh { position: relative; overflow: hidden; border-radius: 9em; isolation: isolate; }
+  .blade .mesh::before { content: ""; position: absolute; inset: -18%; background: var(--orb); filter: blur(6px) saturate(1.2); animation: drift 4s ease-in-out infinite alternate paused; }
+  .blade:hover .mesh::before, .blade:focus-visible .mesh::before { animation-play-state: running; }
   @keyframes drift {
-    33% { transform: rotate(40deg) scale(1.1); filter: blur(5px) saturate(1.4) hue-rotate(-10deg); }
-    66% { transform: rotate(-25deg) scale(1.05); filter: blur(5px) saturate(1.3) hue-rotate(8deg); }
-    100% { transform: rotate(70deg) scale(1.12); filter: blur(5px) saturate(1.45); }
+    33% { transform: rotate(40deg) scale(1.1); filter: blur(6px) saturate(1.4) hue-rotate(-10deg); }
+    66% { transform: rotate(-25deg) scale(1.05); filter: blur(6px) saturate(1.3) hue-rotate(8deg); }
+    100% { transform: rotate(70deg) scale(1.12); filter: blur(6px) saturate(1.45); }
   }
-  .orb:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ink); }
-  .orb[aria-checked="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--field); }
-  .orb .badge {
-    position: absolute; z-index: 1; right: -5px; bottom: -5px; display: none; place-items: center;
-    width: 16px; height: 16px; border-radius: 50%; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1.5px var(--field);
-  }
-  .orb .badge svg { width: 10px; height: 10px; }
-  .orb[aria-checked="true"] .badge { display: grid; }
+  .blade i { border-radius: 5em; }
+  .blade .foot { grid-column: 1 / 3; display: grid; place-items: center; }
+  .blade .foot::after { content: ""; width: 16em; height: 16em; border-radius: 50%; background: var(--line); box-shadow: inset 0 1em 2em rgb(0 0 0 / 0.25); }
+  .modes { display: flex; justify-content: center; }
+  #themes .now { justify-content: center; margin-top: 16px; }
+  .modes div { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+  .modes button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: 9px; background: none; color: var(--ink-2); font: 500 14px/1 var(--text); cursor: pointer; }
+  .modes button svg { width: 15px; height: 15px; }
+  .modes button[aria-checked="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 0.1); }
   .now { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 28px; font-size: 15px; color: var(--ink-2); min-height: 40px; }
   .now b { color: var(--ink); font-weight: 600; }
   .now button { font: inherit; font-weight: 600; color: var(--link); background: none; border: 0; padding: 4px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; }
@@ -580,10 +561,12 @@
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 
   @media (max-width: 1080px) {
-    .deck { grid-template-columns: repeat(5, minmax(0, 1fr)); row-gap: 20px; }
   }
   @media (max-width: 900px) {
     .masthead, .head, .ai { grid-template-columns: minmax(0, 1fr); }
+    .bento { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "s s" "t d" "p k" "c c" "v l"; }
+    .sheet[open] { grid-template-columns: minmax(0, 1fr); }
+    .sheet-copy { padding: 8px 24px 24px; }
     .ai { row-gap: 0; }
     .ai > div:first-child { display: contents; }
     .ai .chip { order: 1; margin-top: 28px; position: sticky; top: 12px; z-index: 1; }
@@ -599,8 +582,10 @@
   @media (max-width: 640px) {
     nav ul li:not(:last-child) { display: none; }
     .weight { aspect-ratio: 3 / 4; min-height: 0; }
-    .deck { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .fan { --spread: 10deg; font-size: min(1px, 100cqw / 560); }
     .index { grid-template-columns: minmax(0, 1fr); }
+    .bento { grid-template-columns: minmax(0, 1fr); grid-template-areas: none; }
+    .tile { grid-area: auto !important; }
     .install { grid-template-columns: minmax(0, 1fr); }
     .dock { position: static; translate: none; margin-top: 64px; flex-wrap: wrap; justify-content: center; white-space: normal; }
     .signoff { padding-bottom: 32px; }
@@ -611,8 +596,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .orb, .theme, .btn, .rail .plug { transition: none; }
-    .orb .mesh::before, .photo .ants, .you { animation: none; }
+    .blade, .tile, .btn, .rail .plug { transition: none; }
+    .blade .mesh::before, .photo .ants, .you, .sheet[open] { animation: none; }
   }
 </style>
 </head>
@@ -682,7 +667,7 @@
     <div class="masthead">
       <h1>Same Figma. Lighter.</h1>
       <div class="pitch">
-        <p>A lightweight desktop app for Figma on macOS and Windows, with far more to work with: split view, nine themes, your plugins in the left rail and free AI image tools.</p>
+        <p>A lightweight desktop app for Figma, with far more to work with</p>
         <div class="actions">
           <a class="btn primary" id="dl-primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
           <a class="btn" id="dl-secondary" href="https://github.com/trelakor/ligma/releases/latest">All downloads</a>
@@ -791,337 +776,302 @@
       <p>Ligma opens figma.com in WebView2 or WKWebView and adds what the web version doesn't have, so it feels like the desktop app at a fraction of the size.</p>
     </div>
 
-    <div class="feat-scene scene" data-scene="features" style="--len: 760svh">
-      <div class="pin">
-        <div class="studio">
-          <div class="studio-bar" aria-hidden="true">
-            <img src="logo.png" alt="">
-            <span class="tab"><svg class="icon"><use href="#i-design"/></svg>What Ligma adds</span>
-          </div>
-          <div class="layers-panel" role="group" aria-label="Features">
-            <div class="lp-head">Layers</div>
-            <ol>
-              <li><button type="button" data-go="0"><svg class="icon"><use href="#i-tabs"/></svg>Tabs</button></li>
-              <li><button type="button" data-go="1"><svg class="icon"><use href="#i-split"/></svg>Split view</button></li>
-              <li><button type="button" data-go="2"><svg class="icon"><use href="#i-rail"/></svg>Plugins in the rail</button></li>
-              <li><button type="button" data-go="3"><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</button></li>
-              <li><button type="button" data-go="4"><svg class="icon"><use href="#i-presence"/></svg>Discord</button></li>
-              <li><button type="button" data-go="5"><svg class="icon"><use href="#i-code"/></svg>Copy as code</button></li>
-              <li><button type="button" data-go="6"><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</button></li>
-              <li><button type="button" data-go="7"><svg class="icon"><use href="#i-layers"/></svg>Layer previews</button></li>
-            </ol>
-            <p class="lp-hint">Scroll to select the next layer</p>
-          </div>
-          <div class="feats">
-          <article class="feat" data-feat="0">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Tabs</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="window rv" style="--d: 0">
-                    <div class="tabbar">
-                      <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
-                      <div class="sq rv" style="--d: .12"><span class="emoji">🎨</span></div>
-                      <div class="on rv" style="--d: .18"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
-                      <div class="rv" style="--d: .24"><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
-                      <div class="hover sleep pre rv" style="--d: .3"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
-                      <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
-                    </div>
-                    <div class="editor">
-                      <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div><div class="bar short"></div></div>
-                      <div></div>
-                    </div>
+    <div class="bento">
+      <article class="tile big" style="grid-area: s" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-split"/></svg>Split view, and windows</h3>
+          <p>Two files side by side under one set of Figma's panels. Drag between them</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="sv rv" style="--d: 0">
+                  <div class="tabbar">
+                    <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
+                    <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span></div>
+                    <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Social kit</span></div>
+                    <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
                   </div>
-                  <div class="tabpreview rv" style="--d: .42">
-                    <div class="shot">
-                      <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
-                      <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
-                      <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
-                      <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
-                    </div>
-                    <b>Q3 pitch</b>
-                    <span>Figma Slides · Asleep</span>
+                  <div class="sv-body">
+                    <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div></div>
+                    <div class="half on"><span class="fname">Brand refresh</span><div class="art-a"></div></div>
+                    <div class="half"><span class="fname">Social kit</span><div class="art-b"><i style="top:2em;width:60%"></i><i style="top:4.4em;width:40%"></i><i style="bottom:2em;height:6em"></i></div></div>
                   </div>
                 </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
+                <div class="drag rv pop" style="--d: .35"></div>
+                <svg class="drag-cursor rv" style="--d: .35" viewBox="0 0 16 16"><path d="M3 2l9.5 7-4.3.6L6 13.5z" fill="currentColor" stroke="#fff" stroke-width="1"/></svg>
               </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>01 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-tabs"/></svg>Tabs, like the desktop app</h3>
-              <p>Every file gets its own tab, with Home pinned on the left. Point at one to see how it last looked.</p>
-              <ul>
-                <li><b>Pin</b> a tab, or start a file's name with an emoji to make it the icon</li>
-                <li><b>Asleep</b> tabs give their memory back and reload when you open them</li>
-                <li><b>Reopen</b> your tabs next time, each on the same page, position and zoom</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>"restoreTabs": true</code></div>
-            </div>
-          </article>
-          <article class="feat" data-feat="1">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Split view</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="sv rv" style="--d: 0">
-                    <div class="tabbar">
-                      <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
-                      <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span></div>
-                      <div class="on"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Social kit</span></div>
-                      <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
-                    </div>
-                    <div class="sv-body">
-                      <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div></div>
-                      <div class="half on"><span class="fname">Brand refresh</span><div class="art-a"></div></div>
-                      <div class="half"><span class="fname">Social kit</span><div class="art-b"><i style="top:2em;width:60%"></i><i style="top:4.4em;width:40%"></i><i style="bottom:2em;height:6em"></i></div></div>
-                    </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about split view"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Two files side by side under one set of Figma's panels. Drag a selection from one into the other to move it there.</p>
+          <ul>
+            <li><b>Split</b> from a tab's menu, or drop a tab onto either half of the canvas</li>
+            <li><b>Windows</b>: drag a tab out of the bar for a window of its own, without reloading</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"splitView": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" style="grid-area: t" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-tabs"/></svg>Tabs, like the desktop app</h3>
+          <p>Every file in its own tab, with a look at how it last looked</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="window rv" style="--d: 0">
+                  <div class="tabbar">
+                    <div class="sq"><svg class="glyph"><use href="#i-home"/></svg></div>
+                    <div class="sq rv" style="--d: .12"><span class="emoji">🎨</span></div>
+                    <div class="on rv" style="--d: .18"><svg class="glyph" style="color:#0d99ff"><use href="#i-design"/></svg><span>Brand refresh</span><svg class="x"><use href="#i-x"/></svg></div>
+                    <div class="rv" style="--d: .24"><svg class="glyph" style="color:#9747ff"><use href="#i-board"/></svg><span>Onboarding map</span></div>
+                    <div class="hover sleep pre rv" style="--d: .3"><svg class="glyph" style="color:#ffa629"><use href="#i-slides"/></svg><span>Q3 pitch</span><svg class="x"><use href="#i-x"/></svg></div>
+                    <div class="sq"><svg class="glyph"><use href="#i-plus"/></svg></div>
                   </div>
-                  <div class="drag rv pop" style="--d: .35"></div>
-                  <svg class="drag-cursor rv" style="--d: .35" viewBox="0 0 16 16"><path d="M3 2l9.5 7-4.3.6L6 13.5z" fill="currentColor" stroke="#fff" stroke-width="1"/></svg>
-                </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
-              </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>02 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-split"/></svg>Split view, and windows</h3>
-              <p>Two files side by side under one set of Figma's panels. Drag a selection from one into the other to move it there.</p>
-              <ul>
-                <li><b>Split</b> from a tab's menu, or drop a tab onto either half of the canvas</li>
-                <li><b>Windows</b>: drag a tab out of the bar for a window of its own, without reloading</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>"splitView": true</code></div>
-            </div>
-          </article>
-          <article class="feat" data-feat="2">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Plugins in the rail</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="ui rv" style="--d: 0">
-                    <div class="rail">
-                      <span class="tool on"><svg><use href="#i-layers"/></svg></span>
-                      <span class="tool"><svg><use href="#i-assets"/></svg></span>
-                      <span class="tool"><svg><use href="#i-search"/></svg></span>
-                      <hr>
-                      <span class="plug rv pop" style="--d: .2;background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
-                      <span class="plug big rv pop" style="--d: .26;background:#7b61ff"><svg><use href="#i-scale"/></svg></span>
-                      <span class="plug rv pop" style="--d: .32;background:#14a38b"><svg><use href="#i-text"/></svg></span>
-                      <span class="plug rv pop" style="--d: .38;background:#f5b400"><svg><use href="#i-star"/></svg></span>
-                    </div>
-                    <div class="layers">
-                      <div class="file">Brand refresh</div>
-                      <div class="sub">Drafts</div>
-                      <div class="row on"><svg><use href="#i-frame"/></svg>Poster</div>
-                      <div class="row"><svg><use href="#i-text"/></svg>Headline</div>
-                      <div class="row"><svg><use href="#i-ellipse"/></svg>Sun</div>
-                      <div class="row"><svg><use href="#i-rect"/></svg>Background</div>
-                    </div>
+                  <div class="editor">
+                    <div class="side"><div class="bar picked"></div><div class="bar"></div><div class="bar short"></div><div class="bar"></div><div class="bar short"></div></div>
                     <div></div>
                   </div>
-                  <div class="tip rv" style="--d: .48">Contrast checker</div>
                 </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
-              </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>03 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-rail"/></svg>Your plugins, one click away</h3>
-              <p>Every plugin and widget saved to your Figma account sits in the editor's left rail, under Figma's own buttons. Click one to run it.</p>
-              <ul>
-                <li><b>Commands</b> show as a menu when a plugin has more than one</li>
-                <li><b>Reorder</b> by holding Ctrl and dragging. The order is kept for every file</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>"railPlugins": true</code></div>
-            </div>
-          </article>
-          <article class="feat" data-feat="3">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Development plugins</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="actions-panel rv" style="--d: 0">
-                    <div class="search"><svg><use href="#i-search"/></svg>Search</div>
-                    <div class="ap-tabs"><span>All</span><b>Plugins &amp; widgets</b></div>
-                    <div class="ap-chips"><span>Saved</span><span class="on">Development</span></div>
-                    <div class="ap-row hover rv" style="--d: .18"><span class="pi" style="background:#7b61ff"><svg><use href="#i-code"/></svg></span>Token sync<small>Development</small></div>
-                    <div class="ap-row rv" style="--d: .26"><span class="pi" style="background:#14a38b"><svg><use href="#i-contrast"/></svg></span>Contrast audit<small>Development</small></div>
-                    <div class="ap-row rv" style="--d: .34"><span class="pi" style="background:#ff5c39"><svg><use href="#i-frame"/></svg></span>Grid maker<small>Development</small></div>
-                    <div class="ap-row import rv" style="--d: .42"><svg style="width:1.4em;height:1.4em"><use href="#i-plus"/></svg>Import from manifest…</div>
+                <div class="tabpreview rv" style="--d: .42">
+                  <div class="shot">
+                    <i style="left:8%;top:14%;width:52%;height:12%;background:#fff4e0"></i>
+                    <i style="left:8%;top:32%;width:34%;height:7%;background:#8e8aa8"></i>
+                    <i style="left:62%;top:46%;width:30%;height:42%;background:#ffa629"></i>
+                    <i style="left:8%;top:62%;width:44%;height:26%;background:#3b3752"></i>
                   </div>
+                  <b>Q3 pitch</b>
+                  <span>Figma Slides · Asleep</span>
                 </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
               </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>04 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</h3>
-              <p>Import a plugin from its <code>manifest.json</code>, as in the Figma desktop app. figma.com can't do this.</p>
-              <ul>
-                <li><b>Rebuilt</b> plugins run their new code, as their files are read on every run</li>
-                <li><b>Not sandboxed</b>, unlike the desktop app, so import only ones you trust</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>plugins.json</code></div>
-            </div>
-          </article>
-          <article class="feat" data-feat="4">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Discord</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="profile rv" style="--d: 0">
-                    <div class="banner"></div>
-                    <div class="who">
-                      <div class="avatar"><span>M</span></div>
-                      <div class="name">Mira</div>
-                      <div class="handle">mira.designs</div>
-                    </div>
-                    <div class="activity rv" style="--d: .25">
-                      <div class="label">Playing</div>
-                      <div class="card2">
-                        <div class="large"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
-                        <div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div>
-                      </div>
-                      <div class="join">Ask to Join</div>
-                    </div>
-                  </div>
-                </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
-              </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>05 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</h3>
-              <p>Your profile shows the file you're in, the page or slide, and the tool in your hand. Keep any file private from its tab's menu.</p>
-              <ul>
-                <li><b>Hide files by default</b> and show only the ones you choose</li>
-                <li><b>Invites</b> let friends ask to join, and the file opens in their Ligma</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>"discordRichPresence": true</code></div>
-            </div>
-          </article>
-          <article class="feat" data-feat="5">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Copy as code</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="menu one rv" style="--d: 0">
-                    <div>Copy<span>Ctrl+C</span></div>
-                    <div>Paste here</div>
-                    <div class="on">Copy/Paste as<span>›</span></div>
-                    <hr>
-                    <div>Bring to front</div>
-                    <div>Send to back</div>
-                  </div>
-                  <div class="menu two rv" style="--d: .15">
-                    <div>CSS</div>
-                    <div>CSS (all layers)</div>
-                    <div>iOS</div>
-                    <div>Android</div>
-                    <hr>
-                    <div class="on">Tailwind</div>
-                    <div>Tailwind (all layers)</div>
-                    <div>React</div>
-                  </div>
-                  <div class="snippet rv" style="--d: .32"><span class="c">/* Card */</span>
-    <span class="s">flex flex-col gap-4 rounded-2xl</span>
-    <span class="s">bg-white p-6 shadow-lg</span></div>
-                </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
-              </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>06 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-code"/></svg>Copy as code</h3>
-              <p>Tailwind and React in Figma's own right-click menu, in every file you can edit, on any plan. No Dev Mode needed.</p>
-              <ul>
-                <li><b>Tailwind</b> classes from the CSS Dev Mode shows, on Tailwind's own scale</li>
-                <li><b>React</b> copies a component for each selected layer, named after it</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>"copyAsCode": true</code></div>
-            </div>
-          </article>
-          <article class="feat" data-feat="6">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Color contrast</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="picker rv" style="--d: 0; --hue: #ff4d00; --pick: #b83a0d">
-                    <div class="tabs2"><b>Custom</b><span>Libraries</span></div>
-                    <div class="square">
-                      <svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0 52 C30 50 60 44 100 36" fill="none" stroke="#fff" stroke-width="0.8" vector-effect="non-scaling-stroke"/><path d="M0 70 C30 68 60 63 100 57" fill="none" stroke="#fff" stroke-width="0.8" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/></svg>
-                      <span class="knob"></span>
-                    </div>
-                    <div class="hue"></div>
-                    <div class="hexrow"><span>Hex</span><span>B83A0D</span><span>100%</span></div>
-                    <div class="ratio rv" style="--d: .3"><span class="aa">Aa</span><b>5.4:1</b><div class="lv"><span class="pass">AA</span><span>AAA</span></div></div>
-                  </div>
-                </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
-              </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>07 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</h3>
-              <p>The color picker shows the WCAG ratio against what's behind the layer, worked out from every layer under it.</p>
-              <ul>
-                <li><b>AA and AAA</b> for text, large text and shapes, as you pick</li>
-                <li><b>Lines</b> on the color square mark where each level starts to pass</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>"colorContrast": true</code></div>
-            </div>
-          </article>
-          <article class="feat" data-feat="7">
-            <div class="feat-canvas">
-              <div class="feat-frame">
-                <span class="label">Layer previews</span>
-                <div class="feat-art">
-                <div class="art" aria-hidden="true">
-                  <div class="lp rv" style="--d: 0">
-                    <div class="layers">
-                      <div class="file">Brand refresh</div>
-                      <div class="sub">Design</div>
-                      <div class="row on rv" style="--d: .14"><span class="th" style="background:#ff5c39"><i style="left:15%;top:15%;width:45%;height:35%;border-radius:50%;background:#ffd23f"></i><i style="left:-20%;right:-20%;bottom:-30%;height:60%;border-radius:50%;background:#1f1d2b"></i></span>Poster</div>
-                      <div class="row rv" style="--d: .2"><span class="th" style="background:#1f1d2b"><i style="left:15%;top:20%;width:70%;height:12%;background:#3b3752"></i><i style="left:15%;top:40%;width:45%;height:12%;background:#3b3752"></i></span>Social card</div>
-                      <div class="row rv" style="--d: .26"><span class="th"><i style="left:20%;top:20%;width:60%;height:60%;border-radius:50%;background:#ffd23f"></i></span>Sun</div>
-                      <div class="row rv" style="--d: .32"><span class="th"><i style="left:15%;top:35%;width:70%;height:30%;border-radius:0.3em;background:#0d99ff"></i></span>Button</div>
-                    </div>
-                    <div class="stage2"><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div></div>
-                  </div>
-                </div>
-                </div>
-                <i></i><i></i><i></i><i></i>
-              </div>
-            </div>
-            <div class="feat-props">
-              <div class="props-tabs"><b>Design</b><span>Prototype</span><small>08 / 08</small></div>
-              <h3><svg class="icon"><use href="#i-layers"/></svg>Layer previews</h3>
-              <p>A small picture of each layer in the layers panel, in every mode, as Figma shows only in Draw.</p>
-              <ul>
-                <li><b>Every mode</b> keeps its own tools and right sidebar</li>
-                <li><b>Toolbar modes</b>: choose which of Draw, Design, Motion and Dev Mode the switch offers</li>
-              </ul>
-              <div class="setting"><span>Setting</span><code>"layerPreviews": true</code></div>
-            </div>
-          </article>
-          </div>
         </div>
-      </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about tabs"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Every file gets its own tab, with Home pinned on the left. Point at one to see how it last looked.</p>
+          <ul>
+            <li><b>Pin</b> a tab, or start a file's name with an emoji to make it the icon</li>
+            <li><b>Asleep</b> tabs give their memory back and reload when you open them</li>
+            <li><b>Reopen</b> your tabs next time, each on the same page, position and zoom</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"restoreTabs": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" style="grid-area: d" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-presence"/></svg>Your file on Discord</h3>
+          <p>The file, page and tool you're in, on your Discord profile</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="profile rv" style="--d: 0">
+                  <div class="banner"></div>
+                  <div class="who">
+                    <div class="avatar"><span>M</span></div>
+                    <div class="name">Mira</div>
+                    <div class="handle">mira.designs</div>
+                  </div>
+                  <div class="activity rv" style="--d: .25">
+                    <div class="label">Playing</div>
+                    <div class="card2">
+                      <div class="large"><img src="logo.png" alt=""><span class="small"><svg><use href="#i-pen"/></svg></span></div>
+                      <div class="lines"><b>Ligma</b>Editing Brand refresh<span>Components</span><span>42:10 elapsed</span></div>
+                    </div>
+                    <div class="join">Ask to Join</div>
+                  </div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about Discord"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Your profile shows the file you're in, the page or slide, and the tool in your hand. Keep any file private from its tab's menu.</p>
+          <ul>
+            <li><b>Hide files by default</b> and show only the ones you choose</li>
+            <li><b>Invites</b> let friends ask to join, and the file opens in their Ligma</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"discordRichPresence": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" style="grid-area: p" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-rail"/></svg>Your plugins, one click away</h3>
+          <p>Your saved plugins and widgets in the left rail, a click away</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="ui rv" style="--d: 0">
+                  <div class="rail">
+                    <span class="tool on"><svg><use href="#i-layers"/></svg></span>
+                    <span class="tool"><svg><use href="#i-assets"/></svg></span>
+                    <span class="tool"><svg><use href="#i-search"/></svg></span>
+                    <hr>
+                    <span class="plug rv pop" style="--d: .2;background:#ff5c39"><svg><use href="#i-ellipse"/></svg></span>
+                    <span class="plug big rv pop" style="--d: .26;background:#7b61ff"><svg><use href="#i-scale"/></svg></span>
+                    <span class="plug rv pop" style="--d: .32;background:#14a38b"><svg><use href="#i-text"/></svg></span>
+                    <span class="plug rv pop" style="--d: .38;background:#f5b400"><svg><use href="#i-star"/></svg></span>
+                  </div>
+                  <div class="layers">
+                    <div class="file">Brand refresh</div>
+                    <div class="sub">Drafts</div>
+                    <div class="row on"><svg><use href="#i-frame"/></svg>Poster</div>
+                    <div class="row"><svg><use href="#i-text"/></svg>Headline</div>
+                    <div class="row"><svg><use href="#i-ellipse"/></svg>Sun</div>
+                    <div class="row"><svg><use href="#i-rect"/></svg>Background</div>
+                  </div>
+                  <div></div>
+                </div>
+                <div class="tip rv" style="--d: .48">Contrast checker</div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about plugins in the rail"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Every plugin and widget saved to your Figma account sits in the editor's left rail, under Figma's own buttons. Click one to run it.</p>
+          <ul>
+            <li><b>Commands</b> show as a menu when a plugin has more than one</li>
+            <li><b>Reorder</b> by holding Ctrl and dragging. The order is kept for every file</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"railPlugins": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile big" style="grid-area: c" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-code"/></svg>Copy as code</h3>
+          <p>Tailwind and React in Figma's right-click menu, on any plan. No Dev Mode needed</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="menu one rv" style="--d: 0">
+                  <div>Copy<span>Ctrl+C</span></div>
+                  <div>Paste here</div>
+                  <div class="on">Copy/Paste as<span>›</span></div>
+                  <hr>
+                  <div>Bring to front</div>
+                  <div>Send to back</div>
+                </div>
+                <div class="menu two rv" style="--d: .15">
+                  <div>CSS</div>
+                  <div>CSS (all layers)</div>
+                  <div>iOS</div>
+                  <div>Android</div>
+                  <hr>
+                  <div class="on">Tailwind</div>
+                  <div>Tailwind (all layers)</div>
+                  <div>React</div>
+                </div>
+                <div class="snippet rv" style="--d: .32"><span class="c">/* Card */</span>
+  <span class="s">flex flex-col gap-4 rounded-2xl</span>
+  <span class="s">bg-white p-6 shadow-lg</span></div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about copy as code"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Tailwind and React in Figma's own right-click menu, in every file you can edit, on any plan. No Dev Mode needed.</p>
+          <ul>
+            <li><b>Tailwind</b> classes from the CSS Dev Mode shows, on Tailwind's own scale</li>
+            <li><b>React</b> copies a component for each selected layer, named after it</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"copyAsCode": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" style="grid-area: k" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-contrast"/></svg>Color contrast</h3>
+          <p>The WCAG ratio, right in the color picker</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="picker rv" style="--d: 0; --hue: #ff4d00; --pick: #b83a0d">
+                  <div class="tabs2"><b>Custom</b><span>Libraries</span></div>
+                  <div class="square">
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M0 52 C30 50 60 44 100 36" fill="none" stroke="#fff" stroke-width="0.8" vector-effect="non-scaling-stroke"/><path d="M0 70 C30 68 60 63 100 57" fill="none" stroke="#fff" stroke-width="0.8" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/></svg>
+                    <span class="knob"></span>
+                  </div>
+                  <div class="hue"></div>
+                  <div class="hexrow"><span>Hex</span><span>B83A0D</span><span>100%</span></div>
+                  <div class="ratio rv" style="--d: .3"><span class="aa">Aa</span><b>5.4:1</b><div class="lv"><span class="pass">AA</span><span>AAA</span></div></div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about color contrast"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>The color picker shows the WCAG ratio against what's behind the layer, worked out from every layer under it.</p>
+          <ul>
+            <li><b>AA and AAA</b> for text, large text and shapes, as you pick</li>
+            <li><b>Lines</b> on the color square mark where each level starts to pass</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"colorContrast": true</code></div>
+        </div>
+      </article>
+
+      <article class="tile" style="grid-area: v" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-manifest"/></svg>Development plugins</h3>
+          <p>Import a plugin from its manifest, as in Figma's desktop app</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="actions-panel rv" style="--d: 0">
+                  <div class="search"><svg><use href="#i-search"/></svg>Search</div>
+                  <div class="ap-tabs"><span>All</span><b>Plugins &amp; widgets</b></div>
+                  <div class="ap-chips"><span>Saved</span><span class="on">Development</span></div>
+                  <div class="ap-row hover rv" style="--d: .18"><span class="pi" style="background:#7b61ff"><svg><use href="#i-code"/></svg></span>Token sync<small>Development</small></div>
+                  <div class="ap-row rv" style="--d: .26"><span class="pi" style="background:#14a38b"><svg><use href="#i-contrast"/></svg></span>Contrast audit<small>Development</small></div>
+                  <div class="ap-row rv" style="--d: .34"><span class="pi" style="background:#ff5c39"><svg><use href="#i-frame"/></svg></span>Grid maker<small>Development</small></div>
+                  <div class="ap-row import rv" style="--d: .42"><svg style="width:1.4em;height:1.4em"><use href="#i-plus"/></svg>Import from manifest…</div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about development plugins"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>Import a plugin from its <code>manifest.json</code>, as in the Figma desktop app. figma.com can't do this.</p>
+          <ul>
+            <li><b>Rebuilt</b> plugins run their new code, as their files are read on every run</li>
+            <li><b>Not sandboxed</b>, unlike the desktop app, so import only ones you trust</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>plugins.json</code></div>
+        </div>
+      </article>
+
+      <article class="tile" style="grid-area: l" data-reveal>
+        <div class="tile-head">
+          <h3><svg class="icon"><use href="#i-layers"/></svg>Layer previews</h3>
+          <p>A small picture beside every layer, in every mode</p>
+        </div>
+        <div class="tile-art">
+              <div class="art" aria-hidden="true">
+                <div class="lp rv" style="--d: 0">
+                  <div class="layers">
+                    <div class="file">Brand refresh</div>
+                    <div class="sub">Design</div>
+                    <div class="row on rv" style="--d: .14"><span class="th" style="background:#ff5c39"><i style="left:15%;top:15%;width:45%;height:35%;border-radius:50%;background:#ffd23f"></i><i style="left:-20%;right:-20%;bottom:-30%;height:60%;border-radius:50%;background:#1f1d2b"></i></span>Poster</div>
+                    <div class="row rv" style="--d: .2"><span class="th" style="background:#1f1d2b"><i style="left:15%;top:20%;width:70%;height:12%;background:#3b3752"></i><i style="left:15%;top:40%;width:45%;height:12%;background:#3b3752"></i></span>Social card</div>
+                    <div class="row rv" style="--d: .26"><span class="th"><i style="left:20%;top:20%;width:60%;height:60%;border-radius:50%;background:#ffd23f"></i></span>Sun</div>
+                    <div class="row rv" style="--d: .32"><span class="th"><i style="left:15%;top:35%;width:70%;height:30%;border-radius:0.3em;background:#0d99ff"></i></span>Button</div>
+                  </div>
+                  <div class="stage2"><div class="poster"><div class="sun"></div><div class="hill"></div><div class="type">Summer<br>sessions</div></div></div>
+                </div>
+              </div>
+        </div>
+        <button type="button" class="open" aria-haspopup="dialog" aria-label="More about layer previews"><svg class="icon"><use href="#i-plus"/></svg></button>
+        <div class="more" hidden>
+          <p>A small picture of each layer in the layers panel, in every mode, as Figma shows only in Draw.</p>
+          <ul>
+            <li><b>Every mode</b> keeps its own tools and right sidebar</li>
+            <li><b>Toolbar modes</b>: choose which of Draw, Design, Motion and Dev Mode the switch offers</li>
+          </ul>
+          <div class="setting"><span>Setting</span><code>"layerPreviews": true</code></div>
+        </div>
+      </article>
     </div>
+
+    <dialog class="sheet" id="sheet" aria-labelledby="sheet-title" data-lenis-prevent>
+      <div class="sheet-art"><div class="tile-art"></div></div>
+      <div class="sheet-copy"></div>
+      <button type="button" class="close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
+    </dialog>
 
     <div class="index">
       <div><h3><svg class="icon"><use href="#i-sleep"/></svg>Low memory use</h3><p>Tabs you aren't looking at are trimmed, frozen and put to sleep, so hidden files give memory back.</p></div>
@@ -1138,9 +1088,13 @@
   <section id="themes" aria-labelledby="themes-heading">
     <div class="head">
       <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
-      <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Click a swatch to see it here.</p>
+      <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick one from the fan to see it here.</p>
     </div>
-    <div class="deck" id="deck" role="radiogroup" aria-label="Themes"></div>
+    <div class="fan-wrap"><div class="fan" id="deck" role="radiogroup" aria-label="Themes"></div></div>
+    <div class="modes"><div role="radiogroup" aria-label="Mode">
+      <button type="button" role="radio" data-mode="light"><svg><use href="#i-sun"/></svg>Light</button>
+      <button type="button" role="radio" data-mode="dark"><svg><use href="#i-moon"/></svg>Dark</button>
+    </div></div>
     <div class="now" aria-live="polite">
       <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
       <button type="button" id="reset" hidden>Back to your system's look</button>
@@ -1290,34 +1244,30 @@
     renderDeck();
   }
 
-  const SUN = '<svg><use href="#i-sun"/></svg>';
-  const MOON = '<svg><use href="#i-moon"/></svg>';
+  // The fan: a blade for each theme, Figma's own in the middle, in the page's mode
+  const FAN = [1, 2, 3, 4, 0, 5, 6, 7, 8].map((i) => LIGMA_THEMES[i]);
   function renderDeck() {
-    const focused = document.activeElement?.closest("#deck") && document.activeElement.getAttribute("aria-label");
-    $("deck").replaceChildren(...LIGMA_THEMES.map((theme) => {
-      const chip = document.createElement("div");
-      chip.className = `theme${theme.id === state.theme ? " picked" : ""}`;
-      const swatch = ramps(theme.id, state.mode);
-      chip.style.setProperty("--chip", swatch["--a-500"]);
-      chip.style.setProperty("--chip-ink", swatch["--a-1000"]);
+    const focused = document.activeElement?.closest("#deck")?.dataset.theme;
+    $("deck").replaceChildren(...FAN.map((theme, i) => {
+      const blade = document.createElement("button");
+      blade.type = "button";
+      blade.className = "blade";
+      blade.dataset.theme = theme.id;
+      blade.style.setProperty("--i", i);
+      blade.style.setProperty("--orb", ligmaMesh(theme.id, state.mode));
+      blade.setAttribute("role", "radio");
+      blade.setAttribute("aria-checked", theme.id === state.theme);
+      const ramp = ramps(theme.id, state.mode);
       const hue = theme.accent == null ? "Original" : `Hue ${theme.accent}°`;
-      chip.innerHTML = `<div class="swatch"><b>${theme.name}</b><span>${hue}</span></div><div class="orbs"></div>`;
-      for (const mode of ["light", "dark"]) {
-        const orb = document.createElement("button");
-        orb.type = "button";
-        orb.className = "orb";
-        orb.innerHTML = `<span class="mesh"></span><span class="badge">${mode === "light" ? SUN : MOON}</span>`;
-        orb.style.setProperty("--orb", ligmaMesh(theme.id, mode));
-        orb.setAttribute("role", "radio");
-        orb.setAttribute("aria-checked", theme.id === state.theme && mode === state.mode);
-        orb.setAttribute("aria-label", `${theme.name} in ${mode} mode`);
-        orb.title = `${theme.name} in ${mode} mode`;
-        orb.addEventListener("click", () => pick(theme.id, mode, orb));
-        chip.querySelector(".orbs").append(orb);
-      }
-      return chip;
+      blade.innerHTML = `<b>${theme.name}<small>${hue}</small></b><span class="mesh"></span>${[300, 500, 700, 1000].map((step) => `<i style="background:${ramp[`--a-${step}`]}"></i>`).join("")}<span class="foot"></span>`;
+      blade.addEventListener("click", () => pick(theme.id, state.mode, blade));
+      return blade;
     }));
-    if (focused) [...$("deck").querySelectorAll("[aria-label]")].find((el) => el.getAttribute("aria-label") === focused)?.focus();
+    if (focused) $("deck").querySelector(`[data-theme="${focused}"]`)?.focus();
+    for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
+  }
+  for (const button of document.querySelectorAll(".modes button")) {
+    button.addEventListener("click", () => pick(state.theme, button.dataset.mode, button));
   }
 
   // Retint the page, spreading out from `from` where the browser can
@@ -1363,8 +1313,6 @@
   const scenes = [...document.querySelectorAll("[data-scene]")];
   const reveals = [...document.querySelectorAll("[data-reveal]")];
   const steps = [...document.querySelectorAll(".steps li")];
-  const feats = [...document.querySelectorAll(".feat")];
-  const layerRows = [...document.querySelectorAll(".layers-panel button")];
 
   function scene(el, p) {
     if (el.dataset.scene === "hero") {
@@ -1396,22 +1344,6 @@
       const p = pinned ? -box.top / (box.height - vh) : list ? (vh * 0.62 - list.top) / list.height : (vh * 0.8 - box.top) / (box.height * 0.9);
       scene(el, clamp(p));
     }
-    // Features: pinned, the scroll selects each in turn and its drawing
-    // builds after it's selected. Otherwise each builds as it comes into view
-    const studio = document.querySelector(".feat-scene");
-    const x = pinned ? clamp(-studio.getBoundingClientRect().top / (studio.offsetHeight - vh)) * feats.length : 0;
-    const at = Math.min(feats.length - 1, Math.floor(x));
-    feats.forEach((feat, i) => {
-      feat.classList.toggle("on", pinned && i === at);
-      const entry = clamp((vh - feat.getBoundingClientRect().top) / (vh * 0.7));
-      const v = reduced.matches ? 1 : pinned ? (i === at ? clamp((x - at) * 3 + 0.25) : 0) : entry;
-      feat.style.setProperty("--v", (pinned && i === 0 && at === 0 ? Math.min(v, clamp((vh - studio.getBoundingClientRect().top) / (vh * 0.7))) : v).toFixed(4));
-    });
-    layerRows.forEach((row, i) => {
-      if (i === at && pinned) row.setAttribute("aria-current", "true");
-      else row.removeAttribute("aria-current");
-      row.style.setProperty("--fill", i < at ? 1 : i === at ? clamp(x - i).toFixed(4) : 0);
-    });
     for (const el of reveals) {
       const v = reduced.matches ? 1 : clamp((vh - el.getBoundingClientRect().top) / (vh * 0.7));
       el.style.setProperty("--v", v.toFixed(4));
@@ -1436,14 +1368,36 @@
 
   const lenis = window.Lenis && !reduced.matches ? new Lenis({ autoRaf: true, anchors: true }) : null;
 
-  // Clicking a layer scrolls to it
-  for (const row of layerRows) {
-    row.addEventListener("click", () => {
-      const scene = document.querySelector(".feat-scene");
-      const y = scene.getBoundingClientRect().top + scrollY + ((+row.dataset.go + 0.4) / feats.length) * (scene.offsetHeight - innerHeight);
-      lenis ? lenis.scrollTo(y, { duration: 1.2 }) : scrollTo({ top: y, behavior: "smooth" });
+  // A tile's plus opens its details in the sheet, the drawing building up
+  const sheet = $("sheet");
+  let opener = null;
+  for (const tile of document.querySelectorAll(".tile")) {
+    tile.querySelector(".open").addEventListener("click", (event) => {
+      opener = event.currentTarget;
+      const art = tile.querySelector(".tile-art .art").cloneNode(true);
+      sheet.querySelector(".sheet-art .tile-art").replaceChildren(art);
+      const title = tile.querySelector("h3").cloneNode(true);
+      title.id = "sheet-title";
+      sheet.querySelector(".sheet-copy").replaceChildren(title, ...[...tile.querySelector(".more").children].map((el) => el.cloneNode(true)));
+      sheet.showModal();
+      lenis?.stop();
+      if (reduced.matches) return art.style.setProperty("--v", 1);
+      const begin = performance.now();
+      const step = (now) => {
+        const v = clamp((now - begin) / 900);
+        art.style.setProperty("--v", v.toFixed(4));
+        if (v < 1 && sheet.open) requestAnimationFrame(step);
+      };
+      art.style.setProperty("--v", 0);
+      requestAnimationFrame(step);
     });
   }
+  sheet.querySelector(".close").addEventListener("click", () => sheet.close());
+  sheet.addEventListener("click", (event) => event.target === sheet && sheet.close());
+  sheet.addEventListener("close", () => {
+    lenis?.start();
+    opener?.focus();
+  });
 
   // Copy the Terminal command
   for (const button of document.querySelectorAll("[data-copy]")) {
