@@ -62,3 +62,5 @@ Themes (2026-11-02, the user's own idea, replacing the Settings window): Figma D
 Themes (2026-11-02, refined): the pencils stand in a row behind the editor window, not in its toolbar, their tips and a little of their colored bodies peeking over the top edge. Pointing lifts one 8px with its name in a dark tooltip, picking pokes it up and it stays. The editor keeps its own toolbar and the poster its place
 
 Pencils (2026-11-02): 50px wide (32px on phones), almost touching, peeking 1.9 widths over the window. Figma's own pencil is Draw's neutral grey with a graphite lead, so blue is never mistaken for it
+
+Pencils (2026-11-02): 58px wide (34px on phones), the body the full width of the wood. The lead is the body's own color. Light mode shades the round body (accent 300, 500, 700); dark mode is brighter (200, 400, 500) with a glossy streak and a soft glow in the pencil's color

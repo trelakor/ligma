@@ -480,7 +480,7 @@
   .themes-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 48px; align-items: end; }
   .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 32em; }
   .themes-side { display: flex; flex-direction: column; align-items: flex-start; }
-  .pencil-stage { --pw: 50px; --peek: calc(var(--pw) * 1.9); --head: 64px; position: relative; margin-top: 32px; padding-top: calc(var(--peek) + var(--head)); }
+  .pencil-stage { --pw: 58px; --peek: calc(var(--pw) * 1.9); --head: 64px; position: relative; margin-top: 32px; padding-top: calc(var(--peek) + var(--head)); }
   .pencil-stage .figma { position: relative; z-index: 1; margin-top: 0; }
   .tray {
     position: absolute; left: 50%; top: var(--head); translate: -50% 0; display: flex; gap: clamp(2px, 0.6vw, 8px);
@@ -494,6 +494,9 @@
   .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -1.15); }
   .tray button:focus-visible { outline: none; }
   .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
+  .tray .gloss { opacity: 0; }
+  :root.dark .tray .gloss { opacity: 0.5; }
+  :root.dark .tray svg { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 45%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
   .tray .tip {
     position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
     background: #1e1e1e; color: #fff; font: 500 11px/16px var(--text); white-space: nowrap; opacity: 0; pointer-events: none;
@@ -650,7 +653,7 @@
   }
   @media (max-width: 900px) {
     .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
-    .pencil-stage { --pw: 32px; --head: 44px; }
+    .pencil-stage { --pw: 34px; --head: 44px; }
     .tray { gap: 2px; }
     .tray .tip { display: none; }
     .cv-layers { left: 8px; right: 8px; top: 8px; width: auto; display: flex; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
@@ -1477,10 +1480,11 @@
       <linearGradient id="pb-${id}" x1="0" x2="1"><stop offset="0" style="stop-color:var(--p3)"/><stop offset=".45" style="stop-color:var(--p5)"/><stop offset="1" style="stop-color:var(--p7)"/></linearGradient>
       <linearGradient id="pw-${id}" x1="0" x2="1"><stop offset="0" stop-color="#fbf6ef"/><stop offset=".5" stop-color="#efe5d8"/><stop offset="1" stop-color="#d8c9b5"/></linearGradient>
     </defs>
-    <path d="M3 36h24v66H3z" fill="url(#pb-${id})"/>
-    <path d="M3 36 15 6l12 30c-2.4 1.6-5 1.6-8 0-2.6 1.6-5.4 1.6-8 0-2.6 1.6-5.4 1.6-8 0z" fill="url(#pw-${id})"/>
-    <path d="M11.4 15 15 6l3.6 9c-2.4.9-4.8.9-7.2 0z" style="fill:var(--p8)"/>
-    <path d="M3 72h24M3 75h24" stroke="#fff" stroke-opacity=".35" stroke-width="1"/>
+    <path d="M1 36h28v66H1z" fill="url(#pb-${id})"/>
+    <path class="gloss" d="M6.5 39v63" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M1 36 15 4l14 32c-2.8 1.8-6 1.8-9.3 0-3 1.8-6.4 1.8-9.4 0-3 1.8-6.3 1.8-9.3 0z" fill="url(#pw-${id})"/>
+    <path d="M10.2 15 15 4l4.8 11c-3.2 1.1-6.4 1.1-9.6 0z" fill="url(#pb-${id})"/>
+    <path d="M1 72h28M1 75h28" stroke="#fff" stroke-opacity=".35" stroke-width="1"/>
     <path d="M15 78v12" stroke="#000" stroke-opacity=".18" stroke-width="1.2" stroke-linecap="round"/>
   </svg>`;
   const pencils = LIGMA_THEMES.map((theme) => {
@@ -1497,9 +1501,13 @@
   function renderDeck() {
     for (const button of pencils) {
       const ramp = ramps(button.dataset.theme, state.mode);
-      // Figma's own is the grey pencil Draw shows, so blue reads as a theme
-      const grey = { 3: "#f5f5f5", 5: "#d9d9d9", 7: "#a8a8a8", 8: "#383838" };
-      for (const step of [3, 5, 7, 8]) button.style.setProperty(`--p${step}`, button.dataset.theme === "figma" ? grey[step] : ramp[`--a-${step}00`]);
+      // Shaded round bodies on light; on dark, brighter and glossy. Figma's
+      // own is the grey pencil Draw shows, so blue reads as a theme
+      const dark = state.mode === "dark";
+      const stops = button.dataset.theme === "figma"
+        ? (dark ? ["#ffffff", "#e6e6e6", "#c2c2c2"] : ["#f5f5f5", "#d9d9d9", "#a8a8a8"])
+        : (dark ? [ramp["--a-200"], ramp["--a-400"], ramp["--a-500"]] : [ramp["--a-300"], ramp["--a-500"], ramp["--a-700"]]);
+      stops.forEach((color, i) => button.style.setProperty(`--p${[3, 5, 7][i]}`, color));
       button.setAttribute("aria-checked", button.dataset.theme === state.theme);
     }
     for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
