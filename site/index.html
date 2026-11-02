@@ -494,7 +494,15 @@
   .tray button[aria-checked="true"] { translate: 0 calc(var(--pw) * -0.6); }
   .tray button:focus-visible { outline: none; }
   .tray svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.25)); }
-  .brush-over { position: fixed; inset: 0; z-index: 2147483647; width: 100vw; height: 100vh; pointer-events: none; }
+  /* Picking a brush: the new theme shows through the strokes' mask, over
+     the page as it was, held still while the strokes are painted */
+  html.brushing::view-transition-old(root) { animation: brush-hold 1000ms linear both; }
+  html.brushing::view-transition-new(root) {
+    animation: brush-hold 1000ms linear both;
+    -webkit-mask-image: var(--brush-mask); mask-image: var(--brush-mask);
+    -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  }
+  @keyframes brush-hold { from { opacity: 1; } to { opacity: 1; } }
   :root.dark .tray svg { filter: saturate(1.25) drop-shadow(0 0 14px color-mix(in srgb, var(--p5) 40%, transparent)) drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.4)); }
   .tray .tip {
     position: absolute; left: 50%; bottom: calc(100% + 8px); translate: -50% 4px; padding: 4px 8px; border-radius: 5px;
@@ -1538,23 +1546,21 @@
     for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
   }
 
-  // Picking a brush paints the screen over in its color, in big curved
-  // strokes back and forth from the top down, switches the theme while it's
-  // covered, then the same strokes wipe the paint off. The strokes are sized
-  // from the window so they always cover all of it
-  function brushOver(change, event) {
-    const color = getComputedStyle(event.currentTarget).getPropertyValue("--p5").trim() || "#888";
-    const w = innerWidth, h = innerHeight, dpr = Math.min(2, devicePixelRatio || 1);
+  // Picking a brush reveals the new theme through brush strokes: the page
+  // in its new theme shows through a mask painted in big curved strokes,
+  // back and forth from the top down, over the page as it was. The strokes
+  // are sized from the window so they always end up covering all of it
+  const BLANK = "url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)";
+  function brushOver(change) {
+    if (!document.startViewTransition) return change();
+    const w = innerWidth, h = innerHeight, k = 0.25;
     const canvas = document.createElement("canvas");
-    canvas.className = "brush-over";
-    canvas.width = Math.ceil(w * dpr);
-    canvas.height = Math.ceil(h * dpr);
-    document.body.append(canvas);
+    canvas.width = Math.ceil(w * k);
+    canvas.height = Math.ceil(h * k);
     const g = canvas.getContext("2d");
-    g.scale(dpr, dpr);
+    g.scale(k, k);
     g.lineCap = "round";
     g.lineJoin = "round";
-    // Four rows, each an arc sagging a little, starting and ending past the edges
     const rows = Math.max(3, Math.round(h / Math.max(220, w * 0.22)));
     const band = h / rows, width = band * 1.75;
     const strokes = Array.from({ length: rows }, (_, r) => {
@@ -1566,19 +1572,20 @@
       const u = 1 - t;
       return [u * u * s.x0 + 2 * u * t * s.cx + t * t * s.x1, u * u * s.y0 + 2 * u * t * s.cy + t * t * s.y1];
     };
-    // The bristles leave faint streaks of varied weight along each stroke
-    const streaks = Array.from({ length: 22 }, (_, n) => ({
-      k: -0.44 + (n / 21) * 0.88 + (Math.random() - 0.5) * 0.03,
-      light: Math.random() > 0.5,
-      alpha: 0.03 + Math.random() * 0.06,
-      weight: 0.004 + Math.random() * 0.012,
+    // The bristles leave a few thinner streaks in each stroke, where the old
+    // page still shows faintly until the next stroke covers it
+    const streaks = Array.from({ length: 16 }, (_, n) => ({
+      k: -0.42 + (n / 15) * 0.84 + (Math.random() - 0.5) * 0.03,
+      alpha: 0.15 + Math.random() * 0.3,
+      weight: 0.006 + Math.random() * 0.016,
     }));
     function draw(progress) {
+      g.clearRect(0, 0, w, h);
       const total = progress * strokes.length;
       strokes.forEach((s, i) => {
         const end = Math.min(1, total - i);
         if (end <= 0) return;
-        const steps = Math.max(2, Math.ceil(end * 48));
+        const steps = Math.max(2, Math.ceil(end * 40));
         const line = (offset) => {
           g.beginPath();
           for (let n = 0; n <= steps; n++) {
@@ -1587,37 +1594,46 @@
           }
           g.stroke();
         };
+        g.globalCompositeOperation = "source-over";
         g.lineWidth = width;
-        g.strokeStyle = color;
+        g.strokeStyle = "#fff";
         line(0);
-        if (g.globalCompositeOperation === "source-over") {
-          for (const s of streaks) {
-            g.lineWidth = Math.max(1, width * s.weight);
-            g.strokeStyle = s.light ? `rgb(255 255 255 / ${s.alpha})` : `rgb(0 0 0 / ${s.alpha})`;
-            line(s.k * width);
+        // Streaks only in the stroke being painted; the ones before are solid
+        if (end < 1 || i === strokes.length - 1) {
+          g.globalCompositeOperation = "destination-out";
+          for (const st of streaks) {
+            g.lineWidth = Math.max(1, width * st.weight);
+            g.strokeStyle = `rgb(0 0 0 / ${st.alpha * (1 - progress)})`;
+            line(st.k * width);
           }
         }
       });
+      g.globalCompositeOperation = "source-over";
     }
     const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-    const run = (ms, frame) => new Promise((done) => {
+    const mask = (value) => root.style.setProperty("--brush-mask", value);
+    mask(BLANK);
+    root.classList.add("brushing");
+    const transition = document.startViewTransition(change);
+    transition.ready.then(() => new Promise((done) => {
       const begin = performance.now();
       const tick = (now) => {
-        const t = Math.min(1, (now - begin) / ms);
-        frame(ease(t));
-        t < 1 ? requestAnimationFrame(tick) : done();
+        const t = Math.min(1, (now - begin) / 820);
+        if (t < 1) {
+          draw(ease(t));
+          mask(`url(${canvas.toDataURL()})`);
+          requestAnimationFrame(tick);
+        } else {
+          mask("none");
+          done();
+        }
       };
       requestAnimationFrame(tick);
+    })).catch(() => {});
+    transition.finished.finally(() => {
+      root.classList.remove("brushing");
+      root.style.removeProperty("--brush-mask");
     });
-    run(560, (t) => { g.clearRect(0, 0, w, h); draw(t); })
-      .then(() => {
-        g.fillStyle = color;
-        g.fillRect(0, 0, w, h);
-        change();
-        g.globalCompositeOperation = "destination-out";
-        return run(520, (t) => draw(t));
-      })
-      .then(() => canvas.remove());
   }
 
   for (const button of document.querySelectorAll(".modes button")) {
