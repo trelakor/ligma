@@ -82,3 +82,5 @@ Brush-over (2026-11-02, reworked): not a coat of paint but a mask. In a View Tra
 Buttons (2026-11-02): in Figma's language. The primary (Download, everywhere) is filled with the theme's accent with a white label and icon, 8px corners (7px in the nav), a faint inner bottom edge, darkening on hover; secondary buttons are outlined with the same corners. Picking a brush pops it up at once and starts the reveal 240ms later
 
 Brush-over (2026-11-02): the brush moves with the reveal, not before it. The picked brush, the previously picked one and the editor get their own View Transition layers; the brushes slide between their old and new places with the page's spring (420ms) while the mask is painted, the editor stays above them so they still tuck behind it, and its new snapshot carries the same mask, lined up with the window
+
+Brushes (2026-11-02): the fan is narrower, its tip about 79% of the brush's width, still flaring from the ferrule

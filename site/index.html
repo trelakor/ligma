@@ -1506,7 +1506,7 @@
     let seed = 7, out = "";
     const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
     for (let n = 0; n < 34; n++) {
-      const t = n / 33, x = 1.2 + t * 27.6 + (rnd() - 0.5) * 0.5, xb = 6.4 + t * 17.2;
+      const t = n / 33, x = 3.6 + t * 22.8 + (rnd() - 0.5) * 0.4, xb = 6.4 + t * 17.2;
       const dark = rnd() > 0.38;
       out += `<path d="M${x.toFixed(2)} ${(7 + rnd() * 5).toFixed(1)}L${xb.toFixed(2)} 31" stroke="${dark ? "#000" : "#fff"}" stroke-opacity="${(dark ? 0.1 + rnd() * 0.22 : 0.06 + rnd() * 0.12).toFixed(2)}" stroke-width="${(0.25 + rnd() * 0.55).toFixed(2)}"/>`;
     }
@@ -1521,14 +1521,14 @@
       <linearGradient id="pm-${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#1f1f1f"/><stop offset=".45" stop-color="#4c4c4c"/><stop offset="1" stop-color="#1c1c1c"/></linearGradient>
       <linearGradient id="ph-${id}" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".22" stop-color="#fff" stop-opacity=".22"/><stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient>
       <filter id="ps-${id}" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation=".18"/></filter>
-      <clipPath id="pk-${id}"><path d="M5.8 31C4 24.2 2 14.4.5 3.6 10 1.9 20 1.9 29.5 3.6 28 14.4 26 24.2 24.2 31z"/></clipPath>
+      <clipPath id="pk-${id}"><path d="M5.8 31C4.8 24.4 3.8 14.6 3.2 3.6 11 2.1 19 2.1 26.8 3.6 26.2 14.6 25.2 24.4 24.2 31z"/></clipPath>
     </defs>
     <path d="M5.6 36h18.8v66H5.6z" fill="url(#pb-${id})"/>
     <svg x="10" y="40" width="10" height="10" viewBox="0 0 16 16" style="color:var(--logo);opacity:var(--logo-o)"><use href="#i-figma"/></svg>
     <g clip-path="url(#pk-${id})">
-      <path d="M5.8 31C4 24.2 2 14.4.5 3.6 10 1.9 20 1.9 29.5 3.6 28 14.4 26 24.2 24.2 31z" fill="url(#pg-${id})"/>
+      <path d="M5.8 31C4.8 24.4 3.8 14.6 3.2 3.6 11 2.1 19 2.1 26.8 3.6 26.2 14.6 25.2 24.4 24.2 31z" fill="url(#pg-${id})"/>
       <g filter="url(#ps-${id})">${hairs}</g>
-      <path d="M5.8 31C4 24.2 2 14.4.5 3.6 10 1.9 20 1.9 29.5 3.6 28 14.4 26 24.2 24.2 31z" fill="url(#pd-${id})"/>
+      <path d="M5.8 31C4.8 24.4 3.8 14.6 3.2 3.6 11 2.1 19 2.1 26.8 3.6 26.2 14.6 25.2 24.4 24.2 31z" fill="url(#pd-${id})"/>
       <path d="M-1 0H31V11.6C24.6 14.6 19.4 10.6 14 12.5 8.9 14.2 4.6 14-1 12z" fill="url(#pb-${id})"/>
       <path d="M-1 0H31V11.6C24.6 14.6 19.4 10.6 14 12.5 8.9 14.2 4.6 14-1 12z" fill="url(#pc-${id})"/>
     </g>
