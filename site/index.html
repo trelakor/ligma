@@ -480,10 +480,10 @@
   .themes-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 48px; align-items: end; }
   .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 32em; }
   .themes-side { display: flex; flex-direction: column; align-items: flex-start; }
-  .pencil-stage { --pw: 36px; --peek: 68px; position: relative; margin-top: 40px; padding-top: calc(var(--peek) + 44px); }
+  .pencil-stage { --pw: 50px; --peek: calc(var(--pw) * 1.9); --head: 64px; position: relative; margin-top: 32px; padding-top: calc(var(--peek) + var(--head)); }
   .pencil-stage .figma { position: relative; z-index: 1; margin-top: 0; }
   .tray {
-    position: absolute; left: 50%; top: 44px; translate: -50% 0; display: flex; gap: clamp(10px, 2.4vw, 30px);
+    position: absolute; left: 50%; top: var(--head); translate: -50% 0; display: flex; gap: clamp(2px, 0.6vw, 8px);
     height: calc(var(--pw) * 3.4); pointer-events: none;
   }
   .tray button {
@@ -650,8 +650,8 @@
   }
   @media (max-width: 900px) {
     .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
-    .pencil-stage { --pw: 24px; --peek: 46px; padding-top: calc(var(--peek) + 32px); }
-    .tray { top: 32px; gap: 10px; }
+    .pencil-stage { --pw: 32px; --head: 44px; }
+    .tray { gap: 2px; }
     .tray .tip { display: none; }
     .cv-layers { left: 8px; right: 8px; top: 8px; width: auto; display: flex; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
     .cv-layers > :not(.f-layer) { display: none; }
@@ -1497,7 +1497,9 @@
   function renderDeck() {
     for (const button of pencils) {
       const ramp = ramps(button.dataset.theme, state.mode);
-      for (const step of [3, 5, 7, 8]) button.style.setProperty(`--p${step}`, ramp[`--a-${step}00`]);
+      // Figma's own is the grey pencil Draw shows, so blue reads as a theme
+      const grey = { 3: "#f5f5f5", 5: "#d9d9d9", 7: "#a8a8a8", 8: "#383838" };
+      for (const step of [3, 5, 7, 8]) button.style.setProperty(`--p${step}`, button.dataset.theme === "figma" ? grey[step] : ramp[`--a-${step}00`]);
       button.setAttribute("aria-checked", button.dataset.theme === state.theme);
     }
     for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
