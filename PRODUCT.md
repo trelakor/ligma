@@ -12,11 +12,11 @@ People who use Figma all day on macOS or Windows and want a desktop app lighter 
 
 ## Product Purpose
 
-Ligma is a desktop app for Figma, about 4 MB. It opens figma.com in the system webview (WebView2 on Windows, WKWebView on macOS) instead of bundling a browser engine. It adds what the web version lacks: tabs like the desktop app, Google sign-in, low memory use, color themes, plugins in the left rail, development plugins, Discord Rich Presence, local fonts and automatic updates. The landing page succeeds when a visitor downloads it.
+Ligma is a desktop app for Figma, about 4 MB. It opens figma.com in the system webview (WebView2 on Windows, WKWebView on macOS) instead of bundling a browser engine. It adds what the web version lacks: tabs like the desktop app, Google sign-in, low memory use, color themes, plugins in the left sidebar, development plugins, Discord Rich Presence, local fonts and automatic updates. The landing page succeeds when a visitor downloads it.
 
 ## Positioning
 
-It's the same Figma in a much smaller shell: 16 MB installed on macOS against 305 MB for Figma desktop. It also adds extras the official app doesn't have: nine color themes, plugins one click away in the left rail, and your file on Discord.
+It's the same Figma in a much smaller shell: 16 MB installed on macOS against 305 MB for Figma desktop. It also adds extras the official app doesn't have: nine color themes, plugins one click away in the left sidebar, and your file on Discord.
 
 ## Capabilities and Constraints
 

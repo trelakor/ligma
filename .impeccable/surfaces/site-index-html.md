@@ -36,3 +36,5 @@ Footer (2026-11-01): a centered stack, "Figma, without the weight.", the downloa
 Highlighted controls on the accent, on the page and in the drawings, carry white text and icons
 
 AI image tools (2026-11-01): pinned for 600svh (960 felt too slow), and the label under the picture follows the tool and its setting
+
+Drawings (2026-11-01): drawn from Figma's UI3 as it is. The left sidebar is Figma's: the logo, the file, assets, add and resources buttons, the plugins button and the development plugin, then the plugins; the panel has the file name with Team project and plan, Pages, then Layers. Layer previews nest layers in their frames, with chevrons, type icons and a grey thumbnail per layer. The Actions panel has All, Assets and Plugins & widgets, an outlined Development filter, and rows with a Development tag and the manifest's path; the toolbar sits under it. Toolbar tools carry their dropdown chevrons. Cursors are Figma's rounded arrow with a square-cornered name tag. Call it the sidebar, never the rail
