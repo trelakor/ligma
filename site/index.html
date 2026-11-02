@@ -473,46 +473,30 @@
   .index h3 .icon { width: 22px; height: 22px; color: var(--field); }
   .index p { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
 
-  /* Themes: the words, the editor in the page's theme, and Figma's
-     Variables window over its foot. Each theme is a mode of a "Ligma
-     themes" collection, a column of the real colors it gives Figma; Light
-     and Dark are its groups. Picking a column or a group retints the page */
-  .themes-top { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 24px 48px; align-items: end; }
-  .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 32em; }
-  .themes-side { display: flex; flex-direction: column; align-items: flex-start; }
-  .vars {
-    position: relative; z-index: 1; width: calc(100% - 64px); margin: -66px auto 0; overflow: hidden;
-    border-radius: 13px; background: var(--panel); box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.2), 0 12px 32px -6px rgb(0 0 0 / 0.25), 0 2px 6px rgb(0 0 0 / 0.08);
+  /* Themes: the words on the left, the nine names set large on the right,
+     each in its own color. Pointing at a name tries it on the whole page,
+     clicking keeps it. The editor under them shows it on Figma */
+  .themes-top { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 40px 64px; align-items: center; }
+  .themes-copy > p { margin-top: 20px; font-size: 18px; color: var(--ink-2); max-width: 30em; }
+  .names { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.32em; font: 650 clamp(2.25rem, 4.6vw, 4rem)/1.04 var(--display); letter-spacing: -0.04em; }
+  .names button {
+    position: relative; padding: 0 0 0.06em; border: 0; background: none; color: var(--c); font: inherit; letter-spacing: inherit; cursor: pointer;
+    text-decoration: underline 0.06em transparent; text-underline-offset: 0.14em; transition: text-decoration-color 200ms var(--ease), opacity 200ms var(--ease);
   }
-  :root.dark .vars { box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 16px 40px -6px rgb(0 0 0 / 0.6); }
-  .vars-head { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--bd); }
-  .vars-head b { font-size: 13px; font-weight: 600; }
-  .vars-x { display: grid; place-items: center; width: 28px; height: 28px; color: var(--t2); }
-  .vars-body { display: grid; grid-template-columns: 152px minmax(0, 1fr); }
-  .vars-side { padding: 8px; border-right: 1px solid var(--bd); }
-  .vs-cap { padding: 10px 8px 6px; color: var(--t2); }
-  .vs-item, .vs-groups button { display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--t1); font: inherit; text-align: left; cursor: pointer; }
-  .vs-item { cursor: default; }
-  .vs-item.on { background: var(--hov); font-weight: 550; }
-  .vs-groups button i { margin-left: auto; color: var(--t3); font-style: normal; }
-  .vs-groups button:hover { background: var(--hov); }
-  .vs-groups button[aria-checked="true"] { background: var(--select); font-weight: 550; }
-  .vars-table { display: flex; overflow-x: auto; scrollbar-width: thin; }
-  .vars-table > div, .vars-table > button { display: flex; flex-direction: column; flex: 1 0 84px; min-width: 84px; padding: 0 0 8px; }
-  .vars-table .names { flex: 0 0 136px; position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--bd); }
-  .vars-table button { border: 0; background: none; color: var(--t1); font: inherit; text-align: left; cursor: pointer; transition: background-color 160ms; }
-  .vars-table span { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .vars-table span + span { box-shadow: inset 0 1px 0 var(--bd); }
-  .vars-table .hd { height: 36px; color: var(--t2); font-weight: 550; box-shadow: inset 0 -1px 0 var(--bd); }
-  .vars-table .names span:not(.hd) svg { width: 14px; height: 14px; color: var(--t2); }
-  .vars-table i { flex: none; width: 14px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12); }
-  :root.dark .vars-table i { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14); }
-  .vars-table button:hover { background: var(--hov); }
-  .vars-table button[aria-checked="true"] { background: var(--select); }
-  .vars-table button[aria-checked="true"] .hd { color: var(--t1); }
-  .vars-table button[aria-checked="true"] .hd::after { content: ""; width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--field); }
-  .vars-table button:focus-visible { outline-offset: -2px; }
-  #themes .now { margin-top: 0; min-height: 0; }
+  .names:hover button:not(:hover), .names:has(:focus-visible) button:not(:focus-visible):not(:hover) { opacity: 0.5; }
+  .names:hover button:hover, .names button:focus-visible { opacity: 1; }
+  .names button[aria-checked="true"] { text-decoration-color: currentColor; }
+  .names button:focus-visible { outline: none; text-decoration-color: currentColor; text-decoration-style: dotted; }
+  /* While a name is tried, the page eases into it */
+  html.trying, html.trying body, html.trying body *, html.trying body *::before, html.trying body *::after {
+    transition: background-color 240ms ease, color 240ms ease, border-color 240ms ease, box-shadow 240ms ease, fill 240ms ease;
+  }
+  .modes { display: flex; margin-top: 28px; }
+  #themes .now { margin-top: 12px; }
+  .modes div { display: flex; gap: 2px; padding: 3px; border-radius: 12px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+  .modes button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: 9px; background: none; color: var(--ink-2); font: 500 14px/1 var(--text); cursor: pointer; }
+  .modes button svg { width: 15px; height: 15px; }
+  .modes button[aria-checked="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 0.1); }
   .now { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 28px; font-size: 15px; color: var(--ink-2); min-height: 40px; }
   .now b { color: var(--ink); font-weight: 600; }
   .now button { font: inherit; font-weight: 600; color: var(--link); background: none; border: 0; padding: 4px 0; cursor: pointer; text-decoration: underline; text-underline-offset: 0.2em; }
@@ -657,14 +641,6 @@
   }
   @media (max-width: 900px) {
     .head, .ai, .themes-top { grid-template-columns: minmax(0, 1fr); }
-    .vars { width: 100%; margin-top: 16px; }
-    .vars-body { grid-template-columns: minmax(0, 1fr); }
-    .vars-side { display: flex; align-items: center; gap: 4px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--bd); }
-    .vars-side > :not(.vs-groups) { display: none; }
-    .vs-groups { display: flex; gap: 4px; }
-    .vs-groups button { width: auto; }
-    .vs-groups button i { display: none; }
-    .vars-table .names { flex-basis: 120px; }
     .cv-layers { left: 8px; right: 8px; top: 8px; width: auto; display: flex; gap: 2px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
     .cv-layers > :not(.f-layer) { display: none; }
     .cv-layers .f-layer { flex: none; width: auto; margin: 0; padding: 0 10px 0 6px; }
@@ -695,6 +671,7 @@
     .reel-row { width: auto; animation: none; }
     .reel-track { flex-wrap: wrap; }
     .reel-track[aria-hidden] { display: none; }
+    html.trying, html.trying body, html.trying body *, html.trying body *::before, html.trying body *::after { transition: none; }
   }
 </style>
 </head>
@@ -859,14 +836,17 @@
     <div class="themes-top">
       <div class="themes-copy">
         <h2 id="themes-heading">Nine themes. Try them on this page.</h2>
-        <p>Each theme is a mode of the same few colors, in a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Pick a column to see it here.</p>
-      </div>
-      <div class="themes-side">
+        <p>Each theme has a light and a dark version. Ligma tints Figma's greys and gives its brand color to buttons, selection and menus. Point at a name to try it on this page, click to keep it.</p>
+        <div class="modes"><div role="radiogroup" aria-label="Mode">
+          <button type="button" role="radio" data-mode="light"><svg><use href="#i-sun"/></svg>Light</button>
+          <button type="button" role="radio" data-mode="dark"><svg><use href="#i-moon"/></svg>Dark</button>
+        </div></div>
         <div class="now" aria-live="polite">
           <span id="now">Showing <b>Figma</b>, the way Figma ships it.</span>
           <button type="button" id="reset" hidden>Back to your system's look</button>
         </div>
       </div>
+      <div class="names" id="names" role="radiogroup" aria-label="Themes"></div>
     </div>
 
     <div class="figma" aria-hidden="true">
@@ -921,21 +901,6 @@
             <div class="f-prop closed"><b>Export<span class="f-ib"><svg><use href="#i-plus"/></svg></span></b></div>
           </div>
         </div>
-      </div>
-    </div>
-    <div class="vars cv-ui">
-      <div class="vars-head"><b>Local variables</b><span class="vars-x" aria-hidden="true"><svg><use href="#i-x"/></svg></span></div>
-      <div class="vars-body">
-        <div class="vars-side">
-          <div class="vs-cap">Collections</div>
-          <div class="vs-item on"><svg><use href="#i-hex"/></svg>Ligma themes</div>
-          <div class="vs-cap">Groups</div>
-          <div class="vs-groups" role="radiogroup" aria-label="Mode">
-            <button type="button" role="radio" data-mode="light">Light<i>8</i></button>
-            <button type="button" role="radio" data-mode="dark">Dark<i>8</i></button>
-          </div>
-        </div>
-        <div class="vars-table" id="vars" role="radiogroup" aria-label="Themes"></div>
       </div>
     </div>
     <p class="figma-caption">Your designs keep their colors. Only Figma's interface changes, and Ligma's with it.</p>
@@ -1489,46 +1454,44 @@
     renderDeck();
   }
 
-  // The Variables table: the colors a theme gives Figma, named as a
-  // designer would name them, a column for each theme in the page's mode
-  const VARS = [
-    ["accent/default", (r) => r["--a-500"]],
-    ["accent/pressed", (r) => r["--a-700"]],
-    ["selection", (r, dark) => (dark ? r["--a-800"] : r["--a-200"])],
-    ["bg/panel", (r, dark) => (dark ? r["--g-800"] : r["--white"])],
-    ["bg/canvas", (r, dark) => (dark ? r["--g-900"] : r["--g-100"])],
-    ["border", (r, dark) => (dark ? r["--g-600"] : r["--g-200"])],
-    ["text/primary", (r, dark) => (dark ? "#ffffff" : r["--g-900"])],
-    ["text/secondary", (r, dark) => (dark ? r["--g-400"] : r["--g-500"])],
-  ];
-  const hex = (color) => (color.startsWith("#") ? color.slice(1, 7).toUpperCase() : color);
+  // The names, made once and recolored for the mode, so pointing at one
+  // isn't lost when the page repaints
+  let trying = null;
+  function tryTheme(id) {
+    if (id === trying) return;
+    trying = id;
+    root.classList.add("trying");
+    for (const [name, value] of Object.entries(ramps(id ?? state.theme, state.mode))) root.style.setProperty(name, value);
+    clearTimeout(tryTheme.done);
+    if (!id) tryTheme.done = setTimeout(() => !trying && root.classList.remove("trying"), 300);
+  }
+  const nameButtons = LIGMA_THEMES.map((theme) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.theme = theme.id;
+    button.setAttribute("role", "radio");
+    button.textContent = theme.name;
+    // Hover tries it on mouse and pen; touch goes straight to a click
+    button.addEventListener("pointerenter", (event) => event.pointerType !== "touch" && tryTheme(theme.id));
+    button.addEventListener("pointerleave", (event) => event.pointerType !== "touch" && tryTheme(null));
+    button.addEventListener("focus", () => button.matches(":focus-visible") && tryTheme(theme.id));
+    button.addEventListener("blur", () => tryTheme(null));
+    button.addEventListener("click", (event) => pick(theme.id, state.mode, event));
+    return button;
+  });
+  $("names").replaceChildren(...nameButtons);
   function renderDeck() {
     const dark = state.mode === "dark";
-    const focused = document.activeElement?.closest("#vars")?.dataset.theme;
-    const names = document.createElement("div");
-    names.className = "names";
-    names.setAttribute("aria-hidden", "true");
-    names.innerHTML = `<span class="hd">Name</span>${VARS.map(([name]) => `<span><svg><use href="#i-palette"/></svg>${name}</span>`).join("")}`;
-    $("vars").replaceChildren(names, ...LIGMA_THEMES.map((theme) => {
-      const ramp = ramps(theme.id, state.mode);
-      const column = document.createElement("button");
-      column.type = "button";
-      column.dataset.theme = theme.id;
-      column.setAttribute("role", "radio");
-      column.setAttribute("aria-checked", theme.id === state.theme);
-      column.setAttribute("aria-label", theme.name);
-      column.innerHTML = `<span class="hd">${theme.name}</span>${VARS.map(([, get]) => {
-        const color = get(ramp, dark);
-        return `<span><i style="background:${color}"></i>${hex(color)}</span>`;
-      }).join("")}`;
-      column.addEventListener("click", (event) => pick(theme.id, state.mode, event));
-      return column;
-    }));
-    if (focused) $("vars").querySelector(`[data-theme="${focused}"]`)?.focus();
-    for (const button of document.querySelectorAll(".vs-groups button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
+    for (const button of nameButtons) {
+      const ramp = ramps(button.dataset.theme, state.mode);
+      // Dark enough on light, light enough on dark, for large type
+      button.style.setProperty("--c", dark ? ramp["--a-400"] : ramp["--a-700"]);
+      button.setAttribute("aria-checked", button.dataset.theme === state.theme);
+    }
+    for (const button of document.querySelectorAll(".modes button")) button.setAttribute("aria-checked", button.dataset.mode === state.mode);
   }
 
-  for (const button of document.querySelectorAll(".vs-groups button")) {
+  for (const button of document.querySelectorAll(".modes button")) {
     button.addEventListener("click", (event) => pick(state.theme, button.dataset.mode, event));
   }
 
@@ -1539,6 +1502,8 @@
   }
 
   function pick(theme, mode, event) {
+    trying = null;
+    root.classList.remove("trying");
     if (theme === state.theme && mode === state.mode) return;
     retint(() => {
       Object.assign(state, { theme, mode, picked: true });
