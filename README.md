@@ -2,7 +2,7 @@
 
 <a href="https://trelakor.github.io/ligma/"><img src="site/social-cover.png" width="840" alt="Ligma. Same Figma. Lighter. For macOS and Windows"></a>
 
-A lightweight desktop app for [Figma](https://www.figma.com), about 4 MB. Built on your system's own webview, with tabs, themes, plugins in the left rail and your file on Discord.
+A lightweight desktop app for [Figma](https://www.figma.com): 16 MB installed, where Figma desktop takes 305 MB. It adds tabs and split view, nine color themes, and AI image tools that are free and run on your own computer.
 
 <a href="../../releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-macos-dark.png"><img src="assets/readme/download-macos-light.png" width="236" height="48" alt="Download for macOS"></picture></a>&nbsp;&nbsp;<a href="../../releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-windows-dark.png"><img src="assets/readme/download-windows-light.png" width="252" height="48" alt="Download for Windows"></picture></a>
 
