@@ -99,7 +99,7 @@ Like the Figma desktop app's Plugins > Development > Import plugin from manifest
 
 ## Updates
 
-On launch and every 6 hours Ligma checks the latest release, downloads a newer version in the background and offers to restart. Choose Later and it installs when you quit. The app is replaced in place, so you stay signed in. If an update can't be installed, Ligma says why and offers to download it or report it.
+On launch and every hour Ligma checks the latest release and downloads a newer version in the background. Once it's ready, an Update now button shows in the tab bar (before Settings on Windows, after the traffic lights on macOS) to restart into it, or it installs when you quit. Only an update ready within a minute of launch, while Ligma is in front, also asks to restart in a prompt; later ones never take focus from what you're doing. The app is replaced in place, so you stay signed in. If an update can't be installed, Ligma says why and offers to download it or report it.
 
 ## Reporting problems
 

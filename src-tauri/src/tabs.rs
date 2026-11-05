@@ -2416,6 +2416,21 @@ pub fn any_focused(app: &AppHandle) -> bool {
     tab_windows(app).iter().any(|window| window.is_focused().unwrap_or(false))
 }
 
+/// True while a window with tabs is the one in front, so Ligma may show a
+/// prompt over it without taking focus from another app. On Windows a Figma
+/// tab's webview holds the keyboard focus, not its window, so this asks for
+/// the foreground window instead
+#[cfg(windows)]
+pub fn in_front(app: &AppHandle) -> bool {
+    let foreground = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+    tab_windows(app).iter().any(|window| window.hwnd().is_ok_and(|hwnd| hwnd.0 as isize == foreground.0 as isize))
+}
+
+#[cfg(not(windows))]
+pub fn in_front(app: &AppHandle) -> bool {
+    any_focused(app)
+}
+
 /// Makes a window for tabs, `size` within. Its own webview is the tab bar;
 /// tabs are added as child webviews below it
 pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visible: bool) -> tauri::Result<Window> {
@@ -2531,8 +2546,11 @@ fn push_state(app: &AppHandle) {
         platform: &'static str,
         /// The window's split view's tabs, if any
         split: Option<[u32; 2]>,
+        /// The version downloaded and ready to install, if any
+        update: Option<String>,
     }
 
+    let update = crate::updater::ready_version(app);
     // Not `get_webview_window`: that returns None once the window holds
     // more than one webview
     for window in tab_windows(app) {
@@ -2550,12 +2568,27 @@ fn push_state(app: &AppHandle) {
                 theme: &state.theme,
                 platform: std::env::consts::OS,
                 split: state.splits.get(window.label()).copied(),
+                update: update.clone(),
             })
             .unwrap()
         };
         let _ = bar.eval(format!("window.render?.({json})"));
     }
     save_session(app);
+}
+
+/// Draws the tab bars again, for when an update is ready
+pub fn refresh_bars(app: &AppHandle) {
+    push_state(app);
+}
+
+/// Puts the tab bars' Update Now button back after the install failed
+pub fn update_failed(app: &AppHandle) {
+    for window in tab_windows(app) {
+        if let Some(bar) = app.get_webview(window.label()) {
+            let _ = bar.eval("window.updateFailed?.()");
+        }
+    }
 }
 
 /// Only the local tab bar may drive tabs. Figma pages have no IPC access
@@ -2640,6 +2673,15 @@ pub async fn tear_off_tab(app: AppHandle, webview: Webview, id: u32, was_active:
     };
     if let Ok(Some(label)) = move_to_new_window(&app, id, at, !was_active) {
         std::thread::spawn(move || follow_cursor(&app, id, &label));
+    }
+}
+
+/// The tab bar's Update Now button: installs the downloaded update and
+/// restarts into it
+#[tauri::command]
+pub async fn update_now(app: AppHandle, webview: Webview) {
+    if from_tab_bar(&webview) {
+        std::thread::spawn(move || crate::updater::install_now(&app));
     }
 }
 

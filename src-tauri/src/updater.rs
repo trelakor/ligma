@@ -1,9 +1,11 @@
-//! Auto-update from GitHub Releases. On launch and every 6 hours, Ligma
+//! Auto-update from GitHub Releases. On launch and every hour, Ligma
 //! fetches `latest.json` from the latest release (written by
-//! `.github/workflows/release.yml`), downloads a newer version in the
-//! background and asks to restart. "Later" installs it on quit, so the next
-//! launch runs the new version. Packages are verified against `pubkey` in
-//! `tauri.conf.json`. The app is replaced in place, so its data (sign-in,
+//! `.github/workflows/release.yml`) and downloads a newer version in the
+//! background. Once it's ready, the tab bar shows an Update Now button.
+//! Only an update found right after launch, while Ligma is in front, also
+//! asks to restart; later ones never take focus. Otherwise it installs on
+//! quit, so the next launch runs the new version. Packages are verified
+//! against `pubkey` in `tauri.conf.json`. The app is replaced in place, so its data (sign-in,
 //! settings) stays. Ligma > Check for Updates… does the same on demand.
 //! If installing fails, Ligma says why, links to the release to install by
 //! hand and offers a report (report.rs), rather than carrying on as the old
@@ -14,13 +16,17 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+
+/// An update ready this soon after launch still asks to restart; one found
+/// later only shows the tab bar's button
+const LAUNCH_PROMPT_WITHIN: Duration = Duration::from_secs(60);
 
 const RELEASES: &str = "https://github.com/trelakor/ligma/releases/latest";
 
@@ -59,18 +65,56 @@ pub fn start(app: &AppHandle) {
         skip_check = true;
     }
     let app = app.clone();
+    let launched = Instant::now();
     std::thread::spawn(move || loop {
         // Once one is downloaded, wait for it to be installed
         if !std::mem::take(&mut skip_check) && app.state::<Pending>().0.lock().unwrap().is_none() {
             // Offline or no release reachable: try again next time
             match tauri::async_runtime::block_on(check(&app)) {
-                Ok(true) => ask_to_restart(&app),
-                Ok(false) => {}
+                Ok(true) if launched.elapsed() < LAUNCH_PROMPT_WITHIN && crate::tabs::in_front(&app) => {
+                    ask_to_restart(&app)
+                }
+                Ok(_) => {}
                 Err(error) => log::warn!("Couldn't check for updates: {error}"),
             }
         }
         std::thread::sleep(CHECK_EVERY);
     });
+}
+
+/// The version downloaded and waiting to be installed, for the tab bar's
+/// Update Now button
+pub fn ready_version(app: &AppHandle) -> Option<String> {
+    let pending = app.try_state::<Pending>()?;
+    let version = pending.0.lock().unwrap().as_ref().map(|(update, _)| update.version.clone());
+    version
+}
+
+/// Installs the downloaded update and restarts into it, for the tab bar's
+/// Update Now button and the prompt's Restart Now
+pub fn install_now(app: &AppHandle) {
+    let Some(version) = ready_version(app) else {
+        return;
+    };
+    // On Windows a successful install quits Ligma, and the installer
+    // starts the new version
+    match install(app) {
+        Ok(()) => relaunch(app),
+        Err(error) => {
+            let error = format!("Couldn't install Ligma {version}: {error}");
+            if WOUND_DOWN.load(Ordering::SeqCst) {
+                // The windows are hidden and Tauri is shut down: say so
+                // from a fresh start instead
+                log::error!("{error}");
+                remember_failure(app, &error);
+                app.state::<Pending>().0.lock().unwrap().take();
+                app.restart();
+            }
+            // Still pending: the button goes back to Update Now
+            crate::tabs::update_failed(app);
+            install_failed(app, error);
+        }
+    }
 }
 
 /// Says why the last update failed to install, if it did. Call once the
@@ -128,18 +172,12 @@ async fn check(app: &AppHandle) -> tauri_plugin_updater::Result<bool> {
     let bytes = update.download(|_, _| {}, || {}).await?;
     log::info!("Downloaded Ligma {}", update.version);
     *app.state::<Pending>().0.lock().unwrap() = Some((update, bytes));
+    crate::tabs::refresh_bars(app);
     Ok(true)
 }
 
 fn ask_to_restart(app: &AppHandle) {
-    let Some(version) = app
-        .state::<Pending>()
-        .0
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|(update, _)| update.version.clone())
-    else {
+    let Some(version) = ready_version(app) else {
         return;
     };
     let handle = app.clone();
@@ -149,25 +187,8 @@ fn ask_to_restart(app: &AppHandle) {
         format!("Ligma {version} is ready. Restart now to use it, or it will be installed when you quit."),
         &["Later", "Restart Now"],
         move |choice| {
-            if choice != Some(1) {
-                return;
-            }
-            // On Windows a successful install quits Ligma, and the installer
-            // starts the new version
-            match install(&handle) {
-                Ok(()) => relaunch(&handle),
-                Err(error) => {
-                    let error = format!("Couldn't install Ligma {version}: {error}");
-                    if WOUND_DOWN.load(Ordering::SeqCst) {
-                        // The windows are hidden and Tauri is shut down:
-                        // say so from a fresh start instead
-                        log::error!("{error}");
-                        remember_failure(&handle, &error);
-                        handle.state::<Pending>().0.lock().unwrap().take();
-                        handle.restart();
-                    }
-                    install_failed(&handle, error);
-                }
+            if choice == Some(1) {
+                install_now(&handle);
             }
         },
     );
