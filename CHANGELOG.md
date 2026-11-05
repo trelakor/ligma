@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.33.0 - 2026-11-05
+
+- Once an update has downloaded, an Update now button shows in the tab bar (before Settings on Windows, after the traffic lights on macOS) to restart into it. Only an update ready just after launch also asks in a prompt, so Ligma no longer comes to the front when it finds one in the background.
+- Ligma checks for updates every hour instead of every 6 hours.
+
 ## 0.32.0 - 2026-11-02
 
 - Color contrast is gone from the color picker, as Figma now shows contrast in its own. Settings > Features > Colors goes with it.
