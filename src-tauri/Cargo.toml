@@ -38,8 +38,9 @@ visioncortex = "0.9"
 webview2-com = "0.39"
 windows-core = "0.62"
 # GetKeyState for the tab shortcuts, the stream tab previews are captured
-# into, and the regions split tabs are clipped to, in src/webview2.rs
-windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi"] }
+# into, and the regions split tabs are clipped to, in src/webview2.rs, and
+# the foreground window for the update prompt (`tabs::in_front`)
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 # Tab preview images as `data:` URLs (src/webview2.rs)
 base64 = "0.22"
 # figma:// registration in src/figma_scheme.rs

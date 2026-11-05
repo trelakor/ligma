@@ -256,6 +256,7 @@ fn main() {
             tabs::tear_off_tab,
             tabs::set_split_ratio,
             tabs::window_control,
+            tabs::update_now,
             settings::get_settings,
             settings::get_theme,
             settings::set_settings,
