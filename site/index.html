@@ -575,13 +575,29 @@
   .compare .yes svg { flex: none; width: 24px; height: 24px; padding: 5px; border-radius: 50%; background: var(--field); color: #fff; }
   .compare .no svg { flex: none; width: 22px; height: 22px; color: var(--ink-3); }
 
-  /* FAQ: always open, so every answer is on the page to read and to index */
-  .faq { border-top: 2px solid var(--ink); }
-  .qa { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 12px 48px; padding: 28px 0 30px; border-bottom: 1px solid var(--line); }
-  .qa:last-child { border-bottom: 0; }
-  .qa h3 { font-size: clamp(1.25rem, 2vw, 1.5rem); }
-  .qa p { margin: 0; max-width: 38em; color: var(--ink-2); font-size: 17px; line-height: 1.6; }
+  /* FAQ under the closing download: one rule per question, the answer
+     opening beneath it. Answers stay in the page for search */
+  .faq { width: 100%; max-width: 880px; margin-top: clamp(96px, 12vw, 144px); padding: 0; text-align: left; }
+  .closing .faq h2 { margin-bottom: 24px; font-size: clamp(2rem, 3.6vw, 3rem); line-height: 1; letter-spacing: -0.035em; font-weight: 650; }
+  .qa { border-top: 1px solid var(--line); }
+  .qa:last-child { border-bottom: 1px solid var(--line); }
+  .qa summary { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 64px; padding: 14px 0; cursor: pointer; list-style: none; border-radius: 0; }
+  .qa summary::-webkit-details-marker { display: none; }
+  .qa summary:focus-visible { outline-offset: -2px; border-radius: 6px; }
+  .qa h3 { font: 600 clamp(17px, 1.6vw, 19px)/1.35 var(--text); letter-spacing: -0.01em; color: var(--ink); }
+  .qa .chev { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; color: var(--ink-2); transition: background-color 120ms, color 120ms; }
+  .qa .chev svg { width: 24px; height: 24px; transition: rotate 240ms var(--ease); }
+  .qa summary:hover .chev { background: var(--surface); color: var(--ink); }
+  .qa[open] .chev { color: var(--ink); }
+  .qa[open] .chev svg { rotate: 180deg; }
+  .qa p { margin: 0; padding: 0 56px 24px 0; max-width: 40em; color: var(--ink-2); font-size: 16px; line-height: 1.6; }
   .qa a { color: var(--link); }
+  @supports (interpolate-size: allow-keywords) {
+    .faq { interpolate-size: allow-keywords; }
+    .qa::details-content { height: 0; overflow: clip; transition: height 280ms var(--ease), content-visibility 280ms allow-discrete; }
+    .qa[open]::details-content { height: auto; }
+  }
+  .faq + .site-links { margin-top: clamp(72px, 9vw, 112px); }
 
   /* Install */
   .install { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(24px, 4vw, 48px); }
@@ -715,7 +731,7 @@
     nav ul li:not(:last-child) { display: none; }
     .index { grid-template-columns: minmax(0, 1fr); }
     .install { grid-template-columns: minmax(0, 1fr); }
-    .qa { grid-template-columns: minmax(0, 1fr); padding: 24px 0 26px; }
+    .qa p { padding-right: 0; }
     .you { display: none; }
     .site-links .brand, .site-links small { margin: 0; width: 100%; justify-content: center; }
     .compare tbody th { width: 40%; }
@@ -724,7 +740,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .tray button, .btn, .orb, .theme, .reel a { transition: none; }
+    .tray button, .btn, .orb, .theme, .reel a, .qa .chev, .qa .chev svg, .qa::details-content { transition: none; }
     .orb .mesh::before, .photo .ants, .you, .sheet[open] { animation: none; }
     .reel { mask-image: none; width: auto; margin-left: 0; }
     .reel-row { width: auto; animation: none; }
@@ -1424,54 +1440,6 @@
     </div>
   </section>
 
-  <section id="faq" aria-labelledby="faq-heading">
-    <div class="head">
-      <h2 id="faq-heading">Questions</h2>
-      <p>What people ask before they swap Figma desktop for Ligma.</p>
-    </div>
-    <div class="faq">
-      <div class="qa">
-        <h3>Is Ligma made by Figma?</h3>
-        <div><p>No. Ligma is an independent, open-source app and isn't affiliated with Figma. It opens figma.com in your system's webview, so you sign in with your own Figma account and work in the same Figma, with the same files, plan and plugins.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Is it free?</h3>
-        <div><p>Yes. Ligma is free and MIT licensed, with no account of its own. Your Figma plan works as it does anywhere else.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Why is it lighter than Figma desktop?</h3>
-        <div><p>Figma desktop ships its own copy of Chromium. Ligma uses the webview your system already has, WebView2 on Windows and WKWebView on macOS, so it's 16 MB installed on macOS against 305 MB. Tabs you aren't looking at are trimmed, frozen and put to sleep to keep memory down. <a href="https://github.com/trelakor/ligma/blob/main/docs/MEMORY.md">Compare memory use on your own machine</a>.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Can I open Figma files in tabs, or side by side?</h3>
-        <div><p>Yes. Tabs work like the desktop app's, with pinning, previews on hover and your tabs reopened next launch. <a href="#f-split">Split view</a> puts two files side by side under one set of Figma's panels, and you can drag a selection from one into the other.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Can I change Figma's colors?</h3>
-        <div><p>Yes. Nine color themes, each in light and dark, recolor Figma's interface and never your designs. <a href="#themes">Try them on this page</a>.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Can I show what I'm working on in Discord?</h3>
-        <div><p>Yes. Discord Rich Presence shows the file, page and tool you're on. You can hide file names, keep one file private from its tab, or turn it off in Settings.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Do my plugins and fonts work?</h3>
-        <div><p>Yes. Your saved plugins sit one click away in the left sidebar, and development plugins import from a <code>manifest.json</code>, which figma.com doesn't support. Installed fonts load through Figma's own font helper.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Is it safe? Why does my system warn me?</h3>
-        <div><p>Builds aren't signed yet, so macOS and Windows ask once before the first launch (see <a href="#install">Install</a>). The code is <a href="https://github.com/trelakor/ligma">open on GitHub</a>, and Ligma collects nothing: no analytics, telemetry or crash reports. Your Figma session stays in the system webview on your computer.</p></div>
-      </div>
-      <div class="qa">
-        <h3>Does Ligma run on Linux?</h3>
-        <div><p>Not at the moment. Ligma runs on macOS, Apple silicon and Intel, and on Windows.</p></div>
-      </div>
-      <div class="qa">
-        <h3>How does it update?</h3>
-        <div><p>By itself. Ligma downloads updates in the background and installs them without signing you out.</p></div>
-      </div>
-    </div>
-  </section>
 </div>
 
 <footer class="closing">
@@ -1481,6 +1449,49 @@
     <a class="btn primary" href="https://github.com/trelakor/ligma/releases/latest" data-download><svg class="icon"><use href="#i-download"/></svg><span>Download</span></a>
     <a class="btn" href="https://github.com/trelakor/ligma"><svg class="icon"><use href="#i-star"/></svg>Star on GitHub</a>
   </div>
+  <section class="faq" id="faq" aria-labelledby="faq-heading">
+    <h2 id="faq-heading">Questions</h2>
+    <details class="qa">
+      <summary><h3>Is Ligma made by Figma?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>No. Ligma is an independent, open-source app and isn't affiliated with Figma. It opens figma.com in your system's webview, so you sign in with your own Figma account and work in the same Figma, with the same files, plan and plugins.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Is it free?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Yes. Ligma is free and MIT licensed, with no account of its own. Your Figma plan works as it does anywhere else.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Why is it lighter than Figma desktop?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Figma desktop ships its own copy of Chromium. Ligma uses the webview your system already has, WebView2 on Windows and WKWebView on macOS, so it's 16 MB installed on macOS against 305 MB. Tabs you aren't looking at are trimmed, frozen and put to sleep to keep memory down. <a href="https://github.com/trelakor/ligma/blob/main/docs/MEMORY.md">Compare memory use on your own machine</a>.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Can I open Figma files in tabs, or side by side?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Yes. Tabs work like the desktop app's, with pinning, previews on hover and your tabs reopened next launch. <a href="#f-split">Split view</a> puts two files side by side under one set of Figma's panels, and you can drag a selection from one into the other.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Can I change Figma's colors?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Yes. Nine color themes, each in light and dark, recolor Figma's interface and never your designs. <a href="#themes">Try them on this page</a>.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Can I show what I'm working on in Discord?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Yes. Discord Rich Presence shows the file, page and tool you're on. You can hide file names, keep one file private from its tab, or turn it off in Settings.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Do my plugins and fonts work?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Yes. Your saved plugins sit one click away in the left sidebar, and development plugins import from a <code>manifest.json</code>, which figma.com doesn't support. Installed fonts load through Figma's own font helper.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Is it safe? Why does my system warn me?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Builds aren't signed yet, so macOS and Windows ask once before the first launch (see <a href="#install">Install</a>). The code is <a href="https://github.com/trelakor/ligma">open on GitHub</a>, and Ligma collects nothing: no analytics, telemetry or crash reports. Your Figma session stays in the system webview on your computer.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>Does Ligma run on Linux?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>Not at the moment. Ligma runs on macOS, Apple silicon and Intel, and on Windows.</p>
+    </details>
+    <details class="qa">
+      <summary><h3>How does it update?</h3><span class="chev" aria-hidden="true"><svg><use href="#i-chev-down"/></svg></span></summary>
+      <p>By itself. Ligma downloads updates in the background and installs them without signing you out.</p>
+    </details>
+  </section>
   <div class="site-links">
     <a class="brand" href="./"><img src="logo.png" alt="" width="24" height="24">Ligma</a>
     <a href="https://github.com/trelakor/ligma">GitHub</a>
@@ -1503,7 +1514,7 @@
       mainEntity: [...document.querySelectorAll("#faq .qa")].map((qa) => ({
         "@type": "Question",
         name: qa.querySelector("h3").textContent.trim(),
-        acceptedAnswer: { "@type": "Answer", text: qa.querySelector("div").textContent.trim().replace(/\s+/g, " ") },
+        acceptedAnswer: { "@type": "Answer", text: qa.querySelector("p").textContent.trim().replace(/\s+/g, " ") },
       })),
     });
     document.head.append(s);
