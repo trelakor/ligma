@@ -4,18 +4,46 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ligma: a lightweight Figma desktop app for macOS and Windows</title>
-<meta name="description" content="Ligma is a free, open-source desktop app for Figma on macOS and Windows: lightweight, with far more to work with. Tabs and split view, nine color themes, plugins in the left sidebar and AI image tools that run on your computer.">
-<link rel="canonical" href="https://trelakor.github.io/ligma/">
-<link rel="icon" href="logo.png">
+<meta name="description" content="Ligma is a free, open-source Figma desktop app for macOS and Windows, 16 MB installed. Tabs, split view, nine color themes, plugins in the sidebar and Discord presence.">
+<link rel="canonical" href="https://www.useligma.com/">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/favicon-96.png" type="image/png" sizes="96x96">
+<link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="Ligma">
 <meta property="og:title" content="Ligma: a lightweight Figma desktop app">
 <meta property="og:description" content="A lightweight desktop app for Figma, with far more to work with. Tabs and split view, nine themes and free AI image tools that run on your computer.">
-<meta property="og:url" content="https://trelakor.github.io/ligma/">
-<meta property="og:image" content="https://trelakor.github.io/ligma/social-cover.png">
+<meta property="og:url" content="https://www.useligma.com/">
+<meta property="og:image" content="https://www.useligma.com/social-cover.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta property="og:image:alt" content="Ligma. Same Figma. Lighter. For macOS and Windows">
 <meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+[
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "Ligma",
+    "url": "https://www.useligma.com/"
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Ligma",
+    "description": "A lightweight, open-source Figma desktop app for macOS and Windows, with tabs, split view, nine color themes, plugins in the left sidebar and Discord Rich Presence",
+    "url": "https://www.useligma.com/",
+    "downloadUrl": "https://github.com/trelakor/ligma/releases/latest",
+    "image": "https://www.useligma.com/social-cover.png",
+    "operatingSystem": "macOS, Windows",
+    "applicationCategory": "DesignApplication",
+    "license": "https://opensource.org/licenses/MIT",
+    "isAccessibleForFree": true,
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+]
+</script>
 <link rel="preload" href="fonts/funnel-display.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
 <script>
@@ -547,6 +575,14 @@
   .compare .yes svg { flex: none; width: 24px; height: 24px; padding: 5px; border-radius: 50%; background: var(--field); color: #fff; }
   .compare .no svg { flex: none; width: 22px; height: 22px; color: var(--ink-3); }
 
+  /* FAQ: always open, so every answer is on the page to read and to index */
+  .faq { border-top: 2px solid var(--ink); }
+  .qa { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 12px 48px; padding: 28px 0 30px; border-bottom: 1px solid var(--line); }
+  .qa:last-child { border-bottom: 0; }
+  .qa h3 { font-size: clamp(1.25rem, 2vw, 1.5rem); }
+  .qa p { margin: 0; max-width: 38em; color: var(--ink-2); font-size: 17px; line-height: 1.6; }
+  .qa a { color: var(--link); }
+
   /* Install */
   .install { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(24px, 4vw, 48px); }
   .os { padding-top: 24px; border-top: 2px solid var(--ink); }
@@ -679,6 +715,7 @@
     nav ul li:not(:last-child) { display: none; }
     .index { grid-template-columns: minmax(0, 1fr); }
     .install { grid-template-columns: minmax(0, 1fr); }
+    .qa { grid-template-columns: minmax(0, 1fr); padding: 24px 0 26px; }
     .you { display: none; }
     .site-links .brand, .site-links small { margin: 0; width: 100%; justify-content: center; }
     .compare tbody th { width: 40%; }
@@ -1386,6 +1423,55 @@
       </div>
     </div>
   </section>
+
+  <section id="faq" aria-labelledby="faq-heading">
+    <div class="head">
+      <h2 id="faq-heading">Questions</h2>
+      <p>What people ask before they swap Figma desktop for Ligma.</p>
+    </div>
+    <div class="faq">
+      <div class="qa">
+        <h3>Is Ligma made by Figma?</h3>
+        <div><p>No. Ligma is an independent, open-source app and isn't affiliated with Figma. It opens figma.com in your system's webview, so you sign in with your own Figma account and work in the same Figma, with the same files, plan and plugins.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Is it free?</h3>
+        <div><p>Yes. Ligma is free and MIT licensed, with no account of its own. Your Figma plan works as it does anywhere else.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Why is it lighter than Figma desktop?</h3>
+        <div><p>Figma desktop ships its own copy of Chromium. Ligma uses the webview your system already has, WebView2 on Windows and WKWebView on macOS, so it's 16 MB installed on macOS against 305 MB. Tabs you aren't looking at are trimmed, frozen and put to sleep to keep memory down. <a href="https://github.com/trelakor/ligma/blob/main/docs/MEMORY.md">Compare memory use on your own machine</a>.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Can I open Figma files in tabs, or side by side?</h3>
+        <div><p>Yes. Tabs work like the desktop app's, with pinning, previews on hover and your tabs reopened next launch. <a href="#f-split">Split view</a> puts two files side by side under one set of Figma's panels, and you can drag a selection from one into the other.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Can I change Figma's colors?</h3>
+        <div><p>Yes. Nine color themes, each in light and dark, recolor Figma's interface and never your designs. <a href="#themes">Try them on this page</a>.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Can I show what I'm working on in Discord?</h3>
+        <div><p>Yes. Discord Rich Presence shows the file, page and tool you're on. You can hide file names, keep one file private from its tab, or turn it off in Settings.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Do my plugins and fonts work?</h3>
+        <div><p>Yes. Your saved plugins sit one click away in the left sidebar, and development plugins import from a <code>manifest.json</code>, which figma.com doesn't support. Installed fonts load through Figma's own font helper.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Is it safe? Why does my system warn me?</h3>
+        <div><p>Builds aren't signed yet, so macOS and Windows ask once before the first launch (see <a href="#install">Install</a>). The code is <a href="https://github.com/trelakor/ligma">open on GitHub</a>, and Ligma collects nothing: no analytics, telemetry or crash reports. Your Figma session stays in the system webview on your computer.</p></div>
+      </div>
+      <div class="qa">
+        <h3>Does Ligma run on Linux?</h3>
+        <div><p>Not at the moment. Ligma runs on macOS, Apple silicon and Intel, and on Windows.</p></div>
+      </div>
+      <div class="qa">
+        <h3>How does it update?</h3>
+        <div><p>By itself. Ligma downloads updates in the background and installs them without signing you out.</p></div>
+      </div>
+    </div>
+  </section>
 </div>
 
 <footer class="closing">
@@ -1398,12 +1484,31 @@
   <div class="site-links">
     <a class="brand" href="./"><img src="logo.png" alt="" width="24" height="24">Ligma</a>
     <a href="https://github.com/trelakor/ligma">GitHub</a>
+    <a href="#faq">Questions</a>
     <a href="https://github.com/trelakor/ligma/blob/main/CHANGELOG.md">Changelog</a>
     <a href="https://github.com/trelakor/ligma/blob/main/PRIVACY.md">Privacy</a>
     <a href="https://github.com/trelakor/ligma/blob/main/TERMS.md">Terms</a>
     <small>MIT licensed. Not affiliated with Figma or Discord</small>
   </div>
 </footer>
+
+<script>
+  // FAQPage structured data, read from the Questions section so the two never drift apart
+  (() => {
+    const s = document.createElement("script");
+    s.type = "application/ld+json";
+    s.textContent = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: [...document.querySelectorAll("#faq .qa")].map((qa) => ({
+        "@type": "Question",
+        name: qa.querySelector("h3").textContent.trim(),
+        acceptedAnswer: { "@type": "Answer", text: qa.querySelector("div").textContent.trim().replace(/\s+/g, " ") },
+      })),
+    });
+    document.head.append(s);
+  })();
+</script>
 
 <!-- The app's own theme code, copied here when the site is published -->
 <script src="themes.js"></script>
