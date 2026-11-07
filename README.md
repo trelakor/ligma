@@ -1,12 +1,12 @@
 <div align="center">
 
-<a href="https://trelakor.github.io/ligma/"><picture><source media="(prefers-color-scheme: dark)" srcset="site/social-cover.png"><img src="site/social-cover-light.png" width="840" alt="Ligma. Same Figma. Lighter. For macOS and Windows"></picture></a>
+<a href="https://www.useligma.com/"><picture><source media="(prefers-color-scheme: dark)" srcset="site/social-cover.png"><img src="site/social-cover-light.png" width="840" alt="Ligma. Same Figma. Lighter. For macOS and Windows"></picture></a>
 
 A lightweight desktop app for [Figma](https://www.figma.com), with far more to work with
 
 <a href="../../releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-macos-dark.png"><img src="assets/readme/download-macos-light.png" width="236" height="48" alt="Download for macOS"></picture></a>&nbsp;&nbsp;<a href="../../releases/latest"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-windows-dark.png"><img src="assets/readme/download-windows-light.png" width="252" height="48" alt="Download for Windows"></picture></a>
 
-[Website](https://trelakor.github.io/ligma/) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md) · [Discussions](../../discussions)
+[Website](https://www.useligma.com/) · [Features](docs/FEATURES.md) · [Changelog](CHANGELOG.md) · [Discussions](../../discussions)
 
 </div>
 
