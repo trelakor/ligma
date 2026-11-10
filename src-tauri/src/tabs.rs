@@ -2263,25 +2263,83 @@ fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
                 });
             });
         }
-        Rest::Sleep => {
-            let url = webview.url().ok();
-            let slept = with_tab(app, id, |tab| {
-                if !still_hidden(tab) {
-                    return false;
-                }
-                tab.asleep = true;
-                tab.suspended = false;
-                tab.revealing = false;
-                if let Some(url) = url {
-                    tab.url = url;
-                }
-                true
-            });
-            if slept == Some(true) {
-                let _ = webview.close();
-                push_state(app);
-            }
+        Rest::Sleep => sleep_now(app, id, Some(since)),
+    }
+}
+
+/// Closes tab `id`'s webview, unless it was shown or hidden again since
+/// `since`, its `hidden_since` when it was found due
+fn sleep_now(app: &AppHandle, id: u32, since: Option<Instant>) {
+    let Some(webview) = app.get_webview(&label(id)) else {
+        return;
+    };
+    let url = webview.url().ok();
+    let slept = with_tab(app, id, |tab| {
+        if tab.asleep || tab.hidden_since != since {
+            return false;
         }
+        tab.asleep = true;
+        tab.suspended = false;
+        tab.revealing = false;
+        if let Some(url) = url {
+            tab.url = url;
+        }
+        true
+    });
+    if slept == Some(true) {
+        let _ = webview.close();
+        push_state(app);
+    }
+}
+
+/// Puts every loaded tab to sleep, the ones on screen too, for game mode
+/// (see game_mode.rs). Like `rest_idle`, only when `CAN_REST_JS` says no
+/// work would be lost
+pub fn sleep_all(app: &AppHandle) {
+    let loaded: Vec<(u32, Option<Instant>, bool)> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.tabs.iter().filter(|tab| !tab.asleep).map(|tab| (tab.id, tab.hidden_since, tab.suspended)).collect()
+    };
+    for (id, since, suspended) in loaded {
+        let Some(webview) = app.get_webview(&label(id)) else {
+            continue;
+        };
+        if suspended {
+            sleep_now(app, id, since);
+            continue;
+        }
+        let app = app.clone();
+        let _ = webview.eval_with_callback(CAN_REST_JS, move |json| {
+            if json == "true" {
+                let app = app.clone();
+                std::thread::spawn(move || sleep_now(&app, id, since));
+            }
+        });
+    }
+}
+
+/// Reloads the tabs on screen that `sleep_all` put to sleep: each window's
+/// active tab and the other half of its split view. The focused window's go
+/// last, so it stays focused
+pub fn wake_shown(app: &AppHandle) {
+    let ids: Vec<u32> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let asleep = |id: u32| state.tabs.iter().any(|tab| tab.id == id && tab.asleep);
+        let mut windows: Vec<&String> = state.actives.keys().collect();
+        windows.sort_by_key(|&window| *window == state.focused);
+        windows
+            .into_iter()
+            .flat_map(|window| {
+                let active = state.active_in(window);
+                let other = state.splits.get(window).and_then(|pair| pair.iter().copied().find(|&tab| tab != active));
+                // Both halves, the active one last so it stays active
+                let shown: Vec<u32> = other.into_iter().chain([active]).collect();
+                if shown.iter().any(|&id| asleep(id)) { shown } else { Vec::new() }
+            })
+            .collect()
+    };
+    for id in ids {
+        let _ = select(app, id);
     }
 }
 

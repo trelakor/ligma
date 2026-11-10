@@ -39,8 +39,10 @@ webview2-com = "0.39"
 windows-core = "0.62"
 # GetKeyState for the tab shortcuts, the stream tab previews are captured
 # into, and the regions split tabs are clipped to, in src/webview2.rs, and
-# the foreground window for the update prompt (`tabs::in_front`)
-windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+# the foreground window for the update prompt (`tabs::in_front`), and the
+# app in front, its executable and full screen state and trimming Ligma's
+# memory for game mode (src/game_mode.rs)
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell"] }
 # Tab preview images as `data:` URLs (src/webview2.rs)
 base64 = "0.22"
 # figma:// registration in src/figma_scheme.rs
@@ -65,7 +67,8 @@ base64 = "0.22"
 flate2 = "1"
 tar = "0.4"
 
-# libc for the memory pressure level in src/pressure.rs; objc2 and block2,
+# libc for the memory pressure level in src/pressure.rs and the processes
+# game mode looks into in src/game_mode.rs; objc2 and block2,
 # the same versions wry uses, for the AppKit and WebKit calls in
 # src/titlebar.rs and src/wkwebview.rs
 [target.'cfg(target_os = "macos")'.dependencies]
