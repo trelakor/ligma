@@ -200,10 +200,10 @@ const LIGMA_APP_ICONS = [
       return {
         defs: radial("tile-fill", [[0, "#24201a"], [1, "#050505"]], [0.5, 0.3, 0.9])
           + linear("gold", [[0, "#fff7d1"], [0.22, "#f2cc68"], [0.48, "#a87414"], [0.56, "#f9e195"], [0.8, "#86590c"], [1, "#e8c058"]])
-          + linear("frame", [[0, "#f6dd8e"], [1, "#8a5d10"]], [0, 0, 1, 1])
+          + linear("frame", [[0, "#fff1b8"], [0.3, "#e3b44c"], [0.55, "#8a5d10"], [0.8, "#f3d27a"], [1, "#9c6c14"]], [0, 0, 1, 1])
           + shadow("lift", 14, 16, 0.75),
         body: fill("url(#tile-fill)")
-          + `<path d="${LIGMA_TILE}" fill="none" stroke="url(#frame)" stroke-width="3" transform="translate(512 512) scale(.9) translate(-512 -512)"/>`
+          + `<g transform="translate(512 512) scale(.885) translate(-512 -512)"><path d="${LIGMA_TILE}" fill="none" stroke="#000" stroke-opacity=".6" stroke-width="22" transform="translate(0 4)"/><path d="${LIGMA_TILE}" fill="none" stroke="url(#frame)" stroke-width="16"/><path d="${LIGMA_TILE}" fill="none" stroke="#fff6d0" stroke-opacity=".5" stroke-width="2"/></g>`
           + `<g filter="url(#lift)">${parts(["url(#gold)", "url(#gold)", "url(#gold)", "url(#gold)"])}</g>`
           + parts(["none", "none", "none", "none"], 'stroke="#fff3c0" stroke-opacity=".55" stroke-width="2"'),
       };
@@ -234,11 +234,12 @@ const LIGMA_APP_ICONS = [
       const veins = (id, table, seed) => `<filter id="${id}" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.003" numOctaves="6" seed="${seed}"/><feColorMatrix type="matrix" values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 1"/><feComponentTransfer><feFuncR type="table" tableValues="${table}"/><feFuncG type="table" tableValues="${table}"/><feFuncB type="table" tableValues="${table}"/></feComponentTransfer></filter>`;
       return {
         defs: veins("carrara", table(0.95, 0.5), 8)
-          + veins("nero", table(0.07, 0.8), 21)
-          + clips() + linear("glare", [[0, "#fff", 0.16], [0.4, "#fff", 0]]) + shadow("lift", 16, 16, 0.4),
+          + linear("onyx", [[0, "#3a3a3d"], [0.45, "#151517"], [1, "#050506"]], [0, 0, 1, 1])
+          + linear("glare", [[0, "#fff", 0.32], [0.3, "#fff", 0.06], [0.31, "#fff", 0]]) + shadow("lift", 16, 16, 0.4),
         body: `<rect width="1024" height="1024" filter="url(#carrara)"/>`
-          + `<g filter="url(#lift)"><g clip-path="url(#glyph)"><rect width="1024" height="1024" filter="url(#nero)"/></g></g>`
-          + parts(["url(#glare)", "url(#glare)", "url(#glare)", "url(#glare)"]),
+          + `<g filter="url(#lift)">${parts(["url(#onyx)", "url(#onyx)", "url(#onyx)", "url(#onyx)"])}</g>`
+          + parts(["url(#glare)", "url(#glare)", "url(#glare)", "url(#glare)"])
+          + parts(["none", "none", "none", "none"], 'stroke="#fff" stroke-opacity=".22" stroke-width="2"'),
       };
     },
   },
@@ -360,7 +361,8 @@ const LIGMA_APP_ICONS = [
       const [l, t, r, b] = [g.x0, g.y0, g.right, g.bottom];
       const handles = [[l, t], [r, t], [l, b], [r, b]].map(([x, y]) => `<rect x="${x - 11}" y="${y - 11}" width="22" height="22" fill="#fff" stroke="${blue}" stroke-width="4"/>`).join("");
       const midX = (l + r) / 2;
-      const cursor = `<path d="M${r + 30} ${b + 34}l0 76 19-18 13 31 14-6-13-30 26-1z" fill="#1e1e1e" stroke="#fff" stroke-width="5" stroke-linejoin="round"/>`;
+      // The multiplayer cursor from the website (site/index.html), tip at the corner handle
+      const cursor = `<path transform="translate(${r + 18} ${b + 20}) scale(5.8) translate(-2.2 -2.2)" d="M3.4 2.2c-.7-.3-1.4.4-1.1 1.1l4.3 10.3c.3.7 1.3.7 1.6-.1l1.3-3.7c.1-.3.3-.5.6-.6l3.7-1.3c.8-.3.8-1.3.1-1.6z" fill="#9747ff" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>`;
       return {
         defs: dotGrid + shadow("lift", 3, 3, 0.25),
         body: fill("#f5f5f5") + fill("url(#grid)") + parts(LIGMA_COLORS)
@@ -432,16 +434,22 @@ const LIGMA_APP_ICONS = [
   {
     id: "holo", name: "Holo", collection: "playful",
     art() {
-      const { fill, linear, shadow, parts } = ligmaSvg;
-      const rainbow = [[0, "#ffd1f5"], [0.2, "#c9b6ff"], [0.4, "#9fe7ff"], [0.6, "#c4ffd9"], [0.8, "#fff3b0"], [1, "#ffc4e1"]];
-      const shimmer = `<filter id="shimmer" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.006 0.02" numOctaves="3" seed="12"/><feColorMatrix type="hueRotate" values="40"/><feColorMatrix type="saturate" values="2.2"/><feComponentTransfer><feFuncA type="table" tableValues=".55 .55"/></feComponentTransfer></filter>`;
-      const sparkle = (x, y, s) => `<path d="M${x} ${y - s}C${x + s * 0.12} ${y - s * 0.12} ${x + s * 0.12} ${y - s * 0.12} ${x + s} ${y}C${x + s * 0.12} ${y + s * 0.12} ${x + s * 0.12} ${y + s * 0.12} ${x} ${y + s}C${x - s * 0.12} ${y + s * 0.12} ${x - s * 0.12} ${y + s * 0.12} ${x - s} ${y}C${x - s * 0.12} ${y - s * 0.12} ${x - s * 0.12} ${y - s * 0.12} ${x} ${y - s}Z" fill="#fff"/>`;
+      const { clips, parts } = ligmaSvg;
+      // Holographic foil: noise mapped through a pastel rainbow, each
+      // channel a step out of phase, so hues swirl as on a foil sticker
+      const foil = (id, seed, frequency) => `<filter id="${id}" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse">`
+        + `<feTurbulence type="fractalNoise" baseFrequency="${frequency}" numOctaves="3" seed="${seed}"/><feColorMatrix type="matrix" values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 1"/>`
+        + `<feComponentTransfer><feFuncR type="table" tableValues="1 .96 .5 .22 .36 .88 1 .96 .42 .3 .88"/><feFuncG type="table" tableValues=".46 .34 .6 .92 1 .94 .62 .42 .78 1 .96"/><feFuncB type="table" tableValues=".96 1 1 .92 .56 .36 .52 .96 1 .82 .52"/></feComponentTransfer></filter>`;
+      // Bright glints where the foil catches the light
+      const glints = `<filter id="glints" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.009" numOctaves="2" seed="31"/><feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  3.4 0 0 0 -1.85"/></filter>`;
+      const sheen = `<linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1"><stop offset=".25" stop-color="#fff" stop-opacity="0"/><stop offset=".42" stop-color="#fff" stop-opacity=".5"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/><stop offset=".66" stop-color="#fff" stop-opacity=".3"/><stop offset=".74" stop-color="#fff" stop-opacity="0"/></linearGradient>`;
+      const ink = "#141414";
       return {
-        defs: linear("tile-fill", rainbow, [0, 0, 1, 1]) + linear("foil", [[0, "#ff6fd8"], [0.25, "#8f7bff"], [0.5, "#33d1ff"], [0.75, "#4ff0a6"], [1, "#ffd23f"]], [1, 0, 0, 1]) + shimmer + shadow("lift", 14, 18, 0.3, "#6b4cc2"),
-        body: fill("url(#tile-fill)") + `<rect width="1024" height="1024" filter="url(#shimmer)" style="mix-blend-mode:soft-light"/>`
-          + `<g filter="url(#lift)">${parts(["url(#foil)", "url(#foil)", "url(#foil)", "url(#foil)"])}</g>`
-          + parts(["#fff", "#fff", "#fff", "#fff"], 'fill-opacity=".18" stroke="#fff" stroke-width="6" stroke-opacity=".95"')
-          + sparkle(760, 270, 46) + sparkle(838, 380, 22) + sparkle(250, 860, 26),
+        defs: foil("foil", 12, 0.0042) + foil("foil-glyph", 5, 0.006) + glints + sheen + clips(),
+        body: `<rect width="1024" height="1024" filter="url(#foil)"/><rect width="1024" height="1024" filter="url(#glints)" style="mix-blend-mode:screen"/><rect width="1024" height="1024" fill="url(#sheen)"/>`
+          + `<path d="${LIGMA_TILE}" fill="none" stroke="${ink}" stroke-width="24" transform="translate(512 512) scale(.86) translate(-512 -512)"/>`
+          + `<g clip-path="url(#glyph)"><rect width="1024" height="1024" filter="url(#foil-glyph)"/><rect width="1024" height="1024" fill="url(#sheen)" transform="rotate(90 512 512)"/></g>`
+          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-width="22" stroke-linejoin="round"`),
       };
     },
   },
