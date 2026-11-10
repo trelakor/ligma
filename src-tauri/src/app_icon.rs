@@ -132,10 +132,14 @@ mod macos {
 }
 
 #[cfg(windows)]
-fn apply(app: &AppHandle, png: Option<Vec<u8>>, _changed: bool) {
+fn apply(app: &AppHandle, png: Option<Vec<u8>>, changed: bool) {
     win::set(png.as_deref());
     for window in app.webview_windows().values() {
         apply_to(window);
+    }
+    if changed {
+        let windows: Vec<_> = app.webview_windows().into_values().collect();
+        let _ = app.run_on_main_thread(move || win::refresh_taskbar(&windows));
     }
 }
 
@@ -208,6 +212,40 @@ mod win {
             let _ = window.set_icon(small);
         }
         unsafe { SendMessageW(hwnd.0 as isize, WM_SETICON, ICON_BIG, big) };
+    }
+
+    /// A pinned taskbar button keeps the icon it had when it was made, so
+    /// each window's button is taken off and put back to make it read the
+    /// new one. Only windows the taskbar shows, or AddTab would add buttons
+    pub fn refresh_taskbar(windows: &[tauri::WebviewWindow]) {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GetWindowLongW, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW};
+
+        let has_button = |hwnd: HWND| unsafe {
+            let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid());
+            IsWindowVisible(hwnd).as_bool() && style & WS_EX_TOOLWINDOW.0 == 0 && (!owned || style & WS_EX_APPWINDOW.0 != 0)
+        };
+        unsafe {
+            let Ok(taskbar) = CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER) else {
+                return;
+            };
+            if taskbar.HrInit().is_err() {
+                return;
+            }
+            for window in windows {
+                let Ok(hwnd) = window.hwnd() else {
+                    continue;
+                };
+                let hwnd = HWND(hwnd.0 as _);
+                if has_button(hwnd) {
+                    let _ = taskbar.DeleteTab(hwnd);
+                    let _ = taskbar.AddTab(hwnd);
+                }
+            }
+        }
     }
 }
 

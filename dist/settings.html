@@ -1009,6 +1009,11 @@
   // icons fill their square, so they're shown and set without the macOS
   // grid's margin
   const iconUrl = (id) => ligmaAppIconUrl(id, !macos);
+  const showIcon = (img, id) => {
+    img.src = iconUrl(id);
+    img.style.maskImage = !macos && id === "ligma" ? LIGMA_TILE_MASK : "";
+    img.style.maskSize = "100% 100%";
+  };
   const iconName = (id) => LIGMA_APP_ICONS.find((icon) => icon.id === id)?.name ?? "Ligma";
   if (!macos) $("app-icon-hint").textContent = "Shows on the taskbar while Ligma is open. Pinned shortcuts keep Ligma's own icon.";
   const iconChoices = [];
@@ -1023,7 +1028,9 @@
       choice.dataset.id = icon.id;
       choice.setAttribute("role", "radio");
       choice.setAttribute("aria-label", icon.name);
-      choice.append(node("img", { src: iconUrl(icon.id), alt: "", decoding: "async", loading: "lazy" }), node("span", { className: "name", textContent: icon.name }));
+      const img = node("img", { alt: "", decoding: "async", loading: "lazy" });
+      showIcon(img, icon.id);
+      choice.append(img, node("span", { className: "name", textContent: icon.name }));
       choice.addEventListener("click", () => pickIcon(icon.id));
       iconChoices.push(choice);
       grid.append(choice);
@@ -1061,7 +1068,7 @@
 
   function showAppIcon() {
     const id = settings.appIcon ?? "ligma";
-    $("app-icon-current").src = iconUrl(id);
+    showIcon($("app-icon-current"), id);
     $("app-icon-name").textContent = iconName(id);
     $("app-icon-reset").hidden = id === "ligma";
     const focused = iconChoices.includes(document.activeElement);
