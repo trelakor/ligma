@@ -8,12 +8,16 @@
 //! shortcuts and Escape treat it as a tool of their own, and the button
 //! shows the lasso while it's the group's tool. While Pencil is on with
 //! the lasso picked, `PAGE_JS` takes the canvas's pointer events before
-//! Figma's scripts see them and draws the lasso itself
+//! Figma's scripts see them and draws the lasso itself. It looks as
+//! Figma's Select area does: its icon and cursor, and a dashed outline
+//! tinted with the selection color
 //!
-//! When the button's let go, the loop is fitted with as few cubic curves
-//! as stay within 1.5 pixels on screen, with Philip J. Schneider's
-//! algorithm, keeping sharp turns as corners, which gives about as many
-//! points as Pencil does. It becomes a filled vector, through Figma's
+//! When the button's let go, the loop is evened out to a point every
+//! pixel on screen and smoothed, as mice and pens report whole pixels and
+//! hands shake, keeping turns over 120° as corners. It's then fitted with
+//! as few cubic curves as stay within 2 pixels, with Philip J. Schneider's
+//! algorithm, which comes out smoother than Pencil. It becomes a filled
+//! vector, through Figma's
 //! console plugin API, `window.figma`, in the innermost frame or section
 //! under where it started, leaving out auto layout as Pencil does, as one
 //! undo step. Its fill is the last lasso fill's, as it is now, so changing
@@ -51,17 +55,15 @@ const PAGE_JS: &str = r##"(() => {
 
   const LASSO = "data-ligma-lasso";
   const CHEVRON = '[data-testid="PenTools-chevron"]';
-  const STROKE = 'stroke="var(--fpl-icon-color, var(--color-icon))"';
-  const FILL = 'fill="var(--fpl-icon-color, var(--color-icon))"';
-  // A loop of rope, filled inside, with its end hanging
-  const shape = (stroke, fill) =>
-    `<path ${stroke} stroke-linecap="round" d="M8.5 14.6C6 13.8 4.5 12.2 4.5 10.5c0-2.8 3.4-5 7.5-5s7.5 2.2 7.5 5-3.4 5-7.5 5c-.9 0-1.8-.1-2.6-.3"/><ellipse ${fill} cx="12" cy="10.5" rx="5" ry="2.8"/><circle ${stroke} cx="8.5" cy="15.5" r="1.5"/><path ${stroke} stroke-linecap="round" d="M8 17c-.3 1 0 1.8.8 2.5"/>`;
-  const ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24">${shape(STROKE, FILL)}</svg>`;
-  const MASK = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none">${shape('stroke="#000"', 'fill="#000"')}</svg>`)}")`;
-  // A crosshair, with a small filled loop by it
+  // Figma's own Select area icon, a dotted loop, and its cursor, an arrow
+  // with a dotted loop by it
+  const LOOP =
+    "m10.197 17.884.33.06q.496.073.98.05a.5.5 0 0 1 .043 1 6 6 0 0 1-1.169-.062l-.393-.07-.097-.031a.501.501 0 0 1 .205-.958zm4.23-.859a.5.5 0 0 1 .534.846q-.667.422-1.377.694a.5.5 0 0 1-.357-.934 7 7 0 0 0 1.2-.606m-7.703-.582a.5.5 0 0 1 .63-.053l.077.065.126.124q.193.18.402.321l.29.186q.146.088.29.168a.5.5 0 0 1-.483.876 8 8 0 0 1-.328-.19l-.326-.21a4 4 0 0 1-.527-.422l-.163-.158-.062-.08a.5.5 0 0 1 .074-.627m10.105-1.63a.5.5 0 0 1 .726.68l-.231.291-.25.287q-.258.282-.526.541a.5.5 0 0 1-.695-.719q.245-.236.481-.496l.221-.254q.107-.127.204-.256zm-11.322-1.85a.5.5 0 0 1 .54.328l.025.098.062.376q.11.557.301 1.06a.5.5 0 0 1-.935.355 7.5 7.5 0 0 1-.347-1.224l-.071-.428-.004-.101a.5.5 0 0 1 .43-.464m13.012-1.264a.5.5 0 0 1 .429.563 6.3 6.3 0 0 1-.393 1.48.5.5 0 0 1-.93-.37 5.3 5.3 0 0 0 .331-1.245.5.5 0 0 1 .563-.428M5.46 9.622a.5.5 0 0 1 .944.332c-.166.47-.279.958-.342 1.448l-.022.099a.501.501 0 0 1-.97-.228l.065-.416a8 8 0 0 1 .325-1.235m12.753-.865c.287.434.5.922.631 1.443a.501.501 0 0 1-.97.244 3.7 3.7 0 0 0-.496-1.136l.418-.275zm-8.182-.42a.5.5 0 0 1 .47.877l-.277.191q-.14.099-.28.205l-.086.053a.5.5 0 0 1-.516-.85l.301-.221q.15-.107.299-.207zm7.49.278a.5.5 0 0 1 .692.142l-.835.551a.5.5 0 0 1 .143-.693m-9.706-2.28a.5.5 0 0 1 .538.838l-.286.242q-.413.376-.738.807a.5.5 0 1 1-.797-.604A7 7 0 0 1 7.73 6.39zm5.392 1.105.109.488a7 7 0 0 0-1.247.414l-.097.03a.501.501 0 0 1-.303-.947l.366-.15a8 8 0 0 1 1.063-.323zm1.943-.59.204.033q.605.112 1.129.363l.172.087.084.056a.5.5 0 0 1-.461.865l-.094-.04-.268-.126a3.6 3.6 0 0 0-.906-.248.5.5 0 0 1 .14-.99m-2.052.102a.5.5 0 0 1 .218.976zM10.62 5.001a.5.5 0 0 1 .25.946l-.094.036q-.374.099-.714.228l-.098.026a.5.5 0 0 1-.255-.962l.397-.137a9 9 0 0 1 .414-.122z";
+  const ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="${LOOP}"/></svg>`;
+  const MASK = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none"><path fill="#000" d="${LOOP}"/></svg>`)}")`;
   const CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none"><path d="M9 2v14M2 9h14" stroke="#fff" stroke-width="3"/><path d="M9 2v14M2 9h14" stroke="#000"/><ellipse cx="17.5" cy="17.5" rx="4.5" ry="3" fill="#000" stroke="#fff"/></svg>',
-  )}") 9 9, crosshair`;
+    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none"><defs><filter id="s" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dy="0.5" stdDeviation="0.8" flood-opacity="0.35"/></filter></defs><g filter="url(#s)"><path d="M4 4l11.8 4.6-5.6 1.6-1.6 5.6z" fill="#000" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/><g transform="translate(7.9 10.2) scale(0.9)"><path d="${LOOP}" fill="#fff" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><path d="${LOOP}" fill="#000"/></g></g></svg>`,
+  )}") 4 4, crosshair`;
 
   // Whether the lasso is the Creation tools group's tool: from picking it
   // until Pen or Pencil is picked, from the menu or by their shortcuts
@@ -276,21 +278,16 @@ const PAGE_JS: &str = r##"(() => {
     }
     return paint;
   };
-  const css = ({ color: { r, g, b } }) => `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`;
-
-  // The lasso as it's drawn, over the canvas, in its points on the canvas
+  // The lasso as it's drawn, over the canvas, in its points on the canvas:
+  // closed, tinted and dashed in the selection color, as Figma's Select
+  // area draws its own
   let drawing = null;
   const overlay = (canvas) => {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute(LASSO, "overlay");
-    const make = (name) => {
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("class", name);
-      return svg.appendChild(path);
-    };
-    const paths = { fill: make("fill"), line: make("line"), close: make("close") };
+    const path = svg.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "path"));
     canvas.after(svg);
-    return { svg, paths };
+    return { svg, path };
   };
   let frame = 0;
   const render = () => {
@@ -311,13 +308,7 @@ const PAGE_JS: &str = r##"(() => {
       return;
     }
     const screen = points.map(([x, y]) => `${((x - bounds.x) * zoom).toFixed(1)} ${((y - bounds.y) * zoom).toFixed(1)}`);
-    view.paths.fill.setAttribute("d", `M${screen.join("L")}Z`);
-    view.paths.line.setAttribute("d", `M${screen.join("L")}`);
-    view.paths.close.setAttribute("d", `M${screen.at(-1)}L${screen[0]}`);
-    if (drawing.paint) {
-      view.paths.fill.style.fill = css(drawing.paint);
-      view.paths.fill.style.fillOpacity = String(0.5 * drawing.paint.opacity);
-    }
+    view.path.setAttribute("d", `M${screen.join("L")}Z`);
   };
   const draw = () => {
     if (!frame) frame = requestAnimationFrame(render);
@@ -381,13 +372,7 @@ const PAGE_JS: &str = r##"(() => {
         try {
           canvas.setPointerCapture(event.pointerId);
         } catch {}
-        drawing = { canvas, figma, pointer: event.pointerId, points: [toCanvas(figma, canvas, event)], view: overlay(canvas), paint: null };
-        const current = drawing;
-        current.fill = lastFill(figma).then((paint) => {
-          current.paint = paint;
-          draw();
-          return paint;
-        });
+        drawing = { canvas, figma, pointer: event.pointerId, points: [toCanvas(figma, canvas, event)], view: overlay(canvas), fill: lastFill(figma) };
         draw();
       },
       true,
@@ -437,7 +422,8 @@ const PAGE_JS: &str = r##"(() => {
         const det = a * d - b * c;
         local = points.map(([x, y]) => [(d * (x - e) - c * (y - f)) / det, (a * (y - f) - b * (x - e)) / det]);
       }
-      const curves = fitLoop(local, 1.5 / zoom);
+      const prepared = prepare(local, 1 / zoom);
+      const curves = prepared && fitLoop(prepared, 2 / zoom);
       if (!curves?.length) return;
       const n = (value) => +value.toFixed(3);
       const data = [`M ${n(curves[0][0][0])} ${n(curves[0][0][1])}`, ...curves.map(([, p1, p2, p3]) => `C ${n(p1[0])} ${n(p1[1])} ${n(p2[0])} ${n(p2[1])} ${n(p3[0])} ${n(p3[1])}`), "Z"].join(" ");
@@ -462,13 +448,94 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
-  // Fits a closed loop of points with as few cubic curves as stay within
-  // `tolerance` of them, by Schneider's algorithm ("An Algorithm for
-  // Automatically Fitting Digitized Curves", Graphics Gems, 1990). Sharp
-  // turns are kept as corners, and elsewhere curves meet smoothly. Returns
-  // `[start, control, control, end]` for each, the last ending where the
-  // first starts
-  const fitLoop = (input, tolerance) => {
+  // Evenly spaced points a pixel (`px`) apart around the loop, smoothed,
+  // with the sharp turns that stay sharp. Mice and pens report whole
+  // pixels, so a slow stroke comes as a staircase, which fitting closely
+  // would follow
+  const prepare = (input, px) => {
+    const len = (x, y) => Math.hypot(x, y);
+    const loop = [...input, input[0]];
+    const even = [loop[0]];
+    let since = 0;
+    for (let i = 1; i < loop.length; i++) {
+      const [ax, ay] = loop[i - 1];
+      const [bx, by] = loop[i];
+      const segment = len(bx - ax, by - ay);
+      let at = 0;
+      while (since + segment - at >= px) {
+        at += px - since;
+        since = 0;
+        even.push([ax + ((bx - ax) * at) / segment, ay + ((by - ay) * at) / segment]);
+      }
+      since += segment - at;
+    }
+    while (even.length > 3 && len(even.at(-1)[0] - even[0][0], even.at(-1)[1] - even[0][1]) < px / 2) even.pop();
+    const n = even.length;
+    if (n < 8) return null;
+    const wrap = (i) => ((i % n) + n) % n;
+
+    // Gaussian smoothing, `sigma` points either way, around the loop. Pins
+    // stay where they are, and points near one reach only as far the
+    // other way, so nothing is pulled around it
+    const smooth = (points, sigma, pins) => {
+      const reach = Math.ceil(sigma * 3);
+      const weights = [];
+      for (let j = 0; j <= reach; j++) weights.push(Math.exp(-(j * j) / (2 * sigma * sigma)));
+      const room = new Array(n).fill(reach);
+      for (const pin of pins) {
+        for (let j = 0; j <= reach; j++) {
+          room[wrap(pin + j)] = Math.min(room[wrap(pin + j)], j);
+          room[wrap(pin - j)] = Math.min(room[wrap(pin - j)], j);
+        }
+      }
+      return points.map((_, i) => {
+        let x = 0;
+        let y = 0;
+        let total = 0;
+        for (let j = -room[i]; j <= room[i]; j++) {
+          const w = weights[Math.abs(j)];
+          const [px2, py2] = points[wrap(i + j)];
+          x += w * px2;
+          y += w * py2;
+          total += w;
+        }
+        return [x / total, y / total];
+      });
+    };
+
+    // Corners: where the way in and the way out, twelve pixels either side,
+    // turn by more than 120°, at the sharpest turn among their neighbors.
+    // A hand's tremor turns sharply too, but only over a few pixels
+    const rough = smooth(even, 2.5, []);
+    const R = 12;
+    const unit = (x, y) => {
+      const l = len(x, y) || 1;
+      return [x / l, y / l];
+    };
+    const turn = rough.map((p, i) => {
+      const a = rough[wrap(i - R)];
+      const b = rough[wrap(i + R)];
+      const [ux, uy] = unit(p[0] - a[0], p[1] - a[1]);
+      const [vx, vy] = unit(b[0] - p[0], b[1] - p[1]);
+      return ux * vx + uy * vy;
+    });
+    const corners = [];
+    for (let i = 0; i < n; i++) {
+      if (turn[i] > -0.5) continue;
+      let sharpest = true;
+      for (let j = 1; j <= R && sharpest; j++) sharpest = turn[i] <= turn[wrap(i + j)] && turn[i] < turn[wrap(i - j)];
+      if (sharpest) corners.push(i);
+    }
+    return { points: smooth(even, 3, corners), corners };
+  };
+
+  // Fits `prepare`'s loop with as few cubic curves as stay within
+  // `tolerance` of it, by Schneider's algorithm ("An Algorithm for
+  // Automatically Fitting Digitized Curves", Graphics Gems, 1990), as
+  // Paper.js simplifies paths. Corners stay sharp, and elsewhere curves
+  // meet smoothly. Returns `[start, control, control, end]` for each, the
+  // last ending where the first starts
+  const fitLoop = ({ points, corners }, tolerance) => {
     const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
     const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
     const scale = (a, s) => [a[0] * s, a[1] * s];
@@ -478,39 +545,10 @@ const PAGE_JS: &str = r##"(() => {
       const l = len(a);
       return l ? [a[0] / l, a[1] / l] : [0, 0];
     };
-    // Points closer than a tenth of the tolerance add nothing
-    const points = [];
-    for (const point of input) if (!points.length || len(sub(point, points.at(-1))) > tolerance / 10) points.push(point);
-    while (points.length > 2 && len(sub(points.at(-1), points[0])) <= tolerance / 10) points.pop();
     const n = points.length;
-    if (n < 3) return null;
     const at = (i) => points[((i % n) + n) % n];
-
-    // How many points back and on it takes to go three tolerances along
-    // the loop from each point, at least one
-    const reach = tolerance * 3;
-    const steps = (i, way) => {
-      let walked = 0;
-      let j = 0;
-      while (walked < reach && j < n / 3) {
-        walked += len(sub(at(i + (j + 1) * way), at(i + j * way)));
-        j++;
-      }
-      return Math.max(1, j);
-    };
-    const back = points.map((_, i) => steps(i, -1));
-    const on = points.map((_, i) => steps(i, 1));
-    // Corners: where the way in and the way out turn by more than 60°, at
-    // the sharpest turn among their neighbors
-    const turn = points.map((_, i) => dot(unit(sub(at(i), at(i - back[i]))), unit(sub(at(i + on[i]), at(i)))));
-    const corners = [];
-    for (let i = 0; i < n; i++) {
-      if (turn[i] > 0.5) continue;
-      let sharpest = true;
-      for (let j = 1; j <= on[i] && sharpest; j++) sharpest = turn[i] <= turn[(i + j) % n];
-      for (let j = 1; j <= back[i] && sharpest; j++) sharpest = turn[i] < turn[(i - j + n) % n];
-      if (sharpest) corners.push(i);
-    }
+    // Ways in and out are taken over a few points, as single steps wobble
+    const W = 3;
 
     const point = (curve, t) => {
       const mt = 1 - t;
@@ -606,14 +644,13 @@ const PAGE_JS: &str = r##"(() => {
           if (max < error) return void out.push(curve);
         }
       }
-      const middle = unit(sub(run[split - 1], run[split + 1]));
+      const middle = unit(sub(run[Math.max(0, split - W)], run[Math.min(run.length - 1, split + W)]));
       fitCubics(run.slice(0, split + 1), left, middle, error, out);
       fitCubics(run.slice(split), scale(middle, -1), right, error, out);
     };
 
-    // Each stretch between corners, or the whole loop from its sharpest
-    // turn if it has none
-    const stops = corners.length ? corners : [turn.indexOf(Math.min(...turn))];
+    // Each stretch between corners, or the whole loop
+    const stops = corners.length ? corners : [0];
     const curves = [];
     for (let k = 0; k < stops.length; k++) {
       const from = stops[k];
@@ -621,9 +658,10 @@ const PAGE_JS: &str = r##"(() => {
       const run = [];
       for (let i = from; i <= to; i++) run.push(at(i));
       // At a corner each side keeps its own way, elsewhere both share one
-      const shared = unit(sub(at(from + on[from]), at(from - back[from])));
-      const left = corners.length ? unit(sub(at(from + Math.min(on[from], to - from)), at(from))) : shared;
-      const right = corners.length ? unit(sub(at(to - Math.min(back[to % n], to - from)), at(to))) : scale(shared, -1);
+      const shared = unit(sub(at(from + W), at(from - W)));
+      const reach = Math.max(1, Math.min(W, to - from));
+      const left = corners.length ? unit(sub(at(from + reach), at(from))) : shared;
+      const right = corners.length ? unit(sub(at(to - reach), at(to))) : scale(shared, -1);
       fitCubics(run, left, right, tolerance * tolerance, curves);
     }
     return curves;
@@ -637,9 +675,7 @@ const PAGE_JS: &str = r##"(() => {
     html[${LASSO}="active"] canvas { cursor: ${CURSOR} !important; }
     [role="menu"]:has([${LASSO}][aria-checked="true"]) [role="menuitemradio"][aria-checked="true"]:not([${LASSO}]) > span > svg:first-child { visibility: hidden; }
     [${LASSO}="overlay"] { position: absolute; pointer-events: none; overflow: visible; z-index: 1; }
-    [${LASSO}="overlay"] .fill { stroke: none; }
-    [${LASSO}="overlay"] .line { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-linejoin: round; stroke-linecap: round; }
-    [${LASSO}="overlay"] .close { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 4 3; }
+    [${LASSO}="overlay"] path { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 25%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 3 2; stroke-linejoin: round; }
   `;
   const mount = () => {
     if (style.isConnected) return true;
