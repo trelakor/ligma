@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.36.0 - 2026-11-10
+
+- Your Discord status shows the app icon you picked in Settings > App Icon, instead of always Ligma's logo.
+
 ## 0.35.2 - 2026-11-10
 
 - On macOS, Use Ligma's icon puts Ligma's own icon back in the Dock right away. Before, the Dock kept the icon Ligma had when it opened.
