@@ -7,7 +7,8 @@
      `get_settings` / `set_settings` in src-tauri/src/settings.rs; each
      change is saved and applied right away. Each category has its own
      page, picked in the sidebar. Appearance picks the color scheme and
-     the themes (dist/themes.js, src-tauri/src/appearance.rs). Plugins imports development plugins
+     the themes (dist/themes.js, src-tauri/src/appearance.rs). App Icon
+     picks the app's icon (dist/app-icons.js, src-tauri/src/app_icon.rs). Plugins imports development plugins
      (src-tauri/src/plugins.rs) and switches them on and off. About checks for updates and reports a
      problem (src-tauri/src/report.rs). The window has no native title bar:
      the header is its own, and its colors follow the active Figma tab's
@@ -350,6 +351,38 @@
   .orb[aria-checked="true"] .badge { display: grid; }
   .themes-hint { padding: 0 16px 4px; }
 
+  /* App icon: the one in use, large, then every icon by collection */
+  .current-icon { display: flex; align-items: center; gap: 16px; padding: 8px 16px 4px; }
+  .current-icon img { flex: none; width: 80px; height: 80px; }
+  .current-icon .label { display: flex; flex-direction: column; gap: 2px; }
+  .current-icon .name { font-size: 13px; font-weight: 550; line-height: 20px; }
+  #app-icon-error { color: var(--danger); }
+  .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 4px; padding: 4px 12px 4px; }
+  .icon-choice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    padding: 6px 4px 7px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: none;
+    color: var(--text-secondary);
+    font: inherit;
+  }
+  .icon-choice img {
+    width: 60px;
+    height: 60px;
+    transition: transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  }
+  .icon-choice .name { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .icon-choice:hover { background: var(--hover); color: var(--text); }
+  .icon-choice:hover img { transform: translateY(-2px) scale(1.04); }
+  .icon-choice:active img { transform: scale(0.97); transition-duration: 80ms; }
+  .icon-choice[aria-checked="true"] { border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); color: var(--text); font-weight: 550; }
+  .icon-choice[aria-busy="true"] img { opacity: 0.6; }
+
   /* Imported plugins */
   .plugin .label { overflow: hidden; }
   .plugin .name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -361,13 +394,14 @@
   #plugin-error { color: var(--danger); }
   .empty { color: var(--text-secondary); }
 
-  .switch:focus-visible, #close:focus-visible, .button:focus-visible, .icon-button:focus-visible, nav button:focus-visible {
+  .switch:focus-visible, #close:focus-visible, .button:focus-visible, .icon-button:focus-visible, nav button:focus-visible, .icon-choice:focus-visible {
     outline: 2px solid var(--brand);
     outline-offset: 1px;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .switch, .switch::before, .orb { transition: none; }
+    .switch, .switch::before, .orb, .icon-choice img { transition: none; }
+    .icon-choice:hover img, .icon-choice:active img { transform: none; }
     .orb .mesh::before { animation: none; }
   }
 </style>
@@ -384,6 +418,10 @@
   <button role="tab" id="tab-appearance" aria-controls="appearance">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 6h11"/></svg>
     Appearance
+  </button>
+  <button role="tab" id="tab-app-icon" aria-controls="app-icon-panel">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5c3.9 0 5.5.6 5.5 5.5S11.9 13.5 8 13.5 2.5 11.9 2.5 8 4.1 2.5 8 2.5z"/><path d="M6.5 5.2v5.3" stroke-linecap="round"/><circle cx="9.6" cy="9.6" r="1.1" fill="currentColor" stroke="none"/></svg>
+    App Icon
   </button>
   <button role="tab" id="tab-features" aria-controls="features">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5l1.4 3.6 3.6 1.4-3.6 1.4L8 12.5 6.6 8.9 3 7.5l3.6-1.4z"/></svg>
@@ -434,6 +472,22 @@
       <div class="hint themes-hint">Pick a theme for light mode and one for dark mode. It colors Figma's panels, toolbars and menus and Ligma's tabs, but not the canvas.</div>
       <div class="themes" id="themes" aria-labelledby="themes-heading"></div>
     </section>
+  </div>
+
+  <div role="tabpanel" id="app-icon-panel" aria-labelledby="tab-app-icon" hidden>
+    <section>
+      <h2>App icon</h2>
+      <div class="current-icon">
+        <img id="app-icon-current" src="app-icon-macos.png" alt="">
+        <span class="label">
+          <span class="name" id="app-icon-name"></span>
+          <span class="hint" id="app-icon-hint">Shows in the Dock and in Finder. After an update, Ligma puts it back the next time it opens.</span>
+          <span class="hint" id="app-icon-error" role="alert" hidden></span>
+        </span>
+        <button class="button" id="app-icon-reset">Use Ligma's icon</button>
+      </div>
+    </section>
+    <div id="app-icon-collections"></div>
   </div>
 
   <div role="tabpanel" id="features" aria-labelledby="tab-features" hidden>
@@ -757,6 +811,7 @@
 </main>
 </div>
 <script src="themes.js"></script>
+<script src="app-icons.js"></script>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
@@ -918,6 +973,124 @@
     if (focused) [...$("appearance").querySelectorAll("[aria-label]")].find((el) => el.getAttribute("aria-label") === focused)?.focus();
   }
 
+  // An element with `props` and inner `html`
+  const node = (tag, props = {}, html = "") => {
+    const created = Object.assign(document.createElement(tag), props);
+    if (html) created.innerHTML = html;
+    return created;
+  };
+
+  // App icons (dist/app-icons.js, src-tauri/src/app_icon.rs). Windows
+  // icons fill their square, so they're shown and set without the macOS
+  // grid's margin
+  const iconUrl = (id) => ligmaAppIconUrl(id, !macos);
+  const iconName = (id) => LIGMA_APP_ICONS.find((icon) => icon.id === id)?.name ?? "Ligma";
+  if (!macos) $("app-icon-hint").textContent = "Shows on the taskbar while Ligma is open. Pinned shortcuts keep Ligma's own icon.";
+  const iconChoices = [];
+  $("app-icon-collections").replaceChildren(...LIGMA_APP_ICON_COLLECTIONS.map((collection) => {
+    const section = node("section");
+    const heading = node("h2", { id: `icons-${collection.id}`, textContent: collection.name });
+    const grid = node("div", { className: "icons" });
+    grid.setAttribute("role", "radiogroup");
+    grid.setAttribute("aria-labelledby", heading.id);
+    for (const icon of LIGMA_APP_ICONS.filter((icon) => icon.collection === collection.id)) {
+      const choice = node("button", { className: "icon-choice", title: icon.name });
+      choice.dataset.id = icon.id;
+      choice.setAttribute("role", "radio");
+      choice.setAttribute("aria-label", icon.name);
+      choice.append(node("img", { src: iconUrl(icon.id), alt: "", decoding: "async", loading: "lazy" }), node("span", { className: "name", textContent: icon.name }));
+      choice.addEventListener("click", () => pickIcon(icon.id));
+      iconChoices.push(choice);
+      grid.append(choice);
+    }
+    section.append(heading, grid);
+    return section;
+  }));
+
+  // Arrow keys move between icons, up and down to the nearest in the next
+  // row, so one stop in the tab order covers them all
+  $("app-icon-collections").addEventListener("keydown", (e) => {
+    const at = iconChoices.indexOf(document.activeElement);
+    if (at < 0) return;
+    const from = iconChoices[at].getBoundingClientRect();
+    let to;
+    if (e.key === "ArrowLeft") to = iconChoices[at - 1];
+    else if (e.key === "ArrowRight") to = iconChoices[at + 1];
+    else if (e.key === "Home") to = iconChoices[0];
+    else if (e.key === "End") to = iconChoices.at(-1);
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const down = e.key === "ArrowDown";
+      const rows = iconChoices.map((choice) => choice.getBoundingClientRect()).filter((rect) => (down ? rect.top > from.bottom - 1 : rect.bottom < from.top + 1));
+      const row = down ? Math.min(...rows.map((rect) => rect.top)) : Math.max(...rows.map((rect) => rect.top));
+      const middle = (rect) => rect.left + rect.width / 2;
+      to = iconChoices
+        .filter((choice) => choice.getBoundingClientRect().top === row)
+        .sort((a, b) => Math.abs(middle(a.getBoundingClientRect()) - middle(from)) - Math.abs(middle(b.getBoundingClientRect()) - middle(from)))[0];
+    } else return;
+    e.preventDefault();
+    if (!to) return;
+    for (const choice of iconChoices) choice.tabIndex = choice === to ? 0 : -1;
+    to.focus();
+    to.scrollIntoView({ block: "nearest" });
+  });
+
+  function showAppIcon() {
+    const id = settings.appIcon ?? "ligma";
+    $("app-icon-current").src = iconUrl(id);
+    $("app-icon-name").textContent = iconName(id);
+    $("app-icon-reset").hidden = id === "ligma";
+    const focused = iconChoices.includes(document.activeElement);
+    for (const choice of iconChoices) {
+      const picked = choice.dataset.id === id;
+      choice.setAttribute("aria-checked", picked);
+      if (!focused) choice.tabIndex = picked ? 0 : -1;
+    }
+  }
+
+  // The icon drawn into a PNG for the Dock or taskbar: 1024px on macOS,
+  // whose Dock and Finder go that large, 256px on Windows
+  async function drawIcon(id) {
+    const size = macos ? 1024 : 256;
+    const image = new Image(size, size);
+    image.src = iconUrl(id);
+    await image.decode();
+    const canvas = node("canvas", { width: size, height: size });
+    canvas.getContext("2d").drawImage(image, 0, 0, size, size);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("the icon couldn't be drawn");
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  // Picks run one at a time, and only the last of a quick run of clicks
+  // is drawn and set
+  let iconQueue = Promise.resolve();
+  let wantedIcon;
+  function pickIcon(id) {
+    const before = settings.appIcon ?? "ligma";
+    wantedIcon = id;
+    settings = { ...settings, appIcon: id };
+    $("app-icon-error").hidden = true;
+    showAppIcon();
+    const choice = iconChoices.find((choice) => choice.dataset.id === id);
+    choice?.setAttribute("aria-busy", "true");
+    iconQueue = iconQueue.then(async () => {
+      if (wantedIcon !== id) return;
+      try {
+        const png = id === "ligma" ? {} : await drawIcon(id);
+        await window.__TAURI_INTERNALS__.invoke("set_app_icon", png, { headers: { "Ligma-Icon": id } });
+      } catch (error) {
+        if (wantedIcon !== id) return;
+        settings = { ...settings, appIcon: before };
+        showAppIcon();
+        $("app-icon-error").textContent = `Couldn't set the icon: ${error?.message ?? error}`;
+        $("app-icon-error").hidden = false;
+      } finally {
+        choice?.removeAttribute("aria-busy");
+      }
+    });
+  }
+  $("app-icon-reset").addEventListener("click", () => pickIcon("ligma"));
+
   let settings;
   // Number fields keep their last value while switched off, so switching
   // back on restores it
@@ -926,6 +1099,7 @@
 
   function show() {
     showAppearance();
+    showAppIcon();
     const sleeping = settings.sleepTabsAfterMinutes > 0;
     const limited = settings.maxHiddenTabsLoaded != null;
     if (sleeping) sleepAfter = settings.sleepTabsAfterMinutes;
@@ -1170,11 +1344,6 @@
   const pluginError = (message) => {
     $("plugin-error").textContent = message ?? "";
     $("plugin-error").hidden = !message;
-  };
-  const node = (tag, props = {}, html = "") => {
-    const created = Object.assign(document.createElement(tag), props);
-    if (html) created.innerHTML = html;
-    return created;
   };
   async function showPlugins() {
     const plugins = await invoke("get_plugins");

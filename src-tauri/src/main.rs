@@ -3,6 +3,7 @@
 
 mod adjustments;
 mod ai_actions;
+mod app_icon;
 mod appearance;
 mod auth;
 mod background;
@@ -264,6 +265,7 @@ fn main() {
             settings::get_version,
             settings::check_for_updates,
             settings::report_problem,
+            app_icon::set_app_icon,
             models::get_model,
             models::install_model,
             models::cancel_model,
@@ -300,6 +302,7 @@ fn main() {
             }
             let settings = settings::load(app.handle());
             appearance::init(app.handle(), &settings);
+            app_icon::init(app.handle(), &settings);
             layers::init(&settings);
             home::init(&settings);
             toolbar::init(&settings);
