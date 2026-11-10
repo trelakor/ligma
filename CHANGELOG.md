@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.35.2 - 2026-11-10
+
+- On macOS, Use Ligma's icon puts Ligma's own icon back in the Dock right away. Before, the Dock kept the icon Ligma had when it opened.
+
 ## 0.35.1 - 2026-11-10
 
 - On Windows, the app icon you pick now shows on Windows 11's taskbar, pinned or not, and on Ligma's Start menu and desktop shortcuts, even while Ligma is closed. Before, it only showed in the window preview.
