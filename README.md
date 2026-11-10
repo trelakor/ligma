@@ -34,6 +34,7 @@ Downloads are 7.7 MB on Windows and 8.2 MB on macOS (a universal build for Apple
 - **Nine color themes** in light and dark variants that recolor Figma's interface, never your designs
 - **Interface scale** from 50% to 200% for Figma, the tabs and menus together
 - **Toolbar modes:** choose which of Draw, Design, Motion and Dev Mode the toolbar's switch offers
+- **Lasso fill** under Pencil: draw around an area to fill it with color, as in Procreate
 - **Layer previews** in the layers panel in every mode, as Figma shows only in Draw
 - **Classic home** keeps Figma's long-standing home page on accounts trying the new one
 
