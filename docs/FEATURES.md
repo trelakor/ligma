@@ -62,7 +62,7 @@ Settings > App Icon swaps Ligma's icon for one of 32 others in four collections:
 
 - The picked icon (`"appIcon"`) is drawn into `app-icon.png` next to `settings.json` and put back on every launch (`src-tauri/src/app_icon.rs`).
 - **macOS:** it shows in the Dock while Ligma runs and is set on Ligma.app as a custom icon, like Finder's Get Info does, so Finder, Launchpad and the Dock show it when Ligma is closed. An update replaces the app and its custom icon, and Ligma sets it again the next time it opens. If Ligma can't write to the app, only the Dock changes. The custom icon is flat: Liquid Glass's dark, tinted and clear styles only apply to Ligma's own icon.
-- **Windows:** it shows on the taskbar and in Alt+Tab while Ligma is open. Pinned shortcuts and the Start menu keep Ligma's own icon.
+- **Windows:** it shows on the taskbar, in Alt+Tab and on Ligma's Start menu, desktop and pinned taskbar shortcuts, which Windows 11's taskbar takes its icon from. An update puts the Start menu shortcut's icon back, so Ligma sets it again the next time it opens.
 - Use Ligma's icon puts the original back and removes the custom icon from the app.
 
 ## Features
