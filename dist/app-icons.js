@@ -628,3 +628,7 @@ function ligmaAppIconUrl(id, crop = false) {
   const svg = ligmaAppIconSvg(id, crop);
   return svg && `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
+
+// A CSS mask of the cropped tile, so app-icon-windows.png, which is near
+// square, previews with the same corners as the others
+const LIGMA_TILE_MASK = `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="88 88 848 848"><path d="${LIGMA_TILE}"/></svg>`)}")`;
