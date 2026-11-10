@@ -2,6 +2,11 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.35.1 - 2026-11-10
+
+- On Windows, the app icon you pick now shows on Windows 11's taskbar, pinned or not, and on Ligma's Start menu and desktop shortcuts, even while Ligma is closed. Before, it only showed in the window preview.
+- On Windows, picking an icon no longer hides the settings window's taskbar button on taskbars like Start11.
+
 ## 0.35.0 - 2026-11-10
 
 - What shows in Figma's bell now also shows as a desktop notification: who it's from, what happened and where, with the comment's text. Click one to open it in Ligma. Nothing shows for the file in front while you're in Ligma. Turn them off in Settings > Features > Notifications.
