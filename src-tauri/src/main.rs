@@ -13,6 +13,7 @@ mod downloads;
 mod figma_scheme;
 #[cfg(windows)]
 mod frame;
+mod game_mode;
 mod handoff;
 mod home;
 mod layers;
@@ -306,9 +307,11 @@ fn main() {
             ai_actions::init(&settings);
             copy_code::init(&settings);
             view_state::init(&settings);
+            game_mode::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
+            game_mode::start(app.handle());
 
             let window = tabs::build_window(app.handle(), tabs::MAIN, tauri::LogicalSize::new(1440.0, 900.0), true)?;
             let handle = app.handle().clone();

@@ -609,6 +609,12 @@
         </span>
         <input type="checkbox" class="switch" id="snapshots">
       </label>
+      <label class="row">
+        <span class="label">Game mode
+          <div class="hint">While a game is in front, every tab sleeps to free its memory for the game. Tabs on screen reload when you come back.</div>
+        </span>
+        <input type="checkbox" class="switch" id="game-mode">
+      </label>
     </section>
   </div>
 
@@ -754,7 +760,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "classic-home"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -933,6 +939,7 @@
     $("limit").checked = limited;
     $("max-hidden").value = maxHidden;
     $("snapshots").checked = settings.reloadSnapshots;
+    $("game-mode").checked = settings.gameMode;
     $("discord").checked = settings.discordRichPresence;
     $("discord-file").checked = settings.discordShowFile;
     $("discord-hide-files").checked = settings.discordHideFilesByDefault;
@@ -1007,6 +1014,7 @@
       sleepTabsAfterMinutes: $("sleep").checked ? sleepAfter : 0,
       maxHiddenTabsLoaded: $("limit").checked ? maxHidden : null,
       reloadSnapshots: $("snapshots").checked,
+      gameMode: $("game-mode").checked,
       discordRichPresence: $("discord").checked,
       discordShowFile: $("discord-file").checked,
       discordHideFilesByDefault: $("discord-hide-files").checked,
