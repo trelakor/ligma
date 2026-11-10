@@ -2,6 +2,13 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.34.0 - 2026-11-10
+
+- Settings > App Icon swaps Ligma's icon for one of 32 others in four collections: Colorways, Materials, Graphic and Playful. On macOS it shows in the Dock and on Ligma.app, so Finder and Launchpad show it too. On Windows it shows on the taskbar and in Alt+Tab while Ligma is open. Use Ligma's icon puts the original back.
+- Ligma's macOS icon follows macOS 26's dark, tinted and clear icon styles.
+- AI tools can read and edit the files open in Ligma through Figma MCP Bridge, without the monthly limit on Figma's own MCP server and with no plugin to run in Figma. Turn it on in Settings > Plugins > AI tools, where Copy JSON and Copy Command add the server to your AI tool. It works in files you can edit, and `run_script` is refused.
+- Game mode: while a game is in front, every tab sleeps and Ligma gives its memory back to the game. Tabs on screen reload when you come back. Turn it off in Settings > Tabs & Memory > Game mode.
+
 ## 0.33.0 - 2026-11-05
 
 - Once an update has downloaded, an Update now button shows in the tab bar (before Settings on Windows, after the traffic lights on macOS) to restart into it. Only an update ready just after launch also asks in a prompt, so Ligma no longer comes to the front when it finds one in the background.
