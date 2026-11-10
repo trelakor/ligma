@@ -22,11 +22,13 @@
 //! layout as Pencil does, as one undo step. Figma only offers that API in
 //! files that can be edited, so the item isn't added in others
 //!
-//! Its fill is the color and opacity in the panel on the right, which is
-//! Pencil's stroke while Pencil is on: Figma keeps it, eyedropper and all,
-//! and `PAGE_JS` reads it off the panel. While the lasso is on, the panel
-//! is named Fill, and Pencil's weight, end caps, styles and more strokes
-//! are hidden
+//! Its fill and stroke are the paints in the panel on the right, which are
+//! Pencil's strokes while Pencil is on: Figma keeps them, picker,
+//! eyedropper and all, and `PAGE_JS` reads them off the panel. While the
+//! lasso is on, the panel's first paint is under Fill, and a second, if
+//! any, under a Stroke heading of Ligma's, with Pencil's weight. The
+//! heading's + adds it as Pencil's + does, and its − takes it away.
+//! Pencil's end caps, styles and further strokes are hidden
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -69,6 +71,8 @@ const PAGE_JS: &str = r##"(() => {
     `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none"><defs><filter id="s" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dy="0.5" stdDeviation="0.8" flood-opacity="0.35"/></filter></defs><g filter="url(#s)"><path d="M4 4l11.8 4.6-5.6 1.6-1.6 5.6z" fill="#000" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/><g transform="translate(7.9 10.2) scale(0.9)"><path d="${LOOP}" fill="#fff" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><path d="${LOOP}" fill="#000"/></g></g></svg>`,
   )}") 4 4, crosshair`;
 
+  const CANVAS = "data-ligma-lasso-canvas";
+
   // Whether the lasso is the Creation tools group's tool: from picking it
   // until Pen or Pencil is picked, from the menu or by their shortcuts
   let picked = false;
@@ -78,8 +82,19 @@ const PAGE_JS: &str = r##"(() => {
   const active = () => state.on && picked && pencil()?.getAttribute("aria-pressed") === "true";
   const show = () => {
     const root = document.documentElement;
-    if (state.on && picked) root.setAttribute(LASSO, active() ? "active" : "picked");
+    const on = active();
+    if (state.on && picked) root.setAttribute(LASSO, on ? "active" : "picked");
     else root.removeAttribute(LASSO);
+    // The cursor is the lasso's over Figma's canvas only, not over the
+    // color picker's own canvases
+    if (on) {
+      const canvas = mainCanvas();
+      if (canvas && !canvas.hasAttribute(CANVAS)) {
+        document.querySelectorAll(`[${CANVAS}]`).forEach((node) => node.removeAttribute(CANVAS));
+        canvas.setAttribute(CANVAS, "");
+      }
+    }
+    watchPanel(on);
   };
   const pick = (on) => {
     picked = on;
@@ -261,27 +276,93 @@ const PAGE_JS: &str = r##"(() => {
       null,
     );
 
-  // The fill: the color in the panel on the right, which is Pencil's
-  // stroke while Pencil is on and shows as the lasso's fill (see the
-  // stylesheet), or else the last one used, or black
+  // The fill and stroke: the paints in the panel on the right, which are
+  // Pencil's strokes while Pencil is on. The first shows as the lasso's
+  // Fill, and a second, if there is one, as its Stroke, with Pencil's
+  // weight (see `syncPanel` and the stylesheet). Without the panel, the
+  // last ones used, or a black fill
   const PANEL = '[data-testid="non-consumed-style-panel"]:has([data-testid="pencilToolPanel.addButton"])';
   const LAST_KEY = "ligma-lasso-last";
   const BLACK = { color: { r: 0, g: 0, b: 0 }, opacity: 1 };
-  const panelPaint = () => {
-    const row = document.querySelector(`${PANEL} [data-testid="paint-panel-color-value-container"]`)?.closest('[role="row"]');
+  const rowsOf = (panel) => [...(panel?.querySelector('[role="grid"]')?.children ?? [])].filter((node) => node.classList.contains("cachedSubtree"));
+  const paintOf = (row) => {
     const hex = /hex:\s*#?([0-9a-f]{6})\b/i.exec(row?.querySelector('button[aria-label*="hex"]')?.getAttribute("aria-label") ?? "")?.[1];
     if (!hex) return null;
     const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
     const percent = parseFloat(row.querySelector('[aria-label="Opacity"] input')?.value);
-    return { color: { r, g, b }, opacity: Number.isFinite(percent) ? Math.min(1, Math.max(0, percent / 100)) : 1 };
+    // Its eye, once there's more than one
+    const visible = row.querySelector('[class*="ui3LeftIcon"] input[type="checkbox"]')?.checked ?? true;
+    return { color: { r, g, b }, opacity: Number.isFinite(percent) ? Math.min(1, Math.max(0, percent / 100)) : 1, visible };
   };
-  const fillPaint = () => {
-    let paint = panelPaint();
+  const panelStyle = () => {
+    const panel = document.querySelector(PANEL);
+    const [fillRow, strokeRow] = rowsOf(panel);
+    const fill = paintOf(fillRow);
+    if (!fill) return null;
+    const weight = parseFloat(panel.parentElement.querySelector('input[aria-label="Stroke weight"]')?.value);
+    return { fill, stroke: strokeRow ? paintOf(strokeRow) : null, weight: Number.isFinite(weight) && weight > 0 ? weight : 1 };
+  };
+  const lassoStyle = () => {
+    let style = panelStyle();
     try {
-      if (paint) localStorage.setItem(LAST_KEY, JSON.stringify(paint));
-      else paint = JSON.parse(localStorage.getItem(LAST_KEY));
+      if (style) localStorage.setItem(LAST_KEY, JSON.stringify(style));
+      else style = JSON.parse(localStorage.getItem(LAST_KEY));
     } catch {}
-    return paint?.color ? paint : BLACK;
+    return style?.fill?.color ? style : { fill: BLACK, stroke: null, weight: 1 };
+  };
+
+  // The Stroke heading, between the panel's first paint and its second: a
+  // copy of Figma's own heading, whose + adds the second as Pencil's does
+  const syncPanel = () => {
+    const panel = document.querySelector(PANEL);
+    const grid = panel?.querySelector('[role="grid"]');
+    if (!grid || !active()) return;
+    let heading = grid.querySelector(`[${LASSO}="stroke"]`);
+    if (!heading) {
+      document.querySelectorAll(`[${LASSO}="stroke"]`).forEach((node) => node.remove());
+      heading = panel.firstElementChild.cloneNode(true);
+      heading.setAttribute(LASSO, "stroke");
+      for (const node of heading.querySelectorAll("[id], [data-testid], [data-onboarding-key]")) {
+        node.removeAttribute("id");
+        node.removeAttribute("data-testid");
+        node.removeAttribute("data-onboarding-key");
+      }
+      const title = heading.querySelector("h2");
+      if (title) title.textContent = "Stroke";
+      for (const button of heading.querySelectorAll("button")) {
+        if (button.getAttribute("aria-label") !== "Add") {
+          button.remove();
+          continue;
+        }
+        button.setAttribute(LASSO, "stroke-add");
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          document.querySelector('[data-testid="pencilToolPanel.addButton"]')?.click();
+        });
+      }
+    }
+    const second = rowsOf(panel)[1] ?? null;
+    if (heading.parentElement !== grid || heading.nextElementSibling !== second) grid.insertBefore(heading, second);
+  };
+  // While the lasso is on, as Figma may draw the panel again at any time
+  let panelObserver = null;
+  let panelFrame = 0;
+  const watchPanel = (on) => {
+    if (!on) {
+      panelObserver?.disconnect();
+      panelObserver = null;
+      return;
+    }
+    const properties = document.querySelector('[data-testid="properties-panel"]');
+    if (!properties || panelObserver?.target === properties) return;
+    panelObserver?.disconnect();
+    const observer = new MutationObserver(() => {
+      if (!panelFrame) panelFrame = requestAnimationFrame(() => ((panelFrame = 0), syncPanel()));
+    });
+    observer.observe(properties, { childList: true, subtree: true });
+    panelObserver = { target: properties, disconnect: () => observer.disconnect() };
+    syncPanel();
   };
 
   // The lasso as it's drawn, over the canvas, in its points on the canvas:
@@ -419,7 +500,7 @@ const PAGE_JS: &str = r##"(() => {
         area += x1 * y2 - x2 * y1;
       }
       if (points.length < 3 || Math.abs(area / 2) * zoom * zoom < 16) return;
-      const paint = fillPaint();
+      const style = lassoStyle();
       const parent = parentAt(figma, points[0]);
       // Into the parent's own space, which may be rotated
       let local = points;
@@ -439,8 +520,13 @@ const PAGE_JS: &str = r##"(() => {
       vector.x = 0;
       vector.y = 0;
       vector.vectorPaths = [{ windingRule: "NONZERO", data }];
-      vector.fills = [{ type: "SOLID", color: paint.color, opacity: paint.opacity }];
-      vector.strokes = [];
+      const solid = ({ color, opacity, visible = true }) => ({ type: "SOLID", color, opacity, visible });
+      vector.fills = [solid(style.fill)];
+      if (style.stroke) {
+        vector.strokes = [solid(style.stroke)];
+        vector.strokeWeight = style.weight;
+        vector.strokeJoin = "ROUND";
+      } else vector.strokes = [];
       try {
         figma.commitUndo();
       } catch {}
@@ -675,15 +761,20 @@ const PAGE_JS: &str = r##"(() => {
     html[${LASSO}] [data-testid="Pencil-tool"] > svg { visibility: hidden; }
     html[${LASSO}] [data-testid="Pencil-tool"] { position: relative; }
     html[${LASSO}] [data-testid="Pencil-tool"]::before { content: ""; position: absolute; inset: 0; margin: auto; width: 24px; height: 24px; background-color: var(--fpl-icon-color, var(--color-icon)); -webkit-mask: ${MASK} center / 24px no-repeat; mask: ${MASK} center / 24px no-repeat; }
-    html[${LASSO}="active"] canvas { cursor: ${CURSOR} !important; }
-    html[${LASSO}="active"] ${PANEL} h2 { visibility: hidden; position: relative; }
-    html[${LASSO}="active"] ${PANEL} h2::after { content: "Fill"; visibility: visible; position: absolute; left: 0; }
-    html[${LASSO}="active"] ${PANEL} [class*="titleButtons"] { display: none; }
-    html[${LASSO}="active"] ${PANEL} [role="row"] ~ [role="row"] { display: none; }
-    html[${LASSO}="active"] :has(> [data-testid="non-consumed-style-panel"] [data-testid="pencilToolPanel.addButton"]) > :not([data-testid="non-consumed-style-panel"]) { display: none; }
+    html[${LASSO}="active"] canvas[${CANVAS}] { cursor: ${CURSOR} !important; }
+    html[${LASSO}="active"] ${PANEL} > :first-child h2 { visibility: hidden; position: relative; }
+    html[${LASSO}="active"] ${PANEL} > :first-child h2::after { content: "Fill"; visibility: visible; position: absolute; left: 0; }
+    html[${LASSO}="active"] ${PANEL} > :first-child [class*="titleButtons"] { display: none; }
+    html[${LASSO}="active"] ${PANEL} [data-testid="row-grabber"] { visibility: hidden; }
+    html[${LASSO}="active"] ${PANEL} [role="grid"] > .cachedSubtree:nth-child(1 of .cachedSubtree) [class*="ui3RightIcon"] { visibility: hidden; }
+    html[${LASSO}="active"] ${PANEL} [role="grid"] > .cachedSubtree:nth-child(n + 3 of .cachedSubtree) { display: none; }
+    html[${LASSO}="active"] :has(> [data-testid="non-consumed-style-panel"] [data-testid="pencilToolPanel.addButton"]):not(:has(> [data-testid="non-consumed-style-panel"] [role="grid"] > .cachedSubtree:nth-child(2 of .cachedSubtree))) > :not([data-testid="non-consumed-style-panel"]) { display: none; }
+    html[${LASSO}="active"] :has(> [data-testid="non-consumed-style-panel"] [data-testid="pencilToolPanel.addButton"]) > :not([data-testid="non-consumed-style-panel"]) :is(fieldset fieldset, [class*="advancedStroke"]) { display: none; }
+    html:not([${LASSO}="active"]) [${LASSO}="stroke"], [role="grid"]:has(> .cachedSubtree:nth-child(2 of .cachedSubtree)) [${LASSO}="stroke-add"] { display: none !important; }
+    [${LASSO}="stroke"] { border-top: 1px solid var(--color-border); margin-top: 8px; }
     [role="menu"]:has([${LASSO}][aria-checked="true"]) [role="menuitemradio"][aria-checked="true"]:not([${LASSO}]) > span > svg:first-child { visibility: hidden; }
     [${LASSO}="overlay"] { position: absolute; pointer-events: none; overflow: visible; z-index: 1; }
-    [${LASSO}="overlay"] path { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 25%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 3 2; stroke-linejoin: round; }
+    [${LASSO}="overlay"] path { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 25%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 4 4; stroke-linejoin: round; }
   `;
   const mount = () => {
     if (style.isConnected) return true;
