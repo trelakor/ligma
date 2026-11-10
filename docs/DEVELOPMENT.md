@@ -13,11 +13,13 @@ npm run dev     # debug build, opens the app
 npm run build   # release bundle in src-tauri/target/release/bundle/
 ```
 
-Regenerate icons after editing `assets/icon.png` (macOS) or `assets/icon-windows.png` (Windows `icon.ico`):
+The macOS icon is `assets/Ligma.icon`, an Icon Composer document, so it follows macOS 26's dark, tinted and clear icon styles. Edit it in Icon Composer (Xcode 26 or later, in Xcode > Open Developer Tool). The Windows icon is `assets/icon-windows.png`. Regenerate the icons after editing either, on macOS with Xcode 26 or later:
 
 ```sh
 npm run icon
 ```
+
+This renders `assets/icon.png` and the PNGs and `icon.icns` (the icon on macOS 11 to 15) from the Icon Composer document. It also compiles `src-tauri/icons/Assets.car`, which macOS 26 and later use, and makes `icon.ico` from the Windows icon. All of them are committed, so building Ligma doesn't need Xcode 26. If actool fails with "Bad file descriptor", run `pkill ibtoold` and try again
 
 The social cover, `site/social-cover.png`, is the site's `og:image`, the README's header on GitHub's dark theme and the repo's social preview. `site/social-cover-light.png` is the README's header on the light theme. Both are drawn in `assets/social/cover.html`. The README's other graphics (the download buttons and the cards) are drawn in `assets/readme/readme.html`, each in a light and a dark version. After editing either, render them again with a local Chrome or Edge (set `CHROME` to its path if it isn't found). Upload a new cover in the repo's Settings > General > Social preview:
 
