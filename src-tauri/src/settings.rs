@@ -135,6 +135,9 @@ pub struct Settings {
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
+    /// Let AI tools read and edit open files through Figma MCP Bridge's
+    /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs)
+    pub mcp_bridge: bool,
 }
 
 impl Default for Settings {
@@ -182,6 +185,7 @@ impl Default for Settings {
             local_select_object: true,
             copy_as_code: true,
             classic_home: false,
+            mcp_bridge: false,
         }
     }
 }
@@ -424,6 +428,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
     crate::view_state::apply_settings(app, &settings);
+    crate::mcp_bridge::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();

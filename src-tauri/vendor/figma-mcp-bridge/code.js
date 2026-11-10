@@ -1,0 +1,3049 @@
+(function() {
+  "use strict";
+  const isMixed = (value) => typeof value === "symbol";
+  const toHex = (color) => {
+    const clamp = (value) => Math.min(255, Math.max(0, Math.round(value * 255)));
+    const [r, g, b] = [clamp(color.r), clamp(color.g), clamp(color.b)];
+    return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+  };
+  const serializeGradientStops = (stops) => stops.map((stop) => ({
+    color: toHex(stop.color),
+    opacity: stop.color.a,
+    position: stop.position
+  }));
+  const serializePaints = (paints) => {
+    if (isMixed(paints)) return "mixed";
+    if (!paints || !Array.isArray(paints)) return [];
+    return paints.filter((paint) => paint.visible !== false).flatMap((paint) => {
+      switch (paint.type) {
+        case "SOLID":
+          return [
+            {
+              type: "SOLID",
+              color: toHex(paint.color),
+              opacity: paint.opacity
+            }
+          ];
+        case "GRADIENT_LINEAR":
+        case "GRADIENT_RADIAL":
+        case "GRADIENT_ANGULAR":
+        case "GRADIENT_DIAMOND":
+          return [
+            {
+              type: paint.type,
+              gradientStops: serializeGradientStops(paint.gradientStops),
+              gradientTransform: paint.gradientTransform,
+              opacity: paint.opacity
+            }
+          ];
+        case "IMAGE":
+          return [
+            {
+              type: "IMAGE",
+              scaleMode: paint.scaleMode,
+              imageHash: paint.imageHash,
+              imageTransform: paint.imageTransform,
+              opacity: paint.opacity
+            }
+          ];
+        default:
+          return [];
+      }
+    });
+  };
+  const serializeEffects = (effects) => effects.filter((effect) => effect.visible !== false).flatMap((effect) => {
+    switch (effect.type) {
+      case "DROP_SHADOW":
+      case "INNER_SHADOW":
+        return [
+          {
+            type: effect.type,
+            color: toHex(effect.color),
+            opacity: effect.color.a,
+            offset: effect.offset,
+            radius: effect.radius,
+            spread: effect.spread,
+            blendMode: effect.blendMode
+          }
+        ];
+      case "LAYER_BLUR":
+      case "BACKGROUND_BLUR":
+        return [{ type: effect.type, radius: effect.radius }];
+      default:
+        return [];
+    }
+  });
+  const serializeLineHeight = (lineHeight) => {
+    if (isMixed(lineHeight)) return "mixed";
+    if ("value" in lineHeight) {
+      return { value: lineHeight.value, unit: lineHeight.unit };
+    }
+    return { unit: lineHeight.unit };
+  };
+  const serializeLetterSpacing = (letterSpacing) => {
+    if (isMixed(letterSpacing)) return "mixed";
+    return { value: letterSpacing.value, unit: letterSpacing.unit };
+  };
+  const getBounds = (node) => {
+    if ("x" in node && "y" in node && "width" in node && "height" in node) {
+      return {
+        x: node.x,
+        y: node.y,
+        width: node.width,
+        height: node.height
+      };
+    }
+    return void 0;
+  };
+  const serializeText = (node, base) => {
+    let fontFamily;
+    let fontStyle;
+    if (typeof node.fontName === "symbol") {
+      fontFamily = "mixed";
+      fontStyle = "mixed";
+    } else if (node.fontName) {
+      fontFamily = node.fontName.family;
+      fontStyle = node.fontName.style;
+    }
+    return {
+      ...base,
+      characters: node.characters,
+      styles: {
+        ...base.styles,
+        fontSize: isMixed(node.fontSize) ? "mixed" : node.fontSize,
+        fontFamily,
+        fontStyle,
+        fontWeight: isMixed(node.fontWeight) ? "mixed" : node.fontWeight,
+        textDecoration: isMixed(node.textDecoration) ? "mixed" : node.textDecoration,
+        lineHeight: serializeLineHeight(node.lineHeight),
+        letterSpacing: serializeLetterSpacing(node.letterSpacing),
+        textAlignHorizontal: isMixed(node.textAlignHorizontal) ? "mixed" : node.textAlignHorizontal,
+        textAlignVertical: isMixed(node.textAlignVertical) ? "mixed" : node.textAlignVertical,
+        textAutoResize: node.textAutoResize
+      }
+    };
+  };
+  const serializeStyles = (node) => {
+    const styles = {};
+    if ("opacity" in node) {
+      styles.opacity = node.opacity;
+    }
+    if ("blendMode" in node) {
+      styles.blendMode = node.blendMode;
+    }
+    if ("visible" in node) {
+      styles.visible = node.visible;
+    }
+    if ("fills" in node) {
+      styles.fills = serializePaints(node.fills);
+    }
+    if ("strokes" in node) {
+      styles.strokes = serializePaints(node.strokes);
+    }
+    if ("strokeWeight" in node) {
+      styles.strokeWeight = isMixed(node.strokeWeight) ? "mixed" : node.strokeWeight;
+    }
+    if ("strokeAlign" in node) {
+      styles.strokeAlign = node.strokeAlign;
+    }
+    if ("dashPattern" in node) {
+      const pattern = node.dashPattern;
+      if (pattern.length > 0) {
+        styles.dashPattern = [...pattern];
+      }
+    }
+    if ("effects" in node) {
+      const effects = node.effects;
+      if (effects.length > 0) {
+        styles.effects = serializeEffects(effects);
+      }
+    }
+    if ("cornerRadius" in node) {
+      styles.cornerRadius = isMixed(node.cornerRadius) ? "mixed" : node.cornerRadius;
+    }
+    if ("topLeftRadius" in node) {
+      const tl = node.topLeftRadius;
+      const tr = node.topRightRadius;
+      const br = node.bottomRightRadius;
+      const bl = node.bottomLeftRadius;
+      if (tl !== tr || tr !== br || br !== bl) {
+        styles.cornerRadii = {
+          topLeft: tl,
+          topRight: tr,
+          bottomRight: br,
+          bottomLeft: bl
+        };
+      }
+    }
+    if ("cornerSmoothing" in node) {
+      const smoothing = node.cornerSmoothing;
+      if (smoothing > 0) {
+        styles.cornerSmoothing = smoothing;
+      }
+    }
+    if ("layoutMode" in node) {
+      const mode = node.layoutMode;
+      if (mode !== "NONE") {
+        styles.autoLayout = {
+          direction: mode,
+          gap: node.itemSpacing,
+          primaryAxisAlign: node.primaryAxisAlignItems,
+          counterAxisAlign: node.counterAxisAlignItems,
+          primaryAxisSizing: node.primaryAxisSizingMode,
+          counterAxisSizing: node.counterAxisSizingMode,
+          wrap: "layoutWrap" in node ? node.layoutWrap : void 0,
+          counterAxisSpacing: "counterAxisSpacing" in node ? node.counterAxisSpacing : void 0
+        };
+      }
+    }
+    if ("paddingLeft" in node) {
+      const top = node.paddingTop;
+      const right = node.paddingRight;
+      const bottom = node.paddingBottom;
+      const left = node.paddingLeft;
+      if (top > 0 || right > 0 || bottom > 0 || left > 0) {
+        styles.padding = { top, right, bottom, left };
+      }
+    }
+    if ("clipsContent" in node) {
+      styles.clipsContent = node.clipsContent;
+    }
+    if ("rotation" in node) {
+      const rotation = node.rotation;
+      if (rotation !== 0) {
+        styles.rotation = rotation;
+      }
+    }
+    if ("constraints" in node) {
+      const c = node.constraints;
+      styles.constraints = { horizontal: c.horizontal, vertical: c.vertical };
+    }
+    return styles;
+  };
+  const serializeNode = (node) => {
+    const base = {
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      bounds: getBounds(node),
+      styles: serializeStyles(node)
+    };
+    if (node.type === "TEXT") {
+      return serializeText(node, base);
+    }
+    if ((node.type === "STICKY" || node.type === "SHAPE_WITH_TEXT") && "text" in node) {
+      try {
+        const textNode = node.text;
+        return {
+          ...base,
+          characters: textNode.characters
+        };
+      } catch {
+      }
+    }
+    if ("children" in node) {
+      return {
+        ...base,
+        children: node.children.filter((child) => child.visible !== false).map((child) => serializeNode(child))
+      };
+    }
+    return base;
+  };
+  const hasChildren = (node) => (
+    // @ts-expect-error
+    node && Array.isArray(node.children)
+  );
+  async function traverseAsync(layer, cb, parent = null) {
+    if (layer) {
+      await cb(layer, parent);
+      if (hasChildren(layer)) {
+        for (let child of layer.children.reverse()) {
+          await traverseAsync(child, cb, layer);
+        }
+      }
+    }
+  }
+  function getRgb(colorString) {
+    const [_1, r, g, b, _2, a] = colorString.match(
+      /rgba?\(([\d\.]+), ([\d\.]+), ([\d\.]+)(, ([\d\.]+))?\)/
+    ) || [];
+    const none = a && parseFloat(a) === 0;
+    if (r && g && b && !none) {
+      return {
+        r: parseInt(r) / 255,
+        g: parseInt(g) / 255,
+        b: parseInt(b) / 255,
+        a: a ? parseFloat(a) : 1
+      };
+    }
+    return null;
+  }
+  function getImageFills(layer) {
+    const images = Array.isArray(layer.fills) && layer.fills.filter((item) => item.type === "IMAGE");
+    return images;
+  }
+  getRgb("rgba(178, 178, 178, 1)");
+  async function processImages(layer) {
+    const images = getImageFills(layer);
+    return images && Promise.all(
+      images.map(async (image) => {
+        if (image && image.intArr) {
+          image.imageHash = await figma.createImage(image.intArr).hash;
+          delete image.intArr;
+        }
+      })
+    );
+  }
+  const fontCache = {};
+  const normalizeName = (str) => str.toLowerCase().replace(/[^a-z]/gi, "");
+  const defaultFont = { family: "Roboto", style: "Regular" };
+  let cachedAvailableFonts = null;
+  const getAvailableFonts = async () => {
+    if (!cachedAvailableFonts) {
+      cachedAvailableFonts = await figma.listAvailableFontsAsync();
+    }
+    return cachedAvailableFonts;
+  };
+  const styleCandidates = (fontWeight) => {
+    if (typeof fontWeight !== "number" || fontWeight < 500) return ["Regular"];
+    if (fontWeight >= 900) return ["Black", "ExtraBold", "Bold", "Regular"];
+    if (fontWeight >= 800) return ["ExtraBold", "Bold", "Regular"];
+    if (fontWeight >= 700) return ["Bold", "SemiBold", "Regular"];
+    if (fontWeight >= 600) return ["SemiBold", "Bold", "Medium", "Regular"];
+    return ["Medium", "SemiBold", "Regular"];
+  };
+  async function getMatchingFont(fontStr, fontWeight) {
+    const cacheKey = `${fontStr}|${fontWeight ?? ""}`;
+    const cached = fontCache[cacheKey];
+    if (cached) {
+      return cached;
+    }
+    const availableFonts = await getAvailableFonts();
+    const candidates = styleCandidates(fontWeight);
+    for (const family of fontStr.split(/\s*,\s*/)) {
+      const normalized = normalizeName(family);
+      const familyFonts = availableFonts.filter(
+        (font) => normalizeName(font.fontName.family) === normalized
+      );
+      if (!familyFonts.length) {
+        continue;
+      }
+      for (const style of candidates) {
+        const match = familyFonts.find((font) => font.fontName.style === style);
+        if (!match) {
+          continue;
+        }
+        await figma.loadFontAsync(match.fontName);
+        fontCache[cacheKey] = match.fontName;
+        return match.fontName;
+      }
+    }
+    await figma.loadFontAsync(defaultFont);
+    fontCache[cacheKey] = defaultFont;
+    return defaultFont;
+  }
+  function assign(a, b) {
+    for (const key in b) {
+      const value = b[key];
+      if (key === "data" && value && typeof value === "object") {
+        const currentData = JSON.parse(a.getSharedPluginData("builder", "data") || "{}") || {};
+        const newData = value;
+        const mergedData = Object.assign({}, currentData, newData);
+        a.setSharedPluginData("builder", "data", JSON.stringify(mergedData));
+      } else if (typeof value != "undefined" && ["width", "height", "type", "ref", "children", "svg"].indexOf(key) === -1) {
+        try {
+          a[key] = b[key];
+        } catch (err) {
+          console.warn(`Assign error for property "${key}"`, a, b, err);
+        }
+      }
+    }
+  }
+  const processDefaultElement = (layer, node) => {
+    node.x = layer.x;
+    node.y = layer.y;
+    node.resize(layer.width || 1, layer.height || 1);
+    assign(node, layer);
+    return node;
+  };
+  const createNodeFromLayer = (layer) => {
+    if (layer.type === "FRAME" || layer.type === "GROUP") {
+      return figma.createFrame();
+    }
+    if (layer.type === "SVG" && layer.svg) {
+      return figma.createNodeFromSvg(layer.svg);
+    }
+    if (layer.type === "RECTANGLE") {
+      return figma.createRectangle();
+    }
+    if (layer.type === "TEXT") {
+      return figma.createText();
+    }
+    if (layer.type === "COMPONENT") {
+      return figma.createComponent();
+    }
+  };
+  const SIMPLE_TYPES = ["FRAME", "GROUP", "SVG", "RECTANGLE", "COMPONENT"];
+  const processLayer = async (layer, parent, baseFrame) => {
+    const parentFrame = parent?.ref || baseFrame;
+    if (typeof layer.x !== "number" || typeof layer.y !== "number") {
+      throw Error("Layer coords not defined");
+    }
+    const node = createNodeFromLayer(layer);
+    if (!node) {
+      throw Error(`${layer.type} not implemented`);
+    }
+    if (SIMPLE_TYPES.includes(layer.type)) {
+      parentFrame.appendChild(processDefaultElement(layer, node));
+    }
+    layer.ref = node;
+    if (layer.type === "RECTANGLE") {
+      if (getImageFills(layer)) {
+        await processImages(layer);
+      }
+    }
+    if (layer.type === "TEXT") {
+      const text = node;
+      if (layer.fontFamily) {
+        text.fontName = await getMatchingFont(layer.fontFamily, layer.fontWeight);
+        delete layer.fontFamily;
+      }
+      delete layer.fontWeight;
+      assign(text, layer);
+      text.resize(layer.width || 1, layer.height || 1);
+      text.textAutoResize = "HEIGHT";
+      let adjustments = 0;
+      if (layer.lineHeight) {
+        text.lineHeight = layer.lineHeight;
+      }
+      while (typeof layer.height === "number" && text.height > layer.height) {
+        if (adjustments++ > 5) {
+          console.warn("Too many font adjustments", text, layer);
+          break;
+        }
+        try {
+          text.resize(text.width + 1, text.height);
+        } catch (err) {
+          console.warn("Error on resize text:", layer, text, err);
+        }
+      }
+      parentFrame.appendChild(text);
+    }
+    return node;
+  };
+  async function addLayersToFrame(layers, baseFrame, onLayerProcess) {
+    for (const rootLayer of layers) {
+      await traverseAsync(rootLayer, async (layer, parent) => {
+        try {
+          const node = await processLayer(layer, parent, baseFrame);
+          onLayerProcess?.({ node, layer, parent });
+        } catch (err) {
+          console.warn("Error on layer:", layer, err);
+        }
+      });
+    }
+  }
+  const DEFAULT_MAX_NODES = 5e3;
+  const DEFAULT_MAX_SCREENS = 25;
+  const SCREEN_PARENT_TYPES = /* @__PURE__ */ new Set(["DOCUMENT", "PAGE", "SECTION"]);
+  const SCREEN_NAVIGATIONS = /* @__PURE__ */ new Set(["NAVIGATE", "SWAP", "OVERLAY"]);
+  const OVERLAY_NAVIGATIONS = /* @__PURE__ */ new Set(["SWAP", "OVERLAY"]);
+  const toRef = (node) => ({ id: node.id, name: node.name, type: node.type });
+  function screenChain(node) {
+    const chain = [];
+    for (let current = node; current; current = current.parent) {
+      if (SCREEN_PARENT_TYPES.has(current.type)) break;
+      chain.push(current);
+    }
+    return chain.reverse();
+  }
+  const screenOf = (node) => screenChain(node)[0] ?? null;
+  function pageOf(node) {
+    for (let current = node; current; current = current.parent) {
+      if (current.type === "PAGE") return current;
+    }
+    return null;
+  }
+  const isScreenNavigation = (action) => action.type === "NODE" && SCREEN_NAVIGATIONS.has(action.navigation);
+  function edgeKind(action) {
+    switch (action.type) {
+      case "NODE":
+        return isScreenNavigation(action) ? "screen" : "in-screen";
+      case "BACK":
+        return "back";
+      case "CLOSE":
+        return "close";
+      case "URL":
+        return "url";
+      case "SET_VARIABLE":
+      case "SET_VARIABLE_MODE":
+        return "variable";
+      case "UPDATE_MEDIA_RUNTIME":
+        return "media";
+      default:
+        return "unsupported";
+    }
+  }
+  function* flattenActions(actions, path, conditions = []) {
+    for (const [i, action] of actions.entries()) {
+      const actionPath = `${path}.actions[${i}]`;
+      if (action.type !== "CONDITIONAL") {
+        yield { action, actionPath, conditions };
+        continue;
+      }
+      for (const [b, block] of action.conditionalBlocks.entries()) {
+        yield* flattenActions(block.actions, `${actionPath}.conditionalBlocks[${b}]`, [
+          ...conditions,
+          block.condition
+        ]);
+      }
+    }
+  }
+  function memoize(load) {
+    const cache = /* @__PURE__ */ new Map();
+    return (id) => {
+      let result = cache.get(id);
+      if (!result) {
+        result = load(id);
+        cache.set(id, result);
+      }
+      return result;
+    };
+  }
+  class PrototypeReader {
+    constructor() {
+      this.getNode = memoize((id) => figma.getNodeByIdAsync(id));
+      this.getVariable = memoize((id) => figma.variables.getVariableByIdAsync(id));
+      this.getCollection = memoize(
+        (id) => figma.variables.getVariableCollectionByIdAsync(id)
+      );
+    }
+    async scan(root, { maxNodes = DEFAULT_MAX_NODES, includeEmpty = false } = {}) {
+      const connections = [];
+      const stack = [root];
+      let nodesScanned = 0;
+      while (stack.length > 0 && nodesScanned < maxNodes) {
+        const node = stack.pop();
+        nodesScanned++;
+        if ("reactions" in node && (includeEmpty || node.reactions.length > 0)) {
+          connections.push(this.describeNode(node));
+        }
+        if ("children" in node) {
+          for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]);
+        }
+      }
+      return {
+        root: toRef(root),
+        nodesScanned,
+        truncated: stack.length > 0,
+        connections: await Promise.all(connections)
+      };
+    }
+    async trace(start, { maxScreens = DEFAULT_MAX_SCREENS, maxNodesPerScreen = DEFAULT_MAX_NODES } = {}) {
+      const startScreen = screenOf(start) ?? start;
+      const trace = {
+        start: toRef(startScreen),
+        screens: [],
+        edges: [],
+        unresolved: [],
+        truncated: false,
+        pending: []
+      };
+      const reached = /* @__PURE__ */ new Set([startScreen.id]);
+      const queue = [{ screen: startScreen, depth: 0, reachedVia: null }];
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        if (trace.screens.length >= maxScreens) {
+          trace.truncated = true;
+          trace.pending = [next, ...queue].map(({ screen: screen2 }) => toRef(screen2));
+          break;
+        }
+        const { screen, depth, reachedVia } = next;
+        const fromScreen = toRef(screen);
+        trace.screens.push({ ...fromScreen, depth, reachedVia });
+        const scan = await this.scan(screen, { maxNodes: maxNodesPerScreen });
+        trace.truncated || (trace.truncated = scan.truncated);
+        for (const { reactions, screen: _screen, ...source } of scan.connections) {
+          for (const [r, { trigger, actions }] of reactions.entries()) {
+            for (const { action, actionPath, conditions } of flattenActions(
+              actions,
+              `reactions[${r}]`
+            )) {
+              const edge = {
+                fromScreen,
+                source,
+                trigger,
+                actionPath,
+                conditions,
+                action,
+                kind: edgeKind(action)
+              };
+              const edgeIndex = trace.edges.push(edge) - 1;
+              if (!isScreenNavigation(action)) continue;
+              const { destination } = action;
+              const targetId = destination?.status === "resolved" ? (destination.screen ?? destination).id : null;
+              const target = targetId ? await this.getNode(targetId) : null;
+              if (!target) {
+                edge.toScreen = null;
+                trace.unresolved.push({ edgeIndex, destinationId: action.destinationId });
+                continue;
+              }
+              edge.toScreen = toRef(target);
+              edge.revisit = reached.has(target.id);
+              if (edge.revisit) continue;
+              reached.add(target.id);
+              queue.push({ screen: target, depth: depth + 1, reachedVia: source.id });
+            }
+          }
+        }
+      }
+      return trace;
+    }
+    async describeNode(node) {
+      const chain = screenChain(node);
+      return {
+        ...toRef(node),
+        instanceSublayer: node.id.startsWith("I"),
+        path: chain.map((ancestor) => ancestor.name),
+        screen: chain.length > 0 ? toRef(chain[0]) : null,
+        reactions: await Promise.all(
+          node.reactions.map(async ({ trigger, action, actions }) => ({
+            trigger,
+            // `action` is the deprecated single-action form of `actions`.
+            actions: await this.resolveActions(actions ?? (action ? [action] : []))
+          }))
+        )
+      };
+    }
+    resolveActions(actions) {
+      return Promise.all(actions.map((action) => this.resolveAction(action)));
+    }
+    async resolveAction(action) {
+      switch (action.type) {
+        case "NODE":
+          return {
+            ...action,
+            destination: await this.resolveDestination(action.destinationId, action.navigation)
+          };
+        case "UPDATE_MEDIA_RUNTIME":
+          return { ...action, destination: await this.resolveDestination(action.destinationId) };
+        case "SET_VARIABLE": {
+          const variable = action.variableId ? await this.getVariable(action.variableId) : null;
+          return {
+            ...action,
+            variable: variable && {
+              id: variable.id,
+              name: variable.name,
+              resolvedType: variable.resolvedType
+            }
+          };
+        }
+        case "SET_VARIABLE_MODE": {
+          const collection = action.variableCollectionId ? await this.getCollection(action.variableCollectionId) : null;
+          return {
+            ...action,
+            collectionName: collection?.name ?? null,
+            modeName: collection?.modes.find((m) => m.modeId === action.variableModeId)?.name ?? null
+          };
+        }
+        case "CONDITIONAL":
+          return {
+            type: "CONDITIONAL",
+            conditionalBlocks: await Promise.all(
+              action.conditionalBlocks.map(async ({ condition, actions }) => ({
+                condition: condition ?? null,
+                actions: await this.resolveActions(actions)
+              }))
+            )
+          };
+        default:
+          return action;
+      }
+    }
+    async resolveDestination(id, navigation) {
+      if (!id) return null;
+      const node = await this.getNode(id);
+      if (!node) return { status: "missing", id };
+      const screen = screenOf(node);
+      const page = pageOf(node);
+      const destination = {
+        status: "resolved",
+        ...toRef(node),
+        screen: screen && toRef(screen),
+        page: page && toRef(page)
+      };
+      if (navigation && OVERLAY_NAVIGATIONS.has(navigation) && "overlayPositionType" in node) {
+        destination.overlay = {
+          overlayPositionType: node.overlayPositionType,
+          overlayBackground: node.overlayBackground,
+          overlayBackgroundInteraction: node.overlayBackgroundInteraction
+        };
+      }
+      return destination;
+    }
+  }
+  function describeFile(node) {
+    const page = pageOf(node);
+    return {
+      schemaVersion: 1,
+      fileKey: figma.fileKey ?? null,
+      fileName: figma.root.name,
+      page: page && toRef(page),
+      flowStartingPoints: page?.flowStartingPoints ?? []
+    };
+  }
+  async function scanPrototype(root, options) {
+    if (root.type === "PAGE") await root.loadAsync();
+    return new PrototypeReader().scan(root, options);
+  }
+  async function getPrototypeConnections(root, options) {
+    const scan = await scanPrototype(root, options);
+    return { ...describeFile(root), ...scan };
+  }
+  async function tracePrototypeFlow(start, options) {
+    const trace = await new PrototypeReader().trace(start, options);
+    return { ...describeFile(start), ...trace };
+  }
+  let cachedFallbackFileKey = null;
+  const generateFallbackFileKey = () => {
+    const random = Math.random().toString(36).slice(2, 10);
+    return `unsaved-${Date.now().toString(36)}-${random}`;
+  };
+  const getFileKey = () => {
+    try {
+      if (typeof figma.fileKey === "string" && figma.fileKey) {
+        return figma.fileKey;
+      }
+    } catch {
+    }
+    if (!cachedFallbackFileKey) {
+      cachedFallbackFileKey = generateFallbackFileKey();
+      console.warn(
+        `[figma-mcp-bridge] figma.fileKey unavailable for "${figma.root.name}". Using session fallback key "${cachedFallbackFileKey}". If you encounter this in a built plugin, please report at https://github.com/gethopp/figma-mcp-bridge/issues with steps to reproduce.`
+      );
+    }
+    return cachedFallbackFileKey;
+  };
+  const sendStatus = () => {
+    figma.ui.postMessage({
+      type: "plugin-status",
+      payload: {
+        fileName: figma.root.name,
+        fileKey: getFileKey(),
+        selectionCount: figma.currentPage.selection.length
+      }
+    });
+  };
+  const serializeVariableValue = (value) => {
+    if (typeof value === "object" && value !== null) {
+      if ("type" in value && value.type === "VARIABLE_ALIAS") {
+        return { type: "VARIABLE_ALIAS", id: value.id };
+      }
+      if ("r" in value && "g" in value && "b" in value) {
+        const color = value;
+        return {
+          type: "COLOR",
+          r: color.r,
+          g: color.g,
+          b: color.b,
+          a: "a" in color ? color.a : 1
+        };
+      }
+    }
+    return value;
+  };
+  const isSceneNode = (node) => node !== null && node.type !== "DOCUMENT" && node.type !== "PAGE";
+  const CONSTRAINT_TYPES = ["MIN", "MAX", "CENTER", "STRETCH", "SCALE"];
+  const isConstraintType = (value) => CONSTRAINT_TYPES.some((constraint) => constraint === value);
+  const getSceneNodeById = async (nodeId) => {
+    const node = await figma.getNodeByIdAsync(nodeId);
+    if (!isSceneNode(node)) {
+      throw new Error(`Node not found: ${nodeId}`);
+    }
+    return node;
+  };
+  const getTextTargetById = async (nodeId, toolName) => {
+    const node = await figma.getNodeByIdAsync(nodeId);
+    if (!isSceneNode(node)) {
+      throw new Error(`Node not found: ${nodeId}`);
+    }
+    if (node.type === "TEXT") {
+      return { kind: "text", node, text: node };
+    }
+    if (node.type === "STICKY" || node.type === "SHAPE_WITH_TEXT") {
+      return { kind: "sublayer", node, text: node.text };
+    }
+    throw new Error(
+      `${toolName} supports TEXT, STICKY, and SHAPE_WITH_TEXT nodes (got ${node.type}: ${nodeId})`
+    );
+  };
+  const supportsChildren = (node) => "appendChild" in node;
+  const isMotionNode = (node) => "applyAnimationStyle" in node;
+  const getParentNodeById = async (parentId) => {
+    const parent = await figma.getNodeByIdAsync(parentId);
+    if (!parent || parent.type === "DOCUMENT" || !supportsChildren(parent)) {
+      throw new Error(`Parent does not support children: ${parentId}`);
+    }
+    if (parent.type === "PAGE") {
+      await parent.loadAsync();
+    }
+    return parent;
+  };
+  const parseHexColor = (hex) => {
+    const normalized = hex.trim().replace(/^#/, "");
+    if (normalized.length !== 3 && normalized.length !== 6) {
+      throw new Error(`Invalid hex color: ${hex}`);
+    }
+    const expanded = normalized.length === 3 ? normalized.split("").map((char) => `${char}${char}`).join("") : normalized;
+    if (!/^[0-9a-fA-F]{6}$/.test(expanded)) {
+      throw new Error(`Invalid hex color: ${hex}`);
+    }
+    return {
+      r: parseInt(expanded.slice(0, 2), 16) / 255,
+      g: parseInt(expanded.slice(2, 4), 16) / 255,
+      b: parseInt(expanded.slice(4, 6), 16) / 255
+    };
+  };
+  const setSolidFill = (node, fillHex, fillOpacity, target = "fill") => {
+    const paint = {
+      type: "SOLID",
+      color: parseHexColor(fillHex),
+      opacity: fillOpacity ?? 1
+    };
+    if (target === "stroke") {
+      if (!("strokes" in node)) {
+        throw new Error(`Node does not support strokes: ${node.id}`);
+      }
+      node.strokes = [paint];
+      return;
+    }
+    if (!("fills" in node)) {
+      throw new Error(`Node does not support fills: ${node.id}`);
+    }
+    node.fills = [paint];
+  };
+  const buildGradientPaint = (paintType, stops, transform, opacity) => {
+    const colorStops = stops.map((stop) => {
+      const rgb = parseHexColor(stop.hex);
+      return {
+        position: stop.position,
+        color: { r: rgb.r, g: rgb.g, b: rgb.b, a: stop.opacity ?? 1 }
+      };
+    });
+    const gradientTransform = transform ?? [
+      [1, 0, 0],
+      [0, 1, 0]
+    ];
+    const paint = {
+      type: paintType,
+      gradientStops: colorStops,
+      gradientTransform,
+      opacity: opacity ?? 1
+    };
+    return paint;
+  };
+  const loadFontsForTextNode = async (node) => {
+    const fonts = /* @__PURE__ */ new Map();
+    if (node.characters.length > 0) {
+      for (const font of node.getRangeAllFontNames(0, node.characters.length)) {
+        fonts.set(`${font.family}::${font.style}`, font);
+      }
+    } else if (typeof node.fontName !== "symbol") {
+      fonts.set(`${node.fontName.family}::${node.fontName.style}`, node.fontName);
+    } else {
+      throw new Error(
+        `Cannot determine font for empty mixed-font text node: ${"id" in node ? node.id : "text sublayer"}`
+      );
+    }
+    await Promise.all([...fonts.values()].map((font) => figma.loadFontAsync(font)));
+  };
+  const ensureFont = async (family, style) => {
+    const font = { family, style };
+    await figma.loadFontAsync(font);
+    return font;
+  };
+  const applyTextFill = (node, fillHex, fillOpacity) => {
+    node.fills = [
+      {
+        type: "SOLID",
+        color: parseHexColor(fillHex),
+        opacity: fillOpacity ?? 1
+      }
+    ];
+  };
+  const positionNode = (node, x, y) => {
+    if ("x" in node && typeof x === "number") {
+      node.x = x;
+    }
+    if ("y" in node && typeof y === "number") {
+      node.y = y;
+    }
+  };
+  const resizeNodeIfSupported = (node, width, height) => {
+    if (typeof width !== "number" && typeof height !== "number") {
+      return;
+    }
+    if (!("resize" in node) || typeof node.resize !== "function") {
+      throw new Error(`Node does not support resizing: ${node.id}`);
+    }
+    const nextWidth = typeof width === "number" ? width : node.width;
+    const nextHeight = typeof height === "number" ? height : node.height;
+    node.resize(nextWidth, nextHeight);
+  };
+  const appendToParentIfProvided = async (node, parentId) => {
+    if (typeof parentId !== "string") {
+      return;
+    }
+    const parent = await getParentNodeById(parentId);
+    parent.appendChild(node);
+  };
+  const decodeBase64ToBytes = (base64) => {
+    try {
+      return figma.base64Decode(base64);
+    } catch {
+      throw new Error("Invalid base64 image payload");
+    }
+  };
+  const isFigJam = () => figma.editorType === "figjam";
+  const requireFigJamApi = (toolName, apiName, api) => {
+    if (!isFigJam()) {
+      throw new Error(`${toolName} is only available in FigJam`);
+    }
+    if (typeof api !== "function") {
+      throw new Error(
+        `${toolName} unavailable: figma.${apiName} is missing. Run the plugin in FigJam with "figjam" in the manifest editorType.`
+      );
+    }
+  };
+  const EDIT_REQUEST_TYPES = /* @__PURE__ */ new Set([
+    "set_node_visibility",
+    "set_text_content",
+    "set_text_properties",
+    "set_node_properties",
+    "set_node_constraints",
+    "set_solid_fill",
+    "set_gradient_fill",
+    "set_effects",
+    "set_stroke_properties",
+    "set_auto_layout",
+    "create_page",
+    "create_frame",
+    "create_text",
+    "create_shape",
+    "create_image",
+    "create_svg",
+    "create_sticky",
+    "create_connector",
+    "create_section",
+    "create_shape_with_text",
+    "import_html_layers",
+    "duplicate_nodes",
+    "duplicate_with_offset",
+    "fit_to_content",
+    "distribute_horizontally",
+    "distribute_vertically",
+    "align_to_grid",
+    "place_below",
+    "place_right_of",
+    "reparent_nodes",
+    "group_nodes",
+    "ungroup_node",
+    "delete_nodes",
+    "run_script",
+    "apply_animation_style",
+    "remove_animation_style",
+    "apply_manual_keyframe_track",
+    "remove_manual_keyframe_track",
+    "set_timeline_duration"
+  ]);
+  const requireEditorMode = (toolName) => {
+    if (figma.editorType === "dev") {
+      throw new Error(
+        `${toolName} requires the plugin to be opened in Figma's design editor (Dev Mode is read-only). Switch to the design editor and re-run.`
+      );
+    }
+  };
+  const requirePrototypes = (toolName) => {
+    if (isFigJam()) {
+      throw new Error(`${toolName} is not available in FigJam (FigJam files have no prototypes)`);
+    }
+  };
+  async function getLayoutTree(rootId, maxNodes = 2e3) {
+    const root = await figma.getNodeByIdAsync(rootId);
+    if (!root || root.type === "DOCUMENT" || root.type === "PAGE")
+      throw new Error("Scene root required");
+    const nodes = [];
+    let truncated = false;
+    function visit(node, depth) {
+      if (nodes.length >= maxNodes || depth > 100) {
+        truncated = true;
+        return;
+      }
+      nodes.push({
+        id: node.id,
+        parentId: node.parent?.id,
+        name: node.name,
+        type: node.type,
+        visible: node.visible,
+        localSize: { width: node.width, height: node.height },
+        absoluteTransform: node.absoluteTransform,
+        absoluteBoundingBox: node.absoluteBoundingBox,
+        absoluteRenderBounds: "absoluteRenderBounds" in node ? node.absoluteRenderBounds : null,
+        clipsContent: "clipsContent" in node ? node.clipsContent : false
+      });
+      if ("children" in node) for (const child of node.children) visit(child, depth + 1);
+    }
+    visit(root, 0);
+    return {
+      schemaVersion: 1,
+      snapshotId: (/* @__PURE__ */ new Date()).toISOString(),
+      atomicWithScreenshot: false,
+      fileKey: figma.fileKey ?? null,
+      fileName: figma.root.name,
+      pageId: figma.currentPage.id,
+      rootId,
+      truncated,
+      nodes,
+      capture: {
+        coordinateSpace: "document-absolute",
+        window: root.absoluteBoundingBox,
+        exportSettings: {
+          format: "PNG",
+          contentsOnly: true,
+          useAbsoluteBounds: true,
+          constraint: { type: "SCALE", value: 1 }
+        },
+        dimensionsAreMeasuredFromImage: false,
+        clipping: "Rectangles are layout AABBs; ancestor masks and painted visibility are not evaluated."
+      }
+    };
+  }
+  const handleRequest = async (request) => {
+    try {
+      if (EDIT_REQUEST_TYPES.has(request.type)) {
+        requireEditorMode(request.type);
+      }
+      switch (request.type) {
+        case "get_document":
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: serializeNode(figma.currentPage)
+          };
+        case "get_selection":
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: figma.currentPage.selection.map((node) => serializeNode(node))
+          };
+        case "get_layout_tree": {
+          const rootId = request.nodeIds?.[0];
+          if (!rootId) throw new Error("rootId is required");
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: await getLayoutTree(rootId, Number(request.params?.maxNodes ?? 2e3))
+          };
+        }
+        case "get_node": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for get_node");
+          }
+          const node = await figma.getNodeByIdAsync(nodeId);
+          if (!node || node.type === "DOCUMENT") {
+            throw new Error(`Node not found: ${nodeId}`);
+          }
+          const data = serializeNode(node);
+          if (!request.params?.includePrototype) {
+            return { type: request.type, requestId: request.requestId, data };
+          }
+          requirePrototypes("get_node includePrototype");
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: { ...data, prototype: await scanPrototype(node) }
+          };
+        }
+        case "get_prototype_connections": {
+          requirePrototypes(request.type);
+          const nodeId = request.nodeIds?.[0];
+          const root = nodeId ? await figma.getNodeByIdAsync(nodeId) : figma.currentPage;
+          if (!root || root.type === "DOCUMENT") {
+            throw new Error(`Node not found: ${nodeId}`);
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: await getPrototypeConnections(root, request.params)
+          };
+        }
+        case "trace_prototype_flow": {
+          requirePrototypes(request.type);
+          const nodeId = request.nodeIds?.[0];
+          if (!nodeId) {
+            throw new Error("nodeId is required for trace_prototype_flow");
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: await tracePrototypeFlow(await getSceneNodeById(nodeId), request.params)
+          };
+        }
+        case "get_styles": {
+          if (isFigJam()) {
+            let paintStyles2 = [];
+            let textStyles2 = [];
+            let effectStyles2 = [];
+            try {
+              paintStyles2 = await figma.getLocalPaintStylesAsync();
+            } catch {
+            }
+            try {
+              textStyles2 = await figma.getLocalTextStylesAsync();
+            } catch {
+            }
+            try {
+              effectStyles2 = await figma.getLocalEffectStylesAsync();
+            } catch {
+            }
+            return {
+              type: request.type,
+              requestId: request.requestId,
+              data: {
+                paints: paintStyles2.map((style) => ({
+                  id: style.id,
+                  name: style.name,
+                  paints: style.paints
+                })),
+                text: textStyles2.map((style) => ({
+                  id: style.id,
+                  name: style.name,
+                  fontSize: style.fontSize,
+                  fontName: style.fontName,
+                  textDecoration: style.textDecoration,
+                  lineHeight: style.lineHeight,
+                  letterSpacing: style.letterSpacing
+                })),
+                effects: effectStyles2.map((style) => ({
+                  id: style.id,
+                  name: style.name,
+                  effects: style.effects
+                })),
+                grids: []
+              }
+            };
+          }
+          const [paintStyles, textStyles, effectStyles, gridStyles] = await Promise.all([
+            figma.getLocalPaintStylesAsync(),
+            figma.getLocalTextStylesAsync(),
+            figma.getLocalEffectStylesAsync(),
+            figma.getLocalGridStylesAsync()
+          ]);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              paints: paintStyles.map((style) => ({
+                id: style.id,
+                name: style.name,
+                paints: style.paints
+              })),
+              text: textStyles.map((style) => ({
+                id: style.id,
+                name: style.name,
+                fontSize: style.fontSize,
+                fontName: style.fontName,
+                textDecoration: style.textDecoration,
+                lineHeight: style.lineHeight,
+                letterSpacing: style.letterSpacing
+              })),
+              effects: effectStyles.map((style) => ({
+                id: style.id,
+                name: style.name,
+                effects: style.effects
+              })),
+              grids: gridStyles.map((style) => ({
+                id: style.id,
+                name: style.name,
+                layoutGrids: style.layoutGrids
+              }))
+            }
+          };
+        }
+        case "get_metadata": {
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              editorType: figma.editorType,
+              fileName: figma.root.name,
+              currentPageId: figma.currentPage.id,
+              currentPageName: figma.currentPage.name,
+              pageCount: figma.root.children.length,
+              pages: figma.root.children.map((page) => ({
+                id: page.id,
+                name: page.name
+              }))
+            }
+          };
+        }
+        case "get_design_context": {
+          const depth = typeof request.params?.depth === "number" ? request.params.depth : 2;
+          const serializeWithDepth = async (node, currentDepth) => {
+            const serialized = serializeNode(node);
+            if (currentDepth >= depth && serialized.children) {
+              return {
+                ...serialized,
+                children: void 0,
+                childCount: node.children?.filter((c) => c.visible !== false).length ?? 0
+              };
+            }
+            if (serialized.children) {
+              const childNodes = await Promise.all(
+                serialized.children.map((child) => figma.getNodeByIdAsync(child.id))
+              );
+              const serializedChildren = await Promise.all(
+                childNodes.filter(
+                  (n) => n !== null && n.type !== "DOCUMENT" && "visible" in n && n.visible !== false
+                ).map((n) => serializeWithDepth(n, currentDepth + 1))
+              );
+              return {
+                ...serialized,
+                children: serializedChildren
+              };
+            }
+            return serialized;
+          };
+          const selection = figma.currentPage.selection;
+          const contextNodes = selection.length > 0 ? await Promise.all(selection.map((node) => serializeWithDepth(node, 0))) : [await serializeWithDepth(figma.currentPage, 0)];
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              fileName: figma.root.name,
+              currentPage: {
+                id: figma.currentPage.id,
+                name: figma.currentPage.name
+              },
+              selectionCount: selection.length,
+              context: contextNodes
+            }
+          };
+        }
+        case "get_variable_defs": {
+          if (isFigJam()) {
+            try {
+              const collections2 = await figma.variables.getLocalVariableCollectionsAsync();
+              const variableData2 = await Promise.all(
+                collections2.map(async (collection) => {
+                  const variables = await Promise.all(
+                    collection.variableIds.map((id) => figma.variables.getVariableByIdAsync(id))
+                  );
+                  return {
+                    id: collection.id,
+                    name: collection.name,
+                    modes: collection.modes.map((mode) => ({
+                      modeId: mode.modeId,
+                      name: mode.name
+                    })),
+                    variables: variables.filter((v) => v !== null).map((variable) => ({
+                      id: variable.id,
+                      name: variable.name,
+                      resolvedType: variable.resolvedType,
+                      valuesByMode: Object.fromEntries(
+                        Object.entries(variable.valuesByMode).map(([modeId, value]) => [
+                          modeId,
+                          serializeVariableValue(value)
+                        ])
+                      )
+                    }))
+                  };
+                })
+              );
+              return {
+                type: request.type,
+                requestId: request.requestId,
+                data: {
+                  collections: variableData2
+                }
+              };
+            } catch {
+              return {
+                type: request.type,
+                requestId: request.requestId,
+                data: {
+                  collections: [],
+                  note: "Variables are not available in FigJam"
+                }
+              };
+            }
+          }
+          const collections = await figma.variables.getLocalVariableCollectionsAsync();
+          const variableData = await Promise.all(
+            collections.map(async (collection) => {
+              const variables = await Promise.all(
+                collection.variableIds.map((id) => figma.variables.getVariableByIdAsync(id))
+              );
+              return {
+                id: collection.id,
+                name: collection.name,
+                modes: collection.modes.map((mode) => ({
+                  modeId: mode.modeId,
+                  name: mode.name
+                })),
+                variables: variables.filter((v) => v !== null).map((variable) => ({
+                  id: variable.id,
+                  name: variable.name,
+                  resolvedType: variable.resolvedType,
+                  valuesByMode: Object.fromEntries(
+                    Object.entries(variable.valuesByMode).map(([modeId, value]) => [
+                      modeId,
+                      serializeVariableValue(value)
+                    ])
+                  )
+                }))
+              };
+            })
+          );
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              collections: variableData
+            }
+          };
+        }
+        case "get_screenshot": {
+          const format = request.params?.format === "SVG" || request.params?.format === "PDF" || request.params?.format === "JPG" || request.params?.format === "PNG" ? request.params.format : "PNG";
+          const scale = typeof request.params?.scale === "number" ? request.params.scale : 2;
+          const clip = request.params?.clip === true;
+          let targetNodes;
+          if (request.nodeIds && request.nodeIds.length > 0) {
+            const nodes = await Promise.all(request.nodeIds.map((id) => figma.getNodeByIdAsync(id)));
+            targetNodes = nodes.filter(
+              (node) => node !== null && node.type !== "DOCUMENT" && node.type !== "PAGE"
+            );
+          } else {
+            targetNodes = [...figma.currentPage.selection];
+          }
+          if (targetNodes.length === 0) {
+            throw new Error("No nodes to export. Select nodes or provide nodeIds.");
+          }
+          const exports$1 = await Promise.all(
+            targetNodes.map(async (node) => {
+              const commonSettings = clip ? { contentsOnly: true, useAbsoluteBounds: true } : {};
+              const settings = format === "SVG" ? { format: "SVG", ...commonSettings } : format === "PDF" ? { format: "PDF", ...commonSettings } : format === "JPG" ? {
+                format: "JPG",
+                constraint: { type: "SCALE", value: scale },
+                ...commonSettings
+              } : {
+                format: "PNG",
+                constraint: { type: "SCALE", value: scale },
+                ...commonSettings
+              };
+              const bytes = await node.exportAsync(settings);
+              const base64 = figma.base64Encode(bytes);
+              return {
+                nodeId: node.id,
+                nodeName: node.name,
+                format,
+                base64,
+                width: node.width,
+                height: node.height
+              };
+            })
+          );
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              exports: exports$1
+            }
+          };
+        }
+        case "set_node_visibility": {
+          const rawItems = request.params?.items;
+          if (!Array.isArray(rawItems) || rawItems.length === 0) {
+            throw new Error("items is required for set_node_visibility");
+          }
+          const items = rawItems;
+          const results = [];
+          for (const { nodeId, visible } of items) {
+            const node = await figma.getNodeByIdAsync(nodeId);
+            if (!node || node.type === "DOCUMENT" || node.type === "PAGE") {
+              results.push({ nodeId, error: `Node not found: ${nodeId}` });
+              continue;
+            }
+            const sceneNode = node;
+            const previousVisible = sceneNode.visible;
+            sceneNode.visible = visible;
+            results.push({ nodeId, previousVisible, visible });
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: { results }
+          };
+        }
+        case "set_text_content": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          const text = request.params?.text;
+          if (!nodeId) {
+            throw new Error("nodeIds is required for set_text_content");
+          }
+          if (typeof text !== "string") {
+            throw new Error("text is required for set_text_content");
+          }
+          const target = await getTextTargetById(nodeId, "set_text_content");
+          await loadFontsForTextNode(target.text);
+          const previousCharacters = target.text.characters;
+          target.text.characters = text;
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: target.node.id,
+              nodeName: target.node.name,
+              previousCharacters,
+              characters: target.text.characters
+            }
+          };
+        }
+        case "set_text_properties": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for set_text_properties");
+          }
+          const target = await getTextTargetById(nodeId, "set_text_properties");
+          const text = target.text;
+          const params = request.params ?? {};
+          const applied = {};
+          await loadFontsForTextNode(text);
+          if (typeof params.fontFamily === "string" || typeof params.fontStyle === "string") {
+            const currentFontName = typeof text.fontName === "symbol" ? null : text.fontName;
+            const nextFamily = typeof params.fontFamily === "string" ? params.fontFamily : currentFontName?.family;
+            const nextStyle = typeof params.fontStyle === "string" ? params.fontStyle : currentFontName?.style;
+            if (!nextFamily || !nextStyle) {
+              throw new Error(
+                "fontFamily and fontStyle must resolve to a concrete font for set_text_properties"
+              );
+            }
+            text.fontName = await ensureFont(nextFamily, nextStyle);
+            applied.fontName = text.fontName;
+          }
+          if (typeof params.fontSize === "number") {
+            text.fontSize = params.fontSize;
+            applied.fontSize = text.fontSize;
+          }
+          if (params.textAlignHorizontal !== void 0 || params.textAlignVertical !== void 0 || params.textAutoResize !== void 0) {
+            if (target.kind !== "text") {
+              throw new Error(
+                "textAlignHorizontal/textAlignVertical/textAutoResize are only supported on TEXT nodes — they do not exist on STICKY/SHAPE_WITH_TEXT text"
+              );
+            }
+            const node2 = target.node;
+            if (params.textAlignHorizontal === "LEFT" || params.textAlignHorizontal === "CENTER" || params.textAlignHorizontal === "RIGHT" || params.textAlignHorizontal === "JUSTIFIED") {
+              node2.textAlignHorizontal = params.textAlignHorizontal;
+              applied.textAlignHorizontal = node2.textAlignHorizontal;
+            }
+            if (params.textAlignVertical === "TOP" || params.textAlignVertical === "CENTER" || params.textAlignVertical === "BOTTOM") {
+              node2.textAlignVertical = params.textAlignVertical;
+              applied.textAlignVertical = node2.textAlignVertical;
+            }
+            if (params.textAutoResize === "NONE" || params.textAutoResize === "WIDTH_AND_HEIGHT" || params.textAutoResize === "HEIGHT" || params.textAutoResize === "TRUNCATE") {
+              node2.textAutoResize = params.textAutoResize;
+              applied.textAutoResize = node2.textAutoResize;
+            }
+          }
+          if (typeof params.lineHeightPx === "number") {
+            text.lineHeight = {
+              unit: "PIXELS",
+              value: params.lineHeightPx
+            };
+            applied.lineHeight = text.lineHeight;
+          }
+          if (typeof params.letterSpacingPx === "number") {
+            text.letterSpacing = {
+              unit: "PIXELS",
+              value: params.letterSpacingPx
+            };
+            applied.letterSpacing = text.letterSpacing;
+          }
+          if (typeof params.fillHex === "string") {
+            const fillOpacity = typeof params.fillOpacity === "number" ? params.fillOpacity : void 0;
+            applyTextFill(text, params.fillHex, fillOpacity);
+            applied.fillHex = params.fillHex;
+            applied.fillOpacity = fillOpacity ?? 1;
+          }
+          const node = target.node;
+          if (typeof params.x === "number" || typeof params.y === "number") {
+            positionNode(node, params.x, params.y);
+            applied.x = node.x;
+            applied.y = node.y;
+          }
+          resizeNodeIfSupported(node, params.width, params.height);
+          if (typeof params.width === "number" || typeof params.height === "number") {
+            applied.width = node.width;
+            applied.height = node.height;
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              applied
+            }
+          };
+        }
+        case "set_node_properties": {
+          const nodeIds = request.nodeIds;
+          if (!nodeIds || nodeIds.length === 0) {
+            throw new Error("nodeIds is required for set_node_properties");
+          }
+          const { nodeIds: _batchIds, fileKey: _fileKey, ...params } = request.params ?? {};
+          const hasUpdates = Object.keys(params).length > 0;
+          if (!hasUpdates) {
+            throw new Error("At least one property is required for set_node_properties");
+          }
+          const nodes = await Promise.all(nodeIds.map((id) => getSceneNodeById(id)));
+          const applyUpdates = (node) => {
+            const applied = {};
+            const id = node.id;
+            if (typeof params.name === "string") {
+              node.name = params.name;
+              applied.name = node.name;
+            }
+            if (typeof params.visible === "boolean") {
+              node.visible = params.visible;
+              applied.visible = node.visible;
+            }
+            if (typeof params.x === "number" || typeof params.y === "number") {
+              if (!("x" in node) || !("y" in node)) {
+                throw new Error(`Node does not support x/y positioning: ${id}`);
+              }
+              positionNode(node, params.x, params.y);
+              applied.x = node.x;
+              applied.y = node.y;
+            }
+            if (typeof params.width === "number" || typeof params.height === "number") {
+              resizeNodeIfSupported(node, params.width, params.height);
+              applied.width = node.width;
+              applied.height = node.height;
+            }
+            if (typeof params.rotation === "number") {
+              if (!("rotation" in node)) {
+                throw new Error(`Node does not support rotation: ${id}`);
+              }
+              node.rotation = params.rotation;
+              applied.rotation = node.rotation;
+            }
+            if (typeof params.opacity === "number") {
+              if (!("opacity" in node)) {
+                throw new Error(`Node does not support opacity: ${id}`);
+              }
+              node.opacity = params.opacity;
+              applied.opacity = node.opacity;
+            }
+            if (typeof params.cornerRadius === "number") {
+              if (!("cornerRadius" in node)) {
+                throw new Error(`Node does not support cornerRadius: ${id}`);
+              }
+              const cornerNode = node;
+              cornerNode.cornerRadius = params.cornerRadius;
+              applied.cornerRadius = cornerNode.cornerRadius;
+            }
+            return applied;
+          };
+          if (nodes.length === 1) {
+            const node = nodes[0];
+            const applied = applyUpdates(node);
+            return {
+              type: request.type,
+              requestId: request.requestId,
+              data: {
+                nodeId: node.id,
+                nodeName: node.name,
+                applied
+              }
+            };
+          }
+          const results = nodes.map((node) => ({
+            nodeId: node.id,
+            nodeName: node.name,
+            applied: applyUpdates(node)
+          }));
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              updatedCount: results.length,
+              results
+            }
+          };
+        }
+        case "set_node_constraints": {
+          if (isFigJam()) {
+            throw new Error("set_node_constraints is not available in FigJam");
+          }
+          const nodeIds = request.nodeIds ?? [];
+          if (nodeIds.length === 0) {
+            throw new Error("nodeIds is required for set_node_constraints");
+          }
+          const horizontal = request.params?.horizontal;
+          const vertical = request.params?.vertical;
+          if (horizontal === void 0 && vertical === void 0) {
+            throw new Error("At least one of horizontal or vertical must be provided");
+          }
+          if (horizontal !== void 0 && !isConstraintType(horizontal)) {
+            throw new Error(`Invalid horizontal constraint: ${String(horizontal)}`);
+          }
+          if (vertical !== void 0 && !isConstraintType(vertical)) {
+            throw new Error(`Invalid vertical constraint: ${String(vertical)}`);
+          }
+          const nodes = await Promise.all(nodeIds.map((id) => getSceneNodeById(id)));
+          const targets = nodes.map((node) => {
+            if (!("constraints" in node)) {
+              throw new Error(`Node does not support constraints: ${node.id} (${node.type})`);
+            }
+            let containingFrame = node.parent;
+            while (containingFrame && containingFrame.type !== "FRAME" && containingFrame.type !== "COMPONENT" && containingFrame.type !== "INSTANCE") {
+              containingFrame = containingFrame.parent;
+            }
+            if (!containingFrame) {
+              throw new Error(`Constraints require a containing frame: ${node.id}`);
+            }
+            if (node.parent === containingFrame && containingFrame.layoutMode !== "NONE" && (!("layoutPositioning" in node) || node.layoutPositioning !== "ABSOLUTE")) {
+              throw new Error(
+                `Constraints are not effective for auto-layout children unless layoutPositioning is ABSOLUTE: ${node.id}`
+              );
+            }
+            return node;
+          });
+          const previous = targets.map((node) => ({ ...node.constraints }));
+          let attemptedIndex = -1;
+          try {
+            for (let i = 0; i < targets.length; i++) {
+              attemptedIndex = i;
+              targets[i].constraints = {
+                horizontal: horizontal ?? previous[i].horizontal,
+                vertical: vertical ?? previous[i].vertical
+              };
+            }
+          } catch (err) {
+            for (let i = attemptedIndex; i >= 0; i--) {
+              try {
+                targets[i].constraints = previous[i];
+              } catch {
+              }
+            }
+            throw err;
+          }
+          const results = targets.map((node, index) => ({
+            nodeId: node.id,
+            nodeName: node.name,
+            previous: previous[index],
+            constraints: { ...node.constraints }
+          }));
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: results.length === 1 ? results[0] : { updatedCount: results.length, results }
+          };
+        }
+        case "set_solid_fill": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for set_solid_fill");
+          }
+          const node = await getSceneNodeById(nodeId);
+          const params = request.params ?? {};
+          if (typeof params.hex !== "string") {
+            throw new Error("hex is required");
+          }
+          const target = params.target === "stroke" ? "stroke" : "fill";
+          const opacity = typeof params.opacity === "number" ? params.opacity : void 0;
+          setSolidFill(node, params.hex, opacity, target);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              applied: {
+                target,
+                hex: params.hex,
+                opacity: opacity ?? 1
+              }
+            }
+          };
+        }
+        case "set_gradient_fill": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for set_gradient_fill");
+          }
+          const node = await getSceneNodeById(nodeId);
+          const params = request.params ?? {};
+          const target = params.target === "stroke" ? "stroke" : "fill";
+          if (target === "fill" && !("fills" in node)) {
+            throw new Error(`Node does not support fills: ${node.id}`);
+          }
+          if (target === "stroke" && !("strokes" in node)) {
+            throw new Error(`Node does not support strokes: ${node.id}`);
+          }
+          const gradientType = typeof params.gradientType === "string" ? params.gradientType : "LINEAR";
+          const paintType = `GRADIENT_${gradientType}`;
+          if (paintType !== "GRADIENT_LINEAR" && paintType !== "GRADIENT_RADIAL" && paintType !== "GRADIENT_ANGULAR" && paintType !== "GRADIENT_DIAMOND") {
+            throw new Error(`Unsupported gradient type: ${gradientType}`);
+          }
+          if (!Array.isArray(params.gradientStops) || params.gradientStops.length < 2) {
+            throw new Error("gradientStops must have at least 2 entries");
+          }
+          const stops = params.gradientStops;
+          const transform = Array.isArray(params.gradientTransform) && params.gradientTransform.length === 2 ? params.gradientTransform : void 0;
+          const opacity = typeof params.opacity === "number" ? params.opacity : void 0;
+          const paint = buildGradientPaint(paintType, stops, transform, opacity);
+          if (target === "fill") {
+            node.fills = [paint];
+          } else {
+            node.strokes = [paint];
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              applied: {
+                target,
+                gradientType: paintType,
+                stops: paint.gradientStops.length
+              }
+            }
+          };
+        }
+        case "set_effects": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for set_effects");
+          }
+          const node = await getSceneNodeById(nodeId);
+          if (!("effects" in node)) {
+            throw new Error(`Node does not support effects: ${node.id}`);
+          }
+          const params = request.params ?? {};
+          if (!Array.isArray(params.effects)) {
+            throw new Error("effects must be an array (pass [] to clear)");
+          }
+          const built = params.effects.map((raw, i) => {
+            const type = raw.type;
+            if (type === "DROP_SHADOW" || type === "INNER_SHADOW") {
+              if (typeof raw.color !== "string") {
+                throw new Error(`effects[${i}].color must be a hex string`);
+              }
+              const offset = raw.offset;
+              if (!offset || typeof offset.x !== "number" || typeof offset.y !== "number") {
+                throw new Error(`effects[${i}].offset must be {x,y} numbers`);
+              }
+              if (typeof raw.radius !== "number") {
+                throw new Error(`effects[${i}].radius must be a number`);
+              }
+              const rgb = parseHexColor(raw.color);
+              const alpha = typeof raw.opacity === "number" ? raw.opacity : 1;
+              return {
+                type,
+                color: { r: rgb.r, g: rgb.g, b: rgb.b, a: alpha },
+                offset: { x: offset.x, y: offset.y },
+                radius: raw.radius,
+                spread: typeof raw.spread === "number" ? raw.spread : 0,
+                visible: raw.visible === void 0 ? true : Boolean(raw.visible),
+                blendMode: typeof raw.blendMode === "string" ? raw.blendMode : "NORMAL"
+              };
+            }
+            if (type === "LAYER_BLUR" || type === "BACKGROUND_BLUR") {
+              if (typeof raw.radius !== "number") {
+                throw new Error(`effects[${i}].radius must be a number`);
+              }
+              return {
+                type,
+                radius: raw.radius,
+                visible: raw.visible === void 0 ? true : Boolean(raw.visible)
+              };
+            }
+            throw new Error(`Unsupported effect type at effects[${i}]: ${String(type)}`);
+          });
+          node.effects = built;
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              applied: { count: built.length }
+            }
+          };
+        }
+        case "set_stroke_properties": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for set_stroke_properties");
+          }
+          const node = await getSceneNodeById(nodeId);
+          const params = request.params ?? {};
+          const applied = {};
+          if (typeof params.strokeWeight === "number") {
+            if (!("strokeWeight" in node)) {
+              throw new Error(`Node does not support strokeWeight: ${node.id}`);
+            }
+            node.strokeWeight = params.strokeWeight;
+            applied.strokeWeight = params.strokeWeight;
+          }
+          if (params.strokeAlign === "INSIDE" || params.strokeAlign === "OUTSIDE" || params.strokeAlign === "CENTER") {
+            if (!("strokeAlign" in node)) {
+              throw new Error(`Node does not support strokeAlign: ${node.id}`);
+            }
+            node.strokeAlign = params.strokeAlign;
+            applied.strokeAlign = params.strokeAlign;
+          }
+          if (Array.isArray(params.dashPattern)) {
+            if (!("dashPattern" in node)) {
+              throw new Error(`Node does not support dashPattern: ${node.id}`);
+            }
+            const pattern = params.dashPattern.map((n, i) => {
+              if (typeof n !== "number" || n < 0) {
+                throw new Error(`dashPattern[${i}] must be a non-negative number`);
+              }
+              return n;
+            });
+            node.dashPattern = pattern;
+            applied.dashPattern = pattern;
+          }
+          if (typeof params.strokeCap === "string") {
+            if (!("strokeCap" in node)) {
+              throw new Error(`Node does not support strokeCap: ${node.id}`);
+            }
+            node.strokeCap = params.strokeCap;
+            applied.strokeCap = params.strokeCap;
+          }
+          if (typeof params.strokeJoin === "string") {
+            if (!("strokeJoin" in node)) {
+              throw new Error(`Node does not support strokeJoin: ${node.id}`);
+            }
+            node.strokeJoin = params.strokeJoin;
+            applied.strokeJoin = params.strokeJoin;
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              applied
+            }
+          };
+        }
+        case "set_auto_layout": {
+          if (isFigJam()) {
+            throw new Error("set_auto_layout is not available in FigJam");
+          }
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for set_auto_layout");
+          }
+          const node = await getSceneNodeById(nodeId);
+          if (node.type === "SECTION") {
+            throw new Error(`Auto-layout is not supported on sections in Figma's API: ${node.id}`);
+          }
+          if (!("layoutMode" in node)) {
+            throw new Error(`Node does not support auto-layout: ${node.id}`);
+          }
+          const frame = node;
+          const params = request.params ?? {};
+          const applied = {};
+          if (params.layoutMode === "NONE" || params.layoutMode === "HORIZONTAL" || params.layoutMode === "VERTICAL") {
+            frame.layoutMode = params.layoutMode;
+            applied.layoutMode = params.layoutMode;
+          }
+          if (typeof params.itemSpacing === "number") {
+            frame.itemSpacing = params.itemSpacing;
+            applied.itemSpacing = params.itemSpacing;
+          }
+          if (typeof params.counterAxisSpacing === "number") {
+            frame.counterAxisSpacing = params.counterAxisSpacing;
+            applied.counterAxisSpacing = params.counterAxisSpacing;
+          }
+          if (typeof params.paddingTop === "number") {
+            frame.paddingTop = params.paddingTop;
+            applied.paddingTop = params.paddingTop;
+          }
+          if (typeof params.paddingRight === "number") {
+            frame.paddingRight = params.paddingRight;
+            applied.paddingRight = params.paddingRight;
+          }
+          if (typeof params.paddingBottom === "number") {
+            frame.paddingBottom = params.paddingBottom;
+            applied.paddingBottom = params.paddingBottom;
+          }
+          if (typeof params.paddingLeft === "number") {
+            frame.paddingLeft = params.paddingLeft;
+            applied.paddingLeft = params.paddingLeft;
+          }
+          if (params.primaryAxisAlignItems === "MIN" || params.primaryAxisAlignItems === "MAX" || params.primaryAxisAlignItems === "CENTER" || params.primaryAxisAlignItems === "SPACE_BETWEEN") {
+            frame.primaryAxisAlignItems = params.primaryAxisAlignItems;
+            applied.primaryAxisAlignItems = params.primaryAxisAlignItems;
+          }
+          if (params.counterAxisAlignItems === "MIN" || params.counterAxisAlignItems === "MAX" || params.counterAxisAlignItems === "CENTER" || params.counterAxisAlignItems === "BASELINE") {
+            frame.counterAxisAlignItems = params.counterAxisAlignItems;
+            applied.counterAxisAlignItems = params.counterAxisAlignItems;
+          }
+          if (params.primaryAxisSizingMode === "FIXED" || params.primaryAxisSizingMode === "AUTO") {
+            frame.primaryAxisSizingMode = params.primaryAxisSizingMode;
+            applied.primaryAxisSizingMode = params.primaryAxisSizingMode;
+          }
+          if (params.counterAxisSizingMode === "FIXED" || params.counterAxisSizingMode === "AUTO") {
+            frame.counterAxisSizingMode = params.counterAxisSizingMode;
+            applied.counterAxisSizingMode = params.counterAxisSizingMode;
+          }
+          if (params.layoutWrap === "NO_WRAP" || params.layoutWrap === "WRAP") {
+            frame.layoutWrap = params.layoutWrap;
+            applied.layoutWrap = params.layoutWrap;
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              applied
+            }
+          };
+        }
+        case "create_page": {
+          const params = request.params ?? {};
+          const page = figma.createPage();
+          if (typeof params.name === "string") {
+            page.name = params.name;
+          }
+          if (params.setAsCurrent === true) {
+            await figma.setCurrentPageAsync(page);
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              pageId: page.id,
+              pageName: page.name,
+              index: figma.root.children.indexOf(page),
+              isCurrentPage: figma.currentPage.id === page.id
+            }
+          };
+        }
+        case "create_frame": {
+          const params = request.params ?? {};
+          const frame = figma.createFrame();
+          if (typeof params.name === "string") {
+            frame.name = params.name;
+          }
+          const width = typeof params.width === "number" ? params.width : 100;
+          const height = typeof params.height === "number" ? params.height : 100;
+          frame.resize(width, height);
+          if (typeof params.fillHex === "string") {
+            const fillOpacity = typeof params.fillOpacity === "number" ? params.fillOpacity : void 0;
+            setSolidFill(frame, params.fillHex, fillOpacity);
+          }
+          await appendToParentIfProvided(frame, params.parentId);
+          positionNode(frame, params.x, params.y);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: frame.id,
+              nodeName: frame.name,
+              parentId: frame.parent?.id,
+              x: frame.x,
+              y: frame.y,
+              width: frame.width,
+              height: frame.height
+            }
+          };
+        }
+        case "create_section": {
+          const params = request.params ?? {};
+          const section = figma.createSection();
+          if (typeof params.name === "string") {
+            section.name = params.name;
+          }
+          const width = typeof params.width === "number" ? params.width : 100;
+          const height = typeof params.height === "number" ? params.height : 100;
+          section.resize(Math.max(width, 0.01), Math.max(height, 0.01));
+          if (typeof params.fillHex === "string") {
+            const fillOpacity = typeof params.fillOpacity === "number" ? params.fillOpacity : void 0;
+            setSolidFill(section, params.fillHex, fillOpacity);
+          }
+          if (typeof params.sectionContentsHidden === "boolean") {
+            section.sectionContentsHidden = params.sectionContentsHidden;
+          }
+          try {
+            await appendToParentIfProvided(section, params.parentId);
+          } catch (e) {
+            section.remove();
+            throw new Error(
+              `Failed to append section to parent: ${e instanceof Error ? e.message : String(e)}`
+            );
+          }
+          positionNode(section, params.x, params.y);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: section.id,
+              nodeName: section.name,
+              parentId: section.parent?.id,
+              x: section.x,
+              y: section.y,
+              width: section.width,
+              height: section.height
+            }
+          };
+        }
+        case "create_text": {
+          const params = request.params ?? {};
+          const text = figma.createText();
+          const fontFamily = typeof params.fontFamily === "string" ? params.fontFamily : "Inter";
+          const fontStyle = typeof params.fontStyle === "string" ? params.fontStyle : "Regular";
+          text.fontName = await ensureFont(fontFamily, fontStyle);
+          if (typeof params.name === "string") {
+            text.name = params.name;
+          }
+          if (typeof params.characters === "string") {
+            text.characters = params.characters;
+          }
+          if (typeof params.fontSize === "number") {
+            text.fontSize = params.fontSize;
+          }
+          if (typeof params.fillHex === "string") {
+            const fillOpacity = typeof params.fillOpacity === "number" ? params.fillOpacity : void 0;
+            applyTextFill(text, params.fillHex, fillOpacity);
+          }
+          if (params.textAlignHorizontal === "LEFT" || params.textAlignHorizontal === "CENTER" || params.textAlignHorizontal === "RIGHT" || params.textAlignHorizontal === "JUSTIFIED") {
+            text.textAlignHorizontal = params.textAlignHorizontal;
+          }
+          if (params.textAutoResize === "NONE" || params.textAutoResize === "WIDTH_AND_HEIGHT" || params.textAutoResize === "HEIGHT" || params.textAutoResize === "TRUNCATE") {
+            text.textAutoResize = params.textAutoResize;
+          }
+          resizeNodeIfSupported(text, params.width, params.height);
+          await appendToParentIfProvided(text, params.parentId);
+          positionNode(text, params.x, params.y);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: text.id,
+              nodeName: text.name,
+              parentId: text.parent?.id,
+              characters: text.characters,
+              x: text.x,
+              y: text.y,
+              width: text.width,
+              height: text.height
+            }
+          };
+        }
+        case "create_shape": {
+          const params = request.params ?? {};
+          const shapeType = params.shapeType;
+          let node;
+          if (shapeType === "ELLIPSE") {
+            node = figma.createEllipse();
+          } else if (shapeType === "LINE") {
+            node = figma.createLine();
+          } else {
+            node = figma.createRectangle();
+          }
+          if (typeof params.name === "string") {
+            node.name = params.name;
+          }
+          resizeNodeIfSupported(node, params.width, params.height);
+          if (typeof params.rotation === "number" && "rotation" in node) {
+            node.rotation = params.rotation;
+          }
+          if (shapeType === "LINE" && typeof params.fillHex === "string") {
+            throw new Error("LINE shapes do not support fillHex — use strokeHex instead");
+          }
+          if (typeof params.fillHex === "string") {
+            const fillOpacity = typeof params.fillOpacity === "number" ? params.fillOpacity : void 0;
+            setSolidFill(node, params.fillHex, fillOpacity);
+          }
+          if (shapeType === "LINE" && typeof params.strokeHex !== "string") {
+            throw new Error(
+              "LINE shapes require strokeHex (lines have no fill, so without a stroke they are invisible)"
+            );
+          }
+          if (typeof params.strokeHex === "string") {
+            const shapeId = node.id;
+            if (!("strokes" in node)) {
+              throw new Error(`Node does not support strokes: ${shapeId}`);
+            }
+            const strokeOpacity = typeof params.strokeOpacity === "number" ? params.strokeOpacity : void 0;
+            setSolidFill(node, params.strokeHex, strokeOpacity, "stroke");
+          }
+          if ("strokeWeight" in node && typeof params.strokeWeight === "number") {
+            node.strokeWeight = params.strokeWeight;
+          }
+          if (typeof params.cornerRadius === "number" && "cornerRadius" in node) {
+            node.cornerRadius = params.cornerRadius;
+          }
+          await appendToParentIfProvided(node, params.parentId);
+          positionNode(node, params.x, params.y);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              shapeType,
+              parentId: node.parent?.id,
+              x: "x" in node ? node.x : void 0,
+              y: "y" in node ? node.y : void 0,
+              width: "width" in node ? node.width : void 0,
+              height: "height" in node ? node.height : void 0
+            }
+          };
+        }
+        case "create_image": {
+          const params = request.params ?? {};
+          if (typeof params.imageBase64 !== "string" || params.imageBase64.length === 0) {
+            throw new Error("imageBase64 is required for create_image");
+          }
+          const image = figma.createImage(decodeBase64ToBytes(params.imageBase64));
+          const imageSize = await image.getSizeAsync();
+          const node = figma.createRectangle();
+          if (typeof params.name === "string") {
+            node.name = params.name;
+          }
+          const aspectRatio = imageSize.width / imageSize.height;
+          const width = typeof params.width === "number" ? params.width : typeof params.height === "number" ? params.height * aspectRatio : imageSize.width;
+          const height = typeof params.height === "number" ? params.height : typeof params.width === "number" ? params.width / aspectRatio : imageSize.height;
+          node.resize(width, height);
+          node.fills = [
+            {
+              type: "IMAGE",
+              imageHash: image.hash,
+              scaleMode: params.scaleMode === "FIT" ? "FIT" : "FILL"
+            }
+          ];
+          if (typeof params.cornerRadius === "number") {
+            node.cornerRadius = params.cornerRadius;
+          }
+          await appendToParentIfProvided(node, params.parentId);
+          positionNode(node, params.x, params.y);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              parentId: node.parent?.id,
+              x: node.x,
+              y: node.y,
+              width: node.width,
+              height: node.height,
+              imageHash: image.hash
+            }
+          };
+        }
+        case "create_svg": {
+          const params = request.params ?? {};
+          if (typeof params.svgText !== "string" || params.svgText.trim().length === 0) {
+            throw new Error("svgText is required for create_svg");
+          }
+          const parent = typeof params.parentId === "string" ? await getParentNodeById(params.parentId) : void 0;
+          const node = figma.createNodeFromSvg(params.svgText);
+          try {
+            if (typeof params.name === "string") {
+              node.name = params.name;
+            }
+            resizeNodeIfSupported(node, params.width, params.height);
+            parent?.appendChild(node);
+            positionNode(node, params.x, params.y);
+          } catch (error) {
+            node.remove();
+            throw error;
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              nodeType: node.type,
+              parentId: node.parent?.id,
+              x: node.x,
+              y: node.y,
+              width: node.width,
+              height: node.height,
+              childCount: node.children.length
+            }
+          };
+        }
+        case "create_sticky": {
+          requireFigJamApi("create_sticky", "createSticky", figma.createSticky);
+          const sticky = figma.createSticky();
+          const params = request.params ?? {};
+          if (typeof params.name === "string") {
+            sticky.name = params.name;
+          }
+          if (typeof params.characters === "string") {
+            try {
+              const currentFont = sticky.text.fontName;
+              if (typeof currentFont !== "symbol") {
+                await figma.loadFontAsync(currentFont);
+              }
+              sticky.text.characters = params.characters;
+            } catch (e) {
+              sticky.remove();
+              throw new Error(
+                `Failed to set sticky text: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+          }
+          if (typeof params.isWideWidth === "boolean") {
+            sticky.isWideWidth = params.isWideWidth;
+          }
+          try {
+            await appendToParentIfProvided(sticky, params.parentId);
+          } catch (e) {
+            sticky.remove();
+            throw new Error(
+              `Failed to append sticky to parent: ${e instanceof Error ? e.message : String(e)}`
+            );
+          }
+          positionNode(sticky, params.x, params.y);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: sticky.id,
+              nodeName: sticky.name,
+              parentId: sticky.parent?.id,
+              x: sticky.x,
+              y: sticky.y,
+              width: sticky.width,
+              height: sticky.height
+            }
+          };
+        }
+        case "create_shape_with_text": {
+          requireFigJamApi(
+            "create_shape_with_text",
+            "createShapeWithText",
+            figma.createShapeWithText
+          );
+          const params = request.params ?? {};
+          const shape = figma.createShapeWithText();
+          if (typeof params.name === "string") {
+            shape.name = params.name;
+          }
+          if (typeof params.shapeType === "string") {
+            shape.shapeType = params.shapeType;
+          }
+          resizeNodeIfSupported(shape, params.width, params.height);
+          if (typeof params.rotation === "number") {
+            shape.rotation = params.rotation;
+          }
+          if (typeof params.fillHex === "string") {
+            const fillOpacity = typeof params.fillOpacity === "number" ? params.fillOpacity : void 0;
+            setSolidFill(shape, params.fillHex, fillOpacity);
+          }
+          if (typeof params.strokeHex === "string") {
+            const strokeOpacity = typeof params.strokeOpacity === "number" ? params.strokeOpacity : void 0;
+            setSolidFill(shape, params.strokeHex, strokeOpacity, "stroke");
+          }
+          if (typeof params.strokeWeight === "number") {
+            shape.strokeWeight = params.strokeWeight;
+          }
+          if (typeof params.textFillHex === "string") {
+            const textFillOpacity = typeof params.textFillOpacity === "number" ? params.textFillOpacity : void 0;
+            applyTextFill(shape.text, params.textFillHex, textFillOpacity);
+          }
+          if (typeof params.characters === "string") {
+            try {
+              const currentFont = shape.text.fontName;
+              if (typeof currentFont !== "symbol") {
+                await figma.loadFontAsync(currentFont);
+              }
+              if (typeof params.fontFamily === "string" || typeof params.fontStyle === "string") {
+                shape.text.fontName = await ensureFont(
+                  typeof params.fontFamily === "string" ? params.fontFamily : "Inter",
+                  typeof params.fontStyle === "string" ? params.fontStyle : "Regular"
+                );
+              }
+              shape.text.characters = params.characters;
+              if (typeof params.fontSize === "number") {
+                shape.text.fontSize = params.fontSize;
+              }
+            } catch (e) {
+              shape.remove();
+              throw new Error(
+                `Failed to set shape text: ${e instanceof Error ? e.message : String(e)}`
+              );
+            }
+          }
+          try {
+            await appendToParentIfProvided(shape, params.parentId);
+          } catch (e) {
+            shape.remove();
+            throw new Error(
+              `Failed to append shape to parent: ${e instanceof Error ? e.message : String(e)}`
+            );
+          }
+          positionNode(shape, params.x, params.y);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: shape.id,
+              nodeName: shape.name,
+              parentId: shape.parent?.id,
+              shapeType: shape.shapeType,
+              characters: shape.text.characters,
+              x: shape.x,
+              y: shape.y,
+              width: shape.width,
+              height: shape.height
+            }
+          };
+        }
+        case "create_connector": {
+          requireFigJamApi("create_connector", "createConnector", figma.createConnector);
+          const connector = figma.createConnector();
+          const params = request.params ?? {};
+          if (typeof params.name === "string") {
+            connector.name = params.name;
+          }
+          try {
+            const anchorMagnet = (anchor) => {
+              if (anchor === "top") return "TOP";
+              if (anchor === "bottom") return "BOTTOM";
+              if (anchor === "left") return "LEFT";
+              if (anchor === "right") return "RIGHT";
+              return "AUTO";
+            };
+            if (typeof params.startNodeId === "string") {
+              connector.connectorStart = {
+                endpointNodeId: params.startNodeId,
+                magnet: anchorMagnet(params.startAnchor)
+              };
+            } else if (params.startAnchor !== void 0) {
+              throw new Error("startAnchor requires startNodeId");
+            } else if (typeof params.startX === "number" && typeof params.startY === "number") {
+              connector.connectorStart = {
+                position: { x: params.startX, y: params.startY }
+              };
+            }
+            if (typeof params.endNodeId === "string") {
+              connector.connectorEnd = {
+                endpointNodeId: params.endNodeId,
+                magnet: anchorMagnet(params.endAnchor)
+              };
+            } else if (params.endAnchor !== void 0) {
+              throw new Error("endAnchor requires endNodeId");
+            } else if (typeof params.endX === "number" && typeof params.endY === "number") {
+              connector.connectorEnd = {
+                position: { x: params.endX, y: params.endY }
+              };
+            }
+            if (typeof params.strokeWeight === "number") {
+              connector.strokeWeight = params.strokeWeight;
+            }
+            if (typeof params.strokeHex === "string") {
+              setSolidFill(connector, params.strokeHex, void 0, "stroke");
+            }
+            await appendToParentIfProvided(connector, params.parentId);
+          } catch (e) {
+            connector.remove();
+            throw new Error(
+              `Failed to create connector: ${e instanceof Error ? e.message : String(e)}`
+            );
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: connector.id,
+              nodeName: connector.name,
+              parentId: connector.parent?.id
+            }
+          };
+        }
+        case "import_html_layers": {
+          const params = request.params ?? {};
+          const root = params.layers;
+          if (!root || typeof root !== "object" || typeof root.type !== "string") {
+            throw new Error(
+              "layers (an html-figma LayerNode tree) is required for import_html_layers"
+            );
+          }
+          const wrapper = figma.createFrame();
+          wrapper.name = typeof params.name === "string" && params.name.length > 0 ? params.name : "imported layers";
+          const rootWidth = typeof root.width === "number" ? root.width : 100;
+          const rootHeight = typeof root.height === "number" ? root.height : 100;
+          wrapper.resize(Math.max(rootWidth, 1), Math.max(rootHeight, 1));
+          wrapper.fills = [];
+          wrapper.clipsContent = true;
+          await appendToParentIfProvided(wrapper, params.parentId);
+          positionNode(wrapper, params.x, params.y);
+          const countLayers = (layer) => {
+            if (!layer || typeof layer !== "object") return 0;
+            const children = layer.children;
+            let total = 1;
+            if (Array.isArray(children)) {
+              for (const child of children) total += countLayers(child);
+            }
+            return total;
+          };
+          const expectedLayerCount = countLayers(root);
+          let layerCount = 0;
+          await addLayersToFrame([root], wrapper, () => {
+            layerCount += 1;
+          });
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: wrapper.id,
+              nodeName: wrapper.name,
+              parentId: wrapper.parent?.id,
+              x: wrapper.x,
+              y: wrapper.y,
+              width: wrapper.width,
+              height: wrapper.height,
+              layerCount,
+              expectedLayerCount,
+              ...layerCount < expectedLayerCount ? {
+                warning: `Partial import: ${expectedLayerCount - layerCount} of ${expectedLayerCount} layers failed to render (see the plugin console for per-layer errors). Delete node ${wrapper.id} and retry if completeness matters.`
+              } : {}
+            }
+          };
+        }
+        case "duplicate_nodes": {
+          if (!request.nodeIds || request.nodeIds.length === 0) {
+            throw new Error("nodeIds is required for duplicate_nodes");
+          }
+          const duplicates = [];
+          for (const nodeId of request.nodeIds) {
+            const node = await getSceneNodeById(nodeId);
+            if (!("clone" in node) || typeof node.clone !== "function") {
+              throw new Error(`Node does not support duplication: ${node.id}`);
+            }
+            const clone = node.clone();
+            duplicates.push({
+              sourceNodeId: node.id,
+              nodeId: clone.id,
+              nodeName: clone.name,
+              parentId: clone.parent?.id
+            });
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              duplicatedCount: duplicates.length,
+              duplicates
+            }
+          };
+        }
+        case "duplicate_with_offset": {
+          const nodeIds = request.nodeIds;
+          if (!nodeIds || nodeIds.length === 0) {
+            throw new Error("nodeIds is required for duplicate_with_offset");
+          }
+          const offsetX = request.params?.offsetX;
+          const offsetY = request.params?.offsetY;
+          if (typeof offsetX !== "number" || typeof offsetY !== "number") {
+            throw new Error("offsetX and offsetY are required for duplicate_with_offset");
+          }
+          const duplicates = [];
+          for (const nodeId of nodeIds) {
+            const node = await getSceneNodeById(nodeId);
+            if (!("clone" in node) || typeof node.clone !== "function") {
+              throw new Error(`Node does not support duplication: ${node.id}`);
+            }
+            const clone = node.clone();
+            if ("x" in clone && "y" in clone) {
+              clone.x = clone.x + offsetX;
+              clone.y = clone.y + offsetY;
+            }
+            duplicates.push({
+              sourceNodeId: node.id,
+              nodeId: clone.id,
+              nodeName: clone.name,
+              parentId: clone.parent?.id,
+              x: "x" in clone ? clone.x : void 0,
+              y: "y" in clone ? clone.y : void 0
+            });
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              duplicatedCount: duplicates.length,
+              duplicates
+            }
+          };
+        }
+        case "fit_to_content": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for fit_to_content");
+          }
+          const node = await getSceneNodeById(nodeId);
+          if (node.type !== "SECTION") {
+            throw new Error(
+              `fit_to_content only supports SECTION nodes (got ${node.type}: ${nodeId})`
+            );
+          }
+          const paddingParam = request.params?.padding;
+          const padding = typeof paddingParam === "number" ? paddingParam : 0;
+          if (!(padding >= 0)) {
+            throw new Error("padding must be >= 0 for fit_to_content");
+          }
+          const children = node.children;
+          if (children.length > 0) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            for (const child of children) {
+              minX = Math.min(minX, child.x);
+              minY = Math.min(minY, child.y);
+              maxX = Math.max(maxX, child.x + child.width);
+              maxY = Math.max(maxY, child.y + child.height);
+            }
+            const shiftX = padding - minX;
+            const shiftY = padding - minY;
+            if (shiftX !== 0 || shiftY !== 0) {
+              for (const child of children) {
+                child.x = child.x + shiftX;
+                child.y = child.y + shiftY;
+              }
+            }
+            const width = maxX - minX + padding * 2;
+            const height = maxY - minY + padding * 2;
+            node.resizeWithoutConstraints(Math.max(width, 0.01), Math.max(height, 0.01));
+          } else {
+            const size = Math.max(padding * 2, 0.01);
+            node.resizeWithoutConstraints(size, size);
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              nodeName: node.name,
+              x: node.x,
+              y: node.y,
+              width: node.width,
+              height: node.height,
+              childCount: children.length
+            }
+          };
+        }
+        case "distribute_horizontally":
+        case "distribute_vertically": {
+          const horizontal = request.type === "distribute_horizontally";
+          const nodeIds = request.nodeIds;
+          if (!nodeIds || nodeIds.length < 3) {
+            throw new Error(`${request.type} requires at least 3 nodeIds`);
+          }
+          const nodes = await Promise.all(nodeIds.map((id) => getSceneNodeById(id)));
+          const pos = (n) => horizontal ? n.x : n.y;
+          const size = (n) => horizontal ? n.width : n.height;
+          const setPos = (n, value) => {
+            if (horizontal) n.x = value;
+            else n.y = value;
+          };
+          const sorted = [...nodes].sort((a, b) => pos(a) - pos(b));
+          const first = sorted[0];
+          const last = sorted[sorted.length - 1];
+          const span = pos(last) + size(last) - pos(first);
+          const totalSize = sorted.reduce((sum, n) => sum + size(n), 0);
+          const gap = (span - totalSize) / (sorted.length - 1);
+          let cursor = pos(first) + size(first);
+          const results = [];
+          for (let i = 1; i < sorted.length; i++) {
+            const node = sorted[i];
+            const next = cursor + gap;
+            setPos(node, next);
+            results.push({ nodeId: node.id, [horizontal ? "x" : "y"]: next });
+            cursor = next + size(node);
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              axis: horizontal ? "horizontal" : "vertical",
+              gap,
+              movedCount: results.length,
+              results
+            }
+          };
+        }
+        case "align_to_grid": {
+          const nodeIds = request.nodeIds;
+          if (!nodeIds || nodeIds.length === 0) {
+            throw new Error("nodeIds is required for align_to_grid");
+          }
+          const gridSize = request.params?.gridSize;
+          if (typeof gridSize !== "number" || !(gridSize > 0)) {
+            throw new Error("gridSize must be a positive number for align_to_grid");
+          }
+          const nodes = await Promise.all(nodeIds.map((id) => getSceneNodeById(id)));
+          const results = nodes.map((node) => {
+            node.x = Math.round(node.x / gridSize) * gridSize;
+            node.y = Math.round(node.y / gridSize) * gridSize;
+            return { nodeId: node.id, x: node.x, y: node.y };
+          });
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              gridSize,
+              updatedCount: results.length,
+              results
+            }
+          };
+        }
+        case "place_below":
+        case "place_right_of": {
+          const below = request.type === "place_below";
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error(`nodeIds is required for ${request.type}`);
+          }
+          const params = request.params ?? {};
+          const relativeToId = params.relativeToId;
+          if (typeof relativeToId !== "string") {
+            throw new Error(`relativeToId is required for ${request.type}`);
+          }
+          const gap = typeof params.gap === "number" ? params.gap : 0;
+          const align = params.align === "center" ? "center" : "start";
+          const target = await getSceneNodeById(nodeId);
+          const relativeTo = await getSceneNodeById(relativeToId);
+          if (below) {
+            target.y = relativeTo.y + relativeTo.height + gap;
+            target.x = align === "center" ? relativeTo.x + (relativeTo.width - target.width) / 2 : relativeTo.x;
+          } else {
+            target.x = relativeTo.x + relativeTo.width + gap;
+            target.y = align === "center" ? relativeTo.y + (relativeTo.height - target.height) / 2 : relativeTo.y;
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: target.id,
+              nodeName: target.name,
+              x: target.x,
+              y: target.y
+            }
+          };
+        }
+        case "reparent_nodes": {
+          if (!request.nodeIds || request.nodeIds.length === 0) {
+            throw new Error("nodeIds is required for reparent_nodes");
+          }
+          const parentId = request.params?.parentId;
+          if (typeof parentId !== "string") {
+            throw new Error("parentId is required for reparent_nodes");
+          }
+          const parent = await getParentNodeById(parentId);
+          const moved = [];
+          for (const nodeId of request.nodeIds) {
+            const node = await getSceneNodeById(nodeId);
+            parent.appendChild(node);
+            moved.push({
+              nodeId: node.id,
+              nodeName: node.name,
+              parentId: node.parent?.id
+            });
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              movedCount: moved.length,
+              moved
+            }
+          };
+        }
+        case "group_nodes": {
+          if (!request.nodeIds || request.nodeIds.length === 0) {
+            throw new Error("nodeIds is required for group_nodes");
+          }
+          const nodes = await Promise.all(request.nodeIds.map((nodeId) => getSceneNodeById(nodeId)));
+          const explicitParentId = request.params?.parentId;
+          let parent;
+          if (typeof explicitParentId === "string") {
+            parent = await getParentNodeById(explicitParentId);
+          } else {
+            const parents = new Set(nodes.map((n) => n.parent?.id));
+            if (parents.size !== 1 || parents.has(void 0)) {
+              throw new Error(
+                "group_nodes requires all nodes to share a parent, or pass parentId explicitly"
+              );
+            }
+            const sharedParent = nodes[0].parent;
+            if (!sharedParent || !supportsChildren(sharedParent)) {
+              throw new Error("Shared parent does not support children");
+            }
+            parent = sharedParent;
+          }
+          const group = figma.group(nodes, parent);
+          const name = request.params?.name;
+          if (typeof name === "string") {
+            group.name = name;
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: group.id,
+              nodeName: group.name,
+              parentId: group.parent?.id,
+              childIds: group.children.map((c) => c.id)
+            }
+          };
+        }
+        case "ungroup_node": {
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) {
+            throw new Error("nodeIds is required for ungroup_node");
+          }
+          const node = await getSceneNodeById(nodeId);
+          if (node.type !== "GROUP" && node.type !== "FRAME") {
+            throw new Error(`ungroup_node only works on GROUP or FRAME nodes, got ${node.type}`);
+          }
+          const parentId = node.parent?.id;
+          const orphans = figma.ungroup(node);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              parentId,
+              orphanIds: orphans.map((o) => o.id)
+            }
+          };
+        }
+        case "set_selection": {
+          const ids = request.nodeIds ?? [];
+          const nodes = [];
+          for (const id of ids) {
+            nodes.push(await getSceneNodeById(id));
+          }
+          figma.currentPage.selection = nodes;
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              selectedCount: nodes.length,
+              selectedIds: nodes.map((n) => n.id)
+            }
+          };
+        }
+        case "scroll_and_zoom_into_view": {
+          if (!request.nodeIds || request.nodeIds.length === 0) {
+            throw new Error("nodeIds is required for scroll_and_zoom_into_view");
+          }
+          const nodes = await Promise.all(request.nodeIds.map((nodeId) => getSceneNodeById(nodeId)));
+          figma.viewport.scrollAndZoomIntoView(nodes);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              framedCount: nodes.length,
+              framedIds: nodes.map((n) => n.id)
+            }
+          };
+        }
+        case "delete_nodes": {
+          if (request.params?.confirm !== true) {
+            throw new Error("delete_nodes requires confirm: true");
+          }
+          if (!request.nodeIds || request.nodeIds.length === 0) {
+            throw new Error("nodeIds is required for delete_nodes");
+          }
+          const nodes = await Promise.all(request.nodeIds.map((nodeId) => getSceneNodeById(nodeId)));
+          const deletions = nodes.map((node) => ({
+            nodeId: node.id,
+            nodeName: node.name,
+            parentId: node.parent?.id
+          }));
+          for (const node of nodes) {
+            node.remove();
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              deletedCount: deletions.length,
+              deletions
+            }
+          };
+        }
+        case "run_script": {
+          const code = request.params?.code;
+          if (typeof code !== "string" || code.trim() === "") {
+            throw new Error("code is required for run_script");
+          }
+          if (/\.remove\s*(?:\?\.)?\s*\(/.test(code) && request.params?.allowRemove !== true) {
+            throw new Error("run_script: code calls .remove(); pass allowRemove: true to confirm");
+          }
+          const AsyncFunction = Object.getPrototypeOf(async function() {
+          }).constructor;
+          const result = await new AsyncFunction("figma", code)(figma);
+          let serialized;
+          try {
+            serialized = JSON.stringify(result, (_key, value) => {
+              if (typeof value === "symbol") {
+                throw new TypeError("symbol");
+              }
+              return value;
+            });
+          } catch {
+            throw new Error("run_script: return value must be JSON-serializable");
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: { result: serialized === void 0 ? null : JSON.parse(serialized) }
+          };
+        }
+        case "get_motion_styles": {
+          if (isFigJam()) {
+            throw new Error("Motion/animation is not available in FigJam");
+          }
+          const motion = figma.motion;
+          if (!motion || typeof motion.figmaAnimationStyles !== "function") {
+            throw new Error(
+              "figma.motion.figmaAnimationStyles is not available in this Figma version"
+            );
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              styles: motion.figmaAnimationStyles()
+            }
+          };
+        }
+        case "get_node_motion": {
+          if (isFigJam()) {
+            throw new Error("Motion/animation is not available in FigJam");
+          }
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) throw new Error("nodeIds is required for get_node_motion");
+          const node = await getSceneNodeById(nodeId);
+          if (!isMotionNode(node)) {
+            throw new Error(`Node does not support animations: ${nodeId}`);
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              animationStyles: node.animationStyles,
+              animations: node.animations,
+              manualKeyframeTracks: node.manualKeyframeTracks,
+              timelines: node.timelines
+            }
+          };
+        }
+        case "apply_animation_style": {
+          if (isFigJam()) {
+            throw new Error("Motion/animation is not available in FigJam");
+          }
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) throw new Error("nodeIds is required for apply_animation_style");
+          const styleId = request.params?.styleId;
+          if (typeof styleId !== "string")
+            throw new Error("styleId is required for apply_animation_style");
+          const node = await getSceneNodeById(nodeId);
+          if (!isMotionNode(node)) {
+            throw new Error(`Node does not support applyAnimationStyle: ${nodeId}`);
+          }
+          const animationStyleData = request.params?.animationStyleData;
+          node.applyAnimationStyle(styleId, animationStyleData);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              animationStyles: node.animationStyles
+            }
+          };
+        }
+        case "remove_animation_style": {
+          if (isFigJam()) {
+            throw new Error("Motion/animation is not available in FigJam");
+          }
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) throw new Error("nodeIds is required for remove_animation_style");
+          const node = await getSceneNodeById(nodeId);
+          if (!isMotionNode(node)) {
+            throw new Error(`Node does not support removeAnimationStyle: ${nodeId}`);
+          }
+          const animationStyleId = request.params?.animationStyleId;
+          if (typeof animationStyleId === "string") {
+            node.removeAnimationStyle(animationStyleId);
+          } else {
+            const appliedStyles = node.animationStyles || [];
+            for (const style of appliedStyles) {
+              node.removeAnimationStyle(style.id);
+            }
+          }
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              animationStyles: node.animationStyles
+            }
+          };
+        }
+        case "apply_manual_keyframe_track": {
+          if (isFigJam()) {
+            throw new Error("Motion/animation is not available in FigJam");
+          }
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) throw new Error("nodeIds is required for apply_manual_keyframe_track");
+          const field = request.params?.field;
+          const track = request.params?.track;
+          if (!field || !track)
+            throw new Error("field and track are required for apply_manual_keyframe_track");
+          const node = await getSceneNodeById(nodeId);
+          if (!isMotionNode(node)) {
+            throw new Error(`Node does not support applyManualKeyframeTrack: ${nodeId}`);
+          }
+          node.applyManualKeyframeTrack(field, track);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              manualKeyframeTracks: node.manualKeyframeTracks
+            }
+          };
+        }
+        case "remove_manual_keyframe_track": {
+          if (isFigJam()) {
+            throw new Error("Motion/animation is not available in FigJam");
+          }
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) throw new Error("nodeIds is required for remove_manual_keyframe_track");
+          const field = request.params?.field;
+          if (!field) throw new Error("field is required for remove_manual_keyframe_track");
+          const node = await getSceneNodeById(nodeId);
+          if (!isMotionNode(node)) {
+            throw new Error(`Node does not support removeManualKeyframeTrack: ${nodeId}`);
+          }
+          node.removeManualKeyframeTrack(field);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              manualKeyframeTracks: node.manualKeyframeTracks
+            }
+          };
+        }
+        case "set_timeline_duration": {
+          if (isFigJam()) {
+            throw new Error("Motion/animation is not available in FigJam");
+          }
+          const nodeId = request.nodeIds && request.nodeIds[0];
+          if (!nodeId) throw new Error("nodeIds is required for set_timeline_duration");
+          const timelineId = request.params?.timelineId;
+          const duration = request.params?.duration;
+          if (typeof timelineId !== "string" || typeof duration !== "number") {
+            throw new Error("timelineId and duration are required for set_timeline_duration");
+          }
+          const node = await getSceneNodeById(nodeId);
+          if (!isMotionNode(node)) {
+            throw new Error(`Node does not support setTimelineDuration: ${nodeId}`);
+          }
+          node.setTimelineDuration(timelineId, duration);
+          return {
+            type: request.type,
+            requestId: request.requestId,
+            data: {
+              nodeId: node.id,
+              timelines: node.timelines
+            }
+          };
+        }
+        default:
+          throw new Error(`Unknown request type: ${request.type}`);
+      }
+    } catch (error) {
+      return {
+        type: request.type,
+        requestId: request.requestId,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  };
+  const UI_WIDTH = 320;
+  const UI_EXPANDED_HEIGHT = 180;
+  const UI_COLLAPSED_HEIGHT = 36;
+  const UI_COLLAPSED_KEY = "ui-collapsed";
+  let uiCollapsed = false;
+  const applyUiSize = () => {
+    figma.ui.resize(UI_WIDTH, uiCollapsed ? UI_COLLAPSED_HEIGHT : UI_EXPANDED_HEIGHT);
+  };
+  const postUiCollapseState = () => {
+    figma.ui.postMessage({ type: "ui-collapse-state", payload: { collapsed: uiCollapsed } });
+  };
+  figma.showUI(__html__, { width: UI_WIDTH, height: UI_EXPANDED_HEIGHT, visible: false });
+  figma.clientStorage.getAsync(UI_COLLAPSED_KEY).then((stored) => {
+    uiCollapsed = stored === true;
+  }).catch(() => {
+    uiCollapsed = false;
+  }).then(() => {
+    applyUiSize();
+    postUiCollapseState();
+    figma.ui.show();
+  });
+  sendStatus();
+  figma.on("selectionchange", () => {
+    sendStatus();
+  });
+  figma.ui.onmessage = async (message) => {
+    if (message.type === "ui-ready") {
+      sendStatus();
+      return;
+    }
+    if (message.type === "request-ui-state") {
+      postUiCollapseState();
+      return;
+    }
+    if (message.type === "set-ui-collapsed") {
+      uiCollapsed = message.collapsed === true;
+      applyUiSize();
+      figma.clientStorage.setAsync(UI_COLLAPSED_KEY, uiCollapsed).catch(() => {
+      });
+      return;
+    }
+    if (message.type === "server-request") {
+      const response = await handleRequest(message.payload);
+      try {
+        figma.ui.postMessage(response);
+      } catch (err) {
+        figma.ui.postMessage({
+          type: response.type,
+          requestId: response.requestId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  };
+})();

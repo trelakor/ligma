@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: October 29, 2026
+Last updated: November 10, 2026
 
 This policy covers Ligma, the desktop app in this repository, and the Ligma application on Discord that it uses for Rich Presence. "We" means the Ligma maintainers.
 
@@ -54,6 +54,7 @@ If that's too long for a link, Ligma also copies the full report to your clipboa
 - **GitHub.** On launch and every 6 hours, Ligma checks GitHub Releases for an update and downloads it from there. GitHub sees a normal web request, including your IP address, under [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - **Hugging Face and GitHub.** If you use Ligma's own Remove background on Windows, or choose BiRefNet for it on a Mac, or Ligma's own Select object, Ligma downloads the model from Hugging Face once you agree, and on a Mac ONNX Runtime from Microsoft's releases on GitHub. They see a normal web request, including your IP address. Your images never leave your computer.
 - **Figma's font helper.** If installed, Ligma starts Figma's `FigmaAgent` on your computer so Figma can use your local fonts.
+- **AI tools.** With Connect AI tools to your files on (it's off unless you turn it on), Ligma connects the files open in its tabs to Figma MCP Bridge's MCP server, which your AI tool starts on your computer. Ligma sends it each file's name and key, and what the AI tool asks to read from the file. What the AI tool does with that, including sending it to its own servers, is up to it.
 
 Links outside figma.com open in your default browser.
 

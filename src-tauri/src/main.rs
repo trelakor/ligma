@@ -17,6 +17,7 @@ mod game_mode;
 mod handoff;
 mod home;
 mod layers;
+mod mcp_bridge;
 mod models;
 mod modules;
 mod objects;
@@ -269,6 +270,8 @@ fn main() {
             models::cancel_model,
             models::uninstall_model,
             plugins::get_plugins,
+            mcp_bridge::get_mcp_status,
+            mcp_bridge::copy_mcp_config,
             plugins::import_plugin,
             plugins::set_plugin_enabled,
             plugins::remove_plugin,
@@ -308,10 +311,12 @@ fn main() {
             copy_code::init(&settings);
             view_state::init(&settings);
             game_mode::init(&settings);
+            mcp_bridge::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
             game_mode::start(app.handle());
+            mcp_bridge::start(app.handle());
 
             let window = tabs::build_window(app.handle(), tabs::MAIN, tauri::LogicalSize::new(1440.0, 900.0), true)?;
             let handle = app.handle().clone();

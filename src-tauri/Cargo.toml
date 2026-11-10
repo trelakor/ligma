@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Lightweight desktop wrapper for Figma"
 edition = "2021"
 license = "MIT"
+publish = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -31,6 +32,9 @@ log = "0.4"
 # Vectorize in src/vectorize.rs: reading the image and tracing it
 image = { version = "0.25", default-features = false, features = ["png"] }
 visioncortex = "0.9"
+# The WebSocket to Figma MCP Bridge's server, on this computer only, in
+# src/mcp_bridge.rs
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 
 # Same versions Tauri's WebView2 backend uses, for the memory APIs and tab
 # shortcuts in src/webview2.rs
