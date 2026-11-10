@@ -59,6 +59,7 @@ Ligma asks before downloading a model the first time one is needed.
 ### Everything else
 
 - **Google sign-in** that works like the desktop app's, alongside it or without it
+- **Desktop notifications** for comments, mentions and the rest of Figma's bell, which open the file when clicked
 - **Discord Rich Presence** showing your file, page and tool, with optional invites to files
 - **Local fonts** through Figma's font helper
 - **Automatic updates** in the background, without signing you out

@@ -21,6 +21,7 @@ mod layers;
 mod mcp_bridge;
 mod models;
 mod modules;
+mod notifications;
 mod objects;
 mod plugins;
 mod presence;
@@ -314,11 +315,13 @@ fn main() {
             copy_code::init(&settings);
             view_state::init(&settings);
             game_mode::init(&settings);
+            notifications::init(&settings);
             mcp_bridge::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
             game_mode::start(app.handle());
+            notifications::start(app.handle());
             mcp_bridge::start(app.handle());
 
             let window = tabs::build_window(app.handle(), tabs::MAIN, tauri::LogicalSize::new(1440.0, 900.0), true)?;

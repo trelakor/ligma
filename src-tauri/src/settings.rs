@@ -46,6 +46,9 @@ pub struct Settings {
     /// too, and give back what memory Ligma can (see game_mode.rs). Tabs on
     /// screen reload once Ligma is in front again
     pub game_mode: bool,
+    /// Show Figma's notifications, the ones in its bell, as the system's
+    /// own (see notifications.rs)
+    pub figma_notifications: bool,
     /// Show the open file, where in it you are and the selected tool on
     /// Discord
     pub discord_rich_presence: bool,
@@ -155,6 +158,7 @@ impl Default for Settings {
             max_hidden_tabs_loaded: None,
             reload_snapshots: false,
             game_mode: true,
+            figma_notifications: true,
             discord_rich_presence: true,
             discord_show_file: true,
             discord_hide_files_by_default: false,
@@ -426,6 +430,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     save(app, &settings)?;
     crate::tabs::apply_settings(app, &settings);
     crate::game_mode::apply_settings(&settings);
+    crate::notifications::apply_settings(&settings);
     crate::appearance::apply_settings(app, &settings);
     crate::presence::apply_settings(app, &settings);
     crate::layers::apply_settings(app, &settings);
