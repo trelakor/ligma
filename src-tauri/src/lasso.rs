@@ -17,12 +17,16 @@
 //! hands shake, keeping turns over 120° as corners. It's then fitted with
 //! as few cubic curves as stay within 2 pixels, with Philip J. Schneider's
 //! algorithm, which comes out smoother than Pencil. It becomes a filled
-//! vector, through Figma's
-//! console plugin API, `window.figma`, in the innermost frame or section
-//! under where it started, leaving out auto layout as Pencil does, as one
-//! undo step. Its fill is the last lasso fill's, as it is now, so changing
-//! one's color changes the next. Figma only offers that API in files that
-//! can be edited, so the item isn't added in others
+//! vector, through Figma's console plugin API, `window.figma`, in the
+//! innermost frame or section under where it started, leaving out auto
+//! layout as Pencil does, as one undo step. Figma only offers that API in
+//! files that can be edited, so the item isn't added in others
+//!
+//! Its fill is the color and opacity in the panel on the right, which is
+//! Pencil's stroke while Pencil is on: Figma keeps it, eyedropper and all,
+//! and `PAGE_JS` reads it off the panel. While the lasso is on, the panel
+//! is named Fill, and Pencil's weight, end caps, styles and more strokes
+//! are hidden
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -257,27 +261,29 @@ const PAGE_JS: &str = r##"(() => {
       null,
     );
 
-  // The fill: the last lasso fill's top solid fill, as it is now, or else
-  // the one it had, or black. Node ids are only unique in a file
-  const FILL_KEY = "ligma-lasso-last";
+  // The fill: the color in the panel on the right, which is Pencil's
+  // stroke while Pencil is on and shows as the lasso's fill (see the
+  // stylesheet), or else the last one used, or black
+  const PANEL = '[data-testid="non-consumed-style-panel"]:has([data-testid="pencilToolPanel.addButton"])';
+  const LAST_KEY = "ligma-lasso-last";
   const BLACK = { color: { r: 0, g: 0, b: 0 }, opacity: 1 };
-  const fileKey = () => /^\/(?:design|file|board|proto)\/([^/]+)/.exec(location.pathname)?.[1] ?? "";
-  const lastFill = async (figma) => {
-    let last = null;
-    try {
-      last = JSON.parse(localStorage.getItem(FILL_KEY));
-    } catch {}
-    let paint = last?.paint ?? BLACK;
-    if (last?.id && last.file === fileKey()) {
-      try {
-        const node = await figma.getNodeByIdAsync(last.id);
-        const fills = node && !node.removed && Array.isArray(node.fills) ? node.fills : [];
-        const top = fills.filter((fill) => fill.type === "SOLID" && fill.visible !== false).at(-1);
-        if (top) paint = { color: top.color, opacity: top.opacity ?? 1 };
-      } catch {}
-    }
-    return paint;
+  const panelPaint = () => {
+    const row = document.querySelector(`${PANEL} [data-testid="paint-panel-color-value-container"]`)?.closest('[role="row"]');
+    const hex = /hex:\s*#?([0-9a-f]{6})\b/i.exec(row?.querySelector('button[aria-label*="hex"]')?.getAttribute("aria-label") ?? "")?.[1];
+    if (!hex) return null;
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const percent = parseFloat(row.querySelector('[aria-label="Opacity"] input')?.value);
+    return { color: { r, g, b }, opacity: Number.isFinite(percent) ? Math.min(1, Math.max(0, percent / 100)) : 1 };
   };
+  const fillPaint = () => {
+    let paint = panelPaint();
+    try {
+      if (paint) localStorage.setItem(LAST_KEY, JSON.stringify(paint));
+      else paint = JSON.parse(localStorage.getItem(LAST_KEY));
+    } catch {}
+    return paint?.color ? paint : BLACK;
+  };
+
   // The lasso as it's drawn, over the canvas, in its points on the canvas:
   // closed, tinted and dashed in the selection color, as Figma's Select
   // area draws its own
@@ -372,7 +378,7 @@ const PAGE_JS: &str = r##"(() => {
         try {
           canvas.setPointerCapture(event.pointerId);
         } catch {}
-        drawing = { canvas, figma, pointer: event.pointerId, points: [toCanvas(figma, canvas, event)], view: overlay(canvas), fill: lastFill(figma) };
+        drawing = { canvas, figma, pointer: event.pointerId, points: [toCanvas(figma, canvas, event)], view: overlay(canvas) };
         draw();
       },
       true,
@@ -413,7 +419,7 @@ const PAGE_JS: &str = r##"(() => {
         area += x1 * y2 - x2 * y1;
       }
       if (points.length < 3 || Math.abs(area / 2) * zoom * zoom < 16) return;
-      const paint = await done.fill;
+      const paint = fillPaint();
       const parent = parentAt(figma, points[0]);
       // Into the parent's own space, which may be rotated
       let local = points;
@@ -437,9 +443,6 @@ const PAGE_JS: &str = r##"(() => {
       vector.strokes = [];
       try {
         figma.commitUndo();
-      } catch {}
-      try {
-        localStorage.setItem(FILL_KEY, JSON.stringify({ file: fileKey(), id: vector.id, paint }));
       } catch {}
     } catch {
       try {
@@ -673,6 +676,11 @@ const PAGE_JS: &str = r##"(() => {
     html[${LASSO}] [data-testid="Pencil-tool"] { position: relative; }
     html[${LASSO}] [data-testid="Pencil-tool"]::before { content: ""; position: absolute; inset: 0; margin: auto; width: 24px; height: 24px; background-color: var(--fpl-icon-color, var(--color-icon)); -webkit-mask: ${MASK} center / 24px no-repeat; mask: ${MASK} center / 24px no-repeat; }
     html[${LASSO}="active"] canvas { cursor: ${CURSOR} !important; }
+    html[${LASSO}="active"] ${PANEL} h2 { visibility: hidden; position: relative; }
+    html[${LASSO}="active"] ${PANEL} h2::after { content: "Fill"; visibility: visible; position: absolute; left: 0; }
+    html[${LASSO}="active"] ${PANEL} [class*="titleButtons"] { display: none; }
+    html[${LASSO}="active"] ${PANEL} [role="row"] ~ [role="row"] { display: none; }
+    html[${LASSO}="active"] :has(> [data-testid="non-consumed-style-panel"] [data-testid="pencilToolPanel.addButton"]) > :not([data-testid="non-consumed-style-panel"]) { display: none; }
     [role="menu"]:has([${LASSO}][aria-checked="true"]) [role="menuitemradio"][aria-checked="true"]:not([${LASSO}]) > span > svg:first-child { visibility: hidden; }
     [${LASSO}="overlay"] { position: absolute; pointer-events: none; overflow: visible; z-index: 1; }
     [${LASSO}="overlay"] path { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 25%, transparent); stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 3 2; stroke-linejoin: round; }
