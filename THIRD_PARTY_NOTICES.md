@@ -7254,6 +7254,7 @@ Used by:
 - jni-macros 0.22.4
 - jni-sys-macros 0.4.1
 - jni 0.22.4
+- mac-notification-sys 0.6.15
 - minisign-verify 0.3.0
 - ndk-context 0.1.1
 - ndk-sys 0.6.0+11769913

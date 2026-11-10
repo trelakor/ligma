@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.35.0 - 2026-11-10
+
+- What shows in Figma's bell now also shows as a desktop notification: who it's from, what happened and where, with the comment's text. Click one to open it in Ligma. Nothing shows for the file in front while you're in Ligma. Turn them off in Settings > Features > Notifications.
+- On Windows, a new app icon shows on Ligma's pinned taskbar button right away, without relaunching Ligma.
+- On Windows, Ligma's own icon in Settings > App Icon has the same rounded corners as the others.
+
 ## 0.34.0 - 2026-11-10
 
 - Settings > App Icon swaps Ligma's icon for one of 32 others in four collections: Colorways, Materials, Graphic and Playful. On macOS it shows in the Dock and on Ligma.app, so Finder and Launchpad show it too. On Windows it shows on the taskbar and in Alt+Tab while Ligma is open. Use Ligma's icon puts the original back.
