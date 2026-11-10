@@ -81,6 +81,7 @@ fn apply(app: &AppHandle, png: Option<Vec<u8>>, changed: bool) {
 mod macos {
     use std::ffi::{c_void, CString};
     use std::path::PathBuf;
+    use std::sync::OnceLock;
 
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
@@ -109,12 +110,27 @@ mod macos {
             log::warn!("app icon: not an image");
             return;
         }
-        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![ns_app, setApplicationIconImage: image];
 
-        if let Some(bundle) = bundle() {
-            // Finder keeps a custom icon in this file inside the app
-            let has_custom = bundle.join("Icon\r").exists();
+        let bundle = bundle();
+        // Finder keeps a custom icon in this file inside the app
+        let has_custom = bundle.as_ref().is_some_and(|bundle| bundle.join("Icon\r").exists());
+        static CUSTOM_AT_LAUNCH: OnceLock<bool> = OnceLock::new();
+        let custom_at_launch = *CUSTOM_AT_LAUNCH.get_or_init(|| has_custom);
+
+        // No image puts back the icon AppKit read from Ligma.app at launch,
+        // the picked one if it had one then, so Ligma's own comes from
+        // Assets.car instead
+        let dock = if image.is_null() && custom_at_launch {
+            let main: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
+            let name: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: c"Icon".as_ptr()];
+            msg_send![main, imageForResource: name]
+        } else {
+            image
+        };
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![ns_app, setApplicationIconImage: dock];
+
+        if let Some(bundle) = bundle {
             if changed || has_custom != !image.is_null() {
                 if let Ok(path) = CString::new(bundle.to_string_lossy().as_bytes()) {
                     let path: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: path.as_ptr()];
