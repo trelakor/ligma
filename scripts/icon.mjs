@@ -9,6 +9,8 @@
 //   macOS 26 and later use. Committing it means release builds don't need
 //   Xcode 26
 // - src-tauri/icons/icon.ico comes from assets/icon-windows.png
+// - dist/app-icon-macos.png and app-icon-windows.png show Ligma's own icon
+//   in Settings > App Icon
 //
 // Needs macOS with Xcode 26 or later. If actool fails with "Bad file
 // descriptor", quit its stuck helper with `pkill ibtoold` and run it again
@@ -39,6 +41,8 @@ try {
   ]);
   run("sips", ["--padToHeightWidth", "1024", "1024", render, "--out", join(root, "assets/icon.png")]);
   tauri("icon", "assets/icon.png", "-o", "src-tauri/icons");
+  // Its preview in Settings > App Icon
+  run("sips", ["-z", "256", "256", join(root, "assets/icon.png"), "--out", join(root, "dist/app-icon-macos.png")]);
   for (const mobile of ["android", "ios"]) rmSync(join(icons, mobile), { recursive: true, force: true });
 
   // Named Icon so the app icon in Assets.car is called Icon
@@ -57,4 +61,5 @@ try {
 const windows = join(icons, ".windows");
 tauri("icon", "assets/icon-windows.png", "-o", windows);
 copyFileSync(join(windows, "icon.ico"), join(icons, "icon.ico"));
+copyFileSync(join(root, "assets/icon-windows.png"), join(root, "dist/app-icon-windows.png"));
 rmSync(windows, { recursive: true, force: true });

@@ -2509,6 +2509,9 @@ pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visibl
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
+    // The app icon picked in settings, on the taskbar (see app_icon.rs)
+    #[cfg(windows)]
+    crate::app_icon::apply_to(&window);
     // Built hidden, it would keep a title bar's worth of frame until shown
     // (see frame.rs)
     #[cfg(windows)]

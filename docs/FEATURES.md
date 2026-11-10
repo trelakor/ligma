@@ -44,7 +44,7 @@ Figma loads installed fonts through its font helper, `FigmaAgent`. If the helper
 
 ## Settings
 
-Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimize) holds the options from `settings.json`, one page per category: Appearance (interface scale, color scheme and themes), Features (toolbar modes, layer previews, image adjustments, copy as code and the classic home page), Tabs & Memory, Discord, Plugins and About. Changes are saved and apply right away.
+Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimize) holds the options from `settings.json`, one page per category: Appearance (interface scale, color scheme and themes), App Icon, Features (toolbar modes, layer previews, image adjustments, copy as code and the classic home page), Tabs & Memory, Discord, Plugins and About. Changes are saved and apply right away.
 
 `settings.json` is created on first launch in `%APPDATA%\dev.ligma.client` (Windows) or `~/Library/Application Support/dev.ligma.client` (macOS). After editing it by hand, restart Ligma.
 
@@ -55,6 +55,15 @@ Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimiz
 - Themes recolor Figma's panels, toolbars, menus, tooltips and buttons, and what Figma draws over the canvas (selection, rulers, labels), and with them the tab bar, the tab menu, prompts and the settings window, but not your designs: new shapes and frames get Figma's usual fills (see `dist/themes.js` and `src-tauri/src/appearance.rs`).
 - **Interface scale** (`"interfaceScale"` in percent, 50 to 200) zooms Figma tabs, the tab bar, the tab menu, prompts and the settings window together, like a browser's zoom; − and + step through the usual zoom levels. The tab bar grows with it.
 - The tab menu, prompts (update ready, join requests, errors) and the settings window are drawn by Ligma in Figma's style and follow the editor's light or dark theme. On Windows 11 they have no accent-colored border, just the system shadow.
+
+## App icon
+
+Settings > App Icon swaps Ligma's icon for one of 32 others in four collections: Colorways (Onyx, Ink, Pastel, Sunset, Forest, Tide, Ultraviolet, Citrus), Materials (Frosted, Chrome, Clay, Paper, Enamel, Gilded, Walnut, Marble), Graphic (Neon, Blueprint, Pixel, Riso, Terminal, Selected, Sticker, Bauhaus) and Playful (Candy, Holo, Cosmos, Lava, Snowfall, Pumpkin, Pool, Bricks). Each is drawn from the logo's own shapes (`dist/app-icons.js`).
+
+- The picked icon (`"appIcon"`) is drawn into `app-icon.png` next to `settings.json` and put back on every launch (`src-tauri/src/app_icon.rs`).
+- **macOS:** it shows in the Dock while Ligma runs and is set on Ligma.app as a custom icon, like Finder's Get Info does, so Finder, Launchpad and the Dock show it when Ligma is closed. An update replaces the app and its custom icon, and Ligma sets it again the next time it opens. If Ligma can't write to the app, only the Dock changes. The custom icon is flat: Liquid Glass's dark, tinted and clear styles only apply to Ligma's own icon.
+- **Windows:** it shows on the taskbar and in Alt+Tab while Ligma is open. Pinned shortcuts and the Start menu keep Ligma's own icon.
+- Use Ligma's icon puts the original back and removes the custom icon from the app.
 
 ## Features
 

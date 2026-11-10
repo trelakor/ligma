@@ -25,6 +25,9 @@ pub struct Settings {
     pub light_theme: String,
     /// and in dark mode
     pub dark_theme: String,
+    /// App icon, from `dist/app-icons.js`, set by `app_icon::set_app_icon`
+    /// with its image. "ligma" is Ligma's own
+    pub app_icon: String,
     /// Size of Figma and Ligma's own interface, in percent, like a
     /// browser's zoom. The tab bar grows with it
     pub interface_scale: u32,
@@ -143,6 +146,7 @@ impl Default for Settings {
             color_scheme: ColorScheme::System,
             light_theme: "figma".into(),
             dark_theme: "figma".into(),
+            app_icon: crate::app_icon::DEFAULT.into(),
             interface_scale: 100,
             sleep_tabs_after_minutes: 30,
             max_hidden_tabs_loaded: None,
@@ -274,6 +278,9 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
+    // The app icon picked in settings, on the taskbar (see app_icon.rs)
+    #[cfg(windows)]
+    crate::app_icon::apply_to(&window);
     // The size it was built with, and no accent-colored border
     #[cfg(windows)]
     {
