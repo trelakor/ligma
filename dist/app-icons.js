@@ -12,16 +12,20 @@ const LIGMA_APP_ICON_COLLECTIONS = [
   { id: "playful", name: "Playful" },
 ];
 
-// The macOS tile: a superellipse, close to the system's own corners
-const LIGMA_TILE = (() => {
+// A superellipse `radius` from the middle, close to the system's own icon
+// corners
+function ligmaSquircle(radius) {
   const points = [];
   for (let i = 0; i < 360; i++) {
     const t = (i / 360) * Math.PI * 2;
-    const at = (v) => Math.sign(v) * Math.abs(v) ** 0.4 * 412 + 512;
+    const at = (v) => Math.sign(v) * Math.abs(v) ** 0.4 * radius + 512;
     points.push(`${at(Math.cos(t)).toFixed(1)} ${at(Math.sin(t)).toFixed(1)}`);
   }
   return `M${points.join("L")}Z`;
-})();
+}
+
+// The macOS tile
+const LIGMA_TILE = ligmaSquircle(412);
 
 // The logo: three half-rounded blocks stacked, and a dot beside the last.
 // `unit` is a block's height. Parts are top, middle, bottom and dot
@@ -54,6 +58,12 @@ function ligmaGlyph(unit = 193, cx = 512, cy = 512) {
 
 const LIGMA_G = ligmaGlyph();
 const LIGMA_COLORS = ["#00CF66", "#FF0026", "#904BFF", "#00BAFF"];
+// The frame inset in the tile (Gilded, Holo), `width` thick, and the logo
+// inside it, smaller so the frame has room. Frames are filled rings:
+// WebKit leaves hairline seams in a stroked squircle
+const LIGMA_FRAME = { radius: 358, width: 34 };
+const ligmaFrame = (width = LIGMA_FRAME.width, radius = LIGMA_FRAME.radius) => `${ligmaSquircle(radius + width / 2)}${ligmaSquircle(radius - width / 2)}`;
+const LIGMA_FRAMED = ligmaGlyph(178);
 
 // SVG helpers
 const ligmaSvg = {
@@ -203,9 +213,10 @@ const LIGMA_APP_ICONS = [
           + linear("frame", [[0, "#fff1b8"], [0.3, "#e3b44c"], [0.55, "#8a5d10"], [0.8, "#f3d27a"], [1, "#9c6c14"]], [0, 0, 1, 1])
           + shadow("lift", 14, 16, 0.75),
         body: fill("url(#tile-fill)")
-          + `<g transform="translate(512 512) scale(.87) translate(-512 -512)"><path d="${LIGMA_TILE}" fill="none" stroke="#000" stroke-opacity=".6" stroke-width="40" transform="translate(0 5)"/><path d="${LIGMA_TILE}" fill="none" stroke="url(#frame)" stroke-width="34"/><path d="${LIGMA_TILE}" fill="none" stroke="#fff6d0" stroke-opacity=".5" stroke-width="2"/></g>`
-          + `<g filter="url(#lift)">${parts(["url(#gold)", "url(#gold)", "url(#gold)", "url(#gold)"])}</g>`
-          + parts(["none", "none", "none", "none"], 'stroke="#fff3c0" stroke-opacity=".55" stroke-width="2"'),
+          + `<path d="${ligmaFrame(LIGMA_FRAME.width + 6)}" fill="#000" fill-opacity=".6" fill-rule="evenodd" transform="translate(0 5)"/><path d="${ligmaFrame()}" fill="url(#frame)" fill-rule="evenodd"/><path d="${ligmaFrame(2)}" fill="#fff6d0" fill-opacity=".5" fill-rule="evenodd"/>`
+          // Inside the frame, the size Holo's outlined logo reaches (168 + its 30 outline, see holo)
+          + `<g filter="url(#lift)">${parts(["url(#gold)", "url(#gold)", "url(#gold)", "url(#gold)"], "", LIGMA_FRAMED)}</g>`
+          + parts(["none", "none", "none", "none"], 'stroke="#fff3c0" stroke-opacity=".55" stroke-width="2"', LIGMA_FRAMED),
       };
     },
   },
@@ -450,9 +461,9 @@ const LIGMA_APP_ICONS = [
       return {
         defs: blur("foil", 70),
         body: fill("#dfe6e6") + `<g filter="url(#foil)">${fields}</g>`
-          + `<path d="${LIGMA_TILE}" fill="none" stroke="${ink}" stroke-width="34" transform="translate(512 512) scale(.87) translate(-512 -512)"/>`
-          // Drawn smaller, as an outline looks larger than the filled logo
-          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-opacity=".88" stroke-width="30" stroke-linejoin="round"`, ligmaGlyph(168)),
+          + `<path d="${ligmaFrame()}" fill="${ink}" fill-rule="evenodd"/>`
+          // Its outline reaches as far as Gilded's filled logo, LIGMA_FRAMED
+          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-opacity=".88" stroke-width="30" stroke-linejoin="round"`, ligmaGlyph(LIGMA_FRAMED.unit - 10)),
       };
     },
   },
@@ -608,7 +619,7 @@ function ligmaAppIconSvg(id, crop = false) {
     + `<clipPath id="tile"><path d="${LIGMA_TILE}"/></clipPath>`
     + `<filter id="tile-shadow" x="-10%" y="-10%" width="120%" height="125%"><feGaussianBlur in="SourceAlpha" stdDeviation="14"/><feOffset dy="12"/><feComponentTransfer><feFuncA type="linear" slope=".32"/></feComponentTransfer></filter>${defs}</defs>`
     + `<path d="${LIGMA_TILE}" filter="url(#tile-shadow)"/>`
-    + `<g clip-path="url(#tile)">${body}<path d="${LIGMA_TILE}" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="5"/></g></svg>`;
+    + `<g clip-path="url(#tile)">${body}<path d="${ligmaFrame(5, 412)}" fill="#fff" fill-opacity=".22" fill-rule="evenodd"/></g></svg>`;
 }
 
 // A URL for an <img> of the icon
