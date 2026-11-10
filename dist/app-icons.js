@@ -203,7 +203,7 @@ const LIGMA_APP_ICONS = [
           + linear("frame", [[0, "#fff1b8"], [0.3, "#e3b44c"], [0.55, "#8a5d10"], [0.8, "#f3d27a"], [1, "#9c6c14"]], [0, 0, 1, 1])
           + shadow("lift", 14, 16, 0.75),
         body: fill("url(#tile-fill)")
-          + `<g transform="translate(512 512) scale(.885) translate(-512 -512)"><path d="${LIGMA_TILE}" fill="none" stroke="#000" stroke-opacity=".6" stroke-width="22" transform="translate(0 4)"/><path d="${LIGMA_TILE}" fill="none" stroke="url(#frame)" stroke-width="16"/><path d="${LIGMA_TILE}" fill="none" stroke="#fff6d0" stroke-opacity=".5" stroke-width="2"/></g>`
+          + `<g transform="translate(512 512) scale(.87) translate(-512 -512)"><path d="${LIGMA_TILE}" fill="none" stroke="#000" stroke-opacity=".6" stroke-width="40" transform="translate(0 5)"/><path d="${LIGMA_TILE}" fill="none" stroke="url(#frame)" stroke-width="34"/><path d="${LIGMA_TILE}" fill="none" stroke="#fff6d0" stroke-opacity=".5" stroke-width="2"/></g>`
           + `<g filter="url(#lift)">${parts(["url(#gold)", "url(#gold)", "url(#gold)", "url(#gold)"])}</g>`
           + parts(["none", "none", "none", "none"], 'stroke="#fff3c0" stroke-opacity=".55" stroke-width="2"'),
       };
@@ -451,7 +451,8 @@ const LIGMA_APP_ICONS = [
         defs: blur("foil", 70),
         body: fill("#dfe6e6") + `<g filter="url(#foil)">${fields}</g>`
           + `<path d="${LIGMA_TILE}" fill="none" stroke="${ink}" stroke-width="34" transform="translate(512 512) scale(.87) translate(-512 -512)"/>`
-          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-opacity=".88" stroke-width="30" stroke-linejoin="round"`),
+          // Drawn smaller, as an outline looks larger than the filled logo
+          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-opacity=".88" stroke-width="30" stroke-linejoin="round"`, ligmaGlyph(168)),
       };
     },
   },
