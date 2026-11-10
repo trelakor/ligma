@@ -302,15 +302,20 @@ const PAGE_JS: &str = r##"(() => {
   // stylesheet). Without the panel, the last ones used, or a black fill
   const PANEL = '[data-testid="non-consumed-style-panel"]:has([data-testid="pencilToolPanel.addButton"])';
   const ADD = '[data-testid="pencilToolPanel.addButton"]';
+  // Pencil's whole panel, and its paints when a style takes their place:
+  // a style is all of Pencil's paints, so it's all of one section's, the
+  // one it was applied from, and the other section has none
+  const CONTAINER = '.propertiesPanel:has(> * [class*="pencil_tool_panel--advancedStroke"])';
+  const STYLED = '[data-testid="consumed-style-panel"]';
+  let styleRole = null;
+  let styleName = null;
   const LAST_KEY = "ligma-lasso-last";
   const BLACK = { color: { r: 0, g: 0, b: 0 }, opacity: 1, visible: true };
   const rowsOf = (panel) => [...(panel?.querySelector('[role="grid"]')?.children ?? [])].filter((node) => node.classList.contains("cachedSubtree"));
   // What each of Pencil's paints is, by its place in the panel, top first:
   // "fill", "stroke", or "spare", the one Pencil keeps when there's
-  // neither, as it never has none, hidden. Pencil adds paints at the top.
-  // A style applied from a heading makes the paints that heading's
+  // neither, as it never has none, hidden. Pencil adds paints at the top
   let roles = [];
-  let pendingRole = null;
   // After Ligma adds or takes away a paint, until Figma has drawn it
   let settling = 0;
   const settle = () => (settling = performance.now() + 1500);
@@ -322,9 +327,26 @@ const PAGE_JS: &str = r##"(() => {
       return true;
     }
     if (performance.now() < settling) return false;
-    roles = Array.from({ length: count }, (_, i) => pendingRole ?? (i === 0 ? "fill" : "stroke"));
-    pendingRole = null;
+    roles = Array.from({ length: count }, (_, i) => pending?.role ?? (i === 0 ? "fill" : "stroke"));
+    pending = null;
     return true;
+  };
+  // A style or variable applied from a heading makes all of Pencil's
+  // paints that heading's: they change while its picker is open
+  let pending = null;
+  const signature = (rows) =>
+    rows.map((row) => `${row.querySelector('button[class*="chit"]')?.style.backgroundColor}${row.textContent}${row.querySelector('input[aria-label="Color"]')?.value}`).join("|");
+  const expectStyle = (role) => {
+    const expected = { role, before: signature(rowsOf(document.querySelector(PANEL))), dialog: null };
+    pending = expected;
+    setTimeout(() => (expected.dialog = [...document.querySelectorAll('[role="dialog"]')].at(-1) ?? null), 300);
+  };
+  const styleApplied = (rows) => {
+    if (!pending) return;
+    if (signature(rows) !== pending.before) {
+      roles = rows.map(() => pending.role);
+      pending = null;
+    } else if (pending.dialog && !pending.dialog.isConnected) pending = null;
   };
   // A paint's color from its swatch, as a style's shows its name instead
   // of a hex
@@ -338,6 +360,17 @@ const PAGE_JS: &str = r##"(() => {
     return { color: { r, g, b }, opacity: Number.isFinite(percent) ? Math.min(1, Math.max(0, percent / 100)) : 1, visible };
   };
   const panelStyle = () => {
+    const container = document.querySelector(CONTAINER);
+    const styled = container?.querySelector(`:scope > ${STYLED}`);
+    if (styled) {
+      const rgba = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/.exec(styled.querySelector("circle")?.getAttribute("fill") ?? "");
+      if (!rgba) return null;
+      const [r, g, b] = rgba.slice(1, 4).map((value) => Number(value) / 255);
+      const paint = { color: { r, g, b }, opacity: rgba[4] === undefined ? 1 : Number(rgba[4]), visible: true, style: styleName };
+      const weight = parseFloat(container.querySelector('input[aria-label="Stroke weight"]')?.value);
+      const stroke = styleRole === "stroke";
+      return { fills: stroke ? [] : [paint], strokes: stroke ? [paint] : [], weight: Number.isFinite(weight) && weight > 0 ? weight : 1 };
+    }
     const panel = document.querySelector(PANEL);
     const rows = rowsOf(panel);
     if (!rows.length) return null;
@@ -398,10 +431,65 @@ const PAGE_JS: &str = r##"(() => {
     }
     syncPanel();
   };
-  // Pencil's only paint has no −, so the lasso's gets one: Pencil's +,
-  // copied, with a minus
+  // A heading of Ligma's, `kind` "stroke" or "other", named `name`, with +
+  // and styles buttons: a copy of Pencil's own, kept from before any style
+  // took its place
+  let template = null;
+  const makeHeading = (kind, name) => {
+    if (!template) return null;
+    const heading = template.cloneNode(true);
+    heading.setAttribute(LASSO, kind);
+    for (const node of heading.querySelectorAll("[id], [data-testid], [data-onboarding-key]")) {
+      node.removeAttribute("id");
+      node.removeAttribute("data-testid");
+      node.removeAttribute("data-onboarding-key");
+    }
+    if (empty()) heading.classList.remove(empty());
+    const title = heading.querySelector("h2");
+    if (title) title.textContent = name;
+    for (const button of heading.querySelectorAll("button")) {
+      if (button.getAttribute("aria-haspopup") === "dialog") {
+        button.setAttribute(LASSO, `${kind}-styles`);
+        button.setAttribute("aria-label", `${name}, Apply styles and variables`);
+      } else button.setAttribute(LASSO, `${kind}-add`);
+    }
+    return heading;
+  };
+
+  // A style's Detach, then what was waiting for it: its paints go to the
+  // style's section, and then a paint is taken away or added
+  let afterDetach = null;
+  const detach = (then) => {
+    afterDetach = then;
+    document.querySelector(`${CONTAINER} > ${STYLED} button[aria-label="Detach style"]`)?.click();
+  };
+
+  // Takes away Pencil's only paint, which Pencil won't: adds a fresh one
+  // through its +, kept as the spare, then takes the old one away with its
+  // −, so a style or color it had doesn't come back with the next +
+  const removeLast = () => {
+    roles = ["spare", ...roles];
+    settle();
+    adding = true;
+    try {
+      document.querySelector(ADD)?.click();
+    } finally {
+      adding = false;
+    }
+    const started = performance.now();
+    const wait = () => {
+      const rows = rowsOf(document.querySelector(PANEL));
+      const remove = rows.length === 2 && rows[1].querySelector('[class*="ui3RightIcon"] button');
+      // The click handler below takes it out of `roles`
+      if (remove) remove.click();
+      else if (performance.now() - started < 1500) requestAnimationFrame(wait);
+    };
+    requestAnimationFrame(wait);
+  };
+  // Pencil's only paint, and a style, have no −, so the lasso's get one:
+  // Pencil's +, copied, with a minus
   const removeButton = () => {
-    const button = document.querySelector(ADD)?.cloneNode(true);
+    const button = (document.querySelector(ADD) ?? template?.querySelector(ADD))?.cloneNode(true);
     if (!button) return null;
     button.removeAttribute("data-testid");
     button.setAttribute(LASSO, "remove");
@@ -412,6 +500,18 @@ const PAGE_JS: &str = r##"(() => {
     return button;
   };
 
+  // Clicks Figma's `button` for one of Ligma's, which the handler below
+  // then leaves alone
+  let relaying = false;
+  const relay = (button) => {
+    relaying = true;
+    try {
+      button?.click();
+    } finally {
+      relaying = false;
+    }
+  };
+
   // Clicks in the panel: its + and styles buttons, and Ligma's, say which
   // section they're for, and its − says which paint goes
   addEventListener(
@@ -419,26 +519,33 @@ const PAGE_JS: &str = r##"(() => {
     (event) => {
       if (!picked || !active()) return;
       const target = event.target;
-      const own = target.closest?.(`[${LASSO}="stroke-add"], [${LASSO}="stroke-styles"], [${LASSO}="remove"]`);
+      const own = target.closest?.(
+        `[${LASSO}="stroke-add"], [${LASSO}="stroke-styles"], [${LASSO}="remove"], [${LASSO}="other-add"], [${LASSO}="other-styles"], [${LASSO}="remove-style"]`,
+      );
       const panel = document.querySelector(PANEL);
       if (own) {
         swallow(event);
         const kind = own.getAttribute(LASSO);
+        const other = styleRole === "stroke" ? "fill" : "stroke";
         if (kind === "stroke-add") addPaint("stroke");
-        else if (kind === "remove") {
-          roles[0] = "spare";
-          syncPanel();
-        } else {
-          pendingRole = "stroke";
-          panel?.firstElementChild.querySelector('button[aria-haspopup="dialog"]')?.click();
+        else if (kind === "remove") removeLast();
+        else if (kind === "stroke-styles") {
+          expectStyle("stroke");
+          relay(panel?.firstElementChild.querySelector('button[aria-haspopup="dialog"]'));
+        } else if (kind === "remove-style") detach(removeLast);
+        else if (kind === "other-add") detach(() => addPaint(other));
+        else {
+          // The style's own button swaps it for another
+          expectStyle(other);
+          relay(document.querySelector(`${CONTAINER} > ${STYLED} button[aria-haspopup="dialog"]`));
         }
         return;
       }
-      if (!panel?.contains(target)) return;
+      if (relaying || !panel?.contains(target)) return;
       if (!adding && target.closest?.(ADD)) {
         swallow(event);
         addPaint("fill");
-      } else if (target.closest?.('button[aria-haspopup="dialog"]') && panel.firstElementChild.contains(target)) pendingRole = "fill";
+      } else if (target.closest?.('button[aria-haspopup="dialog"]') && panel.firstElementChild.contains(target)) expectStyle("fill");
       else {
         const remove = target.closest?.('[class*="ui3RightIcon"] button');
         const index = remove ? rowsOf(panel).findIndex((row) => row.contains(remove)) : -1;
@@ -452,37 +559,88 @@ const PAGE_JS: &str = r##"(() => {
   );
 
   const STROKES = "data-ligma-lasso-strokes";
+  const strokesShown = (on) => {
+    if (document.documentElement.hasAttribute(STROKES) !== on) document.documentElement.toggleAttribute(STROKES, on);
+  };
+  // With a style in place of Pencil's paints: it goes under the heading of
+  // the section it was applied from, Fill renamed from Pencil's, and the
+  // other section gets a heading of Ligma's, with nothing under it
+  const syncStyled = (container, styled) => {
+    const name = styled.querySelector("[data-tooltip-style-name]")?.dataset.tooltipStyleName ?? null;
+    if (styleRole === null) {
+      styleRole = pending?.role ?? "fill";
+      pending = null;
+    } else if (pending && name !== styleName) {
+      styleRole = pending.role;
+      pending = null;
+    } else if (pending?.dialog && !pending.dialog.isConnected) pending = null;
+    styleName = name;
+    if (container.dataset.ligmaStyled !== styleRole) container.dataset.ligmaStyled = styleRole;
+    strokesShown(styleRole === "stroke");
+    const other = styleRole === "stroke" ? "Fill" : "Stroke";
+    let heading = container.querySelector(`:scope > [${LASSO}="other"]`);
+    if (heading && heading.querySelector("h2")?.textContent !== other) {
+      heading.remove();
+      heading = null;
+    }
+    heading ??= makeHeading("other", other);
+    if (!heading) return;
+    const emptied = empty();
+    if (emptied && !heading.classList.contains(emptied)) heading.classList.add(emptied);
+    const place = styleRole === "stroke" ? "before" : "after";
+    if (heading.dataset.ligmaPlace !== place) heading.dataset.ligmaPlace = place;
+    const next = place === "before" ? styled : styled.nextSibling;
+    if (heading.parentElement !== container || heading.nextSibling !== next) container.insertBefore(heading, next);
+    // A − for the style, which Figma's panel doesn't have
+    const buttons = styled.querySelector('[class*="styleTitleButtons"]');
+    if (buttons && !buttons.querySelector(`[${LASSO}="remove-style"]`)) {
+      const button = removeButton();
+      if (button) {
+        button.setAttribute(LASSO, "remove-style");
+        buttons.append(button);
+      }
+    }
+  };
+
   const syncPanel = () => {
+    if (!active()) return;
+    const container = document.querySelector(CONTAINER);
+    const styled = container?.querySelector(`:scope > ${STYLED}`);
+    if (styled) {
+      syncStyled(container, styled);
+      return;
+    }
     const panel = document.querySelector(PANEL);
     const grid = panel?.querySelector('[role="grid"]');
-    if (!grid || !active()) return;
+    if (!grid) return;
     const rows = rowsOf(panel);
+    // Out of a style: its paints are its section's
+    if (styleRole !== null) {
+      roles = rows.map(() => styleRole);
+      styleRole = null;
+      styleName = null;
+      settling = 0;
+      if (container) delete container.dataset.ligmaStyled;
+      container?.querySelector(`:scope > [${LASSO}="other"]`)?.remove();
+      const then = afterDetach;
+      afterDetach = null;
+      if (then) requestAnimationFrame(then);
+    }
     if (!reconcile(rows.length)) return;
+    styleApplied(rows);
     rows.forEach((row, i) => {
       if (row.dataset.ligmaRole !== roles[i]) row.dataset.ligmaRole = roles[i];
     });
     const has = (role) => roles.includes(role);
-    if (document.documentElement.hasAttribute(STROKES) !== has("stroke")) document.documentElement.toggleAttribute(STROKES, has("stroke"));
+    strokesShown(has("stroke"));
     // The Stroke heading: a copy of Fill's, which is Pencil's own
     const title = panel.firstElementChild;
+    template ??= title.cloneNode(true);
     let heading = grid.querySelector(`[${LASSO}="stroke"]`);
     if (!heading) {
       document.querySelectorAll(`[${LASSO}="stroke"]`).forEach((node) => node.remove());
-      heading = title.cloneNode(true);
-      heading.setAttribute(LASSO, "stroke");
-      for (const node of heading.querySelectorAll("[id], [data-testid], [data-onboarding-key]")) {
-        node.removeAttribute("id");
-        node.removeAttribute("data-testid");
-        node.removeAttribute("data-onboarding-key");
-      }
-      const name = heading.querySelector("h2");
-      if (name) name.textContent = "Stroke";
-      for (const button of heading.querySelectorAll("button")) {
-        if (button.getAttribute("aria-haspopup") === "dialog") {
-          button.setAttribute(LASSO, "stroke-styles");
-          button.setAttribute("aria-label", "Stroke, Apply styles and variables");
-        } else button.setAttribute(LASSO, "stroke-add");
-      }
+      heading = makeHeading("stroke", "Stroke");
+      if (!heading) return;
       grid.append(heading);
     }
     // Headings with nothing under them show their styles button on hover
@@ -656,6 +814,9 @@ const PAGE_JS: &str = r##"(() => {
       }
       if (points.length < 3 || Math.abs(area / 2) * zoom * zoom < 16) return;
       const style = lassoStyle();
+      // A style from this file stays linked
+      const named = [...style.fills, ...style.strokes].find((paint) => paint.style)?.style;
+      const linked = named ? (await figma.getLocalPaintStylesAsync()).find((local) => local.name === named) : null;
       const parent = parentAt(figma, points[0]);
       // Into the parent's own space, which may be rotated
       let local = points;
@@ -681,6 +842,12 @@ const PAGE_JS: &str = r##"(() => {
       if (style.strokes.length) {
         vector.strokeWeight = style.weight;
         vector.strokeJoin = "ROUND";
+      }
+      if (linked) {
+        try {
+          if (style.fills.length) vector.fillStyleId = linked.id;
+          else vector.strokeStyleId = linked.id;
+        } catch {}
       }
       try {
         figma.commitUndo();
@@ -925,9 +1092,13 @@ const PAGE_JS: &str = r##"(() => {
     html[${LASSO}="active"] ${PANEL} [role="grid"] > [${LASSO}="stroke"] { order: 2; }
     html[${LASSO}="active"] ${PANEL} [role="grid"] > [data-ligma-role="stroke"] { order: 3; }
     html[${LASSO}="active"] ${PANEL} [role="grid"] > [data-ligma-role="spare"] { display: none; }
-    html[${LASSO}="active"]:not([${STROKES}]) :has(> [data-testid="non-consumed-style-panel"] [data-testid="pencilToolPanel.addButton"]) > :not([data-testid="non-consumed-style-panel"]) { display: none; }
-    html[${LASSO}="active"] :has(> [data-testid="non-consumed-style-panel"] [data-testid="pencilToolPanel.addButton"]) > :not([data-testid="non-consumed-style-panel"]) :is(fieldset fieldset, [class*="advancedStroke"]) { display: none; }
-    html:not([${LASSO}="active"]) :is([${LASSO}="stroke"], [${LASSO}="remove"]) { display: none !important; }
+    html[${LASSO}="active"]:not([${STROKES}]) ${CONTAINER} > :not([data-testid="non-consumed-style-panel"], ${STYLED}, [${LASSO}="other"]) { display: none; }
+    html[${LASSO}="active"] ${CONTAINER} > :not([data-testid="non-consumed-style-panel"], ${STYLED}) :is(fieldset fieldset, [class*="advancedStroke"]) { display: none; }
+    html[${LASSO}="active"] ${CONTAINER}[data-ligma-styled="fill"] > ${STYLED} > :first-child h2 span { visibility: hidden; position: relative; }
+    html[${LASSO}="active"] ${CONTAINER}[data-ligma-styled="fill"] > ${STYLED} > :first-child h2 span::after { content: "Fill"; visibility: visible; position: absolute; left: 0; }
+    [${LASSO}="other"][data-ligma-place="after"] { border-top: 1px solid var(--color-border); margin-top: 8px; }
+    [${LASSO}="other"][data-ligma-place="before"] { border-bottom: 1px solid var(--color-border); margin-bottom: 8px; }
+    html:not([${LASSO}="active"]) :is([${LASSO}="stroke"], [${LASSO}="remove"], [${LASSO}="other"], [${LASSO}="remove-style"]) { display: none !important; }
     [${LASSO}="stroke"] { border-top: 1px solid var(--color-border); margin-top: 8px; }
     [role="menu"]:has([${LASSO}][aria-checked="true"]) [role="menuitemradio"][aria-checked="true"]:not([${LASSO}]) > span > svg:first-child { visibility: hidden; }
     [${LASSO}="overlay"] { position: absolute; pointer-events: none; overflow: visible; z-index: 1; }
