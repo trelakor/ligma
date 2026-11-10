@@ -434,22 +434,22 @@ const LIGMA_APP_ICONS = [
   {
     id: "holo", name: "Holo", collection: "playful",
     art() {
-      const { clips, parts } = ligmaSvg;
-      // Holographic foil: noise mapped through a pastel rainbow, each
-      // channel a step out of phase, so hues swirl as on a foil sticker
-      const foil = (id, seed, frequency) => `<filter id="${id}" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse">`
-        + `<feTurbulence type="fractalNoise" baseFrequency="${frequency}" numOctaves="3" seed="${seed}"/><feColorMatrix type="matrix" values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 1"/>`
-        + `<feComponentTransfer><feFuncR type="table" tableValues="1 .96 .5 .22 .36 .88 1 .96 .42 .3 .88"/><feFuncG type="table" tableValues=".46 .34 .6 .92 1 .94 .62 .42 .78 1 .96"/><feFuncB type="table" tableValues=".96 1 1 .92 .56 .36 .52 .96 1 .82 .52"/></feComponentTransfer></filter>`;
-      // Bright glints where the foil catches the light
-      const glints = `<filter id="glints" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.009" numOctaves="2" seed="31"/><feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  3.4 0 0 0 -1.85"/></filter>`;
-      const sheen = `<linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1"><stop offset=".25" stop-color="#fff" stop-opacity="0"/><stop offset=".42" stop-color="#fff" stop-opacity=".5"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/><stop offset=".66" stop-color="#fff" stop-opacity=".3"/><stop offset=".74" stop-color="#fff" stop-opacity="0"/></linearGradient>`;
-      const ink = "#141414";
+      const { fill, parts, blur } = ligmaSvg;
+      // Holographic foil: broad fields of teal, magenta and violet-grey,
+      // blurred into one another, with a silver streak where the light
+      // catches it. The logo is outlined in ink over the same foil
+      const fields = `<circle cx="160" cy="820" r="320" fill="#4fe0c8"/><circle cx="110" cy="430" r="210" fill="#7fe9ff"/>`
+        + `<circle cx="880" cy="170" r="300" fill="#f468d2"/><circle cx="930" cy="640" r="230" fill="#ff8fe0"/>`
+        + `<circle cx="600" cy="600" r="250" fill="#8c80b8"/><circle cx="720" cy="930" r="210" fill="#a7f0e0"/>`
+        + `<circle cx="170" cy="150" r="170" fill="#f4f0cf"/>`
+        + `<ellipse cx="420" cy="380" rx="420" ry="96" fill="#fff" opacity=".85" transform="rotate(-38 420 380)"/>`
+        + `<ellipse cx="700" cy="760" rx="300" ry="50" fill="#fff" opacity=".45" transform="rotate(-38 700 760)"/>`;
+      const ink = "#121212";
       return {
-        defs: foil("foil", 12, 0.0042) + foil("foil-glyph", 5, 0.006) + glints + sheen + clips(),
-        body: `<rect width="1024" height="1024" filter="url(#foil)"/><rect width="1024" height="1024" filter="url(#glints)" style="mix-blend-mode:screen"/><rect width="1024" height="1024" fill="url(#sheen)"/>`
-          + `<path d="${LIGMA_TILE}" fill="none" stroke="${ink}" stroke-width="24" transform="translate(512 512) scale(.86) translate(-512 -512)"/>`
-          + `<g clip-path="url(#glyph)"><rect width="1024" height="1024" filter="url(#foil-glyph)"/><rect width="1024" height="1024" fill="url(#sheen)" transform="rotate(90 512 512)"/></g>`
-          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-width="22" stroke-linejoin="round"`),
+        defs: blur("foil", 64),
+        body: fill("#b9b0d6") + `<g filter="url(#foil)">${fields}</g>`
+          + `<path d="${LIGMA_TILE}" fill="none" stroke="${ink}" stroke-width="28" transform="translate(512 512) scale(.85) translate(-512 -512)"/>`
+          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-width="24" stroke-linejoin="round"`),
       };
     },
   },
