@@ -30,7 +30,10 @@
 //! its own, with Pencil's weight under the strokes. Each heading's + adds
 //! one through Pencil's, as Figma's do, and each paint's − takes it away.
 //! Pencil always keeps one paint, so with none left it keeps a hidden one
-//! for the next +. Pencil's end caps are hidden
+//! for the next +, a fresh one. A color style takes the place of all of
+//! Pencil's paints, so it's the only paint of the section it was applied
+//! from, and new lassos stay linked to it when it's in the file. Pencil's
+//! end caps are hidden
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
