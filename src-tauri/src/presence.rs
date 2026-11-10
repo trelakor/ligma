@@ -37,6 +37,9 @@ use crate::discord_ipc::Ipc;
 /// Application ID from the Discord Developer Portal. Empty: presence off
 const CLIENT_ID: &str = "1563151879788167309";
 const LOGO_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/discord-logo.png";
+/// The other app icons (Settings > App Icon) as the large image instead of
+/// the logo, `<id>.png` here, rendered by `npm run discord-icons`
+const APP_ICONS_URL: &str = "https://raw.githubusercontent.com/trelakor/ligma/main/assets/discord-icons";
 /// Tool icons are art assets of the Discord application, uploaded in the
 /// Developer Portal (Rich Presence > Art Assets) and named
 /// `<product>-<focused|unfocused>-<slug>`. Only Figma Design's are there so
@@ -199,6 +202,8 @@ struct Status {
     focused: bool,
     /// Only with invites on, in a file
     invite: Option<Invite>,
+    /// The app icon picked in settings (`app_icon`), the large image
+    app_icon: String,
 }
 
 enum Message {
@@ -368,11 +373,12 @@ pub fn sync(app: &AppHandle) {
         return;
     };
     let focused = crate::tabs::any_focused(app);
+    let mut settings = presence.settings.lock().unwrap().clone();
+    let app_icon = settings.app_icon.clone();
     let Some(active) = crate::tabs::active_file(app) else {
-        let _ = tx.send(Message::Status(Status { focused, ..Status::default() }));
+        let _ = tx.send(Message::Status(Status { focused, app_icon, ..Status::default() }));
         return;
     };
-    let mut settings = presence.settings.lock().unwrap().clone();
     // A hidden file shows as if file names were off
     let hidden = presence.choices.lock().unwrap().is_hidden(&active.key, settings.discord_hide_files_by_default);
     settings.discord_show_file &= !hidden;
@@ -388,7 +394,7 @@ pub fn sync(app: &AppHandle) {
     let show_tool = !presenting && settings.discord_show_tool;
     let show_subtext = shows_subtext(&settings, active.view);
     if !show_tool && !show_subtext && invite.is_none() {
-        let status = Status { file: Some(file), verb, focused, invite, ..Status::default() };
+        let status = Status { file: Some(file), verb, focused, invite, app_icon, ..Status::default() };
         let _ = tx.send(Message::Status(status));
         return;
     }
@@ -402,7 +408,7 @@ pub fn sync(app: &AppHandle) {
         let (tool, people, subtext) =
             serde_json::from_str::<(Option<String>, i32, Option<String>)>(&json).unwrap_or((None, 1, None));
         let invite = invite.clone().map(|invite| Invite { people: people.max(1), ..invite });
-        let status = Status { file: Some(file.clone()), verb, subtext, tool, focused, invite };
+        let status = Status { file: Some(file.clone()), verb, subtext, tool, focused, invite, app_icon: app_icon.clone() };
         let _ = tx.send(Message::Status(status));
     });
 }
@@ -494,7 +500,13 @@ fn activity<'a>(status: &'a Status, started: i64, version: &str) -> Activity<'a>
         Some(file) => format!("{verb} {file}"),
         None => "Browsing files".to_owned(),
     };
-    let mut assets = Assets::new().large_image(LOGO_URL).large_text(format!("Ligma {version}"));
+    // `?v=` so Discord's image proxy, which caches by URL, fetches redrawn
+    // icons again after an update
+    let large_image = match status.app_icon.as_str() {
+        "" | crate::app_icon::DEFAULT => LOGO_URL.to_owned(),
+        id => format!("{APP_ICONS_URL}/{id}.png?v={version}"),
+    };
+    let mut assets = Assets::new().large_image(large_image).large_text(format!("Ligma {version}"));
     let mut activity = Activity::new()
         .name("Ligma")
         .details(details)

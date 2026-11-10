@@ -609,16 +609,17 @@ const LIGMA_APP_ICONS = [
 ];
 
 // The icon's SVG. `crop` trims the macOS grid's margin, for Windows,
-// where icons fill their square
+// where icons fill their square. "tile" trims it to the tile itself, with
+// no shadow, for Discord (scripts/discord-icons.mjs)
 function ligmaAppIconSvg(id, crop = false) {
   const icon = LIGMA_APP_ICONS.find((icon) => icon.id === id && icon.art);
   if (!icon) return null;
   const { defs = "", body = "" } = icon.art();
-  const box = crop ? "88 88 848 848" : "0 0 1024 1024";
+  const box = crop === "tile" ? "100 100 824 824" : crop ? "88 88 848 848" : "0 0 1024 1024";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="${box}"><defs>`
     + `<clipPath id="tile"><path d="${LIGMA_TILE}"/></clipPath>`
     + `<filter id="tile-shadow" x="-10%" y="-10%" width="120%" height="125%"><feGaussianBlur in="SourceAlpha" stdDeviation="14"/><feOffset dy="12"/><feComponentTransfer><feFuncA type="linear" slope=".32"/></feComponentTransfer></filter>${defs}</defs>`
-    + `<path d="${LIGMA_TILE}" filter="url(#tile-shadow)"/>`
+    + (crop === "tile" ? "" : `<path d="${LIGMA_TILE}" filter="url(#tile-shadow)"/>`)
     + `<g clip-path="url(#tile)">${body}<path d="${ligmaFrame(5, 412)}" fill="#fff" fill-opacity=".22" fill-rule="evenodd"/></g></svg>`;
 }
 
