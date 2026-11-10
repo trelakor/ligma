@@ -248,6 +248,8 @@
   }
   .button:hover { background: var(--hover); }
   .button:active { background: var(--bg-secondary); }
+  .row.disabled .button { opacity: 0.4; pointer-events: none; }
+  .buttons { display: flex; flex: none; gap: 8px; }
 
   /* Color scheme: a card per scheme, each with a small Figma in its colors
      (the chosen themes', `--s-*` from `ligmaSwatch`) */
@@ -786,6 +788,29 @@
       <div id="plugin-list"></div>
       <div class="row empty" id="no-plugins">None yet</div>
     </section>
+    <section>
+      <h2>AI tools</h2>
+      <label class="row">
+        <span class="label">Connect AI tools to your files
+          <div class="hint">Lets AI tools like Claude Code, Cursor and Codex read and edit the files open in Ligma, through Figma MCP Bridge's MCP server instead of Figma's, which a free plan can call 6 times a month. Only in files you can edit.</div>
+        </span>
+        <input type="checkbox" class="switch" id="mcp-bridge">
+      </label>
+      <div class="row nested" id="mcp-config-row">
+        <span class="label">Add the MCP server to your AI tool
+          <div class="hint">Copies its entry for the tool's MCP settings, or the command that adds it to Claude Code. The tool starts it, and Node.js runs it.</div>
+        </span>
+        <span class="buttons">
+          <button class="button" id="copy-mcp-json">Copy JSON</button>
+          <button class="button" id="copy-mcp-claude">Copy Command</button>
+        </span>
+      </div>
+      <div class="row nested" id="mcp-status-row" aria-live="polite">
+        <span class="label"><span id="mcp-status">Off</span>
+          <div class="hint" id="mcp-status-hint"></div>
+        </span>
+      </div>
+    </section>
   </div>
 
   <div role="tabpanel" id="about" aria-labelledby="tab-about" hidden>
@@ -815,7 +840,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "classic-home"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "classic-home", "mcp-bridge"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1140,6 +1165,7 @@
     $("local-select-object").checked = settings.localSelectObject;
     $("copy-as-code").checked = settings.copyAsCode;
     $("classic-home").checked = settings.classicHome;
+    $("mcp-bridge").checked = settings.mcpBridge;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -1152,6 +1178,8 @@
       ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
+      ["mcp-config-row", settings.mcpBridge],
+      ["mcp-status-row", settings.mcpBridge],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -1215,6 +1243,7 @@
       localSelectObject: $("local-select-object").checked,
       copyAsCode: $("copy-as-code").checked,
       classicHome: $("classic-home").checked,
+      mcpBridge: $("mcp-bridge").checked,
       ...changes,
     };
     show();
@@ -1387,6 +1416,44 @@
   // A plugin rebuilt meanwhile may have lost or gained a problem
   addEventListener("focus", showPlugins);
   showPlugins();
+
+  // AI tools (src-tauri/src/mcp_bridge.rs). Ligma sends the status again
+  // when it changes
+  window.showMcpStatus = (status) => {
+    if (!status) return;
+    const files = (n) => `${n} file${n === 1 ? "" : "s"}`;
+    let text = "Off";
+    let hint = "";
+    if (status.on && status.files === 0) {
+      text = "No files open";
+      hint = "Files connect once they're open in a tab";
+    } else if (status.on && status.connected === 0) {
+      text = "Waiting for the MCP server";
+      hint = "Your AI tool starts it once it's added there";
+    } else if (status.on) {
+      text = status.connected === status.files
+        ? `Connected: ${files(status.connected)}`
+        : `Connected: ${status.connected} of ${files(status.files)}`;
+      hint = `Figma MCP Bridge ${status.version}`;
+    }
+    $("mcp-status").textContent = text;
+    $("mcp-status-hint").textContent = hint;
+    $("mcp-status-hint").hidden = !hint;
+  };
+  invoke("get_mcp_status").then(window.showMcpStatus);
+  for (const [id, kind, label] of [["copy-mcp-json", "json", "Copy JSON"], ["copy-mcp-claude", "claude", "Copy Command"]]) {
+    let reset;
+    $(id).addEventListener("click", async () => {
+      try {
+        await invoke("copy_mcp_config", { kind });
+        $(id).textContent = "Copied";
+      } catch {
+        $(id).textContent = "Couldn't Copy";
+      }
+      clearTimeout(reset);
+      reset = setTimeout(() => { $(id).textContent = label; }, 1500);
+    });
+  }
 
   invoke("get_theme").then(window.applyTheme);
   invoke("get_settings").then((loaded) => {

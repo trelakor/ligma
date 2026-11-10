@@ -301,8 +301,9 @@ fn script(manifest: &Manifest, command: Option<String>) -> Result<String, String
     // The code goes in as written, not through `eval`, which Figma's
     // content security policy may block. A new line ends a last `//`
     // comment
+    let runner = RUNNER_JS.replace("__FIND_HOST__", FIND_HOST_JS);
     Ok(format!(
-        "({RUNNER_JS})({spec}, function (figma, __html__, __uiFiles__, setTimeout, setInterval, clearTimeout, clearInterval) {{\n{code}\n}})"
+        "({runner})({spec}, function (figma, __html__, __uiFiles__, setTimeout, setInterval, clearTimeout, clearInterval) {{\n{code}\n}})"
     ))
 }
 
@@ -343,6 +344,28 @@ fn fail(app: &AppHandle, name: &str, message: &str) {
     crate::prompt::show(app, &format!("Couldn't run {name}"), message, &["OK"], |_| {});
 }
 
+/// Finds Figma's own code that closes the console plugin API and makes a
+/// new one, by text in its modules, as `{ isConsole, close, reset }`, or
+/// null. Pages keep it in `window.__ligmaPluginHost`
+pub const FIND_HOST_JS: &str = r#"() => {
+  const chunks = globalThis.rspackChunk_figma_web_bundler ?? globalThis.webpackChunk_figma_web_bundler;
+  let require;
+  try {
+    chunks?.push([[Symbol("ligma")], {}, (r) => { require = r; }]);
+  } catch {}
+  if (!require?.m) return null;
+  const id = Object.keys(require.m).find((id) => String(require.m[id]).includes("Did not close the previous plugin"));
+  if (id == null) return null;
+  const fns = Object.values(require(id)).filter((v) => typeof v === "function");
+  const text = (fn) => Function.prototype.toString.call(fn);
+  const host = {
+    isConsole: fns.find((fn) => /^function \w*\(\)\{return \w+\?\.type==="global"\}$/.test(text(fn))),
+    close: fns.find((fn) => text(fn).includes("closePluginFunc") && text(fn).includes('"global"===')),
+    reset: fns.find((fn) => text(fn).includes("resetGlobalPluginAPI?.(")),
+  };
+  return host.isConsole && host.close && host.reset ? host : null;
+}"#;
+
 /// Runs a plugin's code against Figma's console plugin API, `window.figma`,
 /// and returns "ok", "unavailable" (no API: the file can't be edited, isn't
 /// loaded, or another plugin is running) or "reload" (the API was closed
@@ -361,25 +384,7 @@ fn fail(app: &AppHandle, name: &str, message: &str) {
 /// events, `closePlugin`, its own `clientStorage` and timers that stop when
 /// it closes. `showUI` titles the window with the plugin's name
 const RUNNER_JS: &str = r#"(spec, main) => {
-  const findHost = () => {
-    const chunks = globalThis.rspackChunk_figma_web_bundler ?? globalThis.webpackChunk_figma_web_bundler;
-    let require;
-    try {
-      chunks?.push([[Symbol("ligma")], {}, (r) => { require = r; }]);
-    } catch {}
-    if (!require?.m) return null;
-    const id = Object.keys(require.m).find((id) => String(require.m[id]).includes("Did not close the previous plugin"));
-    if (id == null) return null;
-    const fns = Object.values(require(id)).filter((v) => typeof v === "function");
-    const text = (fn) => Function.prototype.toString.call(fn);
-    const host = {
-      isConsole: fns.find((fn) => /^function \w*\(\)\{return \w+\?\.type==="global"\}$/.test(text(fn))),
-      close: fns.find((fn) => text(fn).includes("closePluginFunc") && text(fn).includes('"global"===')),
-      reset: fns.find((fn) => text(fn).includes("resetGlobalPluginAPI?.(")),
-    };
-    return host.isConsole && host.close && host.reset ? host : null;
-  };
-  const host = window.__ligmaPluginHost ??= findHost();
+  const host = window.__ligmaPluginHost ??= (__FIND_HOST__)();
   const alive = (api) => {
     try {
       return api != null && api.currentPage != null;

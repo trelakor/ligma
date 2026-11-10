@@ -19,3 +19,6 @@ accepted = [
 ]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+# Ligma itself (`publish = false`), whose license is LICENSE. Otherwise
+# license texts in its folder, like the vendored ones, are listed as its own
+private = { ignore = true }

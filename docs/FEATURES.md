@@ -106,6 +106,18 @@ Like the Figma desktop app's Plugins > Development > Import plugin from manifest
 - **Unlike the desktop app, plugins aren't sandboxed:** they run with the page's access, so import only ones you trust.
 - Widgets, plugin parameters (quick actions) and the manifest's `build` command aren't supported (see `src-tauri/src/plugins.rs`).
 
+## AI tools (MCP)
+
+Figma's own MCP server goes through Figma's API, which a free plan can call 6 times a month (20 on Professional). [Figma MCP Bridge](https://github.com/gethopp/figma-mcp-bridge) gets around that with an MCP server on your computer and a plugin in each Figma file, which reads and edits the open file directly. Ligma takes the plugin's place, so there's nothing to run in Figma.
+
+- Settings > Plugins > AI tools > Connect AI tools to your files (`"mcpBridge"`, off by default) turns it on.
+- Add the bridge's MCP server to your AI tool once: Copy JSON copies its entry for the tool's MCP settings (Cursor, Claude Desktop, Windsurf and others), and Copy Command the command that adds it to Claude Code. The tool starts the server itself with `npx`, so it needs Node.js. The server is pinned to the version of the plugin code Ligma includes, as their tools have to match.
+- Every file open in Figma Design, FigJam, Slides or Buzz connects on its own, each by its key, so an AI tool can use several at once (`list_files`). Settings shows how many are connected. A file in more than one tab is used from the one on screen.
+- The bridge's tools read the document, selection, styles, variables, prototypes and screenshots, and create and edit layers (see its README). `run_script` is refused: Figma's web editor has no plugin sandbox, so its code would run with figma.com's access to your account.
+- Ligma runs the bridge plugin's own code (`src-tauri/vendor/figma-mcp-bridge/code.js`) in the tab, without its window, against the plugin API Figma's web editor offers on the page, like development plugins. So it only works in files you can edit, once they've loaded.
+- A tab an AI tool used in the last 5 minutes isn't frozen or put to sleep. Asleep and frozen tabs aren't connected. Selecting one connects it again.
+- The server listens on `127.0.0.1:1994`, and Ligma connects to it there (see `src-tauri/src/mcp_bridge.rs`).
+
 ## Updates
 
 On launch and every hour Ligma checks the latest release and downloads a newer version in the background. Once it's ready, an Update now button shows in the tab bar (before Settings on Windows, after the traffic lights on macOS) to restart into it, or it installs when you quit. Only an update ready within a minute of launch, while Ligma is in front, also asks to restart in a prompt; later ones never take focus from what you're doing. The app is replaced in place, so you stay signed in. If an update can't be installed, Ligma says why and offers to download it or report it.
