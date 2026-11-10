@@ -12,8 +12,9 @@
 //! so it's set again on the next launch. Without write access to the app,
 //! only the Dock changes
 //!
-//! On Windows the icon goes on Ligma's windows, which the taskbar shows
-//! while Ligma runs. Shortcuts keep Ligma's own icon
+//! On Windows the icon goes on Ligma's windows, for the title bar and
+//! Alt+Tab, and on its Start menu, desktop and pinned taskbar shortcuts,
+//! which Windows 11's taskbar takes the button's icon from (`shortcuts`)
 
 use std::path::PathBuf;
 
@@ -132,14 +133,13 @@ mod macos {
 }
 
 #[cfg(windows)]
-fn apply(app: &AppHandle, png: Option<Vec<u8>>, changed: bool) {
+fn apply(app: &AppHandle, png: Option<Vec<u8>>, _changed: bool) {
     win::set(png.as_deref());
     for window in app.webview_windows().values() {
         apply_to(window);
     }
-    if changed {
-        let windows: Vec<_> = app.webview_windows().into_values().collect();
-        let _ = app.run_on_main_thread(move || win::refresh_taskbar(&windows));
+    if let Ok(dir) = app.path().app_config_dir() {
+        std::thread::spawn(move || shortcuts::set(&dir, png.as_deref()));
     }
 }
 
@@ -213,39 +213,154 @@ mod win {
         }
         unsafe { SendMessageW(hwnd.0 as isize, WM_SETICON, ICON_BIG, big) };
     }
+}
 
-    /// A pinned taskbar button keeps the icon it had when it was made, so
-    /// each window's button is taken off and put back to make it read the
-    /// new one. Only windows the taskbar shows, or AddTab would add buttons
-    pub fn refresh_taskbar(windows: &[tauri::WebviewWindow]) {
-        use windows::Win32::Foundation::HWND;
-        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-        use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
-        use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GetWindowLongW, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW};
+/// Windows 11's own taskbar draws Ligma's button with the icon of the
+/// shortcut it belongs to (the Start menu one carries Ligma's app ID), not
+/// the window's, pinned or not. So the picked icon also goes on Ligma's
+/// shortcuts as an .ico, as Properties > Change Icon does. The installer
+/// makes the Start menu shortcut again on every update, so it runs on every
+/// launch, and only saves shortcuts whose icon is different
+#[cfg(windows)]
+mod shortcuts {
+    use std::hash::{Hash, Hasher};
+    use std::path::{Path, PathBuf};
 
-        let has_button = |hwnd: HWND| unsafe {
-            let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-            let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid());
-            IsWindowVisible(hwnd).as_bool() && style & WS_EX_TOOLWINDOW.0 == 0 && (!owned || style & WS_EX_APPWINDOW.0 != 0)
+    use image::imageops::FilterType;
+    use windows::core::{Interface, GUID, HSTRING, PCWSTR};
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM_READWRITE};
+    use windows::Win32::UI::Shell::{
+        IShellLinkW, SHChangeNotify, SHGetKnownFolderPath, ShellLink, FOLDERID_CommonPrograms, FOLDERID_Desktop, FOLDERID_Programs, FOLDERID_RoamingAppData,
+        KF_FLAG_DEFAULT, SHCNE_ASSOCCHANGED, SHCNE_UPDATEITEM, SHCNF_IDLIST, SHCNF_PATHW,
+    };
+
+    const PREFIX: &str = "app-icon-";
+
+    pub fn set(dir: &Path, png: Option<&[u8]>) {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
         };
+        let icon = png.and_then(|png| write(dir, png));
         unsafe {
-            let Ok(taskbar) = CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER) else {
-                return;
-            };
-            if taskbar.HrInit().is_err() {
-                return;
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let mut changed = false;
+            for link in links() {
+                changed |= update(&link, &exe, icon.as_deref()).unwrap_or(false);
             }
-            for window in windows {
-                let Ok(hwnd) = window.hwnd() else {
-                    continue;
-                };
-                let hwnd = HWND(hwnd.0 as _);
-                if has_button(hwnd) {
-                    let _ = taskbar.DeleteTab(hwnd);
-                    let _ = taskbar.AddTab(hwnd);
-                }
+            if changed {
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
             }
         }
+        // Old icons, once no shortcut points at them
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(PREFIX) && name.ends_with(".ico") && Some(&path) != icon.as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    /// The icon as an .ico beside app-icon.png, named after its contents
+    /// so Windows' icon cache can't show an older one from the same path
+    fn write(dir: &Path, png: &[u8]) -> Option<PathBuf> {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        png.hash(&mut hasher);
+        let path = dir.join(format!("{PREFIX}{:016x}.ico", hasher.finish()));
+        if path.exists() {
+            return Some(path);
+        }
+        std::fs::write(&path, ico(png)?).ok()?;
+        Some(path)
+    }
+
+    /// An .ico of PNG images, one per size the shell asks for
+    fn ico(png: &[u8]) -> Option<Vec<u8>> {
+        let picture = image::load_from_memory(png).ok()?;
+        let mut images = Vec::new();
+        for size in [16, 24, 32, 48, 64, 256] {
+            let mut data = Vec::new();
+            picture
+                .resize_exact(size, size, FilterType::Lanczos3)
+                .write_to(&mut std::io::Cursor::new(&mut data), image::ImageFormat::Png)
+                .ok()?;
+            images.push((size, data));
+        }
+        let mut out = [0u16, 1, images.len() as u16].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>();
+        let mut offset = 6 + 16 * images.len();
+        for (size, data) in &images {
+            // 0 means 256
+            let side = if *size >= 256 { 0 } else { *size as u8 };
+            out.extend([side, side, 0, 0]);
+            out.extend(1u16.to_le_bytes());
+            out.extend(32u16.to_le_bytes());
+            out.extend((data.len() as u32).to_le_bytes());
+            out.extend((offset as u32).to_le_bytes());
+            offset += data.len();
+        }
+        for (_, data) in images {
+            out.extend(data);
+        }
+        Some(out)
+    }
+
+    unsafe fn known(id: &GUID) -> Option<PathBuf> {
+        let path = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
+        let out = path.to_string().ok().map(PathBuf::from);
+        CoTaskMemFree(Some(path.0 as _));
+        out
+    }
+
+    /// Every shortcut that could be Ligma's: the Start menu, the desktop and
+    /// the taskbar's pins
+    unsafe fn links() -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for (id, deep) in [(&FOLDERID_Programs, true), (&FOLDERID_CommonPrograms, true), (&FOLDERID_Desktop, false)] {
+            if let Some(dir) = known(id) {
+                collect(&dir, deep, &mut found);
+            }
+        }
+        if let Some(roaming) = known(&FOLDERID_RoamingAppData) {
+            collect(&roaming.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"), false, &mut found);
+        }
+        found
+    }
+
+    fn collect(dir: &Path, deep: bool, found: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if deep && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                collect(&path, deep, found);
+            } else if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("lnk")) {
+                found.push(path);
+            }
+        }
+    }
+
+    /// Points `link` at `icon`, or back at Ligma's own with none, if it
+    /// opens `exe`. Whether it was saved
+    unsafe fn update(link: &Path, exe: &Path, icon: Option<&Path>) -> windows::core::Result<bool> {
+        let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+        let file: IPersistFile = shell_link.cast()?;
+        let path = HSTRING::from(link.as_os_str());
+        file.Load(&path, STGM_READWRITE)?;
+        let text = |buffer: &[u16]| String::from_utf16_lossy(&buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())]);
+        let mut target = [0u16; 1024];
+        shell_link.GetPath(&mut target, std::ptr::null_mut(), 0)?;
+        if !text(&target).eq_ignore_ascii_case(&exe.to_string_lossy()) {
+            return Ok(false);
+        }
+        let want = icon.map(|icon| icon.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut current = [0u16; 1024];
+        let mut index = 0;
+        shell_link.GetIconLocation(&mut current, &mut index)?;
+        if text(&current).eq_ignore_ascii_case(&want) && index == 0 {
+            return Ok(false);
+        }
+        shell_link.SetIconLocation(&HSTRING::from(want), 0)?;
+        file.Save(PCWSTR::null(), true)?;
+        SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, Some(path.as_ptr() as _), None);
+        Ok(true)
     }
 }
 

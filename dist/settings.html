@@ -1024,7 +1024,7 @@
     img.style.maskSize = "100% 100%";
   };
   const iconName = (id) => LIGMA_APP_ICONS.find((icon) => icon.id === id)?.name ?? "Ligma";
-  if (!macos) $("app-icon-hint").textContent = "Shows on the taskbar while Ligma is open. Pinned shortcuts keep Ligma's own icon.";
+  if (!macos) $("app-icon-hint").textContent = "Shows on the taskbar, in the Start menu and on Ligma's shortcuts. After an update, Ligma puts it back the next time it opens.";
   const iconChoices = [];
   $("app-icon-collections").replaceChildren(...LIGMA_APP_ICON_COLLECTIONS.map((collection) => {
     const section = node("section");
