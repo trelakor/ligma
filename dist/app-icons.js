@@ -435,21 +435,23 @@ const LIGMA_APP_ICONS = [
     id: "holo", name: "Holo", collection: "playful",
     art() {
       const { fill, parts, blur } = ligmaSvg;
-      // Holographic foil: broad fields of teal, magenta and violet-grey,
-      // blurred into one another, with a silver streak where the light
-      // catches it. The logo is outlined in ink over the same foil
-      const fields = `<circle cx="160" cy="820" r="320" fill="#4fe0c8"/><circle cx="110" cy="430" r="210" fill="#7fe9ff"/>`
-        + `<circle cx="880" cy="170" r="300" fill="#f468d2"/><circle cx="930" cy="640" r="230" fill="#ff8fe0"/>`
-        + `<circle cx="600" cy="600" r="250" fill="#8c80b8"/><circle cx="720" cy="930" r="210" fill="#a7f0e0"/>`
-        + `<circle cx="170" cy="150" r="170" fill="#f4f0cf"/>`
-        + `<ellipse cx="420" cy="380" rx="420" ry="96" fill="#fff" opacity=".85" transform="rotate(-38 420 380)"/>`
-        + `<ellipse cx="700" cy="760" rx="300" ry="50" fill="#fff" opacity=".45" transform="rotate(-38 700 760)"/>`;
-      const ink = "#121212";
+      // Holographic foil: silvery ice in the middle, with the color pooling
+      // toward the edges (violet, peach, mint, rose, teal, periwinkle) and
+      // blurred together. The logo is outlined in ink over the same foil
+      const fields = `<circle cx="80" cy="330" r="200" fill="#6f52aa"/><circle cx="100" cy="610" r="160" fill="#8ea0ba"/>`
+        + `<circle cx="230" cy="130" r="180" fill="#a38ba5"/><circle cx="520" cy="90" r="190" fill="#e2ccad"/>`
+        + `<circle cx="820" cy="130" r="170" fill="#bddad3"/><circle cx="940" cy="420" r="200" fill="#f2d7d7"/>`
+        + `<circle cx="910" cy="720" r="180" fill="#99c8c2"/><circle cx="580" cy="950" r="210" fill="#b3c6ee"/>`
+        + `<circle cx="220" cy="890" r="190" fill="#a9dccf"/>`
+        + `<circle cx="520" cy="540" r="250" fill="#e6f1ee" opacity=".85"/><circle cx="350" cy="320" r="150" fill="#d9d6cc" opacity=".8"/>`
+        + `<circle cx="700" cy="350" r="170" fill="#efe6ea"/><circle cx="430" cy="720" r="160" fill="#e3f4ef" opacity=".8"/>`
+        + `<ellipse cx="560" cy="470" rx="380" ry="70" fill="#fff" opacity=".6" transform="rotate(-35 560 470)"/>`;
+      const ink = "#2f2f2f";
       return {
-        defs: blur("foil", 64),
-        body: fill("#b9b0d6") + `<g filter="url(#foil)">${fields}</g>`
-          + `<path d="${LIGMA_TILE}" fill="none" stroke="${ink}" stroke-width="28" transform="translate(512 512) scale(.85) translate(-512 -512)"/>`
-          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-width="24" stroke-linejoin="round"`),
+        defs: blur("foil", 70),
+        body: fill("#dfe6e6") + `<g filter="url(#foil)">${fields}</g>`
+          + `<path d="${LIGMA_TILE}" fill="none" stroke="${ink}" stroke-width="34" transform="translate(512 512) scale(.87) translate(-512 -512)"/>`
+          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-opacity=".88" stroke-width="30" stroke-linejoin="round"`),
       };
     },
   },
