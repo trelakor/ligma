@@ -309,8 +309,9 @@ const READY_JS: &str =
 /// Longest a reloading tab stays behind its snapshot
 const REVEAL_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// True if a hidden tab can be frozen or closed without losing work
-const CAN_REST_JS: &str = "window.__ligmaCanRest?.() ?? false";
+/// True if a hidden tab can be frozen or closed without losing work, and
+/// no AI tool has used its file lately (see mcp_bridge.rs)
+const CAN_REST_JS: &str = "(window.__ligmaCanRest?.() ?? false) && !window.__ligmaMcp?.busy()";
 
 /// How long a tab stays hidden before it's frozen (Windows, macOS)
 #[cfg(any(windows, target_os = "macos"))]
@@ -2077,6 +2078,37 @@ pub fn scriptable_tabs(app: &AppHandle) -> Vec<Webview> {
     ids.into_iter().filter_map(|id| app.get_webview(&label(id))).collect()
 }
 
+/// A file open in its editor, in a tab that can run JavaScript now
+pub struct EditorFile {
+    pub tab: u32,
+    pub key: String,
+    pub name: String,
+}
+
+/// Files open in Figma Design, FigJam, Slides or Buzz, the editors with a
+/// plugin API, in tabs that can run JavaScript now (see `scriptable`). A
+/// file open in more than one tab comes once, in the tab on screen if any
+pub fn editor_files(app: &AppHandle) -> Vec<EditorFile> {
+    let state = app.state::<Tabs>().inner().0.lock().unwrap();
+    let mut files: Vec<(EditorFile, bool)> = Vec::new();
+    for tab in state.tabs.iter().filter(|tab| !tab.asleep && !tab.suspended) {
+        let Some(key) = tab.file_key.clone() else {
+            continue;
+        };
+        if !matches!(view(&tab.url), "design" | "board" | "slides" | "buzz") {
+            continue;
+        }
+        let shown = tab.hidden_since.is_none();
+        let file = EditorFile { tab: tab.id, key, name: tab.title.clone() };
+        match files.iter_mut().find(|(other, _)| other.key == file.key) {
+            Some(other) if shown && !other.1 => *other = (file, shown),
+            Some(_) => {}
+            None => files.push((file, shown)),
+        }
+    }
+    files.into_iter().map(|(file, _)| file).collect()
+}
+
 /// The file in the active tab
 pub struct ActiveFile {
     pub name: String,
@@ -2509,6 +2541,9 @@ pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visibl
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
+    // The app icon picked in settings, on the taskbar (see app_icon.rs)
+    #[cfg(windows)]
+    crate::app_icon::apply_to(&window);
     // Built hidden, it would keep a title bar's worth of frame until shown
     // (see frame.rs)
     #[cfg(windows)]

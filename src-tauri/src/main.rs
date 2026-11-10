@@ -3,6 +3,7 @@
 
 mod adjustments;
 mod ai_actions;
+mod app_icon;
 mod appearance;
 mod auth;
 mod background;
@@ -17,6 +18,7 @@ mod game_mode;
 mod handoff;
 mod home;
 mod layers;
+mod mcp_bridge;
 mod models;
 mod modules;
 mod notifications;
@@ -265,11 +267,14 @@ fn main() {
             settings::get_version,
             settings::check_for_updates,
             settings::report_problem,
+            app_icon::set_app_icon,
             models::get_model,
             models::install_model,
             models::cancel_model,
             models::uninstall_model,
             plugins::get_plugins,
+            mcp_bridge::get_mcp_status,
+            mcp_bridge::copy_mcp_config,
             plugins::import_plugin,
             plugins::set_plugin_enabled,
             plugins::remove_plugin,
@@ -301,6 +306,7 @@ fn main() {
             }
             let settings = settings::load(app.handle());
             appearance::init(app.handle(), &settings);
+            app_icon::init(app.handle(), &settings);
             layers::init(&settings);
             home::init(&settings);
             toolbar::init(&settings);
@@ -310,11 +316,13 @@ fn main() {
             view_state::init(&settings);
             game_mode::init(&settings);
             notifications::init(&settings);
+            mcp_bridge::init(&settings);
             app.manage(tabs::Tabs::new(&settings));
             app.manage(presence::start(app.handle(), &settings));
             updater::start(app.handle());
             game_mode::start(app.handle());
             notifications::start(app.handle());
+            mcp_bridge::start(app.handle());
 
             let window = tabs::build_window(app.handle(), tabs::MAIN, tauri::LogicalSize::new(1440.0, 900.0), true)?;
             let handle = app.handle().clone();

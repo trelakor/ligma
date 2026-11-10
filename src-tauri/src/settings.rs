@@ -25,6 +25,9 @@ pub struct Settings {
     pub light_theme: String,
     /// and in dark mode
     pub dark_theme: String,
+    /// App icon, from `dist/app-icons.js`, set by `app_icon::set_app_icon`
+    /// with its image. "ligma" is Ligma's own
+    pub app_icon: String,
     /// Size of Figma and Ligma's own interface, in percent, like a
     /// browser's zoom. The tab bar grows with it
     pub interface_scale: u32,
@@ -138,6 +141,9 @@ pub struct Settings {
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
+    /// Let AI tools read and edit open files through Figma MCP Bridge's
+    /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs)
+    pub mcp_bridge: bool,
 }
 
 impl Default for Settings {
@@ -146,6 +152,7 @@ impl Default for Settings {
             color_scheme: ColorScheme::System,
             light_theme: "figma".into(),
             dark_theme: "figma".into(),
+            app_icon: crate::app_icon::DEFAULT.into(),
             interface_scale: 100,
             sleep_tabs_after_minutes: 30,
             max_hidden_tabs_loaded: None,
@@ -186,6 +193,7 @@ impl Default for Settings {
             local_select_object: true,
             copy_as_code: true,
             classic_home: false,
+            mcp_bridge: false,
         }
     }
 }
@@ -278,6 +286,9 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.decorations(false);
     }
     let window = builder.build()?;
+    // The app icon picked in settings, on the taskbar (see app_icon.rs)
+    #[cfg(windows)]
+    crate::app_icon::apply_to(&window);
     // The size it was built with, and no accent-colored border
     #[cfg(windows)]
     {
@@ -429,6 +440,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
     crate::view_state::apply_settings(app, &settings);
+    crate::mcp_bridge::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();

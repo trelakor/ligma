@@ -54,6 +54,7 @@ Ligma asks before downloading a model the first time one is needed.
 
 - **Plugins in the left sidebar:** your saved and development plugins under Figma's own buttons, one click to run
 - **Development plugins** imported from a `manifest.json`, which figma.com doesn't support
+- **AI tools in your files** through [Figma MCP Bridge](https://github.com/gethopp/figma-mcp-bridge), without the plugin or Figma's monthly MCP limit
 
 ### Everything else
 

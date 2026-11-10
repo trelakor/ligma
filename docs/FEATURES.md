@@ -44,7 +44,7 @@ Figma loads installed fonts through its font helper, `FigmaAgent`. If the helper
 
 ## Settings
 
-Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimize) holds the options from `settings.json`, one page per category: Appearance (interface scale, color scheme and themes), Features (toolbar modes, layer previews, image adjustments, copy as code, the classic home page and notifications), Tabs & Memory, Discord, Plugins and About. Changes are saved and apply right away.
+Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimize) holds the options from `settings.json`, one page per category: Appearance (interface scale, color scheme and themes), App Icon, Features (toolbar modes, layer previews, image adjustments, copy as code, the classic home page and notifications), Tabs & Memory, Discord, Plugins and About. Changes are saved and apply right away.
 
 `settings.json` is created on first launch in `%APPDATA%\dev.ligma.client` (Windows) or `~/Library/Application Support/dev.ligma.client` (macOS). After editing it by hand, restart Ligma.
 
@@ -55,6 +55,15 @@ Settings (macOS: Ligma > Settings…, `Cmd+,`; Windows: the gear next to minimiz
 - Themes recolor Figma's panels, toolbars, menus, tooltips and buttons, and what Figma draws over the canvas (selection, rulers, labels), and with them the tab bar, the tab menu, prompts and the settings window, but not your designs: new shapes and frames get Figma's usual fills (see `dist/themes.js` and `src-tauri/src/appearance.rs`).
 - **Interface scale** (`"interfaceScale"` in percent, 50 to 200) zooms Figma tabs, the tab bar, the tab menu, prompts and the settings window together, like a browser's zoom; − and + step through the usual zoom levels. The tab bar grows with it.
 - The tab menu, prompts (update ready, join requests, errors) and the settings window are drawn by Ligma in Figma's style and follow the editor's light or dark theme. On Windows 11 they have no accent-colored border, just the system shadow.
+
+## App icon
+
+Settings > App Icon swaps Ligma's icon for one of 32 others in four collections: Colorways (Onyx, Ink, Pastel, Sunset, Forest, Tide, Ultraviolet, Citrus), Materials (Frosted, Chrome, Clay, Paper, Enamel, Gilded, Walnut, Marble), Graphic (Neon, Blueprint, Pixel, Riso, Terminal, Selected, Sticker, Bauhaus) and Playful (Candy, Holo, Cosmos, Lava, Snowfall, Pumpkin, Pool, Bricks). Each is drawn from the logo's own shapes (`dist/app-icons.js`).
+
+- The picked icon (`"appIcon"`) is drawn into `app-icon.png` next to `settings.json` and put back on every launch (`src-tauri/src/app_icon.rs`).
+- **macOS:** it shows in the Dock while Ligma runs and is set on Ligma.app as a custom icon, like Finder's Get Info does, so Finder, Launchpad and the Dock show it when Ligma is closed. An update replaces the app and its custom icon, and Ligma sets it again the next time it opens. If Ligma can't write to the app, only the Dock changes. The custom icon is flat: Liquid Glass's dark, tinted and clear styles only apply to Ligma's own icon.
+- **Windows:** it shows on the taskbar and in Alt+Tab while Ligma is open. Pinned shortcuts and the Start menu keep Ligma's own icon.
+- Use Ligma's icon puts the original back and removes the custom icon from the app.
 
 ## Features
 
@@ -97,6 +106,18 @@ Like the Figma desktop app's Plugins > Development > Import plugin from manifest
 - Ligma runs the code against the plugin API Figma's web editor offers on the page (`window.figma`, as in the developer console), so it needs a file you can edit. `figma.showUI`, messages with the UI, `figma.command`, the `run` and `close` events and `closePlugin` work as in the app. `figma.clientStorage` is kept per plugin in figma.com's IndexedDB.
 - **Unlike the desktop app, plugins aren't sandboxed:** they run with the page's access, so import only ones you trust.
 - Widgets, plugin parameters (quick actions) and the manifest's `build` command aren't supported (see `src-tauri/src/plugins.rs`).
+
+## AI tools (MCP)
+
+Figma's own MCP server goes through Figma's API, which a free plan can call 6 times a month (20 on Professional). [Figma MCP Bridge](https://github.com/gethopp/figma-mcp-bridge) gets around that with an MCP server on your computer and a plugin in each Figma file, which reads and edits the open file directly. Ligma takes the plugin's place, so there's nothing to run in Figma.
+
+- Settings > Plugins > AI tools > Connect AI tools to your files (`"mcpBridge"`, off by default) turns it on.
+- Add the bridge's MCP server to your AI tool once: Copy JSON copies its entry for the tool's MCP settings (Cursor, Claude Desktop, Windsurf and others), and Copy Command the command that adds it to Claude Code. The tool starts the server itself with `npx`, so it needs Node.js. The server is pinned to the version of the plugin code Ligma includes, as their tools have to match.
+- Every file open in Figma Design, FigJam, Slides or Buzz connects on its own, each by its key, so an AI tool can use several at once (`list_files`). Settings shows how many are connected. A file in more than one tab is used from the one on screen.
+- The bridge's tools read the document, selection, styles, variables, prototypes and screenshots, and create and edit layers (see its README). `run_script` is refused: Figma's web editor has no plugin sandbox, so its code would run with figma.com's access to your account.
+- Ligma runs the bridge plugin's own code (`src-tauri/vendor/figma-mcp-bridge/code.js`) in the tab, without its window, against the plugin API Figma's web editor offers on the page, like development plugins. So it only works in files you can edit, once they've loaded.
+- A tab an AI tool used in the last 5 minutes isn't frozen or put to sleep. Asleep and frozen tabs aren't connected. Selecting one connects it again.
+- The server listens on `127.0.0.1:1994`, and Ligma connects to it there (see `src-tauri/src/mcp_bridge.rs`).
 
 ## Updates
 
