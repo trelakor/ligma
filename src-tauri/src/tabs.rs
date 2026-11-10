@@ -641,7 +641,7 @@ fn label(id: u32) -> String {
     format!("tab-{id}")
 }
 
-fn is_figma(url: &Url) -> bool {
+pub fn is_figma(url: &Url) -> bool {
     url.scheme() == "https"
         && url
             .host_str()
@@ -675,7 +675,7 @@ fn kind(url: &Url) -> &'static str {
 }
 
 /// Key of the Figma file an editor URL points at, if any
-fn file_key(url: &Url) -> Option<String> {
+pub fn file_key(url: &Url) -> Option<String> {
     if !is_figma(url) || kind(url) == "page" {
         return None;
     }

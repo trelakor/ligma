@@ -545,6 +545,15 @@
         <input type="checkbox" class="switch" id="classic-home">
       </label>
     </section>
+    <section>
+      <h2>Notifications</h2>
+      <label class="row">
+        <span class="label">Show Figma notifications
+          <div class="hint">Comments, replies, mentions, invites and the rest of Figma's bell show as desktop notifications. Click one to open it. Checked every 30 seconds while a Figma tab is loaded.</div>
+        </span>
+        <input type="checkbox" class="switch" id="figma-notifications">
+      </label>
+    </section>
   </div>
 
   <div role="tabpanel" id="tabs" aria-labelledby="tab-tabs" hidden>
@@ -760,7 +769,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "classic-home"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "classic-home"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -940,6 +949,7 @@
     $("max-hidden").value = maxHidden;
     $("snapshots").checked = settings.reloadSnapshots;
     $("game-mode").checked = settings.gameMode;
+    $("figma-notifications").checked = settings.figmaNotifications;
     $("discord").checked = settings.discordRichPresence;
     $("discord-file").checked = settings.discordShowFile;
     $("discord-hide-files").checked = settings.discordHideFilesByDefault;
@@ -1015,6 +1025,7 @@
       maxHiddenTabsLoaded: $("limit").checked ? maxHidden : null,
       reloadSnapshots: $("snapshots").checked,
       gameMode: $("game-mode").checked,
+      figmaNotifications: $("figma-notifications").checked,
       discordRichPresence: $("discord").checked,
       discordShowFile: $("discord-file").checked,
       discordHideFilesByDefault: $("discord-hide-files").checked,
