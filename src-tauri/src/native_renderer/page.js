@@ -106,9 +106,17 @@
     return btoa(text);
   };
 
-  // Lets Figma draw and take input. A timer would wait at least 4ms each
-  // time, a quarter of every slice of work
-  const yieldNow = () => (globalThis.scheduler?.yield ? scheduler.yield() : new Promise((resolve) => setTimeout(resolve, 0)));
+  // Lets Figma draw and take input, and Ligma collect what's read so far,
+  // in turn. A timer would wait at least 4ms each time, a quarter of every
+  // slice of work, and scheduler.yield() would go ahead of Ligma
+  const channel = new MessageChannel();
+  const waiting = [];
+  channel.port1.onmessage = () => waiting.shift()?.();
+  const yieldNow = () =>
+    new Promise((resolve) => {
+      waiting.push(resolve);
+      channel.port2.postMessage(0);
+    });
 
   // Rounds to 1/1000, which is far below a pixel at any zoom Figma has, to
   // keep the JSON short

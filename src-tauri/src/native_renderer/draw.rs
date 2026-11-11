@@ -387,6 +387,8 @@ pub struct Encoder<'a> {
     pub missing_images: Vec<(String, f64)>,
     /// Images that show bigger than they were kept at, and how wide
     pub sharper_images: Vec<(String, f64)>,
+    /// Every image drawn, and how wide it needs keeping for that
+    pub used_images: Vec<(String, f64)>,
     /// Nodes pattern fills drew from, and whether each was there yet
     pub sources: Vec<(String, bool)>,
     /// Nodes as Figma renders them are wanted at exactly this zoom
@@ -415,6 +417,7 @@ impl<'a> Encoder<'a> {
             counts: Counts::default(),
             missing_images: Vec::new(),
             sharper_images: Vec::new(),
+            used_images: Vec::new(),
             sources: Vec::new(),
             exact_renders: false,
             exact_images: Vec::new(),
@@ -991,6 +994,7 @@ impl<'a> Encoder<'a> {
         // Tiles of this zoom level show up to 1.42 times bigger than it, and
         // an image is never shown bigger than kept while there's more of it
         let shown = shown * 1.42;
+        self.used_images.push((key.clone(), shown as f64));
         if kept < shown && img.original.0 as f32 > kept && kept < 4096.0 {
             self.sharper_images.push((key, shown as f64));
         }
@@ -1086,6 +1090,7 @@ impl<'a> Encoder<'a> {
                 }
                 self.missing_images.extend(inner.missing_images);
                 self.sharper_images.extend(inner.sharper_images);
+                self.used_images.extend(inner.used_images);
                 let picture = recorder.finish_recording_as_picture(Some(&tile))?;
                 self.kit.patterns.borrow_mut().insert(key, (picture.clone(), missing, sources));
                 picture

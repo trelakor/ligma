@@ -123,9 +123,14 @@ struct Recorded {
     waiting: usize,
     /// Nodes its pattern fills drew from, and whether each was there yet
     sources: Vec<(String, bool)>,
+    /// Images it drew, and how wide each needs keeping for it
+    uses: Vec<(String, f64)>,
 }
 
 const TILE: i32 = 512;
+
+/// Decoded images past this many bytes go once nothing drawn uses them
+const IMAGE_BUDGET: usize = 128 << 20;
 
 /// Settings that trade memory for quality, which can be set by environment
 /// variable in a dev build to measure them
@@ -560,6 +565,9 @@ impl Painter {
                 for picture in waiting {
                     self.pictures.remove(&picture);
                 }
+                // Pictures holding it at another size let that go, drawn
+                // again when next needed
+                self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| *used == key));
                 self.kit.forget_patterns(Some(&key));
                 self.images.insert(key, img);
                 self.drop_tiles(&areas);
@@ -625,9 +633,58 @@ impl Painter {
     /// Gives back the GPU memory an offscreen render took, whole views drawn
     /// supersampled, which Skia would otherwise keep for reuse
     fn release(&mut self) {
+        self.fit_images();
         let _ = self.gpu.context.flush_submit_and_sync_cpu();
         self.gpu.context.free_gpu_resources();
         self.update_memory();
+    }
+
+    /// Keeps images about as big as what's drawn from them needs: ones kept
+    /// much bigger are decoded again smaller, from the bytes kept, and past
+    /// `IMAGE_BUDGET` the biggest no picture uses are let go
+    fn fit_images(&mut self) {
+        // Pictures of other zooms are quick to record again, and hold on to
+        // images at the size those zooms took
+        let px = self.zoom.0;
+        if px > 0.0 {
+            let current = px.log2().round() as i32;
+            let exact = EXACT_LEVEL + (px * EXACT_STEPS).round() as i32;
+            self.pictures.retain(|&(_, _, level, _), _| if level >= EXACT_LEVEL { level == exact } else { (level - current).abs() <= 1 });
+        }
+        let mut need: HashMap<&str, f64> = HashMap::new();
+        for recorded in self.pictures.values() {
+            for (key, width) in &recorded.uses {
+                let entry = need.entry(key.as_str()).or_insert(0.0);
+                *entry = entry.max(*width);
+            }
+        }
+        let mut smaller = Vec::new();
+        let mut unused = Vec::new();
+        for (key, img) in &self.images {
+            if key.starts_with(RENDER) {
+                continue;
+            }
+            let kept = img.image.width().max(img.image.height()) as f64;
+            match need.get(key.as_str()) {
+                Some(&width) if kept > 256.0 && kept > width * 4.0 => smaller.push((key.clone(), width)),
+                Some(_) => {}
+                None => unused.push((key.clone(), img.bytes())),
+            }
+        }
+        for (key, width) in smaller {
+            self.asked.insert(key.clone(), width);
+            let _ = self.requests.send(Request { key, width });
+        }
+        let mut total: usize = self.images.values().map(Img::bytes).sum();
+        unused.sort_by(|a, b| b.1.cmp(&a.1));
+        for (key, bytes) in unused {
+            if total <= IMAGE_BUDGET {
+                break;
+            }
+            self.images.remove(&key);
+            self.asked.remove(&key);
+            total -= bytes;
+        }
     }
 
     fn update_memory(&mut self) {
@@ -762,12 +819,14 @@ impl Painter {
             let images: Vec<(String, f64)> = encoder.missing_images.drain(..).chain(encoder.sharper_images.drain(..)).collect();
             let exact = std::mem::take(&mut encoder.exact_images);
             let sources = std::mem::take(&mut encoder.sources);
+            let mut uses = std::mem::take(&mut encoder.used_images);
+            uses.extend(encoder.missing_images.iter().cloned());
             drop(encoder);
             let picture = recorder.finish_recording_as_picture(None)?;
             self.ask(&images);
             self.ask_exact(&exact);
             let missing = images.into_iter().chain(exact).map(|(key, _)| key).collect();
-            self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources });
+            self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources, uses });
         }
         self.pictures.get(&key)
     }
@@ -963,9 +1022,12 @@ impl Painter {
         // drawn quickly so the view fills even while it moves. Once it has
         // been still a moment, quick tiles are drawn again exactly, one a
         // frame, as each takes a while
+        // While the zoom changes, tiles of it are of no use a frame later, so
+        // the view is drawn straight from the pictures instead
+        let zooming = !at_once && !settled;
         let mut order: Vec<(TileKey, bool)> =
-            needed.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, at_once)).collect();
-        order.extend(needed.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| tile.stale)).map(|key| (key, at_once)));
+            needed.iter().copied().filter(|key| !zooming && !self.tiles.contains_key(key)).map(|key| (key, at_once)).collect();
+        order.extend(needed.iter().copied().filter(|key| !zooming && self.tiles.get(key).is_some_and(|tile| tile.stale)).map(|key| (key, at_once)));
         let rough: Vec<TileKey> =
             needed.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.exact)).collect();
         if !rough.is_empty() {
@@ -991,47 +1053,39 @@ impl Painter {
         if let Some(checker) = &checker {
             canvas.draw_paint(checker);
         }
-        // Older tiles where this zoom's aren't ready, oldest zoom first
+        // Where this zoom's tiles aren't ready, the pictures are played
+        // straight onto the view at this zoom, as Figma draws every frame,
+        // rather than stretching tiles of another zoom, which blurs
         let missing: Vec<TileKey> = needed.iter().copied().filter(|key| !self.tiles.contains_key(key)).collect();
+        let mut live = Counts::default();
         if !missing.is_empty() {
-            let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
-            let mut older: Vec<(&TileKey, &Tile)> =
-                self.tiles.iter().filter(|(key, _)| key.px != pxb && Rect::intersects2(&key.area(), &view_area)).collect();
-            // The nearest zoom first, then the most recently shown
-            let near = |key: &TileKey| (key.px().log2() - px.log2()).abs();
-            older.sort_by(|a, b| near(a.0).total_cmp(&near(b.0)).then(b.1.used.cmp(&a.1.used)));
             let mut holes = skia_safe::Region::new();
             for key in &missing {
                 holes.op_rect(skia_safe::IRect::from_xywh(key.x * TILE - ox, key.y * TILE - oy, TILE, TILE), skia_safe::region::RegionOp::Union);
             }
-            let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
-            for (key, tile) in older {
-                if holes.is_empty() {
-                    break;
-                }
-                let area = key.area();
-                let dst = Rect::from_ltrb(
-                    (area.left - view.x as f32) * px,
-                    (area.top - view.y as f32) * px,
-                    (area.right - view.x as f32) * px,
-                    (area.bottom - view.y as f32) * px,
-                );
-                // Each pixel from one stand-in only: stacking them would
-                // add up whatever is see-through in them, and glow
-                let cover = dst.round();
-                if !holes.intersects_rect(cover) {
+            let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
+            let mut pictures = Vec::new();
+            for unit in 0..self.units.len() {
+                let bounds = self.units[unit].bounds;
+                if !Rect::intersects2(&bounds, &view_area) || bounds.width().max(bounds.height()) * px < 0.5 {
                     continue;
                 }
-                let mut here = holes.clone();
-                here.op_rect(cover, skia_safe::region::RegionOp::Intersect);
-                canvas.save();
-                canvas.clip_region(&here, skia_safe::ClipOp::Intersect);
-                canvas.draw_image_rect_with_sampling_options(&tile.image, None, dst, sampling, &Paint::default());
-                canvas.restore();
-                holes.op_rect(cover, skia_safe::region::RegionOp::Difference);
+                let level = self.level(&self.units[unit], px, true);
+                if let Some(recorded) = self.picture(unit, level, true) {
+                    live += recorded.counts;
+                    pictures.push(recorded.picture.clone());
+                }
             }
+            canvas.save();
+            canvas.clip_region(&holes, skia_safe::ClipOp::Intersect);
+            canvas.translate((-ox as f32, -oy as f32));
+            canvas.scale((px, px));
+            for picture in &pictures {
+                canvas.draw_picture(picture, None, None);
+            }
+            canvas.restore();
         }
-        let mut counts = Counts::default();
+        let mut counts = live;
         let frame = self.frame;
         for key in &needed {
             if let Some(tile) = self.tiles.get_mut(key) {
