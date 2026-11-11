@@ -1,8 +1,7 @@
 //! Image adjustments: the seven sliders of an image paint (exposure,
 //! contrast, saturation, temperature, tint, highlights and shadows, each -1
-//! to 1), applied to the decoded image before it's drawn. Figma doesn't say
-//! how it applies them, so these are fitted to its exports with the parity
-//! harness's `compare`
+//! to 1), applied to the decoded image before it's drawn, as Figma's
+//! renderer applies them
 
 use std::collections::HashMap;
 
@@ -46,49 +45,100 @@ impl Adjust {
         Some(Self { exposure, contrast, saturation, temperature, tint, highlights, shadows })
     }
 
-    /// Applies the adjustments to `rgba`, straight alpha, in place
+    /// Applies the adjustments to `rgba`, straight alpha, in place, as
+    /// Figma's renderer does: on colors raised to the power 2.2, highlights
+    /// and shadows as a shift of exposure, temperature, tint and contrast in
+    /// Lab, then exposure and saturation. Contrast reaches the renderer at
+    /// 0.3 of its slider, the rest as they are
     pub fn apply(&self, rgba: &mut [u8]) {
-        let to_linear: Vec<f32> = (0..256).map(|i| srgb_to_linear(i as f32 / 255.0)).collect();
-        let gain = 2f32.powf(self.exposure);
-        let contrast = 1.0 + self.contrast;
-        let saturation = 1.0 + self.saturation;
-        // Warmer: more red, less blue. Tint: more magenta, less green
-        let warm = [1.0 + 0.1 * self.temperature, 1.0, 1.0 - 0.1 * self.temperature];
-        let tint = [1.0 + 0.05 * self.tint, 1.0 - 0.1 * self.tint, 1.0 + 0.05 * self.tint];
+        let to_linear: Vec<f32> = (0..256).map(|i| (i as f32 / 255.0).powf(2.2)).collect();
         for pixel in rgba.chunks_exact_mut(4) {
-            let mut c = [0, 1, 2].map(|i| to_linear[pixel[i] as usize] * gain * warm[i] * tint[i]);
-            let mut s = c.map(linear_to_srgb);
-            let luma = 0.2126 * s[0] + 0.7152 * s[1] + 0.0722 * s[2];
-            // Shadows lift or deepen the dark end, highlights the light end
-            let shift = self.shadows * 0.25 * (1.0 - luma).powi(2) + self.highlights * 0.25 * luma.powi(2);
-            for v in &mut s {
-                *v = (*v - 0.5) * contrast + 0.5 + shift;
-            }
-            let luma = 0.2126 * s[0] + 0.7152 * s[1] + 0.0722 * s[2];
-            for v in &mut s {
-                *v = luma + (*v - luma) * saturation;
-            }
-            c = s;
+            let c = [0, 1, 2].map(|i| to_linear[pixel[i] as usize]);
+            let c = self.color(c);
             for i in 0..3 {
-                pixel[i] = (c[i].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                pixel[i] = (c[i].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0 + 0.5) as u8;
             }
         }
     }
-}
 
-fn srgb_to_linear(v: f32) -> f32 {
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
+    /// One color, after the power 2.2, adjusted
+    fn color(&self, c: [f32; 3]) -> [f32; 3] {
+        const THRESHOLD: f32 = 0.5;
+        let contrast = self.contrast * 0.3;
+        // Highlights and shadows, how far the color's light is from the middle
+        let d = luma(c) - THRESHOLD.powf(2.2);
+        let k = if d > 0.0 { self.highlights } else { -self.shadows * 0.999 };
+        let shift = 0.75 * d / (1.0 + 4.0 * d * d).sqrt() * k;
+        let c = self.lab(c, contrast, THRESHOLD);
+        let c = exposure(c, self.exposure + shift);
+        saturate(c, self.saturation.clamp(-1.0, 1.0))
+    }
+
+    /// Temperature and tint move a and b, contrast moves L about the
+    /// threshold, softly when it's raised
+    fn lab(&self, c: [f32; 3], contrast: f32, threshold: f32) -> [f32; 3] {
+        const WHITE: [f32; 3] = [0.95047, 1.0, 1.08883];
+        let xyz = [
+            (0.4124564 * c[0] + 0.3575761 * c[1] + 0.1804375 * c[2]) / WHITE[0],
+            0.2126729 * c[0] + 0.7151522 * c[1] + 0.0721750 * c[2],
+            (0.0193339 * c[0] + 0.1191920 * c[1] + 0.9503041 * c[2]) / WHITE[2],
+        ]
+        .map(f32::cbrt);
+        let l = 116.0 * xyz[1] - 16.0;
+        let a = 500.0 * (xyz[0] - xyz[1]) + 30.0 * self.tint;
+        let b = 200.0 * (xyz[1] - xyz[2]) + 30.0 * self.temperature;
+        let t = threshold * 100.0;
+        let l = if contrast < 0.0 {
+            let flat = (l - t) * 0.2 + 50.0;
+            flat + (l - flat) * (contrast + 1.0)
+        } else {
+            let x = ((l - (t - 30.0)) / 60.0).clamp(0.0, 1.0);
+            let steep = x * x * x * (x * (x * 6.0 - 15.0) + 10.0) * 100.0;
+            l + (steep - l) * contrast
+        };
+        let fy = (l + 16.0) / 116.0;
+        let [x, y, z] = [a / 500.0 + fy, fy, fy - b / 200.0].map(|v| v * v * v);
+        let (x, z) = (x * WHITE[0], z * WHITE[2]);
+        [
+            3.2404542 * x - 1.5371385 * y - 0.4985314 * z,
+            -0.9692660 * x + 1.8760108 * y + 0.0415560 * z,
+            0.0556434 * x - 0.2040259 * y + 1.0572252 * z,
+        ]
+        .map(|v| v.clamp(0.0, 1.0))
     }
 }
 
-fn linear_to_srgb(v: f32) -> f32 {
-    let v = v.max(0.0);
-    if v <= 0.0031308 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
+fn luma(c: [f32; 3]) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+/// Brightens or darkens along a curve that keeps white and black, with
+/// colors pulled toward their light first and pushed back out after, more so
+/// when darkening
+fn exposure(c: [f32; 3], e: f32) -> [f32; 3] {
+    let y = 10f32.powf(2.0 * e) - 1.0;
+    let mut light = luma(c);
+    let push = 3.0 * (1.0 + light * light * e.min(0.0) / (0.2 - e.min(0.0)));
+    let mut c = c.map(|v| v + (light - v) * 0.75);
+    if e < 0.0 {
+        c = c.map(|v| v * (1.0 + e / 16.0));
+        light *= 1.0 + e / 16.0;
     }
+    let c = c.map(|v| v * (y + 1.0) / (v * y + 1.0));
+    let light = light * (y + 1.0) / (light * y + 1.0);
+    c.map(|v| (v + (v - light) * push).clamp(0.0, 1.0))
+}
+
+/// Less saturated toward gray, more toward the most it can be before a
+/// channel clips, at most twice as far from gray
+fn saturate(c: [f32; 3], s: f32) -> [f32; 3] {
+    let light = luma(c);
+    if s <= 0.0 {
+        return c.map(|v| v - (light - v) * s);
+    }
+    let min = c[0].min(c[1]).min(c[2]);
+    let max = c[0].max(c[1]).max(c[2]);
+    let room = (light / (light - min + 1e-6)).min((1.0 - light) / (max - light + 1e-6));
+    let k = (1.0 + (room - 1.0) * s).min(2.0);
+    c.map(|v| light + (v - light) * k)
 }

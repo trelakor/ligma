@@ -552,6 +552,28 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             let report = audit(&ctx, &action["audit:".len()..])?;
             Ok(report.to_string())
         }
+        "live" if super::dev() => {
+            let (send, receive) = mpsc::channel();
+            let _ = ctx.messages.send(Msg::Live(send));
+            let (shown, fresh, width, height) =
+                receive.recv_timeout(Duration::from_secs(120)).ok().flatten().ok_or("the renderer didn't answer")?;
+            let shown = image::RgbaImage::from_raw(width, height, shown).ok_or("bad size")?;
+            let fresh = image::RgbaImage::from_raw(width, height, fresh).ok_or("bad size")?;
+            let dir = report_dir(&ctx, "live")?;
+            let mut diff = image::RgbaImage::new(width, height);
+            let mut differ = 0u64;
+            for ((a, b), out) in shown.pixels().zip(fresh.pixels()).zip(diff.pixels_mut()) {
+                let error = (0..3).map(|c| (a[c] as i32 - b[c] as i32).abs()).max().unwrap_or(0);
+                if error > AUDIT_TOLERANCE {
+                    differ += 1;
+                }
+                *out = if error > AUDIT_TOLERANCE { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([a[0] / 3, a[1] / 3, a[2] / 3, 255]) };
+            }
+            let _ = shown.save(dir.join("shown.png"));
+            let _ = fresh.save(dir.join("fresh.png"));
+            let _ = diff.save(dir.join("diff.png"));
+            Ok(json!({ "dir": dir, "differ": differ, "pixels": width as u64 * height as u64 }).to_string())
+        }
         "purge" if super::dev() => {
             let (send, receive) = mpsc::channel();
             let _ = ctx.messages.send(Msg::Purge(send));

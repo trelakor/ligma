@@ -72,6 +72,10 @@ pub enum Msg {
     /// Draw `view` whole, `width` by `height` pixels, and send back its
     /// pixels, RGBA, and how many images it's still waiting for
     Render { view: View, width: u32, height: u32, reply: Sender<Option<(Vec<u8>, usize)>> },
+    /// The window's view as it shows now, from the tiles it has, then drawn
+    /// again from nothing: any difference is a tile left out of date. Sends
+    /// back both, RGBA, and the size
+    Live(Sender<Option<(Vec<u8>, Vec<u8>, u32, u32)>>),
     /// For each absolute point, the ids of the nodes under it, from the
     /// top-level one down to the deepest
     HitTest { points: Vec<(f32, f32)>, reply: Sender<Vec<Vec<String>>> },
@@ -99,7 +103,8 @@ pub struct Request {
 
 struct Unit {
     slot: usize,
-    /// A section's own drawing, without what's in it
+    /// A section's own drawing, without what's in it, or, for a mask in a
+    /// section, the section's children from it on, which it masks
     section: bool,
     bounds: Rect,
 }
@@ -486,6 +491,10 @@ impl Painter {
                 let _ = reply.send(self.render_view(&view, width, height));
                 self.dirty = true;
             }
+            Msg::Live(reply) => {
+                let _ = reply.send(self.live());
+                self.dirty = true;
+            }
             Msg::HitTest { points, reply } => {
                 let _ = reply.send(points.iter().map(|&point| self.hit(point)).collect());
             }
@@ -540,7 +549,20 @@ impl Painter {
             };
             if node.kind == Kind::Section {
                 units.push(Unit { slot, section: true, bounds });
-                for &child in &node.children {
+                for (i, &child) in node.children.iter().enumerate() {
+                    let mask = scene.node(child).filter(|child| !child.hidden && child.mask.is_some());
+                    if mask.is_some() {
+                        // A mask covers every layer after it, so they're
+                        // drawn together
+                        let rest = node.children[i..]
+                            .iter()
+                            .filter_map(|&later| scene.node(later).filter(|later| !later.hidden).and_then(|later| later.bounds))
+                            .reduce(|a, b| Rect::join2(a, b));
+                        if let Some(rest) = rest {
+                            units.push(Unit { slot: child, section: true, bounds: rest });
+                        }
+                        break;
+                    }
                     add(scene, child, units);
                 }
             } else {
@@ -595,8 +617,10 @@ impl Painter {
             let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, 2f32.powi(level));
             encoder.tint = self.tint;
             encoder.aa = self.config.supersample < 4;
-            if section {
+            if section && self.scene.node(slot).is_some_and(|node| node.kind == Kind::Section) {
                 encoder.section(slot);
+            } else if section {
+                encoder.masked(slot);
             } else {
                 encoder.node(slot);
             }
@@ -709,12 +733,17 @@ impl Painter {
     /// Figma's checkerboard for a page with its background hidden. It's
     /// anchored to the canvas, its squares 8 units wide at 100% and halved or
     /// doubled at each power of two of zoom, so they stay 5.7 to 11.3 points
-    fn checker(&self, origin: (f32, f32), px: f32, zoom: f64) -> Option<Paint> {
+    /// `origin` is the view's corner in device pixels, unrounded, as Figma
+    /// places the pattern
+    fn checker(&self, origin: (f64, f64), px: f32, zoom: f64) -> Option<Paint> {
         if !self.scene.transparent {
             return None;
         }
         let cell = 8.0 / 2f64.powf(zoom.max(1e-6).log2().round()) as f32;
         let (a, b) = if self.scene.dark { (0.12f32, 0.17f32) } else { (1.0, 0.95) };
+        // Within one repeat, which keeps it exact in 32 bits far out
+        let period = 2.0 * cell as f64 * px as f64;
+        let origin = (origin.0.rem_euclid(period) as f32, origin.1.rem_euclid(period) as f32);
         let shader = self.checker.as_ref()?.make_shader(uniforms(&[origin.0, origin.1, px, cell, a, b]), &[], None)?;
         let mut paint = Paint::default();
         paint.set_shader(shader);
@@ -724,10 +753,11 @@ impl Painter {
     /// Figma's pixel grid, lines a device pixel wide at each unit once a unit
     /// is 8 device pixels or more, which lighten dark colors and darken light
     /// ones
-    fn pixel_grid(&self, canvas: &skia_safe::Canvas, origin: (f32, f32), px: f32, width: i32, height: i32) {
+    fn pixel_grid(&self, canvas: &skia_safe::Canvas, origin: (f64, f64), px: f32, width: i32, height: i32) {
         if px < 8.0 {
             return;
         }
+        let origin = (origin.0.rem_euclid(px as f64) as f32, origin.1.rem_euclid(px as f64) as f32);
         let Some((lines, color)) = &self.grid else {
             return;
         };
@@ -788,7 +818,7 @@ impl Painter {
                 self.tiles.insert(key, tile);
             }
         }
-        let checker = self.checker((ox as f32, oy as f32), px, view.zoom);
+        let checker = self.checker((view.x * px as f64, view.y * px as f64), px, view.zoom);
         let canvas = target.canvas();
         canvas.clear(self.background());
         if let Some(checker) = &checker {
@@ -831,7 +861,7 @@ impl Painter {
                 canvas.draw_image(&tile.image, at, None);
             }
         }
-        self.pixel_grid(canvas, (ox as f32, oy as f32), px, width, height);
+        self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, width, height);
         // The approximate reason of a unit in view, if any
         let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
         let level = px.log2().round().clamp(-12.0, 8.0) as i32;
@@ -951,6 +981,25 @@ impl Painter {
             return None;
         }
         Some((pixels, waiting))
+    }
+
+    fn live(&mut self) -> Option<(Vec<u8>, Vec<u8>, u32, u32)> {
+        let view = self.view.clone()?;
+        let (width, height) = (self.gpu.size.0, self.gpu.size.1);
+        let read = |target: &mut Surface| {
+            let info = ImageInfo::new((width as i32, height as i32), ColorType::RGBA8888, AlphaType::Unpremul, None);
+            let mut pixels = vec![0u8; (width * height * 4) as usize];
+            target.canvas().read_pixels(&info, &mut pixels, (width * 4) as usize, (0, 0)).then_some(pixels)
+        };
+        let mut target = self.gpu.surface(width as i32, height as i32, 1)?;
+        self.compose(&mut target, &view, Some(Duration::ZERO), false);
+        let shown = read(&mut target)?;
+        self.tiles.clear();
+        self.pictures.clear();
+        self.kit.forget_patterns(None);
+        self.compose(&mut target, &view, None, true);
+        let fresh = read(&mut target)?;
+        Some((shown, fresh, width, height))
     }
 
     /// The nodes under `point`, the topmost at each level

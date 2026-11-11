@@ -489,10 +489,26 @@ impl<'a> Encoder<'a> {
     /// Children in order. A mask masks the siblings above it, up to the
     /// next mask: by its alpha (ALPHA), its outline (VECTOR) or its
     /// brightness (LUMINANCE)
+    /// A section's children from mask `slot` on, which it masks
+    pub fn masked(&mut self, slot: usize) {
+        let scene = self.scene;
+        let Some(parent) = scene.node(slot).and_then(|mask| mask.parent).and_then(|parent| scene.node(parent)) else {
+            return;
+        };
+        let Some(start) = parent.children.iter().position(|&child| child == slot) else {
+            return;
+        };
+        self.children_from(parent, start);
+    }
+
     fn children(&mut self, node: &Node) {
+        self.children_from(node, 0);
+    }
+
+    fn children_from(&mut self, node: &Node, start: usize) {
         let scene = self.scene;
         let children = &node.children;
-        let mut i = 0;
+        let mut i = start;
         while i < children.len() {
             let child = children[i];
             let Some(mask) = scene.node(child).filter(|child| !child.hidden && child.mask.is_some()) else {
@@ -503,11 +519,9 @@ impl<'a> Encoder<'a> {
             let end = (i + 1..children.len())
                 .find(|&j| scene.node(children[j]).is_some_and(|other| !other.hidden && other.mask.is_some()))
                 .unwrap_or(children.len());
-            let bounds = node.bounds;
+            // Not bounded to the mask group's box, which would cut off what a
+            // blur inside it reaches for: masking cuts the result to it after
             let mut rec = SaveLayerRec::default();
-            if let Some(bounds) = &bounds {
-                rec = rec.bounds(bounds);
-            }
             // Figma blends masked layers with what's behind the mask group,
             // so their layer starts as a copy of it. Masking it then mixes
             // the blended result with what was there, by the mask
