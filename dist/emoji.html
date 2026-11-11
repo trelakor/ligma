@@ -286,6 +286,8 @@
   let flat = [];
   let heads = [];
   let focused = -1;
+  // Whether the pointer, rather than the arrows, chose `focused`
+  let byMouse = false;
 
   const build = (sections) => {
     rows = [];
@@ -458,7 +460,9 @@
   });
   grid.addEventListener("mousemove", (e) => {
     const index = indexOf(e.target);
-    if (index >= 0 && index !== focused) focus(index, false);
+    if (index < 0 || index === focused) return;
+    byMouse = true;
+    focus(index, false);
   });
 
   // The list, browsing every section or showing a search's matches
@@ -525,12 +529,13 @@
     else query.removeAttribute("aria-activedescendant");
   };
 
-  // The arrows move through the emoji; up and down keep the column where
-  // the next row has one, past headings
+  // The arrows move through the emoji, never the search field's caret,
+  // which keeps the keyboard. Up and down keep the column where the next
+  // row has one, past headings, and stop at the first and last rows
   const step = (key) => {
     if (!flat.length) return;
-    // From the search field, only down goes into the list
-    if (focused < 0) return key === "ArrowDown" && focus(0);
+    byMouse = false;
+    if (focused < 0) return focus(0);
     const { row, col } = flat[focused];
     if (key === "ArrowLeft") return focus(Math.max(0, focused - 1));
     if (key === "ArrowRight") return focus(Math.min(flat.length - 1, focused + 1));
@@ -538,11 +543,7 @@
     let next = row + dir;
     while (rows[next]?.head) next += dir;
     const target = rows[next];
-    if (target) return focus(target.first + Math.min(col, target.items.length - 1));
-    if (dir < 0) {
-      focus(-1);
-      query.focus();
-    }
+    if (target) focus(target.first + Math.min(col, target.items.length - 1));
   };
 
   for (const [name, icon] of Object.entries(NAV_ICONS)) {
@@ -568,8 +569,6 @@
         draw();
       } else invoke("emoji_pick", { emoji: null });
     } else if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.key)) {
-      // Left and right stay in the search text until the grid has focus
-      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && focused < 0) return;
       e.preventDefault();
       step(e.key);
     } else if (e.key === "Enter" && focused >= 0) {
@@ -577,7 +576,9 @@
       pick(flat[focused].char);
     }
   });
-  grid.addEventListener("mouseleave", () => query.value || focus(-1, false));
+  // A pointed-at emoji lets go when the pointer leaves; one picked with
+  // the arrows stays
+  grid.addEventListener("mouseleave", () => byMouse && !query.value && focus(-1, false));
   document.addEventListener("contextmenu", (e) => e.preventDefault());
   // Clicks anywhere but the field keep typing in it
   grid.addEventListener("mousedown", (e) => e.preventDefault());
