@@ -23,6 +23,7 @@ mod mcp_bridge;
 mod mcp_clients;
 mod models;
 mod modules;
+mod new_home;
 mod notifications;
 mod objects;
 mod plugins;
@@ -314,6 +315,7 @@ fn main() {
             app_icon::init(app.handle(), &settings);
             layers::init(&settings);
             home::init(&settings);
+            new_home::init(&settings);
             toolbar::init(&settings);
             adjustments::init(&settings);
             ai_actions::init(&settings);

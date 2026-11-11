@@ -405,7 +405,8 @@ pub fn page_js(app: &AppHandle) -> String {
 /// Sends the themes to a Figma tab's page
 pub fn push_to(webview: &Webview) {
     let page = serde_json::to_string(&page(webview.app_handle())).unwrap();
-    let _ = webview.eval(format!("window.__ligmaAppearance?.({page})"));
+    // Ligma's home page takes them too (see new_home.rs)
+    let _ = webview.eval(format!("window.__ligmaAppearance?.({page}); window.__ligmaHomeAppearance?.({page})"));
 }
 
 /// Applies changed appearance settings to the app and every loaded tab

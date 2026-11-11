@@ -1,0 +1,3223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home</title>
+<!-- Ligma's own home page, in place of Figma's file browser: your files by
+     when you last worked on them, a month rail to go back in time and a
+     search window on Ctrl K. In Ligma's Home tab it runs on www.figma.com
+     with your files (src-tauri/src/new_home.rs). Opened from disk it runs on
+     sample files; ?theme=<id>&mode=light|dark and ?state=loading|empty|error
+     show those -->
+<script src="themes.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --bg2: #f5f5f5;
+    --bg3: #e6e6e6;
+    --line: #e6e6e6;
+    --hover: #f5f5f5;
+    --text: #1e1e1e;
+    --text2: #6b6b6b;
+    --text3: #b3b3b3;
+    --canvas: #f5f5f5;
+    --accent: #0d99ff;
+    --accent-text: #0768cf;
+    --sel: #e5f4ff;
+    --sel-strong: #bde3ff;
+    --menu: #ffffff;
+    --menu-line: #e6e6e6;
+    --toast: #1e1e1e;
+    --shadow: 0 2px 5px rgba(0, 0, 0, 0.08), 0 10px 24px rgba(0, 0, 0, 0.12);
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-mode="light"]) {
+      color-scheme: dark;
+      --bg: #2c2c2c;
+      --bg2: #1e1e1e;
+      --bg3: #383838;
+      --line: #444444;
+      --hover: #383838;
+      --text: #ffffff;
+      --text2: rgba(255, 255, 255, 0.7);
+      --text3: rgba(255, 255, 255, 0.4);
+      --canvas: #1e1e1e;
+      --accent: #0c8ce9;
+      --accent-text: #7cc4f8;
+      --sel: #24425c;
+      --sel-strong: #105cad;
+      --menu: #1e1e1e;
+      --menu-line: #383838;
+      --toast: #111111;
+      --shadow: 0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4);
+    }
+  }
+  /* Picked in the account menu while the system is light */
+  @media (prefers-color-scheme: light) {
+    :root[data-mode="dark"] {
+      color-scheme: dark;
+      --bg: #2c2c2c;
+      --bg2: #1e1e1e;
+      --bg3: #383838;
+      --line: #444444;
+      --hover: #383838;
+      --text: #ffffff;
+      --text2: rgba(255, 255, 255, 0.7);
+      --text3: rgba(255, 255, 255, 0.4);
+      --canvas: #1e1e1e;
+      --accent: #0c8ce9;
+      --accent-text: #7cc4f8;
+      --sel: #24425c;
+      --sel-strong: #105cad;
+      --menu: #1e1e1e;
+      --menu-line: #383838;
+      --toast: #111111;
+      --shadow: 0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 450 11px/16px var(--font);
+    font-feature-settings: "cv11", "calt", "tnum";
+    letter-spacing: 0.005em;
+    -webkit-font-smoothing: antialiased;
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    overflow: hidden;
+  }
+  ::selection { background: var(--sel-strong); }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: default; }
+  button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  a { color: inherit; text-decoration: none; }
+  kbd {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 4px;
+    background: var(--bg);
+    box-shadow: inset 0 0 0 1px var(--line), inset 0 -1px 0 var(--line);
+    color: var(--text2);
+    font: 450 11px/16px var(--font);
+  }
+  .i { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+  .g { flex: none; width: 12px; height: 12px; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-thumb { border: 4px solid transparent; border-radius: 6px; background: var(--bg3) padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: var(--text3); }
+  ::-webkit-scrollbar-track { background: none; }
+
+  #app { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: 100%; }
+
+  /* Sidebar */
+  #side { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--bg); }
+  .acct { display: flex; align-items: center; gap: 8px; height: 48px; margin: 0; padding: 0 16px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 550; text-align: left; }
+  .acct:hover { background: var(--hover); }
+  .av { display: grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; color: #fff; font: 600 11px/1 var(--font); }
+  .acct .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .i { color: var(--text2); }
+  .tree { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0 16px; }
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: calc(100% - 16px);
+    height: 32px;
+    margin: 0 8px;
+    padding: 0 8px;
+    border-radius: 5px;
+    font-size: 13px;
+    line-height: 20px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .nav:hover { background: var(--hover); }
+  .nav .i { color: var(--text2); }
+  .nav .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .nav .n { color: var(--text2); font-size: 11px; }
+  .nav.on { background: var(--sel); font-weight: 550; }
+  .nav.on .i { color: var(--text); }
+  .nav.drop { background: var(--sel); box-shadow: inset 0 0 0 1px var(--accent); }
+  .nav.find { color: var(--text2); }
+  .nav.find kbd { margin-left: auto; }
+  .nav.proj { padding-left: 32px; }
+  .plan { display: flex; align-items: baseline; gap: 6px; height: 32px; margin-top: 12px; padding: 12px 16px 0; color: var(--text2); white-space: nowrap; }
+  .plan b { font-weight: 550; color: var(--text); }
+  .team .chev { margin-left: auto; color: var(--text2); transition: transform 160ms var(--ease); }
+  .team[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+  .tm { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: #fff; font: 600 10px/1 var(--font); }
+  .sfoot { flex: none; padding: 8px 0; border-top: 1px solid var(--line); }
+  .sfoot .ext { margin-left: auto; }
+  .sync { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 16px; color: var(--text2); }
+  .sync .dot { width: 6px; height: 6px; border-radius: 50%; background: #14ae5c; }
+  .sync.off .dot { background: #e5a000; }
+  .sync.busy .dot { background: var(--accent); animation: pulse 900ms ease-in-out infinite alternate; }
+
+  /* Main */
+  main { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+  #head { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 16px 0 32px; }
+  #head h1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; font-size: 13px; line-height: 20px; font-weight: 550; white-space: nowrap; }
+  #head h1 span { overflow: hidden; text-overflow: ellipsis; }
+  #head h1 small { color: var(--text2); font-size: 11px; font-weight: 450; }
+  .menu-btn { display: none; width: 32px; height: 32px; place-items: center; border-radius: 5px; }
+  .menu-btn:hover { background: var(--hover); }
+  .grow { flex: 1; }
+  #find {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 280px;
+    min-width: 0;
+    height: 32px;
+    padding: 0 8px;
+    border-radius: 5px;
+    background: var(--bg2);
+    color: var(--text2);
+    text-align: left;
+  }
+  #find:hover { box-shadow: inset 0 0 0 1px var(--line); }
+  #find .lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .new { display: flex; flex: none; height: 32px; border-radius: 5px; background: var(--accent); color: #fff; font-weight: 550; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12); }
+  .new button { display: flex; align-items: center; gap: 4px; padding: 0 12px 0 8px; border-radius: 5px 0 0 5px; }
+  .new button + button { width: 24px; padding: 0; justify-content: center; border-radius: 0 5px 5px 0; box-shadow: inset 1px 0 rgba(255, 255, 255, 0.28); }
+  .new button:hover { background: rgba(0, 0, 0, 0.1); }
+  .new button:focus-visible { outline-color: #fff; }
+
+  #filters { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 16px 8px 32px; }
+  .seg { display: flex; padding: 2px; border-radius: 6px; background: var(--bg2); }
+  .seg button { height: 24px; padding: 0 10px; border-radius: 4px; color: var(--text2); }
+  .seg button:hover { color: var(--text); }
+  .seg button[aria-pressed="true"] { background: var(--bg); color: var(--text); font-weight: 550; box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, 0.05); }
+  .pill { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line); color: var(--text2); }
+  .pill:hover { color: var(--text); }
+  .pill[aria-pressed="true"] { background: var(--sel); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 550; }
+  .pill .badge { margin: 0; }
+  .fnote { display: flex; align-items: center; gap: 6px; color: var(--text2); white-space: nowrap; }
+  a.fnote:hover { color: var(--text); }
+  .banner { display: flex; align-items: center; gap: 12px; flex: 1; height: 32px; padding: 0 4px 0 12px; border-radius: 5px; background: #fff4e5; color: #7a4100; }
+  :root[data-mode="dark"] .banner { background: #3d2a12; color: #ffd7a1; }
+  .banner button { margin-left: auto; height: 24px; padding: 0 8px; border-radius: 4px; font-weight: 550; }
+  .banner button:hover { background: rgba(0, 0, 0, 0.06); }
+
+  #body { display: grid; grid-template-columns: minmax(0, 1fr) 48px; min-height: 0; }
+  #scroll { position: relative; overflow-y: auto; min-height: 0; padding: 0 24px 120px 32px; outline: none; }
+  .sec h2 {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    height: 40px;
+    margin: 0;
+    padding-top: 12px;
+    background: var(--bg);
+    font-size: 13px;
+    line-height: 20px;
+    font-weight: 550;
+  }
+  .sec h2 small { color: var(--text2); font-size: 11px; font-weight: 450; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px 16px; padding: 4px 0 28px; }
+
+  .card { position: relative; min-width: 0; border-radius: 8px; outline: none; }
+  .marquee { position: absolute; z-index: 3; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
+  .thumb { position: relative; aspect-ratio: 8 / 5; overflow: hidden; border-radius: 6px; background: var(--canvas); color: var(--text2); }
+  .thumb::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--line); pointer-events: none; }
+  .thumb svg, .thumb img, .pt img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .tph { width: 100%; height: 100%; }
+  /* What Ligma's tab bar and windows read their colors from (tabs.rs) */
+  [data-preferred-theme] {
+    --color-bg: var(--bg);
+    --color-bg-secondary: var(--bg2);
+    --color-bg-tertiary: var(--bg3);
+    --color-text: var(--text);
+    --color-text-secondary: var(--text2);
+    --color-text-tertiary: var(--text3);
+    --color-border: var(--line);
+    --color-bg-brand: var(--accent);
+    --color-bg-menu: var(--menu);
+    --color-bg-menu-selected: var(--accent);
+    --color-text-menu: var(--text);
+    --color-text-menu-secondary: var(--text2);
+    --color-border-menu: var(--menu-line);
+  }
+  .av img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+  .card:hover .thumb::after { box-shadow: inset 0 0 0 1px var(--text3); }
+  .card[aria-selected="true"] .thumb::after { box-shadow: inset 0 0 0 2px var(--accent); }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .card.ghost { opacity: 0.4; }
+  .tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
+  .tool {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 5px;
+    background: var(--bg);
+    color: var(--text);
+    box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0, 0, 0, 0.1);
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .tool:hover { background: var(--hover); }
+  .card:hover .tool, .card:focus-within .tool, .card[aria-selected="true"] .tool, .tool.starred { opacity: 1; }
+  .tool.starred .i { fill: #ffc700; stroke: #e6a800; }
+  .name { display: flex; align-items: center; gap: 8px; height: 20px; margin-top: 8px; font-size: 13px; line-height: 20px; }
+  .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nm input {
+    width: 100%;
+    height: 22px;
+    margin: -1px 0;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 3px;
+    outline: 1px solid var(--accent);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .badge { flex: none; min-width: 16px; height: 16px; padding: 0 5px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 11px; line-height: 16px; font-weight: 550; text-align: center; }
+  .meta { padding-left: 20px; overflow: hidden; color: var(--text2); text-overflow: ellipsis; white-space: nowrap; }
+  .card .restore { margin-left: auto; color: var(--accent-text); font-weight: 550; }
+
+  .sk { pointer-events: none; }
+  .sk .thumb, .sk .bar { background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
+  .sk .bar { height: 10px; margin-top: 12px; border-radius: 3px; }
+  @keyframes pulse { from { opacity: 1; } to { opacity: 0.45; } }
+
+  .empty { display: flex; flex-direction: column; align-items: center; max-width: 360px; margin: 14vh auto 0; text-align: center; font-size: 13px; line-height: 20px; }
+  .empty .ic { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 16px; border-radius: 12px; background: var(--bg2); color: var(--text2); }
+  .empty .ic .i { width: 24px; height: 24px; stroke-width: 1.4; }
+  .empty h2 { margin: 0 0 4px; font-size: 13px; font-weight: 550; }
+  .empty p { margin: 0 0 16px; color: var(--text2); }
+  .btn { display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line); font-weight: 550; }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: var(--accent); color: #fff; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12); }
+  .btn.primary:hover { filter: brightness(0.94); }
+
+  /* Month rail */
+  #rail { position: relative; display: flex; flex-direction: column; align-items: center; padding: 8px 0; border-left: 1px solid var(--line); overflow-y: auto; scrollbar-width: none; }
+  #rail::-webkit-scrollbar { display: none; }
+  #rail[hidden] { display: none; }
+  .yr { display: flex; align-items: center; height: 28px; color: var(--text2); font-weight: 550; }
+  .mo { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 40px; height: 32px; flex: none; border-radius: 5px; color: var(--text2); }
+  .mo:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+  .mo:disabled { color: var(--text3); }
+  .mo .d { width: var(--w); max-width: 28px; height: 2px; border-radius: 1px; background: currentColor; opacity: 0.5; }
+  .mo.on { color: var(--accent-text); font-weight: 550; }
+  .mo.on .d { opacity: 1; }
+  .pos { position: absolute; left: 0; top: 0; width: 2px; height: 32px; border-radius: 1px; background: var(--accent); transition: transform 280ms var(--ease); }
+  #tip { position: fixed; z-index: 60; display: none; padding: 4px 8px; border-radius: 5px; background: var(--toast); color: #fff; white-space: nowrap; pointer-events: none; }
+
+  /* Menus */
+  .menu {
+    position: fixed;
+    z-index: 50;
+    display: none;
+    min-width: 200px;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    padding: 8px;
+    border-radius: 13px;
+    background: var(--menu);
+    color: var(--text);
+    box-shadow: var(--shadow), 0 0 0 1px var(--menu-line);
+    outline: none;
+  }
+  .menu.open { display: block; animation: pop 120ms var(--ease); }
+  @keyframes pop { from { opacity: 0; transform: translateY(-2px) scale(0.98); } }
+  .mi { display: flex; align-items: center; width: 100%; height: 24px; padding: 0 16px 0 8px; border-radius: 5px; white-space: nowrap; text-align: left; }
+  .mi .ck { display: flex; width: 16px; margin-right: 4px; visibility: hidden; }
+  .mi[aria-checked="true"] .ck { visibility: visible; }
+  .mi .k { margin-left: auto; padding-left: 24px; opacity: 0.55; }
+  .mi .x { margin-left: auto; padding-left: 16px; opacity: 0.55; }
+  .mi.on { background: var(--accent); color: #fff; }
+  .mi[aria-disabled="true"] { opacity: 0.4; }
+  .mh { display: flex; align-items: center; height: 24px; padding: 0 8px; color: var(--text2); white-space: nowrap; }
+  .msep { height: 1px; margin: 8px -8px; background: var(--menu-line); }
+  .menu input {
+    width: 100%;
+    height: 28px;
+    margin-bottom: 8px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: var(--bg2);
+    color: var(--text);
+    font: inherit;
+    outline: none;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .menu input::placeholder { color: var(--text2); }
+  .menu input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+  .menu .none { padding: 4px 8px; color: var(--text2); }
+
+  /* Toast and selection bar */
+  .float {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 40px;
+    padding: 0 4px 0 16px;
+    border-radius: 8px;
+    background: var(--toast);
+    color: #fff;
+    font-size: 13px;
+    box-shadow: var(--shadow);
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .float[hidden] { display: none; }
+  .float.in { animation: rise 180ms var(--ease); }
+  @keyframes rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+  .float span { margin-right: 12px; }
+  .float button { height: 32px; padding: 0 10px; border-radius: 5px; font-weight: 550; }
+  .float button:hover { background: rgba(255, 255, 255, 0.1); }
+  .float .undo { color: #80caff; }
+  .float .x { width: 32px; padding: 0; display: grid; place-items: center; color: rgba(255, 255, 255, 0.7); }
+  #selbar { bottom: 24px; }
+  #toast { bottom: 76px; }
+  #toast.solo { bottom: 24px; }
+
+  /* Search */
+  #pal {
+    width: min(880px, calc(100vw - 32px));
+    max-width: none;
+    max-height: min(620px, calc(100vh - 80px));
+    margin: 10vh auto auto;
+    padding: 0;
+    border: 0;
+    border-radius: 13px;
+    background: var(--bg);
+    color: var(--text);
+    box-shadow: var(--shadow), 0 0 0 1px var(--line);
+    overflow: hidden;
+  }
+  #pal[open] { display: flex; flex-direction: column; animation: pop 140ms var(--ease); }
+  #pal::backdrop { background: rgba(0, 0, 0, 0.24); }
+  .pf { display: flex; flex: none; align-items: center; gap: 8px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  .pf > .i { color: var(--text2); }
+  .chips { display: contents; }
+  .chip { display: flex; flex: none; align-items: center; gap: 2px; height: 24px; padding: 0 2px 0 8px; border-radius: 4px; background: var(--sel); color: var(--accent-text); font-weight: 550; }
+  .chip i { font-style: normal; font-weight: 450; opacity: 0.75; }
+  .chip button { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 3px; }
+  .chip button:hover { background: rgba(0, 0, 0, 0.06); }
+  .chip .i { width: 12px; height: 12px; }
+  #pal-input {
+    flex: 1;
+    min-width: 120px;
+    height: 32px;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--text);
+    font: 450 16px/24px var(--font);
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  #pal-input::placeholder { color: var(--text2); }
+  .pb { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; }
+  .pb.split { display: grid; grid-template-columns: minmax(0, 1fr) 248px; gap: 8px; }
+  .pb.split > div + div { padding-left: 8px; border-left: 1px solid var(--line); }
+  .ph { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; color: var(--text2); font-weight: 550; }
+  .ph small { margin-left: auto; font-size: 11px; font-weight: 450; }
+  .pr { display: flex; align-items: center; gap: 12px; height: 32px; padding: 0 8px; border-radius: 6px; font-size: 13px; line-height: 20px; }
+  .pr.file { height: 44px; }
+  .pr[aria-selected="true"] { background: var(--sel); }
+  .pr .i { color: var(--text2); }
+  .pt { position: relative; flex: none; width: 48px; height: 30px; overflow: hidden; border-radius: 4px; background: var(--canvas); color: var(--text2); }
+  .pt::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--line); }
+  .pt svg { display: block; width: 100%; height: 100%; }
+  .pn { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .pn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pn b { font-weight: 650; color: var(--text); }
+  .pp, .pw { flex: none; color: var(--text2); font-size: 11px; white-space: nowrap; }
+  .pp { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .pw { width: 72px; text-align: right; }
+  .pr .hint { margin-left: auto; color: var(--text2); font-size: 11px; display: none; }
+  .pr[aria-selected="true"] .hint { display: flex; gap: 4px; align-items: center; }
+  .pmsg { padding: 8px 8px 12px; color: var(--text2); font-size: 13px; line-height: 20px; }
+  .pmsg b { color: var(--text); font-weight: 550; }
+  .scopes { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 8px 8px; }
+  .scopes button { height: 24px; padding: 0 8px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--line); color: var(--text2); }
+  .scopes button:hover { color: var(--text); background: var(--hover); }
+  .pfoot { display: flex; flex: none; align-items: center; gap: 16px; height: 36px; padding: 0 16px; border-top: 1px solid var(--line); color: var(--text2); white-space: nowrap; overflow: hidden; }
+  .pfoot span { display: flex; align-items: center; gap: 4px; }
+
+  /* Inbox */
+  .tier { color: var(--text2); font-size: 11px; }
+  .acct-row { display: flex; align-items: center; flex: none; padding-right: 8px; border-bottom: 1px solid var(--line); }
+  .acct-row .acct { flex: 1; min-width: 0; border-bottom: 0; }
+  .bell { position: relative; display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 5px; color: var(--text2); }
+  .bell:hover { background: var(--hover); color: var(--text); }
+  .bell[aria-expanded="true"] { background: var(--sel); color: var(--text); }
+  .bell .badge { position: absolute; top: 0; right: -2px; box-shadow: 0 0 0 2px var(--bg); }
+  #inbox { position: fixed; z-index: 45; display: none; flex-direction: column; width: 420px; max-height: min(600px, calc(100vh - 64px)); overflow: hidden; border-radius: 13px; background: var(--menu); box-shadow: var(--shadow), 0 0 0 1px var(--menu-line); outline: none; }
+  #inbox.open { display: flex; animation: pop 120ms var(--ease); }
+  .ih { display: flex; flex: none; align-items: center; gap: 8px; height: 48px; padding: 0 8px 0 16px; }
+  .ih h2 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 550; }
+  .ih small { color: var(--text2); font-size: 11px; }
+  .ib { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border-radius: 5px; color: var(--text2); }
+  .ib:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+  .ib:disabled { opacity: 0.5; }
+  .ib.x { justify-content: center; width: 28px; padding: 0; }
+  .if { flex: none; padding: 0 16px 12px; border-bottom: 1px solid var(--menu-line); }
+  .if .seg { display: inline-flex; }
+  .il { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+  .il h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 12px 8px 4px; background: var(--menu); color: var(--text2); font-size: 11px; line-height: 16px; font-weight: 550; }
+  #inbox .note { grid-template-columns: 8px 24px minmax(0, 1fr) 56px; gap: 10px; padding: 10px 8px 10px 2px; }
+  #inbox .ud { margin-top: 8px; }
+  #inbox .av.lg { width: 24px; height: 24px; font-size: 11px; }
+  #inbox .nl { padding-right: 28px; font-size: 11px; line-height: 16px; }
+  #inbox .quote { display: -webkit-box; margin-top: 4px; padding: 6px 8px; overflow: hidden; font-size: 11px; line-height: 16px; -webkit-line-clamp: 2; -webkit-box-orient: vertical; background: color-mix(in srgb, var(--text) 6%, var(--menu)); }
+  #inbox .note:hover .quote { background: var(--menu); }
+  #inbox .more { margin-top: 4px; }
+  #inbox .nacts { margin-top: 6px; }
+  #inbox .pt.nt { width: 56px; height: 35px; }
+  #inbox .tm.nt { width: 24px; height: 24px; font-size: 11px; }
+  #inbox .note .rd { top: 6px; right: 70px; }
+  .iempty { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 40px 24px; color: var(--text2); text-align: center; }
+  .iempty .i { width: 24px; height: 24px; }
+  .iempty b { margin-top: 8px; color: var(--text); font-size: 13px; font-weight: 550; }
+  .note { position: relative; display: grid; grid-template-columns: 8px 32px minmax(0, 1fr) 96px; gap: 12px; align-items: start; padding: 12px 12px 12px 4px; border-radius: 8px; outline: none; }
+  .note:hover { background: var(--hover); }
+  .note:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .ud { width: 8px; height: 8px; margin-top: 12px; border-radius: 50%; }
+  .note.unread .ud { background: var(--accent); }
+  .av.lg { width: 32px; height: 32px; font-size: 13px; }
+  .nl { padding-right: 32px; color: var(--text2); font-size: 13px; line-height: 20px; }
+  .nl b { color: var(--text); font-weight: 550; }
+  .note.unread .nl { color: var(--text); }
+  .nw { margin-left: 8px; color: var(--text2); font-size: 11px; white-space: nowrap; }
+  .quote { margin: 6px 0 0; padding: 8px 12px; border-radius: 6px; background: var(--bg2); color: var(--text); font-size: 13px; line-height: 20px; -webkit-user-select: text; user-select: text; }
+  .note:hover .quote { background: var(--bg); }
+  .more { display: block; margin-top: 6px; color: var(--text2); }
+  .nacts { display: flex; gap: 8px; margin-top: 8px; }
+  .btn.sm { height: 28px; padding: 0 10px; }
+  .done { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: var(--text2); }
+  .pt.nt { width: 96px; height: 60px; }
+  .tm.nt { justify-self: end; width: 32px; height: 32px; border-radius: 6px; font-size: 13px; }
+  .note .rd { position: absolute; top: 10px; right: 120px; }
+  .note:hover .tool, .note:focus-within .tool, .note:focus .tool { opacity: 1; }
+
+  @media (max-width: 860px) {
+    #app { grid-template-columns: minmax(0, 1fr); }
+    #side { position: fixed; inset: 0 auto 0 0; z-index: 30; width: 260px; transform: translateX(-100%); transition: transform 200ms var(--ease); box-shadow: var(--shadow); }
+    body.side-open #side { transform: none; }
+    .menu-btn { display: grid; }
+    #head { padding-left: 12px; }
+    #filters, #scroll { padding-left: 16px; }
+  }
+  @media (max-width: 640px) {
+    #body { grid-template-columns: minmax(0, 1fr); }
+    #rail { display: none; }
+    #find { width: 32px; justify-content: center; padding: 0; }
+    #find .lbl, #find kbd { display: none; }
+    #scroll { padding-right: 16px; }
+    .pb.split { grid-template-columns: minmax(0, 1fr); }
+    .pb.split > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
+    .pp, .pfoot span:nth-child(n + 3) { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body data-preferred-theme="light">
+<div id="app">
+  <nav id="side" aria-label="Files"></nav>
+  <main>
+    <header id="head"></header>
+    <div id="filters"></div>
+    <div id="body">
+      <div id="scroll"></div>
+      <nav id="rail" aria-label="Months"></nav>
+    </div>
+  </main>
+</div>
+<div id="menu" class="menu" role="menu" tabindex="-1"></div>
+<div id="inbox" role="dialog" aria-labelledby="inbox-title" tabindex="-1"></div>
+<div id="tip" role="tooltip"></div>
+<div id="selbar" class="float" role="toolbar" aria-label="Selected files" hidden></div>
+<div id="toast" class="float" role="status" aria-live="polite" hidden></div>
+<dialog id="pal" aria-label="Search">
+  <div class="pf">
+    <svg class="i" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>
+    <span class="chips" id="pal-chips"></span>
+    <input id="pal-input" type="text" role="combobox" aria-expanded="true" aria-controls="pal-body" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search files, projects and actions">
+    <kbd>Esc</kbd>
+  </div>
+  <div class="pb" id="pal-body" role="listbox" aria-label="Results"></div>
+  <div class="pfoot" id="pal-foot"></div>
+</dialog>
+<script>
+"use strict";
+
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const store = {
+  get(key, fallback) {
+    try {
+      const value = localStorage.getItem("ligma-home-" + key);
+      return value == null ? fallback : JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  },
+  set(key, value) {
+    try {
+      localStorage.setItem("ligma-home-" + key, JSON.stringify(value));
+    } catch {}
+  },
+};
+const params = new URLSearchParams(location.search);
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+const MOD = MAC ? "⌘" : "Ctrl+";
+const MIN = 6e4;
+const HOUR = 36e5;
+const DAY = 864e5;
+
+const ICONS = {
+  search: '<circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/>',
+  clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2 1.5"/>',
+  star: '<path d="m8 2.5 1.7 3.5 3.8.5-2.8 2.6.7 3.8L8 11.1l-3.4 1.8.7-3.8-2.8-2.6 3.8-.5z"/>',
+  file: '<path d="M4.5 2.5h5l3 3v8h-8z"/><path d="M9.5 2.5v3h3"/>',
+  folder: '<path d="M2.5 4.5h4L8 6h5.5v7h-11z"/>',
+  trash: '<path d="M3 4.5h10M6.5 4.5v-2h3v2M4.5 4.5l.5 9h6l.5-9"/>',
+  plus: '<path d="M8 3.5v9M3.5 8h9"/>',
+  down: '<path d="m5.5 7 2.5 2.5L10.5 7"/>',
+  more: '<circle cx="4" cy="8" r=".6"/><circle cx="8" cy="8" r=".6"/><circle cx="12" cy="8" r=".6"/>',
+  ext: '<path d="M9.5 3.5h3v3M12.5 3.5l-5 5M11.5 9.5v3h-8v-8h3"/>',
+  chat: '<path d="M3 12.5v-8a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H5.5z"/>',
+  check: '<path d="M4.5 8.5l2.5 2.5 4.5-5.5"/>',
+  x: '<path d="m5 5 6 6M11 5l-6 6"/>',
+  side: '<rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M6.5 3.5v9"/>',
+  arrow: '<path d="M3.5 8h9M9 4.5 12.5 8 9 11.5"/>',
+  import: '<path d="M8 2.5v7M5 6.5l3 3 3-3M3 10.5v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2"/>',
+  home: '<path d="M2.5 7 8 2.5 13.5 7v6.5h-4v-4h-3v4h-4z"/>',
+  bell: '<path d="M4.5 11.5v-4a3.5 3.5 0 0 1 7 0v4l1 1h-9z"/><path d="M6.8 14h2.4"/>',
+  lock: '<rect x="3.5" y="7.5" width="9" height="6" rx="1"/><path d="M5.5 7.5v-2a2.5 2.5 0 0 1 5 0v2"/>',
+  image: '<rect x="2.5" y="3.5" width="11" height="9" rx="1"/><circle cx="6" cy="6.5" r="1"/><path d="m2.5 11 3-3 3 3 2-2 3 3"/>',
+  users: '<circle cx="6" cy="6" r="2.5"/><path d="M2.5 13c0-2 1.6-3.5 3.5-3.5s3.5 1.5 3.5 3.5M10.5 3.8a2.5 2.5 0 0 1 0 4.4M12 9.8c1 .5 1.5 1.7 1.5 3.2"/>',
+  grid: '<rect x="2.5" y="2.5" width="4" height="4" rx=".5"/><rect x="9.5" y="2.5" width="4" height="4" rx=".5"/><rect x="2.5" y="9.5" width="4" height="4" rx=".5"/><rect x="9.5" y="9.5" width="4" height="4" rx=".5"/>',
+  sun: '<circle cx="8" cy="8" r="2.5"/><path d="M8 2v1.5M8 12.5V14M2 8h1.5M12.5 8H14M3.8 3.8l1 1M11.2 11.2l1 1M3.8 12.2l1-1M11.2 4.8l1-1"/>',
+  layers: '<path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5z"/><path d="m2.5 8.5 5.5 3 5.5-3"/>',
+  pen: '<g transform="rotate(135 8 8)"><path d="M8 13.5 3.5 7a4.5 4.5 0 0 1 9 0z"/><circle cx="8" cy="7" r="1.2"/><path d="M8 8.2v5.3"/></g>',
+  heart: '<path d="M8 13s-5-3-5-6.5A2.5 2.5 0 0 1 8 5a2.5 2.5 0 0 1 5 1.5C13 10 8 13 8 13z"/>',
+};
+const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
+
+// Product colors stay as Figma has them in every theme
+const TYPES = {
+  design: { label: "Design", noun: "Design file", color: "#0d99ff", mark: '<path d="M6 3.2 8.8 6 6 8.8 3.2 6z" fill="none" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>' },
+  figjam: { label: "FigJam", noun: "FigJam board", color: "#9747ff", mark: '<path d="M3 7.5c1-2.5 2-2.5 2.6-.6S7.4 9 9 5" fill="none" stroke="#fff" stroke-width="1.2" stroke-linecap="round"/>' },
+  slides: { label: "Slides", noun: "Slides deck", color: "#ff7a00", mark: '<rect x="3" y="3.5" width="6" height="5" rx=".6" fill="none" stroke="#fff" stroke-width="1.2"/>' },
+};
+const glyph = (type) => `<svg class="g" viewBox="0 0 12 12" aria-label="${TYPES[type].label}" role="img"><rect width="12" height="12" rx="3" fill="${TYPES[type].color}"/>${TYPES[type].mark}</svg>`;
+
+/* Sample data. The live page reads these from Figma: the session's
+   accounts, their plans and teams, projects and the files in them */
+
+const PEOPLE = {
+  me: { name: "Chris", color: "#ff7262" },
+  sam: { name: "Sam Ortiz", color: "#9747ff" },
+  priya: { name: "Priya Nair", color: "#14ae5c" },
+  ana: { name: "Ana Kim", color: "#0d99ff" },
+  jonas: { name: "Jonas Reed", color: "#e5a000" },
+  mei: { name: "Mei Tanaka", color: "#f24822" },
+};
+const firstName = (id) => (id === "me" ? "You" : PEOPLE[id].name.split(" ")[0]);
+
+// Each Starter or Professional team is its own plan; an Organization plan
+// holds many teams
+const PLANS = [
+  { id: "ligma", name: "Ligma", tier: "Professional", teams: [
+    { id: "ligma", name: "Ligma", color: "#1e1e1e", projects: [["app", "App"], ["web", "Website"], ["mkt", "Marketing"], ["brand", "Brand"]] },
+  ] },
+  { id: "side", name: "Side projects", tier: "Starter", teams: [
+    { id: "side", name: "Side projects", color: "#14ae5c", projects: [["exp", "Experiments"]] },
+  ] },
+  { id: "nw", name: "Northwind Studio", tier: "Organization", teams: [
+    { id: "client", name: "Client work", color: "#0d99ff", projects: [["halcyon", "Halcyon Bank"], ["fieldnote", "Fieldnote"]] },
+    { id: "studio", name: "Studio", color: "#f24822", projects: [["pitch", "Pitches"], ["tpl", "Templates"]] },
+  ] },
+];
+const PROJECTS = {};
+for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
+// In Ligma's Home tab the page runs on www.figma.com and reads your files
+// from Figma (see "Live data" below); opened from disk, it shows samples
+const LIVE = location.hostname === "www.figma.com";
+// Drafts are a folder per team, so these name a folder as Drafts
+const DRAFT_FOLDERS = new Set();
+const placeOf = (project) => (!project || DRAFT_FOLDERS.has(project) ? "Drafts" : PROJECTS[project]?.name ?? "Shared with you");
+
+// [name, type, look] per project; null is Drafts
+const SPEC = [
+  ["app", [["Settings window", "design", "components"], ["Onboarding flow", "design", "flow"], ["Tab previews", "design", "app"], ["Icon set 16px", "design", "icons"], ["Home rebuild", "figjam", "board"], ["Plugins in the sidebar", "design", "app"], ["Theme orbs", "design", "poster"], ["Discord card", "design", "app"], ["Split view", "design", "app"], ["Layer previews", "design", "app"], ["Context menus", "design", "components"], ["Color contrast", "design", "components"], ["Command palette", "design", "flow"]]],
+  ["web", [["Ligma site — v3", "design", "web"], ["Changelog page", "design", "web"], ["Store listing", "design", "web"], ["Download page", "design", "web"], ["Docs", "design", "web"], ["Ligma site — v2", "design", "web"]]],
+  ["mkt", [["Launch deck", "slides", "deck"], ["Launch posters", "design", "poster"], ["Social kit", "design", "poster"], ["Q4 roadmap", "figjam", "board"], ["Press kit", "slides", "deck"], ["Content calendar", "figjam", "board"]]],
+  ["brand", [["Logo explorations", "design", "icons"], ["Brand guidelines", "slides", "deck"], ["App icon colorways", "design", "icons"], ["Type tests", "design", "poster"]]],
+  ["exp", [["Pixel clock", "design", "poster"], ["Recipe app", "design", "app"], ["Bike routes", "design", "dash"], ["Sonar poster", "design", "poster"], ["Wedding invite", "design", "poster"], ["Tauri spike", "figjam", "board"]]],
+  ["halcyon", [["Mobile banking app", "design", "app"], ["Card designs", "design", "components"], ["Halcyon design system", "design", "components"], ["Discovery workshop", "figjam", "board"], ["Halcyon pitch", "slides", "deck"], ["Account dashboard", "design", "dash"], ["Statement emails", "design", "web"]]],
+  ["fieldnote", [["Fieldnote iOS", "design", "app"], ["Fieldnote site", "design", "web"], ["Research synthesis", "figjam", "board"], ["Sprint retro", "figjam", "board"], ["Usability test plan", "slides", "deck"]]],
+  ["pitch", [["Studio credentials", "slides", "deck"], ["Northwind 2027 plan", "slides", "deck"], ["Rebrand proposal", "slides", "deck"]]],
+  ["tpl", [["Wireframe kit", "design", "components"], ["Workshop templates", "figjam", "board"], ["Case study layout", "design", "web"]]],
+  [null, [["Moodboard", "design", "poster"], ["Scratch — gradients", "design", "poster"], ["Interview notes", "figjam", "board"], ["Weekend project", "design", "app"], ["Untitled", "design", "icons"], ["Portfolio 2025", "design", "web"], ["Holiday card 2025", "design", "poster"], ["Year in review 2025", "slides", "deck"]]],
+];
+
+function hash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+function rng(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const fileKey = (seed) => {
+  const r = rng(seed);
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length: 22 }, () => abc[Math.floor(r() * abc.length)]).join("");
+};
+
+const FILES = [];
+const BY_ID = new Map();
+let nextId = 0;
+function addFile(file, atStart = false) {
+  file.id ??= "f" + nextId++;
+  file.key ??= fileKey(hash(file.id + file.name));
+  if (atStart) FILES.unshift(file);
+  else FILES.push(file);
+  BY_ID.set(file.id, file);
+  return file;
+}
+const byId = (id) => BY_ID.get(id);
+
+function seedFiles() {
+  const r = rng(11);
+  const all = [];
+  for (const [project, files] of SPEC) for (const [name, type, look] of files) all.push({ name, type, look, project, unread: 0, starred: false, trashed: false });
+  // What was worked on today, newest first, and what happened in each
+  const today = [
+    ["Ligma site — v3", 12, "edit", "me"],
+    ["Settings window", 47, "comment", "sam", 2],
+    ["Home rebuild", 95, "create", "me"],
+    ["Onboarding flow", 160, "edit", "priya"],
+    ["Mobile banking app", 230, "edit", "ana"],
+    ["Icon set 16px", 300, "edit", "me"],
+    ["Q4 roadmap", 380, "comment", "priya", 3],
+    ["Launch deck", 460, "edit", "sam"],
+  ];
+  const now = Date.now();
+  const pick = (name) => all.splice(all.findIndex((f) => f.name === name), 1)[0];
+  const ordered = today.map(([name, minutes, kind, by, unread]) => Object.assign(pick(name), { at: now - minutes * MIN, kind, by, unread: unread ?? 0 }));
+  for (let i = all.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [all[i], all[j]] = [all[j], all[i]];
+  }
+  const others = ["sam", "priya", "ana", "jonas", "mei"];
+  all.forEach((file, i) => {
+    const days = 0.6 * Math.exp(i * 0.117) * (0.85 + r() * 0.3) + 0.5;
+    file.at = now - days * DAY - r() * 6 * HOUR;
+    const roll = r();
+    const other = others[Math.floor(r() * others.length)];
+    [file.kind, file.by] = roll < 0.45 ? ["edit", "me"] : roll < 0.68 ? ["edit", other] : roll < 0.88 ? ["open", "me"] : ["comment", other];
+    ordered.push(file);
+  });
+  const mention = ordered.find((f) => f.name === "Halcyon pitch");
+  Object.assign(mention, { kind: "mention", by: "ana", unread: 1 });
+  for (const name of ["Ligma site — v3", "Icon set 16px", "Theme orbs", "Launch deck", "Halcyon design system"]) ordered.find((f) => f.name === name).starred = true;
+  for (const [i, name] of ["Scratch — gradients", "Tauri spike", "Holiday card 2025"].entries()) {
+    Object.assign(ordered.find((f) => f.name === name), { trashed: true, trashedAt: now - (i * 4 + 1) * DAY });
+  }
+  ordered.forEach((file) => addFile(file));
+}
+
+/* Thumbnails: each file's first page as a small drawing, in its own
+   colors whatever the theme. Drawn when a card comes near the view */
+
+const PALETTES = [
+  { bg: "#ffffff", ink: "#1e1e1e", a: "#0d99ff", b: "#9747ff", c: "#ffcd29", soft: "#e5f4ff" },
+  { bg: "#0f1115", ink: "#ffffff", a: "#7b61ff", b: "#ff6ad5", c: "#29d3c3", soft: "#1d2230" },
+  { bg: "#fdf3e7", ink: "#2b2116", a: "#ff7a00", b: "#e8455d", c: "#ffc46b", soft: "#f6e3cc" },
+  { bg: "#f3f7f2", ink: "#17251a", a: "#14ae5c", b: "#0f7a43", c: "#ffcd29", soft: "#dcefe2" },
+  { bg: "#f5f3ff", ink: "#1d1640", a: "#6a55ff", b: "#ff8a65", c: "#4fd1a5", soft: "#e7e3ff" },
+  { bg: "#111111", ink: "#f5f5f5", a: "#ff4d2e", b: "#ffd166", c: "#ffffff", soft: "#262626" },
+  { bg: "#eef6ff", ink: "#0c2440", a: "#1463ff", b: "#00b3a4", c: "#ffb020", soft: "#dbe9ff" },
+];
+const tx = (x, y, size, weight, fill, text, extra = "") => `<text x="${x}" y="${y}" font-size="${size}" font-weight="${weight}" fill="${fill}" ${extra}>${esc(text)}</text>`;
+const rc = (x, y, w, h, fill, r = 0, extra = "") => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="${fill}" ${extra}/>`;
+const frame = (x, y, w, h, fill, label) => (label ? tx(x, y - 5, 7, 500, "currentColor", label) : "") + rc(x, y, w, h, fill, 0, 'stroke="rgba(0,0,0,.08)"');
+const cut = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
+const LOOKS = {
+  web(f, p, r) {
+    const brand = f.name.split(/[\s—]+/)[0];
+    const heads = [["Figma, minus", "the weight"], ["Banking that", "feels human"], ["Notes that", "find you"], ["Made for", "small teams"], ["Everything,", "in one place"], ["Ship the", "next thing"]];
+    const [h1, h2] = heads[Math.floor(r() * heads.length)];
+    const clip = "w" + f.id;
+    let s = frame(24, 22, 272, 200, p.bg, "Desktop");
+    s += rc(36, 34, 9, 9, p.a, 2) + tx(50, 42, 8, 650, p.ink, brand);
+    s += ["Product", "Pricing", "Docs"].map((w, i) => tx(150 + i * 32, 42, 6.5, 500, p.ink, w, 'opacity=".6"')).join("");
+    s += rc(250, 32, 36, 14, p.a, 4) + tx(268, 41.5, 6, 600, "#fff", "Sign up", 'text-anchor="middle"');
+    s += tx(36, 80, 17, 750, p.ink, h1, 'letter-spacing="-.5"') + tx(36, 99, 17, 750, p.ink, h2, 'letter-spacing="-.5"');
+    s += tx(36, 114, 6.5, 450, p.ink, "A short line on what it does and who for", 'opacity=".6"');
+    s += rc(36, 122, 54, 15, p.a, 5) + tx(63, 132, 6.5, 600, "#fff", "Get started", 'text-anchor="middle"');
+    s += `<defs><clipPath id="${clip}"><rect x="178" y="58" width="106" height="82" rx="8"/></clipPath></defs><g clip-path="url(#${clip})">${rc(178, 58, 106, 82, p.soft)}`;
+    s += `<circle cx="${200 + r() * 30}" cy="${80 + r() * 20}" r="34" fill="${p.a}" opacity=".9"/><circle cx="${250 + r() * 20}" cy="${70 + r() * 30}" r="30" fill="${p.b}" opacity=".85"/><circle cx="${230 + r() * 30}" cy="${130 + r() * 10}" r="26" fill="${p.c}" opacity=".9"/></g>`;
+    s += ["Fast", "Simple", "Private"].map((w, i) => rc(36 + i * 84, 156, 74, 44, p.soft, 6) + tx(46 + i * 84, 172, 7, 650, p.ink, w)).join("");
+    return s;
+  },
+  app(f, p, r) {
+    const screens = ["Home", "Activity", "Profile"];
+    const words = [["Groceries", "−24.10"], ["Coffee", "−4.50"], ["Salary", "+3,200"], ["Rent", "−1,150"], ["Transfer", "−200"], ["Refund", "+18.99"]];
+    let s = "";
+    screens.forEach((screen, i) => {
+      const x = 36 + i * 88;
+      const y = 30;
+      const head = i === 0 ? p.a : p.soft;
+      s += frame(x, y, 68, 150, p.bg, screen) + rc(x, y, 68, 34, head);
+      s += tx(x + 7, y + 25, 8, 700, i === 0 ? "#fff" : p.ink, i === 0 ? cut(f.name.split(" ")[0], 10) : screen);
+      for (let k = 0; k < 4; k++) {
+        const [label, amount] = words[(k + i * 2 + Math.floor(r() * 3)) % words.length];
+        const yy = y + 48 + k * 20;
+        s += `<circle cx="${x + 12}" cy="${yy}" r="5" fill="${[p.b, p.c, p.a][(k + i) % 3]}"/>`;
+        s += tx(x + 21, yy - 1, 5.5, 600, p.ink, label) + tx(x + 21, yy + 6, 4.5, 450, p.ink, "Today", 'opacity=".5"');
+        s += tx(x + 62, yy + 2, 5.5, 600, p.ink, amount, 'text-anchor="end"');
+      }
+      s += rc(x + 7, y + 132, 54, 12, p.a, 6) + tx(x + 34, y + 140, 5.5, 600, "#fff", "Continue", 'text-anchor="middle"');
+    });
+    return s;
+  },
+  icons(f, p, r) {
+    const names = ["home", "search", "clock", "star", "file", "folder", "bell", "pen", "users", "grid", "lock", "image", "chat", "sun", "layers", "trash", "plus", "heart", "check", "import", "ext", "side", "arrow", "x"];
+    const pick = Math.floor(r() * 24);
+    let s = frame(24, 30, 272, 170, "#ffffff", f.name.includes("Logo") ? "Marks" : "Icons / 16");
+    names.forEach((name, i) => {
+      const x = 40 + (i % 8) * 31;
+      const y = 44 + Math.floor(i / 8) * 34;
+      s += `<g transform="translate(${x} ${y}) scale(1.3)" fill="none" stroke="#1e1e1e" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</g>`;
+      if (i === pick) s += rc(x - 3, y - 3, 26.8, 26.8, "none", 0, 'stroke="#0d99ff" stroke-width="1"');
+    });
+    return s;
+  },
+  poster(f, p, r) {
+    const words = f.name.replace(/[—\d]+/g, " ").split(/\s+/).filter(Boolean);
+    const lines = words.length > 1 ? [words[0], words.slice(1).join(" ")] : [words[0] ?? "Lighter", "Faster"];
+    const looks = [{ bg: p.a, fg: "#fff" }, { bg: p.bg, fg: p.ink }, { bg: p.ink, fg: p.bg }];
+    let s = "";
+    for (let i = 0; i < 3; i++) {
+      const x = 30 + i * 90;
+      const { bg, fg } = looks[(i + Math.floor(r() * 3)) % 3];
+      s += frame(x, 38, 80, 120, bg, "Poster " + (i + 1));
+      s += `<circle cx="${x + 54 + r() * 10}" cy="${66 + r() * 14}" r="${16 + r() * 8}" fill="${[p.b, p.c, p.a][i]}"/>`;
+      s += tx(x + 7, 118, 12, 800, fg, cut(lines[0], 9), 'letter-spacing="-.4"') + tx(x + 7, 132, 12, 800, fg, cut(lines[1], 9), 'letter-spacing="-.4"');
+      s += tx(x + 7, 150, 5, 500, fg, "Nov 2026", 'opacity=".7"');
+    }
+    return s;
+  },
+  board(f, p, r) {
+    const id = "d" + f.id;
+    const notes = ["Faster home", "Fix search", "Tabs v2", "Mac sign-in", "Interviews", "Pain points", "Quick wins", "Theme picker", "Ship 1.0", "Open questions"];
+    const colors = ["#ffe599", "#ffc1cc", "#c2e5ff", "#b5ecc5", "#e4ccff", "#ffd3a8"];
+    let s = `<defs><pattern id="${id}" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="currentColor" opacity=".35"/></pattern></defs>`;
+    s += `<rect width="320" height="200" fill="url(#${id})"/>`;
+    s += rc(20, 34, 280, 160, "rgba(151,71,255,.06)", 6, 'stroke="rgba(151,71,255,.35)"');
+    const label = cut(f.name, 22);
+    s += rc(28, 26, label.length * 4.6 + 12, 14, "#9747ff", 4) + tx(34, 35.5, 7, 600, "#fff", label);
+    const at = [];
+    for (let i = 0; i < 6; i++) {
+      const x = 40 + (i % 3) * 86 + r() * 10;
+      const y = 52 + Math.floor(i / 3) * 66 + r() * 8;
+      at.push([x, y]);
+      const [w1, w2] = notes[(i + Math.floor(r() * 10)) % notes.length].split(" ");
+      s += `<g transform="rotate(${(r() - 0.5) * 6} ${x + 23} ${y + 23})">${rc(x, y, 46, 46, colors[(i + Math.floor(r() * 6)) % 6], 1, 'stroke="rgba(0,0,0,.06)"')}${tx(x + 5, y + 12, 6.5, 600, "#1e1e1e", w1)}${w2 ? tx(x + 5, y + 21, 6.5, 600, "#1e1e1e", w2) : ""}</g>`;
+    }
+    const [[x1, y1], [x2, y2]] = [at[0], at[4]];
+    s += `<path d="M${x1 + 46} ${y1 + 23}C${x1 + 80} ${y1 + 23} ${x2 - 30} ${y2 + 23} ${x2} ${y2 + 23}" fill="none" stroke="#1e1e1e" stroke-width=".9"/>`;
+    return s;
+  },
+  deck(f, p, r) {
+    const dark = r() < 0.55;
+    const bg = dark ? p.ink === "#ffffff" ? p.bg : "#141414" : p.bg;
+    const fg = dark ? "#ffffff" : p.ink;
+    let s = frame(24, 26, 272, 153, bg, "Slide 1");
+    s += `<circle cx="252" cy="64" r="${40 + r() * 10}" fill="${p.a}"/><circle cx="214" cy="104" r="${12 + r() * 8}" fill="${p.b}"/>`;
+    s += tx(40, 52, 6.5, 500, fg, f.project ? PROJECTS[f.project].team.name : "Chris", 'opacity=".6"');
+    const words = f.name.split(" ");
+    const mid = Math.ceil(words.length / 2);
+    s += tx(40, 112, 19, 750, fg, cut(words.slice(0, mid).join(" "), 14), 'letter-spacing="-.6"');
+    if (words.length > 1) s += tx(40, 134, 19, 750, fg, cut(words.slice(mid).join(" "), 14), 'letter-spacing="-.6"');
+    s += tx(40, 164, 6.5, 500, fg, "November 2026", 'opacity=".6"') + tx(282, 170, 6, 500, fg, "01", 'text-anchor="end" opacity=".5"');
+    return s;
+  },
+  dash(f, p, r) {
+    let s = frame(24, 24, 272, 176, "#ffffff", "Dashboard") + rc(24, 24, 52, 176, p.soft);
+    s += tx(32, 40, 7, 700, p.ink, cut(f.name.split(" ")[0], 8));
+    ["Overview", "Accounts", "Reports", "Settings"].forEach((w, i) => (s += tx(32, 58 + i * 12, 5.5, i ? 450 : 650, p.ink, w, i ? 'opacity=".6"' : "")));
+    [["Balance", "$48.2k"], ["Growth", "12.4%"], ["Users", "1,284"]].forEach(([label, value], i) => {
+      const x = 86 + i * 68;
+      s += rc(x, 34, 60, 34, "#ffffff", 4, 'stroke="#e6e6e6"') + tx(x + 6, 45, 5, 500, "#757575", label) + tx(x + 6, 60, 10, 700, "#1e1e1e", value);
+    });
+    s += rc(86, 76, 196, 76, "#ffffff", 4, 'stroke="#e6e6e6"');
+    for (let i = 0; i < 12; i++) {
+      const h = 12 + r() * 46;
+      s += rc(96 + i * 15, 144 - h, 9, h, i === 11 ? p.a : p.soft === "#ffffff" ? "#e6e6e6" : p.soft, 1.5);
+    }
+    s += [0, 1, 2].map((i) => rc(86, 160 + i * 14, 196, 10, i % 2 ? "#ffffff" : "#f5f5f5", 2)).join("");
+    return s;
+  },
+  components(f, p, r) {
+    let s = frame(24, 28, 272, 172, "#ffffff", "Components");
+    s += rc(36, 50, 248, 36, "none", 4, 'stroke="#9747ff" stroke-dasharray="3 2"') + tx(36, 46, 5.5, 600, "#9747ff", "Button");
+    [["Primary", p.a, "#ffffff", ""], ["Secondary", "#ffffff", "#1e1e1e", 'stroke="#d9d9d9"'], ["Disabled", "#f0f0f0", "#b3b3b3", ""]].forEach(([label, fill, color, extra], i) => {
+      const x = 46 + i * 80;
+      s += rc(x, 58, 66, 20, fill, 5, extra) + tx(x + 33, 70.5, 6.5, 600, color, label, 'text-anchor="middle"');
+    });
+    s += tx(36, 104, 5.5, 600, "#757575", "Input");
+    s += rc(36, 110, 116, 20, "#ffffff", 5, 'stroke="#d9d9d9"') + tx(44, 122.5, 6, 450, "#b3b3b3", "Email address");
+    s += rc(164, 110, 116, 20, "#ffffff", 5, `stroke="${p.a}" stroke-width="1.5"`) + tx(172, 122.5, 6, 450, "#1e1e1e", "chris@");
+    s += tx(36, 150, 5.5, 600, "#757575", "Toggle");
+    s += rc(36, 156, 24, 13, p.a, 6.5) + `<circle cx="53.5" cy="162.5" r="5" fill="#fff"/>` + rc(68, 156, 24, 13, "#d9d9d9", 6.5) + `<circle cx="74.5" cy="162.5" r="5" fill="#fff"/>`;
+    s += tx(110, 150, 5.5, 600, "#757575", "Checkbox") + rc(110, 156, 13, 13, p.a, 3) + `<path d="M113 162.5l2.5 2.5 4.5-5" fill="none" stroke="#fff" stroke-width="1.3"/>` + rc(130, 156, 13, 13, "#ffffff", 3, 'stroke="#b3b3b3"');
+    s += tx(170, 150, 5.5, 600, "#757575", "Badge") + rc(170, 157, 34, 11, p.soft, 5.5) + tx(187, 164.5, 5.5, 600, p.ink === "#ffffff" ? p.a : p.ink, "New", 'text-anchor="middle"');
+    return s;
+  },
+  flow(f, p, r) {
+    const steps = ["Welcome", "Sign in", "Theme", "Done"];
+    let s = rc(22, 22, 44, 13, "#0d99ff", 4) + `<path d="M28 25.5l4 3-4 3z" fill="#fff"/>` + tx(35, 31, 6, 600, "#fff", "Flow 1");
+    steps.forEach((step, i) => {
+      const x = 22 + i * 76;
+      s += frame(x, 52, 52, 104, p.bg, step) + rc(x, 52, 52, 40, i === 0 ? p.a : p.soft);
+      s += tx(x + 5, 104, 6.5, 700, p.ink, step) + tx(x + 5, 113, 4.5, 450, p.ink, "One short line", 'opacity=".55"');
+      s += rc(x + 5, 140, 42, 9, i === 3 ? p.b : p.a, 3);
+      if (i < 3) s += `<path d="M${x + 52} 104h20" stroke="#0d99ff" stroke-width="1.2"/><path d="M${x + 69} 101l3 3-3 3" fill="none" stroke="#0d99ff" stroke-width="1.2"/>`;
+    });
+    return s;
+  },
+};
+const thumbs = new Map();
+function thumb(file) {
+  // Figma's own picture of the file, once it's known; till then its
+  // background color, and a request for it
+  if (file.live) {
+    if (!file.thumbUrl) LG.wantThumb(file.key);
+    const bg = `background:${file.bg ?? "var(--canvas)"}`;
+    return file.thumbUrl ? `<img src="${esc(file.thumbUrl)}" alt="" decoding="async" referrerpolicy="no-referrer" style="${bg}">` : `<div class="tph" style="${bg}"></div>`;
+  }
+  const key = file.id + "|" + file.name;
+  let svg = thumbs.get(key);
+  if (!svg) {
+    const seed = hash(file.id.replace(/c\d+$/, "") + file.look);
+    const palette = PALETTES[seed % PALETTES.length];
+    svg = `<svg viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice" font-family="Inter, system-ui, sans-serif" aria-hidden="true">${LOOKS[file.look](file, palette, rng(seed))}</svg>`;
+    thumbs.set(key, svg);
+  }
+  return svg;
+}
+
+/* Live data. Figma has no public API for any of this; these are the
+   requests its own file browser makes, with the session's cookies. Lists
+   come from LiveGraph, Figma's data socket; projects, files, search and
+   every change from its REST API */
+
+const Live = {
+  uid: null,
+  users: [],
+  status: "Loading your files",
+  error: null,
+  signedOut: false,
+  ready: new Set(),
+  loading: new Set(),
+  draftsByTeam: {},
+  appearance: null,
+};
+
+async function api(path, { method = "GET", json, user = Live.uid } = {}) {
+  const res = await fetch(path, {
+    method,
+    credentials: "include",
+    headers: { Accept: "application/json", "X-Csrf-Bypass": "yes", ...(user ? { "X-Figma-User-ID": user } : {}), ...(json ? { "Content-Type": "application/json" } : {}) },
+    body: json ? JSON.stringify(json) : undefined,
+  });
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {}
+  if (!res.ok || body?.error === true) throw new Error(body?.message || `Figma answered ${res.status}`);
+  return body?.meta ?? body;
+}
+
+// A few at a time, as Figma's own page does
+async function pool(items, limit, task) {
+  const results = [];
+  let next = 0;
+  const run = async () => {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        results[i] = await task(items[i]);
+      } catch (error) {
+        results[i] = error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
+}
+
+const sortKeys = (v) => (Array.isArray(v) ? v.map(sortKeys) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])])) : v);
+const sameArgs = (a, b) => JSON.stringify(sortKeys(a ?? {})) === JSON.stringify(sortKeys(b ?? {}));
+
+// The views Ligma subscribes to. Figma keys each by a hash of its
+// definition; the socket has taken stale ones so far
+const VIEWS = {
+  recents: ["FileBrowserRecentResourcesGlobalView", "ba34ac3ffc3622da7df2867626b14e0ee81e63141de76f0a571f2ac4b658549e", { firstPageSize: 99, resourceTypes: ["file", "repo", "prototype"] }],
+  favorites: ["FileBrowserSidebarData", "09d6e7b0f19ebb6ee9cfe1558ce4e34069b5a2355bed4cad6c5bee78ec712270", { currentOrgId: null, currentTeamId: null }],
+  thumb: (fileKey) => ["FileThumbnail", "4d8cdddecb549134089850d1eb6192d6e67d38faec194518a4054568f6b4ed3e", { fileKey }],
+};
+
+// LiveGraph: one socket; views load into one store of records by type and
+// id, their computed fields under `$`. Views stay subscribed, so later
+// changes arrive too (`changed`)
+const LG = {
+  ws: null,
+  opening: null,
+  pending: [],
+  store: {},
+  wanted: new Set(),
+  connect() {
+    if (this.opening) return this.opening;
+    this.opening = new Promise((resolve, reject) => {
+      const ws = new WebSocket(`wss://www.figma.com/api/livegraph?${new URLSearchParams({ userId: Live.uid, clientType: "web", requestedProtocolVersion: "2" })}`);
+      this.ws = ws;
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ messageType: "auth", clientType: "web", args: { userId: Live.uid, anonymousUserId: null }, tags: { clientType: "web" } }));
+        resolve(ws);
+      };
+      ws.onmessage = (event) => {
+        try {
+          this.receive(JSON.parse(event.data));
+        } catch {}
+      };
+      ws.onerror = () => reject(new Error("Couldn't reach Figma"));
+      ws.onclose = () => {
+        if (this.ws === ws) {
+          this.ws = null;
+          this.opening = null;
+          this.wanted.clear();
+        }
+        for (const p of this.pending.splice(0)) p.reject(new Error("Lost the connection to Figma"));
+      };
+    });
+    return this.opening;
+  },
+  receive(msg) {
+    if (msg.messageType === "denormalizedPendingMutations") {
+      for (const types of Object.values(msg.mutations ?? {})) {
+        for (const [type, { queries, computations }] of Object.entries(types)) {
+          for (const q of Object.values(queries ?? {})) {
+            for (const [id, rec] of Object.entries(q.initial ?? {})) if (rec && typeof rec === "object") Object.assign(((this.store[type] ??= {})[id] ??= {}), rec);
+          }
+          for (const [key, c] of Object.entries(computations ?? {})) {
+            try {
+              const [t, field, id] = JSON.parse(key);
+              (((this.store[t] ??= {})[id] ??= {}).$ ??= {})[field] = c?.value;
+            } catch {}
+          }
+        }
+      }
+      changed();
+    } else if (msg.messageType === "viewLoaded" || msg.messageType === "viewError") {
+      const i = this.pending.findIndex((p) => p.name === msg.viewName && sameArgs(p.args, msg.args));
+      if (i < 0) return;
+      const [p] = this.pending.splice(i, 1);
+      if (msg.messageType === "viewLoaded") p.resolve(this.store);
+      else p.reject(new Error("Figma couldn't load this list"));
+    }
+  },
+  async load([name, hash, args]) {
+    const ws = await this.connect();
+    return new Promise((resolve, reject) => {
+      const p = { name, args, resolve, reject };
+      this.pending.push(p);
+      ws.send(JSON.stringify({ messageType: "subscribe", viewName: name, viewHash: hash, loadType: "initial", args }));
+      setTimeout(() => {
+        const i = this.pending.indexOf(p);
+        if (i >= 0) this.pending.splice(i, 1), reject(new Error("Figma took too long to answer"));
+      }, 20000);
+    });
+  },
+  // Thumbnails load as cards come into view
+  wantThumb(key) {
+    if (!key || this.wanted.has(key)) return;
+    this.wanted.add(key);
+    this.load(VIEWS.thumb(key)).catch(() => this.wanted.delete(key));
+  },
+  close() {
+    const ws = this.ws;
+    this.ws = null;
+    this.opening = null;
+    this.store = {};
+    this.wanted.clear();
+    ws?.close();
+  },
+};
+
+const EDITORS = { design: "design", whiteboard: "figjam", slides: "slides" };
+const URL_PATHS = { design: "design", whiteboard: "board", slides: "slides", sites: "site", figmake: "make", cooper: "buzz" };
+const EDITOR_OF = { design: "design", figjam: "whiteboard", slides: "slides" };
+const colorOf = (meta) => {
+  try {
+    const c = (typeof meta === "string" ? JSON.parse(meta) : meta)?.background_color;
+    return c ? `rgb(${Math.round(c.r * 255)} ${Math.round(c.g * 255)} ${Math.round(c.b * 255)})` : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+function upsertFile(key, fields) {
+  let file = byId(key);
+  if (!file) file = addFile({ id: key, key, name: "Untitled", type: "design", look: "components", project: null, at: 0, kind: "edit", by: null, unread: 0, starred: false, trashed: false, live: true });
+  for (const [k, v] of Object.entries(fields)) if (v !== undefined) file[k] = v;
+  // Where it sits in time: when you last opened it, or when it changed,
+  // whichever is later
+  const viewed = file.viewedAt ?? 0;
+  const touched = file.touchedAt ?? 0;
+  file.at = Math.max(viewed, touched) || Date.now();
+  [file.kind, file.by] = viewed >= touched ? ["open", "me"] : ["edit", null];
+  return file;
+}
+
+// A file as Figma's REST API describes it
+const fromRest = (m) =>
+  upsertFile(m.key, {
+    name: m.name,
+    editor: m.editor_type,
+    type: EDITORS[m.editor_type] ?? "design",
+    project: m.folder_id ?? null,
+    team: m.team_id,
+    touchedAt: Date.parse(m.touched_at ?? m.updated_at) || undefined,
+    thumbUrl: m.thumbnail_url_override ?? m.thumbnail_url ?? undefined,
+    bg: colorOf(m.client_meta),
+    trashed: !!m.trashed_at,
+  });
+
+// Recents and thumbnails from what the socket has sent so far
+function takeFromStore() {
+  const s = LG.store;
+  const links = s.UserRecentResourceFile ?? {};
+  for (const [id, r] of Object.entries(s.UserRecentResource ?? {})) {
+    const fr = s.File?.[links[id]?.resourceIdOrKey];
+    if (!fr?.key || r.resourceType !== "file" || r.isActive === false || fr.trashedAt || fr.deletedAt) continue;
+    upsertFile(fr.key, {
+      name: fr._name,
+      editor: fr.$?.editorType,
+      type: EDITORS[fr.$?.editorType] ?? "design",
+      project: fr.folderId ?? null,
+      team: fr.teamId,
+      recent: true,
+      viewedAt: Date.parse(r.actionAt) || undefined,
+    });
+  }
+  for (const key of LG.wanted) {
+    const fr = s.File?.[key];
+    const file = byId(key);
+    if (!fr?.$ || !file) continue;
+    const url = fr.thumbnailUrlOverride ?? fr.$.signedThumbnailUrl;
+    if (url && url !== file.thumbUrl) Object.assign(file, { thumbUrl: url, bg: colorOf(fr.$.checkpointClientMeta) ?? file.bg, freshThumb: true });
+    if (fr.$.touchedAt && !file.touchedAt) upsertFile(key, { touchedAt: Date.parse(fr.$.touchedAt) });
+  }
+}
+
+// Socket data arrived: thumbnails swap in where they're shown; lists redraw
+// only when they would change
+let changeFrame = 0;
+function changed() {
+  if (changeFrame) return;
+  changeFrame = requestAnimationFrame(() => {
+    changeFrame = 0;
+    const before = FILES.filter((f) => f.recent).length;
+    takeFromStore();
+    for (const el of $$(".thumb[data-thumb] .tph, .pt .tph")) {
+      const holder = el.parentElement;
+      const file = byId(holder.dataset.thumb ?? holder.dataset.key);
+      if (file?.thumbUrl) holder.innerHTML = thumb(file);
+    }
+    if (Live.ready.has("recents") && FILES.filter((f) => f.recent).length !== before) render();
+  });
+}
+
+const DRAFTS = () => Object.values(Live.draftsByTeam);
+const colorForTeam = (id) => ["#0d99ff", "#9747ff", "#14ae5c", "#f24822", "#e5a000", "#ff7262", "#1e1e1e", "#00b3a4"][hash(String(id)) % 8];
+
+async function boot() {
+  Live.status = "Loading your files";
+  Live.error = null;
+  showCached();
+  render();
+  try {
+    const session = await api("/api/session/state", { user: null });
+    Live.users = session.users ?? [];
+    if (!Live.users.length) {
+      Live.signedOut = true;
+      return render();
+    }
+    const saved = store.get("account", null);
+    Live.uid = Live.users.some((u) => u.id === saved) ? saved : Live.users[0].id;
+    store.set("account", Live.uid);
+    for (const f of store.get(`trash:${Live.uid}`, [])) if (!byId(f.key)) upsertFile(f.key, { ...f, trashed: true });
+    const userState = await api("/api/user/state");
+    const mine = (userState.team_users ?? []).filter((tu) => tu.user_id === Live.uid);
+    Live.draftsByTeam = {};
+    DRAFT_FOLDERS.clear();
+    for (const tu of mine) {
+      if (!tu.drafts_folder_id) continue;
+      Live.draftsByTeam[tu.team_id] = tu.drafts_folder_id;
+      DRAFT_FOLDERS.add(tu.drafts_folder_id);
+    }
+    const teams = (session.teams ?? []).filter((t) => !t.deleted_at && mine.some((tu) => tu.team_id === t.id));
+    const orgs = Object.fromEntries((session.orgs ?? []).map((o) => [o.id, o]));
+    const folders = await pool(teams, 6, (t) => api(`/api/teams/${t.id}/folders`));
+    const plans = [];
+    const byOrg = {};
+    teams.forEach((t, i) => {
+      const rows = Array.isArray(folders[i]?.folder_rows) ? folders[i].folder_rows : [];
+      const projects = rows.filter((f) => !f.trashed_at && !f.deleted_at && !f.is_abandoned_drafts && !DRAFT_FOLDERS.has(f.id)).map((f) => [f.id, f.name ?? f.path]);
+      const team = { id: t.id, name: t.name, color: colorForTeam(t.id), projects };
+      if (t.org_id) {
+        byOrg[t.org_id] ??= plans[plans.push({ id: t.org_id, name: orgs[t.org_id]?.name ?? "Organization", tier: "Organization", teams: [] }) - 1];
+        byOrg[t.org_id].teams.push(team);
+      } else {
+        const tier = t.student_team_at ? "Education" : t.subscription ? t.subscription[0].toUpperCase() + t.subscription.slice(1) : "Starter";
+        plans.push({ id: t.id, name: t.name, tier, teams: [team] });
+      }
+    });
+    PLANS.splice(0, PLANS.length, ...plans);
+    for (const k of Object.keys(PROJECTS)) delete PROJECTS[k];
+    for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
+    render();
+    LG.close();
+    await LG.load(VIEWS.recents);
+    takeFromStore();
+    Live.ready.add("recents");
+    Live.status = "Up to date";
+    // Until teams are opened or closed by hand, only those with the latest
+    // files start open
+    if (store.get("collapsed-live", null) === null) {
+      const latest = new Set(FILES.filter((f) => f.recent).sort((a, b) => b.at - a.at).slice(0, 3).map((f) => f.team));
+      state.collapsed = new Set(PLANS.flatMap((p) => p.teams.map((t) => t.id)).filter((id) => !latest.has(id)));
+    }
+    render();
+    loadFavorites();
+    loadNotes();
+    saveCache();
+  } catch (error) {
+    Live.error = error.message;
+    Live.status = "Offline";
+    render();
+  }
+}
+
+async function loadFavorites() {
+  try {
+    const s = await LG.load(VIEWS.favorites);
+    const keys = Object.values(s.FavoritedFile ?? {}).filter((f) => f.userId === Live.uid || !f.userId).map((f) => f.resourceId);
+    for (const file of FILES) file.starred = keys.includes(file.key);
+    const unknown = keys.filter((k) => !byId(k));
+    await pool(unknown, 4, async (k) => (fromRest({ key: k, ...(await api(`/api/files/${k}`)) }).starred = true));
+    for (const k of keys) if (byId(k)) byId(k).starred = true;
+  } catch {}
+  Live.ready.add("starred");
+  render();
+}
+
+// What a view needs before it can show, loaded once
+async function need(view) {
+  if (!LIVE || Live.signedOut || !Live.uid || Live.ready.has(view) || Live.loading.has(view) || view === "recents") return;
+  if (view === "trash") {
+    Live.ready.add(view);
+    return queueMicrotask(render);
+  }
+  if (view === "starred") return;
+  const folders = view === "drafts" ? DRAFTS() : view.startsWith("p:") ? [view.slice(2)] : [];
+  Live.loading.add(view);
+  const pages = await pool(folders, 6, (id) => api(`/api/folders/${id}/paginated_files?sort_column=touched_at&sort_order=desc&page_size=100`));
+  for (const page of pages) for (const m of page?.files ?? []) if (!m.trashed_at) fromRest(m);
+  Live.loading.delete(view);
+  Live.ready.add(view);
+  if (state.view === view) render();
+}
+
+// The Trash shows what was deleted from here; each team's own trash is in
+// Figma, which has none across teams
+function rememberTrash() {
+  store.set(`trash:${Live.uid}`, FILES.filter((f) => f.trashed).map(({ key, name, type, editor, project, team, trashedAt }) => ({ key, name, type, editor, project, team, trashedAt })));
+}
+
+// Shown at once next time, then brought up to date
+function saveCache() {
+  const files = FILES.filter((f) => f.recent).map(({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }) => ({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }));
+  store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, img_url }) => ({ id, name, img_url })), files });
+}
+function showCached() {
+  const uid = store.get("account", null);
+  const cache = uid && store.get(`cache:${uid}`, null);
+  if (!cache) return;
+  Live.uid = uid;
+  Live.users = cache.users ?? [];
+  Live.draftsByTeam = cache.drafts ?? {};
+  for (const id of Object.values(Live.draftsByTeam)) DRAFT_FOLDERS.add(id);
+  PLANS.splice(0, PLANS.length, ...cache.plans);
+  for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
+  for (const f of cache.files ?? []) upsertFile(f.key, { ...f, recent: true });
+  for (const f of store.get(`trash:${uid}`, [])) upsertFile(f.key, { ...f, trashed: true });
+  Live.ready.add("recents");
+}
+
+async function switchAccount(uid) {
+  store.set("account", uid);
+  LG.close();
+  FILES.splice(0);
+  BY_ID.clear();
+  NOTES.splice(0);
+  Live.ready.clear();
+  state.sel.clear();
+  state.focus = null;
+  closeInbox(false);
+  await boot();
+}
+
+/* Time */
+
+const startOfToday = () => new Date().setHours(0, 0, 0, 0);
+function bucket(t) {
+  const t0 = startOfToday();
+  const date = new Date(t);
+  if (t >= t0) return { key: "today", label: "Today" };
+  if (t >= t0 - DAY) return { key: "yesterday", label: "Yesterday" };
+  if (t >= t0 - 6 * DAY) return { key: "wd" + date.getDay(), label: date.toLocaleDateString(undefined, { weekday: "long" }) };
+  const year = date.getFullYear() !== new Date().getFullYear();
+  return { key: `m${date.getFullYear()}-${date.getMonth()}`, label: date.toLocaleDateString(undefined, { month: "long", ...(year && { year: "numeric" }) }) };
+}
+const monthOf = (t) => {
+  const date = new Date(t);
+  return `${date.getFullYear()}-${date.getMonth()}`;
+};
+function ago(t) {
+  const minutes = Math.round((Date.now() - t) / MIN);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (t >= startOfToday()) return `${Math.round(minutes / 60)} h ago`;
+  return null;
+}
+function when(t) {
+  const recent = ago(t);
+  if (recent) return recent;
+  const date = new Date(t);
+  if (t >= startOfToday() - 6 * DAY) return "at " + date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return "on " + date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function short(t) {
+  const recent = ago(t);
+  if (recent) return recent;
+  const t0 = startOfToday();
+  if (t >= t0 - DAY) return "Yesterday";
+  const date = new Date(t);
+  if (t >= t0 - 6 * DAY) return date.toLocaleDateString(undefined, { weekday: "short" });
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== new Date().getFullYear() && { year: "numeric" }) });
+}
+function activity(file) {
+  const at = when(file.at);
+  // Figma says when a file changed, not who changed it
+  if (!file.by) return `${file.kind === "open" ? "You opened it" : "Edited"} ${at}`;
+  const who = firstName(file.by);
+  switch (file.kind) {
+    case "open": return `You opened it ${at}`;
+    case "create": return `You created it ${at}`;
+    case "comment": return `${who} commented ${at}`;
+    case "mention": return `${who} mentioned you ${at}`;
+    case "rename": return `You renamed it ${at}`;
+    case "move": return `You moved it here ${at}`;
+    default: return `${who} edited ${at}`;
+  }
+}
+
+/* State */
+
+const state = {
+  view: store.get("view", "recents"),
+  type: "all",
+  inbox: "all",
+  sel: new Set(),
+  anchor: null,
+  focus: null,
+  collapsed: new Set(store.get(LIVE ? "collapsed-live" : "collapsed", [])),
+  mode: params.get("state"),
+};
+let order = [];
+let previousOrder = [];
+let sections = [];
+
+const viewName = (view) => (view.startsWith("p:") ? PROJECTS[view.slice(2)]?.name : { recents: "Recents", starred: "Starred", drafts: "Drafts", trash: "Trash" }[view]);
+if (!viewName(state.view)) state.view = "recents";
+
+function viewFiles() {
+  const { view } = state;
+  let list = FILES.filter((f) => (view === "trash" ? f.trashed : !f.trashed));
+  if (view === "starred") list = list.filter((f) => f.starred);
+  else if (view === "recents" && LIVE) list = list.filter((f) => f.recent);
+  else if (view === "drafts") list = list.filter((f) => !f.project || DRAFT_FOLDERS.has(f.project));
+  else if (view.startsWith("p:")) list = list.filter((f) => f.project === view.slice(2));
+  if (state.type !== "all") list = list.filter((f) => f.type === state.type);
+  const time = (f) => (view === "trash" ? f.trashedAt : f.at);
+  return list.sort((a, b) => time(b) - time(a));
+}
+
+/* Rendering */
+
+const side = $("#side");
+const head = $("#head");
+const filters = $("#filters");
+const scroller = $("#scroll");
+const rail = $("#rail");
+
+function navRow(view, iconName, label, count, extra = "", tail = "") {
+  const on = state.view === view;
+  const drop = ["recents", "starred"].includes(view) ? "" : `data-drop="${view}"`;
+  const n = tail || `<span class="n">${count ?? ""}</span>`;
+  return `<button class="nav ${extra}${on ? " on" : ""}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${icon(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
+}
+
+function renderSide() {
+  const live = FILES.filter((f) => !f.trashed);
+  // Counts only for lists loaded whole
+  const count = (pred, view) => (LIVE && view && !Live.ready.has(view) ? "" : live.filter(pred).length || "");
+  const unread = NOTES.filter((n) => n.unread).length;
+  const open = inboxEl.classList.contains("open");
+  const user = LIVE ? Live.users.find((u) => u.id === Live.uid) : null;
+  const name = LIVE ? user?.name ?? "Figma" : "Chris";
+  const face = user?.img_url ? `<img src="${esc(user.img_url)}" alt="" referrerpolicy="no-referrer">` : esc(name[0]);
+  let html = `<div class="acct-row"><button class="acct" id="acct" aria-haspopup="menu"><span class="av" style="background:${LIVE ? colorForTeam(Live.uid) : PEOPLE.me.color}">${face}</span><span class="who">${esc(name)}</span>${icon("down")}</button>`;
+  html += `<button class="bell" id="bell" aria-haspopup="dialog" aria-expanded="${open}" aria-controls="inbox" aria-label="Inbox${unread ? `, ${unread} unread` : ""}" title="Inbox">${icon("bell")}${unread ? `<span class="badge" aria-hidden="true">${unread}</span>` : ""}</button></div>`;
+  html += `<div class="tree">`;
+  html += `<button class="nav find" data-act="search">${icon("search")}<span class="lbl">Search</span><kbd>${MOD}K</kbd></button>`;
+  html += navRow("recents", "clock", "Recents");
+  html += navRow("starred", "star", "Starred", count((f) => f.starred, "starred"));
+  html += navRow("drafts", "file", "Drafts", count((f) => !f.project || DRAFT_FOLDERS.has(f.project), "drafts"));
+  // A Starter or Professional plan is one team; an Organization holds many
+  const teamRow = (team, tier = "") => {
+    const open = !state.collapsed.has(team.id);
+    let out = `<button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.color}">${esc(team.name[0])}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${icon("down", "chev")}</button>`;
+    if (open) for (const [id, name] of team.projects) out += navRow("p:" + id, "folder", name, count((f) => f.project === id, "p:" + id), "proj");
+    return out;
+  };
+  html += `<div class="plan">Teams</div>`;
+  for (const plan of PLANS.filter((p) => p.teams.length === 1)) html += teamRow(plan.teams[0], plan.tier);
+  for (const plan of PLANS.filter((p) => p.teams.length > 1)) {
+    html += `<div class="plan"><b>${esc(plan.name)}</b>${esc(plan.tier)}</div>`;
+    for (const team of plan.teams) html += teamRow(team);
+  }
+  html += `</div><div class="sfoot">`;
+  html += navRow("trash", "trash", "Trash", FILES.filter((f) => f.trashed).length || "");
+  html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${icon("home")}<span class="lbl">Figma's file browser</span>${icon("ext", "ext")}</a>`;
+  if (LIVE) {
+    const busy = Live.status !== "Up to date" && !Live.error;
+    html += `<div class="sync${Live.error ? " off" : busy ? " busy" : ""}" id="sync"><span class="dot"></span><span>${esc(Live.error ? "Offline" : Live.status)}</span></div></div>`;
+  } else
+    html += state.mode === "error"
+      ? `<div class="sync off" id="sync"><span class="dot"></span><span>Offline, as of 4 min ago</span></div></div>`
+      : `<div class="sync" id="sync"><span class="dot"></span><span>Sample files, not yours yet</span></div></div>`;
+  const scrollTop = $(".tree", side)?.scrollTop ?? 0;
+  side.innerHTML = html;
+  $(".tree", side).scrollTop = scrollTop;
+}
+
+function renderHead(count) {
+  const name = viewName(state.view);
+  const n = state.mode === "loading" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  head.innerHTML = `<button class="menu-btn" data-act="side" aria-label="Show sidebar">${icon("side")}</button>
+    <h1><span>${esc(name)}</span><small>${n}</small></h1><span class="grow"></span>
+    <button id="find" data-act="search" aria-label="Search">${icon("search")}<span class="lbl">Search files, projects and actions</span><kbd>${MOD}K</kbd></button>
+    <div class="new"><button data-act="new" title="New Design file">${icon("plus")}New</button><button data-act="new-menu" aria-label="More kinds of file" aria-haspopup="menu">${icon("down")}</button></div>`;
+}
+
+function renderFilters() {
+  let html;
+  const types = [["all", "All"], ["design", "Design"], ["figjam", "FigJam"], ["slides", "Slides"]];
+  html = `<div class="seg" role="group" aria-label="File type">${types.map(([id, label]) => `<button data-type="${id}" aria-pressed="${state.type === id}">${label}</button>`).join("")}</div>`;
+  html += `<span class="grow"></span>`;
+  if (LIVE && Live.error) html = `<div class="banner" role="alert">${esc(`Couldn't reach Figma (${Live.error}), so these may be out of date`)}<button data-act="retry">Try again</button></div>`;
+  else if (state.mode === "error") html = `<div class="banner" role="alert">Couldn't reach Figma, so these are your files as of 4 min ago<button data-act="retry">Try again</button></div>`;
+  else if (state.view === "trash" && LIVE) html += `<span class="fnote">What you deleted here. Each team's own trash is in Figma's file browser</span>`;
+  else if (state.view === "trash") html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
+  else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
+  filters.innerHTML = html;
+}
+
+function cardHtml(file) {
+  const trash = state.view === "trash";
+  const place = state.view.startsWith("p:") ? "" : placeOf(file.project) + " · ";
+  const meta = trash ? `${placeOf(file.project)} · Deleted ${when(file.trashedAt)}` : place + activity(file);
+  const tools = trash ? "" : `<div class="tools"><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button></div>`;
+  const badge = file.unread ? `<span class="badge" title="${file.unread} new ${file.unread === 1 ? "comment" : "comments"}">${file.unread}</span>` : "";
+  const restore = trash ? `<button class="restore" tabindex="-1">Restore</button>` : "";
+  return `<div class="card" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="${!trash}">
+    <div class="thumb" data-thumb="${file.id}" aria-hidden="true"></div>${tools}
+    <div class="name">${glyph(file.type)}<span class="nm" id="n-${file.id}">${esc(file.name)}</span>${badge}${restore}</div>
+    <div class="meta" id="d-${file.id}">${esc(meta)}${file.unread ? ` · ${file.unread} new` : ""}</div></div>`;
+}
+
+const EMPTY = {
+  recents: ["clock", "Nothing here yet", "Files you open, edit or get comments on show up here, newest first", "new"],
+  starred: ["star", "No starred files", "Press S on a file, or click the star on its preview, to keep it here", null],
+  drafts: ["file", "No drafts", "Files you make outside a project stay here until you move them", "new"],
+  trash: ["trash", "Trash is empty", "Deleted files stay here for 30 days, then they're gone for good", null],
+  project: ["folder", "No files in this project", "Drag files onto it in the sidebar, or make a new one here", "new"],
+};
+
+function renderEmpty() {
+  if (state.type !== "all") {
+    const what = `No ${TYPES[state.type].label} files here`;
+    return `<div class="empty"><div class="ic">${icon("search")}</div><h2>${what}</h2><p>Your filters hide every file in ${esc(viewName(state.view))}</p><button class="btn" data-act="clear-filters">Show all files</button></div>`;
+  }
+  const [iconName, title, body, action] = EMPTY[state.view.startsWith("p:") ? "project" : state.view];
+  const button = action ? `<button class="btn primary" data-act="new">${icon("plus")}New Design file</button>` : "";
+  return `<div class="empty"><div class="ic">${icon(iconName)}</div><h2>${title}</h2><p>${body}</p>${button}</div>`;
+}
+
+function renderSkeleton() {
+  const card = `<div class="card sk"><div class="thumb"></div><div class="bar" style="width:60%"></div><div class="bar" style="width:40%;margin-top:8px"></div></div>`;
+  return ["Today", "Yesterday"].map((label) => `<section class="sec"><h2>${label}</h2><div class="grid">${card.repeat(4)}</div></section>`).join("");
+}
+
+let thumbObserver;
+function observeThumbs() {
+  thumbObserver?.disconnect();
+  thumbObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const el = entry.target;
+      thumbObserver.unobserve(el);
+      const file = byId(el.dataset.thumb);
+      if (file) el.innerHTML = thumb(file);
+    }
+  }, { root: scroller, rootMargin: "800px 0px" });
+  for (const el of $$(".thumb[data-thumb]", scroller)) thumbObserver.observe(el);
+}
+
+function render({ keepScroll = true } = {}) {
+  const started = performance.now();
+  const list = state.mode === "empty" ? [] : viewFiles();
+  order = list.map((f) => f.id);
+  for (const id of state.sel) if (!order.includes(id)) state.sel.delete(id);
+  renderSide();
+  renderHead(list.length);
+  renderFilters();
+  const top = scroller.scrollTop;
+  sections = [];
+  let html = "";
+  if (state.mode === "loading") html = renderSkeleton();
+  else if (LIVE && Live.signedOut) html = `<div class="empty"><div class="ic">${icon("users")}</div><h2>Sign in to Figma</h2><p>Your files show here once you're signed in</p><a class="btn primary" href="https://www.figma.com/login">Sign in</a></div>`;
+  else if (LIVE && !Live.ready.has(state.view) && !Live.error) {
+    need(state.view);
+    html = renderSkeleton();
+  } else if (!list.length) html = renderEmpty();
+  else {
+    for (const file of list) {
+      const t = state.view === "trash" ? file.trashedAt : file.at;
+      const b = bucket(t);
+      if (sections.at(-1)?.key !== b.key) sections.push({ ...b, month: monthOf(t), files: [] });
+      sections.at(-1).files.push(file);
+    }
+    html = sections.map((s, i) => `<section class="sec" id="s${i}" data-month="${s.month}"><h2>${esc(s.label)}<small>${s.files.length}</small></h2><div class="grid" role="listbox" aria-multiselectable="true" aria-label="${esc(s.label)}">${s.files.map(cardHtml).join("")}</div></section>`).join("");
+  }
+  // Keyboard focus stays on the grid across a redraw: on the same file, or
+  // the next one when it left this view
+  const active = document.activeElement;
+  const hadFocus = scroller.contains(active) || active === document.body || !active;
+  if (state.focus && !order.includes(state.focus)) {
+    const was = previousOrder.indexOf(state.focus);
+    state.focus = previousOrder.slice(was + 1).find((id) => order.includes(id)) ?? order.at(-1) ?? null;
+  }
+  previousOrder = order;
+  scroller.innerHTML = html;
+  if (keepScroll) scroller.scrollTop = top;
+  const first = state.focus && order.includes(state.focus) ? state.focus : order[0];
+  if (first && cardEl(first)) cardEl(first).tabIndex = 0;
+  if (inboxEl.classList.contains("open")) drawInbox();
+  if (hadFocus && state.focus && order.includes(state.focus) && cardEl(state.focus) && !pal.open && !menu.classList.contains("open")) cardEl(state.focus).focus({ preventScroll: true });
+  observeThumbs();
+  renderRail();
+  renderSelbar();
+  console.debug(`Home: ${list.length} files in ${(performance.now() - started).toFixed(1)} ms`);
+}
+
+/* Month rail: every month from the newest file back to the oldest, empty
+   ones too, with a tick as long as the month is busy */
+
+let railMonths = [];
+function renderRail() {
+  railMonths = [];
+  if (sections.length) {
+    const counts = new Map();
+    for (const s of sections) counts.set(s.month, (counts.get(s.month) ?? 0) + s.files.length);
+    const [ny, nm] = sections[0].month.split("-").map(Number);
+    const [oy, om] = sections.at(-1).month.split("-").map(Number);
+    for (let y = ny, m = nm; y > oy || (y === oy && m >= om); m--) {
+      if (m < 0) { m = 11; y--; }
+      railMonths.push({ key: `${y}-${m}`, y, m, n: counts.get(`${y}-${m}`) ?? 0 });
+    }
+  }
+  if (railMonths.length < 2) {
+    scroller.style.paddingBottom = "";
+    rail.hidden = true;
+    rail.parentElement.style.gridTemplateColumns = "minmax(0, 1fr)";
+    return;
+  }
+  rail.hidden = false;
+  rail.parentElement.style.gridTemplateColumns = "";
+  const max = Math.max(...railMonths.map((m) => m.n));
+  let html = `<span class="pos" id="pos"></span>`;
+  let year = null;
+  for (const month of railMonths) {
+    if (month.y !== year) {
+      year = month.y;
+      html += `<span class="yr">${year}</span>`;
+    }
+    const name = new Date(month.y, month.m).toLocaleDateString(undefined, { month: "short" });
+    const full = new Date(month.y, month.m).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    const tip = `${full} · ${month.n ? `${month.n} ${month.n === 1 ? "file" : "files"}` : "nothing"}`;
+    html += `<button class="mo" data-month="${month.key}" data-tip="${esc(tip)}" aria-label="${esc(tip)}" ${month.n ? "" : "disabled"}>${esc(name)}<span class="d" style="--w:${month.n ? Math.max(4, Math.round((month.n / max) * 28)) : 0}px"></span></button>`;
+  }
+  rail.innerHTML = html;
+  fitEnd();
+  syncRail(true);
+}
+
+// Room after the oldest month, so a jump to it lands at the top
+function fitEnd() {
+  const last = !rail.hidden && $(".sec:last-child", scroller);
+  scroller.style.paddingBottom = last ? `${Math.max(120, scroller.clientHeight - last.offsetHeight)}px` : "";
+}
+new ResizeObserver(fitEnd).observe(scroller);
+
+let railKey = null;
+function syncRail(instant = false) {
+  if (rail.hidden || !sections.length) return;
+  const secs = $$(".sec", scroller);
+  const y = scroller.scrollTop + 48;
+  let current = secs[0];
+  for (const sec of secs) {
+    if (sec.offsetTop <= y) current = sec;
+    else break;
+  }
+  if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) current = secs.at(-1);
+  setRailMonth(current.dataset.month, instant);
+}
+function setRailMonth(key, instant = false) {
+  const button = $(`.mo[data-month="${key}"]`, rail);
+  const pos = $("#pos", rail);
+  if (!button || !pos) return;
+  if (key !== railKey) {
+    $$(".mo.on", rail).forEach((b) => {
+      b.classList.remove("on");
+      b.removeAttribute("aria-current");
+    });
+    button.classList.add("on");
+    button.setAttribute("aria-current", "true");
+    railKey = key;
+  }
+  if (instant) pos.style.transition = "none";
+  pos.style.transform = `translateY(${button.offsetTop}px)`;
+  if (instant) requestAnimationFrame(() => (pos.style.transition = ""));
+  const top = button.offsetTop - rail.clientHeight / 2;
+  if (rail.scrollHeight > rail.clientHeight) rail.scrollTo({ top, behavior: instant ? "auto" : "smooth" });
+}
+
+let scrollFrame = 0;
+scroller.addEventListener("scroll", () => {
+  if (scrollFrame) return;
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0;
+    syncRail();
+  });
+}, { passive: true });
+
+function jumpTo(button, smooth) {
+  const sec = button && !button.disabled && $(`.sec[data-month="${button.dataset.month}"]`, scroller);
+  if (!sec) return;
+  setRailMonth(button.dataset.month);
+  scroller.scrollTo({ top: sec.offsetTop, behavior: smooth && !reducedMotion.matches ? "smooth" : "auto" });
+}
+rail.addEventListener("click", (e) => {
+  if (scrubbed) return;
+  const button = e.target.closest(".mo");
+  jumpTo(button, true);
+  const first = button && $(`.sec[data-month="${button.dataset.month}"] .card`, scroller);
+  if (first) focusCard(first.dataset.id, false);
+});
+// Dragging along the rail scrubs through the months
+let scrubbing = false;
+let scrubbed = false;
+rail.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || !e.target.closest(".mo")) return;
+  scrubbing = true;
+  scrubbed = false;
+  rail.setPointerCapture(e.pointerId);
+});
+rail.addEventListener("pointermove", (e) => {
+  if (!scrubbing) return;
+  const x = rail.getBoundingClientRect().left + rail.clientWidth / 2;
+  const button = document.elementFromPoint(x, e.clientY)?.closest(".mo");
+  if (!button || button.dataset.month === railKey) return;
+  scrubbed = true;
+  tip.style.display = "none";
+  jumpTo(button, false);
+});
+rail.addEventListener("pointerup", () => {
+  scrubbing = false;
+  setTimeout(() => (scrubbed = false));
+});
+// Up and down move between months that have files
+rail.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  const months = $$(".mo:not(:disabled)", rail);
+  const next = months[months.indexOf(document.activeElement) + (e.key === "ArrowDown" ? 1 : -1)];
+  if (!next) return;
+  e.preventDefault();
+  next.focus();
+  jumpTo(next, true);
+});
+
+const tip = $("#tip");
+rail.addEventListener("pointerover", (e) => {
+  const button = e.target.closest(".mo");
+  if (!button) return;
+  const box = button.getBoundingClientRect();
+  tip.textContent = button.dataset.tip;
+  tip.style.display = "block";
+  tip.style.left = `${box.left - tip.offsetWidth - 8}px`;
+  tip.style.top = `${box.top + box.height / 2 - tip.offsetHeight / 2}px`;
+});
+rail.addEventListener("pointerout", (e) => {
+  if (!e.relatedTarget?.closest?.(".mo")) tip.style.display = "none";
+});
+
+/* Selection and focus */
+
+const cardEl = (id) => document.getElementById("c-" + id);
+function selection() {
+  if (state.sel.size) return order.filter((id) => state.sel.has(id));
+  return state.focus && order.includes(state.focus) ? [state.focus] : [];
+}
+function setSel(ids, anchor) {
+  state.sel = new Set(ids);
+  if (anchor !== undefined) state.anchor = anchor;
+  for (const el of $$(".card[data-id]", scroller)) el.setAttribute("aria-selected", state.sel.has(el.dataset.id));
+  renderSelbar();
+}
+function focusCard(id, scroll = true) {
+  const el = cardEl(id);
+  if (!el) return;
+  const previous = state.focus && cardEl(state.focus);
+  if (previous) previous.tabIndex = -1;
+  for (const other of $$('.card[tabindex="0"]', scroller)) other.tabIndex = -1;
+  state.focus = id;
+  el.tabIndex = 0;
+  el.focus({ preventScroll: true });
+  if (scroll) el.scrollIntoView({ block: "nearest" });
+}
+function rangeTo(id) {
+  const a = order.indexOf(state.anchor ?? id);
+  const b = order.indexOf(id);
+  setSel(order.slice(Math.min(a, b), Math.max(a, b) + 1));
+}
+// The card beside, above or below, by where the cards sit
+function neighbor(id, key) {
+  const i = order.indexOf(id);
+  if (key === "ArrowRight") return order[i + 1];
+  if (key === "ArrowLeft") return order[i - 1];
+  const step = key === "ArrowDown" ? 1 : -1;
+  const box = cardEl(id).getBoundingClientRect();
+  const center = box.left + box.width / 2;
+  let rowTop = null;
+  let best = null;
+  let bestDistance = Infinity;
+  for (let j = i + step; j >= 0 && j < order.length; j += step) {
+    const other = cardEl(order[j]).getBoundingClientRect();
+    if (rowTop === null) {
+      if (step > 0 ? other.top > box.top + 4 : other.top < box.top - 4) rowTop = other.top;
+      else continue;
+    }
+    if (Math.abs(other.top - rowTop) > 4) break;
+    const distance = Math.abs(other.left + other.width / 2 - center);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = order[j];
+    }
+  }
+  return best;
+}
+
+/* Actions. Each changes the sample data and offers an undo; the live page
+   sends the same changes to Figma */
+
+const snapshot = (ids) => ids.map((id) => ({ ...byId(id) }));
+const restoreSnapshot = (snap) => {
+  for (const saved of snap) Object.assign(byId(saved.id), saved);
+  render();
+};
+const named = (ids) => (ids.length === 1 ? `“${byId(ids[0]).name}”` : `${ids.length} files`);
+
+// Sends a change to Figma. If Figma refuses it, `rollback` puts the page
+// back and the toast says so
+function send(request, rollback, what) {
+  request.catch((error) => {
+    rollback?.();
+    render();
+    toast(`Couldn't ${what}: ${error.message}`);
+  });
+  return request;
+}
+const keysOf = (ids) => ids.map((id) => ({ key: byId(id).key }));
+
+function openFiles(ids, background = false) {
+  ids = ids.filter((id) => !byId(id).trashed);
+  if (!ids.length) return;
+  const now = Date.now();
+  if (LIVE) {
+    // Home hands Figma links to tabs of their own (tabs.rs)
+    for (const id of ids) {
+      window.open(fileUrl(byId(id)), "_blank");
+      upsertFile(id, { viewedAt: now, recent: true });
+    }
+    toast(`Opening ${named(ids)}`);
+    return render();
+  }
+  for (const id of ids) Object.assign(byId(id), { at: now, kind: "open", by: "me", unread: 0 });
+  toast(background ? `Opened ${named(ids)} in the background` : `Opening ${named(ids)}`);
+  render();
+}
+
+function toggleStar(ids) {
+  const snap = snapshot(ids);
+  const star = !ids.every((id) => byId(id).starred);
+  for (const id of ids) byId(id).starred = star;
+  if (LIVE) send(api("/api/bulk_favorite_resources_v2", { method: star ? "PUT" : "DELETE", json: { resources: ids.map((id) => ({ file: { key: id } })) } }), () => restoreSnapshot(snap), star ? "star it" : "unstar it");
+  toast(star ? `Starred ${named(ids)}` : `Removed ${named(ids)} from starred`, LIVE ? () => toggleStar(ids) : () => restoreSnapshot(snap));
+  render();
+}
+
+function moveFiles(ids, project) {
+  // Drafts are per team: the drafts of the first file's team
+  if (LIVE && !project) project = Live.draftsByTeam[byId(ids[0])?.team] ?? DRAFTS()[0];
+  ids = ids.filter((id) => byId(id).project !== project);
+  if (!ids.length) return;
+  const snap = snapshot(ids);
+  // Organizing isn't work on the file: it keeps its place in the timeline
+  for (const id of ids) byId(id).project = project;
+  let undo = () => restoreSnapshot(snap);
+  if (LIVE) {
+    send(
+      api("/api/folder_items/move_bulk", { method: "PUT", json: { folder: { parent_folder_id: project }, folder_items: ids.map((id) => ({ file: { key: id } })) } }).then((meta) => {
+        const failed = (meta?.results ?? []).filter((r) => r && r.success === false).length;
+        if (failed) throw new Error(`${failed} of them can't move there`);
+      }),
+      () => restoreSnapshot(snap),
+      "move it",
+    );
+    // Back where each came from
+    undo = () => {
+      const back = {};
+      for (const saved of snap) (back[saved.project] ??= []).push(saved.id);
+      for (const [from, group] of Object.entries(back)) moveFiles(group, from === "null" ? null : from);
+    };
+  }
+  toast(`Moved ${named(ids)} to ${placeOf(project)}`, undo);
+  render();
+}
+
+function trashFiles(ids) {
+  if (!ids.length) return;
+  const snap = snapshot(ids);
+  for (const id of ids) Object.assign(byId(id), { trashed: true, trashedAt: Date.now() });
+  state.sel.clear();
+  if (LIVE) {
+    send(api("/api/files_batch", { method: "DELETE", json: { files: keysOf(ids), trashed: true } }), () => restoreSnapshot(snap), "delete it");
+    rememberTrash();
+  }
+  toast(`Moved ${named(ids)} to the trash`, LIVE ? () => restoreFiles(ids) : () => restoreSnapshot(snap));
+  render();
+}
+
+function restoreFiles(ids) {
+  const snap = snapshot(ids);
+  for (const id of ids) byId(id).trashed = false;
+  if (LIVE) {
+    send(api("/api/files_batch/restore", { method: "POST", json: { files: keysOf(ids), batch_fail_on_file_limit: true } }), () => restoreSnapshot(snap), "restore it");
+    rememberTrash();
+  }
+  toast(`Restored ${named(ids)}`, LIVE ? () => trashFiles(ids) : () => restoreSnapshot(snap));
+  render();
+}
+
+function deleteForever(ids) {
+  if (LIVE) {
+    // Figma can't bring these back, so ask first
+    if (!window.confirm(`Delete ${named(ids)} for good? This can't be undone.`)) return;
+    const gone = ids.map((id) => byId(id));
+    for (const file of gone) {
+      FILES.splice(FILES.indexOf(file), 1);
+      BY_ID.delete(file.id);
+    }
+    state.sel.clear();
+    send(api("/api/files_batch", { method: "DELETE", json: { files: gone.map((f) => ({ key: f.key })), trashed: false } }), () => gone.forEach((f) => addFile(f)), "delete it for good");
+    rememberTrash();
+    toast(`Deleted ${gone.length === 1 ? `“${gone[0].name}”` : `${gone.length} files`} for good`);
+    return render();
+  }
+  const removed = ids.map((id) => [FILES.indexOf(byId(id)), byId(id)]);
+  for (const [, file] of removed) {
+    FILES.splice(FILES.indexOf(file), 1);
+    BY_ID.delete(file.id);
+  }
+  state.sel.clear();
+  toast(`Deleted ${removed.length === 1 ? `“${removed[0][1].name}”` : `${removed.length} files`} for good`, () => {
+    for (const [index, file] of removed.sort((a, b) => a[0] - b[0])) {
+      FILES.splice(index, 0, file);
+      BY_ID.set(file.id, file);
+    }
+    render();
+  });
+  render();
+}
+
+function duplicate(ids) {
+  if (LIVE) {
+    toast(ids.length === 1 ? "Making a copy" : `Making ${ids.length} copies`);
+    Promise.all(ids.map((id) => api(`/api/multiplayer/${id}/copy?folder_id=${encodeURIComponent(byId(id).project ?? "")}`, { method: "POST" })))
+      .then((metas) => {
+        const copies = metas.map((m) => upsertFile(m.key, { ...fromRest(m), touchedAt: Date.now(), viewedAt: Date.now(), recent: true }));
+        state.sel = new Set(copies.map((f) => f.id));
+        state.focus = copies[0]?.id;
+        toast(`Made ${copies.length === 1 ? "a copy" : `${copies.length} copies`}`, () => trashFiles(copies.map((f) => f.id)));
+        render();
+      })
+      .catch((error) => toast(`Couldn't copy it: ${error.message}`));
+    return;
+  }
+  const copies = ids.map((id) => {
+    const file = byId(id);
+    return addFile({ ...file, id: `${file.id}c${nextId++}`, key: undefined, name: `${file.name} (copy)`, at: Date.now(), kind: "create", by: "me", unread: 0, starred: false }, true);
+  });
+  state.focus = copies[0].id;
+  state.sel = new Set(copies.map((f) => f.id));
+  toast(`Made ${copies.length === 1 ? "a copy" : `${copies.length} copies`}`, () => {
+    for (const copy of copies) {
+      FILES.splice(FILES.indexOf(copy), 1);
+      BY_ID.delete(copy.id);
+    }
+    render();
+  });
+  render();
+  focusCard(copies[0].id);
+}
+
+const fileUrl = (file) => `https://www.figma.com/${URL_PATHS[file.editor] ?? { design: "design", figjam: "board", slides: "slides" }[file.type]}/${file.key}/${encodeURIComponent(file.name.replace(/\s+/g, "-"))}`;
+function copyLinks(ids) {
+  const text = ids.map((id) => fileUrl(byId(id))).join("\n");
+  navigator.clipboard?.writeText(text).catch(() => {});
+  toast(ids.length === 1 ? "Copied link" : `Copied ${ids.length} links`);
+}
+
+function createFile(type = "design", name = "Untitled", project) {
+  project ??= state.view.startsWith("p:") ? state.view.slice(2) : null;
+  if (LIVE) {
+    const folder = project ?? DRAFTS()[0];
+    toast(`Making a new ${TYPES[type].noun}`);
+    api("/api/files/create", { method: "POST", json: { folder_id: folder, editor_type: EDITOR_OF[type], name } })
+      .then((meta) => {
+        const file = fromRest(meta.fig_file ?? meta);
+        upsertFile(file.key, { viewedAt: Date.now(), recent: true });
+        window.open(meta.fig_file?.url ?? fileUrl(file), "_blank");
+        toast(`Opening new ${TYPES[type].noun} “${file.name}” in ${placeOf(file.project)}`);
+        render();
+      })
+      .catch((error) => toast(`Couldn't make it: ${error.message}`));
+    return;
+  }
+  const look = { design: "components", figjam: "board", slides: "deck" }[type];
+  const file = addFile({ name, type, look, project, at: Date.now(), kind: "create", by: "me", unread: 0, starred: false, trashed: false }, true);
+  if (!["recents", "drafts"].includes(state.view) && state.view !== "p:" + project) {
+    state.view = project ? "p:" + project : "drafts";
+  }
+  state.type = "all";
+  state.sel = new Set([file.id]);
+  state.focus = file.id;
+  toast(`Opening new ${TYPES[type].noun} “${name}” in ${placeOf(project)}`);
+  render({ keepScroll: false });
+  focusCard(file.id);
+}
+
+function rename(id) {
+  const file = byId(id);
+  const label = $(".nm", cardEl(id));
+  if (!file || !label) return;
+  const input = document.createElement("input");
+  input.value = file.name;
+  input.setAttribute("aria-label", "File name");
+  label.replaceChildren(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (save && name && name !== file.name) {
+      const snap = snapshot([id]);
+      const old = file.name;
+      file.name = name;
+      const put = (to) => send(api(`/api/files/${file.key}`, { method: "PUT", json: { name: to } }), () => restoreSnapshot(snap), "rename it");
+      if (LIVE) put(name);
+      toast(`Renamed to “${name}”`, () => {
+        restoreSnapshot(snap);
+        if (LIVE) put(old);
+      });
+    }
+    render();
+    focusCard(id, false);
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+function go(view) {
+  if (!viewName(view)) return;
+  state.view = view;
+  state.sel.clear();
+  state.focus = null;
+  store.set("view", view);
+  document.body.classList.remove("side-open");
+  render({ keepScroll: false });
+  scroller.scrollTop = 0;
+}
+
+/* Inbox: comments, replies, mentions, invites and edit requests, as Figma's
+   bell lists them. Reading a comment note clears it from the file's count */
+
+const NOTES = [];
+const ABOUT_COMMENTS = new Set(["comment", "reply", "mention"]);
+function seedNotes() {
+  const file = (name) => FILES.find((f) => f.name === name);
+  const now = Date.now();
+  const add = (note) => NOTES.push({ id: "n" + NOTES.length, unread: false, count: 1, done: null, ...note });
+  const at = (name) => ({ file: file(name).id, at: file(name).at });
+  add({ kind: "comment", by: "sam", ...at("Settings window"), unread: true, count: 2, text: "Can the theme orbs sit a little lower? They crowd the title at 200%" });
+  add({ kind: "comment", by: "priya", ...at("Q4 roadmap"), unread: true, count: 3, text: "Moved Mac sign-in to December, the notes on the right say why" });
+  add({ kind: "mention", by: "ana", ...at("Halcyon pitch"), unread: true, text: "@Chris can you check the numbers on slide 4 before Thursday?" });
+  add({ kind: "request", by: "mei", file: file("Card designs").id, at: now - 26 * HOUR, unread: true });
+  add({ kind: "reply", by: "sam", file: file("Launch deck").id, at: now - 30 * HOUR, text: "Agreed, the second cover is stronger" });
+  add({ kind: "invite-file", by: "jonas", file: file("Fieldnote site").id, at: now - 2.2 * DAY });
+  add({ kind: "comment", by: "priya", file: file("Onboarding flow").id, at: now - 3.1 * DAY, text: "Left a few notes on the sign-in step" });
+  add({ kind: "invite-team", by: "mei", team: "Studio", at: now - 5.4 * DAY, done: "Joined" });
+  add({ kind: "mention", by: "jonas", file: file("Sprint retro").id, at: now - 9 * DAY, text: "@Chris owns the follow-up on search" });
+  add({ kind: "reply", by: "ana", file: file("Card designs").id, at: now - 16 * DAY, text: "Fixed the corner radius on the metal card" });
+}
+const noteFile = (note) => byId(note.fileKey ?? note.file) ?? null;
+const teamColor = (name) => Object.values(PROJECTS).find((p) => p.team.name === name)?.team.color ?? "#757575";
+
+// Figma's bell, read as its own panel reads it. Its text comes as HTML;
+// only bold survives here
+const NOTE_KINDS = { AtMentionCommentNotif: "mention", FileCommentReplyNotifV2: "reply", FileCommentNotifV2: "comment", BatchedFileCommentNotif: "comment" };
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'", nbsp: " " };
+const strip = (html) => String(html ?? "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, (_, e) => ENTITIES[e]);
+const boldOnly = (html) => esc(strip(String(html ?? "").replace(/<b>/gi, "\u0001").replace(/<\/b>/gi, "\u0002"))).replace(/\u0001/g, "<b>").replace(/\u0002/g, "</b>");
+let notesTimer = 0;
+async function loadNotes() {
+  try {
+    const params = new URLSearchParams({ currentView: "fullscreen", appVersion: "1", clientType: "web", current_plan_id: "-1", is_plan_org: "false" });
+    const items = await api(`/api/user_notifications/server_driven/plan?${params}`);
+    NOTES.splice(0);
+    for (const file of FILES) file.unread = 0;
+    for (const item of Array.isArray(items) ? items : []) {
+      const attachment = item.preferred_attachments?.[0];
+      const body = attachment?.body ?? {};
+      const html = (blocks) => (blocks ?? []).map((b) => b?.html_text ?? "").join(" ");
+      const type = item.notification_type ?? "";
+      const href = item.deeplink?.href ?? attachment?.deeplink?.href ?? null;
+      const note = {
+        id: item.notification_id,
+        live: true,
+        kind: NOTE_KINDS[type] ?? (/Invite/.test(type) ? "invite" : /Request(?!Approved)/.test(type) ? "request" : "other"),
+        title: boldOnly(html(body.title)),
+        text: strip(html(body.description)).trim(),
+        href,
+        fileKey: href?.match(/\/(?:design|file|board|slides|proto|deck|make|site|buzz)\/([A-Za-z0-9]{22})/)?.[1] ?? null,
+        avatar: item.avatars?.[0]?.img_url ?? null,
+        initial: (item.avatars?.[0]?.fallback_text ?? "?").trim()[0] ?? "?",
+        icon: item.icon?.img_url ?? null,
+        at: Date.parse(body.created_at) || Date.now(),
+        unread: !!item.is_unread,
+        count: 1,
+        done: null,
+      };
+      NOTES.push(note);
+      const file = byId(note.fileKey);
+      if (note.unread && file && ABOUT_COMMENTS.has(note.kind)) file.unread += 1;
+    }
+  } catch {}
+  notesTimer ||= setInterval(() => document.visibilityState === "visible" && loadNotes(), 60000);
+  render();
+}
+
+function setUnread(note, unread) {
+  if (note.unread === unread) return;
+  // Figma can mark a notification read, not unread again
+  if (note.live && unread) return;
+  note.unread = unread;
+  const file = noteFile(note);
+  if (file && ABOUT_COMMENTS.has(note.kind)) file.unread = Math.max(0, file.unread + (unread ? note.count : -note.count));
+  if (note.live && !note.bulk) api("/api/user_notifications/read", { method: "PUT", json: { id: note.id, currentView: "fullscreen", medium: "web", appVersion: "1", clientType: "web" } }).catch(() => {});
+}
+function markRead(notes, read) {
+  if (!notes.length) return;
+  if (LIVE) {
+    if (!read) return;
+    const all = notes.length > 1;
+    for (const note of notes) {
+      note.bulk = all;
+      setUnread(note, false);
+      note.bulk = false;
+    }
+    if (all) api("/api/user_notifications/mark_read/plan", { method: "POST", json: { current_plan_id: "-1", currentView: "fullscreen", is_plan_org: false, source: "web" } }).catch(() => toast("Couldn't mark them read in Figma"));
+    toast(all ? `Marked ${notes.length} notifications as read` : "Marked as read");
+    return render();
+  }
+  const before = notes.map((n) => [n, n.unread]);
+  for (const note of notes) setUnread(note, !read);
+  const what = notes.length === 1 ? "" : ` ${notes.length} notifications`;
+  toast(`Marked${what} as ${read ? "read" : "unread"}`, () => {
+    for (const [note, unread] of before) setUnread(note, unread);
+    render();
+  });
+  render();
+}
+function openNote(note) {
+  const file = noteFile(note);
+  setUnread(note, false);
+  if (note.live) {
+    if (note.href) window.open(note.href, "_blank");
+    if (file) upsertFile(file.key, { viewedAt: Date.now(), recent: true });
+    toast(file ? `Opening “${file.name}”` : "Opening in Figma");
+    return render();
+  }
+  if (!file) {
+    toast(`Opening the ${note.team} team in Figma`);
+    return render();
+  }
+  Object.assign(file, { at: Date.now(), kind: "open", by: "me" });
+  toast(`Opening “${file.name}”${ABOUT_COMMENTS.has(note.kind) ? ` at ${firstName(note.by)}'s comment` : ""}`);
+  render();
+}
+// Approve or deny an edit request, join or decline a team
+function answer(note, act) {
+  const file = noteFile(note);
+  const person = PEOPLE[note.by].name;
+  const outcome = {
+    approve: ["Approved", `${person} can now edit “${file?.name}”`],
+    deny: ["Denied", `Denied ${person}'s request`],
+    accept: ["Joined", `Joined ${note.team}`],
+    decline: ["Declined", `Declined the invite to ${note.team}`],
+  }[act];
+  if (!outcome) return;
+  const was = note.unread;
+  setUnread(note, false);
+  note.done = outcome[0];
+  toast(outcome[1], () => {
+    note.done = null;
+    setUnread(note, was);
+    render();
+  });
+  render();
+}
+
+function noteRow(note) {
+  const file = noteFile(note);
+  if (note.live) {
+    const pic = note.icon ? `<div class="pt nt" aria-hidden="true"><img src="${esc(note.icon)}" alt="" referrerpolicy="no-referrer"></div>` : file ? `<div class="pt nt" aria-hidden="true" data-key="${file.key}">${thumb(file)}</div>` : "<span></span>";
+    const face = note.avatar ? `<img src="${esc(note.avatar)}" alt="" referrerpolicy="no-referrer">` : esc(note.initial);
+    const label = (note.unread ? "Unread. " : "") + strip(note.title) + ", " + short(note.at);
+    const read = note.unread ? `<button class="tool rd" data-note-act="read" tabindex="-1" aria-label="Mark as read" title="Mark as read (U)">${icon("check")}</button>` : "";
+    return `<div class="note${note.unread ? " unread" : ""}" role="option" id="nt-${esc(note.id)}" data-note="${esc(note.id)}" tabindex="-1" aria-selected="${state.noteFocus === note.id}" aria-label="${esc(label)}">
+      <span class="ud" aria-hidden="true"></span><span class="av lg" aria-hidden="true" style="background:${colorForTeam(note.initial)}">${face}</span>
+      <div class="nb"><div class="nl">${note.title}<span class="nw">${esc(short(note.at))}</span></div>${note.text ? `<p class="quote">${esc(note.text)}</p>` : ""}</div>${pic}${read}</div>`;
+  }
+  const who = PEOPLE[note.by];
+  const name = `<b>${esc(who.name)}</b>`;
+  const target = `<b>${esc(file ? file.name : note.team)}</b>`;
+  const line = {
+    comment: `${name} commented on ${target}`,
+    reply: `${name} replied to you in ${target}`,
+    mention: `${name} mentioned you in ${target}`,
+    request: `${name} asked to edit ${target}`,
+    "invite-file": `${name} invited you to edit ${target}`,
+    "invite-team": `${name} invited you to the ${target} team`,
+  }[note.kind];
+  const quote = note.text ? `<p class="quote">${esc(note.text)}</p>` : "";
+  const more = note.count > 1 ? `<span class="more">and ${note.count - 1} more ${note.count === 2 ? "comment" : "comments"}</span>` : "";
+  let acts = "";
+  if (note.done) acts = `<span class="done">${icon("check")}${esc(note.done)}</span>`;
+  else if (note.kind === "request") acts = `<div class="nacts"><button class="btn sm primary" data-note-act="approve">Approve</button><button class="btn sm" data-note-act="deny">Deny</button></div>`;
+  else if (note.kind === "invite-team") acts = `<div class="nacts"><button class="btn sm primary" data-note-act="accept">Join team</button><button class="btn sm" data-note-act="decline">Decline</button></div>`;
+  const pic = file ? `<div class="pt nt" aria-hidden="true">${thumb(file)}</div>` : `<span class="tm nt" aria-hidden="true" style="background:${teamColor(note.team)}">${esc(note.team[0])}</span>`;
+  const label = (note.unread ? "Unread. " : "") + line.replace(/<[^>]+>/g, "") + ", " + short(note.at);
+  return `<div class="note${note.unread ? " unread" : ""}" role="option" id="nt-${note.id}" data-note="${note.id}" tabindex="-1" aria-selected="${state.noteFocus === note.id}" aria-label="${esc(label)}">
+    <span class="ud" aria-hidden="true"></span><span class="av lg" aria-hidden="true" style="background:${who.color}">${esc(who.name[0])}</span>
+    <div class="nb"><div class="nl">${line}<span class="nw">${esc(short(note.at))}</span></div>${quote}${more}${acts}</div>
+    ${pic}<button class="tool rd" data-note-act="read" tabindex="-1" aria-label="Mark as ${note.unread ? "read" : "unread"}" title="Mark as ${note.unread ? "read" : "unread"} (U)">${icon(note.unread ? "check" : "bell")}</button></div>`;
+}
+
+// The inbox is a window under the bell beside the account menu
+const inboxEl = $("#inbox");
+let bellReturn = null;
+
+function drawInbox() {
+  const show = { unread: (n) => n.unread, mentions: (n) => n.kind === "mention" || n.kind === "reply", requests: (n) => n.kind === "request" || n.kind.startsWith("invite") }[state.inbox] ?? (() => true);
+  const notes = NOTES.filter(show).sort((a, b) => b.at - a.at);
+  const unread = NOTES.filter((n) => n.unread).length;
+  const kinds = [["all", "All"], ["unread", "Unread"], ["mentions", "Mentions"], ["requests", "Requests"]];
+  let html = `<div class="ih"><h2 id="inbox-title">Inbox</h2><small>${unread ? `${unread} unread` : ""}</small><span class="grow"></span>`;
+  html += `<button class="ib" data-act="read-all" ${unread ? "" : "disabled"}>${icon("check")}Mark all as read</button>`;
+  html += `<button class="ib x" data-act="close" aria-label="Close">${icon("x")}</button></div>`;
+  html += `<div class="if"><div class="seg" role="group" aria-label="Show">${kinds.map(([id, label]) => `<button data-inbox="${id}" aria-pressed="${state.inbox === id}">${label}</button>`).join("")}</div></div><div class="il">`;
+  if (!notes.length) {
+    const caughtUp = state.inbox === "all" || state.inbox === "unread";
+    html += `<div class="iempty">${icon("bell")}<b>${caughtUp ? "You're all caught up" : "Nothing here"}</b><span>Comments, replies, mentions and invites from Figma land here</span></div>`;
+  } else {
+    let last = null;
+    for (const note of notes) {
+      const b = bucket(note.at);
+      if (b.key !== last) {
+        if (last) html += `</div>`;
+        last = b.key;
+        html += `<h3>${esc(b.label)}</h3><div role="listbox" aria-label="${esc(b.label)}">`;
+      }
+      html += noteRow(note);
+    }
+    html += `</div>`;
+  }
+  const had = inboxEl.contains(document.activeElement);
+  const scrollTop = $(".il", inboxEl)?.scrollTop ?? 0;
+  inboxEl.innerHTML = html + `</div>`;
+  $(".il", inboxEl).scrollTop = scrollTop;
+  const row = (state.noteFocus && document.getElementById("nt-" + state.noteFocus)) || $(".note", inboxEl);
+  if (row) {
+    state.noteFocus = row.dataset.note;
+    row.tabIndex = 0;
+    row.setAttribute("aria-selected", "true");
+    if (had && !document.activeElement?.closest?.("#inbox")) row.focus({ preventScroll: true });
+  }
+}
+
+function openInbox() {
+  closeMenu();
+  if (pal.open) pal.close();
+  bellReturn = document.activeElement;
+  inboxEl.classList.add("open");
+  drawInbox();
+  renderSide();
+  const bell = $("#bell").getBoundingClientRect();
+  inboxEl.style.top = `${bell.bottom + 6}px`;
+  inboxEl.style.left = `${Math.max(8, Math.min(bell.left - 8, innerWidth - inboxEl.offsetWidth - 8))}px`;
+  ($(".note", inboxEl) ?? inboxEl).focus({ preventScroll: true });
+}
+function closeInbox(restore = true) {
+  if (!inboxEl.classList.contains("open")) return;
+  inboxEl.classList.remove("open");
+  renderSide();
+  if (restore) ($("#bell") ?? bellReturn)?.focus({ preventScroll: true });
+}
+
+inboxEl.addEventListener("click", (e) => {
+  const kind = e.target.closest("[data-inbox]");
+  if (kind) {
+    state.inbox = kind.dataset.inbox;
+    state.noteFocus = null;
+    return drawInbox();
+  }
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "read-all") return markRead(NOTES.filter((n) => n.unread), true);
+  if (act === "close") return closeInbox();
+  const row = e.target.closest(".note[data-note]");
+  if (!row) return;
+  const note = NOTES.find((n) => n.id === row.dataset.note);
+  focusNote(note.id);
+  const noteAct = e.target.closest("[data-note-act]")?.dataset.noteAct;
+  if (noteAct === "read") markRead([note], !note.unread);
+  else if (noteAct) answer(note, noteAct);
+  else if (!e.target.closest("button")) {
+    closeInbox(false);
+    openNote(note);
+  }
+});
+inboxEl.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeInbox();
+  } else if (e.target.closest(".note") || e.target === inboxEl) inboxKeys(e);
+});
+addEventListener("pointerdown", (e) => {
+  if (!inboxEl.classList.contains("open") || inboxEl.contains(e.target) || e.target.closest?.("#bell, #toast, .menu")) return;
+  closeInbox(false);
+}, true);
+addEventListener("resize", () => closeInbox(false));
+
+function focusNote(id, scroll = false) {
+  state.noteFocus = id;
+  for (const row of $$(".note", inboxEl)) {
+    row.tabIndex = row.dataset.note === id ? 0 : -1;
+    row.setAttribute("aria-selected", row.dataset.note === id);
+  }
+  const el = document.getElementById("nt-" + id);
+  el?.focus({ preventScroll: true });
+  if (scroll) el?.scrollIntoView({ block: "nearest" });
+}
+function inboxKeys(e) {
+  const rows = $$(".note", inboxEl);
+  if (!rows.length) return;
+  const i = Math.max(0, rows.findIndex((r) => r.dataset.note === state.noteFocus));
+  const note = NOTES.find((n) => n.id === rows[i].dataset.note);
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const to = (j) => focusNote(rows[Math.min(rows.length - 1, Math.max(0, j))].dataset.note, true);
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    e.preventDefault();
+    to(i + (key === "ArrowDown" ? 1 : -1));
+  } else if (key === "Home" || key === "End") {
+    e.preventDefault();
+    to(key === "Home" ? 0 : rows.length - 1);
+  } else if (key === "Enter") {
+    e.preventDefault();
+    closeInbox(false);
+    openNote(note);
+  } else if (key === "u" && !e.ctrlKey && !e.metaKey && !e.altKey) markRead([note], note.unread);
+}
+
+/* Toast and selection bar */
+
+const toastEl = $("#toast");
+let toastTimer = 0;
+let toastUndo = null;
+function toast(message, undo) {
+  clearTimeout(toastTimer);
+  toastUndo = undo ?? null;
+  toastEl.innerHTML = `<span>${esc(message)}</span>${undo ? `<button class="undo" data-act="undo">Undo</button>` : ""}<button class="x" data-act="dismiss" aria-label="Dismiss">${icon("x")}</button>`;
+  toastEl.hidden = false;
+  toastEl.classList.remove("in");
+  void toastEl.offsetWidth;
+  toastEl.classList.add("in");
+  toastLife = undo ? 6000 : 3000;
+  toastTimer = setTimeout(hideToast, toastLife);
+}
+let toastLife = 0;
+const hideToast = () => {
+  toastEl.hidden = true;
+  toastUndo = null;
+};
+// Held open while the pointer or focus is on it
+for (const [type, run] of [["pointerenter", false], ["focusin", false], ["pointerleave", true], ["focusout", true]]) {
+  toastEl.addEventListener(type, () => {
+    clearTimeout(toastTimer);
+    if (run && !toastEl.matches(":hover, :focus-within")) toastTimer = setTimeout(hideToast, toastLife);
+  });
+}
+toastEl.addEventListener("click", (e) => {
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "undo") toastUndo?.();
+  if (act) {
+    toastEl.hidden = true;
+    toastUndo = null;
+  }
+});
+
+const selbar = $("#selbar");
+function renderSelbar() {
+  const ids = order.filter((id) => state.sel.has(id));
+  const show = ids.length > 1;
+  toastEl.classList.toggle("solo", !show);
+  if (!show) {
+    selbar.hidden = true;
+    return;
+  }
+  const trash = state.view === "trash";
+  const buttons = trash
+    ? `<button data-a="restore">Restore</button><button data-a="forever">Delete forever</button>`
+    : `<button data-a="open">Open</button><button data-a="star">${ids.every((id) => byId(id).starred) ? "Unstar" : "Star"}</button><button data-a="move">Move to…</button><button data-a="trash">Move to trash</button>`;
+  const wasHidden = selbar.hidden;
+  selbar.innerHTML = `<span>${ids.length} selected</span>${buttons}<button class="x" data-a="clear" aria-label="Clear selection">${icon("x")}</button>`;
+  selbar.hidden = false;
+  if (wasHidden) {
+    selbar.classList.remove("in");
+    void selbar.offsetWidth;
+    selbar.classList.add("in");
+  }
+}
+selbar.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-a]");
+  if (!button) return;
+  const ids = selection();
+  const act = button.dataset.a;
+  if (act === "open") openFiles(ids);
+  else if (act === "star") toggleStar(ids);
+  else if (act === "move") openMover(ids, button.getBoundingClientRect(), true);
+  else if (act === "trash") trashFiles(ids);
+  else if (act === "restore") restoreFiles(ids);
+  else if (act === "forever") deleteForever(ids);
+  else if (act === "clear") setSel([]);
+});
+
+/* Menus */
+
+const menu = $("#menu");
+let menuItems = [];
+let menuIndex = -1;
+let menuReturn = null;
+let menuKeys = null;
+
+function placeMenu(at, above = false) {
+  menu.classList.add("open");
+  const { innerWidth: w, innerHeight: h } = window;
+  const rect = at instanceof DOMRect ? at : null;
+  let x = rect ? rect.left : at.x;
+  let y = rect ? (above ? rect.top - menu.offsetHeight - 8 : rect.bottom + 4) : at.y;
+  if (x + menu.offsetWidth > w - 8) x = (rect ? rect.right : at.x) - menu.offsetWidth;
+  if (y + menu.offsetHeight > h - 8) y = (rect ? rect.top - 4 : at.y) - menu.offsetHeight;
+  menu.style.left = `${Math.max(8, x)}px`;
+  menu.style.top = `${Math.max(8, y)}px`;
+}
+
+// items: { label, kbd, act, checked, disabled, ext, swatch } | { header } | null
+function showMenu(items, at, options = {}) {
+  closeMenu();
+  menuReturn = document.activeElement;
+  menuKeys = null;
+  const checks = items.some((item) => item && "checked" in item);
+  menuItems = [];
+  menu.innerHTML = items.map((item) => {
+    if (!item) return `<div class="msep" role="separator"></div>`;
+    if (item.header) return `<div class="mh">${esc(item.header)}</div>`;
+    const i = menuItems.push(item) - 1;
+    const check = checks ? `<span class="ck">${icon("check")}</span>` : "";
+    const swatch = item.swatch ? `<span class="sw" style="background:${item.swatch}"></span>` : "";
+    const tail = item.kbd ? `<span class="k">${esc(item.kbd)}</span>` : item.ext ? `<span class="x">${icon("ext")}</span>` : "";
+    return `<button class="mi" id="mi${i}" tabindex="-1" role="${checks ? "menuitemradio" : "menuitem"}" data-i="${i}" ${checks ? `aria-checked="${!!item.checked}"` : ""} ${item.disabled ? 'aria-disabled="true"' : ""}>${check}${swatch}${esc(item.label)}${tail}</button>`;
+  }).join("");
+  menuIndex = -1;
+  placeMenu(at, options.above);
+  menu.focus();
+}
+function closeMenu() {
+  if (!menu.classList.contains("open")) return;
+  menu.classList.remove("open");
+  menu.innerHTML = "";
+  menuKeys = null;
+  if (menuReturn?.isConnected) menuReturn.focus({ preventScroll: true });
+  menuReturn = null;
+}
+// The highlighted item is announced through aria-activedescendant on what
+// holds focus: the menu, or the Move to field
+function highlight(i) {
+  menuIndex = i;
+  $$(".mi", menu).forEach((el, j) => el.classList.toggle("on", j === i));
+  const owner = $("input", menu) ?? menu;
+  if (i >= 0) owner.setAttribute("aria-activedescendant", "mi" + i);
+  else owner.removeAttribute("aria-activedescendant");
+}
+function pickMenu(i) {
+  const item = menuItems[i];
+  if (!item || item.disabled) return;
+  closeMenu();
+  item.act?.();
+}
+menu.addEventListener("pointermove", (e) => {
+  const el = e.target.closest(".mi");
+  if (el) highlight(Number(el.dataset.i));
+});
+menu.addEventListener("pointerleave", () => highlight(-1));
+menu.addEventListener("click", (e) => {
+  const el = e.target.closest(".mi");
+  if (el) pickMenu(Number(el.dataset.i));
+});
+menu.addEventListener("keydown", (e) => {
+  if (menuKeys?.(e)) return;
+  const usable = menuItems.map((item, i) => (item.disabled ? -1 : i)).filter((i) => i >= 0);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const at = usable.indexOf(menuIndex);
+    const next = e.key === "ArrowDown" ? usable[(at + 1) % usable.length] : usable[(at - 1 + usable.length) % usable.length];
+    highlight(next);
+    $$(".mi", menu)[next]?.scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    pickMenu(menuIndex);
+  } else if (e.key === "Escape" || e.key === "Tab") {
+    e.preventDefault();
+    closeMenu();
+  }
+});
+addEventListener("pointerdown", (e) => {
+  if (menu.classList.contains("open") && !menu.contains(e.target)) closeMenu();
+}, true);
+addEventListener("resize", closeMenu);
+scroller.addEventListener("scroll", closeMenu, { passive: true });
+
+function fileMenu(at) {
+  const ids = selection();
+  if (!ids.length) return;
+  const one = ids.length === 1;
+  if (state.view === "trash") {
+    return showMenu([
+      { label: one ? "Restore" : `Restore ${ids.length} files`, act: () => restoreFiles(ids) },
+      { label: "Delete forever", act: () => deleteForever(ids) },
+    ], at);
+  }
+  const starred = ids.every((id) => byId(id).starred);
+  showMenu([
+    { label: one ? "Open" : `Open ${ids.length} files`, kbd: "Enter", act: () => openFiles(ids) },
+    ...(LIVE ? [] : [{ label: "Open in the background", kbd: MOD + "Enter", act: () => openFiles(ids, true) }]),
+    null,
+    { label: starred ? "Remove from starred" : "Add to starred", kbd: "S", act: () => toggleStar(ids) },
+    { label: "Rename", kbd: "R", disabled: !one, act: () => rename(ids[0]) },
+    { label: "Move to…", kbd: "M", act: () => openMover(ids, at) },
+    { label: "Duplicate", kbd: MOD + "D", act: () => duplicate(ids) },
+    { label: one ? "Copy link" : "Copy links", act: () => copyLinks(ids) },
+    { label: "Share in Figma", ext: true, disabled: !one, act: () => window.open(fileUrl(byId(ids[0])), "_blank", "noopener") },
+    null,
+    { label: "Move to trash", kbd: "Delete", act: () => trashFiles(ids) },
+  ], at);
+}
+
+// Move to: a menu that filters projects as you type
+function openMover(ids, at, above = false) {
+  const current = new Set(ids.map((id) => byId(id).project ?? null));
+  const targets = [{ project: null, label: "Drafts", where: "" }];
+  for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) targets.push({ project: id, label: name, where: team.name });
+  closeMenu();
+  menuReturn = document.activeElement;
+  menu.innerHTML = `<input type="text" role="combobox" aria-expanded="true" aria-controls="mlist" aria-autocomplete="list" placeholder="Move ${esc(named(ids))} to…" aria-label="Project" spellcheck="false"><div class="mlist" id="mlist" role="listbox" aria-label="Projects"></div>`;
+  const input = $("input", menu);
+  const list = $(".mlist", menu);
+  const draw = () => {
+    const q = input.value.trim();
+    const shown = targets.map((t) => ({ t, m: q ? match(q, `${t.label} ${t.where}`) : { score: 0 } })).filter((x) => x.m).sort((a, b) => b.m.score - a.m.score);
+    menuItems = shown.map(({ t }) => ({ label: t.label, disabled: current.size === 1 && current.has(t.project), act: () => moveFiles(ids, t.project) }));
+    let team = null;
+    list.innerHTML = shown.length ? shown.map(({ t }, i) => {
+      let header = "";
+      if (!q && t.where !== team) {
+        team = t.where;
+        header = `<div class="mh">${esc(team)}</div>`;
+      }
+      const here = current.size === 1 && current.has(t.project);
+      return `${header}<button class="mi" id="mi${i}" tabindex="-1" role="option" data-i="${i}" ${here ? 'aria-disabled="true"' : ""}>${icon(t.project ? "folder" : "file")}<span style="margin-left:8px">${esc(t.label)}</span>${q && t.where ? `<span class="x">${esc(t.where)}</span>` : here ? `<span class="x">Here now</span>` : ""}</button>`;
+    }).join("") : `<div class="none">No project called “${esc(q)}”</div>`;
+    const first = menuItems.findIndex((item) => !item.disabled);
+    highlight(first);
+  };
+  menuKeys = (e) => {
+    if (e.key.length === 1 || e.key === "Backspace") return true;
+    return false;
+  };
+  input.addEventListener("input", draw);
+  draw();
+  placeMenu(at, above);
+  input.focus();
+}
+
+$("#side").addEventListener("click", (e) => {
+  const view = e.target.closest("[data-view]");
+  if (view) return go(view.dataset.view);
+  const team = e.target.closest("[data-team]");
+  if (team) {
+    const id = team.dataset.team;
+    state.collapsed.has(id) ? state.collapsed.delete(id) : state.collapsed.add(id);
+    store.set(LIVE ? "collapsed-live" : "collapsed", [...state.collapsed]);
+    return renderSide();
+  }
+  if (e.target.closest("[data-act=search]")) return openPalette();
+  if (e.target.closest("#bell")) return inboxEl.classList.contains("open") ? closeInbox() : openInbox();
+  if (e.target.closest("#acct")) accountMenu(e.target.closest("#acct").getBoundingClientRect());
+});
+
+/* Theme: the same palettes as Figma tabs get (themes.js) */
+
+// In Ligma, the themes picked in its settings, which reach every Figma tab
+// as "ligma-appearance" (appearance.rs) and come again when they change;
+// the system says light or dark. Elsewhere the URL can pick, for previews
+const pref = { theme: params.get("theme") ?? "figma", mode: params.get("mode") ?? "system" };
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+if (LIVE) {
+  try {
+    Live.appearance = JSON.parse(localStorage.getItem("ligma-appearance"));
+  } catch {}
+  window.__ligmaHomeAppearance = (page) => {
+    Live.appearance = page;
+    applyTheme();
+  };
+}
+function applyTheme() {
+  const dark = pref.mode === "dark" || (pref.mode === "system" && darkQuery.matches);
+  const mode = dark ? "dark" : "light";
+  const root = document.documentElement;
+  root.dataset.mode = mode;
+  root.style.colorScheme = mode;
+  document.body.dataset.preferredTheme = mode;
+  if (typeof ligmaPalette !== "function") return;
+  const theme = Live.appearance ? (dark ? Live.appearance.dark : Live.appearance.light) ?? "figma" : pref.theme;
+  const vars = ligmaPalette(theme, mode);
+  const step = (s) => LIGMA_STEPS.indexOf(s);
+  const grey = (s) => vars[`--ramp-grey-${s}`] ?? LIGMA_GREY[step(s)];
+  const accent = (s) => vars[`--ligma-accent-${s}`] ?? LIGMA_BLUE[mode][step(s)];
+  const white = vars["--ramp-white-1000"] ?? "#ffffff";
+  const tokens = dark
+    ? { bg: grey(800), bg2: grey(900), bg3: grey(700), line: grey(600), hover: grey(700), text: "#ffffff", text2: "rgba(255, 255, 255, 0.7)", text3: "rgba(255, 255, 255, 0.4)", canvas: grey(900), accent: accent(500), "accent-text": accent(300), sel: `color-mix(in srgb, ${accent(500)} 24%, ${grey(800)})`, "sel-strong": accent(700), menu: grey(900), "menu-line": grey(700), toast: grey(1000), shadow: "0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4)" }
+    : { bg: white, bg2: grey(100), bg3: grey(200), line: grey(200), hover: grey(100), text: grey(900), text2: `color-mix(in srgb, ${grey(500)} 84%, ${grey(900)})`, text3: grey(400), canvas: grey(100), accent: accent(500), "accent-text": accent(700), sel: accent(200), "sel-strong": accent(300), menu: white, "menu-line": grey(200), toast: grey(900), shadow: "0 2px 5px rgba(0, 0, 0, 0.08), 0 10px 24px rgba(0, 0, 0, 0.12)" };
+  for (const [name, value] of Object.entries(tokens)) root.style.setProperty("--" + name, value);
+}
+darkQuery.addEventListener("change", applyTheme);
+
+function accountMenu(at) {
+  // Every account signed in to Figma here; each has its own files
+  if (LIVE) {
+    return showMenu([
+      ...Live.users.map((u) => ({ label: u.name ?? u.email, checked: u.id === Live.uid, act: () => u.id !== Live.uid && switchAccount(u.id) })),
+      null,
+      { label: "Add another account", checked: false, ext: true, act: () => window.open("https://www.figma.com/login", "_blank") },
+    ], at);
+  }
+  showMenu([
+    { label: "Chris", checked: true, act: () => {} },
+    { label: "Add another account", checked: false, ext: true, act: () => window.open("https://www.figma.com/login", "_blank", "noopener") },
+    null,
+    { label: "Theme and appearance", checked: false, act: () => toast("Opens Ligma's settings at Appearance") },
+  ], at);
+}
+
+/* Search: a window over the page. Empty, it shows what you worked on last;
+   typed into, it finds files, projects and actions. in:, type: and by:
+   narrow it */
+
+const pal = $("#pal");
+const palInput = $("#pal-input");
+const palChips = $("#pal-chips");
+const palBody = $("#pal-body");
+const palFoot = $("#pal-foot");
+let chips = [];
+let palItems = [];
+let palIndex = 0;
+
+const SCOPES = {
+  in: { title: "Projects", options: () => [{ value: null, label: "Drafts" }, ...Object.values(PROJECTS).map((p) => ({ value: p.id, label: p.name, where: p.team.name }))] },
+  type: { title: "File types", options: () => Object.entries(TYPES).map(([value, t]) => ({ value, label: t.label })) },
+  by: { title: "People", options: () => Object.entries(PEOPLE).map(([value, p]) => ({ value, label: value === "me" ? "You" : p.name })) },
+};
+const COMMANDS = [
+  { label: "Go to Starred", view: "starred", icon: "star" },
+  { label: "Go to Drafts", view: "drafts", icon: "file" },
+  { label: "Go to Trash", view: "trash", icon: "trash" },
+  { label: "Open the inbox", act: () => openInbox(), icon: "bell" },
+  { label: "Figma's file browser", url: "https://www.figma.com/files", icon: "home" },
+  { label: "Account settings in Figma", url: "https://www.figma.com/settings", icon: "users" },
+  { label: "Figma Community", url: "https://www.figma.com/community", icon: "grid" },
+];
+
+// Letters of `query` in order in `text`; more for runs, word starts and
+// whole substrings. Each word of the query has to match
+function match(query, text) {
+  const lower = text.toLowerCase();
+  let total = 0;
+  const hits = new Set();
+  for (const word of query.toLowerCase().split(/\s+/).filter(Boolean)) {
+    let score = 0;
+    let at = 0;
+    let last = -2;
+    const local = [];
+    for (let j = 0; j < lower.length && at < word.length; j++) {
+      if (lower[j] !== word[at]) continue;
+      score += (j === last + 1 ? 3 : 1) + (j === 0 || /[\s—\-_./(]/.test(lower[j - 1]) ? 4 : 0);
+      local.push(j);
+      last = j;
+      at++;
+    }
+    if (at < word.length) return null;
+    const sub = lower.indexOf(word);
+    if (sub >= 0) {
+      score += 8 + (sub === 0 ? 6 : 0);
+      local.length = 0;
+      for (let k = 0; k < word.length; k++) local.push(sub + k);
+    }
+    local.forEach((j) => hits.add(j));
+    total += score;
+  }
+  return { score: total - lower.length * 0.02, hits };
+}
+function marked(text, hits) {
+  if (!hits?.size) return esc(text);
+  let out = "";
+  for (let i = 0; i < text.length; i++) out += hits.has(i) ? `<b>${esc(text[i])}</b>` : esc(text[i]);
+  return out.replace(/<\/b><b>/g, "");
+}
+
+function openPalette() {
+  closeMenu();
+  closeInbox(false);
+  chips = [];
+  palInput.value = "";
+  if (!pal.open) pal.showModal();
+  palInput.focus();
+  drawPalette();
+}
+pal.addEventListener("pointerdown", (e) => {
+  if (e.target === pal) pal.close();
+});
+pal.addEventListener("close", () => {
+  if (document.activeElement && document.activeElement !== document.body && !pal.contains(document.activeElement)) return;
+  const card = state.focus && cardEl(state.focus);
+  card?.focus({ preventScroll: true });
+});
+
+function parse() {
+  const text = palInput.value;
+  const token = text.match(/(?:^|\s)(in|type|by):(\S*)$/i);
+  if (!token) return { query: text.trim(), scope: null };
+  const start = token.index + (token[0].length - token[1].length - token[2].length - 1);
+  return { query: text.slice(0, start).trim(), scope: { key: token[1].toLowerCase(), q: token[2], start } };
+}
+
+function fileRow(file, i, hits) {
+  return `<div class="pr file" role="option" id="po${i}" data-i="${i}" aria-selected="${i === palIndex}">
+    <div class="pt" data-key="${file.key ?? file.id}">${thumb(file)}</div>
+    <div class="pn">${glyph(file.type)}<span>${marked(file.name, hits)}</span>${file.unread ? `<span class="badge">${file.unread}</span>` : ""}</div>
+    <span class="pp">${esc(placeOf(file.project))}</span><span class="pw">${esc(short(file.at))}</span></div>`;
+}
+function row(i, iconHtml, label, tail = "") {
+  return `<div class="pr" role="option" id="po${i}" data-i="${i}" aria-selected="${i === palIndex}">${iconHtml}<div class="pn"><span>${label}</span></div>${tail}</div>`;
+}
+
+// Figma's search, for files not loaded here yet; it also matches what's
+// in them. Results join the list as they come
+let searchTimer = 0;
+let searched = "";
+function searchFigma(query) {
+  clearTimeout(searchTimer);
+  if (!LIVE || !Live.uid || !query || query === searched) return;
+  searchTimer = setTimeout(async () => {
+    searched = query;
+    try {
+      const meta = await api(`/api/search/full_results?${new URLSearchParams({ query, search_model_type: "files", sort: "relevancy", desc: "true" })}`);
+      for (const result of meta?.results ?? []) if (result.model?.key && !result.model.trashed_at) fromRest(result.model).found = query;
+    } catch {}
+    if (pal.open && parse().query === query) drawPalette();
+  }, 180);
+}
+
+function drawPalette() {
+  const { query, scope } = parse();
+  const items = [];
+  let html = "";
+  palBody.classList.remove("split");
+  palChips.innerHTML = chips.map((chip, i) => `<span class="chip"><i>${chip.key}:</i>${esc(chip.label)}<button data-chip="${i}" aria-label="Remove ${chip.key} ${esc(chip.label)}">${icon("x")}</button></span>`).join("");
+  const live = FILES.filter((f) => !f.trashed);
+  const scoped = live.filter((f) => chips.every((c) => (c.key === "in" ? f.project === c.value : c.key === "type" ? f.type === c.value : f.by === c.value)));
+  const recency = (f) => 3 * Math.exp(-(Date.now() - f.at) / (7 * DAY));
+
+  if (scope) {
+    const options = SCOPES[scope.key].options()
+      .map((o) => ({ o, m: scope.q ? match(scope.q, o.label) : { score: 0 } }))
+      .filter((x) => x.m)
+      .sort((a, b) => b.m.score - a.m.score)
+      .slice(0, 9);
+    html += `<div class="ph">${SCOPES[scope.key].title}<small>Tab or Enter to add</small></div>`;
+    options.forEach(({ o, m }) => {
+      const i = items.push({ kind: "scope", key: scope.key, value: o.value, label: o.label, start: scope.start }) - 1;
+      html += row(i, icon(scope.key === "in" ? "folder" : scope.key === "by" ? "users" : "file"), marked(o.label, m.hits), o.where ? `<span class="pp">${esc(o.where)}</span>` : "");
+    });
+    if (!options.length) html += `<div class="pmsg">Nothing called <b>${esc(scope.q)}</b></div>`;
+  } else if (!query && !chips.length) {
+    palBody.classList.add("split");
+    let left = `<div class="ph">Recent</div>`;
+    live.slice().sort((a, b) => b.at - a.at).slice(0, 8).forEach((file) => {
+      const i = items.push({ kind: "file", id: file.id }) - 1;
+      left += fileRow(file, i);
+    });
+    let right = `<div class="ph">Starred</div>`;
+    live.filter((f) => f.starred).sort((a, b) => b.at - a.at).slice(0, 5).forEach((file) => {
+      const i = items.push({ kind: "file", id: file.id }) - 1;
+      right += row(i, glyph(file.type), esc(file.name));
+    });
+    right += `<div class="ph">Create</div>`;
+    for (const type of Object.keys(TYPES)) {
+      const i = items.push({ kind: "create", type, name: "Untitled" }) - 1;
+      right += row(i, glyph(type), `New ${TYPES[type].noun}`);
+    }
+    right += `<div class="ph">Narrow down</div><div class="scopes">${Object.keys(SCOPES).map((key) => `<button data-scope="${key}">${key}:</button>`).join("")}</div>`;
+    html = `<div>${left}</div><div>${right}</div>`;
+  } else {
+    searchFigma(query);
+    const files = scoped
+      .map((file) => ({ file, m: query ? match(query, file.name) ?? (match(query, `${file.name} ${placeOf(file.project)}`) && { score: -4, hits: null }) ?? (file.found === query && { score: -6, hits: null }) : { score: 0 } }))
+      .filter((x) => x.m)
+      .sort((a, b) => b.m.score + recency(b.file) - (a.m.score + recency(a.file)));
+    if (files.length) {
+      html += `<div class="ph">Files<small>${files.length > 8 ? `8 of ${files.length}` : files.length}</small></div>`;
+      files.slice(0, 8).forEach(({ file, m }) => {
+        const i = items.push({ kind: "file", id: file.id }) - 1;
+        html += fileRow(file, i, m.hits);
+      });
+    }
+    const inChip = chips.find((c) => c.key === "in");
+    if (query && !inChip) {
+      const projects = Object.values(PROJECTS).map((p) => ({ p, m: match(query, p.name) })).filter((x) => x.m).sort((a, b) => b.m.score - a.m.score).slice(0, 3);
+      if (projects.length) {
+        html += `<div class="ph">Projects</div>`;
+        for (const { p, m } of projects) {
+          const i = items.push({ kind: "view", view: "p:" + p.id }) - 1;
+          html += row(i, icon("folder"), marked(p.name, m.hits), `<span class="pp">${esc(p.team.name)}</span>`);
+        }
+      }
+    }
+    if (!files.length) html = `<div class="pmsg">No files match <b>${esc(query || "these filters")}</b>${chips.length ? " with these filters" : ""}</div>` + html;
+    html += `<div class="ph">Actions</div>`;
+    if (query) {
+      const where = inChip ? inChip.value : state.view.startsWith("p:") ? state.view.slice(2) : null;
+      for (const type of ["design", "figjam"]) {
+        const i = items.push({ kind: "create", type, name: query, project: where }) - 1;
+        html += row(i, icon("plus"), `New ${TYPES[type].noun} “${esc(query)}”`, `<span class="pp">in ${esc(placeOf(where))}</span>`);
+      }
+    }
+    const commands = COMMANDS.map((c) => ({ c, m: query ? match(query, c.label) : { score: 0 } })).filter((x) => x.m).slice(0, query ? 3 : 4);
+    for (const { c, m } of commands) {
+      const i = items.push({ kind: "command", command: c }) - 1;
+      html += row(i, icon(c.icon), marked(c.label, m.hits), c.url ? icon("ext") : "");
+    }
+  }
+  palItems = items;
+  palIndex = Math.min(palIndex, Math.max(0, items.length - 1));
+  palBody.innerHTML = html;
+  selectPal(palIndex, false);
+  const enter = palItems[palIndex]?.kind === "scope" ? "Add" : "Open";
+  palFoot.innerHTML = `<span><kbd>↑</kbd><kbd>↓</kbd>Move</span><span><kbd>Enter</kbd>${enter}</span><span><kbd>${MOD}Enter</kbd>Open in the background</span><span><kbd>Tab</kbd>Add a filter</span><span><kbd>Backspace</kbd>Remove a filter</span>`;
+}
+
+function selectPal(i, scroll = true) {
+  palIndex = i;
+  for (const el of $$(".pr", palBody)) el.setAttribute("aria-selected", Number(el.dataset.i) === i);
+  const el = $(`#po${i}`, palBody);
+  if (el) {
+    palInput.setAttribute("aria-activedescendant", el.id);
+    if (scroll) el.scrollIntoView({ block: "nearest" });
+  } else palInput.removeAttribute("aria-activedescendant");
+}
+
+function activate(item, background = false) {
+  if (!item) return;
+  if (item.kind === "scope") {
+    chips = chips.filter((c) => c.key !== item.key || item.key === "by");
+    chips.push({ key: item.key, value: item.value, label: item.label });
+    palInput.value = palInput.value.slice(0, item.start).replace(/\s+$/, "");
+    if (palInput.value) palInput.value += " ";
+    palIndex = 0;
+    drawPalette();
+    return;
+  }
+  pal.close();
+  if (item.kind === "file") {
+    state.focus = item.id;
+    openFiles([item.id], background);
+  } else if (item.kind === "view") go(item.view);
+  else if (item.kind === "create") createFile(item.type, item.name, item.project);
+  else if (item.kind === "command") {
+    const { command } = item;
+    if (command.view) go(command.view);
+    else if (command.url) window.open(command.url, "_blank", "noopener");
+    else command.act();
+  }
+}
+
+palInput.addEventListener("input", () => {
+  palIndex = 0;
+  drawPalette();
+});
+palInput.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!palItems.length) return;
+    const n = palItems.length;
+    selectPal((palIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    activate(palItems[palIndex], e.ctrlKey || e.metaKey);
+  } else if (e.key === "Tab") {
+    const item = palItems[palIndex];
+    if (item?.kind === "scope") {
+      e.preventDefault();
+      activate(item);
+    } else if (!e.shiftKey && !parse().scope) {
+      e.preventDefault();
+      palInput.value = (palInput.value ? palInput.value.replace(/\s*$/, " ") : "") + "in:";
+      drawPalette();
+    }
+  } else if (e.key === "Backspace" && !palInput.value && chips.length) {
+    chips.pop();
+    drawPalette();
+  }
+});
+palBody.addEventListener("pointermove", (e) => {
+  const el = e.target.closest(".pr");
+  if (el && Number(el.dataset.i) !== palIndex) selectPal(Number(el.dataset.i), false);
+});
+palBody.addEventListener("click", (e) => {
+  const scope = e.target.closest("[data-scope]");
+  if (scope) {
+    palInput.value = scope.dataset.scope + ":";
+    palInput.focus();
+    return drawPalette();
+  }
+  const el = e.target.closest(".pr");
+  if (el) activate(palItems[Number(el.dataset.i)], e.ctrlKey || e.metaKey);
+});
+palChips.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-chip]");
+  if (!button) return;
+  chips.splice(Number(button.dataset.chip), 1);
+  palInput.focus();
+  drawPalette();
+});
+
+/* Page events */
+
+head.addEventListener("click", (e) => {
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "search") openPalette();
+  else if (act === "new") createFile("design");
+  else if (act === "side") document.body.classList.toggle("side-open");
+  else if (act === "new-menu") {
+    showMenu([
+      ...Object.entries(TYPES).map(([type, t]) => ({ label: `New ${t.noun}`, act: () => createFile(type) })),
+      null,
+      { label: "Import a file…", ext: true, act: () => window.open("https://www.figma.com/files", "_blank", "noopener") },
+    ], e.target.closest("[data-act]").getBoundingClientRect());
+  }
+});
+
+filters.addEventListener("click", (e) => {
+  const type = e.target.closest("[data-type]");
+  if (type) {
+    state.type = type.dataset.type;
+    return render({ keepScroll: false });
+  }
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "retry") {
+    state.mode = null;
+    LIVE ? boot() : syncNow();
+  }
+});
+
+scroller.addEventListener("click", (e) => {
+  // The click that ends a selection box doesn't clear what it selected
+  if (boxJustEnded) {
+    boxJustEnded = false;
+    return;
+  }
+  const act = e.target.closest("[data-act]")?.dataset.act;
+  if (act === "new") return createFile("design");
+  if (act === "clear-filters") {
+    state.type = "all";
+    return render({ keepScroll: false });
+  }
+  const card = e.target.closest(".card[data-id]");
+  if (!card) {
+    if (!e.ctrlKey && !e.shiftKey && !e.metaKey) setSel([]);
+    return;
+  }
+  const id = card.dataset.id;
+  if (e.target.closest(".star")) return toggleStar(state.sel.has(id) ? selection() : [id]);
+  if (e.target.closest(".restore")) return restoreFiles([id]);
+  if (e.target.closest(".more")) {
+    if (!state.sel.has(id)) setSel([id], id);
+    focusCard(id, false);
+    return fileMenu(e.target.closest(".more").getBoundingClientRect());
+  }
+  if (e.ctrlKey || e.metaKey) {
+    const next = new Set(state.sel);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSel([...next], id);
+  } else if (e.shiftKey && state.anchor) rangeTo(id);
+  else setSel([id], id);
+  focusCard(id, false);
+});
+/* Selection box: drag over empty space to select every file it touches.
+   Ctrl, Cmd or Shift adds to the files already selected. Near the top or
+   bottom edge the list scrolls along */
+
+const marquee = Object.assign(document.createElement("div"), { className: "marquee" });
+let box = null;
+let boxJustEnded = false;
+let boxFrame = 0;
+
+function drawBox() {
+  const area = scroller.getBoundingClientRect();
+  const x = Math.min(Math.max(box.px - area.left, 0), scroller.clientWidth) + scroller.scrollLeft;
+  const y = Math.min(Math.max(box.py - area.top, 0), scroller.clientHeight) + scroller.scrollTop;
+  const [x1, x2] = [Math.min(box.x, x), Math.max(box.x, x)];
+  const [y1, y2] = [Math.min(box.y, y), Math.max(box.y, y)];
+  Object.assign(marquee.style, { left: `${x1}px`, top: `${y1}px`, width: `${x2 - x1}px`, height: `${y2 - y1}px` });
+  const hits = box.cards.filter((c) => c.l < x2 && c.r > x1 && c.t < y2 && c.b > y1).map((c) => c.id);
+  const next = new Set([...box.base, ...hits]);
+  if (next.size !== state.sel.size || hits.some((id) => !state.sel.has(id))) setSel(order.filter((id) => next.has(id)), hits[0] ?? state.anchor);
+  box.last = hits;
+}
+function edgeScroll() {
+  if (!box?.moved) return;
+  const area = scroller.getBoundingClientRect();
+  const edge = 48;
+  const dy = box.py < area.top + edge ? -(area.top + edge - box.py) / 3 : box.py > area.bottom - edge ? (box.py - area.bottom + edge) / 3 : 0;
+  if (dy) {
+    scroller.scrollTop += Math.round(dy);
+    drawBox();
+  }
+  boxFrame = requestAnimationFrame(edgeScroll);
+}
+
+scroller.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || e.pointerType === "touch" || e.target.closest(".card, button, a, input, .empty")) return;
+  // Not on the scrollbar
+  if (e.target === scroller && e.offsetX > scroller.clientWidth) return;
+  const area = scroller.getBoundingClientRect();
+  box = {
+    x: e.clientX - area.left + scroller.scrollLeft,
+    y: e.clientY - area.top + scroller.scrollTop,
+    px: e.clientX,
+    py: e.clientY,
+    pointer: e.pointerId,
+    moved: false,
+    base: e.ctrlKey || e.metaKey || e.shiftKey ? new Set(state.sel) : new Set(),
+    cards: $$(".card[data-id]", scroller).map((el) => ({ id: el.dataset.id, l: el.offsetLeft, t: el.offsetTop, r: el.offsetLeft + el.offsetWidth, b: el.offsetTop + el.offsetHeight })),
+    last: [],
+  };
+});
+scroller.addEventListener("pointermove", (e) => {
+  if (!box || e.pointerId !== box.pointer) return;
+  box.px = e.clientX;
+  box.py = e.clientY;
+  if (!box.moved) {
+    if (Math.hypot(e.clientX - (box.x - scroller.scrollLeft + scroller.getBoundingClientRect().left), e.clientY - (box.y - scroller.scrollTop + scroller.getBoundingClientRect().top)) < 4) return;
+    box.moved = true;
+    try {
+      scroller.setPointerCapture(e.pointerId);
+    } catch {}
+    scroller.append(marquee);
+    closeMenu();
+    boxFrame = requestAnimationFrame(edgeScroll);
+  }
+  drawBox();
+});
+const endBox = (e) => {
+  if (!box || e.pointerId !== box.pointer) return;
+  cancelAnimationFrame(boxFrame);
+  if (box.moved) {
+    boxJustEnded = true;
+    setTimeout(() => (boxJustEnded = false));
+    marquee.remove();
+    const first = order.find((id) => state.sel.has(id));
+    if (first) focusCard(box.last[0] ?? first, false);
+  }
+  box = null;
+};
+scroller.addEventListener("pointerup", endBox);
+scroller.addEventListener("pointercancel", endBox);
+scroller.addEventListener("scroll", () => box?.moved && drawBox(), { passive: true });
+
+scroller.addEventListener("dblclick", (e) => {
+  const card = e.target.closest(".card[data-id]");
+  if (!card || e.target.closest("button")) return;
+  if (state.view === "trash") toast("Restore the file to open it");
+  else openFiles([card.dataset.id]);
+});
+scroller.addEventListener("contextmenu", (e) => {
+  const card = e.target.closest(".card[data-id]");
+  if (!card) return;
+  e.preventDefault();
+  const id = card.dataset.id;
+  if (!state.sel.has(id)) setSel([id], id);
+  focusCard(id, false);
+  fileMenu({ x: e.clientX, y: e.clientY });
+});
+scroller.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (!order.length) return;
+  const id = state.focus && order.includes(state.focus) ? state.focus : order[0];
+  const mod = e.ctrlKey || e.metaKey;
+  const move = (next) => {
+    if (!next) return;
+    if (e.shiftKey) rangeTo(next);
+    else setSel([next], next);
+    focusCard(next);
+  };
+  const trash = state.view === "trash";
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"].includes(key)) {
+    e.preventDefault();
+    if (!state.focus) return move(order[0]);
+    move(neighbor(id, key));
+  } else if (key === "Home" || key === "End") {
+    e.preventDefault();
+    move(key === "Home" ? order[0] : order.at(-1));
+  } else if (key === "Enter") {
+    e.preventDefault();
+    if (trash) restoreFiles(selection());
+    else openFiles(selection(), mod);
+  } else if (key === "ContextMenu" || (e.shiftKey && key === "F10")) {
+    e.preventDefault();
+    if (!state.sel.has(id)) setSel([id], id);
+    fileMenu(cardEl(id).getBoundingClientRect());
+  } else if (key === " ") {
+    e.preventDefault();
+    const next = new Set(state.sel);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setSel([...next], id);
+  } else if (key === "Escape") setSel([]);
+  else if (key === "a" && mod) {
+    e.preventDefault();
+    setSel(order);
+  } else if (key === "d" && mod && !trash) {
+    e.preventDefault();
+    duplicate(selection());
+  } else if ((key === "Delete" || key === "Backspace") && !trash) trashFiles(selection());
+  else if (mod || e.altKey || trash) return;
+  else if (key === "s") toggleStar(selection());
+  else if (key === "r" && selection().length === 1) {
+    e.preventDefault();
+    rename(selection()[0]);
+  } else if (key === "m" && selection().length) {
+    e.preventDefault();
+    openMover(selection(), cardEl(selection()[0]).getBoundingClientRect());
+  }
+});
+scroller.addEventListener("focusin", (e) => {
+  const card = e.target.closest(".card[data-id]");
+  if (card) state.focus = card.dataset.id;
+});
+
+/* Drag files onto a project, Drafts or the Trash in the sidebar */
+
+scroller.addEventListener("dragstart", (e) => {
+  const card = e.target.closest(".card[data-id]");
+  if (!card) return;
+  if (!state.sel.has(card.dataset.id)) setSel([card.dataset.id], card.dataset.id);
+  const ids = selection();
+  e.dataTransfer.setData("text/plain", ids.map((id) => fileUrl(byId(id))).join("\n"));
+  e.dataTransfer.setData("application/x-ligma-files", ids.join(","));
+  e.dataTransfer.effectAllowed = "move";
+  for (const id of ids) cardEl(id)?.classList.add("ghost");
+});
+scroller.addEventListener("dragend", () => {
+  $$(".ghost", scroller).forEach((el) => el.classList.remove("ghost"));
+  $$(".nav.drop", side).forEach((el) => el.classList.remove("drop"));
+});
+side.addEventListener("dragover", (e) => {
+  const target = e.target.closest("[data-drop]");
+  if (!target || !e.dataTransfer.types.includes("application/x-ligma-files")) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  $$(".nav.drop", side).forEach((el) => el !== target && el.classList.remove("drop"));
+  target.classList.add("drop");
+});
+side.addEventListener("dragleave", (e) => {
+  const target = e.target.closest("[data-drop]");
+  if (target && !target.contains(e.relatedTarget)) target.classList.remove("drop");
+});
+side.addEventListener("drop", (e) => {
+  const target = e.target.closest("[data-drop]");
+  if (!target) return;
+  e.preventDefault();
+  target.classList.remove("drop");
+  const ids = e.dataTransfer.getData("application/x-ligma-files").split(",").filter((id) => byId(id));
+  const drop = target.dataset.drop;
+  if (drop === "trash") trashFiles(ids);
+  else moveFiles(ids, drop === "drafts" ? null : drop.slice(2));
+});
+
+addEventListener("keydown", (e) => {
+  const typing = e.target.closest?.("input, textarea, [contenteditable]");
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing && toastUndo && !toastEl.hidden) {
+    e.preventDefault();
+    const undo = toastUndo;
+    hideToast();
+    undo();
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    pal.open ? pal.close() : openPalette();
+  } else if (e.key === "/" && !typing && !pal.open) {
+    e.preventDefault();
+    openPalette();
+  } else if (!typing && !pal.open && !menu.classList.contains("open") && e.target === document.body && e.key.startsWith("Arrow") && order.length) {
+    e.preventDefault();
+    setSel([order[0]], order[0]);
+    focusCard(order[0]);
+  }
+});
+
+/* Sync: shown from what's saved at once, then brought up to date */
+
+function syncNow() {
+  const sync = $("#sync");
+  sync?.classList.add("busy");
+  if (sync) sync.lastElementChild.textContent = "Checking for changes";
+  setTimeout(() => {
+    render();
+    const done = $("#sync");
+    if (done) done.lastElementChild.textContent = "Sample files, not yours yet";
+  }, 700);
+}
+
+applyTheme();
+if (LIVE) boot();
+else {
+  seedFiles();
+  seedNotes();
+  render({ keepScroll: false });
+}
+if (state.mode === "loading") setTimeout(() => {
+  state.mode = null;
+  render({ keepScroll: false });
+}, 1600);
+</script>
+</body>
+</html>

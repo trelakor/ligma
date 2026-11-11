@@ -646,6 +646,12 @@
         </span>
         <input type="checkbox" class="switch" id="classic-home">
       </label>
+      <label class="row">
+        <span class="label">Ligma's home page (experimental)
+          <div class="hint">A faster home of Ligma's own: your files by when you worked on them, search on Ctrl+K, an inbox and moving files by dragging. It reads your files from Figma in place of loading Figma's home page. Figma's file browser stays one click away for admin and sharing.</div>
+        </span>
+        <input type="checkbox" class="switch" id="new-home">
+      </label>
     </section>
     <section>
       <h2>Notifications</h2>
@@ -905,7 +911,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "ligma-mcp"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "new-home", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1259,6 +1265,7 @@
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
+    $("new-home").checked = settings.newHome;
     $("ligma-mcp").checked = settings.ligmaMcp;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -1339,6 +1346,7 @@
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
+      newHome: $("new-home").checked,
       ligmaMcp: $("ligma-mcp").checked,
       ...changes,
     };
