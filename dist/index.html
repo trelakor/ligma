@@ -53,7 +53,7 @@
   .tab.active, #home.active { background: var(--active); color: var(--text-active); }
   #home { width: 38px; }
   /* Width follows the title, up to max-width. Once the bar is full,
-     tabs switch to equal widths (see `crowded` in render) */
+     tabs shrink in proportion to their width */
   .tab {
     flex: 0 1 auto;
     min-width: 48px;
@@ -100,7 +100,6 @@
   .tab:hover .close, .tab.active .close { visibility: visible; }
   .close:hover { background: rgba(255, 255, 255, 0.1); }
   #new { width: 36px; }
-  .crowded .tab:not(.pinned) { flex: 1 1 0; }
   /* While a tab is dragged, the others slide out of its way */
   .dragging .tab { transition: transform 150ms ease; }
   .dragging .tab.dragged { transition: none; z-index: 1; }
@@ -522,11 +521,6 @@
         bar.append(control);
       }
     }
-
-    // Content-sized tabs only while they fit. Once the drag area is down to
-    // its minimum, the bar is full
-    bar.classList.remove("crowded");
-    bar.classList.toggle("crowded", drag.getBoundingClientRect().width <= 48);
 
     placeGhost();
     // Off the tabs, the card goes. A previewed tab may have moved: follow it
