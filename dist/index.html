@@ -323,11 +323,13 @@
   let deferred = null;
   const groupNodes = (pinned) => [...bar.querySelectorAll(pinned ? ".tab.pinned:not(.ghost)" : ".tab:not(.pinned):not(.ghost)")];
 
-  // Before the press selects it, whether the tab was the active one
+  // Before the press selects it, whether the tab was the active one, and
+  // whether the press is on its icon, which then opens its emoji picker
   const startPress = (e, tab) => {
     if (e.button !== 0) return;
     const wasActive = e.currentTarget.classList.contains("active");
-    drag = { id: tab.id, pinned: tab.pinned, wasActive, startX: e.clientX, startY: e.clientY, moving: false };
+    const onIcon = wasActive && !!e.target.closest(".icon.picks");
+    drag = { id: tab.id, pinned: tab.pinned, wasActive, onIcon, startX: e.clientX, startY: e.clientY, moving: false };
   };
 
   // Where a tab let go of at `x` in this bar goes among its group, for a
@@ -446,9 +448,12 @@
     });
   });
 
-  const endPress = () => {
+  // Selecting redraws the bar, the icon pressed included, so its own click
+  // may never come: the release decides
+  const endPress = (e) => {
     const done = drag;
     drag = null;
+    if (e.type === "pointerup" && done?.onIcon && !done.moving) window.openEmojiPicker(done.id);
     if (!done?.moving) return;
     bar.classList.remove("dragging");
     // The tab stays where it was dropped until the reply renders it there
@@ -538,20 +543,13 @@
       if (emoji) node.append(el("span", { className: "icon emoji", textContent: emoji }));
       else node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
       // On the tab already active, a click on the icon picks its emoji
+      // (see `startPress`)
       const icon = node.firstElementChild;
       if (takesEmoji(tab) && tab.id === active) {
         icon.classList.add("picks");
         const hint = emoji ? "Change emoji" : "Add emoji";
         if (icon.tagName === "svg") icon.insertAdjacentHTML("afterbegin", `<title>${hint}</title>`);
         else icon.title = hint;
-        let press = null;
-        icon.addEventListener("pointerdown", (e) => {
-          press = e.button === 0 && node.classList.contains("active") ? { x: e.clientX, y: e.clientY } : null;
-        });
-        icon.addEventListener("click", (e) => {
-          if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_START) window.openEmojiPicker(tab.id);
-          press = null;
-        });
       }
       const close = el("div", { className: "close", title: "Close tab" }, ICONS.close);
       if (!tab.pinned) node.append(el("span", { className: "title", textContent: title || "Loading…" }), close);
