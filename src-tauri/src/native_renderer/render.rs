@@ -76,6 +76,8 @@ pub enum Msg {
     /// again from nothing: any difference is a tile left out of date. Sends
     /// back both, RGBA, and the size
     Live(Sender<Option<(Vec<u8>, Vec<u8>, u32, u32)>>),
+    /// What the window shows right now, as it would be drawn
+    Shown(Sender<Option<(Vec<u8>, u32, u32)>>),
     /// For each absolute point, the ids of the nodes under it, from the
     /// top-level one down to the deepest
     HitTest { points: Vec<(f32, f32)>, reply: Sender<Vec<Vec<String>>> },
@@ -157,6 +159,8 @@ const MAX_MARGIN: i32 = 256;
 /// Time to spend per frame drawing tiles not ready yet, so a newly shown
 /// part of the page fills in over a few frames rather than stalling one
 const BUILD_BUDGET: Duration = Duration::from_millis(10);
+/// How long the view stays still before quick tiles are drawn exactly
+const REFINE_AFTER: Duration = Duration::from_millis(250);
 /// Memory drawing took is given back after this long without a frame
 const IDLE: Duration = Duration::from_secs(3);
 /// The zoom counts as settled when it hasn't changed for this long
@@ -193,6 +197,9 @@ struct Tile {
     counts: Counts,
     /// Out of date, shown until it's drawn again
     stale: bool,
+    /// Drawn at full quality, sampled as Figma samples, rather than quickly
+    /// to fill the view while it moves
+    exact: bool,
 }
 
 pub struct Gpu {
@@ -324,15 +331,17 @@ pub struct Painter {
     kit: Kit,
     scene: Scene,
     units: Vec<Unit>,
-    /// By unit and zoom level
-    pictures: HashMap<(usize, bool, i32), Recorded>,
+    /// By unit, zoom level and whether edges are anti-aliased
+    pictures: HashMap<(usize, bool, i32, bool), Recorded>,
     images: HashMap<String, Img>,
     /// Widths images were asked for at
     asked: HashMap<String, f64>,
     tiles: HashMap<TileKey, Tile>,
-    /// Where tiles are drawn, supersampled, before they're kept, and the margin
-    /// around the tile it has
-    scratch: Option<(i32, Surface)>,
+    /// Where tiles are drawn before they're kept, by the margin around the
+    /// tile and how many samples a pixel takes along each side
+    scratch: Vec<(i32, i32, Surface)>,
+    /// Tiles drawn, to time some of them
+    made: u64,
     /// Where supersampled tiles are scaled down to
     down: Option<Surface>,
     /// Averages each 4 by 4 block of samples into a pixel
@@ -350,6 +359,8 @@ pub struct Painter {
     view: Option<View>,
     /// The last zoom (pixels per unit) and when it changed
     zoom: (f32, Instant),
+    /// When the view last moved
+    moved: Instant,
     frame: u64,
     tint: bool,
     dirty: bool,
@@ -367,7 +378,8 @@ impl Painter {
             images: HashMap::new(),
             asked: HashMap::new(),
             tiles: HashMap::new(),
-            scratch: None,
+            scratch: Vec::new(),
+            made: 0,
             down: None,
             average: skia_safe::RuntimeEffect::make_for_shader(AVERAGE, None)
                 .map_err(|error| log::warn!("native renderer: average: {error}"))
@@ -386,6 +398,7 @@ impl Painter {
                 .ok(),
             view: None,
             zoom: (0.0, Instant::now()),
+            moved: Instant::now(),
             frame: 0,
             tint: false,
             dirty: true,
@@ -461,11 +474,11 @@ impl Painter {
                     })
                 };
                 for unit in &self.units {
-                    if self.pictures.iter().any(|(&(slot, _, _), recorded)| slot == unit.slot && stale(recorded)) {
+                    if self.pictures.iter().any(|(&(slot, _, _, _), recorded)| slot == unit.slot && stale(recorded)) {
                         areas.push(unit.bounds);
                     }
                 }
-                self.pictures.retain(|&(slot, _, _), recorded| scene.node(slot).is_some() && !touched.contains(&slot) && !stale(recorded));
+                self.pictures.retain(|&(slot, _, _, _), recorded| scene.node(slot).is_some() && !touched.contains(&slot) && !stale(recorded));
                 self.kit.forget_patterns(None);
                 self.drop_tiles(&areas);
                 stats().lock().unwrap().nodes = self.scene.live_nodes();
@@ -474,15 +487,16 @@ impl Painter {
             Msg::View(view) => {
                 if self.view.as_ref() != Some(&view) {
                     self.view = Some(view);
+                    self.moved = Instant::now();
                     self.dirty = true;
                 }
             }
             Msg::Image(key, img) => {
-                let waiting: Vec<(usize, bool, i32)> =
+                let waiting: Vec<(usize, bool, i32, bool)> =
                     self.pictures.iter().filter(|(_, recorded)| recorded.missing.contains(&key)).map(|(&key, _)| key).collect();
                 let areas: Vec<Rect> = waiting
                     .iter()
-                    .filter_map(|&(slot, _, _)| self.units.iter().find(|unit| unit.slot == slot).map(|unit| unit.bounds))
+                    .filter_map(|&(slot, _, _, _)| self.units.iter().find(|unit| unit.slot == slot).map(|unit| unit.bounds))
                     .collect();
                 for picture in waiting {
                     self.pictures.remove(&picture);
@@ -495,7 +509,7 @@ impl Painter {
             }
             Msg::Resize(width, height) => {
                 if (width, height) != self.gpu.size && width > 0 && height > 0 {
-                    self.scratch = None;
+                    self.scratch.clear();
                     if let Err(error) = self.gpu.resize(width, height) {
                         log::warn!("native renderer: {error}");
                     }
@@ -522,6 +536,9 @@ impl Painter {
                 let _ = reply.send(self.render_view(&view, width, height));
                 self.release();
                 self.dirty = true;
+            }
+            Msg::Shown(reply) => {
+                let _ = reply.send(self.shown());
             }
             Msg::Live(reply) => {
                 let _ = reply.send(self.live());
@@ -648,16 +665,17 @@ impl Painter {
         (((reach * key.px()).ceil() as i32 + 31) / 32 * 32).min(MAX_MARGIN)
     }
 
-    /// Unit `unit`'s picture for zoom `level`, recorded if it isn't yet
-    fn picture(&mut self, unit: usize, level: i32) -> Option<&Recorded> {
+    /// Unit `unit`'s picture for zoom `level`, recorded if it isn't yet,
+    /// with anti-aliased edges if `aa`
+    fn picture(&mut self, unit: usize, level: i32, aa: bool) -> Option<&Recorded> {
         let (slot, section, bounds) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds);
-        let key = (slot, section, level);
+        let key = (slot, section, level, aa);
         if !self.pictures.contains_key(&key) {
             let mut recorder = PictureRecorder::new();
             let canvas = recorder.begin_recording(bounds.with_outset((1.0, 1.0)), true);
             let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, 2f32.powi(level));
             encoder.tint = self.tint;
-            encoder.aa = self.config.supersample < 4;
+            encoder.aa = aa;
             if section && self.scene.node(slot).is_some_and(|node| node.kind == Kind::Section) {
                 encoder.section(slot);
             } else if section {
@@ -688,8 +706,12 @@ impl Painter {
         }
     }
 
-    /// Draws tile `key`: every unit over it, in order
-    fn draw_tile(&mut self, key: TileKey) -> Option<Tile> {
+    /// Draws tile `key`: every unit over it, in order. Exact tiles take
+    /// Figma's 16 samples a pixel, others one with anti-aliased edges, which
+    /// is many times quicker
+    fn draw_tile(&mut self, key: TileKey, exact: bool) -> Option<Tile> {
+        let ss = if exact { self.config.supersample } else { 1 };
+        let aa = ss < 4;
         let area = key.area();
         let px = key.px();
         let level = px.log2().round().clamp(-12.0, 8.0) as i32;
@@ -698,7 +720,9 @@ impl Painter {
         let units: Vec<usize> = (0..self.units.len()).filter(|&i| Rect::intersects2(&self.units[i].bounds, &reach)).collect();
         let mut counts = Counts::default();
         let mut pictures = Vec::new();
-        let timing = super::dev();
+        // Timing waits for the GPU, so only some tiles are timed
+        self.made += 1;
+        let timing = super::dev() && self.made % 8 == 0;
         let start = Instant::now();
         for unit in units {
             // Too small to see: left out, as the encoder would
@@ -707,18 +731,22 @@ impl Painter {
                 counts.skipped += 1;
                 continue;
             }
-            if let Some(recorded) = self.picture(unit, level) {
+            if let Some(recorded) = self.picture(unit, level, aa) {
                 counts += recorded.counts;
                 pictures.push(recorded.picture.clone());
             }
         }
         let recorded = start.elapsed();
-        let ss = self.config.supersample;
-        if self.scratch.as_ref().is_none_or(|(kept, _)| *kept != margin) {
-            let side = (TILE + margin * 2) * ss;
-            self.scratch = Some((margin, self.gpu.surface(side, side, self.config.samples)?));
-        }
-        let (_, scratch) = self.scratch.as_mut()?;
+        let found = match self.scratch.iter().position(|(kept, samples, _)| (*kept, *samples) == (margin, ss)) {
+            Some(found) => found,
+            None => {
+                let side = (TILE + margin * 2) * ss;
+                let surface = self.gpu.surface(side, side, self.config.samples)?;
+                self.scratch.push((margin, ss, surface));
+                self.scratch.len() - 1
+            }
+        };
+        let (_, _, scratch) = &mut self.scratch[found];
         let canvas = scratch.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         canvas.save();
@@ -748,9 +776,9 @@ impl Painter {
             shrink(down, &drawn, source, self.average.as_ref());
             down.image_snapshot()
         };
-        // Margins are rare, so their bigger surface isn't kept
+        // Margins are rare, so their bigger surfaces aren't kept
         if margin != 0 {
-            self.scratch = None;
+            self.scratch.remove(found);
         }
         if timing {
             let gpu = start.elapsed();
@@ -761,7 +789,7 @@ impl Painter {
             mix(&mut stats.tile_gpu_ms, (gpu - played).as_secs_f64() * 1000.0);
             stats.tiles_drawn += 1;
         }
-        Some(Tile { image, used: self.frame, counts, stale: false })
+        Some(Tile { image, used: self.frame, counts, stale: false, exact: ss == self.config.supersample })
     }
 
     fn background(&self) -> Color4f {
@@ -841,22 +869,31 @@ impl Painter {
         });
         let start = Instant::now();
         let mut pending = false;
-        // Missing tiles first, then out of date ones, which show meanwhile
-        let mut order: Vec<TileKey> = needed.iter().copied().filter(|key| !self.tiles.contains_key(key)).collect();
-        order.extend(needed.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| tile.stale)));
-        for key in order {
-            // While zooming, older tiles stand in, scaled, if there are any
-            let covered = || self.tiles.keys().any(|other| other.px != pxb && Rect::intersects2(&other.area(), &key.area()));
-            let stale = self.tiles.contains_key(&key);
-            if !settled && (stale || covered()) {
+        // Renders off screen want the finished look straight away
+        let at_once = budget.is_none();
+        // Missing tiles first, then out of date ones, which show meanwhile,
+        // drawn quickly so the view fills even while it moves. Once it has
+        // been still a moment, quick tiles are drawn again exactly, one a
+        // frame, as each takes a while
+        let mut order: Vec<(TileKey, bool)> =
+            needed.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, at_once)).collect();
+        order.extend(needed.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| tile.stale)).map(|key| (key, at_once)));
+        let rough: Vec<TileKey> =
+            needed.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.exact)).collect();
+        if !rough.is_empty() {
+            pending = true;
+            if settled && self.moved.elapsed() >= REFINE_AFTER {
+                order.push((rough[0], true));
+            }
+        }
+        let mut behind = false;
+        for (key, exact) in order {
+            if budget.is_some_and(|budget| start.elapsed() >= budget) || (exact && !at_once && behind) {
                 pending = true;
+                behind = true;
                 continue;
             }
-            if budget.is_some_and(|budget| start.elapsed() >= budget) {
-                pending = true;
-                continue;
-            }
-            if let Some(tile) = self.draw_tile(key) {
+            if let Some(tile) = self.draw_tile(key, exact) {
                 self.tiles.insert(key, tile);
             }
         }
@@ -872,16 +909,18 @@ impl Painter {
             let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
             let mut older: Vec<(&TileKey, &Tile)> =
                 self.tiles.iter().filter(|(key, _)| key.px != pxb && Rect::intersects2(&key.area(), &view_area)).collect();
-            older.sort_by_key(|(_, tile)| tile.used);
-            canvas.save();
-            let mut holes = skia_safe::PathBuilder::new();
+            // The nearest zoom first, then the most recently shown
+            let near = |key: &TileKey| (key.px().log2() - px.log2()).abs();
+            older.sort_by(|a, b| near(a.0).total_cmp(&near(b.0)).then(b.1.used.cmp(&a.1.used)));
+            let mut holes = skia_safe::Region::new();
             for key in &missing {
-                let rect = Rect::from_xywh((key.x * TILE - ox) as f32, (key.y * TILE - oy) as f32, TILE as f32, TILE as f32);
-                holes.add_rect(rect, None, None);
+                holes.op_rect(skia_safe::IRect::from_xywh(key.x * TILE - ox, key.y * TILE - oy, TILE, TILE), skia_safe::region::RegionOp::Union);
             }
-            canvas.clip_path(&holes.detach(), skia_safe::ClipOp::Intersect, false);
             let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
             for (key, tile) in older {
+                if holes.is_empty() {
+                    break;
+                }
                 let area = key.area();
                 let dst = Rect::from_ltrb(
                     (area.left - view.x as f32) * px,
@@ -889,9 +928,20 @@ impl Painter {
                     (area.right - view.x as f32) * px,
                     (area.bottom - view.y as f32) * px,
                 );
+                // Each pixel from one stand-in only: stacking them would
+                // add up whatever is see-through in them, and glow
+                let cover = dst.round();
+                if !holes.intersects_rect(cover) {
+                    continue;
+                }
+                let mut here = holes.clone();
+                here.op_rect(cover, skia_safe::region::RegionOp::Intersect);
+                canvas.save();
+                canvas.clip_region(&here, skia_safe::ClipOp::Intersect);
                 canvas.draw_image_rect_with_sampling_options(&tile.image, None, dst, sampling, &Paint::default());
+                canvas.restore();
+                holes.op_rect(cover, skia_safe::region::RegionOp::Difference);
             }
-            canvas.restore();
         }
         let mut counts = Counts::default();
         let frame = self.frame;
@@ -907,11 +957,12 @@ impl Painter {
         // The approximate reason of a unit in view, if any
         let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
         let level = px.log2().round().clamp(-12.0, 8.0) as i32;
+        let aa = self.config.supersample < 4;
         let reason = self
             .units
             .iter()
             .filter(|unit| Rect::intersects2(&unit.bounds, &view_area))
-            .find_map(|unit| self.pictures.get(&(unit.slot, unit.section, level)).and_then(|recorded| recorded.reason.clone()));
+            .find_map(|unit| self.pictures.get(&(unit.slot, unit.section, level, aa)).and_then(|recorded| recorded.reason.clone()));
         self.evict();
         (counts, reason, pending || !missing.is_empty())
     }
@@ -933,7 +984,7 @@ impl Painter {
         self.tiles.retain(|_, tile| tile.used >= cutoff);
         // Pictures of zoom levels far from any tile kept go too
         let levels: Vec<i32> = self.tiles.keys().map(|key| key.px().log2().round() as i32).collect();
-        self.pictures.retain(|&(_, _, level), _| levels.iter().any(|&kept| (kept - level).abs() <= 1));
+        self.pictures.retain(|&(_, _, level, _), _| levels.iter().any(|&kept| (kept - level).abs() <= 1));
     }
 
     fn present(&mut self) {
@@ -1014,7 +1065,7 @@ impl Painter {
             .units
             .iter()
             .filter(|unit| Rect::intersects2(&unit.bounds, &area))
-            .filter_map(|unit| self.pictures.get(&(unit.slot, unit.section, level)))
+            .filter_map(|unit| self.pictures.get(&(unit.slot, unit.section, level, self.config.supersample < 4)))
             .map(|recorded| recorded.waiting)
             .sum();
         let info = ImageInfo::new((width as i32, height as i32), ColorType::RGBA8888, AlphaType::Unpremul, None);
@@ -1023,6 +1074,17 @@ impl Painter {
             return None;
         }
         Some((pixels, waiting))
+    }
+
+    fn shown(&mut self) -> Option<(Vec<u8>, u32, u32)> {
+        let view = self.view.clone()?;
+        let (width, height) = (self.gpu.size.0, self.gpu.size.1);
+        let mut target = self.gpu.surface(width as i32, height as i32, 1)?;
+        let settled = self.zoom.1.elapsed() >= SETTLE;
+        self.compose(&mut target, &view, Some(Duration::ZERO), settled);
+        let info = ImageInfo::new((width as i32, height as i32), ColorType::RGBA8888, AlphaType::Unpremul, None);
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        target.canvas().read_pixels(&info, &mut pixels, (width * 4) as usize, (0, 0)).then_some((pixels, width, height))
     }
 
     fn live(&mut self) -> Option<(Vec<u8>, Vec<u8>, u32, u32)> {

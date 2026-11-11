@@ -587,6 +587,14 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             let _ = diff.save(dir.join("diff.png"));
             Ok(json!({ "dir": dir, "differ": differ, "pixels": width as u64 * height as u64 }).to_string())
         }
+        _ if action.starts_with("shown:") && super::dev() => {
+            let (send, receive) = mpsc::channel();
+            let _ = ctx.messages.send(Msg::Shown(send));
+            let (pixels, width, height) = receive.recv_timeout(Duration::from_secs(30)).ok().flatten().ok_or("the renderer didn't answer")?;
+            let shown = image::RgbaImage::from_raw(width, height, pixels).ok_or("bad size")?;
+            shown.save(&action["shown:".len()..]).map_err(|error| error.to_string())?;
+            Ok(String::new())
+        }
         "purge" if super::dev() => {
             let (send, receive) = mpsc::channel();
             let _ = ctx.messages.send(Msg::Purge(send));
