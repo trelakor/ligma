@@ -143,9 +143,11 @@ pub struct Settings {
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
-    /// Let AI tools read and edit open files through Figma MCP Bridge's
-    /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs)
-    pub mcp_bridge: bool,
+    /// Ligma MCP: let AI tools read and edit open files through Figwright's
+    /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs).
+    /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
+    /// is no longer read, so it's on for everyone once
+    pub ligma_mcp: bool,
 }
 
 impl Default for Settings {
@@ -196,7 +198,7 @@ impl Default for Settings {
             copy_as_code: true,
             lasso_fill: true,
             classic_home: false,
-            mcp_bridge: false,
+            ligma_mcp: true,
         }
     }
 }

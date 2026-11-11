@@ -1,4 +1,4 @@
-//! AI tools in Figma files (`mcpBridge`), through Figwright
+//! Ligma MCP, AI tools in Figma files (`ligmaMcp`), through Figwright
 //! (github.com/awdr74100/figwright) rather than Figma's own MCP server,
 //! which a free plan can only call 6 times a month
 //!
@@ -17,7 +17,9 @@
 //! or put to sleep (see `CAN_REST_JS` in tabs.rs)
 //!
 //! What AI tools do in a file shows in Figma's right panel, in its MCP
-//! section, which Ligma takes over while the setting is on (`PANEL_JS`)
+//! section, which Ligma takes over as "Ligma MCP" while the setting is on
+//! (`PANEL_JS`). It's on by default, so that section is where people find
+//! it
 //!
 //! The protocol is Figwright's own: `packages/shared/src` for the
 //! WebSocket, `packages/plugin/protocol` for the plugin's messages
@@ -71,7 +73,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub fn init(settings: &crate::settings::Settings) {
-    ENABLED.store(settings.mcp_bridge, Ordering::Relaxed);
+    ENABLED.store(settings.ligma_mcp, Ordering::Relaxed);
 }
 
 pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
@@ -79,7 +81,7 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     // Settings shows the change right away rather than at the next check
     sync(app);
     // Figma's own MCP section comes back
-    if !settings.mcp_bridge {
+    if !settings.ligma_mcp {
         let off = PanelStatus { on: false, connected: false, refused: false, version: VERSION.trim() };
         let script = format!("window.__ligmaMcpLog?.status({})", serde_json::to_string(&off).unwrap());
         for webview in crate::tabs::scriptable_tabs(app) {
@@ -644,7 +646,7 @@ __PLUGIN_JS__
 /// of each tool call as it starts and ends, and Ligma of the setting and
 /// the file's connection, with `status`. While the setting is on, it puts
 /// its own MCP section in place of Figma's: a copy of Figma's heading,
-/// whose chip says whether the file is connected and whose button opens
+/// titled "Ligma MCP" so it isn't taken for Figma's own, whose chip says whether the file is connected and whose button opens
 /// Settings at AI tools, over the latest calls in this file. The heading
 /// collapses it, as Figma's collapsible sections do, and that's
 /// remembered. Three calls show, and "Show more" lists them all in a
@@ -949,6 +951,9 @@ pub const PANEL_JS: &str = r##"(() => {
       chipHolder.append(chip);
       heading?.after(chipHolder);
     }
+    // Named apart from Figma's own MCP, which it takes the place of
+    const name = [...root.querySelectorAll("i18n-text, span")].find((node) => node.childElementCount === 0 && node.textContent.trim() === "MCP");
+    if (name) name.textContent = "Ligma MCP";
     const button = root.querySelector("button");
     if (button) {
       button.setAttribute("aria-label", "Set up AI tools");
