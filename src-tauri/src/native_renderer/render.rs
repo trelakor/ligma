@@ -787,7 +787,7 @@ impl Painter {
     fn ask(&mut self, images: &[(String, f64)]) {
         for (key, width) in images {
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
-            if *width > asked * 1.9 {
+            if *width > asked * 1.05 {
                 self.asked.insert(key.clone(), *width);
                 let _ = self.requests.send(Request { key: key.clone(), width: *width });
             }

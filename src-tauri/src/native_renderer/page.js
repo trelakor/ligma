@@ -9,6 +9,9 @@
   if (window.__ligmaNative) return "ready";
   if (location.hostname !== "www.figma.com" || window.top !== window) return "unavailable";
 
+  // Figma's noise seed, which a file can't change
+  const NOISE_SEED = 5277;
+
   const api = () => {
     try {
       const figma = window.figma;
@@ -17,6 +20,57 @@
       return null;
     }
   };
+
+  // Figma's noise hashes each octave's seed with `sin` of numbers so large
+  // that the result is down to how this GPU rounds, so they're worked out
+  // here, on the GPU Figma uses: for each of the four fields, each of the
+  // three octaves' seed and its two gradient scales
+  let noiseOctaves = null;
+  (async () => {
+    const device = await (await navigator.gpu?.requestAdapter())?.requestDevice();
+    if (!device) return;
+    const module = device.createShaderModule({
+      code: `
+        @group(0) @binding(0) var<storage, read_write> out: array<f32, 36>;
+        @group(0) @binding(1) var<uniform> seed: vec4<i32>;
+        fn hash(x: f32) -> f32 { return fract(sin(x * 91.3458f + 12.345f) * 43758.547f); }
+        @compute @workgroup_size(1) fn main() {
+          for (var field = 0; field < 4; field++) {
+            for (var octave = 0; octave < 3; octave++) {
+              let s = fract(sin(f32(seed.x + field) * 91.3458f + f32(octave) * 57.123f + 12.345f) * 43758.547f);
+              let at = (field * 3 + octave) * 3;
+              out[at] = s;
+              out[at + 1] = hash(s + 2.6457f);
+              out[at + 2] = hash(s + 3.6055f);
+            }
+          }
+        }`,
+    });
+    const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
+    const output = device.createBuffer({ size: 144, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const seed = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const readback = device.createBuffer({ size: 144, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(seed, 0, new Int32Array([NOISE_SEED, 0, 0, 0]));
+    const group = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: output } },
+        { binding: 1, resource: { buffer: seed } },
+      ],
+    });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(1);
+    pass.end();
+    encoder.copyBufferToBuffer(output, 0, readback, 0, 144);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    noiseOctaves = Array.from(new Float32Array(readback.getMappedRange()));
+    readback.unmap();
+    device.destroy();
+  })().catch(() => {});
 
   const store = new Map();
   let next = 0;
@@ -80,8 +134,11 @@
       out.w = round(n.width);
       out.h = round(n.height);
     }
-    // Sections have no render bounds
-    const bounds = get("absoluteRenderBounds") ?? get("absoluteBoundingBox");
+    // Sections have no render bounds, nor do masks, whose strokes and
+    // effects can reach past their box. What a mask shows is in its parent's
+    let bounds = get("absoluteRenderBounds");
+    if (!bounds && n.isMask) bounds = n.parent?.absoluteRenderBounds;
+    bounds ??= get("absoluteBoundingBox");
     if (bounds) out.rb = [bounds.x, bounds.y, bounds.width, bounds.height].map(round);
     if ("opacity" in n && n.opacity !== 1) out.o = n.opacity;
     if ("blendMode" in n && n.blendMode !== "PASS_THROUGH" && n.blendMode !== "NORMAL") out.bm = n.blendMode;
@@ -121,6 +178,7 @@
             ? [radius, radius, radius, radius].map(corner)
             : undefined;
     }
+    if (n.cornerSmoothing > 0) out.cs = n.cornerSmoothing;
     if (n.type === "TEXT") {
       // Only for the record: the outlines in `fg` are what's drawn
       out.chars = n.characters.length;
@@ -319,6 +377,7 @@
         // dark theme
         transparent: !background,
         dark: document.body?.dataset.preferredTheme === "dark",
+        octaves: noiseOctaves,
       };
     },
 

@@ -23,7 +23,7 @@ use skia_safe::{
 };
 
 use super::adjust::Adjust;
-use super::scene::{Effect, Fills, Kind, Node, Paint as FigmaPaint, Rgba, Scene, StrokeAlign};
+use super::scene::{Effect, Fills, Kind, Node, Paint as FigmaPaint, Rgba, Scene, StrokeAlign, Vec2};
 
 /// Figma's blend modes Skia has built in
 pub fn blend(mode: &str) -> Option<BlendMode> {
@@ -53,6 +53,45 @@ pub fn blend(mode: &str) -> Option<BlendMode> {
 pub fn supported(mode: &str) -> bool {
     blend(mode).is_some() || mode == "LINEAR_BURN"
 }
+
+/// Blend modes drawn with Figma's own formulas, on premultiplied colors,
+/// where Skia's differ from them. Color burn and dodge differ only in how
+/// they guard against dividing by nearly nothing, and Skia's built-in ones
+/// match Figma's canvas better under a layer's opacity
+const BLENDERS: [(&str, &str); 3] = [
+    ("LINEAR_BURN", LINEAR_BURN),
+    ("SOFT_LIGHT", SOFT_LIGHT),
+    ("LINEAR_DODGE", LINEAR_DODGE),
+];
+
+/// LINEAR_DODGE: the sum, clamped, with alpha as in source over. Skia's
+/// plus adds alpha up as well
+const LINEAR_DODGE: &str = r#"
+half4 main(half4 src, half4 dst) {
+    return half4(min(half3(1), src.rgb + dst.rgb), src.a + dst.a - src.a * dst.a);
+}
+"#;
+
+
+
+/// A diamond gradient: the ramp, along x, by the distance from the middle
+/// summed across both axes
+const DIAMOND: &str = r#"
+uniform shader ramp;
+half4 main(float2 p) {
+    float2 d = abs(p - 0.5);
+    return ramp.eval(float2(2.0 * (d.x + d.y), 0.5));
+}
+"#;
+
+/// Figma's luminance mask: the root of the weighted squares of the color as
+/// kept, premultiplied, times its alpha
+const LUMINANCE: &str = r#"
+half4 main(half4 color) {
+    float3 c = float3(color.rgb);
+    return half4(0, 0, 0, half(sqrt(dot(c * c, float3(0.299, 0.587, 0.114))) * float(color.a)));
+}
+"#;
 
 fn is_normal(mode: &Option<String>) -> bool {
     mode.as_deref().is_none_or(|mode| mode == "NORMAL" || mode == "PASS_THROUGH")
@@ -113,17 +152,98 @@ pub fn tent_sigma(radius: f64) -> f32 {
     (radius / 6f64.sqrt()) as f32
 }
 
-/// Noise: square grains `grain` units wide, `density` of them in `color`,
-/// the same every time. Figma doesn't say how it makes its grain, so this
-/// only looks alike
+/// Figma's noise effect: three octaves of hashed gradient noise in node
+/// space, one field a channel, of which values in a band as wide as the
+/// density show. Monotone shows `color` where the fields' luma is in the low
+/// band, duotone `secondary` there and `color` in the high band, multitone
+/// the fields as they are where the fourth one is in the low band. The
+/// hashes are Figma's, so the grain lands where Figma's does
 const NOISE: &str = r#"
-uniform float grain;
+uniform float2 frequency;
+uniform float2 center;
+uniform float kind;
 uniform float density;
 uniform half4 color;
+uniform half4 secondary;
+// Each field's octaves: the octave's seed and its two gradient scales
+uniform float3 octaves[12];
+
+float band(float v, bool upper) {
+    float low = 10.0 * ((upper ? 0.75 : 0.25) - density / 4.0);
+    float high = low + 10.0 * (density / 2.0);
+    float x = v * 10.0;
+    return step(low, x) * (1.0 - step(high, x));
+}
+
+float cellHash(float2 cell) {
+    float t = dot(cell, float2(12.9898, 78.233));
+    t = t - floor(t / 3.14159) * 3.14159;
+    return fract(sin(t * 2.71828) * 438.5453 + 1.73205);
+}
+
+float component(float2 cell, float2 k, float s) {
+    return 2.0 * (fract(sin(dot(k, cell) * 0.0625) * (s + 312.0)) - 0.5);
+}
+
+float2 slope(float2 cell, float3 octave) {
+    float a = cellHash(cell);
+    float s1 = octave.x * a * 1.61803 + 18.345;
+    float s2 = octave.x * a * 0.61803 + 21.543;
+    float gx = component(cell, float2(12.42, 78.23) * octave.y, s1);
+    float gy = component(cell, float2(-19.98, 31.21) * octave.z, s2);
+    return float2(gx, gy) / length(float2(gx, gy));
+}
+
+float fade(float t) {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+float gradientNoise(float3 octave, float2 p) {
+    float2 c = floor(p);
+    float2 f = fract(p);
+    float2 u = float2(fade(f.x), fade(f.y));
+    float a = dot(f, slope(c, octave));
+    float b = dot(f - float2(1, 0), slope(c + float2(1, 0), octave));
+    float d = dot(f - float2(0, 1), slope(c + float2(0, 1), octave));
+    float e = dot(f - float2(1, 1), slope(c + float2(1, 1), octave));
+    return mix(mix(a, b, u.x), mix(d, e, u.x), u.y);
+}
+
+// From 0 to 1
+float field(float3 a, float3 b, float3 c, float2 p) {
+    float2 q = p * frequency;
+    float sum = gradientNoise(a, q) + gradientNoise(b, q * 2.0) / 2.0 + gradientNoise(c, q * 4.0) / 4.0;
+    return (sum + 1.0) / 2.0;
+}
+
 half4 main(float2 p) {
-    float2 cell = floor(p / grain);
-    float h = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
-    return h < density ? half4(color.rgb * color.a, color.a) : half4(0);
+    float2 at = p - center;
+    float r = field(octaves[0], octaves[1], octaves[2], at);
+    float g = field(octaves[3], octaves[4], octaves[5], at);
+    float b = field(octaves[6], octaves[7], octaves[8], at);
+    if (kind == 0.0) {
+        float a = band(field(octaves[9], octaves[10], octaves[11], at), false) * color.a;
+        return half4(half3(float3(2.0 * r - 0.5, 2.0 * g - 0.5, 2.0 * b - 0.5) * a), half(a));
+    }
+    float luma = 0.213 * r + 0.715 * g + 0.072 * b;
+    float low = band(luma, false);
+    if (kind == 1.0) {
+        float a = low * color.a;
+        return half4(color.rgb * half(a), half(a));
+    }
+    if (low == 1.0) {
+        return half4(secondary.rgb * secondary.a, secondary.a);
+    }
+    float a = band(luma, true) * color.a;
+    return half4(color.rgb * half(a), half(a));
+}
+"#;
+
+/// Puts the noise over what the node drew, only where it drew, by how much
+const NOISE_OVER: &str = r#"
+half4 main(half4 src, half4 dst) {
+    half4 s = src * dst.a;
+    return s + dst * (1.0 - s.a);
 }
 "#;
 
@@ -150,31 +270,41 @@ type PatternKey = (usize, u64, i32);
 /// What drawing shares across nodes and frames: compiled SkSL and pattern
 /// tiles
 pub struct Kit {
-    linear_burn: Option<Blender>,
-    soft_light: Option<Blender>,
+    blenders: HashMap<&'static str, Blender>,
+    diamond: Option<RuntimeEffect>,
+    luminance: Option<skia_safe::ColorFilter>,
     /// Divides the source by the destination's alpha
     divide: Option<Blender>,
     noise: Option<RuntimeEffect>,
+    noise_over: Option<Blender>,
     /// Recorded pattern tiles, and the images they were waiting for
     patterns: RefCell<HashMap<PatternKey, (skia_safe::Picture, Vec<String>, Vec<(String, bool)>)>>,
 }
 
 impl Kit {
     pub fn new() -> Self {
-        let linear_burn = RuntimeEffect::make_for_blender(LINEAR_BURN, None)
-            .map_err(|error| log::warn!("native renderer: LINEAR_BURN: {error}"))
+        let blenders = BLENDERS
+            .iter()
+            .filter_map(|&(name, sksl)| {
+                let effect = RuntimeEffect::make_for_blender(sksl, None).map_err(|error| log::warn!("native renderer: {name}: {error}")).ok()?;
+                Some((name, effect.make_blender(Data::new_copy(&[]), None)?))
+            })
+            .collect();
+        let diamond = RuntimeEffect::make_for_shader(DIAMOND, None).map_err(|error| log::warn!("native renderer: diamond: {error}")).ok();
+        let luminance = RuntimeEffect::make_for_color_filter(LUMINANCE, None)
+            .map_err(|error| log::warn!("native renderer: luminance: {error}"))
             .ok()
-            .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
-        let soft_light = RuntimeEffect::make_for_blender(SOFT_LIGHT, None)
-            .map_err(|error| log::warn!("native renderer: SOFT_LIGHT: {error}"))
-            .ok()
-            .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
+            .and_then(|effect| effect.make_color_filter(Data::new_copy(&[]), None));
         let divide = RuntimeEffect::make_for_blender(DIVIDE, None)
             .map_err(|error| log::warn!("native renderer: divide: {error}"))
             .ok()
             .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
         let noise = RuntimeEffect::make_for_shader(NOISE, None).map_err(|error| log::warn!("native renderer: noise: {error}")).ok();
-        Self { linear_burn, soft_light, divide, noise, patterns: RefCell::new(HashMap::new()) }
+        let noise_over = RuntimeEffect::make_for_blender(NOISE_OVER, None)
+            .map_err(|error| log::warn!("native renderer: noise over: {error}"))
+            .ok()
+            .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
+        Self { blenders, diamond, luminance, divide, noise, noise_over, patterns: RefCell::new(HashMap::new()) }
     }
 
     /// Forgets pattern tiles drawn without image `key`, or all of them
@@ -208,6 +338,7 @@ impl std::ops::AddAssign for Counts {
 /// Text shorter than this on screen, in pixels, is drawn as a faint bar,
 /// as its letters would be a blur anyway
 const GREEK_BELOW: f32 = 3.0;
+
 
 /// Image keys of nodes as Figma renders them start with this
 pub const RENDER: &str = "node:";
@@ -311,7 +442,9 @@ impl<'a> Encoder<'a> {
         let box_shadows = node.is_solid_box() && node.effects.iter().all(|effect| effect.kind == "DROP_SHADOW");
         let progressive = node.layer_blur().filter(|effect| effect.progressive());
         let filter = if box_shadows { None } else { self.filter(node, progressive.is_none()) };
-        let layer = node.opacity < 0.999 || !is_normal(&node.blend) || filter.is_some();
+        // Noise goes over what the node drew alone, so it needs its own layer
+        let noisy = node.effects.iter().any(|effect| effect.kind == "NOISE");
+        let layer = node.opacity < 0.999 || !is_normal(&node.blend) || filter.is_some() || noisy;
         if layer {
             let mut paint = Paint::default();
             paint.set_alpha_f(node.opacity);
@@ -400,18 +533,10 @@ impl<'a> Encoder<'a> {
     fn set_blend(&self, paint: &mut Paint, mode: Option<&str>) {
         match mode {
             None | Some("NORMAL") | Some("PASS_THROUGH") => {}
-            Some("LINEAR_BURN") => {
-                if let Some(blender) = &self.kit.linear_burn {
-                    paint.set_blender(blender.clone());
-                }
-            }
-            Some("SOFT_LIGHT") => {
-                if let Some(blender) = &self.kit.soft_light {
-                    paint.set_blender(blender.clone());
-                }
-            }
             Some(mode) => {
-                if let Some(mode) = blend(mode) {
+                if let Some(blender) = self.kit.blenders.get(mode) {
+                    paint.set_blender(blender.clone());
+                } else if let Some(mode) = blend(mode) {
                     paint.set_blend_mode(mode);
                 }
             }
@@ -436,13 +561,9 @@ impl<'a> Encoder<'a> {
                 "DROP_SHADOW" => {
                     let Some(rgba) = effect.color else { continue };
                     let spread = effect.spread as f32;
-                    let input = if spread > 0.0 {
-                        image_filters::dilate((spread, spread), solid(), None)
-                    } else if spread < 0.0 {
-                        image_filters::erode((-spread, -spread), solid(), None)
-                    } else {
-                        solid()
-                    };
+                    // A spread shadow is cast by the node's outline grown by
+                    // the spread, whatever its fills show
+                    let input = if spread != 0.0 { self.spread_outline(node, spread).or_else(solid) } else { solid() };
                     let mut shadow = image_filters::drop_shadow_only(offset, (sigma, sigma), color(rgba, 1.0), None, input, None);
                     if !effect.show_shadow_behind_node {
                         shadow = image_filters::blend(BlendMode::DstOut, shadow, solid(), None);
@@ -484,6 +605,28 @@ impl<'a> Encoder<'a> {
             filter = image_filters::blur((sigma, sigma), TileMode::Decal, filter, None);
         }
         filter
+    }
+
+    /// The node's outline grown (or shrunk) by `spread`, solid, as an image
+    /// filter's input. Corners stay as sharp as they are
+    fn spread_outline(&self, node: &Node, spread: f32) -> Option<ImageFilter> {
+        let outline = self.outline(node);
+        let bounds = node.transform.map_rect(outline.bounds().with_outset((spread.abs() + 1.0, spread.abs() + 1.0))).0;
+        let mut recorder = PictureRecorder::new();
+        let canvas = recorder.begin_recording(bounds, false);
+        canvas.concat(&node.transform);
+        let mut paint = Paint::new(Color4f::new(0.0, 0.0, 0.0, 1.0), None);
+        paint.set_anti_alias(self.aa);
+        canvas.draw_path(&outline, &paint);
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(spread.abs() * 2.0);
+        paint.set_stroke_join(skia_safe::PaintJoin::Miter);
+        if spread < 0.0 {
+            paint.set_blend_mode(BlendMode::Clear);
+        }
+        canvas.draw_path(&outline, &paint);
+        let picture = recorder.finish_recording_as_picture(None)?;
+        image_filters::picture(picture, None)
     }
 
     /// Fills, children and strokes
@@ -531,6 +674,11 @@ impl<'a> Encoder<'a> {
 
     /// The node's box with its corners, in its own coordinates
     fn box_shape(&self, node: &Node) -> Path {
+        if node.smoothing > 0.0 {
+            if let [first, ..] = node.fill_geometry.as_slice() {
+                return first.clone();
+            }
+        }
         let (w, h) = node.size;
         let rect = Rect::from_wh(w as f32, h as f32);
         match node.radii {
@@ -611,7 +759,7 @@ impl<'a> Encoder<'a> {
             let mut paint = Paint::default();
             paint.set_blend_mode(BlendMode::DstIn);
             if mask.mask.as_deref() == Some("LUMINANCE") {
-                paint.set_color_filter(luma_color_filter::new());
+                paint.set_color_filter(self.kit.luminance.clone().unwrap_or_else(luma_color_filter::new));
             }
             let mut rec = SaveLayerRec::default().paint(&paint);
             if let Some(bounds) = &bounds {
@@ -682,6 +830,21 @@ impl<'a> Encoder<'a> {
             }
             StrokeAlign::Center => {}
         }
+        // Figma writes all of a node's outlines to its stencil, then covers
+        // them once, so where they overlap a see-through paint isn't doubled
+        let joined;
+        let geometry = match geometry.as_slice() {
+            [first, rest @ ..] if !rest.is_empty() && !matches!(node.fills, Fills::Mixed) && rest.iter().all(|path| path.fill_type() == first.fill_type()) => {
+                let mut builder = skia_safe::PathBuilder::new();
+                builder.set_fill_type(first.fill_type());
+                for path in geometry {
+                    builder.add_path(path, None);
+                }
+                joined = vec![builder.detach()];
+                &joined
+            }
+            _ => geometry,
+        };
         if !fills {
             for paint in node.visible_strokes() {
                 for path in geometry {
@@ -717,7 +880,7 @@ impl<'a> Encoder<'a> {
                 out.set_color4f(color(rgba, paint.opacity), None);
             }
             "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND" => {
-                let Some(shader) = gradient(paint, w, h) else { return };
+                let Some(shader) = gradient(self.kit, paint, w, h) else { return };
                 out.set_shader(shader);
             }
             "IMAGE" => {
@@ -745,7 +908,7 @@ impl<'a> Encoder<'a> {
         let node_scale = node.transform.scale_x().hypot(node.transform.skew_y());
         let Some(img) = self.images.get(&key) else {
             if !self.missing_images.iter().any(|(missing, _)| *missing == key) {
-                self.missing_images.push((key, (w.max(h) * node_scale * self.px) as f64));
+                self.missing_images.push((key, (w.max(h) * node_scale * self.px * 1.42) as f64));
             }
             return None;
         };
@@ -779,7 +942,10 @@ impl<'a> Encoder<'a> {
         // decoded
         let shown = to_node.scale_x().hypot(to_node.skew_y()) * node_scale * iw * self.px;
         let kept = img.image.width() as f32;
-        if kept * 1.4 < shown && img.original.0 as f32 > kept && kept < 4096.0 {
+        // Tiles of this zoom level show up to 1.42 times bigger than it, and
+        // an image is never shown bigger than kept while there's more of it
+        let shown = shown * 1.42;
+        if kept < shown && img.original.0 as f32 > kept && kept < 4096.0 {
             self.sharper_images.push((key, shown as f64));
         }
         let mut local = to_node;
@@ -896,7 +1062,11 @@ impl<'a> Encoder<'a> {
         if rect.width() <= 0.0 || rect.height() <= 0.0 {
             return;
         }
-        let radius = node.radii.map_or(0.0, |r| r.iter().sum::<f64>() as f32 / 4.0) + spread.max(0.0);
+        // Rounded corners grow and shrink with the spread, sharp ones stay
+        let radii = node.radii.unwrap_or_default().map(|r| {
+            let r = if r > 0.0 { (r as f32 + spread).max(0.0) } else { 0.0 };
+            Vector::new(r, r)
+        });
         let mut paint = Paint::new(color(rgba, 1.0), None);
         paint.set_anti_alias(self.aa);
         self.set_blend(&mut paint, effect.blend_mode.as_deref());
@@ -906,7 +1076,7 @@ impl<'a> Encoder<'a> {
         self.canvas.save();
         self.canvas.translate((effect.offset.x as f32, effect.offset.y as f32));
         self.canvas.concat(&node.transform);
-        self.canvas.draw_rrect(RRect::new_rect_xy(rect, radius, radius), &paint);
+        self.canvas.draw_rrect(RRect::new_rect_radii(rect, &radii), &paint);
         self.canvas.restore();
     }
 
@@ -982,24 +1152,53 @@ impl<'a> Encoder<'a> {
 
     /// Noise: grain in the effect's color over the node's outline
     fn noise(&mut self, node: &Node, effect: &Effect) {
-        let (Some(rgba), Some(noise)) = (effect.color, &self.kit.noise) else {
+        let (Some(rgba), Some(noise), Some(over)) = (effect.color, &self.kit.noise, &self.kit.noise_over) else {
             return;
         };
-        let grain = (effect.noise_size.unwrap_or(100.0) / 100.0).max(0.01) as f32;
-        let density = effect.density.unwrap_or(0.5).clamp(0.0, 1.0) as f32;
-        let mut uniforms = Vec::with_capacity(24);
-        for value in [grain, density, rgba.r, rgba.g, rgba.b, rgba.a] {
+        let size = effect.noise_size_vector.unwrap_or(Vec2 { x: effect.noise_size.unwrap_or(1.0), y: effect.noise_size.unwrap_or(1.0) });
+        let kind = match effect.noise_type.as_deref() {
+            Some("MULTITONE") => 0.0,
+            Some("DUOTONE") => 2.0,
+            _ => 1.0,
+        };
+        let secondary = effect.secondary_color.unwrap_or(Rgba { r: 1.0, g: 1.0, b: 1.0, a: 0.25 });
+        let (w, h) = node.size;
+        let values = [
+            (1.0 / size.x.max(1e-3)) as f32,
+            (1.0 / size.y.max(1e-3)) as f32,
+            (w / 2.0) as f32,
+            (h / 2.0) as f32,
+            kind,
+            effect.density.unwrap_or(0.5).clamp(0.0, 1.0) as f32,
+            rgba.r,
+            rgba.g,
+            rgba.b,
+            rgba.a,
+            secondary.r,
+            secondary.g,
+            secondary.b,
+            secondary.a,
+        ];
+        let mut uniforms = Vec::with_capacity((values.len() + 36) * 4);
+        for value in values.into_iter().chain(self.scene.noise_octaves.iter().copied()) {
             uniforms.extend_from_slice(&value.to_le_bytes());
         }
         let Some(shader) = noise.make_shader(Data::new_copy(&uniforms), &[], None) else {
+            log::warn!("native renderer: noise uniforms are {} bytes, not {}", uniforms.len(), noise.uniform_size());
+            return;
+        };
+        let Some(bounds) = node.bounds else {
+            return;
+        };
+        let Some(inverse) = node.transform.invert() else {
             return;
         };
         let mut paint = Paint::default();
-        paint.set_anti_alias(self.aa);
         paint.set_shader(shader);
+        paint.set_blender(over.clone());
         self.canvas.save();
         self.canvas.concat(&node.transform);
-        self.canvas.draw_path(&self.outline(node), &paint);
+        self.canvas.draw_rect(inverse.map_rect(bounds.with_outset((1.0, 1.0))).0, &paint);
         self.canvas.restore();
     }
 }
@@ -1007,9 +1206,10 @@ impl<'a> Encoder<'a> {
 /// A gradient fill as a shader in the node's own coordinates. Figma's
 /// `gradientTransform` maps the node's box, as 0 to 1 both ways, to the
 /// gradient's space, where a linear gradient runs from (0, 0.5) to (1, 0.5)
-/// and the others are centered on (0.5, 0.5). Diamond gradients are drawn
-/// as radial ones
-fn gradient(paint: &FigmaPaint, w: f32, h: f32) -> Option<Shader> {
+/// and the others are centered on (0.5, 0.5). Colors are mixed as they
+/// are, not premultiplied, so one fading out darkens toward a transparent
+/// black, as in Figma
+fn gradient(kit: &Kit, paint: &FigmaPaint, w: f32, h: f32) -> Option<Shader> {
     let [[a, c, e], [b, d, f]] = paint.gradient_transform?;
     let t = Matrix::new_all(a as f32, c as f32, e as f32, b as f32, d as f32, f as f32, 0.0, 0.0, 1.0);
     let mut local = Matrix::scale((w, h));
@@ -1021,7 +1221,11 @@ fn gradient(paint: &FigmaPaint, w: f32, h: f32) -> Option<Shader> {
     let center = Point::new(0.5, 0.5);
     match paint.kind.as_str() {
         "GRADIENT_LINEAR" => gradients::linear_gradient((Point::new(0.0, 0.5), Point::new(1.0, 0.5)), &spec, &local),
-        "GRADIENT_RADIAL" | "GRADIENT_DIAMOND" => gradients::radial_gradient((center, 0.5), &spec, &local),
+        "GRADIENT_RADIAL" => gradients::radial_gradient((center, 0.5), &spec, &local),
+        "GRADIENT_DIAMOND" => {
+            let ramp = gradients::linear_gradient((Point::new(0.0, 0.5), Point::new(1.0, 0.5)), &spec, None)?;
+            kit.diamond.as_ref()?.make_shader(Data::new_copy(&[]), &[ramp.into()], Some(&local))
+        }
         _ => gradients::sweep_gradient(center, (0.0, 360.0), &spec, &local),
     }
 }

@@ -37,6 +37,8 @@ pub struct RawNode {
     pub sg: Option<Vec<(String, String)>>,
     #[serde(default, deserialize_with = "lenient")]
     pub cr: Option<[f64; 4]>,
+    /// Corner smoothing, 0 to 1
+    pub cs: Option<f64>,
     /// Text with more than one fill: each style's fills, in the order of
     /// its outlines in `fg`
     pub segs: Option<Vec<Value>>,
@@ -60,6 +62,9 @@ pub struct Begin {
     /// Figma's dark theme, which darkens its checkerboard
     #[serde(default)]
     pub dark: bool,
+    /// Figma's noise octaves as its GPU hashes them, see `NOISE_OCTAVES`
+    #[serde(default)]
+    pub octaves: Option<Vec<f32>>,
 }
 
 /// A part of the page as it streams in
@@ -221,6 +226,12 @@ pub struct Effect {
     /// Noise: grain size and how much of it shows
     pub noise_size: Option<f64>,
     pub density: Option<f64>,
+    /// Grain size along each axis, where it differs
+    pub noise_size_vector: Option<Vec2>,
+    /// MONOTONE, DUOTONE or MULTITONE
+    pub noise_type: Option<String>,
+    /// Duotone noise's second color
+    pub secondary_color: Option<Rgba>,
 }
 
 impl Effect {
@@ -301,6 +312,8 @@ pub struct Node {
     pub fill_geometry: Vec<Path>,
     pub stroke_geometry: Vec<Path>,
     pub radii: Option<[f64; 4]>,
+    /// Corner smoothing, 0 to 1, which makes corners squircles
+    pub smoothing: f64,
     /// Text with more than one fill: the fills of each outline in
     /// `fill_geometry`
     pub segment_fills: Vec<Vec<Paint>>,
@@ -367,6 +380,7 @@ impl Node {
             fill_geometry: geometry(raw.fg),
             stroke_geometry: geometry(raw.sg),
             radii: raw.cr,
+            smoothing: raw.cs.unwrap_or(0.0),
             segment_fills: raw
                 .segs
                 .unwrap_or_default()
@@ -411,6 +425,7 @@ impl Node {
     pub fn is_solid_box(&self) -> bool {
         matches!(self.kind, Kind::Frame | Kind::Shape)
             && (self.type_name != "VECTOR" && self.type_name != "ELLIPSE" && self.type_name != "STAR" && self.type_name != "POLYGON" && self.type_name != "LINE")
+            && self.smoothing == 0.0
             && self.visible_fills().any(|paint| paint.kind == "SOLID" && paint.opacity >= 0.999 && paint.color.is_some_and(|color| color.a >= 0.999))
     }
 
@@ -434,12 +449,11 @@ impl Node {
         }
         for effect in &self.effects {
             match effect.kind.as_str() {
-                "DROP_SHADOW" if effect.spread != 0.0 && !self.is_solid_box() => return Some("drop shadow spread on a non-box"),
                 "INNER_SHADOW" if effect.spread != 0.0 => return Some("inner shadow spread"),
                 "DROP_SHADOW" | "INNER_SHADOW" | "LAYER_BLUR" => {}
                 "BACKGROUND_BLUR" if effect.progressive() => return Some("progressive background blur"),
                 "BACKGROUND_BLUR" => {}
-                "NOISE" => return Some("noise grain"),
+                "NOISE" => {}
                 "TEXTURE" => return Some("texture effect"),
                 "GLASS" => return Some("glass effect"),
                 "SHADER" => {}
@@ -455,9 +469,7 @@ impl Node {
         for paint in self.visible_fills().chain(self.visible_strokes()) {
             match paint.kind.as_str() {
                 "SOLID" | "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "PATTERN" => {}
-                "IMAGE" if paint.has_filters() => return Some("image adjustments"),
-                "IMAGE" => {}
-                "GRADIENT_DIAMOND" => return Some("diamond gradient"),
+                "IMAGE" | "GRADIENT_DIAMOND" => {}
                 "VIDEO" => return Some("video fill"),
                 _ => {}
             }
@@ -495,6 +507,28 @@ fn parse_all(raw: Vec<RawNode>) -> Vec<Node> {
     })
 }
 
+const NOISE_OCTAVES: usize = 36;
+
+/// Figma's noise seed, which a file can't change
+const NOISE_SEED: f32 = 5277.0;
+
+/// Noise octaves as Figma hashes them, where the tab couldn't say how its
+/// GPU rounds them. Any GPU's grain differs from another's, this is a likely one
+fn noise_octaves() -> Vec<f32> {
+    let hash = |x: f32| (((x * 91.3458 + 12.345).sin() * 43758.547) as f32).rem_euclid(1.0);
+    let mut out = vec![0.0; NOISE_OCTAVES];
+    for field in 0..4 {
+        for octave in 0..3 {
+            let seed = (((NOISE_SEED + field as f32) * 91.3458 + octave as f32 * 57.123 + 12.345).sin() * 43758.547).rem_euclid(1.0);
+            let at = (field * 3 + octave) * 3;
+            out[at] = seed;
+            out[at + 1] = hash(seed + 2.6457);
+            out[at + 2] = hash(seed + 3.6055);
+        }
+    }
+    out
+}
+
 #[derive(Default)]
 pub struct Scene {
     pub page: String,
@@ -502,6 +536,9 @@ pub struct Scene {
     /// The page's background is hidden: Figma shows a checkerboard
     pub transparent: bool,
     pub dark: bool,
+    /// For each of noise's four fields, each of its three octaves' seed and
+    /// two gradient scales
+    pub noise_octaves: Vec<f32>,
     /// Nodes by slot. Removed ones leave an empty slot
     pub nodes: Vec<Option<Node>>,
     pub by_id: HashMap<String, usize>,
@@ -511,7 +548,8 @@ pub struct Scene {
 
 impl Scene {
     pub fn new(begin: Begin) -> Self {
-        Scene { page: begin.page, background: begin.bg, transparent: begin.transparent, dark: begin.dark, ..Default::default() }
+        let noise_octaves = begin.octaves.filter(|octaves| octaves.len() == NOISE_OCTAVES).unwrap_or_else(noise_octaves);
+        Scene { page: begin.page, background: begin.bg, transparent: begin.transparent, dark: begin.dark, noise_octaves, ..Default::default() }
     }
 
     pub fn node(&self, index: usize) -> Option<&Node> {
