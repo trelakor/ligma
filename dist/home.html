@@ -109,7 +109,15 @@
     font: 450 11px/16px var(--font);
   }
   .i { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
-  .g { flex: none; width: 12px; height: 12px; }
+  /* Figma's product squares, colored as on its home page */
+  .g { display: inline-grid; place-items: center; flex: none; width: 15px; height: 15px; border-radius: 3px; color: #fff; background: var(--g, #0c8ce9); }
+  .g svg { display: block; }
+  .g-design { --g: #0c8ce9; }
+  .g-figjam { --g: #8a38f5; }
+  .g-slides { --g: #f65009; }
+  .g-spec { --g: #667799; }
+  .g-make, .g-buzz, .g-site { --g: #1e1e1e; }
+  :root[data-mode="dark"] .g-make, :root[data-mode="dark"] .g-buzz, :root[data-mode="dark"] .g-site { --g: #ffffff; color: #120f18; }
   ::-webkit-scrollbar { width: 12px; height: 12px; }
   ::-webkit-scrollbar-thumb { border: 4px solid transparent; border-radius: 6px; background: var(--bg3) padding-box; }
   ::-webkit-scrollbar-thumb:hover { background-color: var(--text3); }
@@ -152,7 +160,20 @@
   .plan { display: flex; align-items: baseline; gap: 6px; height: 32px; margin-top: 12px; padding: 12px 16px 0; color: var(--text2); white-space: nowrap; }
   .plan b { font-weight: 550; color: var(--text); }
   .team .chev { margin-left: auto; color: var(--text2); transition: transform 160ms var(--ease); }
-  .team[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+  .team[aria-expanded="false"] .chev, .sec-h[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+  .tm img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+  /* Headings fold the teams under them away */
+  button.sec-h { align-items: center; gap: 4px; width: 100%; padding: 12px 16px 0 10px; text-align: left; }
+  button.sec-h:hover b { color: var(--text); }
+  .sec-h .chev { width: 12px; height: 12px; transition: transform 160ms var(--ease); }
+  .sec-h b { color: var(--text2); font-weight: 550; }
+  /* Pin a team to the top, from the star that shows on its row */
+  .team-row { position: relative; }
+  .team-star { position: absolute; top: 4px; right: 36px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: var(--hover); color: var(--text2); opacity: 0; }
+  .team-row:hover .team-star, .team-star:focus-visible { opacity: 1; }
+  .team-row:hover .tier { visibility: hidden; }
+  .team-star:hover { color: var(--text); background: var(--bg3); }
+  .team-star.on .i { fill: #ffc700; stroke: #e6a800; }
   .tm { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: #fff; font: 600 10px/1 var(--font); }
   .sfoot { flex: none; padding: 8px 0; border-top: 1px solid var(--line); }
   .sfoot .ext { margin-left: auto; }
@@ -343,6 +364,10 @@
   .mi .x { margin-left: auto; padding-left: 16px; opacity: 0.55; }
   .mi.on { background: var(--accent); color: #fff; }
   .mi[aria-disabled="true"] { opacity: 0.4; }
+  .menu.big { min-width: 208px; }
+  .menu.big .mi { gap: 8px; height: 40px; padding: 0 16px 0 8px; }
+  .mic { display: grid; place-items: center; flex: none; width: 24px; height: 24px; }
+  .mi:not(.on) .mic > svg { color: var(--text); }
   .mh { display: flex; align-items: center; height: 24px; padding: 0 8px; color: var(--text2); white-space: nowrap; }
   .msep { height: 1px; margin: 8px -8px; background: var(--menu-line); }
   .menu input {
@@ -486,11 +511,15 @@
   #inbox .nl { padding-right: 28px; font-size: 11px; line-height: 16px; }
   #inbox .quote { display: -webkit-box; margin-top: 4px; padding: 6px 8px; overflow: hidden; font-size: 11px; line-height: 16px; -webkit-line-clamp: 2; -webkit-box-orient: vertical; background: color-mix(in srgb, var(--text) 6%, var(--menu)); }
   #inbox .note:hover .quote { background: var(--menu); }
-  #inbox .more { margin-top: 4px; }
+  #inbox .nmore { margin-top: 4px; }
   #inbox .nacts { margin-top: 6px; }
   #inbox .pt.nt { width: 56px; height: 35px; }
   #inbox .tm.nt { width: 24px; height: 24px; font-size: 11px; }
   #inbox .note .rd { top: 6px; right: 70px; }
+  .nwhere { display: block; overflow: hidden; color: var(--text2); text-overflow: ellipsis; white-space: nowrap; }
+  #inbox .nwhere { font-size: 11px; line-height: 16px; }
+  .pt.ni { display: grid; place-items: center; color: var(--text2); background: var(--bg2); }
+  .pt.ni .i { width: 16px; height: 16px; }
   .iempty { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 40px 24px; color: var(--text2); text-align: center; }
   .iempty .i { width: 24px; height: 24px; }
   .iempty b { margin-top: 8px; color: var(--text); font-size: 13px; font-weight: 550; }
@@ -506,7 +535,7 @@
   .nw { margin-left: 8px; color: var(--text2); font-size: 11px; white-space: nowrap; }
   .quote { margin: 6px 0 0; padding: 8px 12px; border-radius: 6px; background: var(--bg2); color: var(--text); font-size: 13px; line-height: 20px; -webkit-user-select: text; user-select: text; }
   .note:hover .quote { background: var(--bg); }
-  .more { display: block; margin-top: 6px; color: var(--text2); }
+  .nmore { display: block; margin-top: 6px; color: var(--text2); }
   .nacts { display: flex; gap: 8px; margin-top: 8px; }
   .btn.sm { height: 28px; padding: 0 10px; }
   .done { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: var(--text2); }
@@ -625,12 +654,31 @@ const ICONS = {
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 
 // Product colors stay as Figma has them in every theme
-const TYPES = {
-  design: { label: "Design", noun: "Design file", color: "#0d99ff", mark: '<path d="M6 3.2 8.8 6 6 8.8 3.2 6z" fill="none" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>' },
-  figjam: { label: "FigJam", noun: "FigJam board", color: "#9747ff", mark: '<path d="M3 7.5c1-2.5 2-2.5 2.6-.6S7.4 9 9 5" fill="none" stroke="#fff" stroke-width="1.2" stroke-linecap="round"/>' },
-  slides: { label: "Slides", noun: "Slides deck", color: "#ff7a00", mark: '<rect x="3" y="3.5" width="6" height="5" rx=".6" fill="none" stroke="#fff" stroke-width="1.2"/>' },
+// Figma's own icons for its products and for folders and import, as its
+// home page draws them. Product colors stay as Figma has them in every theme
+const FIGMA_ICONS = {
+  design: {"vb":"0 0 16 16","d":"<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M3.39 2.206c.236-.182.545-.25.84-.181l5.058 1.19a4.87 4.87 0 0 1 3.748 4.905l.672.672a1 1 0 0 1 0 1.414l-3.5 3.5a1 1 0 0 1-1.414 0l-.673-.673a4.87 4.87 0 0 1-4.904-3.747L2.027 4.23a1 1 0 0 1 .266-.937l1-1zM3 4l1.19 5.058a3.867 3.867 0 0 0 4.31 2.941L9.5 13 13 9.5l-1-1a3.87 3.87 0 0 0-2.942-4.31L4 2.999zm3.986 2.277a2 2 0 1 1-.707.707L3.147 3.853l.707-.707zm1.015.722a1 1 0 1 0 0 2 1 1 0 0 0 0-2\" clip-rule=\"evenodd\"></path>"},
+  figjam: {"vb":"0 0 16 16","d":"<path fill=\"currentColor\" d=\"M12 3a1 1 0 0 1 1 1v4.586l-.005.099a1 1 0 0 1-.288.608l-3.414 3.414-.073.066a1 1 0 0 1-.634.227H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm-8 9h4V9a1 1 0 0 1 1-1h3V4H4zm5-.414L11.586 9H9z\"></path>"},
+  slides: {"vb":"0 0 16 16","d":"<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M4 4h8a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1m.434 8H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-.434l.412 1.354a.5.5 0 1 1-.956.292L10.52 12H5.479l-.5 1.646a.5.5 0 1 1-.957-.292zM5 5a1 1 0 1 0 0 2 1 1 0 0 0 0-2m0 3a1 1 0 1 0 0 2 1 1 0 0 0 0-2\" clip-rule=\"evenodd\"></path>"},
+  make: {"vb":"0 0 16 16","d":"<path fill=\"currentColor\" d=\"M9.497 8c.277 0 .504.226.498.504-.033 1.353-.197 2.582-.452 3.517-.142.52-.32.979-.539 1.318-.204.317-.532.66-1.004.661-.471 0-.8-.344-1.003-.661-.22-.34-.397-.798-.54-1.319q-.06-.226-.115-.475a.482.482 0 0 1 .507-.577c.23.012.427.18.478.404q.045.203.095.386c.13.474.274.822.414 1.039.083.128.246.128.329 0 .14-.218.284-.565.414-1.04.224-.823.379-1.943.414-3.207v-.054A.503.503 0 0 1 9.498 8M4.454 6.342a.483.483 0 0 1 .578.507.52.52 0 0 1-.405.478 9 9 0 0 0-.384.096c-.474.13-.822.274-1.04.414-.127.083-.127.246 0 .328.218.14.566.285 1.04.414.823.225 1.944.38 3.208.414h.056a.501.501 0 0 1-.013 1h-.069c-1.324-.036-2.527-.199-3.445-.449-.52-.142-.98-.32-1.318-.54C2.345 8.802 2 8.474 2 8.002s.345-.8.662-1.004c.339-.219.797-.397 1.318-.539q.226-.062.474-.116m4.122-.333c1.324.036 2.527.199 3.445.449.52.142.98.32 1.318.54.317.203.662.531.662 1.003l-.004.087c-.04.425-.36.725-.658.917-.339.219-.797.397-1.318.539q-.226.062-.475.114a.483.483 0 0 1-.578-.507.52.52 0 0 1 .405-.478q.202-.044.385-.094c.474-.13.822-.274 1.04-.414.127-.083.127-.245 0-.328-.218-.14-.566-.285-1.04-.414-.823-.225-1.944-.38-3.208-.414l-.056-.001a.5.5 0 0 1 .013-1zM8 2c.472 0 .8.344 1.004.661.22.34.397.798.54 1.318q.06.226.115.474a.484.484 0 0 1-.508.578.52.52 0 0 1-.478-.404 8 8 0 0 0-.094-.385c-.13-.474-.274-.822-.414-1.039-.083-.128-.246-.128-.329 0-.14.217-.284.565-.414 1.04-.227.834-.383 1.973-.416 3.257A.51.51 0 0 1 6.5 8a.49.49 0 0 1-.494-.5c.033-1.354.196-2.585.452-3.52.142-.521.32-.98.539-1.319C7.2 2.344 7.529 2 8 2\"></path>"},
+  spec: {"vb":"0 0 16 16","d":"<path fill=\"#667799\" d=\"M0 2a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2z\"></path><path fill=\"currentColor\" d=\"M11 3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm-6 9h6V4H5zm4.5-2a.5.5 0 0 1 0 1h-3a.5.5 0 0 1 0-1zm0-2.5a.5.5 0 0 1 0 1h-3a.5.5 0 0 1 0-1zM8 5a.5.5 0 1 1 0 1 .5.5 0 0 1 0-1m1.5 0a.5.5 0 1 1 0 1 .5.5 0 0 1 0-1\"></path>"},
+  buzz: {"vb":"0 0 24 24","d":"<path fill=\"currentColor\" d=\"M8.963 7.681a1.5 1.5 0 0 1 2.175-.366l.142.126 5.278 5.279.125.142c.536.689.366 1.7-.366 2.175l-.166.093-7.67 3.72a1.5 1.5 0 0 1-1.628-.209l-.087-.08-1.327-1.327a1.5 1.5 0 0 1-.289-1.715l3.72-7.672zM6.05 15.956a.5.5 0 0 0 .096.571l1.326 1.326a.5.5 0 0 0 .499.125l.073-.028 2.153-1.045-3.104-3.104zm1.505-3.108 3.594 3.595 2.079-1.008-4.666-4.665zm3.017-4.7a.5.5 0 0 0-.804.136l-.744 1.534 5.156 5.155 1.534-.743a.5.5 0 0 0 .178-.756l-.043-.047zm8.816 2.246a.477.477 0 0 1 .52.399l.008.06a.48.48 0 0 1-.44.537l-1.724.15a.5.5 0 0 1-.087-.995zm-1.226-2.743a.48.48 0 0 1 .648.154l.033.053a.48.48 0 0 1-.18.66l-2.322 1.34a.5.5 0 0 1-.5-.866zM15.48 5.335a.477.477 0 0 1 .66-.18l.051.032a.48.48 0 0 1 .154.649l-1.34 2.32a.5.5 0 0 1-.864-.5zm-2.335-1.252.061.009c.25.037.42.268.398.52l-.15 1.719a.5.5 0 0 1-.996-.087l.15-1.722a.48.48 0 0 1 .537-.44\"></path>"},
+  site: {"vb":"0 0 24 24","d":"<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M12.465 17.738c-.233.23-.389.262-.465.262s-.232-.032-.465-.262c-.238-.234-.498-.623-.737-1.182-.434-1.013-.738-2.433-.79-4.056h3.984c-.052 1.623-.356 3.044-.79 4.056-.24.56-.5.948-.737 1.182m1.527-6.238h-3.984c.052-1.623.356-3.044.79-4.056.24-.56.5-.948.737-1.182.233-.23.389-.262.465-.262s.232.032.465.262c.238.234.498.623.737 1.182.434 1.012.738 2.433.79 4.056m1 1c-.065 2.176-.558 4.078-1.282 5.253a6.005 6.005 0 0 0 4.27-5.253zm2.988-1h-2.988c-.065-2.176-.558-4.078-1.282-5.253a6.005 6.005 0 0 1 4.27 5.253m-8.972 0c.065-2.176.558-4.078 1.282-5.253A6.005 6.005 0 0 0 6.02 11.5zm-2.987 1a6.005 6.005 0 0 0 4.27 5.253c-.725-1.175-1.218-3.077-1.283-5.253zM19 12a7 7 0 1 0-14 0 7 7 0 0 0 14 0\" clip-rule=\"evenodd\"></path>"},
+  folder: {"vb":"0 0 24 24","d":"<path fill=\"currentColor\" d=\"M10.379 6a2 2 0 0 1 1.414.586L13.207 8H16.5a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM7.5 7a1 1 0 0 0-1 1v7.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10a1 1 0 0 0-1-1h-3.707l-1.707-1.707A1 1 0 0 0 10.379 7zm8 7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1z\"></path>"},
+  import: {"vb":"0 0 24 24","d":"<path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M8 6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9.5a.5.5 0 0 0-1 0V16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h3a.5.5 0 0 0 0-1zm9 0a5.5 5.5 0 0 0-5.5 5.5v1.793l-1.646-1.647a.5.5 0 0 0-.708.708l2.5 2.5a.5.5 0 0 0 .708 0l2.5-2.5a.5.5 0 0 0-.708-.708L12.5 13.293V11.5A4.5 4.5 0 0 1 17 7h.5a.5.5 0 0 0 0-1z\" clip-rule=\"evenodd\"></path>"},
 };
-const glyph = (type) => `<svg class="g" viewBox="0 0 12 12" aria-label="${TYPES[type].label}" role="img"><rect width="12" height="12" rx="3" fill="${TYPES[type].color}"/>${TYPES[type].mark}</svg>`;
+const figmaIcon = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="${FIGMA_ICONS[name].vb}" fill="none" aria-hidden="true">${FIGMA_ICONS[name].d}</svg>`;
+// `editor` is what Figma calls each in its API
+const TYPES = {
+  design: { label: "Design", noun: "Design file", editor: "design" },
+  figjam: { label: "FigJam", noun: "FigJam board", editor: "whiteboard" },
+  slides: { label: "Slides", noun: "Slides deck", editor: "slides" },
+  make: { label: "Make", noun: "Make file", editor: "figmake" },
+  spec: { label: "Spec", noun: "Spec", editor: "figspec" },
+  buzz: { label: "Buzz", noun: "Buzz file", editor: "cooper" },
+  site: { label: "Site", noun: "Site", editor: "sites" },
+};
+const glyph = (type) => `<span class="g g-${type}" role="img" aria-label="${TYPES[type]?.label ?? "File"}">${figmaIcon(TYPES[type] ? type : "design", 13)}</span>`;
 
 /* Sample data. The live page reads these from Figma: the session's
    accounts, their plans and teams, projects and the files in them */
@@ -1028,7 +1076,11 @@ const LG = {
           this.opening = null;
           this.wanted.clear();
         }
-        for (const p of this.pending.splice(0)) p.reject(new Error("Lost the connection to Figma"));
+        // Only what was asked on this socket: a new one may be open by now
+        for (const p of this.pending.filter((p) => p.ws === ws)) {
+          this.pending.splice(this.pending.indexOf(p), 1);
+          p.reject(new Error("Lost the connection to Figma"));
+        }
       };
     });
     return this.opening;
@@ -1060,7 +1112,7 @@ const LG = {
   async load([name, hash, args]) {
     const ws = await this.connect();
     return new Promise((resolve, reject) => {
-      const p = { name, args, resolve, reject };
+      const p = { name, args, resolve, reject, ws };
       this.pending.push(p);
       ws.send(JSON.stringify({ messageType: "subscribe", viewName: name, viewHash: hash, loadType: "initial", args }));
       setTimeout(() => {
@@ -1085,9 +1137,9 @@ const LG = {
   },
 };
 
-const EDITORS = { design: "design", whiteboard: "figjam", slides: "slides" };
-const URL_PATHS = { design: "design", whiteboard: "board", slides: "slides", sites: "site", figmake: "make", cooper: "buzz" };
-const EDITOR_OF = { design: "design", figjam: "whiteboard", slides: "slides" };
+const EDITORS = Object.fromEntries(Object.entries(TYPES).map(([type, t]) => [t.editor, type]));
+const EDITOR_OF = Object.fromEntries(Object.entries(TYPES).map(([type, t]) => [type, t.editor]));
+const URL_PATHS = { design: "design", whiteboard: "board", slides: "slides", sites: "site", figmake: "make", cooper: "buzz", figspec: "spec" };
 const colorOf = (meta) => {
   try {
     const c = (typeof meta === "string" ? JSON.parse(meta) : meta)?.background_color;
@@ -1160,7 +1212,11 @@ function changed() {
     changeFrame = 0;
     const before = FILES.filter((f) => f.recent).length;
     takeFromStore();
-    for (const el of $$(".thumb[data-thumb] .tph, .pt .tph")) {
+    for (const el of $$("[data-note-key] .tph")) {
+      const url = LG.store.File?.[el.parentElement.dataset.noteKey]?.$?.signedThumbnailUrl;
+      if (url) el.outerHTML = `<img src="${esc(url)}" alt="" referrerpolicy="no-referrer">`;
+    }
+    for (const el of $$(".thumb[data-thumb] .tph, .pt[data-key] .tph")) {
       const holder = el.parentElement;
       const file = byId(holder.dataset.thumb ?? holder.dataset.key);
       if (file?.thumbUrl) holder.innerHTML = thumb(file);
@@ -1172,7 +1228,11 @@ function changed() {
 const DRAFTS = () => Object.values(Live.draftsByTeam);
 const colorForTeam = (id) => ["#0d99ff", "#9747ff", "#14ae5c", "#f24822", "#e5a000", "#ff7262", "#1e1e1e", "#00b3a4"][hash(String(id)) % 8];
 
-async function boot() {
+let booting = null;
+function boot() {
+  return (booting ??= start().finally(() => (booting = null)));
+}
+async function start() {
   Live.status = "Loading your files";
   Live.error = null;
   showCached();
@@ -1187,6 +1247,7 @@ async function boot() {
     const saved = store.get("account", null);
     Live.uid = Live.users.some((u) => u.id === saved) ? saved : Live.users[0].id;
     store.set("account", Live.uid);
+    loadPins();
     for (const f of store.get(`trash:${Live.uid}`, [])) if (!byId(f.key)) upsertFile(f.key, { ...f, trashed: true });
     const userState = await api("/api/user/state");
     const mine = (userState.team_users ?? []).filter((tu) => tu.user_id === Live.uid);
@@ -1205,12 +1266,15 @@ async function boot() {
     teams.forEach((t, i) => {
       const rows = Array.isArray(folders[i]?.folder_rows) ? folders[i].folder_rows : [];
       const projects = rows.filter((f) => !f.trashed_at && !f.deleted_at && !f.is_abandoned_drafts && !DRAFT_FOLDERS.has(f.id)).map((f) => [f.id, f.name ?? f.path]);
-      const team = { id: t.id, name: t.name, color: colorForTeam(t.id), projects };
+      const team = { id: t.id, name: t.name, color: colorForTeam(t.id), img: t.img_url ?? null, projects };
       if (t.org_id) {
         byOrg[t.org_id] ??= plans[plans.push({ id: t.org_id, name: orgs[t.org_id]?.name ?? "Organization", tier: "Organization", teams: [] }) - 1];
         byOrg[t.org_id].teams.push(team);
       } else {
-        const tier = t.student_team_at ? "Education" : t.subscription ? t.subscription[0].toUpperCase() + t.subscription.slice(1) : "Starter";
+        // `subscription` is the state of a paid plan ("ok" and the like),
+        // which here can only be Professional
+        const paid = t.subscription && !/cancel|expire|incomplete|unpaid/i.test(t.subscription);
+        const tier = t.student_team_at ? "Education" : paid ? "Professional" : "Starter";
         plans.push({ id: t.id, name: t.name, tier, teams: [team] });
       }
     });
@@ -1233,12 +1297,33 @@ async function boot() {
     loadFavorites();
     loadNotes();
     saveCache();
+    Live.retries = 0;
   } catch (error) {
     Live.error = error.message;
     Live.status = "Offline";
     render();
+    // Again on its own: shortly, waiting longer each time, or as soon as
+    // Home is shown, since a hidden tab can lose its connection
+    const again = () => {
+      document.removeEventListener("visibilitychange", onShown);
+      if (Live.error) boot();
+    };
+    const onShown = () => document.visibilityState === "visible" && again();
+    document.addEventListener("visibilitychange", onShown);
+    setTimeout(again, Math.min(30000, 2000 * 2 ** (Live.retries = (Live.retries ?? 0) + 1)));
   }
 }
+
+// Coming back to Home brings it up to date: the socket may have closed
+// while the tab was hidden or asleep
+document.addEventListener("visibilitychange", () => {
+  if (!LIVE || document.visibilityState !== "visible" || !Live.uid || Live.error || LG.ws || !Live.ready.has("recents")) return;
+  LG.load(VIEWS.recents).then(() => {
+    takeFromStore();
+    render();
+  }, () => {});
+  loadNotes();
+});
 
 async function loadFavorites() {
   try {
@@ -1256,12 +1341,12 @@ async function loadFavorites() {
 // What a view needs before it can show, loaded once
 async function need(view) {
   if (!LIVE || Live.signedOut || !Live.uid || Live.ready.has(view) || Live.loading.has(view) || view === "recents") return;
-  if (view === "trash") {
+  if (view === "trash" || view.startsWith("t:")) {
     Live.ready.add(view);
     return queueMicrotask(render);
   }
   if (view === "starred") return;
-  const folders = view === "drafts" ? DRAFTS() : view.startsWith("p:") ? [view.slice(2)] : [];
+  const folders = view === "drafts" ? DRAFTS() : view.startsWith("p:") ? [view.slice(2)] : view.startsWith("d:") ? [Live.draftsByTeam[view.slice(2)]].filter(Boolean) : [];
   Live.loading.add(view);
   const pages = await pool(folders, 6, (id) => api(`/api/folders/${id}/paginated_files?sort_column=touched_at&sort_order=desc&page_size=100`));
   for (const page of pages) for (const m of page?.files ?? []) if (!m.trashed_at) fromRest(m);
@@ -1286,6 +1371,7 @@ function showCached() {
   const cache = uid && store.get(`cache:${uid}`, null);
   if (!cache) return;
   Live.uid = uid;
+  loadPins();
   Live.users = cache.users ?? [];
   Live.draftsByTeam = cache.drafts ?? {};
   for (const id of Object.values(Live.draftsByTeam)) DRAFT_FOLDERS.add(id);
@@ -1380,18 +1466,29 @@ let order = [];
 let previousOrder = [];
 let sections = [];
 
-const viewName = (view) => (view.startsWith("p:") ? PROJECTS[view.slice(2)]?.name : { recents: "Recents", starred: "Starred", drafts: "Drafts", trash: "Trash" }[view]);
+// Trash views: everything deleted here, or one team's
+const inTrash = () => state.view === "trash" || state.view.startsWith("t:");
+function viewName(view) {
+  if (view.startsWith("p:")) return PROJECTS[view.slice(2)]?.name;
+  const team = /^[dt]:/.test(view) && teamById(view.slice(2))?.team.name;
+  if (view.startsWith("d:")) return team && `Drafts · ${team}`;
+  if (view.startsWith("t:")) return team && `Trash · ${team}`;
+  return { recents: "Recents", starred: "Starred", drafts: "Drafts", trash: "Trash" }[view];
+}
 if (!viewName(state.view)) state.view = "recents";
 
 function viewFiles() {
   const { view } = state;
-  let list = FILES.filter((f) => (view === "trash" ? f.trashed : !f.trashed));
+  const trash = view === "trash" || view.startsWith("t:");
+  let list = FILES.filter((f) => (trash ? f.trashed : !f.trashed));
+  if (view.startsWith("t:")) list = list.filter((f) => f.team === view.slice(2));
+  else if (view.startsWith("d:")) list = list.filter((f) => f.project && f.project === Live.draftsByTeam[view.slice(2)]);
   if (view === "starred") list = list.filter((f) => f.starred);
   else if (view === "recents" && LIVE) list = list.filter((f) => f.recent);
   else if (view === "drafts") list = list.filter((f) => !f.project || DRAFT_FOLDERS.has(f.project));
   else if (view.startsWith("p:")) list = list.filter((f) => f.project === view.slice(2));
   if (state.type !== "all") list = list.filter((f) => f.type === state.type);
-  const time = (f) => (view === "trash" ? f.trashedAt : f.at);
+  const time = (f) => (trash ? f.trashedAt : f.at);
   return list.sort((a, b) => time(b) - time(a));
 }
 
@@ -1426,29 +1523,39 @@ function renderSide() {
   html += navRow("recents", "clock", "Recents");
   html += navRow("starred", "star", "Starred", count((f) => f.starred, "starred"));
   html += navRow("drafts", "file", "Drafts", count((f) => !f.project || DRAFT_FOLDERS.has(f.project), "drafts"));
-  // A Starter or Professional plan is one team; an Organization holds many
+  // Teams: starred ones pinned first, then the rest. A Starter or
+  // Professional plan is one team; an Organization holds many, under its
+  // name. Every heading folds its teams away
+  const starred = STARRED_TEAMS();
   const teamRow = (team, tier = "") => {
     const open = !state.collapsed.has(team.id);
-    let out = `<button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.color}">${esc(team.name[0])}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${icon("down", "chev")}</button>`;
-    if (open) for (const [id, name] of team.projects) out += navRow("p:" + id, "folder", name, count((f) => f.project === id, "p:" + id), "proj");
+    const isStarred = starred.has(team.id);
+    const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
+    let out = `<div class="team-row"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${icon("down", "chev")}</button>`;
+    out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${icon("star")}</button></div>`;
+    if (!open) return out;
+    for (const [id, name] of team.projects) out += navRow("p:" + id, "folder", name, count((f) => f.project === id, "p:" + id), "proj");
+    if (!LIVE || Live.draftsByTeam[team.id]) out += navRow("d:" + team.id, "file", "Drafts", count((f) => f.project === Live.draftsByTeam[team.id], "d:" + team.id), "proj");
+    out += navRow("t:" + team.id, "trash", "Trash", count((f) => f.trashed && f.team === team.id), "proj");
     return out;
   };
-  html += `<div class="plan">Teams</div>`;
-  for (const plan of PLANS.filter((p) => p.teams.length === 1)) html += teamRow(plan.teams[0], plan.tier);
-  for (const plan of PLANS.filter((p) => p.teams.length > 1)) {
-    html += `<div class="plan"><b>${esc(plan.name)}</b>${esc(plan.tier)}</div>`;
-    for (const team of plan.teams) html += teamRow(team);
-  }
+  const section = (id, title, rows, tier = "") => {
+    if (!rows) return "";
+    const open = !state.collapsed.has(id);
+    return `<button class="plan sec-h" data-section="${esc(id)}" aria-expanded="${open}">${icon("down", "chev")}<b>${esc(title)}</b>${tier ? esc(tier) : ""}</button>${open ? rows : ""}`;
+  };
+  const teamsOf = (plans) => plans.flatMap((p) => p.teams.map((t) => [t, p]));
+  const all = teamsOf(PLANS);
+  const pinned = [...starred].map((id) => all.find(([t]) => t.id === id)).filter(Boolean);
+  html += section("sec:starred", "Pinned teams", pinned.map(([t, p]) => teamRow(t, p.teams.length === 1 ? p.tier : p.name)).join(""));
+  html += section("sec:teams", "Teams", all.filter(([t, p]) => p.teams.length === 1 && !starred.has(t.id)).map(([t, p]) => teamRow(t, p.tier)).join(""));
+  for (const plan of PLANS.filter((p) => p.teams.length > 1)) html += section("sec:org:" + plan.id, plan.name, plan.teams.filter((t) => !starred.has(t.id)).map((t) => teamRow(t)).join(""), plan.tier);
   html += `</div><div class="sfoot">`;
   html += navRow("trash", "trash", "Trash", FILES.filter((f) => f.trashed).length || "");
   html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${icon("home")}<span class="lbl">Figma's file browser</span>${icon("ext", "ext")}</a>`;
-  if (LIVE) {
-    const busy = Live.status !== "Up to date" && !Live.error;
-    html += `<div class="sync${Live.error ? " off" : busy ? " busy" : ""}" id="sync"><span class="dot"></span><span>${esc(Live.error ? "Offline" : Live.status)}</span></div></div>`;
-  } else
-    html += state.mode === "error"
-      ? `<div class="sync off" id="sync"><span class="dot"></span><span>Offline, as of 4 min ago</span></div></div>`
-      : `<div class="sync" id="sync"><span class="dot"></span><span>Sample files, not yours yet</span></div></div>`;
+  // Nothing about sync unless it fails: then the bar over the files says so
+  if (!LIVE) html += state.mode === "error" ? `<div class="sync off" id="sync"><span class="dot"></span><span>Offline, as of 4 min ago</span></div>` : `<div class="sync" id="sync"><span class="dot"></span><span>Sample files, not yours yet</span></div>`;
+  html += `</div>`;
   const scrollTop = $(".tree", side)?.scrollTop ?? 0;
   side.innerHTML = html;
   $(".tree", side).scrollTop = scrollTop;
@@ -1470,17 +1577,18 @@ function renderFilters() {
   html += `<span class="grow"></span>`;
   if (LIVE && Live.error) html = `<div class="banner" role="alert">${esc(`Couldn't reach Figma (${Live.error}), so these may be out of date`)}<button data-act="retry">Try again</button></div>`;
   else if (state.mode === "error") html = `<div class="banner" role="alert">Couldn't reach Figma, so these are your files as of 4 min ago<button data-act="retry">Try again</button></div>`;
-  else if (state.view === "trash" && LIVE) html += `<span class="fnote">What you deleted here. Each team's own trash is in Figma's file browser</span>`;
-  else if (state.view === "trash") html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
+  else if (state.view.startsWith("t:")) html += `<a class="fnote" href="https://www.figma.com/files/team/${esc(state.view.slice(2))}" target="_blank" rel="noopener">What you deleted here. The rest of this team's trash is in Figma${icon("ext")}</a>`;
+  else if (inTrash() && LIVE) html += `<span class="fnote">What you deleted here. Each team's own trash is in Figma's file browser</span>`;
+  else if (inTrash()) html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
   else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
   filters.innerHTML = html;
 }
 
 function cardHtml(file) {
-  const trash = state.view === "trash";
-  const place = state.view.startsWith("p:") ? "" : placeOf(file.project) + " · ";
+  const trash = inTrash();
+  const place = /^[pd]:/.test(state.view) ? "" : placeOf(file.project) + " · ";
   const meta = trash ? `${placeOf(file.project)} · Deleted ${when(file.trashedAt)}` : place + activity(file);
-  const tools = trash ? "" : `<div class="tools"><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button></div>`;
+  const tools = trash ? "" : `<div class="tools"><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button></div>`;
   const badge = file.unread ? `<span class="badge" title="${file.unread} new ${file.unread === 1 ? "comment" : "comments"}">${file.unread}</span>` : "";
   const restore = trash ? `<button class="restore" tabindex="-1">Restore</button>` : "";
   return `<div class="card" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="${!trash}">
@@ -1502,7 +1610,7 @@ function renderEmpty() {
     const what = `No ${TYPES[state.type].label} files here`;
     return `<div class="empty"><div class="ic">${icon("search")}</div><h2>${what}</h2><p>Your filters hide every file in ${esc(viewName(state.view))}</p><button class="btn" data-act="clear-filters">Show all files</button></div>`;
   }
-  const [iconName, title, body, action] = EMPTY[state.view.startsWith("p:") ? "project" : state.view];
+  const [iconName, title, body, action] = EMPTY[state.view.startsWith("p:") ? "project" : state.view.startsWith("d:") ? "drafts" : state.view.startsWith("t:") ? "trash" : state.view];
   const button = action ? `<button class="btn primary" data-act="new">${icon("plus")}New Design file</button>` : "";
   return `<div class="empty"><div class="ic">${icon(iconName)}</div><h2>${title}</h2><p>${body}</p>${button}</div>`;
 }
@@ -1546,7 +1654,7 @@ function render({ keepScroll = true } = {}) {
   } else if (!list.length) html = renderEmpty();
   else {
     for (const file of list) {
-      const t = state.view === "trash" ? file.trashedAt : file.at;
+      const t = inTrash() ? file.trashedAt : file.at;
       const b = bucket(t);
       if (sections.at(-1)?.key !== b.key) sections.push({ ...b, month: monthOf(t), files: [] });
       sections.at(-1).files.push(file);
@@ -1953,9 +2061,9 @@ function copyLinks(ids) {
 }
 
 function createFile(type = "design", name = "Untitled", project) {
-  project ??= state.view.startsWith("p:") ? state.view.slice(2) : null;
+  project ??= state.view.startsWith("p:") ? state.view.slice(2) : state.view.startsWith("d:") ? Live.draftsByTeam[state.view.slice(2)] ?? null : null;
   if (LIVE) {
-    const folder = project ?? DRAFTS()[0];
+    const folder = project ?? Live.draftsByTeam[currentTeam()] ?? DRAFTS()[0];
     toast(`Making a new ${TYPES[type].noun}`);
     api("/api/files/create", { method: "POST", json: { folder_id: folder, editor_type: EDITOR_OF[type], name } })
       .then((meta) => {
@@ -1968,7 +2076,7 @@ function createFile(type = "design", name = "Untitled", project) {
       .catch((error) => toast(`Couldn't make it: ${error.message}`));
     return;
   }
-  const look = { design: "components", figjam: "board", slides: "deck" }[type];
+  const look = { figjam: "board", slides: "deck" }[type] ?? "components";
   const file = addFile({ name, type, look, project, at: Date.now(), kind: "create", by: "me", unread: 0, starred: false, trashed: false }, true);
   if (!["recents", "drafts"].includes(state.view) && state.view !== "p:" + project) {
     state.view = project ? "p:" + project : "drafts";
@@ -1979,6 +2087,83 @@ function createFile(type = "design", name = "Untitled", project) {
   toast(`Opening new ${TYPES[type].noun} “${name}” in ${placeOf(project)}`);
   render({ keepScroll: false });
   focusCard(file.id);
+}
+
+/* Teams pinned to the top of the sidebar. Ligma keeps these itself, per
+   account: Figma only stars teams that belong to an organization */
+
+const pinnedTeams = new Set();
+const pinsKey = () => (LIVE ? `pinned-teams:${Live.uid}` : "pinned-teams");
+const loadPins = () => {
+  pinnedTeams.clear();
+  for (const id of store.get(pinsKey(), [])) pinnedTeams.add(id);
+};
+const STARRED_TEAMS = () => pinnedTeams;
+function teamById(id) {
+  for (const plan of PLANS) for (const team of plan.teams) if (team.id === id) return { team, plan };
+  return null;
+}
+
+function toggleTeamStar(id) {
+  const pin = !pinnedTeams.has(id);
+  pin ? pinnedTeams.add(id) : pinnedTeams.delete(id);
+  const name = teamById(id)?.team.name ?? "the team";
+  store.set(pinsKey(), [...pinnedTeams]);
+  state.collapsed.delete("sec:starred");
+  toast(pin ? `Pinned ${name} to the top` : `Unpinned ${name}`, () => toggleTeamStar(id));
+  renderSide();
+}
+
+// Where new things go: the team in view, else the first pinned one, else
+// the team of the file worked on last
+function currentTeam() {
+  const view = state.view;
+  if (view.startsWith("p:")) return PROJECTS[view.slice(2)]?.team.id;
+  if (view.startsWith("d:") || view.startsWith("t:")) return view.slice(2);
+  return [...pinnedTeams][0] ?? FILES.filter((f) => f.recent && f.team).sort((a, b) => b.at - a.at)[0]?.team ?? PLANS[0]?.teams[0]?.id;
+}
+
+// New project: a name field where the menu was
+function newProject(at, teamId = currentTeam()) {
+  const found = teamById(teamId);
+  if (!found) return;
+  closeMenu();
+  menuReturn = document.activeElement;
+  menu.classList.remove("big");
+  menu.innerHTML = `<input type="text" aria-label="Project name" placeholder="New project in ${esc(found.team.name)}" spellcheck="false">`;
+  const input = $("input", menu);
+  menuItems = [];
+  menuKeys = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const name = input.value.trim();
+      closeMenu();
+      if (name) createProject(teamId, name);
+      return true;
+    }
+    return e.key.length === 1 || e.key === "Backspace";
+  };
+  placeMenu(at);
+  input.focus();
+}
+
+function createProject(teamId, name) {
+  const { team } = teamById(teamId);
+  const add = (id, label) => {
+    team.projects.push([id, label]);
+    PROJECTS[id] = { id, name: label, team, plan: teamById(teamId).plan };
+    state.collapsed.delete(teamId);
+    if (LIVE) Live.ready.add("p:" + id);
+    go("p:" + id);
+    toast(`Made the project ${label}`);
+  };
+  if (!LIVE) return add("p" + nextId++, name);
+  api("/api/folders", { method: "POST", json: { path: name, team_id: teamId, sharing_audience_control: "plan_edit" } })
+    .then((meta) => {
+      const folder = meta.folder ?? meta;
+      add(folder.id, folder.name ?? folder.path ?? name);
+    })
+    .catch((error) => toast(`Couldn't make it: ${error.message}`));
 }
 
 function rename(id) {
@@ -2060,8 +2245,13 @@ const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'",
 const strip = (html) => String(html ?? "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "").replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, (_, e) => ENTITIES[e]);
 const boldOnly = (html) => esc(strip(String(html ?? "").replace(/<b>/gi, "\u0001").replace(/<\/b>/gi, "\u0002"))).replace(/\u0001/g, "<b>").replace(/\u0002/g, "</b>");
 let notesTimer = 0;
+// Figma can't mark a notification unread again, so Ligma remembers which
+// ones you did
+const localUnread = new Set();
+const saveLocalUnread = () => store.set(`unread:${Live.uid}`, [...localUnread]);
 async function loadNotes() {
   try {
+    if (!localUnread.size) for (const id of store.get(`unread:${Live.uid}`, [])) localUnread.add(id);
     const params = new URLSearchParams({ currentView: "fullscreen", appVersion: "1", clientType: "web", current_plan_id: "-1", is_plan_org: "false" });
     const items = await api(`/api/user_notifications/server_driven/plan?${params}`);
     NOTES.splice(0);
@@ -2072,11 +2262,22 @@ async function loadNotes() {
       const html = (blocks) => (blocks ?? []).map((b) => b?.html_text ?? "").join(" ");
       const type = item.notification_type ?? "";
       const href = item.deeplink?.href ?? attachment?.deeplink?.href ?? null;
+      // The title is who it's from, sometimes as their email; the avatar
+      // has their name. The subtitle says what happened and where
+      const email = (t) => /^[^\s@]+@[^\s@]+$/.test(t);
+      let who = strip(html(body.title)).trim();
+      if (email(who)) who = Live.users.find((u) => u.email === who)?.name ?? (email(item.avatars?.[0]?.fallback_text ?? "") ? who : item.avatars?.[0]?.fallback_text) ?? who;
+      const parts = (body.subtitle ?? []).map((b) => strip(b?.html_text).trim()).filter((t) => t && t !== "·");
       const note = {
         id: item.notification_id,
         live: true,
         kind: NOTE_KINDS[type] ?? (/Invite/.test(type) ? "invite" : /Request(?!Approved)/.test(type) ? "request" : "other"),
-        title: boldOnly(html(body.title)),
+        who,
+        action: parts[0] ?? "",
+        target: parts.slice(1).join(" · "),
+        title: esc(who),
+        about: /Team/.test(type) ? "team" : /Folder|Project/.test(type) ? "folder" : null,
+        serverUnread: !!item.is_unread,
         text: strip(html(body.description)).trim(),
         href,
         fileKey: href?.match(/\/(?:design|file|board|slides|proto|deck|make|site|buzz)\/([A-Za-z0-9]{22})/)?.[1] ?? null,
@@ -2084,7 +2285,7 @@ async function loadNotes() {
         initial: (item.avatars?.[0]?.fallback_text ?? "?").trim()[0] ?? "?",
         icon: item.icon?.img_url ?? null,
         at: Date.parse(body.created_at) || Date.now(),
-        unread: !!item.is_unread,
+        unread: !!item.is_unread || localUnread.has(item.notification_id),
         count: 1,
         done: null,
       };
@@ -2092,32 +2293,45 @@ async function loadNotes() {
       const file = byId(note.fileKey);
       if (note.unread && file && ABOUT_COMMENTS.has(note.kind)) file.unread += 1;
     }
-  } catch {}
+  } catch (error) {
+    // Again shortly; the bell keeps what it had meanwhile
+    console.warn("Ligma home: couldn't load notifications", error);
+    setTimeout(loadNotes, 5000);
+  }
   notesTimer ||= setInterval(() => document.visibilityState === "visible" && loadNotes(), 60000);
   render();
 }
 
 function setUnread(note, unread) {
   if (note.unread === unread) return;
-  // Figma can mark a notification read, not unread again
-  if (note.live && unread) return;
   note.unread = unread;
   const file = noteFile(note);
   if (file && ABOUT_COMMENTS.has(note.kind)) file.unread = Math.max(0, file.unread + (unread ? note.count : -note.count));
-  if (note.live && !note.bulk) api("/api/user_notifications/read", { method: "PUT", json: { id: note.id, currentView: "fullscreen", medium: "web", appVersion: "1", clientType: "web" } }).catch(() => {});
+  if (!note.live) return;
+  unread ? localUnread.add(note.id) : localUnread.delete(note.id);
+  saveLocalUnread();
+  if (!unread && note.serverUnread && !note.bulk) {
+    note.serverUnread = false;
+    api("/api/user_notifications/read", { method: "PUT", json: { id: note.id, currentView: "fullscreen", medium: "web", appVersion: "1", clientType: "web" } }).catch(() => toast("Couldn't mark it read in Figma"));
+  }
 }
 function markRead(notes, read) {
   if (!notes.length) return;
   if (LIVE) {
-    if (!read) return;
-    const all = notes.length > 1;
+    const all = read && notes.length > 1;
+    const before = notes.map((n) => [n, n.unread]);
     for (const note of notes) {
       note.bulk = all;
-      setUnread(note, false);
+      if (all) note.serverUnread = false;
+      setUnread(note, !read);
       note.bulk = false;
     }
     if (all) api("/api/user_notifications/mark_read/plan", { method: "POST", json: { current_plan_id: "-1", currentView: "fullscreen", is_plan_org: false, source: "web" } }).catch(() => toast("Couldn't mark them read in Figma"));
-    toast(all ? `Marked ${notes.length} notifications as read` : "Marked as read");
+    const what = notes.length === 1 ? "" : ` ${notes.length} notifications`;
+    toast(`Marked${what} as ${read ? "read" : "unread"}`, () => {
+      for (const [note, unread] of before) setUnread(note, unread);
+      render();
+    });
     return render();
   }
   const before = notes.map((n) => [n, n.unread]);
@@ -2171,13 +2385,24 @@ function answer(note, act) {
 function noteRow(note) {
   const file = noteFile(note);
   if (note.live) {
-    const pic = note.icon ? `<div class="pt nt" aria-hidden="true"><img src="${esc(note.icon)}" alt="" referrerpolicy="no-referrer"></div>` : file ? `<div class="pt nt" aria-hidden="true" data-key="${file.key}">${thumb(file)}</div>` : "<span></span>";
+    // The file's own picture where there is one; Figma's icons for the
+    // rest are drawn for a light ground, so these are Ligma's
+    const key = note.fileKey;
+    const url = file?.thumbUrl ?? (key && LG.store.File?.[key]?.$?.signedThumbnailUrl);
+    if (key && !url) LG.wantThumb(key);
+    const pic = key
+      ? `<div class="pt nt" aria-hidden="true" data-note-key="${esc(key)}">${url ? `<img src="${esc(url)}" alt="" referrerpolicy="no-referrer">` : `<div class="tph"></div>`}</div>`
+      : `<div class="pt nt ni" aria-hidden="true">${icon(note.about === "team" ? "users" : note.about === "folder" ? "folder" : "bell")}</div>`;
     const face = note.avatar ? `<img src="${esc(note.avatar)}" alt="" referrerpolicy="no-referrer">` : esc(note.initial);
-    const label = (note.unread ? "Unread. " : "") + strip(note.title) + ", " + short(note.at);
-    const read = note.unread ? `<button class="tool rd" data-note-act="read" tabindex="-1" aria-label="Mark as read" title="Mark as read (U)">${icon("check")}</button>` : "";
+    // As Figma's bell words it: who, then what happened and where
+    const line = `<b>${esc(note.who)}</b>`;
+    const what = [note.action, note.target].filter(Boolean).join(" · ");
+    const where = what ? `<span class="nwhere">${esc(what)}</span>` : "";
+    const label = (note.unread ? "Unread. " : "") + `${note.who} ${note.action} ${note.target}`.trim() + ", " + short(note.at);
+    const read = `<button class="tool rd" data-note-act="read" tabindex="-1" aria-label="Mark as ${note.unread ? "read" : "unread"}" title="Mark as ${note.unread ? "read" : "unread"} (U)">${icon(note.unread ? "check" : "bell")}</button>`;
     return `<div class="note${note.unread ? " unread" : ""}" role="option" id="nt-${esc(note.id)}" data-note="${esc(note.id)}" tabindex="-1" aria-selected="${state.noteFocus === note.id}" aria-label="${esc(label)}">
       <span class="ud" aria-hidden="true"></span><span class="av lg" aria-hidden="true" style="background:${colorForTeam(note.initial)}">${face}</span>
-      <div class="nb"><div class="nl">${note.title}<span class="nw">${esc(short(note.at))}</span></div>${note.text ? `<p class="quote">${esc(note.text)}</p>` : ""}</div>${pic}${read}</div>`;
+      <div class="nb"><div class="nl">${line}<span class="nw">${esc(short(note.at))}</span></div>${where}${note.text ? `<p class="quote">${esc(note.text)}</p>` : ""}</div>${pic}${read}</div>`;
   }
   const who = PEOPLE[note.by];
   const name = `<b>${esc(who.name)}</b>`;
@@ -2191,7 +2416,7 @@ function noteRow(note) {
     "invite-team": `${name} invited you to the ${target} team`,
   }[note.kind];
   const quote = note.text ? `<p class="quote">${esc(note.text)}</p>` : "";
-  const more = note.count > 1 ? `<span class="more">and ${note.count - 1} more ${note.count === 2 ? "comment" : "comments"}</span>` : "";
+  const more = note.count > 1 ? `<span class="nmore">and ${note.count - 1} more ${note.count === 2 ? "comment" : "comments"}</span>` : "";
   let acts = "";
   if (note.done) acts = `<span class="done">${icon("check")}${esc(note.done)}</span>`;
   else if (note.kind === "request") acts = `<div class="nacts"><button class="btn sm primary" data-note-act="approve">Approve</button><button class="btn sm" data-note-act="deny">Deny</button></div>`;
@@ -2280,7 +2505,7 @@ inboxEl.addEventListener("click", (e) => {
   const note = NOTES.find((n) => n.id === row.dataset.note);
   focusNote(note.id);
   const noteAct = e.target.closest("[data-note-act]")?.dataset.noteAct;
-  if (noteAct === "read") markRead([note], !note.unread);
+  if (noteAct === "read") markRead([note], note.unread);
   else if (noteAct) answer(note, noteAct);
   else if (!e.target.closest("button")) {
     closeInbox(false);
@@ -2375,7 +2600,7 @@ function renderSelbar() {
     selbar.hidden = true;
     return;
   }
-  const trash = state.view === "trash";
+  const trash = inTrash();
   const buttons = trash
     ? `<button data-a="restore">Restore</button><button data-a="forever">Delete forever</button>`
     : `<button data-a="open">Open</button><button data-a="star">${ids.every((id) => byId(id).starred) ? "Unstar" : "Star"}</button><button data-a="move">Move to…</button><button data-a="trash">Move to trash</button>`;
@@ -2436,9 +2661,10 @@ function showMenu(items, at, options = {}) {
     const check = checks ? `<span class="ck">${icon("check")}</span>` : "";
     const swatch = item.swatch ? `<span class="sw" style="background:${item.swatch}"></span>` : "";
     const tail = item.kbd ? `<span class="k">${esc(item.kbd)}</span>` : item.ext ? `<span class="x">${icon("ext")}</span>` : "";
-    return `<button class="mi" id="mi${i}" tabindex="-1" role="${checks ? "menuitemradio" : "menuitem"}" data-i="${i}" ${checks ? `aria-checked="${!!item.checked}"` : ""} ${item.disabled ? 'aria-disabled="true"' : ""}>${check}${swatch}${esc(item.label)}${tail}</button>`;
+    return `<button class="mi" id="mi${i}" tabindex="-1" role="${checks ? "menuitemradio" : "menuitem"}" data-i="${i}" ${checks ? `aria-checked="${!!item.checked}"` : ""} ${item.disabled ? 'aria-disabled="true"' : ""}>${check}${swatch}${item.iconHtml ? `<span class="mic">${item.iconHtml}</span>` : ""}${esc(item.label)}${tail}</button>`;
   }).join("");
   menuIndex = -1;
+  menu.classList.toggle("big", !!options.big);
   placeMenu(at, options.above);
   menu.focus();
 }
@@ -2501,7 +2727,7 @@ function fileMenu(at) {
   const ids = selection();
   if (!ids.length) return;
   const one = ids.length === 1;
-  if (state.view === "trash") {
+  if (inTrash()) {
     return showMenu([
       { label: one ? "Restore" : `Restore ${ids.length} files`, act: () => restoreFiles(ids) },
       { label: "Delete forever", act: () => deleteForever(ids) },
@@ -2560,12 +2786,29 @@ function openMover(ids, at, above = false) {
   input.focus();
 }
 
+// Right-click a team for the same and more
+$("#side").addEventListener("contextmenu", (e) => {
+  const row = e.target.closest(".team-row");
+  if (!row) return;
+  e.preventDefault();
+  const id = $("[data-team]", row).dataset.team;
+  const pinned = STARRED_TEAMS().has(id);
+  showMenu([
+    { label: pinned ? "Unpin team" : "Pin to the top", act: () => toggleTeamStar(id) },
+    { label: "New project here", act: () => newProject({ x: e.clientX, y: e.clientY }, id) },
+    null,
+    { label: "Open team in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/team/${id}`, "_blank") },
+  ], { x: e.clientX, y: e.clientY });
+});
+
 $("#side").addEventListener("click", (e) => {
   const view = e.target.closest("[data-view]");
   if (view) return go(view.dataset.view);
-  const team = e.target.closest("[data-team]");
-  if (team) {
-    const id = team.dataset.team;
+  const star = e.target.closest("[data-star-team]");
+  if (star) return toggleTeamStar(star.dataset.starTeam);
+  const fold = e.target.closest("[data-team], [data-section]");
+  if (fold) {
+    const id = fold.dataset.team ?? fold.dataset.section;
     state.collapsed.has(id) ? state.collapsed.delete(id) : state.collapsed.add(id);
     store.set(LIVE ? "collapsed-live" : "collapsed", [...state.collapsed]);
     return renderSide();
@@ -2928,11 +3171,13 @@ head.addEventListener("click", (e) => {
   else if (act === "new") createFile("design");
   else if (act === "side") document.body.classList.toggle("side-open");
   else if (act === "new-menu") {
+    // As Figma's own "More" menu on its home page
     showMenu([
-      ...Object.entries(TYPES).map(([type, t]) => ({ label: `New ${t.noun}`, act: () => createFile(type) })),
+      ...Object.entries(TYPES).map(([type, t]) => ({ label: t.noun, iconHtml: glyph(type), act: () => createFile(type) })),
       null,
-      { label: "Import a file…", ext: true, act: () => window.open("https://www.figma.com/files", "_blank", "noopener") },
-    ], e.target.closest("[data-act]").getBoundingClientRect());
+      { label: "Project", iconHtml: figmaIcon("folder", 24), act: () => newProject(e.target.closest("[data-act]").getBoundingClientRect()) },
+      { label: "Import", iconHtml: figmaIcon("import", 24), act: () => window.open("https://www.figma.com/files", "_blank") },
+    ], e.target.closest("[data-act]").getBoundingClientRect(), { big: true });
   }
 });
 
@@ -3067,7 +3312,7 @@ scroller.addEventListener("scroll", () => box?.moved && drawBox(), { passive: tr
 scroller.addEventListener("dblclick", (e) => {
   const card = e.target.closest(".card[data-id]");
   if (!card || e.target.closest("button")) return;
-  if (state.view === "trash") toast("Restore the file to open it");
+  if (inTrash()) toast("Restore the file to open it");
   else openFiles([card.dataset.id]);
 });
 scroller.addEventListener("contextmenu", (e) => {
@@ -3090,7 +3335,7 @@ scroller.addEventListener("keydown", (e) => {
     else setSel([next], next);
     focusCard(next);
   };
-  const trash = state.view === "trash";
+  const trash = inTrash();
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"].includes(key)) {
     e.preventDefault();
@@ -3210,6 +3455,7 @@ function syncNow() {
 applyTheme();
 if (LIVE) boot();
 else {
+  loadPins();
   seedFiles();
   seedNotes();
   render({ keepScroll: false });
