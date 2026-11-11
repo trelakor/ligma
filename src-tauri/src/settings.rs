@@ -170,6 +170,10 @@ pub struct Settings {
     /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
     /// is no longer read, so it's on for everyone once
     pub ligma_mcp: bool,
+    /// Experimental: Ligma draws the open page itself, in a window of its
+    /// own, to compare with Figma's renderer (see native_renderer.rs).
+    /// Windows only
+    pub native_renderer: bool,
 }
 
 impl Default for Settings {
@@ -228,6 +232,7 @@ impl Default for Settings {
             ligma_home: true,
             ligma_home_start: "home".into(),
             ligma_mcp: true,
+            native_renderer: false,
         }
     }
 }
@@ -491,6 +496,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::copy_code::apply_settings(app, &settings);
     crate::lasso::apply_settings(app, &settings);
     crate::mcp_bridge::apply_settings(app, &settings);
+    crate::native_renderer::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();

@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Native renderer</title>
+<!-- The bar along the top of the experimental native renderer's window (see
+     src-tauri/src/native_renderer.rs): frame time, GPU memory, what's drawn
+     natively, and with LIGMA_NATIVE_DEV=1 the parity harness and benchmark -->
+<style>
+  :root {
+    --bg: #2c2c2c;
+    --text: #ffffff;
+    --muted: #b3b3b3;
+    --line: #444444;
+    --brand: #0d99ff;
+    --warn: #f24822;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }
+  body {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 10px;
+    font: 11px/1 Inter, "Segoe UI", system-ui, sans-serif;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .tag { color: var(--brand); font-weight: 600; }
+  .stat { color: var(--muted); }
+  .stat b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .warn { color: var(--warn); }
+  #status { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; color: var(--muted); }
+  button {
+    font: inherit;
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 4px 8px;
+    cursor: default;
+  }
+  button:hover { background: #383838; }
+  button[aria-pressed="true"] { border-color: var(--brand); color: var(--brand); }
+  button:disabled { opacity: 0.5; }
+  button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  .dev[hidden] { display: none; }
+</style>
+</head>
+<body>
+<span class="tag">Experimental</span>
+<span class="stat">Frame <b id="frame">–</b></span>
+<span class="stat">Nodes <b id="nodes">–</b></span>
+<span class="stat">GPU memory <b id="vram">–</b></span>
+<span class="stat">Images <b id="images">–</b></span>
+<span id="status"></span>
+<button id="tint" aria-pressed="false" title="Tint the layers only drawn close to Figma's look">Show approximations</button>
+<button id="resync" title="Read the page again">Reload page</button>
+<button id="compare" class="dev" hidden title="Render the selected layer through Figma and natively, and save both">Compare selection</button>
+<button id="parity" class="dev" hidden title="Export layers through Figma, draw them natively and compare">Parity</button>
+<button id="bench" class="dev" hidden title="Pan and zoom Figma's canvas, then draw the same views natively">Benchmark</button>
+<script>
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+  const $ = (id) => document.getElementById(id);
+  const mb = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(2)} GB` : `${Math.round(bytes / 1e6)} MB`);
+  const ms = (value) => `${value.toFixed(1)} ms`;
+  const number = (value) => value.toLocaleString("en-US");
+
+  const refresh = async () => {
+    const s = await invoke("get_native_stats");
+    if (!s) return;
+    $("frame").textContent = s.frames ? `${ms(s.frameMs)} · p95 ${ms(s.frameP95)}` : "–";
+    $("nodes").textContent = `${number(s.native)} drawn · ${number(s.approximate)} approximate · ${number(s.skipped)} skipped`;
+    $("nodes").title = s.approximateReason ? `Approximate: ${s.approximateReason}` : "";
+    $("vram").textContent = `Ligma ${mb(s.vramLigma)} · Figma ${mb(s.vramWebview)}`;
+    $("images").textContent = `${s.images} (${mb(s.imageBytes)}) · ${s.tiles} tiles (${mb(s.tileBytes)})`;
+    const parts = [s.status];
+    if (s.pending) parts.push("filling in");
+    if (s.report) parts.push(`Report: ${s.report}`);
+    $("status").textContent = parts.filter(Boolean).join(" · ");
+    $("status").title = [
+      s.adapter,
+      `${number(s.nodes)} nodes, first drawn after ${Math.round(s.firstBatchMs)} ms, all read in ${Math.round(s.snapshotMs)} ms`,
+      `Skia's GPU cache ${mb(s.cacheBytes)}`,
+    ].join("\n");
+    for (const button of document.querySelectorAll(".dev")) button.hidden = !s.dev;
+  };
+  setInterval(refresh, 500);
+  refresh();
+
+  $("tint").addEventListener("click", async () => {
+    const on = $("tint").getAttribute("aria-pressed") !== "true";
+    $("tint").setAttribute("aria-pressed", String(on));
+    await invoke("native_action", { action: on ? "tint" : "untint" });
+  });
+  $("resync").addEventListener("click", () => invoke("native_action", { action: "resync" }));
+  for (const id of ["compare", "parity", "bench"]) {
+    $(id).addEventListener("click", async () => {
+      for (const button of document.querySelectorAll(".dev")) button.disabled = true;
+      try {
+        await invoke("native_action", { action: id });
+      } catch (error) {
+        $("status").textContent = String(error);
+      }
+      for (const button of document.querySelectorAll(".dev")) button.disabled = false;
+    });
+  }
+</script>
+</body>
+</html>

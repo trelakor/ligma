@@ -860,6 +860,15 @@
         <input type="checkbox" class="switch" id="copy-as-code">
       </label>
     </section>
+    <section id="experimental">
+      <h2>Experimental</h2>
+      <label class="row" id="native-renderer-row">
+        <span class="label">Native renderer (experimental)
+          <div class="hint">Ligma draws the open page itself, in a window of its own that follows Figma's view, to compare its GPU memory and speed with Figma's own drawing. Layers it can't draw yet, like blurs, are copied from Figma's render. Figma still draws its canvas as usual. Windows only.</div>
+        </span>
+        <input type="checkbox" class="switch" id="native-renderer">
+      </label>
+    </section>
   </div>
 
   <div role="tabpanel" id="images" aria-labelledby="tab-images" hidden>
@@ -1247,7 +1256,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp", "native-renderer"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1271,6 +1280,8 @@
   document.documentElement.classList.toggle("macos", macos);
   // Snapshots only exist on macOS
   $("snapshots-row").hidden = !macos;
+  // The native renderer is Windows only for now
+  $("experimental").hidden = macos;
   // Removing backgrounds uses macOS's Vision, or on Windows a model
   // downloaded the first time
   if (!macos) {
@@ -1794,6 +1805,7 @@
     $("new-home").checked = settings.ligmaHome;
     $("new-home-start").value = settings.ligmaHomeStart;
     $("ligma-mcp").checked = settings.ligmaMcp;
+    $("native-renderer").checked = settings.nativeRenderer;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -1885,6 +1897,7 @@
       ligmaHome: $("new-home").checked,
       ligmaHomeStart: $("new-home-start").value,
       ligmaMcp: $("ligma-mcp").checked,
+      nativeRenderer: $("native-renderer").checked,
       ...changes,
     };
     show();

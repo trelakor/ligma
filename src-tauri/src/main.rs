@@ -27,6 +27,7 @@ mod mcp_bridge;
 mod mcp_clients;
 mod models;
 mod modules;
+mod native_renderer;
 mod new_home;
 mod notifications;
 mod objects;
@@ -287,6 +288,8 @@ fn main() {
             mcp_bridge::get_mcp_config,
             mcp_clients::get_mcp_clients,
             mcp_clients::set_mcp_client,
+            native_renderer::get_native_stats,
+            native_renderer::native_action,
             plugins::import_plugin,
             plugins::set_plugin_enabled,
             plugins::remove_plugin,
@@ -361,6 +364,7 @@ fn main() {
 
             tabs::apply_scale(app.handle());
             tabs::restore(app.handle(), &settings)?;
+            native_renderer::init(app.handle(), &settings);
             // Once there's a window to show it over
             report::offer_last_crash(app.handle());
             updater::offer_last_failure(app.handle());
