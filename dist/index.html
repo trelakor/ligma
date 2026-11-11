@@ -85,6 +85,9 @@
   .icon { flex: none; width: 16px; height: 16px; }
   .emoji { font-size: 14px; line-height: 16px; text-align: center; }
   .tab.active > .icon { color: var(--accent, currentColor); }
+  /* The active file tab's icon opens its emoji picker */
+  .tab.active > .icon.picks { border-radius: 3px; }
+  .tab.active > .icon.picks:hover { background: rgba(255, 255, 255, 0.1); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1); }
   /* Unloaded to save memory; reloads when selected */
   .asleep:not(.active) > .icon, .asleep:not(.active) > .title { opacity: 0.5; }
   .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -240,6 +243,49 @@
   };
 
   const bar = document.getElementById("bar");
+
+  // Files whose name can start with an emoji: every Figma file but a
+  // prototype, which keeps its play icon
+  const takesEmoji = (tab) => tab.kind in ACCENTS && tab.kind !== "proto";
+
+  // While a file is renamed for a new emoji, the tab shows it already, by
+  // id ("" for none). It goes once the title catches up, or the rename
+  // fails (`pendingEmoji(id, null)`, from emoji_picker.rs)
+  const pending = new Map();
+  let shown = null;
+  window.pendingEmoji = (id, emoji) => {
+    if (emoji == null) pending.delete(id);
+    else {
+      pending.set(id, emoji);
+      // Figma retitles the tab within a second; don't wait on it forever
+      setTimeout(() => {
+        if (pending.get(id) !== emoji) return;
+        pending.delete(id);
+        if (shown) window.render(shown);
+      }, 12000);
+    }
+    if (shown) window.render(shown);
+  };
+  // A tab's emoji and title, the pending emoji first
+  const tabFace = (tab) => {
+    const [emoji, title] = takesEmoji(tab) ? splitEmoji(tab.title) : ["", tab.title];
+    if (!pending.has(tab.id)) return [emoji, title];
+    const want = pending.get(tab.id);
+    if (want === emoji) {
+      pending.delete(tab.id);
+      return [emoji, title];
+    }
+    return [want, title];
+  };
+
+  // Opens tab `id`'s emoji picker under it (see emoji_picker.rs)
+  window.openEmojiPicker = (id) => {
+    const tab = shown?.tabs.find((tab) => tab.id === id);
+    const node = bar.querySelector(`.tab[data-id="${id}"]`);
+    if (!tab || !node || !takesEmoji(tab)) return;
+    hidePreview();
+    invoke("show_emoji_picker", { id, left: node.getBoundingClientRect().left, current: tabFace(tab)[0] });
+  };
 
   const el = (tag, props, html = "") => {
     const node = Object.assign(document.createElement(tag), props);
@@ -448,7 +494,9 @@
     else renderBar(state);
   };
 
-  const renderBar = ({ tabs, active, fullscreen, theme, platform, split, update }) => {
+  const renderBar = (state) => {
+    shown = state;
+    const { tabs, active, fullscreen, theme, platform, split, update } = state;
     document.body.classList.toggle("fullscreen", fullscreen);
     document.body.classList.toggle("macos", platform === "macos");
     for (const [cssVar, key] of Object.entries(THEME_VARS)) {
@@ -486,9 +534,25 @@
       node.style.setProperty("--accent", ACCENTS[tab.kind] ?? "currentColor");
       // A file named "🎨 Thumbnails" shows 🎨 as its icon instead, except
       // in a prototype, which keeps its play icon
-      const [emoji, title] = tab.kind === "proto" ? ["", tab.title] : splitEmoji(tab.title);
+      const [emoji, title] = tabFace(tab);
       if (emoji) node.append(el("span", { className: "icon emoji", textContent: emoji }));
       else node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
+      // On the tab already active, a click on the icon picks its emoji
+      const icon = node.firstElementChild;
+      if (takesEmoji(tab) && tab.id === active) {
+        icon.classList.add("picks");
+        const hint = emoji ? "Change emoji" : "Add emoji";
+        if (icon.tagName === "svg") icon.insertAdjacentHTML("afterbegin", `<title>${hint}</title>`);
+        else icon.title = hint;
+        let press = null;
+        icon.addEventListener("pointerdown", (e) => {
+          press = e.button === 0 && node.classList.contains("active") ? { x: e.clientX, y: e.clientY } : null;
+        });
+        icon.addEventListener("click", (e) => {
+          if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_START) window.openEmojiPicker(tab.id);
+          press = null;
+        });
+      }
       const close = el("div", { className: "close", title: "Close tab" }, ICONS.close);
       if (!tab.pinned) node.append(el("span", { className: "title", textContent: title || "Loading…" }), close);
 

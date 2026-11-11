@@ -1,0 +1,427 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Emoji</title>
+<!-- A file's emoji picker, opened under its tab (see
+     src-tauri/src/emoji_picker.rs). The window is exactly the picker: the
+     page asks for the tab's emoji with `get_emoji_picker`, reports its size
+     with `emoji_picker_ready`, and sends the choice to `emoji_pick`: an
+     emoji, "" to remove it, or null to close. Colors come from the active
+     Figma tab's theme, like the tab menu's -->
+<style>
+  /* Figma's UI3 palette, until the first Figma tab reports its own */
+  :root {
+    color-scheme: dark;
+    --bg: #2c2c2c;
+    --bg-secondary: #383838;
+    --border: #444444;
+    --text: #ffffff;
+    --text-secondary: rgba(255, 255, 255, 0.7);
+    --brand: #0d99ff;
+    --hover: rgba(255, 255, 255, 0.08);
+  }
+  :root.light { color-scheme: light; --hover: rgba(0, 0, 0, 0.06); }
+  :root.dark { color-scheme: dark; --hover: rgba(255, 255, 255, 0.08); }
+
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: var(--bg); overflow: hidden; }
+  body {
+    font: 450 11px/16px "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-feature-settings: "cv11", "calt";
+    letter-spacing: 0.005em;
+    color: var(--text);
+    cursor: default;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-font-smoothing: antialiased;
+  }
+  #picker { display: flex; flex-direction: column; width: 288px; height: 360px; }
+
+  header { display: flex; gap: 4px; padding: 8px 8px 4px; }
+  /* Figma's search field */
+  .search {
+    position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    height: 28px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+  }
+  .search:hover { border-color: var(--border); }
+  .search:focus-within { border-color: var(--brand); }
+  .search svg { flex: none; margin: 0 2px 0 6px; }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 8px 0 4px;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    caret-color: var(--brand);
+  }
+  .search input::placeholder { color: var(--text-secondary); }
+  .search input::-webkit-search-cancel-button { display: none; }
+  .icon-button {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    color: var(--text-secondary);
+  }
+  .icon-button:hover { background: var(--hover); color: var(--text); }
+  .icon-button:focus-visible { outline: 1px solid var(--brand); outline-offset: -1px; }
+  .icon-button[hidden] { display: none; }
+
+  #grid {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 4px 8px 8px;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    outline: 0;
+  }
+  #grid::-webkit-scrollbar { width: 4px; }
+  #grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  h2 {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 8px 4px 4px;
+    background: var(--bg);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 550;
+  }
+  .cells { display: grid; grid-template-columns: repeat(8, 32px); }
+  .cell {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    font: 20px/1 "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  }
+  .cell:hover, .cell.focus { background: var(--hover); }
+  .cell.focus { outline: 1px solid var(--brand); outline-offset: -1px; }
+  /* The file's emoji now */
+  .cell.current { background: color-mix(in srgb, var(--brand) 22%, transparent); }
+  .empty { padding: 32px 16px; color: var(--text-secondary); text-align: center; }
+
+  /* Jumps to each section; the one in view stands out */
+  nav {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 8px;
+    border-top: 1px solid var(--border);
+  }
+  nav[hidden] { display: none; }
+  nav button {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: none;
+    font: 15px/1 "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+    filter: grayscale(1);
+    opacity: 0.55;
+  }
+  nav button:hover { background: var(--hover); opacity: 0.9; }
+  nav button.on { filter: none; opacity: 1; background: var(--hover); }
+  nav button:focus-visible { outline: 1px solid var(--brand); outline-offset: -1px; }
+</style>
+</head>
+<body>
+<div id="picker">
+  <header>
+    <label class="search">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3 3"/></svg>
+      <input id="query" type="search" placeholder="Search emoji" aria-label="Search emoji" autocomplete="off" spellcheck="false" aria-controls="grid">
+    </label>
+    <button id="remove" class="icon-button" type="button" title="Remove emoji" aria-label="Remove emoji" hidden>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m4.5 11.5 7-7"/></svg>
+    </button>
+  </header>
+  <div id="grid" role="listbox" aria-label="Emoji" tabindex="-1"></div>
+  <nav id="sections" aria-label="Sections"></nav>
+</div>
+<script src="emoji-data.js"></script>
+<script>
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+  const $ = (id) => document.getElementById(id);
+  const query = $("query");
+  const grid = $("grid");
+  const nav = $("sections");
+  const remove = $("remove");
+  const COLUMNS = 8;
+
+  const THEME_VARS = {
+    "--bg": "bg",
+    "--bg-secondary": "bgSecondary",
+    "--border": "border",
+    "--text": "text",
+    "--text-secondary": "textSecondary",
+    "--brand": "brand",
+  };
+  const luminance = (color) => {
+    const probe = document.createElement("canvas").getContext("2d");
+    probe.fillStyle = color;
+    const hex = /^#([0-9a-f]{6})$/i.exec(probe.fillStyle)?.[1];
+    if (!hex) return null;
+    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const applyTheme = (theme) => {
+    if (!theme?.bg) return;
+    const root = document.documentElement;
+    for (const [cssVar, key] of Object.entries(THEME_VARS)) {
+      if (theme[key]) root.style.setProperty(cssVar, theme[key]);
+    }
+    const light = luminance(theme.bg);
+    if (light != null) {
+      root.classList.toggle("light", light > 0.5);
+      root.classList.toggle("dark", light <= 0.5);
+    }
+  };
+
+  // Every emoji, by section, with what a search matches against
+  const SECTIONS = LIGMA_EMOJI.map(([name, lines]) => ({
+    name,
+    emoji: lines.split("\n").map((line) => {
+      const [char, label, tags = ""] = line.split("|");
+      return { char, label, words: `${label} ${tags}`.toLowerCase().split(/[\s:,]+/) };
+    }),
+  }));
+  const BY_CHAR = new Map(SECTIONS.flatMap((section) => section.emoji.map((emoji) => [emoji.char, emoji])));
+  const NAV_ICONS = {
+    "Smileys & People": "😀",
+    "Animals & Nature": "🐻",
+    "Food & Drink": "🍔",
+    "Travel & Places": "✈️",
+    "Activities": "⚽",
+    "Objects": "💡",
+    "Symbols": "❤️",
+    "Flags": "🏁",
+  };
+  // For design files, three rows' worth
+  const SUGGESTED = "🎨 ✏️ 📐 🧩 📱 💻 🖥️ 🚀 ✨ 🔥 💡 🧪 📦 🗂️ 📊 🎯 🛠️ 💬 🎬 🌱 ⭐ ❤️ 🏠 🌙".split(" ");
+
+  // The last picks, newest first, two rows' worth
+  const RECENT_KEY = "ligma.emoji.recent";
+  const recent = () => {
+    try {
+      return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]").filter((char) => BY_CHAR.has(char));
+    } catch {
+      return [];
+    }
+  };
+  const remember = (char) => {
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify([char, ...recent().filter((c) => c !== char)].slice(0, COLUMNS * 2)));
+    } catch {}
+  };
+
+  let current = "";
+  let cells = [];
+  let focused = -1;
+
+  const pick = (char) => {
+    if (char) remember(char);
+    invoke("emoji_pick", { emoji: char });
+  };
+
+  const cell = (emoji) => {
+    const node = Object.assign(document.createElement("button"), {
+      type: "button",
+      className: emoji.char === current ? "cell current" : "cell",
+      textContent: emoji.char,
+      title: emoji.label,
+      tabIndex: -1,
+    });
+    node.setAttribute("role", "option");
+    node.setAttribute("aria-label", emoji.label);
+    if (emoji.char === current) node.setAttribute("aria-selected", "true");
+    node.addEventListener("click", () => pick(emoji.char));
+    node.addEventListener("mousemove", () => focused !== cells.indexOf(node) && focus(cells.indexOf(node), false));
+    return node;
+  };
+
+  const section = (name, list) => {
+    const wrap = document.createElement("section");
+    wrap.dataset.name = name;
+    const heading = Object.assign(document.createElement("h2"), { textContent: name });
+    const row = Object.assign(document.createElement("div"), { className: "cells" });
+    row.append(...list.map(cell));
+    wrap.append(heading, row);
+    return wrap;
+  };
+
+  // The grid, browsing every section or showing a search's matches
+  const draw = () => {
+    const words = query.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    grid.replaceChildren();
+    if (words.length) {
+      // Each word starts one of an emoji's words; names before keywords
+      const found = [...BY_CHAR.values()]
+        .map((emoji) => {
+          const all = words.every((word) => emoji.words.some((w) => w.startsWith(word)));
+          if (!all) return null;
+          const inName = emoji.label.toLowerCase().split(/[\s:,]+/);
+          const rank = words.every((word) => inName.some((w) => w.startsWith(word))) ? (inName[0].startsWith(words[0]) ? 0 : 1) : 2;
+          return { emoji, rank };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.rank - b.rank)
+        .map(({ emoji }) => emoji);
+      nav.hidden = true;
+      if (found.length) grid.append(section("Results", found));
+      else grid.append(Object.assign(document.createElement("p"), { className: "empty", textContent: "No emoji found" }));
+    } else {
+      nav.hidden = false;
+      const last = recent();
+      if (last.length) grid.append(section("Recent", last.map((char) => BY_CHAR.get(char))));
+      grid.append(section("Suggested", SUGGESTED.map((char) => BY_CHAR.get(char)).filter(Boolean)));
+      for (const { name, emoji } of SECTIONS) grid.append(section(name, emoji));
+    }
+    cells = [...grid.querySelectorAll(".cell")];
+    // A search's first match is one Enter away
+    focus(words.length && cells.length ? 0 : -1, false);
+    grid.scrollTop = 0;
+    markSection();
+  };
+
+  const focus = (index, scroll = true) => {
+    cells[focused]?.classList.remove("focus");
+    focused = index;
+    const node = cells[index];
+    if (!node) {
+      query.removeAttribute("aria-activedescendant");
+      return;
+    }
+    node.classList.add("focus");
+    node.id = "focused-emoji";
+    query.setAttribute("aria-activedescendant", node.id);
+    if (scroll) {
+      const heading = node.closest("section").querySelector("h2").offsetHeight;
+      const top = node.offsetTop - grid.offsetTop;
+      if (top - heading < grid.scrollTop) grid.scrollTop = top - heading;
+      else if (top + node.offsetHeight > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + node.offsetHeight - grid.clientHeight + 8;
+    }
+  };
+
+  // Up and down move a row within the cells' own section grid
+  const step = (key) => {
+    if (!cells.length) return;
+    if (focused < 0) return focus(0);
+    const node = cells[focused];
+    const row = [...node.parentNode.children];
+    const at = row.indexOf(node);
+    const sectionStart = focused - at;
+    const col = at % COLUMNS;
+    if (key === "ArrowLeft") return focus(Math.max(0, focused - 1));
+    if (key === "ArrowRight") return focus(Math.min(cells.length - 1, focused + 1));
+    if (key === "ArrowDown") {
+      if (at + COLUMNS < row.length) return focus(focused + COLUMNS);
+      // Into the next section, same column where it can
+      const next = sectionStart + row.length;
+      if (next >= cells.length) return focus(sectionStart + row.length - 1);
+      if (Math.floor(at / COLUMNS) < Math.floor((row.length - 1) / COLUMNS)) return focus(sectionStart + row.length - 1);
+      const nextRow = cells[next].parentNode.children.length;
+      return focus(next + Math.min(col, nextRow - 1));
+    }
+    if (key === "ArrowUp") {
+      if (at >= COLUMNS) return focus(focused - COLUMNS);
+      if (sectionStart === 0) return focus(-1), query.focus();
+      const prevLength = cells[sectionStart - 1].parentNode.children.length;
+      const lastRowStart = Math.floor((prevLength - 1) / COLUMNS) * COLUMNS;
+      return focus(sectionStart - prevLength + Math.min(lastRowStart + col, prevLength - 1));
+    }
+  };
+
+  // The browsed section in view lights up in the bar below
+  const markSection = () => {
+    if (nav.hidden) return;
+    const sections = [...grid.querySelectorAll("section")];
+    const top = grid.scrollTop + 1;
+    let shown = sections[0]?.dataset.name;
+    for (const node of sections) if (node.offsetTop - grid.offsetTop <= top) shown = node.dataset.name;
+    // "Recent" and "Suggested" sit above the first section
+    if (!(shown in NAV_ICONS)) shown = null;
+    for (const button of nav.children) button.classList.toggle("on", button.dataset.name === shown);
+  };
+  grid.addEventListener("scroll", markSection, { passive: true });
+
+  for (const [name, icon] of Object.entries(NAV_ICONS)) {
+    const button = Object.assign(document.createElement("button"), { type: "button", textContent: icon, title: name, tabIndex: -1 });
+    button.setAttribute("aria-label", name);
+    button.dataset.name = name;
+    button.addEventListener("click", () => {
+      const node = grid.querySelector(`section[data-name="${name}"]`);
+      if (node) grid.scrollTop = node.offsetTop - grid.offsetTop;
+      query.focus();
+    });
+    nav.append(button);
+  }
+
+  query.addEventListener("input", draw);
+  remove.addEventListener("click", () => pick(""));
+  // Typing always searches; the arrows walk the grid
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (query.value) {
+        query.value = "";
+        draw();
+      } else invoke("emoji_pick", { emoji: null });
+    } else if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      // Left and right stay in the search text until the grid has focus
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && focused < 0) return;
+      e.preventDefault();
+      step(e.key);
+    } else if (e.key === "Enter" && focused >= 0) {
+      e.preventDefault();
+      pick(cells[focused].textContent);
+    }
+  });
+  grid.addEventListener("mouseleave", () => query.value || focus(-1, false));
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
+  // Clicks anywhere but the field keep typing in it
+  grid.addEventListener("mousedown", (e) => e.preventDefault());
+  nav.addEventListener("mousedown", (e) => e.preventDefault());
+
+  window.refresh = async () => {
+    const opened = await invoke("get_emoji_picker");
+    if (!opened) return;
+    applyTheme(opened.theme);
+    current = opened.current ?? "";
+    remove.hidden = !current;
+    query.value = "";
+    draw();
+    const { width, height } = $("picker").getBoundingClientRect();
+    await invoke("emoji_picker_ready", { width: Math.ceil(width), height: Math.ceil(height) });
+    query.focus();
+  };
+
+  window.refresh();
+</script>
+</body>
+</html>

@@ -1911,6 +1911,42 @@ fn tab_url(app: &AppHandle, id: u32) -> Option<Url> {
     live.or_else(|| with_tab(app, id, |tab| tab.url.clone()))
 }
 
+/// Key of tab `id`'s file, if it's one whose name can carry an emoji. A
+/// prototype's tab keeps its play icon
+pub fn file_key_of(app: &AppHandle, id: u32) -> Option<String> {
+    with_tab(app, id, |tab| tab.file_key.clone().filter(|_| tab.kind != "proto")).flatten()
+}
+
+/// Whether a file name starts with an emoji and a space, for the menu's
+/// wording. The tab bar tells emoji apart exactly (`splitEmoji`)
+fn has_emoji(title: &str) -> bool {
+    title.split_once(' ').is_some_and(|(first, rest)| {
+        !first.is_empty() && !rest.trim().is_empty() && first.chars().all(|c| !c.is_ascii() && !c.is_alphanumeric())
+    })
+}
+
+/// File `key` was renamed `name` from Ligma: retitle its tabs. Figma shows
+/// the new name in the editor, but doesn't always retitle the page when
+/// only the leading emoji changed
+pub fn renamed(app: &AppHandle, key: &str, name: &str) {
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        for tab in state.tabs.iter_mut().filter(|tab| tab.file_key.as_deref() == Some(key) && tab.kind != "proto") {
+            tab.title = name.to_owned();
+        }
+    }
+    push_state(app);
+}
+
+/// Shows `emoji` as tab `id`'s while its file is renamed ("" for none), or
+/// the file's own again with None
+pub fn show_pending_emoji(app: &AppHandle, id: u32, emoji: Option<&str>) {
+    if let Some(bar) = window_of(app, id).and_then(|window| app.get_webview(window.label())) {
+        let emoji = serde_json::to_string(&emoji).unwrap();
+        let _ = bar.eval(format!("window.pendingEmoji?.({id}, {emoji})"));
+    }
+}
+
 /// Shows the right-click menu of tab `id` (see tab_menu.rs). Its items
 /// run through `on_menu`
 fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
@@ -1941,15 +1977,26 @@ fn show_menu(app: &AppHandle, id: u32) -> tauri::Result<()> {
             ("discord-hide", "Hide File on Discord")
         }
     });
+    // A file's emoji, picked under its tab (see emoji_picker.rs)
+    let emoji = file_key_of(app, id).map(|_| {
+        if with_tab(app, id, |tab| has_emoji(&tab.title)).unwrap_or(false) {
+            ("emoji", "Change Emoji")
+        } else {
+            ("emoji", "Add Emoji")
+        }
+    });
     let items = if id == HOME_ID {
         vec![Some(("copy", "Copy Link")), Some(("reload", "Reload")), Some(("close-others", "Close Other Tabs"))]
     } else {
-        let mut items = vec![
-            Some(if pinned { ("unpin", "Unpin Tab") } else { ("pin", "Pin Tab") }),
+        let mut items = vec![Some(if pinned { ("unpin", "Unpin Tab") } else { ("pin", "Pin Tab") })];
+        if emoji.is_some() {
+            items.push(emoji);
+        }
+        items.extend([
             Some(("copy", "Copy Link")),
             Some(("browser", "Open in Browser")),
             Some(("reload", "Reload")),
-        ];
+        ]);
         if !alone {
             items.push(Some(("new-window", "Move to New Window")));
         }
@@ -2004,6 +2051,12 @@ pub fn on_menu(app: &AppHandle, item: &str) -> tauri::Result<()> {
             }
         }
         "reload" => reload(app, id),
+        // The tab bar knows where the tab is and opens it from there
+        "emoji" => {
+            if let Some(bar) = window_of(app, id).and_then(|window| app.get_webview(window.label())) {
+                let _ = bar.eval(format!("window.openEmojiPicker?.({id})"));
+            }
+        }
         "split" => {
             let pair = with_tab(app, id, |tab| tab.window.clone()).map(|window| {
                 let active = app.state::<Tabs>().inner().0.lock().unwrap().active_in(&window);

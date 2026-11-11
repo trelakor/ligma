@@ -10,6 +10,7 @@ mod background;
 mod copy_code;
 mod discord_ipc;
 mod downloads;
+mod emoji_picker;
 #[cfg(windows)]
 mod figma_scheme;
 #[cfg(windows)]
@@ -292,6 +293,10 @@ fn main() {
             preview::capture_active_tab,
             preview::get_tab_preview,
             preview::tab_preview_ready,
+            emoji_picker::show_emoji_picker,
+            emoji_picker::get_emoji_picker,
+            emoji_picker::emoji_picker_ready,
+            emoji_picker::emoji_pick,
             prompt::get_prompt,
             prompt::prompt_ready,
             prompt::prompt_answer,
@@ -334,12 +339,13 @@ fn main() {
             let handle = app.handle().clone();
             window.on_window_event(move |event| {
                 // Ligma's other windows go with it: other windows' tabs, the
-                // hidden tab menu or preview window, a prompt or settings
+                // hidden tab menu, preview or emoji picker window, a prompt or settings
                 // would keep the app running
                 if let WindowEvent::Destroyed = event {
                     tabs::close_other_windows(&handle);
                     tab_menu::close(&handle);
                     preview::close(&handle);
+                    emoji_picker::close(&handle);
                     split::close(&handle);
                     prompt::close_all(&handle);
                     settings::close(&handle);
