@@ -53,6 +53,9 @@ fn lenient<'de, D: serde::Deserializer<'de>, T: serde::de::DeserializeOwned>(des
 /// The start of reading a page: what's needed before its nodes come
 #[derive(Deserialize)]
 pub struct Begin {
+    /// The page's batches are kept under this and their number
+    #[serde(default)]
+    pub stream: String,
     pub page: String,
     #[serde(default)]
     pub bg: Option<Rgba>,

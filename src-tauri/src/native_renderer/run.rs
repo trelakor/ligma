@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -48,6 +48,101 @@ struct Ctx {
     /// Image fills' original bytes, kept to decode again at a bigger size
     /// when zooming in, without asking Figma again
     encoded: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+}
+
+/// What page.js read, handed over by the page as each job is done rather
+/// than asked for again and again, which while Figma opens a file waits
+/// behind it for hundreds of milliseconds a time. The page sends it to an
+/// address on its own site that only this run of Ligma knows, which Ligma
+/// answers itself (see `webview2::intercept`)
+struct Pushed {
+    secret: String,
+    bodies: Mutex<Bodies>,
+    arrived: Condvar,
+    /// Tabs whose requests to that address Ligma answers
+    tabs: Mutex<std::collections::HashSet<String>>,
+}
+
+fn pushed() -> &'static Pushed {
+    static PUSHED: std::sync::OnceLock<Pushed> = std::sync::OnceLock::new();
+    PUSHED.get_or_init(|| {
+        use std::hash::{BuildHasher, Hasher};
+        let mut secret = String::new();
+        for _ in 0..2 {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+            secret.push_str(&format!("{:016x}", hasher.finish()));
+        }
+        Pushed { secret, bodies: Mutex::default(), arrived: Condvar::new(), tabs: Mutex::default() }
+    })
+}
+
+#[derive(Default)]
+struct Bodies {
+    waiting: HashMap<String, (Instant, Vec<u8>)>,
+    /// Keys lately taken, as an image can come twice when Figma and the
+    /// cache both answer
+    taken: std::collections::VecDeque<String>,
+}
+
+impl Pushed {
+    fn put(&self, key: &str, body: Vec<u8>) {
+        let mut bodies = self.bodies.lock().unwrap();
+        if bodies.taken.iter().any(|taken| taken == key) {
+            return;
+        }
+        // What no one came for: a page that went away, or images in view
+        // handed over before they were asked for that weren't after all
+        bodies.waiting.retain(|key, (at, _)| at.elapsed() < Duration::from_secs(if key.starts_with('i') { 20 } else { 120 }));
+        bodies.waiting.insert(key.to_string(), (Instant::now(), body));
+        self.arrived.notify_all();
+    }
+
+    /// The body for `key`, waiting for it until `until`
+    fn wait(&self, key: &str, until: Instant) -> Option<Vec<u8>> {
+        let mut bodies = self.bodies.lock().unwrap();
+        loop {
+            if let Some((_, body)) = bodies.waiting.remove(key) {
+                if bodies.taken.len() >= 256 {
+                    bodies.taken.pop_front();
+                }
+                bodies.taken.push_back(key.to_string());
+                return Some(body);
+            }
+            let left = until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())?;
+            bodies = self.arrived.wait_timeout(bodies, left).unwrap().0;
+        }
+    }
+}
+
+/// Has tab `webview` hand over what page.js reads as it's done, from now
+/// on and after it loads again. False if it can't
+fn start_pushing(webview: &Webview) -> bool {
+    let label = webview.label().to_string();
+    if !pushed().tabs.lock().unwrap().contains(&label) {
+        let Ok(url) = webview.url() else {
+            return false;
+        };
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let prefix = format!("{}://{host}/__ligma_native/{}/", url.scheme(), pushed().secret);
+        let (send, receive) = mpsc::channel();
+        crate::webview2::intercept(
+            webview,
+            prefix,
+            |key, body| pushed().put(key, body),
+            move |added| {
+                let _ = send.send(added);
+            },
+        );
+        if !receive.recv_timeout(Duration::from_secs(5)).unwrap_or(false) {
+            return false;
+        }
+        pushed().tabs.lock().unwrap().insert(label);
+    }
+    let path = serde_json::to_string(&format!("/__ligma_native/{}/", pushed().secret)).unwrap();
+    eval_value(webview, &format!("window.__ligmaNative.pushTo({path})")).and_then(|value| value.as_bool()) == Some(true)
 }
 
 static CTX: Mutex<Option<Arc<Ctx>>> = Mutex::new(None);
@@ -158,7 +253,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
     spawn("native-view", ctx.clone(), poll_view);
     spawn("native-memory", ctx.clone(), sample_memory);
     let requested = Arc::new(Mutex::new(requested));
-    for _ in 0..3 {
+    // Images come from the page in parallel, each decoded on its own thread
+    for _ in 0..6 {
         let requested = requested.clone();
         spawn("native-fetch", ctx.clone(), move |ctx| fetch(ctx, requested));
     }
@@ -189,15 +285,37 @@ fn eval_value(webview: &Webview, script: &str) -> Option<Value> {
     serde_json::from_str(&eval(webview, script, Duration::from_secs(30))?).ok()
 }
 
-/// Waits for the job kept under `key` in the page and reads its result
-fn read_key(webview: &Webview, key: &str, timeout: Duration) -> Result<String, String> {
+/// Waits for the job kept under `key` in the page and reads its result,
+/// handed over by the page as it's done where it can be (see `Pushed`),
+/// otherwise read from it in pieces
+fn read_key(webview: &Webview, key: &str, timeout: Duration) -> Result<Vec<u8>, String> {
     let key_json = serde_json::to_string(key).unwrap();
     let start = Instant::now();
-    let len = loop {
+    let mut pushing = pushed().tabs.lock().unwrap().contains(webview.label());
+    let (len, binary) = loop {
+        if pushing {
+            // Asked about now and then all the same, in case it can't be
+            // handed over
+            if let Some(body) = pushed().wait(key, Instant::now() + Duration::from_millis(250)) {
+                let _ = webview.eval(format!("window.__ligmaNative.drop({key_json})"));
+                return Ok(body);
+            }
+        }
         let status = eval_value(webview, &format!("window.__ligmaNative.status({key_json})")).ok_or("the tab didn't answer")?;
+        pushing = status["push"].as_bool() == Some(true);
         match status["state"].as_str() {
-            Some("done") => break status["len"].as_u64().unwrap_or(0) as usize,
-            Some("pending") if start.elapsed() < timeout => sleep(15),
+            Some("done") if status["pushed"].as_bool() == Some(true) => {
+                let body = pushed().wait(key, Instant::now() + Duration::from_secs(2)).ok_or("lost on its way")?;
+                let _ = webview.eval(format!("window.__ligmaNative.drop({key_json})"));
+                return Ok(body);
+            }
+            Some("done") if status["pushing"].as_bool() == Some(true) => {}
+            Some("done") => break (status["len"].as_u64().unwrap_or(0) as usize, status["binary"].as_bool() == Some(true)),
+            Some("pending") if start.elapsed() < timeout => {
+                if !pushing {
+                    sleep(15);
+                }
+            }
             Some("pending") => return Err("timed out".into()),
             _ => return Err(status["error"].as_str().unwrap_or("failed").to_string()),
         }
@@ -213,14 +331,17 @@ fn read_key(webview: &Webview, key: &str, timeout: Duration) -> Result<String, S
         at = end;
     }
     let _ = webview.eval(format!("window.__ligmaNative.drop({key_json})"));
-    Ok(out)
+    if binary {
+        return base64::engine::general_purpose::STANDARD.decode(out).map_err(|error| error.to_string());
+    }
+    Ok(out.into_bytes())
 }
 
 /// Starts job `call` (a `__ligmaNative` method call) and reads its result
 fn job(webview: &Webview, call: &str, timeout: Duration) -> Result<String, String> {
     let key = eval_value(webview, &format!("window.__ligmaNative.{call}")).ok_or("the tab didn't answer")?;
     let key = key.as_str().ok_or("no job")?;
-    read_key(webview, key, timeout)
+    String::from_utf8(read_key(webview, key, timeout)?).map_err(|error| error.to_string())
 }
 
 fn current(ctx: &Ctx) -> Option<Webview> {
@@ -246,7 +367,7 @@ fn sync(ctx: Arc<Ctx>) {
             Some("installed") => mirrored = None,
             _ => {
                 set_status("Waiting for the file to load");
-                sleep(1000);
+                sleep(100);
                 continue;
             }
         }
@@ -255,11 +376,15 @@ fn sync(ctx: Arc<Ctx>) {
             .and_then(|page| page.as_str().map(str::to_owned));
         let Some(page) = page else {
             set_status("Waiting for the file to load");
-            sleep(1000);
+            // Checked often, as the page is read the moment Figma has it
+            sleep(50);
             continue;
         };
         let key = (file.key.clone(), page);
         if mirrored.as_ref() != Some(&key) || ctx.resync.swap(false, Ordering::Relaxed) {
+            if !start_pushing(&file.webview) {
+                log::info!("native renderer: the tab can't hand over what it reads, so it's asked for it");
+            }
             match snapshot(&ctx, &file.webview) {
                 Ok(()) => mirrored = Some(key),
                 Err(error) => {
@@ -292,38 +417,39 @@ fn sync(ctx: Arc<Ctx>) {
 /// drawn as it comes
 fn snapshot(ctx: &Ctx, webview: &Webview) -> Result<(), String> {
     set_status("Reading the page");
+    super::mark(|| "reading the page".into());
     let start = Instant::now();
     let begin = eval_value(webview, "window.__ligmaNative.snapshot()").ok_or("the tab didn't answer")?;
     let begin: Begin = serde_json::from_value(begin).map_err(|error| error.to_string())?;
     let page = begin.page.clone();
+    let stream = begin.stream.clone();
     let _ = ctx.messages.send(Msg::Begin(Box::new(Scene::new(begin))));
     let (mut transfer, mut parse, mut bytes, mut first) = (Duration::ZERO, Duration::ZERO, 0usize, None);
+    let mut next = 0;
     let in_page = loop {
         if ctx.stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        // Gone if the tab loaded again while the page was read
-        let next = eval_value(webview, "window.__ligmaNative ? window.__ligmaNative.batch() : { error: 'the tab reloaded' }")
-            .ok_or("the tab didn't answer")?;
-        let key = match next {
-            Value::Null => {
-                sleep(10);
-                continue;
-            }
-            Value::String(key) => key,
-            Value::Object(done) if done.contains_key("done") => break done.get("ms").and_then(Value::as_f64).unwrap_or(0.0),
-            other => return Err(other["error"].as_str().unwrap_or("failed").to_string()),
-        };
         let read_start = Instant::now();
-        let json = read_key(webview, &key, Duration::from_secs(120))?;
+        let json = read_key(webview, &format!("{stream}{next}"), Duration::from_secs(120))?;
+        next += 1;
         transfer += read_start.elapsed();
+        // The one after the last says it's done, or why it stopped
+        if json.len() < 256 && !json.starts_with(b"{\"items\"") {
+            let end: Value = serde_json::from_slice(&json).map_err(|error| error.to_string())?;
+            match end.get("done") {
+                Some(_) => break end["ms"].as_f64().unwrap_or(0.0),
+                None => return Err(end["error"].as_str().unwrap_or("failed").to_string()),
+            }
+        }
         bytes += json.len();
         let parse_start = Instant::now();
-        let batch: Batch = serde_json::from_str(&json).map_err(|error| error.to_string())?;
+        let batch: Batch = serde_json::from_slice(&json).map_err(|error| error.to_string())?;
         let prepared = batch.prepare();
         parse += parse_start.elapsed();
         let _ = ctx.messages.send(Msg::Changes(prepared));
         if first.is_none() {
+            super::mark(|| "first part of the page read".into());
             first = Some(start.elapsed());
             stats().lock().unwrap().page = page.clone();
             set_status("Drawing, reading the rest of the page");
@@ -354,7 +480,7 @@ fn snapshot(ctx: &Ctx, webview: &Webview) -> Result<(), String> {
 fn changes(ctx: &Ctx, webview: &Webview) -> Result<bool, String> {
     let result = eval_value(webview, "window.__ligmaNative.changes()").ok_or("the tab didn't answer")?;
     let changes: Changes = match result {
-        Value::String(key) => serde_json::from_str(&read_key(webview, &key, Duration::from_secs(60))?).map_err(|error| error.to_string())?,
+        Value::String(key) => serde_json::from_slice(&read_key(webview, &key, Duration::from_secs(60))?).map_err(|error| error.to_string())?,
         Value::Null => return Ok(false),
         value => serde_json::from_value(value).map_err(|error| error.to_string())?,
     };
@@ -427,7 +553,9 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<Mutex<Receiver<Request>>>) {
             });
             continue;
         }
-        match fetch_image(&ctx, &webview, &key, width) {
+        super::mark(|| format!("image {} asked", key.get(..8).unwrap_or(&key)));
+        let fetched = fetch_image(&ctx, &webview, &key, width);
+        match fetched {
             Ok(img) => {
                 let _ = ctx.messages.send(Msg::Image(key, img));
             }
@@ -447,17 +575,42 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
         Some((hash, adjust)) => (hash, Adjust::parse(adjust)),
         None => (key, None),
     };
-    let cached = ctx.encoded.lock().unwrap().get(hash).cloned();
+    let started = Instant::now();
+    let short = hash.get(..8).unwrap_or(hash);
+    // In view, so handed over before it was asked for
+    let cached = ctx.encoded.lock().unwrap().get(hash).cloned().or_else(|| {
+        let bytes = Arc::new(pushed().wait(&format!("i{hash}"), Instant::now())?);
+        super::mark(|| format!("image {short} was handed over"));
+        ctx.encoded.lock().unwrap().insert(hash.to_string(), bytes.clone());
+        Some(bytes)
+    });
     let bytes = match cached {
         Some(bytes) => bytes,
         None => {
-            let data = job(webview, &format!("image({})", serde_json::to_string(hash).unwrap()), Duration::from_secs(120))?;
-            let bytes = Arc::new(base64::engine::general_purpose::STANDARD.decode(data).map_err(|error| error.to_string())?);
+            let asked = Instant::now();
+            let key = eval_value(webview, &format!("window.__ligmaNative.image({})", serde_json::to_string(hash).unwrap())).ok_or("the tab didn't answer")?;
+            let started_in_page = asked.elapsed();
+            let key = key.as_str().ok_or("no job")?.to_string();
+            let mut bytes = read_key(webview, &key, Duration::from_secs(120))?;
+            // Handed over under another key while it was asked for
+            if bytes.starts_with(b"{\"under\":") {
+                let under: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+                let under = under["under"].as_str().ok_or("no key")?;
+                // Or taken by another size of it asked for at the same time
+                bytes = match pushed().wait(under, Instant::now() + Duration::from_secs(5)) {
+                    Some(bytes) => bytes,
+                    None => ctx.encoded.lock().unwrap().get(hash).map(|bytes| bytes.to_vec()).ok_or("lost on its way")?,
+                };
+            }
+            let bytes = Arc::new(bytes);
+            super::mark(|| format!("image {short} read, the job started after {} ms, read after {} ms", started_in_page.as_millis(), asked.elapsed().as_millis()));
             ctx.encoded.lock().unwrap().insert(hash.to_string(), bytes.clone());
             bytes
         }
     };
+    let fetched = started.elapsed();
     let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?.to_rgba8();
+    let decoded = started.elapsed();
     let original = image.dimensions();
     let (w, h) = (original.0 as f64, original.1 as f64);
     let side = (w.max(h) * (width.max(1.0) * 1.25 / w)).ceil();
@@ -476,6 +629,18 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let info = skia_safe::ImageInfo::new((iw as i32, ih as i32), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Unpremul, None);
     let image = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(image.as_raw()), (iw * 4) as usize)
         .ok_or("couldn't make the image")?;
+    if super::dev() {
+        let ms = |d: Duration| d.as_millis();
+        log::info!(
+            "native renderer image {hash}: {} KB {}x{} fetched {} ms, decoded {} ms, ready {} ms",
+            bytes.len() / 1000,
+            original.0,
+            original.1,
+            ms(fetched),
+            ms(decoded - fetched),
+            ms(started.elapsed())
+        );
+    }
     Ok(Img { image, original, area: None, stale: false })
 }
 

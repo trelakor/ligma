@@ -59,6 +59,16 @@ pub fn dev() -> bool {
     std::env::var("LIGMA_NATIVE_DEV").is_ok_and(|value| value == "1") || autorun()
 }
 
+/// In a dev build, logs `what` with the milliseconds since the renderer
+/// started, a timeline of loading
+pub fn mark(what: impl FnOnce() -> String) {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    let start = *START.get_or_init(std::time::Instant::now);
+    if dev() {
+        log::info!("native renderer @{}: {}", start.elapsed().as_millis(), what());
+    }
+}
+
 pub fn autorun() -> bool {
     std::env::var("LIGMA_NATIVE_AUTORUN").is_ok_and(|value| value == "1")
 }
@@ -85,6 +95,7 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
 
 #[cfg(windows)]
 fn start(app: &AppHandle) {
+    mark(|| format!("starting, {} ms after 1970", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()));
     run::start(app);
 }
 

@@ -3,8 +3,10 @@
 // page's scene through the plugin API, `window.figma`, for Ligma to draw
 //
 // `eval` can't wait for a promise or carry much at once, so bulk results
-// (the scene, image bytes, exports) are kept here as strings under a key.
-// Ligma asks for their `status`, reads them in `slice`s and `drop`s them
+// (the scene, image bytes, exports) are kept here under a key, and handed
+// to Ligma as each is done through an address on this site that Ligma
+// answers itself (see `pushTo`). Where that can't be, Ligma asks for their
+// `status`, reads them in `slice`s and `drop`s them
 (() => {
   if (window.__ligmaNative) return "ready";
   if (location.hostname !== "www.figma.com" || window.top !== window) return "unavailable";
@@ -74,37 +76,213 @@
 
   const store = new Map();
   let next = 0;
-  // Runs `job` and keeps its result, a string, under the returned key
+  // Keys differ from the last time the page loaded, as Ligma may still
+  // hold what was handed over then
+  const session = Math.random().toString(36).slice(2, 8);
+  // Where to hand Ligma each result as it's done, an address on this site
+  // that Ligma answers itself (see `Pushed` in run.rs), set once it does
+  let pushTo = null;
+  const push = (key, entry) => {
+    if (!pushTo) return;
+    entry.pushing = true;
+    fetch(location.origin + pushTo + key, { method: "POST", body: entry.bytes ?? entry.data, cache: "no-store", credentials: "omit" })
+      .then((response) => {
+        if (response.status !== 204) throw new Error(`${response.status}`);
+        entry.pushed = true;
+        entry.data = "";
+        entry.bytes = null;
+      })
+      .catch(() => (entry.failed = true))
+      .finally(() => (entry.pushing = false));
+  };
+  // Runs `job` and keeps its result under the returned key: a string, or
+  // bytes, sent as base64 when they can't be handed over
   const run = (job) => {
-    const key = `k${++next}`;
-    const entry = { state: "pending", data: "", error: null, at: performance.now() };
+    const key = `k${session}-${++next}`;
+    const entry = { state: "pending", data: "", bytes: null, error: null, at: performance.now() };
     store.set(key, entry);
     Promise.resolve()
-      .then(job)
+      .then(() => job(key))
       .then((data) => {
-        entry.data = typeof data === "string" ? data : JSON.stringify(data);
+        if (data === PUSHED) {
+          entry.ms = performance.now() - entry.at;
+          entry.pushed = true;
+          entry.state = "done";
+          return;
+        }
+        if (data instanceof Uint8Array) entry.bytes = data;
+        else entry.data = typeof data === "string" ? data : JSON.stringify(data);
+        entry.ms = performance.now() - entry.at;
         entry.state = "done";
+        push(key, entry);
       })
       .catch((error) => {
+        entry.ms = performance.now() - entry.at;
         entry.error = String(error?.message ?? error);
         entry.state = "error";
-      })
-      .finally(() => (entry.ms = performance.now() - entry.at));
+      });
     return key;
   };
 
-  // Keeps `data`, done, under a new key
-  const put = (data) => {
-    const key = `k${++next}`;
-    store.set(key, { state: "done", data, error: null, at: performance.now(), ms: 0 });
+  // A result to come under `key`, pending until `fill` gives it `data`
+  const reserve = (key) => {
+    store.set(key, { state: "pending", data: "", bytes: null, error: null, at: performance.now() });
     return key;
+  };
+  const fill = (key, data) => {
+    const entry = store.get(key);
+    if (!entry || entry.state !== "pending") return;
+    if (data instanceof Uint8Array) entry.bytes = data;
+    else entry.data = data;
+    entry.ms = performance.now() - entry.at;
+    entry.state = "done";
+    push(key, entry);
   };
 
   const base64 = (bytes) => {
+    if (bytes.toBase64) return bytes.toBase64();
     let text = "";
     for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     return btoa(text);
   };
+
+  // Figma downloads image fills from signed addresses that end in the
+  // image's hash, which is the SHA-1 of its bytes. While a file opens,
+  // getBytesAsync() answers seconds after the download is done, so images
+  // are read again from the browser's cache as soon as Figma has them
+  const imageUrls = new Map();
+  const urlWaiters = new Map();
+  const IMAGE_URL = /\/img\/([0-9a-f]{4})\/([0-9a-f]{4})\/([0-9a-f]{32})(?:[?#]|$)/;
+  const seen = (url) => {
+    const match = IMAGE_URL.exec(url);
+    if (!match) return;
+    const hash = match[1] + match[2] + match[3];
+    if (imageUrls.has(hash)) return;
+    imageUrls.set(hash, url);
+    for (const resolve of urlWaiters.get(hash) ?? []) resolve(url);
+    urlWaiters.delete(hash);
+  };
+  // Those downloaded before this ran, from the page's timeline, which
+  // tells of each only once it's done, and late while the page is busy
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) seen(entry.name);
+    }).observe({ type: "resource", buffered: true });
+  } catch {}
+  // The rest as Figma starts each download, passed on untouched, so the
+  // cache is read the moment it has the image
+  try {
+    const open = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+      try {
+        seen(String(url));
+      } catch {}
+      return open.call(this, method, url, ...rest);
+    };
+  } catch {}
+  const hex = (buffer) => Array.from(new Uint8Array(buffer), (b) => b.toString(16).padStart(2, "0")).join("");
+  // Images are read from the cache off the page's main thread, which Figma
+  // keeps busy while a file opens: fetched, checked and, given where,
+  // handed to Ligma from there
+  const WORKER = `
+    const hex = ${hex.toString()};
+    onmessage = async ({ data: { id, url, hash, to } }) => {
+      try {
+        const response = await fetch(url, { cache: "force-cache" });
+        if (!response.ok) throw new Error(String(response.status));
+        const buffer = await response.arrayBuffer();
+        if (hex(await crypto.subtle.digest("SHA-1", buffer)) !== hash) throw new Error("not the image");
+        if (to) {
+          const sent = await fetch(to, { method: "POST", body: buffer, cache: "no-store", credentials: "omit" });
+          if (sent.status === 204) return postMessage({ id, pushed: true });
+        }
+        postMessage({ id, buffer }, [buffer]);
+      } catch (error) {
+        postMessage({ id, error: String(error?.message ?? error) });
+      }
+    };`;
+  // What a job gives when it's handed its result to Ligma itself
+  const PUSHED = Symbol("pushed");
+  let worker;
+  const workerJobs = new Map();
+  let workerNext = 0;
+  const inWorker = (message) => {
+    if (worker === undefined) {
+      try {
+        worker = new Worker(URL.createObjectURL(new Blob([WORKER], { type: "text/javascript" })));
+        worker.onmessage = ({ data }) => {
+          const job = workerJobs.get(data.id);
+          workerJobs.delete(data.id);
+          if (!job) return;
+          if (data.error) job.reject(new Error(data.error));
+          else job.resolve(data.pushed ? PUSHED : new Uint8Array(data.buffer));
+        };
+      } catch {
+        worker = null;
+      }
+    }
+    if (!worker) return null;
+    return new Promise((resolve, reject) => {
+      const id = ++workerNext;
+      workerJobs.set(id, { resolve, reject });
+      worker.postMessage({ ...message, id });
+    });
+  };
+  // Handed to Ligma under `key` when there's one and Ligma takes them
+  const fromCache = async (hash, gaveUp, key) => {
+    const url =
+      imageUrls.get(hash) ??
+      (await new Promise((resolve, reject) => {
+        const waiters = urlWaiters.get(hash) ?? [];
+        waiters.push(resolve);
+        urlWaiters.set(hash, waiters);
+        gaveUp.then(() => {
+          const left = (urlWaiters.get(hash) ?? []).filter((waiter) => waiter !== resolve);
+          if (left.length) urlWaiters.set(hash, left);
+          else urlWaiters.delete(hash);
+          reject(new Error("no address"));
+        });
+      }));
+    const viaWorker = inWorker({ url, hash, to: key && pushTo ? location.origin + pushTo + key : null });
+    if (viaWorker) return viaWorker;
+    const response = await fetch(url, { cache: "force-cache" });
+    if (!response.ok) throw new Error(`${response.status}`);
+    const buffer = await response.arrayBuffer();
+    if (hex(await crypto.subtle.digest("SHA-1", buffer)) !== hash) throw new Error("not the image");
+    return new Uint8Array(buffer);
+  };
+  // An image fill's original bytes, from whichever comes first, or PUSHED
+  const imageBytes = async (figma, hash, key) => {
+    let stop;
+    const gaveUp = new Promise((resolve) => (stop = resolve));
+    const fromFigma = async () => {
+      const image = figma.getImageByHash(hash);
+      if (!image) throw new Error("no image");
+      return image.getBytesAsync();
+    };
+    try {
+      return await Promise.any([fromCache(hash, gaveUp, key), fromFigma()]);
+    } catch (error) {
+      throw error.errors?.[1] ?? error;
+    } finally {
+      stop();
+    }
+  };
+
+  // Image fills' bytes for images near the view, started as soon as the
+  // page is read so they're ready by the time Ligma asks. Those in view are
+  // handed to Ligma under `i` and the hash where they can be, before it
+  // asks, as asking waits behind Figma while it opens a file
+  const prefetched = new Map();
+  let prefetchArea = null;
+  let viewArea = null;
+  const prefetch = (figma, hash, inView) => {
+    if (prefetched.has(hash) || prefetched.size >= 96) return;
+    const ready = imageBytes(figma, hash, inView ? `i${hash}` : null);
+    ready.catch(() => {});
+    prefetched.set(hash, ready);
+  };
+  const overlaps = (b, a) => a && b && b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y;
 
   // Lets Figma draw and take input, and Ligma collect what's read so far,
   // in turn. A timer would wait at least 4ms each time, a quarter of every
@@ -156,6 +334,13 @@
     if (n.isMask) out.mask = get("maskType") ?? "ALPHA";
     if ("fills" in n) {
       out.fills = get("fills");
+      if (prefetchArea && Array.isArray(out.fills) && out.fills.some((paint) => paint.type === "IMAGE" && paint.imageHash)) {
+        const b = n.absoluteBoundingBox;
+        if (overlaps(b, prefetchArea)) {
+          const inView = overlaps(b, viewArea);
+          for (const paint of out.fills) if (paint.type === "IMAGE" && paint.imageHash && paint.visible !== false) prefetch(figma, paint.imageHash, inView);
+        }
+      }
       if (out.fills === "MIXED" && n.type === "TEXT") {
         // Each style's fills, which match its outlines in `fg` in order
         try {
@@ -212,7 +397,8 @@
   // `root` and everything under it in paint order, children after their
   // parent, `p` being the parent's id. Boolean operations are drawn from
   // their own geometry, so their operands are left out. Gives the page a
-  // breather every 12ms
+  // breather every `clock.slice` ms, 12 unless said otherwise. Null if
+  // `clock.stop()` says to give up on it for now
   const subtree = async (figma, root, parent, out, clock) => {
     const stack = [[root, parent]];
     while (stack.length) {
@@ -223,9 +409,10 @@
         const children = n.children;
         for (let i = children.length - 1; i >= 0; i--) stack.push([children[i], n.id]);
       }
-      if (clock && performance.now() - clock.start > 12) {
+      if (clock && performance.now() - clock.start > (clock.slice ?? 12)) {
         await yieldNow();
         clock.start = performance.now();
+        if (clock.stop?.()) return null;
       }
     }
     return out;
@@ -249,7 +436,7 @@
   };
 
   // The page streaming in, nearest the view first, in batches kept under
-  // keys for `batch()`
+  // keys Ligma knows to wait for
   let stream = null;
   const streamPage = async (figma, page, current) => {
     const units = [];
@@ -267,36 +454,77 @@
       });
     };
     collect(page);
-    const v = figma.viewport.bounds;
-    const cx = v.x + v.width / 2;
-    const cy = v.y + v.height / 2;
-    const distance = (n) => {
-      const b = n.absoluteBoundingBox;
-      if (!b) return Infinity;
-      const dx = Math.max(b.x - cx, 0, cx - (b.x + b.width));
-      const dy = Math.max(b.y - cy, 0, cy - (b.y + b.height));
-      return Math.hypot(dx, dy);
+    // Nearest the view first, sorted again whenever the view moves, as
+    // Figma puts the view where it was left a moment after the file opens,
+    // and people move about while the page is read
+    const left = units.map((unit) => ({ unit, box: unit[0].absoluteBoundingBox, distance: 0 }));
+    let aimedAt = "";
+    let aimed = 0;
+    const aim = () => {
+      aimed = performance.now();
+      const v = figma.viewport.bounds;
+      const at = `${v.x},${v.y},${v.width},${v.height}`;
+      if (at === aimedAt) return false;
+      aimedAt = at;
+      prefetchArea = { x: v.x - v.width / 2, y: v.y - v.height / 2, width: v.width * 2, height: v.height * 2 };
+      viewArea = { x: v.x, y: v.y, width: v.width, height: v.height };
+      const cx = v.x + v.width / 2;
+      const cy = v.y + v.height / 2;
+      for (const entry of left) {
+        const b = entry.box;
+        entry.distance = b ? Math.hypot(Math.max(b.x - cx, 0, cx - (b.x + b.width)), Math.max(b.y - cy, 0, cy - (b.y + b.height))) : Infinity;
+      }
+      // Farthest first, so the nearest comes off the end
+      left.sort((a, b) => b.distance - a.distance);
+      return true;
     };
-    const keyed = units.map((unit) => [distance(unit[0]), unit]);
-    keyed.sort((a, b) => a[0] - b[0]);
+    aim();
     let items = shells;
     let clock = { start: performance.now() };
     let since = performance.now();
     let first = true;
+    // Batch n goes under `${current.prefix}n`, kept for it before it's
+    // read, so Ligma can wait for it there. The one after the last says
+    // `{ done, ms }`
+    let n = 0;
     const flush = () => {
       if (!items.length) return;
-      current.batches.push(put(JSON.stringify({ items })));
+      fill(`${current.prefix}${n}`, JSON.stringify({ items }));
+      reserve(`${current.prefix}${++n}`);
       items = [];
     };
     flush();
-    for (const [, [n, parent, index]] of keyed) {
-      if (stream !== current) return;
-      items.push({ parent, index, nodes: await subtree(figma, n, parent, [], clock) });
+    while (left.length) {
+      if (stream !== current) return fill(`${current.prefix}${n}`, JSON.stringify({ error: "the page was read again" }));
+      if (performance.now() - aimed > 50) aim();
+      const picked = left.pop();
+      const [n, parent, index] = picked.unit;
+      // What's in view is read in longer stretches, as each breather while
+      // Figma opens a file can take it 100ms. Something out of view is put
+      // back when the view moves onto something else
+      const inView = picked.distance === 0;
+      clock.slice = inView ? 100 : 12;
+      clock.stop = () => {
+        if (inView || performance.now() - aimed < 50 || !aim() || !left.length || left[left.length - 1].distance > 0) return false;
+        const v = figma.viewport.bounds;
+        const b = picked.box;
+        return !b || b.x > v.x + v.width || b.y > v.y + v.height || b.x + b.width < v.x || b.y + b.height < v.y;
+      };
+      const nodes = await subtree(figma, n, parent, [], clock);
+      clock.stop = null;
+      clock.slice = 12;
+      if (!nodes) {
+        left.push(picked);
+        aimedAt = "";
+        aim();
+        continue;
+      }
+      items.push({ parent, index, nodes });
       items.push(...(await externalItems(figma, clock)));
       // The first batch soon, for what's in view, then bigger ones, as each
       // costs Ligma a few round trips to read
       const elapsed = performance.now() - current.started;
-      if (performance.now() - since > (first ? 40 : elapsed < 2000 ? 150 : 600)) {
+      if (inView || performance.now() - since > (first ? 40 : elapsed < 2000 ? 150 : 600)) {
         flush();
         since = performance.now();
         first = false;
@@ -304,7 +532,7 @@
     }
     flush();
     current.ms = performance.now() - current.started;
-    current.done = true;
+    fill(`${current.prefix}${n}`, JSON.stringify({ done: true, ms: current.ms }));
   };
 
   // Changes since the last `changes()`, from Figma's `documentchange`
@@ -376,8 +604,9 @@
       };
     },
 
-    // Starts streaming the current page in, for `batch()`, and returns what's
-    // needed first: `{ page, bg, transparent, dark }`
+    // Starts streaming the current page in, its batches kept under
+    // `${stream}0`, `${stream}1`... and returns that with what's needed
+    // first: `{ stream, page, bg, transparent, dark }`
     snapshot() {
       const figma = api();
       if (!figma) return null;
@@ -389,10 +618,17 @@
       sentSources = new Set();
       const page = figma.currentPage;
       const background = page.backgrounds?.find((paint) => paint.type === "SOLID" && paint.visible !== false);
-      const current = { batches: [], done: false, error: null, started: performance.now(), ms: 0 };
+      const current = { prefix: `s${session}-${++next}-`, started: performance.now(), ms: 0 };
       stream = current;
-      streamPage(figma, page, current).catch((error) => (current.error = String(error?.message ?? error)));
+      reserve(`${current.prefix}0`);
+      streamPage(figma, page, current).catch((error) => {
+        // Whichever batch is being waited for says so
+        for (const [key, entry] of store) {
+          if (key.startsWith(current.prefix) && entry.state === "pending") fill(key, JSON.stringify({ error: String(error?.message ?? error) }));
+        }
+      });
       return {
+        stream: current.prefix,
         page: page.id,
         name: page.name,
         bg: background && { ...background.color, a: background.opacity ?? 1 },
@@ -402,15 +638,6 @@
         dark: document.body?.dataset.preferredTheme === "dark",
         octaves: noiseOctaves,
       };
-    },
-
-    // The key of the next batch of the page streaming in, `{ done, ms }`
-    // once it's all in, or null while the next isn't ready
-    batch() {
-      if (!stream) return { done: true, ms: 0 };
-      if (stream.batches.length) return stream.batches.shift();
-      if (stream.error) return { error: stream.error };
-      return stream.done ? { done: true, ms: stream.ms } : null;
     },
 
     // Changes since the last snapshot or call: `{ resync }` when the page
@@ -449,13 +676,19 @@
       });
     },
 
-    // An image fill's original bytes, base64
+    // An image fill's original bytes, or `{ under }`, the key they were
+    // handed over under before Ligma asked
     image(hash) {
-      return run(async () => {
+      return run(async (key) => {
+        const ready = prefetched.get(hash);
+        if (ready) {
+          prefetched.delete(hash);
+          const bytes = await ready;
+          return bytes === PUSHED ? { under: `i${hash}` } : bytes;
+        }
         const figma = api();
-        const image = figma?.getImageByHash(hash);
-        if (!image) throw new Error("no image");
-        return base64(await image.getBytesAsync());
+        if (!figma) throw new Error("no image");
+        return await imageBytes(figma, hash, key);
       });
     },
 
@@ -541,10 +774,29 @@
       });
     },
 
+    // Hands Ligma results at `path` on this site from now on
+    pushTo(path) {
+      pushTo = path;
+      for (const [key, entry] of store) if (entry.state === "done" && !entry.pushing && !entry.pushed) push(key, entry);
+      return true;
+    },
     status(key) {
       const entry = store.get(key);
       if (!entry) return { state: "missing" };
-      return { state: entry.state, len: entry.data.length, error: entry.error, ms: entry.ms };
+      const waiting = entry.pushing || entry.pushed;
+      // Bytes not handed over are read as base64
+      if (entry.state === "done" && entry.bytes && !waiting && !entry.data) entry.data = base64(entry.bytes);
+      return {
+        state: entry.state,
+        len: entry.data.length,
+        binary: !!entry.bytes,
+        push: !!pushTo,
+        pushing: !!entry.pushing,
+        pushed: !!entry.pushed,
+        error: entry.error,
+        ms: entry.ms,
+        age: performance.now() - entry.at,
+      };
     },
     slice(key, start, end) {
       return store.get(key)?.data.slice(start, end) ?? null;

@@ -439,6 +439,10 @@ pub struct Painter {
     down: Option<Surface>,
     /// Part of a pixel the view is drawn off the pixel grid by, see `fractional`
     frac: (f32, f32),
+    /// GPU memory used after images were last packed again
+    compacted: u64,
+    /// An image came since the last frame, for the dev timeline
+    fresh: bool,
     /// When images were last fitted to what's drawn
     fitted: Instant,
     /// Where the view is drawn live with a margin, and the view and
@@ -483,6 +487,8 @@ impl Painter {
             down: None,
             live: None,
             fitted: Instant::now(),
+            compacted: 0,
+            fresh: false,
             frac: (0.0, 0.0),
             average: skia_safe::RuntimeEffect::make_for_shader(AVERAGE, None)
                 .map_err(|error| log::warn!("native renderer: average: {error}"))
@@ -617,6 +623,14 @@ impl Painter {
                 }
             }
             Msg::Image(key, img) => {
+                // Asked for twice, by pictures wanting it at sizes that came
+                // to the same: what's drawn with it is right as it is
+                let same = self.images.get(&key).is_some_and(|kept| {
+                    !kept.stale && kept.area == img.area && (kept.image.width(), kept.image.height()) == (img.image.width(), img.image.height())
+                });
+                if same && !key.starts_with(RENDER) {
+                    return true;
+                }
                 let waiting: Vec<(usize, bool, i32, bool)> =
                     self.pictures.iter().filter(|(_, recorded)| recorded.missing.contains(&key)).map(|(&key, _)| key).collect();
                 let areas: Vec<Rect> = waiting
@@ -634,6 +648,7 @@ impl Painter {
                 img.image = upload(&mut self.gpu.context, img.image);
                 self.images.insert(key, img);
                 self.drop_tiles(&areas);
+                self.fresh = true;
                 self.update_memory();
                 self.dirty = true;
             }
@@ -797,7 +812,9 @@ impl Painter {
     /// few blocks and frees the rest
     fn compact(&mut self) {
         let before = self.gpu.used();
-        if before < COMPACT_ABOVE {
+        // Nor again while no more is used than after the last time, when it
+        // didn't help: what's in use then isn't images
+        if before < COMPACT_ABOVE || before <= self.compacted {
             return;
         }
         let mut rasters = Vec::new();
@@ -814,13 +831,14 @@ impl Painter {
                 img.image = raster;
             }
         }
-        self.gpu.context.flush_submit_and_sync_cpu();
+        let _ = self.gpu.context.flush_submit_and_sync_cpu();
         self.gpu.context.free_gpu_resources();
         for img in self.images.values_mut() {
             img.image = upload(&mut self.gpu.context, img.image.clone());
         }
-        self.gpu.context.flush_submit_and_sync_cpu();
-        log::info!("native renderer: GPU memory compacted, {} MB to {} MB", before / 1_000_000, self.gpu.used() / 1_000_000);
+        let _ = self.gpu.context.flush_submit_and_sync_cpu();
+        self.compacted = self.gpu.used();
+        log::info!("native renderer: GPU memory compacted, {} MB to {} MB", before / 1_000_000, self.compacted / 1_000_000);
         self.dirty = true;
     }
 
@@ -1218,7 +1236,7 @@ impl Painter {
             // The budget is of time the GPU takes too, as that's most of a
             // tile's cost, so it waits for each before drawing another
             if !at_once {
-                self.gpu.context.flush_submit_and_sync_cpu();
+                let _ = self.gpu.context.flush_submit_and_sync_cpu();
             }
         }
         let checker = self.checker((view.x * px as f64, view.y * px as f64), px, view.zoom);
@@ -1362,6 +1380,9 @@ impl Painter {
         }
         let rendered = start.elapsed();
         trace(|| format!("frame px={px:.3} settled={settled} encoded={:.1} rendered={:.1} pending={pending}", encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0));
+        if std::mem::take(&mut self.fresh) {
+            super::mark(|| format!("drew new images, {:.0} ms, pending {pending}", rendered.as_secs_f64() * 1000.0));
+        }
         self.gpu.buffers.insert(index, (surface, target));
         let _ = unsafe { self.gpu.swap_chain.Present(1, DXGI_PRESENT(0)) };
         if pending {
@@ -1444,12 +1465,12 @@ impl Painter {
             self.live = None;
             self.scratch.clear();
             self.down = None;
-            self.gpu.context.flush_submit_and_sync_cpu();
+            let _ = self.gpu.context.flush_submit_and_sync_cpu();
             self.gpu.context.free_gpu_resources();
             let without_tiles = self.gpu.used();
             self.images.clear();
             self.asked.clear();
-            self.gpu.context.flush_submit_and_sync_cpu();
+            let _ = self.gpu.context.flush_submit_and_sync_cpu();
             self.gpu.context.free_gpu_resources();
             return format!("{} MB, without tiles and pictures {} MB, without images {} MB", before / 1_000_000, without_tiles / 1_000_000, self.gpu.used() / 1_000_000);
         }
@@ -1480,7 +1501,7 @@ impl Painter {
                     let start = Instant::now();
                     canvas.draw_picture(&picture, None, None);
                     canvas.restore();
-                    self.gpu.context.flush_submit_and_sync_cpu();
+                    let _ = self.gpu.context.flush_submit_and_sync_cpu();
                     best = best.min(start.elapsed().as_secs_f64() * 1000.0);
                 }
                 let name = self.scene.node(self.units[unit].slot).map(|node| format!("{} {}", node.id, node.type_name)).unwrap_or_default();
@@ -1503,7 +1524,7 @@ impl Painter {
             for _ in 0..3 {
                 let canvas = surface.canvas();
                 canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
-                self.gpu.context.flush_submit_and_sync_cpu();
+                let _ = self.gpu.context.flush_submit_and_sync_cpu();
                 let canvas = surface.canvas();
                 canvas.save();
                 canvas.scale((px * ss as f32, px * ss as f32));
@@ -1515,7 +1536,7 @@ impl Painter {
                     encoder.node(slot);
                 }
                 canvas.restore();
-                self.gpu.context.flush_submit_and_sync_cpu();
+                let _ = self.gpu.context.flush_submit_and_sync_cpu();
                 ms = ms.min(start.elapsed().as_secs_f64() * 1000.0);
             }
             let Some(node) = self.scene.node(slot) else { continue };

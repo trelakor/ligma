@@ -12,8 +12,8 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
 use webview2_com::{
-    AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, PermissionRequestedEventHandler,
-    TrySuspendCompletedHandler,
+    take_pwstr, AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, PermissionRequestedEventHandler,
+    TrySuspendCompletedHandler, WebResourceRequestedEventHandler,
 };
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
@@ -222,6 +222,68 @@ pub fn try_suspend(webview: &Webview, done: impl FnOnce(bool) + Send + 'static) 
         }));
         let _ = core.TrySuspend(&handler);
     });
+}
+
+/// Answers the requests tab `webview` makes to addresses starting with
+/// `prefix` itself, with an empty response, so they never reach the
+/// network: `on` gets the rest of the address and the request's body, on
+/// the main thread. How the native renderer's page script hands Ligma what
+/// it reads, as Figma tabs get no IPC. `added` is told whether that's set
+/// up
+pub fn intercept(
+    webview: &Webview,
+    prefix: String,
+    on: impl Fn(&str, Vec<u8>) + Send + 'static,
+    added: impl FnOnce(bool) + Send + 'static,
+) {
+    let result = webview.with_webview(move |platform| unsafe {
+        let Ok(core) = platform.controller().CoreWebView2() else {
+            return added(false);
+        };
+        let environment = platform.environment();
+        let filter = windows_core::HSTRING::from(format!("{prefix}*"));
+        let filtered = match core.cast::<ICoreWebView2_22>() {
+            Ok(core) => core.AddWebResourceRequestedFilterWithRequestSourceKinds(
+                &filter,
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
+            ),
+            Err(_) => core.AddWebResourceRequestedFilter(&filter, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL),
+        };
+        if filtered.is_err() {
+            return added(false);
+        }
+        let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let request = args.Request()?;
+            let mut uri = windows_core::PWSTR::null();
+            request.Uri(&mut uri)?;
+            let uri = take_pwstr(uri);
+            let Some(rest) = uri.strip_prefix(prefix.as_str()) else {
+                return Ok(());
+            };
+            let mut body = Vec::new();
+            if let Ok(content) = request.Content() {
+                let mut buffer = vec![0u8; 1 << 20];
+                loop {
+                    let mut read = 0u32;
+                    if content.Read(buffer.as_mut_ptr().cast(), buffer.len() as u32, Some(&mut read)).is_err() || read == 0 {
+                        break;
+                    }
+                    body.extend_from_slice(&buffer[..read as usize]);
+                }
+            }
+            on(rest, body);
+            let response = environment.CreateWebResourceResponse(None, 204, w!("No Content"), w!(""))?;
+            args.SetResponse(&response)?;
+            Ok(())
+        }));
+        let mut token = 0;
+        added(core.add_WebResourceRequested(&handler, &mut token).is_ok());
+    });
+    if result.is_err() {
+        log::warn!("native renderer: couldn't reach the tab's webview");
+    }
 }
 
 /// Takes an image of what `webview` shows now, for its tab's preview.
