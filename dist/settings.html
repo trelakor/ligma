@@ -396,13 +396,53 @@
   #plugin-error { color: var(--danger); }
   .empty { color: var(--text-secondary); }
 
-  .switch:focus-visible, #close:focus-visible, .button:focus-visible, .icon-button:focus-visible, nav button:focus-visible, .icon-choice:focus-visible {
+  /* AI tools: quick connect, one row per tool found, and the server's
+     settings for adding it by hand */
+  .subhead { padding: 12px 16px 2px 32px; color: var(--text-secondary); font-weight: 550; }
+  .subhead.disabled { color: var(--text-tertiary); }
+  .client .label { overflow: hidden; }
+  .client .path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .client .problem { color: var(--danger); }
+  .client .done { color: var(--text); }
+  .manual summary {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 32px;
+    padding: 6px 16px 6px 28px;
+    color: var(--text-secondary);
+    font-weight: 550;
+    list-style: none;
+  }
+  .manual summary::-webkit-details-marker { display: none; }
+  .manual summary:hover { color: var(--text); }
+  .manual summary svg { flex: none; transition: transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1); }
+  .manual[open] summary svg { transform: rotate(90deg); }
+  .manual .hint { padding: 0 16px 8px 32px; }
+  .snippet { margin: 0 16px 8px 32px; border-radius: 5px; background: var(--bg-secondary); }
+  .snippet-head { display: flex; align-items: center; height: 28px; padding: 0 2px 0 10px; color: var(--text-secondary); }
+  .snippet-head span { flex: 1; }
+  .snippet-head .icon-button { color: var(--text-secondary); }
+  .snippet-head .icon-button:hover { color: var(--text); }
+  .snippet pre {
+    padding: 0 10px 10px;
+    overflow-x: auto;
+    font: 11px/16px ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    white-space: pre;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-tertiary) transparent;
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+
+  .switch:focus-visible, #close:focus-visible, .button:focus-visible, .icon-button:focus-visible, nav button:focus-visible, .icon-choice:focus-visible, .manual summary:focus-visible {
     outline: 2px solid var(--brand);
     outline-offset: 1px;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .switch, .switch::before, .orb, .icon-choice img { transition: none; }
+    .switch, .switch::before, .orb, .icon-choice img, .manual summary svg { transition: none; }
     .icon-choice:hover img, .icon-choice:active img { transform: none; }
     .orb .mesh::before { animation: none; }
   }
@@ -805,20 +845,30 @@
         </span>
         <input type="checkbox" class="switch" id="mcp-bridge">
       </label>
-      <div class="row nested" id="mcp-config-row">
-        <span class="label">Add the MCP server to your AI tool
-          <div class="hint">Copies its entry for the tool's MCP settings, or the command that adds it to Claude Code. The tool starts it, and Node.js runs it.</div>
-        </span>
-        <span class="buttons">
-          <button class="button" id="copy-mcp-json">Copy JSON</button>
-          <button class="button" id="copy-mcp-claude">Copy Command</button>
-        </span>
-      </div>
       <div class="row nested" id="mcp-status-row" aria-live="polite">
         <span class="label"><span id="mcp-status">Off</span>
           <div class="hint" id="mcp-status-hint"></div>
         </span>
       </div>
+      <div class="subhead" id="mcp-clients-head">Quick connect</div>
+      <div id="mcp-clients"></div>
+      <div class="row nested empty" id="no-mcp-clients" hidden>
+        <span class="label">No AI tools found
+          <div class="hint">Add the MCP server to yours by hand, below</div>
+        </span>
+      </div>
+      <details class="manual">
+        <summary><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4.5 10 8l-3.5 3.5"/></svg>Set up by hand</summary>
+        <div class="hint">For an AI tool not listed above. Add this to its MCP settings. The tool starts the server with npx, so it needs Node.js.</div>
+        <div class="snippet">
+          <div class="snippet-head"><span>JSON</span><button class="icon-button" id="copy-mcp-json" title="Copy" aria-label="Copy JSON"></button></div>
+          <pre id="mcp-json"></pre>
+        </div>
+        <div class="snippet">
+          <div class="snippet-head"><span>Claude Code command</span><button class="icon-button" id="copy-mcp-claude" title="Copy" aria-label="Copy Claude Code command"></button></div>
+          <pre id="mcp-claude"></pre>
+        </div>
+      </details>
     </section>
   </div>
 
@@ -1195,7 +1245,6 @@
       ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
-      ["mcp-config-row", settings.mcpBridge],
       ["mcp-status-row", settings.mcpBridge],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
@@ -1210,6 +1259,7 @@
       const input = $(id).querySelector("input");
       if (input) input.disabled = !enabled;
     }
+    lockMcpClients();
   }
 
   function whole(input, min, fallback) {
@@ -1459,18 +1509,105 @@
     $("mcp-status-hint").hidden = !hint;
   };
   invoke("get_mcp_status").then(window.showMcpStatus);
-  for (const [id, kind, label] of [["copy-mcp-json", "json", "Copy JSON"], ["copy-mcp-claude", "claude", "Copy Command"]]) {
-    let reset;
-    $(id).addEventListener("click", async () => {
-      try {
-        await invoke("copy_mcp_config", { kind });
-        $(id).textContent = "Copied";
-      } catch {
-        $(id).textContent = "Couldn't Copy";
+
+  // Quick connect (src-tauri/src/mcp_clients.rs): a switch for each AI
+  // tool found, adding the MCP server to its settings. Claude Code adds it
+  // with its own command. What just changed stays said until Settings is
+  // focused again
+  const COPY_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>';
+  const DONE_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg>';
+  const clientNotes = {};
+  function lockMcpClients() {
+    const on = Boolean(settings?.mcpBridge);
+    $("mcp-clients-head").classList.toggle("disabled", !on);
+    for (const row of $("mcp-clients").children) {
+      row.classList.toggle("disabled", !on);
+      for (const control of row.querySelectorAll("input, button")) control.disabled = !on || control.dataset.broken === "true";
+    }
+  }
+  function clientRow(client) {
+    const row = node("div", { className: "row nested client" });
+    row.dataset.id = client.id;
+    const label = node("span", { className: "label" });
+    label.append(node("div", { className: "name", textContent: client.name }));
+    const hint = (text, className = "") => {
+      const created = node("div", { className: `hint ${className}`, textContent: text });
+      label.append(created);
+      return created;
+    };
+    const note = clientNotes[client.id];
+    if (client.error) hint(client.error, "problem");
+    else if (note) hint(note, "done");
+    else if (client.state === "manual") hint(client.added ? "Added. Run the command again to update it" : "Run this command in a terminal to add it");
+    else if (client.state === "outdated") hint("Set up for another version of the server");
+    else hint(client.path, "path").title = client.path;
+    if (client.state === "manual") {
+      const copy = node("button", { className: "button", textContent: "Copy Command" });
+      copyButton(copy, "claude", "Copy Command");
+      row.append(label, copy);
+      return row;
+    }
+    row.append(label);
+    if (client.state === "outdated") {
+      const update = node("button", { className: "button", textContent: "Update" });
+      update.addEventListener("click", () => setClient(client, true, `Updated. Restart ${client.name} if it's open`));
+      row.append(update);
+    }
+    const toggle = node("input", { type: "checkbox", className: "switch", checked: client.state !== "off" });
+    toggle.setAttribute("aria-label", `Connect ${client.name}`);
+    toggle.dataset.broken = String(Boolean(client.error));
+    toggle.addEventListener("change", () => setClient(client, toggle.checked,
+      `${toggle.checked ? "Added" : "Removed"}. Restart ${client.name} if it's open`));
+    row.append(toggle);
+    return row;
+  }
+  async function setClient(client, on, note) {
+    let changed;
+    try {
+      changed = await invoke("set_mcp_client", { id: client.id, on });
+      clientNotes[client.id] = note;
+    } catch (error) {
+      changed = { ...client, error: String(error) };
+    }
+    $("mcp-clients").querySelector(`[data-id="${client.id}"]`)?.replaceWith(clientRow(changed));
+    lockMcpClients();
+  }
+  async function showMcpClients() {
+    const clients = await invoke("get_mcp_clients");
+    $("mcp-clients").replaceChildren(...clients.map(clientRow));
+    $("no-mcp-clients").hidden = clients.length > 0;
+    lockMcpClients();
+  }
+  // A tool installed or set up meanwhile
+  addEventListener("focus", () => {
+    for (const id of Object.keys(clientNotes)) delete clientNotes[id];
+    showMcpClients();
+  });
+  showMcpClients();
+
+  // Copies the server's settings (copy_mcp_config in mcp_bridge.rs). Icon
+  // buttons show a check, others say so
+  function copyButton(button, kind, label) {
+    const iconOnly = button.classList.contains("icon-button");
+    const showLabel = (done) => {
+      if (iconOnly) {
+        button.innerHTML = done ? DONE_ICON : COPY_ICON;
+        button.title = done === false ? "Couldn't copy" : done ? "Copied" : "Copy";
+      } else {
+        button.textContent = done === false ? "Couldn't Copy" : done ? "Copied" : label;
       }
+    };
+    let reset;
+    showLabel(null);
+    button.addEventListener("click", async () => {
+      showLabel(await invoke("copy_mcp_config", { kind }).then(() => true, () => false));
       clearTimeout(reset);
-      reset = setTimeout(() => { $(id).textContent = label; }, 1500);
+      reset = setTimeout(() => showLabel(null), 1500);
     });
+  }
+  for (const [kind, id] of [["json", "mcp-json"], ["claude", "mcp-claude"]]) {
+    copyButton($(`copy-${id}`), kind);
+    invoke("get_mcp_config", { kind }).then((text) => { $(id).textContent = text ?? ""; });
   }
 
   invoke("get_theme").then(window.applyTheme);
