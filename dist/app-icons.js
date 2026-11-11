@@ -10,6 +10,7 @@ const LIGMA_APP_ICON_COLLECTIONS = [
   { id: "materials", name: "Materials" },
   { id: "graphic", name: "Graphic" },
   { id: "playful", name: "Playful" },
+  { id: "seasonal", name: "Seasonal" },
 ];
 
 // A superellipse `radius` from the middle, close to the system's own icon
@@ -58,12 +59,9 @@ function ligmaGlyph(unit = 193, cx = 512, cy = 512) {
 
 const LIGMA_G = ligmaGlyph();
 const LIGMA_COLORS = ["#00CF66", "#FF0026", "#904BFF", "#00BAFF"];
-// The frame inset in the tile (Gilded, Holo), `width` thick, and the logo
-// inside it, smaller so the frame has room. Frames are filled rings:
-// WebKit leaves hairline seams in a stroked squircle
-const LIGMA_FRAME = { radius: 358, width: 34 };
-const ligmaFrame = (width = LIGMA_FRAME.width, radius = LIGMA_FRAME.radius) => `${ligmaSquircle(radius + width / 2)}${ligmaSquircle(radius - width / 2)}`;
-const LIGMA_FRAMED = ligmaGlyph(178);
+// A squircle ring `width` thick, filled with `fill-rule="evenodd"`: WebKit
+// leaves hairline seams in a stroked squircle
+const ligmaFrame = (width, radius) => `${ligmaSquircle(radius + width / 2)}${ligmaSquircle(radius - width / 2)}`;
 
 // SVG helpers
 const ligmaSvg = {
@@ -96,6 +94,26 @@ const ligmaSvg = {
   },
   clips: (glyph = LIGMA_G) =>
     `<clipPath id="glyph">${glyph.parts.map((d) => `<path d="${d}"/>`).join("")}</clipPath>` + glyph.parts.map((d, i) => `<clipPath id="part${i}"><path d="${d}"/></clipPath>`).join(""),
+  // `count` copies of `draw(x, y, random)` spread over the tile, away from
+  // its edges
+  scatter: (seed, count, draw, [x0, y0, x1, y1] = [110, 110, 914, 914]) => {
+    const random = ligmaSvg.rand(seed);
+    let out = "";
+    for (let i = 0; i < count; i++) out += draw(x0 + random() * (x1 - x0), y0 + random() * (y1 - y0), random, i);
+    return out;
+  },
+  // A heart `size` wide around `x`, `y`
+  heart: (x, y, size) => {
+    const s = size / 2;
+    const p = (px, py) => `${(x + px * s).toFixed(1)} ${(y + py * s).toFixed(1)}`;
+    return `M${p(0, 0.95)}C${p(-0.25, 0.72)} ${p(-1, 0.22)} ${p(-1, -0.3)}C${p(-1, -0.78)} ${p(-0.56, -1.02)} ${p(-0.26, -0.96)}C${p(-0.1, -0.93)} ${p(0, -0.8)} ${p(0, -0.64)}`
+      + `C${p(0, -0.8)} ${p(0.1, -0.93)} ${p(0.26, -0.96)}C${p(0.56, -1.02)} ${p(1, -0.78)} ${p(1, -0.3)}C${p(1, 0.22)} ${p(0.25, 0.72)} ${p(0, 0.95)}Z`;
+  },
+  // A leaf `size` long around `x`, `y`, pointing up before `turn`
+  leaf: (x, y, size, turn, fill) => {
+    const s = size / 2;
+    return `<g transform="translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${turn.toFixed(0)})"><path d="M0 ${-s}Q${s * 1.15} ${-s * 0.15} 0 ${s}Q${-s * 1.15} ${-s * 0.15} 0 ${-s}Z" fill="${fill}"/><path d="M0 ${-s * 0.8}V${s * 1.25}" stroke="#000" stroke-opacity=".22" stroke-width="${(size / 22).toFixed(1)}" stroke-linecap="round"/></g>`;
+  },
   mix: (hex, to, amount) => {
     const a = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
     const b = [1, 3, 5].map((i) => parseInt(to.slice(i, i + 2), 16));
@@ -112,18 +130,79 @@ const ligmaColorway = (stops, colors, shade = 0.2) => () => {
   };
 };
 
+// The gold of Gilded and Fireworks: satin, lit from the top left, with a
+// soft sheen and a fine brushed grain, `id` its fill and `id`-grain the
+// grain to lay over it
+const ligmaGold = (id, g = LIGMA_G) => {
+  const { linear } = ligmaSvg;
+  const box = [g.x0, g.y0, g.right, g.bottom];
+  return linear(id, [[0, "#fff1c4"], [0.28, "#ecc777"], [0.6, "#c6913f"], [1, "#94652a"]], box, true)
+    + linear(`${id}-sheen`, [[0.3, "#fff", 0], [0.47, "#fff", 0.32], [0.64, "#fff", 0]], [box[0], box[3], box[2], box[1]], true)
+    + `<filter id="${id}-grain" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.004 0.42" numOctaves="2" seed="12"/><feColorMatrix type="matrix" values="0 0 0 0 .32  0 0 0 0 .2  0 0 0 0 .05  0 0 0 -1.1 .62"/></filter>`
+    // Pressed in: light on the top left edges, shade on the bottom right
+    + `<filter id="${id}-bevel" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur in="SourceAlpha" stdDeviation="6" result="b"/>`
+    + `<feOffset in="b" dx="-5" dy="-7" result="o1"/><feComposite in="SourceAlpha" in2="o1" operator="out" result="e1"/><feFlood flood-color="#4a2c05" flood-opacity=".5"/><feComposite in2="e1" operator="in" result="shade"/>`
+    + `<feOffset in="b" dx="5" dy="7" result="o2"/><feComposite in="SourceAlpha" in2="o2" operator="out" result="e2"/><feFlood flood-color="#fffaf0" flood-opacity=".75"/><feComposite in2="e2" operator="in" result="light"/>`
+    + `<feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="shade"/><feMergeNode in="light"/></feMerge><feComposite in2="SourceAlpha" operator="in"/></filter>`;
+};
+// The glyph in ligmaGold, `id` as given to it, clipped by `clip`
+const ligmaGilt = (id, clip = "glyph", g = LIGMA_G) => {
+  const { parts } = ligmaSvg;
+  return `<g filter="url(#${id}-bevel)">${parts(Array(4).fill(`url(#${id})`), "", g)}</g>`
+    + `<g clip-path="url(#${clip})"><rect width="1024" height="1024" filter="url(#${id}-grain)" style="mix-blend-mode:multiply"/></g>`
+    + parts(Array(4).fill(`url(#${id}-sheen)`), "", g);
+};
+
 const LIGMA_APP_ICONS = [
   { id: "ligma", name: "Ligma", collection: "colorways" },
 
   // Colorways
+  {
+    id: "ligma-dark", name: "Ligma Dark", collection: "colorways",
+    art() {
+      // Ligma's own icon on a dark tile, as Figma's dark icon is
+      const { fill, linear, shadow, parts } = ligmaSvg;
+      return {
+        defs: linear("tile-fill", [[0, "#2e2e30"], [1, "#161617"]]) + linear("sheen", [[0, "#fff", 0.07], [0.5, "#fff", 0]])
+          + linear("gloss", [[0, "#fff", 0.28], [0.5, "#fff", 0.04], [1, "#fff", 0]]) + shadow("lift", 12, 16, 0.55),
+        body: fill("url(#tile-fill)") + fill("url(#sheen)")
+          + `<g filter="url(#lift)">${parts(LIGMA_COLORS)}</g>`
+          + parts(Array(4).fill("url(#gloss)"))
+          + parts(Array(4).fill("none"), 'stroke="#fff" stroke-opacity=".18" stroke-width="3"'),
+      };
+    },
+  },
   { id: "onyx", name: "Onyx", collection: "colorways", art: ligmaColorway([[0, "#2c2c31"], [1, "#0b0b0d"]], ["#ffffff", "#d0d0d6", "#94949c", "#ffffff"], 0.5) },
   { id: "ink", name: "Ink", collection: "colorways", art: ligmaColorway([[0, "#fcf9f2"], [1, "#ece5d6"]], ["#151515", "#3d3d3d", "#6f6f6f", "#151515"], 0.14) },
+  { id: "slate", name: "Slate", collection: "colorways", art: ligmaColorway([[0, "#5d6d82"], [1, "#2d3747"]], ["#eef3f8", "#bccada", "#8fa3ba", "#ffc94d"], 0.35) },
   { id: "pastel", name: "Pastel", collection: "colorways", art: ligmaColorway([[0, "#fffaf2"], [1, "#f3e9ff"]], ["#72dda5", "#ff98a9", "#bea2ff", "#86d3ff"], 0.12) },
+  { id: "blush", name: "Blush", collection: "colorways", art: ligmaColorway([[0, "#ffe9ee"], [1, "#ffc6d3"]], ["#e8577d", "#c42d5a", "#8f1740", "#e8577d"], 0.16) },
   { id: "sunset", name: "Sunset", collection: "colorways", art: ligmaColorway([[0, "#ffb347"], [0.5, "#ff5e62"], [1, "#9a3cff"]], ["#fff4d6", "#ffd6a3", "#ffc0da", "#ffe14d"], 0.22) },
+  { id: "tangerine", name: "Tangerine", collection: "colorways", art: ligmaColorway([[0, "#ffa040"], [1, "#ff5a1f"]], ["#ffffff", "#ffe0c7", "#ffc296", "#ffffff"], 0.24) },
+  { id: "citrus", name: "Citrus", collection: "colorways", art: ligmaColorway([[0, "#fffbea"], [1, "#ffefb8"]], ["#74c83a", "#ff4d6d", "#ff8c1a", "#ffc400"], 0.16) },
+  { id: "retro", name: "Retro", collection: "colorways", art: ligmaColorway([[0, "#f6e7c8"], [1, "#ead2a4"]], ["#e8a33d", "#d9622b", "#9b3b22", "#2f6f6a"], 0.18) },
+  { id: "matcha", name: "Matcha", collection: "colorways", art: ligmaColorway([[0, "#d5e6bd"], [1, "#a9c98c"]], ["#3e6b2a", "#5a8a3c", "#7ea85c", "#fdfbe9"], 0.18) },
   { id: "forest", name: "Forest", collection: "colorways", art: ligmaColorway([[0, "#1f5c45"], [1, "#09271d"]], ["#b5e48c", "#f4a259", "#74c69d", "#f1faee"], 0.4) },
   { id: "tide", name: "Tide", collection: "colorways", art: ligmaColorway([[0, "#167dd6"], [1, "#0a2b5e"]], ["#7df9ff", "#3ac7ff", "#93a9ff", "#e9fdff"], 0.35) },
+  { id: "cobalt", name: "Cobalt", collection: "colorways", art: ligmaColorway([[0, "#3a86ff"], [1, "#1446d8"]], ["#ffffff", "#d6e4ff", "#a9c4ff", "#ffffff"], 0.28) },
   { id: "ultraviolet", name: "Ultraviolet", collection: "colorways", art: ligmaColorway([[0, "#3d108f"], [1, "#11032b"]], ["#ff5cdb", "#c24cff", "#7b5cff", "#2bf0ff"], 0.45) },
-  { id: "citrus", name: "Citrus", collection: "colorways", art: ligmaColorway([[0, "#fffbea"], [1, "#ffefb8"]], ["#74c83a", "#ff4d6d", "#ff8c1a", "#ffc400"], 0.16) },
+  {
+    id: "prism", name: "Prism", collection: "colorways",
+    art() {
+      // One spectrum running through the whole logo, on near black
+      const { fill, linear, radial, blur, parts } = ligmaSvg;
+      const g = LIGMA_G;
+      const spectrum = [[0, "#00d26a"], [0.25, "#00b8ff"], [0.5, "#8a4dff"], [0.75, "#ff2e7a"], [1, "#ff9a1f"]];
+      return {
+        defs: radial("tile-fill", [[0, "#1c1c22"], [1, "#09090b"]], [0.5, 0.35, 0.85]) + linear("spectrum", spectrum, [g.x0, g.y0, g.right, g.bottom], true)
+          + linear("gloss", [[0, "#fff", 0.22], [0.5, "#fff", 0]]) + blur("glow", 40),
+        body: fill("url(#tile-fill)")
+          + `<g filter="url(#glow)" opacity=".55">${parts(Array(4).fill("url(#spectrum)"))}</g>`
+          + parts(Array(4).fill("url(#spectrum)")) + parts(Array(4).fill("url(#gloss)")),
+      };
+    },
+  },
+  { id: "mocha", name: "Mocha", collection: "colorways", art: ligmaColorway([[0, "#5c3d2c"], [1, "#2a1911"]], ["#f5e3c8", "#d8b38c", "#b07f58", "#fff8ec"], 0.45) },
 
   // Materials
   {
@@ -206,17 +285,14 @@ const LIGMA_APP_ICONS = [
   {
     id: "gilded", name: "Gilded", collection: "materials",
     art() {
-      const { fill, radial, linear, shadow, parts } = ligmaSvg;
+      const { fill, radial, shadow, clips } = ligmaSvg;
       return {
-        defs: radial("tile-fill", [[0, "#24201a"], [1, "#050505"]], [0.5, 0.3, 0.9])
-          + linear("gold", [[0, "#fff7d1"], [0.22, "#f2cc68"], [0.48, "#a87414"], [0.56, "#f9e195"], [0.8, "#86590c"], [1, "#e8c058"]])
-          + linear("frame", [[0, "#fff1b8"], [0.3, "#e3b44c"], [0.55, "#8a5d10"], [0.8, "#f3d27a"], [1, "#9c6c14"]], [0, 0, 1, 1])
-          + shadow("lift", 14, 16, 0.75),
-        body: fill("url(#tile-fill)")
-          + `<path d="${ligmaFrame(LIGMA_FRAME.width + 6)}" fill="#000" fill-opacity=".6" fill-rule="evenodd" transform="translate(0 5)"/><path d="${ligmaFrame()}" fill="url(#frame)" fill-rule="evenodd"/><path d="${ligmaFrame(2)}" fill="#fff6d0" fill-opacity=".5" fill-rule="evenodd"/>`
-          // Inside the frame, the size Holo's outlined logo reaches (168 + its 30 outline, see holo)
-          + `<g filter="url(#lift)">${parts(["url(#gold)", "url(#gold)", "url(#gold)", "url(#gold)"], "", LIGMA_FRAMED)}</g>`
-          + parts(["none", "none", "none", "none"], 'stroke="#fff3c0" stroke-opacity=".55" stroke-width="2"', LIGMA_FRAMED),
+        defs: radial("tile-fill", [[0, "#26221c"], [0.6, "#121110"], [1, "#070707"]], [0.45, 0.3, 0.9])
+          + radial("warmth", [[0, "#d9a54a", 0.16], [1, "#d9a54a", 0]], [0.5, 0.5, 0.42])
+          + ligmaGold("gold") + clips() + shadow("lift", 16, 18, 0.7),
+        body: fill("url(#tile-fill)") + fill("url(#warmth)")
+          + `<g filter="url(#lift)">${ligmaSvg.parts(Array(4).fill("#9a6a2a"))}</g>`
+          + ligmaGilt("gold"),
       };
     },
   },
@@ -461,9 +537,8 @@ const LIGMA_APP_ICONS = [
       return {
         defs: blur("foil", 70),
         body: fill("#dfe6e6") + `<g filter="url(#foil)">${fields}</g>`
-          + `<path d="${ligmaFrame()}" fill="${ink}" fill-rule="evenodd"/>`
-          // Its outline reaches as far as Gilded's filled logo, LIGMA_FRAMED
-          + parts(["none", "none", "none", "none"], `stroke="${ink}" stroke-opacity=".88" stroke-width="30" stroke-linejoin="round"`, ligmaGlyph(LIGMA_FRAMED.unit - 10)),
+          // Its outside edge reaches as far as the other icons' logo
+          + parts(Array(4).fill("none"), `stroke="${ink}" stroke-opacity=".88" stroke-width="34" stroke-linejoin="round"`, ligmaGlyph(LIGMA_G.unit - 34 / 3)),
       };
     },
   },
@@ -509,36 +584,145 @@ const LIGMA_APP_ICONS = [
     },
   },
   {
-    id: "snowfall", name: "Snowfall", collection: "playful",
+    id: "bricks", name: "Bricks", collection: "playful",
     art() {
-      const { fill, linear, rand, shadow, parts, clips } = ligmaSvg;
+      const { fill, linear, shadow, mix, shrink } = ligmaSvg;
       const g = LIGMA_G;
-      const random = rand(3);
-      let flakes = "";
-      for (let i = 0; i < 70; i++) {
-        flakes += `<circle cx="${(100 + random() * 824).toFixed(1)}" cy="${(100 + random() * 824).toFixed(1)}" r="${(2.5 + random() * 6).toFixed(1)}" fill="#fff" opacity="${(0.5 + random() * 0.5).toFixed(2)}"/>`;
-      }
-      // A cap of snow with a wavy edge, `depth` deep from `top`, across `x0` to `x1`
-      const cap = (x0, x1, top, depth) => {
-        let d = `M${x0 - 20} ${top - 30}H${x1 + 20}V${top + depth}`;
-        const steps = Math.ceil((x1 - x0 + 40) / 34);
-        for (let i = 0; i < steps; i++) d += `q-17 ${i % 2 ? -16 : 18} -34 0`;
-        return `${d}Z`;
+      const colors = ["#00a843", "#e3000b", "#ffcd00", "#0055bf"];
+      const studs = (i) => {
+        const [cx, cy] = g.centers[i];
+        const color = colors[i];
+        return [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => {
+          const x = cx + sx * g.unit * 0.22;
+          const y = cy + sy * g.unit * 0.22;
+          return `<circle cx="${x}" cy="${y + 5}" r="27" fill="${mix(color, "#000000", 0.3)}"/><circle cx="${x}" cy="${y}" r="27" fill="${mix(color, "#ffffff", 0.12)}"/><path d="M${x - 17} ${y - 8}a20 20 0 0 1 22 -12" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="5" stroke-linecap="round"/>`;
+        }).join("");
       };
       return {
-        defs: linear("tile-fill", [[0, "#d4edff"], [1, "#86c3f2"]]) + clips() + shadow("lift", 12, 12, 0.25, "#1d4f8a"),
-        body: fill("url(#tile-fill)") + flakes
-          + `<path d="M100 880C260 830 380 870 520 846S800 830 924 860V924H100Z" fill="#fff"/>`
-          + `<g filter="url(#lift)">${parts(["#14c46a", "#f2213d", "#8a4df2", "#16a9ee"])}</g>`
-          + `<g clip-path="url(#part0)"><path d="${cap(g.x0, g.x1, g.y0, 54)}" fill="#fff"/></g>`
-          + `<g clip-path="url(#part3)"><path d="${cap(g.bx - g.r, g.bx + g.r, g.by - g.r, 50)}" fill="#fff"/></g>`
-          + `<g clip-path="url(#part1)"><path d="${cap(g.x0, g.xc, g.y0 + g.unit, 30)}" fill="#fff"/></g>`
-          + `<g clip-path="url(#part2)"><path d="${cap(g.x0, g.xc, g.y0 + 2 * g.unit, 30)}" fill="#fff"/></g>`,
+        defs: linear("tile-fill", [[0, "#f3f6fa"], [1, "#d3dce8"]]) + shadow("lift", 16, 14, 0.25, "#24324a"),
+        body: fill("url(#tile-fill)")
+          + `<g filter="url(#lift)">${g.parts.map((d, i) => `<g ${shrink(i, 0.97)}><path d="${d}" fill="${mix(colors[i], "#000000", 0.32)}" transform="translate(0 14)"/><path d="${d}" fill="${colors[i]}"/></g>`).join("")}</g>`
+          + g.parts.map((d, i) => `<g ${shrink(i, 0.97)}>${studs(i)}</g>`).join(""),
+      };
+    },
+  },
+
+  // Seasonal
+  {
+    id: "fireworks", name: "Fireworks", collection: "seasonal",
+    art() {
+      // New Year's: a gold logo under bursts of fireworks
+      const { fill, radial, blur, scatter, clips, parts } = ligmaSvg;
+      // A burst of `count` sparks `size` across, around `x`, `y`
+      const burst = (x, y, size, count, color, turn = 0) => {
+        let out = "";
+        for (let i = 0; i < count; i++) {
+          const a = ((i / count) * 360 + turn) * (Math.PI / 180);
+          const at = (r) => `${(x + Math.cos(a) * r).toFixed(1)} ${(y + Math.sin(a) * r).toFixed(1)}`;
+          out += `<path d="M${at(size * 0.22)}L${at(size * 0.42)}" stroke="${color}" stroke-width="${(size / 34).toFixed(1)}" stroke-linecap="round"/>`
+            + `<circle cx="${(x + Math.cos(a) * size * 0.5).toFixed(1)}" cy="${(y + Math.sin(a) * size * 0.5).toFixed(1)}" r="${(size / 40).toFixed(1)}" fill="${color}"/>`;
+        }
+        return out;
+      };
+      const bursts = burst(760, 330, 300, 16, "#ffd36e") + burst(196, 236, 170, 12, "#ff6fa8", 10) + burst(836, 650, 190, 12, "#6fe3ff", 6) + burst(206, 810, 120, 10, "#b28dff", 4);
+      const stars = scatter(23, 40, (x, y, random) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(1 + random() * 2.2).toFixed(1)}" fill="#fff" opacity="${(0.3 + random() * 0.6).toFixed(2)}"/>`);
+      return {
+        defs: radial("tile-fill", [[0, "#1d2350"], [0.6, "#0b0d24"], [1, "#04040c"]], [0.5, 0.25, 1]) + blur("glow", 10) + clips() + ligmaGold("gold")
+          + ligmaSvg.shadow("lift", 14, 16, 0.6),
+        body: fill("url(#tile-fill)") + stars
+          + `<g filter="url(#glow)" opacity=".8">${bursts}</g>${bursts}`
+          + `<g filter="url(#lift)">${parts(Array(4).fill("#9a6a2a"))}</g>` + ligmaGilt("gold"),
       };
     },
   },
   {
-    id: "pumpkin", name: "Pumpkin", collection: "playful",
+    id: "sweetheart", name: "Sweetheart", collection: "seasonal",
+    art() {
+      // Valentine's Day: the dot turned into a heart, among hearts
+      const { fill, linear, shadow, scatter, heart, mix } = ligmaSvg;
+      const g = LIGMA_G;
+      const colors = ["#ff4d79", "#e01e4f", "#b0103d", "#ff2a55"];
+      const big = heart(g.bx, g.by + 4, g.unit * 1.22);
+      const hearts = scatter(5, 26, (x, y, random) => {
+        if (x > g.x0 - 60 && x < g.right + 50 && y > g.y0 - 60 && y < g.bottom + 60) return "";
+        return `<path d="${heart(x, y, 26 + random() * 40)}" fill="#fff" opacity="${(0.35 + random() * 0.4).toFixed(2)}" transform="rotate(${Math.round(random() * 50 - 25)} ${x.toFixed(1)} ${y.toFixed(1)})"/>`;
+      });
+      return {
+        defs: linear("tile-fill", [[0, "#ffd3e2"], [1, "#ff8fb4"]])
+          + colors.map((c, i) => linear(`candy${i}`, [[0, mix(c, "#ffffff", 0.28)], [0.6, c], [1, mix(c, "#000000", 0.15)]])).join("")
+          + linear("gloss", [[0, "#fff", 0.45], [0.45, "#fff", 0]]) + shadow("lift", 14, 14, 0.3, "#a3003b"),
+        body: fill("url(#tile-fill)") + hearts
+          + `<g filter="url(#lift)">${g.parts.slice(0, 3).map((d, i) => `<path d="${d}" fill="url(#candy${i})"/>`).join("")}<path d="${big}" fill="url(#candy3)"/></g>`
+          + g.parts.slice(0, 3).map((d) => `<path d="${d}" fill="url(#gloss)"/>`).join("") + `<path d="${big}" fill="url(#gloss)"/>`,
+      };
+    },
+  },
+  {
+    id: "bloom", name: "Bloom", collection: "seasonal",
+    art() {
+      // Spring: the dot a flower, with petals drifting by
+      const { fill, linear, shadow, scatter } = ligmaSvg;
+      const g = LIGMA_G;
+      const flower = (x, y, r, petal, middle) => {
+        let out = "";
+        for (let i = 0; i < 5; i++) out += `<ellipse cx="${x}" cy="${y - r * 0.52}" rx="${r * 0.4}" ry="${r * 0.55}" fill="${petal}" transform="rotate(${i * 72} ${x} ${y})"/>`;
+        return `${out}<circle cx="${x}" cy="${y}" r="${r * 0.3}" fill="${middle}"/>`;
+      };
+      const petals = scatter(31, 22, (x, y, random) => {
+        if (x > g.x0 - 50 && x < g.right + 50 && y > g.y0 - 50 && y < g.bottom + 50) return "";
+        const turn = Math.round(random() * 180);
+        return `<ellipse cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" rx="${(9 + random() * 7).toFixed(1)}" ry="${(15 + random() * 8).toFixed(1)}" fill="${random() > 0.5 ? "#ffffff" : "#ffc2d6"}" opacity=".85" transform="rotate(${turn} ${x.toFixed(1)} ${y.toFixed(1)})"/>`;
+      });
+      return {
+        defs: linear("tile-fill", [[0, "#e6f8e0"], [1, "#b7e4c7"]]) + shadow("lift", 12, 12, 0.22, "#2d6a4f"),
+        body: fill("url(#tile-fill)") + petals
+          + flower(222, 236, 70, "#ffffff", "#ffd23f") + flower(838, 300, 56, "#ffb3cb", "#ffd23f") + flower(824, 836, 64, "#d9c2ff", "#ffd23f")
+          + `<g filter="url(#lift)">${g.parts.slice(0, 3).map((d, i) => `<path d="${d}" fill="${["#52b788", "#ff8fab", "#b197fc"][i]}"/>`).join("")}${flower(g.bx, g.by, g.r * 1.18, "#ffffff", "#ffc300")}</g>`,
+      };
+    },
+  },
+  {
+    id: "pool", name: "Pool", collection: "seasonal",
+    art() {
+      const { fill, linear, clips, blur, shrink, mix } = ligmaSvg;
+      const g = LIGMA_G;
+      const caustics = `<filter id="caustics" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.011" numOctaves="2" seed="6"/><feColorMatrix type="matrix" values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 1"/><feComponentTransfer><feFuncR type="table" tableValues="0 0 0 0 1 0 0 0 0 1 0 0"/><feFuncG type="table" tableValues="0 0 0 0 1 0 0 0 0 1 0 0"/><feFuncB type="table" tableValues="0 0 0 0 1 0 0 0 0 1 0 0"/></feComponentTransfer><feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  .45 0 0 0 0"/></filter>`;
+      const colors = ["#7ef0a6", "#ff7a8c", "#c39bff"];
+      const [x, y, r] = [g.bx, g.by, g.r];
+      const mid = r * 0.72;
+      const circumference = 2 * Math.PI * mid;
+      const buoy = `<circle cx="${x}" cy="${y}" r="${mid}" fill="none" stroke="#fff" stroke-width="${r * 0.56}"/><circle cx="${x}" cy="${y}" r="${mid}" fill="none" stroke="#ff3b3b" stroke-width="${r * 0.56}" stroke-dasharray="${circumference / 8} ${circumference / 8}" transform="rotate(22 ${x} ${y})"/><circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="#fff" stroke-opacity=".7" stroke-width="3"/>`;
+      return {
+        defs: linear("tile-fill", [[0, "#48d7ff"], [1, "#0784d1"]]) + caustics + clips() + blur("soft", 12)
+          + colors.map((c, i) => linear(`float${i}`, [[0, mix(c, "#ffffff", 0.4)], [0.6, c], [1, mix(c, "#000000", 0.15)]])).join(""),
+        body: fill("url(#tile-fill)") + `<rect width="1024" height="1024" filter="url(#caustics)"/>`
+          + `<g transform="translate(22 30)" filter="url(#soft)" opacity=".35">${g.parts.map((d, i) => `<path d="${d}" fill="#00305a" ${shrink(i, 0.95)}/>`).join("")}</g>`
+          + g.parts.slice(0, 3).map((d, i) => `<path d="${d}" fill="url(#float${i})" ${shrink(i, 0.95)}/><path d="${d}" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="5" ${shrink(i, 0.86)}/>`).join("")
+          + buoy,
+      };
+    },
+  },
+  {
+    id: "harvest", name: "Harvest", collection: "seasonal",
+    art() {
+      // Autumn: the logo in fall colors, leaves coming down around it
+      const { fill, linear, shadow, scatter, leaf, parts } = ligmaSvg;
+      const g = LIGMA_G;
+      const tones = ["#d9541e", "#f2b134", "#a8321e", "#e8772e", "#c9a227"];
+      const leaves = scatter(41, 40, (x, y, random, i) => {
+        if (x > g.x0 - 50 && x < g.right + 40 && y > g.y0 - 40 && y < g.bottom + 40) return "";
+        return leaf(x, y, 58 + random() * 40, random() * 360, tones[i % tones.length]);
+      });
+      return {
+        defs: linear("tile-fill", [[0, "#fde9c8"], [1, "#f4c48a"]]) + shadow("lift", 14, 14, 0.28, "#7a3a0a"),
+        body: fill("url(#tile-fill)") + leaves
+          + `<path d="M100 880C300 846 420 870 560 852S820 846 924 870V924H100Z" fill="#e39a4e" opacity=".55"/>`
+          + `<g filter="url(#lift)">${parts(["#6f8f2f", "#e0611f", "#b23a1f", "#f2b134"])}</g>`,
+      };
+    },
+  },
+  {
+    id: "pumpkin", name: "Pumpkin", collection: "seasonal",
     art() {
       const { fill, radial, blur, clips, rand, shadow } = ligmaSvg;
       const g = LIGMA_G;
@@ -563,46 +747,73 @@ const LIGMA_APP_ICONS = [
     },
   },
   {
-    id: "pool", name: "Pool", collection: "playful",
+    id: "festive", name: "Festive", collection: "seasonal",
     art() {
-      const { fill, linear, clips, blur, shrink, mix } = ligmaSvg;
+      // The holidays: the blocks wrapped as presents, the dot a bauble and
+      // a string of lights overhead
+      const { fill, radial, shadow, clips, parts, mix, blur } = ligmaSvg;
       const g = LIGMA_G;
-      const caustics = `<filter id="caustics" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.011" numOctaves="2" seed="6"/><feColorMatrix type="matrix" values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 1"/><feComponentTransfer><feFuncR type="table" tableValues="0 0 0 0 1 0 0 0 0 1 0 0"/><feFuncG type="table" tableValues="0 0 0 0 1 0 0 0 0 1 0 0"/><feFuncB type="table" tableValues="0 0 0 0 1 0 0 0 0 1 0 0"/></feComponentTransfer><feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  .45 0 0 0 0"/></filter>`;
-      const colors = ["#7ef0a6", "#ff7a8c", "#c39bff"];
+      const colors = ["#d62839", "#f2c14e", "#1f8a5b", "#d62839"];
+      const ribbons = ["#f2c14e", "#d62839", "#f2c14e"];
+      const wrap = g.parts.slice(0, 3).map((d, i) => {
+        const top = g.y0 + i * g.unit;
+        const x = g.xc + 20;
+        return `<g clip-path="url(#part${i})"><rect x="${x - 15}" y="${top - 10}" width="30" height="${g.unit + 20}" fill="${ribbons[i]}"/><rect x="${g.x0 - 10}" y="${top + g.unit / 2 - 15}" width="${g.unit + 20}" height="30" fill="${ribbons[i]}"/>`
+          + `<rect x="${g.x0 - 10}" y="${top - 10}" width="${g.unit + 20}" height="${g.unit / 2 + 10}" fill="#fff" opacity=".1"/></g>`;
+      }).join("");
+      const bow = (x, y) => `<path d="M${x} ${y}c-34 -30 -60 -6 -40 14c12 12 30 4 40 -14zM${x} ${y}c34 -30 60 -6 40 14c-12 12 -30 4 -40 -14z" fill="#f2c14e" stroke="#c99a2e" stroke-width="3"/><circle cx="${x}" cy="${y}" r="10" fill="#e0ad3a"/>`;
+      // Bulbs along a sagging wire
+      const wire = (t) => {
+        const [ax, ay, cx, cy, bx, by] = [80, 120, 512, 330, 944, 120];
+        return [(1 - t) ** 2 * ax + 2 * (1 - t) * t * cx + t * t * bx, (1 - t) ** 2 * ay + 2 * (1 - t) * t * cy + t * t * by];
+      };
+      const bulbColors = ["#ff4d4d", "#ffd23f", "#3ddc97", "#4dc9ff", "#ff7ad9"];
+      let bulbs = "";
+      for (let i = 1; i < 12; i++) {
+        const [x, y] = wire(i / 12);
+        const color = bulbColors[i % bulbColors.length];
+        bulbs += `<rect x="${(x - 7).toFixed(1)}" y="${(y - 2).toFixed(1)}" width="14" height="14" rx="3" fill="#2b3a2f"/><ellipse cx="${x.toFixed(1)}" cy="${(y + 28).toFixed(1)}" rx="13" ry="19" fill="${color}"/><ellipse cx="${(x - 4).toFixed(1)}" cy="${(y + 22).toFixed(1)}" rx="4" ry="7" fill="#fff" opacity=".6"/>`;
+      }
       const [x, y, r] = [g.bx, g.by, g.r];
-      const mid = r * 0.72;
-      const circumference = 2 * Math.PI * mid;
-      const buoy = `<circle cx="${x}" cy="${y}" r="${mid}" fill="none" stroke="#fff" stroke-width="${r * 0.56}"/><circle cx="${x}" cy="${y}" r="${mid}" fill="none" stroke="#ff3b3b" stroke-width="${r * 0.56}" stroke-dasharray="${circumference / 8} ${circumference / 8}" transform="rotate(22 ${x} ${y})"/><circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="#fff" stroke-opacity=".7" stroke-width="3"/>`;
       return {
-        defs: linear("tile-fill", [[0, "#48d7ff"], [1, "#0784d1"]]) + caustics + clips() + blur("soft", 12)
-          + colors.map((c, i) => linear(`float${i}`, [[0, mix(c, "#ffffff", 0.4)], [0.6, c], [1, mix(c, "#000000", 0.15)]])).join(""),
-        body: fill("url(#tile-fill)") + `<rect width="1024" height="1024" filter="url(#caustics)"/>`
-          + `<g transform="translate(22 30)" filter="url(#soft)" opacity=".35">${g.parts.map((d, i) => `<path d="${d}" fill="#00305a" ${shrink(i, 0.95)}/>`).join("")}</g>`
-          + g.parts.slice(0, 3).map((d, i) => `<path d="${d}" fill="url(#float${i})" ${shrink(i, 0.95)}/><path d="${d}" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="5" ${shrink(i, 0.86)}/>`).join("")
-          + buoy,
+        defs: radial("tile-fill", [[0, "#1f6b48"], [1, "#0a2a1c"]], [0.5, 0.35, 0.85]) + clips() + shadow("lift", 14, 14, 0.45) + blur("glow", 10)
+          + radial("bauble", [[0, "#ff8a8a"], [0.5, colors[3]], [1, mix(colors[3], "#000000", 0.4)]], [0.35, 0.3, 0.8]),
+        body: fill("url(#tile-fill)")
+          + `<path d="M80 120Q512 330 944 120" fill="none" stroke="#2b3a2f" stroke-width="5"/>`
+          + `<g filter="url(#glow)" opacity=".7">${bulbs}</g>${bulbs}`
+          + `<g filter="url(#lift)">${parts(colors.slice(0, 3).concat("none"))}<circle cx="${x}" cy="${y}" r="${r}" fill="url(#bauble)"/></g>`
+          + wrap + bow(g.xc + 20, g.y0 + g.unit / 2 - 4)
+          + `<rect x="${x - 22}" y="${y - r - 18}" width="44" height="26" rx="5" fill="#e0ad3a"/><circle cx="${x}" cy="${y - r - 26}" r="10" fill="none" stroke="#e0ad3a" stroke-width="5"/>`
+          + `<ellipse cx="${x - r * 0.35}" cy="${y - r * 0.4}" rx="${r * 0.22}" ry="${r * 0.12}" fill="#fff" opacity=".55" transform="rotate(-35 ${x - r * 0.35} ${y - r * 0.4})"/>`,
       };
     },
   },
   {
-    id: "bricks", name: "Bricks", collection: "playful",
+    id: "snowfall", name: "Snowfall", collection: "seasonal",
     art() {
-      const { fill, linear, shadow, mix, shrink } = ligmaSvg;
+      const { fill, linear, rand, shadow, parts, clips } = ligmaSvg;
       const g = LIGMA_G;
-      const colors = ["#00a843", "#e3000b", "#ffcd00", "#0055bf"];
-      const studs = (i) => {
-        const [cx, cy] = g.centers[i];
-        const color = colors[i];
-        return [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => {
-          const x = cx + sx * g.unit * 0.22;
-          const y = cy + sy * g.unit * 0.22;
-          return `<circle cx="${x}" cy="${y + 5}" r="27" fill="${mix(color, "#000000", 0.3)}"/><circle cx="${x}" cy="${y}" r="27" fill="${mix(color, "#ffffff", 0.12)}"/><path d="M${x - 17} ${y - 8}a20 20 0 0 1 22 -12" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="5" stroke-linecap="round"/>`;
-        }).join("");
+      const random = rand(3);
+      let flakes = "";
+      for (let i = 0; i < 70; i++) {
+        flakes += `<circle cx="${(100 + random() * 824).toFixed(1)}" cy="${(100 + random() * 824).toFixed(1)}" r="${(2.5 + random() * 6).toFixed(1)}" fill="#fff" opacity="${(0.5 + random() * 0.5).toFixed(2)}"/>`;
+      }
+      // A cap of snow with a wavy edge, `depth` deep from `top`, across `x0` to `x1`
+      const cap = (x0, x1, top, depth) => {
+        let d = `M${x0 - 20} ${top - 30}H${x1 + 20}V${top + depth}`;
+        const steps = Math.ceil((x1 - x0 + 40) / 34);
+        for (let i = 0; i < steps; i++) d += `q-17 ${i % 2 ? -16 : 18} -34 0`;
+        return `${d}Z`;
       };
       return {
-        defs: linear("tile-fill", [[0, "#f3f6fa"], [1, "#d3dce8"]]) + shadow("lift", 16, 14, 0.25, "#24324a"),
-        body: fill("url(#tile-fill)")
-          + `<g filter="url(#lift)">${g.parts.map((d, i) => `<g ${shrink(i, 0.97)}><path d="${d}" fill="${mix(colors[i], "#000000", 0.32)}" transform="translate(0 14)"/><path d="${d}" fill="${colors[i]}"/></g>`).join("")}</g>`
-          + g.parts.map((d, i) => `<g ${shrink(i, 0.97)}>${studs(i)}</g>`).join(""),
+        defs: linear("tile-fill", [[0, "#d4edff"], [1, "#86c3f2"]]) + clips() + shadow("lift", 12, 12, 0.25, "#1d4f8a"),
+        body: fill("url(#tile-fill)") + flakes
+          + `<path d="M100 880C260 830 380 870 520 846S800 830 924 860V924H100Z" fill="#fff"/>`
+          + `<g filter="url(#lift)">${parts(["#14c46a", "#f2213d", "#8a4df2", "#16a9ee"])}</g>`
+          + `<g clip-path="url(#part0)"><path d="${cap(g.x0, g.x1, g.y0, 54)}" fill="#fff"/></g>`
+          + `<g clip-path="url(#part3)"><path d="${cap(g.bx - g.r, g.bx + g.r, g.by - g.r, 50)}" fill="#fff"/></g>`
+          + `<g clip-path="url(#part1)"><path d="${cap(g.x0, g.xc, g.y0 + g.unit, 30)}" fill="#fff"/></g>`
+          + `<g clip-path="url(#part2)"><path d="${cap(g.x0, g.xc, g.y0 + 2 * g.unit, 30)}" fill="#fff"/></g>`,
       };
     },
   },
