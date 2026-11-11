@@ -84,8 +84,8 @@
   .icon-button:focus-visible { outline: 1px solid var(--brand); outline-offset: -1px; }
   .icon-button[hidden] { display: none; }
 
-  /* A virtual list: only the rows in view are drawn, at their place in
-     #space, and rows scrolled away are reused (see `paint`) */
+  /* A virtual list: rows are drawn in chunks, at their place in #space,
+     only near the view, and chunks scrolled away are reused (see `paint`) */
   #list { position: relative; flex: 1; min-height: 0; overflow: hidden; }
   #grid {
     height: 100%;
@@ -99,8 +99,15 @@
   #grid::-webkit-scrollbar { width: 4px; }
   #grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   #space { position: relative; contain: strict; width: 256px; }
-  .row { position: absolute; top: 0; left: 0; width: 256px; }
-  .row[hidden] { display: none; }
+  .chunk { position: absolute; top: 0; left: 0; width: 256px; contain: layout style; }
+  .chunk[hidden] { display: none; }
+  /* A chunk's emoji, drawn by emoji-worker.js, over the cells' hover and
+     focus */
+  .art { position: absolute; z-index: 1; top: 0; left: 0; width: 256px; height: 100%; pointer-events: none; opacity: 0; transition: opacity 120ms ease-out; }
+  .art.ready { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .art { transition: none; } }
+  /* No hover while the list moves under a still pointer */
+  #grid.scrolling #space { pointer-events: none; }
   h2 {
     height: 28px;
     padding: 8px 4px 4px;
@@ -192,9 +199,15 @@
   const HEAD = 28;
   const ROW = 32;
   const END = 8;
-  // Rows drawn past each edge of the view, so a fast scroll doesn't show
-  // blank space
-  const OVERSCAN = 6;
+  // Rows per chunk. A chunk is drawn once, a screen before it comes into
+  // view, and then only moves with the scroll, so most frames of a scroll
+  // change nothing on the page
+  const CHUNK = 4;
+  // On Windows the emoji are drawn as bitmaps by a worker (see
+  // emoji-worker.js): its color emoji font is slow to draw again and again.
+  // Elsewhere, and if the worker can't, they're text
+  const worker = /Windows/.test(navigator.userAgent) && typeof OffscreenCanvas === "function" ? new Worker("emoji-worker.js") : null;
+  let gen = 0;
 
   const THEME_VARS = {
     "--bg": "bg",
@@ -265,10 +278,11 @@
   let current = "";
 
   // What the list shows: `rows` of headings ({ head, top }) and of emoji
-  // ({ items, first, top }), and `flat`, every emoji in order, which focus
-  // and the arrow keys move through. Each emoji in `flat` knows its row
-  // and column
+  // ({ items, first, top }), `chunks` of CHUNK rows ({ from, to, top }),
+  // and `flat`, every emoji in order, which focus and the arrow keys move
+  // through. Each emoji in `flat` knows its row and column
   let rows = [];
+  let chunks = [];
   let flat = [];
   let heads = [];
   let focused = -1;
@@ -290,119 +304,142 @@
         top += ROW;
       }
     }
+    chunks = [];
+    for (let from = 0; from < rows.length; from += CHUNK) {
+      const to = Math.min(rows.length, from + CHUNK);
+      chunks.push({ from, to, top: rows[from].top, height: (rows[to]?.top ?? top) - rows[from].top });
+    }
     space.style.height = `${top + END}px`;
+    gen++;
   };
 
-  // The rows drawn, by index, and spare ones of each kind to reuse
-  const drawn = new Map();
-  const spare = { head: [], cells: [] };
-  const kindOf = (node) => (node.tagName === "H2" ? "head" : "cells");
-  const release = (index, node) => {
-    drawn.delete(index);
-    node.hidden = true;
-    spare[kindOf(node)].push(node);
-  };
+  const escape = (text) => text.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
-  const makeRow = (kind) => {
-    if (kind === "head") return Object.assign(document.createElement("h2"), { className: "row" });
-    const node = Object.assign(document.createElement("div"), { className: "row cells" });
-    for (let i = 0; i < COLUMNS; i++) {
-      const cell = Object.assign(document.createElement("button"), { type: "button", className: "cell", tabIndex: -1 });
-      cell.setAttribute("role", "option");
-      node.append(cell);
-    }
-    return node;
-  };
-
-  const fill = (node, row) => {
-    node.style.transform = `translateY(${row.top}px)`;
-    if (row.head) {
-      node.textContent = row.head;
-      return;
-    }
-    [...node.children].forEach((cell, col) => {
-      const item = row.items[col];
-      cell.hidden = !item;
-      if (!item) return;
-      const index = row.first + col;
-      cell.dataset.index = index;
-      cell.textContent = item.char;
-      cell.title = item.label;
-      cell.setAttribute("aria-label", item.label);
-      cell.classList.toggle("current", item.char === current);
-      cell.classList.toggle("focus", index === focused);
-      cell.id = index === focused ? "focused-emoji" : "";
-      if (item.char === current) cell.setAttribute("aria-selected", "true");
-      else cell.removeAttribute("aria-selected");
-    });
-  };
-
-  // The last row starting at or above `y`, by binary search on the tops
-  const rowAt = (y) => {
-    let low = 0;
-    let high = rows.length - 1;
-    while (low < high) {
-      const mid = (low + high + 1) >> 1;
-      if (rows[mid].top <= y) low = mid;
-      else high = mid - 1;
-    }
-    return low;
-  };
-
-  // Draws the rows in view, reusing the ones that left it
-  const paint = () => {
-    const from = Math.max(0, rowAt(grid.scrollTop) - OVERSCAN);
-    const to = Math.min(rows.length - 1, rowAt(grid.scrollTop + grid.clientHeight) + OVERSCAN);
-    for (const [index, node] of drawn) if (index < from || index > to) release(index, node);
-    for (let index = from; index <= to; index++) {
+  // A chunk's rows as markup, set in one go
+  const markup = ({ from, to }) => {
+    let html = worker ? '<canvas class="art"></canvas>' : "";
+    for (let index = from; index < to; index++) {
       const row = rows[index];
-      let node = drawn.get(index);
-      if (!node) {
-        const kind = row.head ? "head" : "cells";
-        node = spare[kind].pop() ?? space.appendChild(makeRow(kind));
+      if (row.head) {
+        html += `<h2>${escape(row.head)}</h2>`;
+        continue;
+      }
+      html += '<div class="cells">';
+      row.items.forEach((item, col) => {
+        const at = row.first + col;
+        const label = escape(item.label);
+        const now = item.char === current;
+        const classes = `cell${now ? " current" : ""}${at === focused ? " focus" : ""}`;
+        html += `<button type="button" class="${classes}" role="option" tabindex="-1" data-index="${at}" title="${label}" aria-label="${label}"${now ? ' aria-selected="true"' : ""}${at === focused ? ' id="focused-emoji"' : ""}>${worker ? "" : item.char}</button>`;
+      });
+      html += "</div>";
+    }
+    return html;
+  };
+
+  // The chunks drawn, by index, and spare ones to reuse
+  const drawn = new Map();
+  const spare = [];
+  let range = [0, -1];
+
+  // Draws the chunks within a screen of the view, reusing those that left
+  // it. Nothing changes until the view crosses into another chunk
+  const paint = (force = false) => {
+    const view = grid.clientHeight;
+    const above = grid.scrollTop - view;
+    const below = grid.scrollTop + 2 * view;
+    let from = chunks.findIndex((chunk, i) => (chunks[i + 1]?.top ?? Infinity) > above);
+    let to = chunks.findLastIndex((chunk) => chunk.top < below);
+    if (from < 0) [from, to] = [0, -1];
+    if (force || from !== range[0] || to !== range[1]) {
+      range = [from, to];
+      for (const [index, node] of drawn) {
+        if (index >= from && index <= to && !force) continue;
+        drawn.delete(index);
+        node.hidden = true;
+        spare.push(node);
+      }
+      for (let index = from; index <= to; index++) {
+        if (drawn.has(index)) continue;
+        const node = spare.pop() ?? space.appendChild(Object.assign(document.createElement("div"), { className: "chunk" }));
+        node.innerHTML = markup(chunks[index]);
+        node.style.transform = `translateY(${chunks[index].top}px)`;
         node.hidden = false;
         drawn.set(index, node);
       }
-      fill(node, row);
+      want();
     }
     stick();
     markSection();
   };
 
-  // Redraws what's drawn, for a new focus
-  const repaint = () => {
-    for (const [index, node] of drawn) fill(node, rows[index]);
+  // Asks the worker for the drawn chunks it hasn't drawn yet: those in
+  // view from the top down, then the others by how far they are from it
+  const want = () => {
+    if (!worker) return;
+    const [top, bottom] = [grid.scrollTop, grid.scrollTop + grid.clientHeight];
+    const away = (key) => Math.max(0, top - chunks[key].top - chunks[key].height, chunks[key].top - bottom);
+    const jobs = [...drawn]
+      .filter(([, node]) => !node.querySelector(".art.ready"))
+      .map(([key]) => key)
+      .sort((a, b) => away(a) - away(b) || a - b)
+      .map((key) => {
+        const chunk = chunks[key];
+        const glyphs = [];
+        for (let index = chunk.from; index < chunk.to; index++) {
+          const row = rows[index];
+          row.items?.forEach((item, col) => glyphs.push([item.char, col * ROW, row.top - chunk.top]));
+        }
+        return { key, height: chunk.height, glyphs };
+      });
+    worker.postMessage({ gen, dpr: devicePixelRatio, jobs });
   };
+  worker?.addEventListener("message", ({ data }) => {
+    const art = data.gen === gen && drawn.get(data.key)?.querySelector(".art:not(.ready)");
+    if (!art) return data.bitmap.close();
+    art.getContext("bitmaprenderer").transferFromImageBitmap(data.bitmap);
+    art.classList.add("ready");
+  });
 
   // The heading of the section at the top stays there until the next
   // heading reaches it and pushes it up
+  let stuck = null;
   const stick = () => {
     const y = grid.scrollTop;
     const at = heads.findLastIndex((row) => rows[row].top <= y);
-    sticky.hidden = at < 0 || y <= 0;
-    if (sticky.hidden) return;
-    sticky.textContent = rows[heads[at]].head;
+    const hidden = at < 0 || y <= 0;
+    if (sticky.hidden !== hidden) sticky.hidden = hidden;
+    if (hidden) return;
+    const name = rows[heads[at]].head;
+    if (stuck !== name) sticky.textContent = stuck = name;
     const next = heads[at + 1];
     const push = next == null ? 0 : Math.min(0, rows[next].top - y - HEAD);
     sticky.style.transform = push ? `translateY(${push}px)` : "";
   };
 
   // The browsed section in view lights up in the bar below
+  let marked;
   const markSection = () => {
     if (nav.hidden) return;
     const at = heads.findLastIndex((row) => rows[row].top <= grid.scrollTop + 1);
     const name = rows[heads[at]]?.head;
     // "Recent" and "Suggested" sit above the first section
     const shown = name in NAV_ICONS ? name : null;
+    if (shown === marked) return;
+    marked = shown;
     for (const button of nav.children) button.classList.toggle("on", button.dataset.name === shown);
   };
 
   let frame = 0;
+  let still = 0;
   grid.addEventListener("scroll", () => {
     frame ||= requestAnimationFrame(() => {
       frame = 0;
       paint();
     });
+    grid.classList.add("scrolling");
+    clearTimeout(still);
+    still = setTimeout(() => grid.classList.remove("scrolling"), 120);
   }, { passive: true });
 
   const pick = (char) => {
@@ -410,7 +447,7 @@
     invoke("emoji_pick", { emoji: char });
   };
 
-  // Clicks and hovers on any row, by the emoji's index
+  // Clicks and hovers on any chunk, by the emoji's index
   const indexOf = (target) => {
     const index = Number(target.closest?.(".cell")?.dataset.index);
     return Number.isInteger(index) ? index : -1;
@@ -453,17 +490,24 @@
       ];
     }
     build(sections);
-    for (const [index, node] of drawn) release(index, node);
     $("list").querySelector(".empty")?.remove();
     if (!flat.length) $("list").append(Object.assign(document.createElement("p"), { className: "empty", textContent: "No emoji found" }));
     // A search's first match is one Enter away
     focused = words.length && flat.length ? 0 : -1;
+    marked = undefined;
     grid.scrollTop = 0;
-    paint();
+    paint(true);
     focus(focused, false);
   };
 
+  // Moves the focus ring between two cells, if they're drawn; a chunk
+  // drawn later marks it itself
   const focus = (index, scroll = true) => {
+    const old = space.querySelector("#focused-emoji");
+    if (old) {
+      old.classList.remove("focus");
+      old.removeAttribute("id");
+    }
     focused = index;
     if (scroll && index >= 0) {
       // Clear of the heading held at the top
@@ -472,7 +516,11 @@
       else if (top + ROW > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + ROW - grid.clientHeight + END;
       paint();
     }
-    repaint();
+    const cell = index >= 0 ? space.querySelector(`.cell[data-index="${index}"]`) : null;
+    if (cell) {
+      cell.classList.add("focus");
+      cell.id = "focused-emoji";
+    }
     if (index >= 0) query.setAttribute("aria-activedescendant", "focused-emoji");
     else query.removeAttribute("aria-activedescendant");
   };
