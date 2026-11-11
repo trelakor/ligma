@@ -455,5 +455,6 @@
       store.delete(key);
     },
   };
-  return "ready";
+  // New to this page, so anything read from an earlier one is out of date
+  return "installed";
 })()

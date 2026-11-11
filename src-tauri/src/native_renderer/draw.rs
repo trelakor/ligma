@@ -152,7 +152,7 @@ pub struct Kit {
     divide: Option<Blender>,
     noise: Option<RuntimeEffect>,
     /// Recorded pattern tiles, and the images they were waiting for
-    patterns: RefCell<HashMap<PatternKey, (skia_safe::Picture, Vec<String>)>>,
+    patterns: RefCell<HashMap<PatternKey, (skia_safe::Picture, Vec<String>, Vec<(String, bool)>)>>,
 }
 
 impl Kit {
@@ -177,7 +177,7 @@ impl Kit {
     pub fn forget_patterns(&self, key: Option<&str>) {
         let mut patterns = self.patterns.borrow_mut();
         match key {
-            Some(key) => patterns.retain(|_, (_, missing)| !missing.iter().any(|missing| missing == key)),
+            Some(key) => patterns.retain(|_, (_, missing, _)| !missing.iter().any(|missing| missing == key)),
             None => patterns.clear(),
         }
     }
@@ -221,6 +221,8 @@ pub struct Encoder<'a> {
     pub missing_images: Vec<(String, f64)>,
     /// Images that show bigger than they were kept at, and how wide
     pub sharper_images: Vec<(String, f64)>,
+    /// Nodes pattern fills drew from, and whether each was there yet
+    pub sources: Vec<(String, bool)>,
     /// Why the first approximate node is
     pub approximate_reason: Option<String>,
     /// Marks approximate nodes
@@ -243,6 +245,7 @@ impl<'a> Encoder<'a> {
             counts: Counts::default(),
             missing_images: Vec::new(),
             sharper_images: Vec::new(),
+            sources: Vec::new(),
             approximate_reason: None,
             tint: false,
             aa: true,
@@ -519,9 +522,14 @@ impl<'a> Encoder<'a> {
             let end = (i + 1..children.len())
                 .find(|&j| scene.node(children[j]).is_some_and(|other| !other.hidden && other.mask.is_some()))
                 .unwrap_or(children.len());
-            // Not bounded to the mask group's box, which would cut off what a
-            // blur inside it reaches for: masking cuts the result to it after
+            // Bounded to the mask, as nothing outside it shows. A blur inside
+            // still reads past it, as its own layer is sized from what it
+            // reaches. Unbounded layers would take the whole supersampled tile
+            let bounds = mask.bounds;
             let mut rec = SaveLayerRec::default();
+            if let Some(bounds) = &bounds {
+                rec = rec.bounds(bounds);
+            }
             // Figma blends masked layers with what's behind the mask group,
             // so their layer starts as a copy of it. Masking it then mixes
             // the blended result with what was there, by the mask
@@ -537,7 +545,11 @@ impl<'a> Encoder<'a> {
             if mask.mask.as_deref() == Some("LUMINANCE") {
                 paint.set_color_filter(luma_color_filter::new());
             }
-            self.canvas.save_layer(&SaveLayerRec::default().paint(&paint));
+            let mut rec = SaveLayerRec::default().paint(&paint);
+            if let Some(bounds) = &bounds {
+                rec = rec.bounds(bounds);
+            }
+            self.canvas.save_layer(&rec);
             // A background blur fills the mask's shape with what's behind it,
             // which is opaque, so the mask is its whole shape
             let opaque = mask.effects.iter().any(|effect| effect.kind == "BACKGROUND_BLUR");
@@ -716,13 +728,23 @@ impl<'a> Encoder<'a> {
         img.image.to_shader((tile, tile), sampling, &local)
     }
 
+    fn note_source(&mut self, id: &str, there: bool) {
+        if !self.sources.iter().any(|(known, _)| known == id) {
+            self.sources.push((id.to_string(), there));
+        }
+    }
+
     /// A pattern fill: its source node recorded into a tile, which repeats
     fn pattern(&mut self, node: &Node, paint: &FigmaPaint, w: f32, h: f32) -> Option<Shader> {
         if self.depth >= PATTERN_DEPTH {
             return None;
         }
         let scene = self.scene;
-        let &source_slot = scene.by_id.get(paint.source_node_id.as_ref()?)?;
+        let source_id = paint.source_node_id.as_ref()?;
+        let found = scene.by_id.get(source_id).copied();
+        // The page can come in after what uses it
+        self.note_source(source_id, found.is_some());
+        let source_slot = found?;
         let source = scene.node(source_slot)?;
         let (sw, sh) = (source.size.0.max(1e-3) as f32, source.size.1.max(1e-3) as f32);
         let factor = paint.scaling_factor.unwrap_or(1.0).max(1e-3) as f32;
@@ -743,9 +765,12 @@ impl<'a> Encoder<'a> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (tile_type, spacing.x.to_bits(), spacing.y.to_bits()).hash(&mut hasher);
         let key = (source_slot, hasher.finish(), level);
-        let cached = self.kit.patterns.borrow().get(&key).map(|(picture, missing)| (picture.clone(), missing.clone()));
+        let cached = self.kit.patterns.borrow().get(&key).map(|(picture, missing, sources)| (picture.clone(), missing.clone(), sources.clone()));
         let picture = match cached {
-            Some((picture, missing)) => {
+            Some((picture, missing, sources)) => {
+                for (id, there) in sources {
+                    self.note_source(&id, there);
+                }
                 for hash in missing {
                     if !self.missing_images.iter().any(|(m, _)| *m == hash) {
                         self.missing_images.push((hash, 0.0));
@@ -767,10 +792,14 @@ impl<'a> Encoder<'a> {
                     canvas.restore();
                 }
                 let missing: Vec<String> = inner.missing_images.iter().map(|(hash, _)| hash.clone()).collect();
+                let sources = std::mem::take(&mut inner.sources);
+                for (id, there) in &sources {
+                    self.note_source(id, *there);
+                }
                 self.missing_images.extend(inner.missing_images);
                 self.sharper_images.extend(inner.sharper_images);
                 let picture = recorder.finish_recording_as_picture(Some(&tile))?;
-                self.kit.patterns.borrow_mut().insert(key, (picture.clone(), missing));
+                self.kit.patterns.borrow_mut().insert(key, (picture.clone(), missing, sources));
                 picture
             }
         };

@@ -116,6 +116,8 @@ struct Recorded {
     missing: Vec<String>,
     /// Images it has nothing to draw for yet
     waiting: usize,
+    /// Nodes its pattern fills drew from, and whether each was there yet
+    sources: Vec<(String, bool)>,
 }
 
 const TILE: i32 = 512;
@@ -145,8 +147,8 @@ fn config() -> Config {
     Config {
         samples: get("LIGMA_NATIVE_SAMPLES", 1),
         supersample: get("LIGMA_NATIVE_SUPERSAMPLE", 4).clamp(1, 4) as i32,
-        max_tiles: get("LIGMA_NATIVE_TILES", 160),
-        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 192) << 20,
+        max_tiles: get("LIGMA_NATIVE_TILES", 64),
+        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 96) << 20,
     }
 }
 
@@ -155,6 +157,8 @@ const MAX_MARGIN: i32 = 256;
 /// Time to spend per frame drawing tiles not ready yet, so a newly shown
 /// part of the page fills in over a few frames rather than stalling one
 const BUILD_BUDGET: Duration = Duration::from_millis(10);
+/// Memory drawing took is given back after this long without a frame
+const IDLE: Duration = Duration::from_secs(3);
 /// The zoom counts as settled when it hasn't changed for this long
 const SETTLE: Duration = Duration::from_millis(120);
 
@@ -337,6 +341,9 @@ pub struct Painter {
     backdrops: Vec<(Rect, f32)>,
     config: Config,
     cleaned: Instant,
+    /// When a frame was last drawn, and whether memory was given back since
+    drawn: Instant,
+    released: bool,
     /// Figma's checkerboard, and the pixel grid it draws when zoomed in
     checker: Option<skia_safe::RuntimeEffect>,
     grid: Option<(skia_safe::RuntimeEffect, skia_safe::RuntimeEffect)>,
@@ -368,6 +375,8 @@ impl Painter {
             backdrops: Vec::new(),
             config: config(),
             cleaned: Instant::now(),
+            drawn: Instant::now(),
+            released: true,
             checker: skia_safe::RuntimeEffect::make_for_shader(CHECKER, None)
                 .map_err(|error| log::warn!("native renderer: checker: {error}"))
                 .ok(),
@@ -413,6 +422,13 @@ impl Painter {
             if self.dirty {
                 self.dirty = false;
                 self.present();
+                self.drawn = Instant::now();
+                self.released = false;
+            } else if !self.released && self.drawn.elapsed() > IDLE {
+                // Layers and scratch from drawing tiles stay with the GPU
+                // driver for reuse until given back
+                self.released = true;
+                self.release();
             }
         }
     }
@@ -436,7 +452,20 @@ impl Painter {
                 let mut areas: Vec<Rect> = touched.iter().filter_map(|slot| before.get(slot).copied()).collect();
                 areas.extend(self.units.iter().filter(|unit| touched.contains(&unit.slot)).map(|unit| unit.bounds));
                 let scene = &self.scene;
-                self.pictures.retain(|&(slot, _, _), _| scene.node(slot).is_some() && !touched.contains(&slot));
+                // Patterns whose source came, went or changed are out of
+                // date wherever they're used
+                let stale = |recorded: &Recorded| {
+                    recorded.sources.iter().any(|(id, there)| match scene.by_id.get(id) {
+                        Some(&source) => !there || touched.contains(&scene.unit_of(source)),
+                        None => *there,
+                    })
+                };
+                for unit in &self.units {
+                    if self.pictures.iter().any(|(&(slot, _, _), recorded)| slot == unit.slot && stale(recorded)) {
+                        areas.push(unit.bounds);
+                    }
+                }
+                self.pictures.retain(|&(slot, _, _), recorded| scene.node(slot).is_some() && !touched.contains(&slot) && !stale(recorded));
                 self.kit.forget_patterns(None);
                 self.drop_tiles(&areas);
                 stats().lock().unwrap().nodes = self.scene.live_nodes();
@@ -475,9 +504,11 @@ impl Painter {
             }
             Msg::Offscreen { id, bounds, width, height, reply } => {
                 let _ = reply.send(self.offscreen(&id, bounds, width, height));
+                self.release();
             }
             Msg::Replay { views, reply } => {
                 let _ = reply.send(self.replay(views));
+                self.release();
                 self.dirty = true;
             }
             Msg::Tint(on) => {
@@ -489,10 +520,12 @@ impl Painter {
             }
             Msg::Render { view, width, height, reply } => {
                 let _ = reply.send(self.render_view(&view, width, height));
+                self.release();
                 self.dirty = true;
             }
             Msg::Live(reply) => {
                 let _ = reply.send(self.live());
+                self.release();
                 self.dirty = true;
             }
             Msg::HitTest { points, reply } => {
@@ -511,6 +544,14 @@ impl Painter {
             Msg::Quit => return false,
         }
         true
+    }
+
+    /// Gives back the GPU memory an offscreen render took, whole views drawn
+    /// supersampled, which Skia would otherwise keep for reuse
+    fn release(&mut self) {
+        let _ = self.gpu.context.flush_submit_and_sync_cpu();
+        self.gpu.context.free_gpu_resources();
+        self.update_memory();
     }
 
     fn update_memory(&mut self) {
@@ -627,11 +668,12 @@ impl Painter {
             let (counts, reason) = (encoder.counts, encoder.approximate_reason.take());
             let waiting = encoder.missing_images.len();
             let images: Vec<(String, f64)> = encoder.missing_images.drain(..).chain(encoder.sharper_images.drain(..)).collect();
+            let sources = std::mem::take(&mut encoder.sources);
             drop(encoder);
             let picture = recorder.finish_recording_as_picture(None)?;
             self.ask(&images);
             let missing = images.into_iter().map(|(key, _)| key).collect();
-            self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting });
+            self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources });
         }
         self.pictures.get(&key)
     }

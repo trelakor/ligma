@@ -240,10 +240,15 @@ fn sync(ctx: Arc<Ctx>) {
             continue;
         };
         let ready = eval_value(&file.webview, PAGE_JS);
-        if ready.as_ref().and_then(Value::as_str) != Some("ready") {
-            set_status("Waiting for the file to load");
-            sleep(1000);
-            continue;
+        match ready.as_ref().and_then(Value::as_str) {
+            Some("ready") => {}
+            // The tab loaded again, so what was read from it is gone
+            Some("installed") => mirrored = None,
+            _ => {
+                set_status("Waiting for the file to load");
+                sleep(1000);
+                continue;
+            }
         }
         *ctx.webview.lock().unwrap() = Some(file.webview.clone());
         let page = eval_value(&file.webview, "window.__ligmaNative.view()?.page ?? null")
@@ -297,7 +302,9 @@ fn snapshot(ctx: &Ctx, webview: &Webview) -> Result<(), String> {
         if ctx.stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let next = eval_value(webview, "window.__ligmaNative.batch()").ok_or("the tab didn't answer")?;
+        // Gone if the tab loaded again while the page was read
+        let next = eval_value(webview, "window.__ligmaNative ? window.__ligmaNative.batch() : { error: 'the tab reloaded' }")
+            .ok_or("the tab didn't answer")?;
         let key = match next {
             Value::Null => {
                 sleep(10);
@@ -481,7 +488,8 @@ struct Pair {
 
 /// Renders node `id` through Figma and natively, at up to `side` pixels
 /// on its longer side
-fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64) -> Result<Pair, String> {
+/// At `scale`, or so its longest side is `side` pixels
+fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64, scale: Option<f64>) -> Result<Pair, String> {
     let info = eval_value(
         webview,
         &format!(
@@ -491,7 +499,7 @@ fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64) -> Result<Pair
     );
     let info = info.and_then(|info| info.as_array().cloned()).ok_or("no such node")?;
     let longest = info[2].as_f64().unwrap_or(1.0).max(info[3].as_f64().unwrap_or(1.0));
-    let scale = (side / longest).min(2.0);
+    let scale = scale.unwrap_or((side / longest).min(2.0));
     let (figma, bounds) = fetch_render(webview, id, scale)?;
     let (width, height) = figma.dimensions();
     // Figma's export starts at the render bounds and rounds its size up, so
@@ -514,9 +522,14 @@ fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64) -> Result<Pair
 
 /// Writes node `id` as Figma renders it, as drawn natively, and where they
 /// differ, to a folder in Ligma's log folder
+/// `id`, or `id@scale`
 fn compare_node(ctx: &Ctx, id: &str) -> Result<PathBuf, String> {
     let webview = current(ctx).ok_or("no file")?;
-    let pair = render_pair(ctx, &webview, id, 1600.0)?;
+    let (id, scale) = match id.split_once('@') {
+        Some((id, scale)) => (id, scale.parse().ok()),
+        None => (id, None),
+    };
+    let pair = render_pair(ctx, &webview, id, 1600.0, scale)?;
     let (width, height) = pair.figma.dimensions();
     let dir = report_dir(ctx, &format!("compare-{}", id.replace([':', ';'], "-")))?;
     let (matched, mean_error, diff) = compare(pair.figma.as_raw(), &pair.native.pixels, width, height);
@@ -649,7 +662,7 @@ fn parity(ctx: &Ctx, count: usize) -> Result<PathBuf, String> {
     let mut scores = Vec::new();
     for (i, id) in ids.iter().enumerate() {
         set_status(format!("Parity: node {} of {}", i + 1, ids.len()));
-        let Ok(Pair { kind, figma, native }) = render_pair(ctx, &webview, id, 1024.0) else {
+        let Ok(Pair { kind, figma, native }) = render_pair(ctx, &webview, id, 1024.0, None) else {
             continue;
         };
         let (width, height) = figma.dimensions();
