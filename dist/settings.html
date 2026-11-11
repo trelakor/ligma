@@ -1108,7 +1108,7 @@
     const grid = node("div", { className: "icons" });
     grid.setAttribute("role", "radiogroup");
     grid.setAttribute("aria-labelledby", heading.id);
-    for (const icon of LIGMA_APP_ICONS.filter((icon) => icon.collection === collection.id)) {
+    for (const icon of LIGMA_APP_ICONS.filter((icon) => icon.collection === collection.id && !(macos && icon.windowsOnly))) {
       const choice = node("button", { className: "icon-choice", title: icon.name });
       choice.dataset.id = icon.id;
       choice.setAttribute("role", "radio");
