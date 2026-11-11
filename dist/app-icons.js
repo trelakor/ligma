@@ -651,7 +651,7 @@ const LIGMA_APP_ICONS = [
             const [x, y] = g.centers[i];
             const r = g.r * puff;
             return `<ellipse cx="${x - r * 0.38}" cy="${y - r * 0.45}" rx="${r * 0.3}" ry="${r * 0.14}" fill="#fff" opacity=".85" transform="rotate(-38 ${x - r * 0.38} ${y - r * 0.45})"/>`
-              + `<path d="M${x + r * 0.15} ${y + r * 0.95}a${r} ${r} 0 0 0 ${r * 0.75} ${-r * 0.75}" fill="none" stroke="#fff" stroke-opacity=".45" stroke-width="7" stroke-linecap="round"/>`;
+              + `<path d="M${x - r * 0.15} ${y + r * 0.95}a${r} ${r} 0 0 1 ${-r * 0.75} ${-r * 0.75}" fill="none" stroke="#fff" stroke-opacity=".45" stroke-width="7" stroke-linecap="round"/>`;
           }).join(""),
       };
     },
@@ -690,16 +690,31 @@ const LIGMA_APP_ICONS = [
   {
     id: "knit", name: "Knit", collection: "playful",
     art() {
-      // A cosy sweater: the logo knitted into an oatmeal ground
-      const { fill, parts, shadow } = ligmaSvg;
-      const stitch = `<pattern id="stitch" width="48" height="40" patternUnits="userSpaceOnUse" x="-4">`
-        + [[12, -26], [36, 26]].map(([x, turn]) => `<ellipse cx="${x}" cy="20" rx="10" ry="20" fill="#fff" fill-opacity=".2" stroke="#000" stroke-opacity=".3" stroke-width="3" transform="rotate(${turn} ${x} 20)"/><path d="M${x} 6V30" stroke="#000" stroke-opacity=".12" stroke-width="2" transform="rotate(${turn} ${x} 20)"/>`).join("")
+      // A sweater with the logo knitted into it, each part in its own yarn
+      const { fill, linear, mix, clips } = ligmaSvg;
+      const g = LIGMA_G;
+      // Twelve stitches across the logo and seven to a block, lined up
+      // with its edges
+      const w = g.unit / 6;
+      const h = g.unit / 7;
+      const colors = ["#3fb36c", "#ea4a46", "#8b6ce0", "#38a2ec"];
+      // A stitch in `color`: two loops of yarn leaning into a V, with a
+      // fibre down each
+      const stitch = (id, color) => `<pattern id="${id}" width="${w}" height="${h}" patternUnits="userSpaceOnUse" x="${g.x0}" y="${g.y0}">`
+        + `<rect width="${w}" height="${h}" fill="${mix(color, "#000000", 0.38)}"/>`
+        + [-1, 1].map((side) => {
+          const [x, y] = [w / 2 + side * w * 0.22, h / 2];
+          const turn = `transform="rotate(${side * 30} ${x} ${y})"`;
+          return `<ellipse cx="${x}" cy="${y}" rx="${w * 0.25}" ry="${h * 0.52}" fill="${color}" ${turn}/><ellipse cx="${x}" cy="${y}" rx="${w * 0.25}" ry="${h * 0.52}" fill="url(#yarn)" ${turn}/>`
+            + `<path d="M${x} ${y - h * 0.3}V${y + h * 0.3}" stroke="#000" stroke-opacity=".14" stroke-width="1.6" stroke-linecap="round" ${turn}/>`;
+        }).join("")
         + `</pattern>`;
-      const fuzz = `<filter id="fuzz" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.35" numOctaves="2" seed="8"/><feDisplacementMap in="SourceGraphic" scale="7" xChannelSelector="R" yChannelSelector="G"/></filter>`;
+      const fuzz = `<filter id="fuzz" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.3" numOctaves="2" seed="8"/><feDisplacementMap in="SourceGraphic" scale="5" xChannelSelector="R" yChannelSelector="G"/></filter>`;
       return {
-        defs: stitch + fuzz + shadow("lift", 8, 8, 0.3, "#3d2a14"),
-        body: fill("#eadcc5") + `<rect width="1024" height="1024" fill="url(#stitch)" opacity=".55"/>`
-          + `<g filter="url(#lift)"><g filter="url(#fuzz)">${parts(["#46b873", "#ee4c48", "#8f70de", "#40a4ec"])}${parts(Array(4).fill("url(#stitch)"))}</g></g>`,
+        defs: linear("yarn", [[0, "#fff", 0.32], [0.45, "#fff", 0], [1, "#000", 0.28]]) + clips() + fuzz
+          + stitch("ground", "#ebdfc9") + colors.map((c, i) => stitch(`stitch${i}`, c)).join(""),
+        body: fill("url(#ground)")
+          + `<g filter="url(#fuzz)">${g.parts.map((_, i) => `<rect x="${g.x0 - 10}" y="${g.y0 - 10}" width="${g.right - g.x0 + 20}" height="${g.bottom - g.y0 + 20}" fill="url(#stitch${i})" clip-path="url(#part${i})"/>`).join("")}</g>`,
       };
     },
   },
@@ -741,25 +756,33 @@ const LIGMA_APP_ICONS = [
     id: "fireworks", name: "Fireworks", collection: "seasonal",
     art() {
       // New Year's: a gold logo under bursts of fireworks
-      const { fill, radial, blur, scatter, clips, parts } = ligmaSvg;
-      // A burst of `count` sparks `size` across, around `x`, `y`
-      const burst = (x, y, size, count, color, turn = 0) => {
+      const { fill, radial, blur, scatter, clips, parts, mix } = ligmaSvg;
+      // A burst of `count` sparks `size` across, around `x`, `y`. `core`
+      // draws the white-hot middle of each spark instead
+      const burst = (x, y, size, count, color, turn, core = false) => {
+        const paint = core ? mix(color, "#ffffff", 0.7) : color;
+        const width = size / (core ? 90 : 34);
         let out = "";
         for (let i = 0; i < count; i++) {
           const a = ((i / count) * 360 + turn) * (Math.PI / 180);
           const at = (r) => `${(x + Math.cos(a) * r).toFixed(1)} ${(y + Math.sin(a) * r).toFixed(1)}`;
-          out += `<path d="M${at(size * 0.22)}L${at(size * 0.42)}" stroke="${color}" stroke-width="${(size / 34).toFixed(1)}" stroke-linecap="round"/>`
-            + `<circle cx="${(x + Math.cos(a) * size * 0.5).toFixed(1)}" cy="${(y + Math.sin(a) * size * 0.5).toFixed(1)}" r="${(size / 40).toFixed(1)}" fill="${color}"/>`;
+          out += `<path d="M${at(size * 0.22)}L${at(size * 0.42)}" stroke="${paint}" stroke-width="${width.toFixed(1)}" stroke-linecap="round"/>`
+            + `<circle cx="${(x + Math.cos(a) * size * 0.5).toFixed(1)}" cy="${(y + Math.sin(a) * size * 0.5).toFixed(1)}" r="${(size / (core ? 100 : 40)).toFixed(1)}" fill="${paint}"/>`;
         }
         return out;
       };
-      const bursts = burst(760, 330, 300, 16, "#ffd36e") + burst(196, 236, 170, 12, "#ff6fa8", 10) + burst(836, 650, 190, 12, "#6fe3ff", 6) + burst(206, 810, 120, 10, "#b28dff", 4);
+      const shows = [[760, 330, 300, 16, "#ffcf5a", 0], [196, 236, 170, 12, "#ff5fa0", 10], [836, 650, 190, 12, "#5fe0ff", 6], [206, 810, 120, 10, "#a98bff", 4]];
+      const bursts = shows.map((show) => burst(...show)).join("");
+      const cores = shows.map((show) => burst(...show, true)).join("");
+      // The light each burst throws on the sky around it
+      const halos = shows.map(([x, y, size, , color]) => `<circle cx="${x}" cy="${y}" r="${size * 0.62}" fill="url(#halo-${color.slice(1)})"/>`).join("");
       const stars = scatter(23, 40, (x, y, random) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(1 + random() * 2.2).toFixed(1)}" fill="#fff" opacity="${(0.3 + random() * 0.6).toFixed(2)}"/>`);
       return {
-        defs: radial("tile-fill", [[0, "#1d2350"], [0.6, "#0b0d24"], [1, "#04040c"]], [0.5, 0.25, 1]) + blur("glow", 10) + clips() + ligmaGold("gold", 0.25)
+        defs: radial("tile-fill", [[0, "#1d2350"], [0.6, "#0b0d24"], [1, "#04040c"]], [0.5, 0.25, 1]) + blur("glow", 7) + blur("bloom", 24) + clips() + ligmaGold("gold", 0.04)
+          + shows.map(([, , , , color]) => radial(`halo-${color.slice(1)}`, [[0, color, 0.3], [0.5, color, 0.1], [1, color, 0]])).join("")
           + ligmaSvg.shadow("lift", 14, 16, 0.6),
-        body: fill("url(#tile-fill)") + stars
-          + `<g filter="url(#glow)" opacity=".8">${bursts}</g>${bursts}`
+        body: fill("url(#tile-fill)") + halos + stars
+          + `<g filter="url(#bloom)">${bursts}</g><g filter="url(#glow)">${bursts}</g>${bursts}${cores}`
           + `<g filter="url(#lift)">${parts(Array(4).fill("#9a6a2a"))}</g>` + ligmaGilt("gold"),
       };
     },
