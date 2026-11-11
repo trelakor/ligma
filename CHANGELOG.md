@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.38.0 - 2026-11-10
+
+- AI tools now connect to your files through Figwright instead of Figma MCP Bridge. They can also make components and variants, variables and styles, boolean shapes, and PDF and video exports, and two AI tools can work in two files at once. Press Update next to each AI tool in Settings > Plugins > AI tools, then restart it. Figwright needs Node.js 20.19 or later.
+- Ligma MCP takes the place of Figma's MCP section in the right panel. It shows whether the file is connected and what AI tools did in it, newest first, and selects the layers a call touched. It collapses, and sits under the layer's heading while something is selected.
+- Ligma MCP is now on by default, including for anyone who had it off. Turn it off in Settings > Plugins > AI tools.
+
 ## 0.37.0 - 2026-11-10
 
 - Lasso fill, under Pencil in Figma Design's Creation tools menu, fills what you draw around with color, as Procreate's lasso fill does. The loop is smoothed into a vector, with fills and strokes set from the panel on the right, color styles and variables included. Turn it off in Settings > Features > Toolbar.
