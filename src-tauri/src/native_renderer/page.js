@@ -377,6 +377,22 @@
       });
     },
 
+    // Node `id` as Figma renders it, effects and all, about `width` pixels
+    // wide and no more than `limit` on its longer side: `{ png, rb, scale }`.
+    // For custom effects, which are code the file carries and Figma runs
+    render(id, width, limit) {
+      return run(async () => {
+        const figma = api();
+        const n = figma && findNode(figma, id);
+        if (!n) throw new Error("no node");
+        const b = n.absoluteRenderBounds ?? n.absoluteBoundingBox;
+        if (!b || !b.width || !b.height) throw new Error("no bounds");
+        const scale = Math.min(width / b.width, limit / Math.max(b.width, b.height));
+        const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale } });
+        return { png: base64(bytes), rb: [b.x, b.y, b.width, b.height], scale };
+      });
+    },
+
     // Figma's own render of node `id` as a PNG at `scale`, base64, with the
     // bounds it covers: `{ png, rb }`
     exportNode(id, scale) {

@@ -16,7 +16,7 @@ use skia_safe::Rect;
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBuilder, WebviewUrl, WindowEvent};
 
 use super::adjust::Adjust;
-use super::draw::Img;
+use super::draw::{Img, RENDER, RENDER_LIMIT};
 use super::gpu_memory::GpuMemory;
 use super::render::{Gpu, Msg, Offscreen, Painter, Request, View};
 use super::scene::{Batch, Begin, Changes, Scene};
@@ -415,6 +415,18 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<Mutex<Receiver<Request>>>) {
         let Some(webview) = current(&ctx) else {
             continue;
         };
+        // Figma can take a while to render a node, the first time a custom
+        // effect runs most of all, so image fills don't wait behind it
+        if let Some(id) = key.strip_prefix(RENDER) {
+            let (ctx, id) = (ctx.clone(), id.to_string());
+            std::thread::spawn(move || match fetch_node(&webview, &id, width) {
+                Ok(img) => {
+                    let _ = ctx.messages.send(Msg::Image(key, img));
+                }
+                Err(error) => log::warn!("native renderer render {key}: {error}"),
+            });
+            continue;
+        }
         match fetch_image(&ctx, &webview, &key, width) {
             Ok(img) => {
                 let _ = ctx.messages.send(Msg::Image(key, img));
@@ -464,7 +476,27 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let info = skia_safe::ImageInfo::new((iw as i32, ih as i32), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Unpremul, None);
     let image = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(image.as_raw()), (iw * 4) as usize)
         .ok_or("couldn't make the image")?;
-    Ok(Img { image, original })
+    Ok(Img { image, original, area: None, stale: false })
+}
+
+/// Node `id` as Figma renders it, about `width` pixels wide
+fn fetch_node(webview: &Webview, id: &str, width: f64) -> Result<Img, String> {
+    let call = format!("render({}, {}, {RENDER_LIMIT})", serde_json::to_string(id).unwrap(), width.max(1.0));
+    let data = job(webview, &call, Duration::from_secs(180))?;
+    let value: Value = serde_json::from_str(&data).map_err(|error| error.to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value["png"].as_str().ok_or("no image")?)
+        .map_err(|error| error.to_string())?;
+    let rb: [f32; 4] = serde_json::from_value(value["rb"].clone()).map_err(|_| "no bounds")?;
+    let scale = value["scale"].as_f64().ok_or("no scale")? as f32;
+    let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?.to_rgba8();
+    let (iw, ih) = image.dimensions();
+    let info = skia_safe::ImageInfo::new((iw as i32, ih as i32), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Unpremul, None);
+    let image = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(image.as_raw()), (iw * 4) as usize)
+        .ok_or("couldn't make the image")?;
+    // Figma's export starts at the render bounds and rounds its size up
+    let area = Rect::from_xywh(rb[0], rb[1], iw as f32 / scale, ih as f32 / scale);
+    Ok(Img { image, original: (iw, ih), area: Some(area), stale: false })
 }
 
 /// Figma's render of node `id` at `scale`, and the bounds it covers

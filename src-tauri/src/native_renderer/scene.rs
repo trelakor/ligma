@@ -229,6 +229,11 @@ impl Effect {
     }
 }
 
+/// Paints drawn natively. Others are custom paints, drawn as Figma renders
+/// them
+const KNOWN_PAINTS: [&str; 8] =
+    ["SOLID", "GRADIENT_LINEAR", "GRADIENT_RADIAL", "GRADIENT_ANGULAR", "GRADIENT_DIAMOND", "IMAGE", "PATTERN", "VIDEO"];
+
 /// Fills of a node: text with more than one style has several, which its
 /// outline doesn't tell apart
 #[derive(Clone, Debug)]
@@ -409,6 +414,13 @@ impl Node {
             && self.visible_fills().any(|paint| paint.kind == "SOLID" && paint.opacity >= 0.999 && paint.color.is_some_and(|color| color.a >= 0.999))
     }
 
+    /// Has a custom effect or paint: code the file carries, which Figma runs,
+    /// so it's drawn as Figma renders it
+    pub fn custom(&self) -> bool {
+        self.effects.iter().any(|effect| effect.kind == "SHADER")
+            || self.visible_fills().chain(self.visible_strokes()).any(|paint| !KNOWN_PAINTS.contains(&paint.kind.as_str()))
+    }
+
     /// The layer blur, if it has one
     pub fn layer_blur(&self) -> Option<&Effect> {
         self.effects.iter().find(|effect| effect.kind == "LAYER_BLUR" && effect.radius > 0.0)
@@ -430,7 +442,7 @@ impl Node {
                 "NOISE" => return Some("noise grain"),
                 "TEXTURE" => return Some("texture effect"),
                 "GLASS" => return Some("glass effect"),
-                "SHADER" => return Some("shader effect"),
+                "SHADER" => {}
                 _ => return Some("other effect"),
             }
         }
@@ -447,7 +459,7 @@ impl Node {
                 "IMAGE" => {}
                 "GRADIENT_DIAMOND" => return Some("diamond gradient"),
                 "VIDEO" => return Some("video fill"),
-                _ => return Some("other paint"),
+                _ => {}
             }
             if let Some(mode) = &paint.blend_mode {
                 if !super::draw::supported(mode) {

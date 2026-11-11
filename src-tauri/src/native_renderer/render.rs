@@ -34,7 +34,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 
-use super::draw::{Counts, Encoder, Img, Kit};
+use super::draw::{Counts, Encoder, Img, Kit, RENDER};
 use super::scene::{Kind, Prepared, Scene};
 use super::stats;
 
@@ -109,6 +109,9 @@ struct Unit {
     /// section, the section's children from it on, which it masks
     section: bool,
     bounds: Rect,
+    /// Has a node in it drawn as Figma renders it, which its exact tiles
+    /// want at their exact zoom
+    custom: bool,
 }
 
 struct Recorded {
@@ -159,6 +162,46 @@ const MAX_MARGIN: i32 = 256;
 /// Time to spend per frame drawing tiles not ready yet, so a newly shown
 /// part of the page fills in over a few frames rather than stalling one
 const BUILD_BUDGET: Duration = Duration::from_millis(10);
+/// Frames a quick tile of another zoom is kept after it was last shown
+const PASSING: u64 = 30;
+/// Picture levels from this on are exact zooms, in steps of 1/EXACT_STEPS
+/// of a pixel a unit
+const EXACT_LEVEL: i32 = 1 << 24;
+const EXACT_STEPS: f32 = 4096.0;
+
+/// How far a render's scale may be from the one wanted, as a share
+const EXACT_TOLERANCE: f32 = 0.002;
+
+/// Whether unit `unit` draws a node as Figma renders it
+fn custom_unit(scene: &Scene, unit: &Unit) -> bool {
+    fn any(scene: &Scene, slot: usize) -> bool {
+        scene.node(slot).is_some_and(|node| !node.hidden && (node.custom() || node.children.iter().any(|&child| any(scene, child))))
+    }
+    let Some(node) = scene.node(unit.slot) else {
+        return false;
+    };
+    if !unit.section {
+        return any(scene, unit.slot);
+    }
+    if node.kind == Kind::Section {
+        return node.custom();
+    }
+    // A mask and the section's children after it
+    let Some(parent) = node.parent.and_then(|parent| scene.node(parent)) else {
+        return any(scene, unit.slot);
+    };
+    parent.children.iter().skip_while(|&&child| child != unit.slot).any(|&child| any(scene, child))
+}
+
+/// Pixels per unit of picture level `level`
+fn level_px(level: i32) -> f32 {
+    if level >= EXACT_LEVEL {
+        (level - EXACT_LEVEL) as f32 / EXACT_STEPS
+    } else {
+        2f32.powi(level)
+    }
+}
+
 /// How long the view stays still before quick tiles are drawn exactly
 const REFINE_AFTER: Duration = Duration::from_millis(250);
 /// Memory drawing took is given back after this long without a frame
@@ -479,6 +522,22 @@ impl Painter {
                     }
                 }
                 self.pictures.retain(|&(slot, _, _, _), recorded| scene.node(slot).is_some() && !touched.contains(&slot) && !stale(recorded));
+                // Figma's renders of nodes that changed are asked for again,
+                // and shown until they come
+                self.images.retain(|key, img| {
+                    let Some(id) = key.strip_prefix(RENDER) else {
+                        return true;
+                    };
+                    let Some(&slot) = scene.by_id.get(id) else {
+                        self.asked.remove(key);
+                        return false;
+                    };
+                    if touched.contains(&scene.unit_of(slot)) {
+                        img.stale = true;
+                        self.asked.remove(key);
+                    }
+                    true
+                });
                 self.kit.forget_patterns(None);
                 self.drop_tiles(&areas);
                 stats().lock().unwrap().nodes = self.scene.live_nodes();
@@ -606,7 +665,7 @@ impl Painter {
                 return;
             };
             if node.kind == Kind::Section {
-                units.push(Unit { slot, section: true, bounds });
+                units.push(Unit { slot, section: true, bounds, custom: false });
                 for (i, &child) in node.children.iter().enumerate() {
                     let mask = scene.node(child).filter(|child| !child.hidden && child.mask.is_some());
                     if mask.is_some() {
@@ -617,18 +676,21 @@ impl Painter {
                             .filter_map(|&later| scene.node(later).filter(|later| !later.hidden).and_then(|later| later.bounds))
                             .reduce(|a, b| Rect::join2(a, b));
                         if let Some(rest) = rest {
-                            units.push(Unit { slot: child, section: true, bounds: rest });
+                            units.push(Unit { slot: child, section: true, bounds: rest, custom: false });
                         }
                         break;
                     }
                     add(scene, child, units);
                 }
             } else {
-                units.push(Unit { slot, section: false, bounds });
+                units.push(Unit { slot, section: false, bounds, custom: false });
             }
         }
         for &root in &self.scene.roots {
             add(&self.scene, root, &mut units);
+        }
+        for unit in &mut units {
+            unit.custom = custom_unit(&self.scene, unit);
         }
         self.units = units;
         let mut backdrops = Vec::new();
@@ -665,6 +727,17 @@ impl Painter {
         (((reach * key.px()).ceil() as i32 + 31) / 32 * 32).min(MAX_MARGIN)
     }
 
+    /// The zoom level unit `unit` is recorded at for tiles of `px` pixels a
+    /// unit: the nearest power of two, or for exact tiles of a unit with
+    /// custom effects, `px` itself, as those effects work in whole pixels
+    fn level(&self, unit: &Unit, px: f32, aa: bool) -> i32 {
+        if unit.custom && !aa {
+            EXACT_LEVEL + (px * EXACT_STEPS).round().min((i32::MAX - EXACT_LEVEL) as f32) as i32
+        } else {
+            px.log2().round().clamp(-12.0, 8.0) as i32
+        }
+    }
+
     /// Unit `unit`'s picture for zoom `level`, recorded if it isn't yet,
     /// with anti-aliased edges if `aa`
     fn picture(&mut self, unit: usize, level: i32, aa: bool) -> Option<&Recorded> {
@@ -673,7 +746,8 @@ impl Painter {
         if !self.pictures.contains_key(&key) {
             let mut recorder = PictureRecorder::new();
             let canvas = recorder.begin_recording(bounds.with_outset((1.0, 1.0)), true);
-            let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, 2f32.powi(level));
+            let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, level_px(level));
+            encoder.exact_renders = level >= EXACT_LEVEL;
             encoder.tint = self.tint;
             encoder.aa = aa;
             if section && self.scene.node(slot).is_some_and(|node| node.kind == Kind::Section) {
@@ -684,16 +758,30 @@ impl Painter {
                 encoder.node(slot);
             }
             let (counts, reason) = (encoder.counts, encoder.approximate_reason.take());
-            let waiting = encoder.missing_images.len();
+            let waiting = encoder.missing_images.len() + encoder.exact_images.len();
             let images: Vec<(String, f64)> = encoder.missing_images.drain(..).chain(encoder.sharper_images.drain(..)).collect();
+            let exact = std::mem::take(&mut encoder.exact_images);
             let sources = std::mem::take(&mut encoder.sources);
             drop(encoder);
             let picture = recorder.finish_recording_as_picture(None)?;
             self.ask(&images);
-            let missing = images.into_iter().map(|(key, _)| key).collect();
+            self.ask_exact(&exact);
+            let missing = images.into_iter().chain(exact).map(|(key, _)| key).collect();
             self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources });
         }
         self.pictures.get(&key)
+    }
+
+    /// Asks for renders at exactly the width given, unless that's what was
+    /// asked for last
+    fn ask_exact(&mut self, renders: &[(String, f64)]) {
+        for (key, width) in renders {
+            let asked = self.asked.get(key).copied().unwrap_or(0.0);
+            if (width / asked - 1.0).abs() > EXACT_TOLERANCE as f64 {
+                self.asked.insert(key.clone(), *width);
+                let _ = self.requests.send(Request { key: key.clone(), width: *width });
+            }
+        }
     }
 
     fn ask(&mut self, images: &[(String, f64)]) {
@@ -714,7 +802,6 @@ impl Painter {
         let aa = ss < 4;
         let area = key.area();
         let px = key.px();
-        let level = px.log2().round().clamp(-12.0, 8.0) as i32;
         let margin = self.margin(key);
         let reach = area.with_outset((margin as f32 / px, margin as f32 / px));
         let units: Vec<usize> = (0..self.units.len()).filter(|&i| Rect::intersects2(&self.units[i].bounds, &reach)).collect();
@@ -731,6 +818,7 @@ impl Painter {
                 counts.skipped += 1;
                 continue;
             }
+            let level = self.level(&self.units[unit], px, aa);
             if let Some(recorded) = self.picture(unit, level, aa) {
                 counts += recorded.counts;
                 pictures.push(recorded.picture.clone());
@@ -956,19 +1044,21 @@ impl Painter {
         self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, width, height);
         // The approximate reason of a unit in view, if any
         let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
-        let level = px.log2().round().clamp(-12.0, 8.0) as i32;
         let aa = self.config.supersample < 4;
         let reason = self
             .units
             .iter()
             .filter(|unit| Rect::intersects2(&unit.bounds, &view_area))
-            .find_map(|unit| self.pictures.get(&(unit.slot, unit.section, level, aa)).and_then(|recorded| recorded.reason.clone()));
-        self.evict();
+            .find_map(|unit| self.pictures.get(&(unit.slot, unit.section, self.level(unit, px, aa), aa)).and_then(|recorded| recorded.reason.clone()));
+        self.evict(pxb);
         (counts, reason, pending || !missing.is_empty())
     }
 
-    /// Keeps the most recently shown tiles
-    fn evict(&mut self) {
+    /// Keeps the most recently shown tiles. Quick tiles of zooms passed
+    /// through go soon, as they only stand in for a moment
+    fn evict(&mut self, current: u32) {
+        let frame = self.frame;
+        self.tiles.retain(|key, tile| tile.exact || key.px == current || frame - tile.used < PASSING);
         // Scratch layers and images not used for a while
         if self.cleaned.elapsed() > Duration::from_secs(2) {
             self.cleaned = Instant::now();
@@ -984,7 +1074,14 @@ impl Painter {
         self.tiles.retain(|_, tile| tile.used >= cutoff);
         // Pictures of zoom levels far from any tile kept go too
         let levels: Vec<i32> = self.tiles.keys().map(|key| key.px().log2().round() as i32).collect();
-        self.pictures.retain(|&(_, _, level, _), _| levels.iter().any(|&kept| (kept - level).abs() <= 1));
+        let exact: Vec<i32> = self.tiles.keys().map(|key| EXACT_LEVEL + (key.px() * EXACT_STEPS).round() as i32).collect();
+        self.pictures.retain(|&(_, _, level, _), _| {
+            if level >= EXACT_LEVEL {
+                exact.contains(&level)
+            } else {
+                levels.iter().any(|&kept| (kept - level).abs() <= 1)
+            }
+        });
     }
 
     fn present(&mut self) {
@@ -1059,13 +1156,13 @@ impl Painter {
         let mut target = self.gpu.surface(width as i32, height as i32, 1)?;
         self.compose(&mut target, view, None, true);
         let px = (width as f64 / view.w) as f32;
-        let level = px.log2().round().clamp(-12.0, 8.0) as i32;
+        let aa = self.config.supersample < 4;
         let area = Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32);
         let waiting = self
             .units
             .iter()
             .filter(|unit| Rect::intersects2(&unit.bounds, &area))
-            .filter_map(|unit| self.pictures.get(&(unit.slot, unit.section, level, self.config.supersample < 4)))
+            .filter_map(|unit| self.pictures.get(&(unit.slot, unit.section, self.level(unit, px, aa), aa)))
             .map(|recorded| recorded.waiting)
             .sum();
         let info = ImageInfo::new((width as i32, height as i32), ColorType::RGBA8888, AlphaType::Unpremul, None);

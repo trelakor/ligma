@@ -133,6 +133,10 @@ pub struct Img {
     pub image: Image,
     /// The original's size in pixels, which image fills are laid out by
     pub original: (u32, u32),
+    /// For a node as Figma renders it, the absolute area it covers
+    pub area: Option<Rect>,
+    /// Out of date, shown until the new one comes
+    pub stale: bool,
 }
 
 impl Img {
@@ -205,6 +209,12 @@ impl std::ops::AddAssign for Counts {
 /// as its letters would be a blur anyway
 const GREEK_BELOW: f32 = 3.0;
 
+/// Image keys of nodes as Figma renders them start with this
+pub const RENDER: &str = "node:";
+
+/// Largest side a node is rendered at by Figma, in pixels
+pub const RENDER_LIMIT: u32 = 4096;
+
 /// How deep pattern fills may nest, patterns in patterns
 const PATTERN_DEPTH: u8 = 3;
 
@@ -223,6 +233,10 @@ pub struct Encoder<'a> {
     pub sharper_images: Vec<(String, f64)>,
     /// Nodes pattern fills drew from, and whether each was there yet
     pub sources: Vec<(String, bool)>,
+    /// Nodes as Figma renders them are wanted at exactly this zoom
+    pub exact_renders: bool,
+    /// Those not here at exactly this zoom, and how wide they'd be
+    pub exact_images: Vec<(String, f64)>,
     /// Why the first approximate node is
     pub approximate_reason: Option<String>,
     /// Marks approximate nodes
@@ -246,6 +260,8 @@ impl<'a> Encoder<'a> {
             missing_images: Vec::new(),
             sharper_images: Vec::new(),
             sources: Vec::new(),
+            exact_renders: false,
+            exact_images: Vec::new(),
             approximate_reason: None,
             tint: false,
             aa: true,
@@ -276,6 +292,9 @@ impl<'a> Encoder<'a> {
                 self.greek(node, bounds);
                 return;
             }
+        }
+        if !as_mask && node.custom() && self.rendered(node) {
+            return;
         }
         self.counts.native += 1;
         if let Some(reason) = node.approximate {
@@ -327,6 +346,55 @@ impl<'a> Encoder<'a> {
                 self.canvas.draw_rect(bounds, &paint);
             }
         }
+    }
+
+    /// Draws node `node` as Figma rendered it, if that's here. Custom effects
+    /// are code the file carries, which Figma runs, so their look is taken
+    /// from Figma. Until it comes the node is drawn without them
+    fn rendered(&mut self, node: &Node) -> bool {
+        let Some(bounds) = node.bounds else {
+            return false;
+        };
+        let key = format!("{RENDER}{}", node.id);
+        // Exact tiles want it at exactly their zoom, as custom effects often
+        // work in whole pixels, like dithering. It can't be any bigger than
+        // Figma renders it though
+        let exact = self.exact_renders && bounds.width().max(bounds.height()) * self.px <= RENDER_LIMIT as f32;
+        // Others a little sharper than shown, as tiles of a zoom level show
+        // at up to 1.41 times its scale
+        let width = (bounds.width() * self.px * if exact { 1.0 } else { 1.42 }) as f64;
+        let Some(img) = self.images.get(&key) else {
+            if !self.missing_images.iter().any(|(missing, _)| *missing == key) {
+                self.missing_images.push((key, width));
+            }
+            return false;
+        };
+        let Some(area) = img.area else {
+            return false;
+        };
+        let scale = img.image.width() as f32 / area.width();
+        let at_scale = (scale / self.px - 1.0).abs() <= 0.002;
+        if img.stale {
+            self.missing_images.push((key, width));
+        } else if exact {
+            if !at_scale {
+                self.exact_images.push((key, width));
+            }
+        } else if scale * 1.4 < self.px * 1.42 && img.image.width().max(img.image.height()) < RENDER_LIMIT as i32 {
+            self.sharper_images.push((key, width));
+        }
+        self.counts.native += 1;
+        let mut paint = Paint::default();
+        self.set_blend(&mut paint, node.blend.as_deref());
+        let sampling = if at_scale {
+            SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
+        } else if scale > self.px * 1.5 {
+            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+        } else {
+            SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
+        };
+        self.canvas.draw_image_rect_with_sampling_options(&img.image, None, area, sampling, &paint);
+        true
     }
 
     fn set_blend(&self, paint: &mut Paint, mode: Option<&str>) {
