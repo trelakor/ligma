@@ -847,7 +847,7 @@
       <h2>AI tools</h2>
       <label class="row">
         <span class="label">Connect AI tools to your files
-          <div class="hint">Lets AI tools like Claude Code, Cursor and Codex read and edit the files open in Ligma, through Figma MCP Bridge's MCP server instead of Figma's, which a free plan can call 6 times a month. Only in files you can edit.</div>
+          <div class="hint">Lets AI tools like Claude Code, Cursor and Codex read and edit the files open in Ligma, through Figwright's MCP server instead of Figma's, which a free plan can call 6 times a month. Only in files you can edit.</div>
         </span>
         <input type="checkbox" class="switch" id="mcp-bridge">
       </label>
@@ -865,7 +865,7 @@
       </div>
       <details class="manual">
         <summary><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4.5 10 8l-3.5 3.5"/></svg>Set up by hand</summary>
-        <div class="hint">For an AI tool not listed above. Add this to its MCP settings. The tool starts the server with npx, so it needs Node.js.</div>
+        <div class="hint">For an AI tool not listed above. Add this to its MCP settings. The tool starts the server with npx, so it needs Node.js 20.19 or later.</div>
         <div class="snippet">
           <div class="snippet-head"><span>JSON</span><button class="icon-button" id="copy-mcp-json" title="Copy" aria-label="Copy JSON"></button></div>
           <pre id="mcp-json"></pre>
@@ -1503,6 +1503,9 @@
     if (status.on && status.files === 0) {
       text = "No files open";
       hint = "Files connect once they're open in a tab";
+    } else if (status.on && status.refused) {
+      text = "The MCP server is another version";
+      hint = `Ligma needs Figwright ${status.version}. Update your AI tool below, then restart it`;
     } else if (status.on && status.connected === 0) {
       text = "Waiting for the MCP server";
       hint = "Your AI tool starts it once it's added there";
@@ -1510,7 +1513,7 @@
       text = status.connected === status.files
         ? `Connected: ${files(status.connected)}`
         : `Connected: ${status.connected} of ${files(status.files)}`;
-      hint = `Figma MCP Bridge ${status.version}`;
+      hint = `Figwright ${status.version}`;
     }
     $("mcp-status").textContent = text;
     $("mcp-status-hint").textContent = hint;
@@ -1546,7 +1549,9 @@
     const note = clientNotes[client.id];
     if (client.error) hint(client.error, "problem");
     else if (note) hint(note, "done");
+    else if (client.state === "manual" && client.old) hint("Set up for Figma MCP Bridge. Run claude mcp remove figma-bridge, then this command");
     else if (client.state === "manual") hint(client.added ? "Added. Run the command again to update it" : "Run this command in a terminal to add it");
+    else if (client.state === "outdated" && client.old) hint("Set up for Figma MCP Bridge, which Figwright replaces");
     else if (client.state === "outdated") hint("Set up for another version of the server");
     else hint(client.path, "path").title = client.path;
     if (client.state === "manual") {

@@ -2084,6 +2084,8 @@ pub struct EditorFile {
     pub tab: u32,
     pub key: String,
     pub name: String,
+    /// Whether its tab is on screen
+    pub shown: bool,
 }
 
 /// Files open in Figma Design, FigJam, Slides or Buzz, the editors with a
@@ -2091,7 +2093,7 @@ pub struct EditorFile {
 /// file open in more than one tab comes once, in the tab on screen if any
 pub fn editor_files(app: &AppHandle) -> Vec<EditorFile> {
     let state = app.state::<Tabs>().inner().0.lock().unwrap();
-    let mut files: Vec<(EditorFile, bool)> = Vec::new();
+    let mut files: Vec<EditorFile> = Vec::new();
     for tab in state.tabs.iter().filter(|tab| !tab.asleep && !tab.suspended) {
         let Some(key) = tab.file_key.clone() else {
             continue;
@@ -2100,14 +2102,14 @@ pub fn editor_files(app: &AppHandle) -> Vec<EditorFile> {
             continue;
         }
         let shown = tab.hidden_since.is_none();
-        let file = EditorFile { tab: tab.id, key, name: tab.title.clone() };
-        match files.iter_mut().find(|(other, _)| other.key == file.key) {
-            Some(other) if shown && !other.1 => *other = (file, shown),
+        let file = EditorFile { tab: tab.id, key, name: tab.title.clone(), shown };
+        match files.iter_mut().find(|other| other.key == file.key) {
+            Some(other) if shown && !other.shown => *other = file,
             Some(_) => {}
-            None => files.push((file, shown)),
+            None => files.push(file),
         }
     }
-    files.into_iter().map(|(file, _)| file).collect()
+    files
 }
 
 /// The file in the active tab

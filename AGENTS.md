@@ -4,7 +4,7 @@
 
 Ligma is a lightweight desktop app for Figma on macOS and Windows, built with Tauri 2. It opens figma.com in the system webview (WKWebView on macOS, WebView2 on Windows) instead of bundling a browser engine, and adds tabs, Google sign-in, low memory use, color themes, plugins in the left rail, development plugins and Discord Rich Presence.
 
-- `src-tauri/src/` is the app, one module per feature: `tabs.rs` the tabs, `auth.rs` sign-in, `appearance.rs` themes, `plugins.rs` the left rail and development plugins, `presence.rs` and `discord_ipc.rs` Discord, `mcp_bridge.rs` AI tools through Figma MCP Bridge (its plugin code is vendored in `src-tauri/vendor/`), `updater.rs` updates
+- `src-tauri/src/` is the app, one module per feature: `tabs.rs` the tabs, `auth.rs` sign-in, `appearance.rs` themes, `plugins.rs` the left rail and development plugins, `presence.rs` and `discord_ipc.rs` Discord, `mcp_bridge.rs` and `mcp_clients.rs` AI tools through Figwright (its plugin code is vendored in `src-tauri/vendor/`), `updater.rs` updates
 - `wkwebview.rs`, `titlebar.rs`, `pressure.rs` and `web_auth.rs` are macOS only, `webview2.rs` and `frame.rs` are Windows only
 - `dist/` holds Ligma's own pages: the tab bar (`index.html`), settings, menus, tab previews and prompts. `dist/themes.js` is the source of truth for themes
 - `site/` is the project website, published to GitHub Pages from `main`
