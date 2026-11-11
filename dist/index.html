@@ -83,7 +83,9 @@
   body:not(.macos) #home::after { top: 0; bottom: 0; }
   body:not(.macos) #home.before-active::after { display: block; }
   .icon { flex: none; width: 16px; height: 16px; }
-  .emoji { font-size: 14px; line-height: 16px; text-align: center; }
+  /* An emoji is wider than its 16px box: flex centers it all the same,
+     where text-align would let it hang off the right */
+  .emoji { display: flex; justify-content: center; font-size: 14px; line-height: 16px; }
   .tab.active > .icon { color: var(--accent, currentColor); }
   /* The active file tab's icon opens its emoji picker */
   .tab.active > .icon.picks { border-radius: 3px; }

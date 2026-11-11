@@ -359,6 +359,8 @@
         if (index >= from && index <= to && !force) continue;
         drawn.delete(index);
         node.hidden = true;
+        // Emptied, so its old cells can't answer for the ones on screen
+        node.replaceChildren();
         spare.push(node);
       }
       for (let index = from; index <= to; index++) {
@@ -590,12 +592,16 @@
     applyTheme(opened.theme);
     current = opened.current ?? "";
     remove.hidden = !current;
+    // Each opening starts afresh: no search, no selection, at the top
     query.value = "";
+    byMouse = false;
     draw();
     const { width, height } = $("picker").getBoundingClientRect();
     await invoke("emoji_picker_ready", { width: Math.ceil(width), height: Math.ceil(height) });
     query.focus();
   };
+  // The search field always has the keys, also when the window comes back
+  addEventListener("focus", () => query.focus());
 
   window.refresh();
 </script>
