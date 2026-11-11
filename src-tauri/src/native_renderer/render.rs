@@ -174,8 +174,10 @@ const PASSING: u64 = 30;
 const EXACT_LEVEL: i32 = 1 << 24;
 const EXACT_STEPS: f32 = 4096.0;
 
-/// How far a render's scale may be from the one wanted, as a share
-const EXACT_TOLERANCE: f32 = 0.002;
+/// How far a render's scale may be from the one wanted, as a share, before
+/// Figma is asked for another. Each takes Figma's whole renderer a while, so
+/// asking at every zoom passed through would slow Figma right down
+const EXACT_TOLERANCE: f32 = 0.25;
 
 /// Whether unit `unit` draws a node as Figma renders it
 fn custom_unit(scene: &Scene, unit: &Unit) -> bool {
