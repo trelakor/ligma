@@ -351,25 +351,41 @@ const PAGE_JS: &str = r##"(() => {
       pending = null;
     } else if (pending.dialog && !pending.dialog.isConnected) pending = null;
   };
-  // A paint's color from its swatch, as a style's shows its name instead
-  // of a hex
+  // A color as red, green and blue from 0 to 1, from a hex or CSS rgb()
+  const colorOf = (text) => {
+    const hex = /#?\b([0-9a-f]{6})\b/i.exec(text ?? "")?.[1];
+    if (hex) return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const rgb = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)/.exec(text ?? "");
+    return rgb ? rgb.slice(1, 4).map((value) => Number(value) / 255) : null;
+  };
+  // A paint's color, from its swatch's label: "Solid color hex: FF383C",
+  // or for a color variable "Color Variable Accents/Red with value
+  // #FF383C · 100%", which has no opacity field. Else from the swatch
   const paintOf = (row) => {
-    const rgb = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(row?.querySelector('button[class*="chit"]')?.style.backgroundColor ?? "");
+    const value = row?.querySelector('[data-testid="paint-panel-color-value-container"]');
+    if (!value) return null;
+    const label = value.querySelector("button[aria-label]")?.getAttribute("aria-label") ?? "";
+    const variable = /^Color Variable (.+) with value (#[0-9a-f]{6})(?:\s*·\s*([\d.]+)%)?/i.exec(label);
+    const rgb = colorOf(variable?.[2] ?? /hex:\s*#?([0-9a-f]{6})\b/i.exec(label)?.[1]) ?? colorOf(value.querySelector('[style*="background-color"]')?.style.backgroundColor);
     if (!rgb) return null;
-    const [r, g, b] = rgb.slice(1, 4).map((value) => Number(value) / 255);
-    const percent = parseFloat(row.querySelector('[aria-label="Opacity"] input')?.value);
+    const [r, g, b] = rgb;
+    const percent = parseFloat(row.querySelector('[aria-label="Opacity"] input')?.value ?? variable?.[3]);
     // Its eye, once there's more than one
     const visible = row.querySelector('[class*="ui3LeftIcon"] input[type="checkbox"]')?.checked ?? true;
-    return { color: { r, g, b }, opacity: Number.isFinite(percent) ? Math.min(1, Math.max(0, percent / 100)) : 1, visible };
+    return { color: { r, g, b }, opacity: Number.isFinite(percent) ? Math.min(1, Math.max(0, percent / 100)) : 1, visible, variable: variable?.[1] ?? null };
   };
   const panelStyle = () => {
     const container = document.querySelector(CONTAINER);
     const styled = container?.querySelector(`:scope > ${STYLED}`);
     if (styled) {
-      const rgba = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?/.exec(styled.querySelector("circle")?.getAttribute("fill") ?? "");
-      if (!rgba) return null;
-      const [r, g, b] = rgba.slice(1, 4).map((value) => Number(value) / 255);
-      const paint = { color: { r, g, b }, opacity: rgba[4] === undefined ? 1 : Number(rgba[4]), visible: true, style: styleName };
+      // Its color, from its icon, which may be a hex or rgba()
+      const circle = styled.querySelector("circle");
+      const fill = circle ? getComputedStyle(circle).fill : "";
+      const rgb = colorOf(fill) ?? colorOf(circle?.getAttribute("fill")) ?? colorOf(styled.querySelector('[style*="background-color"]')?.style.backgroundColor);
+      if (!rgb) return null;
+      const [r, g, b] = rgb;
+      const alpha = Number(/rgba\([^)]*,\s*([\d.]+)\)/.exec(fill)?.[1] ?? 1);
+      const paint = { color: { r, g, b }, opacity: alpha, visible: true, style: styleName, variable: null };
       const weight = parseFloat(container.querySelector('input[aria-label="Stroke weight"]')?.value);
       const stroke = styleRole === "stroke";
       return { fills: stroke ? [] : [paint], strokes: stroke ? [paint] : [], weight: Number.isFinite(weight) && weight > 0 ? weight : 1 };
@@ -817,9 +833,21 @@ const PAGE_JS: &str = r##"(() => {
       }
       if (points.length < 3 || Math.abs(area / 2) * zoom * zoom < 16) return;
       const style = lassoStyle();
-      // A style from this file stays linked
+      // A style or color variable from this file stays linked. Ones from
+      // libraries can't be found by name, so only their color comes along
       const named = [...style.fills, ...style.strokes].find((paint) => paint.style)?.style;
       const linked = named ? (await figma.getLocalPaintStylesAsync()).find((local) => local.name === named) : null;
+      const variables = [...style.fills, ...style.strokes].some((paint) => paint.variable) ? await figma.variables.getLocalVariablesAsync("COLOR") : [];
+      const solid = ({ color, opacity, visible = true, variable }) => {
+        const paint = { type: "SOLID", color, opacity, visible };
+        const found = variable ? variables.filter((local) => local.name === variable) : [];
+        if (found.length !== 1) return paint;
+        try {
+          return figma.variables.setBoundVariableForPaint(paint, "color", found[0]);
+        } catch {
+          return paint;
+        }
+      };
       const parent = parentAt(figma, points[0]);
       // Into the parent's own space, which may be rotated
       let local = points;
@@ -839,7 +867,6 @@ const PAGE_JS: &str = r##"(() => {
       vector.x = 0;
       vector.y = 0;
       vector.vectorPaths = [{ windingRule: "NONZERO", data }];
-      const solid = ({ color, opacity, visible = true }) => ({ type: "SOLID", color, opacity, visible });
       vector.fills = style.fills.map(solid);
       vector.strokes = style.strokes.map(solid);
       if (style.strokes.length) {
