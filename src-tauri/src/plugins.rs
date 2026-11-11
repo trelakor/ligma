@@ -970,6 +970,7 @@ const PAGE_JS: &str = r##"(() => {
     store: "This API is intended only for debugging",
     runner: "runExtensionMenuAction: Expected PluginsMenuArgs",
     shortcuts: "[CustomKeyboardShortcuts] no menu action found",
+    setup: "is disabled in release builds",
     manifestMenu: 'type:"submenu",subtype:"manifest"',
     unsave: '"UNSAVE_EXTENSION"',
     options: '"EXTENSION_OPTIONS_DROPDOWN"',
@@ -1025,11 +1026,17 @@ const PAGE_JS: &str = r##"(() => {
     if (figmaCore) return figmaCore;
     const store = figmaModule("store")?.exports;
     const runner = figmaModule("runner");
-    const shortcuts = figmaModule("shortcuts");
     const manifestMenu = figmaModule("manifestMenu");
-    if (!store || !runner || !shortcuts || !manifestMenu) return null;
+    if (!store || !runner || !manifestMenu) return null;
     const fns = (module) => Object.values(module.exports).filter((value) => typeof value === "function");
-    const [context, editor] = shortcuts.imported(/\(0,([\w$]+)\.([\w$]+)\)\([\w$]+,\(0,([\w$]+)\.([\w$]+)\)\(\)\)/);
+    // Figma's shortcuts run `run(context(state, editor()), "quick-actions",
+    // action)`, set up with the app in newer builds and in the shortcuts
+    // module in older ones
+    let [context, editor] =
+      figmaModule("setup")?.imported(/\(0,[\w$]+\.[\w$]+\)\(\(0,([\w$]+)\.([\w$]+)\)\([\w$]+\.getState\(\),\(0,([\w$]+)\.([\w$]+)\)\(\)\),"quick-actions",/) ?? [];
+    if (!context || !editor) {
+      [context, editor] = figmaModule("shortcuts")?.imported(/\(0,([\w$]+)\.([\w$]+)\)\([\w$]+,\(0,([\w$]+)\.([\w$]+)\)\(\)\)/) ?? [];
+    }
     const core = {
       store: () => store.globalReduxStore,
       context,
