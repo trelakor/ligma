@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{AppHandle, Url};
 
-use crate::settings::Settings;
+use crate::settings::{ColorScheme, Settings};
 
 /// Where Home loads while on. The query marks it for `PAGE_JS`
 pub const URL: &str = "https://www.figma.com/.well-known/security.txt?ligma-home";
@@ -64,6 +64,47 @@ pub fn is_url(url: &Url) -> bool {
 pub fn page_js() -> String {
     let html = HTML.replace(r#"<script src="themes.js"></script>"#, &format!("<script>{THEMES_JS}</script>"));
     PAGE_JS.replace("__LIGMA_HOME_HTML__", &serde_json::to_string(&html).unwrap())
+}
+
+/// Origin of the links the page opens to ask Ligma for something: a color
+/// scheme picked in its account menu's Change theme, or Settings
+pub const SIGNAL_HOST: &str = "home.ligma.invalid";
+
+/// A request from the page in tab `tab`, taken only from Home. Not from
+/// within the webview's own callback, which is still deciding on the page
+pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
+    if tab != crate::tabs::HOME_ID {
+        return;
+    }
+    let path = url.path().to_owned();
+    let value = url.query_pairs().find(|(key, _)| key == "value").map(|(_, value)| value.into_owned());
+    let app = app.clone();
+    std::thread::spawn(move || match path.as_str() {
+        "/settings" => {
+            if let Err(error) = crate::settings::open_window(&app) {
+                log::warn!("Couldn't open Settings: {error}");
+            }
+        }
+        "/scheme" => {
+            let scheme = match value.as_deref() {
+                Some("system") => ColorScheme::System,
+                Some("light") => ColorScheme::Light,
+                Some("dark") => ColorScheme::Dark,
+                _ => return,
+            };
+            let mut settings = crate::settings::current(&app);
+            if settings.color_scheme == scheme {
+                return;
+            }
+            settings.color_scheme = scheme;
+            if let Err(error) = crate::settings::change(&app, settings.clone()) {
+                log::error!("Couldn't save settings: {error}");
+                return;
+            }
+            crate::settings::show_in_window(&app, &settings);
+        }
+        _ => {}
+    });
 }
 
 /// Moves Home to the other page when the setting changes

@@ -394,6 +394,25 @@
   .menu input::placeholder { color: var(--text2); }
   .menu input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
   .menu .none { padding: 4px 8px; color: var(--text2); }
+  .mi[aria-expanded="true"]:not(.on) { background: var(--hover); }
+  .mi .two { display: flex; flex: 1; flex-direction: column; min-width: 0; line-height: 16px; }
+  .mi .two span, .mi .two small { overflow: hidden; text-overflow: ellipsis; }
+  .mi .two small { color: var(--text2); font-size: 11px; }
+  .mi.on .two small { color: rgba(255, 255, 255, 0.8); }
+  /* The account menu: who you are, then Figma's account items */
+  .menu.account { width: 272px; }
+  .menu.account .mi { gap: 8px; height: 32px; }
+  .menu.account .mi.tall { height: 44px; }
+  .menu.account .mi .ck { margin-right: 0; }
+  .menu.account .mic { width: 20px; height: 20px; }
+  .menu.account .mh { padding-left: 32px; }
+  .acard { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 8px 4px; text-align: center; }
+  .acard .av { width: 48px; height: 48px; margin-bottom: 8px; font-size: 18px; }
+  .acard b { max-width: 100%; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .acard span { max-width: 100%; overflow: hidden; color: var(--text2); text-overflow: ellipsis; white-space: nowrap; }
+  .av.sm { width: 20px; height: 20px; font-size: 9px; }
+  .menu.sub { min-width: 160px; }
+  .menu.sub .mi { height: 32px; }
 
   /* Toast and selection bar */
   .float {
@@ -587,6 +606,7 @@
   </main>
 </div>
 <div id="menu" class="menu" role="menu" tabindex="-1"></div>
+<div id="submenu" class="menu sub" role="menu" tabindex="-1"></div>
 <div id="inbox" role="dialog" aria-labelledby="inbox-title" tabindex="-1"></div>
 <div id="tip" role="tooltip"></div>
 <div id="selbar" class="float" role="toolbar" aria-label="Selected files" hidden></div>
@@ -619,6 +639,11 @@ const store = {
   set(key, value) {
     try {
       localStorage.setItem("ligma-home-" + key, JSON.stringify(value));
+    } catch {}
+  },
+  drop(key) {
+    try {
+      localStorage.removeItem("ligma-home-" + key);
     } catch {}
   },
 };
@@ -657,6 +682,12 @@ const ICONS = {
   layers: '<path d="M8 2.5 13.5 5.5 8 8.5 2.5 5.5z"/><path d="m2.5 8.5 5.5 3 5.5-3"/>',
   pen: '<g transform="rotate(135 8 8)"><path d="M8 13.5 3.5 7a4.5 4.5 0 0 1 9 0z"/><circle cx="8" cy="7" r="1.2"/><path d="M8 8.2v5.3"/></g>',
   heart: '<path d="M8 13s-5-3-5-6.5A2.5 2.5 0 0 1 8 5a2.5 2.5 0 0 1 5 1.5C13 10 8 13 8 13z"/>',
+  right: '<path d="m6.5 4.5 3.5 3.5-3.5 3.5"/>',
+  theme: '<rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 6.5h11M6.5 6.5v6"/>',
+  gear: '<circle cx="8" cy="8" r="2"/><path d="M8 2.5v1.5M8 12v1.5M2.5 8H4M12 8h1.5M4.1 4.1l1.1 1.1M10.8 10.8l1.1 1.1M4.1 11.9l1.1-1.1M10.8 5.2l1.1-1.1"/>',
+  profile: '<path d="M8 2.5 13 5v6l-5 2.5L3 11V5z"/><path d="m3 5 5 2.5L13 5M8 7.5v6"/>',
+  bookmark: '<path d="M4.5 2.5h7v11L8 11l-3.5 2.5z"/>',
+  logout: '<path d="M6.5 3.5h-3v9h3M10 5l3 3-3 3M13 8H6.5"/>',
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 
@@ -1250,10 +1281,8 @@ async function start() {
   try {
     const session = await api("/api/session/state", { user: null });
     Live.users = session.users ?? [];
-    if (!Live.users.length) {
-      Live.signedOut = true;
-      return render();
-    }
+    Live.signedOut = !Live.users.length;
+    if (Live.signedOut) return render();
     const saved = store.get("account", null);
     Live.uid = Live.users.some((u) => u.id === saved) ? saved : Live.users[0].id;
     store.set("account", Live.uid);
@@ -1374,7 +1403,7 @@ function rememberTrash() {
 // Shown at once next time, then brought up to date
 function saveCache() {
   const files = FILES.filter((f) => f.recent).map(({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }) => ({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }));
-  store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, img_url }) => ({ id, name, img_url })), files });
+  store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, email, img_url, community_profile_handle }) => ({ id, name, email, img_url, community_profile_handle })), files });
 }
 function showCached() {
   const uid = store.get("account", null);
@@ -2657,28 +2686,37 @@ function placeMenu(at, above = false) {
   menu.style.top = `${Math.max(8, y)}px`;
 }
 
-// items: { label, kbd, act, checked, disabled, ext, swatch } | { header } | null
+// items: { label, detail, kbd, act, checked, disabled, ext, swatch, iconHtml, sub } | { header } | { html } | null.
+// detail is a second line under the label; sub, items of a menu that opens
+// beside this one; html, a row of its own that isn't an item
+function menuRows(items, list, prefix, checks = items.some((item) => item && "checked" in item)) {
+  return items.map((item) => {
+    if (!item) return `<div class="msep" role="separator"></div>`;
+    if (item.header) return `<div class="mh">${esc(item.header)}</div>`;
+    if (item.html) return item.html;
+    const i = list.push(item) - 1;
+    const radio = checks && "checked" in item;
+    const check = checks ? `<span class="ck">${icon("check")}</span>` : "";
+    const swatch = item.swatch ? `<span class="sw" style="background:${item.swatch}"></span>` : "";
+    const tail = item.sub ? `<span class="x">${icon("right")}</span>` : item.kbd ? `<span class="k">${esc(item.kbd)}</span>` : item.ext ? `<span class="x">${icon("ext")}</span>` : "";
+    const label = item.detail ? `<span class="two"><span>${esc(item.label)}</span><small>${esc(item.detail)}</small></span>` : esc(item.label);
+    return `<button class="mi${item.detail ? " tall" : ""}" id="${prefix}${i}" tabindex="-1" role="${radio ? "menuitemradio" : "menuitem"}" data-i="${i}" ${radio ? `aria-checked="${!!item.checked}"` : ""} ${item.sub ? 'aria-haspopup="menu" aria-expanded="false"' : ""} ${item.disabled ? 'aria-disabled="true"' : ""}>${check}${swatch}${item.iconHtml ? `<span class="mic">${item.iconHtml}</span>` : ""}${label}${tail}</button>`;
+  }).join("");
+}
 function showMenu(items, at, options = {}) {
   closeMenu();
   menuReturn = document.activeElement;
   menuKeys = null;
-  const checks = items.some((item) => item && "checked" in item);
   menuItems = [];
-  menu.innerHTML = items.map((item) => {
-    if (!item) return `<div class="msep" role="separator"></div>`;
-    if (item.header) return `<div class="mh">${esc(item.header)}</div>`;
-    const i = menuItems.push(item) - 1;
-    const check = checks ? `<span class="ck">${icon("check")}</span>` : "";
-    const swatch = item.swatch ? `<span class="sw" style="background:${item.swatch}"></span>` : "";
-    const tail = item.kbd ? `<span class="k">${esc(item.kbd)}</span>` : item.ext ? `<span class="x">${icon("ext")}</span>` : "";
-    return `<button class="mi" id="mi${i}" tabindex="-1" role="${checks ? "menuitemradio" : "menuitem"}" data-i="${i}" ${checks ? `aria-checked="${!!item.checked}"` : ""} ${item.disabled ? 'aria-disabled="true"' : ""}>${check}${swatch}${item.iconHtml ? `<span class="mic">${item.iconHtml}</span>` : ""}${esc(item.label)}${tail}</button>`;
-  }).join("");
+  menu.innerHTML = menuRows(items, menuItems, "mi", options.checks);
   menuIndex = -1;
   menu.classList.toggle("big", !!options.big);
+  menu.classList.toggle("account", !!options.account);
   placeMenu(at, options.above);
   menu.focus();
 }
 function closeMenu() {
+  closeSub();
   if (!menu.classList.contains("open")) return;
   menu.classList.remove("open");
   menu.innerHTML = "";
@@ -2698,27 +2736,41 @@ function highlight(i) {
 function pickMenu(i) {
   const item = menuItems[i];
   if (!item || item.disabled) return;
+  if (item.sub) return openSub(i, true);
   closeMenu();
   item.act?.();
 }
+const usableIn = (items) => items.map((item, i) => (item.disabled ? -1 : i)).filter((i) => i >= 0);
+function stepIn(items, current, down) {
+  const usable = usableIn(items);
+  const at = usable.indexOf(current);
+  return down ? usable[(at + 1) % usable.length] : usable[(at - 1 + usable.length) % usable.length];
+}
 menu.addEventListener("pointermove", (e) => {
   const el = e.target.closest(".mi");
-  if (el) highlight(Number(el.dataset.i));
+  if (!el) return;
+  const i = Number(el.dataset.i);
+  if (i === menuIndex && (subOwner === i || !menuItems[i]?.sub)) return;
+  highlight(i);
+  if (menuItems[i]?.sub && !menuItems[i].disabled) openSub(i);
+  else closeSub();
 });
-menu.addEventListener("pointerleave", () => highlight(-1));
+menu.addEventListener("pointerleave", () => highlight(subOwner));
 menu.addEventListener("click", (e) => {
   const el = e.target.closest(".mi");
   if (el) pickMenu(Number(el.dataset.i));
 });
 menu.addEventListener("keydown", (e) => {
   if (menuKeys?.(e)) return;
-  const usable = menuItems.map((item, i) => (item.disabled ? -1 : i)).filter((i) => i >= 0);
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
-    const at = usable.indexOf(menuIndex);
-    const next = e.key === "ArrowDown" ? usable[(at + 1) % usable.length] : usable[(at - 1 + usable.length) % usable.length];
+    const next = stepIn(menuItems, menuIndex, e.key === "ArrowDown");
     highlight(next);
+    closeSub();
     $$(".mi", menu)[next]?.scrollIntoView({ block: "nearest" });
+  } else if (e.key === "ArrowRight" && menuItems[menuIndex]?.sub) {
+    e.preventDefault();
+    openSub(menuIndex, true);
   } else if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
     pickMenu(menuIndex);
@@ -2727,8 +2779,90 @@ menu.addEventListener("keydown", (e) => {
     closeMenu();
   }
 });
+
+// A menu beside the open one, for an item with sub items (Change theme)
+const submenu = $("#submenu");
+let subItems = [];
+let subIndex = -1;
+let subOwner = -1;
+function openSub(i, focus = false) {
+  if (subOwner !== i) {
+    closeSub();
+    subOwner = i;
+    subItems = [];
+    submenu.innerHTML = menuRows(menuItems[i].sub, subItems, "smi");
+    submenu.classList.add("open");
+    const row = $(`#mi${i}`, menu);
+    row.setAttribute("aria-expanded", "true");
+    const r = row.getBoundingClientRect();
+    const box = menu.getBoundingClientRect();
+    let x = box.right + 4;
+    if (x + submenu.offsetWidth > innerWidth - 8) x = box.left - submenu.offsetWidth - 4;
+    const y = Math.min(r.top - 8, innerHeight - 8 - submenu.offsetHeight);
+    submenu.style.left = `${Math.max(8, x)}px`;
+    submenu.style.top = `${Math.max(8, y)}px`;
+  }
+  if (focus) {
+    submenu.focus();
+    subHighlight(usableIn(subItems)[0] ?? -1);
+  }
+}
+function closeSub() {
+  if (subOwner < 0) return;
+  $(`#mi${subOwner}`, menu)?.setAttribute("aria-expanded", "false");
+  submenu.classList.remove("open");
+  submenu.innerHTML = "";
+  subItems = [];
+  subIndex = -1;
+  subOwner = -1;
+}
+function subHighlight(i) {
+  subIndex = i;
+  $$(".mi", submenu).forEach((el, j) => el.classList.toggle("on", j === i));
+  if (i >= 0) submenu.setAttribute("aria-activedescendant", "smi" + i);
+  else submenu.removeAttribute("aria-activedescendant");
+}
+function pickSub(i) {
+  const item = subItems[i];
+  if (!item || item.disabled) return;
+  closeMenu();
+  item.act?.();
+}
+// Back to the item that opened it
+function leaveSub() {
+  const owner = subOwner;
+  closeSub();
+  menu.focus();
+  highlight(owner);
+}
+submenu.addEventListener("pointermove", (e) => {
+  const el = e.target.closest(".mi");
+  if (el) subHighlight(Number(el.dataset.i));
+  if (menuIndex !== subOwner) highlight(subOwner);
+});
+submenu.addEventListener("pointerleave", () => subHighlight(-1));
+submenu.addEventListener("click", (e) => {
+  const el = e.target.closest(".mi");
+  if (el) pickSub(Number(el.dataset.i));
+});
+submenu.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    subHighlight(stepIn(subItems, subIndex, e.key === "ArrowDown"));
+  } else if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    pickSub(subIndex);
+  } else if (e.key === "ArrowLeft" || e.key === "Escape") {
+    e.preventDefault();
+    leaveSub();
+  } else if (e.key === "Tab") {
+    e.preventDefault();
+    closeMenu();
+  }
+});
+
 addEventListener("pointerdown", (e) => {
-  if (menu.classList.contains("open") && !menu.contains(e.target)) closeMenu();
+  if (menu.classList.contains("open") && !menu.contains(e.target) && !submenu.contains(e.target)) closeMenu();
 }, true);
 addEventListener("resize", closeMenu);
 scroller.addEventListener("scroll", closeMenu, { passive: true });
@@ -2865,21 +2999,84 @@ function applyTheme() {
 }
 darkQuery.addEventListener("change", applyTheme);
 
+// Asks Ligma for something it does itself (new_home.rs): through
+// window.open on Windows, and on macOS as an iframe load, which WKWebView
+// reports to on_navigation
+function signal(action, params = {}) {
+  const url = `https://home.ligma.invalid/${action}?${new URLSearchParams(params)}`;
+  if (!MAC) return void window.open(url, "_blank");
+  const frame = document.createElement("iframe");
+  frame.style.display = "none";
+  frame.src = url;
+  document.documentElement.appendChild(frame);
+  setTimeout(() => frame.remove(), 1000);
+}
+
+const avatar = (user, cls = "") =>
+  `<span class="av ${cls}" style="background:${colorForTeam(user.id)}">${user.img_url ? `<img src="${esc(user.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((user.name || user.email || "?")[0])}</span>`;
+
+// Figma's account menu, as its home page has it. Theme is Ligma's color
+// scheme, for Figma and Ligma alike; Settings, Ligma's. Figma's own
+// settings open only as a dialog of its file browser, with no link
 function accountMenu(at) {
-  // Every account signed in to Figma here; each has its own files
-  if (LIVE) {
-    return showMenu([
-      ...Live.users.map((u) => ({ label: u.name ?? u.email, checked: u.id === Live.uid, act: () => u.id !== Live.uid && switchAccount(u.id) })),
-      null,
-      { label: "Add another account", checked: false, ext: true, act: () => window.open("https://www.figma.com/login", "_blank") },
-    ], at);
-  }
+  const users = LIVE ? Live.users : [{ id: "me", name: "Chris", email: "chris@example.com", community_profile_handle: "chris" }, { id: "work", name: "Chris (work)", email: "chris@northwind.example" }];
+  const me = users.find((u) => u.id === (LIVE ? Live.uid : "me"));
+  if (!me) return;
+  const scheme = LIVE ? Live.appearance?.scheme ?? "system" : pref.mode;
+  const setScheme = (value) => {
+    if (!LIVE) {
+      pref.mode = value;
+      return applyTheme();
+    }
+    Live.appearance = { ...Live.appearance, scheme: value };
+    signal("scheme", { value });
+  };
+  const open = (url) => window.open(url, "_blank");
+  const logOutItem = users.length < 2
+    ? { label: "Log out", iconHtml: icon("logout"), act: () => logOut(me) }
+    : { label: "Log out", iconHtml: icon("logout"), sub: [...users.map((u) => ({ label: u.email ?? u.name, act: () => logOut(u) })), null, { label: "Log out of all accounts", act: () => logOut(null) }] };
   showMenu([
-    { label: "Chris", checked: true, act: () => {} },
-    { label: "Add another account", checked: false, ext: true, act: () => window.open("https://www.figma.com/login", "_blank", "noopener") },
+    { html: `<div class="acard" aria-hidden="true">${avatar(me)}<b>${esc(me.name ?? me.email)}</b>${me.email ? `<span>${esc(me.email)}</span>` : ""}</div>` },
     null,
-    { label: "Theme and appearance", checked: false, act: () => toast("Opens Ligma's settings at Appearance") },
-  ], at);
+    {
+      label: "Change theme",
+      iconHtml: icon("theme"),
+      sub: [["light", "Light"], ["dark", "Dark"], ["system", "System theme"]].map(([value, label]) => ({ label, checked: scheme === value, act: () => setScheme(value) })),
+    },
+    { label: "Settings", iconHtml: icon("gear"), act: () => (LIVE ? signal("settings") : toast("Opens Ligma's settings")) },
+    null,
+    { header: "Community" },
+    ...(me.community_profile_handle ? [{ label: "View Community profile", iconHtml: icon("profile"), act: () => open(`https://www.figma.com/@${me.community_profile_handle}`) }] : []),
+    { label: "Saved from Community", iconHtml: icon("bookmark"), act: () => open("https://www.figma.com/community/saves") },
+    null,
+    ...(users.length > 1
+      ? [{ header: "Switch account" }, ...users.map((u) => ({ label: u.name ?? u.email, detail: u.name ? u.email : "", iconHtml: avatar(u, "sm"), checked: u.id === me.id, act: () => u.id !== me.id && LIVE && switchAccount(u.id) })), null]
+      : []),
+    // Figma allows 10 accounts at once
+    { label: "Add account", iconHtml: icon("plus"), disabled: users.length >= 10, act: () => open("https://www.figma.com/login?cont=") },
+    logOutItem,
+  ], at, { account: true, checks: true });
+}
+
+// Figma's logout: one account, or every one (user null). What's left of
+// the session loads again, or the sign-in page if nothing is
+async function logOut(user) {
+  if (!LIVE) return toast(`Logs out of ${user ? user.email : "every account"}`);
+  try {
+    await api(user ? `/api/session/logout/${user.id}` : "/api/session/logout", { method: "POST", user: null });
+  } catch (error) {
+    return toast(`Couldn't log out: ${error.message}`);
+  }
+  toast(user ? `Logged out of ${user.email ?? user.name}` : "Logged out of every account");
+  // What this page kept of the account goes too
+  for (const u of user ? [user] : Live.users) for (const key of ["cache", "trash"]) store.drop(`${key}:${u.id}`);
+  if (user && user.id !== Live.uid) {
+    Live.users = Live.users.filter((u) => u.id !== user.id);
+    saveCache();
+    return renderSide();
+  }
+  const next = user ? Live.users.find((u) => u.id !== user.id) : null;
+  await switchAccount(next?.id ?? null);
 }
 
 /* Search: a window over the page. Empty, it shows what you worked on last;

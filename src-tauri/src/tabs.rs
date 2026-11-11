@@ -43,7 +43,7 @@ use tauri_plugin_opener::OpenerExt;
 /// At 100% interface scale; it grows with the scale
 pub const TAB_BAR_HEIGHT: f64 = 38.0;
 pub const HOME_URL: &str = "https://www.figma.com/files";
-const HOME_ID: u32 = 0;
+pub const HOME_ID: u32 = 0;
 /// The window Ligma opens with, which holds Home. Its own webview, like
 /// every window's, is its tab bar and has its label
 pub const MAIN: &str = "main";
@@ -890,6 +890,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::mcp_bridge::on_signal(app, url);
         return false;
     }
+    if url.host_str() == Some(crate::new_home::SIGNAL_HOST) {
+        crate::new_home::on_signal(app, id, url);
+        return false;
+    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -945,7 +949,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::adjustments::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::mcp_bridge::SIGNAL_HOST) {
         crate::mcp_bridge::on_signal(app, &url);
-
+    } else if url.host_str() == Some(crate::new_home::SIGNAL_HOST) {
+        crate::new_home::on_signal(app, id, &url);
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
