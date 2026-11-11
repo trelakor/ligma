@@ -66,11 +66,52 @@ fn color(rgba: Rgba, alpha: f32) -> Color4f {
 /// B(s, d) = max(0, s + d - 1)
 const LINEAR_BURN: &str = r#"
 half4 main(half4 src, half4 dst) {
-    half3 burn = max(half3(0), src.rgb * dst.a + dst.rgb * src.a - src.a * dst.a);
-    half3 rgb = src.rgb * (1 - dst.a) + dst.rgb * (1 - src.a) + burn;
+    half3 rgb = max(half3(0), src.rgb + dst.rgb - src.a * dst.a);
     return half4(rgb, src.a + dst.a - src.a * dst.a);
 }
 "#;
+
+/// Figma's soft light, which differs from the W3C's: a light source
+/// brightens by `cb (1 - cb)`, as in Pegtop's, and a dark one darkens by the
+/// W3C's `D(cb) - cb`, so it isn't Skia's
+const SOFT_LIGHT: &str = r#"
+half4 main(half4 src, half4 dst) {
+    float4 s = float4(src);
+    float4 d = float4(dst);
+    if (s.a == 0.0) {
+        return dst;
+    }
+    float3 cs = s.rgb / s.a;
+    float3 cb = d.a > 0.0 ? d.rgb / d.a : float3(0);
+    float3 dark = mix((16.0 * cb - 12.0) * cb + 3.0, inversesqrt(cb + 1e-6) - 1.0, step(0.25, cb));
+    float3 e = mix(dark, 1.0 - cb, step(0.5, cs));
+    float3 mixed = cb * (1.0 + e * (2.0 * cs - 1.0));
+    float3 rgb = s.rgb * (1.0 - d.a) + d.rgb * (1.0 - s.a) + s.a * d.a * mixed;
+    return half4(half3(rgb), half(s.a + d.a - s.a * d.a));
+}
+"#;
+
+/// The source over the destination's alpha, which undoes a blur's fading at
+/// the edge of what it blurred
+const DIVIDE: &str = r#"
+half4 main(half4 src, half4 dst) {
+    return dst.a > 0.0 ? half4(float4(src) / float(dst.a)) : half4(0);
+}
+"#;
+
+/// Every pixel with any coverage made opaque, as Figma's silhouettes are
+fn silhouette() -> skia_safe::ColorFilter {
+    let mut alpha = [255u8; 256];
+    alpha[0] = 0;
+    color_filters::table_argb(Some(&alpha), None, None, None).expect("table color filter")
+}
+
+/// The standard deviation of Figma's blur of `radius`. It blurs with a
+/// triangle as wide as the radius each side, which a Gaussian of the same
+/// spread matches to within a level or two
+pub fn tent_sigma(radius: f64) -> f32 {
+    (radius / 6f64.sqrt()) as f32
+}
 
 /// Noise: square grains `grain` units wide, `density` of them in `color`,
 /// the same every time. Figma doesn't say how it makes its grain, so this
@@ -106,6 +147,9 @@ type PatternKey = (usize, u64, i32);
 /// tiles
 pub struct Kit {
     linear_burn: Option<Blender>,
+    soft_light: Option<Blender>,
+    /// Divides the source by the destination's alpha
+    divide: Option<Blender>,
     noise: Option<RuntimeEffect>,
     /// Recorded pattern tiles, and the images they were waiting for
     patterns: RefCell<HashMap<PatternKey, (skia_safe::Picture, Vec<String>)>>,
@@ -117,8 +161,16 @@ impl Kit {
             .map_err(|error| log::warn!("native renderer: LINEAR_BURN: {error}"))
             .ok()
             .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
+        let soft_light = RuntimeEffect::make_for_blender(SOFT_LIGHT, None)
+            .map_err(|error| log::warn!("native renderer: SOFT_LIGHT: {error}"))
+            .ok()
+            .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
+        let divide = RuntimeEffect::make_for_blender(DIVIDE, None)
+            .map_err(|error| log::warn!("native renderer: divide: {error}"))
+            .ok()
+            .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
         let noise = RuntimeEffect::make_for_shader(NOISE, None).map_err(|error| log::warn!("native renderer: noise: {error}")).ok();
-        Self { linear_burn, noise, patterns: RefCell::new(HashMap::new()) }
+        Self { linear_burn, soft_light, divide, noise, patterns: RefCell::new(HashMap::new()) }
     }
 
     /// Forgets pattern tiles drawn without image `key`, or all of them
@@ -282,6 +334,11 @@ impl<'a> Encoder<'a> {
                     paint.set_blender(blender.clone());
                 }
             }
+            Some("SOFT_LIGHT") => {
+                if let Some(blender) = &self.kit.soft_light {
+                    paint.set_blender(blender.clone());
+                }
+            }
             Some(mode) => {
                 if let Some(mode) = blend(mode) {
                     paint.set_blend_mode(mode);
@@ -292,29 +349,32 @@ impl<'a> Encoder<'a> {
 
     /// The node's shadows, inner shadows and layer blur (unless `blur` is
     /// false) as one image filter for its layer: shadows behind it, inner
-    /// shadows over it, then all of it blurred. Figma's blur radius is twice
-    /// the standard deviation
+    /// shadows over it, then all of it blurred. Figma casts shadows from the
+    /// node's silhouette, every pixel it covers at all counted as solid, so a
+    /// faint stroke casts as dark a shadow as the fill. Where the shadow
+    /// isn't shown behind the node, it's cut out wherever the node is at all
     fn filter(&self, node: &Node, blur: bool) -> Option<ImageFilter> {
         let mut behind = Vec::new();
         let mut over = Vec::new();
         let mut blur_sigma = None;
+        let solid = || image_filters::color_filter(silhouette(), None, None);
         for effect in &node.effects {
-            let sigma = (effect.radius / 2.0) as f32;
+            let sigma = tent_sigma(effect.radius);
             let offset = Vector::new(effect.offset.x as f32, effect.offset.y as f32);
             match effect.kind.as_str() {
                 "DROP_SHADOW" => {
                     let Some(rgba) = effect.color else { continue };
                     let spread = effect.spread as f32;
                     let input = if spread > 0.0 {
-                        image_filters::dilate((spread, spread), None, None)
+                        image_filters::dilate((spread, spread), solid(), None)
                     } else if spread < 0.0 {
-                        image_filters::erode((-spread, -spread), None, None)
+                        image_filters::erode((-spread, -spread), solid(), None)
                     } else {
-                        None
+                        solid()
                     };
                     let mut shadow = image_filters::drop_shadow_only(offset, (sigma, sigma), color(rgba, 1.0), None, input, None);
                     if !effect.show_shadow_behind_node {
-                        shadow = image_filters::blend(BlendMode::DstOut, shadow, None, None);
+                        shadow = image_filters::blend(BlendMode::DstOut, shadow, solid(), None);
                     }
                     behind.push(shadow);
                 }
@@ -327,7 +387,7 @@ impl<'a> Encoder<'a> {
                         &[0.0, 0.0, 0.0, 0.0, rgba.r, 0.0, 0.0, 0.0, 0.0, rgba.g, 0.0, 0.0, 0.0, 0.0, rgba.b, 0.0, 0.0, 0.0, -rgba.a, rgba.a],
                         None,
                     );
-                    let mut shadow = image_filters::color_filter(outside, None, crop);
+                    let mut shadow = image_filters::color_filter(outside, solid(), crop);
                     if effect.spread > 0.0 {
                         let spread = effect.spread as f32;
                         shadow = image_filters::dilate((spread, spread), shadow, crop);
@@ -630,7 +690,15 @@ impl<'a> Encoder<'a> {
         }
         let mut local = to_node;
         local.pre_scale((iw / kept, ih / img.image.height() as f32), None);
-        let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear);
+        // Figma resamples images with a sharp cubic (Keys, a = -1), so does
+        // this, unless the image is shrunk well past the samples drawn,
+        // where mipmaps keep it from shimmering
+        let samples = if self.aa { 1.0 } else { 4.0 };
+        let sampling = if kept > shown * samples * 2.0 {
+            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+        } else {
+            SamplingOptions::from(skia_safe::CubicResampler { b: 0.0, c: 1.0 })
+        };
         img.image.to_shader((tile, tile), sampling, &local)
     }
 
@@ -722,7 +790,7 @@ impl<'a> Encoder<'a> {
         paint.set_anti_alias(self.aa);
         self.set_blend(&mut paint, effect.blend_mode.as_deref());
         if effect.radius > 0.0 {
-            paint.set_mask_filter(MaskFilter::blur(BlurStyle::Normal, (effect.radius / 2.0) as f32, true));
+            paint.set_mask_filter(MaskFilter::blur(BlurStyle::Normal, tent_sigma(effect.radius), true));
         }
         self.canvas.save();
         self.canvas.translate((effect.offset.x as f32, effect.offset.y as f32));
@@ -734,8 +802,16 @@ impl<'a> Encoder<'a> {
     /// A background blur: what's behind the node blurred, inside its
     /// outline, under its fills
     fn backdrop(&mut self, node: &Node, effect: &Effect) {
-        let sigma = (effect.radius / 2.0) as f32;
-        let Some(blur) = image_filters::blur((sigma, sigma), TileMode::Clamp, None, None) else {
+        let sigma = tent_sigma(effect.radius);
+        // Figma blurs only what's behind the layer's box, each pixel the
+        // weighted mean of the part of the kernel inside it: the blur of
+        // what's inside over the blur of the box itself
+        let area = node.transform.map_rect(Rect::from_wh(node.size.0 as f32, node.size.1 as f32)).0;
+        let behind = image_filters::crop(area, TileMode::Decal, None);
+        let inside = image_filters::blur((sigma, sigma), TileMode::Decal, behind, None);
+        let box_ = image_filters::shader(skia_safe::shaders::color(skia_safe::Color::WHITE), CropRect::from(area));
+        let weight = image_filters::blur((sigma, sigma), TileMode::Decal, box_, None);
+        let Some(blur) = self.kit.divide.clone().and_then(|divide| image_filters::blend(divide, weight, inside, None)) else {
             return;
         };
         self.canvas.save();
@@ -761,12 +837,12 @@ impl<'a> Encoder<'a> {
         let Some(bounds) = node.bounds else {
             return self.content(node);
         };
-        let sigma = (effect.radius / 2.0) as f32;
+        let sigma = tent_sigma(effect.radius);
         let mut dest_in = Paint::default();
         dest_in.set_blend_mode(BlendMode::DstIn);
         self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds));
         // Sharp, or as blurred as it starts, fading out
-        let start_sigma = (effect.start_radius / 2.0) as f32;
+        let start_sigma = tent_sigma(effect.start_radius);
         let mut starting = Paint::default();
         if start_sigma > 0.0 {
             starting.set_image_filter(image_filters::blur((start_sigma, start_sigma), TileMode::Decal, None, None));

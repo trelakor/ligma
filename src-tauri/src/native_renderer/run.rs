@@ -446,7 +446,7 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let fit = (limit as f64 / w.max(h)).min(1.0);
     let mut image = if fit < 1.0 {
         let size = (((w * fit).round() as u32).max(1), ((h * fit).round() as u32).max(1));
-        image::imageops::resize(&image, size.0, size.1, image::imageops::FilterType::Triangle)
+        image::imageops::resize(&image, size.0, size.1, image::imageops::FilterType::Lanczos3)
     } else {
         image
     };
@@ -494,6 +494,9 @@ fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64) -> Result<Pair
     let scale = (side / longest).min(2.0);
     let (figma, bounds) = fetch_render(webview, id, scale)?;
     let (width, height) = figma.dimensions();
+    // Figma's export starts at the render bounds and rounds its size up, so
+    // it covers a little more than them, at exactly `scale`
+    let bounds = Rect::from_xywh(bounds.left, bounds.top, width as f32 / scale as f32, height as f32 / scale as f32);
     // Again until the images it uses have come
     let mut drawn = None;
     for _ in 0..30 {
@@ -544,6 +547,10 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
         "tint" | "untint" => {
             let _ = ctx.messages.send(Msg::Tint(action == "tint"));
             Ok(String::new())
+        }
+        _ if action.starts_with("audit:") && super::dev() => {
+            let report = audit(&ctx, &action["audit:".len()..])?;
+            Ok(report.to_string())
         }
         "purge" if super::dev() => {
             let (send, receive) = mpsc::channel();
@@ -665,6 +672,201 @@ fn parity(ctx: &Ctx, count: usize) -> Result<PathBuf, String> {
     log::info!("native renderer parity: {}", report["all"]);
     set_status("Drawing");
     Ok(dir)
+}
+
+#[derive(serde::Deserialize)]
+struct AuditSpec {
+    view: View,
+    /// A screenshot of Figma's page, a PNG at device pixels, and where its
+    /// canvas is in it
+    figma: String,
+    crop: [u32; 4],
+    name: String,
+}
+
+
+/// A difference found by `audit`, in pixels of the view
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Region {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    /// Absolute bounds of the same area
+    world: [f32; 4],
+    /// Pixels in it differing by more than `AUDIT_TOLERANCE`
+    pixels: usize,
+    mean_error: f64,
+    max_error: i32,
+    /// The nodes under its middle, from the top-level one down
+    nodes: Vec<String>,
+    image: String,
+}
+
+/// A pixel differs when a channel is off by more than this
+const AUDIT_TOLERANCE: i32 = 6;
+
+/// Draws the view a screenshot of Figma's canvas shows, at the same size,
+/// compares the two, and writes both, where they differ, and each region
+/// that differs, side by side, to a folder in Ligma's log folder. Returns
+/// the report
+fn audit(ctx: &Ctx, spec: &str) -> Result<Value, String> {
+    let spec: AuditSpec = serde_json::from_str(spec).map_err(|error| error.to_string())?;
+    let page = image::open(&spec.figma).map_err(|error| error.to_string())?.to_rgba8();
+    let [cx, cy, cw, ch] = spec.crop;
+    let cw = cw.min(page.width().saturating_sub(cx));
+    let ch = ch.min(page.height().saturating_sub(cy));
+    let figma = image::imageops::crop_imm(&page, cx, cy, cw, ch).to_image();
+    let (width, height) = figma.dimensions();
+    let mut view = spec.view;
+    let px = view.zoom * view.dpr;
+    view.w = width as f64 / px;
+    view.h = height as f64 / px;
+    let mut drawn = None;
+    for _ in 0..120 {
+        let (send, receive) = mpsc::channel();
+        let _ = ctx.messages.send(Msg::Render { view: view.clone(), width, height, reply: send });
+        drawn = receive.recv_timeout(Duration::from_secs(120)).ok().flatten();
+        if drawn.as_ref().is_none_or(|(_, waiting)| *waiting == 0) {
+            break;
+        }
+        sleep(500);
+    }
+    let (native, waiting) = drawn.ok_or("not drawn")?;
+    let native = image::RgbaImage::from_raw(width, height, native).ok_or("bad size")?;
+    let dir = report_dir(ctx, &format!("audit-{}", spec.name))?;
+    let _ = figma.save(dir.join("figma.png"));
+    let _ = native.save(dir.join("native.png"));
+
+    // Worst channel difference per pixel
+    let error: Vec<i32> = figma
+        .pixels()
+        .zip(native.pixels())
+        .map(|(a, b)| (0..3).map(|c| (a[c] as i32 - b[c] as i32).abs()).max().unwrap_or(0))
+        .collect();
+    let mut diff = image::RgbaImage::new(width, height);
+    for (i, pixel) in diff.pixels_mut().enumerate() {
+        let (x, y) = (i as u32 % width, i as u32 / width);
+        let grey = (figma.get_pixel(x, y).0.iter().take(3).map(|&v| v as u32).sum::<u32>() / 9 + 170) as u8;
+        *pixel = if error[i] > AUDIT_TOLERANCE { image::Rgba([255, (255 - error[i].min(255)) as u8 / 2, 0, 255]) } else { image::Rgba([grey, grey, grey, 255]) };
+    }
+    let _ = diff.save(dir.join("diff.png"));
+
+    // Blocks of 8 pixels with differences, joined into regions
+    const BLOCK: u32 = 8;
+    let (bw, bh) = (width.div_ceil(BLOCK), height.div_ceil(BLOCK));
+    let mut bad = vec![false; (bw * bh) as usize];
+    for by in 0..bh {
+        for bx in 0..bw {
+            let mut count = 0;
+            for y in by * BLOCK..((by + 1) * BLOCK).min(height) {
+                for x in bx * BLOCK..((bx + 1) * BLOCK).min(width) {
+                    if error[(y * width + x) as usize] > AUDIT_TOLERANCE {
+                        count += 1;
+                    }
+                }
+            }
+            bad[(by * bw + bx) as usize] = count >= 2;
+        }
+    }
+    let mut seen = vec![false; bad.len()];
+    let mut regions = Vec::new();
+    for start in 0..bad.len() {
+        if !bad[start] || seen[start] {
+            continue;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(block) = stack.pop() {
+            let (bx, by) = (block as u32 % bw, block as u32 / bw);
+            (x0, y0, x1, y1) = (x0.min(bx), y0.min(by), x1.max(bx), y1.max(by));
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let (nx, ny) = (bx as i32 + dx, by as i32 + dy);
+                    if nx < 0 || ny < 0 || nx >= bw as i32 || ny >= bh as i32 {
+                        continue;
+                    }
+                    let next = (ny as u32 * bw + nx as u32) as usize;
+                    if bad[next] && !seen[next] {
+                        seen[next] = true;
+                        stack.push(next);
+                    }
+                }
+            }
+        }
+        let (x, y) = (x0 * BLOCK, y0 * BLOCK);
+        let (w, h) = (((x1 + 1) * BLOCK).min(width) - x, ((y1 + 1) * BLOCK).min(height) - y);
+        let mut pixels = 0;
+        let (mut sum, mut max) = (0i64, 0);
+        for yy in y..y + h {
+            for xx in x..x + w {
+                let e = error[(yy * width + xx) as usize];
+                if e > AUDIT_TOLERANCE {
+                    pixels += 1;
+                    sum += e as i64;
+                    max = max.max(e);
+                }
+            }
+        }
+        regions.push((x, y, w, h, pixels, sum as f64 / pixels.max(1) as f64, max));
+    }
+    regions.sort_by_key(|region| std::cmp::Reverse(region.4));
+    let world = |x: u32, y: u32| ((view.x + x as f64 / px) as f32, (view.y + y as f64 / px) as f32);
+    let middles: Vec<(f32, f32)> = regions.iter().map(|&(x, y, w, h, ..)| world(x + w / 2, y + h / 2)).collect();
+    let (send, receive) = mpsc::channel();
+    let _ = ctx.messages.send(Msg::HitTest { points: middles, reply: send });
+    let hits = receive.recv_timeout(Duration::from_secs(10)).unwrap_or_default();
+    let mut found = Vec::new();
+    for (i, &(x, y, w, h, pixels, mean_error, max_error)) in regions.iter().enumerate() {
+        let image = if i < 40 {
+            let name = format!("region-{i:02}.png");
+            let pad = 24;
+            let (cx, cy) = (x.saturating_sub(pad), y.saturating_sub(pad));
+            let (cw, ch) = ((w + pad * 2).min(width - cx), (h + pad * 2).min(height - cy));
+            let zoom = (480 / cw.max(ch)).clamp(1, 8);
+            let mut strip = image::RgbaImage::from_pixel((cw * 3 + 8) * zoom, ch * zoom, image::Rgba([255, 0, 255, 255]));
+            for (k, source) in [&figma, &native, &diff].into_iter().enumerate() {
+                let crop = image::imageops::crop_imm(source, cx, cy, cw, ch).to_image();
+                let crop = image::imageops::resize(&crop, cw * zoom, ch * zoom, image::imageops::FilterType::Nearest);
+                image::imageops::replace(&mut strip, &crop, (k as u32 * (cw + 4) * zoom) as i64, 0);
+            }
+            let _ = strip.save(dir.join(&name));
+            name
+        } else {
+            String::new()
+        };
+        let (wx, wy) = world(x, y);
+        found.push(Region {
+            x,
+            y,
+            width: w,
+            height: h,
+            world: [wx, wy, (w as f64 / px) as f32, (h as f64 / px) as f32],
+            pixels,
+            mean_error,
+            max_error,
+            nodes: hits.get(i).cloned().unwrap_or_default(),
+            image,
+        });
+    }
+    let total = (width * height) as f64;
+    let differing = error.iter().filter(|&&e| e > AUDIT_TOLERANCE).count();
+    let report = json!({
+        "name": spec.name,
+        "dir": dir.display().to_string(),
+        "view": view,
+        "width": width,
+        "height": height,
+        "matched": 1.0 - differing as f64 / total,
+        "meanError": error.iter().map(|&e| e as f64).sum::<f64>() / total,
+        "exact": error.iter().filter(|&&e| e == 0).count() as f64 / total,
+        "imagesWaiting": waiting,
+        "regions": found,
+    });
+    std::fs::write(dir.join("report.json"), serde_json::to_string_pretty(&report).unwrap()).map_err(|error| error.to_string())?;
+    Ok(report)
 }
 
 /// `rgba` blurred by a 3 by 3 box

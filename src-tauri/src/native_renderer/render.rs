@@ -20,8 +20,8 @@ use std::time::{Duration, Instant};
 use skia_safe::gpu::d3d::{BackendContext, TextureResourceInfo};
 use skia_safe::gpu::{self, BackendRenderTarget, DirectContext, Protected, SurfaceOrigin, SyncCpu};
 use skia_safe::{
-    images, AlphaType, Color4f, ColorType, Data, FilterMode, Image, ImageInfo, Matrix, MipmapMode, Paint, Picture,
-    PictureRecorder, Rect, SamplingOptions, Surface, TileMode,
+    AlphaType, Color4f, ColorType, Data, FilterMode, Image, ImageInfo, MipmapMode, Paint, Picture,
+    PictureRecorder, Rect, SamplingOptions, Surface,
 };
 use windows::core::Interface;
 use windows::Win32::Foundation::HWND;
@@ -69,6 +69,12 @@ pub enum Msg {
     /// tiles kept) and then warm
     Replay { views: Vec<View>, reply: Sender<Vec<(f64, f64)>> },
     Tint(bool),
+    /// Draw `view` whole, `width` by `height` pixels, and send back its
+    /// pixels, RGBA, and how many images it's still waiting for
+    Render { view: View, width: u32, height: u32, reply: Sender<Option<(Vec<u8>, usize)>> },
+    /// For each absolute point, the ids of the nodes under it, from the
+    /// top-level one down to the deepest
+    HitTest { points: Vec<(f32, f32)>, reply: Sender<Vec<Vec<String>>> },
     /// Frees what Skia keeps that nothing uses, and sends back the GPU
     /// memory used before, after purging, and after freeing everything
     Purge(Sender<[u64; 3]>),
@@ -103,6 +109,8 @@ struct Recorded {
     counts: Counts,
     reason: Option<String>,
     missing: Vec<String>,
+    /// Images it has nothing to draw for yet
+    waiting: usize,
 }
 
 const TILE: i32 = 512;
@@ -324,7 +332,9 @@ pub struct Painter {
     backdrops: Vec<(Rect, f32)>,
     config: Config,
     cleaned: Instant,
-    checker: Option<Image>,
+    /// Figma's checkerboard, and the pixel grid it draws when zoomed in
+    checker: Option<skia_safe::RuntimeEffect>,
+    grid: Option<(skia_safe::RuntimeEffect, skia_safe::RuntimeEffect)>,
     view: Option<View>,
     /// The last zoom (pixels per unit) and when it changed
     zoom: (f32, Instant),
@@ -353,7 +363,13 @@ impl Painter {
             backdrops: Vec::new(),
             config: config(),
             cleaned: Instant::now(),
-            checker: None,
+            checker: skia_safe::RuntimeEffect::make_for_shader(CHECKER, None)
+                .map_err(|error| log::warn!("native renderer: checker: {error}"))
+                .ok(),
+            grid: skia_safe::RuntimeEffect::make_for_shader(GRID_LINES, None)
+                .and_then(|lines| skia_safe::RuntimeEffect::make_for_blender(GRID_COLOR, None).map(|color| (lines, color)))
+                .map_err(|error| log::warn!("native renderer: grid: {error}"))
+                .ok(),
             view: None,
             zoom: (0.0, Instant::now()),
             frame: 0,
@@ -465,6 +481,13 @@ impl Painter {
                 self.tiles.clear();
                 self.kit.forget_patterns(None);
                 self.dirty = true;
+            }
+            Msg::Render { view, width, height, reply } => {
+                let _ = reply.send(self.render_view(&view, width, height));
+                self.dirty = true;
+            }
+            Msg::HitTest { points, reply } => {
+                let _ = reply.send(points.iter().map(|&point| self.hit(point)).collect());
             }
             Msg::Purge(reply) => {
                 let before = self.gpu.used();
@@ -578,12 +601,13 @@ impl Painter {
                 encoder.node(slot);
             }
             let (counts, reason) = (encoder.counts, encoder.approximate_reason.take());
+            let waiting = encoder.missing_images.len();
             let images: Vec<(String, f64)> = encoder.missing_images.drain(..).chain(encoder.sharper_images.drain(..)).collect();
             drop(encoder);
             let picture = recorder.finish_recording_as_picture(None)?;
             self.ask(&images);
             let missing = images.into_iter().map(|(key, _)| key).collect();
-            self.pictures.insert(key, Recorded { picture, counts, reason, missing });
+            self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting });
         }
         self.pictures.get(&key)
     }
@@ -682,27 +706,41 @@ impl Painter {
         }
     }
 
-    /// Figma's checkerboard for a page with its background hidden, 6 CSS
-    /// pixels a square
-    fn checker(&mut self, dpr: f32) -> Option<Paint> {
+    /// Figma's checkerboard for a page with its background hidden. It's
+    /// anchored to the canvas, its squares 8 units wide at 100% and halved or
+    /// doubled at each power of two of zoom, so they stay 5.7 to 11.3 points
+    fn checker(&self, origin: (f32, f32), px: f32, zoom: f64) -> Option<Paint> {
         if !self.scene.transparent {
             return None;
         }
-        if self.checker.is_none() {
-            let (a, b) = if self.scene.dark { (31u8, 43u8) } else { (255u8, 240u8) };
-            let pixels = [a, a, a, 255, b, b, b, 255, b, b, b, 255, a, a, a, 255];
-            let info = ImageInfo::new((2, 2), ColorType::RGBA8888, AlphaType::Opaque, None);
-            self.checker = images::raster_from_data(&info, Data::new_copy(&pixels), 8);
-        }
-        let cell = 6.0 * dpr;
-        let shader = self.checker.as_ref()?.to_shader(
-            (TileMode::Repeat, TileMode::Repeat),
-            SamplingOptions::new(FilterMode::Nearest, MipmapMode::None),
-            &Matrix::scale((cell, cell)),
-        )?;
+        let cell = 8.0 / 2f64.powf(zoom.max(1e-6).log2().round()) as f32;
+        let (a, b) = if self.scene.dark { (0.12f32, 0.17f32) } else { (1.0, 0.95) };
+        let shader = self.checker.as_ref()?.make_shader(uniforms(&[origin.0, origin.1, px, cell, a, b]), &[], None)?;
         let mut paint = Paint::default();
         paint.set_shader(shader);
         Some(paint)
+    }
+
+    /// Figma's pixel grid, lines a device pixel wide at each unit once a unit
+    /// is 8 device pixels or more, which lighten dark colors and darken light
+    /// ones
+    fn pixel_grid(&self, canvas: &skia_safe::Canvas, origin: (f32, f32), px: f32, width: i32, height: i32) {
+        if px < 8.0 {
+            return;
+        }
+        let Some((lines, color)) = &self.grid else {
+            return;
+        };
+        let Some(shader) = lines.make_shader(uniforms(&[origin.0, origin.1, px]), &[], None) else {
+            return;
+        };
+        let Some(blender) = color.make_blender(Data::new_empty(), None) else {
+            return;
+        };
+        let mut paint = Paint::default();
+        paint.set_shader(shader);
+        paint.set_blender(blender);
+        canvas.draw_rect(Rect::from_iwh(width, height), &paint);
     }
 
     /// Draws `view` onto `target`, `width` by `height` pixels, drawing the
@@ -712,6 +750,7 @@ impl Painter {
         self.frame += 1;
         let (width, height) = (target.width(), target.height());
         let px = (width as f64 / view.w) as f32;
+        // Tiles land on whole pixels, as Figma's do, which keeps them sharp
         let ox = (view.x * px as f64).round() as i32;
         let oy = (view.y * px as f64).round() as i32;
         let pxb = px.to_bits();
@@ -749,7 +788,7 @@ impl Painter {
                 self.tiles.insert(key, tile);
             }
         }
-        let checker = self.checker(view.dpr as f32);
+        let checker = self.checker((ox as f32, oy as f32), px, view.zoom);
         let canvas = target.canvas();
         canvas.clear(self.background());
         if let Some(checker) = &checker {
@@ -792,6 +831,7 @@ impl Painter {
                 canvas.draw_image(&tile.image, at, None);
             }
         }
+        self.pixel_grid(canvas, (ox as f32, oy as f32), px, width, height);
         // The approximate reason of a unit in view, if any
         let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
         let level = px.log2().round().clamp(-12.0, 8.0) as i32;
@@ -892,6 +932,45 @@ impl Painter {
         Some(Offscreen { pixels, approximate_reason: reason, waiting })
     }
 
+    fn render_view(&mut self, view: &View, width: u32, height: u32) -> Option<(Vec<u8>, usize)> {
+        let mut target = self.gpu.surface(width as i32, height as i32, 1)?;
+        self.compose(&mut target, view, None, true);
+        let px = (width as f64 / view.w) as f32;
+        let level = px.log2().round().clamp(-12.0, 8.0) as i32;
+        let area = Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32);
+        let waiting = self
+            .units
+            .iter()
+            .filter(|unit| Rect::intersects2(&unit.bounds, &area))
+            .filter_map(|unit| self.pictures.get(&(unit.slot, unit.section, level)))
+            .map(|recorded| recorded.waiting)
+            .sum();
+        let info = ImageInfo::new((width as i32, height as i32), ColorType::RGBA8888, AlphaType::Unpremul, None);
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        if !target.canvas().read_pixels(&info, &mut pixels, (width * 4) as usize, (0, 0)) {
+            return None;
+        }
+        Some((pixels, waiting))
+    }
+
+    /// The nodes under `point`, the topmost at each level
+    fn hit(&self, point: (f32, f32)) -> Vec<String> {
+        let mut path = Vec::new();
+        let mut level: Vec<usize> = self.scene.roots.clone();
+        loop {
+            let found = level.iter().rev().copied().find(|&slot| {
+                self.scene.node(slot).is_some_and(|node| !node.hidden && node.bounds.is_some_and(|bounds| { let (x, y) = point; x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom }))
+            });
+            let Some(slot) = found else {
+                break;
+            };
+            let node = self.scene.node(slot).unwrap();
+            path.push(node.id.clone());
+            level = node.children.clone();
+        }
+        path
+    }
+
     fn replay(&mut self, views: Vec<View>) -> Vec<(f64, f64)> {
         let Some(first) = views.first() else {
             return Vec::new();
@@ -923,6 +1002,63 @@ impl Painter {
         cold.into_iter().zip(warm).collect()
     }
 }
+
+/// Packs floats as a runtime effect's uniforms
+fn uniforms(values: &[f32]) -> Data {
+    let bytes: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+    Data::new_copy(&bytes)
+}
+
+/// The checkerboard at device pixel `p`: canvas point `(p + origin) / px`,
+/// squares `cell` units wide, `a` where the cell's x and y differ in parity
+const CHECKER: &str = "
+uniform float2 origin;
+uniform float px;
+uniform float cell;
+uniform float a;
+uniform float b;
+half4 main(float2 p) {
+    float2 q = fract((p + origin) / px / (2.0 * cell)) - 0.5;
+    half v = half(q.x * q.y < 0.0 ? a : b);
+    return half4(v, v, v, 1.0);
+}
+";
+
+/// Marks the device pixels on the pixel grid: the first after each unit
+const GRID_LINES: &str = "
+uniform float2 origin;
+uniform float px;
+half4 main(float2 p) {
+    float2 f = fract((p + origin) / px);
+    return (f.x < 1.0 / px || f.y < 1.0 / px) ? half4(1) : half4(0);
+}
+";
+
+/// On the grid, a color's perceived lightness `l` (the root of its weighted
+/// squares) goes to `l - 0.05` when light, and dark colors are mixed toward
+/// white until it's `0.8 l + 0.15`
+const GRID_COLOR: &str = "
+half4 main(half4 src, half4 dst) {
+    if (src.a == 0.0) {
+        return dst;
+    }
+    float3 c = float3(dst.rgb);
+    float3 w = float3(0.299, 0.587, 0.114);
+    float k = dot(c * c, w);
+    float l = sqrt(k);
+    if (l > 0.5) {
+        return half4(half3(c * (l - 0.05) / l), dst.a);
+    }
+    float target = l * 0.8 + 0.15;
+    // |c + t (1 - c)|^2 weighted = target^2, solved for t
+    float3 d = 1.0 - c;
+    float qa = dot(d * d, w);
+    float qb = 2.0 * dot(c * d, w);
+    float qc = k - target * target;
+    float t = qa > 0.0 ? (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa) : 0.0;
+    return half4(half3(c + clamp(t, 0.0, 1.0) * d), dst.a);
+}
+";
 
 /// Each pixel, the average of the 4 by 4 samples drawn for it
 const AVERAGE: &str = "
