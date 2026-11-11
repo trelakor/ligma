@@ -16,6 +16,9 @@
 //! promise. A tab an AI tool has used in the last few minutes isn't frozen
 //! or put to sleep (see `CAN_REST_JS` in tabs.rs)
 //!
+//! What AI tools do in a file shows in Figma's right panel, in its MCP
+//! section, which Ligma takes over while the setting is on (`PANEL_JS`)
+//!
 //! The protocol is Figwright's own: `packages/shared/src` for the
 //! WebSocket, `packages/plugin/protocol` for the plugin's messages
 
@@ -75,6 +78,14 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     init(settings);
     // Settings shows the change right away rather than at the next check
     sync(app);
+    // Figma's own MCP section comes back
+    if !settings.mcp_bridge {
+        let off = PanelStatus { on: false, connected: false, refused: false, version: VERSION.trim() };
+        let script = format!("window.__ligmaMcpLog?.status({})", serde_json::to_string(&off).unwrap());
+        for webview in crate::tabs::scriptable_tabs(app) {
+            let _ = webview.eval(&script);
+        }
+    }
 }
 
 /// What a connection knows of its file, kept up to date by `sync`
@@ -93,6 +104,15 @@ struct Connection {
     file: Arc<Mutex<File>>,
     connected: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+}
+
+/// What a tab's MCP section shows (see `PANEL_JS`)
+#[derive(Serialize)]
+struct PanelStatus {
+    on: bool,
+    connected: bool,
+    refused: bool,
+    version: &'static str,
 }
 
 #[derive(Default)]
@@ -165,6 +185,20 @@ fn sync(app: &AppHandle) {
         state.connections.insert(file.key.clone(), connection);
     }
     let connected = state.connections.values().filter(|c| c.connected.load(Ordering::Relaxed)).count();
+    // Each tab's MCP section, every check, so a tab that reloaded is told
+    // again. A call that does nothing, so it's cheap
+    for connection in state.connections.values() {
+        let tab = connection.file.lock().unwrap().tab;
+        let panel = PanelStatus {
+            on,
+            connected: connection.connected.load(Ordering::Relaxed),
+            refused: state.refused,
+            version: VERSION.trim(),
+        };
+        if let Some(webview) = crate::tabs::scriptable(app, tab) {
+            let _ = webview.eval(format!("window.__ligmaMcpLog?.status({})", serde_json::to_string(&panel).unwrap()));
+        }
+    }
     let status = Status {
         on,
         files: files.len(),
@@ -483,6 +517,7 @@ const RUNNER_JS: &str = r#"(() => {
         waiting.delete(message.id);
         lastUsed = Date.now();
         answers.set(message.id, message);
+        logged("end", message.id, message);
       }
     },
     get onmessage() { return onmessage; },
@@ -543,9 +578,21 @@ __PLUGIN_JS__
   // The file is drawn and Figma's progress bar gone, as READY_JS in tabs.rs
   const ready = () => !!document.querySelector("canvas") && !document.querySelector('[class*="progress_bar--"]');
 
+  // For the MCP section's list of calls (see `PANEL_JS`), which mustn't
+  // get in the way of the call itself
+  const logged = (what, ...args) => {
+    try {
+      window.__ligmaMcpLog?.[what](...args);
+    } catch (error) {
+      console.warn(error);
+    }
+  };
+
   const fail = (id, error) => {
     waiting.delete(id);
-    answers.set(id, { tag: BRIDGE, kind: "tool-error", id, code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error) });
+    const answer = { tag: BRIDGE, kind: "tool-error", id, code: "INTERNAL_ERROR", message: error instanceof Error ? error.message : String(error) };
+    answers.set(id, answer);
+    logged("end", id, answer);
   };
 
   window.__ligmaMcp = {
@@ -569,6 +616,7 @@ __PLUGIN_JS__
       if (typeof onmessage !== "function") return "Figwright's plugin didn't start in this tab";
       waiting.add(id);
       lastUsed = Date.now();
+      logged("start", id, method, params);
       try {
         onmessage(params == null ? { tag: BRIDGE, kind: "tool-call", id, method } : { tag: BRIDGE, kind: "tool-call", id, method, params });
       } catch (error) {
@@ -591,6 +639,481 @@ __PLUGIN_JS__
     busy: () => waiting.size > 0 || Date.now() - lastUsed < BUSY_FOR,
   };
 })()"#;
+
+/// Runs in Figma tabs. Sets `window.__ligmaMcpLog`, which the runner tells
+/// of each tool call as it starts and ends, and Ligma of the setting and
+/// the file's connection, with `status`. While the setting is on, it puts
+/// its own MCP section in place of Figma's: a copy of Figma's heading,
+/// whose chip says whether the file is connected and whose button opens
+/// Settings at AI tools, over the latest calls in this file. Each call
+/// opens to show when it ran and its arguments, or why it failed, and
+/// selects the layers it named or made. Calls are kept in the tab's
+/// `sessionStorage`. Figma only shows its section while nothing is
+/// selected, so otherwise Ligma's goes at the foot of the panel
+pub const PANEL_JS: &str = r##"(() => {
+  if (location.hostname !== "www.figma.com" || window.top !== window || window.__ligmaMcpLog) return;
+  // Calls kept per file, and rows shown before "Show more"
+  const KEEP = 50;
+  const SHOWN = 6;
+  const ANCHOR = '[data-onboarding-key="design-mode-mcp-agents-panel-callout-target"]';
+  const PANEL = '[class*="properties_panel--propertiesPanel--"]';
+  const READ = /^(get|search|scan|list|ping|find)(_|$)/;
+
+  // The file's calls, newest first, kept for the tab's life in
+  // sessionStorage so a reload doesn't lose them
+  const fileKey = () => location.pathname.split("/")[2] ?? "";
+  let loadedFor = null;
+  let calls = [];
+  const load = () => {
+    if (loadedFor === fileKey()) return;
+    loadedFor = fileKey();
+    try {
+      calls = JSON.parse(sessionStorage.getItem(`ligma-mcp-log:${loadedFor}`)) ?? [];
+    } catch {
+      calls = [];
+    }
+    for (const call of calls) {
+      if (call.status !== "pending") continue;
+      call.status = "error";
+      call.error = "The page reloaded before the call was answered";
+    }
+  };
+  let saving = 0;
+  const save = () => {
+    clearTimeout(saving);
+    saving = setTimeout(() => {
+      try {
+        sessionStorage.setItem(`ligma-mcp-log:${loadedFor}`, JSON.stringify(calls));
+      } catch {}
+    }, 300);
+  };
+
+  // Layers a call named, as Figwright's panel finds them
+  const NODE_ID = /^[A-Za-z]?\d+:\d+(?:;[A-Za-z]?\d+:\d+)*$/;
+  const nodeIds = (value, out = new Set(), depth = 0) => {
+    if (depth > 6 || out.size >= 50 || value === null || typeof value !== "object") return out;
+    if (Array.isArray(value)) {
+      for (const item of value) nodeIds(item, out, depth + 1);
+      return out;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "nodeId" && typeof child === "string" && NODE_ID.test(child)) out.add(child);
+      if (key === "nodeIds" && Array.isArray(child)) {
+        for (const id of child) if (typeof id === "string" && NODE_ID.test(id)) out.add(id);
+      }
+      nodeIds(child, out, depth + 1);
+    }
+    return out;
+  };
+
+  // A few of the call's arguments, short enough to read in the panel
+  const summarize = (params) => {
+    if (params === null || typeof params !== "object") return [];
+    return Object.entries(params)
+      .filter(([, value]) => value !== undefined)
+      .slice(0, 6)
+      .map(([key, value]) => {
+        let text = typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+        if (text.length > 80) text = `${text.slice(0, 80)}…`;
+        return [key, text];
+      });
+  };
+
+  let status = null;
+  const expanded = new Set();
+  let showAll = false;
+
+  window.__ligmaMcpLog = {
+    start(id, method, params) {
+      load();
+      calls.unshift({ id, method, args: summarize(params), nodeIds: [...nodeIds(params)], startedAt: Date.now(), status: "pending" });
+      calls.length = Math.min(calls.length, KEEP);
+      save();
+      render();
+    },
+    end(id, reply) {
+      load();
+      const call = calls.find((call) => call.id === id);
+      if (!call || call.status !== "pending") return;
+      call.endedAt = Date.now();
+      if (reply?.kind === "tool-result") {
+        call.status = "ok";
+        // What a write made or changed, which reads only look at
+        if (!READ.test(call.method)) call.nodeIds = [...nodeIds(reply.result, new Set(call.nodeIds))];
+      } else {
+        call.status = "error";
+        // Without the tool's name in front, which the row already shows
+        const message = String(reply?.message ?? "The call failed");
+        call.error = message.startsWith(`${call.method}: `) ? message.slice(call.method.length + 2) : message;
+      }
+      save();
+      render();
+    },
+    // Sent by Ligma every couple of seconds: whether the setting is on,
+    // and whether this file is connected to the MCP server. Each one also
+    // puts the section back if Figma's page dropped it
+    status(next) {
+      const changed = JSON.stringify(next) !== JSON.stringify(status);
+      status = next;
+      watch();
+      if (changed) render();
+    },
+  };
+
+  // "create_component" as "Create component"
+  const ACRONYMS = { svg: "SVG", pdf: "PDF", id: "ID", ids: "IDs", url: "URL", css: "CSS", api: "API" };
+  const title = (method) => {
+    const words = method.split("_").filter(Boolean).map((word) => ACRONYMS[word] ?? word);
+    if (!words.length) return method;
+    return words[0][0].toUpperCase() + words[0].slice(1) + (words.length > 1 ? ` ${words.slice(1).join(" ")}` : "");
+  };
+  const kind = (method) => {
+    if (READ.test(method)) return "read";
+    if (/^(create|import|clone|add|combine|duplicate|group|boolean|flatten|repeat)(_|$)/.test(method)) return "create";
+    if (/^(delete|remove)(_|$)/.test(method)) return "delete";
+    if (/^(export|save)(_|$)/.test(method)) return "export";
+    return "edit";
+  };
+
+  // Drawn in Figma's UI3 icon grammar: 24 by 24, thin strokes
+  const svg = (paths) =>
+    `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+  const ICONS = {
+    read: svg('<circle cx="11" cy="11" r="4.5"/><path d="m14.5 14.5 3.5 3.5"/>'),
+    create: svg('<path d="M12 6.5v11M6.5 12h11"/>'),
+    edit: svg('<path d="m14.5 7 2.5 2.5-8 8H6.5V15z"/>'),
+    delete: svg('<path d="M7 8.5h10M10.5 8.5V7h3v1.5M8.5 8.5l.7 9h5.6l.7-9"/>'),
+    export: svg('<path d="M12 14.5v-8M9 9.5l3-3 3 3M7 13v4h10v-4"/>'),
+    error: svg('<circle cx="12" cy="12" r="5.5"/><path d="M12 9.2v3.3"/><circle cx="12" cy="14.8" r=".4" fill="currentColor"/>'),
+    pending: svg('<circle cx="12" cy="12" r="5.5" stroke-opacity=".3"/><path d="M12 6.5a5.5 5.5 0 0 1 5.5 5.5"/>'),
+    select: svg('<circle cx="12" cy="12" r="4"/><path d="M12 5v3M12 16v3M5 12h3M16 12h3"/>'),
+  };
+
+  const since = (time) => {
+    const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
+    if (seconds < 10) return "now";
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+    return new Date(time).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+  const clock = (time) => new Date(time).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  const took = (call) => {
+    const ms = call.endedAt - call.startedAt;
+    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+  };
+
+  // Selects the layers and zooms to them, going to their page if need be,
+  // as Figwright's panel does
+  const reveal = async (ids) => {
+    const figma = window.figma;
+    try {
+      const found = await Promise.all(ids.map((id) => figma.getNodeByIdAsync(id).catch(() => null)));
+      const nodes = found.filter((node) => node && !node.removed && node.type !== "PAGE" && node.type !== "DOCUMENT");
+      const pageOf = (node) => {
+        while (node && node.type !== "PAGE") node = node.parent;
+        return node;
+      };
+      const page = nodes.length ? pageOf(nodes[0]) : null;
+      if (!page) {
+        figma.notify("Those layers aren't in this file anymore");
+        return;
+      }
+      const shown = nodes.filter((node) => pageOf(node) === page);
+      if (page !== figma.currentPage) await figma.setCurrentPageAsync(page);
+      figma.currentPage.selection = shown;
+      figma.viewport.scrollAndZoomIntoView(shown);
+      if (figma.viewport.zoom > 4) figma.viewport.zoom = 4;
+    } catch (error) {
+      console.warn("Ligma: couldn't select the layers", error);
+    }
+  };
+
+  // Asks Ligma to open Settings at AI tools (see `on_signal`): through
+  // `window.open` on Windows, and on macOS as an iframe load, which
+  // WKWebView reports to `on_navigation`
+  const openSettings = () => {
+    const url = "https://mcp.ligma.invalid/settings";
+    if (navigator.userAgent.includes("Mac")) {
+      const frame = document.createElement("iframe");
+      frame.style.display = "none";
+      frame.src = url;
+      document.documentElement.appendChild(frame);
+      setTimeout(() => frame.remove(), 1000);
+    } else {
+      window.open(url, "_blank");
+    }
+  };
+
+  const style = document.createElement("style");
+  style.textContent = `
+    ${ANCHOR}:not([data-ligma-mcp]) { display: none !important; }
+    [data-ligma-mcp] .ligma-mcp-list { display: flex; flex-direction: column; padding: 0 8px 8px; }
+    [data-ligma-mcp] .ligma-mcp-list:empty { display: none; }
+    [data-ligma-mcp] .ligma-mcp-call { position: relative; }
+    [data-ligma-mcp] button.ligma-mcp-row {
+      all: unset; box-sizing: border-box; display: flex; align-items: center; width: 100%; height: 26px;
+      padding: 0 8px 0 4px; border-radius: 5px; color: var(--color-text); cursor: default;
+    }
+    [data-ligma-mcp] .ligma-mcp-row:hover, [data-ligma-mcp] .ligma-mcp-call:has(.ligma-mcp-select:hover) .ligma-mcp-row { background: var(--color-bg-hover); }
+    [data-ligma-mcp] :is(.ligma-mcp-row, .ligma-mcp-select, .ligma-mcp-more):focus-visible { outline: 1px solid var(--color-border-selected); outline-offset: -1px; }
+    [data-ligma-mcp] .ligma-mcp-icon { flex: none; display: grid; place-items: center; width: 24px; height: 24px; color: var(--color-icon-secondary); }
+    [data-ligma-mcp] [data-status="error"] .ligma-mcp-icon { color: var(--color-icon-danger); }
+    [data-ligma-mcp] [data-status="pending"] .ligma-mcp-icon svg { animation: ligma-mcp-spin .8s linear infinite; }
+    [data-ligma-mcp] .ligma-mcp-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding-left: 4px; }
+    [data-ligma-mcp] [data-kind="read"] .ligma-mcp-name { color: var(--color-text-secondary); }
+    [data-ligma-mcp] .ligma-mcp-count { color: var(--color-text-tertiary); margin-left: 4px; font-variant-numeric: tabular-nums; }
+    [data-ligma-mcp] .ligma-mcp-meta { flex: none; margin-left: 8px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+    [data-ligma-mcp] [data-status="error"] .ligma-mcp-meta { color: var(--color-text-danger); }
+    [data-ligma-mcp] button.ligma-mcp-select {
+      all: unset; box-sizing: border-box; position: absolute; top: 1px; right: 1px; display: none; place-items: center;
+      width: 24px; height: 24px; border-radius: 4px; color: var(--color-icon-secondary);
+    }
+    [data-ligma-mcp] .ligma-mcp-select:hover { color: var(--color-icon); background: var(--color-bg-pressed); }
+    [data-ligma-mcp] .ligma-mcp-call:is(:hover, :focus-within) .ligma-mcp-select { display: grid; }
+    [data-ligma-mcp] .ligma-mcp-call:is(:hover, :focus-within):has(.ligma-mcp-select) .ligma-mcp-meta { visibility: hidden; }
+    [data-ligma-mcp] .ligma-mcp-details { padding: 2px 8px 6px 32px; color: var(--color-text-secondary); }
+    [data-ligma-mcp] .ligma-mcp-details p { margin: 0; overflow-wrap: anywhere; }
+    [data-ligma-mcp] .ligma-mcp-error { color: var(--color-text-danger); margin-bottom: 4px !important; }
+    [data-ligma-mcp] .ligma-mcp-when { font-variant-numeric: tabular-nums; }
+    [data-ligma-mcp] .ligma-mcp-args { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; margin: 4px 0 0; }
+    [data-ligma-mcp] .ligma-mcp-args dt { color: var(--color-text-tertiary); }
+    [data-ligma-mcp] .ligma-mcp-args dd { margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    [data-ligma-mcp] button.ligma-mcp-more {
+      all: unset; box-sizing: border-box; height: 24px; padding: 0 8px 0 32px; border-radius: 5px; color: var(--color-text-secondary);
+    }
+    [data-ligma-mcp] .ligma-mcp-more:hover { color: var(--color-text); }
+    [data-ligma-mcp] .ligma-mcp-chip {
+      display: inline-flex; align-items: center; height: 16px; padding: 0 4px; border-radius: 5px;
+      box-shadow: inset 0 0 0 1px var(--color-border); font-weight: 450;
+    }
+    @keyframes ligma-mcp-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { [data-ligma-mcp] [data-status="pending"] .ligma-mcp-icon svg { animation: none; } }
+  `;
+
+  // Figma's own section, copied as it's first seen so ours looks the same,
+  // with its heading, chip and button
+  let template = null;
+  let root = null;
+  let chip = null;
+  let chipHolder = null;
+  let list = null;
+  const build = () => {
+    if (root || !template) return;
+    root = template.cloneNode(true);
+    root.removeAttribute("data-onboarding-key");
+    root.setAttribute("data-ligma-mcp", "");
+    for (const element of root.querySelectorAll("[id]")) element.removeAttribute("id");
+    chip = root.querySelector("strong span") ?? root.querySelector("strong");
+    chipHolder = root.querySelector("[data-tooltip]:has(strong)");
+    if (!chip) {
+      // A heading without Figma's chip, as when it shows something else
+      const heading = [...root.querySelectorAll("span")].find((span) => span.textContent.trim() === "MCP");
+      chipHolder = document.createElement("span");
+      chipHolder.style.marginLeft = "4px";
+      chip = document.createElement("span");
+      chip.className = "ligma-mcp-chip";
+      chipHolder.append(chip);
+      heading?.after(chipHolder);
+    }
+    const button = root.querySelector("button");
+    if (button) {
+      button.setAttribute("aria-label", "Set up AI tools");
+      button.setAttribute("data-tooltip", "Set up AI tools");
+      button.addEventListener("click", openSettings);
+    }
+    list = document.createElement("div");
+    list.className = "ligma-mcp-list";
+    list.setAttribute("role", "list");
+    list.setAttribute("aria-label", "AI tool activity in this file");
+    root.append(list);
+    // Figma acts on Enter and Space itself, as shortcuts
+    root.addEventListener("keydown", (event) => {
+      if ((event.key === "Enter" || event.key === " ") && event.target.closest("button")) event.stopPropagation();
+    });
+    render();
+  };
+
+  // Consecutive calls of the same tool that went through share a row
+  const groups = () => {
+    const out = [];
+    for (const call of calls) {
+      const last = out.at(-1);
+      if (last && call.status === "ok" && last.status === "ok" && last.method === call.method) last.calls.push(call);
+      else out.push({ id: call.id, method: call.method, status: call.status, calls: [call] });
+    }
+    return out;
+  };
+
+  const element = (tag, className, text) => {
+    const made = document.createElement(tag);
+    if (className) made.className = className;
+    if (text !== undefined) made.textContent = text;
+    return made;
+  };
+
+  const row = (group) => {
+    const [call] = group.calls;
+    const item = element("div", "ligma-mcp-call");
+    item.setAttribute("role", "listitem");
+    item.dataset.status = group.status;
+    item.dataset.kind = kind(group.method);
+    const open = expanded.has(group.id);
+    const button = element("button", "ligma-mcp-row");
+    button.type = "button";
+    button.setAttribute("aria-expanded", open);
+    const icon = element("span", "ligma-mcp-icon");
+    icon.innerHTML = ICONS[group.status === "ok" ? kind(group.method) : group.status];
+    const name = element("span", "ligma-mcp-name", title(group.method));
+    if (group.calls.length > 1) name.append(element("span", "ligma-mcp-count", `×${group.calls.length}`));
+    const meta = element("span", "ligma-mcp-meta", group.status === "error" ? "Failed" : group.status === "pending" ? "" : since(call.endedAt ?? call.startedAt));
+    button.append(icon, name, meta);
+    button.addEventListener("click", () => {
+      if (expanded.has(group.id)) expanded.delete(group.id);
+      else expanded.add(group.id);
+      render();
+    });
+    item.append(button);
+
+    const ids = [...new Set(group.calls.flatMap((call) => call.nodeIds ?? []))];
+    if (ids.length) {
+      const select = element("button", "ligma-mcp-select");
+      select.type = "button";
+      select.innerHTML = ICONS.select;
+      const label = ids.length === 1 ? "Select its layer" : `Select its ${ids.length} layers`;
+      select.setAttribute("aria-label", label);
+      select.setAttribute("data-tooltip", label);
+      select.setAttribute("data-tooltip-type", "text");
+      select.addEventListener("click", () => reveal(ids));
+      item.append(select);
+    }
+
+    if (open) {
+      const details = element("div", "ligma-mcp-details");
+      if (call.error) details.append(element("p", "ligma-mcp-error", call.error));
+      const when =
+        group.calls.length > 1
+          ? `${group.calls.length} calls, the last at ${clock(call.startedAt)}`
+          : call.endedAt
+            ? `${clock(call.startedAt)}, took ${took(call)}`
+            : `Started at ${clock(call.startedAt)}`;
+      details.append(element("p", "ligma-mcp-when", when));
+      if (call.args?.length) {
+        const args = element("dl", "ligma-mcp-args");
+        for (const [key, value] of call.args) {
+          const dd = element("dd", "", value);
+          dd.title = value;
+          args.append(element("dt", "", key), dd);
+        }
+        details.append(args);
+      }
+      item.append(details);
+    }
+    return item;
+  };
+
+  const CHIP = {
+    connected: ["Connected", (version) => `Figwright ${version}. AI tools can read and edit this file through Ligma.`],
+    working: ["Working", () => "An AI tool is using this file"],
+    waiting: ["Not connected", () => "Ligma connects this file once an AI tool set up with Figwright starts. Set one up with the button on the right."],
+    refused: ["Other version", (version) => `Your AI tool runs another version of Figwright's MCP server. Ligma needs ${version}.`],
+  };
+
+  const render = () => {
+    if (!root) return;
+    load();
+    const state = !status?.connected
+      ? status?.refused ? "refused" : "waiting"
+      : calls.some((call) => call.status === "pending") ? "working" : "connected";
+    const [text, tip] = CHIP[state];
+    chip.textContent = text;
+    chipHolder?.setAttribute("data-tooltip", tip(status?.version ?? ""));
+    chipHolder?.setAttribute("data-tooltip-type", "text");
+    const all = groups();
+    const shown = showAll ? all : all.slice(0, SHOWN);
+    const rows = shown.map(row);
+    if (all.length > SHOWN) {
+      const more = element("button", "ligma-mcp-more", showAll ? "Show less" : `Show ${all.length - SHOWN} more`);
+      more.type = "button";
+      more.addEventListener("click", () => {
+        showAll = !showAll;
+        render();
+      });
+      rows.push(more);
+    }
+    // Keeps focus on the row it was on as the list is redrawn
+    const focused = list.contains(document.activeElement) ? [...list.querySelectorAll("button")].indexOf(document.activeElement) : -1;
+    list.replaceChildren(...rows);
+    if (focused >= 0) list.querySelectorAll("button")[focused]?.focus();
+  };
+
+  // Ours goes where Figma's MCP section is, which shows while nothing is
+  // selected, and at the foot of the panel otherwise
+  const place = () => {
+    if (!status?.on) {
+      root?.remove();
+      style.remove();
+      return;
+    }
+    if (!style.isConnected) (document.head ?? document.documentElement).append(style);
+    const anchor = document.querySelector(`${ANCHOR}:not([data-ligma-mcp])`);
+    if (anchor && !template) {
+      template = anchor.cloneNode(true);
+      build();
+    }
+    if (!root) return;
+    if (anchor) {
+      if (anchor.nextElementSibling !== root) anchor.after(root);
+      return;
+    }
+    const panel = document.querySelector(PANEL);
+    if (!panel) root.remove();
+    else if (panel.lastElementChild !== root) panel.append(root);
+  };
+
+  let observer = null;
+  let queued = false;
+  let ticking = 0;
+  const watch = () => {
+    if (status?.on && !observer) {
+      observer = new MutationObserver(() => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => {
+          queued = false;
+          place();
+        });
+      });
+      // The document itself: Figma's page replaces what's in it as it loads
+      observer.observe(document, { childList: true, subtree: true });
+      // Times like "2m" move on
+      ticking = setInterval(() => root?.isConnected && !document.hidden && render(), 15000);
+    } else if (!status?.on && observer) {
+      observer.disconnect();
+      observer = null;
+      clearInterval(ticking);
+    }
+    place();
+  };
+})()"##;
+
+/// Origin of the links `PANEL_JS` opens to ask for Settings
+pub const SIGNAL_HOST: &str = "mcp.ligma.invalid";
+
+/// A click on the MCP section's button: opens Settings at AI tools. Not
+/// from within the webview's own callback, which is still deciding on the
+/// page
+pub fn on_signal(app: &AppHandle, url: &tauri::Url) {
+    if url.path() != "/settings" {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(error) = crate::settings::open_window_at(&app, Some("ai-tools")) {
+            log::warn!("Couldn't open Settings: {error}");
+        }
+    });
+}
 
 /// MCP server configuration for AI tools, pinned to `VERSION`
 fn config() -> String {

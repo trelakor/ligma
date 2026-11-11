@@ -788,6 +788,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
         .initialization_script(crate::lasso::page_js())
+        .initialization_script(crate::mcp_bridge::PANEL_JS)
         .initialization_script(crate::split::PAGE_JS)
         .initialization_script(crate::split::CARRY_JS)
         .initialization_script(crate::view_state::page_js(waking));
@@ -861,6 +862,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::adjustments::on_signal(app, id, url);
         return false;
     }
+    if url.host_str() == Some(crate::mcp_bridge::SIGNAL_HOST) {
+        crate::mcp_bridge::on_signal(app, url);
+        return false;
+    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -914,6 +919,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::toolbar::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
         crate::adjustments::on_signal(app, id, &url);
+    } else if url.host_str() == Some(crate::mcp_bridge::SIGNAL_HOST) {
+        crate::mcp_bridge::on_signal(app, &url);
 
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);

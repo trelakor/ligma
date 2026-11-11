@@ -843,7 +843,7 @@
       <div id="plugin-list"></div>
       <div class="row empty" id="no-plugins">None yet</div>
     </section>
-    <section>
+    <section id="ai-tools">
       <h2>AI tools</h2>
       <label class="row">
         <span class="label">Connect AI tools to your files
@@ -974,6 +974,26 @@
     showPage(tabs[(to + tabs.length) % tabs.length], true);
   });
   showPage($(localStorage.getItem("settingsPage")) ?? tabs[0]);
+
+  // Opens the page holding section `id` and scrolls to it, for links from
+  // elsewhere in Ligma, like the MCP section in Figma's panel
+  window.showSection = (id) => {
+    const section = $(id);
+    const page = section?.closest('[role="tabpanel"]');
+    const tab = page && tabs.find((tab) => tab.getAttribute("aria-controls") === page.id);
+    if (!tab) return;
+    showPage(tab);
+    // The lists above it fill in as they load, so it's kept in view until
+    // they have, or until the page is scrolled
+    const keep = () => section.scrollIntoView({ block: "start" });
+    keep();
+    const resizes = new ResizeObserver(keep);
+    resizes.observe(page);
+    const stop = () => resizes.disconnect();
+    setTimeout(stop, 1500);
+    addEventListener("wheel", stop, { once: true });
+  };
+  if (window.__ligmaOpenSection) window.showSection(window.__ligmaOpenSection);
 
   // Figma theme colors (see THEME_JS in tabs.rs) onto the variables
   const THEME_VARS = {
