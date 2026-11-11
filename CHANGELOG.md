@@ -2,6 +2,13 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.37.0 - 2026-11-10
+
+- Lasso fill, under Pencil in Figma Design's Creation tools menu, fills what you draw around with color, as Procreate's lasso fill does. The loop is smoothed into a vector, with fills and strokes set from the panel on the right, color styles and variables included. Turn it off in Settings > Features > Toolbar.
+- Settings > Plugins > AI tools finds the AI tools on your computer, like Claude Desktop, Codex, Cursor, Visual Studio Code, Windsurf, Gemini CLI and Antigravity, and adds Figma MCP Bridge to each with a switch. Claude Code gets a Copy Command button.
+- Tabs always fit their titles. When the tab bar is full they shrink in step, instead of all turning the same width.
+- Saved plugins and widgets show in the left rail again. A Figma update had hidden them.
+
 ## 0.36.0 - 2026-11-10
 
 - Your Discord status shows the app icon you picked in Settings > App Icon, instead of always Ligma's logo.
