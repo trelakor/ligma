@@ -788,6 +788,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
         .initialization_script(crate::lasso::page_js())
+        .initialization_script(crate::mcp_bridge::PANEL_JS)
         .initialization_script(crate::split::PAGE_JS)
         .initialization_script(crate::split::CARRY_JS)
         .initialization_script(crate::view_state::page_js(waking));
@@ -861,6 +862,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         crate::adjustments::on_signal(app, id, url);
         return false;
     }
+    if url.host_str() == Some(crate::mcp_bridge::SIGNAL_HOST) {
+        crate::mcp_bridge::on_signal(app, url);
+        return false;
+    }
     if crate::auth::is_google_sign_in(url) {
         sign_in_later(app, id);
         return false;
@@ -914,6 +919,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::toolbar::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::adjustments::SIGNAL_HOST) {
         crate::adjustments::on_signal(app, id, &url);
+    } else if url.host_str() == Some(crate::mcp_bridge::SIGNAL_HOST) {
+        crate::mcp_bridge::on_signal(app, &url);
 
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
@@ -2084,6 +2091,8 @@ pub struct EditorFile {
     pub tab: u32,
     pub key: String,
     pub name: String,
+    /// Whether its tab is on screen
+    pub shown: bool,
 }
 
 /// Files open in Figma Design, FigJam, Slides or Buzz, the editors with a
@@ -2091,7 +2100,7 @@ pub struct EditorFile {
 /// file open in more than one tab comes once, in the tab on screen if any
 pub fn editor_files(app: &AppHandle) -> Vec<EditorFile> {
     let state = app.state::<Tabs>().inner().0.lock().unwrap();
-    let mut files: Vec<(EditorFile, bool)> = Vec::new();
+    let mut files: Vec<EditorFile> = Vec::new();
     for tab in state.tabs.iter().filter(|tab| !tab.asleep && !tab.suspended) {
         let Some(key) = tab.file_key.clone() else {
             continue;
@@ -2100,14 +2109,14 @@ pub fn editor_files(app: &AppHandle) -> Vec<EditorFile> {
             continue;
         }
         let shown = tab.hidden_since.is_none();
-        let file = EditorFile { tab: tab.id, key, name: tab.title.clone() };
-        match files.iter_mut().find(|(other, _)| other.key == file.key) {
-            Some(other) if shown && !other.1 => *other = (file, shown),
+        let file = EditorFile { tab: tab.id, key, name: tab.title.clone(), shown };
+        match files.iter_mut().find(|other| other.key == file.key) {
+            Some(other) if shown && !other.shown => *other = file,
             Some(_) => {}
-            None => files.push((file, shown)),
+            None => files.push(file),
         }
     }
-    files.into_iter().map(|(file, _)| file).collect()
+    files
 }
 
 /// The file in the active tab

@@ -143,9 +143,11 @@ pub struct Settings {
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
-    /// Let AI tools read and edit open files through Figma MCP Bridge's
-    /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs)
-    pub mcp_bridge: bool,
+    /// Ligma MCP: let AI tools read and edit open files through Figwright's
+    /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs).
+    /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
+    /// is no longer read, so it's on for everyone once
+    pub ligma_mcp: bool,
 }
 
 impl Default for Settings {
@@ -196,7 +198,7 @@ impl Default for Settings {
             copy_as_code: true,
             lasso_fill: true,
             classic_home: false,
-            mcp_bridge: false,
+            ligma_mcp: true,
         }
     }
 }
@@ -256,10 +258,20 @@ fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
 
 /// Opens the settings window, or focuses it if it's already open
 pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
+    open_window_at(app, None)
+}
+
+/// Opens the settings window at the page and section with id `section` in
+/// settings.html, like `"ai-tools"`, or focuses it there
+pub fn open_window_at(app: &AppHandle, section: Option<&str>) -> tauri::Result<()> {
     // The gear button's clicks can arrive together; one window between them
     static OPENING: Mutex<()> = Mutex::new(());
     let _opening = OPENING.lock().unwrap();
+    let section = section.map(|section| serde_json::to_string(section).unwrap());
     if let Some(window) = app.get_webview_window(WINDOW) {
+        if let Some(section) = &section {
+            window.eval(format!("window.showSection?.({section})"))?;
+        }
         window.unminimize()?;
         return window.set_focus();
     }
@@ -274,6 +286,10 @@ pub fn open_window(app: &AppHandle) -> tauri::Result<()> {
         .maximizable(false)
         .minimizable(false)
         .center();
+    // Read by the page as it starts
+    if let Some(section) = &section {
+        builder = builder.initialization_script(format!("window.__ligmaOpenSection = {section};"));
+    }
     // No flash of another color before the page draws
     if let Some(color) = crate::tabs::theme(app).as_ref().and_then(background) {
         builder = builder.background_color(color);

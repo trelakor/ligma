@@ -843,13 +843,13 @@
       <div id="plugin-list"></div>
       <div class="row empty" id="no-plugins">None yet</div>
     </section>
-    <section>
+    <section id="ai-tools">
       <h2>AI tools</h2>
       <label class="row">
         <span class="label">Connect AI tools to your files
-          <div class="hint">Lets AI tools like Claude Code, Cursor and Codex read and edit the files open in Ligma, through Figma MCP Bridge's MCP server instead of Figma's, which a free plan can call 6 times a month. Only in files you can edit.</div>
+          <div class="hint">Lets AI tools like Claude Code, Cursor and Codex read and edit the files open in Ligma, through Figwright's MCP server instead of Figma's, which a free plan can call 6 times a month. Only in files you can edit. What they do shows under Ligma MCP in Figma's right panel.</div>
         </span>
-        <input type="checkbox" class="switch" id="mcp-bridge">
+        <input type="checkbox" class="switch" id="ligma-mcp">
       </label>
       <div class="row nested" id="mcp-status-row" aria-live="polite">
         <span class="label"><span id="mcp-status">Off</span>
@@ -865,7 +865,7 @@
       </div>
       <details class="manual">
         <summary><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4.5 10 8l-3.5 3.5"/></svg>Set up by hand</summary>
-        <div class="hint">For an AI tool not listed above. Add this to its MCP settings. The tool starts the server with npx, so it needs Node.js.</div>
+        <div class="hint">For an AI tool not listed above. Add this to its MCP settings. The tool starts the server with npx, so it needs Node.js 20.19 or later.</div>
         <div class="snippet">
           <div class="snippet-head"><span>JSON</span><button class="icon-button" id="copy-mcp-json" title="Copy" aria-label="Copy JSON"></button></div>
           <pre id="mcp-json"></pre>
@@ -905,7 +905,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "mcp-bridge"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -974,6 +974,26 @@
     showPage(tabs[(to + tabs.length) % tabs.length], true);
   });
   showPage($(localStorage.getItem("settingsPage")) ?? tabs[0]);
+
+  // Opens the page holding section `id` and scrolls to it, for links from
+  // elsewhere in Ligma, like the MCP section in Figma's panel
+  window.showSection = (id) => {
+    const section = $(id);
+    const page = section?.closest('[role="tabpanel"]');
+    const tab = page && tabs.find((tab) => tab.getAttribute("aria-controls") === page.id);
+    if (!tab) return;
+    showPage(tab);
+    // The lists above it fill in as they load, so it's kept in view until
+    // they have, or until the page is scrolled
+    const keep = () => section.scrollIntoView({ block: "start" });
+    keep();
+    const resizes = new ResizeObserver(keep);
+    resizes.observe(page);
+    const stop = () => resizes.disconnect();
+    setTimeout(stop, 1500);
+    addEventListener("wheel", stop, { once: true });
+  };
+  if (window.__ligmaOpenSection) window.showSection(window.__ligmaOpenSection);
 
   // Figma theme colors (see THEME_JS in tabs.rs) onto the variables
   const THEME_VARS = {
@@ -1239,7 +1259,7 @@
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
-    $("mcp-bridge").checked = settings.mcpBridge;
+    $("ligma-mcp").checked = settings.ligmaMcp;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -1252,7 +1272,7 @@
       ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
-      ["mcp-status-row", settings.mcpBridge],
+      ["mcp-status-row", settings.ligmaMcp],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -1319,7 +1339,7 @@
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
-      mcpBridge: $("mcp-bridge").checked,
+      ligmaMcp: $("ligma-mcp").checked,
       ...changes,
     };
     show();
@@ -1503,6 +1523,9 @@
     if (status.on && status.files === 0) {
       text = "No files open";
       hint = "Files connect once they're open in a tab";
+    } else if (status.on && status.refused) {
+      text = "The MCP server is another version";
+      hint = `Ligma needs Figwright ${status.version}. Update your AI tool below, then restart it`;
     } else if (status.on && status.connected === 0) {
       text = "Waiting for the MCP server";
       hint = "Your AI tool starts it once it's added there";
@@ -1510,7 +1533,7 @@
       text = status.connected === status.files
         ? `Connected: ${files(status.connected)}`
         : `Connected: ${status.connected} of ${files(status.files)}`;
-      hint = `Figma MCP Bridge ${status.version}`;
+      hint = `Figwright ${status.version}`;
     }
     $("mcp-status").textContent = text;
     $("mcp-status-hint").textContent = hint;
@@ -1526,7 +1549,7 @@
   const DONE_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg>';
   const clientNotes = {};
   function lockMcpClients() {
-    const on = Boolean(settings?.mcpBridge);
+    const on = Boolean(settings?.ligmaMcp);
     $("mcp-clients-head").classList.toggle("disabled", !on);
     for (const row of $("mcp-clients").children) {
       row.classList.toggle("disabled", !on);
@@ -1546,7 +1569,9 @@
     const note = clientNotes[client.id];
     if (client.error) hint(client.error, "problem");
     else if (note) hint(note, "done");
+    else if (client.state === "manual" && client.old) hint("Set up for Figma MCP Bridge. Run claude mcp remove figma-bridge, then this command");
     else if (client.state === "manual") hint(client.added ? "Added. Run the command again to update it" : "Run this command in a terminal to add it");
+    else if (client.state === "outdated" && client.old) hint("Set up for Figma MCP Bridge, which Figwright replaces");
     else if (client.state === "outdated") hint("Set up for another version of the server");
     else hint(client.path, "path").title = client.path;
     if (client.state === "manual") {
