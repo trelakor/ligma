@@ -20,6 +20,7 @@ mod home;
 mod lasso;
 mod layers;
 mod mcp_bridge;
+mod mcp_clients;
 mod models;
 mod modules;
 mod notifications;
@@ -276,6 +277,9 @@ fn main() {
             plugins::get_plugins,
             mcp_bridge::get_mcp_status,
             mcp_bridge::copy_mcp_config,
+            mcp_bridge::get_mcp_config,
+            mcp_clients::get_mcp_clients,
+            mcp_clients::set_mcp_client,
             plugins::import_plugin,
             plugins::set_plugin_enabled,
             plugins::remove_plugin,

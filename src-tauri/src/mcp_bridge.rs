@@ -482,6 +482,19 @@ pub async fn get_mcp_status(app: AppHandle, webview: Webview) -> Option<Status> 
     state().lock().unwrap().status.clone()
 }
 
+/// The MCP server's configuration (`"json"`) or Claude Code's command
+/// (`"claude"`), shown in Settings for adding it by hand
+#[tauri::command]
+pub async fn get_mcp_config(webview: Webview, kind: String) -> Option<String> {
+    if !crate::settings::from_settings_window(&webview) {
+        return None;
+    }
+    Some(match kind.as_str() {
+        "claude" => claude_command(),
+        _ => config(),
+    })
+}
+
 /// Copies the MCP server's configuration (`"json"`) or Claude Code's
 /// command (`"claude"`)
 #[tauri::command]
