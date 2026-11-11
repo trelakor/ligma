@@ -645,16 +645,22 @@ __PLUGIN_JS__
 /// the file's connection, with `status`. While the setting is on, it puts
 /// its own MCP section in place of Figma's: a copy of Figma's heading,
 /// whose chip says whether the file is connected and whose button opens
-/// Settings at AI tools, over the latest calls in this file. Each call
-/// opens to show when it ran and its arguments, or why it failed, and
-/// selects the layers it named or made. Calls are kept in the tab's
-/// `sessionStorage`. Figma only shows its section while nothing is
-/// selected, so otherwise Ligma's goes at the foot of the panel
+/// Settings at AI tools, over the latest calls in this file. The heading
+/// collapses it, as Figma's collapsible sections do, and that's
+/// remembered. Three calls show, and "Show more" lists them all in a
+/// scrolling box no taller than eight rows. Each call opens to show when it
+/// ran and its arguments, or why it failed, and selects the layers it
+/// named or made. Calls are kept in the tab's `sessionStorage`. Figma only
+/// shows its section while nothing is selected, so otherwise Ligma's goes
+/// under the selected layers' heading
 pub const PANEL_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window || window.__ligmaMcpLog) return;
-  // Calls kept per file, and rows shown before "Show more"
+  // Calls kept per file, rows shown before "Show more", and the most rows
+  // shown at once after it, which then scroll
   const KEEP = 50;
-  const SHOWN = 6;
+  const SHOWN = 3;
+  const TALLEST = 8;
+  const COLLAPSED = "ligma-mcp-collapsed";
   const ANCHOR = '[data-onboarding-key="design-mode-mcp-agents-panel-callout-target"]';
   const PANEL = '[class*="properties_panel--propertiesPanel--"]';
   const READ = /^(get|search|scan|list|ping|find)(_|$)/;
@@ -722,6 +728,10 @@ pub const PANEL_JS: &str = r##"(() => {
   let status = null;
   const expanded = new Set();
   let showAll = false;
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem(COLLAPSED) === "1";
+  } catch {}
 
   window.__ligmaMcpLog = {
     start(id, method, params) {
@@ -849,7 +859,18 @@ pub const PANEL_JS: &str = r##"(() => {
   style.textContent = `
     ${ANCHOR}:not([data-ligma-mcp]) { display: none !important; }
     [data-ligma-mcp] .ligma-mcp-list { display: flex; flex-direction: column; padding: 0 8px 8px; }
-    [data-ligma-mcp] .ligma-mcp-list:empty { display: none; }
+    [data-ligma-mcp] .ligma-mcp-list[hidden], [data-ligma-mcp][data-collapsed] .ligma-mcp-list { display: none; }
+    [data-ligma-mcp] .ligma-mcp-rows { display: flex; flex-direction: column; }
+    [data-ligma-mcp] .ligma-mcp-rows[data-all] {
+      max-height: ${TALLEST * 26}px; overflow-y: auto; overscroll-behavior: contain;
+      scrollbar-width: thin; scrollbar-color: var(--color-border) transparent;
+    }
+    [data-ligma-mcp] .ligma-mcp-rows[data-below] { mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent); }
+    [data-ligma-mcp] .ligma-mcp-heading { cursor: default; }
+    [data-ligma-mcp] .ligma-mcp-heading:focus-visible { outline: 1px solid var(--color-border-selected); outline-offset: 1px; border-radius: 4px; }
+    [data-ligma-mcp] .ligma-mcp-chevron { opacity: 1; visibility: hidden; transition: transform .12s ease-out; }
+    [data-ligma-mcp] .ligma-mcp-heading:is(:hover, :focus-visible) .ligma-mcp-chevron { visibility: visible; }
+    [data-ligma-mcp]:not([data-collapsed]) .ligma-mcp-chevron { transform: rotate(90deg); }
     [data-ligma-mcp] .ligma-mcp-call { position: relative; }
     [data-ligma-mcp] button.ligma-mcp-row {
       all: unset; box-sizing: border-box; display: flex; align-items: center; width: 100%; height: 26px;
@@ -888,7 +909,10 @@ pub const PANEL_JS: &str = r##"(() => {
       box-shadow: inset 0 0 0 1px var(--color-border); font-weight: 450;
     }
     @keyframes ligma-mcp-spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { [data-ligma-mcp] [data-status="pending"] .ligma-mcp-icon svg { animation: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      [data-ligma-mcp] [data-status="pending"] .ligma-mcp-icon svg { animation: none; }
+      [data-ligma-mcp] .ligma-mcp-chevron { transition: none; }
+    }
   `;
 
   // Figma's own section, copied as it's first seen so ours looks the same,
@@ -897,7 +921,16 @@ pub const PANEL_JS: &str = r##"(() => {
   let root = null;
   let chip = null;
   let chipHolder = null;
+  let heading = null;
   let list = null;
+  let rowsBox = null;
+  const toggle = () => {
+    collapsed = !collapsed;
+    try {
+      localStorage.setItem(COLLAPSED, collapsed ? "1" : "0");
+    } catch {}
+    render();
+  };
   const build = () => {
     if (root || !template) return;
     root = template.cloneNode(true);
@@ -922,14 +955,35 @@ pub const PANEL_JS: &str = r##"(() => {
       button.setAttribute("data-tooltip", "Set up AI tools");
       button.addEventListener("click", openSettings);
     }
-    list = document.createElement("div");
-    list.className = "ligma-mcp-list";
-    list.setAttribute("role", "list");
-    list.setAttribute("aria-label", "AI tool activity in this file");
+    // The heading opens and closes the section, with the chevron Figma's
+    // collapsible sections show beside it on hover
+    heading = root.querySelector('[class*="panel_title--panelTitle"]');
+    const chevron = root.querySelector('[class*="collapsible_panel--icon"]');
+    if (chevron) {
+      chevron.classList.remove(...[...chevron.classList].filter((name) => name.includes("hiddenIcon")));
+      chevron.classList.add("ligma-mcp-chevron");
+    }
+    if (heading) {
+      heading.classList.add("ligma-mcp-heading");
+      heading.setAttribute("role", "button");
+      heading.tabIndex = 0;
+      heading.addEventListener("click", toggle);
+      heading.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        toggle();
+      });
+    }
+    list = element("div", "ligma-mcp-list");
+    rowsBox = element("div", "ligma-mcp-rows");
+    rowsBox.setAttribute("role", "list");
+    rowsBox.setAttribute("aria-label", "AI tool activity in this file");
+    rowsBox.addEventListener("scroll", fade, { passive: true });
+    list.append(rowsBox);
     root.append(list);
     // Figma acts on Enter and Space itself, as shortcuts
     root.addEventListener("keydown", (event) => {
-      if ((event.key === "Enter" || event.key === " ") && event.target.closest("button")) event.stopPropagation();
+      if ((event.key === "Enter" || event.key === " ") && event.target.closest('button, [role="button"]')) event.stopPropagation();
     });
     render();
   };
@@ -1029,26 +1083,45 @@ pub const PANEL_JS: &str = r##"(() => {
     chip.textContent = text;
     chipHolder?.setAttribute("data-tooltip", tip(status?.version ?? ""));
     chipHolder?.setAttribute("data-tooltip-type", "text");
+    root.toggleAttribute("data-collapsed", collapsed);
+    heading?.setAttribute("aria-expanded", !collapsed);
     const all = groups();
-    const shown = showAll ? all : all.slice(0, SHOWN);
-    const rows = shown.map(row);
-    if (all.length > SHOWN) {
+    list.hidden = !all.length;
+    const extra = all.length > SHOWN;
+    if (!extra) showAll = false;
+    // Keeps focus on the button it was on, and the list where it was
+    // scrolled to, as the list is redrawn
+    const buttons = () => [...list.querySelectorAll("button")];
+    const focused = list.contains(document.activeElement) ? buttons().indexOf(document.activeElement) : -1;
+    const scrolled = rowsBox.scrollTop;
+    rowsBox.toggleAttribute("data-all", showAll);
+    rowsBox.replaceChildren(...(showAll ? all : all.slice(0, SHOWN)).map(row));
+    list.querySelector(".ligma-mcp-more")?.remove();
+    if (extra) {
       const more = element("button", "ligma-mcp-more", showAll ? "Show less" : `Show ${all.length - SHOWN} more`);
       more.type = "button";
+      more.setAttribute("aria-expanded", showAll);
       more.addEventListener("click", () => {
         showAll = !showAll;
+        rowsBox.scrollTop = 0;
         render();
       });
-      rows.push(more);
+      list.append(more);
     }
-    // Keeps focus on the row it was on as the list is redrawn
-    const focused = list.contains(document.activeElement) ? [...list.querySelectorAll("button")].indexOf(document.activeElement) : -1;
-    list.replaceChildren(...rows);
-    if (focused >= 0) list.querySelectorAll("button")[focused]?.focus();
+    rowsBox.scrollTop = showAll ? scrolled : 0;
+    fade();
+    if (focused >= 0) buttons()[focused]?.focus();
+  };
+
+  // A fade at the foot of the list while there's more to scroll to
+  const fade = () => {
+    const below = rowsBox.hasAttribute("data-all") && rowsBox.scrollTop + rowsBox.clientHeight < rowsBox.scrollHeight - 1;
+    rowsBox.toggleAttribute("data-below", below);
   };
 
   // Ours goes where Figma's MCP section is, which shows while nothing is
-  // selected, and at the foot of the panel otherwise
+  // selected, and under the selected layers' heading otherwise, where it's
+  // still in view
   const place = () => {
     if (!status?.on) {
       root?.remove();
@@ -1067,8 +1140,9 @@ pub const PANEL_JS: &str = r##"(() => {
       return;
     }
     const panel = document.querySelector(PANEL);
-    if (!panel) root.remove();
-    else if (panel.lastElementChild !== root) panel.append(root);
+    const head = panel && [...panel.children].find((child) => child !== root);
+    if (!head) root.remove();
+    else if (head.nextElementSibling !== root) head.after(root);
   };
 
   let observer = null;
