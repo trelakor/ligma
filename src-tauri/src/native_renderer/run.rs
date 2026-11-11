@@ -578,7 +578,8 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let started = Instant::now();
     let short = hash.get(..8).unwrap_or(hash);
     // In view, so handed over before it was asked for
-    let cached = ctx.encoded.lock().unwrap().get(hash).cloned().or_else(|| {
+    let kept = ctx.encoded.lock().unwrap().get(hash).cloned();
+    let cached = kept.or_else(|| {
         let bytes = Arc::new(pushed().wait(&format!("i{hash}"), Instant::now())?);
         super::mark(|| format!("image {short} was handed over"));
         ctx.encoded.lock().unwrap().insert(hash.to_string(), bytes.clone());
