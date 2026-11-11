@@ -2,6 +2,13 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.39.0 - 2026-11-11
+
+- New app icons in Settings > App Icon. Colorways adds Slate, Blush, Tangerine, Retro, Matcha, Cobalt, Prism and Mocha, and Ligma Dark on Windows. macOS already turns Ligma's own icon dark with your icon style.
+- A new Seasonal collection has Fireworks, Sweetheart, Bloom, Harvest and Festive, along with Pool, Pumpkin and Snowfall from Playful.
+- Playful adds Balloon, Doodle, Knit and Buddies.
+- Gilded is redrawn in polished, brushed gold. Gilded and Holo no longer have a frame, and their logos are the size of the other icons'.
+
 ## 0.38.0 - 2026-11-10
 
 - AI tools now connect to your files through Figwright instead of Figma MCP Bridge. They can also make components and variants, variables and styles, boolean shapes, and PDF and video exports, and two AI tools can work in two files at once. Press Update next to each AI tool in Settings > Plugins > AI tools, then restart it. Figwright needs Node.js 20.19 or later.
