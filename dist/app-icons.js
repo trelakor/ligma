@@ -130,28 +130,32 @@ const ligmaColorway = (stops, colors, shade = 0.2) => () => {
   };
 };
 
-// The gold of Gilded and Fireworks: satin, lit from the top left, with a
-// soft sheen and a fine brushed grain, `id` its fill and `id`-grain the
-// grain to lay over it
-const ligmaGold = (id, g = LIGMA_G) => {
+// A filter that lights shapes as raised, polished metal or foil: their
+// edges domed by blurring them `blur` deep, shaded and given a specular
+// highlight from the top left. `texture` streaks the face with a brushed
+// grain that strong, a turbulence `frequency`
+const ligmaShine = (id, { blur = 11, scale = 7, shine = 1.3, sharpness = 26, light = "#fff6dc", texture = 0, frequency = "0.004 0.7" } = {}) =>
+  `<filter id="${id}" x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="sRGB">`
+  + `<feGaussianBlur in="SourceAlpha" stdDeviation="${blur}" result="dome"/>`
+  + `<feDiffuseLighting in="dome" surfaceScale="${scale}" diffuseConstant="1.2" lighting-color="#fff" result="diffuse"><feDistantLight azimuth="225" elevation="48"/></feDiffuseLighting>`
+  + `<feSpecularLighting in="dome" surfaceScale="${scale}" specularConstant="${shine}" specularExponent="${sharpness}" lighting-color="${light}" result="specular"><feDistantLight azimuth="225" elevation="36"/></feSpecularLighting>`
+  + `<feComposite in="SourceGraphic" in2="diffuse" operator="arithmetic" k1="1.1" result="lit"/>`
+  + (texture
+    ? `<feTurbulence type="fractalNoise" baseFrequency="${frequency}" numOctaves="3" seed="12"/><feColorMatrix type="matrix" values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 1" result="grain"/>`
+      + `<feComposite in="lit" in2="grain" operator="arithmetic" k1="${texture * 2}" k2="${1 - texture}" result="lit"/>`
+    : "")
+  + `<feComposite in="specular" in2="lit" operator="arithmetic" k2="1" k3="1" result="shone"/>`
+  + `<feComposite in="shone" in2="SourceAlpha" operator="in"/></filter>`;
+
+// The gold of Gilded and Fireworks, `id` its fill: polished, with the
+// bright and dark bands of what it reflects, and a brushed grain
+const ligmaGold = (id, texture = 0.4, g = LIGMA_G) => {
   const { linear } = ligmaSvg;
-  const box = [g.x0, g.y0, g.right, g.bottom];
-  return linear(id, [[0, "#fff1c4"], [0.28, "#ecc777"], [0.6, "#c6913f"], [1, "#94652a"]], box, true)
-    + linear(`${id}-sheen`, [[0.3, "#fff", 0], [0.47, "#fff", 0.32], [0.64, "#fff", 0]], [box[0], box[3], box[2], box[1]], true)
-    + `<filter id="${id}-grain" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feTurbulence type="fractalNoise" baseFrequency="0.004 0.42" numOctaves="2" seed="12"/><feColorMatrix type="matrix" values="0 0 0 0 .32  0 0 0 0 .2  0 0 0 0 .05  0 0 0 -1.1 .62"/></filter>`
-    // Pressed in: light on the top left edges, shade on the bottom right
-    + `<filter id="${id}-bevel" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur in="SourceAlpha" stdDeviation="6" result="b"/>`
-    + `<feOffset in="b" dx="-5" dy="-7" result="o1"/><feComposite in="SourceAlpha" in2="o1" operator="out" result="e1"/><feFlood flood-color="#4a2c05" flood-opacity=".5"/><feComposite in2="e1" operator="in" result="shade"/>`
-    + `<feOffset in="b" dx="5" dy="7" result="o2"/><feComposite in="SourceAlpha" in2="o2" operator="out" result="e2"/><feFlood flood-color="#fffaf0" flood-opacity=".75"/><feComposite in2="e2" operator="in" result="light"/>`
-    + `<feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="shade"/><feMergeNode in="light"/></feMerge><feComposite in2="SourceAlpha" operator="in"/></filter>`;
+  return linear(id, [[0, "#fff6cf"], [0.16, "#f6d06a"], [0.34, "#b7801f"], [0.46, "#fbe39a"], [0.58, "#e2b148"], [0.78, "#8c5a12"], [0.92, "#c9932f"], [1, "#f4d27a"]], [g.x0, g.y0, g.right, g.bottom], true)
+    + ligmaShine(`${id}-shine`, { texture });
 };
-// The glyph in ligmaGold, `id` as given to it, clipped by `clip`
-const ligmaGilt = (id, clip = "glyph", g = LIGMA_G) => {
-  const { parts } = ligmaSvg;
-  return `<g filter="url(#${id}-bevel)">${parts(Array(4).fill(`url(#${id})`), "", g)}</g>`
-    + `<g clip-path="url(#${clip})"><rect width="1024" height="1024" filter="url(#${id}-grain)" style="mix-blend-mode:multiply"/></g>`
-    + parts(Array(4).fill(`url(#${id}-sheen)`), "", g);
-};
+// The glyph in ligmaGold, `id` as given to it
+const ligmaGilt = (id, g = LIGMA_G) => `<g filter="url(#${id}-shine)">${ligmaSvg.parts(Array(4).fill(`url(#${id})`), "", g)}</g>`;
 
 const LIGMA_APP_ICONS = [
   { id: "ligma", name: "Ligma", collection: "colorways" },
@@ -608,6 +612,129 @@ const LIGMA_APP_ICONS = [
       };
     },
   },
+  {
+    id: "balloon", name: "Balloon", collection: "playful",
+    art() {
+      // Foil party balloons, each block blown up on its own, on strings.
+      // Shrunk and stroked round, so their corners puff out
+      const { fill, linear, radial, shadow, scatter, shrink, clips, mix } = ligmaSvg;
+      const g = LIGMA_G;
+      const colors = ["#ff4fa0", "#ffad1f", "#8a63ff", "#14c2d3"];
+      const puff = 0.8;
+      // A string curling down from `x`, `y` to the tile's bottom
+      const string = (x, y) => {
+        let d = `M${x} ${y}`;
+        for (let at = 0; y + at < 940; at += 70) d += `q${at % 140 ? 22 : -22} 35 0 70`;
+        return `<path d="${d}" fill="none" stroke="#8b93b8" stroke-opacity=".8" stroke-width="4"/>`;
+      };
+      const confetti = scatter(17, 24, (x, y, random, i) => {
+        if (x > g.x0 - 40 && x < g.right + 40 && y > g.y0 - 40 && y < g.bottom + 40) return "";
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(5 + random() * 7).toFixed(1)}" fill="${colors[i % 4]}" opacity=".7"/>`;
+      });
+      // Where a balloon's knot is, under part `i`
+      const knot = (i) => {
+        const [x, y] = g.centers[i];
+        const bottom = y + g.r * puff + 14;
+        return [x + (i === 3 ? 0 : g.r * 0.5), bottom];
+      };
+      const tie = (i) => {
+        const [x, y] = knot(i);
+        return string(x, y + 14) + `<path d="M${x} ${y - 6}l-13 22h26z" fill="${mix(colors[i], "#000000", 0.2)}"/>`;
+      };
+      const balloon = (d, i) => `<path d="${d}" fill="url(#foil${i})" stroke="url(#foil${i})" stroke-width="30" stroke-linejoin="round" ${shrink(i, puff)}/>`;
+      return {
+        defs: linear("tile-fill", [[0, "#ffe6f2"], [1, "#d9efff"]]) + shadow("lift", 18, 18, 0.25, "#5a2a6e") + clips()
+          + colors.map((c, i) => radial(`foil${i}`, [[0, mix(c, "#ffffff", 0.55)], [0.35, c], [0.85, mix(c, "#000000", 0.18)], [1, mix(c, "#000000", 0.32)]], [0.32, 0.28, 0.85])).join(""),
+        body: fill("url(#tile-fill)") + confetti + tie(2) + tie(3)
+          + `<g filter="url(#lift)">${g.parts.map(balloon).join("")}</g>`
+          + g.parts.map((d, i) => {
+            const [x, y] = g.centers[i];
+            const r = g.r * puff;
+            return `<ellipse cx="${x - r * 0.38}" cy="${y - r * 0.45}" rx="${r * 0.3}" ry="${r * 0.14}" fill="#fff" opacity=".85" transform="rotate(-38 ${x - r * 0.38} ${y - r * 0.45})"/>`
+              + `<path d="M${x + r * 0.15} ${y + r * 0.95}a${r} ${r} 0 0 0 ${r * 0.75} ${-r * 0.75}" fill="none" stroke="#fff" stroke-opacity=".45" stroke-width="7" stroke-linecap="round"/>`;
+          }).join(""),
+      };
+    },
+  },
+  {
+    id: "doodle", name: "Doodle", collection: "playful",
+    art() {
+      // Crayon and pen on a page of a school notebook
+      const { fill, parts, mix } = ligmaSvg;
+      const g = LIGMA_G;
+      const colors = ["#22b46a", "#ff4757", "#8a5cff", "#1e9bff"];
+      const turns = [-38, 42, -30, 50];
+      const page = `<pattern id="rules" width="1024" height="46" patternUnits="userSpaceOnUse" y="20"><path d="M0 45H1024" stroke="#8fbcf0" stroke-opacity=".65" stroke-width="2.5"/></pattern>`;
+      const hatches = colors.map((c, i) => `<pattern id="hatch${i}" width="20" height="20" patternUnits="userSpaceOnUse" patternTransform="rotate(${turns[i]})"><path d="M0 10H20" stroke="${c}" stroke-width="9" stroke-linecap="round"/></pattern>`).join("");
+      const wobble = `<filter id="wobble" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.025" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="9" xChannelSelector="R" yChannelSelector="G"/></filter>`;
+      const star = (x, y, r) => `M${Array.from({ length: 10 }, (_, i) => {
+        const a = (i * Math.PI) / 5 - Math.PI / 2;
+        const at = i % 2 ? r * 0.45 : r;
+        return `${(x + Math.cos(a) * at).toFixed(1)} ${(y + Math.sin(a) * at).toFixed(1)}`;
+      }).join("L")}Z`;
+      const ink = 'stroke="#24262b" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"';
+      const pen = `fill="none" ${ink}`;
+      return {
+        defs: page + hatches + wobble,
+        body: fill("#fffdf5") + fill("url(#rules)") + `<path d="M196 0V1024" stroke="#ff8f8f" stroke-width="3.5"/>`
+          + `<g filter="url(#wobble)">`
+          + parts(colors.map((c) => mix(c, "#ffffff", 0.8))) + parts(colors.map((_, i) => `url(#hatch${i})`), 'fill-opacity=".85"')
+          + parts(Array(4).fill("none"), ink)
+          + `<path d="${star(800, 250, 62)}" fill="#ffd23f" ${ink}/>`
+          + `<path d="M850 470C890 560 850 660 ${g.right + 40} ${g.by - 14}" ${pen}/><path d="M${g.right + 75} ${g.by - 42}L${g.right + 40} ${g.by - 14}L${g.right + 79} ${g.by + 6}" ${pen}/>`
+          + `<path d="M188 776c30 -40 70 -10 50 18c-22 30 -70 4 -46 -36c26 -42 100 -20 96 38" ${pen.replace('width="8"', 'width="6"')}/>`
+          + `</g>`,
+      };
+    },
+  },
+  {
+    id: "knit", name: "Knit", collection: "playful",
+    art() {
+      // A cosy sweater: the logo knitted into an oatmeal ground
+      const { fill, parts, shadow } = ligmaSvg;
+      const stitch = `<pattern id="stitch" width="48" height="40" patternUnits="userSpaceOnUse" x="-4">`
+        + [[12, -26], [36, 26]].map(([x, turn]) => `<ellipse cx="${x}" cy="20" rx="10" ry="20" fill="#fff" fill-opacity=".2" stroke="#000" stroke-opacity=".3" stroke-width="3" transform="rotate(${turn} ${x} 20)"/><path d="M${x} 6V30" stroke="#000" stroke-opacity=".12" stroke-width="2" transform="rotate(${turn} ${x} 20)"/>`).join("")
+        + `</pattern>`;
+      const fuzz = `<filter id="fuzz" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.35" numOctaves="2" seed="8"/><feDisplacementMap in="SourceGraphic" scale="7" xChannelSelector="R" yChannelSelector="G"/></filter>`;
+      return {
+        defs: stitch + fuzz + shadow("lift", 8, 8, 0.3, "#3d2a14"),
+        body: fill("#eadcc5") + `<rect width="1024" height="1024" fill="url(#stitch)" opacity=".55"/>`
+          + `<g filter="url(#lift)"><g filter="url(#fuzz)">${parts(["#46b873", "#ee4c48", "#8f70de", "#40a4ec"])}${parts(Array(4).fill("url(#stitch)"))}</g></g>`,
+      };
+    },
+  },
+  {
+    id: "buddies", name: "Buddies", collection: "playful",
+    art() {
+      // The blocks and the dot as four little friends
+      const { fill, linear, shadow, parts, scatter } = ligmaSvg;
+      const g = LIGMA_G;
+      const r = g.r;
+      const ink = "#2b1d24";
+      const line = `fill="none" stroke="${ink}" stroke-width="${r * 0.08}" stroke-linecap="round"`;
+      const eye = (x, y) => `<circle cx="${x}" cy="${y}" r="${r * 0.14}" fill="${ink}"/><circle cx="${x + r * 0.05}" cy="${y - r * 0.06}" r="${r * 0.055}" fill="#fff"/>`;
+      const happy = (x, y) => `<path d="M${x - r * 0.1} ${y + r * 0.03}q${r * 0.1} ${-r * 0.16} ${r * 0.2} 0" ${line}/>`;
+      const cheeks = (x, y) => `<ellipse cx="${x - r * 0.5}" cy="${y + r * 0.2}" rx="${r * 0.13}" ry="${r * 0.08}" fill="#ff7aa8" opacity=".6"/><ellipse cx="${x + r * 0.5}" cy="${y + r * 0.2}" rx="${r * 0.13}" ry="${r * 0.08}" fill="#ff7aa8" opacity=".6"/>`;
+      const smile = (x, y, w = 0.16) => `<path d="M${x - r * w} ${y + r * 0.16}q${r * w} ${r * w * 1.2} ${r * w * 2} 0" ${line}/>`;
+      const faces = [
+        ([x, y]) => happy(x - r * 0.3, y) + happy(x + r * 0.3, y) + `<path d="M${x - r * 0.16} ${y + r * 0.15}q${r * 0.16} ${r * 0.3} ${r * 0.32} 0z" fill="${ink}"/>` + cheeks(x, y),
+        ([x, y]) => eye(x - r * 0.3, y) + eye(x + r * 0.3, y) + smile(x, y) + cheeks(x, y),
+        ([x, y]) => eye(x - r * 0.3, y) + happy(x + r * 0.3, y) + smile(x, y, 0.2) + `<path d="M${x - r * 0.02} ${y + r * 0.26}q${r * 0.08} ${r * 0.16} ${r * 0.16} 0" fill="#ff6f91"/>` + cheeks(x, y),
+        ([x, y]) => eye(x - r * 0.28, y - r * 0.05) + eye(x + r * 0.28, y - r * 0.05) + `<ellipse cx="${x}" cy="${y + r * 0.25}" rx="${r * 0.09}" ry="${r * 0.12}" fill="${ink}"/>` + cheeks(x, y),
+      ];
+      const sparkles = scatter(29, 14, (x, y, random) => {
+        if (x > g.x0 - 50 && x < g.right + 40 && y > g.y0 - 50 && y < g.bottom + 40) return "";
+        const s = 10 + random() * 14;
+        return `<path d="M${x} ${y - s}Q${x} ${y} ${x + s} ${y}Q${x} ${y} ${x} ${y + s}Q${x} ${y} ${x - s} ${y}Q${x} ${y} ${x} ${y - s}Z" fill="#fff" opacity=".9"/>`;
+      });
+      return {
+        defs: linear("tile-fill", [[0, "#fff6cc"], [1, "#ffd98c"]]) + linear("gloss", [[0, "#fff", 0.35], [0.5, "#fff", 0]]) + shadow("lift", 14, 12, 0.22, "#8a5300"),
+        body: fill("url(#tile-fill)") + sparkles
+          + `<g filter="url(#lift)">${parts(["#2ed47a", "#ff4a64", "#9c66ff", "#2fc0ff"])}</g>` + parts(Array(4).fill("url(#gloss)"))
+          + g.centers.map((at, i) => faces[i](at)).join(""),
+      };
+    },
+  },
 
   // Seasonal
   {
@@ -629,7 +756,7 @@ const LIGMA_APP_ICONS = [
       const bursts = burst(760, 330, 300, 16, "#ffd36e") + burst(196, 236, 170, 12, "#ff6fa8", 10) + burst(836, 650, 190, 12, "#6fe3ff", 6) + burst(206, 810, 120, 10, "#b28dff", 4);
       const stars = scatter(23, 40, (x, y, random) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(1 + random() * 2.2).toFixed(1)}" fill="#fff" opacity="${(0.3 + random() * 0.6).toFixed(2)}"/>`);
       return {
-        defs: radial("tile-fill", [[0, "#1d2350"], [0.6, "#0b0d24"], [1, "#04040c"]], [0.5, 0.25, 1]) + blur("glow", 10) + clips() + ligmaGold("gold")
+        defs: radial("tile-fill", [[0, "#1d2350"], [0.6, "#0b0d24"], [1, "#04040c"]], [0.5, 0.25, 1]) + blur("glow", 10) + clips() + ligmaGold("gold", 0.25)
           + ligmaSvg.shadow("lift", 14, 16, 0.6),
         body: fill("url(#tile-fill)") + stars
           + `<g filter="url(#glow)" opacity=".8">${bursts}</g>${bursts}`
