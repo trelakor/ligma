@@ -158,7 +158,9 @@ const LIGMA_APP_ICONS = [
 
   // Colorways
   {
-    id: "ligma-dark", name: "Ligma Dark", collection: "colorways",
+    // Windows only: macOS already shows Ligma's own icon dark when the
+    // system's icon style is dark
+    id: "ligma-dark", name: "Ligma Dark", collection: "colorways", windowsOnly: true,
     art() {
       // Ligma's own icon on a dark tile, as Figma's dark icon is
       const { fill, linear, shadow, parts } = ligmaSvg;
