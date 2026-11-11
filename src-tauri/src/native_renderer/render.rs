@@ -78,6 +78,8 @@ pub enum Msg {
     Live(Sender<Option<(Vec<u8>, Vec<u8>, u32, u32)>>),
     /// What the window shows right now, as it would be drawn
     Shown(Sender<Option<(Vec<u8>, u32, u32)>>),
+    /// See `Renderer::profile`
+    Profile { id: String, x: f32, y: f32, px: f32, ss: i32, reply: Sender<String> },
     /// For each absolute point, the ids of the nodes under it, from the
     /// top-level one down to the deepest
     HitTest { points: Vec<(f32, f32)>, reply: Sender<Vec<Vec<String>>> },
@@ -101,6 +103,31 @@ pub struct Offscreen {
 pub struct Request {
     pub key: String,
     pub width: f64,
+}
+
+/// In a dev build with LIGMA_NATIVE_TRACE=1, frame and tile timings are
+/// written to ligma-trace.txt in the temp folder
+fn tracing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| super::dev() && std::env::var("LIGMA_NATIVE_TRACE").is_ok_and(|value| value == "1"))
+}
+
+fn trace(line: impl FnOnce() -> String) {
+    if tracing() {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("ligma-trace.txt")) {
+            let _ = writeln!(file, "{}", line());
+        }
+    }
+}
+
+/// In a dev build with LIGMA_NATIVE_FRAC=1, the view is drawn where it is
+/// to a fraction of a pixel, as Figma draws it, rather than snapped to whole
+/// pixels, so audits compare how things are drawn, not where. Tiles then
+/// can't be reused once the view moves by part of a pixel
+fn fractional() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| super::dev() && std::env::var("LIGMA_NATIVE_FRAC").is_ok_and(|value| value == "1"))
 }
 
 struct Unit {
@@ -129,8 +156,19 @@ struct Recorded {
 
 const TILE: i32 = 512;
 
-/// Decoded images past this many bytes go once nothing drawn uses them
-const IMAGE_BUDGET: usize = 128 << 20;
+/// GPU memory used past which, once idle, image textures are packed again.
+/// Windows counts it in steps of 256 MiB, so past one step is past 300 MB
+const COMPACT_ABOVE: u64 = 300_000_000;
+
+/// An image on the GPU once, with its mipmaps, and outside Skia's cache:
+/// left to the cache, layers drawn in a frame push images out, and each is
+/// uploaded and its mipmaps made again next frame
+fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
+    skia_safe::gpu::images::texture_from_image(context, &image, skia_safe::gpu::Mipmapped::Yes, skia_safe::gpu::Budgeted::No).unwrap_or(image)
+}
+
+/// Images past this many bytes go once nothing drawn uses them
+const IMAGE_BUDGET: usize = 64 << 20;
 
 /// Settings that trade memory for quality, which can be set by environment
 /// variable in a dev build to measure them
@@ -157,13 +195,18 @@ fn config() -> Config {
     Config {
         samples: get("LIGMA_NATIVE_SAMPLES", 1),
         supersample: get("LIGMA_NATIVE_SUPERSAMPLE", 4).clamp(1, 4) as i32,
-        max_tiles: get("LIGMA_NATIVE_TILES", 64),
+        max_tiles: get("LIGMA_NATIVE_TILES", 40),
         cache_limit: get("LIGMA_NATIVE_CACHE_MB", 96) << 20,
     }
 }
 
 /// Widest margin a tile is drawn with, in pixels
 const MAX_MARGIN: i32 = 256;
+/// Zoomed in past this many pixels a unit, exact tiles take one sample a
+/// pixel with smoothed edges: 16 samples would look no different there,
+/// but cost 16 times as much, which with big blurs is hundreds of
+/// milliseconds a tile
+const SUPERSAMPLE_UNTIL: f32 = 2.0;
 /// Time to spend per frame drawing tiles not ready yet, so a newly shown
 /// part of the page fills in over a few frames rather than stalling one
 const BUILD_BUDGET: Duration = Duration::from_millis(10);
@@ -394,6 +437,13 @@ pub struct Painter {
     made: u64,
     /// Where supersampled tiles are scaled down to
     down: Option<Surface>,
+    /// Part of a pixel the view is drawn off the pixel grid by, see `fractional`
+    frac: (f32, f32),
+    /// When images were last fitted to what's drawn
+    fitted: Instant,
+    /// Where the view is drawn live with a margin, and the view and
+    /// pictures it shows
+    live: Option<(Surface, Option<(i32, i32, u32, i32, Vec<u32>)>)>,
     /// Averages each 4 by 4 block of samples into a pixel
     average: Option<skia_safe::RuntimeEffect>,
     /// Background blurs, by their absolute bounds and how far they reach
@@ -431,6 +481,9 @@ impl Painter {
             scratch: Vec::new(),
             made: 0,
             down: None,
+            live: None,
+            fitted: Instant::now(),
+            frac: (0.0, 0.0),
             average: skia_safe::RuntimeEffect::make_for_shader(AVERAGE, None)
                 .map_err(|error| log::warn!("native renderer: average: {error}"))
                 .ok(),
@@ -487,6 +540,12 @@ impl Painter {
                 self.present();
                 self.drawn = Instant::now();
                 self.released = false;
+                // Images sized for where the view was go while it moves on,
+                // not only once it stops
+                if self.zoom.1.elapsed() >= SETTLE && self.fitted.elapsed() > Duration::from_secs(1) {
+                    self.fitted = Instant::now();
+                    self.fit_images();
+                }
             } else if !self.released && self.drawn.elapsed() > IDLE {
                 // Layers and scratch from drawing tiles stay with the GPU
                 // driver for reuse until given back
@@ -571,6 +630,8 @@ impl Painter {
                 // again when next needed
                 self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| *used == key));
                 self.kit.forget_patterns(Some(&key));
+                let mut img = img;
+                img.image = upload(&mut self.gpu.context, img.image);
                 self.images.insert(key, img);
                 self.drop_tiles(&areas);
                 self.update_memory();
@@ -609,6 +670,11 @@ impl Painter {
             Msg::Shown(reply) => {
                 let _ = reply.send(self.shown());
             }
+            Msg::Profile { id, x, y, px, ss, reply } => {
+                let _ = reply.send(self.profile(&id, x, y, px, ss));
+                self.release();
+                self.dirty = true;
+            }
             Msg::Live(reply) => {
                 let _ = reply.send(self.live());
                 self.release();
@@ -636,6 +702,11 @@ impl Painter {
     /// supersampled, which Skia would otherwise keep for reuse
     fn release(&mut self) {
         self.fit_images();
+        // Surfaces drawn on are made again when next needed
+        self.live = None;
+        self.scratch.clear();
+        self.down = None;
+        self.compact();
         let _ = self.gpu.context.flush_submit_and_sync_cpu();
         self.gpu.context.free_gpu_resources();
         self.update_memory();
@@ -645,6 +716,11 @@ impl Painter {
     /// much bigger are decoded again smaller, from the bytes kept, and past
     /// `IMAGE_BUDGET` the biggest no picture uses are let go
     fn fit_images(&mut self) {
+        // As run.rs sizes images it fetches
+        let fitted = |(w, h): (u32, u32), width: f64| {
+            let side = (w.max(h) as f64 * (width.max(1.0) * 1.25 / w.max(1) as f64)).ceil();
+            w.max(h) >> super::run::halvings(w.max(h), side)
+        };
         // Pictures of other zooms are quick to record again, and hold on to
         // images at the size those zooms took
         let px = self.zoom.0;
@@ -653,8 +729,23 @@ impl Painter {
             let exact = EXACT_LEVEL + (px * EXACT_STEPS).round() as i32;
             self.pictures.retain(|&(_, _, level, _), _| if level >= EXACT_LEVEL { level == exact } else { (level - current).abs() <= 1 });
         }
+        // What's near the view needs its images; elsewhere they can go, as
+        // the page's encoded copy is kept, so they come back quickly
+        let near: Option<Rect> = self.view.as_ref().map(|view| {
+            let area = Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32);
+            area.with_outset((area.width(), area.height()))
+        });
+        let near_units: std::collections::HashSet<(usize, bool)> = self
+            .units
+            .iter()
+            .filter(|unit| near.is_none_or(|near| Rect::intersects2(&unit.bounds, &near)))
+            .map(|unit| (unit.slot, unit.section))
+            .collect();
         let mut need: HashMap<&str, f64> = HashMap::new();
-        for recorded in self.pictures.values() {
+        for (&(slot, section, _, _), recorded) in &self.pictures {
+            if !near_units.contains(&(slot, section)) {
+                continue;
+            }
             for (key, width) in &recorded.uses {
                 let entry = need.entry(key.as_str()).or_insert(0.0);
                 *entry = entry.max(*width);
@@ -668,7 +759,8 @@ impl Painter {
             }
             let kept = img.image.width().max(img.image.height()) as f64;
             match need.get(key.as_str()) {
-                Some(&width) if kept > 256.0 && kept > width * 4.0 => smaller.push((key.clone(), width)),
+                // Smaller where what the page would send for it now is
+                Some(&width) if kept > fitted(img.original, width) as f64 => smaller.push((key.clone(), width)),
                 Some(_) => {}
                 None => unused.push((key.clone(), img.bytes())),
             }
@@ -679,6 +771,7 @@ impl Painter {
         }
         let mut total: usize = self.images.values().map(Img::bytes).sum();
         unused.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut gone = Vec::new();
         for (key, bytes) in unused {
             if total <= IMAGE_BUDGET {
                 break;
@@ -686,7 +779,49 @@ impl Painter {
             self.images.remove(&key);
             self.asked.remove(&key);
             total -= bytes;
+            gone.push(key);
         }
+        // Pictures hold on to what they drew, so those that drew one go too
+        if !gone.is_empty() {
+            self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| gone.contains(used)));
+            for key in &gone {
+                self.kit.forget_patterns(Some(key));
+            }
+        }
+    }
+
+    /// Image textures, uploaded at all sorts of times, end up spread over
+    /// many of the driver's memory blocks, each kept from being given back
+    /// by the few in it. Once idle with more than a block in use, they're
+    /// copied off the GPU and uploaded again together, which fits them in
+    /// few blocks and frees the rest
+    fn compact(&mut self) {
+        let before = self.gpu.used();
+        if before < COMPACT_ABOVE {
+            return;
+        }
+        let mut rasters = Vec::new();
+        for (key, img) in &self.images {
+            if let Some(raster) = img.image.make_raster_image(&mut self.gpu.context, None) {
+                rasters.push((key.clone(), raster));
+            }
+        }
+        // Pictures hold the textures too
+        self.pictures.clear();
+        self.kit.forget_patterns(None);
+        for (key, raster) in rasters {
+            if let Some(img) = self.images.get_mut(&key) {
+                img.image = raster;
+            }
+        }
+        self.gpu.context.flush_submit_and_sync_cpu();
+        self.gpu.context.free_gpu_resources();
+        for img in self.images.values_mut() {
+            img.image = upload(&mut self.gpu.context, img.image.clone());
+        }
+        self.gpu.context.flush_submit_and_sync_cpu();
+        log::info!("native renderer: GPU memory compacted, {} MB to {} MB", before / 1_000_000, self.gpu.used() / 1_000_000);
+        self.dirty = true;
     }
 
     fn update_memory(&mut self) {
@@ -777,20 +912,31 @@ impl Painter {
     /// they blur: each blur over it reaches that far, and blurs over blurs
     /// add up
     fn margin(&self, key: TileKey) -> i32 {
-        let area = key.area();
+        self.reach(key.area(), key.px())
+    }
+
+    /// Pixels at `px` a unit that background blurs over `area` reach out
+    fn reach(&self, area: Rect, px: f32) -> i32 {
         let reach: f32 = self.backdrops.iter().filter(|(bounds, reach)| Rect::intersects2(bounds, &area.with_outset((*reach, *reach)))).map(|(_, reach)| reach).sum();
         if reach <= 0.0 {
             return 0;
         }
         // In steps of 32, so tiles share scratch surfaces
-        (((reach * key.px()).ceil() as i32 + 31) / 32 * 32).min(MAX_MARGIN)
+        (((reach * px).ceil() as i32 + 31) / 32 * 32).min(MAX_MARGIN)
+    }
+
+    /// Samples a side exact tiles of `px` pixels a unit take
+    fn supersample(&self, px: f32) -> i32 {
+        if px > SUPERSAMPLE_UNTIL { 1 } else { self.config.supersample }
     }
 
     /// The zoom level unit `unit` is recorded at for tiles of `px` pixels a
-    /// unit: the nearest power of two, or for exact tiles of a unit with
-    /// custom effects, `px` itself, as those effects work in whole pixels
-    fn level(&self, unit: &Unit, px: f32, aa: bool) -> i32 {
-        if unit.custom && !aa {
+    /// unit: the nearest power of two, or for exact tiles `px` itself where
+    /// it matters: custom effects work in whole pixels, and without 16
+    /// samples a pixel images average their texels under each pixel, which
+    /// needs to know just where it falls
+    fn level(&self, unit: &Unit, px: f32, exact: bool) -> i32 {
+        if exact && (unit.custom || px > SUPERSAMPLE_UNTIL) {
             EXACT_LEVEL + (px * EXACT_STEPS).round().min((i32::MAX - EXACT_LEVEL) as f32) as i32
         } else {
             px.log2().round().clamp(-12.0, 8.0) as i32
@@ -859,7 +1005,7 @@ impl Painter {
     /// Figma's 16 samples a pixel, others one with anti-aliased edges, which
     /// is many times quicker
     fn draw_tile(&mut self, key: TileKey, exact: bool) -> Option<Tile> {
-        let ss = if exact { self.config.supersample } else { 1 };
+        let ss = if exact { self.supersample(key.px()) } else { 1 };
         let aa = ss < 4;
         let area = key.area();
         let px = key.px();
@@ -870,7 +1016,7 @@ impl Painter {
         let mut pictures = Vec::new();
         // Timing waits for the GPU, so only some tiles are timed
         self.made += 1;
-        let timing = super::dev() && self.made % 8 == 0;
+        let timing = super::dev() && (self.made % 8 == 0 || tracing());
         let start = Instant::now();
         for unit in units {
             // Too small to see: left out, as the encoder would
@@ -879,7 +1025,7 @@ impl Painter {
                 counts.skipped += 1;
                 continue;
             }
-            let level = self.level(&self.units[unit], px, aa);
+            let level = self.level(&self.units[unit], px, exact);
             if let Some(recorded) = self.picture(unit, level, aa) {
                 counts += recorded.counts;
                 pictures.push(recorded.picture.clone());
@@ -899,7 +1045,7 @@ impl Painter {
         let canvas = scratch.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         canvas.save();
-        canvas.translate((((margin - key.x * TILE) * ss) as f32, ((margin - key.y * TILE) * ss) as f32));
+        canvas.translate((((margin - key.x * TILE) * ss) as f32 - self.frac.0 * ss as f32, ((margin - key.y * TILE) * ss) as f32 - self.frac.1 * ss as f32));
         canvas.scale((px * ss as f32, px * ss as f32));
         for picture in &pictures {
             canvas.draw_picture(picture, None, None);
@@ -937,8 +1083,13 @@ impl Painter {
             mix(&mut stats.tile_play_ms, (played - recorded).as_secs_f64() * 1000.0);
             mix(&mut stats.tile_gpu_ms, (gpu - played).as_secs_f64() * 1000.0);
             stats.tiles_drawn += 1;
+            drop(stats);
+            trace(|| {
+                let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+                format!("  tile {},{} exact={exact} margin={margin} units={} gpu={:.1}", key.x, key.y, pictures.len(), ms(gpu - played))
+            });
         }
-        Some(Tile { image, used: self.frame, counts, stale: false, exact: ss == self.config.supersample })
+        Some(Tile { image, used: self.frame, counts, stale: false, exact })
     }
 
     fn background(&self) -> Color4f {
@@ -1002,6 +1153,15 @@ impl Painter {
         // Tiles land on whole pixels, as Figma's do, which keeps them sharp
         let ox = (view.x * px as f64).round() as i32;
         let oy = (view.y * px as f64).round() as i32;
+        let frac = if fractional() {
+            ((view.x * px as f64 - ox as f64) as f32, (view.y * px as f64 - oy as f64) as f32)
+        } else {
+            (0.0, 0.0)
+        };
+        if (frac.0 - self.frac.0).abs() > 0.01 || (frac.1 - self.frac.1).abs() > 0.01 {
+            self.tiles.clear();
+            self.frac = frac;
+        }
         let pxb = px.to_bits();
         let mut needed: Vec<TileKey> = Vec::new();
         for y in oy.div_euclid(TILE)..=(oy + height).div_euclid(TILE) {
@@ -1029,7 +1189,11 @@ impl Painter {
         let zooming = !at_once && !settled;
         let mut order: Vec<(TileKey, bool)> =
             needed.iter().copied().filter(|key| !zooming && !self.tiles.contains_key(key)).map(|key| (key, at_once)).collect();
-        order.extend(needed.iter().copied().filter(|key| !zooming && self.tiles.get(key).is_some_and(|tile| tile.stale)).map(|key| (key, at_once)));
+        // An out of date tile still shows, so it's drawn again as well as
+        // it was, rather than quickly, which would blur it a while
+        order.extend(
+            needed.iter().copied().filter_map(|key| self.tiles.get(&key).filter(|tile| !zooming && tile.stale).map(|tile| (key, at_once || tile.exact))),
+        );
         let rough: Vec<TileKey> =
             needed.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.exact)).collect();
         if !rough.is_empty() {
@@ -1039,14 +1203,22 @@ impl Painter {
             }
         }
         let mut behind = false;
+        // Exact tiles take the GPU a while, so one a frame at most
+        let mut exact_drawn = false;
         for (key, exact) in order {
-            if budget.is_some_and(|budget| start.elapsed() >= budget) || (exact && !at_once && behind) {
+            if budget.is_some_and(|budget| start.elapsed() >= budget) || (exact && !at_once && (behind || exact_drawn)) {
                 pending = true;
                 behind = true;
                 continue;
             }
             if let Some(tile) = self.draw_tile(key, exact) {
                 self.tiles.insert(key, tile);
+            }
+            exact_drawn |= exact && !at_once;
+            // The budget is of time the GPU takes too, as that's most of a
+            // tile's cost, so it waits for each before drawing another
+            if !at_once {
+                self.gpu.context.flush_submit_and_sync_cpu();
             }
         }
         let checker = self.checker((view.x * px as f64, view.y * px as f64), px, view.zoom);
@@ -1059,6 +1231,7 @@ impl Painter {
         // straight onto the view at this zoom, as Figma draws every frame,
         // rather than stretching tiles of another zoom, which blurs
         let missing: Vec<TileKey> = needed.iter().copied().filter(|key| !self.tiles.contains_key(key)).collect();
+        let live_start = Instant::now();
         let mut live = Counts::default();
         if !missing.is_empty() {
             let mut holes = skia_safe::Region::new();
@@ -1066,26 +1239,54 @@ impl Painter {
                 holes.op_rect(skia_safe::IRect::from_xywh(key.x * TILE - ox, key.y * TILE - oy, TILE, TILE), skia_safe::region::RegionOp::Union);
             }
             let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
+            // Background blurs read what's drawn around them, so the whole
+            // view is drawn, with a margin near one, and then the holes taken
+            // from it. Drawn in the holes alone, a blur would see nothing
+            // past their edges and show a seam there
+            let margin = self.reach(view_area, px);
+            let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
             let mut pictures = Vec::new();
             for unit in 0..self.units.len() {
                 let bounds = self.units[unit].bounds;
-                if !Rect::intersects2(&bounds, &view_area) || bounds.width().max(bounds.height()) * px < 0.5 {
+                if !Rect::intersects2(&bounds, &reach) || bounds.width().max(bounds.height()) * px < 0.5 {
                     continue;
                 }
-                let level = self.level(&self.units[unit], px, true);
+                let level = self.level(&self.units[unit], px, false);
                 if let Some(recorded) = self.picture(unit, level, true) {
                     live += recorded.counts;
                     pictures.push(recorded.picture.clone());
                 }
             }
-            canvas.save();
-            canvas.clip_region(&holes, skia_safe::ClipOp::Intersect);
-            canvas.translate((-ox as f32, -oy as f32));
-            canvas.scale((px, px));
-            for picture in &pictures {
-                canvas.draw_picture(picture, None, None);
+            let play = |canvas: &skia_safe::Canvas, x: i32, y: i32| {
+                canvas.translate((x as f32 - frac.0, y as f32 - frac.1));
+                canvas.scale((px, px));
+                for picture in &pictures {
+                    canvas.draw_picture(picture, None, None);
+                }
+            };
+            // Drawn whole, with a margin, onto a surface kept while the view
+            // and what's in it stay the same, as they do while tiles fill in
+            let size = (width + margin * 2, height + margin * 2);
+            let drawn = (ox, oy, pxb, margin, pictures.iter().map(|picture| picture.unique_id()).collect::<Vec<u32>>());
+            if self.live.as_ref().is_none_or(|(surface, _)| (surface.width(), surface.height()) != size) {
+                self.live = self.gpu.surface(size.0, size.1, self.config.samples).map(|surface| (surface, None));
             }
-            canvas.restore();
+            if let Some((surface, shows)) = self.live.as_mut() {
+                if shows.as_ref() != Some(&drawn) {
+                    let live_canvas = surface.canvas();
+                    live_canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+                    live_canvas.save();
+                    play(live_canvas, margin - ox, margin - oy);
+                    live_canvas.restore();
+                    *shows = Some(drawn);
+                }
+                let image = surface.image_snapshot();
+                canvas.save();
+                canvas.clip_region(&holes, skia_safe::ClipOp::Intersect);
+                canvas.draw_image(&image, (-margin as f32, -margin as f32), None);
+                canvas.restore();
+            }
+            trace(|| format!("  live holes={} pictures={} margin={margin} {:.1}ms", missing.len(), pictures.len(), live_start.elapsed().as_secs_f64() * 1000.0));
         }
         let mut counts = live;
         let frame = self.frame;
@@ -1100,12 +1301,12 @@ impl Painter {
         self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, width, height);
         // The approximate reason of a unit in view, if any
         let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
-        let aa = self.config.supersample < 4;
+        let aa = self.supersample(px) < 4;
         let reason = self
             .units
             .iter()
             .filter(|unit| Rect::intersects2(&unit.bounds, &view_area))
-            .find_map(|unit| self.pictures.get(&(unit.slot, unit.section, self.level(unit, px, aa), aa)).and_then(|recorded| recorded.reason.clone()));
+            .find_map(|unit| self.pictures.get(&(unit.slot, unit.section, self.level(unit, px, true), aa)).and_then(|recorded| recorded.reason.clone()));
         self.evict(pxb);
         (counts, reason, pending || !missing.is_empty())
     }
@@ -1160,6 +1361,7 @@ impl Painter {
             log::warn!("native renderer: {error:?}");
         }
         let rendered = start.elapsed();
+        trace(|| format!("frame px={px:.3} settled={settled} encoded={:.1} rendered={:.1} pending={pending}", encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0));
         self.gpu.buffers.insert(index, (surface, target));
         let _ = unsafe { self.gpu.swap_chain.Present(1, DXGI_PRESENT(0)) };
         if pending {
@@ -1212,13 +1414,13 @@ impl Painter {
         let mut target = self.gpu.surface(width as i32, height as i32, 1)?;
         self.compose(&mut target, view, None, true);
         let px = (width as f64 / view.w) as f32;
-        let aa = self.config.supersample < 4;
+        let aa = self.supersample(px) < 4;
         let area = Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32);
         let waiting = self
             .units
             .iter()
             .filter(|unit| Rect::intersects2(&unit.bounds, &area))
-            .filter_map(|unit| self.pictures.get(&(unit.slot, unit.section, self.level(unit, px, aa), aa)))
+            .filter_map(|unit| self.pictures.get(&(unit.slot, unit.section, self.level(unit, px, true), aa)))
             .map(|recorded| recorded.waiting)
             .sum();
         let info = ImageInfo::new((width as i32, height as i32), ColorType::RGBA8888, AlphaType::Unpremul, None);
@@ -1227,6 +1429,105 @@ impl Painter {
             return None;
         }
         Some((pixels, waiting))
+    }
+
+    /// Dev tools: how long node `id` and each node under it take to draw on
+    /// a tile at (`x`, `y`) at `px` pixels a unit with `ss` samples a side;
+    /// or for `*`, each unit over a view there; `#images`, the images kept;
+    /// `#compact`, GPU memory used as tiles, pictures and images are let go
+    fn profile(&mut self, id: &str, x: f32, y: f32, px: f32, ss: i32) -> String {
+        if id == "#compact" {
+            let before = self.gpu.used();
+            self.tiles.clear();
+            self.pictures.clear();
+            self.kit.forget_patterns(None);
+            self.live = None;
+            self.scratch.clear();
+            self.down = None;
+            self.gpu.context.flush_submit_and_sync_cpu();
+            self.gpu.context.free_gpu_resources();
+            let without_tiles = self.gpu.used();
+            self.images.clear();
+            self.asked.clear();
+            self.gpu.context.flush_submit_and_sync_cpu();
+            self.gpu.context.free_gpu_resources();
+            return format!("{} MB, without tiles and pictures {} MB, without images {} MB", before / 1_000_000, without_tiles / 1_000_000, self.gpu.used() / 1_000_000);
+        }
+        if id == "#images" {
+            let mut rows: Vec<_> = self.images.iter().map(|(key, img)| (img.bytes(), format!("{} {}x{} of {:?} {:?}", key, img.image.width(), img.image.height(), img.original, img.area))).collect();
+            rows.sort_by(|a, b| b.0.cmp(&a.0));
+            return rows.iter().map(|(bytes, row)| format!("{:.1}MB {row}\n", *bytes as f64 / 1e6)).collect();
+        }
+        if id == "*" {
+            // Every unit over a 1200 by 800 view there, played as live
+            let area = Rect::from_xywh(x, y, 1200.0 / px, 800.0 / px);
+            let Some(mut surface) = self.gpu.surface(1200, 800, 1) else {
+                return "no surface".into();
+            };
+            let mut rows = Vec::new();
+            for unit in 0..self.units.len() {
+                if !Rect::intersects2(&self.units[unit].bounds, &area) {
+                    continue;
+                }
+                let level = self.level(&self.units[unit], px, false);
+                let Some(picture) = self.picture(unit, level, true).map(|recorded| recorded.picture.clone()) else { continue };
+                let mut best = f64::MAX;
+                for _ in 0..3 {
+                    let canvas = surface.canvas();
+                    canvas.save();
+                    canvas.scale((px, px));
+                    canvas.translate((-x, -y));
+                    let start = Instant::now();
+                    canvas.draw_picture(&picture, None, None);
+                    canvas.restore();
+                    self.gpu.context.flush_submit_and_sync_cpu();
+                    best = best.min(start.elapsed().as_secs_f64() * 1000.0);
+                }
+                let name = self.scene.node(self.units[unit].slot).map(|node| format!("{} {}", node.id, node.type_name)).unwrap_or_default();
+                rows.push((best, name, picture.approximate_op_count()));
+            }
+            rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+            return rows.iter().map(|(ms, name, ops)| format!("{ms:.2}ms {name} ops={ops}\n")).collect();
+        }
+        let Some(&root) = self.scene.by_id.get(id) else {
+            return "no such node".into();
+        };
+        let side = TILE * ss;
+        let Some(mut surface) = self.gpu.surface(side, side, self.config.samples) else {
+            return "no surface".into();
+        };
+        let mut out = String::new();
+        let mut stack = vec![(root, 0usize)];
+        while let Some((slot, depth)) = stack.pop() {
+            let mut ms = f64::MAX;
+            for _ in 0..3 {
+                let canvas = surface.canvas();
+                canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+                self.gpu.context.flush_submit_and_sync_cpu();
+                let canvas = surface.canvas();
+                canvas.save();
+                canvas.scale((px * ss as f32, px * ss as f32));
+                canvas.translate((-x, -y));
+                let start = Instant::now();
+                {
+                    let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, px);
+                    encoder.aa = ss < 4;
+                    encoder.node(slot);
+                }
+                canvas.restore();
+                self.gpu.context.flush_submit_and_sync_cpu();
+                ms = ms.min(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            let Some(node) = self.scene.node(slot) else { continue };
+            let effects: Vec<String> = node.effects.iter().map(|e| format!("{}:{}", e.kind, e.radius)).collect();
+            out += &format!("{}{} {} {:.1}ms {:?} mask={:?} blend={:?} {}\n", "  ".repeat(depth), node.id, node.type_name, ms, node.size, node.mask, node.blend, effects.join(","));
+            if ms > 0.5 && depth < 12 {
+                for &child in node.children.iter().rev() {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+        out
     }
 
     fn shown(&mut self) -> Option<(Vec<u8>, u32, u32)> {

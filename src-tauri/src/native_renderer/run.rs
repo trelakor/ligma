@@ -461,14 +461,14 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let original = image.dimensions();
     let (w, h) = (original.0 as f64, original.1 as f64);
     let side = (w.max(h) * (width.max(1.0) * 1.25 / w)).ceil();
-    let limit = (side as u32).next_power_of_two().clamp(256, IMAGE_LIMIT);
-    let fit = (limit as f64 / w.max(h)).min(1.0);
-    let mut image = if fit < 1.0 {
-        let size = (((w * fit).round() as u32).max(1), ((h * fit).round() as u32).max(1));
-        image::imageops::resize(&image, size.0, size.1, image::imageops::FilterType::Lanczos3)
-    } else {
-        image
-    };
+    // Kept whole, or halved as many times as it can be and still be big
+    // enough, each time by averaging 2 by 2 texels, which is how Figma
+    // makes the smaller copies of images it draws from. Any other size
+    // would sample differently from Figma
+    let mut image = image;
+    for _ in 0..halvings(original.0.max(original.1), side) {
+        image = halve(&image);
+    }
     if let Some(adjust) = adjust {
         adjust.apply(&mut image);
     }
@@ -477,6 +477,37 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let image = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(image.as_raw()), (iw * 4) as usize)
         .ok_or("couldn't make the image")?;
     Ok(Img { image, original, area: None, stale: false })
+}
+
+/// Times an image `longest` pixels on its longer side is halved to still
+/// be `side` pixels, no less than 256, and no more than `IMAGE_LIMIT`
+pub(super) fn halvings(longest: u32, side: f64) -> u32 {
+    let mut k = 0;
+    while k < 16 && ((longest >> (k + 1)) as f64 >= side.max(256.0) || (longest >> k) > IMAGE_LIMIT) {
+        k += 1;
+    }
+    k
+}
+
+/// `image` half the size, each pixel the mean of 2 by 2, weighted by alpha
+fn halve(image: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = ((image.width() / 2).max(1), (image.height() / 2).max(1));
+    image::RgbaImage::from_fn(w, h, |x, y| {
+        let mut sum = [0u32; 4];
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let p = image.get_pixel((x * 2 + dx).min(image.width() - 1), (y * 2 + dy).min(image.height() - 1));
+            let a = p[3] as u32;
+            for c in 0..3 {
+                sum[c] += p[c] as u32 * a;
+            }
+            sum[3] += a;
+        }
+        if sum[3] == 0 {
+            return image::Rgba([0, 0, 0, 0]);
+        }
+        let color = |c: usize| ((sum[c] + sum[3] / 2) / sum[3]) as u8;
+        image::Rgba([color(0), color(1), color(2), ((sum[3] + 2) / 4) as u8])
+    })
 }
 
 /// Node `id` as Figma renders it, about `width` pixels wide
@@ -618,6 +649,14 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             let _ = fresh.save(dir.join("fresh.png"));
             let _ = diff.save(dir.join("diff.png"));
             Ok(json!({ "dir": dir, "differ": differ, "pixels": width as u64 * height as u64 }).to_string())
+        }
+        _ if action.starts_with("profile:") && super::dev() => {
+            let parts: Vec<&str> = action["profile:".len()..].split(',').collect();
+            let [id, x, y, px, ss] = parts[..] else { return Err("profile:id,x,y,px,ss".into()) };
+            let num = |v: &str| v.parse::<f32>().map_err(|e| e.to_string());
+            let (send, receive) = mpsc::channel();
+            let _ = ctx.messages.send(Msg::Profile { id: id.to_string(), x: num(x)?, y: num(y)?, px: num(px)?, ss: num(ss)? as i32, reply: send });
+            receive.recv_timeout(Duration::from_secs(120)).map_err(|_| "the renderer didn't answer".to_string())
         }
         _ if action.starts_with("shown:") && super::dev() => {
             let (send, receive) = mpsc::channel();

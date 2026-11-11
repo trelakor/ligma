@@ -283,8 +283,9 @@ pub struct Img {
 }
 
 impl Img {
+    /// On the GPU, with its mipmaps
     pub fn bytes(&self) -> usize {
-        (self.image.width() * self.image.height() * 4) as usize
+        (self.image.width() * self.image.height() * 4) as usize * 4 / 3
     }
 }
 
@@ -292,6 +293,24 @@ type PatternKey = (usize, u64, i32);
 
 /// What drawing shares across nodes and frames: compiled SkSL and pattern
 /// tiles
+/// An image as 4 by 4 nearest samples a pixel average, which is how Figma's
+/// canvas shows images and how exact tiles draw them: `footprint` takes a
+/// pixel's offsets to the image's texels
+const BOX: &str = r#"
+uniform shader image;
+uniform float2x2 footprint;
+half4 main(float2 p) {
+    half4 sum = half4(0);
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            float2 o = float2((float(i) + 0.5) / 4.0 - 0.5, (float(j) + 0.5) / 4.0 - 0.5);
+            sum += image.eval(p + footprint * o);
+        }
+    }
+    return sum / 16.0;
+}
+"#;
+
 pub struct Kit {
     blenders: HashMap<&'static str, Blender>,
     diamond: Option<RuntimeEffect>,
@@ -301,6 +320,7 @@ pub struct Kit {
     noise: Option<RuntimeEffect>,
     noise_over: Option<Blender>,
     texture: Option<RuntimeEffect>,
+    boxed: Option<RuntimeEffect>,
     /// Recorded pattern tiles, and the images they were waiting for
     patterns: RefCell<HashMap<PatternKey, (skia_safe::Picture, Vec<String>, Vec<(String, bool)>)>>,
 }
@@ -329,7 +349,8 @@ impl Kit {
             .map_err(|error| log::warn!("native renderer: noise over: {error}"))
             .ok()
             .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
-        Self { blenders, diamond, luminance, divide, noise, noise_over, texture, patterns: RefCell::new(HashMap::new()) }
+        let boxed = RuntimeEffect::make_for_shader(BOX, None).map_err(|error| log::warn!("native renderer: box: {error}")).ok();
+        Self { blenders, diamond, luminance, divide, noise, noise_over, texture, boxed, patterns: RefCell::new(HashMap::new()) }
     }
 
     /// Forgets pattern tiles drawn without image `key`, or all of them
@@ -1007,11 +1028,24 @@ impl<'a> Encoder<'a> {
         // take one sample and smooth it
         let texels = kept / (shown / 1.42).max(1e-3);
         let sampling = if self.aa {
-            if texels > 2.0 {
-                SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
-            } else {
-                SamplingOptions::from(skia_safe::CubicResampler { b: 0.0, c: 1.0 })
+            // One sample a pixel: the 16 nearest ones exact tiles take are
+            // averaged here instead, over where the pixel falls on the image
+            if texels <= 4.0 {
+                if let Some(boxed) = &self.kit.boxed {
+                    let mut to_device = node.transform;
+                    to_device.post_scale((self.px, self.px), None);
+                    to_device.pre_concat(&local);
+                    if let Some(back) = to_device.invert() {
+                        let nearest = SamplingOptions::new(FilterMode::Nearest, MipmapMode::None);
+                        let child = img.image.to_shader((tile, tile), nearest, None)?;
+                        // Column major
+                        let footprint = [back.scale_x(), back.skew_y(), back.skew_x(), back.scale_y()];
+                        let uniforms: Vec<u8> = footprint.iter().flat_map(|v| v.to_le_bytes()).collect();
+                        return boxed.make_shader(Data::new_copy(&uniforms), &[child.into()], Some(&local));
+                    }
+                }
             }
+            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
         } else if texels > 4.0 {
             SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
         } else {
