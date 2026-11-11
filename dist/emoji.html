@@ -84,11 +84,13 @@
   .icon-button:focus-visible { outline: 1px solid var(--brand); outline-offset: -1px; }
   .icon-button[hidden] { display: none; }
 
+  /* A virtual list: only the rows in view are drawn, at their place in
+     #space, and rows scrolled away are reused (see `paint`) */
+  #list { position: relative; flex: 1; min-height: 0; overflow: hidden; }
   #grid {
-    flex: 1;
-    min-height: 0;
+    height: 100%;
     overflow-y: auto;
-    padding: 0 4px 8px 8px;
+    padding: 0 4px 0 8px;
     scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
@@ -96,19 +98,25 @@
   }
   #grid::-webkit-scrollbar { width: 4px; }
   #grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  #space { position: relative; contain: strict; width: 256px; }
+  .row { position: absolute; top: 0; left: 0; width: 256px; }
+  .row[hidden] { display: none; }
   h2 {
-    position: sticky;
-    top: 0;
-    z-index: 1;
+    height: 28px;
     padding: 8px 4px 4px;
     background: var(--bg);
     color: var(--text-secondary);
     font-size: 11px;
     font-weight: 550;
+    white-space: nowrap;
   }
-  .cells { display: grid; grid-template-columns: repeat(8, 32px); }
+  /* The section scrolled under the top, pushed up by the next one */
+  #sticky { position: absolute; z-index: 1; top: 0; left: 8px; width: 256px; pointer-events: none; }
+  #sticky[hidden] { display: none; }
+  .cells { display: flex; height: 32px; }
   .cell {
     display: grid;
+    flex: none;
     place-items: center;
     width: 32px;
     height: 32px;
@@ -118,11 +126,12 @@
     background: none;
     font: 20px/1 "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
   }
+  .cell[hidden] { display: none; }
   .cell:hover, .cell.focus { background: var(--hover); }
   .cell.focus { outline: 1px solid var(--brand); outline-offset: -1px; }
   /* The file's emoji now */
   .cell.current { background: color-mix(in srgb, var(--brand) 22%, transparent); }
-  .empty { padding: 32px 16px; color: var(--text-secondary); text-align: center; }
+  .empty { position: absolute; inset: 0 0 auto; padding: 32px 16px; color: var(--text-secondary); text-align: center; }
 
   /* Jumps to each section; the one in view stands out */
   nav {
@@ -161,7 +170,10 @@
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5"/><path d="m4.5 11.5 7-7"/></svg>
     </button>
   </header>
-  <div id="grid" role="listbox" aria-label="Emoji" tabindex="-1"></div>
+  <div id="list">
+    <div id="grid" role="listbox" aria-label="Emoji" tabindex="-1"><div id="space"></div></div>
+    <h2 id="sticky" aria-hidden="true" hidden></h2>
+  </div>
   <nav id="sections" aria-label="Sections"></nav>
 </div>
 <script src="emoji-data.js"></script>
@@ -170,9 +182,19 @@
   const $ = (id) => document.getElementById(id);
   const query = $("query");
   const grid = $("grid");
+  const space = $("space");
+  const sticky = $("sticky");
   const nav = $("sections");
   const remove = $("remove");
   const COLUMNS = 8;
+  // Row heights, in CSS pixels: a section's heading, a row of emoji, and
+  // the space after the last row
+  const HEAD = 28;
+  const ROW = 32;
+  const END = 8;
+  // Rows drawn past each edge of the view, so a fast scroll doesn't show
+  // blank space
+  const OVERSCAN = 6;
 
   const THEME_VARS = {
     "--bg": "bg",
@@ -241,44 +263,171 @@
   };
 
   let current = "";
-  let cells = [];
+
+  // What the list shows: `rows` of headings ({ head, top }) and of emoji
+  // ({ items, first, top }), and `flat`, every emoji in order, which focus
+  // and the arrow keys move through. Each emoji in `flat` knows its row
+  // and column
+  let rows = [];
+  let flat = [];
+  let heads = [];
   let focused = -1;
+
+  const build = (sections) => {
+    rows = [];
+    flat = [];
+    heads = [];
+    let top = 0;
+    for (const { name, emoji } of sections) {
+      heads.push(rows.length);
+      rows.push({ head: name, top });
+      top += HEAD;
+      for (let i = 0; i < emoji.length; i += COLUMNS) {
+        const items = emoji.slice(i, i + COLUMNS);
+        const row = rows.length;
+        rows.push({ items, first: flat.length, top });
+        items.forEach((item, col) => flat.push({ ...item, row, col }));
+        top += ROW;
+      }
+    }
+    space.style.height = `${top + END}px`;
+  };
+
+  // The rows drawn, by index, and spare ones of each kind to reuse
+  const drawn = new Map();
+  const spare = { head: [], cells: [] };
+  const kindOf = (node) => (node.tagName === "H2" ? "head" : "cells");
+  const release = (index, node) => {
+    drawn.delete(index);
+    node.hidden = true;
+    spare[kindOf(node)].push(node);
+  };
+
+  const makeRow = (kind) => {
+    if (kind === "head") return Object.assign(document.createElement("h2"), { className: "row" });
+    const node = Object.assign(document.createElement("div"), { className: "row cells" });
+    for (let i = 0; i < COLUMNS; i++) {
+      const cell = Object.assign(document.createElement("button"), { type: "button", className: "cell", tabIndex: -1 });
+      cell.setAttribute("role", "option");
+      node.append(cell);
+    }
+    return node;
+  };
+
+  const fill = (node, row) => {
+    node.style.transform = `translateY(${row.top}px)`;
+    if (row.head) {
+      node.textContent = row.head;
+      return;
+    }
+    [...node.children].forEach((cell, col) => {
+      const item = row.items[col];
+      cell.hidden = !item;
+      if (!item) return;
+      const index = row.first + col;
+      cell.dataset.index = index;
+      cell.textContent = item.char;
+      cell.title = item.label;
+      cell.setAttribute("aria-label", item.label);
+      cell.classList.toggle("current", item.char === current);
+      cell.classList.toggle("focus", index === focused);
+      cell.id = index === focused ? "focused-emoji" : "";
+      if (item.char === current) cell.setAttribute("aria-selected", "true");
+      else cell.removeAttribute("aria-selected");
+    });
+  };
+
+  // The last row starting at or above `y`, by binary search on the tops
+  const rowAt = (y) => {
+    let low = 0;
+    let high = rows.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (rows[mid].top <= y) low = mid;
+      else high = mid - 1;
+    }
+    return low;
+  };
+
+  // Draws the rows in view, reusing the ones that left it
+  const paint = () => {
+    const from = Math.max(0, rowAt(grid.scrollTop) - OVERSCAN);
+    const to = Math.min(rows.length - 1, rowAt(grid.scrollTop + grid.clientHeight) + OVERSCAN);
+    for (const [index, node] of drawn) if (index < from || index > to) release(index, node);
+    for (let index = from; index <= to; index++) {
+      const row = rows[index];
+      let node = drawn.get(index);
+      if (!node) {
+        const kind = row.head ? "head" : "cells";
+        node = spare[kind].pop() ?? space.appendChild(makeRow(kind));
+        node.hidden = false;
+        drawn.set(index, node);
+      }
+      fill(node, row);
+    }
+    stick();
+    markSection();
+  };
+
+  // Redraws what's drawn, for a new focus
+  const repaint = () => {
+    for (const [index, node] of drawn) fill(node, rows[index]);
+  };
+
+  // The heading of the section at the top stays there until the next
+  // heading reaches it and pushes it up
+  const stick = () => {
+    const y = grid.scrollTop;
+    const at = heads.findLastIndex((row) => rows[row].top <= y);
+    sticky.hidden = at < 0 || y <= 0;
+    if (sticky.hidden) return;
+    sticky.textContent = rows[heads[at]].head;
+    const next = heads[at + 1];
+    const push = next == null ? 0 : Math.min(0, rows[next].top - y - HEAD);
+    sticky.style.transform = push ? `translateY(${push}px)` : "";
+  };
+
+  // The browsed section in view lights up in the bar below
+  const markSection = () => {
+    if (nav.hidden) return;
+    const at = heads.findLastIndex((row) => rows[row].top <= grid.scrollTop + 1);
+    const name = rows[heads[at]]?.head;
+    // "Recent" and "Suggested" sit above the first section
+    const shown = name in NAV_ICONS ? name : null;
+    for (const button of nav.children) button.classList.toggle("on", button.dataset.name === shown);
+  };
+
+  let frame = 0;
+  grid.addEventListener("scroll", () => {
+    frame ||= requestAnimationFrame(() => {
+      frame = 0;
+      paint();
+    });
+  }, { passive: true });
 
   const pick = (char) => {
     if (char) remember(char);
     invoke("emoji_pick", { emoji: char });
   };
 
-  const cell = (emoji) => {
-    const node = Object.assign(document.createElement("button"), {
-      type: "button",
-      className: emoji.char === current ? "cell current" : "cell",
-      textContent: emoji.char,
-      title: emoji.label,
-      tabIndex: -1,
-    });
-    node.setAttribute("role", "option");
-    node.setAttribute("aria-label", emoji.label);
-    if (emoji.char === current) node.setAttribute("aria-selected", "true");
-    node.addEventListener("click", () => pick(emoji.char));
-    node.addEventListener("mousemove", () => focused !== cells.indexOf(node) && focus(cells.indexOf(node), false));
-    return node;
+  // Clicks and hovers on any row, by the emoji's index
+  const indexOf = (target) => {
+    const index = Number(target.closest?.(".cell")?.dataset.index);
+    return Number.isInteger(index) ? index : -1;
   };
+  grid.addEventListener("click", (e) => {
+    const index = indexOf(e.target);
+    if (index >= 0) pick(flat[index].char);
+  });
+  grid.addEventListener("mousemove", (e) => {
+    const index = indexOf(e.target);
+    if (index >= 0 && index !== focused) focus(index, false);
+  });
 
-  const section = (name, list) => {
-    const wrap = document.createElement("section");
-    wrap.dataset.name = name;
-    const heading = Object.assign(document.createElement("h2"), { textContent: name });
-    const row = Object.assign(document.createElement("div"), { className: "cells" });
-    row.append(...list.map(cell));
-    wrap.append(heading, row);
-    return wrap;
-  };
-
-  // The grid, browsing every section or showing a search's matches
+  // The list, browsing every section or showing a search's matches
   const draw = () => {
     const words = query.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    grid.replaceChildren();
+    let sections;
     if (words.length) {
       // Each word starts one of an emoji's words; names before keywords
       const found = [...BY_CHAR.values()]
@@ -293,90 +442,68 @@
         .sort((a, b) => a.rank - b.rank)
         .map(({ emoji }) => emoji);
       nav.hidden = true;
-      if (found.length) grid.append(section("Results", found));
-      else grid.append(Object.assign(document.createElement("p"), { className: "empty", textContent: "No emoji found" }));
+      sections = found.length ? [{ name: "Results", emoji: found }] : [];
     } else {
       nav.hidden = false;
       const last = recent();
-      if (last.length) grid.append(section("Recent", last.map((char) => BY_CHAR.get(char))));
-      grid.append(section("Suggested", SUGGESTED.map((char) => BY_CHAR.get(char)).filter(Boolean)));
-      for (const { name, emoji } of SECTIONS) grid.append(section(name, emoji));
+      sections = [
+        ...(last.length ? [{ name: "Recent", emoji: last.map((char) => BY_CHAR.get(char)) }] : []),
+        { name: "Suggested", emoji: SUGGESTED.map((char) => BY_CHAR.get(char)).filter(Boolean) },
+        ...SECTIONS,
+      ];
     }
-    cells = [...grid.querySelectorAll(".cell")];
+    build(sections);
+    for (const [index, node] of drawn) release(index, node);
+    $("list").querySelector(".empty")?.remove();
+    if (!flat.length) $("list").append(Object.assign(document.createElement("p"), { className: "empty", textContent: "No emoji found" }));
     // A search's first match is one Enter away
-    focus(words.length && cells.length ? 0 : -1, false);
+    focused = words.length && flat.length ? 0 : -1;
     grid.scrollTop = 0;
-    markSection();
+    paint();
+    focus(focused, false);
   };
 
   const focus = (index, scroll = true) => {
-    cells[focused]?.classList.remove("focus");
     focused = index;
-    const node = cells[index];
-    if (!node) {
-      query.removeAttribute("aria-activedescendant");
-      return;
+    if (scroll && index >= 0) {
+      // Clear of the heading held at the top
+      const { top } = rows[flat[index].row];
+      if (top - HEAD < grid.scrollTop) grid.scrollTop = top - HEAD;
+      else if (top + ROW > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + ROW - grid.clientHeight + END;
+      paint();
     }
-    node.classList.add("focus");
-    node.id = "focused-emoji";
-    query.setAttribute("aria-activedescendant", node.id);
-    if (scroll) {
-      const heading = node.closest("section").querySelector("h2").offsetHeight;
-      const top = node.offsetTop - grid.offsetTop;
-      if (top - heading < grid.scrollTop) grid.scrollTop = top - heading;
-      else if (top + node.offsetHeight > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + node.offsetHeight - grid.clientHeight + 8;
-    }
+    repaint();
+    if (index >= 0) query.setAttribute("aria-activedescendant", "focused-emoji");
+    else query.removeAttribute("aria-activedescendant");
   };
 
-  // Up and down move a row within the cells' own section grid
+  // The arrows move through the emoji; up and down keep the column where
+  // the next row has one, past headings
   const step = (key) => {
-    if (!cells.length) return;
-    if (focused < 0) return focus(0);
-    const node = cells[focused];
-    const row = [...node.parentNode.children];
-    const at = row.indexOf(node);
-    const sectionStart = focused - at;
-    const col = at % COLUMNS;
+    if (!flat.length) return;
+    // From the search field, only down goes into the list
+    if (focused < 0) return key === "ArrowDown" && focus(0);
+    const { row, col } = flat[focused];
     if (key === "ArrowLeft") return focus(Math.max(0, focused - 1));
-    if (key === "ArrowRight") return focus(Math.min(cells.length - 1, focused + 1));
-    if (key === "ArrowDown") {
-      if (at + COLUMNS < row.length) return focus(focused + COLUMNS);
-      // Into the next section, same column where it can
-      const next = sectionStart + row.length;
-      if (next >= cells.length) return focus(sectionStart + row.length - 1);
-      if (Math.floor(at / COLUMNS) < Math.floor((row.length - 1) / COLUMNS)) return focus(sectionStart + row.length - 1);
-      const nextRow = cells[next].parentNode.children.length;
-      return focus(next + Math.min(col, nextRow - 1));
-    }
-    if (key === "ArrowUp") {
-      if (at >= COLUMNS) return focus(focused - COLUMNS);
-      if (sectionStart === 0) return focus(-1), query.focus();
-      const prevLength = cells[sectionStart - 1].parentNode.children.length;
-      const lastRowStart = Math.floor((prevLength - 1) / COLUMNS) * COLUMNS;
-      return focus(sectionStart - prevLength + Math.min(lastRowStart + col, prevLength - 1));
+    if (key === "ArrowRight") return focus(Math.min(flat.length - 1, focused + 1));
+    const dir = key === "ArrowDown" ? 1 : -1;
+    let next = row + dir;
+    while (rows[next]?.head) next += dir;
+    const target = rows[next];
+    if (target) return focus(target.first + Math.min(col, target.items.length - 1));
+    if (dir < 0) {
+      focus(-1);
+      query.focus();
     }
   };
-
-  // The browsed section in view lights up in the bar below
-  const markSection = () => {
-    if (nav.hidden) return;
-    const sections = [...grid.querySelectorAll("section")];
-    const top = grid.scrollTop + 1;
-    let shown = sections[0]?.dataset.name;
-    for (const node of sections) if (node.offsetTop - grid.offsetTop <= top) shown = node.dataset.name;
-    // "Recent" and "Suggested" sit above the first section
-    if (!(shown in NAV_ICONS)) shown = null;
-    for (const button of nav.children) button.classList.toggle("on", button.dataset.name === shown);
-  };
-  grid.addEventListener("scroll", markSection, { passive: true });
 
   for (const [name, icon] of Object.entries(NAV_ICONS)) {
     const button = Object.assign(document.createElement("button"), { type: "button", textContent: icon, title: name, tabIndex: -1 });
     button.setAttribute("aria-label", name);
     button.dataset.name = name;
     button.addEventListener("click", () => {
-      const node = grid.querySelector(`section[data-name="${name}"]`);
-      if (node) grid.scrollTop = node.offsetTop - grid.offsetTop;
+      const head = heads.find((row) => rows[row].head === name);
+      if (head != null) grid.scrollTop = rows[head].top;
       query.focus();
     });
     nav.append(button);
@@ -399,7 +526,7 @@
       step(e.key);
     } else if (e.key === "Enter" && focused >= 0) {
       e.preventDefault();
-      pick(cells[focused].textContent);
+      pick(flat[focused].char);
     }
   });
   grid.addEventListener("mouseleave", () => query.value || focus(-1, false));
