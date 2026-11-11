@@ -17,7 +17,7 @@ use skia_safe::canvas::{SaveLayerFlags, SaveLayerRec};
 use skia_safe::image_filters::CropRect;
 use skia_safe::gradient::{shaders as gradients, Colors, Gradient, Interpolation};
 use skia_safe::{
-    color_filters, image_filters, luma_color_filter, BlendMode, Blender, BlurStyle, Canvas, ClipOp, Color4f, Data,
+    color_filters, image_filters, luma_color_filter, BlendMode, Blender, BlurStyle, Canvas, ClipOp, Color4f, ColorChannel, Data,
     FilterMode, Image, ImageFilter, MaskFilter, Matrix, MipmapMode, Paint, Path, PictureRecorder, Point, RRect, Rect,
     RuntimeEffect, SamplingOptions, Shader, TileMode, Vector,
 };
@@ -152,29 +152,9 @@ pub fn tent_sigma(radius: f64) -> f32 {
     (radius / 6f64.sqrt()) as f32
 }
 
-/// Figma's noise effect: three octaves of hashed gradient noise in node
-/// space, one field a channel, of which values in a band as wide as the
-/// density show. Monotone shows `color` where the fields' luma is in the low
-/// band, duotone `secondary` there and `color` in the high band, multitone
-/// the fields as they are where the fourth one is in the low band. The
-/// hashes are Figma's, so the grain lands where Figma's does
-const NOISE: &str = r#"
-uniform float2 frequency;
-uniform float2 center;
-uniform float kind;
-uniform float density;
-uniform half4 color;
-uniform half4 secondary;
-// Each field's octaves: the octave's seed and its two gradient scales
-uniform float3 octaves[12];
-
-float band(float v, bool upper) {
-    float low = 10.0 * ((upper ? 0.75 : 0.25) - density / 4.0);
-    float high = low + 10.0 * (density / 2.0);
-    float x = v * 10.0;
-    return step(low, x) * (1.0 - step(high, x));
-}
-
+/// Figma's fractal noise, which its noise and texture effects are made of:
+/// three octaves of gradient noise on a grid hashed the way Figma does
+const FBM: &str = r#"
 float cellHash(float2 cell) {
     float t = dot(cell, float2(12.9898, 78.233));
     t = t - floor(t / 3.14159) * 3.14159;
@@ -209,15 +189,42 @@ float gradientNoise(float3 octave, float2 p) {
     return mix(mix(a, b, u.x), mix(d, e, u.x), u.y);
 }
 
+// Three octaves at `q`, from -1.75 to 1.75
+float fbm(float3 a, float3 b, float3 c, float2 q) {
+    return gradientNoise(a, q) + gradientNoise(b, q * 2.0) / 2.0 + gradientNoise(c, q * 4.0) / 4.0;
+}
+"#;
+
+/// Figma's noise effect: three octaves of hashed gradient noise in node
+/// space, one field a channel, of which values in a band as wide as the
+/// density show. Monotone shows `color` where the fields' luma is in the low
+/// band, duotone `secondary` there and `color` in the high band, multitone
+/// the fields as they are where the fourth one is in the low band. The
+/// hashes are Figma's, so the grain lands where Figma's does
+const NOISE: &str = r#"
+uniform float2 frequency;
+uniform float2 center;
+uniform float kind;
+uniform float density;
+uniform half4 color;
+uniform half4 secondary;
+// Each field's octaves: the octave's seed and its two gradient scales
+uniform float3 octaves[12];
+
+float band(float v, bool upper) {
+    float low = 10.0 * ((upper ? 0.75 : 0.25) - density / 4.0);
+    float high = low + 10.0 * (density / 2.0);
+    float x = v * 10.0;
+    return step(low, x) * (1.0 - step(high, x));
+}
+
 // From 0 to 1
-float field(float3 a, float3 b, float3 c, float2 p) {
-    float2 q = p * frequency;
-    float sum = gradientNoise(a, q) + gradientNoise(b, q * 2.0) / 2.0 + gradientNoise(c, q * 4.0) / 4.0;
-    return (sum + 1.0) / 2.0;
+float field(float3 a, float3 b, float3 c, float2 q) {
+    return (fbm(a, b, c, q) + 1.0) / 2.0;
 }
 
 half4 main(float2 p) {
-    float2 at = p - center;
+    float2 at = (p - center) * frequency;
     float r = field(octaves[0], octaves[1], octaves[2], at);
     float g = field(octaves[3], octaves[4], octaves[5], at);
     float b = field(octaves[6], octaves[7], octaves[8], at);
@@ -236,6 +243,22 @@ half4 main(float2 p) {
     }
     float a = band(luma, true) * color.a;
     return half4(color.rgb * half(a), half(a));
+}
+"#;
+
+/// Figma's texture effect moves what a node drew by two noise fields, as
+/// far as its radius. This is where to, a quarter of it in red and green
+/// about the middle, for a displacement map
+const TEXTURE: &str = r#"
+uniform float2 frequency;
+uniform float2 center;
+uniform float3 octaves[6];
+
+half4 main(float2 p) {
+    float2 at = (p - center) * frequency;
+    float x = fbm(octaves[0], octaves[1], octaves[2], at);
+    float y = fbm(octaves[3], octaves[4], octaves[5], at);
+    return half4(half(x / 4.0 + 0.5), half(y / 4.0 + 0.5), 0.0, 1.0);
 }
 "#;
 
@@ -277,6 +300,7 @@ pub struct Kit {
     divide: Option<Blender>,
     noise: Option<RuntimeEffect>,
     noise_over: Option<Blender>,
+    texture: Option<RuntimeEffect>,
     /// Recorded pattern tiles, and the images they were waiting for
     patterns: RefCell<HashMap<PatternKey, (skia_safe::Picture, Vec<String>, Vec<(String, bool)>)>>,
 }
@@ -299,12 +323,13 @@ impl Kit {
             .map_err(|error| log::warn!("native renderer: divide: {error}"))
             .ok()
             .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
-        let noise = RuntimeEffect::make_for_shader(NOISE, None).map_err(|error| log::warn!("native renderer: noise: {error}")).ok();
+        let noise = RuntimeEffect::make_for_shader(format!("{FBM}{NOISE}"), None).map_err(|error| log::warn!("native renderer: noise: {error}")).ok();
+        let texture = RuntimeEffect::make_for_shader(format!("{FBM}{TEXTURE}"), None).map_err(|error| log::warn!("native renderer: texture: {error}")).ok();
         let noise_over = RuntimeEffect::make_for_blender(NOISE_OVER, None)
             .map_err(|error| log::warn!("native renderer: noise over: {error}"))
             .ok()
             .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
-        Self { blenders, diamond, luminance, divide, noise, noise_over, patterns: RefCell::new(HashMap::new()) }
+        Self { blenders, diamond, luminance, divide, noise, noise_over, texture, patterns: RefCell::new(HashMap::new()) }
     }
 
     /// Forgets pattern tiles drawn without image `key`, or all of them
@@ -553,6 +578,8 @@ impl<'a> Encoder<'a> {
         let mut behind = Vec::new();
         let mut over = Vec::new();
         let mut blur_sigma = None;
+        // What the node drew, as its effects change it
+        let mut content = None;
         let solid = || image_filters::color_filter(silhouette(), None, None);
         for effect in &node.effects {
             let sigma = tent_sigma(effect.radius);
@@ -592,19 +619,37 @@ impl<'a> Encoder<'a> {
                     over.push(image_filters::blend(BlendMode::SrcIn, None, shadow, None));
                 }
                 "LAYER_BLUR" if blur && effect.radius > 0.0 => blur_sigma = Some(sigma),
+                "TEXTURE" if effect.radius > 0.0 => content = self.texture(node, effect).or(content),
                 _ => {}
             }
         }
         let mut filter = if behind.is_empty() && over.is_empty() {
-            None
+            content
         } else {
-            let layers = behind.into_iter().chain([None]).chain(over);
+            let layers = behind.into_iter().chain([content]).chain(over);
             image_filters::merge(layers, None)
         };
         if let Some(sigma) = blur_sigma {
             filter = image_filters::blur((sigma, sigma), TileMode::Decal, filter, None);
         }
         filter
+    }
+
+    /// What the node drew moved about by Figma's texture `effect`. Unlike
+    /// Figma's, it reads past the shape, so the edges roughen both ways
+    fn texture(&self, node: &Node, effect: &Effect) -> Option<ImageFilter> {
+        let texture = self.kit.texture.as_ref()?;
+        let size = effect.noise_size_vector.unwrap_or(Vec2 { x: effect.noise_size.unwrap_or(1.0), y: effect.noise_size.unwrap_or(1.0) });
+        let (w, h) = node.size;
+        let values = [(1.0 / size.x.max(1e-3)) as f32, (1.0 / size.y.max(1e-3)) as f32, (w / 2.0) as f32, (h / 2.0) as f32];
+        let mut uniforms = Vec::with_capacity((values.len() + 18) * 4);
+        for value in values.into_iter().chain(self.scene.noise_octaves.iter().take(18).copied()) {
+            uniforms.extend_from_slice(&value.to_le_bytes());
+        }
+        let shader = texture.make_shader(Data::new_copy(&uniforms), &[], Some(&node.transform))?;
+        let field = image_filters::shader(shader, None);
+        let scale = node.transform.scale_x().hypot(node.transform.skew_y());
+        image_filters::displacement_map((ColorChannel::R, ColorChannel::G), 4.0 * effect.radius as f32 * scale, field, None, None)
     }
 
     /// The node's outline grown (or shrunk) by `spread`, solid, as an image
@@ -852,7 +897,8 @@ impl<'a> Encoder<'a> {
                 }
             }
         } else if matches!(node.fills, Fills::Mixed) {
-            // Text in several styles: each outline in its own
+            // Text in several styles, or a vector's regions: each outline in
+            // its own
             for (i, path) in geometry.iter().enumerate() {
                 for paint in node.fills_of(i) {
                     self.paint(node, paint, path);
@@ -950,14 +996,22 @@ impl<'a> Encoder<'a> {
         }
         let mut local = to_node;
         local.pre_scale((iw / kept, ih / img.image.height() as f32), None);
-        // Figma resamples images with a sharp cubic (Keys, a = -1), so does
-        // this, unless the image is shrunk well past the samples drawn,
-        // where mipmaps keep it from shimmering
-        let samples = if self.aa { 1.0 } else { 4.0 };
-        let sampling = if kept > shown * samples * 2.0 {
+        // Figma's canvas shows each pixel as the average of the image's texels
+        // under it. Exact tiles take 4 by 4 samples a pixel, so nearest ones
+        // average the same way, unless there are more texels under a pixel
+        // than samples, where mipmaps keep it from shimmering. Quick tiles
+        // take one sample and smooth it
+        let texels = kept / (shown / 1.42).max(1e-3);
+        let sampling = if self.aa {
+            if texels > 2.0 {
+                SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+            } else {
+                SamplingOptions::from(skia_safe::CubicResampler { b: 0.0, c: 1.0 })
+            }
+        } else if texels > 4.0 {
             SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
         } else {
-            SamplingOptions::from(skia_safe::CubicResampler { b: 0.0, c: 1.0 })
+            SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
         };
         img.image.to_shader((tile, tile), sampling, &local)
     }
@@ -980,7 +1034,9 @@ impl<'a> Encoder<'a> {
         self.note_source(source_id, found.is_some());
         let source_slot = found?;
         let source = scene.node(source_slot)?;
-        let (sw, sh) = (source.size.0.max(1e-3) as f32, source.size.1.max(1e-3) as f32);
+        // The source as it shows, turned if it is, in the box around it
+        let frame = source.transform.map_rect(Rect::from_wh(source.size.0 as f32, source.size.1 as f32)).0;
+        let (sw, sh) = (frame.width().max(1e-3), frame.height().max(1e-3));
         let factor = paint.scaling_factor.unwrap_or(1.0).max(1e-3) as f32;
         let spacing = paint.spacing.unwrap_or_default();
         // A cell is the tile and the space after it, in the source's units
@@ -1015,13 +1071,11 @@ impl<'a> Encoder<'a> {
             None => {
                 let mut recorder = PictureRecorder::new();
                 let canvas = recorder.begin_recording(tile, false);
-                let inverse = source.transform.invert()?;
                 let mut inner = Encoder::new(scene, self.images, self.kit, canvas, 2f32.powi(level));
                 inner.depth = self.depth + 1;
                 for (x, y) in placements {
                     canvas.save();
-                    canvas.translate((x, y));
-                    canvas.concat(&inverse);
+                    canvas.translate((x - frame.left, y - frame.top));
                     inner.node(source_slot);
                     canvas.restore();
                 }
@@ -1102,51 +1156,51 @@ impl<'a> Encoder<'a> {
         self.canvas.restore();
     }
 
-    /// A progressive layer blur, blurring more from its start to its end:
-    /// the sharp node fading out as the blurred one fades in
+    /// A progressive layer blur, blurring more from its start to its end
     fn progressive(&mut self, node: &Node, effect: &Effect) {
         let (w, h) = (node.size.0 as f32, node.size.1 as f32);
         let start = effect.start_offset.unwrap_or_default();
         let end = effect.end_offset.unwrap_or(super::scene::Vec2 { x: 0.5, y: 1.0 });
         let p0 = node.transform.map_point((start.x as f32 * w, start.y as f32 * h));
         let p1 = node.transform.map_point((end.x as f32 * w, end.y as f32 * h));
-        let ramp = |from: f32, to: f32| {
-            let colors = [Color4f::new(0.0, 0.0, 0.0, from), Color4f::new(0.0, 0.0, 0.0, to)];
-            let ramp = Gradient::new(Colors::new(&colors, None, TileMode::Clamp, None), Interpolation::default());
-            gradients::linear_gradient((p0, p1), &ramp, None)
-        };
         let Some(bounds) = node.bounds else {
             return self.content(node);
         };
-        let sigma = tent_sigma(effect.radius);
+        // Figma's radius changes along the way. Here blurs of radii evenly
+        // apart are each shown about where the radius is theirs, fading into
+        // the next, so no radius is more than a few pixels off
+        let device = self.px * node.transform.scale_x().hypot(node.transform.skew_y());
+        let span = (effect.radius - effect.start_radius).abs() as f32 * device;
+        let levels = ((span / 6.0).ceil() as usize + 1).clamp(2, 8);
+        let mut plus = Paint::default();
+        plus.set_blend_mode(BlendMode::Plus);
         let mut dest_in = Paint::default();
         dest_in.set_blend_mode(BlendMode::DstIn);
         self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds));
-        // Sharp, or as blurred as it starts, fading out
-        let start_sigma = tent_sigma(effect.start_radius);
-        let mut starting = Paint::default();
-        if start_sigma > 0.0 {
-            starting.set_image_filter(image_filters::blur((start_sigma, start_sigma), TileMode::Decal, None, None));
+        for level in 0..levels {
+            let at = level as f32 / (levels - 1) as f32;
+            let radius = effect.start_radius + (effect.radius - effect.start_radius) * at as f64;
+            let step = 1.0 / (levels - 1) as f32;
+            // 1 where the radius is this level's, 0 a level away
+            let (colors, positions): (Vec<Color4f>, Vec<f32>) = [(at - step, 0.0), (at, 1.0), (at + step, 0.0)]
+                .into_iter()
+                .filter(|(position, _)| (-1e-6..=1.0 + 1e-6).contains(position))
+                .map(|(position, alpha)| (Color4f::new(0.0, 0.0, 0.0, alpha), position.clamp(0.0, 1.0)))
+                .unzip();
+            let ramp = Gradient::new(Colors::new(&colors, Some(&positions), TileMode::Clamp, None), Interpolation::default());
+            dest_in.set_shader(gradients::linear_gradient((p0, p1), &ramp, None));
+            self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&plus));
+            let mut blurred = Paint::default();
+            let sigma = tent_sigma(radius);
+            if sigma > 0.0 {
+                blurred.set_image_filter(image_filters::blur((sigma, sigma), TileMode::Decal, None, None));
+            }
+            self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&blurred));
+            self.content(node);
+            self.canvas.restore();
+            self.canvas.draw_rect(bounds, &dest_in);
+            self.canvas.restore();
         }
-        self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds));
-        self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&starting));
-        self.content(node);
-        self.canvas.restore();
-        dest_in.set_shader(ramp(1.0, 0.0));
-        self.canvas.draw_rect(bounds, &dest_in);
-        self.canvas.restore();
-        // Blurred, fading in, added
-        let mut plus = Paint::default();
-        plus.set_blend_mode(BlendMode::Plus);
-        self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&plus));
-        let mut blurred = Paint::default();
-        blurred.set_image_filter(image_filters::blur((sigma, sigma), TileMode::Decal, None, None));
-        self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&blurred));
-        self.content(node);
-        self.canvas.restore();
-        dest_in.set_shader(ramp(0.0, 1.0));
-        self.canvas.draw_rect(bounds, &dest_in);
-        self.canvas.restore();
         self.canvas.restore();
     }
 

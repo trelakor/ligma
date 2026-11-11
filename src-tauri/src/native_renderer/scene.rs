@@ -232,6 +232,8 @@ pub struct Effect {
     pub noise_type: Option<String>,
     /// Duotone noise's second color
     pub secondary_color: Option<Rgba>,
+    /// A texture effect keeps to the node's shape
+    pub clip_to_shape: Option<bool>,
 }
 
 impl Effect {
@@ -454,13 +456,15 @@ impl Node {
                 "BACKGROUND_BLUR" if effect.progressive() => return Some("progressive background blur"),
                 "BACKGROUND_BLUR" => {}
                 "NOISE" => {}
-                "TEXTURE" => return Some("texture effect"),
+                // Kept to the shape, Figma only moves what's inside it about
+                "TEXTURE" if effect.clip_to_shape == Some(true) => return Some("texture kept to the shape"),
+                "TEXTURE" => {}
                 "GLASS" => return Some("glass effect"),
                 "SHADER" => {}
                 _ => return Some("other effect"),
             }
         }
-        if matches!(self.fills, Fills::Mixed) && (self.kind != Kind::Text || self.segment_fills.len() != self.fill_geometry.len()) {
+        if matches!(self.fills, Fills::Mixed) && self.segment_fills.len() != self.fill_geometry.len() {
             return Some("mixed fills");
         }
         if self.kind == Kind::Text && self.fill_geometry.is_empty() && self.visible_fills().next().is_some() {

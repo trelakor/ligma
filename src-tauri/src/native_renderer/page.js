@@ -106,7 +106,9 @@
     return btoa(text);
   };
 
-  const yieldNow = () => new Promise((resolve) => setTimeout(resolve, 0));
+  // Lets Figma draw and take input. A timer would wait at least 4ms each
+  // time, a quarter of every slice of work
+  const yieldNow = () => (globalThis.scheduler?.yield ? scheduler.yield() : new Promise((resolve) => setTimeout(resolve, 0)));
 
   // Rounds to 1/1000, which is far below a pixel at any zoom Figma has, to
   // keep the JSON short
@@ -152,6 +154,19 @@
           out.segs = n.getStyledTextSegments(["fills"]).map((segment) => segment.fills);
         } catch {}
       }
+      if (n.type === "VECTOR") {
+        // A vector's regions can each have their own fills, which Figma
+        // draws instead of the vector's. Its outlines are its regions'
+        try {
+          const regions = n.vectorNetwork.regions;
+          const own = JSON.stringify(out.fills);
+          if (regions.some((region) => region.fills?.length && JSON.stringify(region.fills) !== own) && regions.length === n.fillGeometry.length) {
+            out.fills = "MIXED";
+            out.segs = regions.map((region) => region.fills ?? []);
+          }
+        } catch {}
+      }
+      if (Array.isArray(out.segs)) for (const fills of out.segs) for (const paint of fills) if (paint.type === "PATTERN" && paint.visible !== false) patternSources.add(paint.sourceNodeId);
       if (Array.isArray(out.fills)) for (const paint of out.fills) if (paint.type === "PATTERN" && paint.visible !== false) patternSources.add(paint.sourceNodeId);
     }
     if ("strokes" in n && n.strokes.length) {
