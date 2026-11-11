@@ -374,7 +374,7 @@
   .menu.big { min-width: 208px; }
   .menu.big .mi { gap: 8px; height: 40px; padding: 0 16px 0 8px; }
   .mic { display: grid; place-items: center; flex: none; width: 24px; height: 24px; }
-  .mi:not(.on) .mic > svg { color: var(--text); }
+  .mi:not(.on) .mic > svg:not(.g) { color: var(--text); }
   .mh { display: flex; align-items: center; height: 24px; padding: 0 8px; color: var(--text2); white-space: nowrap; }
   .msep { height: 1px; margin: 8px -8px; background: var(--menu-line); }
   .menu input {
@@ -3183,7 +3183,7 @@ head.addEventListener("click", (e) => {
   else if (act === "new-menu") {
     // As Figma's own "More" menu on its home page
     showMenu([
-      ...Object.entries(TYPES).map(([type, t]) => ({ label: t.noun, iconHtml: glyph(type), act: () => createFile(type) })),
+      ...Object.entries(TYPES).map(([type, t]) => ({ label: t.label, iconHtml: glyph(type), act: () => createFile(type) })),
       null,
       { label: "Project", iconHtml: figmaIcon("folder", 24), act: () => newProject(e.target.closest("[data-act]").getBoundingClientRect()) },
       { label: "Import", iconHtml: figmaIcon("import", 24), act: () => window.open("https://www.figma.com/files", "_blank") },
