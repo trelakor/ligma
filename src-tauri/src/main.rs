@@ -17,6 +17,7 @@ mod frame;
 mod game_mode;
 mod handoff;
 mod home;
+mod lasso;
 mod layers;
 mod mcp_bridge;
 mod models;
@@ -313,6 +314,7 @@ fn main() {
             adjustments::init(&settings);
             ai_actions::init(&settings);
             copy_code::init(&settings);
+            lasso::init(&settings);
             view_state::init(&settings);
             game_mode::init(&settings);
             notifications::init(&settings);

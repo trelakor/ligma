@@ -138,6 +138,8 @@ pub struct Settings {
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
+    /// Lasso fill in the Creation tools menu, under Pencil (see lasso.rs)
+    pub lasso_fill: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -192,6 +194,7 @@ impl Default for Settings {
             local_vectorize: true,
             local_select_object: true,
             copy_as_code: true,
+            lasso_fill: true,
             classic_home: false,
             mcp_bridge: false,
         }
@@ -439,6 +442,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::adjustments::apply_settings(app, &settings);
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
+    crate::lasso::apply_settings(app, &settings);
     crate::view_state::apply_settings(app, &settings);
     crate::mcp_bridge::apply_settings(app, &settings);
     let plugins_changed = {
