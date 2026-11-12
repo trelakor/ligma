@@ -937,6 +937,11 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             let report = audit(&ctx, &action["audit:".len()..])?;
             Ok(report.to_string())
         }
+        "profile" if super::dev() => Ok(super::profile::report()),
+        "profile-reset" if super::dev() => {
+            super::profile::reset();
+            Ok("reset".into())
+        }
         "rastercheck" if super::dev() => {
             // The view drawn with units drawn into images of their own and
             // without, which should come out the same
@@ -1037,7 +1042,8 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             let mut stats = stats().lock().unwrap();
             let longest = stats.longest_hole_ms;
             stats.longest_hole_ms = 0.0;
-            Ok(format!("{longest:.0}"))
+            let total = std::mem::take(&mut stats.hole_total_ms);
+            Ok(format!("{longest:.0}/{total:.0}"))
         }
         "resync" => {
             ctx.resync.store(true, Ordering::Relaxed);

@@ -53,6 +53,8 @@ mod gpu_census;
 #[cfg(windows)]
 mod present;
 #[cfg(windows)]
+mod profile;
+#[cfg(windows)]
 mod shader_cache;
 #[cfg(windows)]
 mod render;
@@ -187,6 +189,12 @@ pub struct Stats {
     pub longest_hole_ms: f64,
     #[serde(skip)]
     pub holes_since: Option<std::time::Instant>,
+    /// Dev tools: ms frames have shown holes for, all told, and the last
+    /// frame shown and whether it had any
+    #[serde(skip)]
+    pub hole_total_ms: f64,
+    #[serde(skip)]
+    pub last_frame: Option<(std::time::Instant, bool)>,
     /// Where the last parity or benchmark report went
     pub report: Option<String>,
     #[serde(skip)]
@@ -222,6 +230,11 @@ impl Stats {
 
     /// Whether the frame just shown has parts of the view not drawn yet
     pub fn holes(&mut self, holes: bool) {
+        let now = std::time::Instant::now();
+        if let Some((at, true)) = self.last_frame {
+            self.hole_total_ms += (now - at).as_secs_f64() * 1000.0;
+        }
+        self.last_frame = Some((now, holes));
         match (holes, self.holes_since) {
             (true, None) => self.holes_since = Some(std::time::Instant::now()),
             (_, Some(since)) => {

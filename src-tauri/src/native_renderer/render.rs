@@ -30,7 +30,7 @@ use skia_safe::{
 };
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
-use windows::Win32::Graphics::Direct3D12::{D3D12CreateDevice, ID3D12Device};
+use windows::Win32::Graphics::Direct3D12::{D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device, ID3D12Fence, D3D12_FENCE_FLAG_NONE};
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter1, IDXGIAdapter3, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO, IDXGIFactory4, IDXGIFactory6, DXGI_ADAPTER_FLAG, DXGI_ADAPTER_FLAG_SOFTWARE,
     DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
@@ -143,7 +143,7 @@ pub struct Request {
 
 /// In a dev build with LIGMA_NATIVE_TRACE=1, frame and tile timings are
 /// written to ligma-trace.txt in the temp folder
-fn tracing() -> bool {
+pub(super) fn tracing() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| super::dev() && std::env::var("LIGMA_NATIVE_TRACE").is_ok_and(|value| value == "1"))
 }
@@ -408,6 +408,22 @@ fn is_draft(level: i32) -> bool {
     (DRAFT_LEVEL / 2..EXACT_LEVEL).contains(&level)
 }
 
+/// Dev tools: GPU resources made, programs compiled and pipelines made so
+/// far, each with the ms they took
+fn gpu_counters() -> [f64; 6] {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (made, made_ms) = super::committed::made();
+    let ms = |ns: u64| ns as f64 / 1e6;
+    [
+        made as f64,
+        made_ms,
+        super::shader_cache::ASKED.load(Relaxed) as f64,
+        ms(super::shader_cache::ASKED_NS.load(Relaxed)),
+        super::gpu_census::PIPELINES.load(Relaxed) as f64,
+        ms(super::gpu_census::PIPELINES_NS.load(Relaxed) as u64),
+    ]
+}
+
 /// Units smaller than this many pixels are left out of drafts
 const DRAFT_SMALLEST: f32 = 2.0;
 
@@ -471,11 +487,21 @@ struct Tile {
     /// A draft, to show behind the view's tiles while they're drawn. One
     /// the view itself needs is drawn again in full
     draft: bool,
+    /// The render queue's fence passes this once the GPU has drawn it. Till
+    /// then the present thread, on a queue of its own, is shown `previous`,
+    /// what it replaces, if anything
+    fence: u64,
+    previous: Option<Arc<Tex>>,
 }
 
 pub struct Gpu {
     context: DirectContext,
     device: ID3D12Device,
+    /// Signalled on Skia's queue after each tile, so the present thread
+    /// shows a tile once the GPU has drawn it without this thread waiting
+    queue: ID3D12CommandQueue,
+    fence: ID3D12Fence,
+    signalled: u64,
     /// The window's size in pixels
     size: (u32, u32),
     pub adapter: String,
@@ -518,20 +544,41 @@ impl Device {
 
 impl Gpu {
     pub fn new(device: &Device, width: u32, height: u32) -> Result<Self, String> {
-        let queue = unsafe { device.device.CreateCommandQueue(&Default::default()) }.map_err(|error| format!("queue: {error}"))?;
+        let queue: ID3D12CommandQueue = unsafe { device.device.CreateCommandQueue(&Default::default()) }.map_err(|error| format!("queue: {error}"))?;
+        let fence: ID3D12Fence = unsafe { device.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.map_err(|error| format!("fence: {error}"))?;
         let memory = device.adapter.cast::<IDXGIAdapter3>().ok();
-        let backend = BackendContext { adapter: device.adapter.clone(), device: device.device.clone(), queue, memory_allocator: Some(super::committed::allocator(&device.device)), protected_context: Protected::No };
+        let backend = BackendContext { adapter: device.adapter.clone(), device: device.device.clone(), queue: queue.clone(), memory_allocator: Some(super::committed::allocator(&device.device)), protected_context: Protected::No };
         let mut context = unsafe { gpu::direct_contexts::make_d3d(&backend, None) }.ok_or("Skia couldn't start on D3D12")?;
         context.set_resource_cache_limit(config().cache_limit);
         let gpu = Self {
             context,
             device: device.device.clone(),
+            queue,
+            fence,
+            signalled: 0,
             size: (width.max(1), height.max(1)),
             adapter: format!("{} (D3D12)", device.name),
             memory,
         };
         log::info!("native renderer: started on {}, {:?}, {:.0} MB of GPU memory", gpu.adapter, config(), gpu.used() as f64 / 1e6);
         Ok(gpu)
+    }
+
+    /// Signals the fence after all that's submitted so far, returning the
+    /// value it will pass
+    fn signal(&mut self) -> u64 {
+        self.signalled += 1;
+        if unsafe { self.queue.Signal(&self.fence, self.signalled) }.is_err() {
+            // Without it, waiting is the way to know
+            let _ = self.context.flush_submit_and_sync_cpu();
+            return 0;
+        }
+        self.signalled
+    }
+
+    /// The fence value the GPU has passed
+    fn passed(&self) -> u64 {
+        unsafe { self.fence.GetCompletedValue() }
     }
 
     /// GPU memory this process uses, as D3D12 counts it
@@ -615,6 +662,9 @@ pub struct Painter {
     /// When a frame was last drawn, and whether memory was given back since
     drawn: Instant,
     released: bool,
+    /// Tiles are drawing on the GPU, to show once its fence passes `passed`
+    drawing: bool,
+    passed: u64,
     drew: bool,
     /// Figma's checkerboard, and the pixel grid it draws when zoomed in
     checker: Option<skia_safe::RuntimeEffect>,
@@ -675,6 +725,8 @@ impl Painter {
             cleaned: Instant::now(),
             drawn: Instant::now(),
             released: true,
+            drawing: false,
+            passed: 0,
             checker: skia_safe::RuntimeEffect::make_for_shader(CHECKER, None)
                 .map_err(|error| log::warn!("native renderer: checker: {error}"))
                 .ok(),
@@ -698,10 +750,13 @@ impl Painter {
     }
 
     pub fn run(mut self, messages: Receiver<Msg>) {
+        super::profile::register();
         // How long until there's more to draw, if there is
         let mut next: Option<Duration> = Some(Duration::ZERO);
         loop {
             let wait = if self.dirty { Duration::ZERO } else { next.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)) };
+            // Tiles the GPU is drawing are shown the moment it's done
+            let wait = if self.drawing { wait.min(Duration::from_millis(1)) } else { wait };
             let first = if wait.is_zero() {
                 match messages.try_recv() {
                     Ok(message) => Some(message),
@@ -724,7 +779,8 @@ impl Painter {
             }
             let changed = std::mem::take(&mut self.dirty);
             next = self.fill();
-            if changed || self.dirty {
+            let drawn = self.drawing && self.gpu.passed() != self.passed;
+            if changed || self.dirty || drawn {
                 self.publish();
             }
             if std::mem::take(&mut self.drew) {
@@ -855,9 +911,7 @@ impl Painter {
         order.retain(|item| seen.insert(*item));
         if let Some(&(key, exact)) = order.first() {
             if let Some(tile) = self.draw_tile(key, exact, key.px != pxb) {
-                if let Some(old) = self.tiles.insert(key, tile) {
-                    self.retire(old.tex);
-                }
+                self.put_tile(key, tile);
                 self.drew = true;
             }
             self.evict(pxb, cpb);
@@ -916,7 +970,7 @@ impl Painter {
         let canvas = surface.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         play(canvas, &pictures, ((margin - ox) as f32, (margin - oy) as f32), px);
-        let image = self.finish(&backend);
+        let image = self.finish(&backend, true);
         drop(surface);
         if image.is_none() {
             return;
@@ -942,6 +996,30 @@ impl Painter {
         Tex::new(&self.gpu.device, width, height)
     }
 
+    /// Puts `tile` at `key`, the tile there shown until it's drawn
+    fn put_tile(&mut self, key: TileKey, mut tile: Tile) {
+        if let Some(old) = self.tiles.remove(&key) {
+            if old.fence <= self.gpu.passed() {
+                if let Some(previous) = old.previous {
+                    self.retire(previous);
+                }
+                tile.previous = Some(old.tex);
+            } else {
+                // Never shown, so what it was to replace still is
+                tile.previous = old.previous;
+                self.retire(old.tex);
+            }
+        }
+        self.tiles.insert(key, tile);
+    }
+
+    fn drop_tile(&mut self, tile: Tile) {
+        self.retire(tile.tex);
+        if let Some(previous) = tile.previous {
+            self.retire(previous);
+        }
+    }
+
     /// Keeps `tex` to use again once the present thread is done with it
     fn retire(&mut self, tex: Arc<Tex>) {
         self.spare.push(tex);
@@ -954,7 +1032,7 @@ impl Painter {
     fn clear_tiles(&mut self) {
         let tiles: Vec<Tile> = self.tiles.drain().map(|(_, tile)| tile).collect();
         for tile in tiles {
-            self.retire(tile.tex);
+            self.drop_tile(tile);
         }
         if let Some(whole) = self.whole.take() {
             self.retire(whole.layer.tex);
@@ -963,10 +1041,14 @@ impl Painter {
 
     /// Leaves a texture just drawn into through `backend` ready to be read,
     /// and returns it as this context's image
-    fn finish(&mut self, backend: &BackendTexture) -> Option<Image> {
-        // Drawn first, as Skia wouldn't know to wait for it when it's read
-        // through another of its wrappers
-        let _ = self.gpu.context.flush_submit_and_sync_cpu();
+    fn finish(&mut self, backend: &BackendTexture, wait: bool) -> Option<Image> {
+        // Submitted first, as Skia wouldn't know to wait for it when it's
+        // read through another of its wrappers
+        if wait {
+            let _ = self.gpu.context.flush_submit_and_sync_cpu();
+        } else {
+            let _ = self.gpu.context.flush_and_submit();
+        }
         let image = gpu::images::borrow_texture_from(&mut self.gpu.context, backend, SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None)?;
         if self.touch.is_none() {
             self.touch = self.gpu.surface(1, 1, 1);
@@ -974,19 +1056,33 @@ impl Painter {
         let touch = self.touch.as_mut()?;
         let one = Rect::from_wh(1.0, 1.0);
         touch.canvas().draw_image_rect(&image, Some((&one, skia_safe::canvas::SrcRectConstraint::Strict)), one, &Paint::default());
-        let _ = self.gpu.context.flush_submit_and_sync_cpu();
+        if wait {
+            let _ = self.gpu.context.flush_submit_and_sync_cpu();
+        } else {
+            let _ = self.gpu.context.flush_and_submit();
+        }
         Some(image)
     }
 
     /// Hands the present thread what's drawn
     fn publish(&mut self) {
         let background = self.background();
+        let passed = self.gpu.passed();
+        self.passed = passed;
+        let replaced: Vec<Arc<Tex>> = self.tiles.values_mut().filter(|tile| tile.fence <= passed).filter_map(|tile| tile.previous.take()).collect();
+        for tex in replaced {
+            self.retire(tex);
+        }
+        self.drawing = self.tiles.values().any(|tile| tile.fence > passed);
         let mut shown = self.hub.shown.lock().unwrap();
         shown.generation += 1;
         shown.tiles = self
             .tiles
             .iter()
-            .map(|(key, tile)| Layer { tex: tile.tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts })
+            .filter_map(|(key, tile)| {
+                let tex = if tile.fence <= passed { &tile.tex } else { tile.previous.as_ref()? };
+                Some(Layer { tex: tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts })
+            })
             .collect();
         shown.live = self.whole.as_ref().map(|whole| whole.layer.clone());
         shown.background = Some(background);
@@ -1226,6 +1322,7 @@ impl Painter {
         self.touch = None;
         let _ = self.gpu.context.flush_submit_and_sync_cpu();
         self.gpu.context.free_gpu_resources();
+        super::committed::trim();
         self.update_memory();
     }
 
@@ -1759,6 +1856,7 @@ impl Painter {
             }
         }
         let recorded = start.elapsed();
+        let before = if tracing() { gpu_counters() } else { [0.0; 6] };
         let tex = self.tex(TILE, TILE)?;
         let found = match self.scratch.iter().position(|(kept, samples, _)| (*kept, *samples) == (margin, ss)) {
             Some(found) => found,
@@ -1797,8 +1895,9 @@ impl Painter {
             shrink(&mut target, &drawn, source, self.average.as_ref());
         }
         drop(drawn);
-        let image = self.finish(&backend);
+        let image = self.finish(&backend, false);
         drop(target);
+        let fence = self.gpu.signal();
         let image = image?;
         // Margins are rare, so their bigger surfaces aren't kept
         if margin != 0 {
@@ -1816,7 +1915,19 @@ impl Painter {
             let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
             trace(|| {
                 let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-                format!("  tile {},{} px={px:.4} draft={draft} exact={exact} margin={margin} units={} record={:.1} play={:.1} flush={:.1} gpu={:.1} vram={vram}", key.x, key.y, pictures.len(), ms(recorded), ms(played - recorded), ms(flushed - played), ms(gpu - flushed))
+                let after = gpu_counters();
+                let [made, made_ms, programs, programs_ms, pipelines, pipelines_ms] = std::array::from_fn(|i| after[i] - before[i]);
+                let kinds = super::committed::take_kinds();
+                format!(
+                    "  tile {},{} px={px:.4} draft={draft} exact={exact} margin={margin} units={} record={:.1} play={:.1} flush={:.1} gpu={:.1} vram={vram} made={made}/{made_ms:.1} programs={programs}/{programs_ms:.1} pipelines={pipelines}/{pipelines_ms:.1} kinds: {kinds}",
+                    key.x,
+                    key.y,
+                    pictures.len(),
+                    ms(recorded),
+                    ms(played - recorded),
+                    ms(flushed - played),
+                    ms(gpu - flushed)
+                )
             });
             // What a slow tile spent its time on, each unit drawn alone
             if tracing_units() && (gpu - played) > Duration::from_millis(50) {
@@ -1842,7 +1953,7 @@ impl Painter {
                 }
             }
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, fence, previous: None })
     }
 
     fn background(&self) -> Color4f {
@@ -1969,9 +2080,7 @@ impl Painter {
                 continue;
             }
             if let Some(tile) = self.draw_tile(key, exact, false) {
-                if let Some(old) = self.tiles.insert(key, tile) {
-                    self.retire(old.tex);
-                }
+                self.put_tile(key, tile);
             }
             exact_drawn |= exact && !at_once;
             // The budget is of time the GPU takes too, as that's most of a
@@ -2078,7 +2187,7 @@ impl Painter {
             self.tiles.iter().filter(|(key, tile)| !(tile.exact || key.px == current || key.px == coarse || frame - tile.used < PASSING)).map(|(key, _)| *key).collect();
         for key in gone {
             if let Some(tile) = self.tiles.remove(&key) {
-                self.retire(tile.tex);
+                self.drop_tile(tile);
             }
         }
         // The coarse level has room of its own
@@ -2087,7 +2196,7 @@ impl Painter {
             kept.sort_unstable_by_key(|(used, _)| std::cmp::Reverse(*used));
             for (_, key) in kept.split_off(COARSE_TILES) {
                 if let Some(tile) = self.tiles.remove(&key) {
-                    self.retire(tile.tex);
+                    self.drop_tile(tile);
                 }
             }
         }
@@ -2107,7 +2216,7 @@ impl Painter {
         let gone: Vec<TileKey> = self.tiles.iter().filter(|(key, tile)| key.px != coarse && tile.used < cutoff).map(|(key, _)| *key).collect();
         for key in gone {
             if let Some(tile) = self.tiles.remove(&key) {
-                self.retire(tile.tex);
+                self.drop_tile(tile);
             }
         }
         // Pictures of zoom levels far from any tile kept go too

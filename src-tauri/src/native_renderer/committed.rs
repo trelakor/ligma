@@ -4,9 +4,11 @@
 //! back while anything at all is left in them, which held hundreds of MB
 //! for a few images
 //!
-//! Memory of its own takes at least a 64 KiB page, so textures small enough
-//! to be placed at 4 KiB, masks and tables Skia makes by the thousand, share
-//! 4 MiB heaps instead, each freed once nothing is left in it
+//! Memory of its own takes at least a 64 KiB page, and making it takes the
+//! driver a while, up to a millisecond, so resources up to 1 MiB share heaps
+//! of their kind instead, each freed once nothing is left in it: textures
+//! small enough to be placed at 4 KiB, masks and tables Skia makes by the
+//! thousand, other textures, render targets, and buffers to upload through
 //!
 //! Skia takes C++ objects here, `GrD3DMemoryAllocator` and `GrD3DAlloc`, so
 //! this lays them out as MSVC does: a vtable, starting with
@@ -20,8 +22,9 @@ use skia_safe::gpu::d3d::MemoryAllocator;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D12::{
     ID3D12Device, ID3D12Heap, ID3D12Resource, D3D12_CLEAR_VALUE, D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_D3D12_OPTIONS7, D3D12_HEAP_DESC,
-    D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE, D3D12_HEAP_TYPE_DEFAULT,
-    D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+    D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES,
+    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_DESC,
+    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
     D3D12_RESOURCE_STATES,
 };
 
@@ -29,11 +32,27 @@ use windows::Win32::Graphics::Direct3D12::{
 /// clears or draws over what it uses
 const NOT_ZEROED: D3D12_HEAP_FLAGS = D3D12_HEAP_FLAGS(0x1000);
 
-/// Small textures' heaps, and the steps they're placed in
-const SLAB: u64 = 4 << 20;
-const SLOT: u64 = 4096;
-const SLOTS: usize = (SLAB / SLOT) as usize;
-const SMALL: u64 = 64 << 10;
+/// A kind of resource placed in shared heaps: the heaps', their size, the
+/// steps resources are placed in, and the largest placed
+struct Kind {
+    heap: D3D12_HEAP_TYPE,
+    flags: D3D12_HEAP_FLAGS,
+    slab: u64,
+    slot: u64,
+    largest: u64,
+}
+
+const TINY_TEXTURES: usize = 0;
+const TEXTURES: usize = 1;
+const TARGETS: usize = 2;
+const UPLOADS: usize = 3;
+
+static KINDS_PLACED: [Kind; 4] = [
+    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, slab: 4 << 20, slot: 4 << 10, largest: 64 << 10 },
+    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, slab: 8 << 20, slot: 64 << 10, largest: 1 << 20 },
+    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 8 << 20, slot: 64 << 10, largest: 1 << 20 },
+    Kind { heap: D3D12_HEAP_TYPE_UPLOAD, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, slab: 4 << 20, slot: 64 << 10, largest: 1 << 20 },
+];
 
 #[repr(C)]
 struct Vtable {
@@ -49,7 +68,7 @@ struct Allocator {
     refs: AtomicI32,
     device: ID3D12Device,
     zeroed_only: bool,
-    pool: Arc<Mutex<Pool>>,
+    pools: [Arc<Mutex<Pool>>; 4],
 }
 
 static VTABLE: Vtable = Vtable { destroy, dispose, create, alias };
@@ -73,8 +92,10 @@ struct AllocVtable {
 
 static ALLOC_VTABLE: AllocVtable = AllocVtable { destroy: destroy_alloc, dispose: dispose_alloc };
 
-#[derive(Default)]
 struct Pool {
+    kind: &'static Kind,
+    /// Heaps can be made without clearing them first
+    not_zeroed: bool,
     slabs: Vec<Option<Slab>>,
 }
 
@@ -87,13 +108,14 @@ struct Slab {
 impl Pool {
     /// `count` slots in a row, in a heap made if none has room
     fn take(&mut self, device: &ID3D12Device, count: usize) -> Option<(usize, usize, ID3D12Heap)> {
+        let slots = self.slots();
         for (index, slab) in self.slabs.iter_mut().enumerate() {
             let Some(slab) = slab else { continue };
-            if SLOTS - slab.in_use < count {
+            if slots - slab.in_use < count {
                 continue;
             }
             let mut run = 0;
-            for slot in 0..SLOTS {
+            for slot in 0..slots {
                 run = if slab.used[slot] { 0 } else { run + 1 };
                 if run == count {
                     let first = slot + 1 - count;
@@ -103,16 +125,17 @@ impl Pool {
                 }
             }
         }
+        let not_zeroed = if self.not_zeroed && self.kind.heap == D3D12_HEAP_TYPE_DEFAULT { NOT_ZEROED.0 } else { 0 };
         let desc = D3D12_HEAP_DESC {
-            SizeInBytes: SLAB,
-            Properties: D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_DEFAULT, ..Default::default() },
+            SizeInBytes: self.kind.slab,
+            Properties: D3D12_HEAP_PROPERTIES { Type: self.kind.heap, ..Default::default() },
             Alignment: 0,
-            Flags: D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES,
+            Flags: D3D12_HEAP_FLAGS(self.kind.flags.0 | not_zeroed),
         };
         let mut heap: Option<ID3D12Heap> = None;
         unsafe { device.CreateHeap(&desc, &mut heap) }.map_err(|error| log::warn!("native renderer: GPU memory: {error}")).ok()?;
         let heap = heap?;
-        let mut used = vec![false; SLOTS];
+        let mut used = vec![false; slots];
         used[..count].fill(true);
         let slab = Slab { heap: heap.clone(), used, in_use: count };
         let index = match self.slabs.iter().position(Option::is_none) {
@@ -137,11 +160,37 @@ impl Pool {
         slab.used[first..first + count].fill(false);
         slab.in_use -= count;
         if slab.in_use == 0 {
-            let others_have_room = self.slabs.iter().enumerate().any(|(other, slab)| other != index && slab.as_ref().is_some_and(|slab| slab.in_use < SLOTS));
+            let slots = self.slots();
+            let others_have_room = self.slabs.iter().enumerate().any(|(other, slab)| other != index && slab.as_ref().is_some_and(|slab| slab.in_use < slots));
             if others_have_room {
                 self.slabs[index] = None;
             }
         }
+    }
+
+    fn slots(&self) -> usize {
+        (self.kind.slab / self.kind.slot) as usize
+    }
+
+    /// Frees the heaps left empty
+    fn trim(&mut self) {
+        for slab in &mut self.slabs {
+            if slab.as_ref().is_some_and(|slab| slab.in_use == 0) {
+                *slab = None;
+            }
+        }
+    }
+}
+
+/// The pools of the allocators made, to trim
+static POOLS: Mutex<Vec<std::sync::Weak<Mutex<Pool>>>> = Mutex::new(Vec::new());
+
+/// Frees heaps nothing is placed in, kept meanwhile for what's made next
+pub fn trim() {
+    let mut pools = POOLS.lock().unwrap();
+    pools.retain(|pool| pool.strong_count() > 0);
+    for pool in pools.iter().filter_map(std::sync::Weak::upgrade) {
+        pool.lock().unwrap().trim();
     }
 }
 
@@ -161,7 +210,9 @@ pub fn allocator(device: &ID3D12Device) -> MemoryAllocator {
         let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
         unsafe { device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &mut options as *mut _ as *mut c_void, std::mem::size_of_val(&options) as u32) }.is_err()
     };
-    let allocator = Box::into_raw(Box::new(Allocator { vtable: &VTABLE, refs: AtomicI32::new(1), device: device.clone(), zeroed_only, pool: Arc::default() }));
+    let pools: [Arc<Mutex<Pool>>; 4] = std::array::from_fn(|kind| Arc::new(Mutex::new(Pool { kind: &KINDS_PLACED[kind], not_zeroed: !zeroed_only, slabs: Vec::new() })));
+    POOLS.lock().unwrap().extend(pools.iter().map(Arc::downgrade));
+    let allocator = Box::into_raw(Box::new(Allocator { vtable: &VTABLE, refs: AtomicI32::new(1), device: device.clone(), zeroed_only, pools }));
     // A handle is a pointer to the object, which it now owns
     unsafe { std::mem::transmute::<*mut Allocator, MemoryAllocator>(allocator) }
 }
@@ -198,7 +249,7 @@ fn release_slots(alloc: &Alloc) {
     alloc.pool.lock().unwrap().give(alloc.slab, alloc.first, alloc.count);
 }
 
-/// `createResource`: a small texture in a shared heap, anything else a
+/// `createResource`: up to 1 MiB, in a shared heap, anything else a
 /// committed resource, its own memory. Skia gets no allocation object back
 /// for those, as for a texture it wraps
 unsafe extern "system" fn create(
@@ -217,8 +268,10 @@ unsafe extern "system" fn create(
     let clear = (!clear.is_null()).then_some(clear);
     if let Some(resource) = placed(this, heap, &*desc, state, allocation, clear) {
         *out = resource.into_raw();
+        tally(heap, &*desc, true, started);
         return out;
     }
+    let _tally = Tally(heap, *desc, started);
     let properties = D3D12_HEAP_PROPERTIES { Type: heap, ..Default::default() };
     let flags = if heap == D3D12_HEAP_TYPE_DEFAULT && !this.zeroed_only { NOT_ZEROED } else { D3D12_HEAP_FLAG_NONE };
     let mut resource: Option<ID3D12Resource> = None;
@@ -243,7 +296,45 @@ impl Drop for Made {
     }
 }
 
-/// A small texture placed in a shared heap, if it is one
+/// Dev tools: resources made while tracing, by kind, with their count and
+/// the ns they took
+static KINDS: std::sync::Mutex<Option<std::collections::HashMap<String, (u64, u64)>>> = std::sync::Mutex::new(None);
+
+struct Tally(D3D12_HEAP_TYPE, D3D12_RESOURCE_DESC, std::time::Instant);
+
+impl Drop for Tally {
+    fn drop(&mut self) {
+        tally(self.0, &self.1, false, self.2);
+    }
+}
+
+fn tally(heap: D3D12_HEAP_TYPE, desc: &D3D12_RESOURCE_DESC, placed: bool, started: std::time::Instant) {
+    if !super::render::tracing() {
+        return;
+    }
+    let kind = if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D {
+        format!("buffer heap={} {}KB", heap.0, desc.Width >> 10)
+    } else {
+        format!("texture {}x{} format={} flags={} samples={} placed={placed}", desc.Width, desc.Height, desc.Format.0, desc.Flags.0, desc.SampleDesc.Count)
+    };
+    let ns = started.elapsed().as_nanos() as u64;
+    let mut kinds = KINDS.lock().unwrap();
+    let entry = kinds.get_or_insert_with(Default::default).entry(kind).or_default();
+    entry.0 += 1;
+    entry.1 += ns;
+}
+
+/// Dev tools: the kinds of resource made since last asked, most time first
+pub fn take_kinds() -> String {
+    let Some(kinds) = KINDS.lock().unwrap().take() else {
+        return String::new();
+    };
+    let mut kinds: Vec<_> = kinds.into_iter().collect();
+    kinds.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+    kinds.iter().map(|(kind, (count, ns))| format!("{count}x {kind} {:.1}ms", *ns as f64 / 1e6)).collect::<Vec<_>>().join("; ")
+}
+
+/// The resource placed in a shared heap of its kind, if it's one placed
 unsafe fn placed(
     this: &Allocator,
     heap: D3D12_HEAP_TYPE,
@@ -252,22 +343,41 @@ unsafe fn placed(
     allocation: *mut *mut Alloc,
     clear: Option<*const D3D12_CLEAR_VALUE>,
 ) -> Option<ID3D12Resource> {
-    let targets = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0;
-    if heap != D3D12_HEAP_TYPE_DEFAULT || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count > 1 || desc.Flags.0 & targets != 0 || allocation.is_null() {
+    if allocation.is_null() || desc.SampleDesc.Count > 1 {
         return None;
     }
-    let mut small = *desc;
-    small.Alignment = SLOT;
-    let info = this.device.GetResourceAllocationInfo(0, &[small]);
-    if info.Alignment != SLOT || info.SizeInBytes > SMALL || info.SizeInBytes == 0 {
+    let targets = desc.Flags.0 & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0) != 0;
+    let mut desc = *desc;
+    let kind = if heap == D3D12_HEAP_TYPE_UPLOAD && desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+        UPLOADS
+    } else if heap != D3D12_HEAP_TYPE_DEFAULT || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D {
+        return None;
+    } else if targets {
+        TARGETS
+    } else {
+        // Placed at 4 KiB if it's small enough to be
+        let mut small = desc;
+        small.Alignment = KINDS_PLACED[TINY_TEXTURES].slot;
+        let info = this.device.GetResourceAllocationInfo(0, &[small]);
+        if info.Alignment == small.Alignment && info.SizeInBytes <= KINDS_PLACED[TINY_TEXTURES].largest {
+            desc = small;
+            TINY_TEXTURES
+        } else {
+            TEXTURES
+        }
+    };
+    let pool = &this.pools[kind];
+    let slot = KINDS_PLACED[kind].slot;
+    let info = this.device.GetResourceAllocationInfo(0, &[desc]);
+    if info.Alignment > slot || info.SizeInBytes > KINDS_PLACED[kind].largest || info.SizeInBytes == 0 {
         return None;
     }
-    let count = info.SizeInBytes.div_ceil(SLOT) as usize;
-    let (slab, first, heap) = this.pool.lock().unwrap().take(&this.device, count)?;
+    let count = info.SizeInBytes.div_ceil(slot) as usize;
+    let (slab, first, heap) = pool.lock().unwrap().take(&this.device, count)?;
     let mut resource: Option<ID3D12Resource> = None;
-    if let Err(error) = this.device.CreatePlacedResource(&heap, first as u64 * SLOT, &small, state, clear, &mut resource) {
+    if let Err(error) = this.device.CreatePlacedResource(&heap, first as u64 * slot, &desc, state, clear, &mut resource) {
         log::warn!("native renderer: GPU memory: {error}");
-        this.pool.lock().unwrap().give(slab, first, count);
+        pool.lock().unwrap().give(slab, first, count);
         return None;
     }
     let resource = resource?;
@@ -276,7 +386,7 @@ unsafe fn placed(
     if !old.is_null() {
         unref(old);
     }
-    *allocation = Box::into_raw(Box::new(Alloc { vtable: &ALLOC_VTABLE, refs: AtomicI32::new(1), pool: this.pool.clone(), slab, first, count }));
+    *allocation = Box::into_raw(Box::new(Alloc { vtable: &ALLOC_VTABLE, refs: AtomicI32::new(1), pool: pool.clone(), slab, first, count }));
     Some(resource)
 }
 
