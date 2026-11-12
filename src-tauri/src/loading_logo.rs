@@ -37,6 +37,9 @@ pub const PAGE_JS: &str = r##"(() => {
   // The middle D unfolds from the stem, the top out of its corner
   const SPIN = "cubic-bezier(.12, 0, .39, 0)";
   const UNFOLD = "cubic-bezier(.33, 1, .68, 1)";
+  // Folding away is unfolding played backwards: the same steps, mirrored
+  // about the middle of the loop, eased in instead of out
+  const FOLD = "cubic-bezier(.32, 0, .67, 0)";
   const PIECES = "[data-ligma-logo] :is(.top, .middle, .cap, .span, .rest, .end, .divide, .boundary)";
   const TURNING = "[data-ligma-logo] :is(.cap, .span, .rest, .end, .divide, .boundary)";
   // Turning three times, resting, then three times again
@@ -85,14 +88,16 @@ pub const PAGE_JS: &str = r##"(() => {
       10%, 20%, 80%, 90%, 100% { transform: translateX(9px); }
     }
     @keyframes ligma-logo-middle {
-      0%, 22%, 80%, 100% { transform: scaleX(.01); opacity: 0; }
-      22.1%, 79.9% { opacity: 1; }
-      28%, 74% { transform: scaleX(1); }
+      0%, 22%, 78%, 100% { transform: scaleX(.01); opacity: 0; }
+      22.1%, 77.9% { opacity: 1; }
+      28% { transform: scaleX(1); }
+      72% { transform: scaleX(1); animation-timing-function: ${FOLD}; }
     }
     @keyframes ligma-logo-top {
       0%, 26%, 74%, 100% { transform: scale(.01); opacity: 0; }
       26.1%, 73.9% { opacity: 1; }
-      32%, 68% { transform: scale(1); }
+      32% { transform: scale(1); }
+      68% { transform: scale(1); animation-timing-function: ${FOLD}; }
     }
     @media (prefers-reduced-motion: reduce) {
       ${PIECES} { animation: none; }
