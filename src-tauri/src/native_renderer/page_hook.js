@@ -27,6 +27,9 @@
     // scene it can't read, and Figma recovers by sending the whole scene
     wantFull: false,
     error: null,
+    // Memory Ligma shares with the page (see page.js), where it writes the
+    // last frame it has drawn
+    shared: null,
   });
 
   // Figma's threaded renderer, behind a gate it reads once as it starts
@@ -96,13 +99,64 @@
 
   const post = MessagePort.prototype.postMessage;
   MessagePort.prototype.postMessage = function (message) {
+    let isFrame = false;
     try {
-      if (message?.method === "sendCanvasFrameToRenderWorker") frame(message.params);
+      if (message?.method === "sendCanvasFrameToRenderWorker") {
+        frame(message.params);
+        isFrame = true;
+      }
     } catch (error) {
       hook.error = String(error);
     }
+    const queue = held.get(this);
+    if (queue || (isFrame && holding())) {
+      const entry = { args: Array.from(arguments), seq: isFrame ? seq : 0, at: performance.now() };
+      if (queue) queue.push(entry);
+      else held.set(this, [entry]);
+      schedule();
+      return;
+    }
     return post.apply(this, arguments);
   };
+
+  // Frames for Figma's worker, which draws only what's over the canvas, are
+  // held till Ligma has drawn what's under them, or for `HOLD` ms at most,
+  // so the two show together. What else goes to the worker meanwhile waits
+  // behind them, in order
+  const HOLD = 50;
+  const READY_SLOT = 18;
+  const held = new Map();
+  let scheduled = 0;
+  const holding = () => hook.replacing && hook.pushTo && hook.shared && seq > 0;
+  function pump(all) {
+    const now = performance.now();
+    const done = hook.shared?.[READY_SLOT] ?? Infinity;
+    for (const [port, queue] of held) {
+      while (queue.length) {
+        const first = queue[0];
+        if (!all && first.seq > done && now - first.at < HOLD) break;
+        queue.shift();
+        try {
+          post.apply(port, first.args);
+        } catch (error) {
+          hook.error = String(error);
+        }
+      }
+      if (!queue.length) held.delete(port);
+    }
+  }
+  function schedule() {
+    if (scheduled) return;
+    scheduled = 2;
+    // Whichever comes first, a frame or a moment
+    const tick = () => {
+      scheduled = Math.max(0, scheduled - 1);
+      pump(false);
+      if (held.size && !scheduled) schedule();
+    };
+    requestAnimationFrame(tick);
+    setTimeout(tick, 1);
+  }
 
   function frame(params) {
     const f = params?.frame;
@@ -252,6 +306,7 @@
     if (on && !hook.ready()) return false;
     if (hook.replacing === on) return true;
     hook.replacing = on;
+    pump(true);
     under(on);
     // Figma's worker needs the whole scene back when it draws it again
     if (!on) hook.wantFull = true;

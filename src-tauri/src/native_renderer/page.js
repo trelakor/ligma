@@ -1076,6 +1076,7 @@
     const first = !shared;
     shared = new Float64Array(event.getBuffer());
     if (shared[0] % 2) shared[0] += 1;
+    if (window.__ligmaHook) window.__ligmaHook.shared = shared;
     written = [];
     if (first) requestAnimationFrame(nextFrame);
   });

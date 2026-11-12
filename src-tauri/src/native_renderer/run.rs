@@ -680,8 +680,12 @@ fn sync(ctx: Arc<Ctx>) {
         if ready.as_ref().and_then(Value::as_str) == Some("installed") || !shared_here {
             *ctx.shared.lock().unwrap() = None;
             let to = ctx.clone();
-            crate::webview2::share(&file.webview, VIEW_SLOTS * 8, move |shared| match shared {
-                Some(shared) => *to.shared.lock().unwrap() = Some((label, shared)),
+            *ctx.hub.shared.lock().unwrap() = None;
+            crate::webview2::share(&file.webview, SHARED_SLOTS * 8, move |shared| match shared {
+                Some(shared) => {
+                    *to.hub.shared.lock().unwrap() = Some(shared);
+                    *to.shared.lock().unwrap() = Some((label, shared));
+                }
                 None => log::info!("native renderer: the tab can't share memory, so its view is asked for"),
             });
         }
@@ -849,6 +853,9 @@ fn changes(ctx: &Ctx, webview: &Webview) -> Result<bool, String> {
 
 /// Slots of the view the page writes to shared memory (see page.js)
 const VIEW_SLOTS: usize = 18;
+/// Those and the last frame Ligma has drawn, which Ligma writes (see
+/// page_hook.js)
+const SHARED_SLOTS: usize = 19;
 
 /// The view the page last wrote to `shared`, with its count of writes and
 /// when it was written, in ms since 1970

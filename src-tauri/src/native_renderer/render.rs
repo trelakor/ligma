@@ -247,6 +247,10 @@ struct Unit {
 enum Drawn {
     Picture(Picture),
     Image(Image, (i32, i32)),
+    /// A thumb (see `Painter::thumb`): where it is on its page, in the
+    /// page's pixels, and the area it covers, in units
+    Paged(usize, Rect, Rect),
+    Thumb(Image, Rect, Rect),
 }
 
 /// Plays `drawn` onto `canvas`, whose matrix is the identity, at `scale`
@@ -269,8 +273,80 @@ fn play(canvas: &skia_safe::Canvas, drawn: &[Drawn], offset: (f32, f32), scale: 
             Drawn::Image(image, (x, y)) => {
                 canvas.draw_image(image, (offset.0 + *x as f32, offset.1 + *y as f32), None);
             }
+            Drawn::Thumb(image, from, to) => {
+                canvas.save();
+                canvas.translate(offset);
+                canvas.scale((scale, scale));
+                let mut paint = Paint::default();
+                paint.set_anti_alias(true);
+                let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+                canvas.draw_image_rect_with_sampling_options(image, Some((from, skia_safe::canvas::SrcRectConstraint::Strict)), *to, sampling, &paint);
+                canvas.restore();
+            }
+            Drawn::Paged(..) => {}
         }
     }
+}
+
+/// `px` rounded up to a power of two's square root
+fn half_octave(px: f32) -> f32 {
+    2f32.powf((px.max(1e-6).log2() * 2.0).ceil() / 2.0)
+}
+
+/// Side of the pages thumbs of units are drawn on, in pixels
+const THUMB_PAGE: i32 = 2048;
+/// Pages of thumbs kept at most, 16 MB each
+const THUMB_PAGES: usize = 6;
+/// Units wider than this at a thumb's scale are drawn as they are
+const THUMB_SIDE: i32 = 768;
+/// Time a draw spends at most making thumbs from pictures, past which
+/// thumbs of other powers stand in
+const THUMB_TIME: Duration = Duration::from_millis(10);
+
+/// A page of thumbs, filled in rows of thumbs of about the same height
+struct ThumbPage {
+    surface: Surface,
+    /// Each row's top, height and how far it's filled
+    rows: Vec<(i32, i32, i32)>,
+    bottom: i32,
+    used: u64,
+    /// Counts the times it was cleared, which the thumbs on it went with
+    generation: u64,
+}
+
+impl ThumbPage {
+    fn place(&mut self, width: i32, height: i32) -> Option<skia_safe::IRect> {
+        let height = (height + 7) / 8 * 8;
+        for row in &mut self.rows {
+            if height <= row.1 && height * 3 >= row.1 * 2 && row.2 + width <= THUMB_PAGE {
+                let at = skia_safe::IRect::from_xywh(row.2, row.0, width, height);
+                row.2 += width;
+                return Some(at);
+            }
+        }
+        if self.bottom + height > THUMB_PAGE || width > THUMB_PAGE {
+            return None;
+        }
+        self.rows.push((self.bottom, height, width));
+        let at = skia_safe::IRect::from_xywh(0, self.bottom, width, height);
+        self.bottom += height;
+        Some(at)
+    }
+}
+
+/// A unit drawn on a page of thumbs (see `Painter::thumb`)
+struct Thumb {
+    page: usize,
+    generation: u64,
+    from: Rect,
+    to: Rect,
+    /// The picture it was drawn from, and whether that waited on images
+    picture: u32,
+    picture_level: i32,
+    waiting: bool,
+    counts: Counts,
+    /// Thumbs made so far when it was made
+    serial: u64,
 }
 
 /// An image of a unit (see `Painter::drawn`)
@@ -366,6 +442,8 @@ struct Whole {
     fence: u64,
     previous: Option<Layer>,
     submitted: Instant,
+    /// Units were left out, for want of time to make their thumbs
+    partial: bool,
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -762,6 +840,26 @@ pub struct Painter {
     widening: f64,
     /// How long the whole view last took to draw
     whole_took: Duration,
+    /// The last frame of Figma's render tree applied, and drawn
+    seq: u64,
+    drawn_seq: u64,
+    /// Units drawn small at powers of two, on pages of their own, for the
+    /// view while it moves: by unit and power
+    thumbs: HashMap<(usize, bool, i32), Thumb>,
+    thumb_pages: Vec<ThumbPage>,
+    thumbs_made: usize,
+    /// Thumbs are being made ahead, and there's no room left for them
+    thumbs_ahead: bool,
+    thumbs_full: bool,
+    thumbs_derived: usize,
+    /// The last thumb asked for wasn't made, for want of time
+    thumb_later: bool,
+    thumb_serial: u64,
+    /// Thumbs are made from pictures till then, this draw
+    thumb_deadline: Option<Instant>,
+    /// Pages of thumbs as they were before this draw drew on them, and the
+    /// thumbs made by then
+    page_images: Vec<Option<(Image, u64)>>,
     /// The view's corner in device pixels and its zoom, as bits, as last drawn
     at: (i32, i32, u32),
     /// When a frame last changed what's drawn
@@ -835,6 +933,18 @@ impl Painter {
             velocity: (0.0, 0.0),
             widening: 0.0,
             whole_took: Duration::ZERO,
+            seq: 0,
+            drawn_seq: 0,
+            thumbs: HashMap::new(),
+            thumb_pages: Vec::new(),
+            thumbs_made: 0,
+            thumbs_ahead: false,
+            thumbs_full: false,
+            thumbs_derived: 0,
+            thumb_later: false,
+            thumb_serial: 0,
+            thumb_deadline: None,
+            page_images: Vec::new(),
             at: (0, 0, 0),
             edited: Instant::now().checked_sub(EDITING).unwrap_or_else(Instant::now),
             sent: None,
@@ -981,7 +1091,10 @@ impl Painter {
         // While something's changing, what changed is drawn into the whole
         // view at once, each frame, as Figma draws it, and tiles wait
         let editing = EDITING.saturating_sub(self.edited.elapsed());
-        if !editing.is_zero() && (behind || missing > 0 || self.whole.is_some()) {
+        // While the zoom changes, Figma changes what it shows of some nodes
+        // each frame, which isn't an edit to keep up with exactly
+        let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
+        if !editing.is_zero() && settle.is_zero() && (behind || missing > 0 || self.whole.is_some()) {
             let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale);
             // One drawn at a time, what changes meanwhile drawn together
             // once the GPU's done
@@ -991,7 +1104,7 @@ impl Painter {
             match current {
                 Some(whole) if whole.patch.is_empty() => return Some(editing),
                 Some(_) => self.patch_whole(),
-                None => self.draw_whole(ox, oy, width, height, px),
+                None => self.draw_whole(ox, oy, width, height, px, true),
             }
             self.dirty = true;
             return Some(Duration::ZERO);
@@ -1004,20 +1117,38 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
-        let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty());
+        let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty() && !whole.partial);
         // While the zoom changes, tiles of it are of no use a moment later,
         // so the whole view is drawn instead, as Figma draws every frame
-        let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
         if !settle.is_zero() {
-            if !whole_here {
+            // One drawn at the half octave this zoom's in that still covers
+            // the view is scaled to it
+            let half = half_octave(px);
+            let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
+            let covered = self.whole.as_ref().is_some_and(|whole| {
+                let layer = &whole.layer;
+                let drawn = Rect::from_xywh(layer.x as f32 / half, layer.y as f32 / half, layer.tex.width as f32 / half, layer.tex.height as f32 / half);
+                layer.px == half && !whole.stale && whole.patch.is_empty() && !whole.partial && drawn.left <= view_area.left && drawn.top <= view_area.top && drawn.right >= view_area.right && drawn.bottom >= view_area.bottom
+            });
+            if !whole_here && !covered {
                 if self.whole_busy() {
                     return Some(Duration::from_millis(1));
                 }
-                self.draw_whole(ox, oy, width, height, px);
+                self.draw_whole(ox, oy, width, height, px, true);
                 self.dirty = true;
                 return Some(Duration::ZERO);
             }
             return Some(settle);
+        }
+        // One drawn with units left out is drawn again, with more, till it
+        // has them all
+        if missing > 0 && self.whole.as_ref().is_some_and(|whole| whole.partial && whole.at == (ox, oy, pxb)) {
+            if self.whole_busy() {
+                return Some(Duration::from_millis(1));
+            }
+            self.draw_whole(ox, oy, width, height, px, true);
+            self.dirty = true;
+            return Some(Duration::ZERO);
         }
         let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale && (!tile.draft || key.px != pxb));
         let mut order: Vec<(TileKey, bool)> = Vec::new();
@@ -1060,6 +1191,9 @@ impl Painter {
             }
         }
         self.update_reason(&view, px, width, height);
+        if rough.is_empty() && self.moved.elapsed() > Duration::from_millis(300) && self.prewarm(&view, px) {
+            return Some(Duration::ZERO);
+        }
         (!rough.is_empty()).then_some(refine)
     }
 
@@ -1067,15 +1201,20 @@ impl Painter {
     /// its size in pixels at `px` a unit, with a margin for background blurs near its edges to
     /// see what they blur, for the present thread to show where tiles of the
     /// zoom aren't drawn yet
-    fn draw_whole(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32) {
+    fn draw_whole(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32, quick: bool) {
         let _purpose = super::gpu_census::purpose("whole");
         let started = Instant::now();
         let at = (ox, oy, px.to_bits());
         self.rasters_made = 0;
         // Over where the view is headed too, as it's shown a frame or two
         // after it's drawn
+        let area = self.ahead(Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px));
+        // While the zoom changes, drawn at the half octave at or above it,
+        // which the present thread scales to the view: Skia keeps what it
+        // works out for a scale, path masks and glyphs, for the next frame
+        // at it, and the view's drawn again only once it leaves what's drawn
+        let px = if quick && !SETTLE.saturating_sub(self.zoom.1.elapsed()).is_zero() { half_octave(px) } else { px };
         let (ox, oy, width, height) = {
-            let area = self.ahead(Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px));
             let (left, top) = ((area.left * px).floor() as i32, (area.top * px).floor() as i32);
             // In steps, so the texture of one is used again for the next
             let step = |size: i32| (size + 127) / 128 * 128;
@@ -1086,6 +1225,10 @@ impl Painter {
         let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
         let mut pictures = Vec::new();
         let mut counts = Counts::default();
+        let mut left_out = 0;
+        if quick {
+            self.thumb_deadline = Some(Instant::now() + THUMB_TIME);
+        }
         for unit in 0..self.units.len() {
             let bounds = self.units[unit].bounds;
             if !Rect::intersects2(&bounds, &reach) {
@@ -1095,12 +1238,26 @@ impl Painter {
                 counts.skipped += 1;
                 continue;
             }
+            if quick {
+                if let Some((drawn, drawn_counts)) = self.thumb(unit, px) {
+                    counts += drawn_counts;
+                    pictures.push(drawn);
+                    continue;
+                }
+                // Left out till its thumb is made, rather than the view
+                // waiting on it
+                if std::mem::take(&mut self.thumb_later) {
+                    left_out += 1;
+                    continue;
+                }
+            }
             let level = self.level(&self.units[unit], px, false);
             if let Some((drawn, drawn_counts)) = self.drawn(unit, level, true, px, true) {
                 counts += drawn_counts;
                 pictures.push(drawn);
             }
         }
+        let pictures = self.unpage(pictures);
         let start = Instant::now();
         let Some(tex) = self.tex(width + margin * 2, height + margin * 2) else {
             return;
@@ -1125,13 +1282,19 @@ impl Painter {
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| {
             format!(
-                "  whole px={px:.3} pictures={} margin={margin} recorded={:.1}ms {:.1}ms wait={wait} vram={vram}",
+                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} margin={margin} recorded={:.1}ms {:.1}ms wait={wait} vram={vram}",
                 pictures.len(),
+                pictures.iter().filter(|item| matches!(item, Drawn::Thumb(..))).count(),
+                std::mem::take(&mut self.thumbs_made),
+                std::mem::take(&mut self.thumbs_derived),
                 recorded.as_secs_f64() * 1000.0,
                 start.elapsed().as_secs_f64() * 1000.0
             )
         });
         self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts }, fence, Some(at));
+        if let Some(whole) = self.whole.as_mut() {
+            whole.partial = left_out > 0;
+        }
         self.whole_took = started.elapsed();
         self.drew = true;
     }
@@ -1161,7 +1324,7 @@ impl Painter {
                 retired
             }
             None => {
-                self.whole = Some(Whole { layer, at: at.unwrap_or((0, 0, 0)), stale: at.is_none(), patch: Vec::new(), fence, previous: None, submitted });
+                self.whole = Some(Whole { layer, at: at.unwrap_or((0, 0, 0)), stale: at.is_none(), patch: Vec::new(), fence, previous: None, submitted, partial: false });
                 None
             }
         };
@@ -1455,6 +1618,15 @@ impl Painter {
         if let Some(sent) = self.sent.take() {
             trace(|| format!("  change handed over {:.1}ms after Figma sent it", since_epoch_ms() - sent));
         }
+        // The tab shows what Figma's worker draws over the canvas once this
+        // is drawn (see page_hook.js)
+        if !whole_pending && self.whole.as_ref().is_none_or(|whole| whole.patch.is_empty()) && self.drawn_seq != self.seq {
+            self.drawn_seq = self.seq;
+            if let Some(shared) = *self.hub.shared.lock().unwrap() {
+                // SAFETY: the memory stays mapped while Ligma runs, and slot 18 is in it
+                unsafe { std::ptr::write_volatile((shared.ptr as *mut f64).add(18), self.seq as f64) };
+            }
+        }
         if changed {
             self.hub.poke();
         }
@@ -1485,6 +1657,7 @@ impl Painter {
                     if tree.octaves != octaves {
                         tree.octaves = octaves;
                         self.pictures.clear();
+                        self.thumbs.clear();
                         self.clear_rasters();
                         self.clear_tiles();
                         self.dirty = true;
@@ -1497,6 +1670,7 @@ impl Painter {
             Msg::Begin(scene) => {
                 self.scene = *scene;
                 self.pictures.clear();
+                self.thumbs.clear();
                 self.clear_rasters();
                 self.clear_tiles();
                 self.kit.forget_patterns(None);
@@ -1598,6 +1772,7 @@ impl Painter {
             Msg::Tint(on) => {
                 self.tint = on;
                 self.pictures.clear();
+                self.thumbs.clear();
                 self.clear_rasters();
                 self.clear_tiles();
                 self.kit.forget_patterns(None);
@@ -1736,6 +1911,7 @@ impl Painter {
             }
         };
         self.hub.tree_failures.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.seq = frame.header.seq;
         let applied_ms = start.elapsed().as_secs_f64() * 1000.0;
         // What custom effects of nodes gone drew goes with them
         let gone = |key: &str| key.strip_prefix(EFFECT).and_then(|key| key.strip_prefix('t')).and_then(|id| id.parse::<u32>().ok()).is_some_and(|id| tree.node(id).is_none());
@@ -1745,6 +1921,7 @@ impl Painter {
         self.rebuild_units();
         if first {
             self.pictures.clear();
+            self.thumbs.clear();
             self.clear_rasters();
             self.clear_tiles();
             self.kit.forget_patterns(None);
@@ -1753,6 +1930,7 @@ impl Painter {
             let mut areas: Vec<Rect> = before.iter().filter(|(slot, _)| !now.contains(slot)).map(|(_, bounds)| *bounds).collect();
             areas.extend(self.units.iter().filter(|unit| !before.contains_key(&unit.slot)).map(|unit| unit.bounds));
             self.pictures.retain(|(slot, _, _, _), _| now.contains(slot));
+            self.thumbs.retain(|(slot, _, _), _| now.contains(slot));
             let gone: Vec<_> = self.rasters.keys().filter(|(slot, ..)| !now.contains(slot)).copied().collect();
             for key in gone {
                 if let Some(raster) = self.rasters.remove(&key) {
@@ -2262,6 +2440,224 @@ impl Painter {
         Some((Drawn::Image(image, (device.left, device.top)), counts))
     }
 
+    /// Unit `unit` as a thumb, for drawing at `scale` while the view moves:
+    /// drawn at the power of two at or above `scale` onto a page of thumbs,
+    /// and kept while its picture is. Made from a sharper thumb where there
+    /// is one, which is quick, or else from its picture while there's time
+    /// this draw, or else a thumb of another power stands in. None where it
+    /// isn't drawn the same alone, is too big for one, or there's none yet
+    fn thumb(&mut self, unit: usize, scale: f32) -> Option<(Drawn, Counts)> {
+        if self.rasters_off || !self.units[unit].alone || !(scale > 0.0) {
+            return None;
+        }
+        let (slot, section, bounds) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds);
+        let power = scale.log2().ceil() as i32;
+        let side = 2f32.powi(power);
+        let (width, height) = ((bounds.width() * side).ceil() as i32 + 2, (bounds.height() * side).ceil() as i32 + 2);
+        if width.max(height) > THUMB_SIDE || width <= 2 || height <= 2 {
+            return None;
+        }
+        if let Some(found) = self.kept_thumb(unit, power) {
+            return Some(found);
+        }
+        let key = (slot, section, power);
+        // From a sharper one drawn before this draw, halved
+        for sharper in power + 1..=power + 3 {
+            if self.kept_thumb(unit, sharper).is_none() {
+                continue;
+            }
+            let Some(source) = self.thumbs.get(&(slot, section, sharper)) else { continue };
+            let (source_page, source_from, serial) = (source.page, source.from, source.serial);
+            let (picture, picture_level, waiting, counts) = (source.picture, source.picture_level, source.waiting, source.counts);
+            let Some(image) = self.page_image(source_page, serial) else { continue };
+            let Some((page, at)) = self.thumb_space(width, height) else { return None };
+            let from = Rect::from_xywh(at.left as f32 + 1.0, at.top as f32 + 1.0, bounds.width() * side, bounds.height() * side);
+            let canvas = self.thumb_pages[page].surface.canvas();
+            canvas.save();
+            canvas.clip_rect(Rect::from(at), None, false);
+            canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            let mut paint = Paint::default();
+            paint.set_blend_mode(skia_safe::BlendMode::Src);
+            let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+            canvas.draw_image_rect_with_sampling_options(&image, Some((&source_from, skia_safe::canvas::SrcRectConstraint::Strict)), from, sampling, &paint);
+            canvas.restore();
+            let generation = self.thumb_pages[page].generation;
+            self.thumb_serial += 1;
+            let serial = self.thumb_serial;
+            self.thumbs.insert(key, Thumb { page, generation, from, to: bounds, picture, picture_level, waiting, counts, serial });
+            self.thumbs_derived += 1;
+            return Some((Drawn::Paged(page, from, bounds), counts));
+        }
+        // From its picture, while there's time
+        if self.thumb_deadline.is_some_and(|deadline| Instant::now() > deadline) {
+            for other in [power + 1, power - 1, power + 2, power - 2, power + 3, power - 3] {
+                if let Some(found) = self.kept_thumb(unit, other) {
+                    return Some(found);
+                }
+            }
+            self.thumb_later = true;
+            return None;
+        }
+        // Any picture of it kept will do, the more detailed the better
+        let level = self.level(&self.units[unit], side, false);
+        let kept = (level..=level + 4).chain((level - 2..level).rev()).find(|&other| self.pictures.contains_key(&(slot, section, other, true)));
+        let picture_level = kept.unwrap_or(level);
+        let recorded = self.picture(unit, picture_level, true)?;
+        let (picture, waiting, counts) = (recorded.picture.clone(), recorded.waiting > 0, recorded.counts);
+        let (page, at) = self.thumb_space(width, height)?;
+        let _purpose = super::gpu_census::purpose("raster");
+        let canvas = self.thumb_pages[page].surface.canvas();
+        canvas.save();
+        canvas.clip_rect(Rect::from(at), None, false);
+        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        canvas.translate((at.left as f32 + 1.0 - bounds.left * side, at.top as f32 + 1.0 - bounds.top * side));
+        canvas.scale((side, side));
+        canvas.draw_picture(&picture, None, None);
+        canvas.restore();
+        let from = Rect::from_xywh(at.left as f32 + 1.0, at.top as f32 + 1.0, bounds.width() * side, bounds.height() * side);
+        let generation = self.thumb_pages[page].generation;
+        self.thumb_serial += 1;
+        let serial = self.thumb_serial;
+        self.thumbs.insert(key, Thumb { page, generation, from, to: bounds, picture: picture.unique_id(), picture_level, waiting, counts, serial });
+        self.thumbs_made += 1;
+        Some((Drawn::Paged(page, from, bounds), counts))
+    }
+
+    /// Unit `unit`'s thumb for `power`, if it's kept and still as the unit
+    /// is drawn
+    fn kept_thumb(&mut self, unit: usize, power: i32) -> Option<(Drawn, Counts)> {
+        let (slot, section, bounds) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds);
+        let thumb = self.thumbs.get(&(slot, section, power))?;
+        let page = self.thumb_pages.get(thumb.page)?;
+        if page.generation != thumb.generation || thumb.to != bounds {
+            return None;
+        }
+        let fine = match self.pictures.get(&(slot, section, thumb.picture_level, true)) {
+            Some(recorded) => recorded.picture.unique_id() == thumb.picture,
+            None => !thumb.waiting,
+        };
+        if !fine {
+            return None;
+        }
+        let drawn = (Drawn::Paged(thumb.page, thumb.from, thumb.to), thumb.counts);
+        self.thumb_pages[thumb.page].used = self.frame;
+        Some(drawn)
+    }
+
+    /// Page `page` as it was before this draw drew on it, if thumb `serial`
+    /// is on it: what's drawn on it from it then draws from that, rather
+    /// than Skia copying the page each time
+    fn page_image(&mut self, page: usize, serial: u64) -> Option<Image> {
+        if self.page_images.len() < self.thumb_pages.len() {
+            self.page_images.resize(self.thumb_pages.len(), None);
+        }
+        if self.page_images[page].is_none() {
+            let image = self.thumb_pages[page].surface.image_snapshot();
+            self.page_images[page] = Some((image, self.thumb_serial));
+        }
+        let (image, upto) = self.page_images[page].as_ref()?;
+        (serial <= *upto).then(|| image.clone())
+    }
+
+    /// Makes thumbs ahead, a little at a time, for the view as it is and
+    /// zoomed out up to 16 times, so zooming out has them. True if there's
+    /// more to make
+    fn prewarm(&mut self, view: &View, px: f32) -> bool {
+        let start = Instant::now();
+        let (cx, cy) = ((view.x + view.w / 2.0) as f32, (view.y + view.h / 2.0) as f32);
+        self.thumbs_ahead = true;
+        self.thumb_deadline = Some(start + Duration::from_millis(4));
+        let mut more = false;
+        'out: for n in 0..=4 {
+            let grow = (1 << n) as f32;
+            let (w, h) = (view.w as f32 * grow, view.h as f32 * grow);
+            let area = Rect::from_xywh(cx - w / 2.0, cy - h / 2.0, w, h);
+            let scale = px / grow;
+            let power = scale.log2().ceil() as i32;
+            let mut near: Vec<(f32, usize)> = (0..self.units.len())
+                .filter(|&unit| self.units[unit].alone && Rect::intersects2(&self.units[unit].bounds, &area))
+                .filter(|&unit| !self.thumbs.contains_key(&(self.units[unit].slot, self.units[unit].section, power)))
+                .map(|unit| {
+                    let center = self.units[unit].bounds.center();
+                    ((center.x - cx).hypot(center.y - cy), unit)
+                })
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, unit) in near {
+                if start.elapsed() > Duration::from_millis(4) {
+                    more = true;
+                    break 'out;
+                }
+                if self.thumb(unit, scale).is_none() && self.thumbs_full {
+                    break 'out;
+                }
+            }
+        }
+        self.thumbs_ahead = false;
+        self.thumbs_full = false;
+        self.thumb_deadline = None;
+        self.thumb_later = false;
+        self.page_images.clear();
+        // Drawn now, rather than with what's drawn next
+        if std::mem::take(&mut self.thumbs_made) + std::mem::take(&mut self.thumbs_derived) > 0 {
+            let _ = self.gpu.context.flush_and_submit();
+        }
+        if more {
+            self.drew = true;
+        }
+        more
+    }
+
+    /// Room for a thumb `width` by `height` pixels: on a page with room, a
+    /// new page, or else the page least lately used, cleared, unless that's
+    /// in use for this draw, or the thumb is made ahead
+    fn thumb_space(&mut self, width: i32, height: i32) -> Option<(usize, skia_safe::IRect)> {
+        let frame = self.frame;
+        for (index, page) in self.thumb_pages.iter_mut().enumerate() {
+            if let Some(at) = page.place(width, height) {
+                page.used = frame;
+                return Some((index, at));
+            }
+        }
+        if self.thumb_pages.len() < THUMB_PAGES {
+            let _purpose = super::gpu_census::purpose("raster");
+            let mut surface = self.gpu.own_surface(THUMB_PAGE, THUMB_PAGE, 1)?;
+            surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            self.thumb_pages.push(ThumbPage { surface, rows: Vec::new(), bottom: 0, used: frame, generation: 0 });
+            let index = self.thumb_pages.len() - 1;
+            return self.thumb_pages[index].place(width, height).map(|at| (index, at));
+        }
+        if self.thumbs_ahead {
+            self.thumbs_full = true;
+            return None;
+        }
+        let (index, page) = self.thumb_pages.iter_mut().enumerate().filter(|(_, page)| page.used != frame).min_by_key(|(_, page)| page.used)?;
+        page.rows.clear();
+        page.bottom = 0;
+        page.generation += 1;
+        page.used = frame;
+        page.surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        self.thumbs.retain(|_, thumb| thumb.page != index);
+        page.place(width, height).map(|at| (index, at))
+    }
+
+    /// Thumbs as they're drawn, once all that's drawn of them for a view is
+    fn unpage(&mut self, drawn: Vec<Drawn>) -> Vec<Drawn> {
+        self.page_images.clear();
+        self.thumb_deadline = None;
+        if !drawn.iter().any(|item| matches!(item, Drawn::Paged(..))) {
+            return drawn;
+        }
+        let images: Vec<Image> = self.thumb_pages.iter_mut().map(|page| page.surface.image_snapshot()).collect();
+        drawn
+            .into_iter()
+            .map(|item| match item {
+                Drawn::Paged(page, from, to) => Drawn::Thumb(images[page].clone(), from, to),
+                other => other,
+            })
+            .collect()
+    }
+
     fn clear_rasters(&mut self) {
         self.rasters.clear();
         self.raster_bytes = 0;
@@ -2456,12 +2852,24 @@ impl Painter {
         self.made += 1;
         let timing = super::dev() && (self.made % 8 == 0 || tracing());
         let start = Instant::now();
+        if !exact {
+            self.thumb_deadline = Some(start + THUMB_TIME);
+        }
         for unit in units {
             // Too small to see: left out, as the encoder would
             let bounds = self.units[unit].bounds;
             if bounds.width().max(bounds.height()) * px < if draft { DRAFT_SMALLEST } else { 0.5 } {
                 counts.skipped += 1;
                 continue;
+            }
+            // Quick tiles while the view moves draw what thumbs there are
+            if !exact {
+                if let Some((drawn, drawn_counts)) = self.thumb(unit, px) {
+                    counts += drawn_counts;
+                    pictures.push(drawn);
+                    continue;
+                }
+                self.thumb_later = false;
             }
             let level = self.level(&self.units[unit], px, exact);
             let level = if draft { DRAFT_LEVEL + level } else { level };
@@ -2473,6 +2881,7 @@ impl Painter {
                 }
             }
         }
+        let pictures = self.unpage(pictures);
         let recorded = start.elapsed();
         let before = if tracing() { gpu_counters() } else { [0.0; 6] };
         let tex = self.tex(TILE, TILE)?;
@@ -2942,6 +3351,7 @@ impl Painter {
             let before = self.gpu.used();
             self.clear_tiles();
             self.pictures.clear();
+            self.thumbs.clear();
             self.clear_rasters();
             self.kit.forget_patterns(None);
             self.live = None;
@@ -3095,6 +3505,7 @@ impl Painter {
         let shown = read(&mut target)?;
         self.clear_tiles();
         self.pictures.clear();
+        self.thumbs.clear();
         self.clear_rasters();
         self.kit.forget_patterns(None);
         self.compose(&mut target, &view, None, true);

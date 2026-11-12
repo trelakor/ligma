@@ -150,6 +150,8 @@ pub struct Hub {
     pub stop: AtomicBool,
     /// Frames of Figma's render tree that couldn't be applied in a row
     pub tree_failures: std::sync::atomic::AtomicU32,
+    /// Memory shared with the tab drawn, to tell it the last frame drawn
+    pub shared: Mutex<Option<crate::webview2::Shared>>,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -163,6 +165,7 @@ impl Hub {
             origin: Mutex::new(None),
             stop: AtomicBool::new(false),
             tree_failures: std::sync::atomic::AtomicU32::new(0),
+            shared: Mutex::new(None),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
