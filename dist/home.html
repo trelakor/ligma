@@ -95,7 +95,9 @@
   }
   ::selection { background: var(--sel-strong); }
   button { font: inherit; color: inherit; background: none; border: 0; padding: 0; margin: 0; cursor: default; }
-  button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Focus rings show once the keyboard is used to move around, and go
+     again with the pointer (`kbd` on <html>) */
+  .kbd button:focus-visible, .kbd a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   a { color: inherit; text-decoration: none; }
   kbd {
     display: inline-flex;
@@ -217,7 +219,7 @@
   .new button { display: flex; align-items: center; gap: 4px; padding: 0 12px 0 8px; border-radius: 5px 0 0 5px; }
   .new button + button { width: 24px; padding: 0; justify-content: center; border-radius: 0 5px 5px 0; box-shadow: inset 1px 0 rgba(255, 255, 255, 0.28); }
   .new button:hover { background: rgba(0, 0, 0, 0.1); }
-  .new button:focus-visible { outline-color: #fff; }
+  .kbd .new button:focus-visible { outline-color: #fff; }
 
   #filters { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 16px 8px 32px; }
   .seg { display: flex; padding: 2px; border-radius: 6px; background: var(--bg2); }
@@ -244,7 +246,7 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
-    height: 40px;
+    height: 36px;
     margin: 0;
     padding-top: 12px;
     background: var(--bg);
@@ -253,7 +255,8 @@
     font-weight: 550;
   }
   .sec h2 small { color: var(--text2); font-size: 11px; font-weight: 450; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px 16px; padding: 4px 0 28px; }
+  /* Room above the first row for its focus ring, clear of the heading */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px 16px; padding: 8px 0 28px; }
 
   /* Home: sections that fold, each with a way to the whole list */
   .home-sec h2 { align-items: center; padding-top: 8px; }
@@ -268,8 +271,8 @@
   .fold + .all, .fold + .lay { margin-left: auto; }
   .all:hover { background: var(--hover); color: var(--text); }
   .all .i { width: 12px; height: 12px; }
-  .fold:focus-visible, .all:focus-visible, .ptile:focus-visible, .lay button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .hint { margin: 4px 0 28px; color: var(--text2); }
+  .kbd :is(.fold, .all, .ptile, .lay button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { margin: 8px 0 28px; color: var(--text2); }
   .meta.strong { color: var(--accent-text); font-weight: 550; }
   /* Rows or cards: two small buttons */
   .seg.lay button { display: grid; place-items: center; width: 28px; padding: 0; }
@@ -277,7 +280,7 @@
   .home-sec h2 .seg.lay button { height: 22px; }
 
   /* Suggested projects: each a tile with its latest files' previews */
-  .ptiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; padding: 4px 0 28px; }
+  .ptiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; padding: 8px 0 28px; }
   .ptile { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 6px 6px 10px; border-radius: 10px; background: var(--bg2); text-align: left; transition: background 120ms; }
   .ptile:hover { background: var(--bg3); }
   .mosaic { display: grid; gap: 4px; height: 104px; overflow: hidden; border-radius: 6px; }
@@ -293,14 +296,14 @@
   .pmeta span:first-child { overflow: hidden; text-overflow: ellipsis; }
 
   /* Recents as rows: a small preview, the name, where it is, what happened */
-  .rows { padding: 0 0 28px; }
+  .rows { padding: 4px 0 28px; }
   .card.row { display: grid; grid-template-columns: 64px minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1.3fr) 96px; gap: 16px; align-items: center; height: 52px; padding: 0 8px; border-radius: 6px; }
   /* Wide windows: the columns stay close enough to read across */
   @media (min-width: 1500px) { .card.row { grid-template-columns: 64px minmax(0, 480px) minmax(0, 240px) minmax(0, 1fr) 96px; } }
   .card.row + .card.row { box-shadow: 0 -1px 0 var(--line); }
   .card.row:hover { background: var(--hover); }
   .card.row[aria-selected="true"] { background: var(--sel); }
-  .card.row:focus-visible { outline-offset: -2px; }
+  .kbd .card.row:focus-visible { outline-offset: -2px; }
   .card.row .thumb { width: 64px; border-radius: 4px; }
   .row .name { margin: 0; }
   .row .nm { flex: 0 1 auto; }
@@ -314,7 +317,8 @@
     .row .where { display: none; }
   }
 
-  .card { position: relative; min-width: 0; border-radius: 8px; outline: none; }
+  /* Brought into view below the sticky heading, ring and all */
+  .card { position: relative; min-width: 0; border-radius: 8px; outline: none; scroll-margin: 48px 0 12px; }
   .marquee { position: absolute; z-index: 3; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
   .thumb { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px; background: var(--canvas); color: var(--text2); }
   .thumb::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--line); pointer-events: none; }
@@ -339,7 +343,7 @@
   .av img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
   .card:hover .thumb::after { box-shadow: inset 0 0 0 1px var(--text3); }
   .card[aria-selected="true"] .thumb::after { box-shadow: inset 0 0 0 2px var(--accent); }
-  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .kbd .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   .card.ghost { opacity: 0.4; }
   /* Who's in the file now, over the preview's bottom right */
   .faces { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: flex-end; justify-content: flex-end; aspect-ratio: 16 / 9; padding: 8px; pointer-events: none; }
@@ -622,7 +626,7 @@
   .iempty b { margin-top: 8px; color: var(--text); font-size: 13px; font-weight: 550; }
   .note { position: relative; display: grid; grid-template-columns: 8px 32px minmax(0, 1fr) 96px; gap: 12px; align-items: start; padding: 12px 12px 12px 4px; border-radius: 8px; outline: none; }
   .note:hover { background: var(--hover); }
-  .note:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .kbd .note:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
   .ud { width: 8px; height: 8px; margin-top: 12px; border-radius: 50%; }
   .note.unread .ud { background: var(--accent); }
   .av.lg { width: 32px; height: 32px; font-size: 13px; }
@@ -1466,7 +1470,7 @@ function changed() {
     for (const el of $$(".thumb[data-thumb] .tph, .pt[data-key] .tph")) {
       const holder = el.parentElement;
       const file = byId(holder.dataset.thumb ?? holder.dataset.key);
-      if (file?.thumbUrl) holder.innerHTML = thumb(file);
+      if (file?.thumbUrl) fillThumb(holder, file);
     }
     if (Live.ready.has("recents") && FILES.filter((f) => f.recent).length !== before) render();
   });
@@ -1877,7 +1881,7 @@ function navRow(view, iconName, label, count, extra = "", tail = "") {
   const on = state.view === view;
   const drop = ["recents", "starred"].includes(view) ? "" : `data-drop="${view}"`;
   const n = tail || `<span class="n">${count ?? ""}</span>`;
-  return `<button class="nav ${extra}${on ? " on" : ""}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${icon(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
+  return `<button class="nav ${extra}${on ? " on" : ""}" data-key="nav:${view}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${icon(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
 }
 
 function renderSide() {
@@ -1906,7 +1910,7 @@ function renderSide() {
     const open = !state.collapsed.has(team.id);
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
-    let out = `<div class="team-row"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${icon("down", "chev")}</button>`;
+    let out = `<div class="team-row" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${icon("down", "chev")}</button>`;
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${icon("star")}</button></div>`;
     if (!open) return out;
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
@@ -1934,18 +1938,16 @@ function renderSide() {
   // Nothing about sync unless it fails: then the bar over the files says so
   if (!LIVE) html += state.mode === "error" ? `<div class="sync off" id="sync"><span class="dot"></span><span>Offline, as of 4 min ago</span></div>` : `<div class="sync" id="sync"><span class="dot"></span><span>Sample files, not yours yet</span></div>`;
   html += `</div>`;
-  const scrollTop = $(".tree", side)?.scrollTop ?? 0;
-  side.innerHTML = html;
-  $(".tree", side).scrollTop = scrollTop;
+  morph(side, html);
 }
 
 function renderHead(count) {
   const name = viewName(state.view);
   const n = state.mode === "loading" || state.view === "home" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
-  head.innerHTML = `<button class="menu-btn" data-act="side" aria-label="Show sidebar">${icon("side")}</button>
+  morph(head, `<button class="menu-btn" data-act="side" aria-label="Show sidebar">${icon("side")}</button>
     <h1><span>${esc(name)}</span><small>${n}</small></h1><span class="grow"></span>
     <button id="find" data-act="search" aria-label="Search">${icon("search")}<span class="lbl">Search files, projects and actions</span><kbd>${MOD}K</kbd></button>
-    <div class="new"><button data-act="new" title="New Design file">${icon("plus")}New</button><button data-act="new-menu" aria-label="More kinds of file" aria-haspopup="menu">${icon("down")}</button></div>`;
+    <div class="new"><button data-act="new" title="New Design file">${icon("plus")}New</button><button data-act="new-menu" aria-label="More kinds of file" aria-haspopup="menu">${icon("down")}</button></div>`);
 }
 
 function renderFilters() {
@@ -1964,7 +1966,7 @@ function renderFilters() {
   else if (state.view === "starred" && FILES.some((f) => f.starred && !f.trashed)) html += `<span class="fnote">Drag files, or press ${MAC ? "⌥←" : "Alt+Left"} and ${MAC ? "⌥→" : "Alt+Right"}, to put them in your order</span>`;
   else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
   else if (layoutOf(state.view)) html += layoutToggle(layoutOf(state.view));
-  filters.innerHTML = html;
+  morph(filters, html);
 }
 
 // A shared file's line: its project when it's in one of yours, then who
@@ -2112,7 +2114,7 @@ function homeLayout() {
   const files = [];
   const open = (id) => !state.collapsed.has("home:" + id);
   const section = (id, title, count, body, view, extra = "") =>
-    `<section class="sec home-sec"><h2><button class="fold" data-fold="home:${id}" aria-expanded="${open(id)}">${icon("down", "chev")}<span>${esc(title)}</span>${count ? `<small>${count}</small>` : ""}</button>${extra}${view ? `<button class="all" data-go="${view}">View all${icon("right")}</button>` : ""}</h2>${open(id) ? body : ""}</section>`;
+    `<section class="sec home-sec" data-key="home:${id}"><h2><button class="fold" data-fold="home:${id}" aria-expanded="${open(id)}">${icon("down", "chev")}<span>${esc(title)}</span>${count ? `<small>${count}</small>` : ""}</button>${extra}${view ? `<button class="all" data-go="${view}">View all${icon("right")}</button>` : ""}</h2>${open(id) ? body : ""}</section>`;
   let html = "";
 
   // Placeholders while a list is still on its way: Starred comes first
@@ -2124,7 +2126,7 @@ function homeLayout() {
   html += section("starred", "Starred", starredAll.length, starred.length
     ? `<div class="grid star-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>`
     : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
-  if (recentsLoading) html += `<section class="sec home-sec">${waiting(cols * 2)}</section>`;
+  if (recentsLoading) html += `<section class="sec home-sec" data-key="home:waiting">${waiting(cols * 2)}</section>`;
 
   if (projects.length) html += section("projects", "Suggested projects", 0, `<div class="ptiles">${projects.map(projectTile).join("")}</div>`);
 
@@ -2168,6 +2170,69 @@ function renderSkeleton() {
   return ["Today", "Yesterday"].map((label) => `<section class="sec"><h2>${label}</h2><div class="grid">${card.repeat(4)}</div></section>`).join("");
 }
 
+/* Redraws change only what changed. What's on screen stays where it is:
+   previews already drawn, hover, focus, a selection box, animations. So
+   something loading changes its own part of the page, not all of it.
+   Elements pair up by `id` or `data-key`, the rest by place and tag */
+
+const keyOf = (node) => (node.nodeType === 1 ? node.dataset.key || node.id || null : null);
+function morph(parent, html) {
+  const next = document.createElement("template");
+  next.innerHTML = html;
+  patchChildren(parent, next.content);
+}
+function patchChildren(from, to) {
+  const keyed = new Map();
+  for (const el of from.children) if (keyOf(el)) keyed.set(keyOf(el), el);
+  const wanted = new Set([...to.children].map(keyOf).filter(Boolean));
+  let cur = from.firstChild;
+  // Skips past what's going: keyed elements the new content doesn't have
+  const settle = () => {
+    while (cur && keyOf(cur) && !wanted.has(keyOf(cur))) {
+      const gone = cur;
+      cur = cur.nextSibling;
+      gone.remove();
+    }
+  };
+  for (const want of [...to.childNodes]) {
+    settle();
+    const key = keyOf(want);
+    let have = key ? keyed.get(key) : cur && !keyOf(cur) && cur.nodeName === want.nodeName ? cur : null;
+    if (have && have.nodeName !== want.nodeName) have = null;
+    if (key) keyed.delete(key);
+    if (!have) {
+      from.insertBefore(want, cur);
+      continue;
+    }
+    if (have === cur) cur = cur.nextSibling;
+    else from.insertBefore(have, cur);
+    patch(have, want);
+  }
+  while (cur) {
+    const gone = cur;
+    cur = cur.nextSibling;
+    gone.remove();
+  }
+}
+function patch(have, want) {
+  if (have.nodeType !== 1) {
+    if (have.nodeValue !== want.nodeValue) have.nodeValue = want.nodeValue;
+    return;
+  }
+  for (const { name } of [...have.attributes]) if (!want.hasAttribute(name)) have.removeAttribute(name);
+  for (const { name, value } of want.attributes) if (have.getAttribute(name) !== value) have.setAttribute(name, value);
+  // A preview already drawn stays; observeThumbs draws it again if the file's changed
+  if (have.dataset.thumb && have.firstChild) return;
+  patchChildren(have, want);
+}
+
+// A file's preview into `el`, noting which picture it is
+const thumbSig = (file) => `${file.id}|${file.live ? `${file.thumbUrl ?? ""}|${file.bg ?? ""}` : file.name}`;
+function fillThumb(el, file) {
+  el.innerHTML = thumb(file);
+  el.sig = thumbSig(file);
+}
+
 let thumbObserver;
 function observeThumbs() {
   thumbObserver?.disconnect();
@@ -2178,12 +2243,20 @@ function observeThumbs() {
       thumbObserver.unobserve(el);
       const file = byId(el.dataset.thumb);
       if (!file) continue;
-      el.innerHTML = thumb(file);
+      fillThumb(el, file);
       if (file.live && !file.trashed) LG.watch(file.key);
     }
   }, { root: scroller, rootMargin: "800px 0px" });
-  for (const el of $$(".thumb[data-thumb]", scroller)) thumbObserver.observe(el);
+  for (const el of $$(".thumb[data-thumb]", scroller)) {
+    const file = byId(el.dataset.thumb);
+    if (!el.firstChild || !file) thumbObserver.observe(el);
+    else if (el.sig !== thumbSig(file)) fillThumb(el, file);
+  }
 }
+
+// The selection box, drawn over the files (see drawBox)
+const marquee = Object.assign(document.createElement("div"), { className: "marquee" });
+let box = null;
 
 function render({ keepScroll = true } = {}) {
   // Not under a starred file being dragged: once it's down
@@ -2201,7 +2274,6 @@ function render({ keepScroll = true } = {}) {
   renderSide();
   renderHead(list.length);
   renderFilters();
-  const top = scroller.scrollTop;
   sections = [];
   let html = "";
   if (state.mode === "loading") html = renderSkeleton();
@@ -2222,7 +2294,7 @@ function render({ keepScroll = true } = {}) {
       sections.at(-1).files.push(file);
     }
     const layout = state.view === "recents" ? state.layout.recents : "grid";
-    html = sections.map((s, i) => `<section class="sec" id="s${i}" data-month="${s.month}"><h2>${esc(s.label)}<small>${s.files.length}</small></h2>${fileList(s.files, s.label, layout)}</section>`).join("");
+    html = sections.map((s, i) => `<section class="sec" id="s${i}" data-key="day:${s.key}" data-month="${s.month}"><h2>${esc(s.label)}<small>${s.files.length}</small></h2>${fileList(s.files, s.label, layout)}</section>`).join("");
   }
   // Keyboard focus stays on the grid across a redraw: on the same file, or
   // the next one when it left this view
@@ -2233,8 +2305,15 @@ function render({ keepScroll = true } = {}) {
     state.focus = previousOrder.slice(was + 1).find((id) => order.includes(id)) ?? order.at(-1) ?? null;
   }
   previousOrder = order;
-  scroller.innerHTML = html;
-  if (keepScroll) scroller.scrollTop = top;
+  // A selection box being drawn stays over the new content
+  const boxing = marquee.isConnected;
+  marquee.remove();
+  morph(scroller, html);
+  if (boxing) scroller.append(marquee);
+  if (box) box.cards = null;
+  // Otherwise the browser keeps what's in view where it is, as content
+  // above it changes
+  if (!keepScroll) scroller.scrollTop = 0;
   const first = state.focus && order.includes(state.focus) ? state.focus : order[0];
   if (first && cardEl(first)) cardEl(first).tabIndex = 0;
   if (inboxEl.classList.contains("open")) drawInbox();
@@ -3963,10 +4042,10 @@ filters.addEventListener("click", (e) => {
 });
 
 scroller.addEventListener("click", (e) => {
-  // The click that ends a selection box doesn't clear what it selected,
-  // nor does the one that drops a starred file
-  if (boxJustEnded || liftJustEnded) {
-    boxJustEnded = liftJustEnded = false;
+  // The click that drops a starred file doesn't clear the selection. The
+  // one that ends a selection box doesn't reach here (endBox)
+  if (liftJustEnded) {
+    liftJustEnded = false;
     return;
   }
   const act = e.target.closest("[data-act]")?.dataset.act;
@@ -4011,11 +4090,11 @@ scroller.addEventListener("click", (e) => {
    Ctrl, Cmd or Shift adds to the files already selected. Near the top or
    bottom edge the list scrolls along */
 
-const marquee = Object.assign(document.createElement("div"), { className: "marquee" });
-let box = null;
 let boxJustEnded = false;
 let boxFrame = 0;
 
+// Where each file is, in the list's own coordinates; again after a redraw
+const measureCards = () => $$(".card[data-id]", scroller).map((el) => ({ id: el.dataset.id, l: el.offsetLeft, t: el.offsetTop, r: el.offsetLeft + el.offsetWidth, b: el.offsetTop + el.offsetHeight }));
 function drawBox() {
   const area = scroller.getBoundingClientRect();
   const x = Math.min(Math.max(box.px - area.left, 0), scroller.clientWidth) + scroller.scrollLeft;
@@ -4023,6 +4102,7 @@ function drawBox() {
   const [x1, x2] = [Math.min(box.x, x), Math.max(box.x, x)];
   const [y1, y2] = [Math.min(box.y, y), Math.max(box.y, y)];
   Object.assign(marquee.style, { left: `${x1}px`, top: `${y1}px`, width: `${x2 - x1}px`, height: `${y2 - y1}px` });
+  box.cards ??= measureCards();
   const hits = box.cards.filter((c) => c.l < x2 && c.r > x1 && c.t < y2 && c.b > y1).map((c) => c.id);
   const next = new Set([...box.base, ...hits]);
   if (next.size !== state.sel.size || hits.some((id) => !state.sel.has(id))) setSel(order.filter((id) => next.has(id)), hits[0] ?? state.anchor);
@@ -4044,25 +4124,33 @@ scroller.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 || e.pointerType === "touch" || e.target.closest(".card, button, a, input, .empty")) return;
   // Not on the scrollbar
   if (e.target === scroller && e.offsetX > scroller.clientWidth) return;
+  // A box left over from a release the page never heard about
+  if (box) endBox();
   const area = scroller.getBoundingClientRect();
   box = {
     x: e.clientX - area.left + scroller.scrollLeft,
     y: e.clientY - area.top + scroller.scrollTop,
+    sx: e.clientX,
+    sy: e.clientY,
     px: e.clientX,
     py: e.clientY,
     pointer: e.pointerId,
     moved: false,
     base: e.ctrlKey || e.metaKey || e.shiftKey ? new Set(state.sel) : new Set(),
-    cards: $$(".card[data-id]", scroller).map((el) => ({ id: el.dataset.id, l: el.offsetLeft, t: el.offsetTop, r: el.offsetLeft + el.offsetWidth, b: el.offsetTop + el.offsetHeight })),
+    cards: null,
     last: [],
   };
 });
-scroller.addEventListener("pointermove", (e) => {
+// On the window, so the box follows the pointer and ends on release
+// wherever that is: over the sidebar, the header or outside the window
+addEventListener("pointermove", (e) => {
   if (!box || e.pointerId !== box.pointer) return;
+  // Released where the page didn't hear it
+  if (!(e.buttons & 1)) return endBox();
   box.px = e.clientX;
   box.py = e.clientY;
   if (!box.moved) {
-    if (Math.hypot(e.clientX - (box.x - scroller.scrollLeft + scroller.getBoundingClientRect().left), e.clientY - (box.y - scroller.scrollTop + scroller.getBoundingClientRect().top)) < 4) return;
+    if (Math.hypot(e.clientX - box.sx, e.clientY - box.sy) < 4) return;
     box.moved = true;
     try {
       scroller.setPointerCapture(e.pointerId);
@@ -4072,21 +4160,32 @@ scroller.addEventListener("pointermove", (e) => {
     boxFrame = requestAnimationFrame(edgeScroll);
   }
   drawBox();
-});
-const endBox = (e) => {
-  if (!box || e.pointerId !== box.pointer) return;
+}, true);
+function endBox(e) {
+  if (!box || (e && e.pointerId !== box.pointer)) return;
   cancelAnimationFrame(boxFrame);
-  if (box.moved) {
-    boxJustEnded = true;
-    setTimeout(() => (boxJustEnded = false));
-    marquee.remove();
-    const first = order.find((id) => state.sel.has(id));
-    if (first) focusCard(box.last[0] ?? first, false);
-  }
+  const ended = box;
   box = null;
-};
-scroller.addEventListener("pointerup", endBox);
-scroller.addEventListener("pointercancel", endBox);
+  marquee.remove();
+  try {
+    if (scroller.hasPointerCapture(ended.pointer)) scroller.releasePointerCapture(ended.pointer);
+  } catch {}
+  if (!ended.moved) return;
+  // The click that ends the box does nothing else, wherever it lands
+  boxJustEnded = true;
+  setTimeout(() => (boxJustEnded = false));
+  const first = order.find((id) => state.sel.has(id));
+  if (first) focusCard(ended.last[0] ?? first, false);
+}
+addEventListener("pointerup", endBox, true);
+addEventListener("pointercancel", endBox, true);
+addEventListener("blur", () => endBox());
+addEventListener("click", (e) => {
+  if (!boxJustEnded) return;
+  boxJustEnded = false;
+  e.stopPropagation();
+  e.preventDefault();
+}, true);
 scroller.addEventListener("scroll", () => box?.moved && drawBox(), { passive: true });
 
 scroller.addEventListener("dblclick", (e) => {
@@ -4439,6 +4538,13 @@ addEventListener("keydown", (e) => {
     focusCard(order[0]);
   }
 });
+
+// Focus rings show once the keyboard moves focus around, and go when the
+// pointer's used again. Focus Ligma moves itself, after a click or a
+// selection box, stays without one
+const NAV_KEYS = new Set(["Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
+addEventListener("keydown", (e) => NAV_KEYS.has(e.key) && document.documentElement.classList.add("kbd"), true);
+addEventListener("pointerdown", () => document.documentElement.classList.remove("kbd"), true);
 
 /* Sync: shown from what's saved at once, then brought up to date */
 
