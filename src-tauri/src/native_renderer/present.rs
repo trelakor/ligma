@@ -198,7 +198,7 @@ impl Screen {
             adapter: device.adapter.clone(),
             device: device.device.clone(),
             queue,
-            memory_allocator: None,
+            memory_allocator: Some(super::committed::allocator(&device.device)),
             protected_context: Protected::No,
         };
         let context = unsafe { gpu::direct_contexts::make_d3d(&backend, None) }.ok_or("Skia couldn't start on D3D12")?;
@@ -452,7 +452,9 @@ impl Screen {
         super::render::trace(|| {
             format!("present px={px:.3} layers={} encoded={:.1} rendered={:.1} holes={}", draws.len(), encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, !left.is_empty())
         });
-        stats().lock().unwrap().record_frame(
+        let mut stats = stats().lock().unwrap();
+        stats.holes(!left.is_empty());
+        stats.record_frame(
             encoded.as_secs_f64() * 1000.0,
             rendered.as_secs_f64() * 1000.0,
             counts.native,

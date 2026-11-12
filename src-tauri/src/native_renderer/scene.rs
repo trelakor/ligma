@@ -97,6 +97,14 @@ pub struct Changes {
     pub removed: Vec<String>,
 }
 
+/// What `Scene::apply` changed: subtrees sent whole, and nodes whose
+/// children came or went
+#[derive(Default)]
+pub struct Changed {
+    pub roots: HashSet<String>,
+    pub parents: HashSet<String>,
+}
+
 /// Where a subtree goes among its parent's children
 #[derive(Clone, Copy)]
 pub enum Place {
@@ -700,12 +708,16 @@ impl Scene {
     }
 
     /// Applies `changes`. Returns the units whose drawing changed, before
-    /// and after
-    pub fn apply(&mut self, changes: Prepared) -> HashSet<usize> {
+    /// and after, and what changed in them (see `Changed`)
+    pub fn apply(&mut self, changes: Prepared) -> (HashSet<usize>, Changed) {
         let mut touched = HashSet::new();
+        let mut changed = Changed::default();
         for id in &changes.removed {
             if let Some(&slot) = self.by_id.get(id) {
                 touched.insert(self.unit_of(slot));
+                if let Some(parent) = self.node(slot).and_then(|node| node.parent).and_then(|parent| self.node(parent)) {
+                    changed.parents.insert(parent.id.clone());
+                }
             }
             self.remove(id);
         }
@@ -717,6 +729,8 @@ impl Scene {
             if let Some(&slot) = self.by_id.get(&root_id) {
                 touched.insert(self.unit_of(slot));
             }
+            changed.roots.insert(root_id.clone());
+            changed.parents.insert(parent.clone());
             self.remove(&root_id);
             if parent != page && parent != EXTERNAL && !self.by_id.contains_key(&parent) {
                 continue;
@@ -725,7 +739,36 @@ impl Scene {
                 touched.insert(self.unit_of(slot));
             }
         }
-        touched
+        (touched, changed)
+    }
+
+    /// Whether node `id` looks other than before `changed`: it or something
+    /// in it changed, came or went
+    pub fn changed(&self, id: &str, changed: &Changed) -> bool {
+        let Some(&slot) = self.by_id.get(id) else {
+            return true;
+        };
+        // Replaced along with something it's in
+        let mut at = Some(slot);
+        while let Some(slot) = at {
+            let Some(node) = self.node(slot) else { break };
+            if changed.roots.contains(&node.id) {
+                return true;
+            }
+            at = node.parent;
+        }
+        // Something in it changed
+        let target = slot;
+        changed.roots.iter().chain(&changed.parents).any(|other| {
+            let mut at = self.by_id.get(other).copied();
+            while let Some(slot) = at {
+                if slot == target {
+                    return true;
+                }
+                at = self.node(slot).and_then(|node| node.parent);
+            }
+            false
+        })
     }
 
     pub fn live_nodes(&self) -> usize {

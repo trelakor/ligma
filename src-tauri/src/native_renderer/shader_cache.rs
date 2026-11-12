@@ -208,7 +208,32 @@ fn blob(bytes: &[u8]) -> Option<*mut c_void> {
     Some(blob)
 }
 
+/// Dev tools: programs asked for so far
+pub static ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static ASKED_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 unsafe extern "system" fn cached(
+    source: *const c_void,
+    size: usize,
+    name: *const c_char,
+    defines: *const [*const c_char; 2],
+    include: *mut c_void,
+    entry: *const c_char,
+    target: *const c_char,
+    flags1: u32,
+    flags2: u32,
+    code: *mut *mut c_void,
+    errors: *mut *mut c_void,
+) -> HRESULT {
+    ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let started = Instant::now();
+    let result = cached_inner(source, size, name, defines, include, entry, target, flags1, flags2, code, errors);
+    ASKED_NS.fetch_add(started.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn cached_inner(
     source: *const c_void,
     size: usize,
     name: *const c_char,

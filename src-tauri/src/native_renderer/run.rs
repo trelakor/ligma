@@ -225,7 +225,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
         let ctx = ctx.clone();
         Box::new(move |id| effect_code(&ctx, id))
     };
-    super::effects::spawn(job_queue, ctx.messages.clone(), device.as_ref().ok().map(|device| device.name.clone()), code);
+    let kept = super::effects::Kept::default();
+    super::effects::spawn(job_queue, ctx.messages.clone(), device.as_ref().ok().map(|device| device.name.clone()), code, kept.clone());
     let (started, start) = mpsc::channel();
     let (hub, render_device) = (ctx.hub.clone(), device.clone());
     std::thread::Builder::new()
@@ -233,7 +234,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         .spawn(move || match render_device.and_then(|device| Gpu::new(&device, size.width, size.height)) {
             Ok(gpu) => {
                 let _ = started.send(Ok(gpu.adapter.clone()));
-                Painter::new(gpu, requests, jobs, hub).run(receive);
+                Painter::new(gpu, requests, jobs, kept, hub).run(receive);
             }
             Err(error) => {
                 let _ = started.send(Err(error));
@@ -499,7 +500,10 @@ fn snapshot(ctx: &Ctx, webview: &Webview) -> Result<(), String> {
         if json.len() < 256 && !json.starts_with(b"{\"items\"") {
             let end: Value = serde_json::from_slice(&json).map_err(|error| error.to_string())?;
             match end.get("done") {
-                Some(_) => break end["ms"].as_f64().unwrap_or(0.0),
+                Some(_) => {
+                    super::mark(|| format!("page read: {:.0} ms working, {:.0} ms waiting for the page", end["work"].as_f64().unwrap_or(0.0), end["waited"].as_f64().unwrap_or(0.0)));
+                    break end["ms"].as_f64().unwrap_or(0.0);
+                }
                 None => return Err(end["error"].as_str().unwrap_or("failed").to_string()),
             }
         }
@@ -763,7 +767,7 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     if super::dev() {
         let ms = |d: Duration| d.as_millis();
         log::info!(
-            "native renderer image {hash}: {} KB {}x{} fetched {} ms, decoded {} ms, ready {} ms",
+            "native renderer image {hash}: {} KB {}x{} for {width:.0} kept {iw}x{ih} fetched {} ms, decoded {} ms, ready {} ms",
             bytes.len() / 1000,
             original.0,
             original.1,
@@ -775,11 +779,17 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     Ok(Img { image, original, area: None, stale: false })
 }
 
+/// Smallest an image is kept at. Drawn with mipmaps, a copy halved down to
+/// it samples as the GPU's own smaller copies of a bigger one would, and
+/// far out hundreds of images show at a few pixels each
+const IMAGE_FLOOR: f64 = 64.0;
+
 /// Times an image `longest` pixels on its longer side is halved to still
-/// be `side` pixels, no less than 256, and no more than `IMAGE_LIMIT`
+/// be `side` pixels, no less than `IMAGE_FLOOR`, and no more than
+/// `IMAGE_LIMIT`
 pub(super) fn halvings(longest: u32, side: f64) -> u32 {
     let mut k = 0;
-    while k < 16 && ((longest >> (k + 1)) as f64 >= side.max(256.0) || (longest >> k) > IMAGE_LIMIT) {
+    while k < 16 && ((longest >> (k + 1)) as f64 >= side.max(IMAGE_FLOOR) || (longest >> k) > IMAGE_LIMIT) {
         k += 1;
     }
     k
@@ -1021,6 +1031,13 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             let _ = ctx.messages.send(Msg::Purge(send));
             let [before, purged, freed] = receive.recv_timeout(Duration::from_secs(10)).map_err(|_| "the renderer didn't answer")?;
             Ok(format!("{} MB, {} MB purged, {} MB freed", before / 1_000_000, purged / 1_000_000, freed / 1_000_000))
+        }
+        "census" if super::dev() => Ok(super::gpu_census::report()),
+        "holes" if super::dev() => {
+            let mut stats = stats().lock().unwrap();
+            let longest = stats.longest_hole_ms;
+            stats.longest_hole_ms = 0.0;
+            Ok(format!("{longest:.0}"))
         }
         "resync" => {
             ctx.resync.store(true, Ordering::Relaxed);

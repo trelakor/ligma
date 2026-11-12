@@ -37,6 +37,9 @@ struct Gpu {
     queue: wgpu::Queue,
     objects: HashMap<u32, Res>,
     next: u32,
+    /// The node each object was made running, let go once it has run
+    owners: HashMap<u32, String>,
+    owner: Option<String>,
     /// Validation errors since the effect last asked
     errors: Arc<Mutex<Vec<String>>>,
     scopes: Vec<usize>,
@@ -53,7 +56,23 @@ impl Gpu {
     fn add(&mut self, res: Res) -> u32 {
         self.next += 1;
         self.objects.insert(self.next, res);
+        if let Some(owner) = &self.owner {
+            self.owners.insert(self.next, owner.clone());
+        }
         self.next
+    }
+
+    /// Lets go of everything made running node `node`
+    fn release(&mut self, node: &str) {
+        let gone: Vec<u32> = self.owners.iter().filter(|(_, owner)| owner.as_str() == node).map(|(&id, _)| id).collect();
+        for id in gone {
+            self.owners.remove(&id);
+            match self.objects.remove(&id) {
+                Some(Res::Texture(texture)) => texture.destroy(),
+                Some(Res::Buffer(buffer)) => buffer.destroy(),
+                _ => {}
+            }
+        }
     }
 
     fn get(&self, value: &Json) -> Result<&Res, Fail> {
@@ -962,6 +981,8 @@ impl Host {
             label: Some("ligma effects"),
             required_features: features,
             required_limits: wgpu::Limits::default(),
+            // Small blocks: by default it sets aside hundreds of MB up front
+            memory_hints: wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (1 << 20)..(16 << 20) },
             ..Default::default()
         }))
         .map_err(|error| error.to_string())?;
@@ -973,7 +994,7 @@ impl Host {
                 caught.push(error.to_string());
             }
         }));
-        let gpu = Rc::new(RefCell::new(Gpu { device, queue, objects: HashMap::new(), next: 0, errors, scopes: Vec::new(), logs: Vec::new() }));
+        let gpu = Rc::new(RefCell::new(Gpu { device, queue, objects: HashMap::new(), next: 0, owners: HashMap::new(), owner: None, errors, scopes: Vec::new(), logs: Vec::new() }));
         let runtime = Runtime::new().map_err(|error| error.to_string())?;
         runtime.set_memory_limit(512 << 20);
         runtime.set_max_stack_size(4 << 20);
@@ -1060,6 +1081,7 @@ impl Host {
             let output_id = gpu.add(Res::Texture(target.clone()));
             (input_id, output_id, target)
         };
+        self.gpu.borrow_mut().owner = Some(node.to_string());
         let chain_json: Vec<Json> = chain.iter().map(|(id, params)| serde_json::json!([id, serde_json::from_str::<Json>(params).unwrap_or(Json::Null)])).collect();
         let ran = self.context.with(|ctx| -> Result<(), String> {
             let run: Function = ctx.globals().get("__run").map_err(|error| error.to_string())?;
@@ -1089,17 +1111,34 @@ impl Host {
                 }
             })
         });
+        // What it ran with is kept no longer than the run: its output is
+        // kept instead, and it runs again from setup if it has to
+        self.context.with(|ctx| {
+            let _ = ctx.globals().remove("__ran");
+            if let Ok(forget) = ctx.globals().get::<_, Function>("__forget") {
+                let _ = forget.call::<_, ()>((node,));
+            }
+        });
         let mut gpu = self.gpu.borrow_mut();
+        let held = |gpu: &Gpu| gpu.device.generate_allocator_report().map_or((0, 0), |report| (report.total_allocated_bytes >> 20, report.total_reserved_bytes >> 20));
+        let during = held(&gpu);
+        gpu.owner = None;
         gpu.objects.remove(&input_id);
         gpu.objects.remove(&output_id);
         for line in gpu.logs.drain(..) {
             log::info!("native renderer: effect: {line}");
         }
-        finished?;
-        if let Some(error) = gpu.errors.lock().unwrap().first() {
-            return Err(error.clone());
-        }
-        read_back(&gpu.device, &gpu.queue, &output, width, height)
+        let result = finished.and_then(|_| match gpu.errors.lock().unwrap().first() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        });
+        let pixels = result.and_then(|_| read_back(&gpu.device, &gpu.queue, &output, width, height));
+        output.destroy();
+        gpu.release(node);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let after = held(&gpu);
+        super::render::trace(|| format!("effect memory {node} {width}x{height} during={during:?} after={after:?} objects={}", gpu.objects.len()));
+        pixels
     }
 }
 

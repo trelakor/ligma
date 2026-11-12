@@ -39,6 +39,8 @@ use crate::settings::Settings;
 #[cfg(windows)]
 mod adjust;
 #[cfg(windows)]
+mod committed;
+#[cfg(windows)]
 mod draw;
 #[cfg(windows)]
 mod effect_host;
@@ -46,6 +48,8 @@ mod effect_host;
 mod effects;
 #[cfg(windows)]
 mod gpu_memory;
+#[cfg(windows)]
+mod gpu_census;
 #[cfg(windows)]
 mod present;
 #[cfg(windows)]
@@ -178,6 +182,11 @@ pub struct Stats {
     pub transfer_ms: f64,
     pub parse_ms: f64,
     pub snapshot_bytes: usize,
+    /// Longest the view went with part of it not drawn yet, in ms, since
+    /// the renderer started or `holes` was reset
+    pub longest_hole_ms: f64,
+    #[serde(skip)]
+    pub holes_since: Option<std::time::Instant>,
     /// Where the last parity or benchmark report went
     pub report: Option<String>,
     #[serde(skip)]
@@ -208,6 +217,20 @@ impl Stats {
         self.frame_p95 = percentile(&sorted, 0.95);
         if let Some(log) = &mut self.log {
             log.push(frame_ms);
+        }
+    }
+
+    /// Whether the frame just shown has parts of the view not drawn yet
+    pub fn holes(&mut self, holes: bool) {
+        match (holes, self.holes_since) {
+            (true, None) => self.holes_since = Some(std::time::Instant::now()),
+            (_, Some(since)) => {
+                self.longest_hole_ms = self.longest_hole_ms.max(since.elapsed().as_secs_f64() * 1000.0);
+                if !holes {
+                    self.holes_since = None;
+                }
+            }
+            (false, None) => {}
         }
     }
 }

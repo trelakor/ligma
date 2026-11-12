@@ -66,6 +66,7 @@ skia-safe = { version = "0.157", features = ["d3d"] }
 rquickjs = "0.14"
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "dx12", "wgsl"] }
 pollster = "0.4"
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode", "std"] }
 # figma:// registration in src/figma_scheme.rs
 windows-registry = "0.6"
 # Remove background in src/background.rs: ONNX Runtime, linked in, to run

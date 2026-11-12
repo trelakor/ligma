@@ -399,8 +399,12 @@
     if ("fillGeometry" in n) {
       const fill = get("fillGeometry");
       if (fill?.length) out.fg = fill.map((g) => [g.windingRule, path(g.data)]);
-      const stroke = get("strokeGeometry");
-      if (stroke?.length) out.sg = stroke.map((g) => [g.windingRule, path(g.data)]);
+      // Outlining strokes costs Figma more than anything else read here,
+      // text's most of all, so only for what has strokes to draw
+      if (Array.isArray(out.strokes) && out.strokes.some((paint) => paint.visible !== false)) {
+        const stroke = get("strokeGeometry");
+        if (stroke?.length) out.sg = stroke.map((g) => [g.windingRule, path(g.data)]);
+      }
     }
     if ("cornerRadius" in n) {
       const radius = get("cornerRadius");
@@ -436,8 +440,11 @@
         for (let i = children.length - 1; i >= 0; i--) stack.push([children[i], n.id]);
       }
       if (clock && performance.now() - clock.start > (clock.slice ?? 12)) {
+        const paused = performance.now();
+        clock.work = (clock.work ?? 0) + paused - clock.start;
         await yieldNow();
         clock.start = performance.now();
+        clock.waited = (clock.waited ?? 0) + clock.start - paused;
         if (clock.stop?.()) return null;
       }
     }
@@ -483,30 +490,66 @@
     // Nearest the view first, sorted again whenever the view moves, as
     // Figma puts the view where it was left a moment after the file opens,
     // and people move about while the page is read
-    const left = units.map((unit) => ({ unit, box: unit[0].absoluteBoundingBox, distance: 0 }));
+    const left = units.map((unit) => ({ unit, box: unit[0].absoluteBoundingBox, distance: 0, seen: false }));
+    // What's in view first, then nearest the view's center, farthest at the
+    // start so the next comes off the end
+    const order = (a, b) => a.seen - b.seen || b.distance - a.distance;
     let aimedAt = "";
     let aimed = 0;
+    // When the view last moved, as Figma has to be let draw and take input
+    // more often while it does
+    let moved = 0;
+    const distance = (b, cx, cy) => (b ? Math.hypot(Math.max(b.x - cx, 0, cx - (b.x + b.width)), Math.max(b.y - cy, 0, cy - (b.y + b.height))) : Infinity);
     const aim = () => {
       aimed = performance.now();
       const v = figma.viewport.bounds;
       const at = `${v.x},${v.y},${v.width},${v.height}`;
       if (at === aimedAt) return false;
       aimedAt = at;
+      moved = performance.now();
       prefetchArea = { x: v.x - v.width / 2, y: v.y - v.height / 2, width: v.width * 2, height: v.height * 2 };
       viewArea = { x: v.x, y: v.y, width: v.width, height: v.height };
       const cx = v.x + v.width / 2;
       const cy = v.y + v.height / 2;
       for (const entry of left) {
-        const b = entry.box;
-        entry.distance = b ? Math.hypot(Math.max(b.x - cx, 0, cx - (b.x + b.width)), Math.max(b.y - cy, 0, cy - (b.y + b.height))) : Infinity;
+        entry.distance = distance(entry.box, cx, cy);
+        entry.seen = overlaps(entry.box, viewArea);
       }
-      // Farthest first, so the nearest comes off the end
-      left.sort((a, b) => b.distance - a.distance);
+      left.sort(order);
+      return true;
+    };
+    // A frame much bigger than the view and not all in it is sent alone,
+    // and what's in it as units of its own, so what of it is in view comes
+    // first rather than all of it in order
+    const containers = new Set(["FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE"]);
+    const split = (entry) => {
+      const [n, parent, index] = entry.unit;
+      const b = entry.box;
+      const v = viewArea;
+      if (!b || !v || !containers.has(n.type) || n.visible === false) return false;
+      const inside = b.x >= v.x && b.y >= v.y && b.x + b.width <= v.x + v.width && b.y + b.height <= v.y + v.height;
+      if (inside || b.width * b.height < (v.width * v.height) / 16) return false;
+      let children;
+      try {
+        children = n.children;
+      } catch {
+        return false;
+      }
+      if (children.length < 2) return false;
+      items.push({ parent, index, nodes: [node(figma, n, parent)] });
+      const cx = v.x + v.width / 2;
+      const cy = v.y + v.height / 2;
+      children.forEach((child, i) => {
+        const box = child.absoluteBoundingBox;
+        left.push({ unit: [child, n.id, i], box, distance: distance(box, cx, cy), seen: overlaps(box, v) });
+      });
+      left.sort(order);
       return true;
     };
     aim();
     let items = shells;
     let clock = { start: performance.now() };
+    current.left = () => ({ left: left.length, seen: left.filter((entry) => entry.seen).length, since: performance.now() - moved });
     let since = performance.now();
     let first = true;
     // Batch n goes under `${current.prefix}n`, kept for it before it's
@@ -524,17 +567,16 @@
       if (stream !== current) return fill(`${current.prefix}${n}`, JSON.stringify({ error: "the page was read again" }));
       if (performance.now() - aimed > 50) aim();
       const picked = left.pop();
+      if (split(picked)) continue;
       const [root, parent, index] = picked.unit;
       // What's in view is read in longer stretches, as each breather while
       // Figma opens a file can take it 100ms. Something out of view is put
       // back when the view moves onto something else
-      const inView = picked.distance === 0;
-      clock.slice = inView ? 100 : 12;
+      const inView = picked.seen;
+      clock.slice = inView ? 100 : performance.now() - moved < 1000 ? 12 : 40;
       clock.stop = () => {
-        if (inView || performance.now() - aimed < 50 || !aim() || !left.length || left[left.length - 1].distance > 0) return false;
-        const v = figma.viewport.bounds;
-        const b = picked.box;
-        return !b || b.x > v.x + v.width || b.y > v.y + v.height || b.x + b.width < v.x || b.y + b.height < v.y;
+        if (inView || performance.now() - aimed < 50 || !aim() || !left.length || !left[left.length - 1].seen) return false;
+        return !overlaps(picked.box, viewArea);
       };
       const nodes = await subtree(figma, root, parent, [], clock);
       clock.stop = null;
@@ -558,7 +600,7 @@
     }
     flush();
     current.ms = performance.now() - current.started;
-    fill(`${current.prefix}${n}`, JSON.stringify({ done: true, ms: current.ms }));
+    fill(`${current.prefix}${n}`, JSON.stringify({ done: true, ms: current.ms, work: clock.work ?? 0, waited: clock.waited ?? 0 }));
   };
 
   // Changes since the last `changes()`, from Figma's `documentchange`
@@ -628,6 +670,11 @@
         page: figma.currentPage.id,
         visible: document.visibilityState === "visible",
       };
+    },
+
+    // Dev tools: how much of the page is still to read, and of it in view
+    streaming() {
+      return stream?.left?.() ?? null;
     },
 
     // Starts streaming the current page in, its batches kept under

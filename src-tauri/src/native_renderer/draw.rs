@@ -164,11 +164,17 @@ half4 main(half4 src, half4 dst) {
 }
 "#;
 
-/// Every pixel with any coverage made opaque, as Figma's silhouettes are
+/// Every pixel with any coverage made opaque, as Figma's silhouettes are.
+/// Made once: its table is a texture, and each new one uploads its own
 fn silhouette() -> skia_safe::ColorFilter {
-    let mut alpha = [255u8; 256];
-    alpha[0] = 0;
-    color_filters::table_argb(Some(&alpha), None, None, None).expect("table color filter")
+    static FILTER: std::sync::OnceLock<skia_safe::ColorFilter> = std::sync::OnceLock::new();
+    FILTER
+        .get_or_init(|| {
+            let mut alpha = [255u8; 256];
+            alpha[0] = 0;
+            color_filters::table_argb(Some(&alpha), None, None, None).expect("table color filter")
+        })
+        .clone()
 }
 
 /// The standard deviation of Figma's blur of `radius`. It blurs with a
@@ -430,6 +436,9 @@ impl std::ops::AddAssign for Counts {
 /// as its letters would be a blur anyway
 const GREEK_BELOW: f32 = 3.0;
 
+/// Text shorter than this on screen, in pixels, is a bar in drafts
+const DRAFT_GREEK_BELOW: f32 = 24.0;
+
 
 /// Image keys of nodes as Figma renders them start with this
 pub const RENDER: &str = "node:";
@@ -462,6 +471,10 @@ pub struct Encoder<'a> {
     pub sources: Vec<(String, bool)>,
     /// Nodes as Figma renders them are wanted at exactly this zoom
     pub exact_renders: bool,
+    /// A draft, shown only until the tiles of the view are drawn: what's
+    /// smaller than a couple of pixels is left out, and text shorter than
+    /// `DRAFT_GREEK_BELOW` is a bar, so much of a page far out costs little
+    pub draft: bool,
     /// Those not here at exactly this zoom, and how wide they'd be
     pub exact_images: Vec<(String, f64)>,
     /// Why the first approximate node is
@@ -495,6 +508,7 @@ impl<'a> Encoder<'a> {
             used_images: Vec::new(),
             sources: Vec::new(),
             exact_renders: false,
+            draft: false,
             exact_images: Vec::new(),
             approximate_reason: None,
             tint: false,
@@ -539,11 +553,11 @@ impl<'a> Encoder<'a> {
             return;
         }
         if let Some(bounds) = node.bounds {
-            if bounds.width().max(bounds.height()) * self.px < 0.5 {
+            if bounds.width().max(bounds.height()) * self.px < if self.draft { 2.0 } else { 0.5 } {
                 self.counts.skipped += 1;
                 return;
             }
-            if node.kind == Kind::Text && bounds.height() * self.px < GREEK_BELOW {
+            if node.kind == Kind::Text && bounds.height() * self.px < if self.draft { DRAFT_GREEK_BELOW } else { GREEK_BELOW } {
                 self.greek(node, bounds);
                 return;
             }
@@ -679,12 +693,20 @@ impl<'a> Encoder<'a> {
             if target.size.0 <= 0.0 || target.size.1 <= 0.0 {
                 continue;
             }
-            let width = target.size.0.ceil();
+            // Kept about as big as it shows, in steps of halves
+            let m = &target.transform;
+            let px = self.px * m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y()));
+            let width = target.size.0 * px as f64;
             self.used_images.push((key.clone(), width));
             match self.images.get(&key) {
                 Some(img) if img.area.is_some() => {
+                    let (fw, fh) = img.original;
+                    let longest = fw.max(fh);
+                    let fits = longest >> super::run::halvings(longest, longest as f64 * width * 1.25 / fw.max(1) as f64);
                     if img.stale {
                         self.missing_images.push((key, width));
+                    } else if (img.image.width().max(img.image.height()) as u32) < fits {
+                        self.sharper_images.push((key, width));
                     }
                     images.push((target, img));
                 }
@@ -832,7 +854,7 @@ impl<'a> Encoder<'a> {
     /// The node's outline grown (or shrunk) by `spread`, solid, as an image
     /// filter's input. Corners stay as sharp as they are
     fn spread_outline(&self, node: &Node, spread: f32) -> Option<ImageFilter> {
-        let outline = self.outline(node);
+        let outline = self.volatile(self.outline(node));
         let bounds = node.transform.map_rect(outline.bounds().with_outset((spread.abs() + 1.0, spread.abs() + 1.0))).0;
         let mut recorder = PictureRecorder::new();
         let canvas = recorder.begin_recording(bounds, false);
@@ -858,7 +880,7 @@ impl<'a> Encoder<'a> {
             let clip = node.clip && node.kind != Kind::Group;
             if clip {
                 self.canvas.save();
-                self.canvas.clip_path(&self.box_shape(node).with_transform(&node.transform), ClipOp::Intersect, self.aa);
+                self.canvas.clip_path(&self.volatile(self.box_shape(node).with_transform(&node.transform)), ClipOp::Intersect, self.aa);
             }
             self.children(node);
             if clip {
@@ -892,6 +914,16 @@ impl<'a> Encoder<'a> {
         self.counts.native += 1;
         self.paints(node, true);
         self.paints(node, false);
+    }
+
+    /// `path`, marked so Skia doesn't keep it on the GPU when drawn without
+    /// anti-aliasing. It would keep each shape as its own 64 KiB, thousands
+    /// of them far out
+    fn volatile(&self, mut path: Path) -> Path {
+        if !self.aa {
+            path.set_is_volatile(true);
+        }
+        path
     }
 
     /// The node's box with its corners, in its own coordinates
@@ -996,7 +1028,7 @@ impl<'a> Encoder<'a> {
                 self.canvas.concat(&mask.transform);
                 let mut black = Paint::new(Color4f::new(0.0, 0.0, 0.0, 1.0), None);
                 black.set_anti_alias(self.aa);
-                self.canvas.draw_path(&self.outline(mask), &black);
+                self.canvas.draw_path(&self.volatile(self.outline(mask)), &black);
                 self.canvas.restore();
             } else {
                 self.draw(child, true);
@@ -1035,10 +1067,10 @@ impl<'a> Encoder<'a> {
         self.canvas.concat(&node.transform);
         match align {
             StrokeAlign::Inside => {
-                self.canvas.clip_path(&self.outline(node), ClipOp::Intersect, self.aa);
+                self.canvas.clip_path(&self.volatile(self.outline(node)), ClipOp::Intersect, self.aa);
             }
             StrokeAlign::Outside => {
-                self.canvas.clip_path(&self.outline(node), ClipOp::Difference, self.aa);
+                self.canvas.clip_path(&self.volatile(self.outline(node)), ClipOp::Difference, self.aa);
             }
             StrokeAlign::Center => {}
         }
@@ -1108,7 +1140,7 @@ impl<'a> Encoder<'a> {
             }
             _ => return,
         }
-        self.canvas.draw_path(path, &out);
+        self.canvas.draw_path(&self.volatile(path.clone()), &out);
     }
 
     fn image(&mut self, node: &Node, paint: &FigmaPaint, w: f32, h: f32) -> Option<Shader> {
@@ -1333,7 +1365,7 @@ impl<'a> Encoder<'a> {
             return;
         };
         self.canvas.save();
-        self.canvas.clip_path(&self.outline(node).with_transform(&node.transform), ClipOp::Intersect, self.aa);
+        self.canvas.clip_path(&self.volatile(self.outline(node).with_transform(&node.transform)), ClipOp::Intersect, self.aa);
         self.canvas.save_layer(&SaveLayerRec::default().backdrop(&blur));
         self.canvas.restore();
         self.canvas.restore();

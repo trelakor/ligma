@@ -37,7 +37,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 
 use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, EFFECT, RENDER, RENDER_LIMIT};
-use super::effects::Job;
+use super::effects::{Job, Kept, Run};
 use super::present::{checker_paint, grid_paint, Device, Hub, Layer, Tex, CHECKER, GRID_COLOR, GRID_LINES};
 use super::scene::{Kind, Prepared, Scene};
 use super::stats;
@@ -208,6 +208,13 @@ fn footprint(image: &Image) -> usize {
 const RASTER_SIDE: i32 = 1024;
 /// GPU memory units' images take at most
 const RASTER_BUDGET: usize = 32 << 20;
+/// Units smaller than this on their longer side are played into each tile
+/// rather than drawn into an image: they're rarely in more than one, and
+/// far out there are thousands
+const RASTER_MIN: i32 = 192;
+/// Images of units made at most for a tile or view, so one far out doesn't
+/// make hundreds at once
+const RASTERS_A_DRAW: u32 = 16;
 
 /// How far around unit `unit` what's drawn before it shows through it, if
 /// it does: a blend mode that reaches past it, or a background blur
@@ -270,19 +277,18 @@ struct Whole {
     stale: bool,
 }
 
-/// GPU memory used past which, once idle, image textures are packed again.
-/// Windows counts it in steps of 256 MiB, so past one step is past 300 MB
-const COMPACT_ABOVE: u64 = 300_000_000;
-
 /// An image on the GPU once, with its mipmaps, and outside Skia's cache:
 /// left to the cache, layers drawn in a frame push images out, and each is
 /// uploaded and its mipmaps made again next frame
 fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
+    let _purpose = super::gpu_census::purpose("image");
     skia_safe::gpu::images::texture_from_image(context, &image, skia_safe::gpu::Mipmapped::Yes, skia_safe::gpu::Budgeted::No).unwrap_or(image)
 }
 
 /// Images past this many bytes go once nothing drawn uses them
 const IMAGE_BUDGET: usize = 64 << 20;
+/// Past this many bytes, images in use are kept no bigger than they're drawn
+const IMAGES_MAX: usize = 96 << 20;
 
 /// Settings that trade memory for quality, which can be set by environment
 /// variable in a dev build to measure them
@@ -310,7 +316,7 @@ fn config() -> Config {
         samples: get("LIGMA_NATIVE_SAMPLES", 1),
         supersample: get("LIGMA_NATIVE_SUPERSAMPLE", 4).clamp(1, 4) as i32,
         max_tiles: get("LIGMA_NATIVE_TILES", 40),
-        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 96) << 20,
+        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 64) << 20,
     }
 }
 
@@ -329,6 +335,9 @@ const PASSING: u64 = 30;
 /// Picture levels from this on are exact zooms, in steps of 1/EXACT_STEPS
 /// of a pixel a unit
 const EXACT_LEVEL: i32 = 1 << 24;
+/// Levels from this up, below `EXACT_LEVEL`, are drafts of the level as
+/// much lower: see `Encoder::draft`
+const DRAFT_LEVEL: i32 = 1 << 20;
 const EXACT_STEPS: f32 = 4096.0;
 
 /// How far a render's scale may be from the one wanted, as a share, before
@@ -361,10 +370,19 @@ fn custom_unit(scene: &Scene, unit: &Unit) -> bool {
 fn level_px(level: i32) -> f32 {
     if level >= EXACT_LEVEL {
         (level - EXACT_LEVEL) as f32 / EXACT_STEPS
+    } else if is_draft(level) {
+        2f32.powi(level - DRAFT_LEVEL)
     } else {
         2f32.powi(level)
     }
 }
+
+fn is_draft(level: i32) -> bool {
+    (DRAFT_LEVEL / 2..EXACT_LEVEL).contains(&level)
+}
+
+/// Units smaller than this many pixels are left out of drafts
+const DRAFT_SMALLEST: f32 = 2.0;
 
 /// How long the view stays still before quick tiles are drawn exactly
 const REFINE_AFTER: Duration = Duration::from_millis(250);
@@ -423,6 +441,9 @@ struct Tile {
     /// Drawn at full quality, sampled as Figma samples, rather than quickly
     /// to fill the view while it moves
     exact: bool,
+    /// A draft, to show behind the view's tiles while they're drawn. One
+    /// the view itself needs is drawn again in full
+    draft: bool,
 }
 
 pub struct Gpu {
@@ -461,6 +482,7 @@ impl Device {
         super::shader_cache::install();
         let factory: IDXGIFactory4 = unsafe { CreateDXGIFactory1() }.map_err(|error| format!("DXGI: {error}"))?;
         let (adapter, device) = hardware_adapter(&factory).map_err(|error| format!("adapter: {error}"))?;
+        super::gpu_census::install(&device);
         let desc = unsafe { adapter.GetDesc1() }.map_err(|error| error.to_string())?;
         let name = String::from_utf16_lossy(&desc.Description).trim_end_matches('\0').to_string();
         Ok(Device { factory, adapter, device, name })
@@ -471,7 +493,7 @@ impl Gpu {
     pub fn new(device: &Device, width: u32, height: u32) -> Result<Self, String> {
         let queue = unsafe { device.device.CreateCommandQueue(&Default::default()) }.map_err(|error| format!("queue: {error}"))?;
         let memory = device.adapter.cast::<IDXGIAdapter3>().ok();
-        let backend = BackendContext { adapter: device.adapter.clone(), device: device.device.clone(), queue, memory_allocator: None, protected_context: Protected::No };
+        let backend = BackendContext { adapter: device.adapter.clone(), device: device.device.clone(), queue, memory_allocator: Some(super::committed::allocator(&device.device)), protected_context: Protected::No };
         let mut context = unsafe { gpu::direct_contexts::make_d3d(&backend, None) }.ok_or("Skia couldn't start on D3D12")?;
         context.set_resource_cache_limit(config().cache_limit);
         let gpu = Self {
@@ -535,6 +557,8 @@ pub struct Painter {
     rasters: HashMap<(usize, bool, i32, bool, u32), Raster>,
     raster_bytes: usize,
     rasters_off: bool,
+    /// Images of units made for the tile or view being drawn
+    rasters_made: u32,
     /// Textures handed over that the present thread may still show, used
     /// again once it's done with them
     spare: Vec<Arc<Tex>>,
@@ -548,8 +572,6 @@ pub struct Painter {
     /// When the view was last drawn, and whether anything was since
     /// Part of a pixel the view is drawn off the pixel grid by, see `fractional`
     frac: (f32, f32),
-    /// GPU memory used after images were last packed again
-    compacted: u64,
     /// An image came since the last frame, for the dev timeline
     fresh: bool,
     /// When images were last fitted to what's drawn
@@ -585,12 +607,14 @@ pub struct Painter {
     requests: Sender<Request>,
     /// Nodes' custom effects to run, see effects.rs
     effects: Sender<Job>,
+    /// What effects drew, whole, kept on their thread
+    kept: Kept,
     /// Effects waiting on images the node draws, run once they come
     effects_waiting: Vec<(String, f64)>,
 }
 
 impl Painter {
-    pub fn new(gpu: Gpu, requests: Sender<Request>, effects: Sender<Job>, hub: Arc<Hub>) -> Self {
+    pub fn new(gpu: Gpu, requests: Sender<Request>, effects: Sender<Job>, kept: Kept, hub: Arc<Hub>) -> Self {
         Self {
             gpu,
             kit: Kit::new(),
@@ -605,6 +629,7 @@ impl Painter {
             made: 0,
             rasters: HashMap::new(),
             raster_bytes: 0,
+            rasters_made: 0,
             rasters_off: super::dev() && std::env::var("LIGMA_NATIVE_RASTERS").is_ok_and(|value| value == "0"),
             spare: Vec::new(),
             whole: None,
@@ -613,7 +638,6 @@ impl Painter {
             drew: false,
             live: None,
             fitted: Instant::now(),
-            compacted: 0,
             fresh: false,
             frac: (0.0, 0.0),
             average: skia_safe::RuntimeEffect::make_for_shader(AVERAGE, None)
@@ -642,6 +666,7 @@ impl Painter {
             requests,
             effects,
             effects_waiting: Vec::new(),
+            kept,
         }
     }
 
@@ -778,20 +803,21 @@ impl Painter {
             }
             return Some(settle);
         }
-        let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale);
+        let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale && (!tile.draft || key.px != pxb));
         let mut order: Vec<(TileKey, bool)> = Vec::new();
         // Where tiles are missing, the coarse level first: it covers four
-        // or more tiles' worth at once, so a pan never shows nothing
+        // or more tiles' worth at once, so a pan never shows nothing. One
+        // only out of date still shows, so it waits its turn below
         if missing > 0 && !whole_here {
-            order.extend(coarse_view.iter().copied().filter(|key| !ready(&self.tiles, key)).map(|key| (key, false)));
+            order.extend(coarse_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         }
         order.extend(in_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         // An out of date tile still shows, so it's drawn again as well as
         // it was, rather than quickly, which would blur it a while
-        order.extend(in_view.iter().filter_map(|key| self.tiles.get(key).filter(|tile| tile.stale).map(|tile| (*key, tile.exact))));
+        order.extend(in_view.iter().filter_map(|key| self.tiles.get(key).filter(|tile| tile.stale || tile.draft).map(|tile| (*key, tile.exact))));
         order.extend(around.iter().copied().filter(|key| !ready(&self.tiles, key)).map(|key| (key, false)));
         order.extend(coarse_view.iter().chain(&coarse_around).copied().filter(|key| !ready(&self.tiles, key) && key.px != pxb).map(|key| (key, false)));
-        let rough: Vec<TileKey> = in_view.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.exact)).collect();
+        let rough: Vec<TileKey> = in_view.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.draft && !tile.exact)).collect();
         let refine = REFINE_AFTER.saturating_sub(self.moved.elapsed());
         if refine.is_zero() {
             order.extend(rough.iter().map(|&key| (key, true)));
@@ -799,7 +825,7 @@ impl Painter {
         let mut seen = std::collections::HashSet::new();
         order.retain(|item| seen.insert(*item));
         if let Some(&(key, exact)) = order.first() {
-            if let Some(tile) = self.draw_tile(key, exact) {
+            if let Some(tile) = self.draw_tile(key, exact, key.px != pxb) {
                 if let Some(old) = self.tiles.insert(key, tile) {
                     self.retire(old.tex);
                 }
@@ -809,6 +835,9 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
+        // Supersampled scratch is big, and only drawn on once the view is
+        // still, so it goes once that's done
+        self.scratch.retain(|(_, ss, _)| *ss == 1);
         // All there: the whole view drawn for the meantime can go
         if missing == 0 {
             if let Some(whole) = self.whole.take() {
@@ -825,6 +854,8 @@ impl Painter {
     /// see what they blur, for the present thread to show where tiles of the
     /// zoom aren't drawn yet
     fn draw_whole(&mut self, ox: i32, oy: i32, px: f32) {
+        let _purpose = super::gpu_census::purpose("whole");
+        self.rasters_made = 0;
         let (width, height) = (self.gpu.size.0 as i32, self.gpu.size.1 as i32);
         let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
         let margin = self.reach(view_area, px);
@@ -865,7 +896,8 @@ impl Painter {
         if let Some(old) = self.whole.take() {
             self.retire(old.layer.tex);
         }
-        trace(|| format!("  whole px={px:.3} pictures={} margin={margin} {:.1}ms", pictures.len(), start.elapsed().as_secs_f64() * 1000.0));
+        let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
+        trace(|| format!("  whole px={px:.3} pictures={} margin={margin} {:.1}ms vram={vram}", pictures.len(), start.elapsed().as_secs_f64() * 1000.0));
         self.whole = Some(Whole { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts }, at: (ox, oy, px.to_bits()), stale: false });
         self.drew = true;
     }
@@ -873,6 +905,7 @@ impl Painter {
     /// A texture `width` by `height` to hand over, one the present thread is
     /// done with if there is one
     fn tex(&mut self, width: i32, height: i32) -> Option<Arc<Tex>> {
+        let _purpose = super::gpu_census::purpose("tile");
         let free = self.spare.iter().position(|tex| tex.width == width && tex.height == height && Arc::strong_count(tex) == 1);
         if let Some(free) = free {
             std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
@@ -968,7 +1001,7 @@ impl Painter {
             }
             Msg::Changes(changes) => {
                 let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
-                let touched = self.scene.apply(changes);
+                let (touched, changed) = self.scene.apply(changes);
                 self.rebuild_units();
                 let mut areas: Vec<Rect> = touched.iter().filter_map(|slot| before.get(slot).copied()).collect();
                 areas.extend(self.units.iter().filter(|unit| touched.contains(&unit.slot)).map(|unit| unit.bounds));
@@ -997,11 +1030,18 @@ impl Painter {
                         self.asked.remove(key);
                         return false;
                     };
-                    if touched.contains(&scene.unit_of(slot)) {
+                    // Effects only change with their node, Figma's renders
+                    // are of the whole unit
+                    let changed = if key.starts_with(EFFECT) { scene.changed(id, &changed) } else { touched.contains(&scene.unit_of(slot)) };
+                    if changed {
                         img.stale = true;
                         self.asked.remove(key);
                     }
                     true
+                });
+                self.kept.lock().unwrap().retain(|key| {
+                    let id = key.strip_prefix(EFFECT).map_or(key, |id| id.split('>').next().unwrap_or(id));
+                    !scene.changed(id, &changed)
                 });
                 self.kit.forget_patterns(None);
                 trace(|| format!("changes touched={} areas={}", touched.len(), areas.len()));
@@ -1055,7 +1095,13 @@ impl Painter {
                 self.kit.forget_patterns(Some(&key));
                 let mut img = img;
                 img.image = upload(&mut self.gpu.context, img.image);
-                trace(|| format!("image {key} {}x{} areas={}", img.image.width(), img.image.height(), areas.len()));
+                // Its copy on the way up is let go once the GPU has it, not
+                // with those of every other image that came in meanwhile
+                if img.bytes() > 1 << 20 {
+                    let _ = self.gpu.context.flush_and_submit();
+                }
+                let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
+                trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
                 let effect = key.starts_with(EFFECT);
                 self.images.insert(key, img);
                 self.drop_tiles(&areas);
@@ -1144,15 +1190,16 @@ impl Painter {
         self.live = None;
         self.scratch.clear();
         self.touch = None;
-        self.compact();
         let _ = self.gpu.context.flush_submit_and_sync_cpu();
         self.gpu.context.free_gpu_resources();
         self.update_memory();
     }
 
-    /// Keeps images about as big as what's drawn from them needs: ones kept
-    /// much bigger are decoded again smaller, from the bytes kept, and past
-    /// `IMAGE_BUDGET` the biggest no picture uses are let go
+    /// Keeps images within budget: past `IMAGE_BUDGET` the biggest nothing
+    /// near the view uses are let go, and past `IMAGES_MAX` those kept bigger
+    /// than what's drawn from them needs are decoded again smaller, from the
+    /// bytes kept. Only then, as that draws again all that uses them, and
+    /// drawn with mipmaps a bigger copy comes out the same
     fn fit_images(&mut self) {
         // As run.rs sizes images it fetches
         let fitted = |(w, h): (u32, u32), width: f64| {
@@ -1162,10 +1209,18 @@ impl Painter {
         // Pictures of other zooms are quick to record again, and hold on to
         // images at the size those zooms took
         let px = self.zoom.0;
+        let current = px.max(1e-6).log2().round() as i32;
+        let exact = EXACT_LEVEL + (px * EXACT_STEPS).round() as i32;
         if px > 0.0 {
-            let current = px.log2().round() as i32;
-            let exact = EXACT_LEVEL + (px * EXACT_STEPS).round() as i32;
-            self.pictures.retain(|&(_, _, level, _), _| if level >= EXACT_LEVEL { level == exact } else { (level - current).abs() <= 1 });
+            self.pictures.retain(|&(_, _, level, _), _| {
+                if level >= EXACT_LEVEL {
+                    level == exact
+                } else if is_draft(level) {
+                    (level - DRAFT_LEVEL - current).abs() <= 3
+                } else {
+                    (level - current).abs() <= 1
+                }
+            });
         }
         // What's near the view needs its images; elsewhere they can go, as
         // the page's encoded copy is kept, so they come back quickly
@@ -1173,20 +1228,31 @@ impl Painter {
             let area = Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32);
             area.with_outset((area.width(), area.height()))
         });
-        let near_units: std::collections::HashSet<(usize, bool)> = self
+        let seen: Option<Rect> = self.view.as_ref().map(|view| Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32));
+        // Units near the view, and whether they're in it
+        let near_units: HashMap<(usize, bool), bool> = self
             .units
             .iter()
             .filter(|unit| near.is_none_or(|near| Rect::intersects2(&unit.bounds, &near)))
-            .map(|unit| (unit.slot, unit.section))
+            .map(|unit| ((unit.slot, unit.section), seen.is_none_or(|seen| Rect::intersects2(&unit.bounds, &seen))))
             .collect();
+        // What pictures of this zoom draw them at, those of the zooms either
+        // side kept for a while would keep them twice as big
         let mut need: HashMap<&str, f64> = HashMap::new();
-        for (&(slot, section, _, _), recorded) in &self.pictures {
-            if !near_units.contains(&(slot, section)) {
+        let mut in_view: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (&(slot, section, level, _), recorded) in &self.pictures {
+            let Some(&shown) = near_units.get(&(slot, section)) else {
                 continue;
-            }
+            };
+            let this_zoom = level == current || level == exact;
             for (key, width) in &recorded.uses {
                 let entry = need.entry(key.as_str()).or_insert(0.0);
-                *entry = entry.max(*width);
+                if this_zoom {
+                    *entry = entry.max(*width);
+                }
+                if shown {
+                    in_view.insert(key.clone());
+                }
             }
         }
         let mut smaller = Vec::new();
@@ -1195,24 +1261,17 @@ impl Painter {
             if key.starts_with(RENDER) {
                 continue;
             }
-            // Effects run once, at their one size, and again if needed
-            if key.starts_with(EFFECT) {
-                if !need.contains_key(key.as_str()) {
-                    unused.push((key.clone(), img.bytes()));
-                }
-                continue;
-            }
             let kept = img.image.width().max(img.image.height()) as f64;
             match need.get(key.as_str()) {
                 // Smaller where what the page would send for it now is
-                Some(&width) if kept > fitted(img.original, width) as f64 => smaller.push((key.clone(), width)),
+                Some(&width) if width > 0.0 && kept > fitted(img.original, width) as f64 => {
+                    let ratio = fitted(img.original, width) as f64 / kept;
+                    let saving = (img.bytes() as f64 * (1.0 - ratio * ratio)) as usize;
+                    smaller.push((key.clone(), width, saving));
+                }
                 Some(_) => {}
                 None => unused.push((key.clone(), img.bytes())),
             }
-        }
-        for (key, width) in smaller {
-            self.asked.insert(key.clone(), width);
-            let _ = self.requests.send(Request { key, width });
         }
         let mut total: usize = self.images.values().map(Img::bytes).sum();
         unused.sort_by(|a, b| b.1.cmp(&a.1));
@@ -1233,44 +1292,45 @@ impl Painter {
                 self.kit.forget_patterns(Some(key));
             }
         }
-    }
-
-    /// Image textures, uploaded at all sorts of times, end up spread over
-    /// many of the driver's memory blocks, each kept from being given back
-    /// by the few in it. Once idle with more than a block in use, they're
-    /// copied off the GPU and uploaded again together, which fits them in
-    /// few blocks and frees the rest
-    fn compact(&mut self) {
-        let before = self.gpu.used();
-        // Nor again while no more is used than after the last time, when it
-        // didn't help: what's in use then isn't images
-        if before < COMPACT_ABOVE || before <= self.compacted {
-            return;
+        smaller.sort_by(|a, b| b.2.cmp(&a.2));
+        for (key, width, saving) in smaller {
+            if total <= IMAGES_MAX {
+                break;
+            }
+            total = total.saturating_sub(saving);
+            if self.asked.get(&key) == Some(&width) {
+                continue;
+            }
+            self.asked.insert(key.clone(), width);
+            self.request(&key, width);
         }
-        let mut rasters = Vec::new();
-        for (key, img) in &self.images {
-            if let Some(raster) = img.image.make_raster_image(&mut self.gpu.context, None) {
-                rasters.push((key.clone(), raster));
+        // Still past it, those only near the view go, biggest first. What's
+        // drawn of them stays, and they come back from the page's bytes
+        if total > IMAGES_MAX {
+            let mut aside: Vec<(String, usize)> = self
+                .images
+                .iter()
+                .filter(|(key, _)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()))
+                .map(|(key, img)| (key.clone(), img.bytes()))
+                .collect();
+            aside.sort_by(|a, b| b.1.cmp(&a.1));
+            let mut gone = Vec::new();
+            for (key, bytes) in aside {
+                if total <= IMAGES_MAX {
+                    break;
+                }
+                self.images.remove(&key);
+                self.asked.remove(&key);
+                total -= bytes;
+                gone.push(key);
+            }
+            if !gone.is_empty() {
+                self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| gone.contains(used)));
+                for key in &gone {
+                    self.kit.forget_patterns(Some(key));
+                }
             }
         }
-        // Pictures hold the textures too
-        self.pictures.clear();
-        self.clear_rasters();
-        self.kit.forget_patterns(None);
-        for (key, raster) in rasters {
-            if let Some(img) = self.images.get_mut(&key) {
-                img.image = raster;
-            }
-        }
-        let _ = self.gpu.context.flush_submit_and_sync_cpu();
-        self.gpu.context.free_gpu_resources();
-        for img in self.images.values_mut() {
-            img.image = upload(&mut self.gpu.context, img.image.clone());
-        }
-        let _ = self.gpu.context.flush_submit_and_sync_cpu();
-        self.compacted = self.gpu.used();
-        log::info!("native renderer: GPU memory compacted, {} MB to {} MB", before / 1_000_000, self.compacted / 1_000_000);
-        self.dirty = true;
     }
 
     fn update_memory(&mut self) {
@@ -1416,6 +1476,7 @@ impl Painter {
             let canvas = recorder.begin_recording(bounds.with_outset((1.0, 1.0)), true);
             let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, level_px(level));
             encoder.exact_renders = level >= EXACT_LEVEL;
+            encoder.draft = is_draft(level);
             encoder.tint = self.tint;
             encoder.aa = aa;
             if section && self.scene.node(slot).is_some_and(|node| node.kind == Kind::Section) {
@@ -1426,6 +1487,12 @@ impl Painter {
                 encoder.node(slot);
             }
             let (counts, reason) = (encoder.counts, encoder.approximate_reason.take());
+            // A draft draws what's here, and waits for nothing
+            if encoder.draft {
+                encoder.missing_images.clear();
+                encoder.sharper_images.clear();
+                encoder.exact_images.clear();
+            }
             let waiting = encoder.missing_images.len() + encoder.exact_images.len();
             let images: Vec<(String, f64)> = encoder.missing_images.drain(..).chain(encoder.sharper_images.drain(..)).collect();
             let exact = std::mem::take(&mut encoder.exact_images);
@@ -1453,7 +1520,7 @@ impl Painter {
         let (slot, section, bounds, alone) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds, self.units[unit].alone);
         let device: skia_safe::IRect = Rect::from_ltrb(bounds.left * scale, bounds.top * scale, bounds.right * scale, bounds.bottom * scale).round_out();
         let device = device.with_outset((1, 1));
-        if self.rasters_off || !on_grid || !alone || device.width() > RASTER_SIDE || device.height() > RASTER_SIDE || device.is_empty() {
+        if self.rasters_off || !on_grid || !alone || device.width() > RASTER_SIDE || device.height() > RASTER_SIDE || device.width().max(device.height()) < RASTER_MIN {
             return Some((Drawn::Picture(picture), counts));
         }
         let key = (slot, section, level, aa, scale.to_bits());
@@ -1462,6 +1529,11 @@ impl Painter {
             raster.used = frame;
             return Some((Drawn::Image(raster.image.clone(), raster.at), counts));
         }
+        if self.rasters_made >= RASTERS_A_DRAW {
+            return Some((Drawn::Picture(picture), counts));
+        }
+        self.rasters_made += 1;
+        let _purpose = super::gpu_census::purpose("raster");
         let Some(mut surface) = self.gpu.own_surface(device.width(), device.height(), self.config.samples) else {
             return Some((Drawn::Picture(picture), counts));
         };
@@ -1542,7 +1614,8 @@ impl Painter {
     /// does: at a pixel a unit, on the node as drawn without them over its
     /// box in its own space, or for a group, on the child after `>` as drawn
     /// over its box. If that draws images not here yet, it waits for them
-    fn effect(&mut self, key: &str, _width: f64) {
+    fn effect(&mut self, key: &str, width: f64) {
+        let _purpose = super::gpu_census::purpose("effect input");
         let Some(name) = key.strip_prefix(EFFECT) else {
             return;
         };
@@ -1562,6 +1635,11 @@ impl Painter {
         let (Some(owner_node), Some(node)) = (self.scene.node(owner_slot), self.scene.node(slot)) else {
             return;
         };
+        // Drawn before, and not changed since: another size of it
+        if self.kept.lock().unwrap().has(key) {
+            let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
+            return;
+        }
         let chain = owner_node.shaders();
         let (w, h) = (node.size.0 as f32, node.size.1 as f32);
         let transform = node.transform;
@@ -1575,7 +1653,8 @@ impl Painter {
         // A pixel a unit, unless that's more than a GPU texture takes
         let scale = (RENDER_LIMIT as f32 / w.max(h)).min(1.0);
         let (pw, ph) = ((w * scale).ceil().max(1.0) as i32, (h * scale).ceil().max(1.0) as i32);
-        let Some(mut surface) = self.gpu.surface(pw, ph, 1) else {
+        // Its own memory, given back as soon as it's read
+        let Some(mut surface) = self.gpu.own_surface(pw, ph, 1) else {
             return;
         };
         let canvas = surface.canvas();
@@ -1588,7 +1667,6 @@ impl Painter {
         let id = owner_node.id.clone() + child.map(|child| format!(">{child}")).unwrap_or_default().as_str();
         let images: Vec<(String, f64)> = encoder.missing_images.drain(..).filter(|(missing, _)| missing != key).collect();
         drop(encoder);
-        let width = w.ceil() as f64;
         if !images.is_empty() {
             self.asked.remove(key);
             if !self.effects_waiting.iter().any(|(waiting, _)| waiting == key) {
@@ -1602,13 +1680,18 @@ impl Painter {
         if !surface.canvas().read_pixels(&info, &mut pixels, (pw * 4) as usize, (0, 0)) {
             return;
         }
-        let _ = self.effects.send(Job { key: key.to_string(), node: id, chain, pixels, width: pw as u32, height: ph as u32, scale });
+        let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
+        trace(|| format!("effect input {key} {pw}x{ph} vram={vram}"));
+        let _ = self.effects.send(Job::Run(Run { key: key.to_string(), node: id, chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width }));
     }
 
     /// Draws tile `key`: every unit over it, in order. Exact tiles take
     /// Figma's 16 samples a pixel, others one with anti-aliased edges, which
     /// is many times quicker
-    fn draw_tile(&mut self, key: TileKey, exact: bool) -> Option<Tile> {
+    fn draw_tile(&mut self, key: TileKey, exact: bool, draft: bool) -> Option<Tile> {
+        let _purpose = super::gpu_census::purpose("drawing tiles");
+        self.rasters_made = 0;
+        let exact = exact && !draft;
         let ss = if exact { self.supersample(key.px()) } else { 1 };
         let aa = ss < 4;
         let area = key.area();
@@ -1627,11 +1710,12 @@ impl Painter {
         for unit in units {
             // Too small to see: left out, as the encoder would
             let bounds = self.units[unit].bounds;
-            if bounds.width().max(bounds.height()) * px < 0.5 {
+            if bounds.width().max(bounds.height()) * px < if draft { DRAFT_SMALLEST } else { 0.5 } {
                 counts.skipped += 1;
                 continue;
             }
             let level = self.level(&self.units[unit], px, exact);
+            let level = if draft { DRAFT_LEVEL + level } else { level };
             if let Some((drawn, drawn_counts)) = self.drawn(unit, level, aa, px * ss as f32, on_grid) {
                 counts += drawn_counts;
                 pictures.push(drawn);
@@ -1646,7 +1730,8 @@ impl Painter {
             Some(found) => found,
             None => {
                 let side = (TILE + margin * 2) * ss;
-                let surface = self.gpu.surface(side, side, self.config.samples)?;
+                // Outside Skia's cache, so its memory goes as soon as it does
+                let surface = self.gpu.own_surface(side, side, self.config.samples)?;
                 self.scratch.push((margin, ss, surface));
                 self.scratch.len() - 1
             }
@@ -1657,8 +1742,11 @@ impl Painter {
         let offset = (((margin - key.x * TILE) * ss) as f32 - self.frac.0 * ss as f32, ((margin - key.y * TILE) * ss) as f32 - self.frac.1 * ss as f32);
         play(canvas, &pictures, offset, px * ss as f32);
         let played = start.elapsed();
+        let mut flushed = played;
         if timing {
-            let _ = self.gpu.context.flush_and_submit_surface(scratch, Some(SyncCpu::Yes));
+            let _ = self.gpu.context.flush_surface(scratch);
+            flushed = start.elapsed();
+            self.gpu.context.submit(Some(SyncCpu::Yes));
         }
         let source = skia_safe::IRect::from_xywh(margin * ss, margin * ss, TILE * ss, TILE * ss);
         let drawn = scratch.image_snapshot();
@@ -1691,9 +1779,10 @@ impl Painter {
             mix(&mut stats.tile_gpu_ms, (gpu - played).as_secs_f64() * 1000.0);
             stats.tiles_drawn += 1;
             drop(stats);
+            let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
             trace(|| {
                 let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-                format!("  tile {},{} exact={exact} margin={margin} units={} record={:.1} play={:.1} gpu={:.1}", key.x, key.y, pictures.len(), ms(recorded), ms(played - recorded), ms(gpu - played))
+                format!("  tile {},{} px={px:.4} draft={draft} exact={exact} margin={margin} units={} record={:.1} play={:.1} flush={:.1} gpu={:.1} vram={vram}", key.x, key.y, pictures.len(), ms(recorded), ms(played - recorded), ms(flushed - played), ms(gpu - flushed))
             });
             // What a slow tile spent its time on, each unit drawn alone
             if tracing_units() && (gpu - played) > Duration::from_millis(50) {
@@ -1719,7 +1808,7 @@ impl Painter {
                 }
             }
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft })
     }
 
     fn background(&self) -> Color4f {
@@ -1817,7 +1906,7 @@ impl Painter {
                 behind = true;
                 continue;
             }
-            if let Some(tile) = self.draw_tile(key, exact) {
+            if let Some(tile) = self.draw_tile(key, exact, false) {
                 if let Some(old) = self.tiles.insert(key, tile) {
                     self.retire(old.tex);
                 }
@@ -1965,6 +2054,8 @@ impl Painter {
         self.pictures.retain(|&(_, _, level, _), _| {
             if level >= EXACT_LEVEL {
                 exact.contains(&level)
+            } else if is_draft(level) {
+                levels.iter().any(|&kept| (kept - (level - DRAFT_LEVEL)).abs() <= 1)
             } else {
                 levels.iter().any(|&kept| (kept - level).abs() <= 1)
             }
@@ -2061,20 +2152,30 @@ impl Painter {
             rows.sort_by(|a, b| b.0.cmp(&a.0));
             return rows.iter().map(|(bytes, row)| format!("{:.1}MB {row}\n", *bytes as f64 / 1e6)).collect();
         }
-        if id == "*" {
+        if id == "*" || id == "*draft" {
+            let draft = id == "*draft";
             // Every unit over a 1200 by 800 view there, played as live
             let area = Rect::from_xywh(x, y, 1200.0 / px, 800.0 / px);
             let Some(mut surface) = self.gpu.surface(1200, 800, 1) else {
                 return "no surface".into();
             };
+            let resources = super::committed::made();
+            let programs = super::shader_cache::ASKED.load(std::sync::atomic::Ordering::Relaxed);
+            let compiling = super::shader_cache::ASKED_NS.load(std::sync::atomic::Ordering::Relaxed);
+            let pipelines = super::gpu_census::PIPELINES.load(std::sync::atomic::Ordering::Relaxed);
+            let piping = super::gpu_census::PIPELINES_NS.load(std::sync::atomic::Ordering::Relaxed);
             let mut rows = Vec::new();
             for unit in 0..self.units.len() {
                 if !Rect::intersects2(&self.units[unit].bounds, &area) {
                     continue;
                 }
                 let level = self.level(&self.units[unit], px, false);
+                let level = if draft { DRAFT_LEVEL + level } else { level };
+                let made = Instant::now();
                 let Some(picture) = self.picture(unit, level, true).map(|recorded| recorded.picture.clone()) else { continue };
+                let made = made.elapsed().as_secs_f64() * 1000.0;
                 let mut best = f64::MAX;
+                let mut first = 0.0;
                 for _ in 0..3 {
                     let canvas = surface.canvas();
                     canvas.save();
@@ -2084,13 +2185,28 @@ impl Painter {
                     canvas.draw_picture(&picture, None, None);
                     canvas.restore();
                     let _ = self.gpu.context.flush_submit_and_sync_cpu();
-                    best = best.min(start.elapsed().as_secs_f64() * 1000.0);
+                    let ms = start.elapsed().as_secs_f64() * 1000.0;
+                    if first == 0.0 {
+                        first = ms;
+                    }
+                    best = best.min(ms);
                 }
                 let name = self.scene.node(self.units[unit].slot).map(|node| format!("{} {}", node.id, node.type_name)).unwrap_or_default();
-                rows.push((best, name, picture.approximate_op_count()));
+                rows.push((best, name, picture.approximate_op_count(), first, made));
             }
-            rows.sort_by(|a, b| b.0.total_cmp(&a.0));
-            return rows.iter().map(|(ms, name, ops)| format!("{ms:.2}ms {name} ops={ops}\n")).collect();
+            rows.sort_by(|a, b| b.3.total_cmp(&a.3));
+            let first: f64 = rows.iter().map(|row| row.3).sum();
+            let best: f64 = rows.iter().map(|row| row.0).sum();
+            let made: f64 = rows.iter().map(|row| row.4).sum();
+            let head = format!("first {first:.1}ms, best {best:.1}ms, recorded {made:.1}ms, {} resources made in {:.1}ms\n", super::committed::made().0 - resources.0, super::committed::made().1 - resources.1) + &format!(
+                "{} programs compiled in {:.1}ms, {} pipelines made in {:.1}ms
+",
+                super::shader_cache::ASKED.load(std::sync::atomic::Ordering::Relaxed) - programs,
+                (super::shader_cache::ASKED_NS.load(std::sync::atomic::Ordering::Relaxed) - compiling) as f64 / 1e6,
+                super::gpu_census::PIPELINES.load(std::sync::atomic::Ordering::Relaxed) - pipelines,
+                (super::gpu_census::PIPELINES_NS.load(std::sync::atomic::Ordering::Relaxed) - piping) as f64 / 1e6
+            );
+            return head + &rows.iter().map(|(ms, name, ops, first, made)| format!("{first:.2}ms first {ms:.2}ms best {made:.2}ms recorded {name} ops={ops}\n")).collect::<String>();
         }
         let Some(&root) = self.scene.by_id.get(id) else {
             return "no such node".into();
