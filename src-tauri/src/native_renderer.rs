@@ -59,6 +59,8 @@ mod shader_cache;
 #[cfg(windows)]
 mod render;
 #[cfg(windows)]
+#[cfg(windows)]
+mod rt;
 mod run;
 #[cfg(windows)]
 mod scene;
