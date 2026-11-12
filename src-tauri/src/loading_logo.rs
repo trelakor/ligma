@@ -25,17 +25,20 @@ pub const PAGE_JS: &str = r##"(() => {
   // on the compositor; an SVG's would stall with it
   const LOGO =
     '<div data-ligma-logo aria-hidden="true"><div class="top"></div><div class="middle"></div>' +
-    '<div class="row"><div class="cap"></div><div class="span"></div><div class="dot"></div><div class="divide"><div class="line"></div></div></div></div>';
+    '<div class="row"><div class="cap"></div><div class="span"></div><div class="rest"></div><div class="end"></div>' +
+    '<div class="divide"><div class="boundary"><div class="line"></div><div class="arc"></div></div></div></div></div>';
 
-  // The bottom row as Figma builds its turning top row: the D's round end
-  // (`cap`), its straight top and bottom (`span`) and the dot slide
-  // together into one circle and apart again, while the D's flat side
-  // (`line`) sweeps across, clipped to the row. At rest they're the D and
-  // the dot. The middle D unfolds from the stem, the top out of its corner
+  // The bottom row as Figma builds its turning top row: an outline of the
+  // row's two round ends (`cap`, `end`) and the straight top and bottom
+  // between them (`span`) closes into one circle and opens again, while
+  // the boundary between the D and the dot, the D's flat side and the dot's
+  // left arc, sweeps across it, clipped to the row. At rest the straight
+  // parts are the D's own (`rest`), which leaves the row the D and the dot.
+  // The middle D unfolds from the stem, the top out of its corner
   const SPIN = "cubic-bezier(.12, 0, .39, 0)";
   const UNFOLD = "cubic-bezier(.33, 1, .68, 1)";
-  const PIECES = "[data-ligma-logo] :is(.top, .middle, .cap, .span, .dot, .divide, .line)";
-  const TURNING = "[data-ligma-logo] :is(.cap, .span, .dot, .divide, .line)";
+  const PIECES = "[data-ligma-logo] :is(.top, .middle, .cap, .span, .rest, .end, .divide, .boundary)";
+  const TURNING = "[data-ligma-logo] :is(.cap, .span, .rest, .end, .divide, .boundary)";
   // Turning three times, resting, then three times again
   const turn = (name, start, end) => `@keyframes ${name} {
       0%, 10%, 20%, 80%, 90%, 100% { transform: ${start}; }
@@ -53,16 +56,30 @@ pub const PAGE_JS: &str = r##"(() => {
     [data-ligma-logo] .top { left: 0; top: 0; border-radius: 6px 6px 0 6px; transform-origin: right bottom; animation-name: ligma-logo-top; }
     [data-ligma-logo] .middle { left: 0; top: 10px; border-radius: 6px 0 0 6px; transform-origin: right center; animation-name: ligma-logo-middle; }
     [data-ligma-logo] .row { left: 0; top: 20px; width: 22px; height: 12px; }
-    [data-ligma-logo] .cap { left: 0; width: 6px; height: 12px; border: 2px solid currentColor; border-right: 0; border-radius: 6px 0 0 6px; animation-name: ligma-logo-cap; }
-    [data-ligma-logo] .span { left: 6px; width: 6px; height: 12px; border-block: 2px solid currentColor; animation-name: ligma-logo-span; }
-    [data-ligma-logo] .dot { left: 10px; width: 12px; height: 12px; border: 2px solid currentColor; border-radius: 50%; animation-name: ligma-logo-dot; }
-    [data-ligma-logo] .divide { left: 0; top: -1px; width: 22px; height: 14px; border: 2px solid transparent; border-radius: 7px; overflow: hidden; animation-name: ligma-logo-divide; }
-    [data-ligma-logo] .line { left: 8px; width: 2px; height: 100%; background: currentColor; animation-name: ligma-logo-line; }
+    [data-ligma-logo] :is(.cap, .arc) { width: 6px; height: 12px; border: 2px solid currentColor; border-right: 0; border-radius: 6px 0 0 6px; }
+    [data-ligma-logo] .cap { left: 0; animation-name: ligma-logo-cap; }
+    [data-ligma-logo] :is(.span, .rest) { left: 6px; height: 12px; border-block: 2px solid currentColor; }
+    [data-ligma-logo] .span { width: 10px; opacity: 0; animation-name: ligma-logo-span; }
+    [data-ligma-logo] .rest { width: 6px; animation-name: ligma-logo-rest; }
+    [data-ligma-logo] .end { left: 16px; width: 6px; height: 12px; border: 2px solid currentColor; border-left: 0; border-radius: 0 6px 6px 0; animation-name: ligma-logo-end; }
+    [data-ligma-logo] .divide { left: 0; width: 22px; height: 12px; border-radius: 6px; overflow: hidden; animation-name: ligma-logo-divide; }
+    [data-ligma-logo] .boundary { left: 0; width: 22px; height: 12px; animation-name: ligma-logo-boundary; }
+    [data-ligma-logo] .line { left: 10px; width: 2px; height: 12px; background: currentColor; }
+    [data-ligma-logo] .arc { left: 10px; }
     ${turn("ligma-logo-cap", "translateX(5px)", "translateX(0)")}
-    ${turn("ligma-logo-span", "scaleX(.1)", "scaleX(1)")}
-    ${turn("ligma-logo-dot", "translateX(-5px)", "translateX(0)")}
+    ${turn("ligma-logo-end", "translateX(-5px)", "translateX(0)")}
     ${turn("ligma-logo-divide", "scaleX(.5)", "scaleX(1)")}
-    @keyframes ligma-logo-line {
+    @keyframes ligma-logo-span {
+      0%, 10%, 20%, 80%, 90%, 100% { transform: scaleX(.1); }
+      5%, 15%, 25%, 75%, 85%, 95% { transform: scaleX(1); }
+      0%, 25%, 75%, 100% { opacity: 1; }
+      25.1%, 74.9% { opacity: 0; }
+    }
+    @keyframes ligma-logo-rest {
+      0%, 25%, 75%, 100% { opacity: 0; }
+      25.1%, 74.9% { opacity: 1; }
+    }
+    @keyframes ligma-logo-boundary {
       0%, 10.1%, 20.1%, 80.1%, 90.1% { transform: translateX(-9px); }
       5%, 15%, 25%, 75%, 85%, 95% { transform: translateX(0); }
       10%, 20%, 80%, 90%, 100% { transform: translateX(9px); }
