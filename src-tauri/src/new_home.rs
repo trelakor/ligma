@@ -1,7 +1,7 @@
-//! Ligma's home page (Settings > Features > Home, experimental, off by
-//! default): the Home tab shows `dist/home.html` in place of Figma's file
-//! browser. Files by when you last worked on them, search, the inbox and
-//! organizing files, read from and sent to Figma with the user's session
+//! Ligma's home page (Settings > Features > Home, on by default): the Home
+//! tab shows `dist/home.html` in place of Figma's file browser. Starred,
+//! suggestions, Recents, Shared with you, Drafts, teams, search, the inbox
+//! and organizing files, read from and sent to Figma with the user's session
 //!
 //! The page needs www.figma.com as its origin, for the session's cookies,
 //! but none of Figma's home page, which is megabytes of script. So Home
@@ -49,20 +49,20 @@ static ON: AtomicBool = AtomicBool::new(false);
 /// off opens Figma's file browser on that same account
 static ACCOUNT: Mutex<Option<String>> = Mutex::new(None);
 
-/// The page it opens on (`newHomeStart`), passed as the URL's fragment
+/// The page it opens on (`ligmaHomeStart`), passed as the URL's fragment
 static START: Mutex<String> = Mutex::new(String::new());
 
 /// The pages it can open on; anything else opens on Home
 const STARTS: [&str; 5] = ["home", "recents", "starred", "shared", "drafts"];
 
 fn start(settings: &Settings) -> String {
-    let start = settings.new_home_start.as_str();
+    let start = settings.ligma_home_start.as_str();
     if STARTS.contains(&start) { start } else { "home" }.to_owned()
 }
 
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
-    ON.store(settings.new_home, Ordering::Relaxed);
+    ON.store(settings.ligma_home, Ordering::Relaxed);
     *START.lock().unwrap() = start(settings);
 }
 
@@ -146,7 +146,7 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
 
 /// Moves Home to the other page when the setting changes
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
-    let switched = ON.swap(settings.new_home, Ordering::Relaxed) != settings.new_home;
+    let switched = ON.swap(settings.ligma_home, Ordering::Relaxed) != settings.ligma_home;
     let moved = {
         let start = start(settings);
         let mut current = START.lock().unwrap();
@@ -156,7 +156,7 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     };
     // A new start page shows at once: the fragment changes, the page goes
     // there without loading again
-    if switched || (moved && settings.new_home) {
+    if switched || (moved && settings.ligma_home) {
         crate::tabs::set_home_url(app, home_url());
     }
 }

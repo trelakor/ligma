@@ -689,8 +689,8 @@
         <input type="checkbox" class="switch" id="classic-home">
       </label>
       <label class="row">
-        <span class="label">Ligma's home page (experimental)
-          <div class="hint">A faster home of Ligma's own: your files by when you worked on them, search on Ctrl+K, an inbox and moving files by dragging. It reads your files from Figma in place of loading Figma's home page. Figma's file browser stays one click away for admin and sharing.</div>
+        <span class="label">Ligma's home page
+          <div class="hint">A faster home of Ligma's own: your starred files, suggestions, Recents, Shared with you and Drafts, search on Ctrl+K, an inbox and moving files by dragging. It reads your files from Figma in place of loading Figma's home page. Off, Home is Figma's file browser, which stays one click away for admin and sharing either way.</div>
         </span>
         <input type="checkbox" class="switch" id="new-home">
       </label>
@@ -1414,8 +1414,8 @@
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
-    $("new-home").checked = settings.newHome;
-    $("new-home-start").value = settings.newHomeStart;
+    $("new-home").checked = settings.ligmaHome;
+    $("new-home-start").value = settings.ligmaHomeStart;
     $("ligma-mcp").checked = settings.ligmaMcp;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -1430,7 +1430,7 @@
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
-      ["new-home-start-row", settings.newHome],
+      ["new-home-start-row", settings.ligmaHome],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -1497,8 +1497,8 @@
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
-      newHome: $("new-home").checked,
-      newHomeStart: $("new-home-start").value,
+      ligmaHome: $("new-home").checked,
+      ligmaHomeStart: $("new-home-start").value,
       ligmaMcp: $("ligma-mcp").checked,
       ...changes,
     };
