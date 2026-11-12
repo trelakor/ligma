@@ -42,3 +42,5 @@ Home, round two (2026-11-12): Starred cards are the biggest on the page (300px m
 Round three (2026-11-12): the List/Grid choice is kept apart for Home's Recents (rows to start) and the Recents page (cards to start). Shared with you joins the sidebar under Starred, with its count: every file shared with you (SharedWithYouResources), grouped by when it was shared, each saying who shared it ("From <maker>" when Figma doesn't say who)
 
 Shared with you and Drafts (all and each team's) are one grid, newest first, with no date headings or month rail; dates from another year carry the year
+
+Shared with you and Drafts (every Drafts page shares one) each have their own List/Grid switch in the filter bar, cards to start

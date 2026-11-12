@@ -1779,7 +1779,7 @@ const state = {
   type: "all",
   // Recents as rows with small previews, or as cards: rows on Home, cards
   // on the Recents page, until changed
-  layout: { home: store.get("layout:home", "rows"), recents: store.get("layout:recents", "grid") },
+  layout: { home: store.get("layout:home", "rows"), recents: store.get("layout:recents", "grid"), shared: store.get("layout:shared", "grid"), drafts: store.get("layout:drafts", "grid") },
   inbox: "all",
   sel: new Set(),
   anchor: null,
@@ -1941,7 +1941,7 @@ function renderFilters() {
   else if (inTrash()) html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
   else if (state.view === "starred" && FILES.some((f) => f.starred && !f.trashed)) html += `<span class="fnote">Drag files, or press ${MAC ? "⌥←" : "Alt+Left"} and ${MAC ? "⌥→" : "Alt+Right"}, to put them in your order</span>`;
   else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
-  else if (state.view === "recents") html += layoutToggle("recents");
+  else if (layoutOf(state.view)) html += layoutToggle(layoutOf(state.view));
   filters.innerHTML = html;
 }
 
@@ -1949,10 +1949,11 @@ function renderFilters() {
 // shared it and when
 function sharedText(file) {
   const where = placeOf(file.project);
-  const prefix = where === "Shared with you" ? "" : where + " · ";
-  if (file.sharedBy) return `${prefix}${file.sharedBy} shared it ${when(file.sharedAt)}`;
-  return `${prefix}${file.madeBy ? `From ${file.madeBy} · ` : ""}Shared ${when(file.sharedAt)}`;
+  return (where === "Shared with you" ? "" : where + " · ") + sharedWhen(file);
 }
+
+// The same, without where: a row has its own column for that
+const sharedWhen = (file) => (file.sharedBy ? `${file.sharedBy} shared it ${when(file.sharedAt)}` : `${file.madeBy ? `From ${file.madeBy} · ` : ""}Shared ${when(file.sharedAt)}`);
 
 // `reorder`: in a row of starred files, which has its own drag (startLift).
 // `why`: a suggested file says why it's there, in place of where and when
@@ -1982,8 +1983,8 @@ function rowHtml(file) {
   return `<div class="card row" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="true">
     <div class="thumb" data-thumb="${file.id}" aria-hidden="true"></div>
     <div class="name">${glyph(file.type)}<span class="nm" id="n-${file.id}">${esc(file.name)}</span>${badge}</div>
-    <div class="where">${esc(placeOf(file.project))}</div>
-    <div class="when" id="d-${file.id}">${esc(activity(file))}</div>
+    <div class="where">${esc(state.view === "shared" && placeOf(file.project) === "Shared with you" ? "" : placeOf(file.project))}</div>
+    <div class="when" id="d-${file.id}">${esc(state.view === "shared" && file.sharedAt ? sharedWhen(file) : activity(file))}</div>
     <div class="end">${facesBox(file.id, " inline")}<div class="tools"><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button></div></div></div>`;
 }
 const fileList = (files, label, layout) =>
@@ -1992,10 +1993,13 @@ const fileList = (files, label, layout) =>
     : `<div class="grid" role="listbox" aria-multiselectable="true" aria-label="${esc(label)}">${files.map(cardHtml).join("")}</div>`;
 
 // Rows or cards for Recents, here and on Home
-// `where`: "home" (Home's Recents, rows unless changed) or "recents" (the
-// Recents page, cards unless changed); each keeps its own
+// `where`: "home" (Home's Recents, rows unless changed), or a page with
+// cards unless changed: "recents", "shared" or "drafts" (every Drafts).
+// Each keeps its own
+const LAYOUT_LABELS = { home: "Recents", recents: "Recents", shared: "Shared with you", drafts: "Drafts" };
+const layoutOf = (view) => (view === "recents" || view === "shared" ? view : view === "drafts" || view.startsWith("d:") ? "drafts" : null);
 const layoutToggle = (where) =>
-  `<div class="seg lay" role="group" aria-label="Show Recents as">${[["rows", "list", "List"], ["grid", "grid", "Grid"]].map(([value, iconName, label]) => `<button data-layout="${where}:${value}" aria-pressed="${state.layout[where] === value}" aria-label="${label}" title="${label}">${icon(iconName)}</button>`).join("")}</div>`;
+  `<div class="seg lay" role="group" aria-label="Show ${LAYOUT_LABELS[where]} as">${[["rows", "list", "List"], ["grid", "grid", "Grid"]].map(([value, iconName, label]) => `<button data-layout="${where}:${value}" aria-pressed="${state.layout[where] === value}" aria-label="${label}" title="${label}">${icon(iconName)}</button>`).join("")}</div>`;
 function setLayout(choice) {
   const [where, value] = choice.split(":");
   state.layout[where] = value;
@@ -2181,7 +2185,7 @@ function render({ keepScroll = true } = {}) {
   else if (!list.length) html = renderEmpty();
   else if (state.view === "starred") html = `<section class="sec"><div class="grid star-grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
   // Shared with you and Drafts: one grid, newest first, no dates over it
-  else if (state.view === "shared" || state.view === "drafts" || state.view.startsWith("d:")) html = `<section class="sec">${fileList(list, viewName(state.view), "grid")}</section>`;
+  else if (state.view === "shared" || state.view === "drafts" || state.view.startsWith("d:")) html = `<section class="sec">${fileList(list, viewName(state.view), state.layout[layoutOf(state.view)])}</section>`;
   else {
     for (const file of list) {
       const t = timeOf(file);
