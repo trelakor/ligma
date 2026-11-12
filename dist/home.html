@@ -282,6 +282,13 @@
   .card[aria-selected="true"] .thumb::after { box-shadow: inset 0 0 0 2px var(--accent); }
   .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   .card.ghost { opacity: 0.4; }
+  /* Who's in the file now, over the preview's bottom right */
+  .faces { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: flex-end; justify-content: flex-end; aspect-ratio: 16 / 9; padding: 8px; pointer-events: none; }
+  .face { display: grid; place-items: center; flex: none; width: 24px; height: 24px; margin-left: -6px; overflow: hidden; border-radius: 50%; background: var(--bg3); box-shadow: 0 0 0 2px var(--bg); color: var(--text); font: 600 10px/1 var(--font); pointer-events: auto; }
+  .face img { width: 100%; height: 100%; object-fit: cover; }
+  .card.ins-before::before, .card.ins-after::before { content: ""; position: absolute; top: 0; bottom: 0; z-index: 2; width: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+  .card.ins-before::before { left: -9px; }
+  .card.ins-after::before { right: -9px; }
   .tools { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
   .tool {
     display: grid;
@@ -736,10 +743,10 @@ const firstName = (id) => (id === "me" ? "You" : PEOPLE[id].name.split(" ")[0]);
 // Each Starter or Professional team is its own plan; an Organization plan
 // holds many teams
 const PLANS = [
-  { id: "ligma", name: "Ligma", tier: "Professional", teams: [
+  { id: "ligma", name: "Ligma", tier: "Pro", teams: [
     { id: "ligma", name: "Ligma", color: "#1e1e1e", projects: [["app", "App"], ["web", "Website"], ["mkt", "Marketing"], ["brand", "Brand"]] },
   ] },
-  { id: "side", name: "Side projects", tier: "Starter", teams: [
+  { id: "side", name: "Side projects", tier: "Free", teams: [
     { id: "side", name: "Side projects", color: "#14ae5c", projects: [["exp", "Experiments"]] },
   ] },
   { id: "nw", name: "Northwind Studio", tier: "Organization", teams: [
@@ -1084,7 +1091,54 @@ const VIEWS = {
   recents: ["FileBrowserRecentResourcesGlobalView", "ba34ac3ffc3622da7df2867626b14e0ee81e63141de76f0a571f2ac4b658549e", { firstPageSize: 99, resourceTypes: ["file", "repo", "prototype"] }],
   favorites: ["FileBrowserSidebarData", "09d6e7b0f19ebb6ee9cfe1558ce4e34069b5a2355bed4cad6c5bee78ec712270", { currentOrgId: null, currentTeamId: null }],
   thumb: (fileKey) => ["FileThumbnail", "4d8cdddecb549134089850d1eb6192d6e67d38faec194518a4054568f6b4ed3e", { fileKey }],
+  // Who has the file open now: ActiveFileUser {id, handle, imageUrl},
+  // kept up to date with add and remove
+  active: (fileKey) => ["ActiveFileUsersForFileView", "50c8eef8d3a4e125845becb42a6d5e1afc0d1133e7f42908840e0eb68fbbdc3b", { fileKey }],
 };
+
+// File key → Map of the people in it, by user id
+const PRESENCE = new Map();
+function presenceChanged(queryKey, q) {
+  let key;
+  try {
+    const parts = JSON.parse(queryKey);
+    if (parts[1] !== "activeFileUsers") return;
+    key = parts[3]?.[0];
+  } catch {
+    return;
+  }
+  if (!key) return;
+  const users = q.initial ? new Map() : PRESENCE.get(key) ?? new Map();
+  for (const [id, rec] of Object.entries({ ...q.initial, ...q.add })) users.set(id, rec);
+  for (const id of q.remove ?? []) users.delete(id);
+  PRESENCE.set(key, users);
+  drawFaces(key);
+}
+const personName = (u) => Live.users.find((me) => me.id === u.id)?.name ?? u.handle ?? "Someone";
+function facesHtml(key) {
+  const users = [...(PRESENCE.get(key)?.values() ?? [])];
+  const shown = users.slice(0, 3);
+  const rest = users.slice(3);
+  return shown.map((u) => `<span class="face" data-tip="${esc(personName(u))}">${u.imageUrl ? `<img src="${esc(u.imageUrl)}" alt="" referrerpolicy="no-referrer">` : esc(personName(u)[0])}</span>`).join("") +
+    (rest.length ? `<span class="face more" data-tip="${esc(rest.map(personName).join(", "))}">+${rest.length}</span>` : "");
+}
+function facesLabel(key) {
+  const users = [...(PRESENCE.get(key)?.values() ?? [])];
+  return users.length ? `In this file now: ${users.map(personName).join(", ")}` : "";
+}
+function drawFaces(key) {
+  const el = document.querySelector(`[data-faces="${CSS.escape(key)}"]`);
+  if (!el) return;
+  el.innerHTML = facesHtml(key);
+  const label = facesLabel(key);
+  if (label) {
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", label);
+  } else {
+    el.removeAttribute("role");
+    el.removeAttribute("aria-label");
+  }
+}
 
 // LiveGraph: one socket; views load into one store of records by type and
 // id, their computed fields under `$`. Views stay subscribed, so later
@@ -1115,6 +1169,7 @@ const LG = {
           this.ws = null;
           this.opening = null;
           this.wanted.clear();
+          this.forgetPresence();
         }
         // Only what was asked on this socket: a new one may be open by now
         for (const p of this.pending.filter((p) => p.ws === ws)) {
@@ -1129,8 +1184,9 @@ const LG = {
     if (msg.messageType === "denormalizedPendingMutations") {
       for (const types of Object.values(msg.mutations ?? {})) {
         for (const [type, { queries, computations }] of Object.entries(types)) {
-          for (const q of Object.values(queries ?? {})) {
-            for (const [id, rec] of Object.entries(q.initial ?? {})) if (rec && typeof rec === "object") Object.assign(((this.store[type] ??= {})[id] ??= {}), rec);
+          for (const [queryKey, q] of Object.entries(queries ?? {})) {
+            for (const [id, rec] of Object.entries({ ...q.initial, ...q.add })) if (rec && typeof rec === "object") Object.assign(((this.store[type] ??= {})[id] ??= {}), rec);
+            if (type === "ActiveFileUser") presenceChanged(queryKey, q);
           }
           for (const [key, c] of Object.entries(computations ?? {})) {
             try {
@@ -1167,12 +1223,27 @@ const LG = {
     this.wanted.add(key);
     this.load(VIEWS.thumb(key)).catch(() => this.wanted.delete(key));
   },
+  // Who's in a file, watched from when its card first shows
+  watched: new Set(),
+  watch(key) {
+    if (!key || this.watched.has(key)) return;
+    this.watched.add(key);
+    this.load(VIEWS.active(key)).catch(() => this.watched.delete(key));
+  },
+  // Watches end with the socket; the cards shown ask again
+  forgetPresence() {
+    this.watched.clear();
+    const keys = [...PRESENCE.keys()];
+    PRESENCE.clear();
+    for (const key of keys) drawFaces(key);
+  },
   close() {
     const ws = this.ws;
     this.ws = null;
     this.opening = null;
     this.store = {};
     this.wanted.clear();
+    this.forgetPresence();
     ws?.close();
   },
 };
@@ -1312,7 +1383,7 @@ async function start() {
         // `subscription` is the state of a paid plan ("ok" and the like),
         // which here can only be Professional
         const paid = t.subscription && !/cancel|expire|incomplete|unpaid/i.test(t.subscription);
-        const tier = t.student_team_at ? "Education" : paid ? "Professional" : "Starter";
+        const tier = t.student_team_at ? "Education" : paid ? "Pro" : "Free";
         plans.push({ id: t.id, name: t.name, tier, teams: [team] });
       }
     });
@@ -1526,8 +1597,28 @@ function viewFiles() {
   else if (view === "drafts") list = list.filter((f) => !f.project || DRAFT_FOLDERS.has(f.project));
   else if (view.startsWith("p:")) list = list.filter((f) => f.project === view.slice(2));
   if (state.type !== "all") list = list.filter((f) => f.type === state.type);
+  if (view === "starred") return starOrder(list);
   const time = (f) => (trash ? f.trashedAt : f.at);
   return list.sort((a, b) => time(b) - time(a));
+}
+
+// Starred files in the order you drag them into, Ligma's own per account:
+// Figma keeps no order. Files starred since come first, newest first
+const starOrderKey = () => `star-order:${LIVE ? Live.uid : "sample"}`;
+function starOrder(list) {
+  const rank = new Map(store.get(starOrderKey(), []).map((id, i) => [id, i]));
+  return list.sort((a, b) => rank.has(a.id) - rank.has(b.id) || (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0) || b.at - a.at);
+}
+// Puts `ids` before the file `before` (or last), in the order shown
+function reorderStarred(ids, before) {
+  while (before && ids.includes(before)) before = order[order.indexOf(before) + 1] ?? null;
+  const shown = order.filter((id) => !ids.includes(id));
+  const at = before ? shown.indexOf(before) : shown.length;
+  shown.splice(at, 0, ...order.filter((id) => ids.includes(id)));
+  // Starred files hidden by the type filter keep their places after these
+  const rest = store.get(starOrderKey(), []).filter((id) => !shown.includes(id) && byId(id)?.starred);
+  store.set(starOrderKey(), [...shown, ...rest]);
+  render();
 }
 
 /* Rendering */
@@ -1610,7 +1701,10 @@ function renderHead(count) {
 
 function renderFilters() {
   let html;
-  const types = [["all", "All"], ["design", "Design"], ["figjam", "FigJam"], ["slides", "Slides"]];
+  // A tab for each kind of file you have, in the New menu's order, and the
+  // one picked even if its last file went
+  const have = new Set(FILES.filter((f) => !f.trashed).map((f) => f.type));
+  const types = [["all", "All"], ...Object.entries(TYPES).filter(([id]) => have.has(id) || state.type === id).map(([id, t]) => [id, t.label])];
   html = `<div class="seg" role="group" aria-label="File type">${types.map(([id, label]) => `<button data-type="${id}" aria-pressed="${state.type === id}">${label}</button>`).join("")}</div>`;
   html += `<span class="grow"></span>`;
   if (LIVE && Live.error) html = `<div class="banner" role="alert">${esc(`Couldn't reach Figma (${Live.error}), so these may be out of date`)}<button data-act="retry">Try again</button></div>`;
@@ -1618,6 +1712,7 @@ function renderFilters() {
   else if (state.view.startsWith("t:")) html += `<a class="fnote" href="https://www.figma.com/files/team/${esc(state.view.slice(2))}" target="_blank" rel="noopener">What you deleted here. The rest of this team's trash is in Figma${icon("ext")}</a>`;
   else if (inTrash() && LIVE) html += `<span class="fnote">What you deleted here. Each team's own trash is in Figma's file browser</span>`;
   else if (inTrash()) html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
+  else if (state.view === "starred" && FILES.some((f) => f.starred && !f.trashed)) html += `<span class="fnote">Drag files, or press ${MAC ? "⌥←" : "Alt+Left"} and ${MAC ? "⌥→" : "Alt+Right"}, to put them in your order</span>`;
   else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
   filters.innerHTML = html;
 }
@@ -1630,7 +1725,7 @@ function cardHtml(file) {
   const badge = file.unread ? `<span class="badge" title="${file.unread} new ${file.unread === 1 ? "comment" : "comments"}">${file.unread}</span>` : "";
   const restore = trash ? `<button class="restore" tabindex="-1">Restore</button>` : "";
   return `<div class="card" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="${!trash}">
-    <div class="thumb" data-thumb="${file.id}" aria-hidden="true"></div>${tools}
+    <div class="thumb" data-thumb="${file.id}" aria-hidden="true"></div>${trash ? "" : `<div class="faces" data-faces="${file.id}"${facesLabel(file.id) ? ` role="img" aria-label="${esc(facesLabel(file.id))}"` : ""}>${facesHtml(file.id)}</div>`}${tools}
     <div class="name">${glyph(file.type)}<span class="nm" id="n-${file.id}">${esc(file.name)}</span>${badge}${restore}</div>
     <div class="meta" id="d-${file.id}">${esc(meta)}${file.unread ? ` · ${file.unread} new` : ""}</div></div>`;
 }
@@ -1667,7 +1762,9 @@ function observeThumbs() {
       const el = entry.target;
       thumbObserver.unobserve(el);
       const file = byId(el.dataset.thumb);
-      if (file) el.innerHTML = thumb(file);
+      if (!file) continue;
+      el.innerHTML = thumb(file);
+      if (file.live && !file.trashed) LG.watch(file.key);
     }
   }, { root: scroller, rootMargin: "800px 0px" });
   for (const el of $$(".thumb[data-thumb]", scroller)) thumbObserver.observe(el);
@@ -1690,6 +1787,7 @@ function render({ keepScroll = true } = {}) {
     need(state.view);
     html = renderSkeleton();
   } else if (!list.length) html = renderEmpty();
+  else if (state.view === "starred") html = `<section class="sec"><div class="grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
   else {
     for (const file of list) {
       const t = inTrash() ? file.trashedAt : file.at;
@@ -1824,28 +1922,36 @@ rail.addEventListener("click", (e) => {
   const first = button && $(`.sec[data-month="${button.dataset.month}"] .card`, scroller);
   if (first) focusCard(first.dataset.id, false);
 });
-// Dragging along the rail scrubs through the months
+// Dragging along the rail scrubs through the months. The pointer is
+// captured only once it leaves the month it pressed: captured at once, the
+// click would go to the rail instead of the month and do nothing
 let scrubbing = false;
 let scrubbed = false;
+let pressed = null;
 rail.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 || !e.target.closest(".mo")) return;
   scrubbing = true;
   scrubbed = false;
-  rail.setPointerCapture(e.pointerId);
+  pressed = e.target.closest(".mo");
 });
 rail.addEventListener("pointermove", (e) => {
   if (!scrubbing) return;
+  if (!(e.buttons & 1)) return endScrub();
   const x = rail.getBoundingClientRect().left + rail.clientWidth / 2;
   const button = document.elementFromPoint(x, e.clientY)?.closest(".mo");
-  if (!button || button.dataset.month === railKey) return;
+  if (!button || button === pressed || button.dataset.month === railKey) return;
+  if (!scrubbed) rail.setPointerCapture(e.pointerId);
   scrubbed = true;
+  pressed = null;
   tip.style.display = "none";
   jumpTo(button, false);
 });
-rail.addEventListener("pointerup", () => {
+function endScrub() {
   scrubbing = false;
+  pressed = null;
   setTimeout(() => (scrubbed = false));
-});
+}
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) rail.addEventListener(type, endScrub);
 // Up and down move between months that have files
 rail.addEventListener("keydown", (e) => {
   if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
@@ -1870,6 +1976,20 @@ rail.addEventListener("pointerover", (e) => {
 rail.addEventListener("pointerout", (e) => {
   if (!e.relatedTarget?.closest?.(".mo")) tip.style.display = "none";
 });
+// A face over a preview: whose it is, above it
+scroller.addEventListener("pointerover", (e) => {
+  const face = e.target.closest(".face");
+  if (!face) return;
+  const box = face.getBoundingClientRect();
+  tip.textContent = face.dataset.tip;
+  tip.style.display = "block";
+  tip.style.left = `${Math.min(innerWidth - tip.offsetWidth - 8, box.left + box.width / 2 - tip.offsetWidth / 2)}px`;
+  tip.style.top = `${box.top - tip.offsetHeight - 6}px`;
+});
+scroller.addEventListener("pointerout", (e) => {
+  if (e.target.closest(".face") && !e.relatedTarget?.closest?.(".face")) tip.style.display = "none";
+});
+scroller.addEventListener("scroll", () => (tip.style.display = "none"), { passive: true });
 
 /* Selection and focus */
 
@@ -3543,6 +3663,16 @@ scroller.addEventListener("keydown", (e) => {
   };
   const trash = inTrash();
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  // Alt+Left and Alt+Right move starred files, as dragging does
+  if (e.altKey && state.view === "starred" && (key === "ArrowLeft" || key === "ArrowRight")) {
+    e.preventDefault();
+    const ids = selection();
+    const left = key === "ArrowLeft";
+    const edge = order.indexOf(left ? ids[0] : ids.at(-1));
+    if (left && edge > 0) reorderStarred(ids, order[edge - 1]);
+    else if (!left && edge < order.length - 1) reorderStarred(ids, order[edge + 2] ?? null);
+    return focusCard(id);
+  }
   if (["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"].includes(key)) {
     e.preventDefault();
     if (!state.focus) return move(order[0]);
@@ -3601,6 +3731,49 @@ scroller.addEventListener("dragstart", (e) => {
 scroller.addEventListener("dragend", () => {
   $$(".ghost", scroller).forEach((el) => el.classList.remove("ghost"));
   $$(".nav.drop", side).forEach((el) => el.classList.remove("drop"));
+  clearSlot();
+});
+
+// In Starred, dragging between files puts them there. A line shows where
+let slot = null;
+function clearSlot() {
+  $$(".ins-before, .ins-after", scroller).forEach((el) => el.classList.remove("ins-before", "ins-after"));
+  slot = null;
+}
+function slotAt(e) {
+  const grid = $("#starred-grid", scroller);
+  if (!grid || !e.dataTransfer.types.includes("application/x-ligma-files")) return null;
+  const card = e.target.closest(".card[data-id]");
+  if (card) {
+    const box = card.getBoundingClientRect();
+    const after = e.clientX > box.left + box.width / 2;
+    const next = after ? order[order.indexOf(card.dataset.id) + 1] ?? null : card.dataset.id;
+    return { card, after, before: next };
+  }
+  // Past the last file
+  const last = cardEl(order.at(-1));
+  return grid.contains(e.target) && last ? { card: last, after: true, before: null } : null;
+}
+scroller.addEventListener("dragover", (e) => {
+  const at = slotAt(e);
+  if (!at) return clearSlot();
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "move";
+  if (slot?.card === at.card && slot.after === at.after) return;
+  clearSlot();
+  at.card.classList.add(at.after ? "ins-after" : "ins-before");
+  slot = at;
+});
+scroller.addEventListener("dragleave", (e) => {
+  if (!scroller.contains(e.relatedTarget)) clearSlot();
+});
+scroller.addEventListener("drop", (e) => {
+  const at = slot ?? slotAt(e);
+  clearSlot();
+  if (!at) return;
+  e.preventDefault();
+  const ids = e.dataTransfer.getData("application/x-ligma-files").split(",").filter((id) => order.includes(id));
+  if (ids.length) reorderStarred(ids, at.before);
 });
 side.addEventListener("dragover", (e) => {
   const target = e.target.closest("[data-drop]");
