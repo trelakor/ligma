@@ -362,6 +362,24 @@ half4 main(float2 p) {
 }
 "#;
 
+/// A magnified image: nearest texels whose edges are blended over one
+/// pixel, as Figma's canvas shows them. `image` is sampled nearest, as Skia
+/// takes a child's linear sampling for nearest
+const SHARP: &str = r#"
+uniform shader image;
+uniform float2x2 footprint;
+half4 main(float2 p) {
+    // A pixel's width in texels across each axis's texel edges
+    float2 w = max(float2(length(float2(footprint[0][0], footprint[1][0])), length(float2(footprint[0][1], footprint[1][1]))), 1e-4);
+    float2 t = p - 0.5;
+    float2 i = floor(t) + 0.5;
+    float2 f = clamp((t - floor(t) - 0.5) / w + 0.5, 0.0, 1.0);
+    half4 top = mix(image.eval(i), image.eval(i + float2(1, 0)), f.x);
+    half4 bottom = mix(image.eval(i + float2(0, 1)), image.eval(i + float2(1, 1)), f.x);
+    return mix(top, bottom, f.y);
+}
+"#;
+
 pub struct Kit {
     blenders: HashMap<&'static str, Blender>,
     diamond: Option<RuntimeEffect>,
@@ -372,6 +390,7 @@ pub struct Kit {
     noise_over: Option<Blender>,
     texture: Option<RuntimeEffect>,
     boxed: Option<RuntimeEffect>,
+    sharp: Option<RuntimeEffect>,
     /// Recorded pattern tiles, and the images they were waiting for
     patterns: RefCell<HashMap<PatternKey, (skia_safe::Picture, Vec<String>, Vec<(String, bool)>)>>,
 }
@@ -401,7 +420,8 @@ impl Kit {
             .ok()
             .and_then(|effect| effect.make_blender(Data::new_copy(&[]), None));
         let boxed = RuntimeEffect::make_for_shader(BOX, None).map_err(|error| log::warn!("native renderer: box: {error}")).ok();
-        Self { blenders, diamond, luminance, divide, noise, noise_over, texture, boxed, patterns: RefCell::new(HashMap::new()) }
+        let sharp = RuntimeEffect::make_for_shader(SHARP, None).map_err(|error| log::warn!("native renderer: sharp: {error}")).ok();
+        Self { blenders, diamond, luminance, divide, noise, noise_over, texture, boxed, sharp, patterns: RefCell::new(HashMap::new()) }
     }
 
     /// Forgets pattern tiles drawn without image `key`, or all of them
@@ -492,6 +512,9 @@ pub struct Encoder<'a> {
     pub bare: Option<usize>,
     stopped: bool,
     depth: u8,
+    /// Draws what casts the node's shadows: its paints solid wherever
+    /// they're at all, an image's texels before they're smoothed
+    cast: bool,
 }
 
 impl<'a> Encoder<'a> {
@@ -517,6 +540,7 @@ impl<'a> Encoder<'a> {
             bare: None,
             stopped: false,
             depth: 0,
+            cast: false,
         }
     }
 
@@ -777,7 +801,8 @@ impl<'a> Encoder<'a> {
         // What the node drew, as its effects change it
         let mut content = None;
         let device = self.device_scale();
-        let solid = || image_filters::color_filter(silhouette(), None, None);
+        let cast = node.effects.iter().any(|effect| matches!(effect.kind.as_str(), "DROP_SHADOW" | "INNER_SHADOW")).then(|| self.cast(node)).flatten();
+        let solid = || cast.clone().or_else(|| image_filters::color_filter(silhouette(), None, None));
         for effect in &node.effects {
             let sigma = tent_sigma(effect.radius);
             let offset = Vector::new(effect.offset.x as f32, effect.offset.y as f32);
@@ -849,6 +874,31 @@ impl<'a> Encoder<'a> {
         let field = image_filters::shader(shader, None);
         let scale = node.transform.scale_x().hypot(node.transform.skew_y());
         image_filters::displacement_map((ColorChannel::R, ColorChannel::G), 4.0 * effect.radius as f32 * scale, field, None, None)
+    }
+
+    /// What casts a node's shadows, as an image filter's input. Figma counts
+    /// every pixel a node covers at all as solid, but casts from its paints
+    /// before they're drawn, so edges stay as smooth as they're drawn and an
+    /// image's texels are smoothed after. Only for a node without children,
+    /// whose own paints are all it draws, otherwise None
+    fn cast(&self, node: &Node) -> Option<ImageFilter> {
+        if !node.children.is_empty() {
+            return None;
+        }
+        let bounds = node.bounds?.with_outset((1.0, 1.0));
+        let mut recorder = PictureRecorder::new();
+        let canvas = recorder.begin_recording(bounds, false);
+        let mut inner = Encoder::new(self.scene, self.images, self.kit, canvas, self.px);
+        inner.depth = self.depth;
+        inner.aa = self.aa;
+        inner.draft = self.draft;
+        inner.exact_renders = self.exact_renders;
+        inner.cast = true;
+        inner.paints(node, true);
+        inner.paints(node, false);
+        drop(inner);
+        let picture = recorder.finish_recording_as_picture(None)?;
+        image_filters::picture(picture, None)
     }
 
     /// The node's outline grown (or shrunk) by `spread`, solid, as an image
@@ -1118,7 +1168,15 @@ impl<'a> Encoder<'a> {
         let (w, h) = (node.size.0.max(1e-3) as f32, node.size.1.max(1e-3) as f32);
         let mut out = Paint::default();
         out.set_anti_alias(self.aa);
-        self.set_blend(&mut out, paint.blend_mode.as_deref());
+        if self.cast {
+            // Solid wherever it's at all, but an image only once its texels
+            // are, so their edges are smoothed as they're drawn
+            if paint.kind != "IMAGE" {
+                out.set_color_filter(silhouette());
+            }
+        } else {
+            self.set_blend(&mut out, paint.blend_mode.as_deref());
+        }
         match paint.kind.as_str() {
             "SOLID" => {
                 let Some(rgba) = paint.color else { return };
@@ -1131,7 +1189,7 @@ impl<'a> Encoder<'a> {
             "IMAGE" => {
                 let Some(shader) = self.image(node, paint, w, h) else { return };
                 out.set_shader(shader);
-                out.set_alpha_f(paint.opacity);
+                out.set_alpha_f(if self.cast { 1.0 } else { paint.opacity });
             }
             "PATTERN" => {
                 let Some(shader) = self.pattern(node, paint, w, h) else { return };
@@ -1204,19 +1262,24 @@ impl<'a> Encoder<'a> {
         let texels = kept / (shown / 1.42).max(1e-3);
         let sampling = if self.aa {
             // One sample a pixel: the 16 nearest ones exact tiles take are
-            // averaged here instead, over where the pixel falls on the image
+            // averaged here instead, over where the pixel falls on the image.
+            // Magnified, that's a texel's edge blended over a pixel
+            let effect = if texels < 1.0 { &self.kit.sharp } else { &self.kit.boxed };
             if texels <= 4.0 {
-                if let Some(boxed) = &self.kit.boxed {
+                if let Some(effect) = effect {
                     let mut to_device = node.transform;
                     to_device.post_scale((self.px, self.px), None);
                     to_device.pre_concat(&local);
                     if let Some(back) = to_device.invert() {
                         let nearest = SamplingOptions::new(FilterMode::Nearest, MipmapMode::None);
-                        let child = img.image.to_shader((tile, tile), nearest, None)?;
+                        let mut child = img.image.to_shader((tile, tile), nearest, None)?;
+                        if self.cast {
+                            child = child.with_color_filter(silhouette());
+                        }
                         // Column major
                         let footprint = [back.scale_x(), back.skew_y(), back.skew_x(), back.scale_y()];
                         let uniforms: Vec<u8> = footprint.iter().flat_map(|v| v.to_le_bytes()).collect();
-                        return boxed.make_shader(Data::new_copy(&uniforms), &[child.into()], Some(&local));
+                        return effect.make_shader(Data::new_copy(&uniforms), &[child.into()], Some(&local));
                     }
                 }
             }
@@ -1226,7 +1289,8 @@ impl<'a> Encoder<'a> {
         } else {
             SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
         };
-        img.image.to_shader((tile, tile), sampling, &local)
+        let shader = img.image.to_shader((tile, tile), sampling, &local)?;
+        Some(if self.cast { shader.with_color_filter(silhouette()) } else { shader })
     }
 
     fn note_source(&mut self, id: &str, there: bool) {
