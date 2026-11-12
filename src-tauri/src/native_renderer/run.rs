@@ -738,7 +738,7 @@ fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64, scale: Option<
     let info = eval_value(
         webview,
         &format!(
-            "(() => {{ const n = figma.getNodeById({}); const b = n?.absoluteRenderBounds ?? n?.absoluteBoundingBox; return b ? [b.x, b.y, b.width, b.height, n.type] : null }})()",
+            "(() => {{ const n = figma.getNodeById({}); const b = n?.absoluteRenderBounds ?? n?.absoluteBoundingBox; return b ? [b.x, b.y, b.width, b.height, n.type, !!n.effects?.some((e) => e.type === 'BACKGROUND_BLUR' && e.visible !== false)] : null }})()",
             serde_json::to_string(id).unwrap()
         ),
     );
@@ -746,6 +746,9 @@ fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64, scale: Option<
     let longest = info[2].as_f64().unwrap_or(1.0).max(info[3].as_f64().unwrap_or(1.0));
     let scale = scale.unwrap_or((side / longest).min(2.0));
     let (figma, bounds) = fetch_render(webview, id, scale)?;
+    // Figma's export of a node that blurs what's behind it has what's
+    // behind it in it
+    let backdrop = info[5].as_bool().unwrap_or(false);
     let (width, height) = figma.dimensions();
     // Figma's export starts at the render bounds and rounds its size up, so
     // it covers a little more than them, at exactly `scale`
@@ -754,7 +757,7 @@ fn render_pair(ctx: &Ctx, webview: &Webview, id: &str, side: f64, scale: Option<
     let mut drawn = None;
     for _ in 0..30 {
         let (send, receive) = mpsc::channel();
-        let _ = ctx.messages.send(Msg::Offscreen { id: id.to_string(), bounds, width, height, reply: send });
+        let _ = ctx.messages.send(Msg::Offscreen { id: id.to_string(), bounds, width, height, backdrop, reply: send });
         drawn = receive.recv_timeout(Duration::from_secs(60)).ok().flatten();
         if drawn.as_ref().is_none_or(|drawn| drawn.waiting == 0) {
             break;
@@ -882,6 +885,19 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             stats().lock().unwrap().report = Some(shown.clone());
             Ok(shown)
         }
+        // Up to n of each thing Figma draws that the page has
+        _ if super::dev() && action.starts_with("features:") => {
+            let each: usize = action["features:".len()..].parse().map_err(|_| "features:<how many of each>")?;
+            if ctx.busy.swap(true, Ordering::Relaxed) {
+                return Err("already running".into());
+            }
+            let result = parity_by_feature(&ctx, each);
+            ctx.busy.store(false, Ordering::Relaxed);
+            let path = result?;
+            let shown = path.display().to_string();
+            stats().lock().unwrap().report = Some(shown.clone());
+            Ok(shown)
+        }
         _ => Err("unknown action".into()),
     }
 }
@@ -893,10 +909,12 @@ fn report_dir(ctx: &Ctx, name: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct NodeScore {
     id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    feature: Option<String>,
     kind: String,
     width: u32,
     height: u32,
@@ -919,10 +937,38 @@ fn parity(ctx: &Ctx, count: usize) -> Result<PathBuf, String> {
     set_status("Parity: picking nodes");
     let ids: Vec<String> = serde_json::from_str(&job(&webview, &format!("sample({count})"), Duration::from_secs(120))?)
         .map_err(|error| error.to_string())?;
-    let dir = report_dir(ctx, "parity")?;
-    let mut scores = Vec::new();
-    for (i, id) in ids.iter().enumerate() {
-        set_status(format!("Parity: node {} of {}", i + 1, ids.len()));
+    let picked = ids.into_iter().map(|id| (id, None)).collect();
+    score_nodes(ctx, &webview, picked, "parity")
+}
+
+/// Parity for up to `each` nodes with each thing Figma draws that the page
+/// has, scored by feature as well
+fn parity_by_feature(ctx: &Ctx, each: usize) -> Result<PathBuf, String> {
+    let webview = current(ctx).ok_or("no file")?;
+    set_status("Parity: finding what the page uses");
+    #[derive(serde::Deserialize)]
+    struct Picked {
+        id: String,
+        feature: String,
+    }
+    let picked: Vec<Picked> = serde_json::from_str(&job(&webview, &format!("features({each})"), Duration::from_secs(300))?)
+        .map_err(|error| error.to_string())?;
+    score_nodes(ctx, &webview, picked.into_iter().map(|picked| (picked.id, Some(picked.feature))).collect(), "features")
+}
+
+fn score_nodes(ctx: &Ctx, webview: &Webview, picked: Vec<(String, Option<String>)>, name: &str) -> Result<PathBuf, String> {
+    let dir = report_dir(ctx, name)?;
+    let mut scores: Vec<NodeScore> = Vec::new();
+    let mut done: HashMap<String, usize> = HashMap::new();
+    for (i, (id, feature)) in picked.iter().enumerate() {
+        // A node with several features is drawn once
+        if let Some(&at) = done.get(id) {
+            let mut again: NodeScore = scores[at].clone();
+            again.feature = feature.clone();
+            scores.push(again);
+            continue;
+        }
+        set_status(format!("Parity: node {} of {}", i + 1, picked.len()));
         let Ok(Pair { kind, figma, native }) = render_pair(ctx, &webview, id, 1024.0, None) else {
             continue;
         };
@@ -937,7 +983,8 @@ fn parity(ctx: &Ctx, count: usize) -> Result<PathBuf, String> {
         if let Some(diff) = image::RgbaImage::from_raw(width, height, diff) {
             let _ = diff.save(dir.join(format!("{i:03}-diff.png")));
         }
-        scores.push(NodeScore { id: id.clone(), kind, width, height, matched, matched_soft, mean_error, approximate_reason });
+        done.insert(id.clone(), scores.len());
+        scores.push(NodeScore { id: id.clone(), feature: feature.clone(), kind, width, height, matched, matched_soft, mean_error, approximate_reason });
     }
     let summarize = |scores: &[&NodeScore]| {
         let mut matched: Vec<f64> = scores.iter().map(|score| score.matched).collect();
@@ -959,9 +1006,20 @@ fn parity(ctx: &Ctx, count: usize) -> Result<PathBuf, String> {
     };
     let all: Vec<&NodeScore> = scores.iter().collect();
     let exact: Vec<&NodeScore> = scores.iter().filter(|score| score.approximate_reason.is_none()).collect();
+    let mut features: Vec<&str> = scores.iter().filter_map(|score| score.feature.as_deref()).collect();
+    features.sort_unstable();
+    features.dedup();
+    let by_feature: serde_json::Map<String, Value> = features
+        .iter()
+        .map(|&feature| {
+            let these: Vec<&NodeScore> = scores.iter().filter(|score| score.feature.as_deref() == Some(feature)).collect();
+            (feature.to_string(), summarize(&these))
+        })
+        .collect();
     let report = json!({
         "all": summarize(&all),
         "noApproximations": summarize(&exact),
+        "byFeature": by_feature,
         "nodes": scores,
     });
     std::fs::write(dir.join("report.json"), serde_json::to_string_pretty(&report).unwrap()).map_err(|error| error.to_string())?;

@@ -672,8 +672,8 @@ impl Painter {
                     self.dirty = true;
                 }
             }
-            Msg::Offscreen { id, bounds, width, height, reply } => {
-                let _ = reply.send(self.offscreen(&id, bounds, width, height));
+            Msg::Offscreen { id, bounds, width, height, backdrop, reply } => {
+                let _ = reply.send(self.offscreen(&id, bounds, width, height, backdrop));
                 self.release();
             }
             Msg::Replay { views, reply } => {
@@ -1419,7 +1419,7 @@ impl Painter {
         );
     }
 
-    fn offscreen(&mut self, id: &str, bounds: Rect, width: u32, height: u32) -> Option<Offscreen> {
+    fn offscreen(&mut self, id: &str, bounds: Rect, width: u32, height: u32, backdrop: bool) -> Option<Offscreen> {
         let slot = *self.scene.by_id.get(id)?;
         let px = width as f32 / bounds.width().max(1e-6);
         // As tiles are drawn: supersampled, then scaled down
@@ -1431,7 +1431,16 @@ impl Painter {
         canvas.translate((-bounds.left, -bounds.top));
         let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, px);
         encoder.aa = ss < 4;
-        encoder.node(slot);
+        if backdrop {
+            encoder.stop_after = Some(slot);
+            for &root in &self.scene.roots {
+                if self.scene.node(root).and_then(|node| node.bounds).is_none_or(|reach| Rect::intersects2(&reach, &bounds)) {
+                    encoder.node(root);
+                }
+            }
+        } else {
+            encoder.node(slot);
+        }
         let reason = encoder.approximate_reason.take();
         let images: Vec<(String, f64)> = encoder.missing_images.drain(..).chain(encoder.sharper_images.drain(..)).collect();
         drop(encoder);
@@ -1558,7 +1567,21 @@ impl Painter {
             }
             let Some(node) = self.scene.node(slot) else { continue };
             let effects: Vec<String> = node.effects.iter().map(|e| format!("{}:{}", e.kind, e.radius)).collect();
-            out += &format!("{}{} {} {:.1}ms {:?} mask={:?} blend={:?} {}\n", "  ".repeat(depth), node.id, node.type_name, ms, node.size, node.mask, node.blend, effects.join(","));
+            out += &format!(
+                "{}{} {} {:.1}ms {:?} mask={:?} blend={:?} {} fills={} outlines={} hidden={} bounds={:?}\n",
+                "  ".repeat(depth),
+                node.id,
+                node.type_name,
+                ms,
+                node.size,
+                node.mask,
+                node.blend,
+                effects.join(","),
+                node.visible_fills().count(),
+                node.fill_geometry.len(),
+                node.hidden,
+                node.bounds
+            );
             if ms > 0.5 && depth < 12 {
                 for &child in node.children.iter().rev() {
                     stack.push((child, depth + 1));

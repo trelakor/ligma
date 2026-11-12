@@ -774,6 +774,68 @@
       });
     },
 
+    // For the parity harness: up to `each` nodes with each thing Figma
+    // draws that the page has, as `{ id, feature }`, so every one is checked
+    features(each) {
+      return run(async () => {
+        const figma = api();
+        const picked = new Map();
+        const pick = (feature, n) => {
+          const list = picked.get(feature) ?? [];
+          if (list.length < each && !list.includes(n.id)) list.push(n.id);
+          picked.set(feature, list);
+        };
+        const visible = (paints) => (Array.isArray(paints) ? paints.filter((p) => p.visible !== false) : []);
+        const nodes = figma.currentPage.findAll((n) => {
+          if (n.visible === false || n.type === "SLICE") return false;
+          const b = n.absoluteRenderBounds;
+          return !!b && b.width >= 8 && b.height >= 8 && b.width <= 4000 && b.height <= 4000;
+        });
+        // Spread through the page rather than the first few of each
+        for (let i = nodes.length - 1; i > 0; i--) {
+          const j = (i * 7919) % (i + 1);
+          [nodes[i], nodes[j]] = [nodes[j], nodes[i]];
+        }
+        for (const n of nodes) {
+          pick(`type ${n.type}`, n);
+          for (const e of n.effects ?? []) {
+            if (e.visible === false) continue;
+            pick(`effect ${e.type}${e.blurType === "PROGRESSIVE" ? " progressive" : ""}${e.spread ? " spread" : ""}${e.showShadowBehindNode ? " behind" : ""}`, n);
+          }
+          for (const key of ["fills", "strokes"]) {
+            if (n[key] === figma.mixed) pick(`${key} mixed`, n);
+            for (const p of visible(n[key])) {
+              pick(`${key} ${p.type}${p.scaleMode ? " " + p.scaleMode : ""}`, n);
+              if (p.blendMode && p.blendMode !== "NORMAL") pick(`paint blend ${p.blendMode}`, n);
+              if (p.filters && Object.values(p.filters).some((v) => v)) pick("image adjustments", n);
+            }
+          }
+          if (n.isMask) pick(`mask ${n.maskType}`, n);
+          if (n.blendMode && n.blendMode !== "PASS_THROUGH" && n.blendMode !== "NORMAL") pick(`blend ${n.blendMode}`, n);
+          if (visible(n.strokes).length) {
+            pick(`stroke ${n.strokeAlign}`, n);
+            if (n.dashPattern?.length) pick("stroke dashed", n);
+            if (n.strokeWeight === figma.mixed) pick("stroke per side", n);
+            if (n.strokeCap && n.strokeCap !== "NONE") pick("stroke caps", n);
+          }
+          if (n.cornerSmoothing > 0) pick("corner smoothing", n);
+          if (n.clipsContent) pick("clips content", n);
+          if (n.type === "TEXT") {
+            const segments = n.getStyledTextSegments(["textDecoration"]);
+            if (segments.some((s) => s.textDecoration !== "NONE")) pick("text decoration", n);
+            if (segments.length > 1) pick("text styled runs", n);
+            if (visible(n.strokes).length) pick("text stroke", n);
+          }
+          if (n.rotation) pick("rotated", n);
+          const t = n.relativeTransform;
+          if (t && t[0][0] * t[1][1] - t[0][1] * t[1][0] < 0) pick("flipped", n);
+        }
+        const out = [];
+        for (const [feature, ids] of picked) for (const id of ids) out.push({ id, feature });
+        return out;
+      });
+    },
+
     // Hands Ligma results at `path` on this site from now on
     pushTo(path) {
       pushTo = path;

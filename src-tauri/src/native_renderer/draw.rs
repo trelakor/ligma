@@ -443,6 +443,9 @@ pub struct Encoder<'a> {
     /// covers each pixel with 16 samples, each in or out, which leaves no
     /// seam where shapes meet
     pub aa: bool,
+    /// Nothing is drawn after this node, for drawing it over what's behind it
+    pub stop_after: Option<usize>,
+    stopped: bool,
     depth: u8,
 }
 
@@ -464,6 +467,8 @@ impl<'a> Encoder<'a> {
             approximate_reason: None,
             tint: false,
             aa: true,
+            stop_after: None,
+            stopped: false,
             depth: 0,
         }
     }
@@ -481,6 +486,18 @@ impl<'a> Encoder<'a> {
 
     /// `as_mask` draws a mask itself, for the siblings it masks
     fn draw(&mut self, slot: usize, as_mask: bool) {
+        if self.stopped {
+            return;
+        }
+        if self.stop_after == Some(slot) {
+            self.draw_node(slot, as_mask);
+            self.stopped = true;
+            return;
+        }
+        self.draw_node(slot, as_mask);
+    }
+
+    fn draw_node(&mut self, slot: usize, as_mask: bool) {
         let scene = self.scene;
         let Some(node) = scene.node(slot) else {
             return;
@@ -905,6 +922,9 @@ impl<'a> Encoder<'a> {
     /// Fills (`fills`) or strokes. Strokes aligned inside are clipped to
     /// the fill's outline, and those outside have it cut out
     fn paints(&mut self, node: &Node, fills: bool) {
+        if self.stopped {
+            return;
+        }
         let any = if fills { node.visible_fills().next().is_some() } else { node.visible_strokes().next().is_some() };
         if !any {
             return;
