@@ -159,13 +159,32 @@ const PAGE_JS: &str = r##"(() => {
     menuRules.push(`${selector} { ${decls.join(" ")} }`);
     return true;
   };
+  // A file's loading screen (`--color-loading-progress-*`: the cover, the
+  // bar and its track) is in greys written out, not taken from the ramp, so
+  // it would stay Figma's. Each takes the ramp step it equals. FigJam's
+  // white cover, its own product color, stays
+  const loadingRules = [];
+  const scanLoading = (rule, selector, mode) => {
+    const decls = [];
+    for (const name of rule.style) {
+      if (!name.startsWith("--color-loading-progress-")) continue;
+      const step = LIGMA_STEPS[LIGMA_GREY.indexOf(rule.style.getPropertyValue(name).trim().toLowerCase())];
+      if (step) decls.push(`${name}: var(--ramp-grey-${step}) !important;`);
+    }
+    if (!decls.length) return false;
+    const notFigJam = ':not([data-editor-theme="whiteboard"])';
+    const parts = selectors(selector).map((part) => (part.includes(notFigJam) ? part : part + notFigJam));
+    loadingRules.push({ mode, css: `${parts.join(", ")} { ${decls.join(" ")} }` });
+    return true;
+  };
   const scanRule = (rule) => {
     const selector = rule.selectorText;
     if (!selector?.includes("data-preferred-theme")) return false;
     const mode = /data-preferred-theme="?(light|dark)/.exec(selector)?.[1];
     const menus = mode === "light" && scanMenus(rule, selector);
+    const loading = !!mode && scanLoading(rule, selector, mode);
     const [, paleBrand, brand] = /--ramp-(pale-)?([a-z-]+)-\d+/.exec(rule.style.getPropertyValue("--color-bg-menu-selected")) ?? [];
-    if (!mode || !brand) return menus;
+    if (!mode || !brand) return menus || loading;
     const decls = [];
     const canvas = [];
     for (const name of rule.style) {
@@ -198,7 +217,7 @@ const PAGE_JS: &str = r##"(() => {
       canvasRules.push({ mode, css: `${parts.map((part) => part + "[data-ligma-canvas]").join(", ")} { ${canvas.join(" ")} }` });
     }
     const brandSelectors = brandSelector(selector);
-    if (!decls.length || !brandSelectors) return menus || canvas.length > 0;
+    if (!decls.length || !brandSelectors) return menus || loading || canvas.length > 0;
     brandRules.push({ mode, css: `${brandSelectors} { ${decls.join(" ")} }` });
     return true;
   };
@@ -221,14 +240,14 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // The greys and the accent ramps on Figma's theme elements and editors'
-  // own inside them, then the brand tokens and the canvas's. Light menus
-  // and tooltips come after, whatever the theme
+  // own inside them, then the brand tokens, the canvas's and the loading
+  // screen's. Light menus and tooltips come after, whatever the theme
   const css = (mode, id) => {
     const vars = Object.entries(ligmaPalette(id, mode)).map(([name, value]) => `${name}: ${value} !important;`);
     if (!vars.length) return "";
     const theme = `[data-preferred-theme="${mode}"]`;
     const own = (rules) => rules.filter((rule) => rule.mode === mode).map((rule) => rule.css);
-    return [`${theme}, :where(${theme}) [data-editor-theme] { ${vars.join(" ")} }`, ...own(brandRules), ...own(canvasRules)].join("\n");
+    return [`${theme}, :where(${theme}) [data-editor-theme] { ${vars.join(" ")} }`, ...own(brandRules), ...own(canvasRules), ...own(loadingRules)].join("\n");
   };
   // At an interface scale that puts the panels' edges between device
   // pixels, the editor's canvas and the panels beside it round to them

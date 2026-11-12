@@ -630,6 +630,8 @@ const THEME_JS: &str = r#"(() => {
   return {
     railWidth: rail?.width && rail.left === 0 ? rail.right : null,
     bg: v("--color-bg"),
+    // A file's loading screen, but FigJam's, which is white
+    loading: el.matches('[data-editor-theme="whiteboard"]') ? null : v("--color-loading-progress-cover"),
     bgSecondary: v("--color-bg-secondary"),
     bgTertiary: v("--color-bg-tertiary"),
     text: v("--color-text"),
@@ -818,7 +820,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
             .initialization_script(LOCAL_NETWORK_ACCESS_JS)
             .initialization_script(TITLE_EMOJI_JS);
     }
-    let background = page_background(app);
+    let background = page_background(app, with_tab(app, id, |tab| tab.kind).unwrap_or("page"));
     let webview = window.add_child(
         builder.background_color(background),
         LogicalPosition::new(0.0, bar_height(app)),
@@ -2513,23 +2515,39 @@ pub fn theme(app: &AppHandle) -> Option<serde_json::Value> {
     app.state::<Tabs>().inner().0.lock().unwrap().theme.clone()
 }
 
-/// What a tab shows until its page draws, and between pages: Figma's
-/// background, which its loading screens are, rather than the webview's
-/// white. Before a tab has reported the theme, Figma's default for the
-/// color scheme
-fn page_background(app: &AppHandle) -> Color {
-    if let Some(color) = theme(app).as_ref().and_then(|theme| crate::settings::theme_color(theme, "bg")) {
+/// What a tab of `kind` shows until its page draws, and between pages,
+/// rather than the webview's white: the color of Figma's loading screen
+/// for it. A file's has a cover of its own (white in FigJam), other pages
+/// Figma's background. Before a tab has reported the theme, Figma's
+/// defaults for the color scheme
+fn page_background(app: &AppHandle, kind: &str) -> Color {
+    const WHITE: Color = Color(255, 255, 255, 255);
+    if kind == "board" {
+        return WHITE;
+    }
+    let file = !matches!(kind, "page" | "home");
+    let key = if file { "loading" } else { "bg" };
+    if let Some(color) = theme(app).as_ref().and_then(|theme| crate::settings::theme_color(theme, key)) {
         return color;
     }
     let light = app.get_window(MAIN).and_then(|window| window.theme().ok()) == Some(Theme::Light);
-    if light { Color(255, 255, 255, 255) } else { Color(44, 44, 44, 255) }
+    match (light, file) {
+        (true, true) => Color(230, 230, 230, 255),
+        (true, false) => WHITE,
+        (false, true) => Color(30, 30, 30, 255),
+        (false, false) => Color(44, 44, 44, 255),
+    }
 }
 
 /// `page_background` for every tab, after the theme changed
 fn repaint_page_backgrounds(app: &AppHandle) {
-    let background = page_background(app);
-    let ids: Vec<u32> = app.state::<Tabs>().inner().0.lock().unwrap().tabs.iter().map(|tab| tab.id).collect();
-    for webview in ids.into_iter().filter_map(|id| app.get_webview(&label(id))) {
+    let tabs: Vec<(u32, &'static str)> =
+        app.state::<Tabs>().inner().0.lock().unwrap().tabs.iter().map(|tab| (tab.id, tab.kind)).collect();
+    for (id, kind) in tabs {
+        let Some(webview) = app.get_webview(&label(id)) else {
+            continue;
+        };
+        let background = page_background(app, kind);
         let _ = webview.set_background_color(Some(background));
         #[cfg(target_os = "macos")]
         crate::wkwebview::set_background(&webview, background);
