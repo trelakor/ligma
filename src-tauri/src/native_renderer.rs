@@ -59,8 +59,8 @@ mod shader_cache;
 #[cfg(windows)]
 mod render;
 #[cfg(windows)]
-#[cfg(windows)]
 mod rt;
+#[cfg(windows)]
 mod run;
 #[cfg(windows)]
 mod scene;
@@ -88,6 +88,16 @@ pub fn mark(what: impl FnOnce() -> String) {
     if dev() {
         log::info!("native renderer @{}: {}", start.elapsed().as_millis(), what());
     }
+}
+
+/// What a Figma tab runs as it starts while the renderer is on, so Ligma can
+/// take over Figma's canvas renderer in it (see page_hook.js)
+pub const PAGE_HOOK_JS: &str = include_str!("native_renderer/page_hook.js");
+
+/// Whether Figma tabs opened now are made ready for the renderer to take
+/// over their canvas. Tabs opened before it was turned on are reloaded
+pub fn hooks_tabs(app: &AppHandle) -> bool {
+    cfg!(windows) && enabled(&crate::settings::current(app))
 }
 
 pub fn autorun() -> bool {

@@ -864,6 +864,11 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     if id == HOME_ID {
         builder = builder.initialization_script(crate::new_home::page_js());
     }
+    // Figma's canvas drawn by Ligma, under a transparent page
+    #[cfg(windows)]
+    if crate::native_renderer::hooks_tabs(app) {
+        builder = builder.initialization_script(crate::native_renderer::PAGE_HOOK_JS).transparent(true);
+    }
     #[cfg(target_os = "macos")]
     {
         builder = builder

@@ -32,8 +32,12 @@ use windows::Win32::Graphics::Direct3D12::{
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC, DXGI_STANDARD_MULTISAMPLE_QUALITY_PATTERN,
 };
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionTarget, IDCompositionVisual2,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_UNSPECIFIED};
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIAdapter1, IDXGIFactory4, IDXGISwapChain2, IDXGISwapChain3, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC1,
+    IDXGIAdapter1, IDXGIFactory2, IDXGIFactory4, IDXGISwapChain1, IDXGISwapChain2, IDXGISwapChain3, DXGI_PRESENT, DXGI_SCALING_NONE, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
     DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_DISCARD,
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
@@ -140,6 +144,9 @@ pub struct Hub {
     pub shown: Mutex<Shown>,
     /// The window's size in pixels
     pub size: Mutex<(u32, u32)>,
+    /// Drawn in place of Figma's canvas, under the tab: where the tab's
+    /// webview is in the window, in pixels, and whether the tab is shown
+    pub origin: Mutex<Option<(i32, i32)>>,
     pub stop: AtomicBool,
     changes: Mutex<u64>,
     changed: Condvar,
@@ -151,6 +158,7 @@ impl Hub {
             view: Mutex::new(None),
             shown: Mutex::new(Shown::default()),
             size: Mutex::new(size),
+            origin: Mutex::new(None),
             stop: AtomicBool::new(false),
             changes: Mutex::new(0),
             changed: Condvar::new(),
@@ -176,8 +184,24 @@ impl Hub {
     }
 }
 
+/// Where frames go: a window of their own, or a layer of the main window's
+/// under its webviews, where the tab shows it through its canvas
+pub enum Output {
+    Window(isize),
+    Layer(isize),
+}
+
+/// The layer under the webviews, and where it is
+struct Composed {
+    device: IDCompositionDesktopDevice,
+    _target: IDCompositionTarget,
+    visual: IDCompositionVisual2,
+    at: Option<(i32, i32)>,
+}
+
 pub struct Screen {
     context: DirectContext,
+    layer: Option<Composed>,
     swap_chain: IDXGISwapChain3,
     /// Signaled when the swap chain takes another frame, so each frame is
     /// drawn as late as it can be, with the view as it is then
@@ -191,7 +215,7 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub fn new(device: &Device, hwnd: isize, width: u32, height: u32) -> Result<Self, String> {
+    pub fn new(device: &Device, output: Output, width: u32, height: u32) -> Result<Self, String> {
         let queue_desc = D3D12_COMMAND_QUEUE_DESC { Priority: D3D12_COMMAND_QUEUE_PRIORITY_HIGH.0, ..Default::default() };
         let queue = unsafe { device.device.CreateCommandQueue(&queue_desc) }.map_err(|error| format!("queue: {error}"))?;
         let backend = BackendContext {
@@ -202,27 +226,43 @@ impl Screen {
             protected_context: Protected::No,
         };
         let context = unsafe { gpu::direct_contexts::make_d3d(&backend, None) }.ok_or("Skia couldn't start on D3D12")?;
-        let swap_chain: IDXGISwapChain3 = unsafe {
-            device.factory.CreateSwapChainForHwnd(
-                &backend.queue,
-                HWND(hwnd as *mut _),
-                &DXGI_SWAP_CHAIN_DESC1 {
-                    Width: width.max(1),
-                    Height: height.max(1),
-                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                    BufferCount: 2,
-                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-                    Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
-                    ..Default::default()
-                },
-                None,
-                None,
-            )
-        }
-        .and_then(|chain| chain.cast())
-        .map_err(|error| format!("swap chain: {error}"))?;
+        let desc = |composition: bool| DXGI_SWAP_CHAIN_DESC1 {
+            Width: width.max(1),
+            Height: height.max(1),
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            BufferCount: 2,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Scaling: if composition { DXGI_SCALING_STRETCH } else { DXGI_SCALING_NONE },
+            AlphaMode: if composition { DXGI_ALPHA_MODE_IGNORE } else { DXGI_ALPHA_MODE_UNSPECIFIED },
+            Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
+            ..Default::default()
+        };
+        let (swap_chain, layer): (IDXGISwapChain3, Option<Composed>) = match output {
+            Output::Window(hwnd) => {
+                let chain: IDXGISwapChain1 = unsafe { device.factory.CreateSwapChainForHwnd(&backend.queue, HWND(hwnd as *mut _), &desc(false), None, None) }
+                    .map_err(|error| format!("swap chain: {error}"))?;
+                (chain.cast().map_err(|error| format!("swap chain: {error}"))?, None)
+            }
+            Output::Layer(hwnd) => {
+                let factory: IDXGIFactory2 = device.factory.cast().map_err(|error| error.to_string())?;
+                let chain: IDXGISwapChain1 = unsafe { factory.CreateSwapChainForComposition(&backend.queue, &desc(true), None) }
+                    .map_err(|error| format!("swap chain: {error}"))?;
+                // Behind the window's webviews, not over them
+                let layer = unsafe {
+                    let composition: IDCompositionDesktopDevice = DCompositionCreateDevice2(None).map_err(|error| format!("composition: {error}"))?;
+                    let target = composition.CreateTargetForHwnd(HWND(hwnd as *mut _), false).map_err(|error| format!("composition target: {error}"))?;
+                    let visual = composition.CreateVisual().map_err(|error| format!("composition visual: {error}"))?;
+                    target.SetRoot(&visual).map_err(|error| format!("composition root: {error}"))?;
+                    composition.Commit().map_err(|error| format!("composition: {error}"))?;
+                    Composed { device: composition, _target: target, visual, at: None }
+                };
+                let chain3: IDXGISwapChain3 = chain.cast().map_err(|error| format!("swap chain: {error}"))?;
+                unsafe { layer.visual.SetContent(&chain3) }.map_err(|error| format!("composition content: {error}"))?;
+                (chain3, Some(layer))
+            }
+        };
         let waitable = unsafe {
             let chain: IDXGISwapChain2 = swap_chain.cast().map_err(|error| error.to_string())?;
             let _ = chain.SetMaximumFrameLatency(1);
@@ -230,6 +270,7 @@ impl Screen {
         };
         let mut screen = Screen {
             context,
+            layer,
             swap_chain,
             waitable,
             buffers: Vec::new(),
@@ -330,15 +371,24 @@ impl Screen {
                 unsafe { WaitForSingleObjectEx(self.waitable, 250, true) };
                 room = true;
             }
-            let size = *hub.size.lock().unwrap();
+            let view = hub.view.lock().unwrap().clone();
+            let size = match (&self.layer, &view) {
+                (Some(_), Some(view)) => ((view.cw * view.dpr).round().max(1.0) as u32, (view.ch * view.dpr).round().max(1.0) as u32),
+                _ => *hub.size.lock().unwrap(),
+            };
             if size != self.size && size.0 > 0 && size.1 > 0 {
                 if let Err(error) = self.resize(size) {
                     log::warn!("native renderer: {error}");
                 }
                 shown = None;
             }
-            let view = hub.view.lock().unwrap().clone();
             let what = hub.shown.lock().unwrap().clone();
+            if self.layer.is_some() {
+                let at = (*hub.origin.lock().unwrap()).zip(view.as_ref().filter(|view| view.visible)).map(|((x, y), view)| {
+                    (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32)
+                });
+                self.place(at);
+            }
             let Some(view) = view else {
                 seen = hub.wait(seen, Duration::from_millis(100));
                 continue;
@@ -351,6 +401,30 @@ impl Screen {
             self.frame(&view, &what);
             room = false;
             shown = Some(now);
+        }
+    }
+
+    /// Moves the layer to `at` in the window, or hides it
+    fn place(&mut self, at: Option<(i32, i32)>) {
+        let Some(layer) = &mut self.layer else {
+            return;
+        };
+        if layer.at == at {
+            return;
+        }
+        layer.at = at;
+        unsafe {
+            match at {
+                Some((x, y)) => {
+                    let _ = layer.visual.SetOffsetX2(x as f32);
+                    let _ = layer.visual.SetOffsetY2(y as f32);
+                    let _ = layer.visual.SetContent(&self.swap_chain);
+                }
+                None => {
+                    let _ = layer.visual.SetContent(None::<&windows::core::IUnknown>);
+                }
+            }
+            let _ = layer.device.Commit();
         }
     }
 

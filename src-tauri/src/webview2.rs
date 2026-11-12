@@ -100,6 +100,28 @@ pub fn drop_request_filters(webview: &Webview) {
     });
 }
 
+/// Makes `webview` see-through wherever its page is, and runs `script` as
+/// each of its pages starts from now on, then loads it again so it runs.
+/// For a tab opened before the native renderer was turned on
+pub fn hook_and_reload(webview: &Webview, script: &'static str) {
+    let _ = webview.with_webview(move |platform| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Controller2, COREWEBVIEW2_COLOR};
+        if let Ok(controller) = platform.controller().cast::<ICoreWebView2Controller2>() {
+            let _ = controller.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 });
+        }
+        let Ok(core) = platform.controller().CoreWebView2() else {
+            return;
+        };
+        let script = windows_core::HSTRING::from(script);
+        let reload = core.clone();
+        let handler = webview2_com::AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |_, _| {
+            let _ = reload.Reload();
+            Ok(())
+        }));
+        let _ = core.AddScriptToExecuteOnDocumentCreated(&script, &handler);
+    });
+}
+
 /// Lets a Figma tab start downloads one after another without a click in
 /// between. WebView2, like Chrome, asks first for the second and stops it
 /// meanwhile, and Select object hands Ligma a request each time the

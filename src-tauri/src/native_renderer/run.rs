@@ -18,7 +18,7 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBu
 use super::adjust::Adjust;
 use super::draw::{Img, RENDER, RENDER_LIMIT};
 use super::gpu_memory::GpuMemory;
-use super::present::{Device, Hub, Screen};
+use super::present::{Device, Hub, Output, Screen};
 use super::render::{Gpu, Msg, Offscreen, Painter, Request, View};
 use super::scene::{Batch, Begin, Changes, Scene};
 use super::{percentile, stats, OVERLAY, WINDOW};
@@ -53,6 +53,10 @@ struct Ctx {
     shared: Mutex<Option<(String, crate::webview2::Shared)>>,
     /// What the render and present threads share
     hub: Arc<Hub>,
+    /// The tab whose canvas Ligma draws in place of Figma's renderer, and
+    /// tabs opened before the renderer was on, since made ready for it
+    replaced: Mutex<Option<Webview>>,
+    hooked: Mutex<std::collections::HashSet<String>>,
 }
 
 /// What page.js read, handed over by the page as each job is done rather
@@ -168,6 +172,9 @@ pub fn start(app: &AppHandle) {
 
 pub fn stop(app: &AppHandle) {
     if let Some(ctx) = CTX.lock().unwrap().take() {
+        if let Some(webview) = ctx.replaced.lock().unwrap().take() {
+            give_back(&webview);
+        }
         ctx.stop.store(true, Ordering::Relaxed);
         ctx.hub.stop.store(true, Ordering::Relaxed);
         ctx.hub.poke();
@@ -183,21 +190,34 @@ fn open(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     *stats().lock().unwrap() = super::Stats { dev: super::dev(), status: "Starting".into(), ..Default::default() };
-    let window = match app.get_window(WINDOW) {
-        Some(window) => window,
-        None => tauri::window::WindowBuilder::new(app, WINDOW)
-            .title("Native renderer (experimental)")
-            .inner_size(1200.0, 800.0)
-            .build()
-            .map_err(|error| error.to_string())?,
+    // Drawn in place of Figma's canvas, under the tab in the main window, or
+    // for comparing the two side by side, in a window of its own
+    let window = if separate_window() {
+        let window = match app.get_window(WINDOW) {
+            Some(window) => window,
+            None => tauri::window::WindowBuilder::new(app, WINDOW)
+                .title("Native renderer (experimental)")
+                .inner_size(1200.0, 800.0)
+                .build()
+                .map_err(|error| error.to_string())?,
+        };
+        let overlay = WebviewBuilder::new(OVERLAY, WebviewUrl::App("native.html".into()));
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let size = window.inner_size().map_err(|error| error.to_string())?;
+        window
+            .add_child(overlay, LogicalPosition::new(0.0, 0.0), LogicalSize::new(size.width as f64 / scale, BAR))
+            .map_err(|error| error.to_string())?;
+        Some(window)
+    } else {
+        None
     };
-    let size = window.inner_size().map_err(|error| error.to_string())?;
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
-    let overlay = WebviewBuilder::new(OVERLAY, WebviewUrl::App("native.html".into()));
-    let scale = window.scale_factor().unwrap_or(1.0);
-    window
-        .add_child(overlay, LogicalPosition::new(0.0, 0.0), LogicalSize::new(size.width as f64 / scale, BAR))
-        .map_err(|error| error.to_string())?;
+    let host = match &window {
+        Some(window) => window.clone(),
+        None => app.get_window(crate::tabs::MAIN).ok_or("no main window")?,
+    };
+    let size = host.inner_size().map_err(|error| error.to_string())?;
+    let hwnd = host.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    let output = if window.is_some() { Output::Window(hwnd) } else { Output::Layer(hwnd) };
 
     let (messages, receive) = mpsc::channel();
     let (requests, requested) = mpsc::channel();
@@ -214,6 +234,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
         encoded: Mutex::new(HashMap::new()),
         shared: Mutex::new(None),
         hub: Arc::new(Hub::new((size.width, size.height))),
+        replaced: Mutex::new(None),
+        hooked: Mutex::default(),
     });
     *CTX.lock().unwrap() = Some(ctx.clone());
 
@@ -247,7 +269,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         let (hub, device) = (ctx.hub.clone(), device.clone());
         std::thread::Builder::new()
             .name("native-present".into())
-            .spawn(move || match device.and_then(|device| Screen::new(&device, hwnd, size.width, size.height)) {
+            .spawn(move || match device.and_then(|device| Screen::new(&device, output, size.width, size.height)) {
                 Ok(screen) => {
                     let _ = shown.send(Ok(()));
                     screen.run(hub);
@@ -271,8 +293,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
     }
 
     let events = ctx.clone();
-    window.on_window_event(move |event| match event {
-        WindowEvent::Resized(size) => {
+    host.on_window_event(move |event| match event {
+        WindowEvent::Resized(size) if events.app.get_window(WINDOW).is_some() => {
             *events.hub.size.lock().unwrap() = (size.width, size.height);
             events.hub.poke();
             let _ = events.messages.send(Msg::Resize(size.width, size.height));
@@ -281,7 +303,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
                 let _ = overlay.set_size(LogicalSize::new(size.width as f64 / scale, BAR));
             }
         }
-        WindowEvent::Destroyed => {
+        WindowEvent::Destroyed if events.app.get_window(WINDOW).is_some() || !separate_window() => {
             events.stop.store(true, Ordering::Relaxed);
             events.hub.stop.store(true, Ordering::Relaxed);
             events.hub.poke();
@@ -304,6 +326,12 @@ fn open(app: &AppHandle) -> Result<(), String> {
     }
     sync(ctx);
     Ok(())
+}
+
+/// `LIGMA_NATIVE_WINDOW=1` draws in a window of its own, beside Figma's
+/// canvas, rather than in its place
+pub fn separate_window() -> bool {
+    std::env::var("LIGMA_NATIVE_WINDOW").is_ok_and(|value| value == "1")
 }
 
 fn spawn(name: &str, ctx: Arc<Ctx>, work: impl FnOnce(Arc<Ctx>) + Send + 'static) {
@@ -466,6 +494,9 @@ fn sync(ctx: Arc<Ctx>) {
             }
             continue;
         }
+        if !separate_window() {
+            take_over(&ctx, &file.webview);
+        }
         match changes(&ctx, &file.webview) {
             Ok(true) => ctx.resync.store(true, Ordering::Relaxed),
             Ok(false) => {}
@@ -473,6 +504,41 @@ fn sync(ctx: Arc<Ctx>) {
         }
         sleep(200);
     }
+}
+
+/// Has Figma's renderer in `webview` leave the canvas to Ligma, once Ligma
+/// has drawn it, and hands the tab drawn before back to Figma's
+fn take_over(ctx: &Ctx, webview: &Webview) {
+    let label = webview.label().to_string();
+    let mut replaced = ctx.replaced.lock().unwrap();
+    if replaced.as_ref().is_some_and(|replaced| replaced.label() == label) {
+        return;
+    }
+    if ctx.hub.shown.lock().unwrap().tiles.is_empty() {
+        return;
+    }
+    match eval_value(webview, "window.__ligmaHook ? window.__ligmaHook.replace(true) : null") {
+        Some(Value::Bool(true)) => {
+            super::mark(|| format!("drawing {label}'s canvas in place of Figma's renderer"));
+            if let Some(before) = replaced.replace(webview.clone()) {
+                give_back(&before);
+            }
+        }
+        // Opened before the renderer was on
+        Some(Value::Null) => {
+            if ctx.hooked.lock().unwrap().insert(label) {
+                set_status("Loading the tab again for the native renderer");
+                crate::webview2::hook_and_reload(webview, super::PAGE_HOOK_JS);
+            }
+        }
+        // Figma's threaded renderer isn't running in it yet, or its frames
+        // aren't as expected, so Figma's renderer keeps drawing
+        _ => {}
+    }
+}
+
+fn give_back(webview: &Webview) {
+    let _ = eval(webview, "window.__ligmaHook?.replace(false) ?? null", Duration::from_secs(2));
 }
 
 /// Reads the current page, streamed in nearest the view first, each part
@@ -583,9 +649,8 @@ fn shared_view(shared: crate::webview2::Shared) -> Option<(u64, View, f64)> {
             continue;
         }
         let [_, x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, a, b, at, preview, grid, outline] = slots;
-        let _ = (cx, cy);
         let page = format!("{}:{}", a as i64, b as i64);
-        return Some((count as u64, View { x, y, w, h, zoom, cw, ch, dpr, page, visible: visible != 0.0, preview, grid: grid != 0.0, outline }, at));
+        return Some((count as u64, View { x, y, w, h, zoom, cx, cy, cw, ch, dpr, page, visible: visible != 0.0, preview, grid: grid != 0.0, outline }, at));
     }
     None
 }
@@ -595,8 +660,13 @@ fn shared_view(shared: crate::webview2::Shared) -> Option<(u64, View, f64)> {
 /// frame
 fn poll_view(ctx: Arc<Ctx>) {
     let mut seen = 0;
+    let mut placed = Instant::now() - Duration::from_secs(1);
     while !ctx.stop.load(Ordering::Relaxed) {
         let start = Instant::now();
+        if placed.elapsed() > Duration::from_millis(100) {
+            placed = Instant::now();
+            place(&ctx);
+        }
         let shared = ctx.shared.lock().unwrap().as_ref().map(|(_, shared)| *shared);
         if let Some(shared) = shared {
             if let Some((count, view, at)) = shared_view(shared) {
@@ -619,6 +689,17 @@ fn poll_view(ctx: Arc<Ctx>) {
         }
         let elapsed = start.elapsed();
         std::thread::sleep(Duration::from_millis(8).saturating_sub(elapsed));
+    }
+}
+
+/// Where the mirrored tab is in the window, for the layer drawn under it
+fn place(ctx: &Ctx) {
+    let origin = current(ctx).and_then(|webview| webview.position().ok()).map(|at| (at.x, at.y));
+    let mut current = ctx.hub.origin.lock().unwrap();
+    if *current != origin {
+        *current = origin;
+        drop(current);
+        ctx.hub.poke();
     }
 }
 

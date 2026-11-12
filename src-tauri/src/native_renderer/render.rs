@@ -50,6 +50,11 @@ pub struct View {
     pub w: f64,
     pub h: f64,
     pub zoom: f64,
+    /// Figma's canvas in the tab, in CSS pixels: where it starts and its size
+    #[serde(default)]
+    pub cx: f64,
+    #[serde(default)]
+    pub cy: f64,
     pub cw: f64,
     pub ch: f64,
     pub dpr: f64,
