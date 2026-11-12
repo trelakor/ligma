@@ -302,7 +302,7 @@ const THUMB_PAGE: i32 = 2048;
 /// Pages of thumbs kept at most, 16 MB each
 const THUMB_PAGES: usize = 8;
 /// Units wider than this at a thumb's scale are drawn as they are
-const THUMB_SIDE: i32 = 768;
+const THUMB_SIDE: i32 = 1024;
 /// Time a draw spends at most making thumbs from pictures, past which
 /// thumbs of other powers stand in
 const THUMB_TIME: Duration = Duration::from_millis(10);
@@ -459,6 +459,8 @@ const EDITING: Duration = Duration::from_millis(400);
 
 /// Changed areas past which the whole view is drawn again, rather than each
 const PATCHES: usize = 24;
+/// Most units drawn again exactly in a patch of the whole view
+const PATCH_UNITS: usize = 160;
 
 /// An image on the GPU once, with its mipmaps, and outside Skia's cache:
 /// left to the cache, layers drawn in a frame push images out, and each is
@@ -508,6 +510,36 @@ fn config() -> Config {
         max_tiles: get("LIGMA_NATIVE_TILES", 40),
         cache_limit: get("LIGMA_NATIVE_CACHE_MB", 256) << 20,
     }
+}
+
+/// About how long an exact tile is drawn for at a time, before what else
+/// there is to do
+const TILE_SLICE: Duration = Duration::from_millis(4);
+
+/// A tile partly drawn (see `Painter::step_tile`)
+struct Pending {
+    key: TileKey,
+    exact: bool,
+    draft: bool,
+    pictures: Vec<Drawn>,
+    names: Vec<String>,
+    /// The first of `pictures` not drawn yet, and how many to draw at once
+    next: usize,
+    group: usize,
+    scratch: Surface,
+    margin: i32,
+    ss: i32,
+    offset: (f32, f32),
+    counts: Counts,
+    timing: bool,
+    started: Instant,
+    recorded: Duration,
+    played: Duration,
+    flushed: Duration,
+    before: [f64; 6],
+    steps: u32,
+    /// The longest group of pictures took
+    longest: Duration,
 }
 
 /// Widest margin a tile is drawn with, in pixels
@@ -789,6 +821,8 @@ pub struct Painter {
     /// Where tiles are drawn before they're kept, by the margin around the
     /// tile and how many samples a pixel takes along each side
     scratch: Vec<(i32, i32, Surface)>,
+    /// A tile partly drawn, to draw the rest of when there's nothing sooner
+    pending: Option<Pending>,
     /// Tiles drawn, to time some of them
     made: u64,
     /// Units drawn into images of their own, by unit, picture level, whether
@@ -903,6 +937,7 @@ impl Painter {
             failed: HashMap::new(),
             tiles: HashMap::new(),
             scratch: Vec::new(),
+            pending: None,
             made: 0,
             rasters: HashMap::new(),
             raster_bytes: 0,
@@ -1074,6 +1109,9 @@ impl Painter {
         if in_view.len() + around.len() > self.config.max_tiles {
             around.truncate(self.config.max_tiles.saturating_sub(in_view.len()));
         }
+        if self.pending.as_ref().is_some_and(|pending| !in_view.contains(&pending.key) && !around.contains(&pending.key)) {
+            self.pending = None;
+        }
         // The coarse level over the view, and around it and ahead
         let cp = coarse(px);
         let cpb = cp.to_bits();
@@ -1122,7 +1160,11 @@ impl Painter {
             if self.whole_busy() {
                 return Some(Duration::from_millis(1));
             }
-            self.patch_whole();
+            // What changed that isn't an edit, an image come or the like,
+            // is drawn from thumbs, as the view is meanwhile, rather than
+            // exactly, which for a big image is hundreds of milliseconds,
+            // as tiles are drawn exactly after
+            self.draw_whole(ox, oy, width, height, px, true);
             self.dirty = true;
             return Some(Duration::ZERO);
         }
@@ -1133,7 +1175,10 @@ impl Painter {
             // One drawn at the half octave this zoom's in that still covers
             // the view is scaled to it
             let half = half_octave(px);
-            let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
+            // Where the view will be by when another could be drawn, so the
+            // next is ready before the view leaves this one
+            let lag = (self.whole_took.as_secs_f64() + 0.02).min(0.1);
+            let view_area = self.ahead(Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px), lag);
             let covered = self.whole.as_ref().is_some_and(|whole| {
                 let layer = &whole.layer;
                 let drawn = Rect::from_xywh(layer.x as f32 / half, layer.y as f32 / half, layer.tex.width as f32 / half, layer.tex.height as f32 / half);
@@ -1217,7 +1262,13 @@ impl Painter {
         self.rasters_made = 0;
         // Over where the view is headed too, as it's shown a frame or two
         // after it's drawn
-        let area = self.ahead(Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px));
+        // As far as it'll be till the next is drawn and shown, which is
+        // started before the view leaves this
+        let lag = (self.whole_took.as_secs_f64() + 0.03).min(0.12) * 2.0;
+        let area = self.ahead(Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px), lag);
+        // With a little more, for the view to move into before another's
+        // drawn
+        let area = if quick { area.with_outset((area.width() / 16.0, area.height() / 16.0)) } else { area };
         // While the zoom changes, drawn at the half octave at or above it,
         // which the present thread scales to the view: Skia keeps what it
         // works out for a scale, path masks and glyphs, for the next frame
@@ -1235,6 +1286,7 @@ impl Painter {
         let mut pictures = Vec::new();
         let mut counts = Counts::default();
         let mut left_out = 0;
+        let (mut thumbs_took, mut drawn_took, mut slowest) = (Duration::ZERO, Duration::ZERO, (Duration::ZERO, 0));
         if quick {
             self.thumb_deadline = Some(Instant::now() + THUMB_TIME);
         }
@@ -1248,7 +1300,14 @@ impl Painter {
                 continue;
             }
             if quick {
-                if let Some((drawn, drawn_counts)) = self.thumb(unit, px) {
+                let at = Instant::now();
+                let thumb = self.thumb(unit, px);
+                let took = at.elapsed();
+                thumbs_took += took;
+                if took > slowest.0 {
+                    slowest = (took, unit);
+                }
+                if let Some((drawn, drawn_counts)) = thumb {
                     counts += drawn_counts;
                     pictures.push(drawn);
                     continue;
@@ -1260,14 +1319,21 @@ impl Painter {
                     continue;
                 }
             }
+            let at = Instant::now();
             let level = self.level(&self.units[unit], px, false);
             if let Some((drawn, drawn_counts)) = self.drawn(unit, level, true, px, true) {
                 counts += drawn_counts;
                 pictures.push(drawn);
             }
+            let took = at.elapsed();
+            drawn_took += took;
+            if took > slowest.0 {
+                slowest = (took, unit);
+            }
         }
         let pictures = self.unpage(pictures);
         let start = Instant::now();
+        let before = if tracing() { gpu_counters() } else { [0.0; 6] };
         let Some(tex) = self.tex(width + margin * 2, height + margin * 2) else {
             return;
         };
@@ -1292,15 +1358,24 @@ impl Painter {
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| {
             format!(
-                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} cleared={} margin={margin} recorded={:.1}ms played={:.1}ms {:.1}ms wait={wait} vram={vram}",
+                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} cleared={} thumbs_took={:.1}ms drawn_took={:.1}ms slowest={:.1}ms:{} margin={margin} recorded={:.1}ms played={:.1}ms {:.1}ms wait={wait} vram={vram} gpu={}",
                 pictures.len(),
                 pictures.iter().filter(|item| matches!(item, Drawn::Thumb(..))).count(),
                 std::mem::take(&mut self.thumbs_made),
                 std::mem::take(&mut self.thumbs_derived),
                 std::mem::take(&mut self.pages_cleared),
+                thumbs_took.as_secs_f64() * 1000.0,
+                drawn_took.as_secs_f64() * 1000.0,
+                slowest.0.as_secs_f64() * 1000.0,
+                self.units.get(slowest.1).map(|unit| format!("{}x{}{}", (unit.bounds.width() * px) as i32, (unit.bounds.height() * px) as i32, if unit.alone { "" } else { "+under" })).unwrap_or_default(),
                 recorded.as_secs_f64() * 1000.0,
                 played.as_secs_f64() * 1000.0,
-                start.elapsed().as_secs_f64() * 1000.0
+                start.elapsed().as_secs_f64() * 1000.0,
+                {
+                    let after = gpu_counters();
+                    let [made, made_ms, programs, programs_ms, ..] = std::array::from_fn::<f64, 6, _>(|i| after[i] - before[i]);
+                    format!("made={made}/{made_ms:.1} programs={programs}/{programs_ms:.1} {}", super::committed::take_kinds())
+                }
             )
         });
         self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts }, fence, Some(at));
@@ -1389,15 +1464,28 @@ impl Painter {
             return;
         };
         let reach = reach.with_outset((3.0 / px, 3.0 / px));
+        let near: Vec<Rect> = areas.iter().map(|area| area.with_outset((3.0 / px, 3.0 / px))).collect();
+        // Units under the areas changed, not all between them
+        let under: Vec<usize> = (0..self.units.len())
+            .filter(|&unit| {
+                let bounds = self.units[unit].bounds;
+                Rect::intersects2(&bounds, &reach) && bounds.width().max(bounds.height()) * px >= 0.5 && near.iter().any(|area| Rect::intersects2(&bounds, area))
+            })
+            .collect();
+        // So many it'd take a while: the whole view's drawn again from
+        // thumbs instead
+        if under.len() > PATCH_UNITS {
+            if let Some(whole) = self.whole.as_mut() {
+                whole.stale = true;
+            }
+            trace(|| format!("  patch of {} units drawn from thumbs instead", under.len()));
+            return;
+        }
         // Rasters of units that change each frame would be made each frame
         self.rasters_made = RASTERS_A_DRAW;
         let mut recorded = 0usize;
         let mut pictures = Vec::new();
-        for unit in 0..self.units.len() {
-            let bounds = self.units[unit].bounds;
-            if !Rect::intersects2(&bounds, &reach) || bounds.width().max(bounds.height()) * px < 0.5 {
-                continue;
-            }
+        for unit in under {
             let level = self.level(&self.units[unit], px, false);
             if !self.pictures.contains_key(&(self.units[unit].slot, self.units[unit].section, level, true)) {
                 recorded += 1;
@@ -1448,14 +1536,13 @@ impl Painter {
         self.drew = true;
     }
 
-    /// `area` of the view, with where the view is likely to show by the time
-    /// what's drawn of it now is: as far as it moves and widens while a
-    /// whole view is drawn and shown, up to a third of it each way
-    fn ahead(&self, area: Rect) -> Rect {
+    /// `area` of the view, with where the view is likely to be `lag`
+    /// seconds from now, as far as it moves and widens meanwhile, up to a
+    /// third of it each way
+    fn ahead(&self, area: Rect, lag: f64) -> Rect {
         if self.moved.elapsed() > Duration::from_millis(150) {
             return area;
         }
-        let lag = (self.whole_took.as_secs_f64() + 0.02).min(0.1) * 1.5;
         let grow = 2f64.powf((self.widening * lag).clamp(-1.0, 1.0)) as f32;
         let center = area.center();
         let (w, h) = (area.width() * grow, area.height() * grow);
@@ -1527,6 +1614,7 @@ impl Painter {
     }
 
     fn clear_tiles(&mut self) {
+        self.pending = None;
         let tiles: Vec<Tile> = self.tiles.drain().map(|(_, tile)| tile).collect();
         for tile in tiles {
             self.drop_tile(tile);
@@ -2196,6 +2284,13 @@ impl Painter {
                 tile.stale = true;
             }
         }
+        if let Some(pending) = &self.pending {
+            let reach = pending.margin as f32 / pending.key.px();
+            let area = pending.key.area().with_outset((reach, reach));
+            if areas.iter().any(|other| Rect::intersects2(&area, other)) {
+                self.pending = None;
+            }
+        }
         if let Some(whole) = &mut self.whole {
             whole.patch.extend_from_slice(areas);
         }
@@ -2333,6 +2428,14 @@ impl Painter {
         let (slot, section, bounds) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds);
         let key = (slot, section, level, aa);
         if !self.pictures.contains_key(&key) {
+            let started = Instant::now();
+            let slow = |pictures: &HashMap<_, Recorded>| {
+                let took = started.elapsed();
+                if took > Duration::from_millis(15) {
+                    let counts = pictures.get(&key).map(|recorded: &Recorded| recorded.counts).unwrap_or_default();
+                    trace(|| format!("  picture slot={slot} section={section} level={level} took {:.1}ms native={} approximate={} {:.0}x{:.0}", took.as_secs_f64() * 1000.0, counts.native, counts.approximate, bounds.width(), bounds.height()));
+                }
+            };
             if let (Some(tree), Some(place)) = (&self.tree, &self.units[unit].place) {
                 let mut recorder = PictureRecorder::new();
                 let canvas = recorder.begin_recording(bounds.with_outset((1.0, 1.0)), true);
@@ -2355,6 +2458,7 @@ impl Painter {
                 self.ask(&images);
                 let missing = images.into_iter().map(|(key, _)| key).collect();
                 self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources: Vec::new(), uses });
+                slow(&self.pictures);
                 return self.pictures.get(&key);
             }
             let mut recorder = PictureRecorder::new();
@@ -2390,6 +2494,7 @@ impl Painter {
             self.ask_exact(&exact);
             let missing = images.into_iter().chain(exact).map(|(key, _)| key).collect();
             self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources, uses });
+            slow(&self.pictures);
         }
         self.pictures.get(&key)
     }
@@ -2561,6 +2666,11 @@ impl Painter {
         canvas.scale((side, side));
         canvas.draw_picture(&picture, None, None);
         canvas.restore();
+        // Skia does the work of drawing it once flushed, so where time's
+        // short it's flushed now, for the time it takes to count
+        if self.thumb_deadline.is_some() {
+            let _ = self.gpu.context.flush_surface(&mut self.thumb_pages[page].surface);
+        }
         let from = Rect::from_xywh(at.left as f32 + 1.0, at.top as f32 + 1.0, bounds.width() * side, bounds.height() * side);
         let generation = self.thumb_pages[page].generation;
         self.thumb_serial += 1;
@@ -2899,8 +3009,11 @@ impl Painter {
     /// is many times quicker
     fn draw_tile(&mut self, key: TileKey, exact: bool, draft: bool) -> Option<Tile> {
         let _purpose = super::gpu_census::purpose("drawing tiles");
-        self.rasters_made = 0;
         let exact = exact && !draft;
+        if let Some(pending) = self.pending.take_if(|pending| (pending.key, pending.exact, pending.draft) == (key, exact, draft)) {
+            return self.step_tile(pending);
+        }
+        self.rasters_made = 0;
         let ss = if exact { self.supersample(key.px()) } else { 1 };
         let aa = ss < 4;
         let area = key.area();
@@ -2948,29 +3061,91 @@ impl Painter {
         let pictures = self.unpage(pictures);
         let recorded = start.elapsed();
         let before = if tracing() { gpu_counters() } else { [0.0; 6] };
-        let tex = self.tex(TILE, TILE)?;
-        let found = match self.scratch.iter().position(|(kept, samples, _)| (*kept, *samples) == (margin, ss)) {
-            Some(found) => found,
-            None => {
-                let side = (TILE + margin * 2) * ss;
-                // Outside Skia's cache, so its memory goes as soon as it does
-                let surface = self.gpu.own_surface(side, side, self.config.samples)?;
-                self.scratch.push((margin, ss, surface));
-                self.scratch.len() - 1
-            }
+        let scratch = match self.scratch.iter().position(|(kept, samples, _)| (*kept, *samples) == (margin, ss)) {
+            Some(found) => self.scratch.swap_remove(found).2,
+            // Outside Skia's cache, so its memory goes as soon as it does
+            None => self.gpu.own_surface((TILE + margin * 2) * ss, (TILE + margin * 2) * ss, self.config.samples)?,
         };
-        let (_, _, scratch) = &mut self.scratch[found];
-        let canvas = scratch.canvas();
-        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         let offset = (((margin - key.x * TILE) * ss) as f32 - self.frac.0 * ss as f32, ((margin - key.y * TILE) * ss) as f32 - self.frac.1 * ss as f32);
-        play(canvas, &pictures, offset, px * ss as f32);
-        let played = start.elapsed();
-        let mut flushed = played;
+        let mut pending = Pending {
+            key,
+            exact,
+            draft,
+            pictures,
+            names,
+            next: 0,
+            group: 2,
+            scratch,
+            margin,
+            ss,
+            offset,
+            counts,
+            timing,
+            started: start,
+            recorded,
+            played: Duration::ZERO,
+            flushed: Duration::ZERO,
+            before,
+            steps: 0,
+            longest: Duration::ZERO,
+        };
+        pending.scratch.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        self.step_tile(pending)
+    }
+
+    /// Draws more of tile `pending`: a quick one all at once, an exact one
+    /// for about `TILE_SLICE`, then the rest later, so the view is never
+    /// held up long by it. Returns the tile once it's all drawn
+    fn step_tile(&mut self, mut pending: Pending) -> Option<Tile> {
+        let began = Instant::now();
+        let scale = pending.key.px() * pending.ss as f32;
+        let mut groups = 0;
+        while pending.next < pending.pictures.len() {
+            if !pending.exact {
+                let at = Instant::now();
+                play(pending.scratch.canvas(), &pending.pictures, pending.offset, scale);
+                pending.next = pending.pictures.len();
+                pending.played += at.elapsed();
+                if pending.timing {
+                    let at = Instant::now();
+                    let _ = self.gpu.context.flush_surface(&mut pending.scratch);
+                    pending.flushed += at.elapsed();
+                }
+                break;
+            }
+            if groups > 0 && began.elapsed() >= TILE_SLICE {
+                // What's drawn so far goes to the GPU meanwhile
+                self.gpu.context.submit(None);
+                pending.steps += 1;
+                self.pending = Some(pending);
+                return None;
+            }
+            let end = (pending.next + pending.group).min(pending.pictures.len());
+            let at = Instant::now();
+            play(pending.scratch.canvas(), &pending.pictures[pending.next..end], pending.offset, scale);
+            let flushing = Instant::now();
+            // Skia does most of the work of drawing here, not as it's told
+            // what to draw, so what it's given at once is kept to a slice
+            let _ = self.gpu.context.flush_surface(&mut pending.scratch);
+            let took = at.elapsed();
+            pending.played += flushing - at;
+            pending.flushed += flushing.elapsed();
+            pending.next = end;
+            pending.longest = pending.longest.max(took);
+            groups += 1;
+            if took > TILE_SLICE {
+                pending.group = (pending.group / 2).max(1);
+            } else if took < TILE_SLICE / 4 {
+                pending.group = (pending.group * 2).min(64);
+            }
+        }
+        let Pending { key, exact, draft, pictures, names, mut scratch, margin, ss, offset, counts, timing, started, recorded, played, flushed, before, steps, longest, .. } = pending;
+        let px = key.px();
+        let tail = Instant::now();
         if timing {
-            let _ = self.gpu.context.flush_surface(scratch);
-            flushed = start.elapsed();
             self.gpu.context.submit(Some(SyncCpu::Yes));
         }
+        let tex = self.tex(TILE, TILE)?;
         let source = skia_safe::IRect::from_xywh(margin * ss, margin * ss, TILE * ss, TILE * ss);
         let drawn = scratch.image_snapshot();
         let backend = tex.backend();
@@ -2990,38 +3165,37 @@ impl Painter {
         drop(target);
         let fence = self.gpu.signal();
         let image = image?;
-        // Margins are rare, so their bigger surfaces aren't kept
-        if margin != 0 {
-            self.scratch.remove(found);
-        }
         if timing {
-            let gpu = start.elapsed();
+            let gpu = tail.elapsed();
             let mut stats = stats().lock().unwrap();
             let mix = |mean: &mut f64, ms: f64| *mean = if *mean == 0.0 { ms } else { *mean * 0.9 + ms * 0.1 };
             mix(&mut stats.tile_record_ms, recorded.as_secs_f64() * 1000.0);
-            mix(&mut stats.tile_play_ms, (played - recorded).as_secs_f64() * 1000.0);
-            mix(&mut stats.tile_gpu_ms, (gpu - played).as_secs_f64() * 1000.0);
+            mix(&mut stats.tile_play_ms, (played + flushed).as_secs_f64() * 1000.0);
+            mix(&mut stats.tile_gpu_ms, gpu.as_secs_f64() * 1000.0);
             stats.tiles_drawn += 1;
             drop(stats);
             let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
+            let wall = started.elapsed();
             trace(|| {
                 let ms = |d: Duration| d.as_secs_f64() * 1000.0;
                 let after = gpu_counters();
                 let [made, made_ms, programs, programs_ms, pipelines, pipelines_ms] = std::array::from_fn(|i| after[i] - before[i]);
                 let kinds = super::committed::take_kinds();
                 format!(
-                    "  tile {},{} px={px:.4} draft={draft} exact={exact} margin={margin} units={} record={:.1} play={:.1} flush={:.1} gpu={:.1} vram={vram} made={made}/{made_ms:.1} programs={programs}/{programs_ms:.1} pipelines={pipelines}/{pipelines_ms:.1} kinds: {kinds}",
+                    "  tile {},{} px={px:.4} draft={draft} exact={exact} margin={margin} units={} record={:.1} play={:.1} flush={:.1} gpu={:.1} steps={steps} longest={:.1} wall={:.1} vram={vram} made={made}/{made_ms:.1} programs={programs}/{programs_ms:.1} pipelines={pipelines}/{pipelines_ms:.1} kinds: {kinds}",
                     key.x,
                     key.y,
                     pictures.len(),
                     ms(recorded),
-                    ms(played - recorded),
-                    ms(flushed - played),
-                    ms(gpu - flushed)
+                    ms(played),
+                    ms(flushed),
+                    ms(gpu),
+                    ms(longest),
+                    ms(wall)
                 )
             });
             // What a slow tile spent its time on, each unit drawn alone
-            if tracing_units() && (gpu - played) > Duration::from_millis(50) {
+            if tracing_units() && flushed + gpu > Duration::from_millis(50) {
                 if let Some(mut alone) = self.gpu.surface((TILE + margin * 2) * ss, (TILE + margin * 2) * ss, self.config.samples) {
                     {
                         let canvas = alone.canvas();
@@ -3043,6 +3217,10 @@ impl Painter {
                     }
                 }
             }
+        }
+        // Margins are rare, so their bigger surfaces aren't kept
+        if margin == 0 {
+            self.scratch.push((margin, ss, scratch));
         }
         Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, fence, previous: None })
     }
@@ -3330,9 +3508,17 @@ impl Painter {
             }
         }
         // Pictures of zoom levels far from any tile kept go too
-        let levels: Vec<i32> = self.tiles.keys().map(|key| key.px().log2().round() as i32).collect();
+        let mut levels: Vec<i32> = self.tiles.keys().map(|key| key.px().log2().round() as i32).collect();
+        if let Some(whole) = &self.whole {
+            levels.push(whole.layer.px.log2().round() as i32);
+        }
+        // Thumbs stay as they are only while the pictures they're of do
+        let thumbed: std::collections::HashSet<(usize, bool, i32)> = self.thumbs.iter().map(|(&(slot, section, _), thumb)| (slot, section, thumb.picture_level)).collect();
         let exact: Vec<i32> = self.tiles.keys().map(|key| EXACT_LEVEL + (key.px() * EXACT_STEPS).round() as i32).collect();
-        self.pictures.retain(|&(_, _, level, _), _| {
+        self.pictures.retain(|&(slot, section, level, aa), _| {
+            if aa && thumbed.contains(&(slot, section, level)) {
+                return true;
+            }
             if level >= EXACT_LEVEL {
                 exact.contains(&level)
             } else if is_draft(level) {
