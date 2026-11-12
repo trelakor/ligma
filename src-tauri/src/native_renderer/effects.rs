@@ -163,7 +163,7 @@ fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch,
             };
             match done {
                 Ok(img) => {
-                    let _ = messages.send(Msg::Image(key, img));
+                    let _ = messages.send(Msg::Image(key, img, None));
                 }
                 Err(error) => {
                     log::warn!("native renderer: effects of {key}: {error}");

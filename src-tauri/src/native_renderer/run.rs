@@ -582,10 +582,10 @@ fn shared_view(shared: crate::webview2::Shared) -> Option<(u64, View, f64)> {
         if unsafe { std::ptr::read_volatile(base) } != count {
             continue;
         }
-        let [_, x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, a, b, at, ..] = slots;
+        let [_, x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, a, b, at, preview] = slots;
         let _ = (cx, cy);
         let page = format!("{}:{}", a as i64, b as i64);
-        return Some((count as u64, View { x, y, w, h, zoom, cw, ch, dpr, page, visible: visible != 0.0 }, at));
+        return Some((count as u64, View { x, y, w, h, zoom, cw, ch, dpr, page, visible: visible != 0.0, preview }, at));
     }
     None
 }
@@ -665,7 +665,7 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<Mutex<Receiver<Request>>>) {
             let (ctx, id) = (ctx.clone(), id.to_string());
             std::thread::spawn(move || match fetch_node(&webview, &id, width) {
                 Ok(img) => {
-                    let _ = ctx.messages.send(Msg::Image(key, img));
+                    let _ = ctx.messages.send(Msg::Image(key, img, Some(width)));
                 }
                 Err(error) => {
                     log::warn!("native renderer render {key}: {error}");
@@ -678,7 +678,7 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<Mutex<Receiver<Request>>>) {
         let fetched = fetch_image(&ctx, &webview, &key, width);
         match fetched {
             Ok(img) => {
-                let _ = ctx.messages.send(Msg::Image(key, img));
+                let _ = ctx.messages.send(Msg::Image(key, img, Some(width)));
             }
             Err(error) => {
                 log::warn!("native renderer image {key}: {error}");

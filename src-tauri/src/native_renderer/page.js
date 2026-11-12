@@ -14,30 +14,62 @@
   // Figma's noise seed, which a file can't change
   const NOISE_SEED = 5277;
 
+  // Figma's modules: `require` and each module's source, for those whose
+  // source has `marker`
+  let figmaRequire;
+  const modulesWith = (marker) => {
+    if (!figmaRequire) window.rspackChunk_figma_web_bundler?.push([[Symbol("ligma")], {}, (r) => (figmaRequire = r)]);
+    if (!figmaRequire?.m) return [];
+    const ids = [];
+    for (const id of Object.keys(figmaRequire.m)) {
+      try {
+        if (Function.prototype.toString.call(figmaRequire.m[id]).includes(marker)) ids.push(id);
+      } catch {}
+    }
+    return ids;
+  };
+  // The first of the exports of modules with `marker` that has a function
+  // `name`. Only modules Figma has loaded already are asked for
+  const exportWith = (marker, name) => {
+    for (const id of modulesWith(marker)) {
+      const exports = figmaRequire(id);
+      for (const key of Object.keys(exports ?? {})) {
+        try {
+          if (typeof exports[key]?.[name] === "function") return exports[key];
+        } catch {}
+      }
+    }
+    return null;
+  };
+
   // Figma's packager of custom effects' code, found once among its modules
   // by what it does
   let packager;
   const effectPackager = () => {
-    if (packager !== undefined) return packager;
-    packager = null;
-    const chunks = window.rspackChunk_figma_web_bundler;
-    if (!chunks) return packager;
-    let require;
-    chunks.push([[Symbol("ligma")], {}, (r) => (require = r)]);
-    if (!require?.m) return packager;
-    for (const id of Object.keys(require.m)) {
-      let source;
-      try {
-        source = Function.prototype.toString.call(require.m[id]);
-      } catch {
-        continue;
-      }
-      if (!source.includes("_tryS3ArtifactFallback")) continue;
-      const exports = require(id);
-      packager = Object.values(exports ?? {}).find((value) => typeof value?.ensurePackaged === "function") ?? null;
-      if (packager) break;
-    }
+    if (packager === undefined) packager = exportWith("_tryS3ArtifactFallback", "ensurePackaged");
     return packager;
+  };
+
+  // Figma's pixel preview, as pixels a unit it previews at: 1, 2 for its 2x,
+  // or 0 when it's off. Read from Figma's own state, its editor preferences
+  // and canvas view, found among its modules by the getters they define
+  let previewState = null;
+  let previewSought = -Infinity;
+  const pixelPreview = () => {
+    if (!previewState && performance.now() - previewSought > 5000) {
+      previewSought = performance.now();
+      const prefs = exportWith("get activeCanvasPixelPreview(){", "editorPreferences");
+      if (prefs) previewState = { prefs, view: exportWith("get shouldStayZoomedToFit(){", "canvasViewState") };
+    }
+    try {
+      if (previewState) {
+        if (!previewState.prefs.editorPreferences().activeCanvasPixelPreview.getCopy()) return 0;
+        return previewState.view?.canvasViewState().activeCanvasRetinaMode.getCopy() ? 2 : 1;
+      }
+      return localStorage.getItem("active-canvas-pixel-preview") === "1" ? 1 : 0;
+    } catch {
+      return 0;
+    }
   };
 
   const api = () => {
@@ -649,7 +681,7 @@
 
     // The viewport and canvas, polled for every frame drawn: world bounds,
     // zoom, the canvas's CSS size and place in the page, device pixels per
-    // CSS pixel, and the page
+    // CSS pixel, the page, and the pixel preview
     view() {
       const figma = api();
       if (!figma) return null;
@@ -669,6 +701,7 @@
         dpr: devicePixelRatio,
         page: figma.currentPage.id,
         visible: document.visibilityState === "visible",
+        preview: pixelPreview(),
       };
     },
 
@@ -965,19 +998,20 @@
   // `webview2::share`) after every frame Figma draws, so Ligma follows it
   // the moment it moves without asking. Slot 0 counts writes, odd while one
   // is under way, then x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, the
-  // page id's two numbers, and when it was written
+  // page id's two numbers, when it was written, and the pixel preview
   let shared = null;
   let written = [];
   const writeView = () => {
     const v = shared && window.__ligmaNative.view();
     if (!v) return;
     const [a, b] = v.page.split(":").map(Number);
-    const values = [v.x, v.y, v.w, v.h, v.zoom, v.cx, v.cy, v.cw, v.ch, v.dpr, v.visible ? 1 : 0, a, b];
+    const values = [v.x, v.y, v.w, v.h, v.zoom, v.cx, v.cy, v.cw, v.ch, v.dpr, v.visible ? 1 : 0, a, b, v.preview];
     if (values.every((value, i) => value === written[i])) return;
     written = values;
     shared[0] += 1;
-    for (let i = 0; i < values.length; i++) shared[i + 1] = values[i];
+    for (let i = 0; i < 13; i++) shared[i + 1] = values[i];
     shared[14] = performance.timeOrigin + performance.now();
+    shared[15] = v.preview;
     shared[0] += 1;
   };
   // Read once Figma has drawn the frame, as it moves the view before

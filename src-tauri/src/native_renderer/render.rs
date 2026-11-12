@@ -56,6 +56,32 @@ pub struct View {
     pub page: String,
     #[serde(default)]
     pub visible: bool,
+    /// Figma's pixel preview: pixels a unit it previews at, 1 or 2, or 0
+    #[serde(default)]
+    pub preview: f64,
+}
+
+impl View {
+    /// Device pixels a unit in a window `width` pixels wide
+    pub fn px(&self, width: u32) -> f32 {
+        (width as f64 / self.w) as f32
+    }
+
+    /// Pixels a unit the view is drawn at in a window `size`, whether that's
+    /// a pixel preview, and the window's size in those pixels. With Figma's
+    /// pixel preview on and the view zoomed past it, it's drawn at the
+    /// preview's 1 or 2 pixels a unit and magnified, each pixel a square, as
+    /// Figma shows it
+    pub fn drawn(&self, (width, height): (u32, u32)) -> (f32, bool, i32, i32) {
+        let px = self.px(width);
+        let preview = self.preview as f32;
+        if preview > 0.0 && px > preview {
+            let scale = preview / px;
+            (preview, true, (width as f32 * scale).ceil() as i32 + 1, (height as f32 * scale).ceil() as i32 + 1)
+        } else {
+            (px, false, width as i32, height as i32)
+        }
+    }
 }
 
 pub enum Msg {
@@ -63,7 +89,8 @@ pub enum Msg {
     Begin(Box<Scene>),
     Changes(Prepared),
     View(View),
-    Image(String, Img),
+    /// Image `key`, and the width it was asked for at, if it was
+    Image(String, Img, Option<f64>),
     /// Image `key` couldn't be had, so it's asked for again later
     Failed(String),
     Resize(u32, u32),
@@ -746,8 +773,7 @@ impl Painter {
     /// more to draw, if there is
     fn fill(&mut self) -> Option<Duration> {
         let view = self.view.clone()?;
-        let (width, height) = (self.gpu.size.0 as i32, self.gpu.size.1 as i32);
-        let px = (width as f64 / view.w) as f32;
+        let (px, preview, width, height) = view.drawn(self.gpu.size);
         if !px.is_finite() || px <= 0.0 {
             return None;
         }
@@ -756,8 +782,11 @@ impl Painter {
         }
         self.frame += 1;
         let pxb = px.to_bits();
-        let ox = (view.x * px as f64).round() as i32;
-        let oy = (view.y * px as f64).round() as i32;
+        // A preview's pixels are magnified, so it's drawn from the pixel
+        // the window's corner is in
+        let snap = |at: f64| if preview { at.floor() } else { at.round() } as i32;
+        let ox = snap(view.x * px as f64);
+        let oy = snap(view.y * px as f64);
         let in_view = Self::tiles_over(ox, oy, width, height, pxb, 0);
         let mut around: Vec<TileKey> = Self::tiles_over(ox, oy, width, height, pxb, 1).into_iter().filter(|key| !in_view.contains(key)).collect();
         // Where a pan is headed, so its tiles are drawn before it gets there
@@ -797,7 +826,7 @@ impl Painter {
         let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
         if !settle.is_zero() {
             if !whole_here {
-                self.draw_whole(ox, oy, px);
+                self.draw_whole(ox, oy, width, height, px);
                 self.dirty = true;
                 return Some(Duration::ZERO);
             }
@@ -845,18 +874,17 @@ impl Painter {
                 self.dirty = true;
             }
         }
-        self.update_reason(&view, px);
+        self.update_reason(&view, px, width, height);
         (!rough.is_empty()).then_some(refine)
     }
 
-    /// Draws the whole view, (`ox`, `oy`) its corner in device pixels at
-    /// `px` a unit, with a margin for background blurs near its edges to
+    /// Draws the whole view, (`ox`, `oy`) its corner and `width` by `height`
+    /// its size in pixels at `px` a unit, with a margin for background blurs near its edges to
     /// see what they blur, for the present thread to show where tiles of the
     /// zoom aren't drawn yet
-    fn draw_whole(&mut self, ox: i32, oy: i32, px: f32) {
+    fn draw_whole(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32) {
         let _purpose = super::gpu_census::purpose("whole");
         self.rasters_made = 0;
-        let (width, height) = (self.gpu.size.0 as i32, self.gpu.size.1 as i32);
         let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
         let margin = self.reach(view_area, px);
         let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
@@ -974,9 +1002,8 @@ impl Painter {
     }
 
     /// The approximate reason of a unit in view, if any, for the overlay
-    fn update_reason(&mut self, view: &View, px: f32) {
-        let (width, height) = (self.gpu.size.0 as f32, self.gpu.size.1 as f32);
-        let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width / px, height / px);
+    fn update_reason(&mut self, view: &View, px: f32, width: i32, height: i32) {
+        let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
         let aa = self.supersample(px) < 4;
         let reason = self
             .units
@@ -1070,7 +1097,14 @@ impl Painter {
                 self.asked.remove(&key);
                 self.failed.insert(key, Instant::now());
             }
-            Msg::Image(key, img) => {
+            Msg::Image(key, img, width) => {
+                // Fetches run side by side, so one asked for before can come
+                // after: it's of a view gone by, and what's asked for since
+                // is on its way
+                if width.is_some_and(|width| self.asked.get(&key).is_some_and(|&asked| asked != width)) {
+                    trace(|| format!("image {key} for {width:?} came after one asked since"));
+                    return true;
+                }
                 self.failed.remove(&key);
                 // Asked for twice, by pictures wanting it at sizes that came
                 // to the same: what's drawn with it is right as it is
@@ -1842,6 +1876,34 @@ impl Painter {
     /// tiles it's missing within `budget`. Returns what's drawn and whether
     /// tiles are still missing
     fn compose(&mut self, target: &mut Surface, view: &View, budget: Option<Duration>, settled: bool) -> (Counts, Option<String>, bool) {
+        let size = (target.width() as u32, target.height() as u32);
+        let (drawn, preview, width, height) = view.drawn(size);
+        if !preview {
+            return self.compose_at(target, view, budget, settled);
+        }
+        // A pixel preview: the view drawn at its pixels from the one the
+        // corner is in, then magnified, each pixel a square
+        let (cx, cy) = ((view.x * drawn as f64).floor(), (view.y * drawn as f64).floor());
+        let small = View { x: cx / drawn as f64, y: cy / drawn as f64, w: width as f64 / drawn as f64, h: height as f64 / drawn as f64, preview: 0.0, ..view.clone() };
+        let Some(mut surface) = self.gpu.surface(width, height, 1) else {
+            return (Counts::default(), None, true);
+        };
+        let result = self.compose_at(&mut surface, &small, budget, settled);
+        let px = view.px(size.0);
+        let scale = px / drawn;
+        let image = surface.image_snapshot();
+        // Its corner lands on a whole pixel, as the view's does
+        let at = (small.x * px as f64 - (view.x * px as f64).round()) as f32;
+        let at_y = (small.y * px as f64 - (view.y * px as f64).round()) as f32;
+        let dest = Rect::from_xywh(at, at_y, width as f32 * scale, height as f32 * scale);
+        let canvas = target.canvas();
+        canvas.draw_image_rect_with_sampling_options(&image, None, dest, SamplingOptions::new(FilterMode::Nearest, MipmapMode::None), &Paint::default());
+        self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, size.0 as i32, size.1 as i32);
+        result
+    }
+
+    /// `compose` at the window's own pixels
+    fn compose_at(&mut self, target: &mut Surface, view: &View, budget: Option<Duration>, settled: bool) -> (Counts, Option<String>, bool) {
         self.frame += 1;
         let (width, height) = (target.width(), target.height());
         let px = (width as f64 / view.w) as f32;

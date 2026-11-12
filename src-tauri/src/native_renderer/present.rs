@@ -372,7 +372,10 @@ impl Screen {
             return;
         }
         let (width, height) = (self.size.0 as i32, self.size.1 as i32);
-        let px = (width as f64 / view.w) as f32;
+        let px = view.px(self.size.0);
+        // What the render thread draws the view at, a pixel preview's
+        // pixels magnified
+        let (drawn, preview, _, _) = view.drawn(self.size);
         let (ox, oy) = (view.x * px as f64, view.y * px as f64);
         // Tiles of this zoom land on whole pixels, as Figma's do
         let (rx, ry) = (ox.round() as i32, oy.round() as i32);
@@ -381,8 +384,8 @@ impl Screen {
         let mut layers: Vec<(f32, &Layer)> = what
             .tiles
             .iter()
-            .map(|layer| (if layer.px == px { 0.0 } else { 2.0 + (layer.px / px).log2().abs() }, layer))
-            .chain(what.live.iter().map(|layer| (if layer.px == px { 1.0 } else { 1.5 + (layer.px / px).log2().abs() }, layer)))
+            .map(|layer| (if layer.px == drawn { 0.0 } else { 2.0 + (layer.px / drawn).log2().abs() }, layer))
+            .chain(what.live.iter().map(|layer| (if layer.px == drawn { 1.0 } else { 1.5 + (layer.px / drawn).log2().abs() }, layer)))
             .collect();
         layers.sort_by(|a, b| a.0.total_cmp(&b.0));
         let window = skia_safe::IRect::from_wh(width, height);
@@ -395,10 +398,14 @@ impl Screen {
                 break;
             }
             let same = layer.px == px;
+            let square = same || (preview && layer.px == drawn);
             let dest = if same {
                 Rect::from_xywh((layer.x - rx) as f32, (layer.y - ry) as f32, layer.tex.width as f32, layer.tex.height as f32)
             } else {
                 let scale = (px / layer.px) as f64;
+                // A preview's squares are placed from the whole pixel the
+                // view lands on, as Figma places them
+                let (ox, oy) = if square { (rx as f64, ry as f64) } else { (ox, oy) };
                 Rect::from_xywh(
                     (layer.x as f64 * scale - ox) as f32,
                     (layer.y as f64 * scale - oy) as f32,
@@ -419,7 +426,7 @@ impl Screen {
                 counts += layer.counts;
             }
             left.op_rect(covers, skia_safe::region::RegionOp::Difference);
-            draws.push((image, dest, here, same));
+            draws.push((image, dest, here, square));
         }
         let checker = self.checker(what, (ox, oy), px, view.zoom);
         let grid = self.pixel_grid((ox, oy), px);
@@ -429,10 +436,10 @@ impl Screen {
         if let Some(checker) = &checker {
             canvas.draw_paint(checker);
         }
-        for (image, dest, clip, same) in &draws {
+        for (image, dest, clip, square) in &draws {
             canvas.save();
             canvas.clip_region(clip, skia_safe::ClipOp::Intersect);
-            let sampling = if *same { SamplingOptions::new(FilterMode::Nearest, MipmapMode::None) } else { SamplingOptions::new(FilterMode::Linear, MipmapMode::None) };
+            let sampling = if *square { SamplingOptions::new(FilterMode::Nearest, MipmapMode::None) } else { SamplingOptions::new(FilterMode::Linear, MipmapMode::None) };
             canvas.draw_image_rect_with_sampling_options(image, None, *dest, sampling, &Paint::default());
             canvas.restore();
         }
