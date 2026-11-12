@@ -19,8 +19,8 @@ use skia_safe::canvas::{SaveLayerFlags, SaveLayerRec};
 use skia_safe::gradient::{shaders as gradients, Colors, Gradient, Interpolation};
 use skia_safe::image_filters::CropRect;
 use skia_safe::{
-    color_filters, image_filters, BlendMode, Canvas, ClipOp, Color4f, ColorChannel, Data, FilterMode, Matrix, Paint, Path, Picture,
-    PictureRecorder, Point, Rect, TileMode,
+    color_filters, image_filters, BlendMode, Canvas, ClipOp, Color4f, ColorChannel, Data, FilterMode, Matrix, MipmapMode, Paint, Path, Picture,
+    PictureRecorder, Point, Rect, SamplingOptions, TileMode,
 };
 
 use super::adjust::Adjust;
@@ -153,6 +153,22 @@ pub struct TreeUnit {
     pub bounds: Rect,
     pub blends: bool,
     pub custom: bool,
+}
+
+/// A custom effect node's effects, as the effect host runs them
+pub struct CustomEffect {
+    /// What they draw goes by this, which stays the same while the node does
+    pub key: String,
+    /// The Figma node they're on
+    pub node: String,
+    /// Each effect's code by name, and its settings
+    pub chain: Vec<(String, serde_json::Value)>,
+    /// The box they run over and draw, in the node's own space
+    pub area: Rect,
+    /// From the node's own space to the space the custom effect node is in
+    pub to: Matrix,
+    /// What they run on
+    pub child: u32,
 }
 
 /// Subtrees with more nodes than this are split into units of their own
@@ -481,6 +497,42 @@ impl Tree {
             }
         }
         None
+    }
+
+    /// Custom effect node `id`'s effects, when they're of a kind that runs
+    pub fn custom_effect(&self, id: u32) -> Option<CustomEffect> {
+        let node = self.forest.get(id)?;
+        if node.op != Op::CustomEffect {
+            return None;
+        }
+        let ext = node.ext();
+        // One run of effects over the node is all that's taken
+        let [texture] = ext.custom_effect_textures.as_slice() else {
+            return None;
+        };
+        let chain: Vec<(String, serde_json::Value)> = texture
+            .intra_layer_chain
+            .iter()
+            .map(|entry| {
+                let id = entry.code_component_id.as_deref()?;
+                let id = id.strip_prefix("CodeComponentId:").unwrap_or(id).to_string();
+                let params = serde_json::from_str(entry.params_json.as_deref().unwrap_or("{}")).ok()?;
+                Some((id, params))
+            })
+            .collect::<Option<_>>()?;
+        let area = ext.custom_effect_render_target_local_bounds?.to_skia();
+        if chain.is_empty() || !area.is_finite() || area.is_empty() {
+            return None;
+        }
+        let guid = texture.node_guid.unwrap_or_default();
+        Some(CustomEffect {
+            key: format!("{}t{id}", draw::EFFECT),
+            node: format!("{}:{}", guid.session_id, guid.local_id),
+            chain,
+            area,
+            to: Drawer::effect_space(node),
+            child: node.child?,
+        })
     }
 
     /// The outline of fill node `id`, in its own space
@@ -816,9 +868,10 @@ impl<'a> Drawer<'a> {
                 self.draw(child);
                 self.canvas.restore();
             }
+            Op::CustomEffect if !self.cast && self.custom_effect(node.id) => {}
             Op::CustomEffect | Op::CustomEffectFill | Op::Glass | Op::SpatialPlane | Op::SpatialTransform | Op::SpatialComposition => {
-                // Drawn without the effect for now, as Figma would if it
-                // couldn't run it
+                // Drawn without the effect until it's run, or where it can't
+                // be, as Figma would if it couldn't run it
                 self.approximate(match node.op {
                     Op::Glass => "glass",
                     Op::CustomEffect | Op::CustomEffectFill => "custom effect",
@@ -842,6 +895,48 @@ impl<'a> Drawer<'a> {
                 }
             }
         }
+    }
+
+    /// Draws custom effect node `id` as its effects drew it, run by the
+    /// effect host on the node's content, if that's here. As on Figma's
+    /// canvas, they run once, at a pixel a unit whatever the zoom, and what
+    /// they draw covers the box they ran over
+    fn custom_effect(&mut self, id: u32) -> bool {
+        let Some(effect) = self.tree.custom_effect(id) else {
+            return false;
+        };
+        self.canvas.save();
+        self.canvas.concat(&effect.to);
+        let shown = (effect.area.width().max(effect.area.height()) * self.device_scale() * 1.42) as f64;
+        let drawn = match self.images.get(&effect.key) {
+            Some(img) => {
+                if img.stale {
+                    self.missing_images.push((effect.key.clone(), shown));
+                } else {
+                    self.used_images.push((effect.key.clone(), shown));
+                }
+                img.area.is_some_and(|area| {
+                    let scale = img.image.width() as f32 / area.width().max(1e-6);
+                    let sampling = if scale > self.device_scale() * 1.5 {
+                        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+                    } else {
+                        SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
+                    };
+                    let at = Rect::from_xywh(effect.area.left, effect.area.top, area.width(), area.height());
+                    self.canvas.draw_image_rect_with_sampling_options(&img.image, None, at, sampling, &Paint::default());
+                    true
+                })
+            }
+            None => {
+                self.missing_images.push((effect.key.clone(), shown));
+                false
+            }
+        };
+        self.canvas.restore();
+        if drawn {
+            self.counts.native += 1;
+        }
+        drawn
     }
 
     /// Draws `id` as what casts a silhouette
@@ -1166,7 +1261,7 @@ impl<'a> Drawer<'a> {
     }
 
     /// The node's effect space: where its source node is in the node's own
-    fn effect_space(node: &Node) -> Matrix {
+    pub fn effect_space(node: &Node) -> Matrix {
         node.ext()
             .node_to_canvas_space_transform
             .filter(|t| t.iter().all(|v| v.is_finite()))

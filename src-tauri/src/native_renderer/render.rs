@@ -1423,6 +1423,10 @@ impl Painter {
         };
         self.hub.tree_failures.store(0, std::sync::atomic::Ordering::Relaxed);
         let applied_ms = start.elapsed().as_secs_f64() * 1000.0;
+        // What custom effects of nodes gone drew goes with them
+        let gone = |key: &str| key.strip_prefix(EFFECT).and_then(|key| key.strip_prefix('t')).and_then(|id| id.parse::<u32>().ok()).is_some_and(|id| tree.node(id).is_none());
+        self.images.retain(|key, _| !gone(key));
+        self.kept.lock().unwrap().retain(|key| !gone(key));
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
         if first {
@@ -1929,6 +1933,9 @@ impl Painter {
         let Some(name) = key.strip_prefix(EFFECT) else {
             return;
         };
+        if let Some(id) = name.strip_prefix('t').and_then(|id| id.parse::<u32>().ok()) {
+            return self.tree_effect(key, id, width);
+        }
         let (owner, child) = match name.split_once('>') {
             Some((owner, child)) => (owner, Some(child)),
             None => (name, None),
@@ -1993,6 +2000,57 @@ impl Painter {
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| format!("effect input {key} {pw}x{ph} vram={vram}"));
         let _ = self.effects.send(Job::Run(Run { key: key.to_string(), node: id, chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width }));
+    }
+
+    /// Runs the custom effects of render tree node `id`, as Figma's canvas
+    /// does: at a pixel a unit, on the node's content as drawn over the box
+    /// they cover, in the node's own space
+    fn tree_effect(&mut self, key: &str, id: u32, width: f64) {
+        let Some(tree) = &self.tree else {
+            return;
+        };
+        if self.kept.lock().unwrap().has(key) {
+            let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
+            return;
+        }
+        let Some(effect) = tree.custom_effect(id) else {
+            return;
+        };
+        let Some(inverse) = effect.to.invert() else {
+            return;
+        };
+        let area = effect.area;
+        let scale = (RENDER_LIMIT as f32 / area.width().max(area.height())).min(1.0);
+        let (pw, ph) = ((area.width() * scale).ceil().max(1.0) as i32, (area.height() * scale).ceil().max(1.0) as i32);
+        let Some(mut surface) = self.gpu.own_surface(pw, ph, 1) else {
+            return;
+        };
+        let canvas = surface.canvas();
+        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        canvas.scale((scale, scale));
+        canvas.translate((-area.left, -area.top));
+        canvas.concat(&inverse);
+        // The surface's own pixels, which its matrix already maps to
+        let mut drawer = Drawer::new(tree, &self.images, &self.kit, canvas, 1.0);
+        drawer.draw(effect.child);
+        let images: Vec<(String, f64)> = drawer.missing_images.drain(..).filter(|(missing, _)| missing != key).collect();
+        drop(drawer);
+        if !images.is_empty() {
+            self.asked.remove(key);
+            if !self.effects_waiting.iter().any(|(waiting, _)| waiting == key) {
+                self.effects_waiting.push((key.to_string(), width));
+            }
+            self.ask(&images);
+            return;
+        }
+        let info = ImageInfo::new((pw, ph), ColorType::RGBA8888, AlphaType::Premul, None);
+        let mut pixels = vec![0u8; (pw * ph * 4) as usize];
+        if !surface.canvas().read_pixels(&info, &mut pixels, (pw * 4) as usize, (0, 0)) {
+            return;
+        }
+        trace(|| format!("effect input {key} {pw}x{ph}"));
+        let run = Run { key: key.to_string(), node: effect.node, chain: effect.chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width };
+        let _ = self.effects.send(Job::Run(run));
     }
 
     /// Draws tile `key`: every unit over it, in order. Exact tiles take
