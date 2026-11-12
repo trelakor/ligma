@@ -15,57 +15,58 @@ pub const PAGE_JS: &str = r##"(() => {
   if (!/(^|\.)figma\.com$/.test(location.hostname)) return;
   const FIGMA_LOGO = '[class*="progress_bar--strokedLogo"]';
   const SEEN = "ligma-loading-logo-seen";
-  // Ligma's logo, its pieces on a 96 unit grid, with room for the stroke
-  const TOP = "M416 224a96 96 0 0 1 96 96v96H416a96 96 0 0 1 0-192Z";
-  const LOGO = `<svg data-ligma-logo viewBox="300 204 424 616" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="36">
-    <defs><clipPath id="ligma-logo-top"><path d="${TOP}"/></clipPath></defs>
-    <g class="top"><path d="${TOP}"/><g clip-path="url(#ligma-logo-top)"><rect class="seam" x="398" y="224" width="36" height="192" fill="currentColor" stroke="none"/></g></g>
-    <path class="middle" d="M416 416h96v192H416a96 96 0 0 1 0-192Z"/>
-    <path class="bottom" d="M416 608h96v192H416a96 96 0 0 1 0-192Z"/>
-    <circle class="dot" cx="608" cy="704" r="96"/>
-  </svg>`;
+  // Ligma's logo in boxes, as Figma draws its own: 10px squares with a 2px
+  // border, overlapping by theirs. Figma's main thread is busy for most of
+  // a load, and only transforms of HTML boxes keep moving smoothly then,
+  // on the compositor; an SVG's would stall with it
+  const LOGO = '<div data-ligma-logo aria-hidden="true"><div class="top"><div class="seam"></div></div><div class="middle"></div><div class="bottom"></div><div class="dot"></div></div>';
 
   // The top spins as Figma's does: it narrows and widens three times while
-  // a seam sweeps across it, then rests with the seam in its right edge.
-  // The middle and bottom unfold from the stem, the dot out of the bottom,
-  // and fold away in reverse
+  // a seam sweeps across it, then rests with the seam out of sight. The
+  // middle and bottom unfold from the stem, the dot out of the bottom, and
+  // fold away in reverse
   const SPIN = "cubic-bezier(.12, 0, .39, 0)";
   const UNFOLD = "cubic-bezier(.33, 1, .68, 1)";
+  const PIECES = "[data-ligma-logo] :is(.top, .seam, .middle, .bottom, .dot)";
   const CSS = `
     @keyframes ${SEEN} { from { opacity: 1; } to { opacity: 1; } }
     ${FIGMA_LOGO} { animation: ${SEEN} 1ms; }
     ${FIGMA_LOGO} > :not([data-ligma-logo]) { display: none !important; }
-    [data-ligma-logo] { display: block; height: 30px; margin: 0 auto; overflow: visible; color: var(--color-icon); }
-    [data-ligma-logo] :is(.top, .seam, .middle, .bottom, .dot) { transform-box: view-box; animation: 4s infinite; }
-    [data-ligma-logo] .top { transform-origin: 416px 320px; animation-name: ligma-logo-spin; animation-timing-function: ${SPIN}; }
-    [data-ligma-logo] .seam { animation-name: ligma-logo-seam; animation-timing-function: ${SPIN}; }
-    [data-ligma-logo] .middle { transform-origin: 512px 512px; animation-name: ligma-logo-middle; animation-timing-function: ${UNFOLD}; }
-    [data-ligma-logo] .bottom { transform-origin: 512px 704px; animation-name: ligma-logo-bottom; animation-timing-function: ${UNFOLD}; }
-    [data-ligma-logo] .dot { transform-origin: 512px 704px; animation-name: ligma-logo-dot; animation-timing-function: ${UNFOLD}; }
+    [data-ligma-logo] { position: relative; width: 22px; height: 32px; margin: -1px auto; color: var(--color-icon); pointer-events: none; }
+    [data-ligma-logo] > div { position: absolute; box-sizing: border-box; width: 12px; height: 12px; border: 2px solid currentColor; }
+    ${PIECES} { animation: 4s infinite; will-change: transform; }
+    [data-ligma-logo] .top { left: 0; top: 0; border-radius: 6px 6px 0 6px; overflow: hidden; animation-name: ligma-logo-spin; animation-timing-function: ${SPIN}; }
+    [data-ligma-logo] .seam { position: absolute; left: 3px; top: 0; width: 2px; height: 100%; background: currentColor; animation-name: ligma-logo-seam; animation-timing-function: ${SPIN}; }
+    [data-ligma-logo] .middle { left: 0; top: 10px; border-radius: 6px 0 0 6px; transform-origin: right center; animation-name: ligma-logo-middle; animation-timing-function: ${UNFOLD}; }
+    [data-ligma-logo] .bottom { left: 0; top: 20px; border-radius: 6px 0 0 6px; transform-origin: right center; animation-name: ligma-logo-bottom; animation-timing-function: ${UNFOLD}; }
+    [data-ligma-logo] .dot { left: 10px; top: 20px; border-radius: 50%; transform-origin: left center; animation-name: ligma-logo-dot; animation-timing-function: ${UNFOLD}; }
     @keyframes ligma-logo-spin {
       0%, 10%, 20%, 80%, 90%, 100% { transform: scaleX(.5); }
       5%, 15%, 25%, 75%, 85%, 95% { transform: scaleX(1); }
     }
     @keyframes ligma-logo-seam {
       0%, 10%, 20%, 80%, 90%, 100% { transform: translateX(0); }
-      5%, 15%, 25%, 75%, 85%, 95% { transform: translateX(96px); }
-      5.1%, 15.1%, 75.1%, 85.1%, 95.1% { transform: translateX(-96px); }
+      5%, 15%, 25%, 75%, 85%, 95% { transform: translateX(5px); }
+      5.1%, 15.1%, 75.1%, 85.1%, 95.1% { transform: translateX(-5px); }
     }
     @keyframes ligma-logo-middle {
-      0%, 22%, 80%, 100% { transform: scaleX(0); }
+      0%, 22%, 80%, 100% { transform: scaleX(.01); opacity: 0; }
+      22.1%, 79.9% { opacity: 1; }
       28%, 74% { transform: scaleX(1); }
     }
     @keyframes ligma-logo-bottom {
-      0%, 24%, 76%, 100% { transform: scaleX(0); }
+      0%, 24%, 76%, 100% { transform: scaleX(.01); opacity: 0; }
+      24.1%, 75.9% { opacity: 1; }
       30%, 70% { transform: scaleX(1); }
     }
     @keyframes ligma-logo-dot {
-      0%, 26%, 74%, 100% { transform: scaleX(0); }
+      0%, 26%, 74%, 100% { transform: scaleX(.01); opacity: 0; }
+      26.1%, 73.9% { opacity: 1; }
       32%, 68% { transform: scaleX(1); }
     }
     @media (prefers-reduced-motion: reduce) {
-      [data-ligma-logo] :is(.top, .seam, .middle, .bottom, .dot) { animation: none; }
-      [data-ligma-logo] .seam { transform: translateX(96px); }
+      ${PIECES} { animation: none; }
+      [data-ligma-logo] .seam { transform: translateX(5px); }
     }`;
 
   const style = document.createElement("style");
