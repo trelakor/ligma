@@ -209,6 +209,24 @@
   }
   .field input::-webkit-inner-spin-button, .field input::-webkit-outer-spin-button { -webkit-appearance: none; }
   .row.disabled .field { opacity: 0.4; border-color: transparent; }
+
+  /* A short list to pick from, closed like the number fields */
+  .picker {
+    flex: none;
+    height: 24px;
+    padding: 0 24px 0 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: var(--bg-secondary) no-repeat right 6px center / 12px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 4.75 6 7.25l2.5-2.5' fill='none' stroke='%23888' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    color: var(--text);
+    font: inherit;
+    outline: 0;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .picker:hover { border-color: var(--border); }
+  .picker:focus-visible { border-color: var(--brand); }
+  .row.disabled .picker { opacity: 0.4; border-color: transparent; }
   /* Fields that scrub (`scrub` below): the cursor says so until you type */
   .scrub, .scrub input { cursor: ew-resize; }
   .scrub:focus-within, .scrub:focus-within input { cursor: text; }
@@ -652,6 +670,16 @@
         </span>
         <input type="checkbox" class="switch" id="new-home">
       </label>
+      <label class="row nested" id="new-home-start-row">
+        <span class="label">Opens on</span>
+        <select class="picker" id="new-home-start">
+          <option value="home">Home</option>
+          <option value="recents">Recents</option>
+          <option value="starred">Starred</option>
+          <option value="shared">Shared with you</option>
+          <option value="drafts">Drafts</option>
+        </select>
+      </label>
     </section>
     <section>
       <h2>Notifications</h2>
@@ -911,7 +939,7 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "new-home", "ligma-mcp"];
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1266,6 +1294,7 @@
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
     $("new-home").checked = settings.newHome;
+    $("new-home-start").value = settings.newHomeStart;
     $("ligma-mcp").checked = settings.ligmaMcp;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -1280,6 +1309,7 @@
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
+      ["new-home-start-row", settings.newHome],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -1290,7 +1320,7 @@
       ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence && settings.discordShowFile]),
     ]) {
       $(id).classList.toggle("disabled", !enabled);
-      const input = $(id).querySelector("input");
+      const input = $(id).querySelector("input, select");
       if (input) input.disabled = !enabled;
     }
     lockMcpClients();
@@ -1347,6 +1377,7 @@
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
       newHome: $("new-home").checked,
+      newHomeStart: $("new-home-start").value,
       ligmaMcp: $("ligma-mcp").checked,
       ...changes,
     };

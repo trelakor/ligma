@@ -49,16 +49,30 @@ static ON: AtomicBool = AtomicBool::new(false);
 /// off opens Figma's file browser on that same account
 static ACCOUNT: Mutex<Option<String>> = Mutex::new(None);
 
+/// The page it opens on (`newHomeStart`), passed as the URL's fragment
+static START: Mutex<String> = Mutex::new(String::new());
+
+/// The pages it can open on; anything else opens on Home
+const STARTS: [&str; 5] = ["home", "recents", "starred", "shared", "drafts"];
+
+fn start(settings: &Settings) -> String {
+    let start = settings.new_home_start.as_str();
+    if STARTS.contains(&start) { start } else { "home" }.to_owned()
+}
+
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.new_home, Ordering::Relaxed);
+    *START.lock().unwrap() = start(settings);
 }
 
 /// What Home loads: Ligma's home page or Figma's file browser, on the
 /// account Ligma's page was last showing (Figma's `fuid` picks it)
 pub fn home_url() -> Url {
     if ON.load(Ordering::Relaxed) {
-        return URL.parse().unwrap();
+        let mut url: Url = URL.parse().unwrap();
+        url.set_fragment(Some(&START.lock().unwrap()));
+        return url;
     }
     let mut url: Url = crate::tabs::HOME_URL.parse().unwrap();
     if let Some(account) = ACCOUNT.lock().unwrap().as_deref() {
@@ -67,8 +81,10 @@ pub fn home_url() -> Url {
     url
 }
 
-/// Whether `url` is Ligma's home page
+/// Whether `url` is Ligma's home page, on whichever page
 pub fn is_url(url: &Url) -> bool {
+    let mut url = url.clone();
+    url.set_fragment(None);
     url.as_str() == URL
 }
 
@@ -130,8 +146,17 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
 
 /// Moves Home to the other page when the setting changes
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
-    if ON.swap(settings.new_home, Ordering::Relaxed) == settings.new_home {
-        return;
+    let switched = ON.swap(settings.new_home, Ordering::Relaxed) != settings.new_home;
+    let moved = {
+        let start = start(settings);
+        let mut current = START.lock().unwrap();
+        let moved = *current != start;
+        *current = start;
+        moved
+    };
+    // A new start page shows at once: the fragment changes, the page goes
+    // there without loading again
+    if switched || (moved && settings.new_home) {
+        crate::tabs::set_home_url(app, home_url());
     }
-    crate::tabs::set_home_url(app, home_url());
 }

@@ -144,8 +144,11 @@ pub struct Settings {
     /// trying a newer one on
     pub classic_home: bool,
     /// Ligma's own home page in the Home tab, in place of Figma's file
-    /// browser (see home.rs). Experimental
+    /// browser (see new_home.rs). Experimental
     pub new_home: bool,
+    /// The page Ligma's home page opens on: "home", "recents", "starred",
+    /// "shared" or "drafts"
+    pub new_home_start: String,
     /// Ligma MCP: let AI tools read and edit open files through Figwright's
     /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs).
     /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
@@ -202,6 +205,7 @@ impl Default for Settings {
             lasso_fill: true,
             classic_home: false,
             new_home: false,
+            new_home_start: "home".into(),
             ligma_mcp: true,
         }
     }

@@ -1773,9 +1773,18 @@ function activity(file) {
 
 /* State */
 
+const START_VIEWS = ["home", "recents", "starred", "shared", "drafts"];
+function startView() {
+  const view = location.hash.slice(1);
+  return START_VIEWS.includes(view) ? view : "home";
+}
+// Picking another start page in the settings goes there at once
+addEventListener("hashchange", () => go(startView()));
+
 const state = {
-  // Home every time it opens: starred, suggestions and the latest files
-  view: "home",
+  // The page picked in Ligma's settings, which Ligma passes as the URL's
+  // fragment (new_home.rs); Home unless one is picked
+  view: startView(),
   type: "all",
   // Recents as rows with small previews, or as cards: rows on Home, cards
   // on the Recents page, until changed

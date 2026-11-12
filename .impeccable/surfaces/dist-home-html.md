@@ -44,3 +44,5 @@ Round three (2026-11-12): the List/Grid choice is kept apart for Home's Recents 
 Shared with you and Drafts (all and each team's) are one grid, newest first, with no date headings or month rail; dates from another year carry the year
 
 Shared with you and Drafts (every Drafts page shares one) each have their own List/Grid switch in the filter bar, cards to start
+
+Opens on (2026-11-12, setting "newHomeStart", under the toggle in Settings): Home, Recents, Starred, Shared with you or Drafts. Ligma passes it as the page URL's fragment (security.txt?ligma-home#recents); changing it moves an open Home there without a reload
