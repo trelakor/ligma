@@ -17,6 +17,10 @@
     --bg: #ffffff;
     --bg2: #f5f5f5;
     --bg3: #e6e6e6;
+    /* Figma's own secondary and tertiary backgrounds, which the tab bar
+       takes on: Home's differ in dark mode */
+    --fig-bg2: #f5f5f5;
+    --fig-bg3: #e6e6e6;
     --line: #e6e6e6;
     --hover: #f5f5f5;
     --text: #1e1e1e;
@@ -40,6 +44,8 @@
       --bg: #2c2c2c;
       --bg2: #1e1e1e;
       --bg3: #383838;
+      --fig-bg2: #383838;
+      --fig-bg3: #444444;
       --line: #444444;
       --hover: #383838;
       --text: #ffffff;
@@ -63,6 +69,8 @@
       --bg: #2c2c2c;
       --bg2: #1e1e1e;
       --bg3: #383838;
+      --fig-bg2: #383838;
+      --fig-bg3: #444444;
       --line: #444444;
       --hover: #383838;
       --text: #ffffff;
@@ -331,8 +339,8 @@
   /* What Ligma's tab bar and windows read their colors from (tabs.rs) */
   [data-preferred-theme] {
     --color-bg: var(--bg);
-    --color-bg-secondary: var(--bg2);
-    --color-bg-tertiary: var(--bg3);
+    --color-bg-secondary: var(--fig-bg2);
+    --color-bg-tertiary: var(--fig-bg3);
     --color-text: var(--text);
     --color-text-secondary: var(--text2);
     --color-text-tertiary: var(--text3);
@@ -3703,8 +3711,8 @@ function applyTheme() {
   const accent = (s) => vars[`--ligma-accent-${s}`] ?? LIGMA_BLUE[mode][step(s)];
   const white = vars["--ramp-white-1000"] ?? "#ffffff";
   const tokens = dark
-    ? { bg: grey(800), bg2: grey(900), bg3: grey(700), line: grey(600), hover: grey(700), text: "#ffffff", text2: "rgba(255, 255, 255, 0.7)", text3: "rgba(255, 255, 255, 0.4)", canvas: grey(900), accent: accent(500), "accent-text": accent(300), sel: `color-mix(in srgb, ${accent(500)} 24%, ${grey(800)})`, "sel-strong": accent(700), menu: grey(900), "menu-line": grey(700), toast: grey(1000), shadow: "0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4)" }
-    : { bg: white, bg2: grey(100), bg3: grey(200), line: grey(200), hover: grey(100), text: grey(900), text2: `color-mix(in srgb, ${grey(500)} 84%, ${grey(900)})`, text3: grey(400), canvas: grey(100), accent: accent(500), "accent-text": accent(700), sel: accent(200), "sel-strong": accent(300), menu: white, "menu-line": grey(200), toast: grey(900), shadow: "0 2px 5px rgba(0, 0, 0, 0.08), 0 10px 24px rgba(0, 0, 0, 0.12)" };
+    ? { bg: grey(800), bg2: grey(900), bg3: grey(700), "fig-bg2": grey(700), "fig-bg3": grey(600), line: grey(600), hover: grey(700), text: "#ffffff", text2: "rgba(255, 255, 255, 0.7)", text3: "rgba(255, 255, 255, 0.4)", canvas: grey(900), accent: accent(500), "accent-text": accent(300), sel: `color-mix(in srgb, ${accent(500)} 24%, ${grey(800)})`, "sel-strong": accent(700), menu: grey(900), "menu-line": grey(700), toast: grey(1000), shadow: "0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4)" }
+    : { bg: white, bg2: grey(100), bg3: grey(200), "fig-bg2": grey(100), "fig-bg3": grey(200), line: grey(200), hover: grey(100), text: grey(900), text2: `color-mix(in srgb, ${grey(500)} 84%, ${grey(900)})`, text3: grey(400), canvas: grey(100), accent: accent(500), "accent-text": accent(700), sel: accent(200), "sel-strong": accent(300), menu: white, "menu-line": grey(200), toast: grey(900), shadow: "0 2px 5px rgba(0, 0, 0, 0.08), 0 10px 24px rgba(0, 0, 0, 0.12)" };
   for (const [name, value] of Object.entries(tokens)) root.style.setProperty("--" + name, value);
 }
 darkQuery.addEventListener("change", applyTheme);
