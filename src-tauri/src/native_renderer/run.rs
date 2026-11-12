@@ -295,6 +295,7 @@ fn take_frames(ctx: Arc<Ctx>) {
             }
             follow_canvas(&ctx, &view);
             ctx.hub.set_view(view);
+            super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it", frame.header.seq, super::render::since_epoch_ms() - frame.header.at));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
         // One missing a while is lost, so Figma sends the whole scene again

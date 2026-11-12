@@ -289,7 +289,8 @@ pub async fn get_native_stats(webview: Webview) -> Option<Stats> {
 /// run the "parity" harness or the "bench"mark, or "compare:<id>" one node
 #[tauri::command]
 pub async fn native_action(app: AppHandle, webview: Webview, action: String) -> Result<String, String> {
-    if !from_overlay(&webview) {
+    // Ligma's own tab bar too in a dev build, for its dev tools
+    if !from_overlay(&webview) && !(dev() && webview.label() == crate::tabs::MAIN) {
         return Err("not allowed".into());
     }
     #[cfg(windows)]

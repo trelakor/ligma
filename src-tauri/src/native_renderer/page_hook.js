@@ -130,6 +130,9 @@
       emptySent = false;
       return;
     }
+    // Figma sends the whole scene when its worker lost what it had, so the
+    // worker starts from the empty scene again rather than one it lost
+    if (f.updateMode === 0) emptySent = false;
     f.renderTreeForest = (emptySent ? SAME : EMPTY).slice();
     f.updateMode = emptySent ? 1 : 0;
     emptySent = true;

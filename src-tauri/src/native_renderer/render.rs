@@ -16,6 +16,7 @@
 //! in redraw only the tiles they touch
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -250,6 +251,11 @@ enum Drawn {
 
 /// Plays `drawn` onto `canvas`, whose matrix is the identity, at `scale`
 /// device pixels a unit, the page's origin at `offset`
+/// Milliseconds since the epoch, as the page counts them
+pub fn since_epoch_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |since| since.as_secs_f64() * 1000.0)
+}
+
 fn play(canvas: &skia_safe::Canvas, drawn: &[Drawn], offset: (f32, f32), scale: f32) {
     for item in drawn {
         match item {
@@ -351,9 +357,18 @@ struct Whole {
     layer: Layer,
     /// Its corner in device pixels and its zoom, as bits
     at: (i32, i32, u32),
-    /// Something in it changed since
+    /// Something in it changed since, past drawing again where
     stale: bool,
+    /// Where something in it changed since, in units, to draw again
+    patch: Vec<Rect>,
 }
+
+/// After a change, how long the whole view is kept up with every frame, as
+/// Figma does, rather than tile by tile
+const EDITING: Duration = Duration::from_millis(400);
+
+/// Changed areas past which the whole view is drawn again, rather than each
+const PATCHES: usize = 24;
 
 /// An image on the GPU once, with its mipmaps, and outside Skia's cache:
 /// left to the cache, layers drawn in a frame push images out, and each is
@@ -727,10 +742,23 @@ pub struct Painter {
     zoom: (f32, Instant),
     /// When the view last moved
     moved: Instant,
-    /// Where the view was and when, in units, and how fast it's moving, in
-    /// units a second
-    motion: Option<(f64, f64, Instant)>,
+    /// Where the view's center was, how wide it was and when, in units, how
+    /// fast it's moving, in units a second, and how fast it's widening, in
+    /// doublings a second
+    motion: Option<(f64, f64, f64, Instant)>,
     velocity: (f64, f64),
+    widening: f64,
+    /// How long the whole view last took to draw
+    whole_took: Duration,
+    /// The view's corner in device pixels and its zoom, as bits, as last drawn
+    at: (i32, i32, u32),
+    /// When a frame last changed what's drawn
+    edited: Instant,
+    /// What was last handed to the present thread, hashed
+    signature: u64,
+    /// When Figma sent the latest frame, in milliseconds since the epoch,
+    /// until what it changed is handed over, for the trace
+    sent: Option<f64>,
     frame: u64,
     tint: bool,
     dirty: bool,
@@ -793,6 +821,12 @@ impl Painter {
             moved: Instant::now(),
             motion: None,
             velocity: (0.0, 0.0),
+            widening: 0.0,
+            whole_took: Duration::ZERO,
+            at: (0, 0, 0),
+            edited: Instant::now().checked_sub(EDITING).unwrap_or_else(Instant::now),
+            sent: None,
+            signature: 0,
             frame: 0,
             tint: false,
             dirty: true,
@@ -929,8 +963,28 @@ impl Painter {
                 tile.used = frame;
             }
         }
-        let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale);
+        self.at = (ox, oy, pxb);
         let missing = in_view.iter().filter(|key| !self.tiles.contains_key(key)).count();
+        let behind = in_view.iter().any(|key| self.tiles.get(key).is_some_and(|tile| tile.stale));
+        // While something's changing, what changed is drawn into the whole
+        // view at once, each frame, as Figma draws it, and tiles wait
+        let editing = EDITING.saturating_sub(self.edited.elapsed());
+        if !editing.is_zero() && (behind || missing > 0 || self.whole.is_some()) {
+            let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale);
+            match current {
+                Some(whole) if whole.patch.is_empty() => return Some(editing),
+                Some(_) => self.patch_whole(),
+                None => self.draw_whole(ox, oy, width, height, px),
+            }
+            self.dirty = true;
+            return Some(Duration::ZERO);
+        }
+        if self.whole.as_ref().is_some_and(|whole| !whole.patch.is_empty() && whole.at == (ox, oy, pxb) && !whole.stale) {
+            self.patch_whole();
+            self.dirty = true;
+            return Some(Duration::ZERO);
+        }
+        let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty());
         // While the zoom changes, tiles of it are of no use a moment later,
         // so the whole view is drawn instead, as Figma draws every frame
         let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
@@ -976,7 +1030,7 @@ impl Painter {
         // still, so it goes once that's done
         self.scratch.retain(|(_, ss, _)| *ss == 1);
         // All there: the whole view drawn for the meantime can go
-        if missing == 0 {
+        if missing == 0 && !behind {
             if let Some(whole) = self.whole.take() {
                 self.retire(whole.layer.tex);
                 self.dirty = true;
@@ -992,7 +1046,18 @@ impl Painter {
     /// zoom aren't drawn yet
     fn draw_whole(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32) {
         let _purpose = super::gpu_census::purpose("whole");
+        let started = Instant::now();
+        let at = (ox, oy, px.to_bits());
         self.rasters_made = 0;
+        // Over where the view is headed too, as it's shown a frame or two
+        // after it's drawn
+        let (ox, oy, width, height) = {
+            let area = self.ahead(Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px));
+            let (left, top) = ((area.left * px).floor() as i32, (area.top * px).floor() as i32);
+            // In steps, so the texture of one is used again for the next
+            let step = |size: i32| (size + 127) / 128 * 128;
+            (left, top, step((area.right * px).ceil() as i32 - left), step((area.bottom * px).ceil() as i32 - top))
+        };
         let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
         let margin = self.reach(view_area, px);
         let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
@@ -1034,8 +1099,112 @@ impl Painter {
         }
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| format!("  whole px={px:.3} pictures={} margin={margin} {:.1}ms vram={vram}", pictures.len(), start.elapsed().as_secs_f64() * 1000.0));
-        self.whole = Some(Whole { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts }, at: (ox, oy, px.to_bits()), stale: false });
+        self.whole = Some(Whole { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts }, at, stale: false, patch: Vec::new() });
+        self.whole_took = started.elapsed();
         self.drew = true;
+    }
+
+    /// Draws again where things changed in the whole view, onto a copy of
+    /// it, as the present thread may be showing it
+    fn patch_whole(&mut self) {
+        let _purpose = super::gpu_census::purpose("whole");
+        let started = Instant::now();
+        let Some(whole) = self.whole.as_mut() else {
+            return;
+        };
+        let areas = std::mem::take(&mut whole.patch);
+        let (old, x, y, px) = (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px);
+        let (width, height) = (old.width, old.height);
+        if areas.len() > PATCHES {
+            whole.stale = true;
+            return;
+        }
+        let texture = skia_safe::IRect::from_xywh(x, y, width, height);
+        let mut region = skia_safe::Region::new();
+        let mut reach: Option<Rect> = None;
+        for area in &areas {
+            let device: skia_safe::IRect = Rect::from_ltrb(area.left * px, area.top * px, area.right * px, area.bottom * px).round_out();
+            let device = device.with_outset((2, 2));
+            let Some(device) = skia_safe::IRect::intersect(&device, &texture) else {
+                continue;
+            };
+            region.op_rect(device, skia_safe::region::RegionOp::Union);
+            reach = Some(match reach {
+                Some(mut all) => {
+                    all.join(area);
+                    all
+                }
+                None => *area,
+            });
+        }
+        let Some(reach) = reach else {
+            return;
+        };
+        let reach = reach.with_outset((3.0 / px, 3.0 / px));
+        // Rasters of units that change each frame would be made each frame
+        self.rasters_made = RASTERS_A_DRAW;
+        let mut pictures = Vec::new();
+        for unit in 0..self.units.len() {
+            let bounds = self.units[unit].bounds;
+            if !Rect::intersects2(&bounds, &reach) || bounds.width().max(bounds.height()) * px < 0.5 {
+                continue;
+            }
+            let level = self.level(&self.units[unit], px, false);
+            if let Some((drawn, _)) = self.drawn(unit, level, true, px, true) {
+                pictures.push(drawn);
+            }
+        }
+        let Some(tex) = self.tex(width, height) else {
+            return;
+        };
+        let backend = tex.backend();
+        let Some(previous) = gpu::images::borrow_texture_from(&mut self.gpu.context, &old.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None) else {
+            return;
+        };
+        let Some(mut surface) = gpu::surfaces::wrap_backend_texture(&mut self.gpu.context, &backend, SurfaceOrigin::TopLeft, 1, ColorType::RGBA8888, None, None) else {
+            return;
+        };
+        let canvas = surface.canvas();
+        let mut copy = Paint::default();
+        copy.set_blend_mode(skia_safe::BlendMode::Src);
+        canvas.draw_image(&previous, (0, 0), Some(&copy));
+        region.translate((-x, -y));
+        canvas.clip_region(&region, skia_safe::ClipOp::Intersect);
+        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        play(canvas, &pictures, (-x as f32, -y as f32), px);
+        let image = self.finish(&backend, true);
+        drop(surface);
+        drop(previous);
+        if image.is_none() {
+            return;
+        }
+        if let Some(whole) = self.whole.as_mut() {
+            let old = std::mem::replace(&mut whole.layer.tex, tex);
+            self.retire(old);
+        }
+        trace(|| format!("  patch areas={} pictures={} {:.1}ms", areas.len(), pictures.len(), started.elapsed().as_secs_f64() * 1000.0));
+        self.drew = true;
+    }
+
+    /// `area` of the view, with where the view is likely to show by the time
+    /// what's drawn of it now is: as far as it moves and widens while a
+    /// whole view is drawn and shown, up to a third of it each way
+    fn ahead(&self, area: Rect) -> Rect {
+        if self.moved.elapsed() > Duration::from_millis(150) {
+            return area;
+        }
+        let lag = (self.whole_took.as_secs_f64() + 0.02).min(0.1) * 1.5;
+        let grow = 2f64.powf((self.widening * lag).clamp(-1.0, 1.0)) as f32;
+        let center = area.center();
+        let (w, h) = (area.width() * grow, area.height() * grow);
+        let (x, y) = (center.x + (self.velocity.0 * lag) as f32, center.y + (self.velocity.1 * lag) as f32);
+        let mut next = Rect::from_xywh(x - w / 2.0, y - h / 2.0, w, h);
+        next.join(area);
+        let most = area.with_outset((area.width() / 3.0, area.height() / 3.0));
+        if !next.intersect(most) {
+            return area;
+        }
+        next
     }
 
     /// A texture `width` by `height` to hand over, one the present thread is
@@ -1077,6 +1246,18 @@ impl Painter {
     /// Keeps `tex` to use again once the present thread is done with it
     fn retire(&mut self, tex: Arc<Tex>) {
         self.spare.push(tex);
+        // Others than tiles come in sizes rarely the same twice, so only the
+        // latest of them are kept
+        let mut odd = 0;
+        for index in (0..self.spare.len()).rev() {
+            let tex = &self.spare[index];
+            if (tex.width, tex.height) != (TILE, TILE) {
+                odd += 1;
+                if odd > 2 && Arc::strong_count(tex) == 1 {
+                    self.spare.remove(index);
+                }
+            }
+        }
         if self.spare.len() > SPARE {
             let index = self.spare.iter().position(|tex| Arc::strong_count(tex) == 1).unwrap_or(0);
             self.spare.remove(index);
@@ -1129,10 +1310,12 @@ impl Painter {
         }
         self.drawing = self.tiles.values().any(|tile| tile.fence > passed);
         let mut shown = self.hub.shown.lock().unwrap();
-        shown.generation += 1;
+        // Tiles out of date don't cover the whole view drawn since
+        let whole_current = self.whole.as_ref().is_some_and(|whole| whole.at == self.at && !whole.stale);
         shown.tiles = self
             .tiles
             .iter()
+            .filter(|(_, tile)| !(whole_current && tile.stale))
             .filter_map(|(key, tile)| {
                 let tex = if tile.fence <= passed { &tile.tex } else { tile.previous.as_ref()? };
                 Some(Layer { tex: tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts })
@@ -1151,8 +1334,31 @@ impl Painter {
             }
         }
         shown.pending = self.dirty;
+        // Shown again only when something shown changed: each time costs the
+        // next frame a refresh of the screen
+        let layer = |layer: &Layer| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (Arc::as_ptr(&layer.tex) as usize, layer.x, layer.y, layer.px.to_bits()).hash(&mut hasher);
+            hasher.finish()
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        shown.tiles.iter().map(layer).fold(0u64, u64::wrapping_add).hash(&mut hasher);
+        shown.live.as_ref().map(layer).hash(&mut hasher);
+        shown.background.map(|color| color.as_array().map(f32::to_bits)).hash(&mut hasher);
+        (shown.transparent, shown.dark).hash(&mut hasher);
+        let signature = hasher.finish();
+        let changed = signature != self.signature;
+        if changed {
+            self.signature = signature;
+            shown.generation += 1;
+        }
         drop(shown);
-        self.hub.poke();
+        if let Some(sent) = self.sent.take() {
+            trace(|| format!("  change handed over {:.1}ms after Figma sent it", since_epoch_ms() - sent));
+        }
+        if changed {
+            self.hub.poke();
+        }
         if std::mem::take(&mut self.fresh) {
             super::mark(|| "drew new images".into());
         }
@@ -1338,15 +1544,20 @@ impl Painter {
             return;
         }
         let now = Instant::now();
+        let (cx, cy) = (view.x + view.w / 2.0, view.y + view.h / 2.0);
         match self.motion {
-            Some((x, y, at)) if self.view.as_ref().is_some_and(|old| old.w == view.w) && now - at < Duration::from_millis(150) => {
+            Some((x, y, w, at)) if now - at < Duration::from_millis(150) && w > 0.0 && view.w > 0.0 => {
                 let dt = (now - at).as_secs_f64().max(0.004);
-                let (vx, vy) = ((view.x - x) / dt, (view.y - y) / dt);
+                let (vx, vy) = ((cx - x) / dt, (cy - y) / dt);
                 self.velocity = (self.velocity.0 * 0.5 + vx * 0.5, self.velocity.1 * 0.5 + vy * 0.5);
+                self.widening = self.widening * 0.5 + (view.w / w).log2() / dt * 0.5;
             }
-            _ => self.velocity = (0.0, 0.0),
+            _ => {
+                self.velocity = (0.0, 0.0);
+                self.widening = 0.0;
+            }
         }
-        self.motion = Some((view.x, view.y, now));
+        self.motion = Some((cx, cy, view.w, now));
         self.view = Some(view);
         self.moved = now;
         self.dirty = true;
@@ -1446,6 +1657,10 @@ impl Painter {
                 }
             }
             trace(|| format!("frame {} mode={} new={} applied={applied_ms:.1}ms units={} areas={}", frame.header.seq, frame.header.mode, applied.new_nodes.len(), self.units.len(), areas.len()));
+            if !areas.is_empty() {
+                self.edited = Instant::now();
+                self.sent = Some(frame.header.at);
+            }
             self.drop_tiles(&areas);
         }
         stats().lock().unwrap().nodes = self.tree.as_ref().map_or(0, |tree| tree.forest.nodes.len());
@@ -1457,6 +1672,7 @@ impl Painter {
     /// supersampled, which Skia would otherwise keep for reuse
     fn release(&mut self) {
         self.fit_images();
+        self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE) || Arc::strong_count(tex) > 1);
         // Surfaces drawn on are made again when next needed
         self.live = None;
         self.scratch.clear();
@@ -1626,7 +1842,7 @@ impl Painter {
             }
         }
         if let Some(whole) = &mut self.whole {
-            whole.stale = true;
+            whole.patch.extend_from_slice(areas);
         }
     }
 
