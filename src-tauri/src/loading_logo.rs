@@ -49,7 +49,7 @@ pub const PAGE_JS: &str = r##"(() => {
     }`;
   const CSS = `
     @keyframes ${SEEN} { from { opacity: 1; } to { opacity: 1; } }
-    ${FIGMA_LOGO} { animation: ${SEEN} 1ms; }
+    ${FIGMA_LOGO} { animation: ${SEEN} 1s infinite; }
     ${FIGMA_LOGO} > :not([data-ligma-logo]) { display: none !important; }
     [data-ligma-logo] { position: relative; width: 22px; height: 32px; margin: -1px auto; color: var(--color-icon); pointer-events: none; }
     [data-ligma-logo] div { position: absolute; box-sizing: border-box; }
@@ -114,11 +114,27 @@ pub const PAGE_JS: &str = r##"(() => {
   };
   if (!mount()) new MutationObserver((_, observer) => mount() && observer.disconnect()).observe(document, { childList: true });
 
+  // Figma replaces its logo while a file loads, and the new one would
+  // start the animation over. Every logo of one loading screen runs on
+  // one clock instead: its animations all start when the first one did,
+  // so a new logo, or one shown again, carries on where the last one was.
+  // A logo that turns up once none has been on screen for 10 seconds is a
+  // new loading screen, which starts the clock again. `SEEN` repeats each
+  // second while Figma's logo is on screen, which says it still is
   let shown = null;
+  let started = null;
+  let lastSeen = -Infinity;
+  const sync = (element) => {
+    for (const animation of element.getAnimations({ subtree: true })) animation.startTime = started;
+  };
   const show = (figmaLogo) => {
+    const now = performance.now();
+    if (now - lastSeen > 10000) started = document.timeline.currentTime;
+    lastSeen = now;
     if (figmaLogo.querySelector("[data-ligma-logo]")) return;
     figmaLogo.insertAdjacentHTML("beforeend", LOGO);
     shown = figmaLogo.lastElementChild;
+    sync(shown);
   };
   // While the page loads, Figma is too busy to run the animation's event
   // for most of a second, so the logo is caught as it's added instead,
@@ -145,5 +161,10 @@ pub const PAGE_JS: &str = r##"(() => {
   });
   loading.observe(document, { childList: true, subtree: true });
   setTimeout(() => loading.disconnect(), 60000);
-  addEventListener("animationstart", (event) => event.animationName === SEEN && show(event.target), true);
+  addEventListener("animationstart", (event) => {
+    if (event.animationName === SEEN) show(event.target);
+    // A piece's animation starts over when Figma hides the logo and shows it again
+    else if (event.animationName.startsWith("ligma-logo-") && started != null) sync(event.target);
+  }, true);
+  addEventListener("animationiteration", (event) => event.animationName === SEEN && (lastSeen = performance.now()), true);
 })();"##;
