@@ -43,7 +43,7 @@ use tauri_plugin_opener::OpenerExt;
 /// At 100% interface scale; it grows with the scale
 pub const TAB_BAR_HEIGHT: f64 = 38.0;
 pub const HOME_URL: &str = "https://www.figma.com/files";
-const HOME_ID: u32 = 0;
+pub const HOME_ID: u32 = 0;
 /// The window Ligma opens with, which holds Home. Its own webview, like
 /// every window's, is its tab bar and has its label
 pub const MAIN: &str = "main";
@@ -538,7 +538,7 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
         .and_then(|json| serde_json::from_str::<Session>(&json).ok())
         .filter(|session| !session.tabs.is_empty());
     let Some(session) = session else {
-        return open(app, HOME_URL.parse().unwrap());
+        return open(app, crate::new_home::home_url());
     };
     let active = {
         let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
@@ -546,7 +546,13 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
         for (index, saved) in session.tabs.into_iter().enumerate() {
             let url = Url::parse(&saved.url).ok().filter(is_figma);
             let home = state.tabs.is_empty();
-            let Some(url) = url.or_else(|| home.then(|| HOME_URL.parse().unwrap())) else {
+            // Home comes back as the home page the setting asks for, or
+            // where it was in Figma's file browser
+            let url = match url {
+                Some(url) if home && (crate::new_home::is_url(&url) || crate::new_home::is_url(&crate::new_home::home_url())) => Some(crate::new_home::home_url()),
+                url => url,
+            };
+            let Some(url) = url.or_else(|| home.then(crate::new_home::home_url)) else {
                 continue;
             };
             let id = state.next_id;
@@ -793,6 +799,11 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
         .initialization_script(crate::split::PAGE_JS)
         .initialization_script(crate::split::CARRY_JS)
         .initialization_script(crate::view_state::page_js(waking));
+    // Ligma's home page, which Home may load whatever the setting was when
+    // it was made
+    if id == HOME_ID {
+        builder = builder.initialization_script(crate::new_home::page_js());
+    }
     #[cfg(target_os = "macos")]
     {
         builder = builder
@@ -836,6 +847,19 @@ fn open_in_browser(app: &AppHandle, url: &Url) {
     let _ = app.opener().open_url(url.as_str(), None::<&str>);
 }
 
+/// Points Home at `url` (see new_home.rs), loading it now if Home is awake
+pub fn set_home_url(app: &AppHandle, url: Url) {
+    {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        if let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == HOME_ID) {
+            tab.url = url.clone();
+        }
+    }
+    if let Some(webview) = app.get_webview(&label(HOME_ID)) {
+        let _ = webview.navigate(url);
+    }
+}
+
 fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
     #[cfg(target_os = "macos")]
     if url.host_str() == Some(NEW_TAB_HOST) {
@@ -865,6 +889,10 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
     }
     if url.host_str() == Some(crate::mcp_bridge::SIGNAL_HOST) {
         crate::mcp_bridge::on_signal(app, url);
+        return false;
+    }
+    if url.host_str() == Some(crate::new_home::SIGNAL_HOST) {
+        crate::new_home::on_signal(app, id, url);
         return false;
     }
     if crate::auth::is_google_sign_in(url) {
@@ -922,7 +950,8 @@ fn on_new_window(app: &AppHandle, id: u32, url: Url) {
         crate::adjustments::on_signal(app, id, &url);
     } else if url.host_str() == Some(crate::mcp_bridge::SIGNAL_HOST) {
         crate::mcp_bridge::on_signal(app, &url);
-
+    } else if url.host_str() == Some(crate::new_home::SIGNAL_HOST) {
+        crate::new_home::on_signal(app, id, &url);
     } else if crate::auth::is_google_sign_in(&url) {
         sign_in_later(app, id);
     } else if is_figma(&url) {
@@ -940,7 +969,7 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
     // can still end up in Home. Move it to its own tab
     if id == HOME_ID {
         if let Some(url) = url.as_ref().filter(|url| file_key(url).is_some()) {
-            let _ = webview.navigate(HOME_URL.parse().unwrap());
+            let _ = webview.navigate(crate::new_home::home_url());
             open_later(app, url.clone());
             return;
         }

@@ -28,6 +28,10 @@
     --switch-off: rgba(255, 255, 255, 0.2);
     --hover: rgba(255, 255, 255, 0.06);
     --danger: #f24822;
+    /* Figma's menus */
+    --menu: #1e1e1e;
+    --menu-text: #ffffff;
+    --menu-shadow: 0 5px 17px rgba(0, 0, 0, 0.2), 0 2px 7px rgba(0, 0, 0, 0.15), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -41,11 +45,14 @@
       --text-tertiary: rgba(0, 0, 0, 0.3);
       --switch-off: rgba(0, 0, 0, 0.18);
       --hover: rgba(0, 0, 0, 0.04);
+      --menu: #ffffff;
+      --menu-text: rgba(0, 0, 0, 0.9);
+      --menu-shadow: 0 0 0.5px rgba(0, 0, 0, 0.15), 0 5px 17px rgba(0, 0, 0, 0.2), 0 2px 7px rgba(0, 0, 0, 0.15);
     }
   }
   /* Set by `applyTheme` from the theme's background */
-  :root.dark { color-scheme: dark; --switch-off: rgba(255, 255, 255, 0.2); --hover: rgba(255, 255, 255, 0.06); }
-  :root.light { color-scheme: light; --switch-off: rgba(0, 0, 0, 0.18); --hover: rgba(0, 0, 0, 0.04); }
+  :root.dark { color-scheme: dark; --switch-off: rgba(255, 255, 255, 0.2); --hover: rgba(255, 255, 255, 0.06); --menu: #1e1e1e; --menu-text: #ffffff; --menu-shadow: 0 5px 17px rgba(0, 0, 0, 0.2), 0 2px 7px rgba(0, 0, 0, 0.15), inset 0 0 0 0.5px rgba(255, 255, 255, 0.12); }
+  :root.light { color-scheme: light; --switch-off: rgba(0, 0, 0, 0.18); --hover: rgba(0, 0, 0, 0.04); --menu: #ffffff; --menu-text: rgba(0, 0, 0, 0.9); --menu-shadow: 0 0 0.5px rgba(0, 0, 0, 0.15), 0 5px 17px rgba(0, 0, 0, 0.2), 0 2px 7px rgba(0, 0, 0, 0.15); }
 
   * { box-sizing: border-box; margin: 0; }
   html, body { height: 100%; background: var(--bg); }
@@ -209,6 +216,41 @@
   }
   .field input::-webkit-inner-spin-button, .field input::-webkit-outer-spin-button { -webkit-appearance: none; }
   .row.disabled .field { opacity: 0.4; border-color: transparent; }
+
+  /* A dropdown as Figma draws one: closed like the number fields; open, a
+     menu with the current option over the button and a check beside it */
+  .picker {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+    height: 24px;
+    padding: 0 2px 0 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: var(--bg-secondary);
+    color: var(--text);
+    font: inherit;
+    outline: 0;
+  }
+  .picker svg { color: var(--text-secondary); }
+  .picker:hover, .picker[aria-expanded="true"] { border-color: var(--border); }
+  .picker:focus-visible { border-color: var(--brand); }
+  .row.disabled .picker { opacity: 0.4; border-color: transparent; }
+  .menu {
+    position: fixed;
+    z-index: 100;
+    padding: 8px;
+    border-radius: 13px;
+    background: var(--menu);
+    color: var(--menu-text);
+    box-shadow: var(--menu-shadow);
+    outline: 0;
+  }
+  .menu [role="option"] { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 16px 0 8px; border-radius: 5px; white-space: nowrap; }
+  .menu [role="option"] svg { flex: none; visibility: hidden; }
+  .menu [aria-selected="true"] svg { visibility: visible; }
+  .menu .on { background: var(--brand); color: #fff; }
   /* Fields that scrub (`scrub` below): the cursor says so until you type */
   .scrub, .scrub input { cursor: ew-resize; }
   .scrub:focus-within, .scrub:focus-within input { cursor: text; }
@@ -646,6 +688,16 @@
         </span>
         <input type="checkbox" class="switch" id="classic-home">
       </label>
+      <label class="row">
+        <span class="label">Ligma's home page
+          <div class="hint">A faster home of Ligma's own: your starred files, suggestions, Recents, Shared with you and Drafts, search on Ctrl+K, an inbox and moving files by dragging. It reads your files from Figma in place of loading Figma's home page. Off, Home is Figma's file browser, which stays one click away for admin and sharing either way.</div>
+        </span>
+        <input type="checkbox" class="switch" id="new-home">
+      </label>
+      <label class="row nested" id="new-home-start-row">
+        <span class="label">Opens on</span>
+        <button type="button" class="picker" id="new-home-start" aria-haspopup="listbox" aria-expanded="false" data-options='[["home","Home"],["recents","Recents"],["starred","Starred"],["shared","Shared with you"],["drafts","Drafts"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </label>
     </section>
     <section>
       <h2>Notifications</h2>
@@ -905,7 +957,110 @@
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "ligma-mcp"];
+
+  // Dropdowns drawn as Figma draws its own (Windows draws a <select>'s list
+  // itself). `value` reads and sets the choice; picking one fires "change"
+  function picker(button) {
+    const options = JSON.parse(button.dataset.options);
+    const label = button.querySelector(".picker-label");
+    let value = options[0][0];
+    Object.defineProperty(button, "value", {
+      get: () => value,
+      set: (next) => {
+        value = options.some(([key]) => key === next) ? next : options[0][0];
+        label.textContent = options.find(([key]) => key === value)[1];
+      },
+    });
+    button.value = value;
+    const check = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4.5 8.5 2.5 2.5 4.5-5.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    let menu = null;
+    const close = (focus = true) => {
+      if (!menu) return;
+      menu.remove();
+      menu = null;
+      button.setAttribute("aria-expanded", "false");
+      removeEventListener("pointerdown", outside, true);
+      removeEventListener("scroll", quiet, true);
+      removeEventListener("resize", quiet);
+      if (focus) button.focus();
+    };
+    const quiet = () => close(false);
+    // Its own row opens and closes it already
+    const outside = (e) => menu && !menu.contains(e.target) && !button.closest(".row").contains(e.target) && close(false);
+    const choose = (next) => {
+      const changed = next !== value;
+      button.value = next;
+      close();
+      if (changed) button.dispatchEvent(new Event("change"));
+    };
+    const open = () => {
+      menu = document.createElement("div");
+      menu.className = "menu";
+      menu.setAttribute("role", "listbox");
+      menu.setAttribute("aria-label", button.closest(".row").querySelector(".label").textContent.trim());
+      menu.tabIndex = -1;
+      menu.innerHTML = options.map(([key, text], i) => `<div role="option" id="${button.id}-${i}" data-value="${key}" aria-selected="${key === value}">${check}<span>${text}</span></div>`).join("");
+      document.body.append(menu);
+      button.setAttribute("aria-expanded", "true");
+      const items = [...menu.children];
+      let active = Math.max(0, options.findIndex(([key]) => key === value));
+      const highlight = (i) => {
+        active = i;
+        items.forEach((el, j) => el.classList.toggle("on", j === i));
+        menu.setAttribute("aria-activedescendant", items[i].id);
+      };
+      // The current option sits over the button, its text over the button's
+      const box = button.getBoundingClientRect();
+      menu.style.minWidth = `${box.width + 44}px`;
+      const left = Math.min(Math.max(8, box.left - 28), innerWidth - menu.offsetWidth - 8);
+      const top = Math.min(Math.max(8, box.top - 8 - active * 24 + (box.height - 24) / 2), innerHeight - menu.offsetHeight - 8);
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+      highlight(active);
+      menu.addEventListener("pointermove", (e) => {
+        const el = e.target.closest('[role="option"]');
+        if (el) highlight(items.indexOf(el));
+      });
+      menu.addEventListener("click", (e) => {
+        const el = e.target.closest('[role="option"]');
+        if (el) choose(el.dataset.value);
+      });
+      menu.addEventListener("keydown", (e) => {
+        // Keys the menu takes go no further: Esc would close the window too
+        if (e.key !== "Tab") e.stopPropagation();
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          highlight((active + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length);
+        } else if (e.key === "Home" || e.key === "End") {
+          e.preventDefault();
+          highlight(e.key === "Home" ? 0 : items.length - 1);
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          choose(options[active][0]);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          close();
+        } else if (e.key === "Tab") close();
+      });
+      addEventListener("pointerdown", outside, true);
+      addEventListener("scroll", quiet, true);
+      addEventListener("resize", quiet);
+      menu.focus();
+    };
+    button.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (button.disabled) return;
+      menu ? close() : open();
+    });
+    button.addEventListener("keydown", (e) => {
+      if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !menu) {
+        e.preventDefault();
+        open();
+      }
+    });
+  }
+  for (const el of document.querySelectorAll(".picker")) picker(el);
+  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1259,6 +1414,8 @@
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
+    $("new-home").checked = settings.ligmaHome;
+    $("new-home-start").value = settings.ligmaHomeStart;
     $("ligma-mcp").checked = settings.ligmaMcp;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -1273,6 +1430,7 @@
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
+      ["new-home-start-row", settings.ligmaHome],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -1283,7 +1441,7 @@
       ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence && settings.discordShowFile]),
     ]) {
       $(id).classList.toggle("disabled", !enabled);
-      const input = $(id).querySelector("input");
+      const input = $(id).querySelector("input, .picker");
       if (input) input.disabled = !enabled;
     }
     lockMcpClients();
@@ -1339,6 +1497,8 @@
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
+      ligmaHome: $("new-home").checked,
+      ligmaHomeStart: $("new-home-start").value,
       ligmaMcp: $("ligma-mcp").checked,
       ...changes,
     };

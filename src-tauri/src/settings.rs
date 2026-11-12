@@ -143,6 +143,14 @@ pub struct Settings {
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
+    /// Ligma's own home page in the Home tab, in place of Figma's file
+    /// browser (see new_home.rs). On by default. It was `newHome`, off by
+    /// default while experimental; that key is left behind so every
+    /// install starts with it on once
+    pub ligma_home: bool,
+    /// The page Ligma's home page opens on: "home", "recents", "starred",
+    /// "shared" or "drafts"
+    pub ligma_home_start: String,
     /// Ligma MCP: let AI tools read and edit open files through Figwright's
     /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs).
     /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
@@ -198,6 +206,8 @@ impl Default for Settings {
             copy_as_code: true,
             lasso_fill: true,
             classic_home: false,
+            ligma_home: true,
+            ligma_home_start: "home".into(),
             ligma_mcp: true,
         }
     }
@@ -454,6 +464,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::presence::apply_settings(app, &settings);
     crate::layers::apply_settings(app, &settings);
     crate::home::apply_settings(app, &settings);
+    crate::new_home::apply_settings(app, &settings);
     crate::toolbar::apply_settings(app, &settings);
     crate::adjustments::apply_settings(app, &settings);
     crate::ai_actions::apply_settings(app, &settings);

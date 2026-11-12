@@ -25,6 +25,33 @@
           "site/index.html"
         ],
         "createdAt": "2026-11-02T03:31:16.943Z"
+      },
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/launcher.html"
+        ],
+        "createdAt": "2026-11-11T20:34:03.605Z",
+        "reason": "brief mandates Figma UI3 tokens: secondary rgba(0,0,0,.5), tertiary rgba(0,0,0,.3) on #f5f5f5/#fff"
+      },
+      {
+        "rule": "undersized-ui-text",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-11-11T20:39:13.777Z",
+        "reason": "decision sketches: tiny text and tight boxes are miniature file thumbnails drawn inside cards, not UI; sketches never ship"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-11-11T20:39:14.264Z",
+        "reason": "decision sketches: tiny text and tight boxes are miniature file thumbnails drawn inside cards, not UI; sketches never ship"
       }
     ]
   }
