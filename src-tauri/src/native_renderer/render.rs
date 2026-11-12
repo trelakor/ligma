@@ -361,6 +361,11 @@ struct Whole {
     stale: bool,
     /// Where something in it changed since, in units, to draw again
     patch: Vec<Rect>,
+    /// The render queue's fence passes this once the GPU has drawn it,
+    /// `previous` shown till then
+    fence: u64,
+    previous: Option<Layer>,
+    submitted: Instant,
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -382,6 +387,11 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 const IMAGE_BUDGET: usize = 64 << 20;
 /// Past this many bytes, images in use are kept no bigger than they're drawn
 const IMAGES_MAX: usize = 96 << 20;
+/// Images let go are kept this many pixels on their longest side, so
+/// there's something to show where they're drawn till they come again
+const PLACEHOLDER: i32 = 256;
+/// Bytes of those kept of images nothing near the view draws
+const PLACEHOLDERS: usize = 32 << 20;
 
 /// Settings that trade memory for quality, which can be set by environment
 /// variable in a dev build to measure them
@@ -394,7 +404,9 @@ struct Config {
     supersample: i32,
     /// Tiles kept, 1 MB each
     max_tiles: usize,
-    /// Skia's own GPU cache: images, path masks, scratch layers
+    /// Skia's own GPU cache: images, path masks, scratch layers. Smaller,
+    /// the layers effects take over the whole view are made again each
+    /// frame it's drawn. Given back once nothing's drawn for a while
     cache_limit: usize,
 }
 
@@ -409,7 +421,7 @@ fn config() -> Config {
         samples: get("LIGMA_NATIVE_SAMPLES", 1),
         supersample: get("LIGMA_NATIVE_SUPERSAMPLE", 4).clamp(1, 4) as i32,
         max_tiles: get("LIGMA_NATIVE_TILES", 40),
-        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 64) << 20,
+        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 256) << 20,
     }
 }
 
@@ -971,6 +983,11 @@ impl Painter {
         let editing = EDITING.saturating_sub(self.edited.elapsed());
         if !editing.is_zero() && (behind || missing > 0 || self.whole.is_some()) {
             let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale);
+            // One drawn at a time, what changes meanwhile drawn together
+            // once the GPU's done
+            if self.whole_busy() {
+                return Some(Duration::from_millis(1));
+            }
             match current {
                 Some(whole) if whole.patch.is_empty() => return Some(editing),
                 Some(_) => self.patch_whole(),
@@ -980,6 +997,9 @@ impl Painter {
             return Some(Duration::ZERO);
         }
         if self.whole.as_ref().is_some_and(|whole| !whole.patch.is_empty() && whole.at == (ox, oy, pxb) && !whole.stale) {
+            if self.whole_busy() {
+                return Some(Duration::from_millis(1));
+            }
             self.patch_whole();
             self.dirty = true;
             return Some(Duration::ZERO);
@@ -990,6 +1010,9 @@ impl Painter {
         let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
         if !settle.is_zero() {
             if !whole_here {
+                if self.whole_busy() {
+                    return Some(Duration::from_millis(1));
+                }
                 self.draw_whole(ox, oy, width, height, px);
                 self.dirty = true;
                 return Some(Duration::ZERO);
@@ -1032,7 +1055,7 @@ impl Painter {
         // All there: the whole view drawn for the meantime can go
         if missing == 0 && !behind {
             if let Some(whole) = self.whole.take() {
-                self.retire(whole.layer.tex);
+                self.retire_whole(whole);
                 self.dirty = true;
             }
         }
@@ -1086,22 +1109,72 @@ impl Painter {
         let Some(mut surface) = gpu::surfaces::wrap_backend_texture(&mut self.gpu.context, &backend, SurfaceOrigin::TopLeft, 1, ColorType::RGBA8888, None, None) else {
             return;
         };
+        let recorded = start - started;
         let canvas = surface.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         play(canvas, &pictures, ((margin - ox) as f32, (margin - oy) as f32), px);
-        let image = self.finish(&backend, true);
+        // With one shown till it's drawn, the GPU draws it while what's
+        // next is made ready
+        let wait = self.whole.is_none();
+        let image = self.finish(&backend, wait);
         drop(surface);
         if image.is_none() {
             return;
         }
-        if let Some(old) = self.whole.take() {
-            self.retire(old.layer.tex);
-        }
+        let fence = self.gpu.signal();
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
-        trace(|| format!("  whole px={px:.3} pictures={} margin={margin} {:.1}ms vram={vram}", pictures.len(), start.elapsed().as_secs_f64() * 1000.0));
-        self.whole = Some(Whole { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts }, at, stale: false, patch: Vec::new() });
+        trace(|| {
+            format!(
+                "  whole px={px:.3} pictures={} margin={margin} recorded={:.1}ms {:.1}ms wait={wait} vram={vram}",
+                pictures.len(),
+                recorded.as_secs_f64() * 1000.0,
+                start.elapsed().as_secs_f64() * 1000.0
+            )
+        });
+        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts }, fence, Some(at));
         self.whole_took = started.elapsed();
         self.drew = true;
+    }
+
+    /// The whole view's last drawing still on the GPU
+    fn whole_busy(&self) -> bool {
+        self.whole.as_ref().is_some_and(|whole| whole.fence > self.gpu.passed())
+    }
+
+    /// Makes `layer`, which the GPU draws till `fence` passes, the whole
+    /// view, at `at` if it's of a view of its own. What's shown of it now
+    /// is shown till then
+    fn hand_whole(&mut self, layer: Layer, fence: u64, at: Option<(i32, i32, u32)>) {
+        let passed = self.gpu.passed();
+        let submitted = Instant::now();
+        let retired = match self.whole.as_mut() {
+            Some(whole) => {
+                let old = std::mem::replace(&mut whole.layer, layer);
+                let retired = if whole.fence <= passed { std::mem::replace(&mut whole.previous, Some(old)) } else { Some(old) };
+                whole.fence = fence;
+                whole.submitted = submitted;
+                if let Some(at) = at {
+                    whole.at = at;
+                    whole.stale = false;
+                    whole.patch.clear();
+                }
+                retired
+            }
+            None => {
+                self.whole = Some(Whole { layer, at: at.unwrap_or((0, 0, 0)), stale: at.is_none(), patch: Vec::new(), fence, previous: None, submitted });
+                None
+            }
+        };
+        if let Some(retired) = retired {
+            self.retire(retired.tex);
+        }
+    }
+
+    fn retire_whole(&mut self, whole: Whole) {
+        self.retire(whole.layer.tex);
+        if let Some(previous) = whole.previous {
+            self.retire(previous.tex);
+        }
     }
 
     /// Draws again where things changed in the whole view, onto a copy of
@@ -1143,6 +1216,7 @@ impl Painter {
         let reach = reach.with_outset((3.0 / px, 3.0 / px));
         // Rasters of units that change each frame would be made each frame
         self.rasters_made = RASTERS_A_DRAW;
+        let mut recorded = 0usize;
         let mut pictures = Vec::new();
         for unit in 0..self.units.len() {
             let bounds = self.units[unit].bounds;
@@ -1150,10 +1224,14 @@ impl Painter {
                 continue;
             }
             let level = self.level(&self.units[unit], px, false);
+            if !self.pictures.contains_key(&(self.units[unit].slot, self.units[unit].section, level, true)) {
+                recorded += 1;
+            }
             if let Some((drawn, _)) = self.drawn(unit, level, true, px, true) {
                 pictures.push(drawn);
             }
         }
+        let record = started.elapsed();
         let Some(tex) = self.tex(width, height) else {
             return;
         };
@@ -1172,17 +1250,26 @@ impl Painter {
         canvas.clip_region(&region, skia_safe::ClipOp::Intersect);
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         play(canvas, &pictures, (-x as f32, -y as f32), px);
-        let image = self.finish(&backend, true);
+        let played = started.elapsed();
+        let image = self.finish(&backend, false);
         drop(surface);
         drop(previous);
         if image.is_none() {
             return;
         }
-        if let Some(whole) = self.whole.as_mut() {
-            let old = std::mem::replace(&mut whole.layer.tex, tex);
-            self.retire(old);
-        }
-        trace(|| format!("  patch areas={} pictures={} {:.1}ms", areas.len(), pictures.len(), started.elapsed().as_secs_f64() * 1000.0));
+        let fence = self.gpu.signal();
+        let counts = self.whole.as_ref().map(|whole| whole.layer.counts).unwrap_or_default();
+        self.hand_whole(Layer { tex, x, y, px, counts }, fence, None);
+        trace(|| {
+            format!(
+                "  patch areas={} pictures={} recorded={recorded} {:.1}ms played={:.1}ms {:.1}ms",
+                areas.len(),
+                pictures.len(),
+                record.as_secs_f64() * 1000.0,
+                played.as_secs_f64() * 1000.0,
+                started.elapsed().as_secs_f64() * 1000.0
+            )
+        });
         self.drew = true;
     }
 
@@ -1270,7 +1357,7 @@ impl Painter {
             self.drop_tile(tile);
         }
         if let Some(whole) = self.whole.take() {
-            self.retire(whole.layer.tex);
+            self.retire_whole(whole);
         }
     }
 
@@ -1308,7 +1395,19 @@ impl Painter {
         for tex in replaced {
             self.retire(tex);
         }
-        self.drawing = self.tiles.values().any(|tile| tile.fence > passed);
+        let mut retired = None;
+        if let Some(whole) = self.whole.as_mut() {
+            if whole.fence <= passed && whole.previous.is_some() {
+                retired = whole.previous.take();
+                let took = whole.submitted.elapsed();
+                trace(|| format!("  whole drawn by the GPU {:.1}ms after it was handed", took.as_secs_f64() * 1000.0));
+            }
+        }
+        if let Some(retired) = retired {
+            self.retire(retired.tex);
+        }
+        let whole_pending = self.whole.as_ref().is_some_and(|whole| whole.fence > passed);
+        self.drawing = whole_pending || self.tiles.values().any(|tile| tile.fence > passed);
         let mut shown = self.hub.shown.lock().unwrap();
         // Tiles out of date don't cover the whole view drawn since
         let whole_current = self.whole.as_ref().is_some_and(|whole| whole.at == self.at && !whole.stale);
@@ -1321,7 +1420,7 @@ impl Painter {
                 Some(Layer { tex: tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts })
             })
             .collect();
-        shown.live = self.whole.as_ref().map(|whole| whole.layer.clone());
+        shown.live = self.whole.as_ref().and_then(|whole| if whole.fence <= passed { Some(whole.layer.clone()) } else { whole.previous.clone() });
         shown.background = Some(background);
         match self.tree.as_ref().and_then(Tree::background) {
             Some((_, transparent, dark)) => {
@@ -1464,7 +1563,11 @@ impl Painter {
                 // Fetches run side by side, so one asked for before can come
                 // after: it's of a view gone by, and what's asked for since
                 // is on its way
-                if width.is_some_and(|width| self.asked.get(&key).is_some_and(|&asked| asked != width)) {
+                // is on its way. It's still shown till then, unless what's
+                // here is as sharp
+                let superseded = width.is_some_and(|width| self.asked.get(&key).is_some_and(|&asked| asked != width));
+                let sharper = self.images.get(&key).is_none_or(|kept| kept.stale || kept.image.width() < img.image.width());
+                if superseded && !sharper {
                     trace(|| format!("image {key} for {width:?} came after one asked since"));
                     return true;
                 }
@@ -1726,7 +1829,7 @@ impl Painter {
             .collect();
         // What pictures of this zoom draw them at, those of the zooms either
         // side kept for a while would keep them twice as big
-        let mut need: HashMap<&str, f64> = HashMap::new();
+        let mut need: HashMap<String, f64> = HashMap::new();
         let mut in_view: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (&(slot, section, level, _), recorded) in &self.pictures {
             let Some(&shown) = near_units.get(&(slot, section)) else {
@@ -1734,7 +1837,7 @@ impl Painter {
             };
             let this_zoom = level == current || level == exact;
             for (key, width) in &recorded.uses {
-                let entry = need.entry(key.as_str()).or_insert(0.0);
+                let entry = need.entry(key.clone()).or_insert(0.0);
                 if this_zoom {
                     *entry = entry.max(*width);
                 }
@@ -1758,28 +1861,22 @@ impl Painter {
                     smaller.push((key.clone(), width, saving));
                 }
                 Some(_) => {}
-                None => unused.push((key.clone(), img.bytes())),
+                // Small copies kept are looked at apart, below
+                None if key.starts_with(EFFECT) || img.image.width().max(img.image.height()) > PLACEHOLDER => unused.push((key.clone(), img.bytes())),
+                None => {}
             }
         }
         let mut total: usize = self.images.values().map(Img::bytes).sum();
         unused.sort_by(|a, b| b.1.cmp(&a.1));
         let mut gone = Vec::new();
-        for (key, bytes) in unused {
+        for (key, _) in unused {
             if total <= IMAGE_BUDGET {
                 break;
             }
-            self.images.remove(&key);
-            self.asked.remove(&key);
-            total -= bytes;
+            total = self.shrink(&key, total);
             gone.push(key);
         }
-        // Pictures hold on to what they drew, so those that drew one go too
-        if !gone.is_empty() {
-            self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| gone.contains(used)));
-            for key in &gone {
-                self.kit.forget_patterns(Some(key));
-            }
-        }
+        self.forget_images(&gone);
         smaller.sort_by(|a, b| b.2.cmp(&a.2));
         for (key, width, saving) in smaller {
             if total <= IMAGES_MAX {
@@ -1803,20 +1900,88 @@ impl Painter {
                 .collect();
             aside.sort_by(|a, b| b.1.cmp(&a.1));
             let mut gone = Vec::new();
-            for (key, bytes) in aside {
+            for (key, _) in aside {
                 if total <= IMAGES_MAX {
+                    break;
+                }
+                total = self.shrink(&key, total);
+                gone.push(key);
+            }
+            self.forget_images(&gone);
+        }
+        // Small copies of images far off are let go past their own budget,
+        // the biggest first
+        let mut small: Vec<(String, usize)> = self
+            .images
+            .iter()
+            .filter(|(key, img)| !key.starts_with(RENDER) && !key.starts_with(EFFECT) && !need.contains_key(key.as_str()) && img.image.width().max(img.image.height()) <= PLACEHOLDER)
+            .map(|(key, img)| (key.clone(), img.bytes()))
+            .collect();
+        let mut kept: usize = small.iter().map(|(_, bytes)| bytes).sum();
+        if kept > PLACEHOLDERS {
+            small.sort_by(|a, b| b.1.cmp(&a.1));
+            let mut gone = Vec::new();
+            for (key, bytes) in small {
+                if kept <= PLACEHOLDERS {
                     break;
                 }
                 self.images.remove(&key);
                 self.asked.remove(&key);
-                total -= bytes;
+                kept -= bytes;
                 gone.push(key);
             }
-            if !gone.is_empty() {
-                self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| gone.contains(used)));
-                for key in &gone {
-                    self.kit.forget_patterns(Some(key));
-                }
+            self.forget_images(&gone);
+        }
+    }
+
+    /// Keeps image `key` as a small copy, shown where it's drawn till it's
+    /// asked for again at the size needed, rather than nothing. Returns
+    /// `total` less what that saves
+    fn shrink(&mut self, key: &str, total: usize) -> usize {
+        let _purpose = super::gpu_census::purpose("image");
+        let Some(img) = self.images.remove(key) else {
+            return total;
+        };
+        self.asked.remove(key);
+        let bytes = img.bytes();
+        // Effects are run again
+        if key.starts_with(EFFECT) {
+            return total - bytes;
+        }
+        let (w, h) = (img.image.width(), img.image.height());
+        let scale = PLACEHOLDER as f32 / w.max(h) as f32;
+        if scale >= 1.0 {
+            self.images.insert(key.to_string(), img);
+            return total;
+        }
+        let (sw, sh) = (((w as f32 * scale).round() as i32).max(1), ((h as f32 * scale).round() as i32).max(1));
+        let Some(mut surface) = self.gpu.own_surface(sw, sh, 1) else {
+            return total - bytes;
+        };
+        let canvas = surface.canvas();
+        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear);
+        let mut paint = Paint::default();
+        paint.set_blend_mode(skia_safe::BlendMode::Src);
+        canvas.draw_image_rect_with_sampling_options(&img.image, None, Rect::from_wh(sw as f32, sh as f32), sampling, &paint);
+        let image = upload(&mut self.gpu.context, surface.image_snapshot());
+        let small = Img { image, original: img.original, area: img.area, stale: img.stale };
+        let total = total - bytes + small.bytes();
+        self.images.insert(key.to_string(), small);
+        total
+    }
+
+    /// Pictures hold on to images they drew, so those that drew one of
+    /// `keys` go, drawn again with what's kept of it when next needed
+    fn forget_images(&mut self, keys: &[String]) {
+        if keys.is_empty() {
+            return;
+        }
+        self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| keys.contains(used)));
+        for key in keys {
+            self.kit.forget_patterns(Some(key));
+            if let Some(tree) = &self.tree {
+                tree.forget_patterns(Some(key));
             }
         }
     }
