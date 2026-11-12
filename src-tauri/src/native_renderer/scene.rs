@@ -402,6 +402,21 @@ impl Node {
         node
     }
 
+    /// Bounds for a layer its effects filter. Its render bounds can be cut
+    /// by a mask or a frame around it, which would cut what its blurs and
+    /// shadows read near that edge, so they're grown by as far as those read
+    pub fn layer_bounds(&self) -> Option<Rect> {
+        let bounds = self.bounds?;
+        let scale = self.transform.scale_x().hypot(self.transform.skew_y()).max(self.transform.skew_x().hypot(self.transform.scale_y()));
+        let reach: f64 = self
+            .effects
+            .iter()
+            .map(|effect| effect.radius.max(effect.start_radius) + effect.offset.x.abs().max(effect.offset.y.abs()) + effect.spread.abs())
+            .sum();
+        let reach = reach as f32 * scale + 1.0;
+        Some(bounds.with_outset((reach, reach)))
+    }
+
     /// Every fill, all styles' for text with several
     pub fn visible_fills(&self) -> Box<dyn Iterator<Item = &Paint> + '_> {
         match &self.fills {

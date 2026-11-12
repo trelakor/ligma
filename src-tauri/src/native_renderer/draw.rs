@@ -152,6 +152,25 @@ pub fn tent_sigma(radius: f64) -> f32 {
     (radius / 6f64.sqrt()) as f32
 }
 
+/// Skia blurs no more than this many pixels wide, however wide it's asked
+const MAX_SIGMA: f32 = 500.0;
+
+/// A blur of `sigma` in the canvas's units, where one is `device` pixels.
+/// Wider than Skia goes, it's blurred at a lower resolution instead, as
+/// Figma's big blurs show zoomed in
+fn wide_blur(sigma: f32, device: f32, input: Option<ImageFilter>, crop: Option<Rect>) -> Option<ImageFilter> {
+    let crop = crop.map(CropRect::from).unwrap_or_default();
+    let k = sigma * device / MAX_SIGMA;
+    if k <= 1.0 {
+        return image_filters::blur((sigma, sigma), TileMode::Decal, input, crop);
+    }
+    let linear = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+    let down = image_filters::matrix_transform(&Matrix::scale((1.0 / k, 1.0 / k)), linear, input);
+    let blurred = image_filters::blur((sigma / k, sigma / k), TileMode::Decal, down, None);
+    let up = image_filters::matrix_transform(&Matrix::scale((k, k)), linear, blurred);
+    image_filters::offset((0.0, 0.0), up, crop)
+}
+
 /// Figma's fractal noise, which its noise and texture effects are made of:
 /// three octaves of gradient noise on a grid hashed the way Figma does
 const FBM: &str = r#"
@@ -449,6 +468,12 @@ impl<'a> Encoder<'a> {
         }
     }
 
+    /// Pixels a unit of the canvas's current coordinates covers
+    fn device_scale(&self) -> f32 {
+        let m = self.canvas.local_to_device_as_3x3();
+        m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y()))
+    }
+
     /// Draws node `slot` and everything under it
     pub fn node(&mut self, slot: usize) {
         self.draw(slot, false);
@@ -487,8 +512,11 @@ impl<'a> Encoder<'a> {
             self.backdrop(node, effect);
         }
         // Drop shadows of a plain box are drawn as blurred rounded
-        // rectangles, which is much cheaper than filtering a layer
-        let box_shadows = node.is_solid_box() && node.effects.iter().all(|effect| effect.kind == "DROP_SHADOW");
+        // rectangles, which is much cheaper than filtering a layer, unless
+        // they're wider than Skia blurs those
+        let device = self.device_scale();
+        let box_shadows = node.is_solid_box()
+            && node.effects.iter().all(|effect| effect.kind == "DROP_SHADOW" && tent_sigma(effect.radius) * device <= MAX_SIGMA);
         let progressive = node.layer_blur().filter(|effect| effect.progressive());
         let filter = if box_shadows { None } else { self.filter(node, progressive.is_none()) };
         // Noise goes over what the node drew alone, so it needs its own layer
@@ -498,8 +526,8 @@ impl<'a> Encoder<'a> {
             let mut paint = Paint::default();
             paint.set_alpha_f(node.opacity);
             self.set_blend(&mut paint, node.blend.as_deref());
+            let bounds = if filter.is_some() { node.layer_bounds() } else { node.bounds };
             paint.set_image_filter(filter);
-            let bounds = node.bounds;
             let mut rec = SaveLayerRec::default().paint(&paint);
             if let Some(bounds) = &bounds {
                 rec = rec.bounds(bounds);
@@ -604,6 +632,7 @@ impl<'a> Encoder<'a> {
         let mut blur_sigma = None;
         // What the node drew, as its effects change it
         let mut content = None;
+        let device = self.device_scale();
         let solid = || image_filters::color_filter(silhouette(), None, None);
         for effect in &node.effects {
             let sigma = tent_sigma(effect.radius);
@@ -615,7 +644,9 @@ impl<'a> Encoder<'a> {
                     // A spread shadow is cast by the node's outline grown by
                     // the spread, whatever its fills show
                     let input = if spread != 0.0 { self.spread_outline(node, spread).or_else(solid) } else { solid() };
-                    let mut shadow = image_filters::drop_shadow_only(offset, (sigma, sigma), color(rgba, 1.0), None, input, None);
+                    let tint = color_filters::blend(color(rgba, 1.0).to_color(), BlendMode::SrcIn);
+                    let shadow = image_filters::color_filter(tint?, input, None);
+                    let mut shadow = image_filters::offset(offset, wide_blur(sigma, device, shadow, None), None);
                     if !effect.show_shadow_behind_node {
                         shadow = image_filters::blend(BlendMode::DstOut, shadow, solid(), None);
                     }
@@ -638,7 +669,7 @@ impl<'a> Encoder<'a> {
                     // ...moved and blurred, kept inside the shape
                     shadow = image_filters::offset(offset, shadow, crop);
                     if sigma > 0.0 {
-                        shadow = image_filters::blur((sigma, sigma), TileMode::Decal, shadow, crop);
+                        shadow = wide_blur(sigma, device, shadow, node.bounds.map(|bounds| bounds.with_outset((reach, reach))));
                     }
                     over.push(image_filters::blend(BlendMode::SrcIn, None, shadow, None));
                 }
@@ -654,7 +685,7 @@ impl<'a> Encoder<'a> {
             image_filters::merge(layers, None)
         };
         if let Some(sigma) = blur_sigma {
-            filter = image_filters::blur((sigma, sigma), TileMode::Decal, filter, None);
+            filter = wide_blur(sigma, device, filter, None);
         }
         filter
     }
@@ -1182,9 +1213,10 @@ impl<'a> Encoder<'a> {
         // what's inside over the blur of the box itself
         let area = node.transform.map_rect(Rect::from_wh(node.size.0 as f32, node.size.1 as f32)).0;
         let behind = image_filters::crop(area, TileMode::Decal, None);
-        let inside = image_filters::blur((sigma, sigma), TileMode::Decal, behind, None);
+        let device = self.device_scale();
+        let inside = wide_blur(sigma, device, behind, None);
         let box_ = image_filters::shader(skia_safe::shaders::color(skia_safe::Color::WHITE), CropRect::from(area));
-        let weight = image_filters::blur((sigma, sigma), TileMode::Decal, box_, None);
+        let weight = wide_blur(sigma, device, box_, None);
         let Some(blur) = self.kit.divide.clone().and_then(|divide| image_filters::blend(divide, weight, inside, None)) else {
             return;
         };
@@ -1202,7 +1234,7 @@ impl<'a> Encoder<'a> {
         let end = effect.end_offset.unwrap_or(super::scene::Vec2 { x: 0.5, y: 1.0 });
         let p0 = node.transform.map_point((start.x as f32 * w, start.y as f32 * h));
         let p1 = node.transform.map_point((end.x as f32 * w, end.y as f32 * h));
-        let Some(bounds) = node.bounds else {
+        let Some(bounds) = node.layer_bounds() else {
             return self.content(node);
         };
         // Figma's radius changes along the way. Here blurs of radii evenly
@@ -1211,6 +1243,7 @@ impl<'a> Encoder<'a> {
         let device = self.px * node.transform.scale_x().hypot(node.transform.skew_y());
         let span = (effect.radius - effect.start_radius).abs() as f32 * device;
         let levels = ((span / 6.0).ceil() as usize + 1).clamp(2, 8);
+        let device_px = self.device_scale();
         let mut plus = Paint::default();
         plus.set_blend_mode(BlendMode::Plus);
         let mut dest_in = Paint::default();
@@ -1232,7 +1265,7 @@ impl<'a> Encoder<'a> {
             let mut blurred = Paint::default();
             let sigma = tent_sigma(radius);
             if sigma > 0.0 {
-                blurred.set_image_filter(image_filters::blur((sigma, sigma), TileMode::Decal, None, None));
+                blurred.set_image_filter(wide_blur(sigma, device_px, None, None));
             }
             self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&blurred));
             self.content(node);
