@@ -14,6 +14,32 @@
   // Figma's noise seed, which a file can't change
   const NOISE_SEED = 5277;
 
+  // Figma's packager of custom effects' code, found once among its modules
+  // by what it does
+  let packager;
+  const effectPackager = () => {
+    if (packager !== undefined) return packager;
+    packager = null;
+    const chunks = window.rspackChunk_figma_web_bundler;
+    if (!chunks) return packager;
+    let require;
+    chunks.push([[Symbol("ligma")], {}, (r) => (require = r)]);
+    if (!require?.m) return packager;
+    for (const id of Object.keys(require.m)) {
+      let source;
+      try {
+        source = Function.prototype.toString.call(require.m[id]);
+      } catch {
+        continue;
+      }
+      if (!source.includes("_tryS3ArtifactFallback")) continue;
+      const exports = require(id);
+      packager = Object.values(exports ?? {}).find((value) => typeof value?.ensurePackaged === "function") ?? null;
+      if (packager) break;
+    }
+    return packager;
+  };
+
   const api = () => {
     try {
       const figma = window.figma;
@@ -705,6 +731,27 @@
         const scale = Math.min(width / b.width, limit / Math.max(b.width, b.height));
         const bytes = await n.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale } });
         return { png: base64(bytes), rb: [b.x, b.y, b.width, b.height], scale };
+      });
+    },
+
+    // The code of custom effect `id` (as the plugin API names it), bundled
+    // as Figma bundles it to run it: `{ code, features }`
+    effectCode(id) {
+      return run(async () => {
+        const packager = effectPackager();
+        if (!packager) throw new Error("no effect packager");
+        const component = `CodeComponentId:${id}`;
+        // Its files may still be downloading, so it's asked for a few times
+        for (let attempt = 0; attempt < 40; attempt++) {
+          try {
+            packager.prioritize?.(component);
+          } catch {}
+          const packaged = await packager.ensurePackaged(component);
+          if (packaged?.code) return { code: packaged.code, features: packaged.features ?? null };
+          packager.invalidate?.(component);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        throw new Error("effect code didn't come");
       });
     },
 

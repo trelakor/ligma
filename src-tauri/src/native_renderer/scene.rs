@@ -237,9 +237,29 @@ pub struct Effect {
     pub secondary_color: Option<Rgba>,
     /// A texture effect keeps to the node's shape
     pub clip_to_shape: Option<bool>,
+    /// A custom effect's code, by the file's name for it
+    pub id: Option<String>,
+    /// A custom effect's settings, by key, and each key's name and default
+    #[serde(default)]
+    pub properties: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub property_metadata: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Effect {
+    /// A custom effect's settings by name, as its code reads them
+    pub fn params(&self) -> serde_json::Value {
+        let mut params = serde_json::Map::new();
+        for (key, meta) in &self.property_metadata {
+            let Some(name) = meta.get("name").and_then(|name| name.as_str()) else {
+                continue;
+            };
+            let value = self.properties.get(key).or_else(|| meta.get("defaultValue")).cloned().unwrap_or(serde_json::Value::Null);
+            params.insert(name.to_string(), value);
+        }
+        serde_json::Value::Object(params)
+    }
+
     pub fn progressive(&self) -> bool {
         self.blur_type.as_deref() == Some("PROGRESSIVE")
     }
@@ -452,8 +472,22 @@ impl Node {
     /// Has a custom effect or paint: code the file carries, which Figma runs,
     /// so it's drawn as Figma renders it
     pub fn custom(&self) -> bool {
-        self.effects.iter().any(|effect| effect.kind == "SHADER")
-            || self.visible_fills().chain(self.visible_strokes()).any(|paint| !KNOWN_PAINTS.contains(&paint.kind.as_str()))
+        self.shaded() || self.custom_paint()
+    }
+
+    /// Whether it has custom effects, which run natively
+    pub fn shaded(&self) -> bool {
+        self.effects.iter().any(|effect| effect.kind == "SHADER" && effect.id.is_some())
+    }
+
+    /// Whether it has paints of kinds not drawn natively
+    pub fn custom_paint(&self) -> bool {
+        self.visible_fills().chain(self.visible_strokes()).any(|paint| !KNOWN_PAINTS.contains(&paint.kind.as_str()))
+    }
+
+    /// Its custom effects in order, each its code's name and settings
+    pub fn shaders(&self) -> Vec<(String, serde_json::Value)> {
+        self.effects.iter().filter(|effect| effect.kind == "SHADER").filter_map(|effect| Some((effect.id.clone()?, effect.params()))).collect()
     }
 
     /// The layer blur, if it has one

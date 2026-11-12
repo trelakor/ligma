@@ -36,7 +36,8 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
 };
 
-use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, RENDER};
+use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, EFFECT, RENDER, RENDER_LIMIT};
+use super::effects::Job;
 use super::present::{checker_paint, grid_paint, Device, Hub, Layer, Tex, CHECKER, GRID_COLOR, GRID_LINES};
 use super::scene::{Kind, Prepared, Scene};
 use super::stats;
@@ -582,10 +583,14 @@ pub struct Painter {
     tint: bool,
     dirty: bool,
     requests: Sender<Request>,
+    /// Nodes' custom effects to run, see effects.rs
+    effects: Sender<Job>,
+    /// Effects waiting on images the node draws, run once they come
+    effects_waiting: Vec<(String, f64)>,
 }
 
 impl Painter {
-    pub fn new(gpu: Gpu, requests: Sender<Request>, hub: Arc<Hub>) -> Self {
+    pub fn new(gpu: Gpu, requests: Sender<Request>, effects: Sender<Job>, hub: Arc<Hub>) -> Self {
         Self {
             gpu,
             kit: Kit::new(),
@@ -635,6 +640,8 @@ impl Painter {
             tint: false,
             dirty: true,
             requests,
+            effects,
+            effects_waiting: Vec::new(),
         }
     }
 
@@ -983,7 +990,7 @@ impl Painter {
                 // Figma's renders of nodes that changed are asked for again,
                 // and shown until they come
                 self.images.retain(|key, img| {
-                    let Some(id) = key.strip_prefix(RENDER) else {
+                    let Some(id) = key.strip_prefix(RENDER).or_else(|| key.strip_prefix(EFFECT).map(|id| id.split('>').next().unwrap_or(id))) else {
                         return true;
                     };
                     let Some(&slot) = scene.by_id.get(id) else {
@@ -1030,7 +1037,7 @@ impl Painter {
                 let same = self.images.get(&key).is_some_and(|kept| {
                     !kept.stale && kept.area == img.area && (kept.image.width(), kept.image.height()) == (img.image.width(), img.image.height())
                 });
-                if same && !key.starts_with(RENDER) {
+                if same && !key.starts_with(RENDER) && !key.starts_with(EFFECT) {
                     return true;
                 }
                 let waiting: Vec<(usize, bool, i32, bool)> =
@@ -1049,8 +1056,16 @@ impl Painter {
                 let mut img = img;
                 img.image = upload(&mut self.gpu.context, img.image);
                 trace(|| format!("image {key} {}x{} areas={}", img.image.width(), img.image.height(), areas.len()));
+                let effect = key.starts_with(EFFECT);
                 self.images.insert(key, img);
                 self.drop_tiles(&areas);
+                // Effects that waited on an image the node draws
+                if !effect && !self.effects_waiting.is_empty() {
+                    for (key, width) in std::mem::take(&mut self.effects_waiting) {
+                        self.asked.remove(&key);
+                        self.ask(&[(key, width)]);
+                    }
+                }
                 self.fresh = true;
                 self.update_memory();
                 self.dirty = true;
@@ -1178,6 +1193,13 @@ impl Painter {
         let mut unused = Vec::new();
         for (key, img) in &self.images {
             if key.starts_with(RENDER) {
+                continue;
+            }
+            // Effects run once, at their one size, and again if needed
+            if key.starts_with(EFFECT) {
+                if !need.contains_key(key.as_str()) {
+                    unused.push((key.clone(), img.bytes()));
+                }
                 continue;
             }
             let kept = img.image.width().max(img.image.height()) as f64;
@@ -1488,7 +1510,7 @@ impl Painter {
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
             if (width / asked - 1.0).abs() > EXACT_TOLERANCE as f64 {
                 self.asked.insert(key.clone(), *width);
-                let _ = self.requests.send(Request { key: key.clone(), width: *width });
+                self.request(key, *width);
             }
         }
     }
@@ -1501,9 +1523,86 @@ impl Painter {
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
             if *width > asked * 1.05 {
                 self.asked.insert(key.clone(), *width);
-                let _ = self.requests.send(Request { key: key.clone(), width: *width });
+                self.request(key, *width);
             }
         }
+    }
+
+    /// Asks the page for image `key` about `width` pixels wide, or runs a
+    /// node's effects for it
+    fn request(&mut self, key: &str, width: f64) {
+        if key.starts_with(EFFECT) {
+            self.effect(key, width);
+        } else {
+            let _ = self.requests.send(Request { key: key.to_string(), width });
+        }
+    }
+
+    /// Runs the custom effects of the node `key` names, as Figma's canvas
+    /// does: at a pixel a unit, on the node as drawn without them over its
+    /// box in its own space, or for a group, on the child after `>` as drawn
+    /// over its box. If that draws images not here yet, it waits for them
+    fn effect(&mut self, key: &str, _width: f64) {
+        let Some(name) = key.strip_prefix(EFFECT) else {
+            return;
+        };
+        let (owner, child) = match name.split_once('>') {
+            Some((owner, child)) => (owner, Some(child)),
+            None => (name, None),
+        };
+        let Some(&owner_slot) = self.scene.by_id.get(owner) else {
+            return;
+        };
+        let Some(slot) = (match child {
+            Some(child) => self.scene.by_id.get(child).copied(),
+            None => Some(owner_slot),
+        }) else {
+            return;
+        };
+        let (Some(owner_node), Some(node)) = (self.scene.node(owner_slot), self.scene.node(slot)) else {
+            return;
+        };
+        let chain = owner_node.shaders();
+        let (w, h) = (node.size.0 as f32, node.size.1 as f32);
+        let transform = node.transform;
+        let unit = transform.scale_x().hypot(transform.skew_y()).max(transform.skew_x().hypot(transform.scale_y()));
+        let Some(inverse) = transform.invert() else {
+            return;
+        };
+        if chain.is_empty() || w <= 0.0 || h <= 0.0 || unit <= 0.0 {
+            return;
+        }
+        // A pixel a unit, unless that's more than a GPU texture takes
+        let scale = (RENDER_LIMIT as f32 / w.max(h)).min(1.0);
+        let (pw, ph) = ((w * scale).ceil().max(1.0) as i32, (h * scale).ceil().max(1.0) as i32);
+        let Some(mut surface) = self.gpu.surface(pw, ph, 1) else {
+            return;
+        };
+        let canvas = surface.canvas();
+        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        canvas.scale((scale, scale));
+        canvas.concat(&inverse);
+        let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, scale / unit);
+        encoder.bare = Some(owner_slot);
+        encoder.node(slot);
+        let id = owner_node.id.clone() + child.map(|child| format!(">{child}")).unwrap_or_default().as_str();
+        let images: Vec<(String, f64)> = encoder.missing_images.drain(..).filter(|(missing, _)| missing != key).collect();
+        drop(encoder);
+        let width = w.ceil() as f64;
+        if !images.is_empty() {
+            self.asked.remove(key);
+            if !self.effects_waiting.iter().any(|(waiting, _)| waiting == key) {
+                self.effects_waiting.push((key.to_string(), width));
+            }
+            self.ask(&images);
+            return;
+        }
+        let info = ImageInfo::new((pw, ph), ColorType::RGBA8888, AlphaType::Premul, None);
+        let mut pixels = vec![0u8; (pw * ph * 4) as usize];
+        if !surface.canvas().read_pixels(&info, &mut pixels, (pw * 4) as usize, (0, 0)) {
+            return;
+        }
+        let _ = self.effects.send(Job { key: key.to_string(), node: id, chain, pixels, width: pw as u32, height: ph as u32, scale });
     }
 
     /// Draws tile `key`: every unit over it, in order. Exact tiles take
@@ -1884,6 +1983,8 @@ impl Painter {
         canvas.translate((-bounds.left, -bounds.top));
         let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, px);
         encoder.aa = ss < 4;
+        // As exact tiles draw it, custom effects run at exactly this scale
+        encoder.exact_renders = true;
         if backdrop {
             encoder.stop_after = Some(slot);
             for &root in &self.scene.roots {
@@ -1896,9 +1997,11 @@ impl Painter {
         }
         let reason = encoder.approximate_reason.take();
         let images: Vec<(String, f64)> = encoder.missing_images.drain(..).chain(encoder.sharper_images.drain(..)).collect();
+        let exact = std::mem::take(&mut encoder.exact_images);
         drop(encoder);
-        let waiting = images.len();
+        let waiting = images.len() + exact.len();
         self.ask(&images);
+        self.ask_exact(&exact);
         let drawn = big.image_snapshot();
         let mut surface = self.gpu.surface(width as i32, height as i32, 1)?;
         shrink(&mut surface, &drawn, skia_safe::IRect::from_wh(width as i32 * ss, height as i32 * ss), self.average.as_ref());

@@ -2,7 +2,9 @@
 //! to 300 ms a program, and keeps them only while it runs, so a pan into
 //! something not drawn yet waited on the compiler. Ligma's own import of
 //! D3DCompile is pointed here, which keeps what it compiles on disk, so a
-//! program is compiled once ever, then read back in well under a millisecond
+//! program is compiled once ever, then read back in well under a millisecond.
+//! Custom effects' programs, compiled by wgpu, which finds D3DCompile by name,
+//! go through the cache too
 
 use std::ffi::{c_char, c_void, CStr};
 use std::hash::{Hash, Hasher};
@@ -30,7 +32,11 @@ type Compile = unsafe extern "system" fn(
 #[link(name = "kernel32")]
 extern "system" {
     fn GetModuleHandleW(name: *const u16) -> *mut u8;
+    fn GetModuleHandleExW(flags: u32, name: *const u16, module: *mut *mut u8) -> i32;
     fn VirtualProtect(address: *mut c_void, size: usize, protect: u32, old: *mut u32) -> i32;
+    fn VirtualAlloc(address: *mut c_void, size: usize, kind: u32, protect: u32) -> *mut u8;
+    fn FlushInstructionCache(process: *mut c_void, address: *const c_void, size: usize) -> i32;
+    fn GetCurrentProcess() -> *mut c_void;
 }
 
 #[link(name = "d3dcompiler")]
@@ -39,6 +45,8 @@ extern "system" {
 }
 
 const PAGE_READWRITE: u32 = 0x04;
+const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+const MEM_COMMIT_RESERVE: u32 = 0x3000;
 
 struct Cache {
     original: Compile,
@@ -61,6 +69,9 @@ pub fn install() {
                 fallback
             }
         };
+        if original as *const () != fallback as *const () && !unsafe { patch_export(b"D3DCompile\0", original as *const c_void, cached as *const c_void) } {
+            log::warn!("native renderer: couldn't keep effects' programs");
+        }
         Cache { original, dir }
     });
 }
@@ -118,6 +129,58 @@ unsafe fn patch(dll: &[u8], function: &[u8], with: *const c_void) -> Option<*con
         }
         descriptor += 20;
     }
+}
+
+/// Points `function` of the loaded DLL that holds `real` at `with` for
+/// whoever looks it up by name from now on. An export is an offset from the
+/// DLL, so it goes by way of a jump placed within reach of it
+unsafe fn patch_export(function: &[u8], real: *const c_void, with: *const c_void) -> bool {
+    let mut module = std::ptr::null_mut();
+    // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | UNCHANGED_REFCOUNT
+    if GetModuleHandleExW(0x4 | 0x2, real as *const u16, &mut module) == 0 || module.is_null() {
+        return false;
+    }
+    let base = module;
+    let read32 = |offset: usize| (base.add(offset) as *const u32).read_unaligned();
+    let nt = read32(0x3c) as usize;
+    let image = read32(nt + 24 + 56) as usize;
+    let exports = read32(nt + 24 + 112) as usize;
+    if exports == 0 {
+        return false;
+    }
+    let (count, functions, names, ordinals) = (read32(exports + 24) as usize, read32(exports + 28) as usize, read32(exports + 32) as usize, read32(exports + 36) as usize);
+    let wanted = CStr::from_bytes_with_nul(function).unwrap();
+    let Some(index) = (0..count).find(|&index| CStr::from_ptr(base.add(read32(names + index * 4) as usize) as *const c_char) == wanted) else {
+        return false;
+    };
+    let ordinal = (base.add(ordinals + index * 2) as *const u16).read_unaligned() as usize;
+    let slot = base.add(functions + ordinal * 4) as *mut u32;
+    if base.add(slot.read_unaligned() as usize) as *const c_void != real {
+        return false;
+    }
+    // The first free 64 KiB above the DLL, to hold `jmp [rip]` and where to
+    let mut at = (base as usize + image + 0xffff) & !0xffff;
+    let jump = loop {
+        if at - base as usize > 0x7000_0000 {
+            return false;
+        }
+        let made = VirtualAlloc(at as *mut c_void, 4096, MEM_COMMIT_RESERVE, PAGE_EXECUTE_READWRITE);
+        if !made.is_null() {
+            break made;
+        }
+        at += 0x10000;
+    };
+    let mut code = [0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    code[6..].copy_from_slice(&(with as usize as u64).to_le_bytes());
+    std::ptr::copy_nonoverlapping(code.as_ptr(), jump, code.len());
+    FlushInstructionCache(GetCurrentProcess(), jump as *const c_void, code.len());
+    let mut old = 0;
+    if VirtualProtect(slot as *mut c_void, 4, PAGE_READWRITE, &mut old) == 0 {
+        return false;
+    }
+    slot.write_volatile((jump as usize - base as usize) as u32);
+    VirtualProtect(slot as *mut c_void, 4, old, &mut old);
+    true
 }
 
 /// A 128 bit key for what's compiled and how

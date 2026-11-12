@@ -434,6 +434,9 @@ const GREEK_BELOW: f32 = 3.0;
 /// Image keys of nodes as Figma renders them start with this
 pub const RENDER: &str = "node:";
 
+/// Key of a node with its custom effects run on it, in its own space
+pub const EFFECT: &str = "fx:";
+
 /// Largest side a node is rendered at by Figma, in pixels
 pub const RENDER_LIMIT: u32 = 4096;
 
@@ -471,6 +474,9 @@ pub struct Encoder<'a> {
     pub aa: bool,
     /// Nothing is drawn after this node, for drawing it over what's behind it
     pub stop_after: Option<usize>,
+    /// A node drawn as its custom effects take it: without them, its opacity
+    /// or its blend mode
+    pub bare: Option<usize>,
     stopped: bool,
     depth: u8,
 }
@@ -494,6 +500,7 @@ impl<'a> Encoder<'a> {
             tint: false,
             aa: true,
             stop_after: None,
+            bare: None,
             stopped: false,
             depth: 0,
         }
@@ -541,7 +548,11 @@ impl<'a> Encoder<'a> {
                 return;
             }
         }
-        if !as_mask && node.custom() && self.rendered(node) {
+        let bare = self.bare == Some(slot);
+        if !as_mask && !bare && node.shaded() && !node.custom_paint() && self.effected(node) {
+            return;
+        }
+        if !as_mask && !bare && node.custom_paint() && self.rendered(node) {
             return;
         }
         self.counts.native += 1;
@@ -564,11 +575,12 @@ impl<'a> Encoder<'a> {
         let filter = if box_shadows { None } else { self.filter(node, progressive.is_none()) };
         // Noise goes over what the node drew alone, so it needs its own layer
         let noisy = node.effects.iter().any(|effect| effect.kind == "NOISE");
-        let layer = node.opacity < 0.999 || !is_normal(&node.blend) || filter.is_some() || noisy;
+        let (opacity, blend) = if bare { (1.0, None) } else { (node.opacity, node.blend.as_deref()) };
+        let layer = opacity < 0.999 || blend.is_some_and(|mode| mode != "NORMAL" && mode != "PASS_THROUGH") || filter.is_some() || noisy;
         if layer {
             let mut paint = Paint::default();
-            paint.set_alpha_f(node.opacity);
-            self.set_blend(&mut paint, node.blend.as_deref());
+            paint.set_alpha_f(opacity);
+            self.set_blend(&mut paint, blend);
             let bounds = if filter.is_some() { node.layer_bounds() } else { node.bounds };
             paint.set_image_filter(filter);
             let mut rec = SaveLayerRec::default().paint(&paint);
@@ -647,6 +659,73 @@ impl<'a> Encoder<'a> {
             SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
         };
         self.canvas.draw_image_rect_with_sampling_options(&img.image, None, area, sampling, &paint);
+        true
+    }
+
+    /// Draws node `node` with its custom effects run on it, if that's here.
+    /// As on Figma's canvas, they run once, at a pixel a unit whatever the
+    /// zoom, on the node as drawn without them over its box, and what they
+    /// draw covers the same box. A group's run on each child over its box
+    fn effected(&mut self, node: &Node) -> bool {
+        let scene = self.scene;
+        let targets: Vec<(&Node, String)> = if node.kind == Kind::Group {
+            node.children.iter().filter_map(|&child| scene.node(child)).filter(|child| !child.hidden).map(|child| (child, format!("{EFFECT}{}>{}", node.id, child.id))).collect()
+        } else {
+            vec![(node, format!("{EFFECT}{}", node.id))]
+        };
+        let mut images = Vec::new();
+        let mut missing = false;
+        for (target, key) in targets {
+            if target.size.0 <= 0.0 || target.size.1 <= 0.0 {
+                continue;
+            }
+            let width = target.size.0.ceil();
+            self.used_images.push((key.clone(), width));
+            match self.images.get(&key) {
+                Some(img) if img.area.is_some() => {
+                    if img.stale {
+                        self.missing_images.push((key, width));
+                    }
+                    images.push((target, img));
+                }
+                _ => {
+                    if !self.missing_images.iter().any(|(waiting, _)| *waiting == key) {
+                        self.missing_images.push((key, width));
+                    }
+                    missing = true;
+                }
+            }
+        }
+        if missing || images.is_empty() {
+            return false;
+        }
+        self.counts.native += 1;
+        let mut paint = Paint::default();
+        paint.set_alpha_f(node.opacity);
+        self.set_blend(&mut paint, node.blend.as_deref());
+        let layer = images.len() > 1 && (node.opacity < 0.999 || !is_normal(&node.blend));
+        if layer {
+            self.canvas.save_layer(&SaveLayerRec::default().paint(&paint));
+            paint = Paint::default();
+        }
+        for (target, img) in images {
+            let area = img.area.unwrap();
+            let m = &target.transform;
+            let px = self.px * m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y()));
+            let scale = img.image.width() as f32 / area.width();
+            let sampling = if scale > px * 1.5 {
+                SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+            } else {
+                SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
+            };
+            self.canvas.save();
+            self.canvas.concat(m);
+            self.canvas.draw_image_rect_with_sampling_options(&img.image, None, area, sampling, &paint);
+            self.canvas.restore();
+        }
+        if layer {
+            self.canvas.restore();
+        }
         true
     }
 

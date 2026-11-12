@@ -201,6 +201,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
 
     let (messages, receive) = mpsc::channel();
     let (requests, requested) = mpsc::channel();
+    let (jobs, job_queue) = mpsc::channel();
     let ctx = Arc::new(Ctx {
         app: app.clone(),
         stop: Arc::new(AtomicBool::new(false)),
@@ -219,6 +220,12 @@ fn open(app: &AppHandle) -> Result<(), String> {
     // Skia's GPU objects stay on the thread that made them: the render
     // thread draws, the present thread shows what it has drawn
     let device = Device::open();
+    // Before anything draws, see effects.rs
+    let code: super::effects::Fetch = {
+        let ctx = ctx.clone();
+        Box::new(move |id| effect_code(&ctx, id))
+    };
+    super::effects::spawn(job_queue, ctx.messages.clone(), device.as_ref().ok().map(|device| device.name.clone()), code);
     let (started, start) = mpsc::channel();
     let (hub, render_device) = (ctx.hub.clone(), device.clone());
     std::thread::Builder::new()
@@ -226,7 +233,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         .spawn(move || match render_device.and_then(|device| Gpu::new(&device, size.width, size.height)) {
             Ok(gpu) => {
                 let _ = started.send(Ok(gpu.adapter.clone()));
-                Painter::new(gpu, requests, hub).run(receive);
+                Painter::new(gpu, requests, jobs, hub).run(receive);
             }
             Err(error) => {
                 let _ = started.send(Err(error));
@@ -378,6 +385,14 @@ fn job(webview: &Webview, call: &str, timeout: Duration) -> Result<String, Strin
     let key = eval_value(webview, &format!("window.__ligmaNative.{call}")).ok_or("the tab didn't answer")?;
     let key = key.as_str().ok_or("no job")?;
     String::from_utf8(read_key(webview, key, timeout)?).map_err(|error| error.to_string())
+}
+
+/// Custom effect `id`'s code, as Figma bundles it to run it
+fn effect_code(ctx: &Ctx, id: &str) -> Result<String, String> {
+    let webview = current(ctx).ok_or("no file open")?;
+    let data = job(&webview, &format!("effectCode({})", serde_json::to_string(id).unwrap()), Duration::from_secs(60))?;
+    let value: Value = serde_json::from_str(&data).map_err(|error| error.to_string())?;
+    value["code"].as_str().map(str::to_string).ok_or_else(|| "no code".into())
 }
 
 fn current(ctx: &Ctx) -> Option<Webview> {
