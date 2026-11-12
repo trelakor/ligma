@@ -867,6 +867,41 @@
       store.delete(key);
     },
   };
+  // The view, written to memory Ligma shares with the page (see
+  // `webview2::share`) after every frame Figma draws, so Ligma follows it
+  // the moment it moves without asking. Slot 0 counts writes, odd while one
+  // is under way, then x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, the
+  // page id's two numbers, and when it was written
+  let shared = null;
+  let written = [];
+  const writeView = () => {
+    const v = shared && window.__ligmaNative.view();
+    if (!v) return;
+    const [a, b] = v.page.split(":").map(Number);
+    const values = [v.x, v.y, v.w, v.h, v.zoom, v.cx, v.cy, v.cw, v.ch, v.dpr, v.visible ? 1 : 0, a, b];
+    if (values.every((value, i) => value === written[i])) return;
+    written = values;
+    shared[0] += 1;
+    for (let i = 0; i < values.length; i++) shared[i + 1] = values[i];
+    shared[14] = performance.timeOrigin + performance.now();
+    shared[0] += 1;
+  };
+  // Read once Figma has drawn the frame, as it moves the view before
+  const afterFrame = new MessageChannel();
+  afterFrame.port1.onmessage = () => {
+    writeView();
+    requestAnimationFrame(nextFrame);
+  };
+  const nextFrame = () => afterFrame.port2.postMessage(0);
+  document.addEventListener("visibilitychange", writeView);
+  window.chrome?.webview?.addEventListener("sharedbufferreceived", (event) => {
+    if (!event.additionalData?.ligmaNative) return;
+    const first = !shared;
+    shared = new Float64Array(event.getBuffer());
+    if (shared[0] % 2) shared[0] += 1;
+    written = [];
+    if (first) requestAnimationFrame(nextFrame);
+  });
   // New to this page, so anything read from an earlier one is out of date
   return "installed";
 })()

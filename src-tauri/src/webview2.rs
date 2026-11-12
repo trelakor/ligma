@@ -4,7 +4,8 @@
 
 use tauri::{AppHandle, Manager, Webview};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
+    ICoreWebView2Environment12, ICoreWebView2SharedBuffer, ICoreWebView2_17, ICoreWebView2_19, ICoreWebView2_22,
+    ICoreWebView2_3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG, COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_WRITE,
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS,
@@ -280,6 +281,55 @@ pub fn intercept(
         }));
         let mut token = 0;
         added(core.add_WebResourceRequested(&handler, &mut token).is_ok());
+    });
+    if result.is_err() {
+        log::warn!("native renderer: couldn't reach the tab's webview");
+    }
+}
+
+/// Memory shared with a tab's page, which it can write to and Ligma read
+/// from any thread at once, with no round trip through either's main thread
+#[derive(Clone, Copy)]
+pub struct Shared {
+    pub ptr: *mut u8,
+    pub len: usize,
+}
+
+// The memory stays mapped for as long as Ligma runs (see `share`)
+unsafe impl Send for Shared {}
+unsafe impl Sync for Shared {}
+
+struct Kept(#[allow(dead_code)] ICoreWebView2SharedBuffer);
+unsafe impl Send for Kept {}
+
+/// Hands tab `webview`'s page `len` bytes of memory shared with Ligma, the
+/// same each time it's asked for the tab, as an ArrayBuffer through the
+/// `sharedbufferreceived` event of `chrome.webview`, with `{ ligmaNative: 1 }`
+/// as its `additionalData`. `done` gets it, on the main thread, or None
+/// where WebView2 is too old to share memory
+pub fn share(webview: &Webview, len: usize, done: impl FnOnce(Option<Shared>) + Send + 'static) {
+    static KEPT: std::sync::Mutex<Vec<(String, Shared, Kept)>> = std::sync::Mutex::new(Vec::new());
+    let label = webview.label().to_string();
+    let result = webview.with_webview(move |platform| unsafe {
+        let run = || -> windows_core::Result<Shared> {
+            let core = platform.controller().CoreWebView2()?.cast::<ICoreWebView2_17>()?;
+            let mut kept = KEPT.lock().unwrap();
+            let found = kept.iter().position(|(kept, shared, _)| *kept == label && shared.len == len);
+            let index = match found {
+                Some(index) => index,
+                None => {
+                    let buffer = platform.environment().cast::<ICoreWebView2Environment12>()?.CreateSharedBuffer(len as u64)?;
+                    let mut ptr = std::ptr::null_mut();
+                    buffer.Buffer(&mut ptr)?;
+                    kept.push((label.clone(), Shared { ptr, len }, Kept(buffer)));
+                    kept.len() - 1
+                }
+            };
+            let (_, shared, Kept(buffer)) = &kept[index];
+            core.PostSharedBufferToScript(buffer, COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_WRITE, w!("{\"ligmaNative\":1}"))?;
+            Ok(*shared)
+        };
+        done(run().ok());
     });
     if result.is_err() {
         log::warn!("native renderer: couldn't reach the tab's webview");

@@ -14,6 +14,7 @@
 //!   close to (shader effects, for one) is counted as approximate
 //! - `adjust.rs` applies image adjustments (exposure, contrast and so on)
 //! - `render.rs` draws the view in tiles kept on the GPU, 16 samples a pixel
+//! - `present.rs` shows them in the window every frame, wherever the view is
 //! - `gpu_memory.rs` reads Windows' GPU memory counters for the overlay
 //! - `run.rs` ties it together, and holds the parity harness and benchmark
 //!
@@ -37,6 +38,8 @@ mod adjust;
 mod draw;
 #[cfg(windows)]
 mod gpu_memory;
+#[cfg(windows)]
+mod present;
 #[cfg(windows)]
 mod render;
 #[cfg(windows)]

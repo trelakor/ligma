@@ -18,6 +18,7 @@ use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Webview, WebviewBu
 use super::adjust::Adjust;
 use super::draw::{Img, RENDER, RENDER_LIMIT};
 use super::gpu_memory::GpuMemory;
+use super::present::{Device, Hub, Screen};
 use super::render::{Gpu, Msg, Offscreen, Painter, Request, View};
 use super::scene::{Batch, Begin, Changes, Scene};
 use super::{percentile, stats, OVERLAY, WINDOW};
@@ -48,6 +49,10 @@ struct Ctx {
     /// Image fills' original bytes, kept to decode again at a bigger size
     /// when zooming in, without asking Figma again
     encoded: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    /// Memory the mirrored tab writes its view to every frame, and the tab
+    shared: Mutex<Option<(String, crate::webview2::Shared)>>,
+    /// What the render and present threads share
+    hub: Arc<Hub>,
 }
 
 /// What page.js read, handed over by the page as each job is done rather
@@ -164,6 +169,8 @@ pub fn start(app: &AppHandle) {
 pub fn stop(app: &AppHandle) {
     if let Some(ctx) = CTX.lock().unwrap().take() {
         ctx.stop.store(true, Ordering::Relaxed);
+        ctx.hub.stop.store(true, Ordering::Relaxed);
+        ctx.hub.poke();
         let _ = ctx.messages.send(Msg::Quit);
     }
     if let Some(window) = app.get_window(WINDOW) {
@@ -204,17 +211,22 @@ fn open(app: &AppHandle) -> Result<(), String> {
         resync: AtomicBool::new(false),
         busy: AtomicBool::new(false),
         encoded: Mutex::new(HashMap::new()),
+        shared: Mutex::new(None),
+        hub: Arc::new(Hub::new((size.width, size.height))),
     });
     *CTX.lock().unwrap() = Some(ctx.clone());
 
-    // Skia's GPU objects stay on the thread that made them
+    // Skia's GPU objects stay on the thread that made them: the render
+    // thread draws, the present thread shows what it has drawn
+    let device = Device::open();
     let (started, start) = mpsc::channel();
+    let (hub, render_device) = (ctx.hub.clone(), device.clone());
     std::thread::Builder::new()
         .name("native-render".into())
-        .spawn(move || match Gpu::new(hwnd, size.width, size.height) {
+        .spawn(move || match render_device.and_then(|device| Gpu::new(&device, size.width, size.height)) {
             Ok(gpu) => {
                 let _ = started.send(Ok(gpu.adapter.clone()));
-                Painter::new(gpu, requests).run(receive);
+                Painter::new(gpu, requests, hub).run(receive);
             }
             Err(error) => {
                 let _ = started.send(Err(error));
@@ -222,9 +234,29 @@ fn open(app: &AppHandle) -> Result<(), String> {
         })
         .map_err(|error| error.to_string())?;
     let adapter = start.recv().map_err(|error| error.to_string()).and_then(|started| started);
+    let adapter = adapter.and_then(|adapter| {
+        let (shown, show) = mpsc::channel();
+        let (hub, device) = (ctx.hub.clone(), device.clone());
+        std::thread::Builder::new()
+            .name("native-present".into())
+            .spawn(move || match device.and_then(|device| Screen::new(&device, hwnd, size.width, size.height)) {
+                Ok(screen) => {
+                    let _ = shown.send(Ok(()));
+                    screen.run(hub);
+                }
+                Err(error) => {
+                    let _ = shown.send(Err(error));
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        show.recv().map_err(|error| error.to_string()).and_then(|shown| shown).map(|()| adapter)
+    });
     match adapter {
         Ok(adapter) => stats().lock().unwrap().adapter = adapter,
         Err(error) => {
+            ctx.stop.store(true, Ordering::Relaxed);
+            ctx.hub.stop.store(true, Ordering::Relaxed);
+            let _ = ctx.messages.send(Msg::Quit);
             *CTX.lock().unwrap() = None;
             return Err(error);
         }
@@ -233,6 +265,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
     let events = ctx.clone();
     window.on_window_event(move |event| match event {
         WindowEvent::Resized(size) => {
+            *events.hub.size.lock().unwrap() = (size.width, size.height);
+            events.hub.poke();
             let _ = events.messages.send(Msg::Resize(size.width, size.height));
             if let Some(overlay) = events.app.get_webview(OVERLAY) {
                 let scale = events.app.get_window(WINDOW).and_then(|window| window.scale_factor().ok()).unwrap_or(1.0);
@@ -241,6 +275,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
         }
         WindowEvent::Destroyed => {
             events.stop.store(true, Ordering::Relaxed);
+            events.hub.stop.store(true, Ordering::Relaxed);
+            events.hub.poke();
             let _ = events.messages.send(Msg::Quit);
             let mut current = CTX.lock().unwrap();
             if current.as_ref().is_some_and(|current| Arc::ptr_eq(current, &events)) {
@@ -372,6 +408,16 @@ fn sync(ctx: Arc<Ctx>) {
             }
         }
         *ctx.webview.lock().unwrap() = Some(file.webview.clone());
+        let label = file.webview.label().to_string();
+        let shared_here = ctx.shared.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab == label);
+        if ready.as_ref().and_then(Value::as_str) == Some("installed") || !shared_here {
+            *ctx.shared.lock().unwrap() = None;
+            let to = ctx.clone();
+            crate::webview2::share(&file.webview, VIEW_SLOTS * 8, move |shared| match shared {
+                Some(shared) => *to.shared.lock().unwrap() = Some((label, shared)),
+                None => log::info!("native renderer: the tab can't share memory, so its view is asked for"),
+            });
+        }
         let page = eval_value(&file.webview, "window.__ligmaNative.view()?.page ?? null")
             .and_then(|page| page.as_str().map(str::to_owned));
         let Some(page) = page else {
@@ -493,23 +539,76 @@ fn changes(ctx: &Ctx, webview: &Webview) -> Result<bool, String> {
     Ok(false)
 }
 
-/// Follows Figma's viewport, about once a frame
+/// Slots of the view the page writes to shared memory (see page.js)
+const VIEW_SLOTS: usize = 16;
+
+/// The view the page last wrote to `shared`, with its count of writes and
+/// when it was written, in ms since 1970
+fn shared_view(shared: crate::webview2::Shared) -> Option<(u64, View, f64)> {
+    use std::sync::atomic::{fence, Ordering::Acquire};
+    let base = shared.ptr as *const f64;
+    for _ in 0..8 {
+        // Odd while the page writes it, and different after
+        let count = unsafe { std::ptr::read_volatile(base) };
+        if count == 0.0 || count % 2.0 == 1.0 {
+            std::hint::spin_loop();
+            continue;
+        }
+        fence(Acquire);
+        let mut slots = [0.0f64; VIEW_SLOTS];
+        for (i, slot) in slots.iter_mut().enumerate() {
+            *slot = unsafe { std::ptr::read_volatile(base.add(i)) };
+        }
+        fence(Acquire);
+        if unsafe { std::ptr::read_volatile(base) } != count {
+            continue;
+        }
+        let [_, x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, a, b, at, ..] = slots;
+        let _ = (cx, cy);
+        let page = format!("{}:{}", a as i64, b as i64);
+        return Some((count as u64, View { x, y, w, h, zoom, cw, ch, dpr, page, visible: visible != 0.0 }, at));
+    }
+    None
+}
+
+/// Follows Figma's viewport: read from memory the tab shares, written every
+/// frame it draws, the moment it changes, or else asked for about once a
+/// frame
 fn poll_view(ctx: Arc<Ctx>) {
+    let mut seen = 0;
     while !ctx.stop.load(Ordering::Relaxed) {
         let start = Instant::now();
+        let shared = ctx.shared.lock().unwrap().as_ref().map(|(_, shared)| *shared);
+        if let Some(shared) = shared {
+            if let Some((count, view, at)) = shared_view(shared) {
+                if count != seen {
+                    seen = count;
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64() * 1000.0;
+                    super::render::trace(|| format!("view x={:.1} y={:.1} zoom={:.3} {:.1}ms after the page wrote it", view.x, view.y, view.zoom, now - at));
+                    send_view(&ctx, view);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+        }
         if let Some(webview) = current(&ctx) {
             let view = eval_value(&webview, "window.__ligmaNative?.view() ?? null")
                 .and_then(|value| serde_json::from_value::<View>(value).ok());
             if let Some(view) = view {
-                if let Some(recorded) = ctx.recorded.lock().unwrap().as_mut() {
-                    recorded.push(view.clone());
-                }
-                let _ = ctx.messages.send(Msg::View(view));
+                send_view(&ctx, view);
             }
         }
         let elapsed = start.elapsed();
         std::thread::sleep(Duration::from_millis(8).saturating_sub(elapsed));
     }
+}
+
+fn send_view(ctx: &Ctx, view: View) {
+    if let Some(recorded) = ctx.recorded.lock().unwrap().as_mut() {
+        recorded.push(view.clone());
+    }
+    ctx.hub.set_view(view.clone());
+    let _ = ctx.messages.send(Msg::View(view));
 }
 
 fn sample_memory(ctx: Arc<Ctx>) {
