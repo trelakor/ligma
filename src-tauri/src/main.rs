@@ -26,6 +26,7 @@ mod models;
 mod modules;
 mod notifications;
 mod objects;
+mod page_avatars;
 mod plugins;
 mod presence;
 mod preview;
