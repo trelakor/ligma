@@ -10,8 +10,8 @@
 //! It also keeps them per file in `localStorage`, for a file opened
 //! without saying where, as from Home: it puts them in the address before
 //! Figma reads it. A link to a layer or another page still goes there.
-//! Draw mode ignores `viewport`, so there the canvas is moved to it once
-//! the file has loaded
+//! Draw mode ignores `viewport`, so there the canvas is moved to it as
+//! soon as Figma's API is up, still under its loading screen
 //!
 //! The page and canvas are read through Figma's console plugin API,
 //! `window.figma`
@@ -54,8 +54,7 @@ pub const PAGE_JS: &str = r##"(() => {
       history.replaceState(history.state, "", url);
     }
   }
-  // Where the address asks for, which Figma doesn't go to in Draw mode
-  let wanted = opened && new URL(location.href).searchParams.get("viewport");
+  const wanted = opened && new URL(location.href).searchParams.get("viewport");
 
   const api = () => {
     const figma = window.figma;
@@ -68,6 +67,34 @@ pub const PAGE_JS: &str = r##"(() => {
   // Drawn, and no longer loading
   const ready = () => !!document.querySelector("canvas") && !document.querySelector('[class*="progress_bar--"]') && !!api();
 
+  // Draw mode drops `viewport` from the address and fits the page in the
+  // window instead. So the canvas goes where it asked as soon as Figma's
+  // API is up, while its loading screen still covers the canvas, and is
+  // held there until the file has been drawn for a moment
+  if (wanted) {
+    const [x, y, zoom] = wanted.split(",").map(Number);
+    if ([x, y, zoom].every(Number.isFinite) && zoom > 0) {
+      let drawnSince = 0;
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (fileKey() !== opened || Date.now() - started > 60000) return clearInterval(timer);
+        const figma = api();
+        if (!figma) return;
+        try {
+          const bounds = figma.viewport.bounds;
+          if (Math.abs(figma.viewport.zoom - zoom) > 1e-3 || Math.hypot(bounds.x + x / zoom, bounds.y + y / zoom) * zoom > 1) {
+            figma.viewport.zoom = zoom;
+            const { width, height } = figma.viewport.bounds;
+            figma.viewport.center = { x: -x / zoom + width / 2, y: -y / zoom + height / 2 };
+          }
+        } catch {}
+        if (!ready()) drawnSince = 0;
+        else if (!drawnSince) drawnSince = Date.now();
+        else if (Date.now() - drawnSince > 300) clearInterval(timer);
+      }, 16);
+    }
+  }
+
   // The file the address follows, once it has been ready for a second:
   // until then Figma may still be placing the canvas
   let key = null;
@@ -76,8 +103,6 @@ pub const PAGE_JS: &str = r##"(() => {
   const keep = () => {
     const current = fileKey();
     if (current !== key) {
-      // Another file, opened in the page
-      if (key) wanted = null;
       key = current;
       readySince = 0;
     }
@@ -88,20 +113,6 @@ pub const PAGE_JS: &str = r##"(() => {
     readySince ||= Date.now();
     if (Date.now() - readySince < 1000) return;
     const figma = api();
-    if (wanted) {
-      const [x, y, zoom] = wanted.split(",").map(Number);
-      wanted = null;
-      if ([x, y, zoom].every(Number.isFinite) && zoom > 0) {
-        try {
-          if (Math.abs(figma.viewport.zoom - zoom) > 1e-3 || Math.hypot(figma.viewport.bounds.x + x / zoom, figma.viewport.bounds.y + y / zoom) * zoom > 1) {
-            figma.viewport.zoom = zoom;
-            const { width, height } = figma.viewport.bounds;
-            figma.viewport.center = { x: -x / zoom + width / 2, y: -y / zoom + height / 2 };
-            return;
-          }
-        } catch {}
-      }
-    }
     let page, viewport;
     try {
       const { x, y } = figma.viewport.bounds;
