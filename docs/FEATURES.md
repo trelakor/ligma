@@ -13,7 +13,7 @@ How Ligma behaves, in detail. For the short version, see the [README](../README.
 - With `"restoreTabs": true` (Settings > Reopen tabs from last time), Ligma reopens your tabs, pins and the tab you had open. They're kept in `session.json` next to `settings.json`. Only the tab you had open loads; the others load when selected.
 - Shortcuts: `Ctrl+T` (`Cmd+T` on macOS) new tab, `Ctrl+W` (`Cmd+W`) close tab, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch tabs. While the settings window has focus, `Ctrl+W` (`Cmd+W`) closes it instead. Middle-click also closes a tab.
 - Background tabs give memory back, and while a game is in front every tab sleeps (game mode, see [Memory](MEMORY.md)).
-- A file comes back where you left it after its tab sleeps, is reloaded or is reopened from last time: the same page, position and zoom, and mode (Design, Draw, Motion or Dev Mode). Opening a file from Home does too, while a link to a layer still goes to that layer. Kept per file in the page's `localStorage` (see `src-tauri/src/view_state.rs`). Turn it off with `"keepFileView": false` (Settings > Remember where you were in files).
+- A Design or FigJam file comes back where you left it after its tab sleeps, is reloaded or is reopened from last time: the same page, position and zoom, and mode. Ligma keeps them in the file's address, which Figma opens at, so there's no jump after it loads. Opening a file from Home does too, from the last place kept per file in the page's `localStorage`, while a link to a layer or page still goes there (see `src-tauri/src/view_state.rs`).
 
 ## Browsing
 
