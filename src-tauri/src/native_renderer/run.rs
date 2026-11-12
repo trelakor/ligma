@@ -549,7 +549,10 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<Mutex<Receiver<Request>>>) {
                 Ok(img) => {
                     let _ = ctx.messages.send(Msg::Image(key, img));
                 }
-                Err(error) => log::warn!("native renderer render {key}: {error}"),
+                Err(error) => {
+                    log::warn!("native renderer render {key}: {error}");
+                    let _ = ctx.messages.send(Msg::Failed(key));
+                }
             });
             continue;
         }
@@ -559,7 +562,10 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<Mutex<Receiver<Request>>>) {
             Ok(img) => {
                 let _ = ctx.messages.send(Msg::Image(key, img));
             }
-            Err(error) => log::warn!("native renderer image {key}: {error}"),
+            Err(error) => {
+                log::warn!("native renderer image {key}: {error}");
+                let _ = ctx.messages.send(Msg::Failed(key));
+            }
         }
     }
 }
@@ -589,20 +595,30 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
         Some(bytes) => bytes,
         None => {
             let asked = Instant::now();
-            let key = eval_value(webview, &format!("window.__ligmaNative.image({})", serde_json::to_string(hash).unwrap())).ok_or("the tab didn't answer")?;
-            let started_in_page = asked.elapsed();
-            let key = key.as_str().ok_or("no job")?.to_string();
-            let mut bytes = read_key(webview, &key, Duration::from_secs(120))?;
-            // Handed over under another key while it was asked for
-            if bytes.starts_with(b"{\"under\":") {
+            let mut started_in_page = Duration::ZERO;
+            let mut tries = 0;
+            let bytes = loop {
+                tries += 1;
+                let key = eval_value(webview, &format!("window.__ligmaNative.image({})", serde_json::to_string(hash).unwrap())).ok_or("the tab didn't answer")?;
+                started_in_page = started_in_page.max(asked.elapsed());
+                let key = key.as_str().ok_or("no job")?.to_string();
+                let bytes = read_key(webview, &key, Duration::from_secs(120))?;
+                // Handed over under another key while it was asked for
+                if !bytes.starts_with(b"{\"under\":") {
+                    break bytes;
+                }
                 let under: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
                 let under = under["under"].as_str().ok_or("no key")?;
-                // Or taken by another size of it asked for at the same time
-                bytes = match pushed().wait(under, Instant::now() + Duration::from_secs(5)) {
-                    Some(bytes) => bytes,
-                    None => ctx.encoded.lock().unwrap().get(hash).map(|bytes| bytes.to_vec()).ok_or("lost on its way")?,
-                };
-            }
+                // Or taken by another size of it asked for at the same time.
+                // Handed over long before it was asked for, it's gone, and
+                // the page reads it again
+                let found = pushed().wait(under, Instant::now() + Duration::from_secs(5)).or_else(|| ctx.encoded.lock().unwrap().get(hash).map(|bytes| bytes.to_vec()));
+                match found {
+                    Some(bytes) => break bytes,
+                    None if tries < 2 => continue,
+                    None => return Err("lost on its way".into()),
+                }
+            };
             let bytes = Arc::new(bytes);
             super::mark(|| format!("image {short} read, the job started after {} ms, read after {} ms", started_in_page.as_millis(), asked.elapsed().as_millis()));
             ctx.encoded.lock().unwrap().insert(hash.to_string(), bytes.clone());

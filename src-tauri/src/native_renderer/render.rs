@@ -60,10 +60,13 @@ pub enum Msg {
     Changes(Prepared),
     View(View),
     Image(String, Img),
+    /// Image `key` couldn't be had, so it's asked for again later
+    Failed(String),
     Resize(u32, u32),
     /// Draw node `id` alone, offscreen, over `bounds` at `width` by
-    /// `height`, and send back its pixels, RGBA with straight alpha
-    Offscreen { id: String, bounds: Rect, width: u32, height: u32, reply: Sender<Option<Offscreen>> },
+    /// `height`, and send back its pixels, RGBA with straight alpha. With
+    /// `backdrop`, over everything drawn before it
+    Offscreen { id: String, bounds: Rect, width: u32, height: u32, backdrop: bool, reply: Sender<Option<Offscreen>> },
     /// Draw each view as the window would, offscreen at the size of
     /// Figma's canvas, and send back each frame's time in ms, cold (no
     /// tiles kept) and then warm
@@ -429,6 +432,8 @@ pub struct Painter {
     images: HashMap<String, Img>,
     /// Widths images were asked for at
     asked: HashMap<String, f64>,
+    /// Images that couldn't be had, and when
+    failed: HashMap<String, Instant>,
     tiles: HashMap<TileKey, Tile>,
     /// Where tiles are drawn before they're kept, by the margin around the
     /// tile and how many samples a pixel takes along each side
@@ -481,6 +486,7 @@ impl Painter {
             pictures: HashMap::new(),
             images: HashMap::new(),
             asked: HashMap::new(),
+            failed: HashMap::new(),
             tiles: HashMap::new(),
             scratch: Vec::new(),
             made: 0,
@@ -622,7 +628,12 @@ impl Painter {
                     self.dirty = true;
                 }
             }
+            Msg::Failed(key) => {
+                self.asked.remove(&key);
+                self.failed.insert(key, Instant::now());
+            }
             Msg::Image(key, img) => {
+                self.failed.remove(&key);
                 // Asked for twice, by pictures wanting it at sizes that came
                 // to the same: what's drawn with it is right as it is
                 let same = self.images.get(&key).is_some_and(|kept| {
@@ -1001,6 +1012,9 @@ impl Painter {
     /// asked for last
     fn ask_exact(&mut self, renders: &[(String, f64)]) {
         for (key, width) in renders {
+            if self.failed.get(key).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+                continue;
+            }
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
             if (width / asked - 1.0).abs() > EXACT_TOLERANCE as f64 {
                 self.asked.insert(key.clone(), *width);
@@ -1011,6 +1025,9 @@ impl Painter {
 
     fn ask(&mut self, images: &[(String, f64)]) {
         for (key, width) in images {
+            if self.failed.get(key).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+                continue;
+            }
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
             if *width > asked * 1.05 {
                 self.asked.insert(key.clone(), *width);
