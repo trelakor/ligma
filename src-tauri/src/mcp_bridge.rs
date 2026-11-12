@@ -1124,9 +1124,20 @@ pub const PANEL_JS: &str = r##"(() => {
     rowsBox.toggleAttribute("data-below", below);
   };
 
+  // Whether the right panel lists properties, of the page or the selected
+  // layers: its first tab (Design, or Draw) is the one picked. Prototype
+  // and the other tabs list something else
+  const listsProperties = (panel) => {
+    for (let el = panel, up = 0; el && up < 8; el = el.parentElement, up++) {
+      const tabs = el.querySelector('[role="tablist"]');
+      if (tabs) return tabs.querySelector('[role="tab"]')?.getAttribute("aria-selected") === "true";
+    }
+    return false;
+  };
+
   // Ours goes where Figma's MCP section is, which shows while nothing is
   // selected, and under the selected layers' heading otherwise, where it's
-  // still in view
+  // still in view. Only while the panel lists properties
   const place = () => {
     if (!status?.on) {
       root?.remove();
@@ -1145,7 +1156,7 @@ pub const PANEL_JS: &str = r##"(() => {
       return;
     }
     const panel = document.querySelector(PANEL);
-    const head = panel && [...panel.children].find((child) => child !== root);
+    const head = panel && listsProperties(panel) && [...panel.children].find((child) => child !== root);
     if (!head) root.remove();
     else if (head.nextElementSibling !== root) head.after(root);
   };
