@@ -2,6 +2,17 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.40.0 - 2026-11-12
+
+- Ligma's own home page is now on, in place of Figma's file browser in the Home tab. It loads none of Figma's home page, so it opens faster. Home shows your starred files first, then suggested projects and files, then your latest files. Recents, Shared with you and Drafts sit in the sidebar with your teams. Turn it off, or pick the page it opens on, in Settings > Features > Home.
+- Starred files keep the order you put them in. Pick one up and drop it where you want it.
+- A file's preview shows who has it open right now.
+- Each team opens to its projects, Drafts and Trash, all counted at once. Its Trash is the team's trash in Figma, where files can be restored or deleted for good.
+- Search with Ctrl+K finds files, projects and actions. The bell next to your name opens Figma's notifications.
+- The menu under your name works like Figma's: change theme, open settings, switch accounts, add one or log out. Turning Ligma's home page off keeps you on the same account.
+- Right-click a file tab and choose Add Emoji to put an emoji in front of the file's name, which then shows as its tab icon. Clicking the icon of the tab you're on opens the picker too.
+- In a file others have open, the pages list shows who's on each page. Click a picture to follow them.
+
 ## 0.39.0 - 2026-11-11
 
 - New app icons in Settings > App Icon. Colorways adds Slate, Blush, Tangerine, Retro, Matcha, Cobalt, Prism and Mocha, and Ligma Dark on Windows. macOS already turns Ligma's own icon dark with your icon style.
