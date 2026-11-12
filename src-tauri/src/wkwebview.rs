@@ -279,6 +279,31 @@ extern "C" {
     fn CGPathCreateMutable() -> *mut c_void;
     fn CGPathAddRect(path: *mut c_void, transform: *const c_void, rect: Rect);
     fn CGPathRelease(path: *const c_void);
+    fn CGColorCreateSRGB(red: f64, green: f64, blue: f64, alpha: f64) -> *mut c_void;
+    fn CGColorRelease(color: *const c_void);
+}
+
+/// Paints `color` behind tab `webview`'s page, which is all it shows until
+/// the page draws. wry only stops WebKit drawing white there for a
+/// background color, which leaves the window's showing through
+pub fn set_background(webview: &Webview, color: tauri::window::Color) {
+    let _ = webview.with_webview(move |platform| unsafe {
+        let view = platform.inner() as *mut AnyObject;
+        if view.is_null() {
+            return;
+        }
+        catching("tab background", || {
+            let _: () = msg_send![view, setWantsLayer: true];
+            let layer: *mut AnyObject = msg_send![view, layer];
+            if layer.is_null() {
+                return;
+            }
+            let channel = |value: u8| f64::from(value) / 255.0;
+            let cg = CGColorCreateSRGB(channel(color.0), channel(color.1), channel(color.2), 1.0);
+            let _: () = msg_send![layer, setBackgroundColor: cg];
+            CGColorRelease(cg);
+        });
+    });
 }
 
 extern "C" {

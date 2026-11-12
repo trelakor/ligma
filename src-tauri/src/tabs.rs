@@ -33,8 +33,9 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::window::Color;
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, Url, Webview, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalPosition, Theme, Url, Webview, WebviewUrl, WebviewWindowBuilder,
     Window, WindowEvent,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -817,11 +818,14 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
             .initialization_script(LOCAL_NETWORK_ACCESS_JS)
             .initialization_script(TITLE_EMOJI_JS);
     }
+    let background = page_background(app);
     let webview = window.add_child(
-        builder,
+        builder.background_color(background),
         LogicalPosition::new(0.0, bar_height(app)),
         content_size(app, &window)?,
     )?;
+    #[cfg(target_os = "macos")]
+    crate::wkwebview::set_background(&webview, background);
     webview.set_zoom(scale(app))?;
     #[cfg(target_os = "macos")]
     crate::wkwebview::pass_undo_to_pages(&webview);
@@ -2496,6 +2500,7 @@ pub fn sync_theme(app: &AppHandle) {
             state.theme = Some(theme.clone());
         }
         push_state(&app);
+        repaint_page_backgrounds(&app);
         crate::settings::apply_theme(&app, &theme);
         crate::prompt::apply_theme(&app, &theme);
         #[cfg(windows)]
@@ -2506,6 +2511,29 @@ pub fn sync_theme(app: &AppHandle) {
 /// The active tab's Figma theme colors (see `THEME_JS`), once known
 pub fn theme(app: &AppHandle) -> Option<serde_json::Value> {
     app.state::<Tabs>().inner().0.lock().unwrap().theme.clone()
+}
+
+/// What a tab shows until its page draws, and between pages: Figma's
+/// background, which its loading screens are, rather than the webview's
+/// white. Before a tab has reported the theme, Figma's default for the
+/// color scheme
+fn page_background(app: &AppHandle) -> Color {
+    if let Some(color) = theme(app).as_ref().and_then(|theme| crate::settings::theme_color(theme, "bg")) {
+        return color;
+    }
+    let light = app.get_window(MAIN).and_then(|window| window.theme().ok()) == Some(Theme::Light);
+    if light { Color(255, 255, 255, 255) } else { Color(44, 44, 44, 255) }
+}
+
+/// `page_background` for every tab, after the theme changed
+fn repaint_page_backgrounds(app: &AppHandle) {
+    let background = page_background(app);
+    let ids: Vec<u32> = app.state::<Tabs>().inner().0.lock().unwrap().tabs.iter().map(|tab| tab.id).collect();
+    for webview in ids.into_iter().filter_map(|id| app.get_webview(&label(id))) {
+        let _ = webview.set_background_color(Some(background));
+        #[cfg(target_os = "macos")]
+        crate::wkwebview::set_background(&webview, background);
+    }
 }
 
 /// The interface scale (`interfaceScale`), 1 at 100%
