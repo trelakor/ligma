@@ -55,12 +55,16 @@
   // and canvas view, found among its modules by the getters they define
   let previewState = null;
   let previewSought = -Infinity;
-  const pixelPreview = () => {
+  const figmaState = () => {
     if (!previewState && performance.now() - previewSought > 5000) {
       previewSought = performance.now();
       const prefs = exportWith("get activeCanvasPixelPreview(){", "editorPreferences");
       if (prefs) previewState = { prefs, view: exportWith("get shouldStayZoomedToFit(){", "canvasViewState") };
     }
+    return previewState;
+  };
+  const pixelPreview = () => {
+    figmaState();
     try {
       if (previewState) {
         if (!previewState.prefs.editorPreferences().activeCanvasPixelPreview.getCopy()) return 0;
@@ -70,6 +74,33 @@
     } catch {
       return 0;
     }
+  };
+
+  // The rest of what Figma's renderer is told each frame that's Figma's to
+  // set: the pixel grid, and outline mode, where Figma's overlay draws the
+  // outlines and the renderer only the editor's background, given as
+  // 0xRRGGBB, or -1 when it's off
+  let outlineColor = { at: -Infinity, value: 0 };
+  const themeBackground = () => {
+    if (performance.now() - outlineColor.at > 1000) {
+      const context = document.createElement("canvas").getContext("2d");
+      context.fillStyle = getComputedStyle(document.body).getPropertyValue("--color-bg").trim() || "#2c2c2c";
+      const hex = /^#[0-9a-f]{6}$/i.test(context.fillStyle) ? context.fillStyle : "#2c2c2c";
+      outlineColor = { at: performance.now(), value: parseInt(hex.slice(1), 16) };
+    }
+    return outlineColor.value;
+  };
+  const display = () => {
+    const state = figmaState();
+    let grid = true;
+    let outlines = false;
+    try {
+      if (state) {
+        grid = !!state.prefs.editorPreferences().renderGrid.getCopy();
+        outlines = !!state.view?.canvasViewState().showOutlines.getCopy();
+      }
+    } catch {}
+    return { grid, outline: outlines ? themeBackground() : -1 };
   };
 
   const api = () => {
@@ -702,6 +733,7 @@
         page: figma.currentPage.id,
         visible: document.visibilityState === "visible",
         preview: pixelPreview(),
+        ...display(),
       };
     },
 
@@ -743,6 +775,8 @@
         transparent: !background,
         dark: document.body?.dataset.preferredTheme === "dark",
         octaves: noiseOctaves,
+        // Its colors are Display P3, which Figma's renderer shows in sRGB
+        p3: figma.root.documentColorProfile === "DISPLAY_P3",
       };
     },
 
@@ -1005,13 +1039,15 @@
     const v = shared && window.__ligmaNative.view();
     if (!v) return;
     const [a, b] = v.page.split(":").map(Number);
-    const values = [v.x, v.y, v.w, v.h, v.zoom, v.cx, v.cy, v.cw, v.ch, v.dpr, v.visible ? 1 : 0, a, b, v.preview];
+    const values = [v.x, v.y, v.w, v.h, v.zoom, v.cx, v.cy, v.cw, v.ch, v.dpr, v.visible ? 1 : 0, a, b, v.preview, v.grid ? 1 : 0, v.outline];
     if (values.every((value, i) => value === written[i])) return;
     written = values;
     shared[0] += 1;
     for (let i = 0; i < 13; i++) shared[i + 1] = values[i];
     shared[14] = performance.timeOrigin + performance.now();
     shared[15] = v.preview;
+    shared[16] = v.grid ? 1 : 0;
+    shared[17] = v.outline;
     shared[0] += 1;
   };
   // Read once Figma has drawn the frame, as it moves the view before

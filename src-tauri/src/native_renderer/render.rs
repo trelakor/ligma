@@ -59,9 +59,33 @@ pub struct View {
     /// Figma's pixel preview: pixels a unit it previews at, 1 or 2, or 0
     #[serde(default)]
     pub preview: f64,
+    /// Figma's pixel grid is on
+    #[serde(default = "on")]
+    pub grid: bool,
+    /// Outline mode, as the editor's background, 0xRRGGBB, or -1 when it's
+    /// off. Figma's overlay draws the outlines, so its renderer draws only
+    /// that, without the page or the pixel grid
+    #[serde(default = "off")]
+    pub outline: f64,
+}
+
+fn on() -> bool {
+    true
+}
+
+fn off() -> f64 {
+    -1.0
 }
 
 impl View {
+    /// The background outline mode shows, when it's on
+    pub fn outline(&self) -> Option<Color4f> {
+        (self.outline >= 0.0).then(|| {
+            let rgb = self.outline as u32;
+            Color4f::new(((rgb >> 16) & 255) as f32 / 255.0, ((rgb >> 8) & 255) as f32 / 255.0, (rgb & 255) as f32 / 255.0, 1.0)
+        })
+    }
+
     /// Device pixels a unit in a window `width` pixels wide
     pub fn px(&self, width: u32) -> f32 {
         (width as f64 / self.w) as f32
@@ -1988,6 +2012,10 @@ impl Painter {
     /// tiles are still missing
     fn compose(&mut self, target: &mut Surface, view: &View, budget: Option<Duration>, settled: bool) -> (Counts, Option<String>, bool) {
         let size = (target.width() as u32, target.height() as u32);
+        if let Some(color) = view.outline() {
+            target.canvas().clear(color);
+            return (Counts::default(), None, false);
+        }
         let (drawn, preview, width, height) = view.drawn(size);
         if !preview {
             return self.compose_at(target, view, budget, settled);
@@ -2009,7 +2037,9 @@ impl Painter {
         let dest = Rect::from_xywh(at, at_y, width as f32 * scale, height as f32 * scale);
         let canvas = target.canvas();
         canvas.draw_image_rect_with_sampling_options(&image, None, dest, SamplingOptions::new(FilterMode::Nearest, MipmapMode::None), &Paint::default());
-        self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, size.0 as i32, size.1 as i32);
+        if view.grid {
+            self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, size.0 as i32, size.1 as i32);
+        }
         result
     }
 
@@ -2166,7 +2196,9 @@ impl Painter {
                 canvas.draw_image(&tile.image, at, None);
             }
         }
-        self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, width, height);
+        if view.grid {
+            self.pixel_grid(canvas, (view.x * px as f64, view.y * px as f64), px, width, height);
+        }
         // The approximate reason of a unit in view, if any
         let view_area = Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px);
         let aa = self.supersample(px) < 4;

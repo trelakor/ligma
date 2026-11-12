@@ -65,6 +65,9 @@ pub struct Begin {
     /// Figma's dark theme, which darkens its checkerboard
     #[serde(default)]
     pub dark: bool,
+    /// The file's colors are Display P3 rather than sRGB
+    #[serde(default)]
+    pub p3: bool,
     /// Figma's noise octaves as its GPU hashes them, see `NOISE_OCTAVES`
     #[serde(default)]
     pub octaves: Option<Vec<f32>>,
@@ -154,6 +157,25 @@ pub struct Rgba {
     pub b: f32,
     #[serde(default = "one")]
     pub a: f32,
+}
+
+impl Rgba {
+    /// A Display P3 color in sRGB, as Figma's renderer shows it on an sRGB
+    /// canvas: converted in linear light, and what's outside sRGB clipped
+    pub fn from_p3(self) -> Rgba {
+        let linear = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        let encode = |v: f32| {
+            let v = v.clamp(0.0, 1.0);
+            if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+        };
+        let (r, g, b) = (linear(self.r), linear(self.g), linear(self.b));
+        Rgba {
+            r: encode(1.2249401 * r - 0.2249404 * g),
+            g: encode(-0.0420569 * r + 1.0420571 * g),
+            b: encode(-0.0196376 * r - 0.0786361 * g + 1.0982735 * b),
+            a: self.a,
+        }
+    }
 }
 
 fn one() -> f32 {
@@ -430,6 +452,25 @@ impl Node {
         node
     }
 
+    /// Its colors, given in Display P3, in sRGB
+    fn colors_from_p3(&mut self) {
+        let paint = |paint: &mut Paint| {
+            paint.color = paint.color.map(Rgba::from_p3);
+            for stop in paint.gradient_stops.iter_mut().flatten() {
+                stop.color = stop.color.from_p3();
+            }
+        };
+        if let Fills::Paints(fills) = &mut self.fills {
+            fills.iter_mut().for_each(paint);
+        }
+        self.strokes.iter_mut().for_each(paint);
+        self.segment_fills.iter_mut().flatten().for_each(paint);
+        for effect in &mut self.effects {
+            effect.color = effect.color.map(Rgba::from_p3);
+            effect.secondary_color = effect.secondary_color.map(Rgba::from_p3);
+        }
+    }
+
     /// Bounds for a layer its effects filter. Its render bounds can be cut
     /// by a mask or a frame around it, which would cut what its blurs and
     /// shadows read near that edge, so they're grown by as far as those read
@@ -600,6 +641,8 @@ pub struct Scene {
     /// The page's background is hidden: Figma shows a checkerboard
     pub transparent: bool,
     pub dark: bool,
+    /// Colors come in Display P3, and are kept in sRGB
+    pub p3: bool,
     /// For each of noise's four fields, each of its three octaves' seed and
     /// two gradient scales
     pub noise_octaves: Vec<f32>,
@@ -613,7 +656,8 @@ pub struct Scene {
 impl Scene {
     pub fn new(begin: Begin) -> Self {
         let noise_octaves = begin.octaves.filter(|octaves| octaves.len() == NOISE_OCTAVES).unwrap_or_else(noise_octaves);
-        Scene { page: begin.page, background: begin.bg, transparent: begin.transparent, dark: begin.dark, noise_octaves, ..Default::default() }
+        let background = if begin.p3 { begin.bg.map(Rgba::from_p3) } else { begin.bg };
+        Scene { page: begin.page, background, transparent: begin.transparent, dark: begin.dark, p3: begin.p3, noise_octaves, ..Default::default() }
     }
 
     pub fn node(&self, index: usize) -> Option<&Node> {
@@ -629,6 +673,9 @@ impl Scene {
     fn insert(&mut self, nodes: Vec<Node>, page: &str, place: Place) -> Option<usize> {
         let mut first = None;
         for mut node in nodes {
+            if self.p3 {
+                node.colors_from_p3();
+            }
             let slot = self.nodes.len();
             let external = node.parent_id == EXTERNAL;
             let parent = if node.parent_id == page || external { None } else { self.by_id.get(&node.parent_id).copied() };

@@ -559,7 +559,7 @@ fn changes(ctx: &Ctx, webview: &Webview) -> Result<bool, String> {
 }
 
 /// Slots of the view the page writes to shared memory (see page.js)
-const VIEW_SLOTS: usize = 16;
+const VIEW_SLOTS: usize = 18;
 
 /// The view the page last wrote to `shared`, with its count of writes and
 /// when it was written, in ms since 1970
@@ -582,10 +582,10 @@ fn shared_view(shared: crate::webview2::Shared) -> Option<(u64, View, f64)> {
         if unsafe { std::ptr::read_volatile(base) } != count {
             continue;
         }
-        let [_, x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, a, b, at, preview] = slots;
+        let [_, x, y, w, h, zoom, cx, cy, cw, ch, dpr, visible, a, b, at, preview, grid, outline] = slots;
         let _ = (cx, cy);
         let page = format!("{}:{}", a as i64, b as i64);
-        return Some((count as u64, View { x, y, w, h, zoom, cw, ch, dpr, page, visible: visible != 0.0, preview }, at));
+        return Some((count as u64, View { x, y, w, h, zoom, cw, ch, dpr, page, visible: visible != 0.0, preview, grid: grid != 0.0, outline }, at));
     }
     None
 }

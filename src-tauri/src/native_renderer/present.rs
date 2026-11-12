@@ -428,11 +428,18 @@ impl Screen {
             left.op_rect(covers, skia_safe::region::RegionOp::Difference);
             draws.push((image, dest, here, square));
         }
-        let checker = self.checker(what, (ox, oy), px, view.zoom);
-        let grid = self.pixel_grid((ox, oy), px);
+        // Outline mode shows the editor's background alone, Figma's overlay
+        // drawing the outlines
+        let outline = view.outline();
+        if outline.is_some() {
+            draws.clear();
+            left.set_empty();
+        }
+        let checker = if outline.is_some() { None } else { self.checker(what, (ox, oy), px, view.zoom) };
+        let grid = if view.grid && outline.is_none() { self.pixel_grid((ox, oy), px) } else { None };
         let (surface, _) = &mut self.buffers[index];
         let canvas = surface.canvas();
-        canvas.clear(what.background.unwrap_or(Color4f::new(1.0, 1.0, 1.0, 1.0)));
+        canvas.clear(outline.or(what.background).unwrap_or(Color4f::new(1.0, 1.0, 1.0, 1.0)));
         if let Some(checker) = &checker {
             canvas.draw_paint(checker);
         }
