@@ -255,6 +255,51 @@
   .sec h2 small { color: var(--text2); font-size: 11px; font-weight: 450; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 20px 16px; padding: 4px 0 28px; }
 
+  /* Home: sections that fold, each with a way to the whole list */
+  .home-sec h2 { align-items: center; padding-top: 8px; }
+  /* Smaller cards than the full lists: Home is for a glance */
+  .home-sec .grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .fold { display: flex; align-items: center; gap: 6px; height: 28px; margin-left: -8px; padding: 0 8px 0 6px; border-radius: 5px; font-weight: 550; }
+  .fold:hover { background: var(--hover); }
+  .fold .chev { width: 12px; height: 12px; color: var(--text2); transition: transform 160ms var(--ease); }
+  .fold[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+  .fold small { color: var(--text2); font-size: 11px; font-weight: 450; }
+  .all { display: flex; align-items: center; gap: 2px; height: 24px; margin-left: auto; padding: 0 4px 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; }
+  .all:hover { background: var(--hover); color: var(--text); }
+  .all .i { width: 12px; height: 12px; }
+  .fold:focus-visible, .all:focus-visible, .folder:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { margin: 4px 0 28px; color: var(--text2); }
+  .folders { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; padding: 4px 0 28px; }
+  .folder { display: flex; align-items: center; gap: 10px; min-width: 0; height: 52px; padding: 0 12px 0 10px; border-radius: 8px; background: var(--bg2); text-align: left; transition: background 120ms; }
+  .folder:hover { background: var(--bg3); }
+  .folder .fi { display: grid; flex: none; color: var(--text2); }
+  .folder .ft { display: flex; flex-direction: column; min-width: 0; line-height: 16px; }
+  .folder b, .folder small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .folder b { font-weight: 550; }
+  .folder small { color: var(--text2); font-size: 11px; }
+  /* Suggested files: a line each, with why and where */
+  .rows { padding: 0 0 28px; }
+  .rhead, .card.row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.5fr) minmax(0, 1fr) 96px; gap: 16px; align-items: center; }
+  /* Wide windows: the columns stay close enough to read across */
+  @media (min-width: 1500px) { .rhead, .card.row { grid-template-columns: minmax(0, 520px) minmax(0, 360px) minmax(0, 1fr) 96px; } }
+  .rhead { height: 28px; padding: 0 8px; box-shadow: inset 0 -1px 0 var(--line); color: var(--text2); font-size: 11px; }
+  .card.row { height: 40px; padding: 0 8px; border-radius: 0; box-shadow: inset 0 -1px 0 var(--line); }
+  .card.row:hover { background: var(--hover); }
+  .card.row[aria-selected="true"] { background: var(--sel); }
+  .card.row:focus-visible { outline-offset: -2px; }
+  .row .name { margin: 0; }
+  .row .nm { flex: 0 1 auto; }
+  .row .why, .row .where { overflow: hidden; color: var(--text2); text-overflow: ellipsis; white-space: nowrap; }
+  .row .why.strong { color: var(--accent-text); font-weight: 550; }
+  .row .end { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+  .row .tools { position: static; }
+  .faces.inline { position: static; aspect-ratio: auto; padding: 0; }
+  .faces.inline .face { width: 20px; height: 20px; font-size: 9px; }
+  @media (max-width: 900px) {
+    .rhead, .card.row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 72px; }
+    .row .where, .rhead span:nth-child(3) { display: none; }
+  }
+
   .card { position: relative; min-width: 0; border-radius: 8px; outline: none; }
   .marquee { position: absolute; z-index: 3; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
   .thumb { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px; background: var(--canvas); color: var(--text2); }
@@ -288,9 +333,9 @@
   .face img { width: 100%; height: 100%; object-fit: cover; }
   /* A starred file being dragged: held up by the hand, its place in the
      grid shown where it will land */
-  #starred-grid > .card { cursor: grab; }
+  .star-grid > .card { cursor: grab; }
   /* The browser's own drag of a picture would cancel Ligma's */
-  #starred-grid img { -webkit-user-drag: none; user-drag: none; }
+  .star-grid img { -webkit-user-drag: none; user-drag: none; }
   body.grabbing, body.grabbing * { cursor: grabbing !important; }
   .card.hole > * { visibility: hidden; }
   .card.hole::after { content: ""; position: absolute; top: 0; left: 0; right: 0; aspect-ratio: 16 / 9; border-radius: 6px; background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 40%, transparent); }
@@ -1119,7 +1164,14 @@ function presenceChanged(queryKey, q) {
   for (const id of q.remove ?? []) users.delete(id);
   PRESENCE.set(key, users);
   drawFaces(key);
+  // Someone joining a file can make it a suggestion on Home
+  clearTimeout(presenceTimer);
+  presenceTimer = setTimeout(() => {
+    if (state.view !== "home" || $(".nm input", scroller) || menu.classList.contains("open")) return;
+    if (homeLayout().key !== homeKey) render();
+  }, 800);
 }
+let presenceTimer = 0;
 const personName = (u) => Live.users.find((me) => me.id === u.id)?.name ?? u.handle ?? "Someone";
 function facesHtml(key) {
   const users = [...(PRESENCE.get(key)?.values() ?? [])];
@@ -1455,7 +1507,7 @@ async function loadFavorites() {
 
 // What a view needs before it can show, loaded once
 async function need(view) {
-  if (!LIVE || Live.signedOut || !Live.uid || Live.ready.has(view) || Live.loading.has(view) || view === "recents") return;
+  if (!LIVE || Live.signedOut || !Live.uid || Live.ready.has(view) || Live.loading.has(view) || view === "recents" || view === "home") return;
   if (view === "trash" || view.startsWith("t:")) {
     Live.ready.add(view);
     return queueMicrotask(render);
@@ -1568,7 +1620,8 @@ function activity(file) {
 /* State */
 
 const state = {
-  view: store.get("view", "recents"),
+  // Home every time it opens: starred, suggestions and the latest files
+  view: "home",
   type: "all",
   inbox: "all",
   sel: new Set(),
@@ -1591,9 +1644,8 @@ function viewName(view) {
   const team = /^[dt]:/.test(view) && teamById(view.slice(2))?.team.name;
   if (view.startsWith("d:")) return team && `Drafts · ${team}`;
   if (view.startsWith("t:")) return team && `Trash · ${team}`;
-  return { recents: "Recents", starred: "Starred", drafts: "Drafts", trash: "Trash" }[view];
+  return { home: "Home", recents: "Recents", starred: "Starred", drafts: "Drafts", trash: "Trash" }[view];
 }
-if (!viewName(state.view)) state.view = "recents";
 
 function viewFiles() {
   const { view } = state;
@@ -1658,6 +1710,7 @@ function renderSide() {
   html += `<button class="bell" id="bell" aria-haspopup="dialog" aria-expanded="${open}" aria-controls="inbox" aria-label="Inbox${unread ? `, ${unread} unread` : ""}" title="Inbox">${icon("bell")}${unread ? `<span class="badge" aria-hidden="true">${unread}</span>` : ""}</button></div>`;
   html += `<div class="tree">`;
   html += `<button class="nav find" data-act="search">${icon("search")}<span class="lbl">Search</span><kbd>${MOD}K</kbd></button>`;
+  html += navRow("home", "home", "Home");
   html += navRow("recents", "clock", "Recents");
   html += navRow("starred", "star", "Starred", count((f) => f.starred, "starred"));
   html += navRow("drafts", "file", "Drafts", count((f) => !f.project || DRAFT_FOLDERS.has(f.project), "drafts"));
@@ -1690,7 +1743,7 @@ function renderSide() {
   for (const plan of PLANS.filter((p) => p.teams.length > 1)) html += section("sec:org:" + plan.id, plan.name, plan.teams.filter((t) => !starred.has(t.id)).map((t) => teamRow(t)).join(""), plan.tier);
   html += `</div><div class="sfoot">`;
   html += navRow("trash", "trash", "Trash", FILES.filter((f) => f.trashed).length || "");
-  html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${icon("home")}<span class="lbl">Figma's file browser</span>${icon("ext", "ext")}</a>`;
+  html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${icon("grid")}<span class="lbl">Figma's file browser</span>${icon("ext", "ext")}</a>`;
   // Nothing about sync unless it fails: then the bar over the files says so
   if (!LIVE) html += state.mode === "error" ? `<div class="sync off" id="sync"><span class="dot"></span><span>Offline, as of 4 min ago</span></div>` : `<div class="sync" id="sync"><span class="dot"></span><span>Sample files, not yours yet</span></div>`;
   html += `</div>`;
@@ -1701,7 +1754,7 @@ function renderSide() {
 
 function renderHead(count) {
   const name = viewName(state.view);
-  const n = state.mode === "loading" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  const n = state.mode === "loading" || state.view === "home" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
   head.innerHTML = `<button class="menu-btn" data-act="side" aria-label="Show sidebar">${icon("side")}</button>
     <h1><span>${esc(name)}</span><small>${n}</small></h1><span class="grow"></span>
     <button id="find" data-act="search" aria-label="Search">${icon("search")}<span class="lbl">Search files, projects and actions</span><kbd>${MOD}K</kbd></button>
@@ -1726,20 +1779,111 @@ function renderFilters() {
   filters.innerHTML = html;
 }
 
-function cardHtml(file) {
+// `reorder`: in a row of starred files, which has its own drag (startLift)
+function cardHtml(file, { reorder = state.view === "starred" } = {}) {
   const trash = inTrash();
   const place = /^[pd]:/.test(state.view) ? "" : placeOf(file.project) + " · ";
   const meta = trash ? `${placeOf(file.project)} · Deleted ${when(file.trashedAt)}` : place + activity(file);
   const tools = trash ? "" : `<div class="tools"><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button></div>`;
   const badge = file.unread ? `<span class="badge" title="${file.unread} new ${file.unread === 1 ? "comment" : "comments"}">${file.unread}</span>` : "";
   const restore = trash ? `<button class="restore" tabindex="-1">Restore</button>` : "";
-  return `<div class="card" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="${!trash && state.view !== "starred"}">
+  return `<div class="card" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="${!trash && !reorder}">
     <div class="thumb" data-thumb="${file.id}" aria-hidden="true"></div>${trash ? "" : `<div class="faces" data-faces="${file.id}"${facesLabel(file.id) ? ` role="img" aria-label="${esc(facesLabel(file.id))}"` : ""}>${facesHtml(file.id)}</div>`}${tools}
     <div class="name">${glyph(file.type)}<span class="nm" id="n-${file.id}">${esc(file.name)}</span>${badge}${restore}</div>
     <div class="meta" id="d-${file.id}">${esc(meta)}${file.unread ? ` · ${file.unread} new` : ""}</div></div>`;
 }
 
+/* Home: what you starred, then what Ligma thinks you'll want (projects
+   you've been working in, files with something new), then your latest
+   files. Each file shows once, in the first section that has it */
+
+// Cards across, as the grid lays them out at this width
+const homeColumns = (min = 200, gap = 16) => Math.max(1, Math.floor((scroller.clientWidth - 56 + gap) / (min + gap)));
+let homeCols = 0;
+
+// Why a file is suggested, strongest first; 0 is no reason beyond having
+// opened it
+function reasonFor(file) {
+  if (file.unread) return { score: 1000 + file.unread, text: `${file.unread} new ${file.unread === 1 ? "comment" : "comments"}`, strong: true };
+  if (!LIVE) return { score: file.by && file.kind !== "open" ? 500 : 0, text: activity(file) };
+  const people = [...(PRESENCE.get(file.key)?.values() ?? [])].filter((u) => u.id !== Live.uid);
+  if (people.length) return { score: 800, text: `${personName(people[0])}${people.length > 1 ? ` and ${people.length - 1} more are` : " is"} in it now`, strong: true };
+  // Figma says when a file changed, not who changed it, and logs when you
+  // opened a file, not when you left: a change hours after that open is
+  // most likely someone else's, not your own session's
+  if (file.touchedAt && file.viewedAt && file.touchedAt - file.viewedAt > 6 * HOUR) return { score: 400, text: `New changes · ${short(file.touchedAt)}` };
+  return { score: 0, text: `You opened it · ${short(file.viewedAt ?? file.at)}` };
+}
+
+// Projects you've been working in lately, from the files you've touched
+function suggestFolders(files, n) {
+  const last = new Map();
+  for (const f of files) if (f.project && PROJECTS[f.project] && !DRAFT_FOLDERS.has(f.project)) last.set(f.project, Math.max(last.get(f.project) ?? 0, f.at));
+  return [...last].sort((a, b) => b[1] - a[1]).slice(0, n).map(([id, at]) => ({ ...PROJECTS[id], at }));
+}
+
+function homeLayout() {
+  const cols = (homeCols = homeColumns());
+  const shown = FILES.filter((f) => !f.trashed && (state.type === "all" || f.type === state.type));
+  const starredAll = starOrder(shown.filter((f) => f.starred));
+  const starred = starredAll.slice(0, cols);
+  const taken = new Set(starred.map((f) => f.id));
+  const pool = shown.filter((f) => (LIVE ? f.recent : true) && !taken.has(f.id)).sort((a, b) => b.at - a.at);
+  // Who's in a file is a reason too: watch the latest ones
+  if (LIVE) for (const f of pool.slice(0, 24)) LG.watch(f.key);
+  const reasons = new Map(pool.map((f) => [f.id, reasonFor(f)]));
+  const signals = pool.filter((f) => reasons.get(f.id).score > 0).sort((a, b) => reasons.get(b.id).score - reasons.get(a.id).score || b.at - a.at).slice(0, 6);
+  for (const f of signals) taken.add(f.id);
+  const recents = pool.filter((f) => !taken.has(f.id)).slice(0, cols * 2);
+  for (const f of recents) taken.add(f.id);
+  // With little new, older work you opened comes back: what Recents has scrolled past
+  const suggested = [...signals, ...pool.filter((f) => !taken.has(f.id)).slice(0, Math.max(0, 4 - signals.length))];
+  const folders = suggestFolders(shown.filter((f) => !LIVE || f.recent || f.starred), homeColumns(220, 12));
+
+  const files = [];
+  const open = (id) => !state.collapsed.has("home:" + id);
+  const section = (id, title, count, body, view) =>
+    `<section class="sec home-sec"><h2><button class="fold" data-fold="home:${id}" aria-expanded="${open(id)}">${icon("down", "chev")}<span>${esc(title)}</span>${count ? `<small>${count}</small>` : ""}</button>${view ? `<button class="all" data-go="${view}">View all${icon("right")}</button>` : ""}</h2>${open(id) ? body : ""}</section>`;
+  let html = "";
+
+  if (open("starred")) files.push(...starred);
+  html += section("starred", "Starred", starredAll.length, starred.length
+    ? `<div class="grid star-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>`
+    : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
+
+  if (folders.length) {
+    html += section("folders", "Suggested projects", 0, `<div class="folders">${folders.map((p) =>
+      `<button class="folder" data-go="p:${p.id}" data-project="${p.id}"><span class="fi">${figmaIcon("folder", 24)}</span><span class="ft"><b>${esc(p.name)}</b><small>${esc(p.team.name)} · ${esc(short(p.at))}</small></span></button>`).join("")}</div>`);
+  }
+
+  if (suggested.length) {
+    if (open("suggested")) files.push(...suggested);
+    html += section("suggested", "Suggested files", 0, `<div class="rows" role="listbox" aria-multiselectable="true" aria-label="Suggested files"><div class="rhead" aria-hidden="true"><span>Name</span><span>Why</span><span>Where</span><span></span></div>${suggested.map((f) => rowHtml(f, reasons.get(f.id))).join("")}</div>`);
+  }
+
+  if (recents.length) {
+    if (open("recents")) files.push(...recents);
+    html += section("recents", "Recents", 0, `<div class="grid" role="listbox" aria-multiselectable="true" aria-label="Recents">${recents.map(cardHtml).join("")}</div>`, "recents");
+  }
+  // What a redraw would change, for presence updates (see presenceChanged)
+  const key = suggested.map((f) => f.id + reasons.get(f.id).text).join("|");
+  return { html, files, key, any: starred.length + suggested.length + recents.length > 0 };
+}
+let homeKey = "";
+
+// A suggested file: one line, with why and where
+function rowHtml(file, reason) {
+  const badge = file.unread ? `<span class="badge" title="${file.unread} new ${file.unread === 1 ? "comment" : "comments"}">${file.unread}</span>` : "";
+  const label = facesLabel(file.id);
+  return `<div class="card row" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="true">
+    <div class="name">${glyph(file.type)}<span class="nm" id="n-${file.id}">${esc(file.name)}</span>${badge}</div>
+    <div class="why${reason.strong ? " strong" : ""}" id="d-${file.id}">${esc(reason.text)}</div>
+    <div class="where">${esc(placeOf(file.project))}</div>
+    <div class="end"><div class="faces inline" data-faces="${file.id}"${label ? ` role="img" aria-label="${esc(label)}"` : ""}>${facesHtml(file.id)}</div><div class="tools"><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button></div></div></div>`;
+}
+
 const EMPTY = {
+  home: ["home", "Nothing here yet", "Files you open, edit or get comments on show up here", "new"],
   recents: ["clock", "Nothing here yet", "Files you open, edit or get comments on show up here, newest first", "new"],
   starred: ["star", "No starred files", "Press S on a file, or click the star on its preview, to keep it here", null],
   drafts: ["file", "No drafts", "Files you make outside a project stay here until you move them", "new"],
@@ -1786,7 +1930,10 @@ function render({ keepScroll = true } = {}) {
     return;
   }
   const started = performance.now();
-  const list = state.mode === "empty" ? [] : viewFiles();
+  const ready = LIVE && Live.ready.has(state.view === "home" ? "recents" : state.view);
+  const home = state.view === "home" && state.mode !== "empty" && (!LIVE || ready) ? homeLayout() : null;
+  if (home) homeKey = home.key;
+  const list = state.mode === "empty" ? [] : home ? home.files : viewFiles();
   order = list.map((f) => f.id);
   for (const id of state.sel) if (!order.includes(id)) state.sel.delete(id);
   renderSide();
@@ -1797,11 +1944,12 @@ function render({ keepScroll = true } = {}) {
   let html = "";
   if (state.mode === "loading") html = renderSkeleton();
   else if (LIVE && Live.signedOut) html = `<div class="empty"><div class="ic">${icon("users")}</div><h2>Sign in to Figma</h2><p>Your files show here once you're signed in</p><a class="btn primary" href="https://www.figma.com/login">Sign in</a></div>`;
-  else if (LIVE && !Live.ready.has(state.view) && !Live.error) {
+  else if (LIVE && !ready && !Live.error) {
     need(state.view);
     html = renderSkeleton();
-  } else if (!list.length) html = renderEmpty();
-  else if (state.view === "starred") html = `<section class="sec"><div class="grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
+  } else if (home) html = home.any ? home.html : renderEmpty();
+  else if (!list.length) html = renderEmpty();
+  else if (state.view === "starred") html = `<section class="sec"><div class="grid star-grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
   else {
     for (const file of list) {
       const t = inTrash() ? file.trashedAt : file.at;
@@ -1879,7 +2027,14 @@ function fitEnd() {
   const last = !rail.hidden && $(".sec:last-child", scroller);
   scroller.style.paddingBottom = last ? `${Math.max(120, scroller.clientHeight - last.offsetHeight)}px` : "";
 }
-new ResizeObserver(fitEnd).observe(scroller);
+// Home shows a row of starred files and of projects, so a width that fits
+// more or fewer draws it again
+let resizeFrame = 0;
+new ResizeObserver(() => {
+  fitEnd();
+  cancelAnimationFrame(resizeFrame);
+  resizeFrame = requestAnimationFrame(() => state.view === "home" && homeColumns() !== homeCols && render());
+}).observe(scroller);
 
 let railKey = null;
 function syncRail(instant = false) {
@@ -2380,7 +2535,6 @@ function go(view) {
   state.view = view;
   state.sel.clear();
   state.focus = null;
-  store.set("view", view);
   document.body.classList.remove("side-open");
   render({ keepScroll: false });
   scroller.scrollTop = 0;
@@ -3231,6 +3385,8 @@ const SCOPES = {
   by: { title: "People", options: () => Object.entries(PEOPLE).map(([value, p]) => ({ value, label: value === "me" ? "You" : p.name })) },
 };
 const COMMANDS = [
+  { label: "Go to Home", view: "home", icon: "home" },
+  { label: "Go to Recents", view: "recents", icon: "clock" },
   { label: "Go to Starred", view: "starred", icon: "star" },
   { label: "Go to Drafts", view: "drafts", icon: "file" },
   { label: "Go to Trash", view: "trash", icon: "trash" },
@@ -3547,6 +3703,15 @@ scroller.addEventListener("click", (e) => {
     state.type = "all";
     return render({ keepScroll: false });
   }
+  // Home: a section folding away, View all, a suggested project
+  const fold = e.target.closest("[data-fold]")?.dataset.fold;
+  if (fold) {
+    state.collapsed.has(fold) ? state.collapsed.delete(fold) : state.collapsed.add(fold);
+    store.set(LIVE ? "collapsed-live" : "collapsed", [...state.collapsed]);
+    return render();
+  }
+  const to = e.target.closest("[data-go]")?.dataset.go;
+  if (to) return go(to);
   const card = e.target.closest(".card[data-id]");
   if (!card) {
     if (!e.ctrlKey && !e.shiftKey && !e.metaKey) setSel([]);
@@ -3657,6 +3822,14 @@ scroller.addEventListener("dblclick", (e) => {
   else openFiles([card.dataset.id]);
 });
 scroller.addEventListener("contextmenu", (e) => {
+  const project = e.target.closest("[data-project]")?.dataset.project;
+  if (project) {
+    e.preventDefault();
+    return showMenu([
+      { label: "Open", act: () => go("p:" + project) },
+      { label: "Open in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/project/${project}`, "_blank") },
+    ], { x: e.clientX, y: e.clientY });
+  }
   const card = e.target.closest(".card[data-id]");
   if (!card) return;
   e.preventDefault();
@@ -3667,6 +3840,8 @@ scroller.addEventListener("contextmenu", (e) => {
 });
 scroller.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
+  // Home's own buttons (fold, View all, a project) take their keys
+  if (e.target.closest("button, a") && !e.target.closest(".card")) return;
   if (!order.length) return;
   const id = state.focus && order.includes(state.focus) ? state.focus : order[0];
   const mod = e.ctrlKey || e.metaKey;
@@ -3735,7 +3910,7 @@ scroller.addEventListener("focusin", (e) => {
 
 scroller.addEventListener("dragstart", (e) => {
   // Starred has its own drag (startLift), which a native one would cancel
-  if (state.view === "starred") return void e.preventDefault();
+  if (e.target.closest(".star-grid")) return void e.preventDefault();
   const card = e.target.closest(".card[data-id]");
   if (!card) return;
   if (!state.sel.has(card.dataset.id)) setSel([card.dataset.id], card.dataset.id);
@@ -3760,8 +3935,8 @@ const GHOST_PAD = 6;
 
 scroller.addEventListener("pointerdown", (e) => {
   // A press that never became a drag (released outside, say) doesn't block this one
-  if (lift?.live || state.view !== "starred" || e.button !== 0 || e.pointerType === "touch" || e.ctrlKey || e.metaKey || e.shiftKey) return;
-  const card = e.target.closest("#starred-grid > .card[data-id]");
+  if (lift?.live || e.button !== 0 || e.pointerType === "touch" || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const card = e.target.closest(".star-grid > .card[data-id]");
   if (!card || e.target.closest("button")) return;
   lift = { id: card.dataset.id, card, pointer: e.pointerId, sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY, live: false };
 });
@@ -3795,7 +3970,7 @@ function startLift() {
   // The list may have been drawn again since the press
   const card = (l.card = cardEl(l.id));
   const grid = card?.parentElement;
-  if (grid?.id !== "starred-grid") return void (lift = null);
+  if (!grid?.classList.contains("star-grid")) return void (lift = null);
   const r = card.getBoundingClientRect();
   closeMenu();
   tip.style.display = "none";
@@ -3944,8 +4119,9 @@ function commitStarOrder(grid) {
   const shown = [...grid.children].map((el) => el.dataset.id);
   const rest = store.get(starOrderKey(), []).filter((id) => !shown.includes(id) && byId(id)?.starred);
   store.set(starOrderKey(), [...shown, ...rest]);
-  order = shown;
-  previousOrder = shown;
+  // On Home the starred row comes first, then the other sections
+  order = [...shown, ...order.filter((id) => !shown.includes(id))];
+  previousOrder = order;
 }
 side.addEventListener("dragover", (e) => {
   const target = e.target.closest("[data-drop]");
