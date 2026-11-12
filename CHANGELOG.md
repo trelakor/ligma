@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.40.2 - 2026-11-12
+
+- The faces of people in a file update as they come and go, also after the connection to Figma drops, and on starred files. They sit in the preview's corner at every size.
+- The sidebar uses Figma's own icons.
+- The account menu follows Figma's: its order and its icons, with other accounts one click away.
+
 ## 0.40.1 - 2026-11-12
 
 - Ligma's home page no longer flickers as files, counts and previews come in. Only the part that changed is drawn again, and what you're looking at stays where it is.
