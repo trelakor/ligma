@@ -1497,6 +1497,10 @@ async function start() {
     tellFigma(Live.uid);
     loadPins();
     for (const f of store.get(`trash:${Live.uid}`, [])) if (!byId(f.key)) upsertFile(f.key, { ...f, trashed: true });
+    // Starred comes first: it's at the top of Home. A new socket for this
+    // account, its favorites asked for before anything else
+    LG.close();
+    const favorites = loadFavorites();
     const userState = await api("/api/user/state");
     const mine = (userState.team_users ?? []).filter((tu) => tu.user_id === Live.uid);
     Live.draftsByTeam = {};
@@ -1530,9 +1534,9 @@ async function start() {
     for (const k of Object.keys(PROJECTS)) delete PROJECTS[k];
     for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
     render();
-    LG.close();
     await LG.load(VIEWS.recents);
     takeFromStore();
+    markStarred();
     Live.ready.add("recents");
     Live.status = "Up to date";
     // Until teams are opened or closed by hand, only those with the latest
@@ -1542,7 +1546,7 @@ async function start() {
       state.collapsed = new Set(PLANS.flatMap((p) => p.teams.map((t) => t.id)).filter((id) => !latest.has(id)));
     }
     render();
-    loadFavorites();
+    await favorites;
     // For its count in the sidebar
     need("shared");
     loadNotes();
@@ -1575,14 +1579,21 @@ document.addEventListener("visibilitychange", () => {
   loadNotes();
 });
 
+// Stars onto the files known so far: favorites and Recents arrive in either order
+function markStarred() {
+  if (!Live.starKeys) return;
+  for (const file of FILES) file.starred = Live.starKeys.has(file.key);
+}
 async function loadFavorites() {
   try {
     const s = await LG.load(VIEWS.favorites);
     const keys = Object.values(s.FavoritedFile ?? {}).filter((f) => f.userId === Live.uid || !f.userId).map((f) => f.resourceId);
-    for (const file of FILES) file.starred = keys.includes(file.key);
+    Live.starKeys = new Set(keys);
+    for (const k of keys) if (!byId(k)?.thumbUrl) LG.wantThumb(k);
+    markStarred();
     const unknown = keys.filter((k) => !byId(k));
-    await pool(unknown, 4, async (k) => (fromRest({ key: k, ...(await api(`/api/files/${k}`)) }).starred = true));
-    for (const k of keys) if (byId(k)) byId(k).starred = true;
+    await pool(unknown, 8, async (k) => (fromRest({ key: k, ...(await api(`/api/files/${k}`)) }).starred = true));
+    markStarred();
   } catch {}
   Live.ready.add("starred");
   render();
@@ -1650,7 +1661,7 @@ function rememberTrash() {
 
 // Shown at once next time, then brought up to date
 function saveCache() {
-  const files = FILES.filter((f) => f.recent).map(({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }) => ({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }));
+  const files = FILES.filter((f) => !f.trashed && (f.recent || f.starred)).map(({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread, recent, thumbUrl, bg }) => ({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread, recent: !!recent, thumbUrl, bg }));
   store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, email, img_url, community_profile_handle }) => ({ id, name, email, img_url, community_profile_handle })), files });
 }
 // Figma's file browser opens on the account in its `recent_user_data` cookie
@@ -1694,7 +1705,9 @@ function showCached() {
   for (const id of Object.values(Live.draftsByTeam)) DRAFT_FOLDERS.add(id);
   PLANS.splice(0, PLANS.length, ...cache.plans);
   for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
-  for (const f of cache.files ?? []) upsertFile(f.key, { ...f, recent: true });
+  // Previews are links Figma signs for 7 days: kept for 6
+  const fresh = Date.now() - cache.at < 6 * DAY;
+  for (const f of cache.files ?? []) upsertFile(f.key, { ...f, recent: f.recent ?? true, thumbUrl: fresh ? f.thumbUrl : undefined });
   for (const f of store.get(`trash:${uid}`, [])) upsertFile(f.key, { ...f, trashed: true });
   Live.ready.add("recents");
 }
@@ -1897,7 +1910,7 @@ function renderSide() {
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${icon("star")}</button></div>`;
     if (!open) return out;
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
-    countTeam(team);
+    if (!LIVE || Live.ready.has("starred")) countTeam(team);
     const files = (id, view) => (LIVE && LG.count(id) !== undefined ? LG.count(id) || "" : count((f) => f.project === id, view));
     for (const [id, name] of team.projects) out += navRow("p:" + id, "folder", name, files(id, "p:" + id), "proj");
     if (!LIVE || Live.draftsByTeam[team.id]) out += navRow("d:" + team.id, "file", "Drafts", files(Live.draftsByTeam[team.id], "d:" + team.id), "proj");
@@ -2066,7 +2079,7 @@ function wantProjectCount(id) {
 // A project as a tile: its latest files' previews over its name, team,
 // number of files and when something last changed in it
 function projectTile(p) {
-  wantProjectCount(p.id);
+  if (!LIVE || Live.ready.has("starred")) wantProjectCount(p.id);
   const shots = p.files.slice(0, 3);
   const cells = shots.length ? shots.map((f) => `<span class="thumb" data-thumb="${f.id}"></span>`).join("") : `<span class="none">${figmaIcon("folder", 24)}</span>`;
   return `<button class="ptile" data-go="p:${p.id}" data-project="${p.id}" aria-label="${esc(`${p.name}, ${p.team.name}`)}">
@@ -2084,7 +2097,7 @@ function homeLayout() {
   const taken = new Set(starred.map((f) => f.id));
   const pool = shown.filter((f) => (LIVE ? f.recent : true) && !taken.has(f.id)).sort((a, b) => b.at - a.at);
   // Who's in a file is a reason too: watch the latest ones
-  if (LIVE) for (const f of pool.slice(0, 24)) LG.watch(f.key);
+  if (LIVE && Live.ready.has("starred")) for (const f of pool.slice(0, 24)) LG.watch(f.key);
   const reasons = new Map(pool.map((f) => [f.id, reasonFor(f)]));
   // A row of suggestions: files with something new first; with little new,
   // older work you opened comes back, what Recents has scrolled past
@@ -2102,10 +2115,16 @@ function homeLayout() {
     `<section class="sec home-sec"><h2><button class="fold" data-fold="home:${id}" aria-expanded="${open(id)}">${icon("down", "chev")}<span>${esc(title)}</span>${count ? `<small>${count}</small>` : ""}</button>${extra}${view ? `<button class="all" data-go="${view}">View all${icon("right")}</button>` : ""}</h2>${open(id) ? body : ""}</section>`;
   let html = "";
 
+  // Placeholders while a list is still on its way: Starred comes first
+  const waiting = (n, cls = "") => `<div class="grid ${cls}" aria-hidden="true">${`<div class="card sk"><div class="thumb"></div><div class="bar" style="width:60%"></div><div class="bar" style="width:40%;margin-top:8px"></div></div>`.repeat(n)}</div>`;
+  const starsLoading = LIVE && !Live.ready.has("starred") && !starred.length;
+  const recentsLoading = LIVE && !Live.ready.has("recents");
+
   if (open("starred")) files.push(...starred);
   html += section("starred", "Starred", starredAll.length, starred.length
     ? `<div class="grid star-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>`
-    : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
+    : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
+  if (recentsLoading) html += `<section class="sec home-sec">${waiting(cols * 2)}</section>`;
 
   if (projects.length) html += section("projects", "Suggested projects", 0, `<div class="ptiles">${projects.map(projectTile).join("")}</div>`);
 
@@ -2120,7 +2139,7 @@ function homeLayout() {
   }
   // What a redraw would change, for presence updates (see presenceChanged)
   const key = suggested.map((f) => f.id + reasons.get(f.id).text).join("|");
-  return { html, files, key, any: starred.length + suggested.length + recents.length > 0 };
+  return { html, files, key, any: starsLoading || recentsLoading || starred.length + suggested.length + recents.length > 0 };
 }
 let homeKey = "";
 
@@ -2173,7 +2192,7 @@ function render({ keepScroll = true } = {}) {
     return;
   }
   const started = performance.now();
-  const ready = LIVE && Live.ready.has(state.view === "home" ? "recents" : state.view);
+  const ready = LIVE && (state.view === "home" ? Live.ready.has("recents") || Live.ready.has("starred") : Live.ready.has(state.view));
   const home = state.view === "home" && state.mode !== "empty" && (!LIVE || ready) ? homeLayout() : null;
   if (home) homeKey = home.key;
   const list = state.mode === "empty" ? [] : home ? home.files : viewFiles();
@@ -2505,7 +2524,11 @@ function openFiles(ids, background = false) {
 function toggleStar(ids) {
   const snap = snapshot(ids);
   const star = !ids.every((id) => byId(id).starred);
-  for (const id of ids) byId(id).starred = star;
+  for (const id of ids) {
+    byId(id).starred = star;
+    if (star) Live.starKeys?.add(byId(id).key);
+    else Live.starKeys?.delete(byId(id).key);
+  }
   if (LIVE) send(api("/api/bulk_favorite_resources_v2", { method: star ? "PUT" : "DELETE", json: { resources: ids.map((id) => ({ file: { key: id } })) } }), () => restoreSnapshot(snap), star ? "star it" : "unstar it");
   toast(star ? `Starred ${named(ids)}` : `Removed ${named(ids)} from starred`, LIVE ? () => toggleStar(ids) : () => restoreSnapshot(snap));
   render();

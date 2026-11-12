@@ -46,3 +46,5 @@ Shared with you and Drafts (all and each team's) are one grid, newest first, wit
 Shared with you and Drafts (every Drafts page shares one) each have their own List/Grid switch in the filter bar, cards to start
 
 Opens on (2026-11-12, setting "newHomeStart", under the toggle in Settings): Home, Recents, Starred, Shared with you or Drafts. Ligma passes it as the page URL's fragment (security.txt?ligma-home#recents); changing it moves an open Home there without a reload
+
+Loading order (2026-11-12): Starred first. Favorites load as soon as the account is known, their previews asked for first; Home shows the Starred row as soon as it has it, with placeholders for the rest; faces, project counts and team counts wait for it. The saved copy keeps starred files and previews (signed for 7 days, kept 6), so they show at once next time
