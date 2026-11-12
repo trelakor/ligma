@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.40.1 - 2026-11-12
+
+- Ligma's home page no longer flickers as files, counts and previews come in. Only the part that changed is drawn again, and what you're looking at stays where it is.
+- The selection box ends when you let go anywhere, over the sidebar too, and keeps going if the page updates while you draw it.
+- The focus ring shows only once you move around with the keyboard, and isn't cut off on the first row of a section.
+
 ## 0.40.0 - 2026-11-12
 
 - Ligma's own home page is now on, in place of Figma's file browser in the Home tab. It loads none of Figma's home page, so it opens faster. Home shows your starred files first, then suggested projects and files, then your latest files. Recents, Shared with you and Drafts sit in the sidebar with your teams. Turn it off, or pick the page it opens on, in Settings > Features > Home.
