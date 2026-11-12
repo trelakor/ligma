@@ -111,6 +111,10 @@
     font: 450 11px/16px var(--font);
   }
   .i { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+  /* Figma's icons (fig): a 24px grid around a 16px glyph, so they take a
+     16px icon's place */
+  .fi { width: 24px; height: 24px; margin: -4px; fill: currentColor; stroke: none; }
+  .fi.f16 { width: 16px; height: 16px; margin: 0; }
   /* Figma's product squares, in its own colors for light and dark */
   .g { display: block; flex: none; width: 16px; height: 16px; color: #fff; }
   .g .gs { fill: var(--g); }
@@ -182,7 +186,7 @@
   .team-row:hover .team-star, .team-star:focus-visible { opacity: 1; }
   .team-row:hover .tier { visibility: hidden; }
   .team-star:hover { color: var(--text); background: var(--bg3); }
-  .team-star.on .i { fill: #ffc700; stroke: #e6a800; }
+  .team-star.on .i { fill: #ffc700; }
   .tm { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: #fff; font: 600 10px/1 var(--font); }
   .sfoot { flex: none; padding: 8px 0; border-top: 1px solid var(--line); }
   .sfoot .ext { margin-left: auto; }
@@ -310,7 +314,7 @@
   .row .where, .row .when { overflow: hidden; color: var(--text2); text-overflow: ellipsis; white-space: nowrap; }
   .row .end { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
   .row .tools { position: static; }
-  .faces.inline { position: static; aspect-ratio: auto; padding: 0; }
+  .faces.inline { position: static; height: auto; padding: 0; }
   .faces.inline .face { width: 20px; height: 20px; font-size: 9px; }
   @media (max-width: 900px) {
     .card.row { grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr) 72px; }
@@ -345,8 +349,10 @@
   .card[aria-selected="true"] .thumb::after { box-shadow: inset 0 0 0 2px var(--accent); }
   .kbd .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   .card.ghost { opacity: 0.4; }
-  /* Who's in the file now, over the preview's bottom right */
-  .faces { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: flex-end; justify-content: flex-end; aspect-ratio: 16 / 9; padding: 8px; pointer-events: none; }
+  /* Who's in the file now, over the preview's bottom right: a row with no
+     height right under the preview, its faces rising out of it, so they
+     sit 8px from the corner whatever size the preview is */
+  .faces { position: relative; z-index: 1; display: flex; align-items: flex-end; justify-content: flex-end; height: 0; padding: 0 8px; top: -8px; pointer-events: none; }
   .face { display: grid; place-items: center; flex: none; width: 24px; height: 24px; margin-left: -6px; overflow: hidden; border-radius: 50%; background: var(--bg3); box-shadow: 0 0 0 2px var(--bg); color: var(--text); font: 600 10px/1 var(--font); pointer-events: auto; }
   .face img { width: 100%; height: 100%; object-fit: cover; }
   /* A starred file being dragged: held up by the hand, its place in the
@@ -477,11 +483,13 @@
   .mi.on .two small { color: rgba(255, 255, 255, 0.8); }
   /* The account menu: who you are, then Figma's account items */
   .menu.account { width: 228px; }
-  .menu.account .mi { gap: 8px; padding: 0 4px; }
+  /* Lined up as Figma's: headings and items without an icon start where
+     the icons do */
+  .menu.account .mi { gap: 6px; padding: 0 8px; }
   .menu.account .mi.tall { height: 40px; }
-  .menu.account .mi .ck { margin-right: 0; }
-  .menu.account .mic { width: 16px; height: 16px; }
-  .menu.account .mh { padding-left: 24px; }
+  .menu.account .mic { margin-left: -2px; }
+  .menu.account .mic .av.sm { width: 20px; height: 20px; font-size: 9px; }
+  .menu.account .mh { padding-left: 8px; }
   .acard { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 8px 4px; text-align: center; }
   .acard .av { width: 40px; height: 40px; margin-bottom: 6px; font-size: 16px; }
   .acard b { max-width: 100%; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -759,13 +767,35 @@ const ICONS = {
   heart: '<path d="M8 13s-5-3-5-6.5A2.5 2.5 0 0 1 8 5a2.5 2.5 0 0 1 5 1.5C13 10 8 13 8 13z"/>',
   right: '<path d="m6.5 4.5 3.5 3.5-3.5 3.5"/>',
   list: '<path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><circle cx="2.75" cy="4.5" r=".6"/><circle cx="2.75" cy="8" r=".6"/><circle cx="2.75" cy="11.5" r=".6"/>',
-  theme: '<rect x="2.5" y="3.5" width="11" height="9" rx="1"/><path d="M2.5 6.5h11M6.5 6.5v6"/>',
-  gear: '<circle cx="8" cy="8" r="2"/><path d="M8 2.5v1.5M8 12v1.5M2.5 8H4M12 8h1.5M4.1 4.1l1.1 1.1M10.8 10.8l1.1 1.1M4.1 11.9l1.1-1.1M10.8 5.2l1.1-1.1"/>',
-  profile: '<path d="M8 2.5 13 5v6l-5 2.5L3 11V5z"/><path d="m3 5 5 2.5L13 5M8 7.5v6"/>',
-  bookmark: '<path d="M4.5 2.5h7v11L8 11l-3.5 2.5z"/>',
-  logout: '<path d="M6.5 3.5h-3v9h3M10 5l3 3-3 3M13 8H6.5"/>',
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
+// Figma's own UI icons, as its file browser and account menu draw them:
+// filled, most on a 24px grid. The sidebar and the menus use these.
+// [grid, path, 1 when even-odd]
+const FIG = {
+  down: [16, "M9.768 6.768a.5.5 0 0 1 .707.707l-2.12 2.121a.5.5 0 0 1-.708 0L5.525 7.475a.5.5 0 0 1 .708-.707l1.768 1.767z"],
+  check: [16, "M12.088 3.217a.5.5 0 0 1 .824.566l-5.5 8a.5.5 0 0 1-.788.046l-3.5-4a.5.5 0 1 1 .752-.658l3.076 3.516z"],
+  right: [24, "M10.647 8.647a.5.5 0 0 1 .707 0l2.5 2.5a.5.5 0 0 1 0 .707l-2.5 2.5a.5.5 0 0 1-.707-.707l2.146-2.147-2.146-2.146a.5.5 0 0 1 0-.707"],
+  bell: [24, "M12.992 6.124Q13 6.064 13 6a1 1 0 1 0-1.992.124A4 4 0 0 0 8 10v1.172a5.83 5.83 0 0 1-1.707 4.12A1 1 0 0 0 7 17h3a2 2 0 0 0 4 0h3a1 1 0 0 0 .707-1.707A5.83 5.83 0 0 1 16 11.172V10a4 4 0 0 0-3.008-3.876M12 18a1 1 0 0 1-1-1h2a1 1 0 0 1-1 1m5-2a6.82 6.82 0 0 1-2-4.828V10a3 3 0 1 0-6 0v1.172A6.83 6.83 0 0 1 7 16z", 1],
+  search: [24, "M11.5 6a5.5 5.5 0 0 1 4.226 9.019l2.127 2.127a.5.5 0 1 1-.707.707l-2.127-2.127A5.5 5.5 0 1 1 11.5 6m0 1a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9"],
+  home: [24, "M11.404 5.196a1 1 0 0 1 1.265.06l5 4.5A1 1 0 0 1 18 10.5V17a1 1 0 0 1-1 1h-3a1 1 0 0 1-1-1v-4h-2v4a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-6.5a1 1 0 0 1 .331-.743l5-4.5zM7 10.5V17h3v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4h3v-6.5L12 6z"],
+  clock: [24, "M11.5 18a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13m5.5-6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0m-5-3a.5.5 0 0 0-1 0v3a.5.5 0 0 0 .146.354l2 2a.5.5 0 0 0 .708-.708L12 11.293z", 1],
+  star: [24, "M11.147 5.25c.276-.815 1.429-.815 1.705 0L14.125 9h4.212c.86 0 1.23 1.093.545 1.616l-3.445 2.628 1.263 3.859c.271.829-.677 1.52-1.383 1.009L12 15.71l-3.318 2.402-.135.082c-.685.342-1.502-.314-1.248-1.091l1.263-3.86-3.445-2.627C4.433 10.093 4.802 9 5.663 9h4.212zm-.325 4.07-.23.68H5.958l3.21 2.449.564.43-.22.675-1.169 3.568 3.07-2.221.586-.425.586.425 3.068 2.22-1.167-3.567-.22-.675.564-.43 3.21-2.45h-4.633l-.23-.678L12 5.849z"],
+  starOn: [24, "M11.147 5.25c.276-.815 1.429-.815 1.705 0L14.125 9h4.212c.86 0 1.23 1.093.545 1.616l-3.445 2.628 1.263 3.859c.271.829-.677 1.52-1.383 1.009L12 15.71l-3.318 2.402-.135.082c-.685.342-1.502-.314-1.248-1.091l1.263-3.86-3.445-2.627C4.433 10.093 4.802 9 5.663 9h4.212z"],
+  users: [24, "M9.5 11a3.5 3.5 0 0 1 3.5 3.5v3a.5.5 0 0 1-1 0v-3a2.5 2.5 0 0 0-5 0v3a.5.5 0 0 1-1 0v-3A3.5 3.5 0 0 1 9.5 11m5.5 1a3 3 0 0 1 3 3v2.5a.5.5 0 0 1-1 0V15a2 2 0 0 0-2.4-1.96.5.5 0 0 1-.2-.98q.292-.06.6-.06m0-5a2 2 0 1 1 0 4 2 2 0 0 1 0-4M9.5 5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5M15 8a1 1 0 1 0 0 2 1 1 0 0 0 0-2M9.5 6a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3"],
+  file: [24, "M12.598 5.01a.5.5 0 0 1 .255.136l4 4A.5.5 0 0 1 16.5 10h-4a.5.5 0 0 1-.5-.5V6H8.5a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 .5-.5v-6a.5.5 0 0 1 1 0v6a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 7 17.5v-11A1.5 1.5 0 0 1 8.5 5h4zM13 9h2.293L13 6.707z"],
+  folder: [24, "M10.379 6a2 2 0 0 1 1.414.586L13.207 8H16.5a2 2 0 0 1 2 2v5.5a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM8.5 14a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1z"],
+  trash: [24, "M16.354 9a.5.5 0 0 1 .5.52l-.274 6.563-.018.198a2 2 0 0 1-1.782 1.71l-.198.009H9.418a2 2 0 0 1-1.998-1.917l-.274-6.562a.5.5 0 0 1 1-.042l.273 6.563a1 1 0 0 0 .999.958h5.164a1 1 0 0 0 1-.958l.271-6.563a.5.5 0 0 1 .5-.479M10.5 10a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5m3 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5M13 5a1 1 0 0 1 1 1v1h3.5a.5.5 0 0 1 0 1h-11a.5.5 0 0 1 0-1H10V6a1 1 0 0 1 1-1zm-2 2h2V6h-2z"],
+  grid: [24, "M9.653 13.008A1.5 1.5 0 0 1 11 14.5v2l-.008.153a1.5 1.5 0 0 1-1.339 1.34L9.5 18h-2a1.5 1.5 0 0 1-1.492-1.347L6 16.5v-2A1.5 1.5 0 0 1 7.5 13h2zm7 0A1.5 1.5 0 0 1 18 14.5v2l-.008.153a1.5 1.5 0 0 1-1.339 1.34L16.5 18h-2a1.5 1.5 0 0 1-1.492-1.347L13 16.5v-2a1.5 1.5 0 0 1 1.5-1.5h2zM7.5 14a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h2a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5zm7 0a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h2a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5zM9.653 6.008A1.5 1.5 0 0 1 11 7.5v2l-.008.153a1.5 1.5 0 0 1-1.339 1.34L9.5 11h-2a1.5 1.5 0 0 1-1.492-1.347L6 9.5v-2A1.5 1.5 0 0 1 7.5 6h2zm7 0A1.5 1.5 0 0 1 18 7.5v2l-.008.153a1.5 1.5 0 0 1-1.339 1.34L16.5 11h-2a1.5 1.5 0 0 1-1.492-1.347L13 9.5v-2A1.5 1.5 0 0 1 14.5 6h2zM7.5 7a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h2a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5zm7 0a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h2a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 0-.5-.5z"],
+  ext: [24, "M9.5 6a.5.5 0 0 1 0 1h-2a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 16.5v-9A1.5 1.5 0 0 1 7.5 6zm8 0a.5.5 0 0 1 .5.5v5a.5.5 0 0 1-1 0V7.707l-4.146 4.147a.5.5 0 1 1-.707-.707L16.293 7H12.5a.5.5 0 0 1 0-1z"],
+  community: [24, "M16.523 9.21a1 1 0 0 1 1.477.88v4.564c0 .55-.302 1.057-.786 1.32l-5.477 2.965a.5.5 0 0 1-.476 0l-5.476-2.965A1.5 1.5 0 0 1 5 14.654V10.09c0-.758.811-1.24 1.478-.88l5.023 2.72zM6 14.654a.5.5 0 0 0 .262.44l4.737 2.566v-4.863L6 10.09zm5.999-1.857v4.863l4.74-2.566a.5.5 0 0 0 .261-.44V10.09zM11.501 5a2.5 2.5 0 1 1-.002 5.002A2.5 2.5 0 0 1 11.501 5m0 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3"],
+  bookmark: [24, "m12.705 15.816-.705-.7-.705.7L9 18.096V6.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .5.5v11.597zm1.59 2.99L12 16.526l-2.295 2.28c-.631.627-1.705.18-1.705-.71V6.5A1.5 1.5 0 0 1 9.5 5h5A1.5 1.5 0 0 1 16 6.5v11.597c0 .89-1.074 1.336-1.705.71", 1],
+  plus: [24, "M11.5 6a.5.5 0 0 1 .5.5V11h4.5a.5.5 0 0 1 0 1H12v4.5a.5.5 0 0 1-1 0V12H6.5a.5.5 0 0 1 0-1H11V6.5a.5.5 0 0 1 .5-.5", 1],
+};
+const fig = (name, cls = "") => {
+  const [size, d, evenOdd] = FIG[name];
+  return `<svg class="i fi${size === 16 ? " f16" : ""} ${cls}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><path${evenOdd ? ' fill-rule="evenodd" clip-rule="evenodd"' : ""} d="${d}"/></svg>`;
+};
 
 // Product colors stay as Figma has them in every theme
 // Figma's own icons for its products and for folders and import, as its
@@ -1229,10 +1259,12 @@ function presenceChanged(queryKey, q) {
   for (const id of q.remove ?? []) users.delete(id);
   PRESENCE.set(key, users);
   drawFaces(key);
-  // Someone joining a file can make it a suggestion on Home
+  // Someone joining a file can make it a suggestion on Home: once a rename
+  // or a menu is done with, if one's open
   clearTimeout(presenceTimer);
-  presenceTimer = setTimeout(() => {
-    if (state.view !== "home" || $(".nm input", scroller) || menu.classList.contains("open")) return;
+  presenceTimer = setTimeout(function again() {
+    if (state.view !== "home") return;
+    if ($(".nm input", scroller) || menu.classList.contains("open")) return void (presenceTimer = setTimeout(again, 1000));
     if (homeLayout().key !== homeKey) render();
   }, 800);
 }
@@ -1295,6 +1327,8 @@ const LG = {
           this.forgetPresence();
           this.lists.clear();
           COUNTED.clear();
+          // Closed by Figma or the network, not by Ligma: back on a new one
+          resumeSoon();
         }
         // Only what was asked on this socket: a new one may be open by now
         for (const p of this.pending.filter((p) => p.ws === ws)) {
@@ -1335,6 +1369,19 @@ const LG = {
       const [p] = this.pending.splice(i, 1);
       if (msg.messageType === "viewLoaded") p.resolve(this.store);
       else p.reject(new Error("Figma couldn't load this list"));
+    } else if (msg.messageType === "viewSubscriptionFailed") {
+      let name, args;
+      try {
+        [name, args] = JSON.parse(msg.liveViewKey);
+      } catch {
+        return;
+      }
+      const i = this.pending.findIndex((p) => p.name === name && sameArgs(p.args, args));
+      if (i < 0) return;
+      const [p] = this.pending.splice(i, 1);
+      // Asked for twice on this socket: the first is still live
+      if (msg.errorCode === "duplicate-subscribe-attempt-with-same-arguments") p.resolve(this.store);
+      else p.reject(new Error("Figma couldn't load this list"));
     }
   },
   async load([name, hash, args]) {
@@ -1362,7 +1409,7 @@ const LG = {
     this.watched.add(key);
     this.load(VIEWS.active(key)).catch(() => this.watched.delete(key));
   },
-  // Watches end with the socket; the cards shown ask again
+  // Watches end with the socket; the cards shown ask again (resume)
   forgetPresence() {
     this.watched.clear();
     const keys = [...PRESENCE.keys()];
@@ -1572,16 +1619,27 @@ async function start() {
   }
 }
 
-// Coming back to Home brings it up to date: the socket may have closed
-// while the tab was hidden or asleep
-document.addEventListener("visibilitychange", () => {
-  if (!LIVE || document.visibilityState !== "visible" || !Live.uid || Live.error || LG.ws || !Live.ready.has("recents")) return;
+// A new socket after one closed, while Home is shown or once it is: Recents
+// up to date again, and the files on screen watched again for who's in them
+let resumeTimer = 0;
+let resumeTries = 0;
+function resume() {
+  if (!LIVE || !Live.uid || Live.error || LG.ws || !Live.ready.has("recents")) return;
+  clearTimeout(resumeTimer);
   LG.load(VIEWS.recents).then(() => {
+    resumeTries = 0;
     takeFromStore();
     render();
-  }, () => {});
+    observeFaces();
+  }, resumeSoon);
   loadNotes();
-});
+}
+// Shortly, waiting longer each time it doesn't work
+function resumeSoon() {
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => document.visibilityState === "visible" && resume(), Math.min(30000, 1000 * 2 ** resumeTries++));
+}
+document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && resume());
 
 // Stars onto the files known so far: favorites and Recents arrive in either order
 function markStarred() {
@@ -1881,7 +1939,7 @@ function navRow(view, iconName, label, count, extra = "", tail = "") {
   const on = state.view === view;
   const drop = ["recents", "starred"].includes(view) ? "" : `data-drop="${view}"`;
   const n = tail || `<span class="n">${count ?? ""}</span>`;
-  return `<button class="nav ${extra}${on ? " on" : ""}" data-key="nav:${view}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${icon(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
+  return `<button class="nav ${extra}${on ? " on" : ""}" data-key="nav:${view}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${fig(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
 }
 
 function renderSide() {
@@ -1893,10 +1951,10 @@ function renderSide() {
   const user = LIVE ? Live.users.find((u) => u.id === Live.uid) : null;
   const name = LIVE ? user?.name ?? "Figma" : "Chris";
   const face = user?.img_url ? `<img src="${esc(user.img_url)}" alt="" referrerpolicy="no-referrer">` : esc(name[0]);
-  let html = `<div class="acct-row"><button class="acct" id="acct" aria-haspopup="menu"><span class="av" style="background:${LIVE ? colorForTeam(Live.uid) : PEOPLE.me.color}">${face}</span><span class="who">${esc(name)}</span>${icon("down")}</button>`;
-  html += `<button class="bell" id="bell" aria-haspopup="dialog" aria-expanded="${open}" aria-controls="inbox" aria-label="Inbox${unread ? `, ${unread} unread` : ""}" title="Inbox">${icon("bell")}${unread ? `<span class="badge" aria-hidden="true">${unread}</span>` : ""}</button></div>`;
+  let html = `<div class="acct-row"><button class="acct" id="acct" aria-haspopup="menu"><span class="av" style="background:${LIVE ? colorForTeam(Live.uid) : PEOPLE.me.color}">${face}</span><span class="who">${esc(name)}</span>${fig("down")}</button>`;
+  html += `<button class="bell" id="bell" aria-haspopup="dialog" aria-expanded="${open}" aria-controls="inbox" aria-label="Inbox${unread ? `, ${unread} unread` : ""}" title="Inbox">${fig("bell")}${unread ? `<span class="badge" aria-hidden="true">${unread}</span>` : ""}</button></div>`;
   html += `<div class="tree">`;
-  html += `<button class="nav find" data-act="search">${icon("search")}<span class="lbl">Search</span><kbd>${MOD}K</kbd></button>`;
+  html += `<button class="nav find" data-act="search">${fig("search")}<span class="lbl">Search</span><kbd>${MOD}K</kbd></button>`;
   html += navRow("home", "home", "Home");
   html += navRow("recents", "clock", "Recents");
   html += navRow("starred", "star", "Starred", count((f) => f.starred, "starred"));
@@ -1910,8 +1968,8 @@ function renderSide() {
     const open = !state.collapsed.has(team.id);
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
-    let out = `<div class="team-row" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${icon("down", "chev")}</button>`;
-    out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${icon("star")}</button></div>`;
+    let out = `<div class="team-row" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
+    out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${fig(isStarred ? "starOn" : "star")}</button></div>`;
     if (!open) return out;
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
     if (!LIVE || Live.ready.has("starred")) countTeam(team);
@@ -1924,7 +1982,7 @@ function renderSide() {
   const section = (id, title, rows, tier = "") => {
     if (!rows) return "";
     const open = !state.collapsed.has(id);
-    return `<button class="plan sec-h" data-section="${esc(id)}" aria-expanded="${open}">${icon("down", "chev")}<b>${esc(title)}</b>${tier ? esc(tier) : ""}</button>${open ? rows : ""}`;
+    return `<button class="plan sec-h" data-section="${esc(id)}" aria-expanded="${open}">${fig("down", "chev")}<b>${esc(title)}</b>${tier ? esc(tier) : ""}</button>${open ? rows : ""}`;
   };
   const teamsOf = (plans) => plans.flatMap((p) => p.teams.map((t) => [t, p]));
   const all = teamsOf(PLANS);
@@ -1934,7 +1992,7 @@ function renderSide() {
   for (const plan of PLANS.filter((p) => p.teams.length > 1)) html += section("sec:org:" + plan.id, plan.name, plan.teams.filter((t) => !starred.has(t.id)).map((t) => teamRow(t)).join(""), plan.tier);
   html += `</div><div class="sfoot">`;
   html += navRow("trash", "trash", "Trash", FILES.filter((f) => f.trashed).length || "");
-  html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${icon("grid")}<span class="lbl">Figma's file browser</span>${icon("ext", "ext")}</a>`;
+  html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${fig("grid")}<span class="lbl">Figma's file browser</span>${fig("ext", "ext")}</a>`;
   // Nothing about sync unless it fails: then the bar over the files says so
   if (!LIVE) html += state.mode === "error" ? `<div class="sync off" id="sync"><span class="dot"></span><span>Offline, as of 4 min ago</span></div>` : `<div class="sync" id="sync"><span class="dot"></span><span>Sample files, not yours yet</span></div>`;
   html += `</div>`;
@@ -2244,7 +2302,6 @@ function observeThumbs() {
       const file = byId(el.dataset.thumb);
       if (!file) continue;
       fillThumb(el, file);
-      if (file.live && !file.trashed) LG.watch(file.key);
     }
   }, { root: scroller, rootMargin: "800px 0px" });
   for (const el of $$(".thumb[data-thumb]", scroller)) {
@@ -2252,6 +2309,24 @@ function observeThumbs() {
     if (!el.firstChild || !file) thumbObserver.observe(el);
     else if (el.sig !== thumbSig(file)) fillThumb(el, file);
   }
+  observeFaces();
+}
+
+// Who's in each file on screen, watched from when it's near the view.
+// Each redraw, and each new socket, asks for every one in view again: a
+// file already watched on this socket is skipped
+let facesObserver;
+function observeFaces() {
+  if (!LIVE) return;
+  facesObserver?.disconnect();
+  facesObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const file = byId(entry.target.dataset.faces);
+      if (file?.live && !file.trashed) LG.watch(file.key);
+    }
+  }, { root: scroller, rootMargin: "800px 0px" });
+  for (const el of $$("[data-faces]", scroller)) facesObserver.observe(el);
 }
 
 // The selection box, drawn over the files (see drawBox)
@@ -3331,9 +3406,9 @@ function menuRows(items, list, prefix, checks = items.some((item) => item && "ch
     if (item.html) return item.html;
     const i = list.push(item) - 1;
     const radio = checks && "checked" in item;
-    const check = checks ? `<span class="ck">${icon("check")}</span>` : "";
+    const check = checks ? `<span class="ck">${fig("check")}</span>` : "";
     const swatch = item.swatch ? `<span class="sw" style="background:${item.swatch}"></span>` : "";
-    const tail = item.sub ? `<span class="x">${icon("right")}</span>` : item.kbd ? `<span class="k">${esc(item.kbd)}</span>` : item.ext ? `<span class="x">${icon("ext")}</span>` : "";
+    const tail = item.sub ? `<span class="x">${fig("right")}</span>` : item.kbd ? `<span class="k">${esc(item.kbd)}</span>` : item.ext ? `<span class="x">${fig("ext")}</span>` : "";
     const label = item.detail ? `<span class="two"><span>${esc(item.label)}</span><small>${esc(item.detail)}</small></span>` : esc(item.label);
     return `<button class="mi${item.detail ? " tall" : ""}" id="${prefix}${i}" tabindex="-1" role="${radio ? "menuitemradio" : "menuitem"}" data-i="${i}" ${radio ? `aria-checked="${!!item.checked}"` : ""} ${item.sub ? 'aria-haspopup="menu" aria-expanded="false"' : ""} ${item.disabled ? 'aria-disabled="true"' : ""}>${check}${swatch}${item.iconHtml ? `<span class="mic">${item.iconHtml}</span>` : ""}${label}${tail}</button>`;
   }).join("");
@@ -3668,29 +3743,32 @@ function accountMenu(at) {
   };
   const open = (url) => window.open(url, "_blank");
   const logOutItem = users.length < 2
-    ? { label: "Log out", iconHtml: icon("logout"), act: () => logOut(me) }
-    : { label: "Log out", iconHtml: icon("logout"), sub: [...users.map((u) => ({ label: u.email ?? u.name, act: () => logOut(u) })), null, { label: "Log out of all accounts", act: () => logOut(null) }] };
+    ? { label: "Log out", act: () => logOut(me) }
+    : { label: "Log out", sub: [...users.map((u) => ({ label: u.email ?? u.name, act: () => logOut(u) })), null, { label: "Log out of all accounts", act: () => logOut(null) }] };
+  // Figma's order, with its icons where it has them. The card is the
+  // account you're on; the others are one click away, not in a submenu
+  const others = users.filter((u) => u.id !== me.id);
   showMenu([
     { html: `<div class="acard" aria-hidden="true">${avatar(me)}<b>${esc(me.name ?? me.email)}</b>${me.email ? `<span>${esc(me.email)}</span>` : ""}</div>` },
     null,
-    {
-      label: "Change theme",
-      iconHtml: icon("theme"),
-      sub: [["light", "Light"], ["dark", "Dark"], ["system", "System theme"]].map(([value, label]) => ({ label, checked: scheme === value, act: () => setScheme(value) })),
-    },
-    { label: "Settings", iconHtml: icon("gear"), act: () => (LIVE ? signal("settings") : toast("Opens Ligma's settings")) },
-    null,
-    { header: "Community" },
-    ...(me.community_profile_handle ? [{ label: "View Community profile", iconHtml: icon("profile"), act: () => open(`https://www.figma.com/@${me.community_profile_handle}`) }] : []),
-    { label: "Saved from Community", iconHtml: icon("bookmark"), act: () => open("https://www.figma.com/community/saves") },
-    null,
-    ...(users.length > 1
-      ? [{ header: "Switch account" }, ...users.map((u) => ({ label: u.name ?? u.email, detail: u.name ? u.email : "", iconHtml: avatar(u, "sm"), checked: u.id === me.id, act: () => u.id !== me.id && LIVE && switchAccount(u.id) })), null]
+    ...(others.length
+      ? [{ header: "Switch account" }, ...others.map((u) => ({ label: u.name ?? u.email, detail: u.name ? u.email : "", iconHtml: avatar(u, "sm"), act: () => LIVE && switchAccount(u.id) }))]
       : []),
     // Figma allows 10 accounts at once
-    { label: "Add account", iconHtml: icon("plus"), disabled: users.length >= 10, act: () => open("https://www.figma.com/login?cont=") },
+    { label: "Add account", iconHtml: fig("plus"), disabled: users.length >= 10, act: () => open("https://www.figma.com/login?cont=") },
+    null,
+    { header: "Community" },
+    ...(me.community_profile_handle ? [{ label: "View Community profile", iconHtml: fig("community"), act: () => open(`https://www.figma.com/@${me.community_profile_handle}`) }] : []),
+    { label: "Saved from Community", iconHtml: fig("bookmark"), act: () => open("https://www.figma.com/community/saves") },
+    null,
+    {
+      label: "Change theme",
+      sub: [["light", "Light"], ["dark", "Dark"], ["system", "System theme"]].map(([value, label]) => ({ label, checked: scheme === value, act: () => setScheme(value) })),
+    },
+    { label: "Settings", act: () => (LIVE ? signal("settings") : toast("Opens Ligma's settings")) },
+    null,
     logOutItem,
-  ], at, { account: true, checks: true });
+  ], at, { account: true });
 }
 
 // Figma's logout: one account, or every one (user null). What's left of
