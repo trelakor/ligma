@@ -30,6 +30,8 @@
     // Memory Ligma shares with the page (see page.js), where it writes the
     // last frame it has drawn
     shared: null,
+    // Whether frames for Figma's worker wait for Ligma to draw (see `HOLD`)
+    sync: false,
   });
 
   // Figma's threaded renderer, behind a gate it reads once as it starts
@@ -127,7 +129,10 @@
   const READY_SLOT = 18;
   const held = new Map();
   let scheduled = 0;
-  const holding = () => hook.replacing && hook.pushTo && hook.shared && seq > 0;
+  // Off: the page's main thread, which holds and lets go of them, is busy
+  // with Figma's own work for much of each frame, so they come late, and
+  // what's over the canvas trails what's under it
+  const holding = () => hook.sync && hook.replacing && hook.pushTo && hook.shared && seq > 0;
   function pump(all) {
     const now = performance.now();
     const done = hook.shared?.[READY_SLOT] ?? Infinity;

@@ -248,9 +248,10 @@ enum Drawn {
     Picture(Picture),
     Image(Image, (i32, i32)),
     /// A thumb (see `Painter::thumb`): where it is on its page, in the
-    /// page's pixels, and the area it covers, in units
-    Paged(usize, Rect, Rect),
-    Thumb(Image, Rect, Rect),
+    /// page's pixels, the area it covers, in units, and whether it's drawn
+    /// with what's under it, so it replaces that
+    Paged(usize, Rect, Rect, bool),
+    Thumb(Image, Rect, Rect, bool),
 }
 
 /// Plays `drawn` onto `canvas`, whose matrix is the identity, at `scale`
@@ -273,12 +274,15 @@ fn play(canvas: &skia_safe::Canvas, drawn: &[Drawn], offset: (f32, f32), scale: 
             Drawn::Image(image, (x, y)) => {
                 canvas.draw_image(image, (offset.0 + *x as f32, offset.1 + *y as f32), None);
             }
-            Drawn::Thumb(image, from, to) => {
+            Drawn::Thumb(image, from, to, over) => {
                 canvas.save();
                 canvas.translate(offset);
                 canvas.scale((scale, scale));
                 let mut paint = Paint::default();
                 paint.set_anti_alias(true);
+                if *over {
+                    paint.set_blend_mode(skia_safe::BlendMode::Src);
+                }
                 let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
                 canvas.draw_image_rect_with_sampling_options(image, Some((from, skia_safe::canvas::SrcRectConstraint::Strict)), *to, sampling, &paint);
                 canvas.restore();
@@ -296,7 +300,7 @@ fn half_octave(px: f32) -> f32 {
 /// Side of the pages thumbs of units are drawn on, in pixels
 const THUMB_PAGE: i32 = 2048;
 /// Pages of thumbs kept at most, 16 MB each
-const THUMB_PAGES: usize = 6;
+const THUMB_PAGES: usize = 8;
 /// Units wider than this at a thumb's scale are drawn as they are
 const THUMB_SIDE: i32 = 768;
 /// Time a draw spends at most making thumbs from pictures, past which
@@ -347,6 +351,9 @@ struct Thumb {
     counts: Counts,
     /// Thumbs made so far when it was made
     serial: u64,
+    /// For a unit not drawn the same alone, what's under it, which it's
+    /// drawn over (see `Painter::under`), else 0
+    under: u64,
 }
 
 /// An image of a unit (see `Painter::drawn`)
@@ -852,6 +859,7 @@ pub struct Painter {
     thumbs_ahead: bool,
     thumbs_full: bool,
     thumbs_derived: usize,
+    pages_cleared: usize,
     /// The last thumb asked for wasn't made, for want of time
     thumb_later: bool,
     thumb_serial: u64,
@@ -941,6 +949,7 @@ impl Painter {
             thumbs_ahead: false,
             thumbs_full: false,
             thumbs_derived: 0,
+            pages_cleared: 0,
             thumb_later: false,
             thumb_serial: 0,
             thumb_deadline: None,
@@ -1270,6 +1279,7 @@ impl Painter {
         let canvas = surface.canvas();
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         play(canvas, &pictures, ((margin - ox) as f32, (margin - oy) as f32), px);
+        let played = start.elapsed();
         // With one shown till it's drawn, the GPU draws it while what's
         // next is made ready
         let wait = self.whole.is_none();
@@ -1282,12 +1292,14 @@ impl Painter {
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| {
             format!(
-                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} margin={margin} recorded={:.1}ms {:.1}ms wait={wait} vram={vram}",
+                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} cleared={} margin={margin} recorded={:.1}ms played={:.1}ms {:.1}ms wait={wait} vram={vram}",
                 pictures.len(),
                 pictures.iter().filter(|item| matches!(item, Drawn::Thumb(..))).count(),
                 std::mem::take(&mut self.thumbs_made),
                 std::mem::take(&mut self.thumbs_derived),
+                std::mem::take(&mut self.pages_cleared),
                 recorded.as_secs_f64() * 1000.0,
+                played.as_secs_f64() * 1000.0,
                 start.elapsed().as_secs_f64() * 1000.0
             )
         });
@@ -2447,7 +2459,7 @@ impl Painter {
     /// this draw, or else a thumb of another power stands in. None where it
     /// isn't drawn the same alone, is too big for one, or there's none yet
     fn thumb(&mut self, unit: usize, scale: f32) -> Option<(Drawn, Counts)> {
-        if self.rasters_off || !self.units[unit].alone || !(scale > 0.0) {
+        if self.rasters_off || !(scale > 0.0) {
             return None;
         }
         let (slot, section, bounds) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds);
@@ -2468,7 +2480,7 @@ impl Painter {
             }
             let Some(source) = self.thumbs.get(&(slot, section, sharper)) else { continue };
             let (source_page, source_from, serial) = (source.page, source.from, source.serial);
-            let (picture, picture_level, waiting, counts) = (source.picture, source.picture_level, source.waiting, source.counts);
+            let (picture, picture_level, waiting, counts, under) = (source.picture, source.picture_level, source.waiting, source.counts, source.under);
             let Some(image) = self.page_image(source_page, serial) else { continue };
             let Some((page, at)) = self.thumb_space(width, height) else { return None };
             let from = Rect::from_xywh(at.left as f32 + 1.0, at.top as f32 + 1.0, bounds.width() * side, bounds.height() * side);
@@ -2484,9 +2496,9 @@ impl Painter {
             let generation = self.thumb_pages[page].generation;
             self.thumb_serial += 1;
             let serial = self.thumb_serial;
-            self.thumbs.insert(key, Thumb { page, generation, from, to: bounds, picture, picture_level, waiting, counts, serial });
+            self.thumbs.insert(key, Thumb { page, generation, from, to: bounds, picture, picture_level, waiting, counts, serial, under });
             self.thumbs_derived += 1;
-            return Some((Drawn::Paged(page, from, bounds), counts));
+            return Some((Drawn::Paged(page, from, bounds, under != 0), counts));
         }
         // From its picture, while there's time
         if self.thumb_deadline.is_some_and(|deadline| Instant::now() > deadline) {
@@ -2502,6 +2514,31 @@ impl Painter {
         let level = self.level(&self.units[unit], side, false);
         let kept = (level..=level + 4).chain((level - 2..level).rev()).find(|&other| self.pictures.contains_key(&(slot, section, other, true)));
         let picture_level = kept.unwrap_or(level);
+        // One not drawn the same alone is drawn over the thumbs of what's
+        // under it, made before this draw
+        let under = if self.units[unit].alone { 0 } else { self.under(unit) };
+        let mut backdrop: Vec<(Image, Rect, Rect, bool)> = Vec::new();
+        if under != 0 {
+            for lower in 0..unit {
+                if !Rect::intersects2(&self.units[lower].bounds, &bounds) {
+                    continue;
+                }
+                let lower_key = (self.units[lower].slot, self.units[lower].section, power);
+                let found = self.kept_thumb(lower, power).is_some().then(|| self.thumbs.get(&lower_key)).flatten().map(|thumb| (thumb.page, thumb.serial, thumb.from, thumb.to, thumb.under != 0));
+                let Some((lower_page, serial, from, to, over)) = found else {
+                    // Later, once that has a thumb, unless it can't have one
+                    let lower_bounds = self.units[lower].bounds;
+                    let (lw, lh) = ((lower_bounds.width() * side).ceil() as i32 + 2, (lower_bounds.height() * side).ceil() as i32 + 2);
+                    self.thumb_later = lw.max(lh) <= THUMB_SIDE;
+                    return None;
+                };
+                let Some(image) = self.page_image(lower_page, serial) else {
+                    self.thumb_later = true;
+                    return None;
+                };
+                backdrop.push((image, from, to, over));
+            }
+        }
         let recorded = self.picture(unit, picture_level, true)?;
         let (picture, waiting, counts) = (recorded.picture.clone(), recorded.waiting > 0, recorded.counts);
         let (page, at) = self.thumb_space(width, height)?;
@@ -2511,6 +2548,16 @@ impl Painter {
         canvas.clip_rect(Rect::from(at), None, false);
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         canvas.translate((at.left as f32 + 1.0 - bounds.left * side, at.top as f32 + 1.0 - bounds.top * side));
+        let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+        for (image, from, to, over) in &backdrop {
+            let mut paint = Paint::default();
+            paint.set_anti_alias(true);
+            if *over {
+                paint.set_blend_mode(skia_safe::BlendMode::Src);
+            }
+            let to = Rect::from_ltrb(to.left * side, to.top * side, to.right * side, to.bottom * side);
+            canvas.draw_image_rect_with_sampling_options(image, Some((from, skia_safe::canvas::SrcRectConstraint::Strict)), to, sampling, &paint);
+        }
         canvas.scale((side, side));
         canvas.draw_picture(&picture, None, None);
         canvas.restore();
@@ -2518,9 +2565,22 @@ impl Painter {
         let generation = self.thumb_pages[page].generation;
         self.thumb_serial += 1;
         let serial = self.thumb_serial;
-        self.thumbs.insert(key, Thumb { page, generation, from, to: bounds, picture: picture.unique_id(), picture_level, waiting, counts, serial });
+        self.thumbs.insert(key, Thumb { page, generation, from, to: bounds, picture: picture.unique_id(), picture_level, waiting, counts, serial, under });
         self.thumbs_made += 1;
-        Some((Drawn::Paged(page, from, bounds), counts))
+        Some((Drawn::Paged(page, from, bounds, under != 0), counts))
+    }
+
+    /// What's under unit `unit`, as the units it's drawn over and where,
+    /// hashed, never 0
+    fn under(&self, unit: usize) -> u64 {
+        let bounds = self.units[unit].bounds;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for lower in &self.units[..unit] {
+            if Rect::intersects2(&lower.bounds, &bounds) {
+                (lower.slot, lower.section, lower.bounds.left.to_bits(), lower.bounds.top.to_bits(), lower.bounds.right.to_bits(), lower.bounds.bottom.to_bits()).hash(&mut hasher);
+            }
+        }
+        hasher.finish().max(1)
     }
 
     /// Unit `unit`'s thumb for `power`, if it's kept and still as the unit
@@ -2532,6 +2592,9 @@ impl Painter {
         if page.generation != thumb.generation || thumb.to != bounds {
             return None;
         }
+        if thumb.under != 0 && thumb.under != self.under(unit) {
+            return None;
+        }
         let fine = match self.pictures.get(&(slot, section, thumb.picture_level, true)) {
             Some(recorded) => recorded.picture.unique_id() == thumb.picture,
             None => !thumb.waiting,
@@ -2539,7 +2602,7 @@ impl Painter {
         if !fine {
             return None;
         }
-        let drawn = (Drawn::Paged(thumb.page, thumb.from, thumb.to), thumb.counts);
+        let drawn = (Drawn::Paged(thumb.page, thumb.from, thumb.to, thumb.under != 0), thumb.counts);
         self.thumb_pages[thumb.page].used = self.frame;
         Some(drawn)
     }
@@ -2575,7 +2638,7 @@ impl Painter {
             let scale = px / grow;
             let power = scale.log2().ceil() as i32;
             let mut near: Vec<(f32, usize)> = (0..self.units.len())
-                .filter(|&unit| self.units[unit].alone && Rect::intersects2(&self.units[unit].bounds, &area))
+                .filter(|&unit| Rect::intersects2(&self.units[unit].bounds, &area))
                 .filter(|&unit| !self.thumbs.contains_key(&(self.units[unit].slot, self.units[unit].section, power)))
                 .map(|unit| {
                     let center = self.units[unit].bounds.center();
@@ -2635,6 +2698,7 @@ impl Painter {
         page.rows.clear();
         page.bottom = 0;
         page.generation += 1;
+        self.pages_cleared += 1;
         page.used = frame;
         page.surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         self.thumbs.retain(|_, thumb| thumb.page != index);
@@ -2652,7 +2716,7 @@ impl Painter {
         drawn
             .into_iter()
             .map(|item| match item {
-                Drawn::Paged(page, from, to) => Drawn::Thumb(images[page].clone(), from, to),
+                Drawn::Paged(page, from, to, over) => Drawn::Thumb(images[page].clone(), from, to, over),
                 other => other,
             })
             .collect()
@@ -2852,9 +2916,9 @@ impl Painter {
         self.made += 1;
         let timing = super::dev() && (self.made % 8 == 0 || tracing());
         let start = Instant::now();
-        if !exact {
-            self.thumb_deadline = Some(start + THUMB_TIME);
-        }
+        // Thumbs a tile needs are all made: they cost about what playing
+        // the unit would, and later tiles and views use them again
+        self.thumb_deadline = None;
         for unit in units {
             // Too small to see: left out, as the encoder would
             let bounds = self.units[unit].bounds;
