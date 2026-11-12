@@ -1707,7 +1707,7 @@ function when(t) {
   if (recent) return recent;
   const date = new Date(t);
   if (t >= startOfToday() - 6 * DAY) return "at " + date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  return "on " + date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return "on " + date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== new Date().getFullYear() && { year: "numeric" }) });
 }
 function short(t) {
   const recent = ago(t);
@@ -2143,6 +2143,8 @@ function render({ keepScroll = true } = {}) {
   } else if (home) html = home.any ? home.html : renderEmpty();
   else if (!list.length) html = renderEmpty();
   else if (state.view === "starred") html = `<section class="sec"><div class="grid star-grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
+  // Shared with you and Drafts: one grid, newest first, no dates over it
+  else if (state.view === "shared" || state.view === "drafts" || state.view.startsWith("d:")) html = `<section class="sec">${fileList(list, viewName(state.view), "grid")}</section>`;
   else {
     for (const file of list) {
       const t = timeOf(file);
