@@ -1162,6 +1162,9 @@ const VIEWS = {
   active: (fileKey) => ["ActiveFileUsersForFileView", "50c8eef8d3a4e125845becb42a6d5e1afc0d1133e7f42908840e0eb68fbbdc3b", { fileKey }],
   // A project's files (Project.untrashedFiles), for its count
   projectCount: (projectId) => ["ProjectFileCount", "d6ab3803735f6b0d0dbc264e3c8fa4b58c56e55c6962d6aa62756411caa46399", { projectId }],
+  // Files shared with you, newest share first: SharedWithYouFile {sharedAt,
+  // sharedBy, resourceId (the file's key)}. Also refused without __requestId
+  shared: ["SharedWithYouResources", "08ca113f5a39948d884b0b1e3114c4084824b2a1aea94c5a857e5f36f6674f12", { __requestId: "ligma-shared", cursorColumn: "shared_at", fileType: null, firstPageSize: 100, orgDeletedDrafts: null, planId: null, planType: null, resourceTypes: ["file"], sharedBy: null, sharedToFilter: null, sharedToUserGroupIdFilter: null, sortOrder: "desc" }],
   // A team's trash in Figma. Refused without a __requestId of some kind
   teamTrash: (teamId) => ["TrashedFilesPageView", "42d3b73b9539e50b4687b882c9c9a66ef15d131025923dfe72bf93ce0fd1c93b", { __requestId: "ligma-trash-" + teamId, creatorFilter: "all", cursor: null, fileTypeFilter: "all", firstPageSize: 100, planId: teamId, planType: "team", queryParams: null, sortDirection: "DESC", sortType: "trashed_at" }],
 };
@@ -1537,6 +1540,8 @@ async function start() {
     }
     render();
     loadFavorites();
+    // For its count in the sidebar
+    need("shared");
     loadNotes();
     saveCache();
     Live.retries = 0;
@@ -1583,6 +1588,37 @@ async function loadFavorites() {
 // What a view needs before it can show, loaded once
 async function need(view) {
   if (!LIVE || Live.signedOut || !Live.uid || Live.ready.has(view) || Live.loading.has(view) || view === "recents" || view === "home") return;
+  if (view === "shared") {
+    Live.loading.add(view);
+    try {
+      await LG.load(VIEWS.shared);
+      const s = LG.store;
+      for (const share of Object.values(s.SharedWithYouFile ?? {})) {
+        const f = s.File?.[share.resourceId];
+        if (!f?.key || f.trashedAt || f.deletedAt) continue;
+        upsertFile(f.key, {
+          name: f._name ?? f.$?.name,
+          editor: f.$?.editorType,
+          type: EDITORS[f.$?.editorType] ?? "design",
+          project: f.folderId ?? null,
+          team: f.teamId,
+          shared: true,
+          sharedAt: Date.parse(share.sharedAt) || undefined,
+          // Who shared it; Figma doesn't always say, then who made it
+          sharedBy: s.User?.[share.sharedBy]?.name,
+          madeBy: s.User?.[f.creatorId]?.name,
+          touchedAt: Date.parse(f.$?.touchedAt ?? f.updatedAt) || undefined,
+          thumbUrl: f.thumbnailUrlOverride ?? f.$?.signedThumbnailUrl,
+          bg: colorOf(f.$?.checkpointClientMeta),
+        });
+      }
+    } catch {}
+    Live.loading.delete(view);
+    Live.ready.add(view);
+    if (state.view === view) render();
+    else renderSide();
+    return;
+  }
   // Each team's trash comes from Figma; the Trash, every team's together
   if (view === "trash" || view.startsWith("t:")) {
     const teams = view === "trash" ? PLANS.flatMap((p) => p.teams.map((t) => t.id)) : [view.slice(2)];
@@ -1704,8 +1740,9 @@ const state = {
   // Home every time it opens: starred, suggestions and the latest files
   view: "home",
   type: "all",
-  // Recents as rows with small previews, or as cards
-  layout: store.get("recents-layout", "rows"),
+  // Recents as rows with small previews, or as cards: rows on Home, cards
+  // on the Recents page, until changed
+  layout: { home: store.get("layout:home", "rows"), recents: store.get("layout:recents", "grid") },
   inbox: "all",
   sel: new Set(),
   anchor: null,
@@ -1727,7 +1764,7 @@ function viewName(view) {
   const team = /^[dt]:/.test(view) && teamById(view.slice(2))?.team.name;
   if (view.startsWith("d:")) return team && `Drafts · ${team}`;
   if (view.startsWith("t:")) return team && `Trash · ${team}`;
-  return { home: "Home", recents: "Recents", starred: "Starred", drafts: "Drafts", trash: "Trash" }[view];
+  return { home: "Home", recents: "Recents", starred: "Starred", shared: "Shared with you", drafts: "Drafts", trash: "Trash" }[view];
 }
 
 function viewFiles() {
@@ -1737,14 +1774,18 @@ function viewFiles() {
   if (view.startsWith("t:")) list = list.filter((f) => f.team === view.slice(2));
   else if (view.startsWith("d:")) list = list.filter((f) => f.project && f.project === Live.draftsByTeam[view.slice(2)]);
   if (view === "starred") list = list.filter((f) => f.starred);
+  else if (view === "shared") list = list.filter((f) => f.shared);
   else if (view === "recents" && LIVE) list = list.filter((f) => f.recent);
   else if (view === "drafts") list = list.filter((f) => !f.project || DRAFT_FOLDERS.has(f.project));
   else if (view.startsWith("p:")) list = list.filter((f) => f.project === view.slice(2));
   if (state.type !== "all") list = list.filter((f) => f.type === state.type);
   if (view === "starred") return starOrder(list);
-  const time = (f) => (trash ? f.trashedAt : f.at);
-  return list.sort((a, b) => time(b) - time(a));
+  return list.sort((a, b) => timeOf(b) - timeOf(a));
 }
+
+// When a file goes in a list: deleted, shared with you, or last opened or
+// changed
+const timeOf = (f) => (inTrash() ? f.trashedAt : state.view === "shared" ? f.sharedAt ?? f.at : f.at);
 
 // Starred files in the order you drag them into, Ligma's own per account:
 // Figma keeps no order. Files starred since come first, newest first
@@ -1796,6 +1837,7 @@ function renderSide() {
   html += navRow("home", "home", "Home");
   html += navRow("recents", "clock", "Recents");
   html += navRow("starred", "star", "Starred", count((f) => f.starred, "starred"));
+  html += navRow("shared", "users", "Shared with you", count((f) => f.shared, "shared"));
   html += navRow("drafts", "file", "Drafts", count((f) => !f.project || DRAFT_FOLDERS.has(f.project), "drafts"));
   // Teams: starred ones pinned first, then the rest. A Starter or
   // Professional plan is one team; an Organization holds many, under its
@@ -1862,8 +1904,17 @@ function renderFilters() {
   else if (inTrash()) html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
   else if (state.view === "starred" && FILES.some((f) => f.starred && !f.trashed)) html += `<span class="fnote">Drag files, or press ${MAC ? "⌥←" : "Alt+Left"} and ${MAC ? "⌥→" : "Alt+Right"}, to put them in your order</span>`;
   else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
-  else if (state.view === "recents") html += layoutToggle();
+  else if (state.view === "recents") html += layoutToggle("recents");
   filters.innerHTML = html;
+}
+
+// A shared file's line: its project when it's in one of yours, then who
+// shared it and when
+function sharedText(file) {
+  const where = placeOf(file.project);
+  const prefix = where === "Shared with you" ? "" : where + " · ";
+  if (file.sharedBy) return `${prefix}${file.sharedBy} shared it ${when(file.sharedAt)}`;
+  return `${prefix}${file.madeBy ? `From ${file.madeBy} · ` : ""}Shared ${when(file.sharedAt)}`;
 }
 
 // `reorder`: in a row of starred files, which has its own drag (startLift).
@@ -1871,7 +1922,8 @@ function renderFilters() {
 function cardHtml(file, { reorder = state.view === "starred", why } = {}) {
   const trash = inTrash();
   const place = /^[pd]:/.test(state.view) ? "" : placeOf(file.project) + " · ";
-  const meta = why ? why.text : trash ? `${placeOf(file.project)} · Deleted ${when(file.trashedAt)}` : place + activity(file) + (file.unread ? ` · ${file.unread} new` : "");
+  const sharedNote = state.view === "shared" && file.sharedAt ? sharedText(file) : null;
+  const meta = why ? why.text : sharedNote ? sharedNote : trash ? `${placeOf(file.project)} · Deleted ${when(file.trashedAt)}` : place + activity(file) + (file.unread ? ` · ${file.unread} new` : "");
   const tools = trash ? "" : `<div class="tools"><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button></div>`;
   const badge = file.unread ? `<span class="badge" title="${file.unread} new ${file.unread === 1 ? "comment" : "comments"}">${file.unread}</span>` : "";
   const restore = trash ? `<button class="restore" tabindex="-1">Restore</button>` : "";
@@ -1903,11 +1955,14 @@ const fileList = (files, label, layout) =>
     : `<div class="grid" role="listbox" aria-multiselectable="true" aria-label="${esc(label)}">${files.map(cardHtml).join("")}</div>`;
 
 // Rows or cards for Recents, here and on Home
-const layoutToggle = () =>
-  `<div class="seg lay" role="group" aria-label="Show Recents as">${[["rows", "list", "List"], ["grid", "grid", "Grid"]].map(([value, iconName, label]) => `<button data-layout="${value}" aria-pressed="${state.layout === value}" aria-label="${label}" title="${label}">${icon(iconName)}</button>`).join("")}</div>`;
-function setLayout(value) {
-  state.layout = value;
-  store.set("recents-layout", value);
+// `where`: "home" (Home's Recents, rows unless changed) or "recents" (the
+// Recents page, cards unless changed); each keeps its own
+const layoutToggle = (where) =>
+  `<div class="seg lay" role="group" aria-label="Show Recents as">${[["rows", "list", "List"], ["grid", "grid", "Grid"]].map(([value, iconName, label]) => `<button data-layout="${where}:${value}" aria-pressed="${state.layout[where] === value}" aria-label="${label}" title="${label}">${icon(iconName)}</button>`).join("")}</div>`;
+function setLayout(choice) {
+  const [where, value] = choice.split(":");
+  state.layout[where] = value;
+  store.set("layout:" + where, value);
   render();
 }
 
@@ -1985,7 +2040,7 @@ function homeLayout() {
   // older work you opened comes back, what Recents has scrolled past
   const signals = pool.filter((f) => reasons.get(f.id).score > 0).sort((a, b) => reasons.get(b.id).score - reasons.get(a.id).score || b.at - a.at).slice(0, cols);
   for (const f of signals) taken.add(f.id);
-  const recentCount = state.layout === "rows" ? 8 : cols * 2;
+  const recentCount = state.layout.home === "rows" ? 8 : cols * 2;
   const recents = pool.filter((f) => !taken.has(f.id)).slice(0, recentCount);
   for (const f of recents) taken.add(f.id);
   const suggested = [...signals, ...pool.filter((f) => !taken.has(f.id)).slice(0, Math.max(0, Math.min(cols, 4) - signals.length))];
@@ -2011,7 +2066,7 @@ function homeLayout() {
 
   if (recents.length) {
     if (open("recents")) files.push(...recents);
-    html += section("recents", "Recents", 0, fileList(recents, "Recents", state.layout), "recents", layoutToggle());
+    html += section("recents", "Recents", 0, fileList(recents, "Recents", state.layout.home), "recents", layoutToggle("home"));
   }
   // What a redraw would change, for presence updates (see presenceChanged)
   const key = suggested.map((f) => f.id + reasons.get(f.id).text).join("|");
@@ -2022,6 +2077,7 @@ let homeKey = "";
 const EMPTY = {
   home: ["home", "Nothing here yet", "Files you open, edit or get comments on show up here", "new"],
   recents: ["clock", "Nothing here yet", "Files you open, edit or get comments on show up here, newest first", "new"],
+  shared: ["users", "Nothing shared with you", "Files people share with you show up here, newest first", null],
   starred: ["star", "No starred files", "Press S on a file, or click the star on its preview, to keep it here", null],
   drafts: ["file", "No drafts", "Files you make outside a project stay here until you move them", "new"],
   trash: ["trash", "Trash is empty", "Deleted files stay here for 30 days, then they're gone for good", null],
@@ -2089,12 +2145,12 @@ function render({ keepScroll = true } = {}) {
   else if (state.view === "starred") html = `<section class="sec"><div class="grid star-grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
   else {
     for (const file of list) {
-      const t = inTrash() ? file.trashedAt : file.at;
+      const t = timeOf(file);
       const b = bucket(t);
       if (sections.at(-1)?.key !== b.key) sections.push({ ...b, month: monthOf(t), files: [] });
       sections.at(-1).files.push(file);
     }
-    const layout = state.view === "recents" ? state.layout : "grid";
+    const layout = state.view === "recents" ? state.layout.recents : "grid";
     html = sections.map((s, i) => `<section class="sec" id="s${i}" data-month="${s.month}"><h2>${esc(s.label)}<small>${s.files.length}</small></h2>${fileList(s.files, s.label, layout)}</section>`).join("");
   }
   // Keyboard focus stays on the grid across a redraw: on the same file, or
@@ -3526,6 +3582,7 @@ const COMMANDS = [
   { label: "Go to Home", view: "home", icon: "home" },
   { label: "Go to Recents", view: "recents", icon: "clock" },
   { label: "Go to Starred", view: "starred", icon: "star" },
+  { label: "Go to Shared with you", view: "shared", icon: "users" },
   { label: "Go to Drafts", view: "drafts", icon: "file" },
   { label: "Go to Trash", view: "trash", icon: "trash" },
   { label: "Open the inbox", act: () => openInbox(), icon: "bell" },
