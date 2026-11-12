@@ -101,6 +101,32 @@ fn color(rgba: Rgba, alpha: f32) -> Color4f {
     Color4f::new(rgba.r, rgba.g, rgba.b, (rgba.a * alpha).clamp(0.0, 1.0))
 }
 
+/// Whether node `slot` draws with a blend mode that reaches what's behind
+/// it: its own, its fills' or strokes', or a child's through groups that
+/// don't keep their children to themselves
+pub fn blends_through(scene: &Scene, slot: usize) -> bool {
+    let Some(node) = scene.node(slot) else {
+        return false;
+    };
+    if node.hidden {
+        return false;
+    }
+    let paints_blend = node.visible_fills().chain(node.strokes.iter().filter(|paint| paint.visible)).any(|paint| !is_normal(&paint.blend_mode));
+    if !is_normal(&node.blend) || paints_blend {
+        return true;
+    }
+    let isolated = node.opacity < 0.999 || !node.effects.is_empty() || node.blend.as_deref() == Some("NORMAL");
+    !isolated && node.children.iter().any(|&child| blends_through(scene, child))
+}
+
+/// How far past node `slot`'s bounds a background blur in it reads what's
+/// behind it, if it has one
+pub fn blurs_behind(scene: &Scene, slot: usize) -> Option<f32> {
+    let node = scene.node(slot).filter(|node| !node.hidden)?;
+    let own = node.effects.iter().filter(|effect| effect.kind == "BACKGROUND_BLUR" || effect.kind == "GLASS").map(|effect| effect.radius as f32 * 1.5).reduce(f32::max);
+    node.children.iter().filter_map(|&child| blurs_behind(scene, child)).chain(own).reduce(f32::max)
+}
+
 /// LINEAR_BURN on premultiplied colors: the separable blend formula with
 /// B(s, d) = max(0, s + d - 1)
 const LINEAR_BURN: &str = r#"
@@ -902,21 +928,8 @@ impl<'a> Encoder<'a> {
         }
     }
 
-    /// Whether node `slot` draws with a blend mode that reaches what's
-    /// behind it: its own, its fills', or a child's through groups that
-    /// don't keep their children to themselves
     fn blends_through(&self, slot: usize) -> bool {
-        let Some(node) = self.scene.node(slot) else {
-            return false;
-        };
-        if node.hidden {
-            return false;
-        }
-        if !is_normal(&node.blend) || node.visible_fills().any(|paint| !is_normal(&paint.blend_mode)) {
-            return true;
-        }
-        let isolated = node.opacity < 0.999 || !node.effects.is_empty() || node.blend.as_deref() == Some("NORMAL");
-        !isolated && node.children.iter().any(|&child| self.blends_through(child))
+        blends_through(self.scene, slot)
     }
 
     /// Fills (`fills`) or strokes. Strokes aligned inside are clipped to

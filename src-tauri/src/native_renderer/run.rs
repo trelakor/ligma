@@ -912,6 +912,57 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             let report = audit(&ctx, &action["audit:".len()..])?;
             Ok(report.to_string())
         }
+        "rastercheck" if super::dev() => {
+            // The view drawn with units drawn into images of their own and
+            // without, which should come out the same
+            let view = ctx.hub.view.lock().unwrap().clone().ok_or("no view")?;
+            let (width, height) = ((view.cw * view.dpr).round() as u32, (view.ch * view.dpr).round() as u32);
+            let render = |on: bool| -> Result<Vec<u8>, String> {
+                let _ = ctx.messages.send(Msg::Rasters(on));
+                let mut drawn = None;
+                for _ in 0..60 {
+                    let (send, receive) = mpsc::channel();
+                    let _ = ctx.messages.send(Msg::Render { view: view.clone(), width, height, reply: send });
+                    drawn = receive.recv_timeout(Duration::from_secs(120)).ok().flatten();
+                    if drawn.as_ref().is_none_or(|(_, waiting)| *waiting == 0) {
+                        break;
+                    }
+                    sleep(500);
+                }
+                drawn.map(|(pixels, _)| pixels).ok_or_else(|| "not drawn".to_string())
+            };
+            let started = Instant::now();
+            let with = render(true)?;
+            let with_ms = started.elapsed().as_millis();
+            let started = Instant::now();
+            let without = render(false)?;
+            let without_ms = started.elapsed().as_millis();
+            let again = render(true)?;
+            let compare = |a: &[u8], b: &[u8]| {
+                let (mut differ, mut worst) = (0u64, 0i32);
+                for (a, b) in a.chunks(4).zip(b.chunks(4)) {
+                    let error = (0..4).map(|c| (a[c] as i32 - b[c] as i32).abs()).max().unwrap_or(0);
+                    worst = worst.max(error);
+                    if error > 0 {
+                        differ += 1;
+                    }
+                }
+                (differ, worst)
+            };
+            let (differ, worst) = compare(&with, &without);
+            // What differs between two draws alone, as Figma's renders of
+            // some nodes come at other sizes
+            let (noise, noise_worst) = compare(&with, &again);
+            let dir = report_dir(&ctx, "rastercheck")?;
+            if let (Some(a), Some(b)) = (image::RgbaImage::from_raw(width, height, with), image::RgbaImage::from_raw(width, height, without)) {
+                let _ = a.save(dir.join("with.png"));
+                let _ = b.save(dir.join("without.png"));
+            }
+            if let Some(c) = image::RgbaImage::from_raw(width, height, again.clone()) {
+                let _ = c.save(dir.join("again.png"));
+            }
+            Ok(json!({ "differ": differ, "worst": worst, "noise": noise, "noiseWorst": noise_worst, "pixels": width as u64 * height as u64, "withMs": with_ms, "withoutMs": without_ms, "dir": dir }).to_string())
+        }
         "live" if super::dev() => {
             let (send, receive) = mpsc::channel();
             let _ = ctx.messages.send(Msg::Live(send));
