@@ -354,10 +354,10 @@
       channel.port2.postMessage(0);
     });
 
-  // Rounds to 1/1000, which is far below a pixel at any zoom Figma has, to
-  // keep the JSON short
-  const round = (value) => Math.round(value * 1000) / 1000;
-  const path = (data) => data.replace(/-?\d+\.\d{4,}/g, (number) => String(round(+number)));
+  // Numbers are kept short in the JSON, but to Figma's own precision, as at
+  // high zoom a thousandth of a unit is pixels, more so across a rotated node
+  const round = (value) => +value.toPrecision(9);
+  const path = (data) => data.replace(/-?\d+\.\d{6,}/g, (number) => String(Math.round(+number * 1e5) / 1e5));
 
   // One node as Ligma's scene reads it (see `scene.rs`), without children
   const node = (figma, n, parent) => {
