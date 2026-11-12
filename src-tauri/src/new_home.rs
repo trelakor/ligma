@@ -10,6 +10,7 @@
 //! loaded. Files opened from it go to their own tabs like any link from
 //! Home (see `tabs::on_navigation`)
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::{AppHandle, Url};
@@ -44,14 +45,26 @@ const PAGE_JS: &str = r##"(() => {
 
 static ON: AtomicBool = AtomicBool::new(false);
 
+/// The Figma account the page is showing (its user id), so turning the page
+/// off opens Figma's file browser on that same account
+static ACCOUNT: Mutex<Option<String>> = Mutex::new(None);
+
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.new_home, Ordering::Relaxed);
 }
 
-/// What Home loads: Ligma's home page or Figma's file browser
+/// What Home loads: Ligma's home page or Figma's file browser, on the
+/// account Ligma's page was last showing (Figma's `fuid` picks it)
 pub fn home_url() -> Url {
-    if ON.load(Ordering::Relaxed) { URL } else { crate::tabs::HOME_URL }.parse().unwrap()
+    if ON.load(Ordering::Relaxed) {
+        return URL.parse().unwrap();
+    }
+    let mut url: Url = crate::tabs::HOME_URL.parse().unwrap();
+    if let Some(account) = ACCOUNT.lock().unwrap().as_deref() {
+        url.query_pairs_mut().append_pair("fuid", account);
+    }
+    url
 }
 
 /// Whether `url` is Ligma's home page
@@ -67,7 +80,8 @@ pub fn page_js() -> String {
 }
 
 /// Origin of the links the page opens to ask Ligma for something: a color
-/// scheme picked in its account menu's Change theme, or Settings
+/// scheme picked in its account menu's Change theme, Settings, or to say
+/// which account it's on
 pub const SIGNAL_HOST: &str = "home.ligma.invalid";
 
 /// A request from the page in tab `tab`, taken only from Home. Not from
@@ -78,6 +92,13 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
     }
     let path = url.path().to_owned();
     let value = url.query_pairs().find(|(key, _)| key == "value").map(|(_, value)| value.into_owned());
+    // A Figma user id is all digits
+    if path == "/account" {
+        if let Some(id) = value.filter(|id| !id.is_empty() && id.len() < 32 && id.bytes().all(|b| b.is_ascii_digit())) {
+            *ACCOUNT.lock().unwrap() = Some(id);
+        }
+        return;
+    }
     let app = app.clone();
     std::thread::spawn(move || match path.as_str() {
         "/settings" => {

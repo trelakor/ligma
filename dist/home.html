@@ -1489,9 +1489,12 @@ async function start() {
     Live.users = session.users ?? [];
     Live.signedOut = !Live.users.length;
     if (Live.signedOut) return render();
-    const saved = store.get("account", null);
+    // The account Figma's own file browser is on, so turning either home
+    // page off or on keeps you where you were
+    const saved = figmaAccount() ?? store.get("account", null);
     Live.uid = Live.users.some((u) => u.id === saved) ? saved : Live.users[0].id;
     store.set("account", Live.uid);
+    tellFigma(Live.uid);
     loadPins();
     for (const f of store.get(`trash:${Live.uid}`, [])) if (!byId(f.key)) upsertFile(f.key, { ...f, trashed: true });
     const userState = await api("/api/user/state");
@@ -1650,8 +1653,38 @@ function saveCache() {
   const files = FILES.filter((f) => f.recent).map(({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }) => ({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread }));
   store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, email, img_url, community_profile_handle }) => ({ id, name, email, img_url, community_profile_handle })), files });
 }
+// Figma's file browser opens on the account in its `recent_user_data` cookie
+// (a JSON string of base64 JSON, `fileBrowserUserId` among the rest). Ligma's
+// page reads and writes the same, so both home pages agree
+function readFigmaCookie() {
+  const raw = document.cookie.split("; ").find((c) => c.startsWith("recent_user_data="))?.slice("recent_user_data=".length);
+  return raw ? JSON.parse(atob(JSON.parse(decodeURIComponent(raw)))) : null;
+}
+function figmaAccount() {
+  try {
+    return readFigmaCookie()?.fileBrowserUserId ?? null;
+  } catch {
+    return null;
+  }
+}
+let toldLigma = null;
+function tellFigma(uid) {
+  // And Ligma, which opens Figma's file browser on it (new_home.rs)
+  if (LIVE && uid && uid !== toldLigma) {
+    toldLigma = uid;
+    signal("account", { value: uid });
+  }
+  try {
+    const data = readFigmaCookie() ?? {};
+    if (!uid || data.fileBrowserUserId === uid) return;
+    data.fileBrowserUserId = uid;
+    // As Figma sets it: this host only, the whole site, 30 days
+    document.cookie = `recent_user_data=${encodeURIComponent(JSON.stringify(btoa(JSON.stringify(data))))}; path=/; max-age=2592000; secure; samesite=lax`;
+  } catch {}
+}
+
 function showCached() {
-  const uid = store.get("account", null);
+  const uid = figmaAccount() ?? store.get("account", null);
   const cache = uid && store.get(`cache:${uid}`, null);
   if (!cache) return;
   Live.uid = uid;
@@ -1667,7 +1700,11 @@ function showCached() {
 }
 
 async function switchAccount(uid) {
+  // A load still under way picked its account already: let it finish, then
+  // load the new one
+  await booting?.catch(() => {});
   store.set("account", uid);
+  tellFigma(uid);
   LG.close();
   FILES.splice(0);
   BY_ID.clear();
