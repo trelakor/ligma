@@ -20,6 +20,7 @@ mod handoff;
 mod home;
 mod lasso;
 mod layers;
+mod loading_logo;
 mod mcp_bridge;
 mod mcp_clients;
 mod models;
