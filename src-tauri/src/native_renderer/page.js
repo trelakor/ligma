@@ -498,7 +498,7 @@
       if (stream !== current) return fill(`${current.prefix}${n}`, JSON.stringify({ error: "the page was read again" }));
       if (performance.now() - aimed > 50) aim();
       const picked = left.pop();
-      const [n, parent, index] = picked.unit;
+      const [root, parent, index] = picked.unit;
       // What's in view is read in longer stretches, as each breather while
       // Figma opens a file can take it 100ms. Something out of view is put
       // back when the view moves onto something else
@@ -510,7 +510,7 @@
         const b = picked.box;
         return !b || b.x > v.x + v.width || b.y > v.y + v.height || b.x + b.width < v.x || b.y + b.height < v.y;
       };
-      const nodes = await subtree(figma, n, parent, [], clock);
+      const nodes = await subtree(figma, root, parent, [], clock);
       clock.stop = null;
       clock.slice = 12;
       if (!nodes) {
