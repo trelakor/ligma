@@ -97,7 +97,7 @@ fn is_normal(mode: &Option<String>) -> bool {
     mode.as_deref().is_none_or(|mode| mode == "NORMAL" || mode == "PASS_THROUGH")
 }
 
-fn color(rgba: Rgba, alpha: f32) -> Color4f {
+pub(super) fn color(rgba: Rgba, alpha: f32) -> Color4f {
     Color4f::new(rgba.r, rgba.g, rgba.b, (rgba.a * alpha).clamp(0.0, 1.0))
 }
 
@@ -166,7 +166,7 @@ half4 main(half4 src, half4 dst) {
 
 /// Every pixel with any coverage made opaque, as Figma's silhouettes are.
 /// Made once: its table is a texture, and each new one uploads its own
-fn silhouette() -> skia_safe::ColorFilter {
+pub(super) fn silhouette() -> skia_safe::ColorFilter {
     static FILTER: std::sync::OnceLock<skia_safe::ColorFilter> = std::sync::OnceLock::new();
     FILTER
         .get_or_init(|| {
@@ -185,12 +185,12 @@ pub fn tent_sigma(radius: f64) -> f32 {
 }
 
 /// Skia blurs no more than this many pixels wide, however wide it's asked
-const MAX_SIGMA: f32 = 500.0;
+pub(super) const MAX_SIGMA: f32 = 500.0;
 
 /// A blur of `sigma` in the canvas's units, where one is `device` pixels.
 /// Wider than Skia goes, it's blurred at a lower resolution instead, as
 /// Figma's big blurs show zoomed in
-fn wide_blur(sigma: f32, device: f32, input: Option<ImageFilter>, crop: Option<Rect>) -> Option<ImageFilter> {
+pub(super) fn wide_blur(sigma: f32, device: f32, input: Option<ImageFilter>, crop: Option<Rect>) -> Option<ImageFilter> {
     let crop = crop.map(CropRect::from).unwrap_or_default();
     let k = sigma * device / MAX_SIGMA;
     if k <= 1.0 {
@@ -381,14 +381,14 @@ half4 main(float2 p) {
 "#;
 
 pub struct Kit {
-    blenders: HashMap<&'static str, Blender>,
-    diamond: Option<RuntimeEffect>,
-    luminance: Option<skia_safe::ColorFilter>,
+    pub(super) blenders: HashMap<&'static str, Blender>,
+    pub(super) diamond: Option<RuntimeEffect>,
+    pub(super) luminance: Option<skia_safe::ColorFilter>,
     /// Divides the source by the destination's alpha
-    divide: Option<Blender>,
-    noise: Option<RuntimeEffect>,
-    noise_over: Option<Blender>,
-    texture: Option<RuntimeEffect>,
+    pub(super) divide: Option<Blender>,
+    pub(super) noise: Option<RuntimeEffect>,
+    pub(super) noise_over: Option<Blender>,
+    pub(super) texture: Option<RuntimeEffect>,
     boxed: Option<RuntimeEffect>,
     sharp: Option<RuntimeEffect>,
     /// Recorded pattern tiles, and the images they were waiting for
@@ -1252,45 +1252,7 @@ impl<'a> Encoder<'a> {
         if kept < shown && img.original.0 as f32 > kept && kept < 4096.0 {
             self.sharper_images.push((key, shown as f64));
         }
-        let mut local = to_node;
-        local.pre_scale((iw / kept, ih / img.image.height() as f32), None);
-        // Figma's canvas shows each pixel as the average of the image's texels
-        // under it. Exact tiles take 4 by 4 samples a pixel, so nearest ones
-        // average the same way, unless there are more texels under a pixel
-        // than samples, where mipmaps keep it from shimmering. Quick tiles
-        // take one sample and smooth it
-        let texels = kept / (shown / 1.42).max(1e-3);
-        let sampling = if self.aa {
-            // One sample a pixel: the 16 nearest ones exact tiles take are
-            // averaged here instead, over where the pixel falls on the image.
-            // Magnified, that's a texel's edge blended over a pixel
-            let effect = if texels < 1.0 { &self.kit.sharp } else { &self.kit.boxed };
-            if texels <= 4.0 {
-                if let Some(effect) = effect {
-                    let mut to_device = node.transform;
-                    to_device.post_scale((self.px, self.px), None);
-                    to_device.pre_concat(&local);
-                    if let Some(back) = to_device.invert() {
-                        let nearest = SamplingOptions::new(FilterMode::Nearest, MipmapMode::None);
-                        let mut child = img.image.to_shader((tile, tile), nearest, None)?;
-                        if self.cast {
-                            child = child.with_color_filter(silhouette());
-                        }
-                        // Column major
-                        let footprint = [back.scale_x(), back.skew_y(), back.skew_x(), back.scale_y()];
-                        let uniforms: Vec<u8> = footprint.iter().flat_map(|v| v.to_le_bytes()).collect();
-                        return effect.make_shader(Data::new_copy(&uniforms), &[child.into()], Some(&local));
-                    }
-                }
-            }
-            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
-        } else if texels > 4.0 {
-            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
-        } else {
-            SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
-        };
-        let shader = img.image.to_shader((tile, tile), sampling, &local)?;
-        Some(if self.cast { shader.with_color_filter(silhouette()) } else { shader })
+        image_shader(self.kit, img, to_node, tile, &node.transform, self.px, shown / 1.42, self.aa, self.cast)
     }
 
     fn note_source(&mut self, id: &str, there: bool) {
@@ -1535,6 +1497,54 @@ impl<'a> Encoder<'a> {
         self.canvas.draw_rect(inverse.map_rect(bounds.with_outset((1.0, 1.0))).0, &paint);
         self.canvas.restore();
     }
+}
+
+/// An image fill's shader: `img` placed by `to_node`, which maps the
+/// original's pixels to the node's own coordinates, in a node `transform`
+/// maps to the canvas, drawn at `px` pixels a unit where the whole image
+/// shows `shown` pixels wide. `cast` draws it solid where its texels are
+pub(super) fn image_shader(kit: &Kit, img: &Img, to_node: Matrix, tile: TileMode, transform: &Matrix, px: f32, shown: f32, aa: bool, cast: bool) -> Option<Shader> {
+    let (iw, ih) = (img.original.0 as f32, img.original.1 as f32);
+    let kept = img.image.width() as f32;
+    let mut local = to_node;
+    local.pre_scale((iw / kept, ih / img.image.height() as f32), None);
+    // Figma's canvas shows each pixel as the average of the image's texels
+    // under it. Exact tiles take 4 by 4 samples a pixel, so nearest ones
+    // average the same way, unless there are more texels under a pixel
+    // than samples, where mipmaps keep it from shimmering. Quick tiles
+    // take one sample and smooth it
+    let texels = kept / shown.max(1e-3);
+    let sampling = if aa {
+        // One sample a pixel: the 16 nearest ones exact tiles take are
+        // averaged here instead, over where the pixel falls on the image.
+        // Magnified, that's a texel's edge blended over a pixel
+        let effect = if texels < 1.0 { &kit.sharp } else { &kit.boxed };
+        if texels <= 4.0 {
+            if let Some(effect) = effect {
+                let mut to_device = *transform;
+                to_device.post_scale((px, px), None);
+                to_device.pre_concat(&local);
+                if let Some(back) = to_device.invert() {
+                    let nearest = SamplingOptions::new(FilterMode::Nearest, MipmapMode::None);
+                    let mut child = img.image.to_shader((tile, tile), nearest, None)?;
+                    if cast {
+                        child = child.with_color_filter(silhouette());
+                    }
+                    // Column major
+                    let footprint = [back.scale_x(), back.skew_y(), back.skew_x(), back.scale_y()];
+                    let uniforms: Vec<u8> = footprint.iter().flat_map(|v| v.to_le_bytes()).collect();
+                    return effect.make_shader(Data::new_copy(&uniforms), &[child.into()], Some(&local));
+                }
+            }
+        }
+        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+    } else if texels > 4.0 {
+        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+    } else {
+        SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
+    };
+    let shader = img.image.to_shader((tile, tile), sampling, &local)?;
+    Some(if cast { shader.with_color_filter(silhouette()) } else { shader })
 }
 
 /// A gradient fill as a shader in the node's own coordinates. Figma's

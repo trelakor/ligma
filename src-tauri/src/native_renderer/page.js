@@ -344,6 +344,9 @@
   const imageBytes = async (figma, hash, key) => {
     let stop;
     const gaveUp = new Promise((resolve) => (stop = resolve));
+    // Without the plugin API, as in files that can only be viewed, only
+    // from the cache
+    if (!figma) return fromCache(hash, new Promise((resolve) => setTimeout(resolve, 30000)), key);
     const fromFigma = async () => {
       const image = figma.getImageByHash(hash);
       if (!image) throw new Error("no image");
@@ -826,9 +829,7 @@
           const bytes = await ready;
           return bytes === PUSHED ? { under: `i${hash}` } : bytes;
         }
-        const figma = api();
-        if (!figma) throw new Error("no image");
-        return await imageBytes(figma, hash, key);
+        return await imageBytes(api(), hash, key);
       });
     },
 
@@ -995,6 +996,18 @@
         for (const [feature, ids] of picked) for (const id of ids) out.push({ id, feature });
         return out;
       });
+    },
+
+    // Figma's noise octaves, once worked out, see `noiseOctaves`
+    octaves() {
+      return noiseOctaves;
+    },
+
+    // What Figma's renderer is told that's Figma's to set, for page_hook.js
+    // to send with each frame: the pixel preview's pixels a unit, the pixel
+    // grid, and outline mode's background
+    settings() {
+      return { preview: pixelPreview(), ...display() };
     },
 
     // Hands Ligma results at `path` on this site from now on

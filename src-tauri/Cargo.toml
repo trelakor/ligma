@@ -58,6 +58,9 @@ windows-core = "0.62"
 # Ligma's shortcuts (src/app_icon.rs), and checking and loading Windows'
 # DirectML for Upscale (src/upscale.rs)
 windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_DirectComposition"] }
+# The native renderer's layer, stretched as the browser stretches Figma's
+# canvas (src/native_renderer/present.rs)
+windows-numerics = "0.3"
 # The experimental native renderer (src/native_renderer): Skia on D3D12,
 # and the GPU memory counters it shows (PDH, above)
 skia-safe = { version = "0.157", features = ["d3d"] }

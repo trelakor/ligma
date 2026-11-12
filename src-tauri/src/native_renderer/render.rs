@@ -40,6 +40,7 @@ use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, EFFEC
 use super::effects::{Job, Kept, Run};
 use super::present::{checker_paint, grid_paint, Device, Hub, Layer, Tex, CHECKER, GRID_COLOR, GRID_LINES};
 use super::scene::{Kind, Prepared, Scene};
+use super::tree::{Drawer, Frame, Place, Tree};
 use super::stats;
 
 /// Figma's viewport, from `view()` in page.js
@@ -91,6 +92,20 @@ impl View {
         })
     }
 
+    /// The pixels Figma's canvas has, as the browser lines it up with the
+    /// screen's: its edges at the nearest device pixel
+    pub fn canvas(&self) -> (u32, u32) {
+        let snapped = |at: f64, size: f64| (((at + size) * self.dpr).round() - (at * self.dpr).round()).max(1.0) as u32;
+        (snapped(self.cx, self.cw), snapped(self.cy, self.ch))
+    }
+
+    /// How much the browser stretches those pixels across the canvas's own
+    /// size, which isn't a whole number of them
+    pub fn stretch(&self) -> (f64, f64) {
+        let (w, h) = self.canvas();
+        ((self.cw * self.dpr / w as f64).max(1e-3), (self.ch * self.dpr / h as f64).max(1e-3))
+    }
+
     /// Device pixels a unit in a window `width` pixels wide
     pub fn px(&self, width: u32) -> f32 {
         (width as f64 / self.w) as f32
@@ -116,6 +131,11 @@ impl View {
 pub enum Msg {
     /// A page starts streaming in, empty
     Begin(Box<Scene>),
+    /// A frame of Figma's render tree, which once it comes is drawn in place
+    /// of the scene read through the plugin API
+    Frame(Box<Frame>),
+    /// Figma's noise octaves, see `scene::Begin`
+    Octaves(Vec<f32>),
     Changes(Prepared),
     View(View),
     /// Image `key`, and the width it was asked for at, if it was
@@ -216,6 +236,8 @@ struct Unit {
     /// Drawn the same alone as over what's drawn before it, so it can be
     /// drawn once into an image of its own (see `Painter::drawn`)
     alone: bool,
+    /// Of Figma's render tree, where `slot` is the unit's key
+    place: Option<Place>,
 }
 
 /// A unit as it's drawn: its picture, or an image of it drawn at the scale
@@ -641,6 +663,8 @@ pub struct Painter {
     gpu: Gpu,
     kit: Kit,
     scene: Scene,
+    /// Figma's render tree, once frames of it come
+    tree: Option<Tree>,
     units: Vec<Unit>,
     /// By unit, zoom level and whether edges are anti-aliased
     pictures: HashMap<(usize, bool, i32, bool), Recorded>,
@@ -725,6 +749,7 @@ impl Painter {
             gpu,
             kit: Kit::new(),
             scene: Scene::default(),
+            tree: None,
             units: Vec::new(),
             pictures: HashMap::new(),
             images: HashMap::new(),
@@ -1115,8 +1140,16 @@ impl Painter {
             .collect();
         shown.live = self.whole.as_ref().map(|whole| whole.layer.clone());
         shown.background = Some(background);
-        shown.transparent = self.scene.transparent;
-        shown.dark = self.scene.dark;
+        match self.tree.as_ref().and_then(Tree::background) {
+            Some((_, transparent, dark)) => {
+                shown.transparent = transparent;
+                shown.dark = dark;
+            }
+            None => {
+                shown.transparent = self.scene.transparent;
+                shown.dark = self.scene.dark;
+            }
+        }
         shown.pending = self.dirty;
         drop(shown);
         self.hub.poke();
@@ -1141,6 +1174,21 @@ impl Painter {
     /// False to stop
     fn handle(&mut self, message: Msg) -> bool {
         match message {
+            Msg::Frame(frame) => self.frame(*frame),
+            Msg::Octaves(octaves) => {
+                if let Some(tree) = &mut self.tree {
+                    if tree.octaves != octaves {
+                        tree.octaves = octaves;
+                        self.pictures.clear();
+                        self.clear_rasters();
+                        self.clear_tiles();
+                        self.dirty = true;
+                    }
+                }
+            }
+            // The plugin API's scene, which the render tree replaces
+            Msg::Begin(_) | Msg::Changes(_) if self.tree.is_some() => {}
+            Msg::View(_) if self.tree.is_some() => {}
             Msg::Begin(scene) => {
                 self.scene = *scene;
                 self.pictures.clear();
@@ -1201,23 +1249,7 @@ impl Painter {
                 stats().lock().unwrap().nodes = self.scene.live_nodes();
                 self.dirty = true;
             }
-            Msg::View(view) => {
-                if self.view.as_ref() != Some(&view) {
-                    let now = Instant::now();
-                    match self.motion {
-                        Some((x, y, at)) if self.view.as_ref().is_some_and(|old| old.w == view.w) && now - at < Duration::from_millis(150) => {
-                            let dt = (now - at).as_secs_f64().max(0.004);
-                            let (vx, vy) = ((view.x - x) / dt, (view.y - y) / dt);
-                            self.velocity = (self.velocity.0 * 0.5 + vx * 0.5, self.velocity.1 * 0.5 + vy * 0.5);
-                        }
-                        _ => self.velocity = (0.0, 0.0),
-                    }
-                    self.motion = Some((view.x, view.y, now));
-                    self.view = Some(view);
-                    self.moved = now;
-                    self.dirty = true;
-                }
-            }
+            Msg::View(view) => self.set_view(view),
             Msg::Failed(key) => {
                 self.asked.remove(&key);
                 self.failed.insert(key, Instant::now());
@@ -1230,50 +1262,7 @@ impl Painter {
                     trace(|| format!("image {key} for {width:?} came after one asked since"));
                     return true;
                 }
-                self.failed.remove(&key);
-                // Asked for twice, by pictures wanting it at sizes that came
-                // to the same: what's drawn with it is right as it is
-                let same = self.images.get(&key).is_some_and(|kept| {
-                    !kept.stale && kept.area == img.area && (kept.image.width(), kept.image.height()) == (img.image.width(), img.image.height())
-                });
-                if same && !key.starts_with(RENDER) && !key.starts_with(EFFECT) {
-                    return true;
-                }
-                let waiting: Vec<(usize, bool, i32, bool)> =
-                    self.pictures.iter().filter(|(_, recorded)| recorded.missing.contains(&key)).map(|(&key, _)| key).collect();
-                let areas: Vec<Rect> = waiting
-                    .iter()
-                    .filter_map(|&(slot, _, _, _)| self.units.iter().find(|unit| unit.slot == slot).map(|unit| unit.bounds))
-                    .collect();
-                for picture in waiting {
-                    self.pictures.remove(&picture);
-                }
-                // Pictures holding it at another size let that go, drawn
-                // again when next needed
-                self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| *used == key));
-                self.kit.forget_patterns(Some(&key));
-                let mut img = img;
-                img.image = upload(&mut self.gpu.context, img.image);
-                // Its copy on the way up is let go once the GPU has it, not
-                // with those of every other image that came in meanwhile
-                if img.bytes() > 1 << 20 {
-                    let _ = self.gpu.context.flush_and_submit();
-                }
-                let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
-                trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
-                let effect = key.starts_with(EFFECT);
-                self.images.insert(key, img);
-                self.drop_tiles(&areas);
-                // Effects that waited on an image the node draws
-                if !effect && !self.effects_waiting.is_empty() {
-                    for (key, width) in std::mem::take(&mut self.effects_waiting) {
-                        self.asked.remove(&key);
-                        self.ask(&[(key, width)]);
-                    }
-                }
-                self.fresh = true;
-                self.update_memory();
-                self.dirty = true;
+                self.image_came(key, img);
             }
             Msg::Resize(width, height) => {
                 if (width, height) != self.gpu.size && width > 0 && height > 0 {
@@ -1303,6 +1292,9 @@ impl Painter {
                 self.clear_rasters();
                 self.clear_tiles();
                 self.kit.forget_patterns(None);
+                if let Some(tree) = &self.tree {
+                    tree.forget_patterns(None);
+                }
                 self.dirty = true;
             }
             Msg::Render { view, width, height, reply } => {
@@ -1339,6 +1331,122 @@ impl Painter {
             Msg::Quit => return false,
         }
         true
+    }
+
+    fn set_view(&mut self, view: View) {
+        if self.view.as_ref() == Some(&view) {
+            return;
+        }
+        let now = Instant::now();
+        match self.motion {
+            Some((x, y, at)) if self.view.as_ref().is_some_and(|old| old.w == view.w) && now - at < Duration::from_millis(150) => {
+                let dt = (now - at).as_secs_f64().max(0.004);
+                let (vx, vy) = ((view.x - x) / dt, (view.y - y) / dt);
+                self.velocity = (self.velocity.0 * 0.5 + vx * 0.5, self.velocity.1 * 0.5 + vy * 0.5);
+            }
+            _ => self.velocity = (0.0, 0.0),
+        }
+        self.motion = Some((view.x, view.y, now));
+        self.view = Some(view);
+        self.moved = now;
+        self.dirty = true;
+    }
+
+    /// Image `key` came: what waited for it is drawn again
+    fn image_came(&mut self, key: String, img: Img) {
+        self.failed.remove(&key);
+        // Asked for twice, by pictures wanting it at sizes that came
+        // to the same: what's drawn with it is right as it is
+        let same = self.images.get(&key).is_some_and(|kept| {
+            !kept.stale && kept.area == img.area && (kept.image.width(), kept.image.height()) == (img.image.width(), img.image.height())
+        });
+        if same && !key.starts_with(RENDER) && !key.starts_with(EFFECT) {
+            return;
+        }
+        let waiting: Vec<(usize, bool, i32, bool)> =
+            self.pictures.iter().filter(|(_, recorded)| recorded.missing.contains(&key)).map(|(&key, _)| key).collect();
+        let areas: Vec<Rect> = waiting
+            .iter()
+            .filter_map(|&(slot, _, _, _)| self.units.iter().find(|unit| unit.slot == slot).map(|unit| unit.bounds))
+            .collect();
+        for picture in waiting {
+            self.pictures.remove(&picture);
+        }
+        // Pictures holding it at another size let that go, drawn
+        // again when next needed
+        self.pictures.retain(|_, recorded| !recorded.uses.iter().any(|(used, _)| *used == key));
+        self.kit.forget_patterns(Some(&key));
+        if let Some(tree) = &self.tree {
+            tree.forget_patterns(Some(&key));
+        }
+        let mut img = img;
+        img.image = upload(&mut self.gpu.context, img.image);
+        // Its copy on the way up is let go once the GPU has it, not
+        // with those of every other image that came in meanwhile
+        if img.bytes() > 1 << 20 {
+            let _ = self.gpu.context.flush_and_submit();
+        }
+        let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
+        trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
+        let effect = key.starts_with(EFFECT);
+        self.images.insert(key, img);
+        self.drop_tiles(&areas);
+        // Effects that waited on an image the node draws
+        if !effect && !self.effects_waiting.is_empty() {
+            for (key, width) in std::mem::take(&mut self.effects_waiting) {
+                self.asked.remove(&key);
+                self.ask(&[(key, width)]);
+            }
+        }
+        self.fresh = true;
+        self.update_memory();
+        self.dirty = true;
+    }
+
+    /// A frame of Figma's render tree: the units it changed are drawn
+    /// again, the rest kept, as a node that changes is a new node. The view
+    /// comes with it, as Figma drew it
+    fn frame(&mut self, frame: Frame) {
+        let first = self.tree.is_none();
+        let tree = self.tree.get_or_insert_with(|| Tree::new(super::rt::Schema::bundled()));
+        if tree.octaves.is_empty() && self.scene.noise_octaves.len() >= 36 {
+            tree.octaves = self.scene.noise_octaves.clone();
+        }
+        let start = Instant::now();
+        let applied = match tree.apply(&frame) {
+            Ok(applied) => applied,
+            Err(error) => {
+                log::warn!("native renderer: frame {} not applied: {error}", frame.header.seq);
+                self.hub.tree_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+        };
+        self.hub.tree_failures.store(0, std::sync::atomic::Ordering::Relaxed);
+        let applied_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
+        self.rebuild_units();
+        if first {
+            self.pictures.clear();
+            self.clear_rasters();
+            self.clear_tiles();
+            self.kit.forget_patterns(None);
+        } else {
+            let now: std::collections::HashSet<usize> = self.units.iter().map(|unit| unit.slot).collect();
+            let mut areas: Vec<Rect> = before.iter().filter(|(slot, _)| !now.contains(slot)).map(|(_, bounds)| *bounds).collect();
+            areas.extend(self.units.iter().filter(|unit| !before.contains_key(&unit.slot)).map(|unit| unit.bounds));
+            self.pictures.retain(|(slot, _, _, _), _| now.contains(slot));
+            let gone: Vec<_> = self.rasters.keys().filter(|(slot, ..)| !now.contains(slot)).copied().collect();
+            for key in gone {
+                if let Some(raster) = self.rasters.remove(&key) {
+                    self.raster_bytes -= footprint(&raster.image);
+                }
+            }
+            trace(|| format!("frame {} mode={} new={} applied={applied_ms:.1}ms units={} areas={}", frame.header.seq, frame.header.mode, applied.new_nodes.len(), self.units.len(), areas.len()));
+            self.drop_tiles(&areas);
+        }
+        stats().lock().unwrap().nodes = self.tree.as_ref().map_or(0, |tree| tree.forest.nodes.len());
+        self.set_view(frame.view());
+        self.dirty = true;
     }
 
     /// Gives back the GPU memory an offscreen render took, whole views drawn
@@ -1519,6 +1627,24 @@ impl Painter {
     }
 
     fn rebuild_units(&mut self) {
+        if let Some(tree) = &self.tree {
+            // Background blurs draw from copies of what's behind them, so
+            // nothing reads what tiles have drawn
+            self.backdrops.clear();
+            let mut units: Vec<Unit> = tree
+                .units()
+                .into_iter()
+                .map(|unit| Unit { slot: unit.key, section: false, bounds: unit.bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place) })
+                .collect();
+            for i in 0..units.len() {
+                if !units[i].alone {
+                    let area = units[i].bounds;
+                    units[i].alone = !units[..i].iter().any(|lower| Rect::intersects2(&lower.bounds, &area));
+                }
+            }
+            self.units = units;
+            return;
+        }
         let mut units = Vec::new();
         fn add(scene: &Scene, slot: usize, units: &mut Vec<Unit>) {
             let Some(node) = scene.node(slot) else {
@@ -1531,7 +1657,7 @@ impl Painter {
                 return;
             };
             if node.kind == Kind::Section {
-                units.push(Unit { slot, section: true, bounds, custom: false, alone: false });
+                units.push(Unit { slot, section: true, bounds, custom: false, alone: false, place: None });
                 for (i, &child) in node.children.iter().enumerate() {
                     let mask = scene.node(child).filter(|child| !child.hidden && child.mask.is_some());
                     if mask.is_some() {
@@ -1542,14 +1668,14 @@ impl Painter {
                             .filter_map(|&later| scene.node(later).filter(|later| !later.hidden).and_then(|later| later.bounds))
                             .reduce(|a, b| Rect::join2(a, b));
                         if let Some(rest) = rest {
-                            units.push(Unit { slot: child, section: true, bounds: rest, custom: false, alone: false });
+                            units.push(Unit { slot: child, section: true, bounds: rest, custom: false, alone: false, place: None });
                         }
                         break;
                     }
                     add(scene, child, units);
                 }
             } else {
-                units.push(Unit { slot, section: false, bounds, custom: false, alone: false });
+                units.push(Unit { slot, section: false, bounds, custom: false, alone: false, place: None });
             }
         }
         for &root in &self.scene.roots {
@@ -1632,6 +1758,30 @@ impl Painter {
         let (slot, section, bounds) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds);
         let key = (slot, section, level, aa);
         if !self.pictures.contains_key(&key) {
+            if let (Some(tree), Some(place)) = (&self.tree, &self.units[unit].place) {
+                let mut recorder = PictureRecorder::new();
+                let canvas = recorder.begin_recording(bounds.with_outset((1.0, 1.0)), true);
+                let mut drawer = Drawer::new(tree, &self.images, &self.kit, canvas, level_px(level));
+                drawer.draft = is_draft(level);
+                drawer.tint = self.tint;
+                drawer.aa = aa;
+                drawer.place(place);
+                let (counts, reason) = (drawer.counts, drawer.approximate_reason.take());
+                if drawer.draft {
+                    drawer.missing_images.clear();
+                    drawer.sharper_images.clear();
+                }
+                let waiting = drawer.missing_images.len();
+                let images: Vec<(String, f64)> = drawer.missing_images.drain(..).chain(drawer.sharper_images.drain(..)).collect();
+                let mut uses = std::mem::take(&mut drawer.used_images);
+                uses.extend(images.iter().cloned());
+                drop(drawer);
+                let picture = recorder.finish_recording_as_picture(None)?;
+                self.ask(&images);
+                let missing = images.into_iter().map(|(key, _)| key).collect();
+                self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources: Vec::new(), uses });
+                return self.pictures.get(&key);
+            }
             let mut recorder = PictureRecorder::new();
             let canvas = recorder.begin_recording(bounds.with_outset((1.0, 1.0)), true);
             let mut encoder = Encoder::new(&self.scene, &self.images, &self.kit, canvas, level_px(level));
@@ -1986,6 +2136,13 @@ impl Painter {
     }
 
     fn background(&self) -> Color4f {
+        if let Some((background, _, dark)) = self.tree.as_ref().and_then(Tree::background) {
+            return match background {
+                Some(background) => background,
+                None if dark => Color4f::new(31.0 / 255.0, 31.0 / 255.0, 31.0 / 255.0, 1.0),
+                None => Color4f::new(1.0, 1.0, 1.0, 1.0),
+            };
+        }
         match self.scene.background {
             Some(bg) if !self.scene.transparent => Color4f::new(bg.r, bg.g, bg.b, 1.0),
             _ if self.scene.dark => Color4f::new(31.0 / 255.0, 31.0 / 255.0, 31.0 / 255.0, 1.0),
@@ -1999,10 +2156,14 @@ impl Painter {
     /// `origin` is the view's corner in device pixels, unrounded, as Figma
     /// places the pattern
     fn checker(&self, origin: (f64, f64), px: f32, zoom: f64) -> Option<Paint> {
-        if !self.scene.transparent {
+        let (transparent, dark) = match self.tree.as_ref().and_then(Tree::background) {
+            Some((_, transparent, dark)) => (transparent, dark),
+            None => (self.scene.transparent, self.scene.dark),
+        };
+        if !transparent {
             return None;
         }
-        checker_paint(self.checker.as_ref()?, self.scene.dark, origin, px, zoom)
+        checker_paint(self.checker.as_ref()?, dark, origin, px, zoom)
     }
 
     /// Figma's pixel grid, see `present::grid_paint`
@@ -2504,6 +2665,9 @@ impl Painter {
 
     /// The nodes under `point`, the topmost at each level
     fn hit(&self, point: (f32, f32)) -> Vec<String> {
+        if let Some(tree) = &self.tree {
+            return tree.hit(point);
+        }
         let mut path = Vec::new();
         let mut level: Vec<usize> = self.scene.roots.clone();
         loop {

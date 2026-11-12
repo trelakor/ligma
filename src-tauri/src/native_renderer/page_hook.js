@@ -18,9 +18,11 @@
   const hook = (window.__ligmaHook = {
     // Figma's worker gets the empty scene
     replacing: false,
-    // Called with every frame the main thread sends, before it goes
-    sink: null,
+    // Where to hand Ligma each frame, an address on this site Ligma answers
+    // itself (see `Frames` in run.rs), set by Ligma
+    pushTo: null,
     frames: 0,
+    sent: 0,
     // Set when the next frame should be a full scene: the worker is sent a
     // scene it can't read, and Figma recovers by sending the whole scene
     wantFull: false,
@@ -109,9 +111,9 @@
       return;
     }
     hook.frames++;
-    if (hook.sink) {
+    if (hook.pushTo) {
       try {
-        hook.sink(params);
+        send(f);
       } catch (error) {
         hook.error = String(error);
       }
@@ -138,6 +140,66 @@
     // Drawn under it by Ligma
     f.checkerboardStyle = 0;
     f.pixelGrid = false;
+  }
+
+  // Each frame as Figma's main thread sends it, in order: a little-endian
+  // length, that much JSON of what Ligma needs to draw it, then the forest.
+  // A frame lost on the way has Figma send the whole scene again
+  const session = Math.random().toString(36).slice(2, 8);
+  let seq = 0;
+  let rect = null;
+  const measure = () => {
+    const canvas = document.querySelector(".gpu-view-content canvas");
+    if (!canvas) return null;
+    const r = canvas.getBoundingClientRect();
+    rect = [r.left, r.top, r.width, r.height];
+    if (!canvas.__ligmaMeasured) {
+      canvas.__ligmaMeasured = true;
+      new ResizeObserver(() => (rect = null)).observe(canvas);
+    }
+    return rect;
+  };
+  addEventListener("resize", () => (rect = null));
+  const encoder = new TextEncoder();
+  function send(f) {
+    const [cx, cy, cw, ch] = rect ?? measure() ?? [0, 0, innerWidth, innerHeight];
+    const color = f.backgroundColor ?? {};
+    const settings = window.__ligmaNative?.settings?.() ?? null;
+    const header = encoder.encode(
+      JSON.stringify({
+        session,
+        seq: ++seq,
+        mode: f.updateMode,
+        root: f.canvasRootNodeId,
+        released: Array.from(f.releasedNodeIds ?? []),
+        ox: f.canvasToPixels?.offset?.x ?? 0,
+        oy: f.canvasToPixels?.offset?.y ?? 0,
+        scale: f.canvasToPixels?.scale ?? 1,
+        dpr: f.devicePixelRatio ?? devicePixelRatio,
+        bg: [color.red ?? 0, color.green ?? 0, color.blue ?? 0, color.alpha ?? 0],
+        checker: f.checkerboardStyle ?? 0,
+        grid: !!f.pixelGrid,
+        preview: f.isPixelPreviewEnabled ? settings?.preview || 1 : 0,
+        outline: settings?.outline ?? -1,
+        cx,
+        cy,
+        cw,
+        ch,
+        visible: document.visibilityState === "visible",
+        at: performance.timeOrigin + performance.now(),
+      }),
+    );
+    const forest = f.renderTreeForest;
+    const body = new Uint8Array(4 + header.length + forest.length);
+    new DataView(body.buffer).setUint32(0, header.length, true);
+    body.set(header, 4);
+    body.set(forest, 4 + header.length);
+    hook.sent++;
+    fetch(location.origin + hook.pushTo + `f${session}-${seq}`, { method: "POST", body, cache: "no-store", credentials: "omit" })
+      .then((response) => {
+        if (response.status !== 204) throw new Error(`${response.status}`);
+      })
+      .catch(() => (hook.wantFull = true));
   }
 
   // What's behind Figma's canvas made transparent, but for a backing of the
@@ -194,6 +256,13 @@
   };
   hook.resync = () => {
     hook.wantFull = true;
+    return true;
+  };
+  // Called by Ligma with where to hand it frames, or null to stop. Figma
+  // then sends the whole scene, for Ligma to start from
+  hook.push = (path) => {
+    hook.pushTo = path;
+    if (path) hook.wantFull = true;
     return true;
   };
 })();

@@ -57,6 +57,15 @@ struct Ctx {
     /// tabs opened before the renderer was on, since made ready for it
     replaced: Mutex<Option<Webview>>,
     hooked: Mutex<std::collections::HashSet<String>>,
+    /// The tab handing over frames of Figma's render tree, and when it was
+    /// asked to
+    framing: Mutex<Option<(String, Instant)>>,
+    /// The size in pixels the render thread was last told to draw at, which
+    /// in place of Figma's canvas is the canvas's
+    canvas: Mutex<(u32, u32)>,
+    /// Frames of the render tree are drawn, rather than the plugin API's
+    /// scene
+    tree: AtomicBool,
 }
 
 /// What page.js read, handed over by the page as each job is done rather
@@ -137,10 +146,17 @@ fn start_pushing(webview: &Webview) -> bool {
         };
         let prefix = format!("{}://{host}/__ligma_native/{}/", url.scheme(), pushed().secret);
         let (send, receive) = mpsc::channel();
+        let tab = label.clone();
         crate::webview2::intercept(
             webview,
             prefix,
-            |key, body| pushed().put(key, body),
+            move |key, body| {
+                if key.starts_with('f') {
+                    frames().put(&tab, body);
+                } else {
+                    pushed().put(key, body);
+                }
+            },
             move |added| {
                 let _ = send.send(added);
             },
@@ -152,6 +168,189 @@ fn start_pushing(webview: &Webview) -> bool {
     }
     let path = serde_json::to_string(&format!("/__ligma_native/{}/", pushed().secret)).unwrap();
     eval_value(webview, &format!("window.__ligmaNative.pushTo({path})")).and_then(|value| value.as_bool()) == Some(true)
+}
+
+/// Frames of Figma's render tree, as tabs hand them over (see
+/// page_hook.js), waiting to be put in order
+#[derive(Default)]
+struct Frames {
+    waiting: Mutex<Vec<(String, Vec<u8>)>>,
+    arrived: Condvar,
+}
+
+fn frames() -> &'static Frames {
+    static FRAMES: std::sync::OnceLock<Frames> = std::sync::OnceLock::new();
+    FRAMES.get_or_init(Frames::default)
+}
+
+impl Frames {
+    fn put(&self, tab: &str, body: Vec<u8>) {
+        let mut waiting = self.waiting.lock().unwrap();
+        // Nothing takes them while the renderer is off
+        if waiting.len() > 4096 {
+            waiting.clear();
+        }
+        waiting.push((tab.to_string(), body));
+        self.arrived.notify_all();
+    }
+
+    fn take(&self, timeout: Duration) -> Vec<(String, Vec<u8>)> {
+        let waiting = self.waiting.lock().unwrap();
+        let (mut waiting, _) = self.arrived.wait_timeout_while(waiting, timeout, |waiting| waiting.is_empty()).unwrap();
+        std::mem::take(&mut *waiting)
+    }
+}
+
+/// Times in a row Figma's whole scene is asked for again before Figma's
+/// renderer is left to draw the tab
+const TREE_FAILURES: u32 = 4;
+
+/// Passes the current tab's frames to the render thread in the order Figma
+/// sent them, starting from a whole scene. A frame missing, or one the render
+/// thread can't apply, has Figma send the whole scene again
+fn take_frames(ctx: Arc<Ctx>) {
+    use super::tree::Frame;
+    let mut session: Option<String> = None;
+    let mut pending: std::collections::BTreeMap<u64, Frame> = std::collections::BTreeMap::new();
+    // The frame to pass on next, once there's a whole scene to start from
+    let mut next: Option<u64> = None;
+    let mut gap: Option<Instant> = None;
+    let mut asked: Option<Instant> = None;
+    let mut resyncs = 0u32;
+    while !ctx.stop.load(Ordering::Relaxed) {
+        let came = frames().take(Duration::from_millis(100));
+        let tab = ctx.framing.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
+        for (from, body) in came {
+            if Some(&from) != tab.as_ref() {
+                continue;
+            }
+            let frame = match Frame::parse(body) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    log::warn!("native renderer: a frame couldn't be read: {error}");
+                    continue;
+                }
+            };
+            if session.as_deref() != Some(frame.header.session.as_str()) {
+                // The tab loaded again
+                session = Some(frame.header.session.clone());
+                pending.clear();
+                next = None;
+            }
+            pending.insert(frame.header.seq, frame);
+        }
+        if tab.is_none() {
+            pending.clear();
+            next = None;
+            session = None;
+            continue;
+        }
+        if ctx.hub.tree_failures.swap(0, Ordering::Relaxed) > 0 {
+            next = None;
+            resyncs += 1;
+        }
+        if next.is_none() {
+            // Starts from the first whole scene
+            match pending.iter().find(|(_, frame)| frame.header.mode == 0).map(|(&seq, _)| seq) {
+                Some(seq) => {
+                    pending.retain(|&at, _| at >= seq);
+                    next = Some(seq);
+                    gap = None;
+                }
+                None => {
+                    pending.clear();
+                    if asked.is_none_or(|at| at.elapsed() > Duration::from_millis(1000)) {
+                        asked = Some(Instant::now());
+                        if resyncs > TREE_FAILURES {
+                            // Not as expected, so Figma's renderer keeps
+                            // drawing the tab
+                            log::warn!("native renderer: Figma's render tree couldn't be followed, so Figma's renderer draws the tab");
+                            set_status("Figma's render tree couldn't be followed");
+                            stop_framing(&ctx);
+                            resyncs = 0;
+                        } else if let Some(webview) = current(&ctx) {
+                            let _ = webview.eval("window.__ligmaHook?.resync(); dispatchEvent(new Event('resize'))");
+                        }
+                    }
+                }
+            }
+        }
+        while let Some(seq) = next {
+            let Some(frame) = pending.remove(&seq) else { break };
+            next = Some(seq + 1);
+            gap = None;
+            if frame.header.mode == 0 {
+                resyncs = resyncs.saturating_sub(1);
+            }
+            let view = frame.view();
+            if !ctx.tree.swap(true, Ordering::Relaxed) {
+                super::mark(|| "drawing Figma's render tree".into());
+                set_status("Drawing");
+                if let Some(webview) = current(&ctx) {
+                    let octaves = eval_value(&webview, "window.__ligmaNative?.octaves?.() ?? null").and_then(|value| serde_json::from_value::<Vec<f32>>(value).ok());
+                    if let Some(octaves) = octaves {
+                        let _ = ctx.messages.send(Msg::Octaves(octaves));
+                    }
+                }
+            }
+            follow_canvas(&ctx, &view);
+            ctx.hub.set_view(view);
+            let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
+        }
+        // One missing a while is lost, so Figma sends the whole scene again
+        if next.is_some() && !pending.is_empty() {
+            let since = *gap.get_or_insert_with(Instant::now);
+            if since.elapsed() > Duration::from_millis(500) {
+                log::info!("native renderer: frame {} didn't come, asking for the whole scene", next.unwrap_or(0));
+                next = None;
+            }
+        }
+    }
+}
+
+/// Stops the tab handing over frames, and draws the plugin API's scene again
+fn stop_framing(ctx: &Ctx) {
+    let framing = ctx.framing.lock().unwrap().take();
+    if let Some((label, _)) = framing {
+        if let Some(webview) = ctx.app.get_webview(&label) {
+            let _ = webview.eval("window.__ligmaHook?.push(null)");
+            let mut replaced = ctx.replaced.lock().unwrap();
+            if replaced.as_ref().is_some_and(|replaced| replaced.label() == label) {
+                give_back(&webview);
+                *replaced = None;
+            }
+        }
+    }
+    ctx.tree.store(false, Ordering::Relaxed);
+}
+
+/// Has tab `webview` hand over frames of Figma's render tree, if its page
+/// was hooked as it loaded and Figma's threaded renderer runs in it. True
+/// while it does
+fn start_framing(ctx: &Ctx, webview: &Webview) -> bool {
+    let label = webview.label().to_string();
+    let framing = ctx.framing.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
+    if framing.as_deref() == Some(label.as_str()) {
+        return true;
+    }
+    let ready = eval_value(webview, "window.__ligmaHook ? window.__ligmaHook.ready() : null");
+    if ready != Some(Value::Bool(true)) {
+        return false;
+    }
+    if !pushed().tabs.lock().unwrap().contains(&label) && !start_pushing(webview) {
+        return false;
+    }
+    if framing.is_some() {
+        stop_framing(ctx);
+    }
+    let path = serde_json::to_string(&format!("/__ligma_native/{}/", pushed().secret)).unwrap();
+    if eval_value(webview, &format!("window.__ligmaHook.push({path})")) != Some(Value::Bool(true)) {
+        return false;
+    }
+    *ctx.framing.lock().unwrap() = Some((label, Instant::now()));
+    // Figma draws when something changes, so it's asked to now
+    let _ = webview.eval("dispatchEvent(new Event('resize'))");
+    true
 }
 
 static CTX: Mutex<Option<Arc<Ctx>>> = Mutex::new(None);
@@ -236,6 +435,9 @@ fn open(app: &AppHandle) -> Result<(), String> {
         hub: Arc::new(Hub::new((size.width, size.height))),
         replaced: Mutex::new(None),
         hooked: Mutex::default(),
+        framing: Mutex::new(None),
+        canvas: Mutex::new((0, 0)),
+        tree: AtomicBool::new(false),
     });
     *CTX.lock().unwrap() = Some(ctx.clone());
 
@@ -317,6 +519,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
     });
 
     spawn("native-view", ctx.clone(), poll_view);
+    spawn("native-frames", ctx.clone(), take_frames);
     spawn("native-memory", ctx.clone(), sample_memory);
     let requested = Arc::new(Mutex::new(requested));
     // Images come from the page in parallel, each decoded on its own thread
@@ -453,6 +656,25 @@ fn sync(ctx: Arc<Ctx>) {
         }
         *ctx.webview.lock().unwrap() = Some(file.webview.clone());
         let label = file.webview.label().to_string();
+        if ctx.framing.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab != label) {
+            stop_framing(&ctx);
+        }
+        // Figma's own scene, handed over frame by frame, where the tab was
+        // hooked as it loaded. The plugin API's is read only where it can't be
+        if !separate_window() && start_framing(&ctx, &file.webview) {
+            let since = ctx.framing.lock().unwrap().as_ref().map(|(_, at)| at.elapsed()).unwrap_or_default();
+            if ctx.tree.load(Ordering::Relaxed) {
+                mirrored = None;
+                take_over(&ctx, &file.webview);
+                sleep(100);
+                continue;
+            }
+            if since < Duration::from_secs(5) {
+                set_status("Waiting for Figma's scene");
+                sleep(50);
+                continue;
+            }
+        }
         let shared_here = ctx.shared.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab == label);
         if ready.as_ref().and_then(Value::as_str) == Some("installed") || !shared_here {
             *ctx.shared.lock().unwrap() = None;
@@ -704,11 +926,30 @@ fn place(ctx: &Ctx) {
 }
 
 fn send_view(ctx: &Ctx, view: View) {
+    // Views come with frames of the render tree, as Figma draws them
+    if ctx.tree.load(Ordering::Relaxed) {
+        return;
+    }
     if let Some(recorded) = ctx.recorded.lock().unwrap().as_mut() {
         recorded.push(view.clone());
     }
+    follow_canvas(ctx, &view);
     ctx.hub.set_view(view.clone());
     let _ = ctx.messages.send(Msg::View(view));
+}
+
+/// Drawn in place of Figma's canvas, the render thread draws at the
+/// canvas's size, as the layer shows it
+fn follow_canvas(ctx: &Ctx, view: &View) {
+    if separate_window() {
+        return;
+    }
+    let size = view.canvas();
+    let mut canvas = ctx.canvas.lock().unwrap();
+    if *canvas != size {
+        *canvas = size;
+        let _ = ctx.messages.send(Msg::Resize(size.0, size.1));
+    }
 }
 
 fn sample_memory(ctx: Arc<Ctx>) {

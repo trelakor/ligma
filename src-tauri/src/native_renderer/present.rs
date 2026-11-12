@@ -33,7 +33,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC, DXGI_STANDARD_MULTISAMPLE_QUALITY_PATTERN,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionTarget, IDCompositionVisual2,
+    DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionTarget, IDCompositionVisual2, DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_UNSPECIFIED};
 use windows::Win32::Graphics::Dxgi::{
@@ -148,6 +148,8 @@ pub struct Hub {
     /// webview is in the window, in pixels, and whether the tab is shown
     pub origin: Mutex<Option<(i32, i32)>>,
     pub stop: AtomicBool,
+    /// Frames of Figma's render tree that couldn't be applied in a row
+    pub tree_failures: std::sync::atomic::AtomicU32,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -160,6 +162,7 @@ impl Hub {
             size: Mutex::new(size),
             origin: Mutex::new(None),
             stop: AtomicBool::new(false),
+            tree_failures: std::sync::atomic::AtomicU32::new(0),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
@@ -196,7 +199,8 @@ struct Composed {
     device: IDCompositionDesktopDevice,
     _target: IDCompositionTarget,
     visual: IDCompositionVisual2,
-    at: Option<(i32, i32)>,
+    /// Where it is, and how much it's stretched, in hundred thousandths
+    at: Option<((i32, i32), (i32, i32))>,
 }
 
 pub struct Screen {
@@ -373,7 +377,7 @@ impl Screen {
             }
             let view = hub.view.lock().unwrap().clone();
             let size = match (&self.layer, &view) {
-                (Some(_), Some(view)) => ((view.cw * view.dpr).round().max(1.0) as u32, (view.ch * view.dpr).round().max(1.0) as u32),
+                (Some(_), Some(view)) => view.canvas(),
                 _ => *hub.size.lock().unwrap(),
             };
             if size != self.size && size.0 > 0 && size.1 > 0 {
@@ -384,8 +388,12 @@ impl Screen {
             }
             let what = hub.shown.lock().unwrap().clone();
             if self.layer.is_some() {
+                // Where the browser would put Figma's canvas: at the nearest
+                // device pixel, stretched to its size
                 let at = (*hub.origin.lock().unwrap()).zip(view.as_ref().filter(|view| view.visible)).map(|((x, y), view)| {
-                    (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32)
+                    let (sx, sy) = view.stretch();
+                    let at = (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32);
+                    (at, ((sx * 1e5).round() as i32, (sy * 1e5).round() as i32))
                 });
                 self.place(at);
             }
@@ -405,7 +413,7 @@ impl Screen {
     }
 
     /// Moves the layer to `at` in the window, or hides it
-    fn place(&mut self, at: Option<(i32, i32)>) {
+    fn place(&mut self, at: Option<((i32, i32), (i32, i32))>) {
         let Some(layer) = &mut self.layer else {
             return;
         };
@@ -415,9 +423,12 @@ impl Screen {
         layer.at = at;
         unsafe {
             match at {
-                Some((x, y)) => {
-                    let _ = layer.visual.SetOffsetX2(x as f32);
-                    let _ = layer.visual.SetOffsetY2(y as f32);
+                Some(((x, y), (sx, sy))) => {
+                    let _ = layer.visual.SetOffsetX2(0.0);
+                    let _ = layer.visual.SetOffsetY2(0.0);
+                    let matrix = windows_numerics::Matrix3x2 { M11: sx as f32 / 1e5, M12: 0.0, M21: 0.0, M22: sy as f32 / 1e5, M31: x as f32, M32: y as f32 };
+                    let _ = layer.visual.SetTransform2(&matrix);
+                    let _ = layer.visual.SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR);
                     let _ = layer.visual.SetContent(&self.swap_chain);
                 }
                 None => {

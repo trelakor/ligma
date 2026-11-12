@@ -2603,6 +2603,7 @@ dependencies = [
  "wgpu",
  "windows",
  "windows-core",
+ "windows-numerics",
  "windows-registry",
  "zip",
 ]
