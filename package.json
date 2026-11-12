@@ -11,6 +11,7 @@
     "notices": "cargo about generate --manifest-path src-tauri/Cargo.toml -c src-tauri/about.toml -o THIRD_PARTY_NOTICES.md src-tauri/about.hbs",
     "discord-assets": "node scripts/discord-assets.mjs",
     "discord-icons": "node scripts/discord-icons.mjs",
+    "emoji-data": "node scripts/emoji-data.mjs",
     "prune": "node scripts/prune-worktrees.mjs",
     "graphics": "node scripts/graphics.mjs"
   },
