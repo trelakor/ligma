@@ -2,6 +2,12 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.41.0 - 2026-11-12
+
+- New tabs no longer flash white while they load. They open in the color of Figma's loading screen, in your color theme.
+- Figma's loading screen takes your color theme too.
+- Files load with Ligma's logo in place of Figma's, animated the way Figma's is. It keeps moving smoothly while Figma is busy loading, and doesn't start over partway through.
+
 ## 0.40.2 - 2026-11-12
 
 - The faces of people in a file update as they come and go, also after the connection to Figma drops, and on starred files. They sit in the preview's corner at every size.
