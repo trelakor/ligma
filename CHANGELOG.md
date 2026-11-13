@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.42.3 - 2026-11-13
+
+- On macOS, an empty tab preview card no longer stays in the middle of the screen, and hidden tab menus and emoji pickers no longer come back when you switch back to Ligma.
+
 ## 0.42.2 - 2026-11-13
 
 - A tab waking from sleep or reloading keeps its name instead of showing "Figma" or "Loading…", and shows a spinner as its icon until it has loaded.
