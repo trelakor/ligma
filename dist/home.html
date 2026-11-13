@@ -935,6 +935,21 @@
   .fhint { color: var(--text2); }
   .fhint.bad { color: #e03e1a; }
   .sform .acts { display: flex; justify-content: flex-end; gap: 6px; }
+  /* Transferring or deleting the team, in a window over the page */
+  dialog.flow { width: min(500px, calc(100vw - 32px)); max-height: calc(100vh - 64px); margin: auto; padding: 0; overflow: auto; border: 0; border-radius: 13px; background: var(--menu); color: var(--text); box-shadow: var(--shadow), 0 0 0 1px var(--menu-line); }
+  dialog.flow[open] { animation: pop 140ms var(--ease); }
+  dialog.flow::backdrop { background: rgba(0, 0, 0, 0.4); }
+  .flow .fh { display: flex; align-items: flex-start; gap: 10px; padding: 16px 12px 14px 20px; border-bottom: 1px solid var(--menu-line); }
+  .flow .fh > div { flex: 1; min-width: 0; }
+  .flow .fh h2 { margin: 0; font-size: 15px; line-height: 22px; font-weight: 600; overflow-wrap: anywhere; }
+  .flow .fh p { margin: 2px 0 0; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .flow .fb { gap: 14px; padding: 16px 20px 4px; }
+  .flow .fwhat { display: grid; gap: 8px; padding: 12px 14px; border-radius: 8px; background: color-mix(in srgb, var(--text) 5%, var(--menu)); }
+  .flow .fwhat div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; font-size: 13px; line-height: 18px; }
+  .flow .fwhat b { color: var(--text2); font-weight: 450; }
+  .flow.danger .fwhat { background: color-mix(in srgb, var(--danger) 9%, var(--menu)); }
+  .flow .fhint.ok { color: var(--text); }
+  .flow .ff { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px 18px; }
   .snote { padding: 10px 0 0; color: var(--text2); }
   /* Account settings: a window over the page, sections down the left */
   #acs {
@@ -1310,9 +1325,9 @@ const placeOf = (project) => (!project || DRAFT_FOLDERS.has(project) ? "Drafts" 
 // Figma's folder colors, in its order, as its menu draws them
 const FOLDER = {};
 const FOLDER_COLORS = [
-  ["pale_blue", "Blue", "#2e8cff"],
+  ["pale_blue", "Grey", "#8e959f"],
   ["pale_purple", "Purple", "#a259ff"],
-  ["pale_violet", "Violet", "#6457f9"],
+  ["pale_violet", "Blue", "#2e8cff"],
   ["pale_green", "Green", "#14ae5c"],
   ["pale_pink", "Pink", "#f2489e"],
   ["pale_yellow", "Yellow", "#f5b800"],
@@ -2805,7 +2820,8 @@ function patch(have, want) {
     if (have.nodeValue !== want.nodeValue) have.nodeValue = want.nodeValue;
     return;
   }
-  for (const { name } of [...have.attributes]) if (!want.hasAttribute(name)) have.removeAttribute(name);
+  // A dialog's open is the browser's to keep, set by showModal
+  for (const { name } of [...have.attributes]) if (!want.hasAttribute(name) && !(name === "open" && have.nodeName === "DIALOG")) have.removeAttribute(name);
   for (const { name, value } of want.attributes) if (have.getAttribute(name) !== value) have.setAttribute(name, value);
   // A preview already drawn stays; observeThumbs draws it again if the file's changed
   if (have.dataset.thumb && have.firstChild) return;
@@ -2918,6 +2934,7 @@ function render({ keepScroll = true } = {}) {
   const boxing = marquee.isConnected;
   marquee.remove();
   morph(scroller, html);
+  if (settings) openFlows();
   if (boxing) scroller.append(marquee);
   if (box) box.cards = null;
   // Otherwise the browser keeps what's in view where it is, as content
@@ -4661,7 +4678,7 @@ function settingsPage(id) {
   } else html += settingRow("No libraries published", "A library published from one of the team's files shows here");
   html += `</section></div>`;
   html += `<div class="panel p-own"><section class="sec" id="dash-ownership" data-key="dash:ownership"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section></div>`;
-  return html + `</div></div>`;
+  return html + `</div>${transferFlow(id, s)}${deleteFlow(id, s)}</div>`;
 }
 
 // A Professional team's bill: what it comes to, when it renews, and the
@@ -4777,30 +4794,60 @@ function seatAskRow(seats, u, m) {
 function transferRow(id, s, off) {
   const t = s.transfer;
   if (t?.sent) return settingRow("Transfer requested", `Sent to ${esc(t.email)}${t.orgName ? ` at ${esc(t.orgName)}` : ""}. The team moves once they accept`, t.requestId ? `<button class="btn sm" data-set="transfer-withdraw">Withdraw</button>` : "");
-  if (!t?.open) return settingRow("Transfer to another organization", "Moves the team, its projects, files and people to an organization. An admin there accepts it", `<button class="btn sm" data-set="transfer-open"${off ? " disabled" : ""}>Transfer…</button>`);
-  const hint = t.error ? `<span class="fhint bad" role="alert">${esc(t.error)}</span>` : t.orgName ? `<span class="fhint">To ${esc(t.orgName)}</span>` : `<span class="fhint">Copy the link of any page in that organization in Figma</span>`;
-  return `<div class="srow ask"><span class="st"><b>Transfer ${esc(teamById(id).team.name)} to another organization</b><small>The team, its projects, files and people move once an admin there accepts. Libraries and fonts it used may not come along</small></span>
-    <div class="sform"><label>Link to the organization<input data-set-field="org" value="${esc(t.org ?? "")}" placeholder="https://www.figma.com/files/…" spellcheck="false" autocomplete="off">${hint}</label>
-    <label>An admin's email<input data-set-field="email" type="email" value="${esc(t.email ?? "")}" placeholder="admin@example.com" spellcheck="false" autocomplete="off"></label>
-    <label>Message, if any<textarea data-set-field="message">${esc(t.message ?? "")}</textarea></label>
-    <div class="acts"><button class="btn sm" data-set="transfer-cancel">Cancel</button><button class="btn sm primary" data-set="transfer-send"${transferReady(t) ? "" : " disabled"}>Send request</button></div></div></div>`;
+  return settingRow("Transfer to another organization", "Moves the team, its projects, files and people to an organization. An admin there accepts it", `<button class="btn sm" data-set="transfer-open"${off ? " disabled" : ""}>Transfer…</button>`);
 }
 const transferReady = (t) => !!t.orgId && isEmail(t.email ?? "") && !t.sending;
 
-function deleteRow(id, s, plan, off) {
-  const { team } = teamById(id);
+// What deleting the team takes with it, as Figma counts it
+function deleteWhat(s) {
   const c = s.counts;
-  const what = c ? [[c.team_active_project_count, "project"], [c.active_project_active_file_count, "file"], [c.active_drafts_count, "draft"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`) : [];
-  const detail = `Deletes it with ${what.length ? what.join(", ") : "everything in it"}. Figma can restore it for a while`;
+  return c ? [[c.team_active_project_count, "project"], [c.active_project_active_file_count, "file"], [c.active_drafts_count, "draft"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`) : [];
+}
+function deleteRow(id, s, plan, off) {
+  const what = deleteWhat(s);
   // A paid plan is cancelled before its team goes: billing stays Figma's
   if (s.meta.pro_team && s.meta.subscription === "ok" && !s.seats?.summary?.plan_canceled)
     return settingRow("Delete team", "Cancel the Professional plan before deleting this team, so it stops billing", `<a class="btn sm" href="https://www.figma.com/files/team/${esc(id)}" target="_blank" rel="noopener">Cancel plan in Figma${fig("ext")}</a>`);
+  return settingRow("Delete team", esc(`Deletes it with ${what.length ? what.join(", ") : "everything in it"}. Figma can restore it for a while`), `<button class="btn sm warn" data-set="delete-open"${off ? " disabled" : ""}>Delete…</button>`);
+}
+
+/* Transferring and deleting the team: each in a window of its own, over
+   the page, with the whole of it in view. Drawn inside the page so its
+   fields and buttons go through the page's handlers, and shown as a modal
+   once drawn (see openFlows) */
+
+const flowHead = (title, sub) => `<div class="fh"><div><h2 id="flow-title">${title}</h2>${sub ? `<p>${sub}</p>` : ""}</div><button class="ib x" data-set="flow-close" aria-label="Close" title="Close">${icon("x")}</button></div>`;
+function transferFlow(id, s) {
+  const t = s.transfer;
+  if (!t?.open || t.sent) return "";
+  const { team } = teamById(id);
+  const hint = t.error ? `<span class="fhint bad" role="alert">${esc(t.error)}</span>` : t.orgName ? `<span class="fhint ok">To ${esc(t.orgName)}</span>` : `<span class="fhint">Open any page of that organization in Figma and copy its link</span>`;
+  return `<dialog class="flow" data-key="flow:transfer" data-flow="transfer" aria-labelledby="flow-title">${flowHead(`Transfer ${esc(team.name)}`, "To another organization in Figma")}
+    <div class="fb sform">
+      <div class="fwhat"><div><b>Moves</b><span>The team, its projects and files, and its people</span></div><div><b>May stay behind</b><span>Libraries and fonts it used from elsewhere</span></div><div><b>When</b><span>Once an admin there accepts. You can withdraw the request until then</span></div></div>
+      <label>Link to the organization<input data-set-field="org" value="${esc(t.org ?? "")}" placeholder="https://www.figma.com/files/…" spellcheck="false" autocomplete="off">${hint}</label>
+      <label>An admin's email<input data-set-field="email" type="email" value="${esc(t.email ?? "")}" placeholder="admin@example.com" spellcheck="false" autocomplete="off"></label>
+      <label>Message, if any<textarea data-set-field="message">${esc(t.message ?? "")}</textarea></label>
+    </div>
+    <div class="ff"><button class="btn sm" data-set="transfer-cancel">Cancel</button><button class="btn sm primary" data-set="transfer-send"${transferReady(t) ? "" : " disabled"}>${t.sending ? "Sending…" : "Send request"}</button></div></dialog>`;
+}
+function deleteFlow(id, s) {
   const d = s.deleting;
-  if (!d) return settingRow("Delete team", esc(detail), `<button class="btn sm warn" data-set="delete-open"${off ? " disabled" : ""}>Delete…</button>`);
+  if (!d) return "";
+  const { team } = teamById(id);
+  const what = deleteWhat(s);
+  const people = TEAM_INFO[id]?.members?.filter((m) => !m.pending && !m.me).length ?? 0;
   const ok = d.typed.trim() === team.name.trim();
-  return `<div class="srow ask"><span class="st"><b id="del-q">Delete ${esc(team.name)}?</b><small>${esc(detail)}. Everyone in it loses access</small></span>
-    <div class="sform"><label>Type the team's name to confirm<input data-set-field="typed" value="${esc(d.typed)}" spellcheck="false" autocomplete="off" aria-describedby="del-q"></label>
-    <div class="acts"><button class="btn sm" data-set="delete-cancel">Cancel</button><button class="btn sm danger solid" data-set="delete-yes"${ok && !d.busy ? "" : " disabled"}>Delete team</button></div></div></div>`;
+  return `<dialog class="flow danger" data-key="flow:delete" data-flow="delete" aria-labelledby="flow-title">${flowHead(`Delete ${esc(team.name)}?`, "")}
+    <div class="fb sform">
+      <div class="fwhat"><div><b>Goes with it</b><span>${esc(what.length ? what.join(", ") : "Everything in it")}</span></div><div><b>Loses access</b><span>${people ? esc(`${people === 1 ? "1 other person" : `${people} other people`} and you`) : "You"}</span></div><div><b>Comes back</b><span>Figma can restore it for a while. Undo does that right after</span></div></div>
+      <label>Type “${esc(team.name)}” to confirm<input data-set-field="typed" value="${esc(d.typed)}" spellcheck="false" autocomplete="off"></label>
+    </div>
+    <div class="ff"><button class="btn sm" data-set="delete-cancel">Cancel</button><button class="btn sm danger solid" data-set="delete-yes"${ok && !d.busy ? "" : " disabled"}>${d.busy ? "Deleting…" : "Delete team"}</button></div></dialog>`;
+}
+// Each window drawn is shown as a modal; one gone closes with it
+function openFlows() {
+  for (const d of $$("dialog.flow", scroller)) if (!d.open) d.showModal();
 }
 
 // The toggles: optimistic, with Undo, rolled back if Figma refuses
@@ -4989,6 +5036,7 @@ function settingsClick(el) {
     render();
     return $("[data-set-field=org]", scroller)?.focus();
   }
+  if (act === "flow-close") return $(s.deleting ? "[data-set=delete-cancel]" : "[data-set=transfer-cancel]", scroller)?.click();
   if (act === "transfer-cancel") {
     s.transfer = null;
     render();
@@ -5027,6 +5075,16 @@ scroller.addEventListener("input", (e) => {
   }
   const send = $("[data-set=transfer-send]", scroller);
   if (send) send.disabled = !transferReady(s.transfer);
+});
+// Escape on a window, from wherever in it, cancels it; so does a click on
+// the page dimmed behind it
+scroller.addEventListener("cancel", (e) => {
+  if (!e.target.matches?.("dialog.flow")) return;
+  e.preventDefault();
+  $(`[data-set=${e.target.dataset.flow}-cancel]`, e.target)?.click();
+}, true);
+scroller.addEventListener("click", (e) => {
+  if (e.target.matches?.("dialog.flow")) $(`[data-set=${e.target.dataset.flow}-cancel]`, e.target)?.click();
 });
 scroller.addEventListener("keydown", (e) => {
   const id = settingsTeam();
