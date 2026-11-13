@@ -2571,8 +2571,9 @@ const PAGE_JS: &str = r##"(() => {
   }
 
   // Upscale makes one image 2 or 4 times as large on this device, on the
-  // graphics card where there's one (see upscale.rs): Detailed, keeping its
-  // texture, or Fast, at most 4,096 pixels across, as Figma keeps images. The layer stays as large; its image gets sharper. Once it's
+  // graphics card where there's one (see upscale.rs): Photo, keeping its
+  // texture, Illustration, keeping lines and flat color clean, or Fast, at
+  // most 4,096 pixels across, as Figma keeps images. The layer stays as large; its image gets sharper. Once it's
   // done, the canvas shows it, with the image as it was over it up to a
   // divider that drags across, to compare. Apply, or Enter, keeps it, the
   // image fill changed and the one before under it, hidden, as Remove
@@ -2581,12 +2582,45 @@ const PAGE_JS: &str = r##"(() => {
   const UPSCALE = "data-ligma-upscale";
   const UPSCALING = "data-ligma-upscaling";
   let upscaling = null;
-  // Detailed keeps texture and grain, Fast is several times as quick
-  const upscaleOptions = { scale: 2, quality: "detailed" };
+  // Photo keeps texture and grain, Illustration keeps lines and flat
+  // color clean, and Fast is several times as quick. Until one's chosen,
+  // it's picked for each image by how it looks (see `looksDrawn`)
+  const upscaleOptions = { scale: 2, quality: null };
   const QUALITIES = [
     ["fast", "Fast", "Quicker, and smoother"],
-    ["detailed", "Detailed", "Keeps texture, grain and noise"],
+    ["photo", "Photo", "For photos: keeps texture, grain and noise"],
+    ["illustration", "Illustration", "For drawings, renders and graphics: keeps lines and flat color clean"],
   ];
+
+  // Whether an image looks drawn rather than photographed: drawings,
+  // renders and graphics have many hard edges between flat colors, where
+  // photos change gently. Read at 128 pixels across
+  const looksDrawn = async (bytes) => {
+    try {
+      const bitmap = await createImageBitmap(new Blob([bytes]));
+      const scale = 128 / Math.max(bitmap.width, bitmap.height);
+      const [width, height] = [Math.max(8, Math.round(bitmap.width * scale)), Math.max(8, Math.round(bitmap.height * scale))];
+      const context = Object.assign(document.createElement("canvas"), { width, height }).getContext("2d", { willReadFrequently: true });
+      context.drawImage(bitmap, 0, 0, width, height);
+      bitmap.close();
+      const { data } = context.getImageData(0, 0, width, height);
+      let hard = 0;
+      for (let y = 0; y < height - 1; y++) {
+        for (let x = 0; x < width - 1; x++) {
+          const at = (y * width + x) * 4;
+          let most = 0;
+          for (let channel = 0; channel < 3; channel++) {
+            const value = data[at + channel];
+            most = Math.max(most, Math.abs(value - data[at + 4 + channel]), Math.abs(value - data[at + width * 4 + channel]));
+          }
+          if (most > 40) hard++;
+        }
+      }
+      return hard / ((width - 1) * (height - 1)) > 0.08;
+    } catch {
+      return false;
+    }
+  };
   // Arrows out of a corner, as an image growing
   const UPSCALE_ICON = icon(`<rect ${STROKE} x="4.5" y="12.5" width="7" height="7" rx="1"/><path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5h6v6m0-6-7 7"/>`);
   const LARGEST = 4096;
@@ -2647,6 +2681,7 @@ const PAGE_JS: &str = r##"(() => {
       Object.assign(button.dataset, { tooltip: tip, tooltipType: "text", tooltipShowAbove: "true" });
       button.addEventListener("click", () => {
         upscaleOptions.quality = value;
+        if (upscaling) upscaling.quality = value;
         showUpscaling();
       });
     }
@@ -2662,10 +2697,37 @@ const PAGE_JS: &str = r##"(() => {
     const cancel = strip.appendChild(barButton(crop, "Cancel"));
     cancel.addEventListener("click", () => (upscaling?.comparing ? finishUpscale(false) : closeUpscaling()));
 
-    upscaling = { figma, node, index, paint, size, canvas, root, scales, qualities, result, goDivider, go, apply, working: false, comparing: null };
+    upscaling = {
+      figma,
+      node,
+      index,
+      paint,
+      size,
+      canvas,
+      root,
+      scales,
+      qualities,
+      result,
+      goDivider,
+      go,
+      apply,
+      working: false,
+      comparing: null,
+      quality: upscaleOptions.quality ?? "photo",
+    };
     document.documentElement.setAttribute(UPSCALING, "");
     placeUpscaling();
     showUpscaling();
+    // Photo or Illustration, by how the image looks, unless one's chosen
+    if (!upscaleOptions.quality) {
+      const current = upscaling;
+      const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync().catch(() => new Uint8Array());
+      const drawn = await looksDrawn(bytes);
+      if (upscaling === current && !upscaleOptions.quality && !current.working) {
+        current.quality = drawn ? "illustration" : "photo";
+        showUpscaling();
+      }
+    }
   };
 
   // The size the image becomes at the chosen scale, at most `LARGEST`
@@ -2683,7 +2745,7 @@ const PAGE_JS: &str = r##"(() => {
       button.disabled = working;
     }
     for (const button of qualities.children) {
-      button.setAttribute("aria-checked", String(button.dataset.value === upscaleOptions.quality));
+      button.setAttribute("aria-checked", String(button.dataset.value === upscaling.quality));
       button.disabled = working;
     }
     const [width, height] = comparing ? [comparing.width, comparing.height] : upscaledSize();
@@ -2732,7 +2794,7 @@ const PAGE_JS: &str = r##"(() => {
       const scale = Math.min(LARGEST / Math.max(node.width, node.height, 1), Math.max(size.width / node.width, size.height / node.height, 1));
       const before = drawn(figma, node, scale, true);
       const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync();
-      const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale, quality: upscaleOptions.quality }, bytes), show, "", controller.signal));
+      const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale, quality: current.quality }, bytes), show, "", controller.signal));
       if (node.removed || upscaling !== current) throw "cancelled";
       const fills = fillsOf(node);
       if (fills[index]?.imageHash !== paint.imageHash) throw "failed";

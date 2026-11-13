@@ -1,7 +1,7 @@
 //! The models Ligma runs on this device with ONNX Runtime: BiRefNet for
 //! Remove background (see background.rs), SAM 2.1 for Select object (see
-//! objects.rs) and 4xNomosWebPhoto_RealPLKSR and Real-ESRGAN for Upscale
-//! (see upscale.rs). Each is downloaded when it's first needed, once asked,
+//! objects.rs) and 4xNomosWebPhoto_RealPLKSR and two Real-ESRGAN models
+//! for Upscale (see upscale.rs). Each is downloaded when it's first needed, once asked,
 //! or from Settings, which can also remove it. Downloads are checked
 //! against their SHA-256. ONNX Runtime is linked in on Windows. Macs with
 //! Apple silicon download it along with the first model, as it needs
@@ -31,8 +31,8 @@ pub fn supported() -> bool {
 #[cfg(birefnet)]
 pub use download::*;
 
-/// The model Settings names: "background", "objects", "upscale" or
-/// "upscale-fast"
+/// The model Settings names: "background", "objects", "upscale",
+/// "upscale-fast" or "upscale-art"
 #[cfg(birefnet)]
 fn named(name: &str) -> Option<&'static Model> {
     ALL.into_iter().find(|model| model.name == name)
@@ -209,6 +209,20 @@ mod download {
         entry: None,
     };
 
+    /// Real-ESRGAN's x4plus anime 6B (https://github.com/xinntao/Real-ESRGAN,
+    /// BSD 3-Clause), for Upscale's Illustration, trained on drawings, so
+    /// lines and flat color stay clean, as ONNX from
+    /// https://huggingface.co/skillsafe-ai/realesrgan-x4plus-anime-6b,
+    /// converted reproducibly from the official weights, pinned to one
+    /// revision
+    pub const REAL_ESRGAN_ART: Download = Download {
+        url: "https://huggingface.co/skillsafe-ai/realesrgan-x4plus-anime-6b/resolve/c001be50fae1c7a2bae8b2b4dec5e6fcbdbcca96/model.onnx",
+        sha256: "9a029dae374b2cd4c3eb2dbbed857e22e6d785687c767aa12828e7356b9fb378",
+        size: 17_939_975,
+        file: "RealESRGAN_x4plus_anime_6B.onnx",
+        entry: None,
+    };
+
     /// A model and what Ligma says about it
     pub struct Model {
         /// As Settings names it
@@ -260,10 +274,10 @@ mod download {
     pub static UPSCALE: Model = Model {
         name: "upscale",
         files: &[&NOMOS],
-        doing: "Upscaling images",
+        doing: "Upscaling photos",
         model: "4xNomosWebPhoto",
-        title: "Download Upscale Model",
-        progress: "Downloading the upscale model…",
+        title: "Download Photo Upscale Model",
+        progress: "Downloading the photo upscale model…",
         after: "Upscaling…",
         downloading: Mutex::new(None),
         cancels: AtomicU32::new(0),
@@ -283,8 +297,21 @@ mod download {
         watchers: Mutex::new(Vec::new()),
     };
 
+    pub static UPSCALE_ART: Model = Model {
+        name: "upscale-art",
+        files: &[&REAL_ESRGAN_ART],
+        doing: "Upscaling illustrations",
+        model: "Real-ESRGAN",
+        title: "Download Illustration Upscale Model",
+        progress: "Downloading the illustration upscale model…",
+        after: "Upscaling…",
+        downloading: Mutex::new(None),
+        cancels: AtomicU32::new(0),
+        watchers: Mutex::new(Vec::new()),
+    };
+
     /// Every model, for what they share
-    pub const ALL: [&Model; 4] = [&BACKGROUND, &OBJECTS, &UPSCALE, &UPSCALE_FAST];
+    pub const ALL: [&Model; 5] = [&BACKGROUND, &OBJECTS, &UPSCALE, &UPSCALE_FAST, &UPSCALE_ART];
 
     /// Why a model isn't there to use
     pub enum Missing {

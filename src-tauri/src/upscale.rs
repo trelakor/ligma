@@ -1,8 +1,10 @@
 //! Upscale on this device (Settings > Features > Images): the image bar's
 //! Upscale in free projects (see ai_actions.rs), which makes an image 2 or
-//! 4 times as large, Detailed with 4xNomosWebPhoto_RealPLKSR (Philip
-//! Hofmann, CC BY 4.0), trained on real photos to keep their texture,
-//! grain and noise rather than smooth them away, or Fast with
+//! 4 times as large: Photo with 4xNomosWebPhoto_RealPLKSR (Philip Hofmann,
+//! CC BY 4.0), trained on real photos to keep their texture, grain and
+//! noise rather than smooth them away, Illustration with Real-ESRGAN's
+//! x4plus anime 6B (BSD 3-Clause), trained on drawings, so lines and flat
+//! color stay clean where a photo model would make up texture, or Fast with
 //! Real-ESRGAN's compact general model, realesr-general-x4v3 (BSD
 //! 3-Clause), several times as quick and smoother. They run as ONNX with
 //! ONNX Runtime where it runs (see models.rs), on the graphics card where
@@ -11,7 +13,7 @@
 //! needed
 //!
 //! The page hands a request over as a download (see handoff.rs): a line of
-//! JSON, `{"scale":s,"quality":"fast"|"detailed"}`, then the image itself,
+//! JSON, `{"scale":s,"quality":"photo"|"illustration"|"fast"}`, then the image itself,
 //! as Figma keeps it. The model makes it 4 times as large, a tile at a
 //! time, each the same size, so a graphics card prepares the model once,
 //! and that's scaled down to `s` times, at most 4,096 pixels across, as
@@ -51,7 +53,7 @@ pub fn handle(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<Strin
     let request: Request = serde_json::from_slice(&bytes[..split]).map_err(|_| "failed")?;
     let image = bytes.get(split + 1..).unwrap_or_default();
     #[cfg(birefnet)]
-    return esrgan::upscale(app, tab, job, request.scale, request.quality != "fast", image);
+    return esrgan::upscale(app, tab, job, request.scale, &request.quality, image);
     #[cfg(not(birefnet))]
     {
         let _ = (app, tab, job, request, image);
@@ -75,7 +77,7 @@ mod esrgan {
     use tauri::AppHandle;
 
     use super::factor;
-    use crate::models::{Missing, NOMOS, REAL_ESRGAN, UPSCALE, UPSCALE_FAST};
+    use crate::models::{Missing, NOMOS, REAL_ESRGAN, REAL_ESRGAN_ART, UPSCALE, UPSCALE_ART, UPSCALE_FAST};
 
     /// The model makes images 4 times as large, a tile this size at a time,
     /// each read with this much more of the image around it, as far as its
@@ -103,10 +105,14 @@ mod esrgan {
         "failed"
     }
 
-    pub fn upscale(app: &AppHandle, tab: u32, job: u64, scale: f32, detailed: bool, bytes: &[u8]) -> Result<String, &'static str> {
+    pub fn upscale(app: &AppHandle, tab: u32, job: u64, scale: f32, quality: &str, bytes: &[u8]) -> Result<String, &'static str> {
         let image = decode(bytes)?;
         let factor = factor(image.width(), image.height(), scale).ok_or("large")?;
-        let (model, file) = if detailed { (&UPSCALE, NOMOS.file) } else { (&UPSCALE_FAST, REAL_ESRGAN.file) };
+        let (model, file) = match quality {
+            "fast" => (&UPSCALE_FAST, REAL_ESRGAN.file),
+            "illustration" => (&UPSCALE_ART, REAL_ESRGAN_ART.file),
+            _ => (&UPSCALE, NOMOS.file),
+        };
         let (_held, folder) = model.ensure(app, tab, job).map_err(|missing| match missing {
             Missing::Cancelled => "cancelled",
             Missing::Failed => "failed",
