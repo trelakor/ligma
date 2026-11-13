@@ -3817,14 +3817,16 @@ async function loadTeamInfo(id) {
     if (r.pending && !list.some((m) => m.role?.id === r.id)) list.push({ id: `invite:${r.id}`, name: r.pending_email ?? r.user?.email ?? "Someone", email: null, level: r.level, role: r, pending: true, me: false });
   }
   list.sort(byPeople);
-  // A Starter or Professional team on Figma's plan permissions keeps who's
-  // an admin on the plan's users, which only LiveGraph has
+  // A Starter or Professional team keeps who's an admin on its plan's
+  // users, which only LiveGraph has: Figma refuses to set their team roles
+  // ("Cannot set team role in Standalone team"), whatever the plan's
+  // standaloneTeamPlanPermsEnabledAt says
   let planId = null;
   if (standalone(teamById(id).plan)) {
     try {
       const store = await Promise.race([LG.load(VIEWS.teamMembers(id)), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 4000))]);
       const plan = Object.values(store.PlanRecord ?? {}).find((r) => r.planParentId === id);
-      if (plan?.standaloneTeamPlanPermsEnabledAt) {
+      if (plan) {
         planId = plan.id;
         const users = Object.values(store.PlanUserRecord ?? {}).filter((u) => u.planParentId === id);
         for (const m of list) {
@@ -4463,8 +4465,8 @@ function setRole(m, level) {
   const key = winKey();
   if (m.level === level) return;
   const planId = ws().kind === "team" ? TEAM_INFO[ws().team]?.planId : null;
-  // A team on Figma's plan permissions keeps admins on the plan, not the
-  // team role (Figma's standaloneTeamPlanPermsEnabled)
+  // A Starter or Professional team keeps admins on its plan, not the team
+  // role
   const request = (to) => planId && m.planUser
     ? api(`/api/plans/${planId}/plan_users/update_permission`, { method: "PUT", json: { plan_user_ids: [m.planUser.id], permission: to >= ROLE_LEVELS.admin ? "admin" : "member" } })
     : api(`/api/roles/${m.role.id}`, { method: "PUT", json: { ...m.role, level: to, response_version: 2 } });
@@ -5220,16 +5222,93 @@ addEventListener("pointerdown", (e) => {
 }, true);
 addEventListener("resize", () => win.classList.contains("open") && placeWin());
 
-function go(view) {
+function go(view, { back = false } = {}) {
   if (!viewName(view)) return;
   if (state.view.startsWith("s:")) reblur(scroller);
+  const moved = view !== state.view;
   state.view = view;
   state.sel.clear();
   state.focus = null;
   document.body.classList.remove("side-open");
   render({ keepScroll: false });
   scroller.scrollTop = 0;
+  // A new page is a new step in the history; one gone back to already is
+  if (moved && !back) {
+    try {
+      history.pushState({ view, scroll: 0 }, "");
+    } catch {}
+  }
 }
+
+/* Back and forward through the pages, as in a browser, from the mouse's
+   side buttons, Alt+Left and Alt+Right (⌘[ and ⌘] or ⌘← and ⌘→ on a Mac),
+   a keyboard's Back and Forward keys, or a two-finger swipe sideways. Each
+   page is a step in the page's own history, with where it was scrolled to.
+   Nothing on screen: it's what the hands already do */
+try {
+  history.replaceState({ view: state.view, scroll: 0 }, "");
+} catch {}
+let scrollSave = 0;
+scroller.addEventListener("scroll", () => {
+  clearTimeout(scrollSave);
+  scrollSave = setTimeout(() => {
+    try {
+      if (history.state?.view === state.view) history.replaceState({ ...history.state, scroll: scroller.scrollTop }, "");
+    } catch {}
+  }, 200);
+}, { passive: true });
+addEventListener("popstate", (e) => {
+  const view = e.state?.view;
+  if (!view || !viewName(view)) return;
+  closeMenu();
+  closeWin(false);
+  if (pal.open) pal.close();
+  go(view, { back: true });
+  // Back where it was, once the page has drawn what it has
+  const top = e.state.scroll ?? 0;
+  scroller.scrollTop = top;
+  requestAnimationFrame(() => (scroller.scrollTop = top));
+});
+// Not while a window, a dialog or a file being dragged has the keys
+const navBusy = () => acs.open || !!$("dialog.flow[open]") || pal.open || !!lift?.live;
+const stepBack = () => !navBusy() && history.back();
+const stepForward = () => !navBusy() && history.forward();
+addEventListener("mouseup", (e) => {
+  if (e.button !== 3 && e.button !== 4) return;
+  e.preventDefault();
+  e.button === 3 ? stepBack() : stepForward();
+});
+addEventListener("keydown", (e) => {
+  // After the page's own uses of the keys: Alt+arrows move starred files
+  if (e.defaultPrevented) return;
+  if (e.key === "BrowserBack" || e.key === "BrowserForward") {
+    e.preventDefault();
+    return e.key === "BrowserBack" ? stepBack() : stepForward();
+  }
+  if (e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  const arrow = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+  const bracket = e.key === "[" ? -1 : e.key === "]" ? 1 : 0;
+  const dir = MAC
+    ? e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey ? arrow || bracket : 0
+    : e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey ? arrow : 0;
+  if (!dir) return;
+  e.preventDefault();
+  dir < 0 ? stepBack() : stepForward();
+});
+// A swipe: sideways scrolling well past a nudge, over nothing that scrolls
+// sideways itself, one step per swipe
+let swipeNav = { dx: 0, idle: 0, done: false };
+addEventListener("wheel", (e) => {
+  if (e.defaultPrevented || e.ctrlKey || Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.5) return;
+  for (let el = e.target; el && el !== document.body; el = el.parentElement) if (el.scrollWidth > el.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return;
+  clearTimeout(swipeNav.idle);
+  swipeNav.idle = setTimeout(() => (swipeNav = { dx: 0, idle: 0, done: false }), 260);
+  if (swipeNav.done) return;
+  swipeNav.dx += e.deltaX;
+  if (Math.abs(swipeNav.dx) < 140) return;
+  swipeNav.done = true;
+  swipeNav.dx < 0 ? stepBack() : stepForward();
+}, { passive: true });
 
 /* Inbox: comments, replies, mentions, invites and edit requests, as Figma's
    bell lists them. Reading a comment note clears it from the file's count */
