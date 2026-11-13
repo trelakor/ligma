@@ -1202,9 +1202,7 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
         adjust.apply(&mut image);
     }
     let (iw, ih) = image.dimensions();
-    let info = skia_safe::ImageInfo::new((iw as i32, ih as i32), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Unpremul, None);
-    let image = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(image.as_raw()), (iw * 4) as usize)
-        .ok_or("couldn't make the image")?;
+    let image = premultiplied(&image).ok_or("couldn't make the image")?;
     if super::dev() {
         let ms = |d: Duration| d.as_millis();
         log::info!(
@@ -1237,6 +1235,24 @@ pub(super) fn halvings(longest: u32, side: f64) -> u32 {
 }
 
 /// `image` half the size, each pixel the mean of 2 by 2, weighted by alpha
+/// `image` as Skia takes it, its colors premultiplied as Figma's are. Left
+/// unpremultiplied, the GPU filters it before premultiplying, so the colors
+/// of transparent texels, often white, bleed into the edges next to them
+fn premultiplied(image: &image::RgbaImage) -> Option<skia_safe::Image> {
+    let (iw, ih) = image.dimensions();
+    let mut pixels = image.as_raw().clone();
+    for texel in pixels.chunks_exact_mut(4) {
+        let a = texel[3] as u32;
+        if a < 255 {
+            for c in &mut texel[..3] {
+                *c = ((*c as u32 * a + 127) / 255) as u8;
+            }
+        }
+    }
+    let info = skia_safe::ImageInfo::new((iw as i32, ih as i32), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Premul, None);
+    skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(&pixels), (iw * 4) as usize)
+}
+
 fn halve(image: &image::RgbaImage) -> image::RgbaImage {
     let (w, h) = ((image.width() / 2).max(1), (image.height() / 2).max(1));
     image::RgbaImage::from_fn(w, h, |x, y| {
@@ -1269,9 +1285,7 @@ fn fetch_node(webview: &Webview, id: &str, width: f64) -> Result<Img, String> {
     let scale = value["scale"].as_f64().ok_or("no scale")? as f32;
     let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?.to_rgba8();
     let (iw, ih) = image.dimensions();
-    let info = skia_safe::ImageInfo::new((iw as i32, ih as i32), skia_safe::ColorType::RGBA8888, skia_safe::AlphaType::Unpremul, None);
-    let image = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(image.as_raw()), (iw * 4) as usize)
-        .ok_or("couldn't make the image")?;
+    let image = premultiplied(&image).ok_or("couldn't make the image")?;
     // Figma's export starts at the render bounds and rounds its size up
     let area = Rect::from_xywh(rb[0], rb[1], iw as f32 / scale, ih as f32 / scale);
     Ok(Img { image, original: (iw, ih), area: Some(area), stale: false })
