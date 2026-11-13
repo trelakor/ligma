@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.42.1 - 2026-11-13
+
+- Ligma no longer quits when macOS ends a background tab to free memory. The tab reloads when you select it.
+
 ## 0.42.0 - 2026-11-13
 
 - Settings in Home's account menu opens a Settings window for your Figma account, like the one on Figma's home page. Change your photo, name, role, language, community handle, email notifications and password, and manage your sessions, access tokens and connected apps. The command palette opens each of its tabs.
