@@ -203,7 +203,7 @@ fn shut_down(app: &tauri::AppHandle) {
 fn main() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(build_menu);
+    let builder = builder.menu(build_menu).on_web_content_process_terminate(tabs::on_process_terminated);
 
     builder
         // First, so a second launch exits before anything else starts. It
