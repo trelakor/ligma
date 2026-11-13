@@ -2161,8 +2161,8 @@ const PAGE_JS: &str = r##"(() => {
   let healing = null;
   // The brush's size, in the image's own pixels, once chosen
   const healOptions = { size: null };
-  // A plaster, as Photoshop's Spot Healing Brush has it
-  const HEAL_ICON = icon(`<rect ${STROKE} x="3.6" y="8.6" width="16.8" height="6.8" rx="3.4" transform="rotate(-45 12 12)"/><path ${STROKE} d="m9.5 9.5 5 5"/><path ${FILL} d="M11.4 12.6a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2m1.2-1.2a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2"/>`);
+  // A bandage, its pad dotted, as Photoshop's Spot Healing Brush has it
+  const HEAL_ICON = icon(`<g transform="rotate(-45 12 12)"><rect ${STROKE} x="3.5" y="8.5" width="17" height="7" rx="3.5"/><path ${STROKE} d="M9 8.5v7M15 8.5v7"/></g><g ${FILL}><circle cx="11.3" cy="11.3" r=".6"/><circle cx="12.7" cy="12.7" r=".6"/><circle cx="11.3" cy="12.7" r=".6"/><circle cx="12.7" cy="11.3" r=".6"/></g>`);
 
   // A button with an icon and a label, as the image bar's own are
   const barButton = (crop, label, svg, tip) => {
@@ -2621,8 +2621,8 @@ const PAGE_JS: &str = r##"(() => {
       return false;
     }
   };
-  // Arrows out of a corner, as an image growing
-  const UPSCALE_ICON = icon(`<rect ${STROKE} x="4.5" y="12.5" width="7" height="7" rx="1"/><path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5h6v6m0-6-7 7"/>`);
+  // An image, an arrow growing out of its corner
+  const UPSCALE_ICON = icon(`<rect ${STROKE} x="4.5" y="9.5" width="10" height="10" rx="1.5"/><path ${STROKE} stroke-linejoin="round" d="m4.5 17 2.6-2.6a1 1 0 0 1 1.4 0l1.5 1.5 1.1-1.1a1 1 0 0 1 1.4 0l2 2"/><path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M14 4.5h5.5V10m0-5.5-5 5"/>`);
   const LARGEST = 4096;
   // The divider's handle: two chevrons, pointing apart
   const COMPARE_HANDLE = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M6 4.5 2.5 8 6 11.5m4-7L13.5 8 10 11.5"/></svg>`;
