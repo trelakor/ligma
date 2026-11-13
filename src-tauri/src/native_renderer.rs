@@ -74,7 +74,7 @@ pub const OVERLAY: &str = "native-overlay";
 static ON: AtomicBool = AtomicBool::new(false);
 
 fn enabled(settings: &Settings) -> bool {
-    settings.native_renderer || std::env::var("LIGMA_NATIVE_RENDERER").is_ok_and(|value| value == "1")
+    (settings.experimental && settings.native_renderer) || std::env::var("LIGMA_NATIVE_RENDERER").is_ok_and(|value| value == "1")
 }
 
 /// Whether the parity harness and benchmark are offered

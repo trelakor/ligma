@@ -170,8 +170,11 @@ pub struct Settings {
     /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
     /// is no longer read, so it's on for everyone once
     pub ligma_mcp: bool,
-    /// Experimental: Ligma draws the open page itself, in a window of its
-    /// own, to compare with Figma's renderer (see native_renderer.rs).
+    /// Shows Settings' experimental features. Off, they're all off,
+    /// whatever their own settings say
+    pub experimental: bool,
+    /// Experimental: Ligma draws Figma's canvas itself in place of Figma's
+    /// renderer (see native_renderer.rs). Only while `experimental` is on.
     /// Windows only
     pub native_renderer: bool,
 }
@@ -232,6 +235,7 @@ impl Default for Settings {
             ligma_home: true,
             ligma_home_start: "home".into(),
             ligma_mcp: true,
+            experimental: false,
             native_renderer: false,
         }
     }

@@ -862,11 +862,17 @@
     </section>
     <section id="experimental">
       <h2>Experimental</h2>
-      <label class="row" id="native-renderer-row">
-        <span class="label">Native renderer (experimental)
-          <div class="hint">Ligma draws the open page itself, in a window of its own that follows Figma's view, to compare its GPU memory and speed with Figma's own drawing. Layers it can't draw yet, like blurs, are copied from Figma's render. Figma still draws its canvas as usual. Windows only.</div>
+      <label class="row">
+        <span class="label">Show experimental features
+          <div class="hint">Features still being built. They may be slow, look wrong or break, and turning this off turns them all off</div>
         </span>
-        <input type="checkbox" class="switch" id="native-renderer">
+        <input type="checkbox" class="switch" id="experimental-features">
+      </label>
+      <label class="row nested" id="renderer-row" hidden>
+        <span class="label">Renderer
+          <div class="hint">What draws the canvas in Figma Design. Ligma's own renderer draws it with Skia on the GPU in place of Figma's, and copies from Figma what it can't draw yet. It only works in files you can edit. Windows only</div>
+        </span>
+        <button type="button" class="picker" id="renderer" aria-haspopup="listbox" aria-expanded="false" data-options='[["figma","Figma"],["ligma","Ligma (experimental)"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </label>
     </section>
   </div>
@@ -1256,7 +1262,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp", "native-renderer"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp", "experimental-features", "renderer"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1805,7 +1811,9 @@
     $("new-home").checked = settings.ligmaHome;
     $("new-home-start").value = settings.ligmaHomeStart;
     $("ligma-mcp").checked = settings.ligmaMcp;
-    $("native-renderer").checked = settings.nativeRenderer;
+    $("experimental-features").checked = settings.experimental;
+    $("renderer-row").hidden = !settings.experimental;
+    $("renderer").value = settings.nativeRenderer ? "ligma" : "figma";
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],
@@ -1897,7 +1905,8 @@
       ligmaHome: $("new-home").checked,
       ligmaHomeStart: $("new-home-start").value,
       ligmaMcp: $("ligma-mcp").checked,
-      nativeRenderer: $("native-renderer").checked,
+      experimental: $("experimental-features").checked,
+      nativeRenderer: $("renderer").value === "ligma",
       ...changes,
     };
     show();
