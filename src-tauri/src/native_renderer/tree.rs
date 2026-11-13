@@ -970,6 +970,19 @@ impl<'a> Drawer<'a> {
                     return self.draw(child);
                 }
                 let device = self.device_scale();
+                // Under a third of a pixel, a blur changes no pixel by a
+                // step, but would still take a layer, which far out is
+                // thousands of tiny ones a frame
+                if sigma * device < 0.3 {
+                    if let Some(clamp) = ext.clamp {
+                        self.canvas.save();
+                        self.canvas.clip_rect(clamp.to_skia(), ClipOp::Intersect, self.aa);
+                        self.draw(child);
+                        self.canvas.restore();
+                        return;
+                    }
+                    return self.draw(child);
+                }
                 let filter = match ext.clamp {
                     // Figma blurs only what's inside, each pixel the
                     // weighted mean of the part of the kernel inside it: the
@@ -1216,7 +1229,10 @@ impl<'a> Drawer<'a> {
                 // show through those over them, and blends add to what's
                 // already mixed with what's outside. Masked as Figma does,
                 // what's under the mask is cut once, as one
-                let one = !self.aa || (self.single_draw(color) && !self.tree.info(color).blends);
+                // A few pixels across, what shows through at the edge can't
+                // be seen, and a layer each costs a lot far out
+                let tiny = bounds.width().max(bounds.height()) * self.device_scale() < 4.0;
+                let one = !self.aa || tiny || (self.single_draw(color) && !self.tree.info(color).blends);
                 if one && matches!(op, MaskOpType::Normal | MaskOpType::Pattern | MaskOpType::BackgroundBlur) {
                     if let Some((fill, at)) = self.tree.clip_of(alpha) {
                         if let Some(outline) = self.tree.outline(fill) {
