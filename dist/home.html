@@ -477,6 +477,7 @@
   .menu input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
   .menu .none { padding: 4px 8px; color: var(--text2); }
   .mi[aria-expanded="true"]:not(.on) { background: var(--hover); }
+  .mi.tall { height: 40px; }
   .mi .two { display: flex; flex: 1; flex-direction: column; min-width: 0; line-height: 16px; }
   .mi .two span, .mi .two small { overflow: hidden; text-overflow: ellipsis; }
   .mi .two small { color: var(--text2); font-size: 11px; }
@@ -653,6 +654,80 @@
   .note .rd { position: absolute; top: 10px; right: 120px; }
   .note:hover .tool, .note:focus-visible .tool, .note .tool:focus-visible { opacity: 1; }
 
+  /* Project colors, Figma's eight: the folder takes it wherever it shows */
+  .i.tint, .nav .i.tint, .nav.on .i.tint, .menu .mi .mic > svg.tint { color: var(--fc); }
+  .nav .lbl input { width: 100%; height: 22px; margin: -1px 0 -1px -4px; padding: 0 4px; border: 0; border-radius: 3px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: inherit; -webkit-user-select: text; user-select: text; }
+
+  /* A project's header holds its settings: color, name, description,
+     who has access and the rest in a menu */
+  #head .ptitle { display: flex; align-items: center; gap: 2px; min-width: 0; margin-left: -6px; }
+  .hb { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 5px; color: var(--text2); }
+  .hb:hover, .hb[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+  .hname { flex: 0 1 auto; min-width: 0; height: 28px; padding: 0 6px; overflow: hidden; border-radius: 5px; font-size: 13px; line-height: 28px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+  .hname:hover { background: var(--hover); }
+  .hname input, .hdesc input { width: 100%; height: 24px; padding: 0 6px; border: 0; border-radius: 4px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: inherit; -webkit-user-select: text; user-select: text; }
+  .hname.editing, .hdesc.editing { width: 240px; padding: 0 2px; overflow: visible; background: none; }
+  .hdesc.editing { width: 360px; }
+  #head .ptitle small { flex: none; margin: 0 6px 0 2px; color: var(--text2); font-size: 11px; }
+  .hdesc { flex: 0 1 auto; min-width: 0; max-width: 420px; height: 28px; padding: 0 6px; overflow: hidden; border-radius: 5px; color: var(--text2); font-weight: 450; line-height: 28px; text-overflow: ellipsis; white-space: nowrap; }
+  .hdesc:hover { background: var(--hover); color: var(--text); }
+  /* No description yet: the way to add one shows with the pointer or keys */
+  .hdesc.blank { color: var(--text3); opacity: 0; transition: opacity 120ms; }
+  #head:hover .hdesc.blank, .hdesc.blank:focus-visible, .hdesc.editing { opacity: 1; }
+  .access { flex: none; max-width: 240px; }
+  .access span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .access[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+
+  /* Team settings and sharing: a window like the inbox, beside what
+     opened it */
+  .team-gear { position: absolute; top: 4px; right: 62px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: var(--hover); color: var(--text2); opacity: 0; }
+  .team-row:hover .team-gear, .team-gear:focus-visible, .team-gear[aria-expanded="true"] { opacity: 1; }
+  .team-gear:hover, .team-gear[aria-expanded="true"] { color: var(--text); background: var(--bg3); }
+  #win { position: fixed; z-index: 45; display: none; flex-direction: column; width: 400px; max-height: min(640px, calc(100vh - 16px)); overflow: hidden; border-radius: 13px; background: var(--menu); box-shadow: var(--shadow), 0 0 0 1px var(--menu-line); outline: none; }
+  #win.open { display: flex; animation: pop 120ms var(--ease); }
+  .wh { display: flex; flex: none; align-items: center; gap: 10px; min-height: 56px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--menu-line); }
+  .wh .tm, .wh .fbig { width: 32px; height: 32px; border-radius: 8px; font-size: 13px; }
+  .wh .fbig { display: grid; place-items: center; flex: none; background: var(--bg2); }
+  .wh .fbig .i { width: 24px; height: 24px; margin: 0; }
+  .wt { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+  .wt h2 { display: flex; margin: 0 0 0 -6px; font-size: 13px; line-height: 20px; font-weight: 550; }
+  .wt h2 .hname { height: 24px; line-height: 24px; }
+  .wt h2 .hname.static:hover { background: none; }
+  .wt small { color: var(--text2); font-size: 11px; line-height: 16px; }
+  .wb { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+  .ws h3 { display: flex; align-items: center; gap: 6px; height: 36px; margin: 0; padding: 12px 8px 4px; color: var(--text2); font-size: 11px; line-height: 16px; font-weight: 550; }
+  .ws h3 a, .ws h3 button { display: flex; align-items: center; gap: 2px; margin-left: auto; padding: 2px 4px; border-radius: 4px; font-weight: 450; }
+  .ws h3 a:hover, .ws h3 button:hover { background: var(--hover); color: var(--text); }
+  .ws h3 .i { width: 12px; height: 12px; }
+  .ws h3 .fi { width: 18px; height: 18px; margin: -3px; }
+  .about { display: block; width: 100%; min-height: 32px; padding: 6px 8px; border-radius: 5px; font-size: 13px; line-height: 20px; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .about:hover { background: var(--hover); }
+  .about.blank { color: var(--text2); }
+  .about.static:hover { background: none; }
+  .wb textarea { display: block; width: 100%; min-height: 56px; padding: 6px 8px; border: 0; border-radius: 5px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: 450 13px/20px var(--font); resize: none; -webkit-user-select: text; user-select: text; }
+  .mem { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 44px; padding: 4px 8px; border-radius: 6px; }
+  .mem .av { width: 24px; height: 24px; }
+  .mem .tm { width: 24px; height: 24px; border-radius: 6px; font-size: 11px; }
+  .mem b { display: block; overflow: hidden; font-weight: 450; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+  .mem b i { color: var(--text2); font-style: normal; }
+  .mem small { display: block; overflow: hidden; color: var(--text2); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  .mem .role { color: var(--text2); white-space: nowrap; }
+  .mem .ib { margin-right: -4px; }
+  .wnote { padding: 8px; color: var(--text2); }
+  .invite { display: flex; gap: 6px; padding: 4px 0 0; }
+  .invite input { flex: 1; min-width: 0; height: 32px; padding: 0 8px; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--text) 7%, var(--menu)); color: var(--text); font: inherit; font-size: 13px; outline: none; -webkit-user-select: text; user-select: text; }
+  .invite input::placeholder { color: var(--text2); }
+  .invite input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+  .invite .ib { height: 32px; }
+  .invite .btn { height: 32px; }
+  .btn:disabled { opacity: 0.4; pointer-events: none; }
+  .wlink { margin: 6px 0 0 -2px; }
+  .wfoot { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px; border-top: 1px solid var(--menu-line); }
+  .wfoot .ib { flex: 1; justify-content: flex-start; }
+  .wfoot .ib .x { margin-left: auto; }
+  .wsk { height: 44px; margin: 0 8px; border-radius: 6px; background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
+  .wsk + .wsk { margin-top: 4px; }
+
   @media (max-width: 860px) {
     #app { grid-template-columns: minmax(0, 1fr); }
     #side { position: fixed; inset: 0 auto 0 0; z-index: 30; width: 260px; transform: translateX(-100%); transition: transform 200ms var(--ease); box-shadow: var(--shadow); }
@@ -691,6 +766,7 @@
 <div id="menu" class="menu" role="menu" tabindex="-1"></div>
 <div id="submenu" class="menu sub" role="menu" tabindex="-1"></div>
 <div id="inbox" role="dialog" aria-labelledby="inbox-title" tabindex="-1"></div>
+<div id="win" role="dialog" aria-labelledby="win-title" tabindex="-1"></div>
 <div id="tip" role="tooltip"></div>
 <div id="selbar" class="float" role="toolbar" aria-label="Selected files" hidden></div>
 <div id="toast" class="float" role="status" aria-live="polite" hidden></div>
@@ -767,6 +843,8 @@ const ICONS = {
   heart: '<path d="M8 13s-5-3-5-6.5A2.5 2.5 0 0 1 8 5a2.5 2.5 0 0 1 5 1.5C13 10 8 13 8 13z"/>',
   right: '<path d="m6.5 4.5 3.5 3.5-3.5 3.5"/>',
   list: '<path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><circle cx="2.75" cy="4.5" r=".6"/><circle cx="2.75" cy="8" r=".6"/><circle cx="2.75" cy="11.5" r=".6"/>',
+  sliders: '<path d="M2.5 5.5h6M11.5 5.5h2M2.5 10.5h2M7.5 10.5h6"/><circle cx="10" cy="5.5" r="1.5"/><circle cx="6" cy="10.5" r="1.5"/>',
+  link: '<path d="M7 9a2.5 2.5 0 0 0 3.5 0l2-2A2.5 2.5 0 0 0 9 3.5l-.75.75M9 7a2.5 2.5 0 0 0-3.5 0l-2 2A2.5 2.5 0 0 0 7 12.5l.75-.75"/>',
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 // Figma's own UI icons, as its file browser and account menu draw them:
@@ -862,6 +940,40 @@ const LIVE = location.hostname === "www.figma.com";
 // Drafts are a folder per team, so these name a folder as Drafts
 const DRAFT_FOLDERS = new Set();
 const placeOf = (project) => (!project || DRAFT_FOLDERS.has(project) ? "Drafts" : PROJECTS[project]?.name ?? "Shared with you");
+
+// A project's own settings, by its id: { color, description, audience,
+// teamAccess }. Who in the team or organization has it is `audience`
+// (sharing_audience_control) on newer projects, `teamAccess` on older ones.
+// Figma's folder colors, in its order, as its menu draws them
+const FOLDER = {};
+const FOLDER_COLORS = [
+  ["pale_blue", "Blue", "#afbccf"],
+  ["pale_purple", "Purple", "#c5b2dc"],
+  ["pale_violet", "Violet", "#b3b2dc"],
+  ["pale_green", "Green", "#9fc1aa"],
+  ["pale_pink", "Pink", "#daaace"],
+  ["pale_yellow", "Yellow", "#e8cd7d"],
+  ["pale_persimmon", "Persimmon", "#ebb49d"],
+  ["pale_teal", "Teal", "#a3c2cc"],
+];
+const folderHex = (id) => FOLDER_COLORS.find(([key]) => key === FOLDER[id]?.color)?.[2] ?? null;
+// The folder icon in the project's color, at a 16px icon's place
+const folderIcon = (id, hex = folderHex(id)) => (hex ? fig("folder", "tint").replace("<svg ", `<svg style="--fc:${hex}" `) : fig("folder"));
+for (const [id, color, description] of [["app", "pale_blue", "The desktop app: windows, menus and the sidebar"], ["web", "pale_teal", ""], ["mkt", "pale_persimmon", "Launches, posters and the deck"], ["brand", "pale_yellow", ""], ["halcyon", "pale_green", ""], ["fieldnote", "pale_purple", ""]]) FOLDER[id] = { color, description, audience: "plan_edit" };
+
+// A team's description, people and what you can change there, read from
+// Figma when its window opens: { description, members, admin }
+const TEAM_INFO = {};
+const ROLE_LEVELS = { viewer: 100, editor: 300, admin: 900, owner: 999 };
+// What Figma calls a level. A Starter team's owner is its admin, and anyone
+// without a team role has been given only some of its files
+function roleName(level, tier) {
+  if (level == null) return "Limited access";
+  if (level >= ROLE_LEVELS.owner) return tier === "Free" ? "Admin" : "Owner";
+  if (level >= ROLE_LEVELS.admin) return "Admin";
+  if (level >= ROLE_LEVELS.editor) return "Can edit";
+  return "Can view";
+}
 
 // [name, type, look] per project; null is Drafts
 const SPEC = [
@@ -1568,8 +1680,10 @@ async function start() {
     const byOrg = {};
     teams.forEach((t, i) => {
       const rows = Array.isArray(folders[i]?.folder_rows) ? folders[i].folder_rows : [];
-      const projects = rows.filter((f) => !f.trashed_at && !f.deleted_at && !f.is_abandoned_drafts && !DRAFT_FOLDERS.has(f.id)).map((f) => [f.id, f.name ?? f.path]);
-      const team = { id: t.id, name: t.name, color: colorForTeam(t.id), img: t.img_url ?? null, projects };
+      const kept = rows.filter((f) => !f.trashed_at && !f.deleted_at && !f.is_abandoned_drafts && !DRAFT_FOLDERS.has(f.id));
+      for (const f of kept) FOLDER[f.id] = { color: f.color ?? null, description: f.description ?? "", audience: f.sharing_audience_control ?? null, teamAccess: f.team_access ?? null };
+      const projects = kept.map((f) => [f.id, f.name ?? f.path]);
+      const team = { id: t.id, name: t.name, color: colorForTeam(t.id), img: t.img_url ?? null, description: t.description ?? "", projects };
       if (t.org_id) {
         byOrg[t.org_id] ??= plans[plans.push({ id: t.org_id, name: orgs[t.org_id]?.name ?? "Organization", tier: "Organization", teams: [] }) - 1];
         byOrg[t.org_id].teams.push(team);
@@ -1724,7 +1838,7 @@ function rememberTrash() {
 // Shown at once next time, then brought up to date
 function saveCache() {
   const files = FILES.filter((f) => !f.trashed && (f.recent || f.starred)).map(({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread, recent, thumbUrl, bg }) => ({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread, recent: !!recent, thumbUrl, bg }));
-  store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, email, img_url, community_profile_handle }) => ({ id, name, email, img_url, community_profile_handle })), files });
+  store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, folders: FOLDER, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, email, img_url, community_profile_handle }) => ({ id, name, email, img_url, community_profile_handle })), files });
 }
 // Figma's file browser opens on the account in its `recent_user_data` cookie
 // (a JSON string of base64 JSON, `fileBrowserUserId` among the rest). Ligma's
@@ -1766,6 +1880,7 @@ function showCached() {
   Live.draftsByTeam = cache.drafts ?? {};
   for (const id of Object.values(Live.draftsByTeam)) DRAFT_FOLDERS.add(id);
   PLANS.splice(0, PLANS.length, ...cache.plans);
+  Object.assign(FOLDER, cache.folders);
   for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
   // Previews are links Figma signs for 7 days: kept for 6
   const fresh = Date.now() - cache.at < 6 * DAY;
@@ -1934,15 +2049,21 @@ const head = $("#head");
 const filters = $("#filters");
 const scroller = $("#scroll");
 const rail = $("#rail");
+// The window for a team's settings and people, or for sharing a project
+const win = $("#win");
+const winState = { kind: null, team: null, project: null, anchor: null, back: null, editing: null, level: null, busy: false };
 
+// iconName: one of Figma's icons, or an icon's own markup
 function navRow(view, iconName, label, count, extra = "", tail = "") {
   const on = state.view === view;
   const drop = ["recents", "starred"].includes(view) ? "" : `data-drop="${view}"`;
   const n = tail || `<span class="n">${count ?? ""}</span>`;
-  return `<button class="nav ${extra}${on ? " on" : ""}" data-key="nav:${view}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${fig(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
+  return `<button class="nav ${extra}${on ? " on" : ""}" data-key="nav:${view}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${iconName.startsWith("<") ? iconName : fig(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
 }
 
 function renderSide() {
+  // Not while a project is renamed in place: it redraws once that's done
+  if ($(".lbl input", side)) return;
   const live = FILES.filter((f) => !f.trashed);
   // Counts only for lists loaded whole
   const count = (pred, view) => (LIVE && view && !Live.ready.has(view) ? "" : live.filter(pred).length || "");
@@ -1969,12 +2090,13 @@ function renderSide() {
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
     let out = `<div class="team-row" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
+    out += `<button class="team-gear" data-team-win="${team.id}" aria-haspopup="dialog" aria-expanded="${win.classList.contains("open") && winState.team === team.id}" aria-label="${esc(team.name)} settings and people" title="Settings and people">${icon("sliders")}</button>`;
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${fig(isStarred ? "starOn" : "star")}</button></div>`;
     if (!open) return out;
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
     if (!LIVE || Live.ready.has("starred")) countTeam(team);
     const files = (id, view) => (LIVE && LG.count(id) !== undefined ? LG.count(id) || "" : count((f) => f.project === id, view));
-    for (const [id, name] of team.projects) out += navRow("p:" + id, "folder", name, files(id, "p:" + id), "proj");
+    for (const [id, name] of team.projects) out += navRow("p:" + id, folderIcon(id), name, files(id, "p:" + id), "proj");
     if (!LIVE || Live.draftsByTeam[team.id]) out += navRow("d:" + team.id, "file", "Drafts", files(Live.draftsByTeam[team.id], "d:" + team.id), "proj");
     out += navRow("t:" + team.id, "trash", "Trash", count((f) => f.trashed && f.team === team.id), "proj");
     return out;
@@ -2000,10 +2122,13 @@ function renderSide() {
 }
 
 function renderHead(count) {
+  // Not while the project's name or description is being edited
+  if ($("input", head)) return;
   const name = viewName(state.view);
   const n = state.mode === "loading" || state.view === "home" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  const project = state.view.startsWith("p:") ? PROJECTS[state.view.slice(2)] : null;
   morph(head, `<button class="menu-btn" data-act="side" aria-label="Show sidebar">${icon("side")}</button>
-    <h1><span>${esc(name)}</span><small>${n}</small></h1><span class="grow"></span>
+    ${project ? projectTitle(project, n) : `<h1><span>${esc(name)}</span><small>${n}</small></h1>`}<span class="grow"></span>${project ? projectTools(project) : ""}
     <button id="find" data-act="search" aria-label="Search">${icon("search")}<span class="lbl">Search files, projects and actions</span><kbd>${MOD}K</kbd></button>
     <div class="new"><button data-act="new" title="New Design file">${icon("plus")}New</button><button data-act="new-menu" aria-label="More kinds of file" aria-haspopup="menu">${icon("down")}</button></div>`);
 }
@@ -2022,7 +2147,6 @@ function renderFilters() {
   else if (inTrash() && LIVE) html += `<span class="fnote">Every team's trash in Figma. Restore a file, or delete it for good</span>`;
   else if (inTrash()) html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
   else if (state.view === "starred" && FILES.some((f) => f.starred && !f.trashed)) html += `<span class="fnote">Drag files, or press ${MAC ? "⌥←" : "Alt+Left"} and ${MAC ? "⌥→" : "Alt+Right"}, to put them in your order</span>`;
-  else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
   else if (layoutOf(state.view)) html += layoutToggle(layoutOf(state.view));
   morph(filters, html);
 }
@@ -2144,7 +2268,7 @@ function projectTile(p) {
   const cells = shots.length ? shots.map((f) => `<span class="thumb" data-thumb="${f.id}"></span>`).join("") : `<span class="none">${figmaIcon("folder", 24)}</span>`;
   return `<button class="ptile" data-go="p:${p.id}" data-project="${p.id}" aria-label="${esc(`${p.name}, ${p.team.name}`)}">
     <span class="mosaic n${shots.length}" aria-hidden="true">${cells}</span>
-    <span class="pname">${figmaIcon("folder", 16)}<b>${esc(p.name)}</b></span>
+    <span class="pname">${folderIcon(p.id)}<b>${esc(p.name)}</b></span>
     <span class="pmeta"><span>${esc(p.team.name)} · ${esc(short(p.at))}</span><span data-pcount="${p.id}">${esc(filesText(LIVE ? LG.count(p.id) : p.files.length))}</span></span></button>`;
 }
 
@@ -2953,6 +3077,622 @@ function rename(id) {
   input.addEventListener("blur", () => finish(true));
 }
 
+/* Projects: what Figma's folder menu and settings offer, where the project
+   shows. Its header in its view, its row in the sidebar and its tile on
+   Home, each with the same menu */
+
+const projectUrl = (id) => `https://www.figma.com/files/project/${id}`;
+const allTeams = () => PLANS.flatMap((plan) => plan.teams);
+
+function projectTitle(p, count) {
+  const desc = FOLDER[p.id]?.description ?? "";
+  const color = FOLDER_COLORS.find(([key]) => key === FOLDER[p.id]?.color)?.[1];
+  return `<h1 class="ptitle"><button class="hb" data-pact="color" aria-haspopup="menu" aria-label="Color${color ? `, ${color}` : ""}" title="Color">${folderIcon(p.id)}</button>` +
+    `<button class="hname" data-pact="rename" title="Rename">${esc(p.name)}</button><small>${count}</small>` +
+    `<button class="hdesc${desc ? "" : " blank"}" data-pact="describe" title="${desc ? esc(desc) : "Add a description"}">${esc(desc || "Add a description")}</button></h1>`;
+}
+// What everyone in the team (or organization) can do with a project:
+// edit, view or nothing, which leaves it to people invited to it
+function accessOf(id) {
+  const f = FOLDER[id] ?? {};
+  if (f.audience) return f.audience === "invite_only" ? "none" : /view/.test(f.audience) ? "view" : "edit";
+  return f.teamAccess === "team_view" ? "view" : f.teamAccess === "team_access_disabled" ? "none" : "edit";
+}
+const orgWide = (id) => /^org_/.test(FOLDER[id]?.audience ?? "");
+// Who has the project, as the team gets it: the chip that opens sharing
+function accessText(p) {
+  const who = orgWide(p.id) ? "Organization" : "Team";
+  return { edit: `${who} can edit`, view: `${who} can view`, none: "Invited people only" }[accessOf(p.id)];
+}
+function projectTools(p) {
+  const open = win.classList.contains("open") && winState.kind === "share" && winState.project === p.id;
+  return `<button class="pill access" data-pact="share" aria-haspopup="dialog" aria-expanded="${open}" title="Share ${esc(p.name)}">${fig("users")}<span>${esc(accessText(p))}</span></button>` +
+    `<button class="hb" data-pact="more" aria-haspopup="menu" aria-label="More for ${esc(p.name)}" title="More">${icon("more")}</button>`;
+}
+
+function colorItems(id) {
+  return FOLDER_COLORS.map(([key, label, hex]) => ({ label, iconHtml: folderIcon(id, hex), checked: FOLDER[id]?.color === key, act: () => setProjectColor(id, key) }));
+}
+function projectMenu(id, at, { open = false } = {}) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  const others = allTeams().filter((t) => t.id !== p.team.id);
+  showMenu([
+    ...(open ? [{ label: "Open", act: () => go("p:" + id) }, null] : []),
+    { label: "Rename", act: () => renameProject(id) },
+    { label: FOLDER[id]?.description ? "Edit description" : "Add a description", act: () => describeProject(id) },
+    { label: "Color", sub: colorItems(id) },
+    null,
+    { label: "Share…", act: () => openShare(id, at) },
+    { label: "Copy link", act: () => copyProjectLink(id) },
+    { label: "Move to team", disabled: !others.length, sub: others.map((t) => ({ label: t.name, act: () => moveProject(id, t.id) })) },
+    { label: "Transfer or send a copy", ext: true, act: () => window.open(projectUrl(id), "_blank", "noopener") },
+    null,
+    { label: "Move to trash", act: () => trashProject(id) },
+  ], at);
+}
+
+head.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-pact]");
+  const id = state.view.startsWith("p:") && state.view.slice(2);
+  if (!button || !id || !PROJECTS[id]) return;
+  const at = button.getBoundingClientRect();
+  const act = button.dataset.pact;
+  if (act === "color") showMenu(colorItems(id), at);
+  else if (act === "rename") renameProject(id);
+  else if (act === "describe") describeProject(id);
+  else if (act === "share") winState.kind === "share" && win.classList.contains("open") ? closeWin() : openShare(id, at);
+  else if (act === "more") projectMenu(id, at);
+});
+
+// Focus goes back to what was edited for the keyboard, not the pointer
+function refocus(el) {
+  if (!el || !document.documentElement.classList.contains("kbd")) return false;
+  el.focus({ preventScroll: true });
+  return true;
+}
+
+// Edits a name or description where it shows: `el` gives way to a field
+// until Enter, Escape or a click elsewhere. `wrap` makes what holds the
+// field, by default a span like `el`
+function editInPlace(el, { value, label, multiline = false, wrap }, save, after) {
+  const input = document.createElement(multiline ? "textarea" : "input");
+  input.value = value;
+  input.setAttribute("aria-label", label);
+  input.spellcheck = false;
+  if (multiline) input.rows = 3;
+  let box;
+  if (wrap) box = wrap(input);
+  else {
+    box = document.createElement("span");
+    box.className = el.className + " editing";
+    box.append(input);
+  }
+  el.replaceWith(box);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    const next = input.value.trim();
+    box.remove();
+    if (keep && next !== value.trim()) save(next);
+    after?.();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && !(multiline && e.shiftKey)) {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  for (const type of ["click", "pointerdown", "dblclick", "contextmenu"]) input.addEventListener(type, (e) => e.stopPropagation());
+  input.addEventListener("blur", () => finish(true));
+}
+
+// Renames in place: in the header when the project is open, else on its
+// row in the sidebar, else it opens to rename there
+function renameProject(id) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  const row = $(`.nav[data-view="p:${CSS.escape(id)}"]`, side);
+  if (state.view !== "p:" + id && row) {
+    return editInPlace(row, {
+      value: p.name,
+      label: "Project name",
+      wrap: (input) => {
+        const box = document.createElement("div");
+        box.className = "nav proj on";
+        box.style.setProperty("--fc", folderHex(id));
+        box.innerHTML = `${folderIcon(id)}<span class="lbl"></span>`;
+        $(".lbl", box).append(input);
+        return box;
+      },
+    }, (name) => saveProjectName(id, name), () => {
+      renderSide();
+      refocus($(`.nav[data-view="p:${CSS.escape(id)}"]`, side));
+    });
+  }
+  if (state.view !== "p:" + id) go("p:" + id);
+  const el = $(".hname", head);
+  if (el) editInPlace(el, { value: p.name, label: "Project name" }, (name) => saveProjectName(id, name), () => {
+    render();
+    refocus($(".hname", head));
+  });
+}
+function saveProjectName(id, name) {
+  const p = PROJECTS[id];
+  if (!name || !p || name === p.name) return;
+  const old = p.name;
+  const set = (to) => {
+    p.name = to;
+    const row = p.team.projects.find(([pid]) => pid === id);
+    if (row) row[1] = to;
+  };
+  const put = (to, from) => {
+    set(to);
+    render();
+    if (LIVE) send(api("/api/folders/rename", { method: "PUT", json: { folder_id: id, name: to } }), () => set(from), "rename the project");
+  };
+  put(name, old);
+  toast(`Renamed to “${name}”`, () => put(old, name));
+}
+
+function describeProject(id) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  if (state.view !== "p:" + id) go("p:" + id);
+  const el = $(".hdesc", head);
+  if (!el) return;
+  const old = FOLDER[id]?.description ?? "";
+  editInPlace(el, { value: old, label: `Description of ${p.name}` }, (text) => {
+    const put = (to, from) => setFolder(id, "description", to, from, () => api(`/api/folders/${id}/description`, { method: "PUT", json: { description: to } }), "save the description");
+    put(text, old);
+    toast(text ? "Saved the description" : "Removed the description", () => put(old, text));
+  }, () => {
+    render();
+    refocus($(".hdesc", head));
+  });
+}
+
+// One of a project's settings, here at once and then in Figma. If Figma
+// refuses it, it goes back
+function setFolder(id, field, to, from, request, what) {
+  const f = (FOLDER[id] ??= {});
+  f[field] = to;
+  render();
+  if (win.classList.contains("open")) drawWin();
+  if (LIVE) send(request(), () => (f[field] = from), what);
+}
+
+function setProjectColor(id, color) {
+  const old = FOLDER[id]?.color ?? null;
+  if (old === color) return;
+  const put = (to, from) => setFolder(id, "color", to, from, () => api(`/api/folders/${id}/color`, { method: "PUT", json: { color: to } }), "change the color");
+  put(color, old);
+  const name = FOLDER_COLORS.find(([key]) => key === color)[1];
+  toast(`Made ${PROJECTS[id].name} ${name.toLowerCase()}`, () => put(old, color));
+}
+
+function copyProjectLink(id) {
+  navigator.clipboard?.writeText(projectUrl(id)).catch(() => {});
+  toast("Copied link");
+}
+
+function moveProject(id, teamId) {
+  const p = PROJECTS[id];
+  const dest = teamById(teamId);
+  if (!p || !dest) return;
+  const source = p.team;
+  const shift = (a, b) => {
+    const i = a.projects.findIndex(([pid]) => pid === id);
+    if (i < 0) return;
+    b.projects.push(...a.projects.splice(i, 1));
+    p.team = b;
+    p.plan = teamById(b.id).plan;
+    for (const f of FILES) if (f.project === id) f.team = b.id;
+    render();
+  };
+  const put = (a, b) => {
+    shift(a, b);
+    if (LIVE) send(api("/api/folders/move", { method: "PUT", json: { folder_id: id, team_id: b.id } }), () => shift(b, a), "move the project");
+  };
+  state.collapsed.delete(teamId);
+  put(source, dest.team);
+  toast(`Moved ${p.name} to ${dest.team.name}`, () => put(dest.team, source));
+}
+
+// Into Figma's trash with its files, as Figma does, with a way back
+function trashProject(id) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  const team = p.team;
+  const at = team.projects.findIndex(([pid]) => pid === id);
+  const row = team.projects[at];
+  const files = FILES.filter((f) => f.project === id && !f.trashed);
+  const drop = () => {
+    const i = team.projects.indexOf(row);
+    if (i >= 0) team.projects.splice(i, 1);
+    delete PROJECTS[id];
+    for (const f of files) f.trashed = true;
+    if (winState.project === id) closeWin(false);
+    if (state.view === "p:" + id) go("home");
+    else render();
+  };
+  const back = () => {
+    if (!team.projects.includes(row)) team.projects.splice(Math.min(at, team.projects.length), 0, row);
+    PROJECTS[id] = p;
+    for (const f of files) f.trashed = false;
+    render();
+  };
+  drop();
+  if (LIVE) send(api(`/api/folders/trash/${id}`, { method: "PUT" }), back, "move the project to the trash");
+  toast(`Moved ${p.name} to the trash`, () => {
+    back();
+    if (LIVE) send(api(`/api/folders/restore/${id}`, { method: "PUT", json: { destination_team_id: team.id } }), drop, "restore the project");
+  });
+}
+
+/* Teams: the menu on a team, and a window with its name, description,
+   people and invites. Roles, libraries, AI, transfer and deleting the
+   team stay in Figma: they differ by plan and reach other people */
+
+function teamMenu(id, at) {
+  const found = teamById(id);
+  if (!found) return;
+  const pinned = STARRED_TEAMS().has(id);
+  showMenu([
+    { label: "Settings and people", act: () => openTeamWin(id, at) },
+    { label: "Invite people…", act: () => openTeamWin(id, at, "invite") },
+    { label: "Copy invite link", act: () => copyTeamLink(id) },
+    { label: "Rename", act: () => openTeamWin(id, at, "rename") },
+    null,
+    { label: pinned ? "Unpin team" : "Pin to the top", act: () => toggleTeamStar(id) },
+    { label: "New project here", act: () => newProject(at instanceof DOMRect ? { x: at.left, y: at.bottom } : at, id) },
+    null,
+    { label: "Open team in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/team/${id}`, "_blank") },
+  ], at);
+}
+
+const SAMPLE_ROLES = { me: 999, sam: 900, priya: 300, ana: 100, jonas: null };
+async function loadTeamInfo(id) {
+  const { team } = teamById(id) ?? {};
+  if (!team) return;
+  if (!LIVE) {
+    TEAM_INFO[id] ??= { description: team.description ?? "", admin: true, members: Object.entries(SAMPLE_ROLES).map(([pid, level]) => ({ id: pid, name: PEOPLE[pid].name, email: `${pid}@example.com`, color: PEOPLE[pid].color, level, me: pid === "me" })) };
+    return;
+  }
+  const [meta, members] = await Promise.all([api(`/api/teams/${id}`), api(`/api/teams/${id}/members`)]);
+  team.name = meta.name ?? team.name;
+  team.img = meta.img_url ?? team.img;
+  team.description = meta.description ?? "";
+  const list = (Array.isArray(members) ? members : []).map((m) => ({ id: m.id, name: m.name || m.email, email: m.email, img_url: m.img_url, level: m.team_role?.level ?? null, me: m.id === Live.uid }));
+  list.sort((a, b) => b.me - a.me || (b.level ?? 0) - (a.level ?? 0) || a.name.localeCompare(b.name));
+  TEAM_INFO[id] = { description: team.description, admin: (list.find((m) => m.me)?.level ?? 0) >= ROLE_LEVELS.admin, members: list };
+}
+
+// A team's invite link, as Figma's Invite by link makes it: Starter teams
+// only have links that join as members (editor level)
+async function copyTeamLink(id) {
+  const { team, plan } = teamById(id) ?? {};
+  if (!team) return;
+  if (!LIVE) {
+    navigator.clipboard?.writeText(`https://www.figma.com/team_invite/redeem/sample-${id}`).catch(() => {});
+    return toast("Copied the invite link, good for 90 days");
+  }
+  const get = (level) => api("/api/team_join_link", { method: "PUT", json: { team_id: id, level } });
+  try {
+    let meta;
+    try {
+      meta = await get(plan.tier === "Free" ? ROLE_LEVELS.editor : ROLE_LEVELS.viewer);
+    } catch (error) {
+      if (!/editor/i.test(error.message)) throw error;
+      meta = await get(ROLE_LEVELS.editor);
+    }
+    if (meta.disabled || !meta.link?.token) return toast("Invite links are off for this team in Figma");
+    navigator.clipboard?.writeText(`https://www.figma.com/team_invite/redeem/${meta.link.token}`).catch(() => {});
+    toast(`Copied the invite link${meta.link_expiration_days ? `, good for ${meta.link_expiration_days} days` : ""}`);
+  } catch (error) {
+    toast(`Couldn't get the invite link: ${error.message}`);
+  }
+}
+
+/* The window */
+
+function openTeamWin(id, at, focus = null) {
+  if (!teamById(id)) return;
+  openWin({ kind: "team", team: id, project: null }, at, focus);
+  loadTeamInfo(id).then(() => winState.team === id && drawWin(), (error) => {
+    if (winState.team !== id) return;
+    TEAM_INFO[id] = { ...TEAM_INFO[id], error: error.message };
+    drawWin();
+  });
+}
+function openShare(id, at) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  openWin({ kind: "share", team: p.team.id, project: id }, at);
+  loadRoles(id).then(() => winState.project === id && drawWin(), (error) => {
+    if (winState.project !== id) return;
+    ROLES[id] = { error: error.message };
+    drawWin();
+  });
+}
+
+// Who a project's been shared with: Figma's roles on it
+const ROLES = {};
+async function loadRoles(id) {
+  if (!LIVE) {
+    ROLES[id] ??= { list: Object.entries(SAMPLE_ROLES).slice(0, 3).map(([pid, level]) => ({ name: PEOPLE[pid].name, color: PEOPLE[pid].color, id: pid, level: level ?? 300, me: pid === "me" })) };
+    return;
+  }
+  const roles = await api(`/api/roles/folder/${id}`);
+  ROLES[id] = {
+    list: (Array.isArray(roles) ? roles : []).map((r) => ({ id: r.user?.id ?? r.id, name: r.user?.handle ?? r.pending_email ?? "Someone", img_url: r.user?.img_url, email: r.pending ? r.pending_email : null, pending: !!r.pending, level: r.level, me: r.user_id === Live.uid })).sort((a, b) => b.me - a.me || b.level - a.level),
+  };
+}
+
+function openWin(what, at, focus = null) {
+  closeMenu();
+  closeInbox(false);
+  if (pal.open) pal.close();
+  const again = win.classList.contains("open") && winState.kind === what.kind && winState.team === what.team && winState.project === what.project;
+  if (!again) winState.back = document.activeElement;
+  Object.assign(winState, what, { anchor: at, level: null });
+  win.classList.add("open");
+  drawWin();
+  renderSide();
+  renderHead(order.length);
+  if (focus === "rename") $("[data-w=rename]", win)?.click();
+  else if (focus === "invite") $(".invite input", win)?.focus();
+  else win.focus({ preventScroll: true });
+}
+function closeWin(restore = true) {
+  if (!win.classList.contains("open")) return;
+  win.classList.remove("open");
+  win.innerHTML = "";
+  const back = winState.back;
+  Object.assign(winState, { kind: null, team: null, project: null, anchor: null, back: null });
+  renderSide();
+  renderHead(order.length);
+  if (restore && back?.isConnected) back.focus({ preventScroll: true });
+}
+// Beside a sidebar row, under a header button, or where the pointer was
+function placeWin() {
+  const at = winState.anchor;
+  const w = win.offsetWidth;
+  const h = win.offsetHeight;
+  let x, y;
+  if (at instanceof DOMRect) {
+    const inSide = at.right <= side.getBoundingClientRect().right + 1;
+    [x, y] = inSide ? [side.getBoundingClientRect().right + 8, at.top - 12] : [at.right - w, at.bottom + 6];
+  } else [x, y] = [at?.x ?? 8, at?.y ?? 8];
+  win.style.left = `${Math.max(8, Math.min(x, innerWidth - w - 8))}px`;
+  win.style.top = `${Math.max(8, Math.min(y, innerHeight - h - 8))}px`;
+}
+
+const levelName = (level) => (level >= ROLE_LEVELS.editor ? "Can edit" : "Can view");
+function personRow(m, tier, extra = "") {
+  const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
+  const role = m.pending ? "Invited" : roleName(m.level, tier);
+  return `<div class="mem" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${esc(m.name)}${m.me ? " <i>(you)</i>" : ""}</b>${m.email ? `<small>${esc(m.email)}</small>` : ""}</span><span class="role">${esc(role)}</span>${extra}</div>`;
+}
+function inviteForm(label, levels) {
+  const level = winState.level ?? levels?.[0] ?? null;
+  winState.level = level;
+  return `<form class="invite" data-w="invite"><input type="text" inputmode="email" autocomplete="off" spellcheck="false" placeholder="Emails, comma separated" aria-label="${esc(label)}">` +
+    (levels ? `<button type="button" class="ib" data-w="level" aria-haspopup="menu" aria-label="Invite as: ${levelName(level)}">${levelName(level)}${icon("down")}</button>` : "") +
+    `<button type="submit" class="btn sm primary" disabled>Invite</button></form>`;
+}
+
+function teamWinHtml() {
+  const { team, plan } = teamById(winState.team);
+  const info = TEAM_INFO[team.id];
+  const tier = plan.teams.length === 1 ? plan.tier : plan.name;
+  const edit = !info || info.admin;
+  const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
+  const count = info?.members ? ` · ${info.members.length} ${info.members.length === 1 ? "person" : "people"}` : "";
+  let html = `<div class="wh"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><div class="wt"><h2 id="win-title">` +
+    (edit ? `<button class="hname" data-w="rename" title="Rename">${esc(team.name)}</button>` : `<span class="hname static">${esc(team.name)}</span>`) +
+    `</h2><small>${esc(tier)}${count}</small></div><button class="ib x" data-w="close" aria-label="Close" title="Close">${icon("x")}</button></div><div class="wb">`;
+  const about = info?.description ?? team.description ?? "";
+  html += `<section class="ws"><h3>About</h3>` + (edit ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : `<p class="about static${about ? "" : " blank"}">${esc(about || "No description")}</p>`) + `</section>`;
+  html += `<section class="ws"><h3>People<a href="https://www.figma.com/files/team/${esc(team.id)}" target="_blank" rel="noopener" title="Change roles or remove people in Figma">Roles in Figma${fig("ext")}</a></h3>`;
+  html += inviteForm(`Invite people to ${team.name}`, tier === "Free" ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor]);
+  html += `<button class="ib wlink" data-w="team-link">${icon("link")}Copy invite link</button>`;
+  if (info?.error) html += `<p class="wnote" role="alert">Couldn't load the people: ${esc(info.error)}</p>`;
+  else if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div><div class="wsk"></div>`;
+  else html += `<div role="list" aria-label="People in ${esc(team.name)}">${info.members.map((m) => personRow(m, tier)).join("")}</div>`;
+  html += `</section></div><div class="wfoot"><a class="ib" href="https://www.figma.com/files/team/${esc(team.id)}" target="_blank" rel="noopener">Libraries, AI, transfer and deleting in Figma<span class="x">${fig("ext")}</span></a></div>`;
+  return html;
+}
+
+const ACCESS = [["edit", "Can edit"], ["view", "Can view"], ["none", "No access"]];
+function shareWinHtml() {
+  const p = PROJECTS[winState.project];
+  const roles = ROLES[p.id];
+  const access = ACCESS.find(([k]) => k === accessOf(p.id))[1];
+  const everyone = orgWide(p.id) ? p.plan.name : p.team.name;
+  const tm = p.team.img ? `<img src="${esc(p.team.img)}" alt="" referrerpolicy="no-referrer">` : esc(p.team.name[0]);
+  let html = `<div class="wh"><span class="fbig">${folderIcon(p.id)}</span><div class="wt"><h2 id="win-title"><span class="hname static">Share ${esc(p.name)}</span></h2><small>${esc(p.team.name)}</small></div><button class="ib x" data-w="close" aria-label="Close" title="Close">${icon("x")}</button></div><div class="wb">`;
+  html += `<section class="ws"><h3>Invite</h3>${inviteForm(`Invite people to ${p.name}`, [ROLE_LEVELS.viewer, ROLE_LEVELS.editor])}</section>`;
+  html += `<section class="ws"><h3>Who has access</h3><div role="list" aria-label="Who has access to ${esc(p.name)}">`;
+  html += `<div class="mem" role="listitem"><span class="tm" style="background:${p.team.img ? "transparent" : p.team.color}">${tm}</span><span><b>Anyone in ${esc(everyone)}</b></span>` +
+    // Starter teams' projects are open to the whole team, to edit
+    (p.plan.tier === "Free" ? `<span class="role">${access}</span>` : `<button class="ib" data-w="team-access" aria-haspopup="menu" aria-label="What ${esc(everyone)} can do: ${access}">${access}${icon("down")}</button>`) + `</div>`;
+  if (roles?.error) html += `<p class="wnote" role="alert">Couldn't load who has access: ${esc(roles.error)}</p>`;
+  else if (!roles) html += `<div class="wsk"></div><div class="wsk"></div>`;
+  else html += roles.list.map((r) => personRow({ ...r, level: r.level }, null)).join("");
+  html += `</div></section></div><div class="wfoot"><button class="ib" data-w="project-link">${icon("link")}Copy link</button><a class="ib" href="${projectUrl(p.id)}" target="_blank" rel="noopener" style="flex:none">Change roles in Figma<span class="x">${fig("ext")}</span></a></div>`;
+  return html;
+}
+
+function drawWin() {
+  if (!win.classList.contains("open")) return;
+  // Not under a name or description being edited: once it's saved
+  if ($(".editing", win)) return;
+  if (winState.kind === "team" && !teamById(winState.team)) return closeWin(false);
+  if (winState.kind === "share" && !PROJECTS[winState.project]) return closeWin(false);
+  const was = $(".invite input", win);
+  const typed = was?.value ?? "";
+  const focused = document.activeElement;
+  const refocus = was && focused === was ? "emails" : win.contains(focused) ? focused.dataset?.w : null;
+  win.setAttribute("aria-label", winState.kind === "team" ? "Team settings and people" : "Share");
+  win.innerHTML = winState.kind === "team" ? teamWinHtml() : shareWinHtml();
+  const input = $(".invite input", win);
+  if (input) {
+    input.value = typed;
+    inviteReady();
+  }
+  if (refocus === "emails") input?.focus();
+  else if (refocus) $(`[data-w="${refocus}"]`, win)?.focus();
+  placeWin();
+}
+
+const emailsIn = (text) => text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+function inviteReady() {
+  const input = $(".invite input", win);
+  const emails = emailsIn(input?.value ?? "");
+  const submit = $(".invite [type=submit]", win);
+  if (submit) submit.disabled = !emails.length || !emails.every(isEmail);
+}
+
+function sendInvites() {
+  const input = $(".invite input", win);
+  const emails = emailsIn(input.value);
+  if (!emails.length || !emails.every(isEmail)) return;
+  const team = winState.kind === "team";
+  const id = team ? winState.team : winState.project;
+  const { plan } = teamById(winState.team);
+  // Starter teams invite members, with no level to pick: as their links do
+  const level = team && plan.tier === "Free" ? ROLE_LEVELS.editor : winState.level ?? ROLE_LEVELS.viewer;
+  const done = () => {
+    input.value = "";
+    inviteReady();
+    toast(emails.length === 1 ? `Invited ${emails[0]}` : `Invited ${emails.length} people`);
+    (team ? loadTeamInfo(id) : loadRoles(id)).then(drawWin, () => {});
+  };
+  if (!LIVE) return done();
+  const submit = $(".invite [type=submit]", win);
+  submit.disabled = true;
+  api("/api/invites", { method: "POST", json: { emails, resource_type: team ? "team" : "folder", resource_id_or_key: id, level } })
+    .then(done, (error) => {
+      inviteReady();
+      toast(`Couldn't invite them: ${error.message}`);
+    });
+}
+
+function renameTeam(id) {
+  const { team } = teamById(id) ?? {};
+  const el = $("[data-w=rename]", win);
+  if (!team || !el) return;
+  editInPlace(el, { value: team.name, label: "Team name" }, (name) => {
+    if (!name) return;
+    const old = team.name;
+    const put = (to, from) => {
+      team.name = to;
+      render();
+      drawWin();
+      if (LIVE) send(api(`/api/teams/${id}`, { method: "PUT", json: { name: to } }), () => {
+        team.name = from;
+        drawWin();
+      }, "rename the team");
+    };
+    put(name, old);
+    toast(`Renamed to “${name}”`, () => put(old, name));
+  }, () => {
+    drawWin();
+    refocus($("[data-w=rename]", win)) || win.focus({ preventScroll: true });
+  });
+}
+function describeTeam(id) {
+  const { team } = teamById(id) ?? {};
+  const el = $("[data-w=about]", win);
+  if (!team || !el) return;
+  const info = TEAM_INFO[id];
+  const old = info?.description ?? team.description ?? "";
+  editInPlace(el, { value: old, label: `Description of ${team.name}`, multiline: true }, (text) => {
+    const put = (to, from) => {
+      team.description = to;
+      if (info) info.description = to;
+      drawWin();
+      if (LIVE) send(api(`/api/teams/${id}`, { method: "PUT", json: { description: to } }), () => {
+        team.description = from;
+        if (info) info.description = from;
+        drawWin();
+      }, "save the description");
+    };
+    put(text, old);
+    toast(text ? "Saved the description" : "Removed the description", () => put(old, text));
+  }, () => {
+    drawWin();
+    refocus($("[data-w=about]", win)) || win.focus({ preventScroll: true });
+  });
+}
+
+function teamAccessMenu(at) {
+  const id = winState.project;
+  const f = (FOLDER[id] ??= {});
+  const current = accessOf(id);
+  const scope = orgWide(id) ? "organization" : "team";
+  // In the field the project has, keeping its scope (plan, org, workspace)
+  const field = f.audience ? "audience" : "teamAccess";
+  const value = (level) => (field === "audience"
+    ? level === "none" ? "invite_only" : `${f.audience.match(/^(org|plan|workspace)_/)?.[1] ?? "plan"}_${level}`
+    : { edit: "team_edit", view: "team_view", none: "team_access_disabled" }[level]);
+  showMenu(ACCESS.map(([key, label]) => ({
+    label,
+    detail: { edit: `Everyone in the ${scope} can edit`, view: `Everyone in the ${scope} can view`, none: "Only people invited to it" }[key],
+    checked: key === current,
+    act: () => {
+      if (key === current) return;
+      const old = f[field];
+      const put = (to, from) => setFolder(id, field, to, from, () => api(`/api/folders/${id}`, { method: "PUT", json: field === "audience" ? { sharing_audience_control: to } : { team_access: to } }), "change who has access");
+      put(value(key), old);
+      toast(key === "none" ? `Only people invited can open ${PROJECTS[id].name}` : `Everyone in the ${scope} ${label.toLowerCase()}`, () => put(old, value(key)));
+    },
+  })), at);
+}
+
+win.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-w]");
+  const act = el?.dataset.w;
+  if (!act || act === "invite") return;
+  if (act === "close") closeWin();
+  else if (act === "rename") renameTeam(winState.team);
+  else if (act === "about") describeTeam(winState.team);
+  else if (act === "team-link") copyTeamLink(winState.team);
+  else if (act === "project-link") copyProjectLink(winState.project);
+  else if (act === "team-access") teamAccessMenu(el.getBoundingClientRect());
+  else if (act === "level") {
+    showMenu([ROLE_LEVELS.viewer, ROLE_LEVELS.editor].map((level) => ({ label: levelName(level), checked: (winState.level ?? ROLE_LEVELS.viewer) === level, act: () => {
+      winState.level = level;
+      drawWin();
+    } })), el.getBoundingClientRect());
+  }
+});
+win.addEventListener("submit", (e) => {
+  e.preventDefault();
+  sendInvites();
+});
+win.addEventListener("input", (e) => e.target.matches(".invite input") && inviteReady());
+win.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeWin();
+  }
+});
+addEventListener("pointerdown", (e) => {
+  if (!win.classList.contains("open") || win.contains(e.target) || e.target.closest?.("#toast, .menu, [data-team-win], [data-pact=share]")) return;
+  closeWin(false);
+}, true);
+addEventListener("resize", () => win.classList.contains("open") && placeWin());
+
 function go(view) {
   if (!viewName(view)) return;
   state.view = view;
@@ -3625,7 +4365,7 @@ function openMover(ids, at, above = false) {
         header = `<div class="mh">${esc(team)}</div>`;
       }
       const here = current.size === 1 && current.has(t.project);
-      return `${header}<button class="mi" id="mi${i}" tabindex="-1" role="option" data-i="${i}" ${here ? 'aria-disabled="true"' : ""}>${icon(t.project ? "folder" : "file")}<span style="margin-left:8px">${esc(t.label)}</span>${q && t.where ? `<span class="x">${esc(t.where)}</span>` : here ? `<span class="x">Here now</span>` : ""}</button>`;
+      return `${header}<button class="mi" id="mi${i}" tabindex="-1" role="option" data-i="${i}" ${here ? 'aria-disabled="true"' : ""}>${t.project ? folderIcon(t.project) : icon("file")}<span style="margin-left:8px">${esc(t.label)}</span>${q && t.where ? `<span class="x">${esc(t.where)}</span>` : here ? `<span class="x">Here now</span>` : ""}</button>`;
     }).join("") : `<div class="none">No project called “${esc(q)}”</div>`;
     const first = menuItems.findIndex((item) => !item.disabled);
     highlight(first);
@@ -3640,22 +4380,26 @@ function openMover(ids, at, above = false) {
   input.focus();
 }
 
-// Right-click a team for the same and more
+// Right-click a team or a project for its menu
 $("#side").addEventListener("contextmenu", (e) => {
+  const at = { x: e.clientX, y: e.clientY };
   const row = e.target.closest(".team-row");
-  if (!row) return;
-  e.preventDefault();
-  const id = $("[data-team]", row).dataset.team;
-  const pinned = STARRED_TEAMS().has(id);
-  showMenu([
-    { label: pinned ? "Unpin team" : "Pin to the top", act: () => toggleTeamStar(id) },
-    { label: "New project here", act: () => newProject({ x: e.clientX, y: e.clientY }, id) },
-    null,
-    { label: "Open team in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/team/${id}`, "_blank") },
-  ], { x: e.clientX, y: e.clientY });
+  const project = e.target.closest('.nav[data-view^="p:"]')?.dataset.view.slice(2);
+  if (row) {
+    e.preventDefault();
+    teamMenu($("[data-team]", row).dataset.team, at);
+  } else if (project && PROJECTS[project]) {
+    e.preventDefault();
+    projectMenu(project, at, { open: true });
+  }
 });
 
 $("#side").addEventListener("click", (e) => {
+  const gear = e.target.closest("[data-team-win]");
+  if (gear) {
+    const id = gear.dataset.teamWin;
+    return win.classList.contains("open") && winState.kind === "team" && winState.team === id ? closeWin() : openTeamWin(id, gear.closest(".team-row").getBoundingClientRect());
+  }
   const view = e.target.closest("[data-view]");
   if (view) return go(view.dataset.view);
   const star = e.target.closest("[data-star-team]");
@@ -3823,6 +4567,30 @@ const COMMANDS = [
   { label: "Figma Community", url: "https://www.figma.com/community", icon: "grid" },
 ];
 
+// The open project's settings and each team's, after the fixed ones
+function paletteCommands() {
+  const list = [...COMMANDS];
+  const id = state.view.startsWith("p:") && state.view.slice(2);
+  const p = id && PROJECTS[id];
+  if (p) {
+    const at = () => $("[data-pact=more]", head)?.getBoundingClientRect() ?? { x: innerWidth / 2 - 200, y: 120 };
+    list.push(
+      { label: `Rename ${p.name}`, act: () => renameProject(id), icon: "folder" },
+      { label: `Share ${p.name}`, act: () => openShare(id, $("[data-pact=share]", head)?.getBoundingClientRect() ?? at()), icon: "users" },
+      { label: `Change the color of ${p.name}`, act: () => showMenu(colorItems(id), $("[data-pact=color]", head)?.getBoundingClientRect() ?? at()), icon: "folder" },
+      { label: `Describe ${p.name}`, act: () => describeProject(id), icon: "folder" },
+    );
+  }
+  for (const team of allTeams()) {
+    const at = () => $(`[data-team-win="${CSS.escape(team.id)}"]`, side)?.closest(".team-row").getBoundingClientRect() ?? { x: 248, y: 64 };
+    list.push(
+      { label: `${team.name} settings and people`, act: () => openTeamWin(team.id, at()), icon: "users" },
+      { label: `Invite people to ${team.name}`, act: () => openTeamWin(team.id, at(), "invite"), icon: "users" },
+    );
+  }
+  return list;
+}
+
 // Letters of `query` in order in `text`; more for runs, word starts and
 // whole substrings. Each word of the query has to match
 function match(query, text) {
@@ -3974,7 +4742,7 @@ function drawPalette() {
         html += `<div class="ph">Projects</div>`;
         for (const { p, m } of projects) {
           const i = items.push({ kind: "view", view: "p:" + p.id }) - 1;
-          html += row(i, icon("folder"), marked(p.name, m.hits), `<span class="pp">${esc(p.team.name)}</span>`);
+          html += row(i, folderIcon(p.id), marked(p.name, m.hits), `<span class="pp">${esc(p.team.name)}</span>`);
         }
       }
     }
@@ -3987,7 +4755,7 @@ function drawPalette() {
         html += row(i, icon("plus"), `New ${TYPES[type].noun} “${esc(query)}”`, `<span class="pp">in ${esc(placeOf(where))}</span>`);
       }
     }
-    const commands = COMMANDS.map((c) => ({ c, m: query ? match(query, c.label) : { score: 0 } })).filter((x) => x.m).slice(0, query ? 3 : 4);
+    const commands = paletteCommands().map((c) => ({ c, m: query ? match(query, c.label) : { score: 0 } })).filter((x) => x.m).sort((a, b) => b.m.score - a.m.score).slice(0, 4);
     for (const { c, m } of commands) {
       const i = items.push({ kind: "command", command: c }) - 1;
       html += row(i, icon(c.icon), marked(c.label, m.hits), c.url ? icon("ext") : "");
@@ -4276,10 +5044,7 @@ scroller.addEventListener("contextmenu", (e) => {
   const project = e.target.closest("[data-project]")?.dataset.project;
   if (project) {
     e.preventDefault();
-    return showMenu([
-      { label: "Open", act: () => go("p:" + project) },
-      { label: "Open in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/project/${project}`, "_blank") },
-    ], { x: e.clientX, y: e.clientY });
+    return projectMenu(project, { x: e.clientX, y: e.clientY }, { open: true });
   }
   const card = e.target.closest(".card[data-id]");
   if (!card) return;
