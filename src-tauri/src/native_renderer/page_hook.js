@@ -23,6 +23,7 @@
     pushTo: null,
     frames: 0,
     sent: 0,
+    ringed: 0,
     // Set when the next frame should be a full scene: the worker is sent a
     // scene it can't read, and Figma recovers by sending the whole scene
     wantFull: false,
@@ -327,11 +328,72 @@
     body.set(header, 4);
     body.set(forest, 4 + header.length);
     hook.sent++;
+    if (ring(body)) return;
     fetch(location.origin + hook.pushTo + `f${session}-${seq}`, { method: "POST", body, cache: "no-store", credentials: "omit" })
       .then((response) => {
         if (response.status !== 204) throw new Error(`${response.status}`);
       })
       .catch(() => (hook.wantFull = true));
+  }
+
+  // Memory shared with Ligma that frames go through (see `read_ring` in
+  // run.rs): the bytes written in all and those Ligma has read, then parts of
+  // frames, round. A frame bigger than what's free goes in parts, waiting for
+  // Ligma to read the ones before, which it does within a millisecond or so
+  const RING_HEADER = 64;
+  const RING_PART = 4 << 20;
+  const RING_WAIT = 100;
+  let shared = null;
+  window.chrome?.webview?.addEventListener("sharedbufferreceived", (event) => {
+    if (!event.additionalData?.ligmaFrames) return;
+    const buffer = event.getBuffer();
+    const positions = new Float64Array(buffer, 0, 2);
+    // Starting from what Ligma has read
+    positions[0] = positions[1];
+    shared = { positions, bytes: new Uint8Array(buffer, RING_HEADER), view: new DataView(buffer, RING_HEADER), capacity: buffer.byteLength - RING_HEADER };
+  });
+  function ring(body) {
+    if (!shared) return false;
+    const { positions, bytes, view, capacity } = shared;
+    let offset = 0;
+    let waiting = 0;
+    let read = positions[1];
+    do {
+      const written = positions[0];
+      const at = written % capacity;
+      const free = capacity - (written - positions[1]);
+      const end = capacity - at;
+      const rest = body.length - offset;
+      // Too little before the end for a part worth writing
+      if (end - 8 < Math.min(rest, 4096) && free >= end) {
+        if (end >= 8) view.setUint32(at, 0xffffffff, true);
+        positions[0] = written + end;
+        continue;
+      }
+      const part = Math.min(rest, RING_PART, Math.min(free, end) - 8);
+      if (part <= 0 || (part < rest && part < 4096)) {
+        // Ligma reading, or not: then frames go as requests till the tab
+        // gets memory again
+        const now = performance.now();
+        if (positions[1] !== read) {
+          read = positions[1];
+          waiting = now;
+        } else if (!waiting) {
+          waiting = now;
+        } else if (now - waiting > RING_WAIT) {
+          if (!offset) shared = null;
+          return false;
+        }
+        continue;
+      }
+      view.setUint32(at, part, true);
+      view.setUint32(at + 4, (offset + part < body.length ? 1 : 0) | (offset ? 2 : 0), true);
+      bytes.set(body.subarray(offset, offset + part), at + 8);
+      positions[0] = written + 8 + Math.ceil(part / 8) * 8;
+      offset += part;
+    } while (offset < body.length);
+    hook.ringed++;
+    return true;
   }
 
   // What's behind Figma's canvas made transparent, but for a backing of the

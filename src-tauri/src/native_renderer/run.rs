@@ -664,8 +664,29 @@ fn sync(ctx: Arc<Ctx>) {
         }
         *ctx.webview.lock().unwrap() = Some(file.webview.clone());
         let label = file.webview.label().to_string();
-        if ctx.framing.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab != label) {
+        // Another tab, or this one loaded again, whose page has to be told
+        // where frames go and to leave the canvas to Ligma again
+        let reloaded = ready.as_ref().and_then(Value::as_str) == Some("installed");
+        if ctx.framing.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab != label || reloaded) {
             stop_framing(&ctx);
+        }
+        let shared_here = ctx.shared.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab == label);
+        if reloaded || !shared_here {
+            *ctx.shared.lock().unwrap() = None;
+            let to = ctx.clone();
+            *ctx.hub.shared.lock().unwrap() = None;
+            let tab = label.clone();
+            crate::webview2::share(&file.webview, RING_BYTES, "{\"ligmaFrames\":1}", move |ring| match ring {
+                Some(ring) => read_ring(tab, ring),
+                None => log::info!("native renderer: the tab can't share memory, so frames come as requests"),
+            });
+            crate::webview2::share(&file.webview, SHARED_SLOTS * 8, "{\"ligmaNative\":1}", move |shared| match shared {
+                Some(shared) => {
+                    *to.hub.shared.lock().unwrap() = Some(shared);
+                    *to.shared.lock().unwrap() = Some((label, shared));
+                }
+                None => log::info!("native renderer: the tab can't share memory, so its view is asked for"),
+            });
         }
         // Figma's own scene, handed over frame by frame, where the tab was
         // hooked as it loaded. The plugin API's is read only where it can't be
@@ -682,19 +703,6 @@ fn sync(ctx: Arc<Ctx>) {
                 sleep(50);
                 continue;
             }
-        }
-        let shared_here = ctx.shared.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab == label);
-        if ready.as_ref().and_then(Value::as_str) == Some("installed") || !shared_here {
-            *ctx.shared.lock().unwrap() = None;
-            let to = ctx.clone();
-            *ctx.hub.shared.lock().unwrap() = None;
-            crate::webview2::share(&file.webview, SHARED_SLOTS * 8, move |shared| match shared {
-                Some(shared) => {
-                    *to.hub.shared.lock().unwrap() = Some(shared);
-                    *to.shared.lock().unwrap() = Some((label, shared));
-                }
-                None => log::info!("native renderer: the tab can't share memory, so its view is asked for"),
-            });
         }
         let page = eval_value(&file.webview, "window.__ligmaNative.view()?.page ?? null")
             .and_then(|page| page.as_str().map(str::to_owned));
@@ -856,6 +864,96 @@ fn changes(ctx: &Ctx, webview: &Webview) -> Result<bool, String> {
         let _ = ctx.messages.send(Msg::Changes(changes.prepare()));
     }
     Ok(false)
+}
+
+/// Memory a tab shares with Ligma to hand it frames of Figma's render tree,
+/// in place of requests, which wait behind Figma's own while it loads (see
+/// page_hook.js): a header of the bytes written in all and those read, as
+/// doubles, then parts of frames one after another, round, each its length,
+/// its `RING_MORE` and `RING_REST` flags and its bytes, to 8 bytes. A frame
+/// bigger than what's free goes in parts as Ligma reads the ones before
+const RING_BYTES: usize = 8 << 20;
+const RING_HEADER: usize = 64;
+/// Where there wasn't room for a part before the end, so the next is at the
+/// start
+const RING_WRAP: u32 = u32::MAX;
+/// The frame goes on in the next part
+const RING_MORE: u32 = 1;
+/// The part goes on from the one before
+const RING_REST: u32 = 2;
+
+/// Takes the frames tab `tab` writes to `ring`, as they're written, till the
+/// renderer stops. One reader a tab
+fn read_ring(tab: String, ring: crate::webview2::Shared) {
+    use std::sync::atomic::{fence, Ordering::{Acquire, Release}};
+    static READING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    {
+        let mut reading = READING.lock().unwrap();
+        if reading.contains(&tab) {
+            return;
+        }
+        reading.push(tab.clone());
+    }
+    std::thread::spawn(move || {
+        let ring = ring;
+        let base = ring.ptr;
+        let capacity = (ring.len - RING_HEADER) as u64;
+        let data = unsafe { base.add(RING_HEADER) };
+        let mut partial: Option<Vec<u8>> = None;
+        while CTX.lock().unwrap().is_some() {
+            let written = unsafe { std::ptr::read_volatile(base as *const f64) } as u64;
+            let mut read = unsafe { std::ptr::read_volatile((base as *const f64).add(1)) } as u64;
+            fence(Acquire);
+            // The page loaded again and starts from what's been read
+            if written < read {
+                read = written;
+                partial = None;
+            }
+            let came = read < written;
+            while read < written {
+                let at = (read % capacity) as usize;
+                let room = capacity as usize - at;
+                let len = if room >= 8 { unsafe { std::ptr::read_unaligned(data.add(at) as *const u32) } } else { RING_WRAP };
+                if len == RING_WRAP {
+                    read += room as u64;
+                    continue;
+                }
+                let flags = unsafe { std::ptr::read_unaligned(data.add(at + 4) as *const u32) };
+                let size = 8 + (len as usize).div_ceil(8) * 8;
+                if size > room || read + size as u64 > written {
+                    log::warn!("native renderer: frames in shared memory aren't as expected");
+                    read = written;
+                    partial = None;
+                    break;
+                }
+                let bytes = unsafe { std::slice::from_raw_parts(data.add(at + 8), len as usize) };
+                // A frame's first part, or the rest of the one begun
+                if flags & RING_REST == 0 {
+                    partial = Some(Vec::with_capacity(len as usize));
+                }
+                if let Some(body) = partial.as_mut() {
+                    body.extend_from_slice(bytes);
+                }
+                if flags & RING_MORE == 0 {
+                    if let Some(body) = partial.take() {
+                        frames().put(&tab, body);
+                    }
+                }
+                read += size as u64;
+                // Room for the page as soon as there is, for a frame it waits
+                // to write the rest of
+                fence(Release);
+                unsafe { std::ptr::write_volatile((base as *mut f64).add(1), read as f64) };
+            }
+            if came {
+                fence(Release);
+                unsafe { std::ptr::write_volatile((base as *mut f64).add(1), read as f64) };
+            } else {
+                std::thread::sleep(Duration::from_micros(500));
+            }
+        }
+        READING.lock().unwrap().retain(|reading| *reading != tab);
+    });
 }
 
 /// Slots of the view the page writes to shared memory (see page.js)

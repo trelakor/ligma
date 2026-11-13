@@ -326,10 +326,10 @@ unsafe impl Send for Kept {}
 
 /// Hands tab `webview`'s page `len` bytes of memory shared with Ligma, the
 /// same each time it's asked for the tab, as an ArrayBuffer through the
-/// `sharedbufferreceived` event of `chrome.webview`, with `{ ligmaNative: 1 }`
-/// as its `additionalData`. `done` gets it, on the main thread, or None
-/// where WebView2 is too old to share memory
-pub fn share(webview: &Webview, len: usize, done: impl FnOnce(Option<Shared>) + Send + 'static) {
+/// `sharedbufferreceived` event of `chrome.webview`, with `data`, JSON, as
+/// its `additionalData`. `done` gets it, on the main thread, or None where
+/// WebView2 is too old to share memory
+pub fn share(webview: &Webview, len: usize, data: &'static str, done: impl FnOnce(Option<Shared>) + Send + 'static) {
     static KEPT: std::sync::Mutex<Vec<(String, Shared, Kept)>> = std::sync::Mutex::new(Vec::new());
     let label = webview.label().to_string();
     let result = webview.with_webview(move |platform| unsafe {
@@ -348,7 +348,7 @@ pub fn share(webview: &Webview, len: usize, done: impl FnOnce(Option<Shared>) + 
                 }
             };
             let (_, shared, Kept(buffer)) = &kept[index];
-            core.PostSharedBufferToScript(buffer, COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_WRITE, w!("{\"ligmaNative\":1}"))?;
+            core.PostSharedBufferToScript(buffer, COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_WRITE, &windows_core::HSTRING::from(data))?;
             Ok(*shared)
         };
         done(run().ok());

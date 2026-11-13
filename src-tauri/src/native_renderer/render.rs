@@ -743,7 +743,11 @@ impl Gpu {
         let fence: ID3D12Fence = unsafe { device.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.map_err(|error| format!("fence: {error}"))?;
         let memory = device.adapter.cast::<IDXGIAdapter3>().ok();
         let backend = BackendContext { adapter: device.adapter.clone(), device: device.device.clone(), queue: queue.clone(), memory_allocator: Some(super::committed::allocator(&device.device)), protected_context: Protected::No };
-        let mut context = unsafe { gpu::direct_contexts::make_d3d(&backend, None) }.ok_or("Skia couldn't start on D3D12")?;
+        // Room for every program a file needs, as past Skia's 256 they were
+        // made again while panning
+        let mut options = gpu::ContextOptions::new();
+        options.runtime_program_cache_size = 4096;
+        let mut context = unsafe { gpu::direct_contexts::make_d3d(&backend, &options) }.ok_or("Skia couldn't start on D3D12")?;
         context.set_resource_cache_limit(config().cache_limit);
         let gpu = Self {
             context,
@@ -1224,7 +1228,9 @@ impl Painter {
         order.extend(around.iter().copied().filter(|key| !ready(&self.tiles, key)).map(|key| (key, false)));
         order.extend(coarse_view.iter().chain(&coarse_around).copied().filter(|key| !ready(&self.tiles, key) && key.px != pxb).map(|key| (key, false)));
         let rough: Vec<TileKey> = in_view.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.draft && !tile.exact)).collect();
-        let refine = REFINE_AFTER.saturating_sub(self.moved.elapsed());
+        // Nor while the page changes, as while a file loads, which would
+        // draw them again soon anyway
+        let refine = REFINE_AFTER.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
         if refine.is_zero() {
             order.extend(rough.iter().map(|&key| (key, true)));
         }
