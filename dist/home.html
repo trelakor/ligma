@@ -320,7 +320,7 @@
   .car-btn .flip { transform: scaleX(-1); }
   .kbd .car-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* The Starred page: few files, so bigger cards */
-  #starred-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 32px 24px; }
+  #starred-grid, .roomy .grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 32px 24px; }
   .all:hover { background: var(--hover); color: var(--text); }
   .all .i { width: 12px; height: 12px; }
   .kbd :is(.fold, .all, .ptile, .lay button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -364,9 +364,18 @@
   .row .tools { position: static; }
   .faces.inline { position: static; height: auto; padding: 0; }
   .faces.inline .face { width: 20px; height: 20px; font-size: 9px; }
+  /* A project's files as rows: bigger previews, the place column gone
+     since it's the project itself */
+  .roomy .card.row { grid-template-columns: 112px minmax(0, 2fr) minmax(0, 1.3fr) 96px; gap: 20px; height: 80px; }
+  .roomy .card.row .thumb { width: 112px; border-radius: 5px; }
+  .roomy .card.row .where { display: none; }
+  .roomy .card.row .name { font-size: 14px; }
+  @media (min-width: 1500px) { .roomy .card.row { grid-template-columns: 112px minmax(0, 560px) minmax(0, 1fr) 96px; } }
   @media (max-width: 900px) {
     .card.row { grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr) 72px; }
     .row .where { display: none; }
+    .roomy .card.row { grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1fr) 72px; }
+    .roomy .card.row .thumb { width: 96px; }
   }
 
   /* Brought into view below the sticky heading, ring and all */
@@ -1268,14 +1277,14 @@ const placeOf = (project) => (!project || DRAFT_FOLDERS.has(project) ? "Drafts" 
 // Figma's folder colors, in its order, as its menu draws them
 const FOLDER = {};
 const FOLDER_COLORS = [
-  ["pale_blue", "Blue", "#afbccf"],
-  ["pale_purple", "Purple", "#c5b2dc"],
-  ["pale_violet", "Violet", "#b3b2dc"],
-  ["pale_green", "Green", "#9fc1aa"],
-  ["pale_pink", "Pink", "#daaace"],
-  ["pale_yellow", "Yellow", "#e8cd7d"],
-  ["pale_persimmon", "Persimmon", "#ebb49d"],
-  ["pale_teal", "Teal", "#a3c2cc"],
+  ["pale_blue", "Blue", "#2e8cff"],
+  ["pale_purple", "Purple", "#a259ff"],
+  ["pale_violet", "Violet", "#6457f9"],
+  ["pale_green", "Green", "#14ae5c"],
+  ["pale_pink", "Pink", "#f2489e"],
+  ["pale_yellow", "Yellow", "#f5b800"],
+  ["pale_persimmon", "Persimmon", "#ff6b2c"],
+  ["pale_teal", "Teal", "#00b8a3"],
 ];
 const folderHex = (id) => FOLDER_COLORS.find(([key]) => key === FOLDER[id]?.color)?.[2] ?? null;
 // The folder icon in the project's color, at a 16px icon's place
@@ -1633,6 +1642,10 @@ const VIEWS = {
   // sharedBy, resourceId (the file's key)}. Also refused without __requestId
   shared: ["SharedWithYouResources", "08ca113f5a39948d884b0b1e3114c4084824b2a1aea94c5a857e5f36f6674f12", { __requestId: "ligma-shared", cursorColumn: "shared_at", fileType: null, firstPageSize: 100, orgDeletedDrafts: null, planId: null, planType: null, resourceTypes: ["file"], sharedBy: null, sharedToFilter: null, sharedToUserGroupIdFilter: null, sortOrder: "desc" }],
   // A team's trash in Figma. Refused without a __requestId of some kind
+  // A Starter or Professional team's plan and its users: PlanRecord
+  // {standaloneTeamPlanPermsEnabledAt}, PlanUserRecord {id, userId,
+  // dbBackedPermission: admin, member or guest}
+  teamMembers: (teamId) => ["StandaloneTeamMembersModalView", "42052f9b2c42d79344172a22041a9c3d1cd4561e424194436a6fda2eb2e0bc88", { firstPageSize: null, teamId }],
   teamTrash: (teamId) => ["TrashedFilesPageView", "42d3b73b9539e50b4687b882c9c9a66ef15d131025923dfe72bf93ce0fd1c93b", { __requestId: "ligma-trash-" + teamId, creatorFilter: "all", cursor: null, fileTypeFilter: "all", firstPageSize: 100, planId: teamId, planType: "team", queryParams: null, sortDirection: "DESC", sortType: "trashed_at" }],
 };
 
@@ -2847,7 +2860,8 @@ function render({ keepScroll = true } = {}) {
   else if (state.view === "starred") html = `<section class="sec"><div class="grid star-grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
   // Shared with you, Drafts and projects: one list, newest first, no dates
   // over it
-  else if (state.view === "shared" || state.view === "drafts" || /^[dp]:/.test(state.view)) html = `<section class="sec">${fileList(list, viewName(state.view), state.layout[layoutOf(state.view)])}</section>`;
+  // A project holds few files, so they're as big as Starred's
+  else if (state.view === "shared" || state.view === "drafts" || /^[dp]:/.test(state.view)) html = `<section class="sec${state.view.startsWith("p:") ? " roomy" : ""}">${fileList(list, viewName(state.view), state.layout[layoutOf(state.view)])}</section>`;
   else {
     for (const file of list) {
       const t = timeOf(file);
@@ -3753,7 +3767,26 @@ async function loadTeamInfo(id) {
     if (r.pending && !list.some((m) => m.role?.id === r.id)) list.push({ id: `invite:${r.id}`, name: r.pending_email ?? r.user?.email ?? "Someone", email: null, level: r.level, role: r, pending: true, me: false });
   }
   list.sort(byPeople);
-  TEAM_INFO[id] = { description: team.description, admin: (list.find((m) => m.me)?.level ?? 0) >= ROLE_LEVELS.admin, members: list };
+  // A Starter or Professional team on Figma's plan permissions keeps who's
+  // an admin on the plan's users, which only LiveGraph has
+  let planId = null;
+  if (standalone(teamById(id).plan)) {
+    try {
+      const store = await Promise.race([LG.load(VIEWS.teamMembers(id)), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 4000))]);
+      const plan = Object.values(store.PlanRecord ?? {}).find((r) => r.planParentId === id);
+      if (plan?.standaloneTeamPlanPermsEnabledAt) {
+        planId = plan.id;
+        const users = Object.values(store.PlanUserRecord ?? {}).filter((u) => u.planParentId === id);
+        for (const m of list) {
+          const u = users.find((x) => x.userId === m.id);
+          if (!u) continue;
+          m.planUser = { id: u.id, permission: u.dbBackedPermission };
+          if (m.level == null || m.level < ROLE_LEVELS.owner) m.level = u.dbBackedPermission === "admin" ? ROLE_LEVELS.admin : u.dbBackedPermission === "member" ? ROLE_LEVELS.editor : m.level;
+        }
+      }
+    } catch {}
+  }
+  TEAM_INFO[id] = { description: team.description, admin: (list.find((m) => m.me)?.level ?? 0) >= ROLE_LEVELS.admin, members: list, planId };
 }
 
 /* A team's picture: square, as Figma keeps them, at 120 and 500 px.
@@ -3969,11 +4002,15 @@ function askRow(m) {
 // shared with
 const peopleOf = () => (ws().kind === "team" ? TEAM_INFO[ws().team]?.members : SHARED_WITH[ws().project]?.list);
 const peopleWhere = () => (ws().kind === "team" ? teamById(ws().team)?.team.name : PROJECTS[ws().project]?.name) ?? "here";
-// Roles to pick: a project's on any plan, a team's only in an Organization
+// Roles to pick: a project's Can view or Can edit; an Organization team's
+// Can view, Can edit or Admin; a Starter or Professional team's member
+// (who edits) or Admin, as Figma's own team settings offer
 function rolesFor(m) {
-  if (!m.role) return [];
-  if (ws().kind === "share") return [ROLE_LEVELS.viewer, ROLE_LEVELS.editor];
-  return standalone(teamById(ws().team).plan) ? [] : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor, ROLE_LEVELS.admin];
+  if (m.pending) return [];
+  if (ws().kind === "share") return m.role ? [ROLE_LEVELS.viewer, ROLE_LEVELS.editor] : [];
+  const info = TEAM_INFO[ws().team];
+  if (!standalone(teamById(ws().team).plan)) return m.role ? [ROLE_LEVELS.viewer, ROLE_LEVELS.editor, ROLE_LEVELS.admin] : [];
+  return m.role || (info?.planId && m.planUser) ? [ROLE_LEVELS.editor, ROLE_LEVELS.admin] : [];
 }
 // The role, as a menu where it can change; elsewhere a ⋯ with what can be
 // done: remove, or resend and cancel an invite. Only for those who manage
@@ -4350,12 +4387,19 @@ function teamAccessMenu(at) {
    Organization's teams; removing people and invites anywhere. Nothing here
    can be undone in Figma but a role, so removing asks first */
 
-const ROLE_DETAIL = { team: ["Opens the team's files", "Edits the team's files", "Also manages the team and its people"], share: ["Opens the project's files", "Edits the project's files"] };
+const ROLE_DETAIL = {
+  team: { [ROLE_LEVELS.viewer]: "Opens the team's files", [ROLE_LEVELS.editor]: "Edits the team's files", [ROLE_LEVELS.admin]: "Also manages the team, its people and settings" },
+  share: { [ROLE_LEVELS.viewer]: "Opens the project's files", [ROLE_LEVELS.editor]: "Edits the project's files" },
+};
 function personMenu(i, at) {
   const m = peopleOf()?.[i];
   if (!m) return;
   const levels = rolesFor(m);
-  const items = levels.map((level, j) => ({ label: level === ROLE_LEVELS.admin ? "Admin" : levelName(level), detail: ROLE_DETAIL[ws().kind][j], checked: m.level === level, act: () => setRole(m, level) }));
+  // A member who isn't an admin edits, whatever level their role says
+  const current = m.level >= ROLE_LEVELS.admin ? ROLE_LEVELS.admin : levels.includes(m.level) ? m.level : levels[0];
+  const items = levels.map((level) => ({ label: level === ROLE_LEVELS.admin ? "Admin" : levelName(level), detail: ROLE_DETAIL[ws().kind][level], checked: current === level, act: () => setRole(m, level) }));
+  // Someone given only some of a team's files can join it, as Figma offers
+  if (ws().kind === "team" && !m.role && !m.pending && m.email && !items.length) items.push({ label: "Invite to the team", detail: "They join as a member who can edit", act: () => inviteToTeam(m) });
   if (items.length) items.push(null);
   if (m.pending) items.push({ label: "Send the invite again", act: () => resendInvite(m) }, { label: "Cancel invite…", act: () => askRemove(m) });
   else items.push({ label: `Remove from ${peopleWhere()}…`, act: () => askRemove(m) });
@@ -4368,19 +4412,36 @@ const winKey = () => `${ws().kind}:${ws().kind === "team" ? ws().team : ws().pro
 function setRole(m, level) {
   const key = winKey();
   if (m.level === level) return;
+  const planId = ws().kind === "team" ? TEAM_INFO[ws().team]?.planId : null;
+  // A team on Figma's plan permissions keeps admins on the plan, not the
+  // team role (Figma's standaloneTeamPlanPermsEnabled)
+  const request = (to) => planId && m.planUser
+    ? api(`/api/plans/${planId}/plan_users/update_permission`, { method: "PUT", json: { plan_user_ids: [m.planUser.id], permission: to >= ROLE_LEVELS.admin ? "admin" : "member" } })
+    : api(`/api/roles/${m.role.id}`, { method: "PUT", json: { ...m.role, level: to, response_version: 2 } });
   const put = (to, from) => {
     m.level = to;
-    m.role = { ...m.role, level: to };
+    if (m.role) m.role = { ...m.role, level: to };
     drawWin();
-    if (LIVE) send(api(`/api/roles/${m.role.id}`, { method: "PUT", json: { ...m.role, level: to, response_version: 2 } }), () => {
+    if (LIVE) send(request(to), () => {
       m.level = from;
-      m.role = { ...m.role, level: from };
+      if (m.role) m.role = { ...m.role, level: from };
       if (winKey() === key) drawWin();
     }, "change the role");
   };
   const old = m.level;
   put(level, old);
   toast(`${m.name} ${level >= ROLE_LEVELS.admin ? "is an admin now" : levelName(level).toLowerCase()}`, () => put(old, level));
+}
+
+function inviteToTeam(m) {
+  const id = ws().team;
+  const done = () => {
+    toast(`Invited ${m.name} to ${teamById(id)?.team.name ?? "the team"}`);
+    loadTeamInfo(id).then(drawWin, () => {});
+  };
+  if (!LIVE) return done();
+  api("/api/invites", { method: "POST", json: { emails: [m.email], resource_type: "team", resource_id_or_key: id, level: ROLE_LEVELS.editor } })
+    .then(done, (error) => toast(`Couldn't invite them: ${error.message}`));
 }
 
 function resendInvite(m) {
@@ -4610,7 +4671,7 @@ function dashPeople(id, info, tier, plan, seats) {
   const bill = seats ? seatBill(seats) : "";
   let html = `<section class="sec" id="dash-people" data-key="dash:people"><h2>People${people !== undefined ? `<small>${people}</small>` : ""}${bill ? `<small class="bill">${esc(bill)}</small>` : ""}</h2>`;
   html += `<div class="dinvite">${inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor])}</div>`;
-  if (standalone(plan)) html += `<p class="dnote">Everyone invited joins as a member who can edit. Starter and Professional teams have no roles to pick</p>`;
+  if (standalone(plan)) html += `<p class="dnote">Everyone invited joins as a member who can edit. Pick Admin in someone's role to let them manage the team</p>`;
   if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div>`;
   else {
     const askSeat = TEAM_SET[id]?.askSeat;
