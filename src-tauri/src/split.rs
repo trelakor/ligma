@@ -716,6 +716,7 @@ pub fn show_hint(app: &AppHandle, owner: &Window, rect: Rect) {
 
 pub fn hide_hint(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(HINT) {
+        crate::tab_menu::release(&window);
         #[cfg(windows)]
         crate::frame::show_inactive(&window, false);
         #[cfg(not(windows))]

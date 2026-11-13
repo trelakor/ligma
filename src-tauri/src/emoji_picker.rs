@@ -128,11 +128,8 @@ fn show(app: &AppHandle, tab: u32, left: f64, current: String) -> tauri::Result<
     {
         builder = builder.owner_raw(main.hwnd()?);
     }
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder.parent_raw(main.ns_window()?);
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    // Not a child window on macOS until shown, see tab_menu.rs
+    #[cfg(not(windows))]
     let _ = main;
     let window = builder.build()?;
     #[cfg(windows)]
@@ -170,6 +167,7 @@ pub fn is_open() -> bool {
 pub fn hide(app: &AppHandle) {
     OPEN.lock().unwrap().take();
     if let Some(window) = app.get_webview_window(WINDOW) {
+        crate::tab_menu::release(&window);
         let _ = window.hide();
     }
 }
