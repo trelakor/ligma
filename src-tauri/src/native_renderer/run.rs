@@ -345,7 +345,8 @@ fn start_framing(ctx: &Ctx, webview: &Webview) -> bool {
     if ready != Some(Value::Bool(true)) {
         return false;
     }
-    if !pushed().tabs.lock().unwrap().contains(&label) && !start_pushing(webview) {
+    // A page loaded again has to be told again where to hand things over
+    if !start_pushing(webview) {
         return false;
     }
     if framing.is_some() {
