@@ -145,14 +145,20 @@ const PAGE_JS: &str = r##"(() => {
         }, 300000);
       };
       wait();
+      // A large result comes in parts, then `done` with null
+      const parts = [];
       jobs.set(job, {
         progress: (text) => {
           wait();
-          onProgress(text);
+          onProgress?.(text);
+        },
+        part: (text) => {
+          wait();
+          parts.push(text);
         },
         done: (result) => {
           finish();
-          resolve(result);
+          resolve(result ?? parts.join(""));
         },
         failed: (reason) => {
           finish();
@@ -164,6 +170,7 @@ const PAGE_JS: &str = r##"(() => {
   // From Ligma, with a job's progress and result
   window.__ligmaJob = {
     progress: (job, text) => jobs.get(job)?.progress(text),
+    part: (job, text) => jobs.get(job)?.part(text),
     done: (job, result) => jobs.get(job)?.done(result),
     failed: (job, reason) => jobs.get(job)?.failed(reason),
   };
@@ -2144,6 +2151,9 @@ const PAGE_JS: &str = r##"(() => {
   // filled from the image around it on this device (see expand.rs), as one
   // undo step. The first hides the layer's fills under one image fill, as
   // Remove background leaves them, and the strokes after change that image.
+  // Ligma keeps the image while it's open, so a stroke only sends where it
+  // paints and gets back the patch that changed, which is drawn into a copy
+  // of the image here, so a heal takes a moment, not the image's size.
   // `[` and `]` resize the brush; Done, Escape, a click on the canvas off
   // the image or selecting something else leaves
   const HEAL = "data-ligma-heal";
@@ -2221,7 +2231,27 @@ const PAGE_JS: &str = r##"(() => {
     const brush = svg.appendChild(document.createElementNS(SVG_NS, "circle"));
     brush.setAttribute("class", "brush");
 
-    healing = { figma, node, canvas, root, layer, svg, stroke, brush, input, size: 0, scales: { native: 1, full: 1 }, drag: null, working: false, frame: 0, hash: null };
+    // The image as the layer's fills draw it, here and in Ligma, once read
+    healing = {
+      figma,
+      node,
+      canvas,
+      root,
+      layer,
+      svg,
+      stroke,
+      brush,
+      input,
+      size: 0,
+      scales: { native: 1, full: 1 },
+      drag: null,
+      working: false,
+      frame: 0,
+      hash: null,
+      session: null,
+      picture: null,
+      opening: null,
+    };
     document.documentElement.setAttribute(HEALING, "");
     placeHealing();
     placeHealOverlay();
@@ -2231,10 +2261,29 @@ const PAGE_JS: &str = r##"(() => {
     // A brush a 30th of the image across, until one is chosen
     current.size = healOptions.size ?? Math.max(2, Math.round((Math.max(node.width, node.height) * current.scales.native) / 30));
     showHealing();
+    current.opening = openHealing(current);
+  };
+
+  // Reads the image as the layer's fills draw it, for Ligma to keep and to
+  // draw healed patches into here
+  const openHealing = async (current) => {
+    const { figma, node } = current;
+    const bytes = await drawn(figma, node, current.scales.full, true);
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const picture = Object.assign(document.createElement("canvas"), { width: bitmap.width, height: bitmap.height });
+    picture.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const { session } = JSON.parse(await handOff("heal", request({ op: "open" }, bytes)));
+    if (healing !== current) {
+      handOff("heal", request({ op: "close", session })).catch(() => {});
+      throw "closed";
+    }
+    Object.assign(current, { session, picture });
   };
 
   const closeHealing = () => {
     if (!healing || healing.working) return;
+    if (healing.session) handOff("heal", request({ op: "close", session: healing.session })).catch(() => {});
     cancelAnimationFrame(healing.frame);
     healing.root.remove();
     healing.layer.remove();
@@ -2329,27 +2378,50 @@ const PAGE_JS: &str = r##"(() => {
     current.working = true;
     busy = true;
     showHealing();
-    const stopShimmer = shimmer(figma, [node], "objects");
     try {
-      const bytes = await drawn(figma, node, current.scales.full, true);
-      const { png } = JSON.parse(await handOff("heal", request({ strokes: [{ points, radius }] }, bytes)));
+      await current.opening;
+      // Undone, or changed some other way since, the image is read again
+      const top = fillsOf(node).at(-1);
+      if (current.hash && !(top?.type === "IMAGE" && top.imageHash === current.hash)) {
+        handOff("heal", request({ op: "close", session: current.session })).catch(() => {});
+        current.hash = null;
+        current.opening = openHealing(current);
+        await current.opening;
+      }
+      const ask = () => handOff("heal", request({ op: "heal", session: current.session, strokes: [{ points, radius }] }));
+      let reply;
+      try {
+        reply = await ask();
+      } catch (reason) {
+        // Ligma let it go, as when another tab opened one
+        if (reason !== "closed") throw reason;
+        current.opening = openHealing(current);
+        await current.opening;
+        reply = await ask();
+      }
+      const { png, x, y } = JSON.parse(reply);
       if (node.removed) throw "failed";
-      const hash = figma.createImage(Uint8Array.from(atob(png), (char) => char.charCodeAt(0))).hash;
+      const patch = await createImageBitmap(new Blob([Uint8Array.from(atob(png), (char) => char.charCodeAt(0))], { type: "image/png" }));
+      const context = current.picture.getContext("2d");
+      context.clearRect(x, y, patch.width, patch.height);
+      context.drawImage(patch, x, y);
+      patch.close();
+      const blob = await new Promise((resolve) => current.picture.toBlob(resolve, "image/png"));
+      const hash = figma.createImage(new Uint8Array(await blob.arrayBuffer())).hash;
       const fills = fillsOf(node);
-      const top = fills.at(-1);
+      const last = fills.at(-1);
       // After a heal, the healed image is changed rather than hidden too
       node.fills =
-        top?.type === "IMAGE" && top.imageHash === current.hash
-          ? [...fills.slice(0, -1), { ...top, imageHash: hash }]
+        last?.type === "IMAGE" && last.imageHash === current.hash
+          ? [...fills.slice(0, -1), { ...last, imageHash: hash }]
           : [...fills.map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
       current.hash = hash;
       try {
         figma.commitUndo();
       } catch {}
     } catch (reason) {
-      if (reason !== "empty" && reason !== "cancelled") figma.notify("Couldn't heal the image", { timeout: 3000 });
+      if (reason !== "empty" && reason !== "cancelled" && reason !== "closed") figma.notify("Couldn't heal the image", { timeout: 3000 });
     }
-    stopShimmer();
     busy = false;
     current.working = false;
     current.stroke.removeAttribute("d");
@@ -2444,9 +2516,12 @@ const PAGE_JS: &str = r##"(() => {
 
   // Upscale makes one image 2 or 4 times as large with Real-ESRGAN on this
   // device (see upscale.rs), at most 4,096 pixels across, as Figma keeps
-  // images. The layer stays as large; its image gets sharper. The image
-  // fill is changed, as one undo step, and the one before stays under it,
-  // hidden, as Remove background leaves it
+  // images. The layer stays as large; its image gets sharper. Once it's
+  // done, the canvas shows it, with the image as it was over it up to a
+  // divider that drags across, to compare. Apply, or Enter, keeps it, the
+  // image fill changed and the one before under it, hidden, as Remove
+  // background leaves it, as one undo step; Cancel, Escape or selecting
+  // something else puts it back
   const UPSCALE = "data-ligma-upscale";
   const UPSCALING = "data-ligma-upscaling";
   let upscaling = null;
@@ -2454,6 +2529,8 @@ const PAGE_JS: &str = r##"(() => {
   // Arrows out of a corner, as an image growing
   const UPSCALE_ICON = icon(`<rect ${STROKE} x="4.5" y="12.5" width="7" height="7" rx="1"/><path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5h6v6m0-6-7 7"/>`);
   const LARGEST = 4096;
+  // The divider's handle: two chevrons, pointing apart
+  const COMPARE_HANDLE = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M6 4.5 2.5 8 6 11.5m4-7L13.5 8 10 11.5"/></svg>`;
 
   const upscaleImage = async (bar, crop) => {
     const figma = api();
@@ -2478,6 +2555,8 @@ const PAGE_JS: &str = r##"(() => {
       figma.notify("The image is as large as Figma keeps images", { timeout: 3000 });
       return;
     }
+    const canvas = mainCanvas();
+    if (!canvas) return;
     closeRecolor();
 
     const root = document.createElement("div");
@@ -2498,14 +2577,18 @@ const PAGE_JS: &str = r##"(() => {
       });
     }
     const result = strip.appendChild(Object.assign(document.createElement("span"), { className: "hint" }));
-    barDivider(strip);
+    result.setAttribute("aria-live", "polite");
+    const goDivider = barDivider(strip);
     const go = strip.appendChild(barButton(crop, "Upscale", UPSCALE_ICON, "Upscale the image with Real-ESRGAN"));
     go.addEventListener("click", () => runUpscale());
+    const apply = strip.appendChild(barButton(crop, "Apply", CHECK, "Keep the upscaled image"));
+    apply.classList.add("apply");
+    apply.addEventListener("click", () => finishUpscale(true));
     barDivider(strip);
     const cancel = strip.appendChild(barButton(crop, "Cancel"));
-    cancel.addEventListener("click", () => closeUpscaling());
+    cancel.addEventListener("click", () => (upscaling?.comparing ? finishUpscale(false) : closeUpscaling()));
 
-    upscaling = { figma, node, index, paint, size, root, scales, result, go, working: false };
+    upscaling = { figma, node, index, paint, size, canvas, root, scales, result, goDivider, go, apply, working: false, comparing: null };
     document.documentElement.setAttribute(UPSCALING, "");
     placeUpscaling();
     showUpscaling();
@@ -2519,18 +2602,23 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const showUpscaling = () => {
-    const { scales, result, go, working } = upscaling;
+    const { scales, result, goDivider, go, apply, working, comparing } = upscaling;
+    scales.hidden = !!comparing;
     for (const button of scales.children) {
       button.setAttribute("aria-checked", String(Number(button.dataset.value) === upscaleOptions.scale));
       button.disabled = working;
     }
-    const [width, height] = upscaledSize();
-    result.textContent = `${width} × ${height} px`;
+    const [width, height] = comparing ? [comparing.width, comparing.height] : upscaledSize();
+    result.textContent = comparing ? `Upscaled to ${width} × ${height} px` : `${width} × ${height} px`;
+    go.hidden = !!comparing;
+    goDivider.hidden = false;
     go.disabled = working;
+    apply.hidden = !comparing;
   };
 
   const closeUpscaling = () => {
     if (!upscaling || upscaling.working) return;
+    if (upscaling.comparing) return finishUpscale(false);
     upscaling.root.remove();
     document.documentElement.removeAttribute(UPSCALING);
     upscaling = null;
@@ -2540,7 +2628,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!upscaling) return;
     const selection = api()?.currentPage.selection ?? [];
     if (!state.upscale || upscaling.node.removed || selection.length !== 1 || selection[0] !== upscaling.node) {
-      closeUpscaling();
+      if (!upscaling.working) closeUpscaling();
       return;
     }
     const wrapper = document.querySelector('[data-testid="design-toolbelt-wrapper"]');
@@ -2551,8 +2639,8 @@ const PAGE_JS: &str = r##"(() => {
 
   const runUpscale = async () => {
     const current = upscaling;
-    if (!current || current.working || busy) return;
-    const { figma, node, index, paint } = current;
+    if (!current || current.working || current.comparing || busy) return;
+    const { figma, node, index, paint, size } = current;
     current.working = true;
     busy = true;
     showUpscaling();
@@ -2560,23 +2648,25 @@ const PAGE_JS: &str = r##"(() => {
     const controller = new AbortController();
     const { show, hide } = toast(figma, () => controller.abort());
     show("Upscaling…");
-    let done = false;
+    let shown = false;
     try {
+      // The layer as it is, to compare against, as sharp as its image is
+      const scale = Math.min(LARGEST / Math.max(node.width, node.height, 1), Math.max(size.width / node.width, size.height / node.height, 1));
+      const before = drawn(figma, node, scale, true);
       const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync();
       const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale }, bytes), show, "", controller.signal));
-      if (node.removed) throw "failed";
+      if (node.removed || upscaling !== current) throw "cancelled";
       const fills = fillsOf(node);
       if (fills[index]?.imageHash !== paint.imageHash) throw "failed";
+      const beforeBytes = await before;
       const hash = figma.createImage(Uint8Array.from(atob(reply.png), (char) => char.charCodeAt(0))).hash;
       const original = fills[index];
       const larger = { ...original, imageHash: hash, visible: true };
       // Tiles keep their size on the canvas
-      if (original.scaleMode === "TILE") larger.scalingFactor = (original.scalingFactor ?? 1) * (current.size.width / reply.width);
+      if (original.scaleMode === "TILE") larger.scalingFactor = (original.scalingFactor ?? 1) * (size.width / reply.width);
       node.fills = [...fills.slice(0, index), { ...original, visible: false }, larger, ...fills.slice(index + 1)];
-      try {
-        figma.commitUndo();
-      } catch {}
-      done = true;
+      openCompare(current, fills, beforeBytes, reply.width, reply.height);
+      shown = true;
     } catch (reason) {
       if (reason === "large") figma.notify("The image is as large as Figma keeps images", { timeout: 3000 });
       else if (reason !== "cancelled") figma.notify("Couldn't upscale the image", { timeout: 3000 });
@@ -2585,21 +2675,173 @@ const PAGE_JS: &str = r##"(() => {
     stopShimmer();
     busy = false;
     current.working = false;
-    if (upscaling === current) {
-      if (done) {
-        closeUpscaling();
-        figma.notify(`Upscaled to ${current.result.textContent}`, { timeout: 3000 });
-      } else showUpscaling();
+    if (upscaling === current) showUpscaling();
+    if (!shown) tidy();
+  };
+
+  // The image as it was over the upscaled one, up to the divider
+  const openCompare = (current, fills, beforeBytes, width, height) => {
+    const layer = document.createElement("div");
+    layer.setAttribute(UPSCALE, "compare");
+    current.canvas.after(layer);
+    const frame = layer.appendChild(Object.assign(document.createElement("div"), { className: "frame" }));
+    const url = URL.createObjectURL(new Blob([beforeBytes], { type: "image/png" }));
+    const before = frame.appendChild(Object.assign(document.createElement("img"), { className: "original", src: url, alt: "", draggable: false }));
+    const labels = ["Before", "After"].map((text) => frame.appendChild(Object.assign(document.createElement("span"), { className: `label ${text.toLowerCase()}`, textContent: text })));
+    const line = frame.appendChild(Object.assign(document.createElement("div"), { className: "line" }));
+    const handle = line.appendChild(Object.assign(document.createElement("div"), { className: "handle", innerHTML: COMPARE_HANDLE }));
+    handle.setAttribute("role", "slider");
+    handle.setAttribute("aria-label", "Compare before and after");
+    handle.setAttribute("aria-valuemin", "0");
+    handle.setAttribute("aria-valuemax", "100");
+    current.comparing = { fills, layer, frame, before, labels, line, handle, url, width, height, split: 1, drag: false, raf: 0 };
+    document.documentElement.setAttribute(UPSCALING, "comparing");
+    // The divider sweeps in from the right to the middle, so it's seen
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const start = performance.now();
+    const sweep = (now) => {
+      if (!upscaling?.comparing || upscaling.comparing.drag) return;
+      const t = reduced ? 1 : Math.min(1, (now - start) / 520);
+      setSplit(1 - 0.5 * (1 - (1 - t) ** 3));
+      if (t < 1) requestAnimationFrame(sweep);
+    };
+    requestAnimationFrame(sweep);
+    placeCompare();
+    showUpscaling();
+  };
+
+  const setSplit = (split) => {
+    const compare = upscaling?.comparing;
+    if (!compare) return;
+    compare.split = Math.min(1, Math.max(0, split));
+    const percent = compare.split * 100;
+    compare.before.style.clipPath = `inset(0 ${100 - percent}% 0 0)`;
+    compare.line.style.left = `${percent}%`;
+    compare.handle.setAttribute("aria-valuenow", String(Math.round(percent)));
+    // A side's label fades as the divider nears it
+    compare.labels[0].style.opacity = String(Math.min(1, compare.split / 0.18));
+    compare.labels[1].style.opacity = String(Math.min(1, (1 - compare.split) / 0.18));
+  };
+
+  // Keeps the comparison on the layer as the canvas pans and zooms
+  const placeCompare = () => {
+    const compare = upscaling?.comparing;
+    if (!compare) return;
+    const { figma, node, canvas } = upscaling;
+    Object.assign(compare.layer.style, {
+      left: `${canvas.offsetLeft}px`,
+      top: `${canvas.offsetTop}px`,
+      width: `${canvas.offsetWidth}px`,
+      height: `${canvas.offsetHeight}px`,
+    });
+    try {
+      const { bounds } = figma.viewport;
+      const zoom = figma.viewport.zoom;
+      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+      Object.assign(compare.frame.style, {
+        width: `${node.width * zoom}px`,
+        height: `${node.height * zoom}px`,
+        transform: `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`,
+      });
+    } catch {}
+    compare.raf = requestAnimationFrame(placeCompare);
+  };
+
+  // Keeps the upscaled image, or puts the one before back
+  const finishUpscale = (keep) => {
+    const current = upscaling;
+    const compare = current?.comparing;
+    if (!compare) return;
+    const { figma, node } = current;
+    if (!keep && !node.removed) {
+      try {
+        node.fills = compare.fills;
+      } catch {}
     }
+    if (keep) {
+      try {
+        figma.commitUndo();
+      } catch {}
+    }
+    cancelAnimationFrame(compare.raf);
+    compare.layer.remove();
+    URL.revokeObjectURL(compare.url);
+    current.comparing = null;
+    closeUpscaling();
+    if (keep) figma.notify(`Upscaled to ${compare.width} × ${compare.height} px`, { timeout: 2000 });
     tidy();
   };
 
+  // Where along the layer `event` is, from 0 at its left to 1 at its right,
+  // or null when it's not over the layer
+  const alongLayer = (event) => {
+    const { figma, node, canvas } = upscaling;
+    const rect = canvas.getBoundingClientRect();
+    const [x, y] = [event.clientX - rect.left, event.clientY - rect.top];
+    try {
+      const { bounds } = figma.viewport;
+      const zoom = figma.viewport.zoom;
+      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+      const [dx, dy] = [bounds.x + x / zoom - e, bounds.y + y / zoom - f];
+      const det = a * d - b * c;
+      const [lx, ly] = [(d * dx - c * dy) / det, (a * dy - b * dx) / det];
+      return { split: lx / node.width, inside: lx >= 0 && ly >= 0 && lx <= node.width && ly <= node.height };
+    } catch {
+      return null;
+    }
+  };
+
+  // While comparing, a press on the layer moves the divider there and
+  // drags it. Space, the wheel and other buttons still pan and zoom
+  for (const type of POINTER_TYPES) {
+    addEventListener(
+      type,
+      (event) => {
+        const compare = upscaling?.comparing;
+        if (!compare) return;
+        if (compare.drag) {
+          swallow(event);
+          if (type === "pointermove") setSplit(alongLayer(event)?.split ?? compare.split);
+          if (type === "pointerup") {
+            compare.drag = false;
+            compare.frame.classList.remove("dragging");
+          }
+          return;
+        }
+        const target = event.target;
+        if (target instanceof Element && target !== upscaling.canvas && !target.closest(`[${UPSCALE}="compare"]`)) return;
+        const at = alongLayer(event);
+        if (type === "pointermove") document.documentElement.toggleAttribute("data-ligma-compare-pointer", !!at?.inside && !space);
+        if (!at?.inside || space || event.button > 0 || (event.buttons & ~1) !== 0) return;
+        swallow(event);
+        if (type === "pointerdown") {
+          compare.drag = true;
+          compare.frame.classList.add("dragging");
+          setSplit(at.split);
+        }
+      },
+      true,
+    );
+  }
+
+  // Enter applies and Escape cancels while comparing; Escape leaves before
+  // that. The arrow keys move the divider
   addEventListener(
     "keydown",
     (event) => {
-      if (!upscaling || event.key !== "Escape" || event.target.closest?.(':is(input, textarea):not([readonly]), [contenteditable]:not([contenteditable="false"])')) return;
-      swallow(event);
-      closeUpscaling();
+      if (!upscaling || event.target.closest?.(':is(input, textarea):not([readonly]), [contenteditable]:not([contenteditable="false"])')) return;
+      const compare = upscaling.comparing;
+      if (event.key === "Escape") {
+        swallow(event);
+        if (compare) finishUpscale(false);
+        else closeUpscaling();
+      } else if (compare && event.key === "Enter") {
+        swallow(event);
+        finishUpscale(true);
+      } else if (compare && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        swallow(event);
+        setSplit(compare.split + (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 0.1 : 0.02));
+      }
     },
     true,
   );
@@ -2804,6 +3046,31 @@ const PAGE_JS: &str = r##"(() => {
       background: var(--color-bg, #2c2c2c); color: var(--color-text, #fff); box-shadow: 0 0 0 1px var(--color-border, #444);
     }
     [${UPSCALE}=""] .hint { padding: 0 4px 0 8px; font-variant-numeric: tabular-nums; }
+    [${UPSCALE}=""] .apply { padding-right: 8px; border-radius: 5px; background: var(--color-bg-brand, #0d99ff); color: var(--color-text-onbrand, #fff); }
+    [${UPSCALE}=""] .apply svg { color: var(--color-icon-onbrand, #fff); }
+    [${UPSCALE}=""] .apply:hover { background: var(--color-bg-brand-hover, var(--color-bg-brand, #0d99ff)); }
+    [${UPSCALE}="compare"] { position: absolute; overflow: hidden; pointer-events: none; }
+    [${UPSCALE}="compare"] .frame { position: absolute; left: 0; top: 0; transform-origin: 0 0; container-type: inline-size; }
+    [${UPSCALE}="compare"] .original { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; user-select: none; }
+    [${UPSCALE}="compare"] .line {
+      position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff;
+      box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.2), 0 0 8px rgb(0 0 0 / 0.25);
+    }
+    [${UPSCALE}="compare"] .handle {
+      position: absolute; top: 50%; left: 50%; display: grid; place-items: center; width: 28px; height: 28px; margin: -14px 0 0 -14px;
+      border-radius: 50%; background: #fff; color: #1e1e1e; box-shadow: 0 1px 4px rgb(0 0 0 / 0.3), 0 0 0 0.5px rgb(0 0 0 / 0.12);
+      transition: transform 140ms cubic-bezier(0.2, 0, 0, 1);
+    }
+    [${UPSCALE}="compare"] .frame.dragging .handle { transform: scale(1.1); }
+    [${UPSCALE}="compare"] .label {
+      position: absolute; top: 8px; padding: 2px 6px; border-radius: 4px; background: rgb(0 0 0 / 0.55); color: #fff;
+      font: 500 11px/16px Inter, system-ui, sans-serif; letter-spacing: 0.005em; white-space: nowrap; transition: opacity 120ms ease-out;
+    }
+    [${UPSCALE}="compare"] .label.before { left: 8px; }
+    [${UPSCALE}="compare"] .label.after { right: 8px; }
+    @container (max-width: 180px) { [${UPSCALE}="compare"] .label { display: none; } }
+    @media (prefers-reduced-motion: reduce) { [${UPSCALE}="compare"] .handle { transition: none; } }
+    html[data-ligma-compare-pointer], html[data-ligma-compare-pointer] * { cursor: ew-resize !important; }
     [${HEAL}=""] .field input { width: 40px; }
     [${HEAL}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
     [${HEAL}="overlay"] svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }

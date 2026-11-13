@@ -56,6 +56,7 @@ mod esrgan {
     use std::sync::Arc;
 
     use base64::Engine;
+    use image::codecs::png::{CompressionType, FilterType as PngFilter};
     use image::imageops::{self, FilterType};
     use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageReader, RgbImage, RgbaImage};
     use ort::session::builder::AutoDevicePolicy;
@@ -99,8 +100,9 @@ mod esrgan {
                 failed(error)
             }
         })?;
+        // Encoded quickly: it's large, and Figma compresses it again anyway
         let mut png = Vec::new();
-        image::codecs::png::PngEncoder::new(&mut png)
+        image::codecs::png::PngEncoder::new_with_quality(&mut png, CompressionType::Fast, PngFilter::Adaptive)
             .write_image(larger.as_raw(), larger.width(), larger.height(), image::ExtendedColorType::Rgba8)
             .map_err(failed)?;
         Ok(format!(
@@ -193,6 +195,7 @@ mod esrgan {
             }
         }
         drop(session);
+        progress("Finishing…");
         // Transparency scaled up smoothly, and the color back off black
         let alpha = imageops::resize(
             &image::GrayImage::from_fn(width as u32, height as u32, |x, y| image::Luma([image.get_pixel(x, y)[3]])),
@@ -215,10 +218,32 @@ mod esrgan {
         });
         drop(out);
         let target = ((width as f32 * factor).round() as u32, (height as f32 * factor).round() as u32);
-        if target != (out_width as u32, out_height as u32) {
-            larger = imageops::resize(&larger, target.0, target.1, FilterType::Lanczos3);
+        if target == ((width * 2) as u32, (height * 2) as u32) {
+            larger = halved(&larger);
+        } else if target != (out_width as u32, out_height as u32) {
+            larger = imageops::resize(&larger, target.0, target.1, FilterType::Triangle);
         }
         Ok(larger)
+    }
+
+    /// `image` half as large, each pixel the average of four, weighed by
+    /// how opaque they are
+    fn halved(image: &RgbaImage) -> RgbaImage {
+        RgbaImage::from_fn(image.width() / 2, image.height() / 2, |x, y| {
+            let (mut sum, mut alpha) = ([0u32; 3], 0u32);
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let [r, g, b, a] = image.get_pixel(2 * x + dx, 2 * y + dy).0;
+                for (total, value) in sum.iter_mut().zip([r, g, b]) {
+                    *total += value as u32 * a as u32;
+                }
+                alpha += a as u32;
+            }
+            if alpha == 0 {
+                return image::Rgba([0, 0, 0, 0]);
+            }
+            let [r, g, b] = sum.map(|total| ((total + alpha / 2) / alpha) as u8);
+            image::Rgba([r, g, b, ((alpha + 2) / 4) as u8])
+        })
     }
 
     #[cfg(test)]

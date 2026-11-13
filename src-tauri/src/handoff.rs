@@ -200,8 +200,25 @@ fn send(app: &AppHandle, tab: u32, job: u64, reply: Result<String, &str>) {
         return;
     };
     let script = match reply {
+        // A large result, like an upscaled image, goes over in parts, as
+        // one script that size takes the page long to take in
+        Ok(result) if result.len() > PART => {
+            let mut rest = result.as_str();
+            while !rest.is_empty() {
+                let mut end = PART.min(rest.len());
+                while !rest.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let _ = webview.eval(format!("window.__ligmaJob?.part({job}, {:?})", &rest[..end]));
+                rest = &rest[end..];
+            }
+            format!("window.__ligmaJob?.done({job}, null)")
+        }
         Ok(result) => format!("window.__ligmaJob?.done({job}, {result:?})"),
         Err(reason) => format!("window.__ligmaJob?.failed({job}, {reason:?})"),
     };
     let _ = webview.eval(script);
 }
+
+/// Results longer than this many bytes go to the page in parts this long
+const PART: usize = 1 << 20;

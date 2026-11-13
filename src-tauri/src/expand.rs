@@ -272,22 +272,71 @@ fn painted(strokes: &[Stroke], image: (u32, u32), at: (usize, usize), canvas: (u
 
 #[derive(Deserialize)]
 struct Healing {
+    op: String,
+    #[serde(default)]
+    session: u64,
+    #[serde(default)]
     strokes: Vec<Stroke>,
 }
 
-/// Spot healing (see ai_actions.rs): the image after the line of JSON,
-/// `{"strokes":[…]}`, strokes of the brush as Expand's `sample` has them,
-/// with what they paint over filled from the image around it, as
-/// Photoshop's Spot Healing Brush does, as `{"png":<base64>}`, or "empty"
-/// when nothing is painted. Only a square around what's painted is filled,
-/// with the image around it to go on, so it's quick on large images
+/// The image Spot healing has open, and the session that names it: one at a
+/// time
+static HEALING: std::sync::Mutex<Option<(u64, image::RgbaImage)>> = std::sync::Mutex::new(None);
+
+/// Spot healing (see ai_actions.rs), for `job` in tab `tab`, which keeps
+/// the image while it's open, so each stroke only says where it paints and
+/// gets back only what changed. A request is a line of JSON, followed by
+/// the layer's fills as Figma draws them, as a PNG, for "open":
+///
+/// - `{"op":"open"}` keeps the image, as session `job`, and gives
+///   `{"session":<job>}`
+/// - `{"op":"heal","session":s,"strokes":[…]}` fills what the strokes, as
+///   Expand's `sample` has them, paint over from the image around it, as
+///   Photoshop's Spot Healing Brush does, and gives the square of the
+///   image that changed, `{"png":<base64>,"x":x,"y":y}`, or "empty" when
+///   nothing is painted, or "closed" when the image isn't open any more.
+///   Only a square around what's painted is filled, with the image around
+///   it to go on, so it's quick on any image
+/// - `{"op":"close","session":s}` lets the image go
 pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
     let split = bytes.iter().position(|&byte| byte == b'\n').unwrap_or(bytes.len());
     let request: Healing = serde_json::from_slice(&bytes[..split]).map_err(|_| "failed")?;
-    let png = bytes.get(split + 1..).unwrap_or_default();
-    let mut image = image::load_from_memory_with_format(png, image::ImageFormat::Png).map_err(failed)?.into_rgba8();
+    let mut open = HEALING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    match request.op.as_str() {
+        "open" => {
+            let png = bytes.get(split + 1..).unwrap_or_default();
+            let image = image::load_from_memory(png).map_err(failed)?.into_rgba8();
+            *open = Some((job, image));
+            Ok(format!(r#"{{"session":{job}}}"#))
+        }
+        "close" => {
+            if open.as_ref().is_some_and(|(session, _)| *session == request.session) {
+                *open = None;
+            }
+            Ok("{}".to_owned())
+        }
+        "heal" => {
+            let (_, image) = open.as_mut().filter(|(session, _)| *session == request.session).ok_or("closed")?;
+            let stopped = || crate::handoff::cancelled(tab, job);
+            let (x, y, patch) = heal_strokes(image, &request.strokes, &stopped)?;
+            let mut out = Vec::new();
+            {
+                use image::ImageEncoder;
+                image::codecs::png::PngEncoder::new(&mut out)
+                    .write_image(patch.as_raw(), patch.width(), patch.height(), image::ExtendedColorType::Rgba8)
+                    .map_err(failed)?;
+            }
+            Ok(format!(r#"{{"png":"{}","x":{x},"y":{y}}}"#, base64::engine::general_purpose::STANDARD.encode(out)))
+        }
+        _ => Err("failed"),
+    }
+}
+
+/// Fills what `strokes` paint over in `image` from the image around it, in
+/// place, and gives the square of it that changed, and where it is
+fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn Fn() -> bool) -> Result<(usize, usize, image::RgbaImage), &'static str> {
     let (width, height) = (image.width() as usize, image.height() as usize);
-    let hole = painted(&request.strokes, (image.width(), image.height()), (0, 0), (width, height));
+    let hole = painted(strokes, (image.width(), image.height()), (0, 0), (width, height));
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
     for (at, _) in hole.iter().enumerate().filter(|(_, &hole)| hole) {
         let (x, y) = (at % width, at / width);
@@ -319,8 +368,11 @@ pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
     if !canvas.known.contains(&true) {
         return Err("failed");
     }
-    let stopped = || crate::handoff::cancelled(tab, job);
-    fill(&mut canvas, None, &stopped).map_err(<&str>::from)?;
+    fill(&mut canvas, None, stopped).map_err(<&str>::from)?;
+    // Only the square around what's painted comes back, and it's as small
+    // as the hole and a few pixels around it, as nothing else changed
+    let (px0, py0) = (left.saturating_sub(2), top.saturating_sub(2));
+    let (px1, py1) = ((right + 2).min(width), (bottom + 2).min(height));
     for y in 0..down {
         for x in 0..across {
             if !canvas.known[y * across + x] {
@@ -328,14 +380,8 @@ pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
             }
         }
     }
-    let mut out = Vec::new();
-    {
-        use image::ImageEncoder;
-        image::codecs::png::PngEncoder::new(&mut out)
-            .write_image(image.as_raw(), image.width(), image.height(), image::ExtendedColorType::Rgba8)
-            .map_err(failed)?;
-    }
-    Ok(format!(r#"{{"png":"{}"}}"#, base64::engine::general_purpose::STANDARD.encode(out)))
+    let patch = image::imageops::crop_imm(image, px0 as u32, py0 as u32, (px1 - px0) as u32, (py1 - py0) as u32).to_image();
+    Ok((px0, py0, patch))
 }
 
 /// Spot healing reads at least this many pixels around what's painted
@@ -1098,8 +1144,19 @@ mod tests {
         assert!(blue.count() > 80 * 40 * 9 / 10);
     }
 
-    /// A spot painted over on a flat color heals to that color, and the
-    /// rest of the image is left as it was
+    /// What a Spot healing request gives back, as JSON
+    fn ask_heal(header: &str, image: Option<&image::RgbaImage>) -> Result<serde_json::Value, &'static str> {
+        let mut png = Vec::new();
+        if let Some(image) = image {
+            image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        }
+        let request = [header.as_bytes(), b"\n", &png].concat();
+        heal(0, 7, &request).map(|reply| serde_json::from_str(&reply).unwrap())
+    }
+
+    /// A spot painted over on a flat color heals to that color, and only a
+    /// little more than it comes back. Spot healing's tests share its one
+    /// open image, so they're one test
     #[test]
     fn heals_a_spot() {
         let mut image = image::RgbaImage::from_pixel(200, 120, image::Rgba([30, 140, 90, 255]));
@@ -1108,41 +1165,34 @@ mod tests {
                 image.put_pixel(x, y, image::Rgba([250, 10, 10, 255]));
             }
         }
-        let mut png = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        let header = br#"{"strokes":[{"points":[[0.475,0.458]],"radius":0.05}]}"#;
-        let request = [&header[..], b"\n", &png].concat();
-        let json: serde_json::Value = serde_json::from_str(&heal(0, 0, &request).unwrap()).unwrap();
-        let bytes = base64::engine::general_purpose::STANDARD.decode(json["png"].as_str().unwrap()).unwrap();
-        let healed = image::load_from_memory(&bytes).unwrap().into_rgba8();
-        assert!(healed.pixels().all(|pixel| pixel.0 == [30, 140, 90, 255]));
+        assert_eq!(ask_heal(r#"{"op":"open"}"#, Some(&image)).unwrap()["session"], 7);
+        assert_eq!(ask_heal(r#"{"op":"heal","session":7,"strokes":[]}"#, None).err(), Some("empty"));
+        let reply = ask_heal(r#"{"op":"heal","session":7,"strokes":[{"points":[[0.475,0.458]],"radius":0.05}]}"#, None).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(reply["png"].as_str().unwrap()).unwrap();
+        let patch = image::load_from_memory(&bytes).unwrap().into_rgba8();
+        assert!(patch.width() < 30 && patch.height() < 30);
+        assert!(patch.pixels().all(|pixel| pixel.0 == [30, 140, 90, 255]));
+        let (x, y) = (reply["x"].as_u64().unwrap(), reply["y"].as_u64().unwrap());
+        assert!(x <= 90 && y <= 50 && x + patch.width() as u64 >= 100 && y + patch.height() as u64 >= 60);
+        ask_heal(r#"{"op":"close","session":7}"#, None).unwrap();
+        assert_eq!(ask_heal(r#"{"op":"heal","session":7,"strokes":[{"points":[[0.5,0.5]],"radius":0.05}]}"#, None).err(), Some("closed"));
     }
 
     /// Heals `LIGMA_HEAL_IMAGE` where `LIGMA_HEAL_STROKES`, Spot healing's
-    /// JSON, paints, and writes it next to the image. `cargo test --release
-    /// -- --ignored heals_an_image`
+    /// strokes, paint, and writes it next to the image. `cargo test
+    /// --release -- --ignored heals_an_image`
     #[test]
     #[ignore]
     fn heals_an_image() {
         let (Ok(path), Ok(strokes)) = (std::env::var("LIGMA_HEAL_IMAGE"), std::env::var("LIGMA_HEAL_STROKES")) else {
             return;
         };
-        let mut png = Vec::new();
-        image::open(&path).unwrap().write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        let request = [strokes.as_bytes(), b"
-", &png].concat();
+        let mut image = image::open(&path).unwrap().into_rgba8();
+        let strokes: Vec<Stroke> = serde_json::from_str(&strokes).unwrap();
         let started = std::time::Instant::now();
-        let json: serde_json::Value = serde_json::from_str(&heal(0, 0, &request).unwrap()).unwrap();
+        heal_strokes(&mut image, &strokes, &|| false).unwrap();
         eprintln!("healed in {:?}", started.elapsed());
-        std::fs::write(format!("{path}.healed.png"), base64::engine::general_purpose::STANDARD.decode(json["png"].as_str().unwrap()).unwrap()).unwrap();
-    }
-
-    #[test]
-    fn healing_nothing_is_empty() {
-        let mut png = Vec::new();
-        image::RgbaImage::new(20, 20).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        let request = [&br#"{"strokes":[]}"#[..], b"\n", &png].concat();
-        assert_eq!(heal(0, 0, &request).err(), Some("empty"));
+        image.save(format!("{path}.healed.png")).unwrap();
     }
 
     #[test]
