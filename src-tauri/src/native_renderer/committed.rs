@@ -9,11 +9,13 @@
 //! render targets up to 32, share heaps of their kind instead, each freed
 //! once nothing is left in it: textures small enough to be placed at 4 KiB,
 //! masks and tables Skia makes by the thousand, other textures, render
-//! targets small and big, and buffers to upload through. A render target
-//! placed in memory used before has to be cleared before it's drawn into,
-//! or what the GPU keeps of how it's compressed is whatever was there, and
-//! a blur reads some of a new layer before drawing it, which would show
-//! another frame's pixels. Skia doesn't, so it's done here (see `Clears`)
+//! targets small and big, and buffers to upload through. Every texture
+//! starts out all transparent, wherever its memory comes from: Skia reads
+//! parts of some before it writes them, as a blur does of a new layer or of
+//! the copy of what's behind it, which in memory used before showed another
+//! image's pixels. A render target placed in memory used before is cleared,
+//! another texture copied zeros into, and one of its own is made zeroed
+//! (see `Clears`)
 //!
 //! Skia takes C++ objects here, `GrD3DMemoryAllocator` and `GrD3DAlloc`, so
 //! this lays them out as MSVC does: a vtable, starting with
@@ -33,11 +35,14 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES,
     D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_DESC,
     D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-    D3D12_RESOURCE_STATES,
+    D3D12_RESOURCE_STATES, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
 };
+use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
-/// Its memory isn't cleared first, for what's written whole before it's
-/// read: images and buffers uploaded
+/// Its memory isn't cleared first, for heaps, whose resources are each
+/// cleared as they're placed
 const NOT_ZEROED: D3D12_HEAP_FLAGS = D3D12_HEAP_FLAGS(0x1000);
 
 /// A kind of resource placed in shared heaps: the heaps', their size, the
@@ -84,12 +89,13 @@ struct Allocator {
     clears: Option<Mutex<Clears>>,
 }
 
-/// Clears render targets as they're placed, to transparent, on the queue
-/// Skia draws with, ahead of anything Skia sends it that draws into them.
-/// Depth and stencil, which Skia clears before it uses, are discarded
-/// instead. Each goes in a command list of its own, sent at once, as Skia
-/// gives no word of when it sends its own. They all come from one command
-/// allocator, reset whenever the GPU's done with all it holds
+/// Clears textures as they're placed, to transparent, on the queue Skia
+/// draws with, ahead of anything Skia sends it that uses them: render
+/// targets cleared, others copied zeros into. Depth and stencil, which
+/// Skia clears before it uses, are discarded instead. Each goes in a
+/// command list of its own, sent at once, as Skia gives no word of when it
+/// sends its own. They all come from one command allocator, reset whenever
+/// the GPU's done with all it holds
 struct Clears {
     device: ID3D12Device,
     queue: ID3D12CommandQueue,
@@ -100,6 +106,10 @@ struct Clears {
     /// Where a target's view is made to clear it through, read as the
     /// clear's recorded
     views: ID3D12DescriptorHeap,
+    /// Zeros to copy from, as big as the biggest texture copied into yet
+    zeros: Option<(ID3D12Resource, u64)>,
+    /// Zeros outgrown, let go once the GPU passes the fence value with each
+    outgrown: Vec<(u64, ID3D12Resource)>,
 }
 
 impl Clears {
@@ -110,7 +120,7 @@ impl Clears {
             list.Close()?;
             let fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
             let views = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, ..Default::default() })?;
-            Ok(Clears { device: device.clone(), queue: queue.clone(), allocator, list, fence, sent: 0, views })
+            Ok(Clears { device: device.clone(), queue: queue.clone(), allocator, list, fence, sent: 0, views, zeros: None, outgrown: Vec::new() })
         }
     }
 
@@ -118,22 +128,7 @@ impl Clears {
     /// render target or depth write, as clearing and discarding take
     fn clear(&mut self, resource: &ID3D12Resource, depth: bool) -> windows::core::Result<()> {
         unsafe {
-            if self.fence.GetCompletedValue() >= self.sent {
-                self.allocator.Reset()?;
-            }
-            self.list.Reset(&self.allocator, None)?;
-            let barrier = D3D12_RESOURCE_BARRIER {
-                Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
-                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
-                Anonymous: D3D12_RESOURCE_BARRIER_0 {
-                    Aliasing: std::mem::ManuallyDrop::new(D3D12_RESOURCE_ALIASING_BARRIER {
-                        pResourceBefore: std::mem::ManuallyDrop::new(None),
-                        // Borrowed, not dropped
-                        pResourceAfter: std::mem::transmute_copy(resource),
-                    }),
-                },
-            };
-            self.list.ResourceBarrier(&[barrier]);
+            self.begin(resource)?;
             if depth {
                 self.list.DiscardResource(resource, None);
             } else {
@@ -141,11 +136,114 @@ impl Clears {
                 self.device.CreateRenderTargetView(resource, None, view);
                 self.list.ClearRenderTargetView(view, &[0.0; 4], None);
             }
-            self.list.Close()?;
-            self.queue.ExecuteCommandLists(&[Some(self.list.cast::<ID3D12CommandList>()?)]);
-            self.sent += 1;
-            self.queue.Signal(&self.fence, self.sent)
+            self.send()
         }
+    }
+
+    /// `resource`, a texture just placed with one level as `desc` says, in
+    /// `state`, made all zeros
+    fn zero(&mut self, resource: &ID3D12Resource, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOURCE_STATES) -> windows::core::Result<()> {
+        unsafe {
+            let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+            let mut total = 0u64;
+            self.device.GetCopyableFootprints(desc, 0, 1, 0, Some(&mut footprint), None, None, Some(&mut total));
+            if total == 0 || total == u64::MAX {
+                return Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_INVALIDARG));
+            }
+            let done = self.fence.GetCompletedValue();
+            self.outgrown.retain(|(until, _)| *until > done);
+            if !self.zeros.as_ref().is_some_and(|(_, size)| *size >= total) {
+                let size = total.max(1 << 20);
+                let buffer = D3D12_RESOURCE_DESC {
+                    Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                    Width: size,
+                    Height: 1,
+                    DepthOrArraySize: 1,
+                    MipLevels: 1,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                    ..Default::default()
+                };
+                let properties = D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_UPLOAD, ..Default::default() };
+                let mut zeros: Option<ID3D12Resource> = None;
+                self.device.CreateCommittedResource(&properties, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_GENERIC_READ, None, &mut zeros)?;
+                let zeros = zeros.ok_or_else(|| windows::core::Error::from_hresult(windows::Win32::Foundation::E_OUTOFMEMORY))?;
+                // Made zeroed, but written so it's sure to be
+                let mut at = std::ptr::null_mut();
+                zeros.Map(0, None, Some(&mut at))?;
+                std::ptr::write_bytes(at as *mut u8, 0, size as usize);
+                zeros.Unmap(0, None);
+                if let Some((old, _)) = self.zeros.replace((zeros, size)) {
+                    self.outgrown.push((self.sent + 1, old));
+                }
+            }
+            let Some((zeros, _)) = &self.zeros else { return Ok(()) };
+            let zeros = zeros.clone();
+            self.begin(resource)?;
+            let moving = state != D3D12_RESOURCE_STATE_COPY_DEST;
+            if moving {
+                self.list.ResourceBarrier(&[transition(resource, state, D3D12_RESOURCE_STATE_COPY_DEST)]);
+            }
+            let to = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: std::mem::transmute_copy(resource),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+            };
+            let from = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: std::mem::transmute_copy(&zeros),
+                Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: footprint },
+            };
+            self.list.CopyTextureRegion(&to, 0, 0, 0, &from, None);
+            if moving {
+                self.list.ResourceBarrier(&[transition(resource, D3D12_RESOURCE_STATE_COPY_DEST, state)]);
+            }
+            self.send()
+        }
+    }
+
+    /// Starts a command list for `resource`, just placed
+    unsafe fn begin(&mut self, resource: &ID3D12Resource) -> windows::core::Result<()> {
+        if self.fence.GetCompletedValue() >= self.sent {
+            self.allocator.Reset()?;
+        }
+        self.list.Reset(&self.allocator, None)?;
+        let barrier = D3D12_RESOURCE_BARRIER {
+            Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
+            Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+            Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                Aliasing: std::mem::ManuallyDrop::new(D3D12_RESOURCE_ALIASING_BARRIER {
+                    pResourceBefore: std::mem::ManuallyDrop::new(None),
+                    // Borrowed, not dropped
+                    pResourceAfter: std::mem::transmute_copy(resource),
+                }),
+            },
+        };
+        self.list.ResourceBarrier(&[barrier]);
+        Ok(())
+    }
+
+    unsafe fn send(&mut self) -> windows::core::Result<()> {
+        self.list.Close()?;
+        self.queue.ExecuteCommandLists(&[Some(self.list.cast::<ID3D12CommandList>()?)]);
+        self.sent += 1;
+        self.queue.Signal(&self.fence, self.sent)
+    }
+}
+
+/// A barrier taking all of `resource`, borrowed, from `before` to `after`
+unsafe fn transition(resource: &ID3D12Resource, before: D3D12_RESOURCE_STATES, after: D3D12_RESOURCE_STATES) -> D3D12_RESOURCE_BARRIER {
+    D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                pResource: std::mem::transmute_copy(resource),
+                Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                StateBefore: before,
+                StateAfter: after,
+            }),
+        },
     }
 }
 
@@ -357,10 +455,9 @@ unsafe extern "system" fn create(
     }
     let _tally = Tally(heap, *desc, started);
     let properties = D3D12_HEAP_PROPERTIES { Type: heap, ..Default::default() };
-    let targets = (*desc).Flags.0 & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0) != 0;
-    let flags = if heap == D3D12_HEAP_TYPE_DEFAULT && !this.zeroed_only && !targets { NOT_ZEROED } else { D3D12_HEAP_FLAG_NONE };
+    // Made zeroed, see the top
     let mut resource: Option<ID3D12Resource> = None;
-    match this.device.CreateCommittedResource(&properties, flags, desc, state, clear, &mut resource) {
+    match this.device.CreateCommittedResource(&properties, D3D12_HEAP_FLAG_NONE, desc, state, clear, &mut resource) {
         Ok(()) => {
             if let Some(resource) = resource {
                 let _ = resource.SetName(windows::core::w!("Ligma committed"));
@@ -435,12 +532,16 @@ unsafe fn placed(
     }
     let targets = desc.Flags.0 & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0) != 0;
     let mut desc = *desc;
+    // Textures placed are cleared, which takes `clears`
+    let texture = heap == D3D12_HEAP_TYPE_DEFAULT && desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    if texture && this.clears.is_none() {
+        return None;
+    }
     let kind = if heap == D3D12_HEAP_TYPE_UPLOAD && desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
         UPLOADS
     } else if heap != D3D12_HEAP_TYPE_DEFAULT || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D {
         return None;
     } else if targets {
-        this.clears.as_ref()?;
         let size = this.device.GetResourceAllocationInfo(0, &[desc]).SizeInBytes;
         if size > KINDS_PLACED[TARGETS].largest { BIG_TARGETS } else { TARGETS }
     } else {
@@ -475,9 +576,10 @@ unsafe fn placed(
         pool.lock().unwrap().give(slab, first, count);
         return None;
     };
-    if let (true, Some(clears)) = (targets, &this.clears) {
+    if let (true, Some(clears)) = (texture, &this.clears) {
         let depth = desc.Flags.0 & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0 != 0;
-        if let Err(error) = clears.lock().unwrap().clear(&resource, depth) {
+        let cleared = if targets { clears.lock().unwrap().clear(&resource, depth) } else { clears.lock().unwrap().zero(&resource, &desc, state) };
+        if let Err(error) = cleared {
             log::warn!("native renderer: clear: {error}");
             drop(resource);
             pool.lock().unwrap().give(slab, first, count);

@@ -934,6 +934,17 @@ impl Gpu {
         let info = ImageInfo::new((width, height), ColorType::RGBA8888, AlphaType::Premul, None);
         gpu::surfaces::render_target(&mut self.context, gpu::Budgeted::No, &info, samples, SurfaceOrigin::TopLeft, None, false, None)
     }
+
+    /// Sends what's drawn on `surface` to the GPU, never flushed without
+    /// being submitted. Skia's D3D backend keeps the tables telling shaders
+    /// which textures to read till it submits, found by the slots of the
+    /// textures in them, and a texture let go hands its slot at once to the
+    /// next one made: drawn before a submit, that one could be read as the
+    /// one let go, another image entirely. Each submit starts the tables
+    /// afresh, and within a flush every texture is made before any is read
+    fn flush(&mut self, surface: &mut Surface) {
+        let _ = self.context.flush_and_submit_surface(surface, None);
+    }
 }
 
 pub struct Painter {
@@ -3082,7 +3093,7 @@ impl Painter {
         // Skia does the work of drawing it once flushed, so where time's
         // short it's flushed now, for the time it takes to count
         if self.thumb_deadline.is_some() {
-            let _ = self.gpu.context.flush_surface(&mut self.thumb_pages[page].surface);
+            self.gpu.flush(&mut self.thumb_pages[page].surface);
         }
         let from = Rect::from_xywh(at.left as f32 + 1.0, at.top as f32 + 1.0, bounds.width() * side, bounds.height() * side);
         let generation = self.thumb_pages[page].generation;
@@ -3532,7 +3543,7 @@ impl Painter {
                 pending.played += at.elapsed();
                 if pending.timing {
                     let at = Instant::now();
-                    let _ = self.gpu.context.flush_surface(&mut pending.scratch);
+                    self.gpu.flush(&mut pending.scratch);
                     pending.flushed += at.elapsed();
                 }
                 break;
@@ -3550,7 +3561,7 @@ impl Painter {
             let flushing = Instant::now();
             // Skia does most of the work of drawing here, not as it's told
             // what to draw, so what it's given at once is kept to a slice
-            let _ = self.gpu.context.flush_surface(&mut pending.scratch);
+            self.gpu.flush(&mut pending.scratch);
             let took = at.elapsed();
             pending.played += flushing - at;
             pending.flushed += flushing.elapsed();
