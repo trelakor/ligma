@@ -2494,7 +2494,10 @@ impl Painter {
         let mut paint = Paint::default();
         paint.set_blend_mode(skia_safe::BlendMode::Src);
         canvas.draw_image_rect_with_sampling_options(&img.image, None, Rect::from_wh(sw as f32, sh as f32), sampling, &paint);
-        let image = upload(&mut self.gpu.context, surface.image_snapshot());
+        // Kept on the GPU without mipmaps, as reading it back to make them
+        // waits on all the GPU has to do, once per image let go, which
+        // stalled moving the view (see `draw::sampled`)
+        let image = surface.image_snapshot();
         let small = Img { image, original: img.original, area: img.area, stale: img.stale };
         let total = total - bytes + small.bytes();
         self.images.insert(key.to_string(), small);
