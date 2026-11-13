@@ -28,8 +28,11 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_RESOURCE_STATES,
 };
 
-/// Its memory isn't cleared first, as with Skia's own allocator: Skia
-/// clears or draws over what it uses
+/// Its memory isn't cleared first, for what's written whole before it's
+/// read: images and buffers uploaded. Render targets are cleared, as
+/// Skia's own allocator has big ones: a blur reads some of a new layer
+/// before drawing it, which otherwise shows what was in that memory, as
+/// another frame's pixels
 const NOT_ZEROED: D3D12_HEAP_FLAGS = D3D12_HEAP_FLAGS(0x1000);
 
 /// A kind of resource placed in shared heaps: the heaps', their size, the
@@ -210,7 +213,7 @@ pub fn allocator(device: &ID3D12Device) -> MemoryAllocator {
         let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
         unsafe { device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &mut options as *mut _ as *mut c_void, std::mem::size_of_val(&options) as u32) }.is_err()
     };
-    let pools: [Arc<Mutex<Pool>>; 4] = std::array::from_fn(|kind| Arc::new(Mutex::new(Pool { kind: &KINDS_PLACED[kind], not_zeroed: !zeroed_only, slabs: Vec::new() })));
+    let pools: [Arc<Mutex<Pool>>; 4] = std::array::from_fn(|kind| Arc::new(Mutex::new(Pool { kind: &KINDS_PLACED[kind], not_zeroed: !zeroed_only && kind != TARGETS, slabs: Vec::new() })));
     POOLS.lock().unwrap().extend(pools.iter().map(Arc::downgrade));
     let allocator = Box::into_raw(Box::new(Allocator { vtable: &VTABLE, refs: AtomicI32::new(1), device: device.clone(), zeroed_only, pools }));
     // A handle is a pointer to the object, which it now owns
@@ -273,7 +276,8 @@ unsafe extern "system" fn create(
     }
     let _tally = Tally(heap, *desc, started);
     let properties = D3D12_HEAP_PROPERTIES { Type: heap, ..Default::default() };
-    let flags = if heap == D3D12_HEAP_TYPE_DEFAULT && !this.zeroed_only { NOT_ZEROED } else { D3D12_HEAP_FLAG_NONE };
+    let targets = (*desc).Flags.0 & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0) != 0;
+    let flags = if heap == D3D12_HEAP_TYPE_DEFAULT && !this.zeroed_only && !targets { NOT_ZEROED } else { D3D12_HEAP_FLAG_NONE };
     let mut resource: Option<ID3D12Resource> = None;
     match this.device.CreateCommittedResource(&properties, flags, desc, state, clear, &mut resource) {
         Ok(()) => {
