@@ -1,6 +1,7 @@
 //! The models Ligma runs on this device with ONNX Runtime: BiRefNet for
 //! Remove background (see background.rs), SAM 2.1 for Select object (see
-//! objects.rs) and 4xNomosWebPhoto_RealPLKSR for Upscale (see upscale.rs). Each is downloaded when it's first needed, once asked,
+//! objects.rs) and 4xNomosWebPhoto_RealPLKSR and Real-ESRGAN for Upscale
+//! (see upscale.rs). Each is downloaded when it's first needed, once asked,
 //! or from Settings, which can also remove it. Downloads are checked
 //! against their SHA-256. ONNX Runtime is linked in on Windows. Macs with
 //! Apple silicon download it along with the first model, as it needs
@@ -30,7 +31,8 @@ pub fn supported() -> bool {
 #[cfg(birefnet)]
 pub use download::*;
 
-/// The model Settings names: "background", "objects" or "upscale"
+/// The model Settings names: "background", "objects", "upscale" or
+/// "upscale-fast"
 #[cfg(birefnet)]
 fn named(name: &str) -> Option<&'static Model> {
     ALL.into_iter().find(|model| model.name == name)
@@ -194,6 +196,19 @@ mod download {
         entry: None,
     };
 
+    /// Real-ESRGAN's compact general model, realesr-general-x4v3
+    /// (https://github.com/xinntao/Real-ESRGAN, BSD 3-Clause), for Upscale's
+    /// Fast, as ONNX from
+    /// https://huggingface.co/CoderViking/realesr-general-x4v3-onnx, pinned
+    /// to one revision
+    pub const REAL_ESRGAN: Download = Download {
+        url: "https://huggingface.co/CoderViking/realesr-general-x4v3-onnx/resolve/c6a971706797c7502945a2b4c4274fce4900d4ab/realesr-general-x4v3.onnx",
+        sha256: "1940a93ee08283a0a7286183186357b1688fe9fa8ede74604b424586aaddf112",
+        size: 4_866_417,
+        file: "realesr-general-x4v3.onnx",
+        entry: None,
+    };
+
     /// A model and what Ligma says about it
     pub struct Model {
         /// As Settings names it
@@ -255,8 +270,21 @@ mod download {
         watchers: Mutex::new(Vec::new()),
     };
 
+    pub static UPSCALE_FAST: Model = Model {
+        name: "upscale-fast",
+        files: &[&REAL_ESRGAN],
+        doing: "Fast upscaling",
+        model: "Real-ESRGAN",
+        title: "Download Fast Upscale Model",
+        progress: "Downloading the fast upscale model…",
+        after: "Upscaling…",
+        downloading: Mutex::new(None),
+        cancels: AtomicU32::new(0),
+        watchers: Mutex::new(Vec::new()),
+    };
+
     /// Every model, for what they share
-    pub const ALL: [&Model; 3] = [&BACKGROUND, &OBJECTS, &UPSCALE];
+    pub const ALL: [&Model; 4] = [&BACKGROUND, &OBJECTS, &UPSCALE, &UPSCALE_FAST];
 
     /// Why a model isn't there to use
     pub enum Missing {

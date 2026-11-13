@@ -684,15 +684,21 @@
       </label>
       <label class="row nested" id="local-upscale-row" hidden>
         <span class="label"><span id="local-upscale-label">Upscale on this Mac</span>
-          <div class="hint" id="local-upscale-hint">Makes the image 2 or 4 times as large and sharper on your Mac, keeping its texture, with 4xNomosWebPhoto, once downloaded</div>
+          <div class="hint" id="local-upscale-hint">Makes the image 2 or 4 times as large and sharper on your Mac, on its graphics, Detailed keeping its texture or Fast, once downloaded</div>
         </span>
         <input type="checkbox" class="switch" id="local-upscale">
       </label>
       <div class="row nested deeper" id="upscale-model-row" hidden>
-        <span class="label">Upscale model
+        <span class="label">Detailed upscale model
           <div class="hint" id="upscale-model-hint"></div>
         </span>
         <button class="button" id="upscale-model-button"></button>
+      </div>
+      <div class="row nested deeper" id="upscale-fast-model-row" hidden>
+        <span class="label">Fast upscale model
+          <div class="hint" id="upscale-fast-model-hint"></div>
+        </span>
+        <button class="button" id="upscale-fast-model-button"></button>
       </div>
     </section>
     <section>
@@ -1114,7 +1120,7 @@
     $("local-heal-label").textContent = "Spot healing on this PC";
     $("local-heal-hint").textContent = $("local-heal-hint").textContent.replace("your Mac", "your PC");
     $("local-upscale-label").textContent = "Upscale on this PC";
-    $("local-upscale-hint").textContent = "Makes the image 2 or 4 times as large and sharper on your PC, keeping its texture, with 4xNomosWebPhoto. The first time, it downloads a 30 MB model from GitHub.";
+    $("local-upscale-hint").textContent = "Makes the image 2 or 4 times as large and sharper on your PC, on its graphics card where it can, Detailed keeping its texture or Fast. The first time, each downloads a model, 30 MB or 5 MB.";
     $("local-select-object-label").textContent = "Select objects on this PC";
     $("local-select-object-hint").textContent = $("local-select-object-hint").textContent.replace("your Mac, once downloaded.", "your PC. The first time, it downloads a 74 MB model from Hugging Face.");
   }
@@ -1616,6 +1622,7 @@
     background: { what: "BiRefNet" },
     objects: { what: "SAM 2.1" },
     upscale: { what: "4xNomosWebPhoto" },
+    "upscale-fast": { what: "Real-ESRGAN" },
   };
   const megabytes = (bytes) => `${Math.round(bytes / 1e6)} MB`;
   window.applyModel = (name, state) => {

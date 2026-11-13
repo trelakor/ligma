@@ -61,7 +61,7 @@ windows-registry = "0.6"
 # Remove background in src/background.rs: ONNX Runtime, linked in, to run
 # the model on the CPU, the model's download and check, and reading and
 # writing the images
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-22"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-22", "directml"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
@@ -70,7 +70,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Windows, but with ONNX Runtime downloaded along with the model, as it
 # needs macOS 14. The download is a .tgz, hence flate2 and tar
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-22"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-22", "coreml"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }

@@ -1,14 +1,21 @@
 //! Upscale on this device (Settings > Features > Images): the image bar's
 //! Upscale in free projects (see ai_actions.rs), which makes an image 2 or
-//! 4 times as large with 4xNomosWebPhoto_RealPLKSR (Philip Hofmann, CC BY
-//! 4.0), trained on real photos to keep their texture, grain and noise
-//! rather than smooth them away, as ONNX, on the CPU with ONNX Runtime,
-//! where it runs (see models.rs). It's 30 MB, downloaded when first needed
+//! 4 times as large, Detailed with 4xNomosWebPhoto_RealPLKSR (Philip
+//! Hofmann, CC BY 4.0), trained on real photos to keep their texture,
+//! grain and noise rather than smooth them away, or Fast with
+//! Real-ESRGAN's compact general model, realesr-general-x4v3 (BSD
+//! 3-Clause), several times as quick and smoother. They run as ONNX with
+//! ONNX Runtime where it runs (see models.rs), on the graphics card where
+//! there's one to use, with DirectML on Windows and Core ML on Macs, and
+//! otherwise, or if that fails, on the CPU. Each is downloaded when first
+//! needed
 //!
 //! The page hands a request over as a download (see handoff.rs): a line of
-//! JSON, `{"scale":s}`, then the image itself, as Figma keeps it. The model
-//! makes it 4 times as large, a tile at a time, and that's scaled down to
-//! `s` times, at most 4,096 pixels across, as large as Figma keeps images.
+//! JSON, `{"scale":s,"quality":"fast"|"detailed"}`, then the image itself,
+//! as Figma keeps it. The model makes it 4 times as large, a tile at a
+//! time, each the same size, so a graphics card prepares the model once,
+//! and that's scaled down to `s` times, at most 4,096 pixels across, as
+//! large as Figma keeps images.
 //! Transparency is scaled up smoothly alongside. The result is
 //! `{"png":<base64>,"width":w,"height":h}`, or "large" when the image is
 //! as large as it can be already
@@ -20,6 +27,8 @@ use tauri::AppHandle;
 #[cfg_attr(not(birefnet), allow(dead_code))]
 struct Request {
     scale: f32,
+    #[serde(default)]
+    quality: String,
 }
 
 /// Figma keeps images at most this many pixels across
@@ -42,7 +51,7 @@ pub fn handle(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<Strin
     let request: Request = serde_json::from_slice(&bytes[..split]).map_err(|_| "failed")?;
     let image = bytes.get(split + 1..).unwrap_or_default();
     #[cfg(birefnet)]
-    return esrgan::upscale(app, tab, job, request.scale, image);
+    return esrgan::upscale(app, tab, job, request.scale, request.quality != "fast", image);
     #[cfg(not(birefnet))]
     {
         let _ = (app, tab, job, request, image);
@@ -66,24 +75,39 @@ mod esrgan {
     use tauri::AppHandle;
 
     use super::factor;
-    use crate::models::{Missing, NOMOS, UPSCALE};
+    use crate::models::{Missing, NOMOS, REAL_ESRGAN, UPSCALE, UPSCALE_FAST};
 
     /// The model makes images 4 times as large, a tile this size at a time,
     /// each read with this much more of the image around it, as far as its
     /// large kernels see, so the tiles meet without seams
     const TIMES: usize = 4;
-    const TILE: usize = 256;
+    const GPU_TILE: usize = 512;
+    const CPU_TILE: usize = 256;
     const PAD: usize = 32;
+
+    /// A tile, `across` by `down` at `x` and `y`, read as `read_across` by
+    /// `read_down` from `x0` and `y0`, which may be past the image's edge
+    struct Tile {
+        x: usize,
+        y: usize,
+        across: usize,
+        down: usize,
+        x0: isize,
+        y0: isize,
+        read_across: usize,
+        read_down: usize,
+    }
 
     fn failed(error: impl std::fmt::Display) -> &'static str {
         log::warn!("Upscale: {error}");
         "failed"
     }
 
-    pub fn upscale(app: &AppHandle, tab: u32, job: u64, scale: f32, bytes: &[u8]) -> Result<String, &'static str> {
+    pub fn upscale(app: &AppHandle, tab: u32, job: u64, scale: f32, detailed: bool, bytes: &[u8]) -> Result<String, &'static str> {
         let image = decode(bytes)?;
         let factor = factor(image.width(), image.height(), scale).ok_or("large")?;
-        let (_held, folder) = UPSCALE.ensure(app, tab, job).map_err(|missing| match missing {
+        let (model, file) = if detailed { (&UPSCALE, NOMOS.file) } else { (&UPSCALE_FAST, REAL_ESRGAN.file) };
+        let (_held, folder) = model.ensure(app, tab, job).map_err(|missing| match missing {
             Missing::Cancelled => "cancelled",
             Missing::Failed => "failed",
         })?;
@@ -94,7 +118,7 @@ mod esrgan {
         });
         let stopped = || crate::handoff::cancelled(tab, job);
         let progress = |text: &str| crate::handoff::progress(app, tab, job, text);
-        let larger = run(&folder.join(NOMOS.file), Some(&folder), &image, factor, &options, &stopped, &progress).map_err(|error| {
+        let larger = run(&folder.join(file), Some(&folder), &image, factor, &options, &stopped, &progress).map_err(|error| {
             if stopped() {
                 "cancelled"
             } else {
@@ -112,6 +136,34 @@ mod esrgan {
             larger.width(),
             larger.height()
         ))
+    }
+
+    /// A session for the model at `model`, on the graphics card if `gpu`
+    /// and there's one to use: DirectML on Windows, picking the fastest
+    /// card, and Core ML on Macs. Where it can't, ONNX Runtime runs it on
+    /// the CPU instead
+    fn session(environment: &'static ort::environment::Environment, model: &Path, gpu: bool) -> Result<Session, String> {
+        let builder = Session::builder(environment).map_err(|error| error.to_string())?;
+        let mut builder = if gpu {
+            #[cfg(windows)]
+            let providers = [ort::ep::DirectML::default().with_performance_preference(ort::ep::directml::PerformancePreference::HighPerformance).build()];
+            #[cfg(target_os = "macos")]
+            let providers = [ort::ep::CoreML::default()
+                .with_compute_units(ort::ep::coreml::ComputeUnits::All)
+                .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+                .build()];
+            builder
+                // DirectML runs nodes one at a time, in buffers it lays out itself
+                .with_memory_pattern(false)
+                .map_err(|error| error.to_string())?
+                .with_parallel_execution(false)
+                .map_err(|error| error.to_string())?
+                .with_execution_providers(providers)
+                .map_err(|error| error.to_string())?
+        } else {
+            builder.with_auto_device(AutoDevicePolicy::PreferCPU).map_err(|error| error.to_string())?
+        };
+        builder.commit_from_file(model).map_err(|error| error.to_string())
     }
 
     /// The image in `bytes`, turned as its orientation says
@@ -142,12 +194,10 @@ mod esrgan {
         let error = |error: ort::Error| error.to_string();
         let (width, height) = (image.width() as usize, image.height() as usize);
         let environment = crate::models::environment(folder.unwrap_or(Path::new("")))?;
-        let mut session = Session::builder(environment)
-            .map_err(|error| error.to_string())?
-            .with_auto_device(AutoDevicePolicy::PreferCPU)
-            .map_err(|error| error.to_string())?
-            .commit_from_file(model)
-            .map_err(|error| error.to_string())?;
+        // Tests can ask for the CPU, to compare
+        let gpu = !(cfg!(test) && std::env::var("LIGMA_UPSCALE_CPU").is_ok());
+        let mut session = session(environment, model, gpu).or_else(|_| session(environment, model, false))?;
+        let mut on_gpu = gpu;
         // Transparent pixels as they'd show on black, as the model reads color
         let rgb = RgbImage::from_fn(width as u32, height as u32, |x, y| {
             let [r, g, b, a] = image.get_pixel(x, y).0;
@@ -156,42 +206,94 @@ mod esrgan {
         });
         let (out_width, out_height) = (width * TIMES, height * TIMES);
         let mut out = RgbImage::new(out_width as u32, out_height as u32);
-        let tiles: Vec<(usize, usize)> = (0..height).step_by(TILE).flat_map(|y| (0..width).step_by(TILE).map(move |x| (x, y))).collect();
-        for (index, &(x, y)) in tiles.iter().enumerate() {
+        // Tiles on a graphics card are all read the same size, their edge
+        // pixels carried on past the image's, so the model is prepared for
+        // one size only. On the CPU, where that costs nothing, they're
+        // smaller, and those at the edges smaller still, so less is read
+        // twice
+        let tile = if gpu { GPU_TILE } else { CPU_TILE };
+        let tiles: Vec<Tile> = if gpu {
+            let (across, down) = (tile.min(width), tile.min(height));
+            let starts = |size: usize, tile: usize| {
+                let mut starts: Vec<usize> = (0..size.saturating_sub(tile)).step_by(tile).collect();
+                starts.push(size - tile);
+                starts.dedup();
+                starts
+            };
+            starts(height, down)
+                .into_iter()
+                .flat_map(|y| starts(width, across).into_iter().map(move |x| (x, y)))
+                .map(|(x, y)| Tile { x, y, across, down, x0: x as isize - PAD as isize, y0: y as isize - PAD as isize, read_across: across + 2 * PAD, read_down: down + 2 * PAD })
+                .collect()
+        } else {
+            (0..height)
+                .step_by(tile)
+                .flat_map(|y| (0..width).step_by(tile).map(move |x| (x, y)))
+                .map(|(x, y)| {
+                    let (x0, y0) = (x.saturating_sub(PAD), y.saturating_sub(PAD));
+                    let (x1, y1) = ((x + tile + PAD).min(width), (y + tile + PAD).min(height));
+                    Tile {
+                        x,
+                        y,
+                        across: tile.min(width - x),
+                        down: tile.min(height - y),
+                        x0: x0 as isize,
+                        y0: y0 as isize,
+                        read_across: x1 - x0,
+                        read_down: y1 - y0,
+                    }
+                })
+                .collect()
+        };
+        for (index, t) in tiles.iter().enumerate() {
             if stopped() {
                 return Err("cancelled".to_owned());
             }
             if tiles.len() > 1 {
                 progress(&format!("Upscaling… {}%", index * 100 / tiles.len()));
             }
-            // The tile with the image around it, as far as there's image
-            let (x0, y0) = (x.saturating_sub(PAD), y.saturating_sub(PAD));
-            let (x1, y1) = ((x + TILE + PAD).min(width), (y + TILE + PAD).min(height));
-            let (across, down) = (x1 - x0, y1 - y0);
+            let (across, down) = (t.read_across, t.read_down);
             let plane = across * down;
             let mut input = vec![0f32; 3 * plane];
             for row in 0..down {
+                let source_y = (t.y0 + row as isize).clamp(0, height as isize - 1) as u32;
                 for column in 0..across {
-                    let pixel = rgb.get_pixel((x0 + column) as u32, (y0 + row) as u32);
+                    let source_x = (t.x0 + column as isize).clamp(0, width as isize - 1) as u32;
+                    let pixel = rgb.get_pixel(source_x, source_y);
                     for channel in 0..3 {
                         input[channel * plane + row * across + column] = pixel[channel] as f32 / 255.0;
                     }
                 }
             }
-            let tensor = TensorRef::from_array_view(([1usize, 3, down, across], &*input)).map_err(error)?;
-            let outputs = session.run_with_options(ort::inputs![tensor], options).map_err(error)?;
-            let (_, output) = outputs[0].try_extract_tensor::<f32>().map_err(error)?;
+            let ask = |session: &mut Session| -> Result<Vec<f32>, String> {
+                let tensor = TensorRef::from_array_view(([1usize, 3, down, across], &*input)).map_err(error)?;
+                let outputs = session.run_with_options(ort::inputs![tensor], options).map_err(error)?;
+                let (_, output) = outputs[0].try_extract_tensor::<f32>().map_err(error)?;
+                Ok(output.to_vec())
+            };
+            let output = match ask(&mut session) {
+                Ok(output) => output,
+                // The graphics card failed: the CPU from then on
+                Err(_) if on_gpu && !stopped() => {
+                    log::warn!("Upscale: the graphics card failed, using the CPU");
+                    session = self::session(environment, model, false)?;
+                    on_gpu = false;
+                    ask(&mut session)?
+                }
+                Err(error) => return Err(error),
+            };
             let (big_across, big_down) = (across * TIMES, down * TIMES);
             if output.len() != 3 * big_across * big_down {
                 return Err("unexpected output".to_owned());
             }
             let big_plane = big_across * big_down;
             // Only the tile itself, not what was read around it
-            for row in (y - y0) * TIMES..((y + TILE).min(height) - y0) * TIMES {
-                for column in (x - x0) * TIMES..((x + TILE).min(width) - x0) * TIMES {
-                    let at = row * big_across + column;
+            let (inner_x, inner_y) = ((t.x as isize - t.x0) as usize * TIMES, (t.y as isize - t.y0) as usize * TIMES);
+            for row in 0..t.down * TIMES {
+                for column in 0..t.across * TIMES {
+                    let at = (inner_y + row) * big_across + inner_x + column;
                     let pixel = [0, 1, 2].map(|channel| (output[channel * big_plane + at] * 255.0).round().clamp(0.0, 255.0) as u8);
-                    out.put_pixel((x0 * TIMES + column) as u32, (y0 * TIMES + row) as u32, image::Rgb(pixel));
+                    out.put_pixel((t.x * TIMES + column) as u32, (t.y * TIMES + row) as u32, image::Rgb(pixel));
                 }
             }
         }
@@ -252,8 +354,9 @@ mod esrgan {
         use super::*;
 
         /// Upscales `LIGMA_UPSCALE_IMAGE` with the model at `LIGMA_UPSCALE`
-        /// 4 times and writes it next to the image. `cargo test --release
-        /// -- --ignored upscales`
+        /// 4 times and writes it next to the image, on the graphics card
+        /// unless `LIGMA_UPSCALE_CPU` is set. `cargo test --release --
+        /// --ignored upscales`
         #[test]
         #[ignore]
         fn upscales_an_image() {

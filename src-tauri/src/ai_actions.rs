@@ -2570,9 +2570,9 @@ const PAGE_JS: &str = r##"(() => {
     );
   }
 
-  // Upscale makes one image 2 or 4 times as large with 4xNomosWebPhoto on this
-  // device (see upscale.rs), at most 4,096 pixels across, as Figma keeps
-  // images. The layer stays as large; its image gets sharper. Once it's
+  // Upscale makes one image 2 or 4 times as large on this device, on the
+  // graphics card where there's one (see upscale.rs): Detailed, keeping its
+  // texture, or Fast, at most 4,096 pixels across, as Figma keeps images. The layer stays as large; its image gets sharper. Once it's
   // done, the canvas shows it, with the image as it was over it up to a
   // divider that drags across, to compare. Apply, or Enter, keeps it, the
   // image fill changed and the one before under it, hidden, as Remove
@@ -2581,7 +2581,12 @@ const PAGE_JS: &str = r##"(() => {
   const UPSCALE = "data-ligma-upscale";
   const UPSCALING = "data-ligma-upscaling";
   let upscaling = null;
-  const upscaleOptions = { scale: 2 };
+  // Detailed keeps texture and grain, Fast is several times as quick
+  const upscaleOptions = { scale: 2, quality: "detailed" };
+  const QUALITIES = [
+    ["fast", "Fast", "Quicker, and smoother"],
+    ["detailed", "Detailed", "Keeps texture, grain and noise"],
+  ];
   // Arrows out of a corner, as an image growing
   const UPSCALE_ICON = icon(`<rect ${STROKE} x="4.5" y="12.5" width="7" height="7" rx="1"/><path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5h6v6m0-6-7 7"/>`);
   const LARGEST = 4096;
@@ -2632,6 +2637,19 @@ const PAGE_JS: &str = r##"(() => {
         showUpscaling();
       });
     }
+    const qualities = strip.appendChild(Object.assign(document.createElement("div"), { className: "segments" }));
+    qualities.setAttribute("role", "radiogroup");
+    qualities.setAttribute("aria-label", "Quality");
+    for (const [value, label, tip] of QUALITIES) {
+      const button = qualities.appendChild(Object.assign(document.createElement("button"), { type: "button", textContent: label }));
+      button.setAttribute("role", "radio");
+      button.dataset.value = value;
+      Object.assign(button.dataset, { tooltip: tip, tooltipType: "text", tooltipShowAbove: "true" });
+      button.addEventListener("click", () => {
+        upscaleOptions.quality = value;
+        showUpscaling();
+      });
+    }
     const result = strip.appendChild(Object.assign(document.createElement("span"), { className: "hint" }));
     result.setAttribute("aria-live", "polite");
     const goDivider = barDivider(strip);
@@ -2644,7 +2662,7 @@ const PAGE_JS: &str = r##"(() => {
     const cancel = strip.appendChild(barButton(crop, "Cancel"));
     cancel.addEventListener("click", () => (upscaling?.comparing ? finishUpscale(false) : closeUpscaling()));
 
-    upscaling = { figma, node, index, paint, size, canvas, root, scales, result, goDivider, go, apply, working: false, comparing: null };
+    upscaling = { figma, node, index, paint, size, canvas, root, scales, qualities, result, goDivider, go, apply, working: false, comparing: null };
     document.documentElement.setAttribute(UPSCALING, "");
     placeUpscaling();
     showUpscaling();
@@ -2658,10 +2676,14 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const showUpscaling = () => {
-    const { scales, result, goDivider, go, apply, working, comparing } = upscaling;
-    scales.hidden = !!comparing;
+    const { scales, qualities, result, goDivider, go, apply, working, comparing } = upscaling;
+    scales.hidden = qualities.hidden = !!comparing;
     for (const button of scales.children) {
       button.setAttribute("aria-checked", String(Number(button.dataset.value) === upscaleOptions.scale));
+      button.disabled = working;
+    }
+    for (const button of qualities.children) {
+      button.setAttribute("aria-checked", String(button.dataset.value === upscaleOptions.quality));
       button.disabled = working;
     }
     const [width, height] = comparing ? [comparing.width, comparing.height] : upscaledSize();
@@ -2710,7 +2732,7 @@ const PAGE_JS: &str = r##"(() => {
       const scale = Math.min(LARGEST / Math.max(node.width, node.height, 1), Math.max(size.width / node.width, size.height / node.height, 1));
       const before = drawn(figma, node, scale, true);
       const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync();
-      const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale }, bytes), show, "", controller.signal));
+      const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale, quality: upscaleOptions.quality }, bytes), show, "", controller.signal));
       if (node.removed || upscaling !== current) throw "cancelled";
       const fills = fillsOf(node);
       if (fills[index]?.imageHash !== paint.imageHash) throw "failed";
