@@ -298,7 +298,32 @@
   .fold[aria-expanded="false"] .chev { transform: rotate(-90deg); }
   .fold small { color: var(--text2); font-size: 11px; font-weight: 450; }
   .all { display: flex; align-items: center; gap: 2px; height: 24px; margin-left: 8px; padding: 0 4px 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; }
-  .fold + .all, .fold + .lay { margin-left: auto; }
+  .fold + .all, .fold + .lay, .fold + .pager { margin-left: auto; }
+  /* Starred on Home: a page of cards at a time, turned with the arrows,
+     the dots or a sideways swipe; each page slides in from its side */
+  .home-sec .star-grid.paged { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); --from: 40px; }
+  .home-sec .star-grid.paged.back { --from: -40px; }
+  .star-grid.slide0 { animation: page-a 280ms var(--ease); }
+  .star-grid.slide1 { animation: page-b 280ms var(--ease); }
+  @keyframes page-a { from { transform: translateX(var(--from)); opacity: 0; } }
+  @keyframes page-b { from { transform: translateX(var(--from)); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .home-sec .star-grid.paged { --from: 0px; } }
+  .pager { display: flex; align-items: center; gap: 2px; }
+  .pager > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--text2); }
+  .pager > button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+  .pager > button:disabled { opacity: 0.35; }
+  .pager .i { width: 14px; height: 14px; }
+  .pager .flip { transform: scaleX(-1); }
+  .pager .dots { display: flex; align-items: center; }
+  .pager .dots button { display: grid; place-items: center; width: 14px; height: 24px; }
+  .pager .dots button::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text3); transition: background 120ms, width 160ms var(--ease); }
+  .pager .dots button:hover::after { background: var(--text2); }
+  .pager .dots button[aria-current]::after { width: 14px; border-radius: 3px; background: var(--text); }
+  .pager .dots button[aria-current] { width: 22px; }
+  .pager .count { min-width: 40px; color: var(--text2); font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
+  .kbd .pager button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* The Starred page: few files, so bigger cards */
+  #starred-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 32px 24px; }
   .all:hover { background: var(--hover); color: var(--text); }
   .all .i { width: 12px; height: 12px; }
   .kbd :is(.fold, .all, .ptile, .lay button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -796,6 +821,63 @@
   .setp a.srow:hover b { text-decoration: underline; text-underline-offset: 2px; }
   .setp .srow.ask { flex-wrap: wrap; row-gap: 8px; margin: 0 -12px; padding: 12px; border-top-color: transparent; border-radius: 8px; background: var(--hover); }
   .setp .srow.ask + .srow { border-top-color: transparent; }
+  /* The team's page: the team on top, its sections in one column, a list
+     of them beside it that follows the scroll */
+  .dash { display: grid; grid-template-columns: 148px minmax(0, 720px); gap: 48px; max-width: none; padding-bottom: 96px; }
+  .dnav { position: sticky; top: 16px; align-self: start; display: flex; flex-direction: column; gap: 1px; margin-top: 20px; }
+  .dnav button { height: 28px; padding: 0 8px; border-radius: 5px; color: var(--text2); text-align: left; white-space: nowrap; }
+  .dnav button:hover { background: var(--hover); color: var(--text); }
+  .dnav button[aria-current] { background: var(--hover); color: var(--text); font-weight: 550; }
+  @media (max-width: 1080px) {
+    .dash { grid-template-columns: minmax(0, 720px); }
+    .dnav { display: none; }
+  }
+  .dhero { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 20px; align-items: start; padding: 20px 0 24px; border-bottom: 1px solid var(--line); }
+  .dhero .tm { width: 72px; height: 72px; border-radius: 16px; font-size: 28px; }
+  .dhero .pic { position: relative; overflow: hidden; }
+  .dhero .pic .ov { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 120ms; }
+  .dhero .pic:hover .ov, .dhero .pic:focus-visible .ov, .dhero .pic.drop .ov, .dhero .pic.busy .ov { opacity: 1; }
+  .dhero .pic .ov .i { width: 20px; height: 20px; margin: 0; color: #fff; }
+  .dhero .pic.busy .ov .i { animation: pulse 700ms ease-in-out infinite alternate; }
+  .dhero .pic.drop { box-shadow: 0 0 0 2px var(--accent); }
+  .dt { min-width: 0; padding-top: 2px; }
+  .dname { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: -6px; }
+  .dname .hname { height: 32px; font-size: 18px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; }
+  .dname .hname.static:hover { background: none; }
+  .dname .hname.editing { width: min(360px, 100%); }
+  .dname .hname input { height: 30px; }
+  .dtier { flex: none; height: 20px; padding: 0 6px; border-radius: 4px; background: var(--bg2); color: var(--text2); font-size: 11px; line-height: 20px; font-weight: 550; }
+  .dhero .about { width: calc(100% + 8px); max-width: 560px; min-height: 28px; margin: 2px 0 0 -8px; padding: 4px 8px; color: var(--text2); }
+  .dhero .about:hover { color: var(--text); }
+  .dhero .about.blank { color: var(--text3); }
+  .dhero .about.static { margin-left: 0; padding: 0; }
+  .dhero .about.editing { padding: 0; }
+  .dhero .about textarea { display: block; width: 100%; min-height: 56px; padding: 4px 8px; border: 0; border-radius: 5px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: 450 13px/20px var(--font); resize: none; -webkit-user-select: text; user-select: text; }
+  .facts { margin: 6px 0 0; color: var(--text2); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+  .dacts { display: flex; align-items: center; gap: 6px; }
+  .dacts .btn { font-weight: 450; }
+  .dacts .btn[aria-pressed="true"] .fi { color: #e6a800; }
+  .btn.sm.icon { width: 28px; padding: 0; justify-content: center; }
+  .dash .sec { margin-top: 32px; }
+  .dash .sec h2 .hact { display: flex; align-self: center; align-items: center; gap: 4px; height: 24px; margin-left: auto; padding: 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; font-weight: 450; }
+  .dash .sec h2 .hact:hover { background: var(--hover); color: var(--text); }
+  .dash .sec h2 .hact .i { width: 12px; height: 12px; }
+  .dinvite { padding: 0 0 8px; }
+  .dinvite .invite { padding: 0; }
+  .dnote { margin: 0 0 8px; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .dpeople .mem { margin: 0 -8px; }
+  .dash .sec h2 .bill { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .ib.seat .cost { margin-left: 4px; color: var(--text2); font-variant-numeric: tabular-nums; }
+  .ib.seat:hover .cost { color: inherit; }
+  .prow { padding: 6px 0; }
+  .pgo { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; margin: -4px 0 -4px -8px; padding: 4px 8px; border-radius: 6px; text-align: left; }
+  .pgo:hover { background: var(--hover); }
+  .pgo .st { min-width: 0; }
+  .pgo small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dhero.sk { grid-template-columns: 72px minmax(0, 1fr); }
+  .dhero.sk .tm { background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
+  .dhero.sk .bar { height: 12px; margin: 10px 0 0; border-radius: 3px; background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
+  .dash .wsk { margin: 12px 0 0; }
   .tgl { position: relative; flex: none; width: 28px; height: 16px; border-radius: 8px; background: var(--bg3); box-shadow: inset 0 0 0 1px var(--line); transition: background 120ms; }
   .tgl::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 160ms var(--ease); }
   .tgl[aria-checked="true"] { background: var(--accent); box-shadow: none; }
@@ -2217,7 +2299,7 @@ const state = {
   type: "all",
   // Recents as rows with small previews, or as cards: rows on Home, cards
   // on the Recents page, until changed
-  layout: { home: store.get("layout:home", "rows"), recents: store.get("layout:recents", "grid"), shared: store.get("layout:shared", "grid"), drafts: store.get("layout:drafts", "grid") },
+  layout: { home: store.get("layout:home", "rows"), recents: store.get("layout:recents", "grid"), shared: store.get("layout:shared", "grid"), drafts: store.get("layout:drafts", "grid"), projects: store.get("layout:projects", "grid") },
   inbox: "all",
   sel: new Set(),
   anchor: null,
@@ -2294,6 +2376,16 @@ const win = $("#win");
 // ask: someone about to be removed, with what that does to their files.
 // picBusy: a new team picture on its way to Figma
 const winState = { kind: null, team: null, project: null, anchor: null, back: null, editing: null, level: null, busy: false, ask: null, picBusy: false };
+// A team's people are managed in its window or on its settings page, with
+// the same rows and controls: the window while it's open, else the page
+const pageState = { kind: "team", team: null, project: null, ask: null, level: null, picBusy: false };
+const onDash = () => dashForced || (!win.classList.contains("open") && !!settingsTeam());
+function ws() {
+  if (!onDash()) return winState;
+  if (pageState.team !== settingsTeam()) Object.assign(pageState, { team: settingsTeam(), ask: null, level: null, picBusy: false });
+  return pageState;
+}
+const peopleRoot = () => (onDash() ? scroller : win);
 
 // iconName: one of Figma's icons, or an icon's own markup
 function navRow(view, iconName, label, count, extra = "", tail = "") {
@@ -2435,7 +2527,7 @@ function rowHtml(file) {
   return `<div class="card row" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="true">
     <div class="thumb" data-thumb="${file.id}" aria-hidden="true"></div>
     <div class="name">${glyph(file.type)}<span class="nm" id="n-${file.id}">${esc(file.name)}</span>${badge}</div>
-    <div class="where">${esc(state.view === "shared" && placeOf(file.project) === "Shared with you" ? "" : placeOf(file.project))}</div>
+    <div class="where">${esc((state.view === "shared" && placeOf(file.project) === "Shared with you") || /^[pd]:/.test(state.view) ? "" : placeOf(file.project))}</div>
     <div class="when" id="d-${file.id}">${esc(state.view === "shared" && file.sharedAt ? sharedWhen(file) : activity(file))}</div>
     <div class="end">${facesBox(file.id, " inline")}<div class="tools"><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button></div></div></div>`;
 }
@@ -2446,10 +2538,10 @@ const fileList = (files, label, layout) =>
 
 // Rows or cards for Recents, here and on Home
 // `where`: "home" (Home's Recents, rows unless changed), or a page with
-// cards unless changed: "recents", "shared" or "drafts" (every Drafts).
-// Each keeps its own
-const LAYOUT_LABELS = { home: "Recents", recents: "Recents", shared: "Shared with you", drafts: "Drafts" };
-const layoutOf = (view) => (view === "recents" || view === "shared" ? view : view === "drafts" || view.startsWith("d:") ? "drafts" : null);
+// cards unless changed: "recents", "shared", "drafts" (every Drafts) or
+// "projects" (every project). Each keeps its own
+const LAYOUT_LABELS = { home: "Recents", recents: "Recents", shared: "Shared with you", drafts: "Drafts", projects: "this project" };
+const layoutOf = (view) => (view === "recents" || view === "shared" ? view : view === "drafts" || view.startsWith("d:") ? "drafts" : view.startsWith("p:") ? "projects" : null);
 const layoutToggle = (where) =>
   `<div class="seg lay" role="group" aria-label="Show ${LAYOUT_LABELS[where]} as">${[["rows", "list", "List"], ["grid", "grid", "Grid"]].map(([value, iconName, label]) => `<button data-layout="${where}:${value}" aria-pressed="${state.layout[where] === value}" aria-label="${label}" title="${label}">${icon(iconName)}</button>`).join("")}</div>`;
 function setLayout(choice) {
@@ -2523,8 +2615,12 @@ function homeLayout() {
   const [starCols, cols, projectCols] = homeCols.split(",").map(Number);
   const shown = FILES.filter((f) => !f.trashed && (state.type === "all" || f.type === state.type));
   const starredAll = starOrder(shown.filter((f) => f.starred));
-  const starred = starredAll.slice(0, starCols);
-  const taken = new Set(starred.map((f) => f.id));
+  // A row of them at a time, paged through: each file still shows once, so
+  // none of them shows further down
+  const starPages = Math.max(1, Math.ceil(starredAll.length / starCols));
+  starPage = Math.min(starPage, starPages - 1);
+  const starred = starredAll.slice(starPage * starCols, (starPage + 1) * starCols);
+  const taken = new Set(starredAll.map((f) => f.id));
   const pool = shown.filter((f) => (LIVE ? f.recent : true) && !taken.has(f.id)).sort((a, b) => b.at - a.at);
   // Who's in a file is a reason too: watch the latest ones
   if (LIVE && Live.ready.has("starred")) for (const f of pool.slice(0, 24)) LG.watch(f.key);
@@ -2551,9 +2647,10 @@ function homeLayout() {
   const recentsLoading = LIVE && !Live.ready.has("recents");
 
   if (open("starred")) files.push(...starred);
+  const slide = starSlide ? ` slide${starSlide.n % 2} ${starSlide.dir < 0 ? "back" : ""}` : "";
   html += section("starred", "Starred", starredAll.length, starred.length
-    ? `<div class="grid star-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>`
-    : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
+    ? `<div class="grid star-grid paged${slide}" style="--cols:${starCols}" role="listbox" aria-multiselectable="true" aria-label="Starred, page ${starPage + 1} of ${starPages}, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>`
+    : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null, starPages > 1 && open("starred") ? starPager(starPages) : "");
   if (recentsLoading) html += `<section class="sec home-sec" data-key="home:waiting">${waiting(cols * 2)}</section>`;
 
   if (projects.length) html += section("projects", "Suggested projects", 0, `<div class="ptiles">${projects.map(projectTile).join("")}</div>`);
@@ -2572,6 +2669,23 @@ function homeLayout() {
   return { html, files, key, any: starsLoading || recentsLoading || starred.length + suggested.length + recents.length > 0 };
 }
 let homeKey = "";
+
+// Starred on Home, a page at a time: the arrows, and a dot for each page
+// while there are few enough to count at a glance
+let starPage = 0;
+let starSlide = null;
+function starPager(pages) {
+  const dots = pages <= 8
+    ? `<span class="dots">${Array.from({ length: pages }, (_, i) => `<button data-star-page="${i}" aria-label="Page ${i + 1}"${i === starPage ? ' aria-current="true"' : ""}></button>`).join("")}</span>`
+    : `<span class="count">${starPage + 1} / ${pages}</span>`;
+  return `<span class="pager" role="group" aria-label="Starred pages"><button data-star-page="${starPage - 1}" aria-label="Previous page" title="Previous"${starPage ? "" : " disabled"}>${icon("right", "flip")}</button>${dots}<button data-star-page="${starPage + 1}" aria-label="Next page" title="Next"${starPage < pages - 1 ? "" : " disabled"}>${icon("right")}</button></span>`;
+}
+function turnStarPage(to) {
+  if (to === starPage || to < 0) return;
+  starSlide = { dir: Math.sign(to - starPage), n: (starSlide?.n ?? 0) + 1 };
+  starPage = to;
+  render();
+}
 
 const EMPTY = {
   home: ["home", "Nothing here yet", "Files you open, edit or get comments on show up here", "new"],
@@ -2709,6 +2823,8 @@ function render({ keepScroll = true } = {}) {
     lift.rerender = true;
     return;
   }
+  // Not under a team's name or description being edited on its page
+  if (settingsTeam() && $(".dash .editing", scroller)) return;
   const started = performance.now();
   const ready = LIVE && (state.view === "home" ? Live.ready.has("recents") || Live.ready.has("starred") : Live.ready.has(state.view));
   const home = state.view === "home" && state.mode !== "empty" && (!LIVE || ready) ? homeLayout() : null;
@@ -2731,8 +2847,9 @@ function render({ keepScroll = true } = {}) {
   } else if (home) html = home.any ? home.html : renderEmpty();
   else if (!list.length) html = renderEmpty();
   else if (state.view === "starred") html = `<section class="sec"><div class="grid star-grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
-  // Shared with you and Drafts: one grid, newest first, no dates over it
-  else if (state.view === "shared" || state.view === "drafts" || state.view.startsWith("d:")) html = `<section class="sec">${fileList(list, viewName(state.view), state.layout[layoutOf(state.view)])}</section>`;
+  // Shared with you, Drafts and projects: one list, newest first, no dates
+  // over it
+  else if (state.view === "shared" || state.view === "drafts" || /^[dp]:/.test(state.view)) html = `<section class="sec">${fileList(list, viewName(state.view), state.layout[layoutOf(state.view)])}</section>`;
   else {
     for (const file of list) {
       const t = timeOf(file);
@@ -3233,7 +3350,7 @@ function toggleTeamStar(id) {
   store.set(pinsKey(), [...pinnedTeams]);
   state.collapsed.delete("sec:starred");
   toast(pin ? `Pinned ${name} to the top` : `Unpinned ${name}`, () => toggleTeamStar(id));
-  renderSide();
+  settingsTeam() === id ? render() : renderSide();
 }
 
 // Where new things go: the team in view, else the first pinned one, else
@@ -3697,7 +3814,7 @@ async function setTeamImage(id, file) {
   const show = (img, img500, busy = false) => {
     team.img = img;
     team.img500 = img500;
-    winState.picBusy = busy;
+    ws().picBusy = busy;
     render();
     drawWin();
   };
@@ -3752,8 +3869,8 @@ async function copyTeamLink(id) {
 function openTeamWin(id, at, focus = null) {
   if (!teamById(id)) return;
   openWin({ kind: "team", team: id, project: null }, at, focus);
-  loadTeamInfo(id).then(() => winState.team === id && drawWin(), (error) => {
-    if (winState.team !== id) return;
+  loadTeamInfo(id).then(() => ws().team === id && drawWin(), (error) => {
+    if (ws().team !== id) return;
     TEAM_INFO[id] = { ...TEAM_INFO[id], error: error.message };
     drawWin();
   });
@@ -3762,8 +3879,8 @@ function openShare(id, at) {
   const p = PROJECTS[id];
   if (!p) return;
   openWin({ kind: "share", team: p.team.id, project: id }, at);
-  loadRoles(id).then(() => winState.project === id && drawWin(), (error) => {
-    if (winState.project !== id) return;
+  loadRoles(id).then(() => ws().project === id && drawWin(), (error) => {
+    if (ws().project !== id) return;
     SHARED_WITH[id] = { error: error.message };
     drawWin();
   });
@@ -3794,8 +3911,8 @@ function openWin(what, at, focus = null) {
   drawWin();
   renderSide();
   renderHead(order.length);
-  if (focus === "rename") $("[data-w=rename]", win)?.click();
-  else if (focus === "invite") $(".invite input", win)?.focus();
+  if (focus === "rename") $("[data-w=rename]", peopleRoot())?.click();
+  else if (focus === "invite") $(".invite input", peopleRoot())?.focus();
   else win.focus({ preventScroll: true });
 }
 function closeWin(restore = true) {
@@ -3837,8 +3954,8 @@ function personRow(m, tier, control = null) {
 // Asking before someone's removed, with what happens to their files
 function askRow(m) {
   const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
-  const ask = winState.ask;
-  const team = winState.kind === "team";
+  const ask = ws().ask;
+  const team = ws().kind === "team";
   const question = m.pending ? `Cancel the invite to ${nameOrVeil(m.name)}?` : `Remove ${nameOrVeil(m.name)} from ${esc(peopleWhere())}?`;
   let note = m.pending ? "The link in their email stops working" : team ? "They lose access to the team's projects and files" : "They keep any access they have through the team";
   const impact = ask.impact;
@@ -3853,28 +3970,28 @@ function askRow(m) {
 }
 // The people in the open window: a team's members, or who a project's
 // shared with
-const peopleOf = () => (winState.kind === "team" ? TEAM_INFO[winState.team]?.members : SHARED_WITH[winState.project]?.list);
-const peopleWhere = () => (winState.kind === "team" ? teamById(winState.team)?.team.name : PROJECTS[winState.project]?.name) ?? "here";
+const peopleOf = () => (ws().kind === "team" ? TEAM_INFO[ws().team]?.members : SHARED_WITH[ws().project]?.list);
+const peopleWhere = () => (ws().kind === "team" ? teamById(ws().team)?.team.name : PROJECTS[ws().project]?.name) ?? "here";
 // Roles to pick: a project's on any plan, a team's only in an Organization
 function rolesFor(m) {
   if (!m.role) return [];
-  if (winState.kind === "share") return [ROLE_LEVELS.viewer, ROLE_LEVELS.editor];
-  return standalone(teamById(winState.team).plan) ? [] : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor, ROLE_LEVELS.admin];
+  if (ws().kind === "share") return [ROLE_LEVELS.viewer, ROLE_LEVELS.editor];
+  return standalone(teamById(ws().team).plan) ? [] : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor, ROLE_LEVELS.admin];
 }
 // The role, as a menu where it can change; elsewhere a ⋯ with what can be
 // done: remove, or resend and cancel an invite. Only for those who manage
 // the people here: a team's admins, a project's editors
 function memberControl(m, i, tier) {
   const mine = peopleOf()?.find((p) => p.me)?.level ?? 0;
-  const manage = winState.kind === "team" ? TEAM_INFO[winState.team]?.admin : mine >= ROLE_LEVELS.editor;
+  const manage = ws().kind === "team" ? TEAM_INFO[ws().team]?.admin : mine >= ROLE_LEVELS.editor;
   if (!manage || m.me || (m.level ?? 0) >= ROLE_LEVELS.owner) return null;
   const role = roleName(m.level, tier);
   if (rolesFor(m).length) return `<button class="ib" data-w="person" data-i="${i}" aria-haspopup="menu" aria-label="${esc(m.name)}: ${esc(role)}">${esc(role)}${icon("down")}</button>`;
   return `<span class="acts"><span class="role">${esc(role)}</span><button class="ib more" data-w="person" data-i="${i}" aria-haspopup="menu" aria-label="More for ${esc(m.name)}" title="More">${icon("more")}</button></span>`;
 }
 function inviteForm(label, levels) {
-  const level = winState.level ?? levels?.[0] ?? null;
-  winState.level = level;
+  const level = ws().level ?? levels?.[0] ?? null;
+  ws().level = level;
   return `<form class="invite" data-w="invite"><input type="text" inputmode="email" autocomplete="off" spellcheck="false" placeholder="Names or emails, comma separated" aria-label="${esc(label)}" role="combobox" aria-autocomplete="list" aria-controls="invite-sugg" aria-expanded="false">` +
     (levels ? `<button type="button" class="ib" data-w="level" aria-haspopup="menu" aria-label="Invite as: ${levelName(level)}">${levelName(level)}${icon("down")}</button>` : "") +
     `<button type="submit" class="btn sm primary" disabled>Invite</button></form>`;
@@ -3904,7 +4021,7 @@ function rememberInvited(emails) {
 }
 // Who's already here, or typed in already, isn't suggested again
 function notHere() {
-  const input = $(".invite input", win);
+  const input = $(".invite input", peopleRoot());
   // Not counting the address still being typed
   const value = input?.value ?? "";
   const typed = lastAddress(value) ? emailsIn(value).slice(0, -1) : emailsIn(value);
@@ -3942,7 +4059,7 @@ function knownPeople() {
   return [...people.values()];
 }
 function suggest() {
-  const input = $(".invite input", win);
+  const input = $(".invite input", peopleRoot());
   const atEnd = input && document.activeElement === input && input.selectionEnd === input.value.length;
   const q = atEnd ? lastAddress(input.value).toLowerCase() : "";
   sugg.q = q;
@@ -3991,7 +4108,7 @@ suggBox.setAttribute("role", "listbox");
 suggBox.setAttribute("aria-label", "Suggested people");
 document.body.append(suggBox);
 function drawSugg() {
-  const input = $(".invite input", win);
+  const input = $(".invite input", peopleRoot());
   const show = !!input && sugg.items.length > 0;
   if (input) input.setAttribute("aria-expanded", String(show));
   if (!show) {
@@ -4014,7 +4131,7 @@ function drawSugg() {
   suggBox.classList.add("open");
 }
 function placeSugg() {
-  const input = $(".invite input", win);
+  const input = $(".invite input", peopleRoot());
   if (!input || !suggBox.classList.contains("open") && !sugg.items.length) return;
   const r = input.getBoundingClientRect();
   suggBox.style.left = `${r.left}px`;
@@ -4025,7 +4142,7 @@ function placeSugg() {
 // The address being typed swapped for the one picked, ready for the next
 function pickSugg(i) {
   const p = sugg.items[i];
-  const input = $(".invite input", win);
+  const input = $(".invite input", peopleRoot());
   if (!p || !input) return;
   const typed = lastAddress(input.value);
   input.value = `${input.value.slice(0, input.value.length - typed.length)}${p.email}, `;
@@ -4045,7 +4162,7 @@ function clearSugg() {
 }
 
 function teamWinHtml() {
-  const { team, plan } = teamById(winState.team);
+  const { team, plan } = teamById(ws().team);
   const info = TEAM_INFO[team.id];
   const tier = plan.teams.length === 1 ? plan.tier : plan.name;
   const edit = !info || info.admin;
@@ -4054,7 +4171,7 @@ function teamWinHtml() {
   const count = info?.members ? ` · ${people} ${people === 1 ? "person" : "people"}` : "";
   const bg = `background:${team.img ? "transparent" : team.color}`;
   const pic = edit
-    ? `<button class="tm pic${winState.picBusy ? " busy" : ""}" data-w="picture" style="${bg}" aria-label="Change the picture of ${esc(team.name)}" title="Change picture, or drop an image here">${face}<span class="ov">${icon("camera")}</span></button>`
+    ? `<button class="tm pic${ws().picBusy ? " busy" : ""}" data-w="picture" style="${bg}" aria-label="Change the picture of ${esc(team.name)}" title="Change picture, or drop an image here">${face}<span class="ov">${icon("camera")}</span></button>`
     : `<span class="tm" style="${bg}">${face}</span>`;
   let html = `<div class="wh">${pic}<div class="wt"><h2 id="win-title">` +
     (edit ? `<button class="hname" data-w="rename" title="Rename">${esc(team.name)}</button>` : `<span class="hname static">${esc(team.name)}</span>`) +
@@ -4068,14 +4185,14 @@ function teamWinHtml() {
   html += `<button class="ib wlink" data-w="team-link">${icon("link")}Copy invite link</button>`;
   if (info?.error) html += `<p class="wnote" role="alert">Couldn't load the people: ${esc(info.error)}</p>`;
   else if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div><div class="wsk"></div>`;
-  else html += `<div role="list" aria-label="People in ${esc(team.name)}">${info.members.map((m, i) => (winState.ask?.id === m.id ? askRow(m) : personRow(m, tier, memberControl(m, i, tier)))).join("")}</div>`;
-  html += `</section></div><div class="wfoot"><button class="ib" data-w="all-settings">${plan.tier === "Pro" ? "Seats, libraries, AI, transfer and deleting" : "Libraries, AI, transfer and deleting"}<span class="x">${fig("right")}</span></button></div>`;
+  else html += `<div role="list" aria-label="People in ${esc(team.name)}">${info.members.map((m, i) => (ws().ask?.id === m.id ? askRow(m) : personRow(m, tier, memberControl(m, i, tier)))).join("")}</div>`;
+  html += `</section></div><div class="wfoot"><button class="ib" data-w="all-settings">All team settings<span class="x">${fig("right")}</span></button></div>`;
   return html;
 }
 
 const ACCESS = [["edit", "Can edit"], ["view", "Can view"], ["none", "No access"]];
 function shareWinHtml() {
-  const p = PROJECTS[winState.project];
+  const p = PROJECTS[ws().project];
   const roles = SHARED_WITH[p.id];
   const access = ACCESS.find(([k]) => k === accessOf(p.id))[1];
   const everyone = orgWide(p.id) ? p.plan.name : p.team.name;
@@ -4088,33 +4205,36 @@ function shareWinHtml() {
     (p.plan.tier === "Free" ? `<span class="role">${access}</span>` : `<button class="ib" data-w="team-access" aria-haspopup="menu" aria-label="What ${esc(everyone)} can do: ${access}">${access}${icon("down")}</button>`) + `</div>`;
   if (roles?.error) html += `<p class="wnote" role="alert">Couldn't load who has access: ${esc(roles.error)}</p>`;
   else if (!roles) html += `<div class="wsk"></div><div class="wsk"></div>`;
-  else html += roles.list.map((m, i) => (winState.ask?.id === m.id ? askRow(m) : personRow(m, null, memberControl(m, i, null)))).join("");
+  else html += roles.list.map((m, i) => (ws().ask?.id === m.id ? askRow(m) : personRow(m, null, memberControl(m, i, null)))).join("");
   html += `</div></section></div><div class="wfoot"><button class="ib" data-w="project-link">${icon("link")}Copy link</button></div>`;
   return html;
 }
 
 function drawWin() {
-  if (!win.classList.contains("open")) return;
+  if (!win.classList.contains("open")) {
+    if (settingsTeam()) drawDash();
+    return;
+  }
   // Not under a name or description being edited: once it's saved
-  if ($(".editing", win)) return;
-  if (winState.kind === "team" && !teamById(winState.team)) return closeWin(false);
-  if (winState.kind === "share" && !PROJECTS[winState.project]) return closeWin(false);
-  const was = $(".invite input", win);
+  if ($(".editing", peopleRoot())) return;
+  if (ws().kind === "team" && !teamById(ws().team)) return closeWin(false);
+  if (ws().kind === "share" && !PROJECTS[ws().project]) return closeWin(false);
+  const was = $(".invite input", peopleRoot());
   const typed = was?.value ?? "";
   const focused = document.activeElement;
   // What had focus, found again in the new contents: a person's button by
   // their place in the list
   const { w, i } = win.contains(focused) ? focused.dataset ?? {} : {};
   const refocus = was && focused === was ? "emails" : w ? `[data-w="${w}"]${i ? `[data-i="${i}"]` : ""}` : null;
-  win.setAttribute("aria-label", winState.kind === "team" ? "Team settings and people" : "Share");
-  win.innerHTML = winState.kind === "team" ? teamWinHtml() : shareWinHtml();
-  const input = $(".invite input", win);
+  win.setAttribute("aria-label", ws().kind === "team" ? "Team settings and people" : "Share");
+  win.innerHTML = ws().kind === "team" ? teamWinHtml() : shareWinHtml();
+  const input = $(".invite input", peopleRoot());
   if (input) {
     input.value = typed;
     inviteReady();
   }
   if (refocus === "emails") input?.focus();
-  else if (refocus) $(refocus, win)?.focus();
+  else if (refocus) $(refocus, peopleRoot())?.focus();
   if (refocus !== "emails") sugg.items = [];
   placeWin();
   drawSugg();
@@ -4123,22 +4243,22 @@ function drawWin() {
 const emailsIn = (text) => text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
 const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
 function inviteReady() {
-  const input = $(".invite input", win);
+  const input = $(".invite input", peopleRoot());
   const emails = emailsIn(input?.value ?? "");
-  const submit = $(".invite [type=submit]", win);
+  const submit = $(".invite [type=submit]", peopleRoot());
   if (submit) submit.disabled = !emails.length || !emails.every(isEmail);
 }
 
 function sendInvites() {
-  const input = $(".invite input", win);
+  const input = $(".invite input", peopleRoot());
   const emails = emailsIn(input.value);
   if (!emails.length || !emails.every(isEmail)) return;
-  const team = winState.kind === "team";
-  const id = team ? winState.team : winState.project;
-  const { plan } = teamById(winState.team);
+  const team = ws().kind === "team";
+  const id = team ? ws().team : ws().project;
+  const { plan } = teamById(ws().team);
   // Starter and Professional teams invite members, with no level to pick:
   // as their links do
-  const level = team && standalone(plan) ? ROLE_LEVELS.editor : winState.level ?? ROLE_LEVELS.viewer;
+  const level = team && standalone(plan) ? ROLE_LEVELS.editor : ws().level ?? ROLE_LEVELS.viewer;
   const done = () => {
     input.value = "";
     rememberInvited(emails);
@@ -4148,7 +4268,7 @@ function sendInvites() {
     (team ? loadTeamInfo(id) : loadRoles(id)).then(drawWin, () => {});
   };
   if (!LIVE) return done();
-  const submit = $(".invite [type=submit]", win);
+  const submit = $(".invite [type=submit]", peopleRoot());
   submit.disabled = true;
   api("/api/invites", { method: "POST", json: { emails, resource_type: team ? "team" : "folder", resource_id_or_key: id, level } })
     .then(done, (error) => {
@@ -4159,7 +4279,7 @@ function sendInvites() {
 
 function renameTeam(id) {
   const { team } = teamById(id) ?? {};
-  const el = $("[data-w=rename]", win);
+  const el = $("[data-w=rename]", peopleRoot());
   if (!team || !el) return;
   editInPlace(el, { value: team.name, label: "Team name" }, (name) => {
     if (!name) return;
@@ -4177,12 +4297,12 @@ function renameTeam(id) {
     toast(`Renamed to “${name}”`, () => put(old, name));
   }, () => {
     drawWin();
-    refocus($("[data-w=rename]", win)) || win.focus({ preventScroll: true });
+    refocus($("[data-w=rename]", peopleRoot())) || win.focus({ preventScroll: true });
   });
 }
 function describeTeam(id) {
   const { team } = teamById(id) ?? {};
-  const el = $("[data-w=about]", win);
+  const el = $("[data-w=about]", peopleRoot());
   if (!team || !el) return;
   const info = TEAM_INFO[id];
   const old = info?.description ?? team.description ?? "";
@@ -4201,12 +4321,12 @@ function describeTeam(id) {
     toast(text ? "Saved the description" : "Removed the description", () => put(old, text));
   }, () => {
     drawWin();
-    refocus($("[data-w=about]", win)) || win.focus({ preventScroll: true });
+    refocus($("[data-w=about]", peopleRoot())) || win.focus({ preventScroll: true });
   });
 }
 
 function teamAccessMenu(at) {
-  const id = winState.project;
+  const id = ws().project;
   const f = (FOLDER[id] ??= {});
   const current = accessOf(id);
   const scope = orgWide(id) ? "organization" : "team";
@@ -4238,7 +4358,7 @@ function personMenu(i, at) {
   const m = peopleOf()?.[i];
   if (!m) return;
   const levels = rolesFor(m);
-  const items = levels.map((level, j) => ({ label: level === ROLE_LEVELS.admin ? "Admin" : levelName(level), detail: ROLE_DETAIL[winState.kind][j], checked: m.level === level, act: () => setRole(m, level) }));
+  const items = levels.map((level, j) => ({ label: level === ROLE_LEVELS.admin ? "Admin" : levelName(level), detail: ROLE_DETAIL[ws().kind][j], checked: m.level === level, act: () => setRole(m, level) }));
   if (items.length) items.push(null);
   if (m.pending) items.push({ label: "Send the invite again", act: () => resendInvite(m) }, { label: "Cancel invite…", act: () => askRemove(m) });
   else items.push({ label: `Remove from ${peopleWhere()}…`, act: () => askRemove(m) });
@@ -4246,7 +4366,7 @@ function personMenu(i, at) {
 }
 
 // The window's resource, to know a change still belongs to what's open
-const winKey = () => `${winState.kind}:${winState.kind === "team" ? winState.team : winState.project}`;
+const winKey = () => `${ws().kind}:${ws().kind === "team" ? ws().team : ws().project}`;
 
 function setRole(m, level) {
   const key = winKey();
@@ -4268,8 +4388,8 @@ function setRole(m, level) {
 
 function resendInvite(m) {
   if (!LIVE) return toast(`Sent the invite to ${m.name} again`);
-  const team = winState.kind === "team";
-  api("/api/invites/resend", { method: "POST", json: { email: m.name, resource_type: team ? "team" : "folder", resource_id_or_key: team ? winState.team : winState.project } })
+  const team = ws().kind === "team";
+  api("/api/invites/resend", { method: "POST", json: { email: m.name, resource_type: team ? "team" : "folder", resource_id_or_key: team ? ws().team : ws().project } })
     .then(() => toast(`Sent the invite to ${m.name} again`), (error) => toast(`Couldn't send the invite: ${error.message}`));
 }
 
@@ -4277,13 +4397,13 @@ function resendInvite(m) {
 // comes in as Figma works it out
 function askRemove(m) {
   const key = winKey();
-  winState.ask = { id: m.id, impact: null };
+  ws().ask = { id: m.id, impact: null };
   drawWin();
-  $("[data-w=ask-no]", win)?.focus();
-  if (!LIVE || m.pending || winState.kind !== "team") return;
-  api(`/api/teams/${winState.team}/users/removal_impact?user_ids[]=${encodeURIComponent(m.id)}`).then((impact) => {
-    if (winKey() !== key || winState.ask?.id !== m.id) return;
-    winState.ask.impact = impact;
+  $("[data-w=ask-no]", peopleRoot())?.focus();
+  if (!LIVE || m.pending || ws().kind !== "team") return;
+  api(`/api/teams/${ws().team}/users/removal_impact?user_ids[]=${encodeURIComponent(m.id)}`).then((impact) => {
+    if (winKey() !== key || ws().ask?.id !== m.id) return;
+    ws().ask.impact = impact;
     drawWin();
   }, () => {});
 }
@@ -4294,18 +4414,18 @@ function removePerson(m) {
   const where = peopleWhere();
   if (!list) return;
   const at = list.indexOf(m);
-  winState.ask = null;
+  ws().ask = null;
   list.splice(at, 1);
   drawWin();
-  $(".invite input", win)?.focus();
+  $(".invite input", peopleRoot())?.focus();
   toast(m.pending ? `Canceled the invite to ${m.name}` : `Removed ${m.name} from ${where}`);
   if (!LIVE) return;
   // An invite, a project's person or an Organization team's member goes
   // with their role; a Starter or Professional team's member, as Figma's
   // own Members page removes them
-  const viaTeam = winState.kind === "team" && !m.pending && (standalone(teamById(winState.team).plan) || !m.role);
+  const viaTeam = ws().kind === "team" && !m.pending && (standalone(teamById(ws().team).plan) || !m.role);
   const request = viaTeam
-    ? api(`/api/teams/${winState.team}/users`, { method: "DELETE", json: { user_ids: [m.id] } })
+    ? api(`/api/teams/${ws().team}/users`, { method: "DELETE", json: { user_ids: [m.id] } })
     : api(`/api/roles/${m.role.id}`, { method: "DELETE" });
   send(request, () => {
     if (!list.includes(m)) list.splice(Math.min(at, list.length), 0, m);
@@ -4390,28 +4510,55 @@ function spareSeats(seats, key) {
 const settingRow = (title, detail, control, extra = "") => `<div class="srow"${extra}><span class="st"><b>${title}</b>${detail ? `<small>${detail}</small>` : ""}</span>${control ? `<span class="ctl">${control}</span>` : ""}</div>`;
 const toggle = (key, label, on, off) => `<button class="tgl" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-set="${key}"${off ? " disabled" : ""}></button>`;
 
+/* A team's settings page: the team at the top (picture, name,
+   description, what it holds, its link), then everything about it in one
+   column, with a list of sections beside it to jump to. People are managed
+   here as in the team's window, with the same rows (see ws) */
+
+const DASH_SECTIONS = [["people", "People"], ["projects", "Projects"], ["libraries", "Libraries"], ["ai", "AI"], ["ownership", "Transfer and delete"]];
+let dashForced = false;
+// The team's people as its page shows them, even with a window open on
+// another team
+function asDash(fn) {
+  dashForced = true;
+  try {
+    return fn();
+  } finally {
+    dashForced = false;
+  }
+}
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function dashSkeleton() {
+  const bar = (w) => `<div class="bar" style="width:${w}"></div>`;
+  return `<div class="setp dash" aria-busy="true"><div class="dnav"></div><div class="dcol"><div class="dhero sk"><span class="tm"></span><span>${bar("40%")}${bar("64%")}</span></div>${`<div class="wsk"></div>`.repeat(4)}</div></div>`;
+}
+
 function settingsPage(id) {
   const { team, plan } = teamById(id);
   const s = TEAM_SET[id];
   if (!s) {
     loadTeamSettings(id);
-    return renderSkeleton();
+    return dashSkeleton();
   }
   if (s.error) return `<div class="empty"><div class="ic">${icon("users")}</div><h2>Couldn't load ${esc(team.name)}'s settings</h2><p>${esc(s.error)}</p><button class="btn" data-set="reload">Try again</button></div>`;
-  const admin = TEAM_INFO[id]?.admin ?? !LIVE;
+  const info = TEAM_INFO[id];
+  const admin = info?.admin ?? !LIVE;
   const off = !admin;
-  let html = `<div class="setp">`;
-  if (!admin) html += `<p class="snote">Only the team's admins can change these</p>`;
-  if (s.seats) html += seatsSection(id, s.seats);
+  const tier = tierOf(plan);
+  let html = `<div class="setp dash"><nav class="dnav" aria-label="Sections">${DASH_SECTIONS.map(([key, label]) => `<button data-set="jump" data-to="${key}"${key === dashAt ? ' aria-current="true"' : ""}>${esc(label)}</button>`).join("")}</nav><div class="dcol">`;
+  html += dashHero(id, s, admin);
+  html += asDash(() => dashPeople(id, info, tier, plan, s.seats));
+  html += dashProjects(id, team);
   // Libraries: Figma's own kits for the team's files, and what it publishes
   const kits = !s.meta.figma_provided_libraries_disabled;
-  html += `<section class="sec"><h2>Libraries</h2>`;
+  html += `<section class="sec" id="dash-libraries" data-key="dash:libraries"><h2>Libraries</h2>`;
   // Starter teams always have them: Figma takes the setting and ignores it
   const starter = !!s.meta.starter_team;
   html += settingRow("Figma's UI kits and libraries", starter ? "Starter teams always have the libraries Figma provides, like its iOS, Android and Material kits" : "Lets this team's files use the libraries Figma provides, like its iOS, Android and Material kits", toggle("kits", "Figma's UI kits and libraries", starter || kits, off || starter));
   if (s.libraries.length) {
     for (const l of s.libraries) {
-      const parts = [[l.num_components, "component"], [l.num_styles, "style"], [l.num_variables, "variable"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`);
+      const parts = [[l.num_components, "component"], [l.num_styles, "style"], [l.num_variables, "variable"]].filter(([n]) => n).map(([n, w]) => plural(n, w));
       html += `<a class="srow" href="https://www.figma.com/design/${esc(l.library_file_key ?? l.library_key)}" target="_blank" rel="noopener"><span class="st"><b>${esc(l.library_name ?? "Library")}</b><small>Published library${parts.length ? ` · ${parts.join(", ")}` : ""}</small></span><span class="ctl">${fig("ext")}</span></a>`;
     }
   } else html += settingRow("No libraries published from this team", "A library published from one of its files shows here");
@@ -4419,41 +4566,127 @@ function settingsPage(id) {
   // AI: Figma's AI in the team's files, and whether Figma learns from them
   const ai = !s.meta.ai_features_disabled;
   const student = !!s.meta.student_team_at;
-  html += `<section class="sec"><h2>AI</h2>`;
+  html += `<section class="sec" id="dash-ai" data-key="dash:ai"><h2>AI</h2>`;
   html += settingRow("AI features", "Lets people use Figma's AI tools in this team's files", toggle("ai", "AI features", ai, off));
   html += settingRow("Share content to train Figma's AI", student ? "Off for education teams" : "Lets Figma use this team's files to improve its AI models", toggle("ai-data", "Share content to train Figma's AI", !student && !!s.meta.ai_data_sharing_enabled, off || student));
   html += `</section>`;
-  html += `<section class="sec"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section>`;
-  return html + `</div>`;
+  html += `<section class="sec" id="dash-ownership" data-key="dash:ownership"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section>`;
+  return html + `</div></div>`;
 }
 
-function seatsSection(id, seats) {
+// The team itself: picture, name and description, edited where they are,
+// what it holds, and what's done to the team as a whole
+function dashHero(id, s, admin) {
+  const { team, plan } = teamById(id);
+  const info = TEAM_INFO[id];
+  const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
+  const bg = `background:${team.img ? "transparent" : team.color}`;
+  const pic = admin
+    ? `<button class="tm pic${pageState.picBusy ? " busy" : ""}" data-w="picture" style="${bg}" aria-label="Change the picture of ${esc(team.name)}" title="Change picture, or drop an image here">${face}<span class="ov">${icon("camera")}</span></button>`
+    : `<span class="tm" style="${bg}">${face}</span>`;
+  const about = info?.description ?? team.description ?? "";
+  const people = info?.members?.filter((m) => !m.pending).length;
+  const invited = info?.members?.filter((m) => m.pending).length ?? 0;
+  const c = s.counts;
+  const facts = [
+    people !== undefined && (people === 1 ? "1 person" : `${people} people`),
+    invited && `${invited} invited`,
+    plural(team.projects.length, "project"),
+    c?.active_project_active_file_count !== undefined && plural(c.active_project_active_file_count, "file"),
+    c?.active_drafts_count && plural(c.active_drafts_count, "draft"),
+  ].filter(Boolean);
+  const pinned = pinnedTeams.has(id);
+  let html = `<header class="dhero" data-key="dash:hero">${pic}<div class="dt">`;
+  html += `<div class="dname">${admin ? `<button class="hname" data-w="rename" title="Rename">${esc(team.name)}</button>` : `<span class="hname static">${esc(team.name)}</span>`}<span class="dtier">${esc(tierOf(plan))}</span></div>`;
+  html += admin ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : about ? `<p class="about static">${esc(about)}</p>` : "";
+  html += `<p class="facts">${facts.map(esc).join(" · ")}${admin ? "" : " · Only the team's admins can change its settings"}</p></div>`;
+  html += `<div class="dacts"><button class="btn sm" data-w="team-link">${icon("link")}Copy invite link</button>` +
+    `<button class="btn sm" data-set="pin" aria-pressed="${pinned}" title="${pinned ? "Unpin from the top of the sidebar" : "Pin to the top of the sidebar"}">${fig(pinned ? "starOn" : "star")}${pinned ? "Pinned" : "Pin"}</button>` +
+    `<a class="btn sm icon" href="https://www.figma.com/files/team/${esc(id)}" target="_blank" rel="noopener" aria-label="Open this team in Figma" title="Open this team in Figma">${fig("ext")}</a></div>`;
+  return html + `</header>`;
+}
+
+// Everyone in the team, each with their role and, on a Professional team,
+// their seat, priced as Figma bills it
+function dashPeople(id, info, tier, plan, seats) {
+  const { team } = teamById(id);
+  const people = info?.members?.filter((m) => !m.pending).length;
+  const bill = seats ? seatBill(seats) : "";
+  let html = `<section class="sec" id="dash-people" data-key="dash:people"><h2>People${people !== undefined ? `<small>${people}</small>` : ""}${bill ? `<small class="bill">${esc(bill)}</small>` : ""}</h2>`;
+  html += `<div class="dinvite">${inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor])}</div>`;
+  if (standalone(plan)) html += `<p class="dnote">Everyone invited joins as a member who can edit. Starter and Professional teams have no roles to pick</p>`;
+  if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div>`;
+  else {
+    const askSeat = TEAM_SET[id]?.askSeat;
+    const rows = info.members.map((m, i) => {
+      if (ws().ask?.id === m.id) return askRow(m);
+      const u = !m.pending && seats?.users?.find((x) => String(x.user_id) === String(m.id));
+      if (u && askSeat?.user === u.user_id) return seatAskRow(seats, u, m);
+      const control = memberControl(m, i, tier);
+      const seat = u ? seatControl(seats, u, m.name) : "";
+      return personRow(m, tier, seat ? `<span class="acts">${seat}${control ?? `<span class="role">${esc(roleName(m.level, tier))}</span>`}</span>` : control);
+    });
+    html += `<div class="dpeople" role="list" aria-label="People in ${esc(team.name)}">${rows.join("")}</div>`;
+  }
+  return html + `</section>`;
+}
+
+function dashProjects(id, team) {
+  let html = `<section class="sec" id="dash-projects" data-key="dash:projects"><h2>Projects<small>${team.projects.length}</small><button class="hact" data-set="p-new">${icon("plus")}New project</button></h2>`;
+  if (!team.projects.length) html += settingRow("No projects yet", "A project's files are shared with the team, as the project's sharing says");
+  for (const [pid] of team.projects) {
+    const p = PROJECTS[pid];
+    if (!p) continue;
+    if (!LIVE || Live.ready.has("starred")) wantProjectCount(pid);
+    const n = LIVE ? LG.count(pid) : FILES.filter((f) => f.project === pid && !f.trashed).length;
+    const desc = FOLDER[pid]?.description;
+    html += `<div class="srow prow" data-key="dash:p:${pid}"><button class="pgo" data-go="p:${pid}">${folderIcon(pid)}<span class="st"><b>${esc(p.name)}</b><small><span data-pcount="${pid}">${esc(filesText(n))}</span>${desc ? ` · ${esc(desc)}` : ""}</small></span></button>` +
+      `<span class="ctl"><button class="pill access" data-set="p-share" data-project="${pid}" aria-haspopup="dialog" title="Share ${esc(p.name)}">${fig("users")}<span>${esc(accessText(p))}</span></button>` +
+      `<button class="ib more" data-set="p-more" data-project="${pid}" aria-haspopup="menu" aria-label="More for ${esc(p.name)}" title="More">${icon("more")}</button></span></div>`;
+  }
+  return html + `</section>`;
+}
+
+// The section in view, lit in the list beside the page
+let dashAt = "people";
+scroller.addEventListener("scroll", () => {
+  if (!settingsTeam()) return;
+  const top = scroller.getBoundingClientRect().top + 72;
+  let at = null;
+  for (const sec of $$(".dash .sec[id]", scroller)) if (sec.getBoundingClientRect().top <= top) at = sec.id.slice(5);
+  // At the very bottom, the last section, however short
+  if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) at = $$(".dash .sec[id]", scroller).at(-1)?.id.slice(5) ?? at;
+  at ??= "people";
+  if (at === dashAt) return;
+  dashAt = at;
+  for (const b of $$(".dnav button", scroller)) b.toggleAttribute("aria-current", b.dataset.to === at);
+}, { passive: true });
+
+// What the team pays and when, for the People heading
+function seatBill(seats) {
   const sum = seats.summary;
   const sub = sum.monthly_subscription ?? sum.annual_subscription;
   const term = sum.monthly_subscription ? "month" : "year";
-  const plan = sub ? `${money(sub.estimated_amount_due ?? 0, sum.currency)} a ${term} · ${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${dayOf(sub.current_period_end)}` : "";
-  let html = `<section class="sec"><h2>Seats<small>${esc(plan)}</small></h2><div class="seats">`;
-  const ask = TEAM_SET[id].askSeat;
-  for (const u of seats.users ?? []) {
-    const key = u.active_seat_type?.key ?? "";
-    const who = u.user ?? {};
-    const name = who.handle || who.email || "Someone";
-    const face = who.img_url ? `<img src="${esc(who.img_url)}" alt="" referrerpolicy="no-referrer">` : esc(name[0]);
-    const avatar = `<span class="av" style="background:${who.img_url ? "transparent" : colorForTeam(u.user_id)}">${face}</span>`;
-    const me = u.user_id === (LIVE ? Live.uid : "me");
-    if (ask?.user === u.user_id) {
-      const to = ask.seat;
-      const price = seatPrice(seats, to);
-      const bits = [];
-      if (to) bits.push(spareSeats(seats, to) > 0 ? `It uses a ${seatName(to)} this team already pays for` : `It adds ${price ?? "a seat"} to this team's bill`);
-      if (key && sub) bits.push(`Their ${seatName(key)} stays on the bill until the plan renews on ${dayOf(sub.current_period_end)}, for someone else to use`);
-      html += `<div class="srow ask">${avatar}<span class="st"><b id="seat-q">Give ${nameOrVeil(name)} a ${seatName(to)}?</b><small>${esc(bits.join(". "))}</small></span><span class="ctl"><button class="btn sm" data-set="seat-no">Cancel</button><button class="btn sm primary" data-set="seat-yes" aria-describedby="seat-q">${to ? `${spareSeats(seats, to) > 0 ? "Give" : "Add"} ${seatName(to)}` : "Change seat"}</button></span></div>`;
-      continue;
-    }
-    const price = seatPrice(seats, key);
-    html += `<div class="srow">${avatar}<span class="st"><b>${nameOrVeil(name)}${me ? ` <i style="color:var(--text2);font-style:normal">(you)</i>` : ""}</b><small>${who.email ? veil(who.email) : ""}</small></span><span class="ctl"><button class="ib" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? ` · ${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}` : ""}${icon("down")}</button></span></div>`;
-  }
-  return html + `</div></section>`;
+  return sub ? `${money(sub.estimated_amount_due ?? 0, sum.currency)} a ${term} · ${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${dayOf(sub.current_period_end)}` : "";
+}
+// Someone's seat, as a menu of the seats and their prices
+function seatControl(seats, u, name) {
+  const key = u.active_seat_type?.key ?? "";
+  const price = seatPrice(seats, key);
+  return `<button class="ib seat" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? `<span class="cost">${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}</span>` : ""}${icon("down")}</button>`;
+}
+// A seat change asks first, in the person's row, saying what it costs
+function seatAskRow(seats, u, m) {
+  const sum = seats.summary;
+  const sub = sum.monthly_subscription ?? sum.annual_subscription;
+  const key = u.active_seat_type?.key ?? "";
+  const to = TEAM_SET[settingsTeam()].askSeat.seat;
+  const price = seatPrice(seats, to);
+  const bits = [];
+  if (to) bits.push(spareSeats(seats, to) > 0 ? `It uses a ${seatName(to)} this team already pays for` : `It adds ${price ?? "a seat"} to this team's bill`);
+  if (key && sub) bits.push(`Their ${seatName(key)} stays on the bill until the plan renews on ${dayOf(sub.current_period_end)}, for someone else to use`);
+  const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
+  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : colorForTeam(m.id)}">${face}</span><span><b id="seat-q">Give ${nameOrVeil(m.name)} a ${seatName(to)}?</b><small>${esc(bits.join(". "))}</small></span><span class="acts"><button class="btn sm" data-set="seat-no">Cancel</button><button class="btn sm primary" data-set="seat-yes" aria-describedby="seat-q">${to ? `${spareSeats(seats, to) > 0 ? "Give" : "Add"} ${seatName(to)}` : "Change seat"}</button></span></div>`;
 }
 
 function transferRow(id, s, off) {
@@ -4627,6 +4860,11 @@ function deleteTeam(id) {
   });
 }
 
+// The page drawn again for a change to its people, the suggestions with it
+function drawDash() {
+  drawSettingsKeepingFocus();
+  drawSugg();
+}
 // Redrawn as typed, with the field being typed in keeping focus and caret
 function drawSettingsKeepingFocus() {
   const el = document.activeElement;
@@ -4649,6 +4887,11 @@ function settingsClick(el) {
     return render();
   }
   if (TEAM_FLAGS[act]) return setTeamFlag(id, act);
+  if (act === "jump") return $(`#dash-${el.dataset.to}`, scroller)?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  if (act === "pin") return toggleTeamStar(id);
+  if (act === "p-new") return newProject(el.getBoundingClientRect(), id);
+  if (act === "p-share") return openShare(el.dataset.project, el.getBoundingClientRect());
+  if (act === "p-more") return projectMenu(el.dataset.project, el.getBoundingClientRect(), { open: true });
   if (act === "seat") return seatMenu(id, el.dataset.user, el.getBoundingClientRect());
   if (act === "seat-yes") return changeSeat(id);
   if (act === "seat-no") {
@@ -4714,48 +4957,53 @@ scroller.addEventListener("keydown", (e) => {
   }
 }, true);
 
-win.addEventListener("click", (e) => {
+// The window's handlers serve the team's settings page as well
+function onPeople(type, fn, opts) {
+  win.addEventListener(type, fn, opts);
+  scroller.addEventListener(type, (e) => e.target.closest?.(".dash") && fn(e), opts);
+}
+onPeople("click", (e) => {
   const el = e.target.closest("[data-w]");
   const act = el?.dataset.w;
   if (!act || act === "invite") return;
-  const ask = () => peopleOf()?.find((m) => m.id === winState.ask?.id);
-  if (act === "picture") pickTeamImage(winState.team);
+  const ask = () => peopleOf()?.find((m) => m.id === ws().ask?.id);
+  if (act === "picture") pickTeamImage(ws().team);
   else if (act === "person") personMenu(Number(el.dataset.i), el.getBoundingClientRect());
   else if (act === "ask-yes") ask() && removePerson(ask());
   else if (act === "ask-no") {
     const i = peopleOf()?.indexOf(ask());
-    winState.ask = null;
+    ws().ask = null;
     drawWin();
-    $(`[data-w=person][data-i="${i}"]`, win)?.focus();
+    $(`[data-w=person][data-i="${i}"]`, peopleRoot())?.focus();
   } else if (act === "all-settings") {
-    const id = winState.team;
+    const id = ws().team;
     closeWin(false);
     go(`s:${id}`);
   } else if (act === "close") closeWin();
-  else if (act === "rename") renameTeam(winState.team);
-  else if (act === "about") describeTeam(winState.team);
-  else if (act === "team-link") copyTeamLink(winState.team);
-  else if (act === "project-link") copyProjectLink(winState.project);
+  else if (act === "rename") renameTeam(ws().team);
+  else if (act === "about") describeTeam(ws().team);
+  else if (act === "team-link") copyTeamLink(ws().team);
+  else if (act === "project-link") copyProjectLink(ws().project);
   else if (act === "team-access") teamAccessMenu(el.getBoundingClientRect());
   else if (act === "level") {
-    showMenu([ROLE_LEVELS.viewer, ROLE_LEVELS.editor].map((level) => ({ label: levelName(level), checked: (winState.level ?? ROLE_LEVELS.viewer) === level, act: () => {
-      winState.level = level;
+    showMenu([ROLE_LEVELS.viewer, ROLE_LEVELS.editor].map((level) => ({ label: levelName(level), checked: (ws().level ?? ROLE_LEVELS.viewer) === level, act: () => {
+      ws().level = level;
       drawWin();
     } })), el.getBoundingClientRect());
   }
 });
-win.addEventListener("submit", (e) => {
+onPeople("submit", (e) => {
   e.preventDefault();
   sendInvites();
 });
-win.addEventListener("input", (e) => {
+onPeople("input", (e) => {
   if (!e.target.matches(".invite input")) return;
   inviteReady();
   suggest();
 });
-win.addEventListener("focusin", (e) => e.target.matches?.(".invite input") && loadTeamPeople());
+onPeople("focusin", (e) => e.target.matches?.(".invite input") && loadTeamPeople());
 // Gone once the box is left, unless it's only being drawn again
-win.addEventListener("focusout", (e) => {
+onPeople("focusout", (e) => {
   if (!e.target.matches?.(".invite input")) return;
   setTimeout(() => document.activeElement?.matches?.(".invite input") || clearSugg());
 });
@@ -4775,8 +5023,9 @@ suggBox.addEventListener("pointermove", (e) => {
 });
 // Kept under the box as the window's contents scroll
 win.addEventListener("scroll", placeSugg, true);
+scroller.addEventListener("scroll", placeSugg, { passive: true });
 addEventListener("resize", placeSugg);
-win.addEventListener("keydown", (e) => {
+onPeople("keydown", (e) => {
   if (e.target.matches?.(".invite input")) {
     const n = sugg.items.length;
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && n) {
@@ -4801,11 +5050,11 @@ win.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   e.preventDefault();
   // Out of asking about a removal first, then out of the window
-  if (winState.ask) $("[data-w=ask-no]", win)?.click();
+  if (ws().ask) $("[data-w=ask-no]", peopleRoot())?.click();
   else closeWin();
 });
 // An image dropped on the team's picture becomes its new one
-win.addEventListener("dragover", (e) => {
+onPeople("dragover", (e) => {
   const pic = e.target.closest?.("[data-w=picture]");
   if (!pic || !e.dataTransfer?.types.includes("Files")) return;
   e.preventDefault();
@@ -4813,15 +5062,15 @@ win.addEventListener("dragover", (e) => {
   e.dataTransfer.dropEffect = "copy";
   pic.classList.add("drop");
 });
-win.addEventListener("dragleave", (e) => e.target.closest?.("[data-w=picture]")?.classList.remove("drop"));
-win.addEventListener("drop", (e) => {
+onPeople("dragleave", (e) => e.target.closest?.("[data-w=picture]")?.classList.remove("drop"));
+onPeople("drop", (e) => {
   const pic = e.target.closest?.("[data-w=picture]");
   if (!pic) return;
   e.preventDefault();
   e.stopPropagation();
   pic.classList.remove("drop");
   const file = [...(e.dataTransfer?.files ?? [])].find((f) => f.type.startsWith("image/"));
-  file ? setTeamImage(winState.team, file) : toast("Drop an image to use it as the picture");
+  file ? setTeamImage(ws().team, file) : toast("Drop an image to use it as the picture");
 });
 addEventListener("pointerdown", (e) => {
   if (!win.classList.contains("open") || win.contains(e.target) || e.target.closest?.("#toast, .menu, #invite-sugg, [data-pact=share]")) return;
@@ -6900,6 +7149,22 @@ head.addEventListener("click", (e) => {
   }
 });
 
+// A sideways swipe over Home's Starred turns its pages, one per swipe
+let swipe = { dx: 0, until: 0 };
+scroller.addEventListener("wheel", (e) => {
+  const grid = e.target.closest?.(".star-grid.paged");
+  if (!grid || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  const now = performance.now();
+  if (now < swipe.until) return;
+  swipe.dx += e.deltaX;
+  if (Math.abs(swipe.dx) < 60) return;
+  const pager = $(".pager", grid.closest(".home-sec"));
+  const next = $(`[data-star-page="${starPage + Math.sign(swipe.dx)}"]:not(:disabled)`, pager ?? grid);
+  swipe = { dx: 0, until: now + 450 };
+  if (next) turnStarPage(starPage + Math.sign(next.dataset.starPage - starPage));
+}, { passive: false });
+
 filters.addEventListener("click", (e) => {
   const layout = e.target.closest("[data-layout]")?.dataset.layout;
   if (layout) return setLayout(layout);
@@ -6937,6 +7202,8 @@ scroller.addEventListener("click", (e) => {
     store.set(LIVE ? "collapsed-live" : "collapsed", [...state.collapsed]);
     return render();
   }
+  const page = e.target.closest("[data-star-page]");
+  if (page) return turnStarPage(Number(page.dataset.starPage));
   const to = e.target.closest("[data-go]")?.dataset.go;
   if (to) return go(to);
   const layout = e.target.closest("[data-layout]")?.dataset.layout;
