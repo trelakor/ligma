@@ -500,6 +500,18 @@
               },
       },
       {
+        // Which nodes have animated custom effects, which Figma's threaded
+        // renderer works out by walking the page several times a frame,
+        // about 4 ms a frame in a file with many. Moving or resizing doesn't
+        // change it, so it's worked out once a drag
+        match: (source) => source.includes("getPlaybackNodes(){") && source.includes("hasAnimatedCustomEffectOrDescendant"),
+        source: (source) =>
+          source.replace(
+            "getPlaybackNodes(){",
+            "getPlaybackNodes(){if(!window.__ligmaHook?.panels?.dragging){this.__ligmaPlayback=null;return this.__ligmaPlaybackNodes()}return this.__ligmaPlayback??=this.__ligmaPlaybackNodes()}__ligmaPlaybackNodes(){",
+          ),
+      },
+      {
         // Listeners some of which may run later
         match: (source) => source.includes("deferrableListeners") && source.includes("runDeferredListeners"),
         getter: (value) =>
