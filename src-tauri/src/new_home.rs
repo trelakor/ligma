@@ -43,6 +43,57 @@ const PAGE_JS: &str = r##"(() => {
   else swap();
 })()"##;
 
+/// Runs in every Figma tab. The few account settings the page leaves to
+/// Figma (email, two-factor, deleting the account or the public profile)
+/// open Figma's file browser at `#ligma-settings=<tab>`, and this opens its
+/// settings dialog on that tab, as its account menu would. Figma has no
+/// link to the dialog. Its own markers find the menu and the tab, and the
+/// file browser is left as it is if they've gone
+pub const SETTINGS_JS: &str = r##"(() => {
+  if (location.hostname !== "www.figma.com" || window.top !== window) return;
+  const match = /^#ligma-settings=(account|community|notifications|security)$/.exec(location.hash);
+  if (!match) return;
+  history.replaceState(history.state, "", location.pathname + location.search);
+  const tab = match[1].toUpperCase();
+  // Figma's menus open on the pointer, not on click()
+  const press = (el) => {
+    const r = el.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, composed: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, button: 0, pointerId: 1, pointerType: "mouse", isPrimary: true };
+    el.dispatchEvent(new PointerEvent("pointerdown", at));
+    el.dispatchEvent(new MouseEvent("mousedown", at));
+    el.dispatchEvent(new PointerEvent("pointerup", at));
+    el.dispatchEvent(new MouseEvent("mouseup", at));
+    el.dispatchEvent(new MouseEvent("click", at));
+  };
+  // Each pressed once a second at most, so a menu or dialog still opening
+  // isn't closed again
+  const last = { menu: 0, item: 0 };
+  const started = Date.now();
+  const timer = setInterval(() => {
+    const now = Date.now();
+    if (now - started > 30000) return clearInterval(timer);
+    const trigger = document.querySelector(`[role=dialog] [role=tab][id$="-${tab}-trigger"]`);
+    if (trigger) {
+      clearInterval(timer);
+      if (trigger.getAttribute("aria-selected") !== "true") press(trigger);
+      return;
+    }
+    const item = document.querySelector("[data-onboarding-key=settings-nav-bar-item]");
+    if (item) {
+      if (now - last.item > 1000) {
+        last.item = now;
+        press(item);
+      }
+      return;
+    }
+    const profile = document.querySelector("[data-testid=ProfileButton]");
+    if (profile && profile.getAttribute("aria-expanded") !== "true" && now - last.menu > 1000 && now - last.item > 1000) {
+      last.menu = now;
+      press(profile);
+    }
+  }, 200);
+})()"##;
+
 static ON: AtomicBool = AtomicBool::new(false);
 
 /// The Figma account the page is showing (its user id), so turning the page
