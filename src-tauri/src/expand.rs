@@ -81,7 +81,7 @@ pub fn handle(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<Strin
     let sample = if request.sample.is_empty() {
         background(app, tab, job, png).and_then(|cut| canvas.background(&cut))
     } else {
-        canvas.sample(&request.sample, image.width(), image.height())
+        canvas.sample(&request.sample, image.width(), image.height(), &stopped)
     };
     if stopped() {
         return Err("cancelled");
@@ -123,7 +123,8 @@ impl Canvas {
     /// `image` grown as `request` says
     fn grown(image: &image::RgbaImage, request: &Request) -> Result<Self, &'static str> {
         let (width, height) = (image.width() as usize, image.height() as usize);
-        let side = |fraction: f32, size: usize| (fraction.max(0.0) * size as f32).round() as usize;
+        // Capped, so a huge or infinite fraction can't overflow the sums
+        let side = |fraction: f32, size: usize| (fraction.max(0.0) * size as f32).round().min(MAX_PIXELS as f32) as usize;
         let (left, right) = (side(request.left, width), side(request.right, width));
         let (top, bottom) = (side(request.top, height), side(request.bottom, height));
         if left + right + top + bottom == 0 || width == 0 || height == 0 {
@@ -151,11 +152,11 @@ impl Canvas {
 
     /// Where the fill takes from, as `strokes` paint it over the image,
     /// `width` by `height`, or None for all of it
-    fn sample(&self, strokes: &[Stroke], width: u32, height: u32) -> Option<Vec<bool>> {
+    fn sample(&self, strokes: &[Stroke], width: u32, height: u32, stopped: &dyn Fn() -> bool) -> Option<Vec<bool>> {
         if strokes.is_empty() {
             return None;
         }
-        let mut painted = painted(strokes, (width, height), (self.left, self.top), (self.width, self.height));
+        let mut painted = painted(strokes, (width, height), (self.left, self.top), (self.width, self.height), stopped);
         for (painted, &known) in painted.iter_mut().zip(&self.known) {
             *painted &= known;
         }
@@ -245,8 +246,9 @@ fn unpremultiply([r, g, b, a]: [f32; 4]) -> [u8; 4] {
 
 /// Where `strokes`, in fractions of an image `image` across and down, paint
 /// over a canvas `canvas` across and down, with the image at `at` in it,
-/// each stroke adding to what's painted, or taking away
-fn painted(strokes: &[Stroke], image: (u32, u32), at: (usize, usize), canvas: (usize, usize)) -> Vec<bool> {
+/// each stroke adding to what's painted, or taking away. Stops early once
+/// `stopped`, which the caller checks after
+fn painted(strokes: &[Stroke], image: (u32, u32), at: (usize, usize), canvas: (usize, usize), stopped: &dyn Fn() -> bool) -> Vec<bool> {
     let (width, height) = (image.0 as f32, image.1 as f32);
     let mut painted = vec![false; canvas.0 * canvas.1];
     for stroke in strokes {
@@ -258,6 +260,9 @@ fn painted(strokes: &[Stroke], image: (u32, u32), at: (usize, usize), canvas: (u
             _ => points.windows(2).map(|pair| (pair[0], pair[1])).collect(),
         };
         for (a, b) in segments {
+            if stopped() {
+                return painted;
+            }
             for y in span(a[1], b[1], radius, canvas.1) {
                 for x in span(a[0], b[0], radius, canvas.0) {
                     if from_segment([x as f32 + 0.5, y as f32 + 0.5], a, b) <= radius {
@@ -338,7 +343,10 @@ pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
 /// place, and gives the square of it that changed, and where it is
 fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn Fn() -> bool) -> Result<(usize, usize, image::RgbaImage), &'static str> {
     let (width, height) = (image.width() as usize, image.height() as usize);
-    let hole = painted(strokes, (image.width(), image.height()), (0, 0), (width, height));
+    let hole = painted(strokes, (image.width(), image.height()), (0, 0), (width, height), stopped);
+    if stopped() {
+        return Err("cancelled");
+    }
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
     for (at, _) in hole.iter().enumerate().filter(|(_, &hole)| hole) {
         let (x, y) = (at % width, at / width);
@@ -370,9 +378,7 @@ fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn 
     if !canvas.known.contains(&true) {
         return Err("failed");
     }
-    if !heal_spots(&mut canvas, stopped)? {
-        fill_with(&mut canvas, None, false, stopped).map_err(<&str>::from)?;
-    }
+    heal_spots(&mut canvas, stopped)?;
     // Only the square around what's painted comes back, and it's as small
     // as the hole and a few pixels around it, as nothing else changed
     let (px0, py0) = (left.saturating_sub(2), top.saturating_sub(2));
@@ -392,9 +398,9 @@ fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn 
 /// Brush does: the place nearby whose surroundings best match the spot's
 /// own is copied over it whole, so its texture, grain and noise come with
 /// it as they are, and then its tone is evened out into the spot's
-/// surroundings, so it matches the light around it. False when a spot has
-/// nowhere to copy from, as when it's most of what's read
-fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<bool, &'static str> {
+/// surroundings, so it matches the light around it. A piece with nowhere
+/// to copy from is evened out from what's around it instead
+fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'static str> {
     let (width, height) = (canvas.width, canvas.height);
     let mut hole: Vec<bool> = canvas.known.iter().map(|&known| !known).collect();
     // The pieces to heal one at a time: each spot, what's painted over and
@@ -453,24 +459,36 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<bool, &
         holes
     };
     let mut holes = counts(&hole);
+    // How much of the image is already around each piece, and the box it
+    // lies in, so only the pieces next to one just healed are counted again
+    let around = |hole: &[bool], piece: &[usize]| {
+        piece
+            .iter()
+            .filter(|&&at| {
+                let (x, y) = (at % width, at / width);
+                [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)]
+                    .iter()
+                    .any(|&(nx, ny)| nx < width && ny < height && !hole[ny * width + nx])
+            })
+            .count()
+    };
+    let bounds = |piece: &[usize]| {
+        piece.iter().fold((width, height, 0, 0), |(left, top, right, bottom), &at| {
+            let (x, y) = (at % width, at / width);
+            (left.min(x), top.min(y), right.max(x), bottom.max(y))
+        })
+    };
+    let mut boxes: Vec<(usize, usize, usize, usize)> = pieces.iter().map(|piece| bounds(piece)).collect();
+    let mut scores: Vec<usize> = pieces.iter().map(|piece| around(&hole, piece)).collect();
     while !pieces.is_empty() {
         if stopped() {
             return Err("cancelled");
         }
         // The piece with the most of the image already around it next
-        let around = |piece: &[usize]| {
-            piece
-                .iter()
-                .filter(|&&at| {
-                    let (x, y) = (at % width, at / width);
-                    [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)]
-                        .iter()
-                        .any(|&(nx, ny)| nx < width && ny < height && !hole[ny * width + nx])
-                })
-                .count()
-        };
-        let index = (0..pieces.len()).max_by_key(|&i| around(&pieces[i])).unwrap_or(0);
+        let index = (0..pieces.len()).max_by_key(|&i| scores[i]).unwrap_or(0);
         let piece = pieces.swap_remove(index);
+        let healed = boxes.swap_remove(index);
+        scores.swap_remove(index);
         // Nowhere clear of what's still to heal: what's been healed can
         // be copied from too, and failing that, the piece is evened out
         // from what's around it
@@ -489,8 +507,14 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<bool, &
         for &at in &piece {
             hole[at] = false;
         }
+        let (left, top, right, bottom) = healed;
+        for (i, &(l, t, r, b)) in boxes.iter().enumerate() {
+            if l <= right + 1 && left <= r + 1 && t <= bottom + 1 && top <= b + 1 {
+                scores[i] = around(&hole, &pieces[i]);
+            }
+        }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Fills `piece` evenly from what's around it, for a piece with nowhere to
@@ -818,14 +842,16 @@ struct Level {
 }
 
 impl Level {
-    /// Half as large: a pixel is known only where all four are
-    fn halved(&self) -> Level {
+    /// Half as large: a pixel is known only where all four are, or with
+    /// `any`, where any is, for an image too thin to keep a pixel known
+    /// otherwise
+    fn halved(&self, any: bool) -> Level {
         let (width, height) = (self.width.div_ceil(2), self.height.div_ceil(2));
         let mut level = Level {
             width,
             height,
             pixels: vec![[0.0; 4]; width * height],
-            known: vec![true; width * height],
+            known: vec![!any; width * height],
             sample: vec![false; width * height],
         };
         for y in 0..height {
@@ -837,7 +863,11 @@ impl Level {
                         continue;
                     }
                     let fine = fy * self.width + fx;
-                    level.known[at] &= self.known[fine];
+                    if any {
+                        level.known[at] |= self.known[fine];
+                    } else {
+                        level.known[at] &= self.known[fine];
+                    }
                     level.sample[at] |= self.sample[fine];
                     if self.known[fine] {
                         for (total, value) in sum.iter_mut().zip(self.pixels[fine]) {
@@ -1185,9 +1215,20 @@ fn vote(level: &mut Level, hole: &[bool], matches: &[u32], costs: &[f32], confid
 /// patch most like what's around it so far, known or filled before it, so
 /// the fill starts out coherent for the rounds after to refine. Every
 /// source is tried where there are few, and otherwise its neighbors'
-/// matches moved over and a few hundred at random
-fn onion(level: &mut Level, hole: &[bool], sources: &[bool], source_list: &[u32], matches: &mut [u32], random: &mut Random) {
+/// matches moved over and a few hundred at random. Stops with
+/// `Failure::Cancelled` once `stopped`
+fn onion(
+    level: &mut Level,
+    hole: &[bool],
+    sources: &[bool],
+    source_list: &[u32],
+    matches: &mut [u32],
+    random: &mut Random,
+    stopped: &dyn Fn() -> bool,
+) -> Result<(), Failure> {
     const TRIED: usize = 4096;
+    // Every source is tried only while that's at most this many patches
+    const BUDGET: usize = 1 << 24;
     let (width, height) = (level.width, level.height);
     let mut rings = vec![[0f32; 0]; width * height];
     let depth = diffuse(&mut rings, &level.known, width, height);
@@ -1195,10 +1236,14 @@ fn onion(level: &mut Level, hole: &[bool], sources: &[bool], source_list: &[u32]
     order.sort_by_key(|&at| depth[at]);
     let mut filled = level.known.clone();
     let mut candidates = Vec::new();
-    for at in order {
+    let every = source_list.len() <= TRIED && order.len().saturating_mul(source_list.len()) <= BUDGET;
+    for (index, at) in order.into_iter().enumerate() {
+        if index % 1024 == 0 && stopped() {
+            return Err(Failure::Cancelled);
+        }
         let (x, y) = ((at % width) as isize, (at / width) as isize);
         candidates.clear();
-        if source_list.len() <= TRIED {
+        if every {
             candidates.extend_from_slice(source_list);
         } else {
             candidates.extend((0..TRIED / 8).map(|_| source_list[(random.next() % source_list.len() as u64) as usize]));
@@ -1231,6 +1276,7 @@ fn onion(level: &mut Level, hole: &[bool], sources: &[bool], source_list: &[u32]
         level.pixels[at] = level.pixels[best as usize];
         filled[at] = true;
     }
+    Ok(())
 }
 
 /// How unlike the patch at `target` is the one at `source`, as
@@ -1271,16 +1317,9 @@ fn filled_distance(level: &Level, filled: &[bool], target: usize, source: usize,
 
 /// Fills what isn't known in `canvas` from what is, taking patches only
 /// from where `sample` is set, if given. Stops with
-/// `Failure::Cancelled` once `stopped`
+/// `Failure::Cancelled` once `stopped`. Parts of the image already taken
+/// from a lot cost more to take from again (see `overuse`)
 fn fill(canvas: &mut Canvas, sample: Option<&[bool]>, stopped: &dyn Fn() -> bool) -> Result<Vec<u32>, Failure> {
-    fill_with(canvas, sample, true, stopped)
-}
-
-/// As `fill`, and only with `diverse`, parts of the image already taken
-/// from a lot cost more to take from again (see `overuse`): right for a
-/// large fill, wrong for a small one, which should take from what's like it
-/// right around it
-fn fill_with(canvas: &mut Canvas, sample: Option<&[bool]>, diverse: bool, stopped: &dyn Fn() -> bool) -> Result<Vec<u32>, Failure> {
     if !canvas.known.contains(&true) {
         return Err(Failure::Failed);
     }
@@ -1296,7 +1335,12 @@ fn fill_with(canvas: &mut Canvas, sample: Option<&[bool]>, diverse: bool, stoppe
         if last.width.min(last.height) < 2 * COARSEST {
             break;
         }
-        let halved = last.halved();
+        let mut halved = last.halved(false);
+        // An image a few pixels thin keeps none of its own pixels halved,
+        // which would leave all of the canvas for `onion` to fill at once
+        if !halved.known.contains(&true) {
+            halved = last.halved(true);
+        }
         // Somewhere to take from, at least
         if !halved.known.contains(&true) {
             break;
@@ -1339,7 +1383,7 @@ fn fill_with(canvas: &mut Canvas, sample: Option<&[bool]>, diverse: bool, stoppe
                     }
                 }
             }
-            _ => onion(level, &hole, &sources, &source_list, &mut matches, &mut random),
+            _ => onion(level, &hole, &sources, &source_list, &mut matches, &mut random, stopped)?,
         }
 
         let confidence: Vec<f32> = {
@@ -1354,7 +1398,7 @@ fn fill_with(canvas: &mut Canvas, sample: Option<&[bool]>, diverse: bool, stoppe
         // The pixels voted from the level below first, so they're matched
         // against something like what they'll be
         if coarser.is_some() {
-            let overused = if diverse { overuse(&matches, &hole, &sources, width, height) } else { vec![0.0; width.div_ceil(CELL) * height.div_ceil(CELL)] };
+            let overused = overuse(&matches, &hole, &sources, width, height);
             let matching = Matching { width, height, pixels: &level.pixels, hole: &hole, sources: &sources, overused: &overused };
             let costs = costs(&matching, &matches);
             vote(level, &hole, &matches, &costs, &confidence);
@@ -1363,7 +1407,7 @@ fn fill_with(canvas: &mut Canvas, sample: Option<&[bool]>, diverse: bool, stoppe
             if stopped() {
                 return Err(Failure::Cancelled);
             }
-            let overused = if diverse { overuse(&matches, &hole, &sources, width, height) } else { vec![0.0; width.div_ceil(CELL) * height.div_ceil(CELL)] };
+            let overused = overuse(&matches, &hole, &sources, width, height);
             let matching = Matching { width, height, pixels: &level.pixels, hole: &hole, sources: &sources, overused: &overused };
             let mut costs = costs(&matching, &matches);
             for pass in 0..passes {
@@ -1410,17 +1454,20 @@ mod tests {
     #[test]
     fn too_large_fails() {
         assert_eq!(Canvas::grown(&solid(4096, 4096, [0; 4]), &request(0.5, 0.0, 0.0, 0.0)).err(), Some("failed"));
+        // Without overflowing on the way
+        assert_eq!(Canvas::grown(&solid(10, 10, [0; 4]), &request(1e30, 0.0, 1e30, 0.0)).err(), Some("failed"));
+        assert_eq!(Canvas::grown(&solid(10, 10, [0; 4]), &request(f32::INFINITY, 0.0, 0.0, 0.0)).err(), Some("failed"));
     }
 
     #[test]
     fn strokes_paint_where_to_take_from() {
         let canvas = Canvas::grown(&solid(100, 100, [0, 0, 0, 255]), &request(0.0, 0.0, 0.5, 0.0)).unwrap();
-        assert!(canvas.sample(&[], 100, 100).is_none());
+        assert!(canvas.sample(&[], 100, 100, &|| false).is_none());
         let strokes = [
-            Stroke { points: vec![[0.1, 0.5], [0.9, 0.5]], radius: 0.05, subtract: false },
+            Stroke { points: vec![[0.1, 0.5], [1.4, 0.5]], radius: 0.05, subtract: false },
             Stroke { points: vec![[0.5, 0.5]], radius: 0.1, subtract: true },
         ];
-        let sample = canvas.sample(&strokes, 100, 100).unwrap();
+        let sample = canvas.sample(&strokes, 100, 100, &|| false).unwrap();
         assert!(sample[50 * 150 + 20]);
         // Taken away in the middle, and never outside the image
         assert!(!sample[50 * 150 + 50]);
@@ -1428,7 +1475,7 @@ mod tests {
         assert!(!sample[10 * 150 + 20]);
         // Taking away everything leaves all of it to take from
         let none = [Stroke { points: vec![[0.5, 0.5]], radius: 0.1, subtract: true }];
-        assert!(canvas.sample(&none, 100, 100).is_none());
+        assert!(canvas.sample(&none, 100, 100, &|| false).is_none());
     }
 
     #[test]
@@ -1491,7 +1538,7 @@ mod tests {
         let image = image::RgbaImage::from_fn(80, 80, |x, _| if x < 40 { image::Rgba([220, 30, 30, 255]) } else { image::Rgba([30, 30, 220, 255]) });
         let mut canvas = Canvas::grown(&image, &request(0.0, 0.0, 0.0, 0.5)).unwrap();
         let strokes = [Stroke { points: vec![[0.75, 0.0], [0.75, 1.0]], radius: 0.25, subtract: false }];
-        let sample = canvas.sample(&strokes, 80, 80).unwrap();
+        let sample = canvas.sample(&strokes, 80, 80, &|| false).unwrap();
         fill(&mut canvas, Some(&sample), &|| false).unwrap();
         let width = canvas.width;
         let blue = (80..120).flat_map(|y| (0..80).map(move |x| (x, y))).filter(|&(x, y)| {
@@ -1556,6 +1603,25 @@ mod tests {
     fn stops_once_cancelled() {
         let mut canvas = Canvas::grown(&solid(64, 64, [1, 2, 3, 255]), &request(0.5, 0.0, 0.0, 0.0)).unwrap();
         assert_eq!(fill(&mut canvas, None, &|| true), Err(Failure::Cancelled));
+        // Before the coarsest level is filled, too
+        let mut canvas = Canvas::grown(&solid(1000, 1, [1, 2, 3, 255]), &request(0.0, 0.0, 0.0, 200.0)).unwrap();
+        let mut level = Level { width: canvas.width, height: canvas.height, pixels: std::mem::take(&mut canvas.pixels), known: canvas.known.clone(), sample: canvas.known.clone() };
+        let hole: Vec<bool> = level.known.iter().map(|&known| !known).collect();
+        let sources = level.sources();
+        let source_list: Vec<u32> = (0..sources.len()).filter(|&at| sources[at]).map(|at| at as u32).collect();
+        let mut matches = vec![0; hole.len()];
+        assert_eq!(onion(&mut level, &hole, &sources, &source_list, &mut matches, &mut Random(1), &|| true), Err(Failure::Cancelled));
+    }
+
+    #[test]
+    fn thin_images_grow_quickly() {
+        // A row a pixel tall keeps no pixel of its own halved the usual way
+        let mut canvas = Canvas::grown(&solid(1000, 1, [40, 80, 120, 255]), &request(0.0, 0.0, 0.0, 200.0)).unwrap();
+        let started = std::time::Instant::now();
+        fill(&mut canvas, None, &|| false).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+        let last = canvas.pixels[(canvas.height - 1) * canvas.width + 500];
+        assert!((last[2] - 120.0).abs() < 2.0, "{last:?}");
     }
 
     #[test]
