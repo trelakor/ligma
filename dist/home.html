@@ -298,9 +298,9 @@
   .fold[aria-expanded="false"] .chev { transform: rotate(-90deg); }
   .fold small { color: var(--text2); font-size: 11px; font-weight: 450; }
   .all { display: flex; align-items: center; gap: 2px; height: 24px; margin-left: 8px; padding: 0 4px 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; }
-  .fold + .all, .fold + .lay, .fold + .pager { margin-left: auto; }
-  /* Starred on Home: a page of cards at a time, turned with the arrows,
-     the dots or a sideways swipe; each page slides in from its side */
+  .fold + .all, .fold + .lay { margin-left: auto; }
+  /* Starred on Home: a page of cards at a time, turned with the arrows
+     or a sideways swipe; each page slides in from its side */
   .home-sec .star-grid.paged { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); --from: 40px; }
   .home-sec .star-grid.paged.back { --from: -40px; }
   .star-grid.slide0 { animation: page-a 280ms var(--ease); }
@@ -308,20 +308,17 @@
   @keyframes page-a { from { transform: translateX(var(--from)); opacity: 0; } }
   @keyframes page-b { from { transform: translateX(var(--from)); opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .home-sec .star-grid.paged { --from: 0px; } }
-  .pager { display: flex; align-items: center; gap: 2px; }
-  .pager > button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--text2); }
-  .pager > button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
-  .pager > button:disabled { opacity: 0.35; }
-  .pager .i { width: 14px; height: 14px; }
-  .pager .flip { transform: scaleX(-1); }
-  .pager .dots { display: flex; align-items: center; }
-  .pager .dots button { display: grid; place-items: center; width: 14px; height: 24px; }
-  .pager .dots button::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text3); transition: background 120ms, width 160ms var(--ease); }
-  .pager .dots button:hover::after { background: var(--text2); }
-  .pager .dots button[aria-current]::after { width: 14px; border-radius: 3px; background: var(--text); }
-  .pager .dots button[aria-current] { width: 22px; }
-  .pager .count { min-width: 40px; color: var(--text2); font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
-  .kbd .pager button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* The arrows sit on the row's edges, at the middle of the previews: a
+     card is the row's width shared by its columns, its preview 16:9 */
+  .star-car { position: relative; container-type: inline-size; }
+  .car-btn { position: absolute; z-index: 3; top: calc(8px + (100cqw - (var(--cols) - 1) * 20px) / var(--cols) * 9 / 32 - 18px); display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: rgba(28, 28, 28, 0.9); color: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.1); transition: transform 140ms var(--ease), background 140ms; }
+  .car-btn.prev { left: -18px; }
+  .car-btn.next { right: -18px; }
+  .car-btn:hover { background: #000; transform: scale(1.08); }
+  .car-btn:active { transform: scale(0.96); }
+  .car-btn .i { width: 18px; height: 18px; }
+  .car-btn .flip { transform: scaleX(-1); }
+  .kbd .car-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* The Starred page: few files, so bigger cards */
   #starred-grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 32px 24px; }
   .all:hover { background: var(--hover); color: var(--text); }
@@ -823,14 +820,18 @@
   .setp .srow.ask + .srow { border-top-color: transparent; }
   /* The team's page: the team on top, its sections in one column, a list
      of them beside it that follows the scroll */
-  .dash { display: grid; grid-template-columns: 148px minmax(0, 720px); gap: 48px; max-width: none; padding-bottom: 96px; }
-  .dnav { position: sticky; top: 16px; align-self: start; display: flex; flex-direction: column; gap: 1px; margin-top: 20px; }
-  .dnav button { height: 28px; padding: 0 8px; border-radius: 5px; color: var(--text2); text-align: left; white-space: nowrap; }
-  .dnav button:hover { background: var(--hover); color: var(--text); }
-  .dnav button[aria-current] { background: var(--hover); color: var(--text); font-weight: 550; }
-  @media (max-width: 1080px) {
-    .dash { grid-template-columns: minmax(0, 720px); }
-    .dnav { display: none; }
+  .dash { max-width: none; padding-bottom: 96px; container-type: inline-size; }
+  /* One column, two from 1000px (people and projects beside the
+     settings), three from 1700px */
+  .dgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 56px; align-items: start; }
+  @container (min-width: 1000px) {
+    .dgrid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "people set" "projects set"; }
+    .dc-people { grid-area: people; }
+    .dc-projects { grid-area: projects; }
+    .dc-set { grid-area: set; }
+  }
+  @container (min-width: 1700px) {
+    .dgrid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "people projects set"; }
   }
   .dhero { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 20px; align-items: start; padding: 20px 0 24px; border-bottom: 1px solid var(--line); }
   .dhero .tm { width: 72px; height: 72px; border-radius: 16px; font-size: 28px; }
@@ -2648,9 +2649,11 @@ function homeLayout() {
 
   if (open("starred")) files.push(...starred);
   const slide = starSlide ? ` slide${starSlide.n % 2} ${starSlide.dir < 0 ? "back" : ""}` : "";
+  starPageCount = starPages;
+  const arrow = (to, dir, label) => (to >= 0 && to < starPages ? `<button class="car-btn ${dir}" data-star-page="${to}" aria-label="${label}" title="${label}">${icon("right", dir === "prev" ? "flip" : "")}</button>` : "");
   html += section("starred", "Starred", starredAll.length, starred.length
-    ? `<div class="grid star-grid paged${slide}" style="--cols:${starCols}" role="listbox" aria-multiselectable="true" aria-label="Starred, page ${starPage + 1} of ${starPages}, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>`
-    : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null, starPages > 1 && open("starred") ? starPager(starPages) : "");
+    ? `<div class="star-car" data-key="star-car" style="--cols:${starCols}"><div class="grid star-grid paged${slide}" role="listbox" aria-multiselectable="true" aria-label="Starred, page ${starPage + 1} of ${starPages}, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>${arrow(starPage - 1, "prev", "Previous starred files")}${arrow(starPage + 1, "next", "More starred files")}</div>`
+    : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
   if (recentsLoading) html += `<section class="sec home-sec" data-key="home:waiting">${waiting(cols * 2)}</section>`;
 
   if (projects.length) html += section("projects", "Suggested projects", 0, `<div class="ptiles">${projects.map(projectTile).join("")}</div>`);
@@ -2670,18 +2673,13 @@ function homeLayout() {
 }
 let homeKey = "";
 
-// Starred on Home, a page at a time: the arrows, and a dot for each page
-// while there are few enough to count at a glance
+// Starred on Home, a page at a time, turned with the round arrows over its
+// row or a sideways swipe
 let starPage = 0;
+let starPageCount = 1;
 let starSlide = null;
-function starPager(pages) {
-  const dots = pages <= 8
-    ? `<span class="dots">${Array.from({ length: pages }, (_, i) => `<button data-star-page="${i}" aria-label="Page ${i + 1}"${i === starPage ? ' aria-current="true"' : ""}></button>`).join("")}</span>`
-    : `<span class="count">${starPage + 1} / ${pages}</span>`;
-  return `<span class="pager" role="group" aria-label="Starred pages"><button data-star-page="${starPage - 1}" aria-label="Previous page" title="Previous"${starPage ? "" : " disabled"}>${icon("right", "flip")}</button>${dots}<button data-star-page="${starPage + 1}" aria-label="Next page" title="Next"${starPage < pages - 1 ? "" : " disabled"}>${icon("right")}</button></span>`;
-}
 function turnStarPage(to) {
-  if (to === starPage || to < 0) return;
+  if (to === starPage || to < 0 || to >= starPageCount) return;
   starSlide = { dir: Math.sign(to - starPage), n: (starSlide?.n ?? 0) + 1 };
   starPage = to;
   render();
@@ -3717,7 +3715,6 @@ function teamMenu(id, at) {
   const pinned = STARRED_TEAMS().has(id);
   showMenu([
     { label: "Settings and people", act: () => openTeamWin(id, at) },
-    { label: "All settings", act: () => go(`s:${id}`) },
     { label: "Invite people…", act: () => openTeamWin(id, at, "invite") },
     { label: "Copy invite link", act: () => copyTeamLink(id) },
     null,
@@ -4511,11 +4508,11 @@ const settingRow = (title, detail, control, extra = "") => `<div class="srow"${e
 const toggle = (key, label, on, off) => `<button class="tgl" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-set="${key}"${off ? " disabled" : ""}></button>`;
 
 /* A team's settings page: the team at the top (picture, name,
-   description, what it holds, its link), then everything about it in one
-   column, with a list of sections beside it to jump to. People are managed
-   here as in the team's window, with the same rows (see ws) */
+   description, what it holds, its link), then everything about it in
+   columns as wide as the page allows: people, projects, then the team's
+   settings. People are managed here as in the team's window, with the
+   same rows (see ws) */
 
-const DASH_SECTIONS = [["people", "People"], ["projects", "Projects"], ["libraries", "Libraries"], ["ai", "AI"], ["ownership", "Transfer and delete"]];
 let dashForced = false;
 // The team's people as its page shows them, even with a window open on
 // another team
@@ -4531,7 +4528,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function dashSkeleton() {
   const bar = (w) => `<div class="bar" style="width:${w}"></div>`;
-  return `<div class="setp dash" aria-busy="true"><div class="dnav"></div><div class="dcol"><div class="dhero sk"><span class="tm"></span><span>${bar("40%")}${bar("64%")}</span></div>${`<div class="wsk"></div>`.repeat(4)}</div></div>`;
+  return `<div class="setp dash" aria-busy="true"><div class="dhero sk"><span class="tm"></span><span>${bar("40%")}${bar("64%")}</span></div><div class="dgrid"><div class="dc">${`<div class="wsk"></div>`.repeat(4)}</div></div></div>`;
 }
 
 function settingsPage(id) {
@@ -4546,10 +4543,9 @@ function settingsPage(id) {
   const admin = info?.admin ?? !LIVE;
   const off = !admin;
   const tier = tierOf(plan);
-  let html = `<div class="setp dash"><nav class="dnav" aria-label="Sections">${DASH_SECTIONS.map(([key, label]) => `<button data-set="jump" data-to="${key}"${key === dashAt ? ' aria-current="true"' : ""}>${esc(label)}</button>`).join("")}</nav><div class="dcol">`;
-  html += dashHero(id, s, admin);
-  html += asDash(() => dashPeople(id, info, tier, plan, s.seats));
-  html += dashProjects(id, team);
+  let html = `<div class="setp dash">${dashHero(id, s, admin)}<div class="dgrid">`;
+  html += `<div class="dc dc-people">${asDash(() => dashPeople(id, info, tier, plan, s.seats))}</div>`;
+  html += `<div class="dc dc-projects">${dashProjects(id, team)}</div><div class="dc dc-set">`;
   // Libraries: Figma's own kits for the team's files, and what it publishes
   const kits = !s.meta.figma_provided_libraries_disabled;
   html += `<section class="sec" id="dash-libraries" data-key="dash:libraries"><h2>Libraries</h2>`;
@@ -4571,7 +4567,7 @@ function settingsPage(id) {
   html += settingRow("Share content to train Figma's AI", student ? "Off for education teams" : "Lets Figma use this team's files to improve its AI models", toggle("ai-data", "Share content to train Figma's AI", !student && !!s.meta.ai_data_sharing_enabled, off || student));
   html += `</section>`;
   html += `<section class="sec" id="dash-ownership" data-key="dash:ownership"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section>`;
-  return html + `</div></div>`;
+  return html + `</div></div></div>`;
 }
 
 // The team itself: picture, name and description, edited where they are,
@@ -4647,20 +4643,6 @@ function dashProjects(id, team) {
   return html + `</section>`;
 }
 
-// The section in view, lit in the list beside the page
-let dashAt = "people";
-scroller.addEventListener("scroll", () => {
-  if (!settingsTeam()) return;
-  const top = scroller.getBoundingClientRect().top + 72;
-  let at = null;
-  for (const sec of $$(".dash .sec[id]", scroller)) if (sec.getBoundingClientRect().top <= top) at = sec.id.slice(5);
-  // At the very bottom, the last section, however short
-  if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) at = $$(".dash .sec[id]", scroller).at(-1)?.id.slice(5) ?? at;
-  at ??= "people";
-  if (at === dashAt) return;
-  dashAt = at;
-  for (const b of $$(".dnav button", scroller)) b.toggleAttribute("aria-current", b.dataset.to === at);
-}, { passive: true });
 
 // What the team pays and when, for the People heading
 function seatBill(seats) {
@@ -4887,7 +4869,6 @@ function settingsClick(el) {
     return render();
   }
   if (TEAM_FLAGS[act]) return setTeamFlag(id, act);
-  if (act === "jump") return $(`#dash-${el.dataset.to}`, scroller)?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
   if (act === "pin") return toggleTeamStar(id);
   if (act === "p-new") return newProject(el.getBoundingClientRect(), id);
   if (act === "p-share") return openShare(el.dataset.project, el.getBoundingClientRect());
@@ -6861,7 +6842,6 @@ function paletteCommands() {
     const at = () => $(`[data-team-more="${CSS.escape(team.id)}"]`, side)?.closest(".team-row").getBoundingClientRect() ?? { x: 248, y: 64 };
     list.push(
       { label: `${team.name} settings and people`, act: () => openTeamWin(team.id, at()), icon: "users" },
-      { label: `All settings for ${team.name}: seats, libraries, AI`, act: () => go(`s:${team.id}`), icon: "users" },
       { label: `Invite people to ${team.name}`, act: () => openTeamWin(team.id, at(), "invite"), icon: "users" },
     );
   }
@@ -7159,10 +7139,9 @@ scroller.addEventListener("wheel", (e) => {
   if (now < swipe.until) return;
   swipe.dx += e.deltaX;
   if (Math.abs(swipe.dx) < 60) return;
-  const pager = $(".pager", grid.closest(".home-sec"));
-  const next = $(`[data-star-page="${starPage + Math.sign(swipe.dx)}"]:not(:disabled)`, pager ?? grid);
+  const to = starPage + Math.sign(swipe.dx);
   swipe = { dx: 0, until: now + 450 };
-  if (next) turnStarPage(starPage + Math.sign(next.dataset.starPage - starPage));
+  turnStarPage(to);
 }, { passive: false });
 
 filters.addEventListener("click", (e) => {
