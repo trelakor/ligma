@@ -347,6 +347,9 @@ fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn 
     if stopped() {
         return Err("cancelled");
     }
+    // A pixel more all round, so the soft edge of what's painted over, its
+    // anti-aliasing or glow, goes with it rather than spread into the heal
+    let hole = grown_by(&hole, width, height, EDGE);
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
     for (at, _) in hole.iter().enumerate().filter(|(_, &hole)| hole) {
         let (x, y) = (at % width, at / width);
@@ -500,7 +503,7 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
         if stopped() {
             return Err("cancelled");
         }
-        match offset {
+        match offset.flatten() {
             Some(offset) => copy_into(canvas, &hole, &piece, offset),
             None => smooth_into(canvas, &hole, &piece),
         }
@@ -579,6 +582,25 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
         window[i] = [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
         known[i] = true;
     }
+    // Where the surroundings differ from the copy's far more than most
+    // do, it's something left of what's removed, or an edge the copy
+    // hasn't, and carrying that in would smear it over the spot
+    let far = |value: &[f32; 4]| value.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let mut distances: Vec<f32> = (0..across * down).filter(|&i| known[i]).map(|i| far(&window[i])).collect();
+    if !distances.is_empty() {
+        let middle = distances.len() / 2;
+        let typical = *distances.select_nth_unstable_by(middle, f32::total_cmp).1;
+        let most = OUTLIER * typical + OUTLIER_FLOOR;
+        let kept = (0..across * down).filter(|&i| known[i] && far(&window[i]) <= most).count();
+        // Unless that leaves too little to go on
+        if kept * 4 >= distances.len() {
+            for i in 0..across * down {
+                if known[i] && far(&window[i]) > most {
+                    known[i] = false;
+                }
+            }
+        }
+    }
     if known.contains(&true) {
         diffuse(&mut window, &known, across, down);
         relax(&mut window, &known, across, down);
@@ -595,6 +617,12 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
         ];
     }
 }
+
+/// Around a spot, where the surroundings differ from the copy's more than
+/// this many times as far as typically, and `OUTLIER_FLOOR` more, out of
+/// 255, the difference isn't carried in
+const OUTLIER: f32 = 3.0;
+const OUTLIER_FLOOR: f32 = 24.0;
 
 /// Smooths what `diffuse` filled in, where `known` isn't set, into a
 /// membrane, each pixel the average of the four around it, as Poisson
@@ -637,7 +665,7 @@ const FARTHER: f32 = 0.08;
 /// there looks most like the spot's own ring, nearer places counting for a
 /// little more. Places are tried coarsely, then finer around the best. None
 /// when there's no such place, or once `stopped`
-fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], stopped: &dyn Fn() -> bool) -> Option<(isize, isize)> {
+fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], stopped: &dyn Fn() -> bool) -> Option<Option<(isize, isize)>> {
     let (width, height) = (canvas.width, canvas.height);
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
     for &at in spot {
@@ -665,7 +693,63 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
         let step = ring.len().div_ceil(RING_SAMPLES);
         ring = ring.into_iter().step_by(step).collect();
     }
+    // What the spot would be, evened out from its surroundings, and how
+    // much those vary from pixel to pixel: a place whose copy strays from
+    // that by much more, like a stripe or an edge where it's flat around
+    // the spot, costs more, so in a tight spot it doesn't bring in what's
+    // beside it. Texture as fine as the surroundings' costs nothing
+    let mut guess: Vec<[f32; 4]> = (0..across * down).map(|i| canvas.pixels[(y0 + i / across) * width + x0 + i % across]).collect();
+    let known: Vec<bool> = (0..across * down).map(|i| !hole[(y0 + i / across) * width + x0 + i % across]).collect();
+    diffuse(&mut guess, &known, across, down);
+    relax(&mut guess, &known, across, down);
+    let mut inside: Vec<(isize, isize, [f32; 4])> = spot
+        .iter()
+        .map(|&at| {
+            let (x, y) = (at % width, at / width);
+            (x as isize, y as isize, guess[(y - y0) * across + x - x0])
+        })
+        .collect();
+    if inside.len() > INSIDE_SAMPLES {
+        let step = inside.len().div_ceil(INSIDE_SAMPLES);
+        inside = inside.into_iter().step_by(step).collect();
+    }
+    let grain = {
+        let (mut sum, mut count) = (0f32, 0f32);
+        for &(x, y) in &ring {
+            let (x, y) = (x as usize, y as usize);
+            if x == 0 || y == 0 || x + 1 >= width || y + 1 >= height {
+                continue;
+            }
+            let neighbours = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)];
+            if neighbours.iter().any(|&(nx, ny)| hole[ny * width + nx]) {
+                continue;
+            }
+            let pixel = canvas.pixels[y * width + x];
+            for channel in 0..4 {
+                let mean = neighbours.iter().map(|&(nx, ny)| canvas.pixels[ny * width + nx][channel]).sum::<f32>() / 4.0;
+                sum += (pixel[channel] - mean).powi(2);
+            }
+            count += 1.0;
+        }
+        if count > 0.0 { (sum / count).sqrt() } else { 0.0 }
+    };
+    let allowed = GRAIN * grain + GRAIN_FLOOR;
     let (w, h) = (width as isize, height as isize);
+    // How far a copy from `ox` and `oy` strays, on average, or infinity
+    // once that's past `limit`
+    let strays = |ox: isize, oy: isize, limit: f32| -> f32 {
+        let budget = limit * inside.len() as f32;
+        let mut sum = 0f32;
+        for (count, &(x, y, expected)) in inside.iter().enumerate() {
+            let b = canvas.pixels[((y + oy) * w + x + ox) as usize];
+            let off = ((expected[0] - b[0]).powi(2) + (expected[1] - b[1]).powi(2) + (expected[2] - b[2]).powi(2) + (expected[3] - b[3]).powi(2)).sqrt();
+            sum += (off - allowed).max(0.0).powi(2);
+            if count % 32 == 31 && sum >= budget {
+                return f32::INFINITY;
+            }
+        }
+        sum / inside.len().max(1) as f32
+    };
     let (bx0, by0, bx1, by1) = (x0 as isize, y0 as isize, x1 as isize, y1 as isize);
     // Whether the spot's box and ring, shifted, lands on none of what's
     // painted, from running counts of it
@@ -692,7 +776,8 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
                 return f32::INFINITY;
             }
         }
-        sum / ring.len() as f32 + penalty
+        let around = sum / ring.len() as f32 + penalty;
+        around + strays(ox, oy, limit - around)
     };
     // Nearest places first, a step a 24th of the spot's size apart, as far
     // as `REACH` spots' sizes away: once one fits well, places farther off
@@ -743,7 +828,13 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
             oy += step;
         }
     }
-    best.map(|(offset, _)| offset)
+    let ((ox, oy), _) = best?;
+    // Where every copy strays far from the flat around it, as in a tight
+    // spot, it's evened out from its surroundings instead
+    if strays(ox, oy, f32::INFINITY) > TOO_STRAY {
+        return Some(None);
+    }
+    Some(Some((ox, oy)))
 }
 
 /// A spot is copied from at most this many times its size away, and at
@@ -752,7 +843,20 @@ const REACH: usize = 4;
 const MIN_REACH: usize = 96;
 /// The ring is compared at most this many of its pixels
 const RING_SAMPLES: usize = 600;
+/// What's copied is compared to what the spot would be, evened out, at
+/// most this many of its pixels, its straying costing only past this many
+/// times as far as the surroundings vary from pixel to pixel, and
+/// `GRAIN_FLOOR` more, out of 255
+const INSIDE_SAMPLES: usize = 300;
+const GRAIN: f32 = 3.0;
+const GRAIN_FLOOR: f32 = 16.0;
+/// Where the best copy strays this far, on average, squared, the spot is
+/// evened out instead
+const TOO_STRAY: f32 = 400.0;
 
+
+/// What's painted over is grown by this many pixels
+const EDGE: usize = 1;
 
 /// Spot healing reads at least this many pixels around what's painted,
 /// and at most `MOST_AROUND`
@@ -1580,6 +1684,24 @@ mod tests {
         assert!(x <= 90 && y <= 50 && x + patch.width() as u64 >= 100 && y + patch.height() as u64 >= 60);
         ask_heal(r#"{"op":"close","session":7}"#, None).unwrap();
         assert_eq!(ask_heal(r#"{"op":"heal","session":7,"strokes":[{"points":[[0.5,0.5]],"radius":0.05}]}"#, None).err(), Some("closed"));
+    }
+
+    #[test]
+    fn heals_a_tight_spot_from_what_surrounds_it() {
+        // A small white panel on black, a dark mark in it, and nowhere
+        // white clear of the mark to copy from
+        let mut image = image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 10, 10, 255]));
+        for y in 10..32 {
+            for x in 10..32 {
+                let mark = (17..25).contains(&x) && (17..25).contains(&y);
+                image.put_pixel(x, y, image::Rgba(if mark { [40, 40, 40, 255] } else { [240, 240, 240, 255] }));
+            }
+        }
+        let strokes: Vec<Stroke> = serde_json::from_str(r#"[{"points":[[0.328,0.328]],"radius":0.09}]"#).unwrap();
+        heal_strokes(&mut image, &strokes, &|| false).unwrap();
+        for (x, y) in [(21, 21), (18, 18), (24, 24)] {
+            assert!(image.get_pixel(x, y)[0] > 200, "{x}, {y}: {:?}", image.get_pixel(x, y));
+        }
     }
 
     /// Heals `LIGMA_HEAL_IMAGE` where `LIGMA_HEAL_STROKES`, Spot healing's

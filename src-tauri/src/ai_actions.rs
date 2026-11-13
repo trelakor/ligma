@@ -2225,7 +2225,15 @@ const PAGE_JS: &str = r##"(() => {
       const value = Number(input.value);
       if (Number.isFinite(value)) setHealSize(value);
       else showHealing();
+      leaveHealInput();
     });
+    // What had focus before, Figma's own, to hand it back to after, so its
+    // shortcuts, like Undo, keep working
+    input.addEventListener("focus", (event) => {
+      if (healing && event.relatedTarget instanceof HTMLElement) healing.returnFocus = event.relatedTarget;
+    });
+    // Its name drags the size rather than focus the field
+    name.addEventListener("click", (event) => event.preventDefault());
     name.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || !healing) return;
       event.preventDefault();
@@ -2603,6 +2611,8 @@ const PAGE_JS: &str = r##"(() => {
         }
         if (space || event.button > 0 || (event.buttons & ~1) !== 0) return;
         swallow(event);
+        // Painting leaves the size field, as clicks here never reach Figma
+        if (type === "pointerdown") leaveHealInput();
         if (type === "pointerdown" && !healing.working && healing.size) {
           healing.drag = { points: [[at.x / healing.node.width, at.y / healing.node.height]] };
           showHealStroke();
@@ -2611,6 +2621,14 @@ const PAGE_JS: &str = r##"(() => {
       true,
     );
   }
+
+  // Leaves the size field, focus back with Figma
+  const leaveHealInput = () => {
+    if (!healing || document.activeElement !== healing.input) return;
+    healing.input.blur();
+    const back = healing.returnFocus;
+    if (back?.isConnected) back.focus({ preventScroll: true });
+  };
 
   const placeHealBrush = (at) => {
     healing.brush.setAttribute("cx", at.x);
@@ -2626,10 +2644,20 @@ const PAGE_JS: &str = r##"(() => {
       (event) => {
         if (!healing) return;
         if (event.target === healing.input) {
+          // Undo and Redo, with nothing typed, are Figma's: the field is
+          // left and the keys handed to what had focus before
+          const undo = (MAC ? event.metaKey : event.ctrlKey) && !event.altKey && /^[zy]$/i.test(event.key);
+          if (undo && healing.input.value === String(healing.size)) {
+            swallow(event);
+            leaveHealInput();
+            const back = document.activeElement;
+            if (back && back !== document.body) back.dispatchEvent(new KeyboardEvent(event.type, event));
+            return;
+          }
           event.stopImmediatePropagation();
           if (type === "keydown" && (event.key === "Enter" || event.key === "Escape")) {
             if (event.key === "Escape") showHealing();
-            healing.input.blur();
+            leaveHealInput();
           }
           return;
         }
