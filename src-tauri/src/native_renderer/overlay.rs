@@ -209,7 +209,13 @@ impl Decoder {
                     canvas.concat(&affine(Some(matrix)));
                 }
                 if let Some(font) = font {
-                    canvas.draw_str(v.get("text").map(Value::str).unwrap_or_default(), vector(v.get("point")), &font, &paint);
+                    // `point` is the top of the text, its em box fit between
+                    // the font's ascent and descent, as frame names sit
+                    let (_, metrics) = font.metrics();
+                    let extent = -metrics.ascent + metrics.descent;
+                    let drop = if extent > 0.0 { font.size() * -metrics.ascent / extent } else { font.size() * 0.8 };
+                    let (x, y) = vector(v.get("point"));
+                    canvas.draw_str(v.get("text").map(Value::str).unwrap_or_default(), (x, y + drop), &font, &paint);
                 }
                 true
             }
