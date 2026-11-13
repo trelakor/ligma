@@ -827,22 +827,57 @@
   .setp a.srow:hover b { text-decoration: underline; text-underline-offset: 2px; }
   .setp .srow.ask { flex-wrap: wrap; row-gap: 8px; margin: 0 -12px; padding: 12px; border-top-color: transparent; border-radius: 8px; background: var(--hover); }
   .setp .srow.ask + .srow { border-top-color: transparent; }
-  /* The team's page: the team on top, its sections in one column, a list
-     of them beside it that follows the scroll */
-  .dash { max-width: none; padding-bottom: 96px; container-type: inline-size; }
-  /* One column, two from 1000px (people and projects beside the
-     settings), three from 1700px */
-  .dgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 56px; align-items: start; }
-  @container (min-width: 1000px) {
-    .dgrid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); grid-template-rows: auto 1fr; grid-template-areas: "people set" "projects set"; }
-    .dc-people { grid-area: people; }
-    .dc-projects { grid-area: projects; }
-    .dc-set { grid-area: set; }
+  /* The team's page: the team on top, then panels sized to what they
+     hold. People runs down the left beside the projects, the bill, the
+     settings and the team's transfer and deletion */
+  .dash { --panel: color-mix(in srgb, var(--text) 3.5%, var(--bg)); max-width: none; padding-bottom: 64px; container-type: inline-size; }
+  .bento { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 8px; }
+  .panel { min-width: 0; padding: 14px 20px 18px; border-radius: 12px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .panel > .sec { margin: 0; }
+  .panel > .sec > h2 { position: static; height: auto; margin: 0 0 6px; padding: 4px 0 0; background: none; }
+  @container (min-width: 820px) {
+    .bento { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "projects projects" "people set" "people own" "people bill"; }
+    .bento:not(.pro) { grid-template-areas: "projects projects" "people set" "people own"; }
   }
-  @container (min-width: 1700px) {
-    .dgrid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "people projects set"; }
+  @container (min-width: 1320px) {
+    .bento { grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.8fr) minmax(0, 1fr); grid-template-rows: auto auto 1fr; grid-template-areas: "people projects projects" "people bill set" "people own own"; }
+    .bento:not(.pro) { grid-template-rows: auto 1fr; grid-template-areas: "people projects projects" "people set own"; }
   }
-  .dhero { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 20px; align-items: start; padding: 20px 0 24px; border-bottom: 1px solid var(--line); }
+  .p-people { grid-area: people; }
+  .p-projects { grid-area: projects; }
+  .p-bill { grid-area: bill; }
+  .p-set { grid-area: set; }
+  .p-own { grid-area: own; }
+  @container (max-width: 819px) {
+    .p-people, .p-projects, .p-bill, .p-set, .p-own { grid-area: auto; }
+  }
+  /* Projects as tiles: their latest files over the name, the sharing and
+     a menu */
+  .dtiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding-top: 4px; }
+  .dtile { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 6px 6px 8px; border-radius: 10px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow 140ms; }
+  .dtile:hover { box-shadow: inset 0 0 0 1px var(--text3); }
+  .dtile .dgo { display: block; border-radius: 6px; }
+  .dtile .mosaic { height: 112px; }
+  .dtile .dtn { display: flex; align-items: center; gap: 4px; min-width: 0; padding-left: 2px; }
+  .dtile .dtn .pname { flex: 1; padding: 0; }
+  .dtile .dtn .ib.more { width: 24px; height: 24px; padding: 0; justify-content: center; }
+  .dtile .dtm { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px 0 24px; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .dtile .dacc { display: flex; align-items: center; gap: 4px; min-width: 0; height: 22px; padding: 0 6px; border-radius: 4px; color: var(--text2); white-space: nowrap; }
+  .dtile .dacc:hover { background: var(--hover); color: var(--text); }
+  .dtile .dacc .fi { width: 16px; height: 16px; margin: -2px; }
+  .dtile.new { align-items: center; justify-content: center; min-height: 160px; gap: 8px; background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--text2); }
+  .dtile.new { border: 1px dashed var(--text3); box-shadow: none; }
+  .dtile.new:hover { border-color: var(--text2); color: var(--text); }
+  .dtile.new .i { width: 20px; height: 20px; }
+  .kbd :is(.dtile .dgo, .dtile.new):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* What the team pays, and the seats it pays for */
+  .amount { margin: 6px 0 0; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .amount small { margin-left: 4px; color: var(--text2); font-size: 13px; font-weight: 450; letter-spacing: 0; }
+  .renews { margin: 2px 0 0; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .seatmix { display: flex; flex-direction: column; gap: 2px; margin: 14px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); }
+  .seatmix div { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+  .seatmix span { color: var(--text2); }
+  .dhero { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 20px; align-items: start; padding: 20px 4px 16px; }
   .dhero .tm { width: 72px; height: 72px; border-radius: 16px; font-size: 28px; }
   .dhero .pic { position: relative; overflow: hidden; }
   .dhero .pic .ov { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 120ms; }
@@ -868,15 +903,13 @@
   .dacts .btn { font-weight: 450; }
   .dacts .btn[aria-pressed="true"] .fi { color: #e6a800; }
   .btn.sm.icon { width: 28px; padding: 0; justify-content: center; }
-  .dash .sec { margin-top: 32px; }
-  .dash .sec h2 .hact { display: flex; align-self: center; align-items: center; gap: 4px; height: 24px; margin-left: auto; padding: 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; font-weight: 450; }
+  .dash .sec h2 .hact, .panel h2 .hact { display: flex; align-self: center; align-items: center; gap: 4px; height: 24px; margin-left: auto; padding: 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; font-weight: 450; }
   .dash .sec h2 .hact:hover { background: var(--hover); color: var(--text); }
   .dash .sec h2 .hact .i { width: 12px; height: 12px; }
   .dinvite { padding: 0 0 8px; }
   .dinvite .invite { padding: 0; }
   .dnote { margin: 0 0 8px; color: var(--text2); font-size: 11px; line-height: 16px; }
   .dpeople .mem { margin: 0 -8px; }
-  .dash .sec h2 .bill { margin-left: auto; font-variant-numeric: tabular-nums; }
   .ib.seat .cost { margin-left: 4px; color: var(--text2); font-variant-numeric: tabular-nums; }
   .ib.seat:hover .cost { color: inherit; }
   .prow { padding: 6px 0; }
@@ -4589,7 +4622,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 function dashSkeleton() {
   const bar = (w) => `<div class="bar" style="width:${w}"></div>`;
-  return `<div class="setp dash" aria-busy="true"><div class="dhero sk"><span class="tm"></span><span>${bar("40%")}${bar("64%")}</span></div><div class="dgrid"><div class="dc">${`<div class="wsk"></div>`.repeat(4)}</div></div></div>`;
+  return `<div class="setp dash" aria-busy="true"><div class="dhero sk"><span class="tm"></span><span>${bar("40%")}${bar("64%")}</span></div><div class="bento"><div class="panel p-people">${`<div class="wsk"></div>`.repeat(4)}</div><div class="panel p-projects"><div class="wsk"></div></div></div></div>`;
 }
 
 function settingsPage(id) {
@@ -4604,31 +4637,47 @@ function settingsPage(id) {
   const admin = info?.admin ?? !LIVE;
   const off = !admin;
   const tier = tierOf(plan);
-  let html = `<div class="setp dash">${dashHero(id, s, admin)}<div class="dgrid">`;
-  html += `<div class="dc dc-people">${asDash(() => dashPeople(id, info, tier, plan, s.seats))}</div>`;
-  html += `<div class="dc dc-projects">${dashProjects(id, team)}</div><div class="dc dc-set">`;
-  // Libraries: Figma's own kits for the team's files, and what it publishes
+  const bill = s.seats && dashBill(s.seats);
+  let html = `<div class="setp dash">${dashHero(id, s, admin)}<div class="bento${bill ? " pro" : ""}">`;
+  html += `<div class="panel p-people">${asDash(() => dashPeople(id, info, tier, plan, s.seats))}</div>`;
+  html += `<div class="panel p-projects">${dashProjects(id, team)}</div>`;
+  if (bill) html += `<div class="panel p-bill">${bill}</div>`;
+  // The team's settings: Figma's own kits for its files, what it
+  // publishes, and Figma's AI in its files
   const kits = !s.meta.figma_provided_libraries_disabled;
-  html += `<section class="sec" id="dash-libraries" data-key="dash:libraries"><h2>Libraries</h2>`;
   // Starter teams always have them: Figma takes the setting and ignores it
   const starter = !!s.meta.starter_team;
+  const ai = !s.meta.ai_features_disabled;
+  const student = !!s.meta.student_team_at;
+  html += `<div class="panel p-set"><section class="sec" id="dash-settings" data-key="dash:settings"><h2>Team settings</h2>`;
+  html += settingRow("AI features", "Lets people use Figma's AI tools in this team's files", toggle("ai", "AI features", ai, off));
+  html += settingRow("Share content to train Figma's AI", student ? "Off for education teams" : "Lets Figma use this team's files to improve its AI models", toggle("ai-data", "Share content to train Figma's AI", !student && !!s.meta.ai_data_sharing_enabled, off || student));
   html += settingRow("Figma's UI kits and libraries", starter ? "Starter teams always have the libraries Figma provides, like its iOS, Android and Material kits" : "Lets this team's files use the libraries Figma provides, like its iOS, Android and Material kits", toggle("kits", "Figma's UI kits and libraries", starter || kits, off || starter));
   if (s.libraries.length) {
     for (const l of s.libraries) {
       const parts = [[l.num_components, "component"], [l.num_styles, "style"], [l.num_variables, "variable"]].filter(([n]) => n).map(([n, w]) => plural(n, w));
       html += `<a class="srow" href="https://www.figma.com/design/${esc(l.library_file_key ?? l.library_key)}" target="_blank" rel="noopener"><span class="st"><b>${esc(l.library_name ?? "Library")}</b><small>Published library${parts.length ? ` · ${parts.join(", ")}` : ""}</small></span><span class="ctl">${fig("ext")}</span></a>`;
     }
-  } else html += settingRow("No libraries published from this team", "A library published from one of its files shows here");
-  html += `</section>`;
-  // AI: Figma's AI in the team's files, and whether Figma learns from them
-  const ai = !s.meta.ai_features_disabled;
-  const student = !!s.meta.student_team_at;
-  html += `<section class="sec" id="dash-ai" data-key="dash:ai"><h2>AI</h2>`;
-  html += settingRow("AI features", "Lets people use Figma's AI tools in this team's files", toggle("ai", "AI features", ai, off));
-  html += settingRow("Share content to train Figma's AI", student ? "Off for education teams" : "Lets Figma use this team's files to improve its AI models", toggle("ai-data", "Share content to train Figma's AI", !student && !!s.meta.ai_data_sharing_enabled, off || student));
-  html += `</section>`;
-  html += `<section class="sec" id="dash-ownership" data-key="dash:ownership"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section>`;
-  return html + `</div></div></div>`;
+  } else html += settingRow("No libraries published", "A library published from one of the team's files shows here");
+  html += `</section></div>`;
+  html += `<div class="panel p-own"><section class="sec" id="dash-ownership" data-key="dash:ownership"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section></div>`;
+  return html + `</div></div>`;
+}
+
+// A Professional team's bill: what it comes to, when it renews, and the
+// seats behind it
+function dashBill(seats) {
+  const sum = seats.summary;
+  const sub = sum.monthly_subscription ?? sum.annual_subscription;
+  if (!sub) return "";
+  const term = sum.monthly_subscription ? "month" : "year";
+  const counts = new Map();
+  for (const u of seats.users ?? []) {
+    const key = u.active_seat_type?.key ?? "";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const mix = SEATS.filter(([key]) => counts.get(key)).map(([key, label]) => `<div><span>${counts.get(key)} ${esc(label.replace(" seat", ""))} ${counts.get(key) === 1 ? "seat" : "seats"}</span><b>${esc(seatPrice(seats, key) ? `${seatPrice(seats, key).replace(" a ", "/").replace("month", "mo").replace("year", "yr")} each` : "Free")}</b></div>`).join("");
+  return `<section class="sec" id="dash-bill" data-key="dash:bill"><h2>Billing</h2><p class="amount">${esc(money(sub.estimated_amount_due ?? 0, sum.currency))}<small>a ${term}</small></p><p class="renews">${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${esc(dayOf(sub.current_period_end))}</p>${mix ? `<div class="seatmix">${mix}</div>` : ""}</section>`;
 }
 
 // The team itself: picture, name and description, edited where they are,
@@ -4668,8 +4717,7 @@ function dashHero(id, s, admin) {
 function dashPeople(id, info, tier, plan, seats) {
   const { team } = teamById(id);
   const people = info?.members?.filter((m) => !m.pending).length;
-  const bill = seats ? seatBill(seats) : "";
-  let html = `<section class="sec" id="dash-people" data-key="dash:people"><h2>People${people !== undefined ? `<small>${people}</small>` : ""}${bill ? `<small class="bill">${esc(bill)}</small>` : ""}</h2>`;
+  let html = `<section class="sec" id="dash-people" data-key="dash:people"><h2>People${people !== undefined ? `<small>${people}</small>` : ""}</h2>`;
   html += `<div class="dinvite">${inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor])}</div>`;
   if (standalone(plan)) html += `<p class="dnote">Everyone invited joins as a member who can edit. Pick Admin in someone's role to let them manage the team</p>`;
   if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div>`;
@@ -4689,29 +4737,23 @@ function dashPeople(id, info, tier, plan, seats) {
 }
 
 function dashProjects(id, team) {
-  let html = `<section class="sec" id="dash-projects" data-key="dash:projects"><h2>Projects<small>${team.projects.length}</small><button class="hact" data-set="p-new">${icon("plus")}New project</button></h2>`;
-  if (!team.projects.length) html += settingRow("No projects yet", "A project's files are shared with the team, as the project's sharing says");
+  let html = `<section class="sec" id="dash-projects" data-key="dash:projects"><h2>Projects<small>${team.projects.length}</small><button class="hact" data-set="p-new">${icon("plus")}New project</button></h2><div class="dtiles">`;
   for (const [pid] of team.projects) {
     const p = PROJECTS[pid];
     if (!p) continue;
     if (!LIVE || Live.ready.has("starred")) wantProjectCount(pid);
-    const n = LIVE ? LG.count(pid) : FILES.filter((f) => f.project === pid && !f.trashed).length;
-    const desc = FOLDER[pid]?.description;
-    html += `<div class="srow prow" data-key="dash:p:${pid}"><button class="pgo" data-go="p:${pid}">${folderIcon(pid)}<span class="st"><b>${esc(p.name)}</b><small><span data-pcount="${pid}">${esc(filesText(n))}</span>${desc ? ` · ${esc(desc)}` : ""}</small></span></button>` +
-      `<span class="ctl"><button class="pill access" data-set="p-share" data-project="${pid}" aria-haspopup="dialog" title="Share ${esc(p.name)}">${fig("users")}<span>${esc(accessText(p))}</span></button>` +
-      `<button class="ib more" data-set="p-more" data-project="${pid}" aria-haspopup="menu" aria-label="More for ${esc(p.name)}" title="More">${icon("more")}</button></span></div>`;
+    const files = FILES.filter((f) => f.project === pid && !f.trashed).sort((a, b) => b.at - a.at);
+    const n = LIVE ? LG.count(pid) : files.length;
+    const shots = files.slice(0, 3);
+    const cells = shots.length ? shots.map((f) => `<span class="thumb" data-thumb="${f.id}"></span>`).join("") : `<span class="none">${figmaIcon("folder", 24)}</span>`;
+    html += `<div class="dtile" data-key="dash:p:${pid}"><button class="dgo" data-go="p:${pid}" aria-label="Open ${esc(p.name)}"><span class="mosaic n${shots.length}" aria-hidden="true">${cells}</span></button>` +
+      `<div class="dtn"><span class="pname">${folderIcon(pid)}<b>${esc(p.name)}</b></span><button class="ib more" data-set="p-more" data-project="${pid}" aria-haspopup="menu" aria-label="More for ${esc(p.name)}" title="More">${icon("more")}</button></div>` +
+      `<div class="dtm"><span data-pcount="${pid}">${esc(filesText(n))}</span><button class="dacc" data-set="p-share" data-project="${pid}" aria-haspopup="dialog" title="Share ${esc(p.name)}">${fig("users")}${esc(accessText(p))}</button></div></div>`;
   }
-  return html + `</section>`;
+  if (!team.projects.length) html += `<button class="dtile new" data-set="p-new">${icon("plus")}New project</button>`;
+  return html + `</div></section>`;
 }
 
-
-// What the team pays and when, for the People heading
-function seatBill(seats) {
-  const sum = seats.summary;
-  const sub = sum.monthly_subscription ?? sum.annual_subscription;
-  const term = sum.monthly_subscription ? "month" : "year";
-  return sub ? `${money(sub.estimated_amount_due ?? 0, sum.currency)} a ${term} · ${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${dayOf(sub.current_period_end)}` : "";
-}
 // Someone's seat, as a menu of the seats and their prices
 function seatControl(seats, u, name) {
   const key = u.active_seat_type?.key ?? "";
