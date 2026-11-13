@@ -1,7 +1,6 @@
 //! The models Ligma runs on this device with ONNX Runtime: BiRefNet for
-//! Remove background (see background.rs), SAM 2.1 for Select object (see
-//! objects.rs), and LaMa or Stable Diffusion for Expand's Generative (see
-//! expand.rs). Each is downloaded when it's first needed, once asked,
+//! Remove background (see background.rs) and SAM 2.1 for Select object
+//! (see objects.rs). Each is downloaded when it's first needed, once asked,
 //! or from Settings, which can also remove it. Downloads are checked
 //! against their SHA-256. ONNX Runtime is linked in on Windows. Macs with
 //! Apple silicon download it along with the first model, as it needs
@@ -31,11 +30,10 @@ pub fn supported() -> bool {
 #[cfg(birefnet)]
 pub use download::*;
 
-/// The model Settings names: "background", "objects", "expand" (LaMa) or
-/// "diffusion"
+/// The model Settings names: "background" or "objects"
 #[cfg(birefnet)]
 fn named(name: &str) -> Option<&'static Model> {
-    ALL.into_iter().find(|model| model.name == name)
+    [&BACKGROUND, &OBJECTS].into_iter().find(|model| model.name == name)
 }
 
 fn model_state(app: &AppHandle, name: &str) -> ModelState {
@@ -184,58 +182,6 @@ mod download {
         entry: None,
     };
 
-    /// big-lama (https://github.com/advimman/lama, Apache 2.0), as ONNX
-    /// from https://huggingface.co/Carve/LaMa-ONNX, pinned to one revision.
-    /// It takes a 512 pixel square
-    pub const LAMA: Download = Download {
-        url: "https://huggingface.co/Carve/LaMa-ONNX/resolve/c3c0c9e468934d62e79c329e35d82dd09ff8c444/lama_fp32.onnx",
-        sha256: "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
-        size: 208_044_816,
-        file: "lama.onnx",
-        entry: None,
-    };
-
-    /// Stable Diffusion 1.5 Inpainting (https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-inpainting,
-    /// CreativeML OpenRAIL-M), as ONNX in full precision from
-    /// https://huggingface.co/JasonYANG170/sd15-inpainting-onnx-fp32,
-    /// pinned to one revision: the UNet, whose weights are in a file of
-    /// their own that keeps the name it refers to them by, and the VAE's
-    /// encoder and decoder. Its text encoder isn't needed: Expand runs it
-    /// without a prompt, whose encoding is built in (see expand.rs)
-    macro_rules! diffusion {
-        ($file:literal) => {
-            concat!("https://huggingface.co/JasonYANG170/sd15-inpainting-onnx-fp32/resolve/2b359848e4b1d2ac7142bcb9c07e639af480babf/", $file)
-        };
-    }
-    pub const DIFFUSION_UNET: Download = Download {
-        url: diffusion!("unet/model.onnx"),
-        sha256: "d6abc46fc2bf96e4fca7dff950beaa67646f9bd0bdd93fcf8621ef122ae8feab",
-        size: 1_973_332,
-        file: "sd15-inpainting/unet/model.onnx",
-        entry: None,
-    };
-    const DIFFUSION_UNET_DATA: Download = Download {
-        url: diffusion!("unet/model.onnx_data"),
-        sha256: "df01d68458269b62670c8e287743c2a59f613b21039a5d8937ef2d522c677fe9",
-        size: 3_438_141_440,
-        file: "sd15-inpainting/unet/model.onnx_data",
-        entry: None,
-    };
-    pub const DIFFUSION_ENCODER: Download = Download {
-        url: diffusion!("vae_encoder/model.onnx"),
-        sha256: "8912a7e136a1c3ea21699d170a0e98e89608f8eb8213ba27f7e1a2709aebc517",
-        size: 136_773_617,
-        file: "sd15-inpainting/vae_encoder.onnx",
-        entry: None,
-    };
-    pub const DIFFUSION_DECODER: Download = Download {
-        url: diffusion!("vae_decoder/model.onnx"),
-        sha256: "668fa7d9b511fa5ce87280b4f0b0e5177483de7c3ffea7166b47c2b7284a47f2",
-        size: 265_178_525,
-        file: "sd15-inpainting/vae_decoder.onnx",
-        entry: None,
-    };
-
     /// A model and what Ligma says about it
     pub struct Model {
         /// As Settings names it
@@ -284,35 +230,6 @@ mod download {
         watchers: Mutex::new(Vec::new()),
     };
 
-    pub static EXPAND: Model = Model {
-        name: "expand",
-        files: &[&LAMA],
-        doing: "Generative expand",
-        model: "LaMa",
-        title: "Download Expand Model",
-        progress: "Downloading the expand model…",
-        after: "Expanding…",
-        downloading: Mutex::new(None),
-        cancels: AtomicU32::new(0),
-        watchers: Mutex::new(Vec::new()),
-    };
-
-    pub static DIFFUSION: Model = Model {
-        name: "diffusion",
-        files: &[&DIFFUSION_UNET, &DIFFUSION_UNET_DATA, &DIFFUSION_ENCODER, &DIFFUSION_DECODER],
-        doing: "Generative expand",
-        model: "Stable Diffusion",
-        title: "Download Diffusion Model",
-        progress: "Downloading the diffusion model…",
-        after: "Expanding…",
-        downloading: Mutex::new(None),
-        cancels: AtomicU32::new(0),
-        watchers: Mutex::new(Vec::new()),
-    };
-
-    /// Every model, for what they share
-    pub const ALL: [&Model; 4] = [&BACKGROUND, &OBJECTS, &EXPAND, &DIFFUSION];
-
     /// Why a model isn't there to use
     pub enum Missing {
         /// The person didn't want it downloaded, or cancelled it
@@ -356,6 +273,11 @@ mod download {
             self.downloads().all(|download| folder.join(download.file).is_file())
         }
 
+        /// Whether it's downloaded, so using it won't ask to download it
+        pub fn is_installed(&self, app: &AppHandle) -> bool {
+            folder(app).is_ok_and(|folder| self.installed(&folder))
+        }
+
         pub fn state(&self, app: &AppHandle) -> ModelState {
             let downloading = *self.downloading.lock().unwrap();
             let Ok(folder) = folder(app) else {
@@ -385,26 +307,6 @@ mod download {
         /// lock while it's used. A download it starts stops once every job
         /// waiting on it is cancelled
         pub fn ensure(&'static self, app: &AppHandle, tab: u32, job: u64) -> Result<(MutexGuard<'static, ()>, PathBuf), Missing> {
-            self.ensure_asking(app, tab, job, true)
-        }
-
-        /// As `ensure`, but without asking first, as the person chose it
-        /// already
-        pub fn ensure_chosen(&'static self, app: &AppHandle, tab: u32, job: u64) -> Result<(MutexGuard<'static, ()>, PathBuf), Missing> {
-            self.ensure_asking(app, tab, job, false)
-        }
-
-        /// Whether it's downloaded
-        pub fn is_installed(&self, app: &AppHandle) -> bool {
-            folder(app).is_ok_and(|folder| self.installed(&folder))
-        }
-
-        /// How large its download is, in MB
-        pub fn megabytes(&self) -> u64 {
-            (self.files.iter().map(|download| download.size).sum::<u64>() as f64 / 1e6).round() as u64
-        }
-
-        fn ensure_asking(&'static self, app: &AppHandle, tab: u32, job: u64, ask: bool) -> Result<(MutexGuard<'static, ()>, PathBuf), Missing> {
             self.watchers.lock().unwrap().push((tab, job));
             let _watching = Watching(self, tab, job);
             let cancels = self.cancels.load(Ordering::SeqCst);
@@ -415,7 +317,7 @@ mod download {
             }
             let folder = folder(app).map_err(|error| failed(self, error))?;
             if !self.installed(&folder) {
-                if self.cancels.load(Ordering::SeqCst) != cancels || (ask && !self.ask(app, &folder)) || cancelled() {
+                if self.cancels.load(Ordering::SeqCst) != cancels || !self.ask(app, &folder) || cancelled() {
                     return Err(Missing::Cancelled);
                 }
                 match self.download(app, &folder, true) {
@@ -464,7 +366,7 @@ mod download {
                 }
                 let _held = lock();
                 if let Ok(folder) = folder(&app) {
-                    let others = ALL.into_iter().filter(|other| other.name != self.name);
+                    let others = [&BACKGROUND, &OBJECTS].into_iter().filter(|other| other.name != self.name);
                     let shared = others.filter(|other| other.installed(&folder)).flat_map(|other| other.downloads()).collect::<Vec<_>>();
                     for download in self.downloads().filter(|download| !shared.iter().any(|kept| kept.file == download.file)) {
                         let path = folder.join(download.file);
@@ -475,7 +377,7 @@ mod download {
                         }
                     }
                 }
-                for model in ALL {
+                for model in [&BACKGROUND, &OBJECTS] {
                     super::show_state(&app, model.name);
                 }
             });
@@ -551,8 +453,8 @@ mod download {
                 before += download.size;
             }
             *self.downloading.lock().unwrap() = None;
-            // ONNX Runtime may now be there for the other models too
-            for model in ALL {
+            // ONNX Runtime may now be there for the other model too
+            for model in [&BACKGROUND, &OBJECTS] {
                 super::show_state(app, model.name);
             }
             if result.is_ok() {

@@ -20,9 +20,8 @@
 //!
 //! After Vectorize goes Ligma's own Expand, in place of the one in Figma's
 //! More menu, which grows the image past its edges as a frame over the
-//! canvas says, and fills what's new on this device (see expand.rs): from
-//! the image itself, or only from what's painted, or with LaMa, where it
-//! runs. On by default
+//! canvas says, and fills what's new from the image itself on this device,
+//! or only from what's painted (see expand.rs). On by default
 //!
 //! First of them goes Ligma's own Select object, in place of Select area,
 //! which picks out objects in the selected image as Photoshop's Object
@@ -48,10 +47,9 @@ use tauri::AppHandle;
 use crate::settings::Settings;
 
 /// Runs in Figma tabs. `__LIGMA_FREE_AI_ACTIONS__` is `{ on, local,
-/// vectorize, objects, expand, generative, rev }`: the settings when the
+/// vectorize, objects, expand, rev }`: the settings when the
 /// tab was made, `local` and `objects` only where this device can remove
-/// backgrounds and select objects, and `generative` where it can run LaMa
-/// for Expand. A page loaded later in the same tab may find a newer one in
+/// backgrounds and select objects.
 /// `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
@@ -1466,14 +1464,14 @@ const PAGE_JS: &str = r##"(() => {
     );
   }
 
-  // Expand grows one image past its edges, as Photoshop's Generative
-  // Expand does, in place of the one in Figma's More menu. A frame around
-  // the image shows what it grows to: its edges and corners drag out, Alt
-  // (Option) from both sides at once and Shift keeping its proportions, and
-  // the frame drags to move it around the image. The bar sets how
-  // (Content-aware, from the image itself, or Generative, with LaMa) and the
-  // new width and height. Content-aware's brush paints where in the image
-  // it takes from, Alt taking away; without any, it takes from all of it.
+  // Expand grows one image past its edges, in place of the one in Figma's
+  // More menu, and fills what's new from the image itself, as Photoshop's
+  // Content-Aware Fill does. A frame around the image shows what it grows
+  // to: its edges and corners drag out, Alt (Option) from both sides at
+  // once and Shift keeping its proportions, and the frame drags to move it
+  // around the image. The bar sets the new width and height, and its brush
+  // paints where in the image the fill takes from, Alt taking away; without
+  // any, it takes from the image's background, leaving out its subject.
   // Expand, or Enter, grows the layer and fills it as one undo step, the
   // fills before hidden under it; Cancel, Escape or a click on the canvas
   // off the frame leaves. Ligma does the filling (see expand.rs)
@@ -1483,16 +1481,11 @@ const PAGE_JS: &str = r##"(() => {
   const EXPANDING = "data-ligma-expanding";
   const EXPAND_POINTER = "data-ligma-expand-pointer";
   let expanding = null;
-  // The bar's choices, kept while the tab is open: how it fills, Generative
-  // where it runs until another is chosen, the tool and the brush's size,
-  // in the image's own pixels, once chosen
-  const expandOptions = { method: null, tool: "frame", size: null };
+  // The bar's choices, kept while the tab is open: the tool and the brush's
+  // size, in the image's own pixels, once chosen
+  const expandOptions = { tool: "frame", size: null };
   // A dashed frame around the image, as it grows to
   const EXPAND_ICON = icon(`<rect ${STROKE} x="4.5" y="4.5" width="15" height="15" rx="1.5" stroke-dasharray="2 2"/><rect ${STROKE} x="8.5" y="8.5" width="7" height="7" rx="1"/>`);
-  const METHODS = [
-    ["content", "Content-aware", "Fill from the image itself"],
-    ["generative", "Generative", "Draw what's new with an AI model on this device"],
-  ];
   const EXPAND_TOOLS = [
     ["frame", "Drag the frame's edges to expand, or the frame to move it", icon(`<path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M8.5 4.5v15M15.5 4.5v15M4.5 8.5h15M4.5 15.5h15"/>`)],
     ["brush", `Paint where to take from, ${ALT} to take away, [ and ] to resize`, TOOLS[1][2]],
@@ -1515,9 +1508,6 @@ const PAGE_JS: &str = r##"(() => {
     if (!canvas) return;
     closeRecolor();
     barClasses = { root: bar.closest("[data-secondary-toolbelt]")?.className ?? "", bar: bar.className };
-    const generative = !!state.generative;
-    if (!generative) expandOptions.method = "content";
-    else expandOptions.method ??= "generative";
 
     const root = document.createElement("div");
     root.setAttribute(EXPAND, "");
@@ -1535,22 +1525,8 @@ const PAGE_JS: &str = r##"(() => {
       return button;
     };
 
-    // Content-aware or Generative, where LaMa runs
-    const methods = strip.appendChild(Object.assign(document.createElement("div"), { className: "segments" }));
-    methods.setAttribute("role", "radiogroup");
-    methods.setAttribute("aria-label", "Fill with");
-    for (const [value, label, text] of METHODS) {
-      const button = methods.appendChild(Object.assign(document.createElement("button"), { type: "button", textContent: label }));
-      button.setAttribute("role", "radio");
-      button.dataset.value = value;
-      tip(button, text);
-      button.addEventListener("click", () => setExpand("method", value));
-    }
-    methods.hidden = !generative;
-    const methodsDivider = divider();
-    methodsDivider.hidden = !generative;
 
-    // Content-aware's tools, the brush's size and Clear
+    // The tools, the brush's size and Clear
     const sampling = strip.appendChild(Object.assign(document.createElement("div"), { className: "sampling" }));
     const tools = sampling.appendChild(Object.assign(document.createElement("div"), { className: "group" }));
     tools.setAttribute("role", "radiogroup");
@@ -1564,8 +1540,8 @@ const PAGE_JS: &str = r##"(() => {
       button.addEventListener("click", () => setExpand("tool", value));
     }
     const clear = sampling.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon", innerHTML: ERASE_ICON }));
-    clear.setAttribute("aria-label", "Clear what's painted, to take from all of the image");
-    tip(clear, "Clear what's painted, to take from all of the image");
+    clear.setAttribute("aria-label", "Clear what's painted, to take from the background");
+    tip(clear, "Clear what's painted, to take from the background");
     clear.addEventListener("click", () => {
       if (!expanding?.strokes.length) return;
       remember();
@@ -1653,8 +1629,6 @@ const PAGE_JS: &str = r##"(() => {
       layer,
       svg,
       parts: { area, lines, hatch, line, sampled, edge, frame, handles, brush, mask, size },
-      methods,
-      methodsDivider,
       sampling,
       tools,
       clear,
@@ -1662,7 +1636,7 @@ const PAGE_JS: &str = r##"(() => {
       go,
       // How far each side grows, in the layer's units
       box: { left: 0, top: 0, right: 0, bottom: 0 },
-      // Content-aware's brush strokes, in fractions of the image
+      // The brush's strokes, in fractions of the image
       strokes: [],
       undone: [],
       redone: [],
@@ -1772,12 +1746,8 @@ const PAGE_JS: &str = r##"(() => {
   // The bar, the frame's size and what's painted, as they are
   const showExpand = () => {
     if (!expanding) return;
-    const { values, methods, methodsDivider, sampling, tools, clear, fields, go, parts, box, strokes, working, scales } = expanding;
-    const content = values.method === "content";
-    for (const button of methods.children) button.setAttribute("aria-checked", String(button.dataset.value === values.method));
+    const { values, tools, clear, fields, go, parts, box, strokes, working, scales } = expanding;
     for (const button of tools.children) button.setAttribute("aria-checked", String(button.dataset.value === values.tool));
-    sampling.hidden = !content;
-    methods.hidden = methodsDivider.hidden = !state.generative;
     clear.disabled = !strokes.length || working;
     const { total } = expandSize();
     const shown = { size: values.size, width: Math.round(total[0]), height: Math.round(total[1]) };
@@ -1787,13 +1757,13 @@ const PAGE_JS: &str = r##"(() => {
       element.classList.toggle("off", off || working);
       input.disabled = off || working;
     }
-    for (const button of [...methods.children, ...tools.children]) button.disabled = working;
+    for (const button of tools.children) button.disabled = working;
     const grows = sides().some((side) => box[side] > 0);
     go.disabled = !grows || working;
     parts.size.textContent = grows ? `${shown.width} × ${shown.height}` : "Drag an edge to expand";
     parts.size.classList.toggle("hint", !grows);
     expanding.layer.classList.toggle("working", working);
-    // What's painted, shown over the image, Content-aware's only
+    // What's painted, shown over the image
     parts.mask.replaceChildren(
       ...strokes.map((stroke) => {
         const path = document.createElementNS(SVG_NS, "path");
@@ -1801,7 +1771,7 @@ const PAGE_JS: &str = r##"(() => {
         return path;
       }),
     );
-    parts.sampled.style.display = content && strokes.length ? "" : "none";
+    parts.sampled.style.display = strokes.length ? "" : "none";
     parts.brush.setAttribute("r", (values.size / 2) / Math.max(scales.native, 1e-6));
     if (expanding.drag?.stroke) parts.mask.append(expanding.drag.path);
   };
@@ -1915,7 +1885,7 @@ const PAGE_JS: &str = r##"(() => {
       const vertical = top || bottom;
       value = horizontal && vertical ? ((left && top) || (right && bottom) ? "nwse" : "nesw") : horizontal ? "ew" : "ns";
     } else if (hit?.inside) {
-      value = values.tool === "brush" && values.method === "content" && hit.image ? (event.altKey ? "draw-subtract" : "draw-add") : "move";
+      value = values.tool === "brush" && hit.image ? (event.altKey ? "draw-subtract" : "draw-add") : "move";
     }
     if (value) root.setAttribute(EXPAND_POINTER, value);
     else root.removeAttribute(EXPAND_POINTER);
@@ -1972,7 +1942,7 @@ const PAGE_JS: &str = r##"(() => {
   const runExpand = async () => {
     const current = expanding;
     if (!current || current.working || busy) return;
-    const { figma, node, box, values, strokes } = current;
+    const { figma, node, box, strokes } = current;
     if (!sides().some((side) => box[side] > 0)) return;
     current.working = true;
     busy = true;
@@ -1989,12 +1959,11 @@ const PAGE_JS: &str = r##"(() => {
       const scale = Math.max(0.01, Math.min(largest, 4096 / Math.max(...total), Math.sqrt(EXPAND_PIXELS / (total[0] * total[1]))));
       const bytes = await drawn(figma, node, scale, true);
       const header = {
-        method: values.method,
         left: grown.left / node.width,
         top: grown.top / node.height,
         right: grown.right / node.width,
         bottom: grown.bottom / node.height,
-        sample: values.method === "content" ? strokes : [],
+        sample: strokes,
       };
       const { png } = JSON.parse(await handOff("expand", request(header, bytes), show, "", controller.signal));
       if (node.removed) throw "failed";
@@ -2093,7 +2062,7 @@ const PAGE_JS: &str = r##"(() => {
         swallow(event);
         if (type !== "pointerdown" || expanding.working) return;
         const { values, node } = expanding;
-        if (!hit.edges && hit.image && values.tool === "brush" && values.method === "content") {
+        if (!hit.edges && hit.image && values.tool === "brush") {
           const stroke = { points: [[at.x / node.width, at.y / node.height]], radius: expandBrush(), subtract: event.altKey };
           const path = document.createElementNS(SVG_NS, "path");
           strokePath(path, stroke);
@@ -2336,15 +2305,6 @@ const PAGE_JS: &str = r##"(() => {
     [${RECOLOR}] .done { background: var(--color-bg-brand, #0d99ff); color: var(--color-icon-onbrand, #fff); }
     [${RECOLOR}] .done:hover { background: var(--color-bg-brand-hover, var(--color-bg-brand, #0d99ff)); }
     [${EXPAND}=""] .sampling { display: flex; align-items: center; gap: 4px; }
-    [${EXPAND}=""] .segments { display: flex; padding: 2px; border-radius: 6px; background: var(--color-bg-secondary, #383838); }
-    [${EXPAND}=""] .segments button {
-      height: 20px; padding: 0 8px; border: 0; border-radius: 4px; background: none; white-space: nowrap;
-      color: var(--color-text-secondary, #b3b3b3); font: inherit;
-    }
-    [${EXPAND}=""] .segments button:hover { color: var(--color-text, #fff); }
-    [${EXPAND}=""] .segments button[aria-checked="true"] {
-      background: var(--color-bg, #2c2c2c); color: var(--color-text, #fff); box-shadow: 0 0 0 1px var(--color-border, #444);
-    }
     [${EXPAND}=""] .field input { width: 48px; }
     [${EXPAND}=""] .field.size input { width: 40px; }
     [${EXPAND}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
@@ -2425,9 +2385,8 @@ static LOCAL: AtomicBool = AtomicBool::new(true);
 static VECTORIZE: AtomicBool = AtomicBool::new(true);
 /// and its Select object, where it works,
 static OBJECTS: AtomicBool = AtomicBool::new(true);
-/// and its Expand, Generative where it works,
+/// and its Expand,
 static EXPAND: AtomicBool = AtomicBool::new(true);
-static GENERATIVE: AtomicBool = AtomicBool::new(true);
 /// and when they last changed, for `PAGE_JS` to tell it from older ones in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
@@ -2439,9 +2398,9 @@ fn now() -> u64 {
 fn state() -> String {
     let (on, local, vectorize) = (ON.load(Ordering::Relaxed), LOCAL.load(Ordering::Relaxed), VECTORIZE.load(Ordering::Relaxed));
     let objects = OBJECTS.load(Ordering::Relaxed);
-    let (expand, generative) = (EXPAND.load(Ordering::Relaxed), GENERATIVE.load(Ordering::Relaxed));
+    let expand = EXPAND.load(Ordering::Relaxed);
     format!(
-        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"expand":{expand},"generative":{generative},"rev":{}}}"#,
+        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"expand":{expand},"rev":{}}}"#,
         REV.load(Ordering::Relaxed)
     )
 }
@@ -2461,7 +2420,6 @@ pub fn init(settings: &Settings) {
     VECTORIZE.store(settings.local_vectorize, Ordering::Relaxed);
     OBJECTS.store(objects(settings), Ordering::Relaxed);
     EXPAND.store(settings.local_expand, Ordering::Relaxed);
-    GENERATIVE.store(crate::models::supported(), Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
 
