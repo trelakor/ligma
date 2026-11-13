@@ -1551,7 +1551,7 @@ impl Painter {
             return;
         }
         let texture = skia_safe::IRect::from_xywh(x, y, width, height);
-        let mut region = skia_safe::Region::new();
+        let mut rects: Vec<skia_safe::IRect> = Vec::new();
         let mut reach: Option<Rect> = None;
         for area in &areas {
             let device: skia_safe::IRect = Rect::from_ltrb(area.left * px, area.top * px, area.right * px, area.bottom * px).round_out();
@@ -1559,7 +1559,7 @@ impl Painter {
             let Some(device) = skia_safe::IRect::intersect(&device, &texture) else {
                 continue;
             };
-            region.op_rect(device, skia_safe::region::RegionOp::Union);
+            rects.push(device);
             reach = Some(match reach {
                 Some(mut all) => {
                     all.join(area);
@@ -1592,16 +1592,41 @@ impl Painter {
         // Rasters of units that change each frame would be made each frame
         self.rasters_made = RASTERS_A_DRAW;
         let mut recorded = 0usize;
-        let mut pictures = Vec::new();
+        let mut pictures: Vec<(Rect, Drawn)> = Vec::new();
         for unit in under {
             let level = self.level(&self.units[unit], px, false);
             if !self.pictures.contains_key(&(self.units[unit].slot, self.units[unit].section, level, true)) {
                 recorded += 1;
             }
             if let Some((drawn, _)) = self.drawn(unit, level, true, px, true) {
-                pictures.push(drawn);
+                pictures.push((self.units[unit].bounds, drawn));
             }
         }
+        // Areas mostly over each other are drawn as one. Each is a plain
+        // rect clip, which the GPU does with a scissor, where a region of
+        // them would take a mask the size of the view each time
+        let size = |rect: &skia_safe::IRect| rect.width() as i64 * rect.height() as i64;
+        'merge: loop {
+            for i in 0..rects.len() {
+                for j in i + 1..rects.len() {
+                    let (a, b) = (rects[i], rects[j]);
+                    let both = skia_safe::IRect::from_ltrb(a.left.min(b.left), a.top.min(b.top), a.right.max(b.right), a.bottom.max(b.bottom));
+                    if size(&both) * 4 <= (size(&rects[i]) + size(&rects[j])) * 5 {
+                        rects[i] = both;
+                        rects.swap_remove(j);
+                        continue 'merge;
+                    }
+                }
+            }
+            break;
+        }
+        let passes: Vec<(skia_safe::IRect, Vec<Drawn>)> = rects
+            .iter()
+            .map(|rect| {
+                let area = Rect::from_ltrb(rect.left as f32 / px, rect.top as f32 / px, rect.right as f32 / px, rect.bottom as f32 / px).with_outset((1.0 / px, 1.0 / px));
+                (*rect, pictures.iter().filter(|(bounds, _)| Rect::intersects2(bounds, &area)).map(|(_, drawn)| drawn.clone()).collect())
+            })
+            .collect();
         let record = started.elapsed();
         let Some(tex) = self.tex(width, height) else {
             return;
@@ -1617,10 +1642,13 @@ impl Painter {
         let mut copy = Paint::default();
         copy.set_blend_mode(skia_safe::BlendMode::Src);
         canvas.draw_image(&previous, (0, 0), Some(&copy));
-        region.translate((-x, -y));
-        canvas.clip_region(&region, skia_safe::ClipOp::Intersect);
-        canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
-        play(canvas, &pictures, (-x as f32, -y as f32), px);
+        for (rect, drawn) in &passes {
+            canvas.save();
+            canvas.clip_irect(rect.with_offset((-x, -y)), skia_safe::ClipOp::Intersect);
+            canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            play(canvas, drawn, (-x as f32, -y as f32), px);
+            canvas.restore();
+        }
         let played = started.elapsed();
         let image = self.finish(&backend, false);
         drop(surface);
@@ -1633,8 +1661,9 @@ impl Painter {
         self.hand_whole(Layer { tex, x, y, px, counts, behind: false }, fence, None);
         trace(|| {
             format!(
-                "  patch areas={} pictures={} recorded={recorded} {:.1}ms played={:.1}ms {:.1}ms",
+                "  patch areas={} passes={} pictures={} recorded={recorded} {:.1}ms played={:.1}ms {:.1}ms",
                 areas.len(),
+                passes.len(),
                 pictures.len(),
                 record.as_secs_f64() * 1000.0,
                 played.as_secs_f64() * 1000.0,
