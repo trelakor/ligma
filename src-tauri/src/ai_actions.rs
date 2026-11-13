@@ -2161,8 +2161,9 @@ const PAGE_JS: &str = r##"(() => {
   let healing = null;
   // The brush's size, in the image's own pixels, once chosen
   const healOptions = { size: null };
-  // A bandage, its pad dotted, as Photoshop's Spot Healing Brush has it
-  const HEAL_ICON = icon(`<g transform="rotate(-45 12 12)"><rect ${STROKE} x="3.5" y="8.5" width="17" height="7" rx="3.5"/><path ${STROKE} d="M9 8.5v7M15 8.5v7"/></g><g ${FILL}><circle cx="11.3" cy="11.3" r=".6"/><circle cx="12.7" cy="12.7" r=".6"/><circle cx="11.3" cy="12.7" r=".6"/><circle cx="12.7" cy="11.3" r=".6"/></g>`);
+  // A bandage, its pad dotted, over a dashed spot, as Photoshop's Spot
+  // Healing Brush has it
+  const HEAL_ICON = icon(`<path ${STROKE} stroke-dasharray="1.6 1.4" d="M9.7 19.4A4 4 0 1 1 4.6 14.3"/><g transform="rotate(-45 13.5 10.5)"><rect ${STROKE} x="6" y="7.5" width="15" height="6" rx="3"/><path ${STROKE} d="M11 7.5v6M16 7.5v6"/></g><g ${FILL}><circle cx="13" cy="11" r=".55"/><circle cx="14" cy="10" r=".55"/><circle cx="13" cy="10" r=".55"/><circle cx="14" cy="11" r=".55"/></g>`);
 
   // A button with an icon and a label, as the image bar's own are
   const barButton = (crop, label, svg, tip) => {
