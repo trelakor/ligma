@@ -142,6 +142,8 @@ pub struct Settings {
     /// and its Upscale, which makes the image larger with a model on this
     /// device (see upscale.rs)
     pub local_upscale: bool,
+    /// Show the image bar's buttons as icons only, their names on hover
+    pub image_bar_icons: bool,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
@@ -212,6 +214,7 @@ impl Default for Settings {
             local_expand: true,
             local_heal: true,
             local_upscale: true,
+            image_bar_icons: false,
             copy_as_code: true,
             lasso_fill: true,
             classic_home: false,

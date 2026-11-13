@@ -52,7 +52,7 @@ use tauri::AppHandle;
 use crate::settings::Settings;
 
 /// Runs in Figma tabs. `__LIGMA_FREE_AI_ACTIONS__` is `{ on, local,
-/// vectorize, objects, expand, heal, upscale, rev }`: the settings when the
+/// vectorize, objects, expand, heal, upscale, icons, rev }`: the settings when the
 /// tab was made, `local`, `objects` and `upscale` only where this device
 /// can remove backgrounds, select objects and upscale images.
 /// `localStorage`; the higher `rev` wins
@@ -3070,7 +3070,33 @@ const PAGE_JS: &str = r##"(() => {
   const BAR = '[data-secondary-toolbelt="true"] [class*="secondary_toolbelt--secondaryToolbeltContainer"]';
   const CROP = 'path[d^="M8.5 5a.5.5 0 0 1 .5.5V15h6V9"]';
   const HIDDEN = "data-ligma-ai-hidden";
+  // Icons only in the image bar: each of its buttons with an icon shows
+  // only that, with its name as its tooltip, as Figma's toolbar does.
+  // Tooltips Ligma adds for it are marked, to take away again
+  const ICONS = "data-ligma-image-icons";
+  const ICON_TIP = "data-ligma-icon-tip";
+  const iconsOnly = () => {
+    const on = !!state.icons;
+    document.documentElement.toggleAttribute(ICONS, on);
+    if (!on) {
+      for (const button of document.querySelectorAll(`[${ICON_TIP}]`)) {
+        button.removeAttribute(ICON_TIP);
+        for (const key of ["tooltip", "tooltipType", "tooltipShowAbove"]) delete button.dataset[key];
+      }
+      return;
+    }
+    for (const button of document.querySelectorAll(`${BAR} > button`)) {
+      if (button.dataset.tooltip || !button.querySelector(":scope > svg")) continue;
+      const name = button.querySelector(":scope > span")?.textContent.trim();
+      if (!name) continue;
+      button.setAttribute(ICON_TIP, "");
+      Object.assign(button.dataset, { tooltip: name, tooltipType: "text", tooltipShowAbove: "true" });
+      if (!button.hasAttribute("aria-label")) button.setAttribute("aria-label", name);
+    }
+  };
+
   const tidy = () => {
+    iconsOnly();
     placeRecolor();
     placePicking();
     placeExpanding();
@@ -3242,6 +3268,8 @@ const PAGE_JS: &str = r##"(() => {
       background: var(--color-bg-brand, #0d99ff); color: var(--color-text-onbrand, #fff); font-variant-numeric: tabular-nums;
     }
     [${EXPAND}="overlay"] .size.hint { padding: 0 6px; background: var(--color-bg-tooltip, #1e1e1e); color: var(--color-text-tooltip, #fff); }
+    html[${ICONS}] ${BAR} > button:has(> svg) > span { display: none; }
+    html[${ICONS}] ${BAR} > button:has(> svg) { padding-left: 4px; padding-right: 4px; }
     @keyframes ligma-expand-working { from { opacity: 0.35; } to { opacity: 1; } }
     @media (prefers-reduced-motion: reduce) { [${EXPAND}="overlay"].working :is(.area, .lines) { animation: none; } }
     html[${EXPAND_POINTER}="ew"], html[${EXPAND_POINTER}="ew"] * { cursor: ew-resize !important; }
@@ -3307,6 +3335,8 @@ static EXPAND: AtomicBool = AtomicBool::new(true);
 static HEAL: AtomicBool = AtomicBool::new(true);
 /// and its Upscale, where it works,
 static UPSCALE: AtomicBool = AtomicBool::new(true);
+/// and show the image bar's buttons as icons only
+static ICONS: AtomicBool = AtomicBool::new(false);
 /// and when they last changed, for `PAGE_JS` to tell it from older ones in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
@@ -3319,9 +3349,9 @@ fn state() -> String {
     let (on, local, vectorize) = (ON.load(Ordering::Relaxed), LOCAL.load(Ordering::Relaxed), VECTORIZE.load(Ordering::Relaxed));
     let objects = OBJECTS.load(Ordering::Relaxed);
     let expand = EXPAND.load(Ordering::Relaxed);
-    let (heal, upscale) = (HEAL.load(Ordering::Relaxed), UPSCALE.load(Ordering::Relaxed));
+    let (heal, upscale, icons) = (HEAL.load(Ordering::Relaxed), UPSCALE.load(Ordering::Relaxed), ICONS.load(Ordering::Relaxed));
     format!(
-        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"expand":{expand},"heal":{heal},"upscale":{upscale},"rev":{}}}"#,
+        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"expand":{expand},"heal":{heal},"upscale":{upscale},"icons":{icons},"rev":{}}}"#,
         REV.load(Ordering::Relaxed)
     )
 }
@@ -3347,6 +3377,7 @@ pub fn init(settings: &Settings) {
     EXPAND.store(settings.local_expand, Ordering::Relaxed);
     HEAL.store(settings.local_heal, Ordering::Relaxed);
     UPSCALE.store(upscale(settings), Ordering::Relaxed);
+    ICONS.store(settings.image_bar_icons, Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
 
@@ -3364,7 +3395,8 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     let expand = EXPAND.swap(settings.local_expand, Ordering::Relaxed) != settings.local_expand;
     let heal = HEAL.swap(settings.local_heal, Ordering::Relaxed) != settings.local_heal;
     let upscale = UPSCALE.swap(upscale(settings), Ordering::Relaxed) != upscale(settings);
-    if !on && !local && !vectorize && !objects && !expand && !heal && !upscale {
+    let icons = ICONS.swap(settings.image_bar_icons, Ordering::Relaxed) != settings.image_bar_icons;
+    if !on && !local && !vectorize && !objects && !expand && !heal && !upscale && !icons {
         return;
     }
     REV.store(now(), Ordering::Relaxed);
