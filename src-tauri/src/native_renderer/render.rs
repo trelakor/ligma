@@ -629,8 +629,11 @@ const DRAFT_SMALLEST: f32 = 2.0;
 
 /// How long the view stays still before quick tiles are drawn exactly
 const REFINE_AFTER: Duration = Duration::from_millis(250);
-/// Memory drawing took is given back after this long without a frame
+/// Layers drawing took are given back after this long without a frame
 const IDLE: Duration = Duration::from_secs(3);
+/// And all else Skia keeps on the GPU after this long, its atlases, masks
+/// and images, which the next draw makes again, a hitch of 100 ms or so
+const FREE_AFTER: Duration = Duration::from_secs(30);
 /// The zoom counts as settled when it hasn't changed for this long
 const SETTLE: Duration = Duration::from_millis(120);
 
@@ -920,6 +923,7 @@ pub struct Painter {
     /// When a frame was last drawn, and whether memory was given back since
     drawn: Instant,
     released: bool,
+    freed: bool,
     /// Tiles are drawing on the GPU, to show once its fence passes `passed`
     drawing: bool,
     passed: u64,
@@ -1023,6 +1027,7 @@ impl Painter {
             cleaned: Instant::now(),
             drawn: Instant::now(),
             released: true,
+            freed: true,
             drawing: false,
             passed: 0,
             checker: skia_safe::RuntimeEffect::make_for_shader(CHECKER, None)
@@ -1109,6 +1114,7 @@ impl Painter {
             if std::mem::take(&mut self.drew) {
                 self.drawn = Instant::now();
                 self.released = false;
+                self.freed = false;
                 // Images sized for where the view was go while it moves on,
                 // not only once it stops
                 if self.zoom.1.elapsed() >= SETTLE && self.fitted.elapsed() > Duration::from_secs(1) {
@@ -1119,6 +1125,9 @@ impl Painter {
                 // Layers and scratch from drawing tiles stay with the GPU
                 // driver for reuse until given back
                 self.released = true;
+                self.trim();
+            } else if !self.freed && self.drawn.elapsed() > FREE_AFTER {
+                self.freed = true;
                 self.release();
             }
             self.dirty = next == Some(Duration::ZERO);
@@ -1436,10 +1445,9 @@ impl Painter {
         canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
         play(canvas, &pictures, ((margin - ox) as f32, (margin - oy) as f32), px);
         let played = start.elapsed();
-        // With one shown till it's drawn, the GPU draws it while what's
-        // next is made ready
-        let wait = self.whole.is_none();
-        let image = self.finish(&backend, wait);
+        // The GPU draws it while what's next is made ready, and it's shown
+        // once the GPU's done, what's shown now till then
+        let image = self.finish(&backend, false);
         drop(surface);
         drop(stand_in);
         if image.is_none() {
@@ -1449,7 +1457,7 @@ impl Painter {
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| {
             format!(
-                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} stood_in={stood_in} cleared={} thumbs_took={:.1}ms drawn_took={:.1}ms slowest={:.1}ms:{} margin={margin} recorded={:.1}ms played={:.1}ms {:.1}ms wait={wait} vram={vram} gpu={}",
+                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} stood_in={stood_in} cleared={} thumbs_took={:.1}ms drawn_took={:.1}ms slowest={:.1}ms:{} margin={margin} recorded={:.1}ms played={:.1}ms {:.1}ms vram={vram} gpu={}",
                 pictures.len(),
                 pictures.iter().filter(|item| matches!(item, Drawn::Thumb(..))).count(),
                 std::mem::take(&mut self.thumbs_made),
@@ -1776,8 +1784,9 @@ impl Painter {
         let whole_pending = self.whole.as_ref().is_some_and(|whole| whole.fence > passed);
         self.drawing = whole_pending || self.tiles.values().any(|tile| tile.fence > passed);
         let mut shown = self.hub.shown.lock().unwrap();
-        // Tiles out of date don't cover the whole view drawn since
-        let whole_current = self.whole.as_ref().is_some_and(|whole| whole.at == self.at && !whole.stale);
+        // Tiles out of date don't cover the whole view drawn since, once
+        // it shows: till the GPU's done they're all there is
+        let whole_current = self.whole.as_ref().is_some_and(|whole| whole.at == self.at && !whole.stale && whole.fence <= passed);
         // Nor does what they show win over it where it's newer, as while the
         // view moves during an edit, or the edits of a few frames together
         // are too many to patch, which would show things a moment where
@@ -2187,6 +2196,18 @@ impl Painter {
         stats().lock().unwrap().nodes = self.tree.as_ref().map_or(0, |tree| tree.forest.nodes.len());
         self.set_view(frame.view());
         self.dirty = true;
+    }
+
+    /// Gives back the layers drawing took, keeping what the next draw would
+    /// only make again, as an edit's first draw would wait on that
+    fn trim(&mut self) {
+        self.fit_images();
+        self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE) || Arc::strong_count(tex) > 1);
+        self.scratch.retain(|(_, ss, _)| *ss == 1);
+        let _ = self.gpu.context.flush_and_submit();
+        self.gpu.context.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::ScratchResourcesOnly);
+        super::committed::trim();
+        self.update_memory();
     }
 
     /// Gives back the GPU memory an offscreen render took, whole views drawn
