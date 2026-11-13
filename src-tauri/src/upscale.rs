@@ -17,7 +17,9 @@
 //! as Figma keeps it. The model makes it 4 times as large, a tile at a
 //! time, each the same size, so a graphics card prepares the model once,
 //! and that's scaled down to `s` times, at most 4,096 pixels across, as
-//! large as Figma keeps images.
+//! large as Figma keeps images. An image that was enlarged before, so
+//! it holds less detail than its size, is shrunk back to the size its
+//! detail is for first, and enlarged twice where once isn't enough.
 //! Transparency is scaled up smoothly alongside. The result is
 //! `{"png":<base64>,"width":w,"height":h}`, or "large" when the image is
 //! as large as it can be already
@@ -234,6 +236,137 @@ mod esrgan {
         }
     }
 
+    /// Images that read as enlarged this many times or more before are
+    /// shrunk back first, at most `MOST_SHRINK` times
+    const SHRINK_FROM: f32 = 2.0;
+    const MOST_SHRINK: f32 = 4.0;
+    /// How sharp an image is is read in squares this many pixels across,
+    /// those whose brightness spreads this little left out as there's
+    /// nothing in them to read
+    const SHARP_TILE: usize = 128;
+    const SHARP_SPREAD: f32 = 8.0;
+
+    /// How many times `rgb` reads as enlarged before: how far short of the
+    /// finest detail a pixel can hold most of its squares stop, in where
+    /// their detail fades to a thousandth of their broad shapes', so a few
+    /// blurry ones, like a background out of focus, don't count. 1 when
+    /// it's as sharp as its pixels allow
+    fn shrink_by(rgb: &RgbImage) -> f32 {
+        const T: usize = SHARP_TILE;
+        let (width, height) = (rgb.width() as usize, rgb.height() as usize);
+        if width < T || height < T {
+            return 1.0;
+        }
+        let luma: Vec<f32> = rgb.pixels().map(|p| 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32).collect();
+        let window: Vec<f32> = (0..T).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (T - 1) as f32).cos()).collect();
+        // At most 17 squares each way, overlapping by half where it's small
+        let starts = |size: usize| {
+            let step = ((size - T) / 16).max(T / 2);
+            (0..=size - T).step_by(step).collect::<Vec<_>>()
+        };
+        let mut reached = Vec::new();
+        let mut re = vec![0f32; T * T];
+        let mut im = vec![0f32; T * T];
+        for y0 in starts(height) {
+            for x0 in starts(width) {
+                let (mut sum, mut squares) = (0f32, 0f32);
+                for y in y0..y0 + T {
+                    for &value in &luma[y * width + x0..y * width + x0 + T] {
+                        sum += value;
+                        squares += value * value;
+                    }
+                }
+                let mean = sum / (T * T) as f32;
+                if (squares / (T * T) as f32 - mean * mean).max(0.0).sqrt() < SHARP_SPREAD {
+                    continue;
+                }
+                for y in 0..T {
+                    for x in 0..T {
+                        re[y * T + x] = (luma[(y0 + y) * width + x0 + x] - mean) * window[y] * window[x];
+                        im[y * T + x] = 0.0;
+                    }
+                }
+                fft_2d(&mut re, &mut im, T);
+                // Power by how fine it is, in pixels across a wave: `k` waves
+                // in the square, the larger of across and down
+                let (mut power, mut count) = ([0f32; T / 2 + 1], [0f32; T / 2 + 1]);
+                for ky in 0..T {
+                    for kx in 0..T {
+                        let fine = |k: usize| k.min(T - k);
+                        let k = fine(ky).max(fine(kx));
+                        let at = ky * T + kx;
+                        power[k] += re[at] * re[at] + im[at] * im[at];
+                        count[k] += 1.0;
+                    }
+                }
+                let mean = |from: usize, to: usize| power[from..to].iter().sum::<f32>() / count[from..to].iter().sum::<f32>();
+                // Broad shapes, 17 to 32 pixels across, and where detail
+                // fades, from 12 pixels across
+                let broad = mean(4, 8);
+                let fades = (11..T / 2).find(|&k| mean(k, (k + 2).min(T / 2 + 1)) < broad * 1e-3);
+                reached.push(fades.map_or(0.5, |k| (k - 1) as f32 / T as f32));
+            }
+        }
+        if reached.len() < 4 {
+            return 1.0;
+        }
+        reached.sort_by(f32::total_cmp);
+        // A fifth again, as compression leaves some finer detail behind
+        (0.6 / reached[reached.len() * 3 / 4]).clamp(1.0, MOST_SHRINK)
+    }
+
+    /// The Fourier transform of the `n` by `n` complex values in `re` and
+    /// `im`, in place, `n` a power of 2
+    fn fft_2d(re: &mut [f32], im: &mut [f32], n: usize) {
+        let mut row_re = vec![0f32; n];
+        let mut row_im = vec![0f32; n];
+        for pass in 0..2 {
+            for line in 0..n {
+                let at = |i: usize| if pass == 0 { line * n + i } else { i * n + line };
+                for i in 0..n {
+                    (row_re[i], row_im[i]) = (re[at(i)], im[at(i)]);
+                }
+                fft(&mut row_re, &mut row_im);
+                for i in 0..n {
+                    (re[at(i)], im[at(i)]) = (row_re[i], row_im[i]);
+                }
+            }
+        }
+    }
+
+    /// The Fourier transform of `re` and `im`, in place, their length a
+    /// power of 2
+    fn fft(re: &mut [f32], im: &mut [f32]) {
+        let n = re.len();
+        let mut j = 0;
+        for i in 1..n {
+            let mut bit = n >> 1;
+            while j & bit != 0 {
+                j ^= bit;
+                bit >>= 1;
+            }
+            j |= bit;
+            if i < j {
+                re.swap(i, j);
+                im.swap(i, j);
+            }
+        }
+        let mut size = 2;
+        while size <= n {
+            let angle = -std::f32::consts::TAU / size as f32;
+            for start in (0..n).step_by(size) {
+                for k in 0..size / 2 {
+                    let (sin, cos) = (angle * k as f32).sin_cos();
+                    let (a, b) = (start + k, start + k + size / 2);
+                    let (tr, ti) = (re[b] * cos - im[b] * sin, re[b] * sin + im[b] * cos);
+                    (re[b], im[b]) = (re[a] - tr, im[a] - ti);
+                    (re[a], im[a]) = (re[a] + tr, im[a] + ti);
+                }
+            }
+            size <<= 1;
+        }
+    }
+
     /// The image in `bytes`, turned as its orientation says
     fn decode(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
         let mut decoder = ImageReader::new(Cursor::new(bytes))
@@ -262,7 +395,6 @@ mod esrgan {
         stopped: &dyn Fn() -> bool,
         progress: &dyn Fn(&str),
     ) -> Result<RgbaImage, String> {
-        let error = |error: ort::Error| error.to_string();
         let (width, height) = (image.width() as usize, image.height() as usize);
         let environment = crate::models::environment(folder.unwrap_or(Path::new("")))?;
         // Tests can ask for the CPU, to compare
@@ -275,6 +407,79 @@ mod esrgan {
             let alpha = a as u16;
             image::Rgb([r, g, b].map(|value| ((value as u16 * alpha + 127) / 255) as u8))
         });
+        let target = ((width as f32 * factor).round() as u32, (height as f32 * factor).round() as u32);
+        // An image enlarged before holds no more than a smaller one would,
+        // spread out and blocky where it was compressed, which a model only
+        // enlarges further. It's read at the size its detail is for instead,
+        // so the model sees edges, and enlarged twice where once isn't enough
+        let shrink = shrink_by(&rgb);
+        let mut work = if shrink >= SHRINK_FROM {
+            log::info!("Upscale: enlarged {shrink:.1} times before, shrunk back first");
+            let size = |side: usize| ((side as f32 / shrink).round() as u32).max(1);
+            imageops::resize(&rgb, size(width), size(height), FilterType::Lanczos3)
+        } else {
+            rgb.clone()
+        };
+        let passes = if work.width() as usize * TIMES >= target.0 as usize { 1 } else { 2 };
+        let mut out = RgbImage::new(0, 0);
+        for pass in 0..passes {
+            if pass > 0 {
+                let size = |side: u32| side.div_ceil(TIMES as u32);
+                work = imageops::resize(&out, size(target.0), size(target.1), FilterType::Lanczos3);
+            }
+            let step = |done: usize| progress(&format!("Upscaling… {}%", (pass * 100 + done) / passes));
+            out = enlarge(&mut session, environment, model, gpu, &mut on_gpu, &work, options, stopped, &step)?;
+        }
+        drop(session);
+        progress("Finishing…");
+        settle(&work, &mut out, strength);
+        let (out_width, out_height) = (out.width(), out.height());
+        // Transparency scaled up smoothly, and the color back off black
+        let alpha = imageops::resize(
+            &image::GrayImage::from_fn(width as u32, height as u32, |x, y| image::Luma([image.get_pixel(x, y)[3]])),
+            out_width,
+            out_height,
+            FilterType::CatmullRom,
+        );
+        let opaque = image.pixels().all(|pixel| pixel[3] == 255);
+        let mut larger = RgbaImage::from_fn(out_width, out_height, |x, y| {
+            let [r, g, b] = out.get_pixel(x, y).0;
+            let a = if opaque { 255 } else { alpha.get_pixel(x, y)[0] };
+            if a == 255 {
+                return image::Rgba([r, g, b, 255]);
+            }
+            if a == 0 {
+                return image::Rgba([0, 0, 0, 0]);
+            }
+            let unmultiply = |value: u8| ((value as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
+            image::Rgba([unmultiply(r), unmultiply(g), unmultiply(b), a])
+        });
+        drop(out);
+        if (target.0 * 2, target.1 * 2) == (out_width, out_height) {
+            larger = halved(&larger);
+        } else if target != (out_width, out_height) {
+            larger = imageops::resize(&larger, target.0, target.1, FilterType::Triangle);
+        }
+        Ok(larger)
+    }
+
+    /// `rgb` made `TIMES` as large with `session`, a tile at a time, moved
+    /// to the CPU, in `on_gpu`, if the graphics card fails, saying how far
+    /// it's got, in percent, with `progress`
+    #[allow(clippy::too_many_arguments)]
+    fn enlarge(
+        session: &mut Session,
+        environment: &'static ort::environment::Environment,
+        model: &Path,
+        gpu: bool,
+        on_gpu: &mut bool,
+        rgb: &RgbImage,
+        options: &RunOptions,
+        stopped: &dyn Fn() -> bool,
+        progress: &dyn Fn(usize),
+    ) -> Result<RgbImage, String> {
+        let error = |error: ort::Error| error.to_string();
+        let (width, height) = (rgb.width() as usize, rgb.height() as usize);
         let (out_width, out_height) = (width * TIMES, height * TIMES);
         let mut out = RgbImage::new(out_width as u32, out_height as u32);
         // Tiles on a graphics card are all read the same size, their edge
@@ -320,9 +525,7 @@ mod esrgan {
             if stopped() {
                 return Err("cancelled".to_owned());
             }
-            if tiles.len() > 1 {
-                progress(&format!("Upscaling… {}%", index * 100 / tiles.len()));
-            }
+            progress(index * 100 / tiles.len());
             let (across, down) = (t.read_across, t.read_down);
             let plane = across * down;
             let mut input = vec![0f32; 3 * plane];
@@ -342,14 +545,14 @@ mod esrgan {
                 let (_, output) = outputs[0].try_extract_tensor::<f32>().map_err(error)?;
                 Ok(output.to_vec())
             };
-            let output = match ask(&mut session) {
+            let output = match ask(session) {
                 Ok(output) => output,
                 // The graphics card failed: the CPU from then on
-                Err(_) if on_gpu && !stopped() => {
+                Err(_) if *on_gpu && !stopped() => {
                     log::warn!("Upscale: the graphics card failed, using the CPU");
-                    session = self::session(environment, model, false)?;
-                    on_gpu = false;
-                    ask(&mut session)?
+                    *session = self::session(environment, model, false)?;
+                    *on_gpu = false;
+                    ask(session)?
                 }
                 Err(error) => return Err(error),
             };
@@ -368,37 +571,7 @@ mod esrgan {
                 }
             }
         }
-        drop(session);
-        progress("Finishing…");
-        settle(&rgb, &mut out, strength);
-        // Transparency scaled up smoothly, and the color back off black
-        let alpha = imageops::resize(
-            &image::GrayImage::from_fn(width as u32, height as u32, |x, y| image::Luma([image.get_pixel(x, y)[3]])),
-            out_width as u32,
-            out_height as u32,
-            FilterType::CatmullRom,
-        );
-        let opaque = image.pixels().all(|pixel| pixel[3] == 255);
-        let mut larger = RgbaImage::from_fn(out_width as u32, out_height as u32, |x, y| {
-            let [r, g, b] = out.get_pixel(x, y).0;
-            let a = if opaque { 255 } else { alpha.get_pixel(x, y)[0] };
-            if a == 255 {
-                return image::Rgba([r, g, b, 255]);
-            }
-            if a == 0 {
-                return image::Rgba([0, 0, 0, 0]);
-            }
-            let unmultiply = |value: u8| ((value as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
-            image::Rgba([unmultiply(r), unmultiply(g), unmultiply(b), a])
-        });
-        drop(out);
-        let target = ((width as f32 * factor).round() as u32, (height as f32 * factor).round() as u32);
-        if target == ((width * 2) as u32, (height * 2) as u32) {
-            larger = halved(&larger);
-        } else if target != (out_width as u32, out_height as u32) {
-            larger = imageops::resize(&larger, target.0, target.1, FilterType::Triangle);
-        }
-        Ok(larger)
+        Ok(out)
     }
 
     /// `image` half as large, each pixel the average of four, weighed by
@@ -429,6 +602,34 @@ mod esrgan {
         /// 4 times and writes it next to the image, on the graphics card
         /// unless `LIGMA_UPSCALE_CPU` is set. `cargo test --release --
         /// --ignored upscales`
+        #[test]
+        fn reads_how_far_an_image_was_enlarged() {
+            // Detail down to single pixels, a little blurred, as a camera has it
+            let mut seed = 1u32;
+            let noise = RgbImage::from_fn(256, 256, |_, _| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                image::Rgb([(seed >> 24) as u8; 3])
+            });
+            let sharp = imageops::blur(&noise, 0.6);
+            assert!(shrink_by(&sharp) < SHRINK_FROM);
+            let enlarged = imageops::resize(&sharp, 768, 768, FilterType::CatmullRom);
+            let shrink = shrink_by(&enlarged);
+            assert!((2.4..=MOST_SHRINK).contains(&shrink), "{shrink}");
+            // Nothing to read
+            assert_eq!(shrink_by(&RgbImage::from_pixel(512, 512, image::Rgb([90, 120, 60]))), 1.0);
+        }
+
+        #[test]
+        fn fourier_transform() {
+            let mut re: Vec<f32> = (0..8).map(|i| (std::f32::consts::TAU * i as f32 / 8.0).cos()).collect();
+            let mut im = vec![0f32; 8];
+            fft(&mut re, &mut im);
+            for (k, (r, i)) in re.iter().zip(&im).enumerate() {
+                let expected = if k == 1 || k == 7 { 4.0 } else { 0.0 };
+                assert!((r - expected).abs() < 1e-4 && i.abs() < 1e-4, "{k}: {r} {i}");
+            }
+        }
+
         #[test]
         #[ignore]
         fn upscales_an_image() {
