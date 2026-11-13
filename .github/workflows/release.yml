@@ -20,6 +20,8 @@ permissions:
 jobs:
   notes:
     runs-on: ubuntu-latest
+    # Waits for approval in the release environment before anything builds
+    environment: release
     outputs:
       body: ${{ steps.notes.outputs.body }}
     steps:
