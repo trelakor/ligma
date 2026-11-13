@@ -1063,13 +1063,23 @@
     shared[17] = v.outline;
     shared[0] += 1;
   };
-  // Read once Figma has drawn the frame, as it moves the view before
+  // Read once Figma has drawn the frame, as it moves the view before. Not
+  // while Figma's frames go to Ligma, as they carry the view, so the page
+  // isn't woken every frame for nothing
   const afterFrame = new MessageChannel();
+  let following = false;
   afterFrame.port1.onmessage = () => {
     writeView();
-    requestAnimationFrame(nextFrame);
+    following = !window.__ligmaHook?.pushTo;
+    if (following) requestAnimationFrame(nextFrame);
   };
   const nextFrame = () => afterFrame.port2.postMessage(0);
+  window.__ligmaNative.follow = () => {
+    if (!following && shared) {
+      following = true;
+      requestAnimationFrame(nextFrame);
+    }
+  };
   document.addEventListener("visibilitychange", writeView);
   window.chrome?.webview?.addEventListener("sharedbufferreceived", (event) => {
     if (!event.additionalData?.ligmaNative) return;
@@ -1078,7 +1088,7 @@
     if (shared[0] % 2) shared[0] += 1;
     if (window.__ligmaHook) window.__ligmaHook.shared = shared;
     written = [];
-    if (first) requestAnimationFrame(nextFrame);
+    if (first) window.__ligmaNative.follow();
   });
   // New to this page, so anything read from an earlier one is out of date
   return "installed";

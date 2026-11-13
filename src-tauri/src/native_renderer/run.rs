@@ -1002,6 +1002,11 @@ fn poll_view(ctx: Arc<Ctx>) {
             placed = Instant::now();
             place(&ctx);
         }
+        // Frames of Figma's render tree carry the view
+        if ctx.tree.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        }
         let shared = ctx.shared.lock().unwrap().as_ref().map(|(_, shared)| *shared);
         if let Some(shared) = shared {
             if let Some((count, view, at)) = shared_view(shared) {
