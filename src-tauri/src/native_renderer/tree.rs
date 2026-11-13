@@ -795,6 +795,8 @@ pub struct Drawer<'a> {
     /// all, an image's texels before they're smoothed, as Figma casts
     /// shadows
     cast: bool,
+    /// The color a silhouette's drawn in, rather than in a layer of it
+    shade: Option<skia_safe::ColorFilter>,
     depth: u8,
     patterns: u8,
 }
@@ -816,6 +818,7 @@ impl<'a> Drawer<'a> {
             draft: false,
             tint: false,
             cast: false,
+            shade: None,
             depth: 0,
             patterns: 0,
         }
@@ -988,9 +991,18 @@ impl<'a> Drawer<'a> {
             Op::HardMaskWithColor => {
                 let Some(alpha) = node.alpha_node else { return };
                 let color = node.color.unwrap_or_default();
+                let shade = color_filters::blend(draw::color(rgba(color), 1.0).to_color(), BlendMode::SrcIn);
+                // A silhouette drawn at once comes out the same colored as
+                // it's drawn, as a text's shadow is, without a layer each
+                if !self.cast && self.single_draw(alpha) {
+                    let was = std::mem::replace(&mut self.shade, shade);
+                    self.cast_with(alpha);
+                    self.shade = was;
+                    return;
+                }
                 let mut paint = Paint::default();
                 if !self.cast {
-                    paint.set_color_filter(color_filters::blend(draw::color(rgba(color), 1.0).to_color(), BlendMode::SrcIn));
+                    paint.set_color_filter(shade);
                 }
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&paint));
                 self.cast_with(alpha);
@@ -1087,6 +1099,25 @@ impl<'a> Drawer<'a> {
     }
 
     /// Draws `id` as what casts a silhouette
+    /// Node `id` is one shape with one paint, drawn in one go
+    fn single_draw(&self, id: u32) -> bool {
+        let mut id = id;
+        for _ in 0..8 {
+            let Some(node) = self.tree.node(id) else { return false };
+            match node.op {
+                Op::StaticTransformBinding => match node.child {
+                    Some(child) => id = child,
+                    None => return false,
+                },
+                Op::Group if node.children.len() == 1 => id = node.children[0],
+                Op::Fill => return node.geometry.as_ref().is_some_and(|g| g.path.is_some() && g.paints.len() == 1),
+                Op::FillGlyphs => return node.ext().painted_glyph_geometry.as_ref().is_some_and(|g| g.paints.len() == 1),
+                _ => return false,
+            }
+        }
+        false
+    }
+
     fn cast_with(&mut self, id: u32) {
         let was = std::mem::replace(&mut self.cast, true);
         self.draw(id);
@@ -1241,6 +1272,13 @@ impl<'a> Drawer<'a> {
         if self.cast {
             if kind != PaintType::Image {
                 out.set_color_filter(draw::silhouette());
+            }
+            if let Some(shade) = &self.shade {
+                let filter = match out.color_filter() {
+                    Some(inner) => shade.composed(inner),
+                    None => Some(shade.clone()),
+                };
+                out.set_color_filter(filter);
             }
         } else {
             self.set_blend(&mut out, paint.blend_mode);
