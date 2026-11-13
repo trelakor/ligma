@@ -793,6 +793,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::modules::PAGE_JS)
         .initialization_script(crate::layers::page_js())
         .initialization_script(crate::home::page_js())
+        .initialization_script(crate::new_home::SETTINGS_JS)
         .initialization_script(crate::toolbar::page_js())
         .initialization_script(crate::adjustments::page_js())
         .initialization_script(crate::ai_actions::page_js())
