@@ -54,8 +54,9 @@ windows-core = "0.62"
 # app in front, its executable and full screen state and trimming Ligma's
 # memory for game mode (src/game_mode.rs), and the toasts Figma's
 # notifications show as (src/notifications.rs), and the picked app icon on
-# Ligma's shortcuts (src/app_icon.rs)
-windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem"] }
+# Ligma's shortcuts (src/app_icon.rs), and checking and loading Windows'
+# DirectML for Upscale (src/upscale.rs)
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader"] }
 # figma:// registration in src/figma_scheme.rs
 windows-registry = "0.6"
 # Remove background in src/background.rs: ONNX Runtime, linked in, to run
