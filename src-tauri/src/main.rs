@@ -11,6 +11,7 @@ mod copy_code;
 mod discord_ipc;
 mod downloads;
 mod emoji_picker;
+mod expand;
 #[cfg(windows)]
 mod figma_scheme;
 #[cfg(windows)]

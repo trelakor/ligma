@@ -132,6 +132,10 @@ pub struct Settings {
     /// the image bar, which picks out objects with a model on this device
     /// (see objects.rs)
     pub local_select_object: bool,
+    /// With `hide_free_ai_actions`, also put Ligma's own Expand in the
+    /// image bar, which grows the image and fills what's new on this device
+    /// (see expand.rs)
+    pub local_expand: bool,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
@@ -199,6 +203,7 @@ impl Default for Settings {
             use_background_model: false,
             local_vectorize: true,
             local_select_object: true,
+            local_expand: true,
             copy_as_code: true,
             lasso_fill: true,
             classic_home: false,

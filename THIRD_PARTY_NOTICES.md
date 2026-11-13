@@ -10177,7 +10177,7 @@ SOFTWARE.
 
 ## ONNX Runtime
 
-Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet or SAM 2.1 is used, to remove backgrounds and select objects.
+Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet, SAM 2.1 or LaMa is used, to remove backgrounds, select objects and expand images.
 
 ```
 MIT License

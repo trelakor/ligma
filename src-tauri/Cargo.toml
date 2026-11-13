@@ -34,6 +34,9 @@ log = "0.4"
 # Vectorize in src/vectorize.rs: reading the image and tracing it
 image = { version = "0.25", default-features = false, features = ["png"] }
 visioncortex = "0.9"
+# The images Expand grows (src/expand.rs), sent back to the page, and tab
+# preview images as `data:` URLs on Windows (src/webview2.rs)
+base64 = "0.22"
 # The WebSocket to Figwright's MCP server, on this computer only, and the
 # MessagePack it speaks, in
 # src/mcp_bridge.rs
@@ -53,8 +56,6 @@ windows-core = "0.62"
 # notifications show as (src/notifications.rs), and the picked app icon on
 # Ligma's shortcuts (src/app_icon.rs)
 windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem"] }
-# Tab preview images as `data:` URLs (src/webview2.rs)
-base64 = "0.22"
 # figma:// registration in src/figma_scheme.rs
 windows-registry = "0.6"
 # Remove background in src/background.rs: ONNX Runtime, linked in, to run
@@ -73,7 +74,6 @@ ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-base64 = "0.22"
 flate2 = "1"
 tar = "0.4"
 

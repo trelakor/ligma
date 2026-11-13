@@ -670,6 +670,18 @@
         </span>
         <input type="checkbox" class="switch" id="local-vectorize">
       </label>
+      <label class="row nested" id="local-expand-row">
+        <span class="label"><span id="local-expand-label">Expand on this Mac</span>
+          <div class="hint" id="local-expand-hint">Ligma's own Expand grows the image past its edges, in place of the one in Figma's More menu. Drag the frame to choose how far, and Content-aware fills what's new from the image itself, or only from what you paint, on your Mac.</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-expand">
+      </label>
+      <div class="row nested deeper" id="expand-model-row" hidden>
+        <span class="label">Expand model
+          <div class="hint" id="expand-model-hint"></div>
+        </span>
+        <button class="button" id="expand-model-button"></button>
+      </div>
     </section>
     <section>
       <h2>Code</h2>
@@ -1054,7 +1066,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-expand", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1085,6 +1097,8 @@
     $("local-remove-background-hint").textContent = "Ligma's own Remove background takes the place of Figma's and finds the subject on your PC. The first time, it downloads a 224 MB model from Hugging Face.";
     $("local-vectorize-label").textContent = "Vectorize on this PC";
     $("local-vectorize-hint").textContent = $("local-vectorize-hint").textContent.replace("your Mac", "your PC");
+    $("local-expand-label").textContent = "Expand on this PC";
+    $("local-expand-hint").textContent = $("local-expand-hint").textContent.replace("your Mac", "your PC");
     $("local-select-object-label").textContent = "Select objects on this PC";
     $("local-select-object-hint").textContent = $("local-select-object-hint").textContent.replace("your Mac, once downloaded.", "your PC. The first time, it downloads a 74 MB model from Hugging Face.");
   }
@@ -1404,6 +1418,7 @@
     $("use-background-model").checked = settings.useBackgroundModel;
     $("local-vectorize").checked = settings.localVectorize;
     $("local-select-object").checked = settings.localSelectObject;
+    $("local-expand").checked = settings.localExpand;
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
@@ -1422,6 +1437,7 @@
       ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
+      ["local-expand-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
       ["new-home-start-row", settings.ligmaHome],
       ["discord-file-row", settings.discordRichPresence],
@@ -1486,6 +1502,7 @@
       useBackgroundModel: $("use-background-model").checked,
       localVectorize: $("local-vectorize").checked,
       localSelectObject: $("local-select-object").checked,
+      localExpand: $("local-expand").checked,
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
@@ -1570,19 +1587,23 @@
   $("check-updates").addEventListener("click", () => invoke("check_for_updates"));
 
   // The models Ligma runs (src-tauri/src/models.rs), to download ahead of
-  // time or remove: BiRefNet, which Macs can use in place of Vision, and
-  // SAM, for Select object
+  // time or remove: BiRefNet, which Macs can use in place of Vision, SAM,
+  // for Select object, and LaMa, for Expand's Generative
   const models = {};
   const MODELS = {
     background: { what: "BiRefNet" },
     objects: { what: "SAM 2.1" },
+    expand: { what: "LaMa" },
   };
+  const expandHint = $("local-expand-hint").textContent;
   const megabytes = (bytes) => `${Math.round(bytes / 1e6)} MB`;
   window.applyModel = (name, state) => {
     models[name] = state;
     $(`${name}-model-row`).hidden = !state.supported;
     if (name === "background") $("use-background-model-row").hidden = !state.supported || !macos;
     if (name === "objects") $("local-select-object-row").hidden = !state.supported;
+    // Generative, where LaMa runs
+    if (name === "expand") $("local-expand-hint").textContent = state.supported ? `${expandHint} Generative fills it with LaMa, an AI model on your ${macos ? "Mac" : "PC"}, which needs a download the first time.` : expandHint;
     const button = $(`${name}-model-button`);
     let hint;
     if (state.downloading != null) {

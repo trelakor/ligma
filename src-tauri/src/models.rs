@@ -1,6 +1,6 @@
 //! The models Ligma runs on this device with ONNX Runtime: BiRefNet for
-//! Remove background (see background.rs) and SAM 2.1 for Select object
-//! (see objects.rs). Each is downloaded when it's first needed, once asked,
+//! Remove background (see background.rs), SAM 2.1 for Select object (see
+//! objects.rs) and LaMa for Expand's Generative (see expand.rs). Each is downloaded when it's first needed, once asked,
 //! or from Settings, which can also remove it. Downloads are checked
 //! against their SHA-256. ONNX Runtime is linked in on Windows. Macs with
 //! Apple silicon download it along with the first model, as it needs
@@ -30,10 +30,10 @@ pub fn supported() -> bool {
 #[cfg(birefnet)]
 pub use download::*;
 
-/// The model Settings names: "background" or "objects"
+/// The model Settings names: "background", "objects" or "expand"
 #[cfg(birefnet)]
 fn named(name: &str) -> Option<&'static Model> {
-    [&BACKGROUND, &OBJECTS].into_iter().find(|model| model.name == name)
+    ALL.into_iter().find(|model| model.name == name)
 }
 
 fn model_state(app: &AppHandle, name: &str) -> ModelState {
@@ -182,6 +182,17 @@ mod download {
         entry: None,
     };
 
+    /// big-lama (https://github.com/advimman/lama, Apache 2.0), as ONNX
+    /// from https://huggingface.co/Carve/LaMa-ONNX, pinned to one revision.
+    /// It takes a 512 pixel square
+    pub const LAMA: Download = Download {
+        url: "https://huggingface.co/Carve/LaMa-ONNX/resolve/c3c0c9e468934d62e79c329e35d82dd09ff8c444/lama_fp32.onnx",
+        sha256: "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+        size: 208_044_816,
+        file: "lama.onnx",
+        entry: None,
+    };
+
     /// A model and what Ligma says about it
     pub struct Model {
         /// As Settings names it
@@ -229,6 +240,22 @@ mod download {
         cancels: AtomicU32::new(0),
         watchers: Mutex::new(Vec::new()),
     };
+
+    pub static EXPAND: Model = Model {
+        name: "expand",
+        files: &[&LAMA],
+        doing: "Generative expand",
+        model: "LaMa",
+        title: "Download Expand Model",
+        progress: "Downloading the expand model…",
+        after: "Expanding…",
+        downloading: Mutex::new(None),
+        cancels: AtomicU32::new(0),
+        watchers: Mutex::new(Vec::new()),
+    };
+
+    /// Every model, for what they share
+    pub const ALL: [&Model; 3] = [&BACKGROUND, &OBJECTS, &EXPAND];
 
     /// Why a model isn't there to use
     pub enum Missing {
@@ -361,7 +388,7 @@ mod download {
                 }
                 let _held = lock();
                 if let Ok(folder) = folder(&app) {
-                    let others = [&BACKGROUND, &OBJECTS].into_iter().filter(|other| other.name != self.name);
+                    let others = ALL.into_iter().filter(|other| other.name != self.name);
                     let shared = others.filter(|other| other.installed(&folder)).flat_map(|other| other.downloads()).collect::<Vec<_>>();
                     for download in self.downloads().filter(|download| !shared.iter().any(|kept| kept.file == download.file)) {
                         let path = folder.join(download.file);
@@ -372,7 +399,7 @@ mod download {
                         }
                     }
                 }
-                for model in [&BACKGROUND, &OBJECTS] {
+                for model in ALL {
                     super::show_state(&app, model.name);
                 }
             });
@@ -448,8 +475,8 @@ mod download {
                 before += download.size;
             }
             *self.downloading.lock().unwrap() = None;
-            // ONNX Runtime may now be there for the other model too
-            for model in [&BACKGROUND, &OBJECTS] {
+            // ONNX Runtime may now be there for the other models too
+            for model in ALL {
                 super::show_state(app, model.name);
             }
             if result.is_ok() {
