@@ -2161,9 +2161,9 @@ const PAGE_JS: &str = r##"(() => {
   let healing = null;
   // The brush's size, in the image's own pixels, once chosen
   const healOptions = { size: null };
-  // A bandage, its pad dotted, over a dashed spot, as Photoshop's Spot
-  // Healing Brush has it
-  const HEAL_ICON = icon(`<path ${STROKE} stroke-dasharray="1.6 1.4" d="M9.7 19.4A4 4 0 1 1 4.6 14.3"/><g transform="rotate(-45 13.5 10.5)"><rect ${STROKE} x="6" y="7.5" width="15" height="6" rx="3"/><path ${STROKE} d="M11 7.5v6M16 7.5v6"/></g><g ${FILL}><circle cx="13" cy="11" r=".55"/><circle cx="14" cy="10" r=".55"/><circle cx="13" cy="10" r=".55"/><circle cx="14" cy="11" r=".55"/></g>`);
+  // A bandage, its pad solid with its holes showing through, over a dashed
+  // spot, as Photoshop's Spot Healing Brush has it
+  const HEAL_ICON = icon(`<defs><mask id="ligma-heal-pad"><rect width="24" height="24" fill="#fff"/><g transform="translate(13 13) rotate(-45)" fill="#000"><circle cx="-1.25" cy="-1.25" r=".75"/><circle cx="1.25" cy="-1.25" r=".75"/><circle cx="-1.25" cy="1.25" r=".75"/><circle cx="1.25" cy="1.25" r=".75"/></g></mask></defs><path ${STROKE} stroke-dasharray="1.7 1.5" d="M5 14.6A7 7 0 0 1 14.6 5"/><g transform="translate(13 13) rotate(-45)"><rect ${STROKE} x="-9" y="-4" width="18" height="8" rx="4"/></g><g mask="url(#ligma-heal-pad)"><rect ${FILL} x="-3.5" y="-4" width="7" height="8" transform="translate(13 13) rotate(-45)"/></g>`);
 
   // A button with an icon and a label, as the image bar's own are
   const barButton = (crop, label, svg, tip) => {
@@ -2227,11 +2227,6 @@ const PAGE_JS: &str = r##"(() => {
     layer.setAttribute(HEAL, "overlay");
     canvas.after(layer);
     const svg = layer.appendChild(document.createElementNS(SVG_NS, "svg"));
-    // The image as last healed, shown until Figma draws it, as Figma shows
-    // nothing for a moment while it reads a new image
-    const shown = svg.appendChild(document.createElementNS(SVG_NS, "image"));
-    shown.setAttribute("class", "shown");
-    shown.setAttribute("preserveAspectRatio", "none");
     const stroke = svg.appendChild(document.createElementNS(SVG_NS, "path"));
     stroke.setAttribute("class", "stroke");
     const brush = svg.appendChild(document.createElementNS(SVG_NS, "circle"));
@@ -2257,8 +2252,9 @@ const PAGE_JS: &str = r##"(() => {
       session: null,
       picture: null,
       opening: null,
-      shown,
-      shownUrl: null,
+      // The copy of the image, healed, is shown over the layer the moment a
+      // patch is drawn into it, until Figma draws the heal itself
+      patched: false,
       shownAt: 0,
     };
     document.documentElement.setAttribute(HEALING, "");
@@ -2279,7 +2275,7 @@ const PAGE_JS: &str = r##"(() => {
     const { figma, node } = current;
     const bytes = await drawn(figma, node, current.scales.full, true);
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-    const picture = Object.assign(document.createElement("canvas"), { width: bitmap.width, height: bitmap.height });
+    const picture = Object.assign(document.createElement("canvas"), { width: bitmap.width, height: bitmap.height, className: "picture" });
     picture.getContext("2d").drawImage(bitmap, 0, 0);
     bitmap.close();
     const { session } = JSON.parse(await handOff("heal", request({ op: "open" }, bytes)));
@@ -2287,7 +2283,9 @@ const PAGE_JS: &str = r##"(() => {
       handOff("heal", request({ op: "close", session })).catch(() => {});
       throw "closed";
     }
-    Object.assign(current, { session, picture });
+    current.picture?.remove();
+    current.layer.insertBefore(picture, current.svg);
+    Object.assign(current, { session, picture, patched: false });
   };
 
   // How long the last heal stays shown over the layer after Heal closes,
@@ -2305,15 +2303,15 @@ const PAGE_JS: &str = r##"(() => {
     if (healing.session) handOff("heal", request({ op: "close", session: healing.session })).catch(() => {});
     cancelAnimationFrame(healing.frame);
     healing.root.remove();
-    const { figma, node, canvas, layer, svg, shown, shownUrl, shownAt, hash } = healing;
+    const { figma, node, canvas, layer, svg, picture, patched, shownAt, hash } = healing;
     const left = LINGER - (performance.now() - shownAt);
-    if (shownUrl && left > 0) {
+    if (patched && picture && left > 0) {
       // Kept on the layer a little longer, then faded out
       layer.classList.add("lingering");
       let frame = 0;
       const follow = () => {
-        placeOver(figma, node, canvas, layer, svg);
-        shown.style.display = topImage(node) === hash ? "" : "none";
+        placeOver(figma, node, canvas, layer, svg, picture);
+        picture.style.display = topImage(node) === hash ? "block" : "";
         frame = requestAnimationFrame(follow);
       };
       follow();
@@ -2322,12 +2320,10 @@ const PAGE_JS: &str = r##"(() => {
         setTimeout(() => {
           cancelAnimationFrame(frame);
           layer.remove();
-          URL.revokeObjectURL(shownUrl);
         }, 200);
       }, left);
     } else {
       layer.remove();
-      if (shownUrl) URL.revokeObjectURL(shownUrl);
     }
     document.documentElement.removeAttribute(HEALING);
     document.documentElement.removeAttribute(POINTER);
@@ -2347,9 +2343,9 @@ const PAGE_JS: &str = r##"(() => {
     if (healing.root.parentElement !== parent) parent.append(healing.root);
   };
 
-  // Keeps `svg`, in the layer's own units, on `node` as the canvas pans and
-  // zooms
-  const placeOver = (figma, node, canvas, layer, svg) => {
+  // Keeps `svg`, in the layer's own units, and `picture`, the size of the
+  // layer, on `node` as the canvas pans and zooms
+  const placeOver = (figma, node, canvas, layer, svg, picture) => {
     Object.assign(layer.style, {
       left: `${canvas.offsetLeft}px`,
       top: `${canvas.offsetTop}px`,
@@ -2363,7 +2359,12 @@ const PAGE_JS: &str = r##"(() => {
       svg.setAttribute("width", Math.max(node.width * zoom, 1));
       svg.setAttribute("height", Math.max(node.height * zoom, 1));
       svg.setAttribute("viewBox", `0 0 ${Math.max(node.width, 1e-3)} ${Math.max(node.height, 1e-3)}`);
-      svg.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`;
+      const transform = `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`;
+      svg.style.transform = transform;
+      if (picture) {
+        const radius = typeof node.cornerRadius === "number" ? node.cornerRadius * zoom : 0;
+        Object.assign(picture.style, { width: `${node.width * zoom}px`, height: `${node.height * zoom}px`, borderRadius: `${radius}px`, transform });
+      }
     } catch {}
   };
 
@@ -2375,10 +2376,10 @@ const PAGE_JS: &str = r##"(() => {
 
   const placeHealOverlay = () => {
     if (!healing) return;
-    const { figma, node, canvas, layer, svg, shown, hash } = healing;
-    placeOver(figma, node, canvas, layer, svg);
-    // Undone, or changed some other way, the last heal isn't shown
-    shown.style.display = hash && topImage(node) === hash ? "" : "none";
+    const { figma, node, canvas, layer, svg, picture, patched, working, hash } = healing;
+    placeOver(figma, node, canvas, layer, svg, picture);
+    // Healing, or healed and not undone or changed some other way since
+    if (picture) picture.style.display = patched && (working || (hash && topImage(node) === hash)) ? "block" : "";
     healing.frame = requestAnimationFrame(placeHealOverlay);
   };
 
@@ -2463,14 +2464,9 @@ const PAGE_JS: &str = r##"(() => {
       context.clearRect(x, y, patch.width, patch.height);
       context.drawImage(patch, x, y);
       patch.close();
+      // Shown at once, over the layer, while it's handed to Figma
+      Object.assign(current, { patched: true, shownAt: performance.now() });
       const blob = await new Promise((resolve) => current.picture.toBlob(resolve, "image/png"));
-      // Shown at once, over the layer, until Figma draws it
-      const url = URL.createObjectURL(blob);
-      current.shown.setAttribute("href", url);
-      current.shown.setAttribute("width", node.width);
-      current.shown.setAttribute("height", node.height);
-      if (current.shownUrl) URL.revokeObjectURL(current.shownUrl);
-      Object.assign(current, { shownUrl: url, shownAt: performance.now() });
       const hash = figma.createImage(new Uint8Array(await blob.arrayBuffer())).hash;
       const fills = fillsOf(node);
       const last = fills.at(-1);
@@ -3255,6 +3251,7 @@ const PAGE_JS: &str = r##"(() => {
     [${HEAL}="overlay"] .stroke { fill: none; stroke: color-mix(in srgb, var(--color-border-selected, #0d99ff) 45%, transparent); stroke-linecap: round; stroke-linejoin: round; }
     [${HEAL}="overlay"].working .stroke { animation: ligma-expand-working 900ms ease-in-out infinite alternate; }
     [${HEAL}="overlay"] { transition: opacity 200ms ease-out; }
+    [${HEAL}="overlay"] .picture { display: none; position: absolute; left: 0; top: 0; transform-origin: 0 0; }
     [${HEAL}="overlay"].gone { opacity: 0; }
     [${HEAL}="overlay"].lingering :is(.stroke, .brush) { display: none; }
     [${HEAL}="overlay"] .brush { display: none; vector-effect: non-scaling-stroke; fill: none; stroke: #fff; stroke-width: 1.5px; filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.8)); }

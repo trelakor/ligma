@@ -637,27 +637,36 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
         }
         sum / ring.len() as f32 + penalty
     };
-    // Coarsely over everywhere, a step a 24th of the spot's size, then
+    // Nearest places first, a step a 24th of the spot's size apart, as far
+    // as `REACH` spots' sizes away: once one fits well, places farther off
+    // cost more than it for being far, so the search stops there. Then
     // finer and finer around the best
     let mut step = ((across.max(down) / 24).max(2)) as isize;
-    let mut best: Option<((isize, isize), f32)> = None;
-    let mut tried = 0usize;
-    let mut oy = -h;
-    while oy < h {
-        let mut ox = -w;
-        while ox < w {
-            tried += 1;
-            if tried.is_multiple_of(4096) && stopped() {
-                return None;
-            }
-            let limit = best.map_or(f32::INFINITY, |(_, cost)| cost);
-            let found = cost(ox, oy, limit);
-            if found < limit {
-                best = Some(((ox, oy), found));
-            }
+    let reach = (across.max(down) * REACH).max(MIN_REACH) as isize;
+    let mut offsets: Vec<(isize, isize)> = Vec::new();
+    let mut oy = -reach;
+    while oy <= reach {
+        let mut ox = -reach;
+        while ox <= reach {
+            offsets.push((ox, oy));
             ox += step;
         }
         oy += step;
+    }
+    offsets.sort_by_key(|&(ox, oy)| ox * ox + oy * oy);
+    let mut best: Option<((isize, isize), f32)> = None;
+    for (tried, &(ox, oy)) in offsets.iter().enumerate() {
+        if tried.is_multiple_of(4096) && stopped() {
+            return None;
+        }
+        let limit = best.map_or(f32::INFINITY, |(_, cost)| cost);
+        if FARTHER * (ox * ox + oy * oy) as f32 / 16.0 >= limit {
+            break;
+        }
+        let found = cost(ox, oy, limit);
+        if found < limit {
+            best = Some(((ox, oy), found));
+        }
     }
     while step > 1 {
         let ((cx, cy), _) = best?;
@@ -680,6 +689,10 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
     best.map(|(offset, _)| offset)
 }
 
+/// A spot is copied from at most this many times its size away, and at
+/// least `MIN_REACH` pixels
+const REACH: usize = 4;
+const MIN_REACH: usize = 96;
 /// The ring is compared at most this many of its pixels
 const RING_SAMPLES: usize = 600;
 
