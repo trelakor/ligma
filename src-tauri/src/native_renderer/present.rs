@@ -12,7 +12,7 @@
 //! yet
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -160,6 +160,8 @@ pub struct Hub {
     frames: Mutex<std::collections::VecDeque<FrameView>>,
     /// When Figma's worker last said it drew its overlay
     overlay_at: Mutex<Option<Instant>>,
+    /// The frame whose view was last shown, for tracing
+    pub shown_seq: AtomicU64,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -176,6 +178,7 @@ impl Hub {
             shared: Mutex::new(None),
             frames: Mutex::new(std::collections::VecDeque::new()),
             overlay_at: Mutex::new(None),
+            shown_seq: AtomicU64::new(0),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
@@ -248,6 +251,7 @@ impl Hub {
             }
             frames.pop_front();
         }
+        self.shown_seq.store(frames.front().map_or(0, |frame| frame.seq), Ordering::Relaxed);
         (frames.front().map(|frame| frame.view.clone()), next)
     }
 
@@ -503,7 +507,7 @@ impl Screen {
                 seen = hub.wait(seen, due.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)));
                 continue;
             }
-            self.frame(&view, &what);
+            self.frame(&view, &what, hub.shown_seq.load(Ordering::Relaxed));
             room = false;
             shown = Some(now);
         }
@@ -547,7 +551,7 @@ impl Screen {
         Some(image)
     }
 
-    fn frame(&mut self, view: &View, what: &Shown) {
+    fn frame(&mut self, view: &View, what: &Shown, seq: u64) {
         let start = Instant::now();
         let index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() } as usize;
         if index >= self.buffers.len() {
@@ -641,12 +645,13 @@ impl Screen {
         }
         let rendered = start.elapsed();
         let _ = unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) };
+        let presented = super::render::since_epoch_ms();
         // Textures the render thread let go of, now the GPU is done with them
         let kept: std::collections::HashSet<usize> =
             what.tiles.iter().chain(what.live.iter()).map(|layer| Arc::as_ptr(&layer.tex) as usize).collect();
         self.images.retain(|key, _| kept.contains(key));
         super::render::trace(|| {
-            format!("present px={px:.3} layers={} encoded={:.1} rendered={:.1} holes={}", draws.len(), encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, !left.is_empty())
+            format!("present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes={}", draws.len(), encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, !left.is_empty())
         });
         let mut stats = stats().lock().unwrap();
         stats.holes(!left.is_empty());

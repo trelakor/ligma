@@ -155,9 +155,13 @@ fn start_pushing(webview: &Webview) -> bool {
                     frames().put(&tab, body);
                 } else if let Some(drawn) = key.strip_prefix("ov-") {
                     // Figma's worker drew its overlay for the frame
+                    // `<session>-<seq>`, then, for tracing, `~` the frame
+                    // time the worker drew in and when it was done, in ms
+                    // since 1970
+                    let (drawn, times) = drawn.split_once('~').unwrap_or((drawn, ""));
                     let seq = drawn.rsplit('-').next().and_then(|seq| seq.parse::<u64>().ok());
                     if let (Some(seq), Some(ctx)) = (seq, CTX.lock().unwrap().clone()) {
-                        super::render::trace(|| format!("overlay {seq} drawn"));
+                        super::render::trace(|| format!("overlay {seq} drawn at={:.2} worker={times}", super::render::since_epoch_ms()));
                         ctx.hub.overlay_drawn(seq);
                     }
                 } else {
@@ -302,7 +306,7 @@ fn take_frames(ctx: Arc<Ctx>) {
             }
             follow_canvas(&ctx, &view);
             ctx.hub.frame_view(frame.header.seq, view);
-            super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it", frame.header.seq, super::render::since_epoch_ms() - frame.header.at));
+            super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
         // One missing a while is lost, so Figma sends the whole scene again
