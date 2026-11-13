@@ -47,6 +47,23 @@ pub fn draw(canvas: &Canvas, name: &str, tint: Option<Color4f>, opacity: f32) ->
             }
             true
         }
+        "SPEC_ICON" => {
+            // A page with lines of text and two dots at its top right
+            let unit = 1.0 / 16.0;
+            let mut paint = Paint::new(color, None);
+            paint.set_anti_alias(true);
+            paint.set_style(paint::Style::Stroke);
+            paint.set_stroke_width(unit);
+            let page = skia_safe::Rect::from_ltrb(3.5 * unit, 2.0 * unit, 12.5 * unit, 14.0 * unit);
+            canvas.draw_round_rect(page, 1.5 * unit, 1.5 * unit, &paint);
+            for y in [7.0, 9.25, 11.5] {
+                canvas.draw_line((5.5 * unit, y * unit), (10.5 * unit, y * unit), &paint);
+            }
+            paint.set_style(paint::Style::Fill);
+            canvas.draw_circle((8.25 * unit, 4.5 * unit), 0.6 * unit, &paint);
+            canvas.draw_circle((10.25 * unit, 4.5 * unit), 0.6 * unit, &paint);
+            true
+        }
         _ => false,
     }
 }
