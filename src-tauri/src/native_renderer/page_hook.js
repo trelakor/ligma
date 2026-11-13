@@ -33,6 +33,13 @@
     shared: null,
     // Figma's interface fonts, as its worker is given them
     fonts: null,
+    // Frames go to Figma's worker: not from when Ligma asks for them, so
+    // the worker isn't sent the whole scene again for nothing, till Ligma
+    // hands drawing back (`worker`)
+    toWorker: true,
+    // Figma's image publishers that left images for its worker undecoded
+    // meanwhile
+    skipped: new Set(),
     // Changes when the scene might have, for what's worked out from it to
     // be worked out again
     playback: 0,
@@ -139,7 +146,7 @@
         hook.error = String(error);
       }
     }
-    if (hook.replacing) {
+    if (!hook.toWorker) {
       release(params);
       return true;
     }
@@ -428,6 +435,37 @@
           ),
       },
       {
+        // The layers panel places its rows with 3D translations, for which
+        // Chrome gives each row a layer of its own (see `ROWS`). Moved in 2D
+        // they're drawn in the panel's layer
+        many: true,
+        match: (source) => source.includes("translate3d(0px, ${") && /--selection-height|--object-row-height|objects_panel--|object_row--/.test(source),
+        source: (source) => source.replace(/translate3d\(0px, (\$\{[^`]*?\})px, 0\)/g, "translate(0px, $1px)"),
+      },
+      {
+        // Figma decodes each image a frame shows, at each size it's shown,
+        // and hands the pixels to its worker. Ligma decodes its own, so
+        // while Ligma draws they're left undecoded: hundreds as a file
+        // opens, which held the main thread up and hundreds of MB of video
+        // memory. They're marked as not yet handed over, so Figma hands
+        // them all over when its worker draws again (see `worker`)
+        match: (source) => source.includes("_attemptPublish(") && source.includes("_publishWhenDecoded(") && source.includes("abandonInFlightDecodes(){"),
+        source: (source) =>
+          source.replace(
+            /_attemptPublish\(([\w$]+),([\w$]+),([\w$]+)\)\{/,
+            (all, publication, session, given) =>
+              `${all}{const h=window.__ligmaHook;if(h&&!h.toWorker&&h.skipped){if(${given}?.kind==="pixels")try{${given}.decoded.image?.close?.()}catch{}h.skipped.add(this);return!0}}`,
+          ),
+      },
+      {
+        // How Figma's main thread decodes images (see `MAIN_IMAGES`), as
+        // its bindings hand it to Figma's wasm. Its own module comes with
+        // the page, before any patch can take it
+        many: true,
+        match: (source) => /ImageIo:\(\)=>[\w$]+\.[\w$]+,/.test(source),
+        source: (source) => source.replace(/ImageIo:\(\)=>([\w$]+\.[\w$]+),/, "ImageIo:()=>window.__ligmaHook?.imageIo?.($1)??$1,"),
+      },
+      {
         // Listeners some of which may run later
         match: (source) => source.includes("deferrableListeners") && source.includes("runDeferredListeners"),
         getter: (value) =>
@@ -444,6 +482,160 @@
     ]);
   }
 
+  // The layers panel's rows. Chrome sorts the page's compositor layers out
+  // again every frame something moves, as the view does in a pan, at a
+  // cost that grows with the layers and what's painted over them. Each row
+  // had two: one for its 3D translation (see the patch above) and one for
+  // what's painted over its icon, which sticks to the panel's side when it
+  // scrolls across. That made the 118 layers that took 5 ms of a pan's
+  // frame with something selected, which the panels' 32 take 1.3 ms of.
+  // The icons scroll with their rows instead
+  const ROWS = `[class*="object_row--layerIcon"] { position: relative !important; }`;
+  {
+    const style = document.createElement("style");
+    style.id = "ligma-native-rows";
+    style.textContent = ROWS;
+    const add = () => (document.head ?? document.documentElement).append(style);
+    if (document.documentElement) add();
+    else addEventListener("DOMContentLoaded", add, { once: true });
+  }
+
+  // Figma's main thread decodes every image it downloads and keeps a copy
+  // of each on its own GPU, at full size, for what it still draws itself
+  // while Ligma draws the canvas: thumbnails and previews a few hundred
+  // pixels across. While Ligma draws, those copies are made no larger than
+  // `MAIN_IMAGES`, and Figma draws them as it draws any image. A file's
+  // took 958 MB of video memory at full size and 244 MB so. Figma still
+  // gets each image at its own size, as its size controls and plugins read
+  // it, and only its texture is smaller
+  const MAIN_IMAGES = 512;
+  // Sizes of the textures Figma is about to make for smaller copies, each
+  // with the size to make instead, for this task only
+  const shrinking = new Map();
+  // Each smaller copy's full size image, kept till it's copied to the GPU
+  // in case Figma's texture is full size after all
+  const fullSize = new WeakMap();
+  // Copies are made off the main thread, once the worker has said it runs,
+  // as images handed to it are gone from here
+  const SHRINK = `postMessage("ready");
+    onmessage = async ({ data: { id, bitmap, width, height } }) => {
+      let small = null;
+      try {
+        small = await createImageBitmap(bitmap, { resizeWidth: width, resizeHeight: height, resizeQuality: "high", premultiplyAlpha: "none" });
+      } catch {}
+      postMessage({ id, bitmap, small }, small ? [bitmap, small] : [bitmap]);
+    };`;
+  let shrinker = null;
+  let shrinkerReady = false;
+  const shrinkJobs = new Map();
+  let shrinkNext = 0;
+  function startShrinker() {
+    try {
+      shrinker = new Worker(URL.createObjectURL(new Blob([SHRINK], { type: "text/javascript" })));
+      shrinker.onmessage = ({ data }) => {
+        if (data === "ready") shrinkerReady = true;
+        else {
+          shrinkJobs.get(data.id)?.(data);
+          shrinkJobs.delete(data.id);
+        }
+      };
+    } catch {
+      shrinker = false;
+    }
+  }
+  // Figma's decoded image `result`, with a smaller copy in place of its
+  // pixels when Ligma draws
+  function smaller(result) {
+    const bitmap = result?.bitmap;
+    if (!hook.pushTo || !(bitmap instanceof ImageBitmap)) return result;
+    const scale = MAIN_IMAGES / Math.max(bitmap.width, bitmap.height);
+    if (!(scale < 1)) return result;
+    if (shrinker === null) startShrinker();
+    if (!shrinkerReady) return result;
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    return new Promise((resolve) => {
+      const id = shrinkNext++;
+      shrinkJobs.set(id, resolve);
+      shrinker.postMessage({ id, bitmap, width, height }, [bitmap]);
+    }).then(({ bitmap: full, small }) => {
+      if (!small) return { ...result, bitmap: full };
+      fullSize.set(small, full);
+      const key = `${full.width}x${full.height}`;
+      const entry = { width, height };
+      if (!shrinking.has(key)) shrinking.set(key, []);
+      shrinking.get(key).push(entry);
+      setTimeout(() => {
+        const list = shrinking.get(key);
+        const at = list?.indexOf(entry) ?? -1;
+        if (at >= 0) list.splice(at, 1);
+        if (list && !list.length) shrinking.delete(key);
+      });
+      return { ...result, bitmap: small };
+    });
+  }
+  // Figma's image decoding, as its wasm gets it, decoding as it did with
+  // `smaller` after
+  hook.imageIo = (io) => {
+    if (typeof io?.decodeImage !== "function" || io.__ligmaDecode) return io;
+    const decode = io.decodeImage;
+    io.__ligmaDecode = decode;
+    io.decodeImage = function () {
+      const decoded = decode.apply(this, arguments);
+      return hook.pushTo ? Promise.resolve(decoded).then(smaller) : decoded;
+    };
+    return io;
+  };
+  try {
+    const createTexture = GPUDevice.prototype.createTexture;
+    GPUDevice.prototype.createTexture = function (descriptor) {
+      if (shrinking.size && descriptor?.label === "Image") {
+        const size = descriptor.size;
+        const key = `${size?.width ?? size?.[0]}x${size?.height ?? size?.[1] ?? 1}`;
+        const list = shrinking.get(key);
+        const entry = list?.shift();
+        if (list && !list.length) shrinking.delete(key);
+        if (entry && (size?.depthOrArrayLayers ?? size?.[2] ?? 1) === 1 && (descriptor.mipLevelCount ?? 1) === 1 && (descriptor.dimension ?? "2d") === "2d")
+          descriptor = { ...descriptor, size: { width: entry.width, height: entry.height, depthOrArrayLayers: 1 } };
+      }
+      return createTexture.call(this, descriptor);
+    };
+    const copyExternal = GPUQueue.prototype.copyExternalImageToTexture;
+    GPUQueue.prototype.copyExternalImageToTexture = function (source, destination, copySize) {
+      const small = source?.source;
+      const full = small && fullSize.get(small);
+      if (full) {
+        fullSize.delete(small);
+        const texture = destination?.texture;
+        if (texture && (texture.width !== small.width || texture.height !== small.height)) {
+          try {
+            small.close();
+          } catch {}
+          source = { ...source, source: full };
+        } else {
+          try {
+            full.close();
+          } catch {}
+        }
+      }
+      return copyExternal.call(this, source, destination, copySize);
+    };
+  } catch {}
+
+  // Whether frames go to Figma's worker. Images it was meant to get
+  // meanwhile are decoded and sent along with the next frames
+  function worker(on) {
+    if (on && !hook.toWorker) {
+      for (const publisher of hook.skipped) {
+        try {
+          publisher.abandonInFlightDecodes();
+        } catch {}
+      }
+      hook.skipped.clear();
+    }
+    hook.toWorker = on;
+  }
+
   // Called by Ligma. True once Figma's threaded renderer is running and
   // frames have come through as expected
   hook.ready = () => hook.frames > 0 && !hook.error;
@@ -454,6 +646,7 @@
     under(on);
     // Figma's worker needs the whole scene back when it draws it again
     if (!on) hook.wantFull = true;
+    worker(!on);
     return true;
   };
   hook.resync = () => {
@@ -461,13 +654,27 @@
     return true;
   };
   // Called by Ligma with where to hand it frames, or null to stop. Figma
-  // then sends the whole scene, for Ligma to start from
+  // then sends the whole scene, for Ligma to start from, or for its worker
+  // when Ligma stops. Figma's canvas holds still till Ligma draws, a frame
+  // or two, rather than its worker loading the whole scene and its images
+  // again. Unless Ligma hasn't taken over by `HAND_BACK` ms, as when it
+  // reads the page another way
+  const HAND_BACK = 4000;
+  let handBack = 0;
   hook.push = (path) => {
     hook.pushTo = path;
+    hook.wantFull = true;
+    worker(!path);
+    clearTimeout(handBack);
     if (path) {
-      hook.wantFull = true;
       sendFonts();
-    }
+      if (shrinker === null) startShrinker();
+      handBack = setTimeout(() => {
+        if (hook.replacing || hook.toWorker) return;
+        worker(true);
+        hook.wantFull = true;
+      }, HAND_BACK);
+    } else window.__ligmaNative?.follow?.();
     return true;
   };
 })();
