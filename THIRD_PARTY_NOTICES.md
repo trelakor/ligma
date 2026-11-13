@@ -10177,7 +10177,7 @@ SOFTWARE.
 
 ## ONNX Runtime
 
-Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet, SAM 2.1 or Real-ESRGAN is used, to remove backgrounds, select objects and upscale images.
+Built into Ligma on Windows by ort-sys, and on Macs with Apple silicon downloaded from Microsoft's releases when BiRefNet, SAM 2.1 or 4xNomosWebPhoto_RealPLKSR is used, to remove backgrounds, select objects and upscale images. 4xNomosWebPhoto_RealPLKSR, downloaded for Upscale, is by Philip Hofmann (https://github.com/Phhofm/models), under CC BY 4.0.
 
 ```
 MIT License

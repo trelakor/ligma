@@ -684,7 +684,7 @@
       </label>
       <label class="row nested" id="local-upscale-row" hidden>
         <span class="label"><span id="local-upscale-label">Upscale on this Mac</span>
-          <div class="hint" id="local-upscale-hint">Makes the image 2 or 4 times as large and sharper with Real-ESRGAN on your Mac, once downloaded</div>
+          <div class="hint" id="local-upscale-hint">Makes the image 2 or 4 times as large and sharper on your Mac, keeping its texture, with 4xNomosWebPhoto, once downloaded</div>
         </span>
         <input type="checkbox" class="switch" id="local-upscale">
       </label>
@@ -1114,7 +1114,7 @@
     $("local-heal-label").textContent = "Spot healing on this PC";
     $("local-heal-hint").textContent = $("local-heal-hint").textContent.replace("your Mac", "your PC");
     $("local-upscale-label").textContent = "Upscale on this PC";
-    $("local-upscale-hint").textContent = "Makes the image 2 or 4 times as large and sharper with Real-ESRGAN on your PC. The first time, it downloads a 5 MB model from Hugging Face.";
+    $("local-upscale-hint").textContent = "Makes the image 2 or 4 times as large and sharper on your PC, keeping its texture, with 4xNomosWebPhoto. The first time, it downloads a 30 MB model from GitHub.";
     $("local-select-object-label").textContent = "Select objects on this PC";
     $("local-select-object-hint").textContent = $("local-select-object-hint").textContent.replace("your Mac, once downloaded.", "your PC. The first time, it downloads a 74 MB model from Hugging Face.");
   }
@@ -1610,12 +1610,12 @@
 
   // The models Ligma runs (src-tauri/src/models.rs), to download ahead of
   // time or remove: BiRefNet, which Macs can use in place of Vision, SAM,
-  // for Select object, and Real-ESRGAN, for Upscale
+  // for Select object, and 4xNomosWebPhoto, for Upscale
   const models = {};
   const MODELS = {
     background: { what: "BiRefNet" },
     objects: { what: "SAM 2.1" },
-    upscale: { what: "Real-ESRGAN" },
+    upscale: { what: "4xNomosWebPhoto" },
   };
   const megabytes = (bytes) => `${Math.round(bytes / 1e6)} MB`;
   window.applyModel = (name, state) => {
@@ -1634,7 +1634,7 @@
       button.textContent = "Remove";
     } else {
       const what = MODELS[name].what + (macos ? " and ONNX Runtime to run it" : "");
-      const from = macos ? "Hugging Face and GitHub" : "Hugging Face";
+      const from = name === "upscale" ? "GitHub" : macos ? "Hugging Face and GitHub" : "Hugging Face";
       hint = `${what}, ${megabytes(state.bytes)} from ${from}. Without it, Ligma asks to download it when it's first needed.`;
       button.textContent = "Download";
     }

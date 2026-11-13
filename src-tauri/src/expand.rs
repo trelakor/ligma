@@ -368,7 +368,9 @@ fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn 
     if !canvas.known.contains(&true) {
         return Err("failed");
     }
-    fill(&mut canvas, None, stopped).map_err(<&str>::from)?;
+    if !heal_spots(&mut canvas, stopped)? {
+        fill_with(&mut canvas, None, false, stopped).map_err(<&str>::from)?;
+    }
     // Only the square around what's painted comes back, and it's as small
     // as the hole and a few pixels around it, as nothing else changed
     let (px0, py0) = (left.saturating_sub(2), top.saturating_sub(2));
@@ -382,6 +384,231 @@ fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn 
     }
     let patch = image::imageops::crop_imm(image, px0 as u32, py0 as u32, (px1 - px0) as u32, (py1 - py0) as u32).to_image();
     Ok((px0, py0, patch))
+}
+
+/// Heals each spot painted over in `canvas`, as Photoshop's Spot Healing
+/// Brush does: the place nearby whose surroundings best match the spot's
+/// own is copied over it whole, so its texture, grain and noise come with
+/// it as they are, and then its tone is evened out into the spot's
+/// surroundings, so it matches the light around it. False when a spot has
+/// nowhere to copy from, as when it's most of what's read
+fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<bool, &'static str> {
+    let (width, height) = (canvas.width, canvas.height);
+    let hole: Vec<bool> = canvas.known.iter().map(|&known| !known).collect();
+    let mut seen = vec![false; hole.len()];
+    let mut spots = Vec::new();
+    for start in 0..hole.len() {
+        if !hole[start] || seen[start] {
+            continue;
+        }
+        // The spot: what's painted over and touches this, as one
+        let mut spot = vec![start];
+        seen[start] = true;
+        let mut next = 0;
+        while next < spot.len() {
+            let at = spot[next];
+            next += 1;
+            let (x, y) = ((at % width) as isize, (at / width) as isize);
+            for (dx, dy) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
+                    continue;
+                }
+                let near = ny as usize * width + nx as usize;
+                if hole[near] && !seen[near] {
+                    seen[near] = true;
+                    spot.push(near);
+                }
+            }
+        }
+        spots.push(spot);
+    }
+    // Where each spot's copy comes from, found against the image before
+    // any spot is healed
+    let mut copies = Vec::new();
+    for spot in &spots {
+        if stopped() {
+            return Err("cancelled");
+        }
+        match best_offset(canvas, &hole, spot) {
+            Some(offset) => copies.push((spot, offset)),
+            None => return Ok(false),
+        }
+    }
+    for (spot, (ox, oy)) in copies {
+        let source = |at: usize| ((at / width) as isize + oy) as usize * width + ((at % width) as isize + ox) as usize;
+        // How far the copy's surroundings are off from the spot's, carried
+        // in from the spot's edge, smoothly
+        let mut offsets = vec![[0f32; 4]; width * height];
+        let mut known = vec![true; width * height];
+        let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+        for &at in spot {
+            known[at] = false;
+            let (x, y) = (at % width, at / width);
+            (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
+        }
+        let (x0, y0) = (left.saturating_sub(RING), top.saturating_sub(RING));
+        let (x1, y1) = ((right + RING + 1).min(width), (bottom + RING + 1).min(height));
+        // Only where both it and its copy are the image's own
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let at = y * width + x;
+                if !known[at] {
+                    continue;
+                }
+                let (sx, sy) = (x as isize + ox, y as isize + oy);
+                if hole[at] || sx < 0 || sy < 0 || sx >= width as isize || sy >= height as isize || hole[source(at)] {
+                    known[at] = false;
+                    continue;
+                }
+                let (a, b) = (canvas.pixels[at], canvas.pixels[source(at)]);
+                offsets[at] = [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
+            }
+        }
+        let (across, down) = (x1 - x0, y1 - y0);
+        let mut window: Vec<[f32; 4]> = (0..across * down).map(|i| offsets[(y0 + i / across) * width + x0 + i % across]).collect();
+        let window_known: Vec<bool> = (0..across * down).map(|i| known[(y0 + i / across) * width + x0 + i % across]).collect();
+        if !window_known.contains(&true) {
+            continue;
+        }
+        diffuse(&mut window, &window_known, across, down);
+        relax(&mut window, &window_known, across, down);
+        for &at in spot {
+            let (x, y) = (at % width, at / width);
+            let offset = window[(y - y0) * across + x - x0];
+            let copied = canvas.pixels[source(at)];
+            let alpha = (copied[3] + offset[3]).clamp(0.0, 255.0);
+            canvas.pixels[at] = [
+                (copied[0] + offset[0]).clamp(0.0, alpha),
+                (copied[1] + offset[1]).clamp(0.0, alpha),
+                (copied[2] + offset[2]).clamp(0.0, alpha),
+                alpha,
+            ];
+        }
+    }
+    Ok(true)
+}
+
+/// Smooths what `diffuse` filled in, where `known` isn't set, into a
+/// membrane, each pixel the average of the four around it, as Poisson
+/// blending with no texture of its own would, so the tone carried in from
+/// the edge has no ridges
+fn relax(values: &mut [[f32; 4]], known: &[bool], width: usize, height: usize) {
+    let rounds = 2 * width.max(height);
+    for _ in 0..rounds {
+        for parity in 0..2 {
+            for y in 0..height {
+                for x in 0..width {
+                    let at = y * width + x;
+                    if known[at] || (x + y) % 2 != parity {
+                        continue;
+                    }
+                    let (mut sum, mut count) = ([0f32; 4], 0f32);
+                    for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
+                        if nx < width && ny < height {
+                            for (total, value) in sum.iter_mut().zip(values[ny * width + nx]) {
+                                *total += value;
+                            }
+                            count += 1.0;
+                        }
+                    }
+                    values[at] = sum.map(|total| total / count);
+                }
+            }
+        }
+    }
+}
+
+/// How far the edge around a spot is compared, in pixels
+const RING: usize = 4;
+/// How much more a place costs to copy from for each pixel farther from
+/// the spot it is, so a spot takes from close by where that's as good
+const FARTHER: f32 = 0.08;
+
+/// The shift from `spot` to the place to copy it from: where the spot and
+/// the ring around it all land on the image's own pixels, and the ring
+/// there looks most like the spot's own ring, nearer places counting for a
+/// little more. None when there's no such place
+fn best_offset(canvas: &Canvas, hole: &[bool], spot: &[usize]) -> Option<(isize, isize)> {
+    let (width, height) = (canvas.width as isize, canvas.height as isize);
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for &at in spot {
+        let (x, y) = ((at as isize) % width, (at as isize) / width);
+        (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
+    }
+    let ring_size = RING as isize;
+    // The ring: known pixels within `RING` of the spot
+    let mut ring = Vec::new();
+    for y in (top - ring_size).max(0)..(bottom + ring_size + 1).min(height) {
+        for x in (left - ring_size).max(0)..(right + ring_size + 1).min(width) {
+            let at = (y * width + x) as usize;
+            if hole[at] {
+                continue;
+            }
+            let near = spot.iter().any(|&s| {
+                let (sx, sy) = ((s as isize) % width, (s as isize) / width);
+                (sx - x).abs() <= ring_size && (sy - y).abs() <= ring_size
+            });
+            if near {
+                ring.push((x, y));
+            }
+        }
+    }
+    if ring.is_empty() {
+        return None;
+    }
+    let spot_xy: Vec<(isize, isize)> = spot.iter().map(|&at| ((at as isize) % width, (at as isize) / width)).collect();
+    let (span_x, span_y) = (right - left + 1 + 2 * ring_size, bottom - top + 1 + 2 * ring_size);
+    let mut best: Option<((isize, isize), f32)> = None;
+    // Every other place first, then the places right around the best
+    let coarse: Vec<(isize, isize)> = (-height..height).step_by(2).flat_map(|oy| (-width..width).step_by(2).map(move |ox| (ox, oy))).collect();
+    let mut tries = coarse.into_iter().map(|offset| (offset, false)).collect::<Vec<_>>();
+    let mut index = 0;
+    while index < tries.len() {
+        let ((ox, oy), refined) = tries[index];
+        index += 1;
+        if index == tries.len() && !refined {
+            if let Some(((bx, by), _)) = best {
+                tries.extend((-1..=1).flat_map(|dy| (-1..=1).map(move |dx| ((bx + dx, by + dy), true))));
+            }
+        }
+        {
+            if top - ring_size + oy < 0 || bottom + ring_size + oy >= height || left - ring_size + ox < 0 || right + ring_size + ox >= width {
+                continue;
+            }
+            // The copy can't overlap what it heals, or any spot
+            if ox.abs() < span_x && oy.abs() < span_y {
+                continue;
+            }
+            let distance = ((ox * ox + oy * oy) as f32).sqrt();
+            let penalty = FARTHER * distance * distance / 16.0;
+            let limit = best.map_or(f32::INFINITY, |(_, cost)| cost);
+            if penalty >= limit {
+                continue;
+            }
+            if spot_xy.iter().any(|&(x, y)| hole[((y + oy) * width + x + ox) as usize]) {
+                continue;
+            }
+            let mut sum = 0f32;
+            for (count, &(x, y)) in ring.iter().enumerate() {
+                let source = ((y + oy) * width + x + ox) as usize;
+                if hole[source] {
+                    sum = f32::INFINITY;
+                    break;
+                }
+                let (a, b) = (canvas.pixels[(y * width + x) as usize], canvas.pixels[source]);
+                sum += (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2) + (a[3] - b[3]).powi(2);
+                if count % 16 == 15 && sum / ring.len() as f32 + penalty >= limit {
+                    break;
+                }
+            }
+            let cost = sum / ring.len() as f32 + penalty;
+            if cost < limit {
+                best = Some(((ox, oy), cost));
+            }
+        }
+    }
+    best.map(|(offset, _)| offset)
 }
 
 /// Spot healing reads at least this many pixels around what's painted
@@ -924,7 +1151,15 @@ fn filled_distance(level: &Level, filled: &[bool], target: usize, source: usize,
 /// Fills what isn't known in `canvas` from what is, taking patches only
 /// from where `sample` is set, if given. Stops with
 /// `Failure::Cancelled` once `stopped`
-fn fill(canvas: &mut Canvas, sample: Option<&[bool]>, stopped: &dyn Fn() -> bool) -> Result<(), Failure> {
+fn fill(canvas: &mut Canvas, sample: Option<&[bool]>, stopped: &dyn Fn() -> bool) -> Result<Vec<u32>, Failure> {
+    fill_with(canvas, sample, true, stopped)
+}
+
+/// As `fill`, and only with `diverse`, parts of the image already taken
+/// from a lot cost more to take from again (see `overuse`): right for a
+/// large fill, wrong for a small one, which should take from what's like it
+/// right around it
+fn fill_with(canvas: &mut Canvas, sample: Option<&[bool]>, diverse: bool, stopped: &dyn Fn() -> bool) -> Result<Vec<u32>, Failure> {
     if !canvas.known.contains(&true) {
         return Err(Failure::Failed);
     }
@@ -998,7 +1233,7 @@ fn fill(canvas: &mut Canvas, sample: Option<&[bool]>, stopped: &dyn Fn() -> bool
         // The pixels voted from the level below first, so they're matched
         // against something like what they'll be
         if coarser.is_some() {
-            let overused = overuse(&matches, &hole, &sources, width, height);
+            let overused = if diverse { overuse(&matches, &hole, &sources, width, height) } else { vec![0.0; width.div_ceil(CELL) * height.div_ceil(CELL)] };
             let matching = Matching { width, height, pixels: &level.pixels, hole: &hole, sources: &sources, overused: &overused };
             let costs = costs(&matching, &matches);
             vote(level, &hole, &matches, &costs, &confidence);
@@ -1007,7 +1242,7 @@ fn fill(canvas: &mut Canvas, sample: Option<&[bool]>, stopped: &dyn Fn() -> bool
             if stopped() {
                 return Err(Failure::Cancelled);
             }
-            let overused = overuse(&matches, &hole, &sources, width, height);
+            let overused = if diverse { overuse(&matches, &hole, &sources, width, height) } else { vec![0.0; width.div_ceil(CELL) * height.div_ceil(CELL)] };
             let matching = Matching { width, height, pixels: &level.pixels, hole: &hole, sources: &sources, overused: &overused };
             let mut costs = costs(&matching, &matches);
             for pass in 0..passes {
@@ -1020,8 +1255,9 @@ fn fill(canvas: &mut Canvas, sample: Option<&[bool]>, stopped: &dyn Fn() -> bool
     let finest = levels.swap_remove(0);
     canvas.pixels = finest.pixels;
     // Rounding aside, the image's own pixels stay as they were
-    Ok(())
+    Ok(previous.map(|(_, matches)| matches).unwrap_or_default())
 }
+
 
 #[cfg(test)]
 mod tests {

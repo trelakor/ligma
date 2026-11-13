@@ -1,6 +1,6 @@
 //! The models Ligma runs on this device with ONNX Runtime: BiRefNet for
 //! Remove background (see background.rs), SAM 2.1 for Select object (see
-//! objects.rs) and Real-ESRGAN for Upscale (see upscale.rs). Each is downloaded when it's first needed, once asked,
+//! objects.rs) and 4xNomosWebPhoto_RealPLKSR for Upscale (see upscale.rs). Each is downloaded when it's first needed, once asked,
 //! or from Settings, which can also remove it. Downloads are checked
 //! against their SHA-256. ONNX Runtime is linked in on Windows. Macs with
 //! Apple silicon download it along with the first model, as it needs
@@ -182,15 +182,15 @@ mod download {
         entry: None,
     };
 
-    /// Real-ESRGAN's compact general model, realesr-general-x4v3
-    /// (https://github.com/xinntao/Real-ESRGAN, BSD 3-Clause), as ONNX from
-    /// https://huggingface.co/CoderViking/realesr-general-x4v3-onnx, pinned
-    /// to one revision
-    pub const REAL_ESRGAN: Download = Download {
-        url: "https://huggingface.co/CoderViking/realesr-general-x4v3-onnx/resolve/c6a971706797c7502945a2b4c4274fce4900d4ab/realesr-general-x4v3.onnx",
-        sha256: "1940a93ee08283a0a7286183186357b1688fe9fa8ede74604b424586aaddf112",
-        size: 4_866_417,
-        file: "realesr-general-x4v3.onnx",
+    /// 4xNomosWebPhoto_RealPLKSR by Philip Hofmann
+    /// (https://github.com/Phhofm/models, CC BY 4.0), a RealPLKSR model
+    /// trained on real photos from the web to make them 4 times as large
+    /// keeping their texture and grain, as ONNX from its author's release
+    pub const NOMOS: Download = Download {
+        url: "https://github.com/Phhofm/models/releases/download/4xNomosWebPhoto_RealPLKSR/4xNomosWebPhoto_RealPLKSR_fp32_opset17.onnx",
+        sha256: "146669e66cd3b22a4b97b0cf83f9bb2bcf20cd4ffd51fe76f91b95a4a8002df6",
+        size: 29_805_849,
+        file: "4xNomosWebPhoto_RealPLKSR.onnx",
         entry: None,
     };
 
@@ -244,9 +244,9 @@ mod download {
 
     pub static UPSCALE: Model = Model {
         name: "upscale",
-        files: &[&REAL_ESRGAN],
+        files: &[&NOMOS],
         doing: "Upscaling images",
-        model: "Real-ESRGAN",
+        model: "4xNomosWebPhoto",
         title: "Download Upscale Model",
         progress: "Downloading the upscale model…",
         after: "Upscaling…",
@@ -425,15 +425,18 @@ mod download {
                 self.downloads().filter(|download| !folder.join(download.file).is_file()).map(|download| download.size).sum();
             let runtime = self.files.iter().map(|download| download.size).sum::<u64>() < missing;
             let (doing, model) = (self.doing, self.model);
+            // Upscale's model is on GitHub, the others on Hugging Face
+            let host = if self.files.iter().all(|download| download.url.starts_with("https://github.com/")) { "GitHub" } else { "Hugging Face" };
             let message = if cfg!(windows) {
-                format!("{doing} on this PC needs {model}, a {own} MB model that Ligma downloads once from Hugging Face. You can remove it in Settings.")
+                format!("{doing} on this PC needs {model}, a {own} MB model that Ligma downloads once from {host}. You can remove it in Settings.")
             } else if runtime {
                 format!(
-                    "{doing} with {model} needs the {own} MB model and ONNX Runtime to run it, {} MB in all, that Ligma downloads once from Hugging Face and GitHub. You can remove them in Settings.",
-                    megabytes(missing)
+                    "{doing} with {model} needs the {own} MB model and ONNX Runtime to run it, {} MB in all, that Ligma downloads once from {}. You can remove them in Settings.",
+                    megabytes(missing),
+                    if host == "GitHub" { "GitHub" } else { "Hugging Face and GitHub" }
                 )
             } else {
-                format!("{doing} with {model} needs a {own} MB model that Ligma downloads once from Hugging Face. You can remove it in Settings.")
+                format!("{doing} with {model} needs a {own} MB model that Ligma downloads once from {host}. You can remove it in Settings.")
             };
             let (send, receive) = mpsc::channel();
             crate::prompt::show(app, self.title, message, &["Cancel", "Download"], move |choice| {

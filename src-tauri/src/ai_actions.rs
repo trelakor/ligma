@@ -25,7 +25,7 @@
 //!
 //! After Expand go Ligma's own Spot healing, which paints out what's in
 //! the way and fills it from the image around it, and Upscale, which makes
-//! the image 2 or 4 times as large with Real-ESRGAN on this device (see
+//! the image 2 or 4 times as large, keeping its texture, on this device (see
 //! upscale.rs). On by default
 //!
 //! First of them goes Ligma's own Select object, in place of Select area,
@@ -54,7 +54,7 @@ use crate::settings::Settings;
 /// Runs in Figma tabs. `__LIGMA_FREE_AI_ACTIONS__` is `{ on, local,
 /// vectorize, objects, expand, heal, upscale, rev }`: the settings when the
 /// tab was made, `local`, `objects` and `upscale` only where this device
-/// can remove backgrounds, select objects and run Real-ESRGAN.
+/// can remove backgrounds, select objects and upscale images.
 /// `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
@@ -2226,6 +2226,11 @@ const PAGE_JS: &str = r##"(() => {
     layer.setAttribute(HEAL, "overlay");
     canvas.after(layer);
     const svg = layer.appendChild(document.createElementNS(SVG_NS, "svg"));
+    // The image as last healed, shown until Figma draws it, as Figma shows
+    // nothing for a moment while it reads a new image
+    const shown = svg.appendChild(document.createElementNS(SVG_NS, "image"));
+    shown.setAttribute("class", "shown");
+    shown.setAttribute("preserveAspectRatio", "none");
     const stroke = svg.appendChild(document.createElementNS(SVG_NS, "path"));
     stroke.setAttribute("class", "stroke");
     const brush = svg.appendChild(document.createElementNS(SVG_NS, "circle"));
@@ -2251,6 +2256,9 @@ const PAGE_JS: &str = r##"(() => {
       session: null,
       picture: null,
       opening: null,
+      shown,
+      shownUrl: null,
+      shownAt: 0,
     };
     document.documentElement.setAttribute(HEALING, "");
     placeHealing();
@@ -2281,12 +2289,39 @@ const PAGE_JS: &str = r##"(() => {
     Object.assign(current, { session, picture });
   };
 
+  // How long the last heal stays shown over the layer after Heal closes,
+  // in case Figma is still reading it
+  const LINGER = 4000;
+
   const closeHealing = () => {
     if (!healing || healing.working) return;
     if (healing.session) handOff("heal", request({ op: "close", session: healing.session })).catch(() => {});
     cancelAnimationFrame(healing.frame);
     healing.root.remove();
-    healing.layer.remove();
+    const { figma, node, canvas, layer, svg, shown, shownUrl, shownAt, hash } = healing;
+    const left = LINGER - (performance.now() - shownAt);
+    if (shownUrl && left > 0) {
+      // Kept on the layer a little longer, then faded out
+      layer.classList.add("lingering");
+      let frame = 0;
+      const follow = () => {
+        placeOver(figma, node, canvas, layer, svg);
+        shown.style.display = topImage(node) === hash ? "" : "none";
+        frame = requestAnimationFrame(follow);
+      };
+      follow();
+      setTimeout(() => {
+        layer.classList.add("gone");
+        setTimeout(() => {
+          cancelAnimationFrame(frame);
+          layer.remove();
+          URL.revokeObjectURL(shownUrl);
+        }, 200);
+      }, left);
+    } else {
+      layer.remove();
+      if (shownUrl) URL.revokeObjectURL(shownUrl);
+    }
     document.documentElement.removeAttribute(HEALING);
     document.documentElement.removeAttribute(POINTER);
     healing = null;
@@ -2305,9 +2340,9 @@ const PAGE_JS: &str = r##"(() => {
     if (healing.root.parentElement !== parent) parent.append(healing.root);
   };
 
-  const placeHealOverlay = () => {
-    if (!healing) return;
-    const { figma, node, canvas, layer, svg } = healing;
+  // Keeps `svg`, in the layer's own units, on `node` as the canvas pans and
+  // zooms
+  const placeOver = (figma, node, canvas, layer, svg) => {
     Object.assign(layer.style, {
       left: `${canvas.offsetLeft}px`,
       top: `${canvas.offsetTop}px`,
@@ -2323,6 +2358,20 @@ const PAGE_JS: &str = r##"(() => {
       svg.setAttribute("viewBox", `0 0 ${Math.max(node.width, 1e-3)} ${Math.max(node.height, 1e-3)}`);
       svg.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`;
     } catch {}
+  };
+
+  // The layer's top fill's image, if it's an image
+  const topImage = (node) => {
+    const top = fillsOf(node).at(-1);
+    return top?.type === "IMAGE" ? top.imageHash : null;
+  };
+
+  const placeHealOverlay = () => {
+    if (!healing) return;
+    const { figma, node, canvas, layer, svg, shown, hash } = healing;
+    placeOver(figma, node, canvas, layer, svg);
+    // Undone, or changed some other way, the last heal isn't shown
+    shown.style.display = hash && topImage(node) === hash ? "" : "none";
     healing.frame = requestAnimationFrame(placeHealOverlay);
   };
 
@@ -2407,6 +2456,13 @@ const PAGE_JS: &str = r##"(() => {
       context.drawImage(patch, x, y);
       patch.close();
       const blob = await new Promise((resolve) => current.picture.toBlob(resolve, "image/png"));
+      // Shown at once, over the layer, until Figma draws it
+      const url = URL.createObjectURL(blob);
+      current.shown.setAttribute("href", url);
+      current.shown.setAttribute("width", node.width);
+      current.shown.setAttribute("height", node.height);
+      if (current.shownUrl) URL.revokeObjectURL(current.shownUrl);
+      Object.assign(current, { shownUrl: url, shownAt: performance.now() });
       const hash = figma.createImage(new Uint8Array(await blob.arrayBuffer())).hash;
       const fills = fillsOf(node);
       const last = fills.at(-1);
@@ -2514,7 +2570,7 @@ const PAGE_JS: &str = r##"(() => {
     );
   }
 
-  // Upscale makes one image 2 or 4 times as large with Real-ESRGAN on this
+  // Upscale makes one image 2 or 4 times as large with 4xNomosWebPhoto on this
   // device (see upscale.rs), at most 4,096 pixels across, as Figma keeps
   // images. The layer stays as large; its image gets sharper. Once it's
   // done, the canvas shows it, with the image as it was over it up to a
@@ -2579,7 +2635,7 @@ const PAGE_JS: &str = r##"(() => {
     const result = strip.appendChild(Object.assign(document.createElement("span"), { className: "hint" }));
     result.setAttribute("aria-live", "polite");
     const goDivider = barDivider(strip);
-    const go = strip.appendChild(barButton(crop, "Upscale", UPSCALE_ICON, "Upscale the image with Real-ESRGAN"));
+    const go = strip.appendChild(barButton(crop, "Upscale", UPSCALE_ICON, "Upscale the image, keeping its texture"));
     go.addEventListener("click", () => runUpscale());
     const apply = strip.appendChild(barButton(crop, "Apply", CHECK, "Keep the upscaled image"));
     apply.classList.add("apply");
@@ -3076,6 +3132,9 @@ const PAGE_JS: &str = r##"(() => {
     [${HEAL}="overlay"] svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }
     [${HEAL}="overlay"] .stroke { fill: none; stroke: color-mix(in srgb, var(--color-border-selected, #0d99ff) 45%, transparent); stroke-linecap: round; stroke-linejoin: round; }
     [${HEAL}="overlay"].working .stroke { animation: ligma-expand-working 900ms ease-in-out infinite alternate; }
+    [${HEAL}="overlay"] { transition: opacity 200ms ease-out; }
+    [${HEAL}="overlay"].gone { opacity: 0; }
+    [${HEAL}="overlay"].lingering :is(.stroke, .brush) { display: none; }
     [${HEAL}="overlay"] .brush { display: none; vector-effect: non-scaling-stroke; fill: none; stroke: #fff; stroke-width: 1.5px; filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.8)); }
     @media (prefers-reduced-motion: reduce) { [${HEAL}="overlay"].working .stroke { animation: none; } }
     [${EXPAND}=""] .field input { width: 48px; }

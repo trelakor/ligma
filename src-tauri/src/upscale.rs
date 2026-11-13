@@ -1,8 +1,9 @@
 //! Upscale on this device (Settings > Features > Images): the image bar's
 //! Upscale in free projects (see ai_actions.rs), which makes an image 2 or
-//! 4 times as large with Real-ESRGAN (BSD 3-Clause), the compact general
-//! model, realesr-general-x4v3, as ONNX, on the CPU with ONNX Runtime,
-//! where it runs (see models.rs). It's 5 MB, downloaded when first needed
+//! 4 times as large with 4xNomosWebPhoto_RealPLKSR (Philip Hofmann, CC BY
+//! 4.0), trained on real photos to keep their texture, grain and noise
+//! rather than smooth them away, as ONNX, on the CPU with ONNX Runtime,
+//! where it runs (see models.rs). It's 30 MB, downloaded when first needed
 //!
 //! The page hands a request over as a download (see handoff.rs): a line of
 //! JSON, `{"scale":s}`, then the image itself, as Figma keeps it. The model
@@ -65,14 +66,14 @@ mod esrgan {
     use tauri::AppHandle;
 
     use super::factor;
-    use crate::models::{Missing, REAL_ESRGAN, UPSCALE};
+    use crate::models::{Missing, NOMOS, UPSCALE};
 
     /// The model makes images 4 times as large, a tile this size at a time,
-    /// each read with this much more of the image around it, so the tiles
-    /// meet without seams
+    /// each read with this much more of the image around it, as far as its
+    /// large kernels see, so the tiles meet without seams
     const TIMES: usize = 4;
-    const TILE: usize = 192;
-    const PAD: usize = 16;
+    const TILE: usize = 256;
+    const PAD: usize = 32;
 
     fn failed(error: impl std::fmt::Display) -> &'static str {
         log::warn!("Upscale: {error}");
@@ -93,7 +94,7 @@ mod esrgan {
         });
         let stopped = || crate::handoff::cancelled(tab, job);
         let progress = |text: &str| crate::handoff::progress(app, tab, job, text);
-        let larger = run(&folder.join(REAL_ESRGAN.file), Some(&folder), &image, factor, &options, &stopped, &progress).map_err(|error| {
+        let larger = run(&folder.join(NOMOS.file), Some(&folder), &image, factor, &options, &stopped, &progress).map_err(|error| {
             if stopped() {
                 "cancelled"
             } else {
