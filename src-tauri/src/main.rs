@@ -45,6 +45,7 @@ mod tabs;
 mod titlebar;
 mod toolbar;
 mod updater;
+mod upscale;
 mod vectorize;
 mod view_state;
 #[cfg(windows)]

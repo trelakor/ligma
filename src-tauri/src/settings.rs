@@ -136,6 +136,12 @@ pub struct Settings {
     /// image bar, which grows the image and fills what's new on this device
     /// (see expand.rs)
     pub local_expand: bool,
+    /// and its Spot healing, which fills what's painted over from the
+    /// image around it (see expand.rs)
+    pub local_heal: bool,
+    /// and its Upscale, which makes the image larger with a model on this
+    /// device (see upscale.rs)
+    pub local_upscale: bool,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
@@ -204,6 +210,8 @@ impl Default for Settings {
             local_vectorize: true,
             local_select_object: true,
             local_expand: true,
+            local_heal: true,
+            local_upscale: true,
             copy_as_code: true,
             lasso_fill: true,
             classic_home: false,

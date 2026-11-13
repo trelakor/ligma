@@ -23,6 +23,11 @@
 //! canvas says, and fills what's new from the image itself on this device,
 //! or only from what's painted (see expand.rs). On by default
 //!
+//! After Expand go Ligma's own Spot healing, which paints out what's in
+//! the way and fills it from the image around it, and Upscale, which makes
+//! the image 2 or 4 times as large with Real-ESRGAN on this device (see
+//! upscale.rs). On by default
+//!
 //! First of them goes Ligma's own Select object, in place of Select area,
 //! which picks out objects in the selected image as Photoshop's Object
 //! Selection does, with SAM on this device (see objects.rs): the object
@@ -47,9 +52,9 @@ use tauri::AppHandle;
 use crate::settings::Settings;
 
 /// Runs in Figma tabs. `__LIGMA_FREE_AI_ACTIONS__` is `{ on, local,
-/// vectorize, objects, expand, rev }`: the settings when the
-/// tab was made, `local` and `objects` only where this device can remove
-/// backgrounds and select objects.
+/// vectorize, objects, expand, heal, upscale, rev }`: the settings when the
+/// tab was made, `local`, `objects` and `upscale` only where this device
+/// can remove backgrounds, select objects and run Real-ESRGAN.
 /// `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
@@ -2134,8 +2139,474 @@ const PAGE_JS: &str = r##"(() => {
     );
   }
 
-  // Ligma's Select object, Remove background, Vectorize and Expand, after
-  // Crop and Ligma's adjustments, each where it's on
+  // Spot healing paints over what to take out of one image, as Photoshop's
+  // Spot Healing Brush does: each stroke, once the button's let go, is
+  // filled from the image around it on this device (see expand.rs), as one
+  // undo step. The first hides the layer's fills under one image fill, as
+  // Remove background leaves them, and the strokes after change that image.
+  // `[` and `]` resize the brush; Done, Escape, a click on the canvas off
+  // the image or selecting something else leaves
+  const HEAL = "data-ligma-heal";
+  const HEALING = "data-ligma-healing";
+  let healing = null;
+  // The brush's size, in the image's own pixels, once chosen
+  const healOptions = { size: null };
+  // A plaster, as Photoshop's Spot Healing Brush has it
+  const HEAL_ICON = icon(`<rect ${STROKE} x="3.6" y="8.6" width="16.8" height="6.8" rx="3.4" transform="rotate(-45 12 12)"/><path ${STROKE} d="m9.5 9.5 5 5"/><path ${FILL} d="M11.4 12.6a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2m1.2-1.2a.6.6 0 1 0 0-1.2.6.6 0 0 0 0 1.2"/>`);
+
+  // A button with an icon and a label, as the image bar's own are
+  const barButton = (crop, label, svg, tip) => {
+    const button = Object.assign(document.createElement("button"), { type: "button", className: crop.className });
+    const text = crop.querySelector("span")?.cloneNode(false) ?? document.createElement("span");
+    text.textContent = label;
+    if (svg) button.innerHTML = svg;
+    button.append(text);
+    if (tip) Object.assign(button.dataset, { tooltip: tip, tooltipType: "text", tooltipShowAbove: "true" });
+    return button;
+  };
+  const barDivider = (strip) => strip.appendChild(Object.assign(document.createElement("span"), { className: "divider" }));
+
+  const healImage = async (bar, crop) => {
+    const figma = api();
+    if (!figma || busy || picking || expanding || healing || upscaling) return;
+    const image = (paint) => paint?.type === "IMAGE" && !!paint.imageHash && paint.visible !== false;
+    const selection = figma.currentPage.selection;
+    if (selection.length !== 1 || !fillsOf(selection[0]).some(image) || selection[0].type === "TEXT") {
+      figma.notify(selection.length > 1 ? "Select one image to heal" : "No images selected", { timeout: 2000 });
+      return;
+    }
+    const node = selection[0];
+    const canvas = mainCanvas();
+    if (!canvas) return;
+    closeRecolor();
+
+    const root = document.createElement("div");
+    root.setAttribute(HEAL, "");
+    root.setAttribute("data-fullscreen-prevent-event-capture", "true");
+    root.className = bar.closest("[data-secondary-toolbelt]")?.className ?? "";
+    const strip = root.appendChild(Object.assign(document.createElement("div"), { className: bar.className }));
+    strip.append(Object.assign(document.createElement("span"), { className: "hint", textContent: "Paint over what to remove" }));
+    barDivider(strip);
+    const field = strip.appendChild(Object.assign(document.createElement("label"), { className: "field size" }));
+    Object.assign(field.dataset, { tooltip: "Brush size, in pixels, [ and ] to resize", tooltipType: "text", tooltipShowAbove: "true" });
+    const name = field.appendChild(Object.assign(document.createElement("span"), { textContent: "Size" }));
+    const input = field.appendChild(Object.assign(document.createElement("input"), { type: "text", inputMode: "numeric", spellcheck: false }));
+    input.setAttribute("aria-label", "Brush size, in pixels");
+    input.addEventListener("change", () => {
+      const value = Number(input.value);
+      if (Number.isFinite(value)) setHealSize(value);
+      else showHealing();
+    });
+    name.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !healing) return;
+      event.preventDefault();
+      name.setPointerCapture(event.pointerId);
+      const [from, start] = [event.clientX, healing.size];
+      const move = (event) => setHealSize(start + (event.clientX - from));
+      name.addEventListener("pointermove", move);
+      name.addEventListener("lostpointercapture", () => name.removeEventListener("pointermove", move), { once: true });
+    });
+    barDivider(strip);
+    const done = strip.appendChild(barButton(crop, "Done"));
+    done.addEventListener("click", () => closeHealing());
+
+    // The stroke being painted and the brush, over the image, in the
+    // layer's own units
+    const layer = document.createElement("div");
+    layer.setAttribute(HEAL, "overlay");
+    canvas.after(layer);
+    const svg = layer.appendChild(document.createElementNS(SVG_NS, "svg"));
+    const stroke = svg.appendChild(document.createElementNS(SVG_NS, "path"));
+    stroke.setAttribute("class", "stroke");
+    const brush = svg.appendChild(document.createElementNS(SVG_NS, "circle"));
+    brush.setAttribute("class", "brush");
+
+    healing = { figma, node, canvas, root, layer, svg, stroke, brush, input, size: 0, scales: { native: 1, full: 1 }, drag: null, working: false, frame: 0, hash: null };
+    document.documentElement.setAttribute(HEALING, "");
+    placeHealing();
+    placeHealOverlay();
+    const current = healing;
+    current.scales = await imageScales(figma, node);
+    if (healing !== current) return;
+    // A brush a 30th of the image across, until one is chosen
+    current.size = healOptions.size ?? Math.max(2, Math.round((Math.max(node.width, node.height) * current.scales.native) / 30));
+    showHealing();
+  };
+
+  const closeHealing = () => {
+    if (!healing || healing.working) return;
+    cancelAnimationFrame(healing.frame);
+    healing.root.remove();
+    healing.layer.remove();
+    document.documentElement.removeAttribute(HEALING);
+    document.documentElement.removeAttribute(POINTER);
+    healing = null;
+  };
+
+  const placeHealing = () => {
+    if (!healing) return;
+    const selection = api()?.currentPage.selection ?? [];
+    if (!state.heal || healing.node.removed || selection.length !== 1 || selection[0] !== healing.node) {
+      closeHealing();
+      return;
+    }
+    const wrapper = document.querySelector('[data-testid="design-toolbelt-wrapper"]');
+    healing.root.classList.toggle("floating", !wrapper);
+    const parent = wrapper ?? document.body;
+    if (healing.root.parentElement !== parent) parent.append(healing.root);
+  };
+
+  const placeHealOverlay = () => {
+    if (!healing) return;
+    const { figma, node, canvas, layer, svg } = healing;
+    Object.assign(layer.style, {
+      left: `${canvas.offsetLeft}px`,
+      top: `${canvas.offsetTop}px`,
+      width: `${canvas.offsetWidth}px`,
+      height: `${canvas.offsetHeight}px`,
+    });
+    try {
+      const { bounds } = figma.viewport;
+      const zoom = figma.viewport.zoom;
+      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+      svg.setAttribute("width", Math.max(node.width * zoom, 1));
+      svg.setAttribute("height", Math.max(node.height * zoom, 1));
+      svg.setAttribute("viewBox", `0 0 ${Math.max(node.width, 1e-3)} ${Math.max(node.height, 1e-3)}`);
+      svg.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${(e - bounds.x) * zoom}, ${(f - bounds.y) * zoom})`;
+    } catch {}
+    healing.frame = requestAnimationFrame(placeHealOverlay);
+  };
+
+  const setHealSize = (value) => {
+    if (!healing) return;
+    healing.size = Math.min(2000, Math.max(1, Math.round(value)));
+    healOptions.size = healing.size;
+    showHealing();
+  };
+
+  const showHealing = () => {
+    const { input, brush, size, scales, working, layer } = healing;
+    if (document.activeElement !== input) input.value = size;
+    brush.setAttribute("r", size / 2 / Math.max(scales.native, 1e-6));
+    layer.classList.toggle("working", working);
+  };
+
+  // Where `event` is on the image, in the layer's units, with whether it's
+  // on it, or null when it's not over the canvas
+  const onHealImage = (event) => {
+    const { figma, node, canvas } = healing;
+    const rect = canvas.getBoundingClientRect();
+    const [x, y] = [event.clientX - rect.left, event.clientY - rect.top];
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+    const target = event.target;
+    if (target instanceof Element && target !== canvas && target.closest(`[${HEAL}=""], [data-secondary-toolbelt], [data-testid="design-toolbelt-wrapper"], [role="toolbar"], [role="dialog"], [role="menu"]`)) return null;
+    try {
+      const { bounds } = figma.viewport;
+      const zoom = figma.viewport.zoom;
+      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+      const [dx, dy] = [bounds.x + x / zoom - e, bounds.y + y / zoom - f];
+      const det = a * d - b * c;
+      const [lx, ly] = [(d * dx - c * dy) / det, (a * dy - b * dx) / det];
+      return { x: lx, y: ly, inside: lx >= 0 && ly >= 0 && lx <= node.width && ly <= node.height };
+    } catch {
+      return null;
+    }
+  };
+
+  const showHealStroke = () => {
+    const { drag, stroke, node, size, scales } = healing;
+    const d = drag.points.map(([u, v], i) => `${i ? "L" : "M"}${u * node.width} ${v * node.height}`).join("");
+    stroke.setAttribute("d", drag.points.length === 1 ? `${d}l0.001 0` : d);
+    stroke.setAttribute("stroke-width", size / Math.max(scales.native, 1e-6));
+  };
+
+  // Heals what `points`, in fractions of the image, paint over, `radius` a
+  // fraction of its width
+  const runHeal = async (points, radius) => {
+    const current = healing;
+    if (!current || current.working) return;
+    const { figma, node } = current;
+    current.working = true;
+    busy = true;
+    showHealing();
+    const stopShimmer = shimmer(figma, [node], "objects");
+    try {
+      const bytes = await drawn(figma, node, current.scales.full, true);
+      const { png } = JSON.parse(await handOff("heal", request({ strokes: [{ points, radius }] }, bytes)));
+      if (node.removed) throw "failed";
+      const hash = figma.createImage(Uint8Array.from(atob(png), (char) => char.charCodeAt(0))).hash;
+      const fills = fillsOf(node);
+      const top = fills.at(-1);
+      // After a heal, the healed image is changed rather than hidden too
+      node.fills =
+        top?.type === "IMAGE" && top.imageHash === current.hash
+          ? [...fills.slice(0, -1), { ...top, imageHash: hash }]
+          : [...fills.map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+      current.hash = hash;
+      try {
+        figma.commitUndo();
+      } catch {}
+    } catch (reason) {
+      if (reason !== "empty" && reason !== "cancelled") figma.notify("Couldn't heal the image", { timeout: 3000 });
+    }
+    stopShimmer();
+    busy = false;
+    current.working = false;
+    current.stroke.removeAttribute("d");
+    if (healing === current) showHealing();
+    tidy();
+  };
+
+  for (const type of POINTER_TYPES) {
+    addEventListener(
+      type,
+      (event) => {
+        if (!healing) return;
+        const drag = healing.drag;
+        if (drag) {
+          swallow(event);
+          const at = onHealImage(event);
+          if (type === "pointermove" && at) {
+            placeHealBrush(at);
+            const { node, size, scales } = healing;
+            const [u, v] = [at.x / node.width, at.y / node.height];
+            const [lu, lv] = drag.points.at(-1);
+            const step = Math.max(0.5, size / Math.max(scales.native, 1e-6) / 4);
+            if (Math.hypot((u - lu) * node.width, (v - lv) * node.height) < step) return;
+            drag.points.push([u, v]);
+            showHealStroke();
+          } else if (type === "pointerup") {
+            healing.drag = null;
+            const { node, size, scales } = healing;
+            runHeal(drag.points, size / 2 / Math.max(node.width * scales.native, 1));
+          }
+          return;
+        }
+        const at = onHealImage(event);
+        if (type === "pointermove") {
+          const over = !!at?.inside;
+          if (over) document.documentElement.setAttribute(POINTER, healing.working ? "wait" : "draw-replace");
+          else document.documentElement.removeAttribute(POINTER);
+          healing.brush.style.display = over && !healing.working ? "block" : "";
+          if (at) placeHealBrush(at);
+        }
+        if (!at?.inside) {
+          if (type === "pointerdown" && at && event.button === 0 && !space && !healing.working) closeHealing();
+          return;
+        }
+        if (space || event.button > 0 || (event.buttons & ~1) !== 0) return;
+        swallow(event);
+        if (type === "pointerdown" && !healing.working && healing.size) {
+          healing.drag = { points: [[at.x / healing.node.width, at.y / healing.node.height]] };
+          showHealStroke();
+        }
+      },
+      true,
+    );
+  }
+
+  const placeHealBrush = (at) => {
+    healing.brush.setAttribute("cx", at.x);
+    healing.brush.setAttribute("cy", at.y);
+  };
+
+  // While it's open, Escape leaves, Delete is kept from deleting the image
+  // and [ and ] resize the brush. Undo is Figma's, a heal at a time. Keys
+  // typed in the bar's field stop here, before Figma sees them
+  for (const type of ["keydown", "keypress", "keyup"]) {
+    addEventListener(
+      type,
+      (event) => {
+        if (!healing) return;
+        if (event.target === healing.input) {
+          event.stopImmediatePropagation();
+          if (type === "keydown" && (event.key === "Enter" || event.key === "Escape")) {
+            if (event.key === "Escape") showHealing();
+            healing.input.blur();
+          }
+          return;
+        }
+        if (type !== "keydown" || event.target.closest?.(':is(input, textarea):not([readonly]), [contenteditable]:not([contenteditable="false"])')) return;
+        if (event.key === "Escape") {
+          swallow(event);
+          closeHealing();
+        } else if ((event.key === "[" || event.key === "]") && !event.ctrlKey && !event.metaKey) {
+          swallow(event);
+          const size = healing.size;
+          setHealSize(event.key === "]" ? Math.max(size + 1, size * 1.2) : Math.min(size - 1, size / 1.2));
+        } else if (event.key === "Delete" || event.key === "Backspace") {
+          swallow(event);
+        }
+      },
+      true,
+    );
+  }
+
+  // Upscale makes one image 2 or 4 times as large with Real-ESRGAN on this
+  // device (see upscale.rs), at most 4,096 pixels across, as Figma keeps
+  // images. The layer stays as large; its image gets sharper. The image
+  // fill is changed, as one undo step, and the one before stays under it,
+  // hidden, as Remove background leaves it
+  const UPSCALE = "data-ligma-upscale";
+  const UPSCALING = "data-ligma-upscaling";
+  let upscaling = null;
+  const upscaleOptions = { scale: 2 };
+  // Arrows out of a corner, as an image growing
+  const UPSCALE_ICON = icon(`<rect ${STROKE} x="4.5" y="12.5" width="7" height="7" rx="1"/><path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5h6v6m0-6-7 7"/>`);
+  const LARGEST = 4096;
+
+  const upscaleImage = async (bar, crop) => {
+    const figma = api();
+    if (!figma || busy || picking || expanding || healing || upscaling) return;
+    const image = (paint) => paint?.type === "IMAGE" && !!paint.imageHash && paint.visible !== false;
+    const selection = figma.currentPage.selection;
+    const node = selection[0];
+    const index = selection.length === 1 ? fillsOf(node).findLastIndex(image) : -1;
+    if (index < 0) {
+      figma.notify(selection.length > 1 ? "Select one image to upscale" : "No images selected", { timeout: 2000 });
+      return;
+    }
+    const paint = fillsOf(node)[index];
+    let size;
+    try {
+      size = await figma.getImageByHash(paint.imageHash).getSizeAsync();
+    } catch {
+      figma.notify("Couldn't read the image", { timeout: 3000 });
+      return;
+    }
+    if (Math.max(size.width, size.height) >= LARGEST) {
+      figma.notify("The image is as large as Figma keeps images", { timeout: 3000 });
+      return;
+    }
+    closeRecolor();
+
+    const root = document.createElement("div");
+    root.setAttribute(UPSCALE, "");
+    root.setAttribute("data-fullscreen-prevent-event-capture", "true");
+    root.className = bar.closest("[data-secondary-toolbelt]")?.className ?? "";
+    const strip = root.appendChild(Object.assign(document.createElement("div"), { className: bar.className }));
+    const scales = strip.appendChild(Object.assign(document.createElement("div"), { className: "segments" }));
+    scales.setAttribute("role", "radiogroup");
+    scales.setAttribute("aria-label", "Scale");
+    for (const scale of [2, 4]) {
+      const button = scales.appendChild(Object.assign(document.createElement("button"), { type: "button", textContent: `${scale}×` }));
+      button.setAttribute("role", "radio");
+      button.dataset.value = scale;
+      button.addEventListener("click", () => {
+        upscaleOptions.scale = scale;
+        showUpscaling();
+      });
+    }
+    const result = strip.appendChild(Object.assign(document.createElement("span"), { className: "hint" }));
+    barDivider(strip);
+    const go = strip.appendChild(barButton(crop, "Upscale", UPSCALE_ICON, "Upscale the image with Real-ESRGAN"));
+    go.addEventListener("click", () => runUpscale());
+    barDivider(strip);
+    const cancel = strip.appendChild(barButton(crop, "Cancel"));
+    cancel.addEventListener("click", () => closeUpscaling());
+
+    upscaling = { figma, node, index, paint, size, root, scales, result, go, working: false };
+    document.documentElement.setAttribute(UPSCALING, "");
+    placeUpscaling();
+    showUpscaling();
+  };
+
+  // The size the image becomes at the chosen scale, at most `LARGEST`
+  const upscaledSize = () => {
+    const { size } = upscaling;
+    const factor = Math.min(upscaleOptions.scale, LARGEST / Math.max(size.width, size.height));
+    return [Math.round(size.width * factor), Math.round(size.height * factor)];
+  };
+
+  const showUpscaling = () => {
+    const { scales, result, go, working } = upscaling;
+    for (const button of scales.children) {
+      button.setAttribute("aria-checked", String(Number(button.dataset.value) === upscaleOptions.scale));
+      button.disabled = working;
+    }
+    const [width, height] = upscaledSize();
+    result.textContent = `${width} × ${height} px`;
+    go.disabled = working;
+  };
+
+  const closeUpscaling = () => {
+    if (!upscaling || upscaling.working) return;
+    upscaling.root.remove();
+    document.documentElement.removeAttribute(UPSCALING);
+    upscaling = null;
+  };
+
+  const placeUpscaling = () => {
+    if (!upscaling) return;
+    const selection = api()?.currentPage.selection ?? [];
+    if (!state.upscale || upscaling.node.removed || selection.length !== 1 || selection[0] !== upscaling.node) {
+      closeUpscaling();
+      return;
+    }
+    const wrapper = document.querySelector('[data-testid="design-toolbelt-wrapper"]');
+    upscaling.root.classList.toggle("floating", !wrapper);
+    const parent = wrapper ?? document.body;
+    if (upscaling.root.parentElement !== parent) parent.append(upscaling.root);
+  };
+
+  const runUpscale = async () => {
+    const current = upscaling;
+    if (!current || current.working || busy) return;
+    const { figma, node, index, paint } = current;
+    current.working = true;
+    busy = true;
+    showUpscaling();
+    const stopShimmer = shimmer(figma, [node], "objects");
+    const controller = new AbortController();
+    const { show, hide } = toast(figma, () => controller.abort());
+    show("Upscaling…");
+    let done = false;
+    try {
+      const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync();
+      const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale }, bytes), show, "", controller.signal));
+      if (node.removed) throw "failed";
+      const fills = fillsOf(node);
+      if (fills[index]?.imageHash !== paint.imageHash) throw "failed";
+      const hash = figma.createImage(Uint8Array.from(atob(reply.png), (char) => char.charCodeAt(0))).hash;
+      const original = fills[index];
+      const larger = { ...original, imageHash: hash, visible: true };
+      // Tiles keep their size on the canvas
+      if (original.scaleMode === "TILE") larger.scalingFactor = (original.scalingFactor ?? 1) * (current.size.width / reply.width);
+      node.fills = [...fills.slice(0, index), { ...original, visible: false }, larger, ...fills.slice(index + 1)];
+      try {
+        figma.commitUndo();
+      } catch {}
+      done = true;
+    } catch (reason) {
+      if (reason === "large") figma.notify("The image is as large as Figma keeps images", { timeout: 3000 });
+      else if (reason !== "cancelled") figma.notify("Couldn't upscale the image", { timeout: 3000 });
+    }
+    hide();
+    stopShimmer();
+    busy = false;
+    current.working = false;
+    if (upscaling === current) {
+      if (done) {
+        closeUpscaling();
+        figma.notify(`Upscaled to ${current.result.textContent}`, { timeout: 3000 });
+      } else showUpscaling();
+    }
+    tidy();
+  };
+
+  addEventListener(
+    "keydown",
+    (event) => {
+      if (!upscaling || event.key !== "Escape" || event.target.closest?.(':is(input, textarea):not([readonly]), [contenteditable]:not([contenteditable="false"])')) return;
+      swallow(event);
+      closeUpscaling();
+    },
+    true,
+  );
+
+  // Ligma's Select object, Remove background, Vectorize, Expand, Spot
+  // healing and Upscale, after Crop and Ligma's adjustments, each where
+  // it's on
   const BUTTONS = [
     {
       attribute: "data-ligma-select-object",
@@ -2168,6 +2639,20 @@ const PAGE_JS: &str = r##"(() => {
       label: "Expand",
       icon: EXPAND_ICON,
       run: (bar, crop) => expandImage(bar, crop),
+    },
+    {
+      attribute: "data-ligma-heal-image",
+      on: () => state.heal,
+      label: "Heal",
+      icon: HEAL_ICON,
+      run: (bar, crop) => healImage(bar, crop),
+    },
+    {
+      attribute: "data-ligma-upscale-image",
+      on: () => state.upscale,
+      label: "Upscale",
+      icon: UPSCALE_ICON,
+      run: (bar, crop) => upscaleImage(bar, crop),
     },
   ];
   const OURS = ["[data-ligma-adjustments-bar]", ...BUTTONS.map(({ attribute }) => `[${attribute}]`)].join(", ");
@@ -2207,10 +2692,14 @@ const PAGE_JS: &str = r##"(() => {
     placeRecolor();
     placePicking();
     placeExpanding();
+    placeHealing();
+    placeUpscaling();
     const hide = state.on && free();
     if (!hide) {
       if (!picking?.working) closePicking();
       if (!expanding?.working) closeExpanding();
+      closeHealing();
+      closeUpscaling();
       for (const node of document.querySelectorAll(`[${HIDDEN}]`)) node.removeAttribute(HIDDEN);
       for (const { attribute } of BUTTONS) for (const node of document.querySelectorAll(`[${attribute}]`)) node.remove();
       return;
@@ -2228,7 +2717,7 @@ const PAGE_JS: &str = r##"(() => {
 
   const style = document.createElement("style");
   // Select object's bar and Expand's, styled alike
-  const BARS = `:is([${OBJECTS}=""], [${EXPAND}=""])`;
+  const BARS = `:is([${OBJECTS}=""], [${EXPAND}=""], [${HEAL}=""], [${UPSCALE}=""])`;
   style.textContent = `[${HIDDEN}] { display: none !important; }
     [${SHIMMER}] { position: absolute; overflow: hidden; pointer-events: none; transition: opacity 200ms ease-out; }
     [${SHIMMER}].done { opacity: 0; }
@@ -2242,7 +2731,7 @@ const PAGE_JS: &str = r##"(() => {
     :is([${SHIMMER}="vectorize"], [${SHIMMER}="objects"]) > div::after { background: linear-gradient(100deg, transparent 20%, rgb(190 226 255 / 0.4) 50%, transparent 80%); }
     @keyframes ligma-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
     @media (prefers-reduced-motion: reduce) { [${SHIMMER}] > div::after { animation: none; opacity: 0; } }
-    :is(html[${RECOLORING}], html[${PICKING}], html[${EXPANDING}]) [data-secondary-toolbelt] { display: none !important; }
+    :is(html[${RECOLORING}], html[${PICKING}], html[${EXPANDING}], html[${HEALING}], html[${UPSCALING}]) [data-secondary-toolbelt] { display: none !important; }
     :is([${RECOLOR}], ${BARS}).floating { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 10; }
     :is([${RECOLOR}], ${BARS}) > div {
       display: flex; align-items: center; gap: 4px; height: 40px; box-sizing: border-box; padding: 8px; border-radius: 13px;
@@ -2305,6 +2794,23 @@ const PAGE_JS: &str = r##"(() => {
     [${RECOLOR}] .done { background: var(--color-bg-brand, #0d99ff); color: var(--color-icon-onbrand, #fff); }
     [${RECOLOR}] .done:hover { background: var(--color-bg-brand-hover, var(--color-bg-brand, #0d99ff)); }
     [${EXPAND}=""] .sampling { display: flex; align-items: center; gap: 4px; }
+    [${UPSCALE}=""] .segments { display: flex; padding: 2px; border-radius: 6px; background: var(--color-bg-secondary, #383838); }
+    [${UPSCALE}=""] .segments button {
+      height: 20px; padding: 0 8px; border: 0; border-radius: 4px; background: none; white-space: nowrap;
+      color: var(--color-text-secondary, #b3b3b3); font: inherit; font-variant-numeric: tabular-nums;
+    }
+    [${UPSCALE}=""] .segments button:hover { color: var(--color-text, #fff); }
+    [${UPSCALE}=""] .segments button[aria-checked="true"] {
+      background: var(--color-bg, #2c2c2c); color: var(--color-text, #fff); box-shadow: 0 0 0 1px var(--color-border, #444);
+    }
+    [${UPSCALE}=""] .hint { padding: 0 4px 0 8px; font-variant-numeric: tabular-nums; }
+    [${HEAL}=""] .field input { width: 40px; }
+    [${HEAL}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
+    [${HEAL}="overlay"] svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }
+    [${HEAL}="overlay"] .stroke { fill: none; stroke: color-mix(in srgb, var(--color-border-selected, #0d99ff) 45%, transparent); stroke-linecap: round; stroke-linejoin: round; }
+    [${HEAL}="overlay"].working .stroke { animation: ligma-expand-working 900ms ease-in-out infinite alternate; }
+    [${HEAL}="overlay"] .brush { display: none; vector-effect: non-scaling-stroke; fill: none; stroke: #fff; stroke-width: 1.5px; filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.8)); }
+    @media (prefers-reduced-motion: reduce) { [${HEAL}="overlay"].working .stroke { animation: none; } }
     [${EXPAND}=""] .field input { width: 48px; }
     [${EXPAND}=""] .field.size input { width: 40px; }
     [${EXPAND}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
@@ -2387,6 +2893,10 @@ static VECTORIZE: AtomicBool = AtomicBool::new(true);
 static OBJECTS: AtomicBool = AtomicBool::new(true);
 /// and its Expand,
 static EXPAND: AtomicBool = AtomicBool::new(true);
+/// and its Spot healing,
+static HEAL: AtomicBool = AtomicBool::new(true);
+/// and its Upscale, where it works,
+static UPSCALE: AtomicBool = AtomicBool::new(true);
 /// and when they last changed, for `PAGE_JS` to tell it from older ones in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
@@ -2399,14 +2909,19 @@ fn state() -> String {
     let (on, local, vectorize) = (ON.load(Ordering::Relaxed), LOCAL.load(Ordering::Relaxed), VECTORIZE.load(Ordering::Relaxed));
     let objects = OBJECTS.load(Ordering::Relaxed);
     let expand = EXPAND.load(Ordering::Relaxed);
+    let (heal, upscale) = (HEAL.load(Ordering::Relaxed), UPSCALE.load(Ordering::Relaxed));
     format!(
-        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"expand":{expand},"rev":{}}}"#,
+        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"expand":{expand},"heal":{heal},"upscale":{upscale},"rev":{}}}"#,
         REV.load(Ordering::Relaxed)
     )
 }
 
 fn local(settings: &Settings) -> bool {
     settings.local_remove_background && crate::background::available()
+}
+
+fn upscale(settings: &Settings) -> bool {
+    settings.local_upscale && crate::models::supported()
 }
 
 fn objects(settings: &Settings) -> bool {
@@ -2420,6 +2935,8 @@ pub fn init(settings: &Settings) {
     VECTORIZE.store(settings.local_vectorize, Ordering::Relaxed);
     OBJECTS.store(objects(settings), Ordering::Relaxed);
     EXPAND.store(settings.local_expand, Ordering::Relaxed);
+    HEAL.store(settings.local_heal, Ordering::Relaxed);
+    UPSCALE.store(upscale(settings), Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
 
@@ -2435,7 +2952,9 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     let vectorize = VECTORIZE.swap(settings.local_vectorize, Ordering::Relaxed) != settings.local_vectorize;
     let objects = OBJECTS.swap(objects(settings), Ordering::Relaxed) != objects(settings);
     let expand = EXPAND.swap(settings.local_expand, Ordering::Relaxed) != settings.local_expand;
-    if !on && !local && !vectorize && !objects && !expand {
+    let heal = HEAL.swap(settings.local_heal, Ordering::Relaxed) != settings.local_heal;
+    let upscale = UPSCALE.swap(upscale(settings), Ordering::Relaxed) != upscale(settings);
+    if !on && !local && !vectorize && !objects && !expand && !heal && !upscale {
         return;
     }
     REV.store(now(), Ordering::Relaxed);

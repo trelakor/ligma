@@ -155,29 +155,7 @@ impl Canvas {
         if strokes.is_empty() {
             return None;
         }
-        let (width, height) = (width as f32, height as f32);
-        let mut painted = vec![false; self.width * self.height];
-        for stroke in strokes {
-            let radius = (stroke.radius * width).max(0.5);
-            let points: Vec<[f32; 2]> =
-                stroke.points.iter().map(|&[x, y]| [self.left as f32 + x * width, self.top as f32 + y * height]).collect();
-            let segments: Vec<([f32; 2], [f32; 2])> = match points.len() {
-                0 => continue,
-                1 => vec![(points[0], points[0])],
-                _ => points.windows(2).map(|pair| (pair[0], pair[1])).collect(),
-            };
-            for (a, b) in segments {
-                let rows = span(a[1], b[1], radius, self.height);
-                let columns = span(a[0], b[0], radius, self.width);
-                for y in rows {
-                    for x in columns.clone() {
-                        if from_segment([x as f32 + 0.5, y as f32 + 0.5], a, b) <= radius {
-                            painted[y * self.width + x] = !stroke.subtract;
-                        }
-                    }
-                }
-            }
-        }
+        let mut painted = painted(strokes, (width, height), (self.left, self.top), (self.width, self.height));
         for (painted, &known) in painted.iter_mut().zip(&self.known) {
             *painted &= known;
         }
@@ -264,6 +242,104 @@ fn unpremultiply([r, g, b, a]: [f32; 4]) -> [u8; 4] {
     let scale = 255.0 / a;
     [byte(r * scale), byte(g * scale), byte(b * scale), byte(a)]
 }
+
+/// Where `strokes`, in fractions of an image `image` across and down, paint
+/// over a canvas `canvas` across and down, with the image at `at` in it,
+/// each stroke adding to what's painted, or taking away
+fn painted(strokes: &[Stroke], image: (u32, u32), at: (usize, usize), canvas: (usize, usize)) -> Vec<bool> {
+    let (width, height) = (image.0 as f32, image.1 as f32);
+    let mut painted = vec![false; canvas.0 * canvas.1];
+    for stroke in strokes {
+        let radius = (stroke.radius * width).max(0.5);
+        let points: Vec<[f32; 2]> = stroke.points.iter().map(|&[x, y]| [at.0 as f32 + x * width, at.1 as f32 + y * height]).collect();
+        let segments: Vec<([f32; 2], [f32; 2])> = match points.len() {
+            0 => continue,
+            1 => vec![(points[0], points[0])],
+            _ => points.windows(2).map(|pair| (pair[0], pair[1])).collect(),
+        };
+        for (a, b) in segments {
+            for y in span(a[1], b[1], radius, canvas.1) {
+                for x in span(a[0], b[0], radius, canvas.0) {
+                    if from_segment([x as f32 + 0.5, y as f32 + 0.5], a, b) <= radius {
+                        painted[y * canvas.0 + x] = !stroke.subtract;
+                    }
+                }
+            }
+        }
+    }
+    painted
+}
+
+#[derive(Deserialize)]
+struct Healing {
+    strokes: Vec<Stroke>,
+}
+
+/// Spot healing (see ai_actions.rs): the image after the line of JSON,
+/// `{"strokes":[…]}`, strokes of the brush as Expand's `sample` has them,
+/// with what they paint over filled from the image around it, as
+/// Photoshop's Spot Healing Brush does, as `{"png":<base64>}`, or "empty"
+/// when nothing is painted. Only a square around what's painted is filled,
+/// with the image around it to go on, so it's quick on large images
+pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
+    let split = bytes.iter().position(|&byte| byte == b'\n').unwrap_or(bytes.len());
+    let request: Healing = serde_json::from_slice(&bytes[..split]).map_err(|_| "failed")?;
+    let png = bytes.get(split + 1..).unwrap_or_default();
+    let mut image = image::load_from_memory_with_format(png, image::ImageFormat::Png).map_err(failed)?.into_rgba8();
+    let (width, height) = (image.width() as usize, image.height() as usize);
+    let hole = painted(&request.strokes, (image.width(), image.height()), (0, 0), (width, height));
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for (at, _) in hole.iter().enumerate().filter(|(_, &hole)| hole) {
+        let (x, y) = (at % width, at / width);
+        (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x + 1), bottom.max(y + 1));
+    }
+    if right <= left {
+        return Err("empty");
+    }
+    // As much of the image again around it, and at least `AROUND`
+    let margin = (right - left).max(bottom - top).max(AROUND);
+    let (x0, y0) = (left.saturating_sub(margin), top.saturating_sub(margin));
+    let (x1, y1) = ((right + margin).min(width), (bottom + margin).min(height));
+    let (across, down) = (x1 - x0, y1 - y0);
+    let mut canvas = Canvas {
+        width: across,
+        height: down,
+        pixels: vec![[0.0; 4]; across * down],
+        known: vec![true; across * down],
+        left: 0,
+        top: 0,
+    };
+    for y in 0..down {
+        for x in 0..across {
+            let at = y * across + x;
+            canvas.pixels[at] = premultiply(image.get_pixel((x0 + x) as u32, (y0 + y) as u32).0);
+            canvas.known[at] = !hole[(y0 + y) * width + x0 + x];
+        }
+    }
+    if !canvas.known.contains(&true) {
+        return Err("failed");
+    }
+    let stopped = || crate::handoff::cancelled(tab, job);
+    fill(&mut canvas, None, &stopped).map_err(<&str>::from)?;
+    for y in 0..down {
+        for x in 0..across {
+            if !canvas.known[y * across + x] {
+                image.put_pixel((x0 + x) as u32, (y0 + y) as u32, image::Rgba(unpremultiply(canvas.pixels[y * across + x])));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    {
+        use image::ImageEncoder;
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(image.as_raw(), image.width(), image.height(), image::ExtendedColorType::Rgba8)
+            .map_err(failed)?;
+    }
+    Ok(format!(r#"{{"png":"{}"}}"#, base64::engine::general_purpose::STANDARD.encode(out)))
+}
+
+/// Spot healing reads at least this many pixels around what's painted
+const AROUND: usize = 48;
 
 /// The pixels from `from` to `to` along one side `size` pixels across, and
 /// `reach` more either way
@@ -1020,6 +1096,53 @@ mod tests {
             b > r
         });
         assert!(blue.count() > 80 * 40 * 9 / 10);
+    }
+
+    /// A spot painted over on a flat color heals to that color, and the
+    /// rest of the image is left as it was
+    #[test]
+    fn heals_a_spot() {
+        let mut image = image::RgbaImage::from_pixel(200, 120, image::Rgba([30, 140, 90, 255]));
+        for y in 50..60 {
+            for x in 90..100 {
+                image.put_pixel(x, y, image::Rgba([250, 10, 10, 255]));
+            }
+        }
+        let mut png = Vec::new();
+        image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let header = br#"{"strokes":[{"points":[[0.475,0.458]],"radius":0.05}]}"#;
+        let request = [&header[..], b"\n", &png].concat();
+        let json: serde_json::Value = serde_json::from_str(&heal(0, 0, &request).unwrap()).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(json["png"].as_str().unwrap()).unwrap();
+        let healed = image::load_from_memory(&bytes).unwrap().into_rgba8();
+        assert!(healed.pixels().all(|pixel| pixel.0 == [30, 140, 90, 255]));
+    }
+
+    /// Heals `LIGMA_HEAL_IMAGE` where `LIGMA_HEAL_STROKES`, Spot healing's
+    /// JSON, paints, and writes it next to the image. `cargo test --release
+    /// -- --ignored heals_an_image`
+    #[test]
+    #[ignore]
+    fn heals_an_image() {
+        let (Ok(path), Ok(strokes)) = (std::env::var("LIGMA_HEAL_IMAGE"), std::env::var("LIGMA_HEAL_STROKES")) else {
+            return;
+        };
+        let mut png = Vec::new();
+        image::open(&path).unwrap().write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let request = [strokes.as_bytes(), b"
+", &png].concat();
+        let started = std::time::Instant::now();
+        let json: serde_json::Value = serde_json::from_str(&heal(0, 0, &request).unwrap()).unwrap();
+        eprintln!("healed in {:?}", started.elapsed());
+        std::fs::write(format!("{path}.healed.png"), base64::engine::general_purpose::STANDARD.decode(json["png"].as_str().unwrap()).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn healing_nothing_is_empty() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(20, 20).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let request = [&br#"{"strokes":[]}"#[..], b"\n", &png].concat();
+        assert_eq!(heal(0, 0, &request).err(), Some("empty"));
     }
 
     #[test]

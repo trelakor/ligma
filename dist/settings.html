@@ -676,6 +676,24 @@
         </span>
         <input type="checkbox" class="switch" id="local-expand">
       </label>
+      <label class="row nested" id="local-heal-row">
+        <span class="label"><span id="local-heal-label">Spot healing on this Mac</span>
+          <div class="hint" id="local-heal-hint">Paint over a spot, a stray object or text in the image, and it's filled from the image around it on your Mac, as Photoshop's Spot Healing Brush does</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-heal">
+      </label>
+      <label class="row nested" id="local-upscale-row" hidden>
+        <span class="label"><span id="local-upscale-label">Upscale on this Mac</span>
+          <div class="hint" id="local-upscale-hint">Makes the image 2 or 4 times as large and sharper with Real-ESRGAN on your Mac, once downloaded</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-upscale">
+      </label>
+      <div class="row nested deeper" id="upscale-model-row" hidden>
+        <span class="label">Upscale model
+          <div class="hint" id="upscale-model-hint"></div>
+        </span>
+        <button class="button" id="upscale-model-button"></button>
+      </div>
     </section>
     <section>
       <h2>Code</h2>
@@ -1060,7 +1078,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-expand", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-expand", "local-heal", "local-upscale", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1093,6 +1111,10 @@
     $("local-vectorize-hint").textContent = $("local-vectorize-hint").textContent.replace("your Mac", "your PC");
     $("local-expand-label").textContent = "Expand on this PC";
     $("local-expand-hint").textContent = $("local-expand-hint").textContent.replace("your Mac", "your PC");
+    $("local-heal-label").textContent = "Spot healing on this PC";
+    $("local-heal-hint").textContent = $("local-heal-hint").textContent.replace("your Mac", "your PC");
+    $("local-upscale-label").textContent = "Upscale on this PC";
+    $("local-upscale-hint").textContent = "Makes the image 2 or 4 times as large and sharper with Real-ESRGAN on your PC. The first time, it downloads a 5 MB model from Hugging Face.";
     $("local-select-object-label").textContent = "Select objects on this PC";
     $("local-select-object-hint").textContent = $("local-select-object-hint").textContent.replace("your Mac, once downloaded.", "your PC. The first time, it downloads a 74 MB model from Hugging Face.");
   }
@@ -1413,6 +1435,8 @@
     $("local-vectorize").checked = settings.localVectorize;
     $("local-select-object").checked = settings.localSelectObject;
     $("local-expand").checked = settings.localExpand;
+    $("local-heal").checked = settings.localHeal;
+    $("local-upscale").checked = settings.localUpscale;
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
@@ -1432,6 +1456,8 @@
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
       ["local-expand-row", settings.hideFreeAiActions],
+      ["local-heal-row", settings.hideFreeAiActions],
+      ["local-upscale-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
       ["new-home-start-row", settings.ligmaHome],
       ["discord-file-row", settings.discordRichPresence],
@@ -1497,6 +1523,8 @@
       localVectorize: $("local-vectorize").checked,
       localSelectObject: $("local-select-object").checked,
       localExpand: $("local-expand").checked,
+      localHeal: $("local-heal").checked,
+      localUpscale: $("local-upscale").checked,
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
@@ -1581,12 +1609,13 @@
   $("check-updates").addEventListener("click", () => invoke("check_for_updates"));
 
   // The models Ligma runs (src-tauri/src/models.rs), to download ahead of
-  // time or remove: BiRefNet, which Macs can use in place of Vision, and
-  // SAM, for Select object
+  // time or remove: BiRefNet, which Macs can use in place of Vision, SAM,
+  // for Select object, and Real-ESRGAN, for Upscale
   const models = {};
   const MODELS = {
     background: { what: "BiRefNet" },
     objects: { what: "SAM 2.1" },
+    upscale: { what: "Real-ESRGAN" },
   };
   const megabytes = (bytes) => `${Math.round(bytes / 1e6)} MB`;
   window.applyModel = (name, state) => {
@@ -1594,6 +1623,7 @@
     $(`${name}-model-row`).hidden = !state.supported;
     if (name === "background") $("use-background-model-row").hidden = !state.supported || !macos;
     if (name === "objects") $("local-select-object-row").hidden = !state.supported;
+    if (name === "upscale") $("local-upscale-row").hidden = !state.supported;
     const button = $(`${name}-model-button`);
     let hint;
     if (state.downloading != null) {

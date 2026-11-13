@@ -1,6 +1,6 @@
 //! The models Ligma runs on this device with ONNX Runtime: BiRefNet for
-//! Remove background (see background.rs) and SAM 2.1 for Select object
-//! (see objects.rs). Each is downloaded when it's first needed, once asked,
+//! Remove background (see background.rs), SAM 2.1 for Select object (see
+//! objects.rs) and Real-ESRGAN for Upscale (see upscale.rs). Each is downloaded when it's first needed, once asked,
 //! or from Settings, which can also remove it. Downloads are checked
 //! against their SHA-256. ONNX Runtime is linked in on Windows. Macs with
 //! Apple silicon download it along with the first model, as it needs
@@ -30,10 +30,10 @@ pub fn supported() -> bool {
 #[cfg(birefnet)]
 pub use download::*;
 
-/// The model Settings names: "background" or "objects"
+/// The model Settings names: "background", "objects" or "upscale"
 #[cfg(birefnet)]
 fn named(name: &str) -> Option<&'static Model> {
-    [&BACKGROUND, &OBJECTS].into_iter().find(|model| model.name == name)
+    ALL.into_iter().find(|model| model.name == name)
 }
 
 fn model_state(app: &AppHandle, name: &str) -> ModelState {
@@ -182,6 +182,18 @@ mod download {
         entry: None,
     };
 
+    /// Real-ESRGAN's compact general model, realesr-general-x4v3
+    /// (https://github.com/xinntao/Real-ESRGAN, BSD 3-Clause), as ONNX from
+    /// https://huggingface.co/CoderViking/realesr-general-x4v3-onnx, pinned
+    /// to one revision
+    pub const REAL_ESRGAN: Download = Download {
+        url: "https://huggingface.co/CoderViking/realesr-general-x4v3-onnx/resolve/c6a971706797c7502945a2b4c4274fce4900d4ab/realesr-general-x4v3.onnx",
+        sha256: "1940a93ee08283a0a7286183186357b1688fe9fa8ede74604b424586aaddf112",
+        size: 4_866_417,
+        file: "realesr-general-x4v3.onnx",
+        entry: None,
+    };
+
     /// A model and what Ligma says about it
     pub struct Model {
         /// As Settings names it
@@ -229,6 +241,22 @@ mod download {
         cancels: AtomicU32::new(0),
         watchers: Mutex::new(Vec::new()),
     };
+
+    pub static UPSCALE: Model = Model {
+        name: "upscale",
+        files: &[&REAL_ESRGAN],
+        doing: "Upscaling images",
+        model: "Real-ESRGAN",
+        title: "Download Upscale Model",
+        progress: "Downloading the upscale model…",
+        after: "Upscaling…",
+        downloading: Mutex::new(None),
+        cancels: AtomicU32::new(0),
+        watchers: Mutex::new(Vec::new()),
+    };
+
+    /// Every model, for what they share
+    pub const ALL: [&Model; 3] = [&BACKGROUND, &OBJECTS, &UPSCALE];
 
     /// Why a model isn't there to use
     pub enum Missing {
@@ -366,7 +394,7 @@ mod download {
                 }
                 let _held = lock();
                 if let Ok(folder) = folder(&app) {
-                    let others = [&BACKGROUND, &OBJECTS].into_iter().filter(|other| other.name != self.name);
+                    let others = ALL.into_iter().filter(|other| other.name != self.name);
                     let shared = others.filter(|other| other.installed(&folder)).flat_map(|other| other.downloads()).collect::<Vec<_>>();
                     for download in self.downloads().filter(|download| !shared.iter().any(|kept| kept.file == download.file)) {
                         let path = folder.join(download.file);
@@ -377,7 +405,7 @@ mod download {
                         }
                     }
                 }
-                for model in [&BACKGROUND, &OBJECTS] {
+                for model in ALL {
                     super::show_state(&app, model.name);
                 }
             });
@@ -453,8 +481,8 @@ mod download {
                 before += download.size;
             }
             *self.downloading.lock().unwrap() = None;
-            // ONNX Runtime may now be there for the other model too
-            for model in [&BACKGROUND, &OBJECTS] {
+            // ONNX Runtime may now be there for the other models too
+            for model in ALL {
                 super::show_state(app, model.name);
             }
             if result.is_ok() {
