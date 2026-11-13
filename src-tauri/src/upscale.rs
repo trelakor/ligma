@@ -113,6 +113,9 @@ mod esrgan {
             "illustration" => (&UPSCALE_ART, REAL_ESRGAN_ART.file),
             _ => (&UPSCALE, NOMOS.file),
         };
+        // Photo makes up texture most readily, so it's kept to most of its
+        // way, the rest a smooth enlargement
+        let strength = if quality == "fast" || quality == "illustration" { 1.0 } else { PHOTO_STRENGTH };
         let (_held, folder) = model.ensure(app, tab, job).map_err(|missing| match missing {
             Missing::Cancelled => "cancelled",
             Missing::Failed => "failed",
@@ -124,7 +127,7 @@ mod esrgan {
         });
         let stopped = || crate::handoff::cancelled(tab, job);
         let progress = |text: &str| crate::handoff::progress(app, tab, job, text);
-        let larger = run(&folder.join(file), Some(&folder), &image, factor, &options, &stopped, &progress).map_err(|error| {
+        let larger = run(&folder.join(file), Some(&folder), &image, factor, strength, &options, &stopped, &progress).map_err(|error| {
             if stopped() {
                 "cancelled"
             } else {
@@ -172,6 +175,65 @@ mod esrgan {
         builder.commit_from_file(model).map_err(|error| error.to_string())
     }
 
+    /// How much of its way Photo's model is kept, the rest a smooth
+    /// enlargement, as it makes up texture most readily
+    const PHOTO_STRENGTH: f32 = 0.85;
+    /// Where the original is this flat, in how far its brightness spreads
+    /// around each pixel, only `FLAT_KEEP` of the model is kept, and where
+    /// it's `DETAILED` or more, all of it
+    const FLAT: f32 = 3.0;
+    const DETAILED: f32 = 12.0;
+    const FLAT_KEEP: f32 = 0.15;
+
+    /// Evens `out`, `src` made 4 times as large by a model, toward a smooth
+    /// enlargement of `src` where `src` is flat: there a model makes up
+    /// texture from compression and noise, like a pattern on a green
+    /// screen or wax on skin. Where `src` has detail, the model's stays.
+    /// All of it is kept to `strength` of the way
+    fn settle(src: &RgbImage, out: &mut RgbImage, strength: f32) {
+        let (width, height) = (src.width() as usize, src.height() as usize);
+        let smooth = imageops::resize(src, out.width(), out.height(), FilterType::CatmullRom);
+        // How far brightness spreads in the 5 by 5 pixels around each
+        let luma: Vec<f32> = src.pixels().map(|p| 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32).collect();
+        let mut keep = vec![0f32; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let (mut sum, mut squares, mut count) = (0f32, 0f32, 0f32);
+                for ny in y.saturating_sub(2)..(y + 3).min(height) {
+                    for nx in x.saturating_sub(2)..(x + 3).min(width) {
+                        let value = luma[ny * width + nx];
+                        sum += value;
+                        squares += value * value;
+                        count += 1.0;
+                    }
+                }
+                let mean = sum / count;
+                let spread = (squares / count - mean * mean).max(0.0).sqrt();
+                let t = ((spread - FLAT) / (DETAILED - FLAT)).clamp(0.0, 1.0);
+                keep[y * width + x] = strength * (FLAT_KEEP + (1.0 - FLAT_KEEP) * t * t * (3.0 - 2.0 * t));
+            }
+        }
+        // Read smoothly between the original's pixels
+        let at = |x: f32, y: f32| {
+            let (x, y) = (x.clamp(0.0, (width - 1) as f32), y.clamp(0.0, (height - 1) as f32));
+            let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+            let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+            let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+            let top = keep[y0 * width + x0] * (1.0 - fx) + keep[y0 * width + x1] * fx;
+            let bottom = keep[y1 * width + x0] * (1.0 - fx) + keep[y1 * width + x1] * fx;
+            top * (1.0 - fy) + bottom * fy
+        };
+        let (scale_x, scale_y) = (width as f32 / out.width() as f32, height as f32 / out.height() as f32);
+        for (x, y, pixel) in out.enumerate_pixels_mut() {
+            let k = at((x as f32 + 0.5) * scale_x - 0.5, (y as f32 + 0.5) * scale_y - 0.5);
+            let base = smooth.get_pixel(x, y);
+            for channel in 0..3 {
+                let (model, base) = (pixel[channel] as f32, base[channel] as f32);
+                pixel[channel] = (base + (model - base) * k).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
     /// The image in `bytes`, turned as its orientation says
     fn decode(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
         let mut decoder = ImageReader::new(Cursor::new(bytes))
@@ -187,12 +249,15 @@ mod esrgan {
 
     /// `image` made `factor` times as large with the model at `model`, ONNX
     /// Runtime from `folder` where it's downloaded, or as linked in without
-    /// one, saying how far it's got with `progress`
+    /// one, its detail kept to `strength` of the way (see `settle`), saying
+    /// how far it's got with `progress`
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         model: &Path,
         folder: Option<&Path>,
         image: &RgbaImage,
         factor: f32,
+        strength: f32,
         options: &RunOptions,
         stopped: &dyn Fn() -> bool,
         progress: &dyn Fn(&str),
@@ -305,6 +370,7 @@ mod esrgan {
         }
         drop(session);
         progress("Finishing…");
+        settle(&rgb, &mut out, strength);
         // Transparency scaled up smoothly, and the color back off black
         let alpha = imageops::resize(
             &image::GrayImage::from_fn(width as u32, height as u32, |x, y| image::Luma([image.get_pixel(x, y)[3]])),
@@ -373,7 +439,8 @@ mod esrgan {
             let options = RunOptions::new().unwrap();
             let started = std::time::Instant::now();
             let factor = factor(image.width(), image.height(), 4.0).unwrap();
-            let larger = run(Path::new(&model), None, &image, factor, &options, &|| false, &|_| {}).unwrap();
+            let strength = std::env::var("LIGMA_UPSCALE_STRENGTH").ok().and_then(|value| value.parse().ok()).unwrap_or(PHOTO_STRENGTH);
+            let larger = run(Path::new(&model), None, &image, factor, strength, &options, &|| false, &|_| {}).unwrap();
             eprintln!("{}x{} in {:?}", larger.width(), larger.height(), started.elapsed());
             larger.save(format!("{path}.upscaled.png")).unwrap();
         }
