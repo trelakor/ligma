@@ -883,8 +883,12 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             .initialization_script(TITLE_EMOJI_JS);
     }
     let background = page_background(app, with_tab(app, id, |tab| tab.kind).unwrap_or("page"));
+    // Ligma's renderer draws behind the page, so it stays transparent
+    if !crate::native_renderer::hooks_tabs(app) {
+        builder = builder.background_color(background);
+    }
     let webview = window.add_child(
-        builder.background_color(background),
+        builder,
         LogicalPosition::new(0.0, bar_height(app)),
         content_size(app, &window)?,
     )?;
@@ -2698,6 +2702,9 @@ fn page_background(app: &AppHandle, kind: &str) -> Color {
 
 /// `page_background` for every tab, after the theme changed
 fn repaint_page_backgrounds(app: &AppHandle) {
+    if crate::native_renderer::hooks_tabs(app) {
+        return;
+    }
     let tabs: Vec<(u32, &'static str)> =
         app.state::<Tabs>().inner().0.lock().unwrap().tabs.iter().map(|tab| (tab.id, tab.kind)).collect();
     for (id, kind) in tabs {
