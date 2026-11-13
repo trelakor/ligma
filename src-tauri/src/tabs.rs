@@ -749,13 +749,13 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         });
         id
     };
-    create_webview(app, id, url, false)?;
+    create_webview(app, id, url)?;
     select(app, id)
 }
 
-/// Loads tab `id`'s webview, for a new tab or one `waking` from sleep or
+/// Loads tab `id`'s webview, for a new tab or one waking from sleep or
 /// reopened from the last session
-fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Result<()> {
+fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     let window = with_tab(app, id, |tab| tab.window.clone())
         .and_then(|label| app.get_window(&label))
         .or_else(|| app.get_window(MAIN))
@@ -802,7 +802,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
         .initialization_script(crate::mcp_bridge::PANEL_JS)
         .initialization_script(crate::split::PAGE_JS)
         .initialization_script(crate::split::CARRY_JS)
-        .initialization_script(crate::view_state::page_js(waking));
+        .initialization_script(crate::view_state::PAGE_JS);
     // Ligma's home page, which Home may load whatever the setting was when
     // it was made
     if id == HOME_ID {
@@ -1086,7 +1086,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     if let Some(url) = wake {
         // Fails if the old webview is still closing. Stay asleep, so
         // selecting the tab again retries
-        if create_webview(app, id, url, true).is_err() {
+        if create_webview(app, id, url).is_err() {
             with_tab(app, id, |tab| {
                 tab.asleep = true;
                 tab.revealing = false;

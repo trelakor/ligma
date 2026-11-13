@@ -720,12 +720,6 @@
         <input type="checkbox" class="switch" id="restore">
       </label>
       <label class="row">
-        <span class="label">Remember where you were in files
-          <div class="hint">After a tab sleeps, reloads or is reopened, a file comes back on the same page, view and mode</div>
-        </span>
-        <input type="checkbox" class="switch" id="keep-view">
-      </label>
-      <label class="row">
         <span class="label">Preview tabs on hover
           <div class="hint">Shows a tab's name and how it last looked when you point at it</div>
         </span>
@@ -1060,7 +1054,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "keep-view", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1396,7 +1390,6 @@
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
     for (const [id, key] of Object.entries(modeFields)) $(id).checked = settings[key];
     $("restore").checked = settings.restoreTabs;
-    $("keep-view").checked = settings.keepFileView;
     $("previews").checked = settings.tabPreviews;
     $("split-view").checked = settings.splitView;
     $("uniform-split").checked = settings.uniformSplit;
@@ -1479,7 +1472,6 @@
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
       ...Object.fromEntries(Object.entries(modeFields).map(([id, key]) => [key, $(id).checked])),
       restoreTabs: $("restore").checked,
-      keepFileView: $("keep-view").checked,
       tabPreviews: $("previews").checked,
       splitView: $("split-view").checked,
       uniformSplit: $("uniform-split").checked,

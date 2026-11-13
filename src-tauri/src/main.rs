@@ -328,7 +328,6 @@ fn main() {
             ai_actions::init(&settings);
             copy_code::init(&settings);
             lasso::init(&settings);
-            view_state::init(&settings);
             game_mode::init(&settings);
             notifications::init(&settings);
             mcp_bridge::init(&settings);
