@@ -436,6 +436,86 @@
     addEventListener("resize", hole);
   };
 
+  // While something is dragged on the canvas, Figma's side panels wait for
+  // the drag to end. Redrawing them took about 15 of the 25 ms each frame of
+  // a drag took, so the canvas followed the mouse at 40 fps. Figma redraws
+  // them from its store's listeners, which it flushes once a frame, and from
+  // its scene's deferrable listeners, which it lets run later anyway. What
+  // Figma draws on the canvas, the size label included, keeps up
+  const panels = { dragging: false, flush: null, deferred: new Set() };
+  hook.panels = panels;
+  {
+    let down = null;
+    const onCanvas = (target) => target instanceof Element && !!target.closest(".gpu-view-content");
+    const catchUp = () => {
+      if (panels.dragging) return;
+      const deferred = [...panels.deferred];
+      panels.deferred.clear();
+      for (const listeners of deferred) {
+        try {
+          listeners.runDeferredListeners();
+        } catch {}
+      }
+      const flush = panels.flush;
+      panels.flush = null;
+      try {
+        flush?.();
+      } catch {}
+    };
+    const end = () => {
+      down = null;
+      if (!panels.dragging) return;
+      panels.dragging = false;
+      // After Figma has seen the drag end
+      setTimeout(catchUp, 0);
+    };
+    addEventListener("pointerdown", (event) => (down = event.button === 0 && onCanvas(event.target) ? [event.clientX, event.clientY] : null), true);
+    addEventListener(
+      "pointermove",
+      (event) => {
+        if (!down || panels.dragging) return;
+        if (!(event.buttons & 1)) return end();
+        if (Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 2) panels.dragging = true;
+      },
+      true,
+    );
+    addEventListener("pointerup", end, true);
+    addEventListener("pointercancel", end, true);
+    addEventListener("blur", end);
+    window.__ligmaModules?.patch([
+      {
+        // Flushes the store's listeners, which Figma calls each frame: the
+        // export that takes nothing, as seen on 2026-11-13
+        match: (source) => source.includes("BeforeReactRender") && source.includes("AfterReactRender") && source.includes("subscribeImmediate"),
+        getter: (value) =>
+          typeof value !== "function" || value.length !== 0
+            ? value
+            : function () {
+                if (panels.dragging) {
+                  panels.flush = value;
+                  return;
+                }
+                panels.flush = null;
+                return value.apply(this, arguments);
+              },
+      },
+      {
+        // Listeners some of which may run later
+        match: (source) => source.includes("deferrableListeners") && source.includes("runDeferredListeners"),
+        getter: (value) =>
+          typeof value !== "function" || !value.prototype?.runDeferredListeners
+            ? value
+            : class extends value {
+                runDeferredListeners(...args) {
+                  if (!panels.dragging) return super.runDeferredListeners(...args);
+                  panels.deferred.add(this);
+                  this.deferredCancel = () => panels.deferred.delete(this);
+                }
+              },
+      },
+    ]);
+  }
+
   // Called by Ligma. True once Figma's threaded renderer is running and
   // frames have come through as expected
   hook.ready = () => hook.frames > 0 && !hook.error;
