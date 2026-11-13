@@ -2303,25 +2303,32 @@ const PAGE_JS: &str = r##"(() => {
     if (healing.session) handOff("heal", request({ op: "close", session: healing.session })).catch(() => {});
     cancelAnimationFrame(healing.frame);
     healing.root.remove();
-    const { figma, node, canvas, layer, svg, picture, patched, shownAt, hash } = healing;
+    const closed = healing;
+    const { figma, node, canvas, layer, svg, picture, patched, shownAt } = closed;
     const left = LINGER - (performance.now() - shownAt);
-    if (patched && picture && left > 0) {
+    if (patched && picture && (left > 0 || closed.committing)) {
       // Kept on the layer a little longer, then faded out
       layer.classList.add("lingering");
       let frame = 0;
       const follow = () => {
         placeOver(figma, node, canvas, layer, svg, picture);
-        picture.style.display = topImage(node) === hash ? "block" : "";
+        picture.style.display = closed.committing || closed.dirty || topImage(node) === closed.hash ? "block" : "";
         frame = requestAnimationFrame(follow);
       };
       follow();
-      setTimeout(() => {
-        layer.classList.add("gone");
+      // Faded once the last heal is with Figma and it's had a moment to
+      // draw it
+      const fade = () => {
+        if (closed.committing || closed.dirty) return setTimeout(fade, 200);
         setTimeout(() => {
-          cancelAnimationFrame(frame);
-          layer.remove();
-        }, 200);
-      }, left);
+          layer.classList.add("gone");
+          setTimeout(() => {
+            cancelAnimationFrame(frame);
+            layer.remove();
+          }, 200);
+        }, Math.max(left, 1500));
+      };
+      fade();
     } else {
       layer.remove();
     }
@@ -2376,10 +2383,10 @@ const PAGE_JS: &str = r##"(() => {
 
   const placeHealOverlay = () => {
     if (!healing) return;
-    const { figma, node, canvas, layer, svg, picture, patched, working, hash } = healing;
+    const { figma, node, canvas, layer, svg, picture, patched, working, committing, dirty, hash } = healing;
     placeOver(figma, node, canvas, layer, svg, picture);
     // Healing, or healed and not undone or changed some other way since
-    if (picture) picture.style.display = patched && (working || (hash && topImage(node) === hash)) ? "block" : "";
+    if (picture) picture.style.display = patched && (working || committing || dirty || (hash && topImage(node) === hash)) ? "block" : "";
     healing.frame = requestAnimationFrame(placeHealOverlay);
   };
 
@@ -2438,9 +2445,10 @@ const PAGE_JS: &str = r##"(() => {
     showHealing();
     try {
       await current.opening;
-      // Undone, or changed some other way since, the image is read again
+      // Undone, or changed some other way since, the image is read again,
+      // unless a heal is still being handed to Figma
       const top = fillsOf(node).at(-1);
-      if (current.hash && !(top?.type === "IMAGE" && top.imageHash === current.hash)) {
+      if (current.hash && !current.committing && !current.dirty && !(top?.type === "IMAGE" && top.imageHash === current.hash)) {
         handOff("heal", request({ op: "close", session: current.session })).catch(() => {});
         current.hash = null;
         current.opening = openHealing(current);
@@ -2464,21 +2472,10 @@ const PAGE_JS: &str = r##"(() => {
       context.clearRect(x, y, patch.width, patch.height);
       context.drawImage(patch, x, y);
       patch.close();
-      // Shown at once, over the layer, while it's handed to Figma
-      Object.assign(current, { patched: true, shownAt: performance.now() });
-      const blob = await new Promise((resolve) => current.picture.toBlob(resolve, "image/png"));
-      const hash = figma.createImage(new Uint8Array(await blob.arrayBuffer())).hash;
-      const fills = fillsOf(node);
-      const last = fills.at(-1);
-      // After a heal, the healed image is changed rather than hidden too
-      node.fills =
-        last?.type === "IMAGE" && last.imageHash === current.hash
-          ? [...fills.slice(0, -1), { ...last, imageHash: hash }]
-          : [...fills.map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
-      current.hash = hash;
-      try {
-        figma.commitUndo();
-      } catch {}
+      // Shown at once, over the layer, and handed to Figma after, so the
+      // next stroke needn't wait for it
+      Object.assign(current, { patched: true, shownAt: performance.now(), dirty: true });
+      commitHeal(current);
     } catch (reason) {
       if (reason !== "empty" && reason !== "cancelled" && reason !== "closed") figma.notify("Couldn't heal the image", { timeout: 3000 });
     }
@@ -2491,6 +2488,36 @@ const PAGE_JS: &str = r##"(() => {
       else showHealing();
     }
     tidy();
+  };
+
+  // Hands the healed image to Figma, as one undo step, the layer's fills
+  // before hidden under it the first time and that image changed after.
+  // Strokes healed while it's at it go in together the next time round
+  const commitHeal = async (current) => {
+    if (current.committing) return;
+    current.committing = true;
+    const { figma, node } = current;
+    try {
+      while (current.dirty && !node.removed) {
+        current.dirty = false;
+        const blob = await new Promise((resolve) => current.picture.toBlob(resolve, "image/png"));
+        if (node.removed) break;
+        const hash = figma.createImage(new Uint8Array(await blob.arrayBuffer())).hash;
+        const fills = fillsOf(node);
+        const last = fills.at(-1);
+        node.fills =
+          last?.type === "IMAGE" && last.imageHash === current.hash
+            ? [...fills.slice(0, -1), { ...last, imageHash: hash }]
+            : [...fills.map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+        current.hash = hash;
+        try {
+          figma.commitUndo();
+        } catch {}
+      }
+    } catch {
+      figma.notify("Couldn't heal the image", { timeout: 3000 });
+    }
+    current.committing = false;
   };
 
   for (const type of POINTER_TYPES) {

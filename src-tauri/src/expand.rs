@@ -318,7 +318,9 @@ pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
         "heal" => {
             let (_, image) = open.as_mut().filter(|(session, _)| *session == request.session).ok_or("closed")?;
             let stopped = || crate::handoff::cancelled(tab, job);
+            let started = std::time::Instant::now();
             let (x, y, patch) = heal_strokes(image, &request.strokes, &stopped)?;
+            log::info!("Spot healing: {}x{} patch in {:?}", patch.width(), patch.height(), started.elapsed());
             let mut out = Vec::new();
             {
                 use image::ImageEncoder;
@@ -346,7 +348,7 @@ fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn 
         return Err("empty");
     }
     // As much of the image again around it, and at least `AROUND`
-    let margin = (right - left).max(bottom - top).max(AROUND);
+    let margin = (right - left).max(bottom - top).clamp(AROUND, MOST_AROUND);
     let (x0, y0) = (left.saturating_sub(margin), top.saturating_sub(margin));
     let (x1, y1) = ((right + margin).min(width), (bottom + margin).min(height));
     let (across, down) = (x1 - x0, y1 - y0);
@@ -469,19 +471,50 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<bool, &
         };
         let index = (0..pieces.len()).max_by_key(|&i| around(&pieces[i])).unwrap_or(0);
         let piece = pieces.swap_remove(index);
-        let Some((ox, oy)) = best_offset(canvas, &hole, &holes, &piece, stopped) else {
-            if stopped() {
-                return Err("cancelled");
-            }
-            return Ok(false);
-        };
-        copy_into(canvas, &hole, &piece, (ox, oy));
+        // Nowhere clear of what's still to heal: what's been healed can
+        // be copied from too, and failing that, the piece is evened out
+        // from what's around it
+        let mut offset = best_offset(canvas, &hole, &holes, &piece, stopped);
+        if offset.is_none() && !stopped() {
+            holes = counts(&hole);
+            offset = best_offset(canvas, &hole, &holes, &piece, stopped);
+        }
+        if stopped() {
+            return Err("cancelled");
+        }
+        match offset {
+            Some(offset) => copy_into(canvas, &hole, &piece, offset),
+            None => smooth_into(canvas, &hole, &piece),
+        }
         for &at in &piece {
             hole[at] = false;
         }
-        holes = counts(&hole);
     }
     Ok(true)
+}
+
+/// Fills `piece` evenly from what's around it, for a piece with nowhere to
+/// copy from
+fn smooth_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize]) {
+    let width = canvas.width;
+    let (mut left, mut top, mut right, mut bottom) = (width, canvas.height, 0, 0);
+    for &at in piece {
+        let (x, y) = (at % width, at / width);
+        (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
+    }
+    let (x0, y0) = (left.saturating_sub(RING), top.saturating_sub(RING));
+    let (x1, y1) = ((right + RING + 1).min(width), (bottom + RING + 1).min(canvas.height));
+    let (across, down) = (x1 - x0, y1 - y0);
+    let mut window: Vec<[f32; 4]> = (0..across * down).map(|i| canvas.pixels[(y0 + i / across) * width + x0 + i % across]).collect();
+    let known: Vec<bool> = (0..across * down).map(|i| !hole[(y0 + i / across) * width + x0 + i % across]).collect();
+    if !known.contains(&true) {
+        return;
+    }
+    diffuse(&mut window, &known, across, down);
+    relax(&mut window, &known, across, down);
+    for &at in piece {
+        canvas.pixels[at] = window[(at / width - y0) * across + at % width - x0];
+    }
 }
 
 /// Long strokes are healed in squares this many pixels across
@@ -697,8 +730,10 @@ const MIN_REACH: usize = 96;
 const RING_SAMPLES: usize = 600;
 
 
-/// Spot healing reads at least this many pixels around what's painted
+/// Spot healing reads at least this many pixels around what's painted,
+/// and at most `MOST_AROUND`
 const AROUND: usize = 48;
+const MOST_AROUND: usize = 384;
 
 /// The pixels from `from` to `to` along one side `size` pixels across, and
 /// `reach` more either way
