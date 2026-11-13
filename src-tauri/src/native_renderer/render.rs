@@ -692,6 +692,8 @@ struct Tile {
     /// what it replaces, if anything
     fence: u64,
     previous: Option<Arc<Tex>>,
+    /// The last frame whose edits it has
+    seq: u64,
 }
 
 impl Drop for Gpu {
@@ -1768,19 +1770,29 @@ impl Painter {
         let mut shown = self.hub.shown.lock().unwrap();
         // Tiles out of date don't cover the whole view drawn since
         let whole_current = self.whole.as_ref().is_some_and(|whole| whole.at == self.at && !whole.stale);
-        // Nor does what they show win over it where it's somewhere else,
-        // as while the view moves during an edit, which would show the
-        // edit back as it was a frame
+        // Nor does what they show win over it where it's newer, as while the
+        // view moves during an edit, or the edits of a few frames together
+        // are too many to patch, which would show things a moment where
+        // they were before the edit
+        let whole_seq = self.whole.as_ref().map(|whole| if whole.fence <= passed { whole.seq } else { whole.previous_seq });
         let whole_fresh = self.whole.as_ref().is_some_and(|whole| !whole.stale && whole.patch.is_empty());
+        let mut kept_under = 0;
         shown.tiles = self
             .tiles
             .iter()
             .filter(|(_, tile)| !(whole_current && tile.stale))
             .filter_map(|(key, tile)| {
-                let tex = if tile.fence <= passed { &tile.tex } else { tile.previous.as_ref()? };
-                Some(Layer { tex: tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts, behind: tile.stale && whole_fresh })
+                let (tex, seq) = if tile.fence <= passed { (&tile.tex, tile.seq) } else { (tile.previous.as_ref()?, 0) };
+                let behind = tile.stale && whole_seq.is_some_and(|whole| whole > seq);
+                if behind && !whole_current && !whole_fresh {
+                    kept_under += 1;
+                }
+                Some(Layer { tex: tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts, behind })
             })
             .collect();
+        if kept_under > 0 {
+            trace(|| format!("  {kept_under} out of date tiles kept under the newer whole view"));
+        }
         shown.live = self.whole.as_ref().and_then(|whole| if whole.fence <= passed { Some(whole.layer.clone()) } else { whole.previous.clone() });
         shown.background = Some(background);
         match self.tree.as_ref().and_then(Tree::background) {
@@ -3350,7 +3362,7 @@ impl Painter {
         if margin == 0 {
             self.scratch.push((margin, ss, scratch));
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, fence, previous: None })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, fence, previous: None, seq: self.seq })
     }
 
     fn background(&self) -> Color4f {

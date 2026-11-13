@@ -635,7 +635,15 @@ impl Screen {
             what.tiles.iter().chain(what.live.iter()).map(|layer| Arc::as_ptr(&layer.tex) as usize).collect();
         self.images.retain(|key, _| kept.contains(key));
         super::render::trace(|| {
-            format!("present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes={}", draws.len(), encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, !left.is_empty())
+            let live = what.live.as_ref().map(|layer| format!(" live={},{}@{:.3}", layer.x, layer.y, layer.px)).unwrap_or_default();
+            format!(
+                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes={} x={rx} y={ry} placed={:?}{live}",
+                draws.len(),
+                encoded.as_secs_f64() * 1000.0,
+                rendered.as_secs_f64() * 1000.0,
+                !left.is_empty(),
+                self.layer.as_ref().and_then(|layer| layer.at).map(|(at, _)| at)
+            )
         });
         let mut stats = stats().lock().unwrap();
         stats.holes(!left.is_empty());
