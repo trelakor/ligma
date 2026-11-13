@@ -5,10 +5,15 @@
 //! for a few images
 //!
 //! Memory of its own takes at least a 64 KiB page, and making it takes the
-//! driver a while, up to a millisecond, so resources up to 1 MiB share heaps
-//! of their kind instead, each freed once nothing is left in it: textures
-//! small enough to be placed at 4 KiB, masks and tables Skia makes by the
-//! thousand, other textures, render targets, and buffers to upload through
+//! driver a while, up to a millisecond, so resources up to 1 MiB, and
+//! render targets up to 32, share heaps of their kind instead, each freed
+//! once nothing is left in it: textures small enough to be placed at 4 KiB,
+//! masks and tables Skia makes by the thousand, other textures, render
+//! targets small and big, and buffers to upload through. A render target
+//! placed in memory used before has to be cleared before it's drawn into,
+//! or what the GPU keeps of how it's compressed is whatever was there, and
+//! a blur reads some of a new layer before drawing it, which would show
+//! another frame's pixels. Skia doesn't, so it's done here (see `Clears`)
 //!
 //! Skia takes C++ objects here, `GrD3DMemoryAllocator` and `GrD3DAlloc`, so
 //! this lays them out as MSVC does: a vtable, starting with
@@ -21,18 +26,18 @@ use std::sync::{Arc, Mutex};
 use skia_safe::gpu::d3d::MemoryAllocator;
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D12::{
-    ID3D12Device, ID3D12Heap, ID3D12Resource, D3D12_CLEAR_VALUE, D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_D3D12_OPTIONS7, D3D12_HEAP_DESC,
-    D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES,
+    ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence, D3D12_DESCRIPTOR_HEAP_DESC,
+    D3D12_DESCRIPTOR_HEAP_TYPE_RTV, ID3D12GraphicsCommandList, ID3D12Heap, ID3D12Resource,
+    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, D3D12_RESOURCE_ALIASING_BARRIER, D3D12_RESOURCE_BARRIER,
+    D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_ALIASING, D3D12_CLEAR_VALUE, D3D12_FEATURE_D3D12_OPTIONS7, D3D12_FEATURE_DATA_D3D12_OPTIONS7, D3D12_HEAP_DESC,
+    D3D12_HEAP_FLAGS, D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES,
     D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_DESC,
-    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
     D3D12_RESOURCE_STATES,
 };
 
 /// Its memory isn't cleared first, for what's written whole before it's
-/// read: images and buffers uploaded. Render targets are cleared, as
-/// Skia's own allocator has big ones: a blur reads some of a new layer
-/// before drawing it, which otherwise shows what was in that memory, as
-/// another frame's pixels
+/// read: images and buffers uploaded
 const NOT_ZEROED: D3D12_HEAP_FLAGS = D3D12_HEAP_FLAGS(0x1000);
 
 /// A kind of resource placed in shared heaps: the heaps', their size, the
@@ -48,12 +53,14 @@ struct Kind {
 const TINY_TEXTURES: usize = 0;
 const TEXTURES: usize = 1;
 const TARGETS: usize = 2;
-const UPLOADS: usize = 3;
+const BIG_TARGETS: usize = 3;
+const UPLOADS: usize = 4;
 
-static KINDS_PLACED: [Kind; 4] = [
+static KINDS_PLACED: [Kind; 5] = [
     Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, slab: 4 << 20, slot: 4 << 10, largest: 64 << 10 },
     Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, slab: 8 << 20, slot: 64 << 10, largest: 1 << 20 },
-    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 8 << 20, slot: 64 << 10, largest: 1 << 20 },
+    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 16 << 20, slot: 64 << 10, largest: 4 << 20 },
+    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 64 << 20, slot: 1 << 20, largest: 32 << 20 },
     Kind { heap: D3D12_HEAP_TYPE_UPLOAD, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, slab: 4 << 20, slot: 64 << 10, largest: 1 << 20 },
 ];
 
@@ -71,7 +78,75 @@ struct Allocator {
     refs: AtomicI32,
     device: ID3D12Device,
     zeroed_only: bool,
-    pools: [Arc<Mutex<Pool>>; 4],
+    pools: [Arc<Mutex<Pool>>; 5],
+    /// None if it couldn't be set up, and render targets get memory of
+    /// their own, which starts cleared
+    clears: Option<Mutex<Clears>>,
+}
+
+/// Clears render targets as they're placed, to transparent, on the queue
+/// Skia draws with, ahead of anything Skia sends it that draws into them.
+/// Depth and stencil, which Skia clears before it uses, are discarded
+/// instead. Each goes in a command list of its own, sent at once, as Skia
+/// gives no word of when it sends its own. They all come from one command
+/// allocator, reset whenever the GPU's done with all it holds
+struct Clears {
+    device: ID3D12Device,
+    queue: ID3D12CommandQueue,
+    allocator: ID3D12CommandAllocator,
+    list: ID3D12GraphicsCommandList,
+    fence: ID3D12Fence,
+    sent: u64,
+    /// Where a target's view is made to clear it through, read as the
+    /// clear's recorded
+    views: ID3D12DescriptorHeap,
+}
+
+impl Clears {
+    fn new(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> windows::core::Result<Self> {
+        unsafe {
+            let allocator: ID3D12CommandAllocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
+            let list: ID3D12GraphicsCommandList = device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)?;
+            list.Close()?;
+            let fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
+            let views = device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC { Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV, NumDescriptors: 1, ..Default::default() })?;
+            Ok(Clears { device: device.clone(), queue: queue.clone(), allocator, list, fence, sent: 0, views })
+        }
+    }
+
+    /// `resource`, just placed, in the state Skia makes render targets in,
+    /// render target or depth write, as clearing and discarding take
+    fn clear(&mut self, resource: &ID3D12Resource, depth: bool) -> windows::core::Result<()> {
+        unsafe {
+            if self.fence.GetCompletedValue() >= self.sent {
+                self.allocator.Reset()?;
+            }
+            self.list.Reset(&self.allocator, None)?;
+            let barrier = D3D12_RESOURCE_BARRIER {
+                Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
+                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                    Aliasing: std::mem::ManuallyDrop::new(D3D12_RESOURCE_ALIASING_BARRIER {
+                        pResourceBefore: std::mem::ManuallyDrop::new(None),
+                        // Borrowed, not dropped
+                        pResourceAfter: std::mem::transmute_copy(resource),
+                    }),
+                },
+            };
+            self.list.ResourceBarrier(&[barrier]);
+            if depth {
+                self.list.DiscardResource(resource, None);
+            } else {
+                let view = self.views.GetCPUDescriptorHandleForHeapStart();
+                self.device.CreateRenderTargetView(resource, None, view);
+                self.list.ClearRenderTargetView(view, &[0.0; 4], None);
+            }
+            self.list.Close()?;
+            self.queue.ExecuteCommandLists(&[Some(self.list.cast::<ID3D12CommandList>()?)]);
+            self.sent += 1;
+            self.queue.Signal(&self.fence, self.sent)
+        }
+    }
 }
 
 static VTABLE: Vtable = Vtable { destroy, dispose, create, alias };
@@ -206,16 +281,17 @@ pub fn made() -> (u64, f64) {
     (MADE.load(Relaxed), MAKING_NS.load(Relaxed) as f64 / 1e6)
 }
 
-/// An allocator for a Skia context on `device`
-pub fn allocator(device: &ID3D12Device) -> MemoryAllocator {
+/// An allocator for a Skia context on `device` drawing with `queue`
+pub fn allocator(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> MemoryAllocator {
     // Older Windows can't skip clearing
     let zeroed_only = {
         let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
         unsafe { device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &mut options as *mut _ as *mut c_void, std::mem::size_of_val(&options) as u32) }.is_err()
     };
-    let pools: [Arc<Mutex<Pool>>; 4] = std::array::from_fn(|kind| Arc::new(Mutex::new(Pool { kind: &KINDS_PLACED[kind], not_zeroed: !zeroed_only && kind != TARGETS, slabs: Vec::new() })));
+    let pools: [Arc<Mutex<Pool>>; 5] = std::array::from_fn(|kind| Arc::new(Mutex::new(Pool { kind: &KINDS_PLACED[kind], not_zeroed: !zeroed_only, slabs: Vec::new() })));
     POOLS.lock().unwrap().extend(pools.iter().map(Arc::downgrade));
-    let allocator = Box::into_raw(Box::new(Allocator { vtable: &VTABLE, refs: AtomicI32::new(1), device: device.clone(), zeroed_only, pools }));
+    let clears = Clears::new(device, queue).map_err(|error| log::warn!("native renderer: clears: {error}")).ok().map(Mutex::new);
+    let allocator = Box::into_raw(Box::new(Allocator { vtable: &VTABLE, refs: AtomicI32::new(1), device: device.clone(), zeroed_only, pools, clears }));
     // A handle is a pointer to the object, which it now owns
     unsafe { std::mem::transmute::<*mut Allocator, MemoryAllocator>(allocator) }
 }
@@ -274,6 +350,11 @@ unsafe extern "system" fn create(
         tally(heap, &*desc, true, started);
         return out;
     }
+    // Only made by Skia making mipmaps on the GPU, which it mustn't be
+    // asked to (see `draw::sampled`)
+    if (*desc).Flags.0 & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS.0 != 0 {
+        super::render::trace(|| "Skia made mipmaps on the GPU".to_string());
+    }
     let _tally = Tally(heap, *desc, started);
     let properties = D3D12_HEAP_PROPERTIES { Type: heap, ..Default::default() };
     let targets = (*desc).Flags.0 & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0) != 0;
@@ -282,6 +363,7 @@ unsafe extern "system" fn create(
     match this.device.CreateCommittedResource(&properties, flags, desc, state, clear, &mut resource) {
         Ok(()) => {
             if let Some(resource) = resource {
+                let _ = resource.SetName(windows::core::w!("Ligma committed"));
                 *out = resource.into_raw();
             }
         }
@@ -347,7 +429,8 @@ unsafe fn placed(
     allocation: *mut *mut Alloc,
     clear: Option<*const D3D12_CLEAR_VALUE>,
 ) -> Option<ID3D12Resource> {
-    if allocation.is_null() || desc.SampleDesc.Count > 1 {
+    // Mipmapped images have memory of their own
+    if allocation.is_null() || desc.SampleDesc.Count > 1 || desc.MipLevels > 1 {
         return None;
     }
     let targets = desc.Flags.0 & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0) != 0;
@@ -357,13 +440,17 @@ unsafe fn placed(
     } else if heap != D3D12_HEAP_TYPE_DEFAULT || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D {
         return None;
     } else if targets {
-        TARGETS
+        this.clears.as_ref()?;
+        let size = this.device.GetResourceAllocationInfo(0, &[desc]).SizeInBytes;
+        if size > KINDS_PLACED[TARGETS].largest { BIG_TARGETS } else { TARGETS }
     } else {
-        // Placed at 4 KiB if it's small enough to be
+        // Placed at 4 KiB if it's small enough to be, which takes it being
+        // 64 KiB at most, so only those that could be are asked about
         let mut small = desc;
         small.Alignment = KINDS_PLACED[TINY_TEXTURES].slot;
-        let info = this.device.GetResourceAllocationInfo(0, &[small]);
-        if info.Alignment == small.Alignment && info.SizeInBytes <= KINDS_PLACED[TINY_TEXTURES].largest {
+        let could = small_tiles(&desc) <= 16;
+        let info = if could { this.device.GetResourceAllocationInfo(0, &[small]) } else { Default::default() };
+        if could && info.Alignment == small.Alignment && info.SizeInBytes <= KINDS_PLACED[TINY_TEXTURES].largest {
             desc = small;
             TINY_TEXTURES
         } else {
@@ -384,7 +471,20 @@ unsafe fn placed(
         pool.lock().unwrap().give(slab, first, count);
         return None;
     }
-    let resource = resource?;
+    let Some(resource) = resource else {
+        pool.lock().unwrap().give(slab, first, count);
+        return None;
+    };
+    if let (true, Some(clears)) = (targets, &this.clears) {
+        let depth = desc.Flags.0 & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL.0 != 0;
+        if let Err(error) = clears.lock().unwrap().clear(&resource, depth) {
+            log::warn!("native renderer: clear: {error}");
+            drop(resource);
+            pool.lock().unwrap().give(slab, first, count);
+            return None;
+        }
+    }
+    let _ = resource.SetName(windows::core::w!("Ligma placed"));
     // Skia hands over an empty holder
     let old = *allocation;
     if !old.is_null() {
@@ -392,6 +492,22 @@ unsafe fn placed(
     }
     *allocation = Box::into_raw(Box::new(Alloc { vtable: &ALLOC_VTABLE, refs: AtomicI32::new(1), pool: pool.clone(), slab, first, count }));
     Some(resource)
+}
+
+/// The 4 KiB tiles the top level of texture `desc` takes, which can be 16
+/// at most for it to be placed at 4 KiB. Formats not known count as 16
+/// bytes a pixel, which is never fewer tiles than they take
+fn small_tiles(desc: &D3D12_RESOURCE_DESC) -> u64 {
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM};
+    // A tile's width and height in pixels, by bytes a pixel
+    let (width, height) = match desc.Format {
+        DXGI_FORMAT_A8_UNORM | DXGI_FORMAT_R8_UNORM => (64, 64),
+        DXGI_FORMAT_R8G8_UNORM => (64, 32),
+        DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM => (32, 32),
+        DXGI_FORMAT_R16G16B16A16_FLOAT => (32, 16),
+        _ => (16, 16),
+    };
+    desc.Width.div_ceil(width) * (desc.Height as u64).div_ceil(height)
 }
 
 /// SkRefCnt's `unref`

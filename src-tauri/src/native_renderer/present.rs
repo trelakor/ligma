@@ -1,32 +1,32 @@
 //! The present thread: puts Figma's view in the window every frame, from
-//! the tiles the render thread has drawn so far, so the window follows
-//! Figma's view the moment it moves however long a tile takes to draw
+//! the latest snapshot of what the render thread has drawn, so the window
+//! follows the view the moment it moves however long drawing takes
 //!
-//! The render thread draws tiles into textures of their own (`Tex`), made
-//! outside Skia so its caches never hand them to anything else, and hands
-//! them over (`Shown`). This thread has a Skia context of its own on the
-//! same device and a queue of its own, ahead of the render thread's, and
-//! draws them where the view has them now: the tiles of the view's zoom
-//! first, then the whole view the render thread draws while the zoom
-//! changes, then tiles of other zooms, scaled, where neither has anything
-//! yet
+//! The render thread draws tiles and the whole view into textures of their
+//! own (`Tex`), made outside Skia so its caches never hand them to anything
+//! else, and hands over snapshots of them (`Snapshot`): only what's up to
+//! date, all of it as of one frame of Figma's render tree, never changed
+//! once handed over. This thread has a Skia context of its own on the same
+//! device and a queue of its own, and composes each frame of one snapshot
+//! the GPU has finished drawing, at the latest view that changes nothing in
+//! the scene since, with what Figma draws over the canvas in that frame.
+//! Where the snapshot doesn't cover all of the view it shows nothing new
+//! till the render thread has drawn more, so what's in the window is always
+//! all of the view, as of one moment of the page
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use skia_safe::gpu::d3d::{BackendContext, TextureResourceInfo};
 use skia_safe::gpu::{self, BackendRenderTarget, BackendTexture, DirectContext, Protected, SurfaceOrigin, SyncCpu};
-use skia_safe::{
-    AlphaType, Color4f, ColorType, Data, FilterMode, Image, MipmapMode, Paint, Rect, SamplingOptions, Surface,
-};
+use skia_safe::{AlphaType, Color4f, ColorType, Data, FilterMode, Image, MipmapMode, Paint, Rect, SamplingOptions, Surface};
 use windows::core::Interface;
 use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::Graphics::Direct3D12::{
-    ID3D12Device, ID3D12Resource, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_PRIORITY_HIGH, D3D12_HEAP_FLAG_NONE,
+    ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12Resource, D3D12_COMMAND_QUEUE_DESC, D3D12_FENCE_FLAG_NONE, D3D12_COMMAND_QUEUE_PRIORITY_HIGH, D3D12_HEAP_FLAG_NONE,
     D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-    D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    D3D12_RESOURCE_FLAGS, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS, D3D12_RESOURCE_STATE_COMMON,
     D3D12_TEXTURE_LAYOUT_UNKNOWN,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -61,14 +61,41 @@ pub struct Device {
 unsafe impl Send for Device {}
 
 /// A texture the render thread draws a tile or a view into and this thread
-/// shows. Whenever it isn't being drawn into it's left ready to be read
-/// (`D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE`), which every Skia context
-/// that wraps it is told, so none has to change its state but to draw into
-/// it. It's freed once neither thread holds it
+/// shows. Two Skia contexts on two queues use it, each knowing nothing of
+/// what the other did to it, so it allows simultaneous access: D3D12 itself
+/// returns it to the common state once each submission that used it is
+/// done, and promotes it from there to whatever the next needs. So it's in
+/// the common state whenever a context wraps it, as each is told, whatever
+/// either did before. Its render target memory is also never compressed,
+/// which reading it without the transitions that would resolve that could
+/// otherwise show what was in that memory before. It's made with the sample
+/// quality Skia gives what it makes itself, which the stencils it makes for
+/// it have to match. Once neither thread holds it, it's freed once the GPU
+/// is done with it too (see `buried`)
 pub struct Tex {
-    pub resource: ID3D12Resource,
+    resource: std::mem::ManuallyDrop<ID3D12Resource>,
     pub width: i32,
     pub height: i32,
+}
+
+/// Textures let go of, for the render thread to free once its queue has
+/// passed all it was asked to do with them
+struct Graves(Vec<ID3D12Resource>);
+
+unsafe impl Send for Graves {}
+
+static GRAVES: std::sync::Mutex<Graves> = std::sync::Mutex::new(Graves(Vec::new()));
+
+/// Textures let go of since last asked, see `Tex`
+pub fn buried() -> Vec<ID3D12Resource> {
+    std::mem::take(&mut GRAVES.lock().unwrap().0)
+}
+
+impl Drop for Tex {
+    fn drop(&mut self) {
+        let resource = unsafe { std::mem::ManuallyDrop::take(&mut self.resource) };
+        GRAVES.lock().unwrap().0.push(resource);
+    }
 }
 
 unsafe impl Send for Tex {}
@@ -85,23 +112,26 @@ impl Tex {
             DepthOrArraySize: 1,
             MipLevels: 1,
             Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: DXGI_STANDARD_MULTISAMPLE_QUALITY_PATTERN },
             Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            Flags: D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+            Flags: D3D12_RESOURCE_FLAGS(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS.0),
         };
         let mut resource: Option<ID3D12Resource> = None;
-        unsafe { device.CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, None, &mut resource) }
+        unsafe { device.CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, None, &mut resource) }
             .map_err(|error| log::warn!("native renderer: texture: {error}"))
             .ok()?;
-        Some(Arc::new(Tex { resource: resource?, width, height }))
+        let resource = resource?;
+        let _ = unsafe { resource.SetName(windows::core::w!("Ligma shared texture")) };
+        Some(Arc::new(Tex { resource: std::mem::ManuallyDrop::new(resource), width, height }))
     }
 
-    /// For a Skia context to wrap, ready to be read
+    /// For a Skia context to wrap, in the common state it's always in
+    /// between submissions
     pub fn backend(&self) -> BackendTexture {
         let info = TextureResourceInfo {
-            resource: self.resource.clone(),
+            resource: (*self.resource).clone(),
             alloc: None,
-            resource_state: D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            resource_state: D3D12_RESOURCE_STATE_COMMON,
             format: DXGI_FORMAT_R8G8B8A8_UNORM,
             sample_count: 1,
             level_count: 1,
@@ -110,6 +140,23 @@ impl Tex {
         };
         gpu::backend_textures::make_d3d((self.width, self.height), &info, "ligma")
     }
+}
+
+/// A fence on the render thread's queue
+pub struct Fence(pub ID3D12Fence);
+
+unsafe impl Send for Fence {}
+unsafe impl Sync for Fence {}
+
+/// What a layer is
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LayerKind {
+    Tile,
+    /// A tile drawn quickly at less detail, to stand in for a moment
+    Draft,
+    /// All of the view and around it, drawn while the zoom changes, while
+    /// things change, or before its tiles are drawn
+    Whole,
 }
 
 /// Something drawn at `px` device pixels a unit, its top left corner at
@@ -121,20 +168,25 @@ pub struct Layer {
     pub y: i32,
     pub px: f32,
     pub counts: Counts,
-    /// An out of date tile, shown only where the whole view, drawn since,
-    /// isn't
-    pub behind: bool,
+    pub kind: LayerKind,
 }
 
-/// What the render thread has drawn for the view
-#[derive(Clone, Default)]
-pub struct Shown {
-    /// Changes whenever anything else does
-    pub generation: u64,
-    pub tiles: Vec<Layer>,
-    /// The whole view, drawn while the zoom changes or before its tiles are
-    pub live: Option<Layer>,
-    pub background: Option<Color4f>,
+/// What the render thread has drawn, every layer of it up to date as of
+/// frame `seq` of Figma's render tree, so whatever's composed of it at any
+/// view is all of one moment of the page. Nothing in it changes once it's
+/// handed over: what's drawn again is drawn into textures of its own
+pub struct Snapshot {
+    pub seq: u64,
+    /// The GPU has drawn all of it once `fence` passes `value`
+    pub fence: Arc<Fence>,
+    pub value: u64,
+    /// Tells it from the one before
+    pub serial: u64,
+    pub layers: Vec<Layer>,
+    /// The view the whole view is drawn for, if it's up to date: its
+    /// corner and zoom, see `view_at`
+    pub whole_at: Option<(i32, i32, u32)>,
+    pub background: Color4f,
     /// Figma's checkerboard, and its darker kind, for a hidden background
     pub transparent: bool,
     pub dark: bool,
@@ -142,26 +194,32 @@ pub struct Shown {
     pub pending: bool,
 }
 
+impl Snapshot {
+    /// Up to date as of frame `seq` once the GPU has drawn it
+    pub fn drawn(&self) -> bool {
+        (unsafe { self.fence.0.GetCompletedValue() }) >= self.value
+    }
+}
+
 /// What the threads share
 pub struct Hub {
     pub view: Mutex<Option<View>>,
-    pub shown: Mutex<Shown>,
+    /// The latest snapshot handed over
+    pub snapshot: Mutex<Option<Arc<Snapshot>>>,
     /// The window's size in pixels
     pub size: Mutex<(u32, u32)>,
     /// Drawn in place of Figma's canvas, under the tab: where the tab's
     /// webview is in the window, in pixels, and whether the tab is shown
     pub origin: Mutex<Option<(i32, i32)>>,
     pub stop: AtomicBool,
-    /// Frames of Figma's render tree that couldn't be applied in a row
+    /// Frames of the render tree that couldn't be applied in a row
     pub tree_failures: std::sync::atomic::AtomicU32,
-    /// Memory shared with the tab drawn, to tell it the last frame drawn
+    /// Memory shared with the tab drawn
     pub shared: Mutex<Option<crate::webview2::Shared>>,
-    /// Frames of the render tree not shown yet, the first the one shown now
+    /// Frames of the render tree from the one shown now on
     frames: Mutex<std::collections::VecDeque<FrameView>>,
-    /// The frame whose view was last shown, for tracing
+    /// The frame last shown, for tracing
     pub shown_seq: AtomicU64,
-    /// The last frame whose edits the render thread has drawn
-    pub drawn_seq: AtomicU64,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -170,7 +228,7 @@ impl Hub {
     pub fn new(size: (u32, u32)) -> Self {
         Hub {
             view: Mutex::new(None),
-            shown: Mutex::new(Shown::default()),
+            snapshot: Mutex::new(None),
             size: Mutex::new(size),
             origin: Mutex::new(None),
             stop: AtomicBool::new(false),
@@ -178,7 +236,6 @@ impl Hub {
             shared: Mutex::new(None),
             frames: Mutex::new(std::collections::VecDeque::new()),
             shown_seq: AtomicU64::new(0),
-            drawn_seq: AtomicU64::new(0),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
@@ -196,18 +253,16 @@ impl Hub {
         self.poke();
     }
 
-    /// Frame `seq` of the render tree: its view, and what Figma draws over
-    /// the canvas in it. One that `edits` the scene shows once the render
-    /// thread has drawn it, so the scene and the overlay show together, as
-    /// Figma's worker shows them
+    /// Frame `seq` of the render tree: its view, what Figma draws over the
+    /// canvas in it, and whether it `edits` the scene
     pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool) {
         let mut frames = self.frames.lock().unwrap();
-        // Lost track: shown at once
+        // Lost track: those before go
         if frames.back().is_some_and(|last| last.seq >= seq) {
             frames.clear();
         }
-        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, came: Instant::now() });
-        while frames.len() > 64 {
+        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits });
+        while frames.len() > 256 {
             frames.pop_front();
         }
         drop(frames);
@@ -215,38 +270,26 @@ impl Hub {
         self.poke();
     }
 
-    /// The render thread has drawn the edits of frames up to `seq`
-    pub fn edits_drawn(&self, seq: u64) {
-        self.drawn_seq.store(seq, Ordering::Relaxed);
-        self.poke();
-    }
-
-    /// The view to show now and what goes over it: the latest frame after
-    /// which no edit waits for the render thread, or that's waited
-    /// `EDIT_HOLD`. With how long until the one waiting is due
-    fn shown_view(&self) -> (Option<View>, Overlay, Option<Duration>) {
+    /// The latest frame that can be shown over a snapshot as of frame
+    /// `seq`: one that changes nothing in the scene since, so its view and
+    /// what Figma draws over it go with the scene as it is in the snapshot.
+    /// None while the next is an edit not drawn yet, to show nothing new
+    /// till it is
+    fn pick(&self, seq: u64) -> Option<(View, Overlay, u64)> {
         let mut frames = self.frames.lock().unwrap();
         if frames.is_empty() {
-            return (self.view.lock().unwrap().clone(), None, None);
+            return self.view.lock().unwrap().clone().map(|view| (view, None, seq));
         }
-        let now = Instant::now();
-        let drawn = self.drawn_seq.load(Ordering::Relaxed);
-        let mut next = None;
-        let mut take = 0;
-        for (i, frame) in frames.iter().enumerate().skip(1) {
-            if frame.edits && frame.seq > drawn {
-                let due = frame.came + EDIT_HOLD;
-                if due > now {
-                    next = Some(due - now);
-                    break;
-                }
+        let mut take = None;
+        for (i, frame) in frames.iter().enumerate() {
+            if frame.edits && frame.seq > seq {
+                break;
             }
-            take = i;
+            take = Some(i);
         }
-        frames.drain(..take);
-        let first = frames.front();
-        self.shown_seq.store(first.map_or(0, |frame| frame.seq), Ordering::Relaxed);
-        (first.map(|frame| frame.view.clone()), first.and_then(|frame| frame.overlay.clone()), next)
+        frames.drain(..take?);
+        let frame = frames.front()?;
+        Some((frame.view.clone(), frame.overlay.clone(), frame.seq))
     }
 
     /// Waits until poked after `seen`, or `timeout`, and returns the count
@@ -262,12 +305,159 @@ struct FrameView {
     view: View,
     overlay: Overlay,
     edits: bool,
-    came: Instant,
 }
 
-/// Longest a frame that edits the scene waits for the render thread to
-/// draw it
-const EDIT_HOLD: Duration = Duration::from_millis(100);
+/// The view's corner in device pixels at the zoom it's drawn at in a window
+/// `size`, and that zoom, as bits
+pub fn view_at(view: &View, size: (u32, u32)) -> (i32, i32, u32) {
+    let (px, preview, _, _) = view.drawn(size);
+    // A preview's pixels are magnified, so it's drawn from the pixel the
+    // window's corner is in
+    let snap = |at: f64| if preview { at.floor() } else { at.round() } as i32;
+    (snap(view.x * px as f64), snap(view.y * px as f64), px.to_bits())
+}
+
+/// Part of a frame: layer `layer` drawn at `dest` in it, where `clip` is
+pub struct Piece {
+    pub layer: usize,
+    pub dest: Rect,
+    pub clip: skia_safe::Region,
+    /// Sampled nearest, as it lands on whole pixels or is a pixel preview's
+    /// squares
+    pub square: bool,
+}
+
+/// What a frame of `view` in a window `size` is composed of: `layers`
+/// nearest what Figma shows first, the tiles of its zoom, then the whole
+/// view drawn at it, then the rest, scaled, each where those before don't
+/// cover. And whether that leaves some of the view out
+pub fn cover(layers: &[Layer], view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
+    if view.outline().is_some() {
+        return (Vec::new(), false);
+    }
+    let px = view.px(size.0);
+    let (drawn, preview, _, _) = view.drawn(size);
+    let (ox, oy) = (view.x * px as f64, view.y * px as f64);
+    // Tiles of this zoom land on whole pixels, as Figma's do
+    let (rx, ry) = (ox.round() as i32, oy.round() as i32);
+    let distance = |at: f32| (at / drawn).log2().abs();
+    let mut ranked: Vec<(f32, usize)> = layers
+        .iter()
+        .enumerate()
+        .map(|(i, layer)| {
+            let rank = match (layer.kind, layer.px == drawn) {
+                (LayerKind::Tile, true) => 0.0,
+                (LayerKind::Whole, true) => 1.0,
+                (LayerKind::Draft, true) => 1.2,
+                (LayerKind::Whole, false) => 1.5 + distance(layer.px),
+                _ => 2.0 + distance(layer.px),
+            };
+            (rank, i)
+        })
+        .collect();
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut left = skia_safe::Region::new();
+    left.set_rect(skia_safe::IRect::from_wh(size.0 as i32, size.1 as i32));
+    let mut pieces = Vec::new();
+    for (_, i) in ranked {
+        if left.is_empty() {
+            break;
+        }
+        let layer = &layers[i];
+        let same = layer.px == px;
+        let square = same || (preview && layer.px == drawn);
+        let dest = if same {
+            Rect::from_xywh((layer.x - rx) as f32, (layer.y - ry) as f32, layer.tex.width as f32, layer.tex.height as f32)
+        } else {
+            let scale = (px / layer.px) as f64;
+            // A preview's squares are placed from the whole pixel the view
+            // lands on, as Figma places them
+            let (ox, oy) = if square { (rx as f64, ry as f64) } else { (ox, oy) };
+            Rect::from_xywh(
+                (layer.x as f64 * scale - ox) as f32,
+                (layer.y as f64 * scale - oy) as f32,
+                (layer.tex.width as f64 * scale) as f32,
+                (layer.tex.height as f64 * scale) as f32,
+            )
+        };
+        let covers = dest.round();
+        let mut clip = skia_safe::Region::new();
+        clip.set_rect(covers);
+        if !clip.op_region(&left, skia_safe::region::RegionOp::Intersect) {
+            continue;
+        }
+        left.op_rect(covers, skia_safe::region::RegionOp::Difference);
+        pieces.push(Piece { layer: i, dest, clip, square });
+    }
+    (pieces, !left.is_empty())
+}
+
+/// What draws Figma's checkerboard and pixel grid
+pub struct Patterns {
+    checker: Option<skia_safe::RuntimeEffect>,
+    grid: Option<(skia_safe::RuntimeEffect, skia_safe::RuntimeEffect)>,
+}
+
+impl Patterns {
+    pub fn new() -> Self {
+        Patterns {
+            checker: skia_safe::RuntimeEffect::make_for_shader(CHECKER, None).map_err(|error| log::warn!("native renderer: checker: {error}")).ok(),
+            grid: skia_safe::RuntimeEffect::make_for_shader(GRID_LINES, None)
+                .and_then(|lines| skia_safe::RuntimeEffect::make_for_blender(GRID_COLOR, None).map(|color| (lines, color)))
+                .map_err(|error| log::warn!("native renderer: grid: {error}"))
+                .ok(),
+        }
+    }
+
+    /// Draws a frame of `view` onto `canvas`, `size` pixels: the page's
+    /// background, `pieces` of `snapshot`, `images` its layers' as the
+    /// canvas's context's images, and the pixel grid. Returns what the
+    /// layers of this zoom drew
+    pub fn paint(&self, canvas: &skia_safe::Canvas, snapshot: &Snapshot, images: &[Option<Image>], pieces: &[Piece], view: &View, size: (u32, u32)) -> Counts {
+        let px = view.px(size.0);
+        // Figma places its checkerboard and pixel grid from where the view
+        // is, unrounded
+        let origin = (view.x * px as f64, view.y * px as f64);
+        // Outline mode shows the editor's background alone, Figma's overlay
+        // drawing the outlines
+        let outline = view.outline();
+        canvas.clear(outline.unwrap_or(snapshot.background));
+        if outline.is_some() {
+            return Counts::default();
+        }
+        if snapshot.transparent {
+            if let Some(paint) = self.checker.as_ref().and_then(|checker| checker_paint(checker, snapshot.dark, origin, px, view.zoom)) {
+                canvas.draw_paint(&paint);
+            }
+        }
+        let (drawn, ..) = view.drawn(size);
+        let mut counts = Counts::default();
+        for piece in pieces {
+            let Some(image) = images.get(piece.layer).and_then(Option::as_ref) else {
+                continue;
+            };
+            let layer = &snapshot.layers[piece.layer];
+            if layer.px == drawn && layer.kind != LayerKind::Draft {
+                counts += layer.counts;
+            }
+            // Rect by rect, each a scissor, as a region's clip would take a
+            // stencil, which Skia makes for the window's buffers unlike them
+            let filter = if piece.square { FilterMode::Nearest } else { FilterMode::Linear };
+            for rect in skia_safe::region::Iterator::new(&piece.clip) {
+                canvas.save();
+                canvas.clip_irect(rect, skia_safe::ClipOp::Intersect);
+                canvas.draw_image_rect_with_sampling_options(image, None, piece.dest, SamplingOptions::new(filter, MipmapMode::None), &Paint::default());
+                canvas.restore();
+            }
+        }
+        if view.grid {
+            if let Some(paint) = self.grid.as_ref().and_then(|grid| grid_paint(grid, origin, px)) {
+                canvas.draw_rect(Rect::from_iwh(size.0 as i32, size.1 as i32), &paint);
+            }
+        }
+        counts
+    }
+}
 
 /// Where frames go: a window of their own, or a layer of the main window's
 /// under its webviews, where the tab shows it through its canvas
@@ -295,20 +485,27 @@ pub struct Screen {
     buffers: Vec<(Surface, BackendRenderTarget)>,
     size: (u32, u32),
     /// The render thread's textures as this context's images
-    images: HashMap<usize, (Arc<Tex>, BackendTexture, Image)>,
-    checker: Option<skia_safe::RuntimeEffect>,
-    grid: Option<(skia_safe::RuntimeEffect, skia_safe::RuntimeEffect)>,
+    images: std::collections::HashMap<usize, (Arc<Tex>, Image)>,
+    patterns: Patterns,
+    queue: ID3D12CommandQueue,
+    /// Passes each frame's number once the GPU has drawn it
+    fence: ID3D12Fence,
+    frames: u64,
+    /// Textures frames read, held till the GPU's drawn them, so the render
+    /// thread draws into none the GPU's still reading here
+    reading: std::collections::VecDeque<(u64, Vec<Arc<Tex>>)>,
 }
 
 impl Screen {
     pub fn new(device: &Device, output: Output, width: u32, height: u32) -> Result<Self, String> {
         let queue_desc = D3D12_COMMAND_QUEUE_DESC { Priority: D3D12_COMMAND_QUEUE_PRIORITY_HIGH.0, ..Default::default() };
         let queue = unsafe { device.device.CreateCommandQueue(&queue_desc) }.map_err(|error| format!("queue: {error}"))?;
+        let fence: ID3D12Fence = unsafe { device.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.map_err(|error| format!("fence: {error}"))?;
         let backend = BackendContext {
             adapter: device.adapter.clone(),
             device: device.device.clone(),
-            queue,
-            memory_allocator: Some(super::committed::allocator(&device.device)),
+            memory_allocator: Some(super::committed::allocator(&device.device, &queue)),
+            queue: queue.clone(),
             protected_context: Protected::No,
         };
         let context = unsafe { gpu::direct_contexts::make_d3d(&backend, None) }.ok_or("Skia couldn't start on D3D12")?;
@@ -361,12 +558,12 @@ impl Screen {
             waitable,
             buffers: Vec::new(),
             size: (width.max(1), height.max(1)),
-            images: HashMap::new(),
-            checker: skia_safe::RuntimeEffect::make_for_shader(CHECKER, None).map_err(|error| log::warn!("native renderer: checker: {error}")).ok(),
-            grid: skia_safe::RuntimeEffect::make_for_shader(GRID_LINES, None)
-                .and_then(|lines| skia_safe::RuntimeEffect::make_for_blender(GRID_COLOR, None).map(|color| (lines, color)))
-                .map_err(|error| log::warn!("native renderer: grid: {error}"))
-                .ok(),
+            images: std::collections::HashMap::new(),
+            patterns: Patterns::new(),
+            queue,
+            fence,
+            frames: 0,
+            reading: std::collections::VecDeque::new(),
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -393,17 +590,19 @@ impl Screen {
             for clipped in [false, true] {
                 canvas.save();
                 if clipped {
-                    canvas.clip_region(&clip, skia_safe::ClipOp::Intersect);
+                    if let Some(rect) = std::iter::Iterator::next(&mut skia_safe::region::Iterator::new(&clip)) {
+                        canvas.clip_irect(rect, skia_safe::ClipOp::Intersect);
+                    }
                 }
                 canvas.draw_image_rect_with_sampling_options(&image, None, Rect::from_xywh(0.5, 0.5, 50.0, 50.0), SamplingOptions::new(filter, MipmapMode::None), &Paint::default());
                 canvas.restore();
             }
         }
-        let shown = Shown { transparent: true, ..Default::default() };
-        if let Some(paint) = self.checker(&shown, (0.0, 0.0), 1.0, 1.0) {
+        canvas.draw_image(&image, (0, 0), Some(&copy()));
+        if let Some(paint) = self.patterns.checker.as_ref().and_then(|checker| checker_paint(checker, false, (0.0, 0.0), 1.0, 1.0)) {
             canvas.draw_paint(&paint);
         }
-        if let Some(paint) = self.pixel_grid((0.0, 0.0), 10.0) {
+        if let Some(paint) = self.patterns.grid.as_ref().and_then(|grid| grid_paint(grid, (0.0, 0.0), 10.0)) {
             canvas.draw_paint(&paint);
         }
         let _ = self.context.flush_submit_and_sync_cpu();
@@ -423,7 +622,7 @@ impl Screen {
                     format: DXGI_FORMAT_R8G8B8A8_UNORM,
                     sample_count: 1,
                     level_count: 0,
-                    sample_quality_pattern: DXGI_STANDARD_MULTISAMPLE_QUALITY_PATTERN,
+                    sample_quality_pattern: 0,
                     protected: Protected::No,
                 },
             );
@@ -448,7 +647,14 @@ impl Screen {
     }
 
     pub fn run(mut self, hub: Arc<Hub>) {
-        let mut shown: Option<(View, u64, (u32, u32), Option<u32>)> = None;
+        // The snapshot frames are composed of: the latest the GPU has drawn
+        let mut current: Option<Arc<Snapshot>> = None;
+        // The last snapshot shown whole: while the latest has holes, the
+        // view moves on over this, all of it as it was a moment before,
+        // rather than standing still till the render thread fills them
+        let mut complete: Option<Arc<Snapshot>> = None;
+        // What's shown: the snapshot, the view, what's over it and the size
+        let mut shown: Option<(u64, View, Option<u32>, (u32, u32))> = None;
         let mut seen = 0;
         // Whether the swap chain has room for a frame already waited for
         let mut room = false;
@@ -457,10 +663,20 @@ impl Screen {
                 unsafe { WaitForSingleObjectEx(self.waitable, 250, true) };
                 room = true;
             }
-            let (view, overlay, due) = hub.shown_view();
-            let size = match (&self.layer, &view) {
-                (Some(_), Some(view)) => view.canvas(),
-                _ => *hub.size.lock().unwrap(),
+            let latest = hub.snapshot.lock().unwrap().clone();
+            if let Some(latest) = latest.filter(|latest| current.as_ref().is_none_or(|current| current.serial != latest.serial) && latest.drawn()) {
+                current = Some(latest);
+            }
+            let picked = current.as_ref().and_then(|snapshot| hub.pick(snapshot.seq).map(|picked| (snapshot.clone(), picked)));
+            let Some((snapshot, (view, overlay, seq))) = picked else {
+                // The render thread pokes once there's more, and the GPU
+                // has drawn it
+                seen = hub.wait(seen, Duration::from_millis(100));
+                continue;
+            };
+            let size = match &self.layer {
+                Some(_) => view.canvas(),
+                None => *hub.size.lock().unwrap(),
             };
             if size != self.size && size.0 > 0 && size.1 > 0 {
                 if let Err(error) = self.resize(size) {
@@ -468,29 +684,50 @@ impl Screen {
                 }
                 shown = None;
             }
-            let what = hub.shown.lock().unwrap().clone();
             if self.layer.is_some() {
                 // Where the browser would put Figma's canvas: at the nearest
                 // device pixel, stretched to its size
-                let at = (*hub.origin.lock().unwrap()).zip(view.as_ref().filter(|view| view.visible)).map(|((x, y), view)| {
+                let at = (*hub.origin.lock().unwrap()).filter(|_| view.visible).map(|(x, y)| {
                     let (sx, sy) = view.stretch();
                     let at = (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32);
                     (at, ((sx * 1e5).round() as i32, (sy * 1e5).round() as i32))
                 });
                 self.place(at);
             }
-            let Some(view) = view else {
+            let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
+            if shown.as_ref() == Some(&now) {
+                drop(snapshot);
                 seen = hub.wait(seen, Duration::from_millis(100));
                 continue;
-            };
-            let now = (view.clone(), what.generation, self.size, overlay.as_ref().map(|picture| picture.unique_id()));
-            if shown.as_ref() == Some(&now) {
-                seen = hub.wait(seen, due.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)));
+            }
+            // All of the view or nothing: what's shown stays till the
+            // render thread has drawn what the view needs. Its whole view
+            // is drawn for the view itself, so it's what there is
+            let (pieces, holes) = cover(&snapshot.layers, &view, self.size);
+            if holes && snapshot.whole_at != Some(view_at(&view, self.size)) {
+                stats().lock().unwrap().holes(true);
+                let before = complete.clone().filter(|before| before.serial != snapshot.serial).and_then(|before| {
+                    let (pieces, holes) = cover(&before.layers, &view, self.size);
+                    let then = (before.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
+                    (!holes && shown.as_ref() != Some(&then)).then_some((before, pieces, then))
+                });
+                drop(snapshot);
+                let Some((before, pieces, then)) = before else {
+                    super::render::trace(|| format!("present held: seq={seq} px={:.3}", view.px(self.size.0)));
+                    seen = hub.wait(seen, Duration::from_millis(100));
+                    continue;
+                };
+                hub.shown_seq.store(seq, Ordering::Relaxed);
+                self.frame(&before, &pieces, &view, overlay.as_ref(), seq);
+                room = false;
+                shown = Some(then);
                 continue;
             }
-            self.frame(&view, &what, overlay.as_ref(), hub.shown_seq.load(Ordering::Relaxed));
+            hub.shown_seq.store(seq, Ordering::Relaxed);
+            self.frame(&snapshot, &pieces, &view, overlay.as_ref(), seq);
             room = false;
             shown = Some(now);
+            complete = Some(snapshot);
         }
     }
 
@@ -523,159 +760,82 @@ impl Screen {
 
     fn image(&mut self, tex: &Arc<Tex>) -> Option<Image> {
         let key = Arc::as_ptr(tex) as usize;
-        if let Some((_, _, image)) = self.images.get(&key) {
+        if let Some((_, image)) = self.images.get(&key) {
             return Some(image.clone());
         }
-        let backend = tex.backend();
-        let image = gpu::images::borrow_texture_from(&mut self.context, &backend, SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None)?;
-        self.images.insert(key, (tex.clone(), backend, image.clone()));
+        let image = gpu::images::borrow_texture_from(&mut self.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None)?;
+        self.images.insert(key, (tex.clone(), image.clone()));
         Some(image)
     }
 
-    fn frame(&mut self, view: &View, what: &Shown, overlay: Option<&skia_safe::Picture>, seq: u64) {
+    /// Shows `pieces` of `snapshot` at `view`, and what Figma draws over it
+    /// in frame `seq`
+    fn frame(&mut self, snapshot: &Snapshot, pieces: &[Piece], view: &View, overlay: Option<&skia_safe::Picture>, seq: u64) {
         let start = Instant::now();
         let index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() } as usize;
         if index >= self.buffers.len() {
             return;
         }
-        let (width, height) = (self.size.0 as i32, self.size.1 as i32);
-        let px = view.px(self.size.0);
-        // What the render thread draws the view at, a pixel preview's
-        // pixels magnified
-        let (drawn, preview, _, _) = view.drawn(self.size);
-        let (ox, oy) = (view.x * px as f64, view.y * px as f64);
-        // Tiles of this zoom land on whole pixels, as Figma's do
-        let (rx, ry) = (ox.round() as i32, oy.round() as i32);
-        // Nearest to what Figma shows first: tiles of this zoom, then the
-        // whole view drawn at it, then the rest, nearest zoom first
-        let mut layers: Vec<(f32, &Layer)> = what
-            .tiles
-            .iter()
-            .map(|layer| (if layer.px == drawn && !layer.behind { 0.0 } else { 2.0 + (layer.px / drawn).log2().abs() }, layer))
-            .chain(what.live.iter().map(|layer| (if layer.px == drawn { 1.0 } else { 1.5 + (layer.px / drawn).log2().abs() }, layer)))
-            .collect();
-        layers.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let window = skia_safe::IRect::from_wh(width, height);
-        let mut left = skia_safe::Region::new();
-        left.set_rect(window);
-        let mut counts = Counts::default();
-        let mut draws: Vec<(Image, Rect, skia_safe::Region, bool)> = Vec::new();
-        for (rank, layer) in layers {
-            if left.is_empty() {
-                break;
-            }
-            let same = layer.px == px;
-            let square = same || (preview && layer.px == drawn);
-            let dest = if same {
-                Rect::from_xywh((layer.x - rx) as f32, (layer.y - ry) as f32, layer.tex.width as f32, layer.tex.height as f32)
-            } else {
-                let scale = (px / layer.px) as f64;
-                // A preview's squares are placed from the whole pixel the
-                // view lands on, as Figma places them
-                let (ox, oy) = if square { (rx as f64, ry as f64) } else { (ox, oy) };
-                Rect::from_xywh(
-                    (layer.x as f64 * scale - ox) as f32,
-                    (layer.y as f64 * scale - oy) as f32,
-                    (layer.tex.width as f64 * scale) as f32,
-                    (layer.tex.height as f64 * scale) as f32,
-                )
-            };
-            let covers = dest.round();
-            let mut here = skia_safe::Region::new();
-            here.set_rect(covers);
-            if !here.op_region(&left, skia_safe::region::RegionOp::Intersect) {
-                continue;
-            }
-            let Some(image) = self.image(&layer.tex) else {
-                continue;
-            };
-            if rank < 2.0 {
-                counts += layer.counts;
-            }
-            left.op_rect(covers, skia_safe::region::RegionOp::Difference);
-            draws.push((image, dest, here, square));
+        let mut images: Vec<Option<Image>> = vec![None; snapshot.layers.len()];
+        for piece in pieces {
+            images[piece.layer] = self.image(&snapshot.layers[piece.layer].tex);
         }
-        // Outline mode shows the editor's background alone, Figma's overlay
-        // drawing the outlines
-        let outline = view.outline();
-        if outline.is_some() {
-            draws.clear();
-            left.set_empty();
-        }
-        let checker = if outline.is_some() { None } else { self.checker(what, (ox, oy), px, view.zoom) };
-        let grid = if view.grid && outline.is_none() { self.pixel_grid((ox, oy), px) } else { None };
+        let size = self.size;
         let (surface, _) = &mut self.buffers[index];
         let canvas = surface.canvas();
-        canvas.clear(outline.or(what.background).unwrap_or(Color4f::new(1.0, 1.0, 1.0, 1.0)));
-        if let Some(checker) = &checker {
-            canvas.draw_paint(checker);
-        }
-        for (image, dest, clip, square) in &draws {
-            canvas.save();
-            canvas.clip_region(clip, skia_safe::ClipOp::Intersect);
-            let sampling = if *square { SamplingOptions::new(FilterMode::Nearest, MipmapMode::None) } else { SamplingOptions::new(FilterMode::Linear, MipmapMode::None) };
-            canvas.draw_image_rect_with_sampling_options(image, None, *dest, sampling, &Paint::default());
-            canvas.restore();
-        }
-        if let Some(grid) = &grid {
-            canvas.draw_rect(Rect::from_iwh(width, height), grid);
-        }
+        let counts = self.patterns.paint(canvas, snapshot, &images, pieces, view, size);
         if let Some(overlay) = overlay {
             canvas.draw_picture(overlay, None, None);
         }
         let encoded = start.elapsed();
-        if let Err(error) = self.context.flush_and_submit_surface(surface, Some(SyncCpu::Yes)) {
+        // Left ready to present, and what it reads held till the GPU's done
+        if let Err(error) = self.context.flush_surface_with_access(surface, skia_safe::surface::BackendSurfaceAccess::Present, &gpu::FlushInfo::default()) {
             log::warn!("native renderer: {error:?}");
+        }
+        self.context.submit(SyncCpu::No);
+        drop(images);
+        self.frames += 1;
+        let read: Vec<Arc<Tex>> = pieces.iter().map(|piece| snapshot.layers[piece.layer].tex.clone()).collect();
+        if unsafe { self.queue.Signal(&self.fence, self.frames) }.is_err() {
+            // Without the fence, waited for instead
+            self.context.submit(SyncCpu::Yes);
+        } else {
+            self.reading.push_back((self.frames, read));
+        }
+        let done = unsafe { self.fence.GetCompletedValue() };
+        while self.reading.front().is_some_and(|(frame, _)| *frame <= done) {
+            self.reading.pop_front();
         }
         let rendered = start.elapsed();
         let _ = unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) };
         let presented = super::render::since_epoch_ms();
-        // Textures the render thread let go of, now the GPU is done with them
-        let kept: std::collections::HashSet<usize> =
-            what.tiles.iter().chain(what.live.iter()).map(|layer| Arc::as_ptr(&layer.tex) as usize).collect();
+        // Textures of snapshots before, let go of
+        let kept: std::collections::HashSet<usize> = snapshot.layers.iter().map(|layer| Arc::as_ptr(&layer.tex) as usize).collect();
         self.images.retain(|key, _| kept.contains(key));
+        let px = view.px(size.0);
         super::render::trace(|| {
-            let live = what.live.as_ref().map(|layer| format!(" live={},{}@{:.3}", layer.x, layer.y, layer.px)).unwrap_or_default();
             format!(
-                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes={} x={rx} y={ry} placed={:?}{live}",
-                draws.len(),
+                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={}",
+                pieces.len(),
                 encoded.as_secs_f64() * 1000.0,
                 rendered.as_secs_f64() * 1000.0,
-                !left.is_empty(),
-                self.layer.as_ref().and_then(|layer| layer.at).map(|(at, _)| at)
+                (view.x * px as f64).round(),
+                (view.y * px as f64).round(),
+                self.layer.as_ref().and_then(|layer| layer.at).map(|(at, _)| at),
+                snapshot.seq
             )
         });
         let mut stats = stats().lock().unwrap();
-        stats.holes(!left.is_empty());
-        stats.record_frame(
-            encoded.as_secs_f64() * 1000.0,
-            rendered.as_secs_f64() * 1000.0,
-            counts.native,
-            counts.approximate,
-            counts.skipped,
-            view.zoom,
-            what.pending || !left.is_empty(),
-        );
+        stats.holes(false);
+        stats.record_frame(encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, counts.native, counts.approximate, counts.skipped, view.zoom, snapshot.pending);
     }
+}
 
-    /// Figma's checkerboard for a page with its background hidden. It's
-    /// anchored to the canvas, its squares 8 units wide at 100% and halved or
-    /// doubled at each power of two of zoom, so they stay 5.7 to 11.3 points
-    /// `origin` is the view's corner in device pixels, unrounded, as Figma
-    /// places the pattern
-    fn checker(&self, what: &Shown, origin: (f64, f64), px: f32, zoom: f64) -> Option<Paint> {
-        if !what.transparent {
-            return None;
-        }
-        checker_paint(self.checker.as_ref()?, what.dark, origin, px, zoom)
-    }
-
-    /// Figma's pixel grid, lines a device pixel wide at each unit once a unit
-    /// is 8 device pixels or more, which lighten dark colors and darken light
-    /// ones
-    fn pixel_grid(&self, origin: (f64, f64), px: f32) -> Option<Paint> {
-        grid_paint(self.grid.as_ref()?, origin, px)
-    }
+/// Paints over what's there rather than on it
+fn copy() -> Paint {
+    let mut paint = Paint::default();
+    paint.set_blend_mode(skia_safe::BlendMode::Src);
+    paint
 }
 
 pub(super) fn checker_paint(effect: &skia_safe::RuntimeEffect, dark: bool, origin: (f64, f64), px: f32, zoom: f64) -> Option<Paint> {

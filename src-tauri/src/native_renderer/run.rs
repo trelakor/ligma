@@ -465,7 +465,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         .name("native-render".into())
         .spawn(move || match render_device.and_then(|device| Gpu::new(&device, size.width, size.height)) {
             Ok(mut gpu) => {
-                gpu.watch(wake);
+                gpu.watch(wake, hub.clone());
                 let _ = started.send(Ok(gpu.adapter.clone()));
                 Painter::new(gpu, requests, jobs, kept, hub).run(receive);
             }
@@ -757,7 +757,7 @@ fn take_over(ctx: &Ctx, webview: &Webview) {
     if replaced.as_ref().is_some_and(|replaced| replaced.label() == label) {
         return;
     }
-    if ctx.hub.shown.lock().unwrap().tiles.is_empty() {
+    if ctx.hub.snapshot.lock().unwrap().is_none() {
         return;
     }
     match eval_value(webview, "window.__ligmaHook ? window.__ligmaHook.replace(true) : null") {
