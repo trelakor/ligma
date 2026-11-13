@@ -1490,6 +1490,7 @@ impl Painter {
         if let Some(&(key, exact)) = order.first() {
             if let Some(tile) = self.draw_tile(key, exact, key.px != pxb) {
                 self.put_tile(key, tile);
+                self.verify_tile(key);
                 self.drew = true;
             }
             self.evict(pxb, cpb);
@@ -1892,6 +1893,61 @@ impl Painter {
             return Some(self.spare.swap_remove(free));
         }
         Tex::new(&self.gpu.device, width, height)
+    }
+
+    /// Dev tools: `tex`'s pixels
+    fn read_tex(&mut self, tex: &Tex) -> Option<Vec<u8>> {
+        let (width, height) = (tex.width, tex.height);
+        let info = ImageInfo::new((width, height), ColorType::RGBA8888, AlphaType::Premul, None);
+        let mut target = self.gpu.surface(width, height, 1)?;
+        let image = gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None)?;
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        target.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0)).draw_image(&image, (0, 0), None).read_pixels(&info, &mut pixels, (width * 4) as usize, (0, 0)).then_some(pixels)
+    }
+
+    /// Dev tools, with LIGMA_NATIVE_VERIFY set: an exact tile just drawn
+    /// against the same drawn again at once from what's kept, traced and
+    /// saved where they differ: with `live`, that tells a tile drawn wrong
+    /// from one whose texture changed after
+    fn verify_tile(&mut self, key: TileKey) {
+        if std::env::var_os("LIGMA_NATIVE_VERIFY").is_none() || self.verifying {
+            return;
+        }
+        let Some(tile) = self.tiles.get(&key).filter(|tile| tile.exact && !tile.stale) else { return };
+        let tex = tile.tex.clone();
+        let Some(had) = self.read_tex(&tex) else { return };
+        self.verifying = true;
+        let old = self.tiles.remove(&key);
+        let pending = self.pending.take();
+        let mut again = None;
+        for _ in 0..1000 {
+            again = self.draw_tile(key, true, false);
+            if again.is_some() {
+                break;
+            }
+        }
+        self.pending = pending;
+        if let Some(old) = old {
+            self.tiles.insert(key, old);
+        }
+        self.verifying = false;
+        let Some(again) = again else { return };
+        let fresh = self.read_tex(&again.tex);
+        self.drop_tile(again);
+        let Some(fresh) = fresh else { return };
+        let differ = had.chunks(4).zip(fresh.chunks(4)).filter(|(a, b)| (0..4).any(|c| (a[c] as i32 - b[c] as i32).abs() > 24)).count();
+        self.verified += 1;
+        let n = self.verified;
+        trace(|| format!("verify {n} tile {},{} px={:.3} differ={differ}", key.x, key.y, key.px()));
+        if differ > 2000 {
+            let dir = std::env::temp_dir().join("ligma-verify");
+            let _ = std::fs::create_dir_all(&dir);
+            for (name, pixels) in [("had", had), ("again", fresh)] {
+                if let Some(image) = image::RgbaImage::from_raw(TILE as u32, TILE as u32, pixels) {
+                    let _ = image.save(dir.join(format!("{n}-{}_{}-{name}.png", key.x, key.y)));
+                }
+            }
+        }
     }
 
     fn put_tile(&mut self, key: TileKey, tile: Tile) {
@@ -4291,34 +4347,58 @@ impl Painter {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let background = self.background();
-        for (index, layer) in snapshot.layers.iter().enumerate() {
-            let (width, height) = (layer.tex.width, layer.tex.height);
-            let info = ImageInfo::new((width, height), ColorType::RGBA8888, AlphaType::Premul, None);
-            let Some(mut target) = self.gpu.surface(width, height, 1) else { continue };
-            let Some(image) = gpu::images::borrow_texture_from(&mut self.gpu.context, &layer.tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None) else { continue };
-            let mut had = vec![0u8; (width * height * 4) as usize];
-            if !target.canvas().clear(background).draw_image(&image, (0, 0), None).read_pixels(&info, &mut had, (width * 4) as usize, (0, 0)) {
-                continue;
-            }
-            drop(image);
-            self.clear_tiles();
-            self.pictures.clear();
-            self.thumbs.clear();
-            self.clear_rasters();
-            let px = layer.px as f64;
-            let at = View { x: layer.x as f64 / px, y: layer.y as f64 / px, w: width as f64 / px, h: height as f64 / px, preview: 0.0, ..view.clone() };
-            target.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
-            self.compose_at(&mut target, &at, None, true);
-            let mut fresh = vec![0u8; (width * height * 4) as usize];
-            if !target.canvas().read_pixels(&info, &mut fresh, (width * 4) as usize, (0, 0)) {
-                continue;
-            }
-            let differ = had.chunks(4).zip(fresh.chunks(4)).filter(|(a, b)| (0..4).any(|c| (a[c] as i32 - b[c] as i32).abs() > 24)).count();
-            trace(|| format!("layer {index} kind={:?} px={:.3} x={} y={} {}x{} differ={differ}", layer.kind, layer.px, layer.x, layer.y, width, height));
-            if differ > 2000 {
-                for (name, pixels) in [("had", had), ("fresh", fresh)] {
-                    if let Some(image) = image::RgbaImage::from_raw(width as u32, height as u32, pixels) {
-                        let _ = image.save(dir.join(format!("{index}-{name}.png")));
+        // Each layer as shown, drawn again with all but tiles kept as they
+        // are, and drawn again from nothing: where only the first differs,
+        // its texture changed after it was drawn
+        let mut had: Vec<Option<Vec<u8>>> = Vec::new();
+        let mut cached: Vec<Option<Vec<u8>>> = Vec::new();
+        for pass in 0..2 {
+            for (index, layer) in snapshot.layers.iter().enumerate() {
+                let (width, height) = (layer.tex.width, layer.tex.height);
+                let info = ImageInfo::new((width, height), ColorType::RGBA8888, AlphaType::Premul, None);
+                let Some(mut target) = self.gpu.surface(width, height, 1) else {
+                    had.push(None);
+                    cached.push(None);
+                    continue;
+                };
+                if pass == 0 {
+                    let Some(image) = gpu::images::borrow_texture_from(&mut self.gpu.context, &layer.tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None) else {
+                        had.push(None);
+                        cached.push(None);
+                        continue;
+                    };
+                    let mut pixels = vec![0u8; (width * height * 4) as usize];
+                    let read = target.canvas().clear(background).draw_image(&image, (0, 0), None).read_pixels(&info, &mut pixels, (width * 4) as usize, (0, 0));
+                    had.push(read.then_some(pixels));
+                    self.clear_tiles();
+                } else {
+                    self.clear_tiles();
+                    self.pictures.clear();
+                    self.thumbs.clear();
+                    self.clear_rasters();
+                }
+                let px = layer.px as f64;
+                let at = View { x: layer.x as f64 / px, y: layer.y as f64 / px, w: width as f64 / px, h: height as f64 / px, preview: 0.0, ..view.clone() };
+                target.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+                self.compose_at(&mut target, &at, None, true);
+                let mut drawn = vec![0u8; (width * height * 4) as usize];
+                let read = target.canvas().read_pixels(&info, &mut drawn, (width * 4) as usize, (0, 0));
+                if pass == 0 {
+                    cached.push(read.then_some(drawn));
+                    continue;
+                }
+                let (Some(had), Some(cached)) = (&had[index], &cached[index]) else { continue };
+                if !read {
+                    continue;
+                }
+                let count = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(a, b)| (0..4).any(|c| (a[c] as i32 - b[c] as i32).abs() > 24)).count();
+                let (differ, cached_differ) = (count(had, &drawn), count(cached, &drawn));
+                trace(|| format!("layer {index} kind={:?} px={:.3} x={} y={} {}x{} differ={differ} cached={cached_differ}", layer.kind, layer.px, layer.x, layer.y, width, height));
+                if differ > 2000 || cached_differ > 2000 {
+                    for (name, pixels) in [("had", had), ("cached", cached), ("fresh", &drawn)] {
+                        if let Some(image) = image::RgbaImage::from_raw(width as u32, height as u32, pixels.clone()) {
+                            let _ = image.save(dir.join(format!("{index}-{name}.png")));
+                        }
                     }
                 }
             }
