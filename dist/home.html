@@ -299,15 +299,19 @@
   .fold small { color: var(--text2); font-size: 11px; font-weight: 450; }
   .all { display: flex; align-items: center; gap: 2px; height: 24px; margin-left: 8px; padding: 0 4px 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; }
   .fold + .all, .fold + .lay { margin-left: auto; }
-  /* Starred on Home: a page of cards at a time, turned with the arrows
-     or a sideways swipe; each page slides in from its side */
-  .home-sec .star-grid.paged { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); --from: 40px; }
-  .home-sec .star-grid.paged.back { --from: -40px; }
-  .star-grid.slide0 { animation: page-a 280ms var(--ease); }
-  .star-grid.slide1 { animation: page-b 280ms var(--ease); }
-  @keyframes page-a { from { transform: translateX(var(--from)); opacity: 0; } }
-  @keyframes page-b { from { transform: translateX(var(--from)); opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { .home-sec .star-grid.paged { --from: 0px; } }
+  /* Starred on Home: one strip of every starred file, as many in view as
+     fit, that slides sideways: a swipe moves it and snaps to a card, the
+     arrows glide it along by all but the last card in view. A fade on a
+     side says there's more that way */
+  .home-sec .star-grid.car { position: relative; grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: calc((100% - (var(--cols) - 1) * 20px) / var(--cols)); overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; margin: -8px -12px 0; padding: 16px 12px 28px; scroll-padding-inline: 12px; }
+  .home-sec .star-grid.car::-webkit-scrollbar { display: none; }
+  .home-sec .star-grid.car > .card { scroll-snap-align: start; }
+  .star-grid.car.lifting { scroll-snap-type: none; }
+  .star-car.more-l .star-grid.car { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40px); mask-image: linear-gradient(to right, transparent 0, #000 40px); }
+  .star-car.more-r .star-grid.car { -webkit-mask-image: linear-gradient(to left, transparent 0, #000 40px); mask-image: linear-gradient(to left, transparent 0, #000 40px); }
+  .star-car.more-l.more-r .star-grid.car { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%); }
+  .star-car .car-btn { opacity: 0; pointer-events: none; transition: opacity 160ms, transform 140ms var(--ease), background 140ms; }
+  .star-car.more-l .car-btn.prev, .star-car.more-r .car-btn.next { opacity: 1; pointer-events: auto; }
   /* The arrows sit on the row's edges, at the middle of the previews: a
      card is the row's width shared by its columns, its preview 16:9 */
   .star-car { position: relative; container-type: inline-size; }
@@ -2677,11 +2681,9 @@ function homeLayout() {
   const [starCols, cols, projectCols] = homeCols.split(",").map(Number);
   const shown = FILES.filter((f) => !f.trashed && (state.type === "all" || f.type === state.type));
   const starredAll = starOrder(shown.filter((f) => f.starred));
-  // A row of them at a time, paged through: each file still shows once, so
-  // none of them shows further down
-  const starPages = Math.max(1, Math.ceil(starredAll.length / starCols));
-  starPage = Math.min(starPage, starPages - 1);
-  const starred = starredAll.slice(starPage * starCols, (starPage + 1) * starCols);
+  // All of them in one sliding row: each file still shows once, so none of
+  // them shows further down
+  const starred = starredAll;
   const taken = new Set(starredAll.map((f) => f.id));
   const pool = shown.filter((f) => (LIVE ? f.recent : true) && !taken.has(f.id)).sort((a, b) => b.at - a.at);
   // Who's in a file is a reason too: watch the latest ones
@@ -2709,11 +2711,9 @@ function homeLayout() {
   const recentsLoading = LIVE && !Live.ready.has("recents");
 
   if (open("starred")) files.push(...starred);
-  const slide = starSlide ? ` slide${starSlide.n % 2} ${starSlide.dir < 0 ? "back" : ""}` : "";
-  starPageCount = starPages;
-  const arrow = (to, dir, label) => (to >= 0 && to < starPages ? `<button class="car-btn ${dir}" data-star-page="${to}" aria-label="${label}" title="${label}">${icon("right", dir === "prev" ? "flip" : "")}</button>` : "");
+  const arrow = (dir, label) => `<button class="car-btn ${dir}" data-car="${dir === "prev" ? -1 : 1}" tabindex="-1" aria-label="${label}" title="${label}">${icon("right", dir === "prev" ? "flip" : "")}</button>`;
   html += section("starred", "Starred", starredAll.length, starred.length
-    ? `<div class="star-car" data-key="star-car" style="--cols:${starCols}"><div class="grid star-grid paged${slide}" role="listbox" aria-multiselectable="true" aria-label="Starred, page ${starPage + 1} of ${starPages}, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>${arrow(starPage - 1, "prev", "Previous starred files")}${arrow(starPage + 1, "next", "More starred files")}</div>`
+    ? `<div class="star-car" data-key="star-car" style="--cols:${starCols}"><div class="grid star-grid car" data-key="star-track" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>${arrow("prev", "Earlier starred files")}${arrow("next", "More starred files")}</div>`
     : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
   if (recentsLoading) html += `<section class="sec home-sec" data-key="home:waiting">${waiting(cols * 2)}</section>`;
 
@@ -2734,17 +2734,26 @@ function homeLayout() {
 }
 let homeKey = "";
 
-// Starred on Home, a page at a time, turned with the round arrows over its
-// row or a sideways swipe
-let starPage = 0;
-let starPageCount = 1;
-let starSlide = null;
-function turnStarPage(to) {
-  if (to === starPage || to < 0 || to >= starPageCount) return;
-  starSlide = { dir: Math.sign(to - starPage), n: (starSlide?.n ?? 0) + 1 };
-  starPage = to;
-  render();
+// Starred on Home: which sides have more, for the fades and the arrows
+function carEdges() {
+  const car = $(".star-car", scroller);
+  const track = car && $(".star-grid.car", car);
+  if (!track) return;
+  car.classList.toggle("more-l", track.scrollLeft > 2);
+  car.classList.toggle("more-r", track.scrollLeft + track.clientWidth < track.scrollWidth - 2);
 }
+// An arrow glides the row along by all but one of the cards in view, so
+// the last one seen slides over to be the first
+function slideCar(dir) {
+  const track = $(".star-grid.car", scroller);
+  const card = track?.firstElementChild;
+  if (!card) return;
+  const step = card.offsetWidth + 20;
+  const n = Math.max(1, Math.round(track.clientWidth / step) - 1);
+  track.scrollBy({ left: dir * n * step, behavior: calm() ? "auto" : "smooth" });
+}
+scroller.addEventListener("scroll", (e) => e.target.matches?.(".star-grid.car") && carEdges(), { capture: true, passive: true });
+addEventListener("resize", () => carEdges());
 
 const EMPTY = {
   home: ["home", "Nothing here yet", "Files you open, edit or get comments on show up here", "new"],
@@ -2935,6 +2944,7 @@ function render({ keepScroll = true } = {}) {
   marquee.remove();
   morph(scroller, html);
   if (settings) openFlows();
+  if (home) carEdges();
   if (boxing) scroller.append(marquee);
   if (box) box.cards = null;
   // Otherwise the browser keeps what's in view where it is, as content
@@ -3778,7 +3788,7 @@ function teamMenu(id, at) {
   if (!found) return;
   const pinned = STARRED_TEAMS().has(id);
   showMenu([
-    { label: "Settings and people", act: () => openTeamWin(id, at) },
+    { label: "Settings", act: () => go(`s:${id}`) },
     { label: "Invite people…", act: () => openTeamWin(id, at, "invite") },
     { label: "Copy invite link", act: () => copyTeamLink(id) },
     null,
@@ -7369,21 +7379,6 @@ head.addEventListener("click", (e) => {
   }
 });
 
-// A sideways swipe over Home's Starred turns its pages, one per swipe
-let swipe = { dx: 0, until: 0 };
-scroller.addEventListener("wheel", (e) => {
-  const grid = e.target.closest?.(".star-grid.paged");
-  if (!grid || Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
-  e.preventDefault();
-  const now = performance.now();
-  if (now < swipe.until) return;
-  swipe.dx += e.deltaX;
-  if (Math.abs(swipe.dx) < 60) return;
-  const to = starPage + Math.sign(swipe.dx);
-  swipe = { dx: 0, until: now + 450 };
-  turnStarPage(to);
-}, { passive: false });
-
 filters.addEventListener("click", (e) => {
   const layout = e.target.closest("[data-layout]")?.dataset.layout;
   if (layout) return setLayout(layout);
@@ -7421,8 +7416,8 @@ scroller.addEventListener("click", (e) => {
     store.set(LIVE ? "collapsed-live" : "collapsed", [...state.collapsed]);
     return render();
   }
-  const page = e.target.closest("[data-star-page]");
-  if (page) return turnStarPage(Number(page.dataset.starPage));
+  const car = e.target.closest("[data-car]");
+  if (car) return slideCar(Number(car.dataset.car));
   const to = e.target.closest("[data-go]")?.dataset.go;
   if (to) return go(to);
   const layout = e.target.closest("[data-layout]")?.dataset.layout;
@@ -7722,6 +7717,7 @@ function startLift() {
   ghost.style.transform = `translate(${r.left - GHOST_PAD}px, ${r.top - GHOST_PAD}px)`;
   document.body.append(ghost);
   card.classList.add("hole");
+  grid.classList.add("lifting");
   document.body.classList.add("grabbing");
   try {
     scroller.setPointerCapture(l.pointer);
@@ -7753,6 +7749,16 @@ function stepLift(now) {
   const edge = 56;
   const dy = l.py < area.top + edge ? -(area.top + edge - l.py) / 3 : l.py > area.bottom - edge ? (l.py - area.bottom + edge) / 3 : 0;
   if (dy) scroller.scrollTop += Math.round(dy * dt);
+  // In Home's sliding row, held near either end it slides that way
+  if (l.grid.classList.contains("car")) {
+    const r = l.grid.getBoundingClientRect();
+    const reach = 72;
+    const dx = l.py > r.top - 40 && l.py < r.bottom + 40 ? (l.px < r.left + reach ? -(r.left + reach - l.px) / 4 : l.px > r.right - reach ? (l.px - r.right + reach) / 4 : 0) : 0;
+    if (dx) {
+      l.grid.scrollLeft += Math.round(Math.max(-24, Math.min(24, dx)) * dt);
+      carEdges();
+    }
+  }
   l.ghost.style.transform = `translate(${l.px - l.ox}px, ${l.py - l.oy}px) rotate(${l.ang.toFixed(2)}deg) scale(${l.scale.toFixed(4)})`;
   retarget(area);
   l.frame = requestAnimationFrame(stepLift);
@@ -7767,8 +7773,10 @@ function retarget(area) {
     l.target = over;
   }
   if (over || l.px < area.left || l.px > area.right) return;
-  const gx = l.px - area.left + scroller.scrollLeft;
-  const gy = l.py - area.top + scroller.scrollTop;
+  // The sliding row's places are in its own coordinates, scrolled or not
+  const car = l.grid.classList.contains("car") ? l.grid.getBoundingClientRect() : null;
+  const gx = car ? l.px - car.left + l.grid.scrollLeft : l.px - area.left + scroller.scrollLeft;
+  const gy = car ? l.py - car.top : l.py - area.top + scroller.scrollTop;
   let best = 0;
   let bestDistance = Infinity;
   l.slots.forEach((s, i) => {
@@ -7810,6 +7818,7 @@ function dropLift(cancel = false) {
   const finish = () => {
     l.ghost.remove();
     l.card.classList.remove("hole");
+    l.grid.classList.remove("lifting");
     lift = null;
   };
   const into = !cancel && l.target;
