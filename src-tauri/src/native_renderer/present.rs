@@ -44,6 +44,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 
 use super::draw::Counts;
+use super::overlay::Overlay;
 use super::render::View;
 use super::stats;
 
@@ -155,13 +156,12 @@ pub struct Hub {
     pub tree_failures: std::sync::atomic::AtomicU32,
     /// Memory shared with the tab drawn, to tell it the last frame drawn
     pub shared: Mutex<Option<crate::webview2::Shared>>,
-    /// Views of frames of the render tree not shown yet, with when Figma's
-    /// worker drew its overlay for each, the first the one shown now
+    /// Frames of the render tree not shown yet, the first the one shown now
     frames: Mutex<std::collections::VecDeque<FrameView>>,
-    /// When Figma's worker last said it drew its overlay
-    overlay_at: Mutex<Option<Instant>>,
     /// The frame whose view was last shown, for tracing
     pub shown_seq: AtomicU64,
+    /// The last frame whose edits the render thread has drawn
+    pub drawn_seq: AtomicU64,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -177,8 +177,8 @@ impl Hub {
             tree_failures: std::sync::atomic::AtomicU32::new(0),
             shared: Mutex::new(None),
             frames: Mutex::new(std::collections::VecDeque::new()),
-            overlay_at: Mutex::new(None),
             shown_seq: AtomicU64::new(0),
+            drawn_seq: AtomicU64::new(0),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
@@ -196,15 +196,17 @@ impl Hub {
         self.poke();
     }
 
-    /// The view of frame `seq` of the render tree, shown once Figma's
-    /// worker has drawn its overlay for it, so the two show together
-    pub fn frame_view(&self, seq: u64, view: View) {
+    /// Frame `seq` of the render tree: its view, and what Figma draws over
+    /// the canvas in it. One that `edits` the scene shows once the render
+    /// thread has drawn it, so the scene and the overlay show together, as
+    /// Figma's worker shows them
+    pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool) {
         let mut frames = self.frames.lock().unwrap();
         // Lost track: shown at once
         if frames.back().is_some_and(|last| last.seq >= seq) {
             frames.clear();
         }
-        frames.push_back(FrameView { seq, view: view.clone(), came: Instant::now(), drawn: None });
+        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, came: Instant::now() });
         while frames.len() > 64 {
             frames.pop_front();
         }
@@ -213,46 +215,38 @@ impl Hub {
         self.poke();
     }
 
-    /// Figma's worker drew its overlay for frames up to `seq`
-    pub fn overlay_drawn(&self, seq: u64) {
-        let now = Instant::now();
-        *self.overlay_at.lock().unwrap() = Some(now);
-        for frame in self.frames.lock().unwrap().iter_mut().filter(|frame| frame.seq <= seq) {
-            frame.drawn.get_or_insert(now);
-        }
+    /// The render thread has drawn the edits of frames up to `seq`
+    pub fn edits_drawn(&self, seq: u64) {
+        self.drawn_seq.store(seq, Ordering::Relaxed);
         self.poke();
     }
 
-    /// The view to show now: the latest whose overlay Figma's worker has
-    /// drawn, `OVERLAY_LATENCY` ago, or that's waited `OVERLAY_HOLD`. With
-    /// how long until the next is due, if one waits
-    fn shown_view(&self) -> (Option<View>, Option<Duration>) {
+    /// The view to show now and what goes over it: the latest frame after
+    /// which no edit waits for the render thread, or that's waited
+    /// `EDIT_HOLD`. With how long until the one waiting is due
+    fn shown_view(&self) -> (Option<View>, Overlay, Option<Duration>) {
         let mut frames = self.frames.lock().unwrap();
         if frames.is_empty() {
-            return (self.view.lock().unwrap().clone(), None);
+            return (self.view.lock().unwrap().clone(), None, None);
         }
         let now = Instant::now();
-        // The worker isn't saying, so views aren't held for it
-        let heard = self.overlay_at.lock().unwrap().is_some_and(|at| now - at < Duration::from_secs(1));
-        let latency = overlay_latency();
-        let due = |frame: &FrameView| {
-            let Some(latency) = latency.filter(|_| heard) else {
-                return frame.came;
-            };
-            let drawn = frame.drawn.map_or(frame.came + OVERLAY_HOLD, |drawn| drawn + latency);
-            drawn.min(frame.came + OVERLAY_HOLD)
-        };
+        let drawn = self.drawn_seq.load(Ordering::Relaxed);
         let mut next = None;
-        while frames.len() > 1 {
-            let at = due(&frames[1]);
-            if at > now {
-                next = Some(at - now);
-                break;
+        let mut take = 0;
+        for (i, frame) in frames.iter().enumerate().skip(1) {
+            if frame.edits && frame.seq > drawn {
+                let due = frame.came + EDIT_HOLD;
+                if due > now {
+                    next = Some(due - now);
+                    break;
+                }
             }
-            frames.pop_front();
+            take = i;
         }
-        self.shown_seq.store(frames.front().map_or(0, |frame| frame.seq), Ordering::Relaxed);
-        (frames.front().map(|frame| frame.view.clone()), next)
+        frames.drain(..take);
+        let first = frames.front();
+        self.shown_seq.store(first.map_or(0, |frame| frame.seq), Ordering::Relaxed);
+        (first.map(|frame| frame.view.clone()), first.and_then(|frame| frame.overlay.clone()), next)
     }
 
     /// Waits until poked after `seen`, or `timeout`, and returns the count
@@ -266,27 +260,14 @@ impl Hub {
 struct FrameView {
     seq: u64,
     view: View,
+    overlay: Overlay,
+    edits: bool,
     came: Instant,
-    drawn: Option<Instant>,
 }
 
-/// Longest a frame's view waits for Figma's worker to draw its overlay
-const OVERLAY_HOLD: Duration = Duration::from_millis(50);
-
-/// From when Figma's worker draws its overlay to when it's on screen,
-/// past what it takes this thread to show a frame, in microseconds, or
-/// negative for views not to wait for it (`set_overlay_latency`)
-static OVERLAY_LATENCY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-
-fn overlay_latency() -> Option<Duration> {
-    let micros = OVERLAY_LATENCY.load(Ordering::Relaxed);
-    (micros >= 0).then(|| Duration::from_micros(micros as u64))
-}
-
-/// For the dev build, to tune it
-pub fn set_overlay_latency(ms: f64) {
-    OVERLAY_LATENCY.store((ms * 1000.0) as i64, Ordering::Relaxed);
-}
+/// Longest a frame that edits the scene waits for the render thread to
+/// draw it
+const EDIT_HOLD: Duration = Duration::from_millis(100);
 
 /// Where frames go: a window of their own, or a layer of the main window's
 /// under its webviews, where the tab shows it through its canvas
@@ -467,7 +448,7 @@ impl Screen {
     }
 
     pub fn run(mut self, hub: Arc<Hub>) {
-        let mut shown: Option<(View, u64, (u32, u32))> = None;
+        let mut shown: Option<(View, u64, (u32, u32), Option<u32>)> = None;
         let mut seen = 0;
         // Whether the swap chain has room for a frame already waited for
         let mut room = false;
@@ -476,7 +457,7 @@ impl Screen {
                 unsafe { WaitForSingleObjectEx(self.waitable, 250, true) };
                 room = true;
             }
-            let (view, due) = hub.shown_view();
+            let (view, overlay, due) = hub.shown_view();
             let size = match (&self.layer, &view) {
                 (Some(_), Some(view)) => view.canvas(),
                 _ => *hub.size.lock().unwrap(),
@@ -502,12 +483,12 @@ impl Screen {
                 seen = hub.wait(seen, Duration::from_millis(100));
                 continue;
             };
-            let now = (view.clone(), what.generation, self.size);
+            let now = (view.clone(), what.generation, self.size, overlay.as_ref().map(|picture| picture.unique_id()));
             if shown.as_ref() == Some(&now) {
                 seen = hub.wait(seen, due.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)));
                 continue;
             }
-            self.frame(&view, &what, hub.shown_seq.load(Ordering::Relaxed));
+            self.frame(&view, &what, overlay.as_ref(), hub.shown_seq.load(Ordering::Relaxed));
             room = false;
             shown = Some(now);
         }
@@ -551,7 +532,7 @@ impl Screen {
         Some(image)
     }
 
-    fn frame(&mut self, view: &View, what: &Shown, seq: u64) {
+    fn frame(&mut self, view: &View, what: &Shown, overlay: Option<&skia_safe::Picture>, seq: u64) {
         let start = Instant::now();
         let index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() } as usize;
         if index >= self.buffers.len() {
@@ -638,6 +619,9 @@ impl Screen {
         }
         if let Some(grid) = &grid {
             canvas.draw_rect(Rect::from_iwh(width, height), grid);
+        }
+        if let Some(overlay) = overlay {
+            canvas.draw_picture(overlay, None, None);
         }
         let encoded = start.elapsed();
         if let Err(error) = self.context.flush_and_submit_surface(surface, Some(SyncCpu::Yes)) {

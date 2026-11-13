@@ -151,19 +151,13 @@ fn start_pushing(webview: &Webview) -> bool {
             webview,
             prefix,
             move |key, body| {
-                if key.starts_with('f') {
-                    frames().put(&tab, body);
-                } else if let Some(drawn) = key.strip_prefix("ov-") {
-                    // Figma's worker drew its overlay for the frame
-                    // `<session>-<seq>`, then, for tracing, `~` the frame
-                    // time the worker drew in and when it was done, in ms
-                    // since 1970
-                    let (drawn, times) = drawn.split_once('~').unwrap_or((drawn, ""));
-                    let seq = drawn.rsplit('-').next().and_then(|seq| seq.parse::<u64>().ok());
-                    if let (Some(seq), Some(ctx)) = (seq, CTX.lock().unwrap().clone()) {
-                        super::render::trace(|| format!("overlay {seq} drawn at={:.2} worker={times}", super::render::since_epoch_ms()));
-                        ctx.hub.overlay_drawn(seq);
+                if let Some(family) = key.strip_prefix("font-") {
+                    // Figma's interface font, for the overlay
+                    if let Err(error) = super::overlay::add_font(family, &body) {
+                        log::warn!("native renderer: Figma's font {family} couldn't be read: {error}");
                     }
+                } else if key.starts_with('f') {
+                    frames().put(&tab, body);
                 } else {
                     pushed().put(key, body);
                 }
@@ -228,6 +222,7 @@ fn take_frames(ctx: Arc<Ctx>) {
     let mut gap: Option<Instant> = None;
     let mut asked: Option<Instant> = None;
     let mut resyncs = 0u32;
+    let mut overlay = super::overlay::Decoder::new();
     while !ctx.stop.load(Ordering::Relaxed) {
         let came = frames().take(Duration::from_millis(100));
         let tab = ctx.framing.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
@@ -305,7 +300,8 @@ fn take_frames(ctx: Arc<Ctx>) {
                 }
             }
             follow_canvas(&ctx, &view);
-            ctx.hub.frame_view(frame.header.seq, view);
+            let drawn = overlay.as_mut().and_then(|overlay| overlay.decode(frame.ui()));
+            ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits());
             super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
@@ -1377,11 +1373,6 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             Ok(report.to_string())
         }
         "profile" if super::dev() => Ok(super::profile::report()),
-        _ if action.starts_with("overlay:") && super::dev() => {
-            let ms = action["overlay:".len()..].parse::<f64>().map_err(|error| error.to_string())?;
-            super::present::set_overlay_latency(ms);
-            Ok(String::new())
-        }
         "profile-reset" if super::dev() => {
             super::profile::reset();
             Ok("reset".into())

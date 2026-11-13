@@ -64,6 +64,9 @@ windows-numerics = "0.3"
 # The experimental native renderer (src/native_renderer): Skia on D3D12,
 # and the GPU memory counters it shows (PDH, above)
 skia-safe = { version = "0.157", features = ["d3d"] }
+# Figma's interface font, which comes as WOFF2, for what the native
+# renderer draws over the canvas (src/native_renderer/overlay.rs)
+wuff = { version = "0.2", default-features = false, features = ["brotli"] }
 # Custom effects, the file's own code, run natively: QuickJS for their
 # code, wgpu on D3D12 for their WebGPU (src/native_renderer/effect_host.rs)
 rquickjs = "0.14"

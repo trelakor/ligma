@@ -51,6 +51,10 @@ mod gpu_memory;
 #[cfg(windows)]
 mod gpu_census;
 #[cfg(windows)]
+mod overlay;
+#[cfg(windows)]
+mod overlay_icons;
+#[cfg(windows)]
 mod present;
 #[cfg(windows)]
 mod profile;

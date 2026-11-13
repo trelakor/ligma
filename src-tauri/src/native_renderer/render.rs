@@ -1753,10 +1753,11 @@ impl Painter {
         if let Some(sent) = self.sent.take() {
             trace(|| format!("  change handed over {:.1}ms after Figma sent it", since_epoch_ms() - sent));
         }
-        // The tab shows what Figma's worker draws over the canvas once this
-        // is drawn (see page_hook.js)
+        // What Figma draws over the canvas in a frame that edits the scene
+        // shows once the edit is drawn (see `Hub::shown_view`)
         if !whole_pending && self.whole.as_ref().is_none_or(|whole| whole.patch.is_empty()) && self.drawn_seq != self.seq {
             self.drawn_seq = self.seq;
+            self.hub.edits_drawn(self.seq);
             if let Some(shared) = *self.hub.shared.lock().unwrap() {
                 // SAFETY: the memory stays mapped while Ligma runs, and slot 18 is in it
                 unsafe { std::ptr::write_volatile((shared.ptr as *mut f64).add(18), self.seq as f64) };

@@ -2457,6 +2457,142 @@ fn unknown_field(def: &Def, id: u32, at: usize) -> String {
     format!("{} has no field {id}, at byte {at}: the schema doesn't match the data", def.name)
 }
 
+// ---------------------------------------------------------------- any value
+
+/// Kiwi read without binding to this module's types, for data other than
+/// the forest, as Figma's overlay commands (see overlay.rs)
+pub struct Raw<'a> {
+    rd: Reader<'a>,
+    s: &'a Schema,
+}
+
+impl<'a> Raw<'a> {
+    pub fn new(s: &'a Schema, bytes: &'a [u8]) -> Self {
+        Raw { rd: Reader::new(bytes), s }
+    }
+
+    pub fn at(&self) -> usize {
+        self.rd.p
+    }
+
+    pub fn done(&self) -> bool {
+        self.rd.p >= self.rd.b.len()
+    }
+
+    pub fn byte(&mut self) -> R<u8> {
+        self.rd.byte()
+    }
+
+    pub fn uint(&mut self) -> R<u32> {
+        self.rd.uint()
+    }
+
+    /// One value of definition `def`
+    pub fn value(&mut self, def: u32) -> R<Value> {
+        self.any(Type::Def(def), false)
+    }
+
+    fn any(&mut self, ty: Type, array: bool) -> R<Value> {
+        if array {
+            let n = self.rd.uint()? as usize;
+            if ty == Type::Byte {
+                return Ok(Value::Bytes(self.rd.take(n)?.to_vec()));
+            }
+            let mut v = Vec::with_capacity(n.min(self.rd.remaining()));
+            for _ in 0..n {
+                v.push(self.any(ty, false)?);
+            }
+            return Ok(Value::Array(v));
+        }
+        Ok(match ty {
+            Type::Bool => Value::Bool(self.rd.byte()? != 0),
+            Type::Byte => Value::Byte(self.rd.byte()?),
+            Type::Int => Value::Int(self.rd.int()?),
+            Type::Uint => Value::Uint(self.rd.uint()?),
+            Type::Float => Value::Float(self.rd.float()?),
+            Type::String => Value::String(String::from_utf8_lossy(self.rd.string_bytes()?).into_owned()),
+            Type::Int64 => Value::Int64(self.rd.int64()?),
+            Type::Uint64 => Value::Uint64(self.rd.uint64()?),
+            Type::Def(d) => {
+                let s = self.s;
+                let def = s.defs.get(d as usize).ok_or("no such definition")?;
+                match def.kind {
+                    DefKind::Enum => {
+                        let value = self.rd.uint()?;
+                        Value::Enum { value, name: def.field(value).map(|f| f.name.clone()) }
+                    }
+                    DefKind::Struct => {
+                        let mut fields = Vec::with_capacity(def.fields.len());
+                        for f in &def.fields {
+                            fields.push((f.name.clone(), self.any(f.ty, f.array)?));
+                        }
+                        Value::Record(fields)
+                    }
+                    DefKind::Message => {
+                        let mut fields = Vec::new();
+                        loop {
+                            let at = self.rd.p;
+                            let id = self.rd.uint()?;
+                            if id == 0 {
+                                break;
+                            }
+                            let f = def.field(id).ok_or_else(|| unknown_field(def, id, at))?;
+                            fields.push((f.name.clone(), self.any(f.ty, f.array)?));
+                        }
+                        Value::Record(fields)
+                    }
+                }
+            }
+        })
+    }
+}
+
+impl Schema {
+    /// The index of the definition named `name`
+    pub fn index(&self, name: &str) -> Option<u32> {
+        self.names.get(name).copied()
+    }
+}
+
+impl Value {
+    /// A field of a record, by name
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        match self {
+            Value::Record(fields) => fields.iter().find(|(n, _)| &**n == name).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    pub fn num(&self) -> Option<f64> {
+        Some(match *self {
+            Value::Bool(v) => v as u8 as f64,
+            Value::Byte(v) => v as f64,
+            Value::Int(v) => v as f64,
+            Value::Uint(v) => v as f64,
+            Value::Float(v) => v as f64,
+            Value::Int64(v) => v as f64,
+            Value::Uint64(v) => v as f64,
+            Value::Enum { value, .. } => value as f64,
+            _ => return None,
+        })
+    }
+
+    pub fn items(&self) -> &[Value] {
+        match self {
+            Value::Array(items) => items,
+            _ => &[],
+        }
+    }
+
+    pub fn str(&self) -> &str {
+        match self {
+            Value::String(s) => s,
+            Value::Enum { name: Some(name), .. } => name,
+            _ => "",
+        }
+    }
+}
+
 // ---------------------------------------------------------------- schema from Figma's wasm
 
 /// The `render.bkiwi` asset of an Emscripten build of Figma, found by name

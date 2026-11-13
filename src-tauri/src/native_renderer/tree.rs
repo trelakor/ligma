@@ -67,6 +67,9 @@ pub struct Header {
     /// When the page sent it, in ms since 1970
     #[serde(default)]
     pub at: f64,
+    /// Bytes of what Figma draws over the canvas, after the forest
+    #[serde(default)]
+    pub ui: usize,
 }
 
 fn no_outline() -> f64 {
@@ -74,7 +77,8 @@ fn no_outline() -> f64 {
 }
 
 /// A frame as the page sends it: a little-endian u32 length, that much
-/// JSON (`Header`), then the forest
+/// JSON (`Header`), the forest, then what Figma draws over the canvas
+/// (`uiCommands`, see overlay.rs)
 pub struct Frame {
     pub header: Header,
     body: Vec<u8>,
@@ -86,11 +90,25 @@ impl Frame {
         let length = u32::from_le_bytes(body.get(..4).ok_or("no header")?.try_into().unwrap()) as usize;
         let end = 4usize.checked_add(length).filter(|&end| end <= body.len()).ok_or("header past the end")?;
         let header: Header = serde_json::from_slice(&body[4..end]).map_err(|error| error.to_string())?;
+        if header.ui > body.len() - end {
+            return Err("overlay past the end".into());
+        }
         Ok(Frame { header, body, start: end })
     }
 
     pub fn forest(&self) -> &[u8] {
-        &self.body[self.start..]
+        &self.body[self.start..self.body.len() - self.header.ui]
+    }
+
+    pub fn ui(&self) -> &[u8] {
+        &self.body[self.body.len() - self.header.ui..]
+    }
+
+    /// Whether the frame changes the scene, rather than only what's over
+    /// it or the view: a whole scene, nodes let go, or more than a reference
+    /// to the root as it was
+    pub fn edits(&self) -> bool {
+        self.header.mode == 0 || !self.header.released.is_empty() || self.forest().len() > 16
     }
 
     /// The view Figma drew this frame at
