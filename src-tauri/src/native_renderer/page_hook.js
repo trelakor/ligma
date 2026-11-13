@@ -33,7 +33,12 @@
     shared: null,
     // Figma's interface fonts, as its worker is given them
     fonts: null,
+    // Changes when the scene might have, for what's worked out from it to
+    // be worked out again
+    playback: 0,
   });
+  // And now and then regardless
+  setInterval(() => hook.playback++, 1000);
 
   // Figma's threaded renderer, behind a gate it reads once as it starts
   let options;
@@ -126,6 +131,7 @@
       return false;
     }
     hook.frames++;
+    if (!hook.panels?.dragging && (f.updateMode === 0 || f.renderTreeForest.length > 16 || f.releasedNodeIds?.length)) hook.playback++;
     if (hook.pushTo) {
       try {
         send(f);
@@ -330,14 +336,27 @@
   // a drag took, so the canvas followed the mouse at 40 fps. Figma redraws
   // them from its store's listeners, which it flushes once a frame, and from
   // its scene's deferrable listeners, which it lets run later anyway. What
-  // Figma draws on the canvas, the size label included, keeps up
-  const panels = { dragging: false, flush: null, deferred: new Set() };
+  // Figma draws on the canvas, the size label included, keeps up. They catch
+  // up once the canvas has had no input for `QUIET` ms after, as that takes
+  // Figma's main thread 60 ms or so, which would hold up a pan or a hover
+  // started right after
+  const QUIET = 120;
+  const panels = { dragging: false, holding: false, flush: null, deferred: new Set() };
   hook.panels = panels;
   {
     let down = null;
+    let input = 0;
+    let waiting = 0;
     const onCanvas = (target) => target instanceof Element && !!target.closest(".gpu-view-content");
     const catchUp = () => {
+      waiting = 0;
       if (panels.dragging) return;
+      const quiet = performance.now() - input;
+      if (quiet < QUIET) {
+        waiting = setTimeout(catchUp, QUIET - quiet);
+        return;
+      }
+      panels.holding = false;
       const deferred = [...panels.deferred];
       panels.deferred.clear();
       for (const listeners of deferred) {
@@ -355,16 +374,23 @@
       down = null;
       if (!panels.dragging) return;
       panels.dragging = false;
+      hook.playback++;
+      input = performance.now();
       // After Figma has seen the drag end
-      setTimeout(catchUp, 0);
+      if (!waiting) waiting = setTimeout(catchUp, QUIET);
     };
+    const touched = (event) => {
+      if (panels.holding && onCanvas(event.target)) input = performance.now();
+    };
+    addEventListener("wheel", touched, { capture: true, passive: true });
+    addEventListener("pointermove", touched, { capture: true, passive: true });
     addEventListener("pointerdown", (event) => (down = event.button === 0 && onCanvas(event.target) ? [event.clientX, event.clientY] : null), true);
     addEventListener(
       "pointermove",
       (event) => {
         if (!down || panels.dragging) return;
         if (!(event.buttons & 1)) return end();
-        if (Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 2) panels.dragging = true;
+        if (Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 2) panels.dragging = panels.holding = true;
       },
       true,
     );
@@ -380,7 +406,7 @@
           typeof value !== "function" || value.length !== 0
             ? value
             : function () {
-                if (panels.dragging) {
+                if (panels.holding) {
                   panels.flush = value;
                   return;
                 }
@@ -391,13 +417,14 @@
       {
         // Which nodes have animated custom effects, which Figma's threaded
         // renderer works out by walking the page several times a frame,
-        // about 4 ms a frame in a file with many. Moving or resizing doesn't
-        // change it, so it's worked out once a drag
+        // 3 to 5 ms a frame in a file with many, a third of a pan's frame.
+        // It's kept till the scene changes (`playback`), and a drag's moves
+        // and resizes don't change it
         match: (source) => source.includes("getPlaybackNodes(){") && source.includes("hasAnimatedCustomEffectOrDescendant"),
         source: (source) =>
           source.replace(
             "getPlaybackNodes(){",
-            "getPlaybackNodes(){if(!window.__ligmaHook?.panels?.dragging){this.__ligmaPlayback=null;return this.__ligmaPlaybackNodes()}return this.__ligmaPlayback??=this.__ligmaPlaybackNodes()}__ligmaPlaybackNodes(){",
+            "getPlaybackNodes(){const h=window.__ligmaHook;if(!h)return this.__ligmaPlaybackNodes();if(this.__ligmaPlaybackAt!==h.playback||!this.__ligmaPlayback){this.__ligmaPlayback=this.__ligmaPlaybackNodes();this.__ligmaPlaybackAt=h.playback}return this.__ligmaPlayback}__ligmaPlaybackNodes(){",
           ),
       },
       {
@@ -408,7 +435,7 @@
             ? value
             : class extends value {
                 runDeferredListeners(...args) {
-                  if (!panels.dragging) return super.runDeferredListeners(...args);
+                  if (!panels.holding) return super.runDeferredListeners(...args);
                   panels.deferred.add(this);
                   this.deferredCancel = () => panels.deferred.delete(this);
                 }
