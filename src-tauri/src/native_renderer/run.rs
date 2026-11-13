@@ -460,11 +460,12 @@ fn open(app: &AppHandle) -> Result<(), String> {
     let kept = super::effects::Kept::default();
     super::effects::spawn(job_queue, ctx.messages.clone(), device.as_ref().ok().map(|device| device.name.clone()), code, kept.clone());
     let (started, start) = mpsc::channel();
-    let (hub, render_device) = (ctx.hub.clone(), device.clone());
+    let (hub, render_device, wake) = (ctx.hub.clone(), device.clone(), ctx.messages.clone());
     std::thread::Builder::new()
         .name("native-render".into())
         .spawn(move || match render_device.and_then(|device| Gpu::new(&device, size.width, size.height)) {
-            Ok(gpu) => {
+            Ok(mut gpu) => {
+                gpu.watch(wake);
                 let _ = started.send(Ok(gpu.adapter.clone()));
                 Painter::new(gpu, requests, jobs, kept, hub).run(receive);
             }

@@ -153,6 +153,8 @@ pub enum Msg {
     /// tiles kept) and then warm
     Replay { views: Vec<View>, reply: Sender<Vec<(f64, f64)>> },
     Tint(bool),
+    /// The GPU has passed a fence, so what it drew can be shown
+    Gpu,
     /// Dev tools: whether units are drawn into images of their own
     Rasters(bool),
     /// Draw `view` whole, `width` by `height` pixels, and send back its
@@ -451,6 +453,9 @@ struct Whole {
     submitted: Instant,
     /// Units were left out, for want of time to make their thumbs
     partial: bool,
+    /// The last frame whose edits `layer` has, and `previous`
+    seq: u64,
+    previous_seq: u64,
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -689,6 +694,15 @@ struct Tile {
     previous: Option<Arc<Tex>>,
 }
 
+impl Drop for Gpu {
+    fn drop(&mut self) {
+        if let Some((event, stop)) = self.done.take() {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = unsafe { windows::Win32::System::Threading::SetEvent(event) };
+        }
+    }
+}
+
 pub struct Gpu {
     context: DirectContext,
     device: ID3D12Device,
@@ -697,6 +711,9 @@ pub struct Gpu {
     queue: ID3D12CommandQueue,
     fence: ID3D12Fence,
     signalled: u64,
+    /// Set as the GPU passes each fence signalled, waking the render thread
+    /// (see `watch`)
+    done: Option<(windows::Win32::Foundation::HANDLE, Arc<std::sync::atomic::AtomicBool>)>,
     /// The window's size in pixels
     size: (u32, u32),
     pub adapter: String,
@@ -755,12 +772,41 @@ impl Gpu {
             queue,
             fence,
             signalled: 0,
+            done: None,
             size: (width.max(1), height.max(1)),
             adapter: format!("{} (D3D12)", device.name),
             memory,
         };
         log::info!("native renderer: started on {}, {:?}, {:.0} MB of GPU memory", gpu.adapter, config(), gpu.used() as f64 / 1e6);
         Ok(gpu)
+    }
+
+    /// Sends `wake` a `Msg::Gpu` each time the GPU passes a fence, so the
+    /// render thread hands over what the GPU drew the moment it's done.
+    /// Waiting a millisecond and looking again would be up to 16, as
+    /// Windows wakes threads that sleep
+    pub fn watch(&mut self, wake: Sender<Msg>) {
+        use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject, INFINITE};
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+            return;
+        };
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (raw, stopped) = (event.0 as isize, stop.clone());
+        let watching = std::thread::Builder::new().name("native-gpu-done".into()).spawn(move || {
+            let event = windows::Win32::Foundation::HANDLE(raw as *mut _);
+            loop {
+                unsafe { WaitForSingleObject(event, INFINITE) };
+                if stopped.load(std::sync::atomic::Ordering::Relaxed) || wake.send(Msg::Gpu).is_err() {
+                    break;
+                }
+            }
+            let _ = unsafe { windows::Win32::Foundation::CloseHandle(event) };
+        });
+        if watching.is_ok() {
+            self.done = Some((event, stop));
+        } else {
+            let _ = unsafe { windows::Win32::Foundation::CloseHandle(event) };
+        }
     }
 
     /// Signals the fence after all that's submitted so far, returning the
@@ -771,6 +817,9 @@ impl Gpu {
             // Without it, waiting is the way to know
             let _ = self.context.flush_submit_and_sync_cpu();
             return 0;
+        }
+        if let Some((event, _)) = &self.done {
+            let _ = unsafe { self.fence.SetEventOnCompletion(self.signalled, *event) };
         }
         self.signalled
     }
@@ -1039,6 +1088,11 @@ impl Painter {
                     return;
                 }
                 message = messages.try_recv().ok();
+            }
+            // What the GPU has finished is shown before more is drawn, which
+            // takes a while in a drag, rather than after it
+            if self.drawing && self.gpu.passed() != self.passed {
+                self.publish();
             }
             let changed = std::mem::take(&mut self.dirty);
             next = self.fill();
@@ -1428,10 +1482,19 @@ impl Painter {
     fn hand_whole(&mut self, layer: Layer, fence: u64, at: Option<(i32, i32, u32)>) {
         let passed = self.gpu.passed();
         let submitted = Instant::now();
+        // What changed up to now is all drawn into it, as the patch is
+        // taken whole
+        let seq = self.seq;
         let retired = match self.whole.as_mut() {
             Some(whole) => {
                 let old = std::mem::replace(&mut whole.layer, layer);
-                let retired = if whole.fence <= passed { std::mem::replace(&mut whole.previous, Some(old)) } else { Some(old) };
+                let retired = if whole.fence <= passed {
+                    whole.previous_seq = whole.seq;
+                    std::mem::replace(&mut whole.previous, Some(old))
+                } else {
+                    Some(old)
+                };
+                whole.seq = seq;
                 whole.fence = fence;
                 whole.submitted = submitted;
                 if let Some(at) = at {
@@ -1442,7 +1505,7 @@ impl Painter {
                 retired
             }
             None => {
-                self.whole = Some(Whole { layer, at: at.unwrap_or((0, 0, 0)), stale: at.is_none(), patch: Vec::new(), fence, previous: None, submitted, partial: false });
+                self.whole = Some(Whole { layer, at: at.unwrap_or((0, 0, 0)), stale: at.is_none(), patch: Vec::new(), fence, previous: None, submitted, partial: false, seq, previous_seq: 0 });
                 None
             }
         };
@@ -1754,13 +1817,20 @@ impl Painter {
             trace(|| format!("  change handed over {:.1}ms after Figma sent it", since_epoch_ms() - sent));
         }
         // What Figma draws over the canvas in a frame that edits the scene
-        // shows once the edit is drawn (see `Hub::shown_view`)
-        if !whole_pending && self.whole.as_ref().is_none_or(|whole| whole.patch.is_empty()) && self.drawn_seq != self.seq {
-            self.drawn_seq = self.seq;
-            self.hub.edits_drawn(self.seq);
+        // shows once the edit is drawn (see `Hub::shown_view`): all of them,
+        // or while edits keep coming, as each does every frame of a drag,
+        // those of the whole view shown, rather than none till they stop
+        let drawn = if !whole_pending && self.whole.as_ref().is_none_or(|whole| whole.patch.is_empty()) {
+            Some(self.seq)
+        } else {
+            self.whole.as_ref().filter(|whole| !whole.stale).map(|whole| if whole.fence <= passed { whole.seq } else { whole.previous_seq })
+        };
+        if let Some(drawn) = drawn.filter(|&drawn| drawn > self.drawn_seq || (drawn < self.drawn_seq && drawn == self.seq)) {
+            self.drawn_seq = drawn;
+            self.hub.edits_drawn(drawn);
             if let Some(shared) = *self.hub.shared.lock().unwrap() {
                 // SAFETY: the memory stays mapped while Ligma runs, and slot 18 is in it
-                unsafe { std::ptr::write_volatile((shared.ptr as *mut f64).add(18), self.seq as f64) };
+                unsafe { std::ptr::write_volatile((shared.ptr as *mut f64).add(18), drawn as f64) };
             }
         }
         if changed {
@@ -1905,6 +1975,7 @@ impl Painter {
                 self.clear_tiles();
                 self.dirty = true;
             }
+            Msg::Gpu => {}
             Msg::Tint(on) => {
                 self.tint = on;
                 self.pictures.clear();
@@ -2085,6 +2156,9 @@ impl Painter {
                 self.sent = Some(frame.header.at);
             }
             self.drop_tiles(&areas);
+            if let Some(whole) = self.whole.as_mut().filter(|whole| whole.patch.is_empty() && !whole.stale) {
+                whole.seq = frame.header.seq;
+            }
         }
         stats().lock().unwrap().nodes = self.tree.as_ref().map_or(0, |tree| tree.forest.nodes.len());
         self.set_view(frame.view());
