@@ -380,7 +380,17 @@ const PAGE_JS: &str = r##"(() => {
         if ("strokes" in copy) copy.strokes = [];
         if ("effects" in copy) copy.effects = [];
         // A frame's own fills, square, without what's in it
-        if ("children" in copy) for (const child of [...copy.children]) child.remove();
+        // An instance's can't be removed, only hidden
+        if ("children" in copy)
+          for (const child of [...copy.children]) {
+            try {
+              child.remove();
+            } catch {
+              try {
+                child.visible = false;
+              } catch {}
+            }
+          }
         try {
           if ("cornerRadius" in copy) copy.cornerRadius = 0;
         } catch {}
@@ -1598,7 +1608,12 @@ const PAGE_JS: &str = r##"(() => {
     go.addEventListener("click", () => runExpand());
     divider();
     const cancel = strip.appendChild(labelled("Cancel"));
-    cancel.addEventListener("click", () => closeExpanding());
+    // While it works, Cancel stops it, then leaves
+    cancel.addEventListener("click", () => {
+      if (!expanding?.working) return closeExpanding();
+      expanding.cancelled = true;
+      expanding.controller?.abort();
+    });
 
     // The frame over the canvas, in the layer's own units, and its size
     // below it
@@ -1961,6 +1976,8 @@ const PAGE_JS: &str = r##"(() => {
     expandPointer(null, {});
     showExpand();
     const controller = new AbortController();
+    current.controller = controller;
+    current.cancelled = false;
     const { show, hide } = toast(figma, () => controller.abort());
     show("Expanding…");
     const grown = { ...box };
@@ -1990,8 +2007,9 @@ const PAGE_JS: &str = r##"(() => {
     hide();
     busy = false;
     current.working = false;
+    current.controller = null;
     if (expanding === current) {
-      if (done) closeExpanding();
+      if (done || current.cancelled) closeExpanding();
       else showExpand();
     }
     tidy();
@@ -2266,13 +2284,32 @@ const PAGE_JS: &str = r##"(() => {
     // A brush a 30th of the image across, until one is chosen
     current.size = healOptions.size ?? Math.max(2, Math.round((Math.max(node.width, node.height) * current.scales.native) / 30));
     showHealing();
-    current.opening = openHealing(current);
+    reopenHealing(current);
+  };
+
+  // Opens the image again, in `current.opening`, which a stroke awaits.
+  // A failure is left for the stroke to report and try again
+  const reopenHealing = (current, keep = false) => {
+    current.opening = openHealing(current, keep);
+    current.opening.catch(() => {});
+    return current.opening;
   };
 
   // Reads the image as the layer's fills draw it, for Ligma to keep and to
-  // draw healed patches into here
-  const openHealing = async (current) => {
+  // draw healed patches into here, or with `keep`, hands Ligma the image
+  // as drawn here, with heals Figma may not have yet
+  const openHealing = async (current, keep) => {
     const { figma, node } = current;
+    if (keep && current.picture) {
+      const blob = await new Promise((resolve) => current.picture.toBlob(resolve, "image/png"));
+      const { session } = JSON.parse(await handOff("heal", request({ op: "open" }, new Uint8Array(await blob.arrayBuffer()))));
+      if (healing !== current) {
+        handOff("heal", request({ op: "close", session })).catch(() => {});
+        throw "closed";
+      }
+      current.session = session;
+      return;
+    }
     const bytes = await drawn(figma, node, current.scales.full, true);
     const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
     const picture = Object.assign(document.createElement("canvas"), { width: bitmap.width, height: bitmap.height, className: "picture" });
@@ -2444,25 +2481,26 @@ const PAGE_JS: &str = r##"(() => {
     busy = true;
     showHealing();
     try {
-      await current.opening;
+      // Read again if reading it failed before
+      await current.opening?.catch(() => reopenHealing(current));
       // Undone, or changed some other way since, the image is read again,
       // unless a heal is still being handed to Figma
       const top = fillsOf(node).at(-1);
-      if (current.hash && !current.committing && !current.dirty && !(top?.type === "IMAGE" && top.imageHash === current.hash)) {
+      const changed = current.hash && !current.committing && !current.dirty && !(top?.type === "IMAGE" && top.imageHash === current.hash);
+      if (current.stale || changed) {
         handOff("heal", request({ op: "close", session: current.session })).catch(() => {});
-        current.hash = null;
-        current.opening = openHealing(current);
-        await current.opening;
+        Object.assign(current, { hash: null, stale: false });
+        await reopenHealing(current);
       }
       const ask = () => handOff("heal", request({ op: "heal", session: current.session, strokes: [{ points, radius }] }), undefined, "", current.controller.signal);
       let reply;
       try {
         reply = await ask();
       } catch (reason) {
-        // Ligma let it go, as when another tab opened one
+        // Ligma let it go, as when another tab opened one: handed back as
+        // drawn here, so heals Figma doesn't have yet aren't lost
         if (reason !== "closed") throw reason;
-        current.opening = openHealing(current);
-        await current.opening;
+        await reopenHealing(current, true);
         reply = await ask();
       }
       const { png, x, y } = JSON.parse(reply);
@@ -2505,10 +2543,16 @@ const PAGE_JS: &str = r##"(() => {
         const hash = figma.createImage(new Uint8Array(await blob.arrayBuffer())).hash;
         const fills = fillsOf(node);
         const last = fills.at(-1);
-        node.fills =
-          last?.type === "IMAGE" && last.imageHash === current.hash
-            ? [...fills.slice(0, -1), { ...last, imageHash: hash }]
-            : [...fills.map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+        const ours = last?.type === "IMAGE" && last.imageHash === current.hash;
+        // Undone or changed meanwhile: left as it is, rather than undoing
+        // the undo, and read again before the next stroke
+        if (current.hash && !ours) {
+          Object.assign(current, { dirty: false, stale: true });
+          break;
+        }
+        node.fills = ours
+          ? [...fills.slice(0, -1), { ...last, imageHash: hash }]
+          : [...fills.map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
         current.hash = hash;
         try {
           figma.commitUndo();
@@ -2662,6 +2706,7 @@ const PAGE_JS: &str = r##"(() => {
   // The divider's handle: two chevrons, pointing apart
   const COMPARE_HANDLE = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M6 4.5 2.5 8 6 11.5m4-7L13.5 8 10 11.5"/></svg>`;
 
+  let upscaleOpening = false;
   const upscaleImage = async (bar, crop) => {
     const figma = api();
     if (!figma || busy || picking || expanding || healing || upscaling) return;
@@ -2674,13 +2719,19 @@ const PAGE_JS: &str = r##"(() => {
       return;
     }
     const paint = fillsOf(node)[index];
+    // Reading its size takes a moment, in which a second click opens nothing
+    if (upscaleOpening) return;
+    upscaleOpening = true;
     let size;
     try {
       size = await figma.getImageByHash(paint.imageHash).getSizeAsync();
     } catch {
       figma.notify("Couldn't read the image", { timeout: 3000 });
       return;
+    } finally {
+      upscaleOpening = false;
     }
+    if (upscaling || figma.currentPage.selection[0] !== node) return;
     if (Math.max(size.width, size.height) >= LARGEST) {
       figma.notify("The image is as large as Figma keeps images", { timeout: 3000 });
       return;
@@ -2825,9 +2876,12 @@ const PAGE_JS: &str = r##"(() => {
     show("Upscaling…");
     let shown = false;
     try {
-      // The layer as it is, to compare against, as sharp as its image is
+      // The layer as it is, to compare against, as sharp as its image is,
+      // with its corners and what's in it, as the layer shows after
       const scale = Math.min(LARGEST / Math.max(node.width, node.height, 1), Math.max(size.width / node.width, size.height / node.height, 1));
-      const before = drawn(figma, node, scale, true);
+      const before = drawn(figma, node, scale);
+      // Awaited only once there's a result
+      before.catch(() => {});
       const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync();
       const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale, quality: current.quality }, bytes), show, "", controller.signal));
       if (node.removed || upscaling !== current) throw "cancelled";
