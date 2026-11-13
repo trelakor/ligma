@@ -647,7 +647,7 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
         let mut ox = -w;
         while ox < w {
             tried += 1;
-            if tried % 4096 == 0 && stopped() {
+            if tried.is_multiple_of(4096) && stopped() {
                 return None;
             }
             let limit = best.map_or(f32::INFINITY, |(_, cost)| cost);
