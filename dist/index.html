@@ -92,6 +92,10 @@
   .tab.active > .icon.picks:hover { background: rgba(255, 255, 255, 0.1); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1); }
   /* Unloaded to save memory; reloads when selected */
   .asleep:not(.active) > .icon, .asleep:not(.active) > .title { opacity: 0.5; }
+  /* Waking or reloading, until its page is drawn */
+  .icon.spinner { animation: spin 0.8s linear infinite; }
+  .icon.spinner circle { opacity: 0.25; }
+  @keyframes spin { to { transform: rotate(1turn); } }
   .title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .close {
     flex: none;
@@ -191,6 +195,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     #snapshot::after { animation: none; }
+    .icon.spinner { animation-duration: 2.4s; }
   }
 </style>
 </head>
@@ -231,6 +236,16 @@
     page: svg('<path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M9.5 2.5V5H12"/>'),
     close: svg('<path d="m5 5 6 6M11 5l-6 6"/>', 12),
     plus: svg('<path d="M8 3.5v9M3.5 8h9"/>'),
+    spinner: svg('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5"/>'),
+  };
+
+  // The bar is redrawn on every change; start each spinner where the last
+  // one was, so it keeps turning smoothly
+  const spinner = () => {
+    const icon = el("div", {}, ICONS.spinner).firstElementChild;
+    icon.classList.add("spinner");
+    icon.style.animationDelay = `-${performance.now() % 800}ms`;
+    return icon;
   };
 
   const ACCENTS = {
@@ -530,6 +545,7 @@
 
       if (tab.kind === "home") {
         const home = el("div", { id: "home", className: classes.join(" "), title: "Home" }, ICONS.home);
+        if (tab.loading) home.replaceChildren(spinner());
         home.addEventListener("mousedown", (e) => e.button === 0 && invoke("select_tab", { id: tab.id }));
         home.addEventListener("contextmenu", () => invoke("tab_menu", { id: tab.id }));
         bar.append(home);
@@ -543,12 +559,13 @@
       // A file named "🎨 Thumbnails" shows 🎨 as its icon instead, except
       // in a prototype, which keeps its play icon
       const [emoji, title] = tabFace(tab);
-      if (emoji) node.append(el("span", { className: "icon emoji", textContent: emoji }));
+      if (tab.loading) node.append(spinner());
+      else if (emoji) node.append(el("span", { className: "icon emoji", textContent: emoji }));
       else node.innerHTML = ICONS[tab.kind] ?? ICONS.page;
       // On the tab already active, a click on the icon picks its emoji
       // (see `startPress`)
       const icon = node.firstElementChild;
-      if (takesEmoji(tab) && tab.id === active) {
+      if (takesEmoji(tab) && tab.id === active && !tab.loading) {
         icon.classList.add("picks");
         const hint = emoji ? "Change emoji" : "Add emoji";
         if (icon.tagName === "svg") icon.insertAdjacentHTML("afterbegin", `<title>${hint}</title>`);
