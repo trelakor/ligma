@@ -3,7 +3,8 @@
 //! frameless window centered over the main window, like the tab menu: the
 //! page fetches its text (`get_prompt`), reports its size (`prompt_ready`)
 //! and is shown, then sends the chosen button (`prompt_answer`). Closing it
-//! any other way answers None
+//! any other way answers None. A prompt can instead offer choices, each a
+//! row with its own button, and a close button, which answers None
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -22,6 +23,17 @@ struct Content {
     message: String,
     /// Left to right; the last is the default
     buttons: Vec<String>,
+    /// Rows to choose one of, in place of the buttons
+    choices: Vec<Choice>,
+}
+
+/// A row of a prompt that offers choices: its name, a line about it and
+/// its button
+#[derive(Clone, Serialize)]
+pub struct Choice {
+    pub name: String,
+    pub detail: String,
+    pub button: String,
 }
 
 struct Open {
@@ -44,12 +56,25 @@ pub fn show(
     buttons: &[&str],
     done: impl FnOnce(Option<usize>) + Send + 'static,
 ) {
-    let label = format!("{LABEL_PREFIX}{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let content = Content {
         title: title.to_owned(),
         message: message.into(),
         buttons: buttons.iter().map(|&button| button.to_owned()).collect(),
+        choices: Vec::new(),
     };
+    open(app, content, done);
+}
+
+/// Shows `message` under `title` with `choices` below it, each with its own
+/// button, and a close button. `done` gets the index of the choice whose
+/// button was chosen, or None if the prompt was closed
+pub fn choose(app: &AppHandle, title: &str, message: impl Into<String>, choices: Vec<Choice>, done: impl FnOnce(Option<usize>) + Send + 'static) {
+    let content = Content { title: title.to_owned(), message: message.into(), buttons: Vec::new(), choices };
+    open(app, content, done);
+}
+
+fn open(app: &AppHandle, content: Content, done: impl FnOnce(Option<usize>) + Send + 'static) {
+    let label = format!("{LABEL_PREFIX}{}", NEXT.fetch_add(1, Ordering::Relaxed));
     OPEN.lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)

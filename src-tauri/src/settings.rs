@@ -136,6 +136,9 @@ pub struct Settings {
     /// image bar, which grows the image and fills what's new on this device
     /// (see expand.rs)
     pub local_expand: bool,
+    /// The model Expand's Generative uses: "diffusion" (Stable Diffusion)
+    /// or "lama". If it isn't downloaded, Expand offers both
+    pub generative_model: String,
     /// Tailwind and React in Figma's right-click menu, under Copy as code,
     /// on every plan
     pub copy_as_code: bool,
@@ -204,6 +207,7 @@ impl Default for Settings {
             local_vectorize: true,
             local_select_object: true,
             local_expand: true,
+            generative_model: "diffusion".to_owned(),
             copy_as_code: true,
             lasso_fill: true,
             classic_home: false,

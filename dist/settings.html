@@ -676,8 +676,20 @@
         </span>
         <input type="checkbox" class="switch" id="local-expand">
       </label>
+      <label class="row nested deeper" id="generative-model-row" hidden>
+        <span class="label">Generative model
+          <div class="hint">Stable Diffusion draws new things past the edge. LaMa carries backgrounds and textures on, faster</div>
+        </span>
+        <button type="button" class="picker" id="generative-model" aria-haspopup="listbox" aria-expanded="false" data-options='[["diffusion","Stable Diffusion"],["lama","LaMa"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </label>
+      <div class="row nested deeper" id="diffusion-model-row" hidden>
+        <span class="label">Diffusion model
+          <div class="hint" id="diffusion-model-hint"></div>
+        </span>
+        <button class="button" id="diffusion-model-button"></button>
+      </div>
       <div class="row nested deeper" id="expand-model-row" hidden>
-        <span class="label">Expand model
+        <span class="label">LaMa model
           <div class="hint" id="expand-model-hint"></div>
         </span>
         <button class="button" id="expand-model-button"></button>
@@ -1066,7 +1078,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-expand", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-expand", "generative-model", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1419,6 +1431,7 @@
     $("local-vectorize").checked = settings.localVectorize;
     $("local-select-object").checked = settings.localSelectObject;
     $("local-expand").checked = settings.localExpand;
+    $("generative-model").value = settings.generativeModel;
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
     $("classic-home").checked = settings.classicHome;
@@ -1438,6 +1451,7 @@
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
       ["local-expand-row", settings.hideFreeAiActions],
+      ["generative-model-row", settings.hideFreeAiActions && settings.localExpand],
       ["mcp-status-row", settings.ligmaMcp],
       ["new-home-start-row", settings.ligmaHome],
       ["discord-file-row", settings.discordRichPresence],
@@ -1503,6 +1517,7 @@
       localVectorize: $("local-vectorize").checked,
       localSelectObject: $("local-select-object").checked,
       localExpand: $("local-expand").checked,
+      generativeModel: $("generative-model").value,
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
       classicHome: $("classic-home").checked,
@@ -1594,6 +1609,7 @@
     background: { what: "BiRefNet" },
     objects: { what: "SAM 2.1" },
     expand: { what: "LaMa" },
+    diffusion: { what: "Stable Diffusion 1.5" },
   };
   const expandHint = $("local-expand-hint").textContent;
   const megabytes = (bytes) => `${Math.round(bytes / 1e6)} MB`;
@@ -1603,7 +1619,10 @@
     if (name === "background") $("use-background-model-row").hidden = !state.supported || !macos;
     if (name === "objects") $("local-select-object-row").hidden = !state.supported;
     // Generative, where LaMa runs
-    if (name === "expand") $("local-expand-hint").textContent = state.supported ? `${expandHint} Generative fills it with LaMa, an AI model on your ${macos ? "Mac" : "PC"}, which needs a download the first time.` : expandHint;
+    if (name === "expand") {
+      $("generative-model-row").hidden = !state.supported;
+      $("local-expand-hint").textContent = state.supported ? `${expandHint} Generative draws it with an AI model on your ${macos ? "Mac" : "PC"}, which needs a download the first time.` : expandHint;
+    }
     const button = $(`${name}-model-button`);
     let hint;
     if (state.downloading != null) {

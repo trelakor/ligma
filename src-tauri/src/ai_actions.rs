@@ -1483,14 +1483,15 @@ const PAGE_JS: &str = r##"(() => {
   const EXPANDING = "data-ligma-expanding";
   const EXPAND_POINTER = "data-ligma-expand-pointer";
   let expanding = null;
-  // The bar's choices, kept while the tab is open: how it fills, the tool
-  // and the brush's size, in the image's own pixels, once chosen
-  const expandOptions = { method: "content", tool: "frame", size: null };
+  // The bar's choices, kept while the tab is open: how it fills, Generative
+  // where it runs until another is chosen, the tool and the brush's size,
+  // in the image's own pixels, once chosen
+  const expandOptions = { method: null, tool: "frame", size: null };
   // A dashed frame around the image, as it grows to
   const EXPAND_ICON = icon(`<rect ${STROKE} x="4.5" y="4.5" width="15" height="15" rx="1.5" stroke-dasharray="2 2"/><rect ${STROKE} x="8.5" y="8.5" width="7" height="7" rx="1"/>`);
   const METHODS = [
     ["content", "Content-aware", "Fill from the image itself"],
-    ["generative", "Generative", "Fill with LaMa, an AI model on this device"],
+    ["generative", "Generative", "Draw what's new with an AI model on this device"],
   ];
   const EXPAND_TOOLS = [
     ["frame", "Drag the frame's edges to expand, or the frame to move it", icon(`<path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M8.5 4.5v15M15.5 4.5v15M4.5 8.5h15M4.5 15.5h15"/>`)],
@@ -1516,6 +1517,7 @@ const PAGE_JS: &str = r##"(() => {
     barClasses = { root: bar.closest("[data-secondary-toolbelt]")?.className ?? "", bar: bar.className };
     const generative = !!state.generative;
     if (!generative) expandOptions.method = "content";
+    else expandOptions.method ??= "generative";
 
     const root = document.createElement("div");
     root.setAttribute(EXPAND, "");
@@ -1622,10 +1624,19 @@ const PAGE_JS: &str = r##"(() => {
       return element;
     };
     const maskId = `ligma-expand-sample-${Date.now()}`;
-    const mask = make("mask", "", make("defs"));
+    const defs = make("defs");
+    const mask = make("mask", "", defs);
     mask.id = maskId;
     mask.setAttribute("maskUnits", "userSpaceOnUse");
+    // Diagonal lines over what's new, the same on screen at any zoom
+    const hatch = make("pattern", "", defs);
+    hatch.id = `${maskId}-hatch`;
+    hatch.setAttribute("patternUnits", "userSpaceOnUse");
+    hatch.setAttribute("patternTransform", "rotate(45)");
+    const line = make("rect", "line", hatch);
     const area = make("path", "area");
+    const lines = make("path", "lines");
+    lines.setAttribute("fill", `url(#${hatch.id})`);
     const sampled = make("rect", "sampled");
     sampled.setAttribute("mask", `url(#${maskId})`);
     const edge = make("rect", "edge");
@@ -1641,7 +1652,7 @@ const PAGE_JS: &str = r##"(() => {
       root,
       layer,
       svg,
-      parts: { area, sampled, edge, frame, handles, brush, mask, size },
+      parts: { area, lines, hatch, line, sampled, edge, frame, handles, brush, mask, size },
       methods,
       methodsDivider,
       sampling,
@@ -1736,7 +1747,13 @@ const PAGE_JS: &str = r##"(() => {
       rect(parts.frame, x0, y0, total[0], total[1]);
       rect(parts.edge, 0, 0, width, height);
       rect(parts.sampled, 0, 0, width, height);
-      parts.area.setAttribute("d", `M${x0} ${y0}h${total[0]}v${total[1]}h${-total[0]}zM0 0v${height}h${width}v${-height}z`);
+      const outside = `M${x0} ${y0}h${total[0]}v${total[1]}h${-total[0]}zM0 0v${height}h${width}v${-height}z`;
+      parts.area.setAttribute("d", outside);
+      parts.lines.setAttribute("d", outside);
+      const gap = 6 / zoom;
+      parts.hatch.setAttribute("width", gap);
+      parts.hatch.setAttribute("height", gap);
+      rect(parts.line, 0, 0, 1 / zoom, gap);
       const handle = 7 / zoom;
       const [x1, y1] = [x0 + total[0], y0 + total[1]];
       const [mx, my] = [(x0 + x1) / 2, (y0 + y1) / 2];
@@ -2333,8 +2350,10 @@ const PAGE_JS: &str = r##"(() => {
     [${EXPAND}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
     [${EXPAND}="overlay"] svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }
     [${EXPAND}="overlay"] :is(path, rect) { vector-effect: non-scaling-stroke; }
-    [${EXPAND}="overlay"] .area { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 14%, transparent); fill-rule: evenodd; transition: opacity 200ms ease-out; }
-    [${EXPAND}="overlay"].working .area { animation: ligma-expand-working 900ms ease-in-out infinite alternate; }
+    [${EXPAND}="overlay"] .area { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 10%, transparent); fill-rule: evenodd; }
+    [${EXPAND}="overlay"] .lines { fill-rule: evenodd; }
+    [${EXPAND}="overlay"] .line { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 55%, transparent); }
+    [${EXPAND}="overlay"].working :is(.area, .lines) { animation: ligma-expand-working 900ms ease-in-out infinite alternate; }
     [${EXPAND}="overlay"] .sampled { fill: rgb(20 174 92 / 0.4); }
     [${EXPAND}="overlay"] .edge { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 4 3; }
     [${EXPAND}="overlay"] .frame { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; }
@@ -2348,7 +2367,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     [${EXPAND}="overlay"] .size.hint { padding: 0 6px; background: var(--color-bg-tooltip, #1e1e1e); color: var(--color-text-tooltip, #fff); }
     @keyframes ligma-expand-working { from { opacity: 0.35; } to { opacity: 1; } }
-    @media (prefers-reduced-motion: reduce) { [${EXPAND}="overlay"].working .area { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { [${EXPAND}="overlay"].working :is(.area, .lines) { animation: none; } }
     html[${EXPAND_POINTER}="ew"], html[${EXPAND_POINTER}="ew"] * { cursor: ew-resize !important; }
     html[${EXPAND_POINTER}="ns"], html[${EXPAND_POINTER}="ns"] * { cursor: ns-resize !important; }
     html[${EXPAND_POINTER}="nwse"], html[${EXPAND_POINTER}="nwse"] * { cursor: nwse-resize !important; }

@@ -102,9 +102,71 @@ fn failed(error: impl std::fmt::Display) -> &'static str {
     "failed"
 }
 
+/// Fills `canvas` with the generative model Settings names, once it's
+/// downloaded. If it isn't, both models are offered, to download one and
+/// make it the one used from then on; with neither chosen, it's cancelled
 #[cfg(birefnet)]
 fn generative(app: &AppHandle, tab: u32, job: u64, canvas: &mut Canvas) -> Result<(), &'static str> {
-    lama::fill(app, tab, job, canvas)
+    use crate::models::{DIFFUSION, EXPAND};
+    let preferred = crate::settings::current(app).generative_model;
+    let installed = |name: &str| if name == "lama" { EXPAND.is_installed(app) } else { DIFFUSION.is_installed(app) };
+    let (model, chosen) = if installed(&preferred) {
+        (preferred, false)
+    } else {
+        (choose_model(app).ok_or("cancelled")?, true)
+    };
+    if model == "lama" {
+        lama::fill(app, tab, job, canvas, chosen)
+    } else {
+        diffusion::fill(app, tab, job, canvas, chosen)
+    }
+}
+
+/// Asks which generative model to download, or use if it's there, and
+/// makes it the one Settings names: "lama" or "diffusion", or None
+#[cfg(birefnet)]
+fn choose_model(app: &AppHandle) -> Option<String> {
+    use crate::models::{DIFFUSION, EXPAND};
+    use crate::prompt::Choice;
+    let place = if cfg!(windows) { "PC" } else { "Mac" };
+    let size = |megabytes: u64| if megabytes >= 1000 { format!("{:.1} GB", megabytes as f64 / 1000.0) } else { format!("{megabytes} MB") };
+    let choice = |installed: bool, name: &str, detail: String| Choice {
+        name: name.to_owned(),
+        detail,
+        button: if installed { "Use".to_owned() } else { "Download".to_owned() },
+    };
+    let choices = vec![
+        choice(
+            DIFFUSION.is_installed(app),
+            "Stable Diffusion",
+            format!(
+                "Draws new things past the edge, from scenery to the rest of a subject. {}, about a minute an image on this {place}",
+                size(DIFFUSION.megabytes())
+            ),
+        ),
+        choice(
+            EXPAND.is_installed(app),
+            "LaMa",
+            format!("Carries backgrounds and textures on, without drawing anything new. {}, a few seconds an image", size(EXPAND.megabytes())),
+        ),
+    ];
+    let (send, receive) = std::sync::mpsc::channel();
+    crate::prompt::choose(
+        app,
+        "Choose a Generative Model",
+        format!("Generative expand runs on this {place} with a model Ligma downloads once from Hugging Face. You can change it or download the other in Settings."),
+        choices,
+        move |choice| {
+            let _ = send.send(choice);
+        },
+    );
+    let model = ["diffusion", "lama"][receive.recv().ok().flatten()?];
+    let mut settings = crate::settings::current(app);
+    settings.generative_model = model.to_owned();
+    if crate::settings::change(app, settings.clone()).is_ok() {
+        crate::settings::show_in_window(app, &settings);
+    }
+    Some(model.to_owned())
 }
 
 #[cfg(not(birefnet))]
@@ -813,9 +875,10 @@ fn fill(canvas: &mut Canvas, sample: Option<&[bool]>, stopped: &dyn Fn() -> bool
     Ok(())
 }
 
-/// Generative: LaMa fills the grown image, scaled into its 512 pixel
-/// square, and its fill is scaled back up and evened out into the image's
-/// own colors near the edge
+/// Generative: LaMa fills the grown image a 512 pixel square at a time,
+/// at a scale where what's new is no deeper than it can see across, then
+/// its fill is scaled back up and evened out into the image's own colors
+/// along the edge
 #[cfg(birefnet)]
 mod lama {
     use std::path::Path;
@@ -831,10 +894,19 @@ mod lama {
     use super::{diffuse, failed, unpremultiply, Canvas};
     use crate::models::{Missing, EXPAND, LAMA};
 
+    /// LaMa takes a square this size
     const SIDE: usize = 512;
+    /// The deepest new pixel is at most this far from the image, in LaMa's
+    /// pixels, so each square has the image to go on
+    const DEPTH: f32 = 160.0;
+    /// Squares overlap, and only their middle, this far in from an edge
+    /// inside the image, is kept, where LaMa saw around it
+    const STEP: usize = 384;
+    const MARGIN: usize = 40;
 
-    pub fn fill(app: &AppHandle, tab: u32, job: u64, canvas: &mut Canvas) -> Result<(), &'static str> {
-        let (_held, folder) = EXPAND.ensure(app, tab, job).map_err(|missing| match missing {
+    pub fn fill(app: &AppHandle, tab: u32, job: u64, canvas: &mut Canvas, chosen: bool) -> Result<(), &'static str> {
+        let ensured = if chosen { EXPAND.ensure_chosen(app, tab, job) } else { EXPAND.ensure(app, tab, job) };
+        let (_held, folder) = ensured.map_err(|missing| match missing {
             Missing::Cancelled => "cancelled",
             Missing::Failed => "failed",
         })?;
@@ -843,8 +915,10 @@ mod lama {
         crate::handoff::on_cancel(tab, job, move || {
             let _ = terminate.terminate();
         });
-        run(&folder.join(LAMA.file), Some(&folder), canvas, &options).map_err(|error| {
-            if crate::handoff::cancelled(tab, job) {
+        let stopped = || crate::handoff::cancelled(tab, job);
+        let progress = |text: &str| crate::handoff::progress(app, tab, job, text);
+        run(&folder.join(LAMA.file), Some(&folder), canvas, &options, &stopped, &progress).map_err(|error| {
+            if stopped() {
                 "cancelled"
             } else {
                 failed(error)
@@ -853,13 +927,65 @@ mod lama {
     }
 
     /// Fills `canvas` with the model at `model`, ONNX Runtime from `folder`
-    /// where it's downloaded, or as linked in without one
-    pub fn run(model: &Path, folder: Option<&Path>, canvas: &mut Canvas, options: &RunOptions) -> Result<(), String> {
+    /// where it's downloaded, or as linked in without one, saying how far
+    /// it's got with `progress`
+    pub fn run(
+        model: &Path,
+        folder: Option<&Path>,
+        canvas: &mut Canvas,
+        options: &RunOptions,
+        stopped: &dyn Fn() -> bool,
+        progress: &dyn Fn(&str),
+    ) -> Result<(), String> {
+        let environment = crate::models::environment(folder.unwrap_or(Path::new("")))?;
+        let mut session = Session::builder(environment)
+            .map_err(|error| error.to_string())?
+            .with_auto_device(AutoDevicePolicy::PreferCPU)
+            .map_err(|error| error.to_string())?
+            .commit_from_file(model)
+            .map_err(|error| error.to_string())?;
+        let plane = SIDE * SIDE;
+        squares(canvas, DEPTH, stopped, &mut |input, mask, index, total| {
+            if total > 1 {
+                progress(&format!("Expanding… {}%", index * 100 / total));
+            }
+            let image = TensorRef::from_array_view(([1usize, 3, SIDE, SIDE], input)).map_err(|error| error.to_string())?;
+            let holes = TensorRef::from_array_view(([1usize, 1, SIDE, SIDE], mask)).map_err(|error| error.to_string())?;
+            let outputs = session.run_with_options(ort::inputs!["image" => image, "mask" => holes], options).map_err(|error| error.to_string())?;
+            let (_, output) = outputs[0].try_extract_tensor::<f32>().map_err(|error| error.to_string())?;
+            if output.len() != 3 * plane {
+                return Err("unexpected output".to_owned());
+            }
+            // 0 to 255, though some exports give 0 to 1
+            let range = if output.iter().copied().fold(0f32, f32::max) <= 1.5 { 255.0 } else { 1.0 };
+            Ok(output.iter().map(|value| value * range).collect())
+        })
+    }
+
+    /// What a model is given for a square: the image in it, 0 to 1, channel
+    /// by channel, blank where it's new, what's new, as 1, a little more of
+    /// it than is, so the edge it blends into is the image's, which square
+    /// it is and how many there are at most. It gives the square filled, 0
+    /// to 255, channel by channel
+    pub(super) type Fill<'a> = dyn FnMut(&[f32], &[f32], usize, usize) -> Result<Vec<f32>, String> + 'a;
+
+    /// Fills `canvas` a 512 pixel square at a time with `fill`, at a scale
+    /// where what's new is no deeper than `depth` of the square's pixels,
+    /// up to the image's own size, and no smaller than a square. Squares
+    /// overlap, those with the most to go on first, and only their middle
+    /// is kept where they're inside the image. The fill is scaled back up
+    /// and evened out into the image's own colors along the edge
+    pub(super) fn squares(canvas: &mut Canvas, depth: f32, stopped: &dyn Fn() -> bool, fill: &mut Fill) -> Result<(), String> {
         let (width, height) = (canvas.width, canvas.height);
-        // Scaled to fit the square, the rest of it filled too, and left out
-        let scale = SIDE as f32 / width.max(height) as f32;
-        let (inner_width, inner_height) =
-            (((width as f32 * scale).round() as u32).clamp(1, SIDE as u32), ((height as f32 * scale).round() as u32).clamp(1, SIDE as u32));
+        let deepest = {
+            let mut rings = vec![[0f32; 0]; width * height];
+            let depth = diffuse(&mut rings, &canvas.known, width, height);
+            depth.iter().zip(&canvas.known).filter(|(_, &known)| !known).map(|(&depth, _)| depth).max().unwrap_or(1).max(1)
+        };
+        let scale = (depth / deepest as f32).min(1.0).max(SIDE as f32 / width.min(height) as f32);
+        let across = ((width as f32 * scale).ceil() as usize).max(SIDE);
+        let down = ((height as f32 * scale).ceil() as usize).max(SIDE);
+
         let mut picture = RgbImage::new(width as u32, height as u32);
         let mut holes = GrayImage::new(width as u32, height as u32);
         for (at, (&pixel, &known)) in canvas.pixels.iter().zip(&canvas.known).enumerate() {
@@ -871,69 +997,97 @@ mod lama {
                 holes.put_pixel(x, y, Luma([255]));
             }
         }
-        let small = imageops::resize(&picture, inner_width, inner_height, FilterType::Triangle);
-        let small_holes = imageops::resize(&holes, inner_width, inner_height, FilterType::Triangle);
+        let mut work = imageops::resize(&picture, across as u32, down as u32, FilterType::Triangle);
+        let small_holes = imageops::resize(&holes, across as u32, down as u32, FilterType::Triangle);
+        drop((picture, holes));
+        // Known, or filled by a square before: any of it new is new
+        let mut filled: Vec<bool> = small_holes.pixels().map(|pixel| pixel[0] == 0).collect();
+
+        let starts = |size: usize| {
+            let mut starts: Vec<usize> = (0..size.saturating_sub(SIDE)).step_by(STEP).collect();
+            starts.push(size - SIDE);
+            starts.dedup();
+            starts
+        };
+        let mut squares: Vec<(usize, usize)> = starts(down)
+            .into_iter()
+            .flat_map(|y| starts(across).into_iter().map(move |x| (x, y)))
+            .filter(|&(x, y)| (y..y + SIDE).any(|row| filled[row * across + x..row * across + x + SIDE].contains(&false)))
+            .collect();
+        let kept = |(x, y): (usize, usize)| {
+            let left = if x > 0 { x + MARGIN } else { 0 };
+            let top = if y > 0 { y + MARGIN } else { 0 };
+            let right = if x + SIDE < across { x + SIDE - MARGIN } else { across };
+            let bottom = if y + SIDE < down { y + SIDE - MARGIN } else { down };
+            (left..right, top..bottom)
+        };
+        let unfilled = |filled: &[bool], square: (usize, usize)| {
+            let (columns, rows) = kept(square);
+            rows.into_iter().any(|row| filled[row * across + columns.start..row * across + columns.end].contains(&false))
+        };
+
         let plane = SIDE * SIDE;
-        let mut input = vec![0f32; 3 * plane];
-        let mut mask = vec![1f32; plane];
-        for y in 0..inner_height as usize {
-            for x in 0..inner_width as usize {
-                let at = y * SIDE + x;
-                // Any of it to fill is filled, and a little more, so the
-                // edge LaMa blends into is the image's
-                if small_holes.get_pixel(x as u32, y as u32)[0] > 0 {
-                    continue;
-                }
-                mask[at] = 0.0;
-                let pixel = small.get_pixel(x as u32, y as u32);
-                for channel in 0..3 {
-                    input[channel * plane + at] = pixel[channel] as f32 / 255.0;
+        let total = squares.len();
+        let mut index = 0;
+        loop {
+            squares.retain(|&square| unfilled(&filled, square));
+            // The square with the most to go on first
+            let Some(&(x, y)) = squares.iter().max_by_key(|&&(x, y)| {
+                (y..y + SIDE).map(|row| filled[row * across + x..row * across + x + SIDE].iter().filter(|&&known| known).count()).sum::<usize>()
+            }) else {
+                break;
+            };
+            if stopped() {
+                return Err("cancelled".to_owned());
+            }
+            let mut input = vec![0f32; 3 * plane];
+            let mut mask = vec![0f32; plane];
+            for row in 0..SIDE {
+                for column in 0..SIDE {
+                    let (at, from) = (row * SIDE + column, (y + row) * across + x + column);
+                    if filled[from] {
+                        let pixel = work.get_pixel((x + column) as u32, (y + row) as u32);
+                        for channel in 0..3 {
+                            input[channel * plane + at] = pixel[channel] as f32 / 255.0;
+                        }
+                    } else {
+                        mask[at] = 1.0;
+                    }
                 }
             }
-        }
-        let mask = grown(&mask, 2);
-        for (at, &hole) in mask.iter().enumerate() {
-            if hole > 0.5 {
-                for channel in 0..3 {
-                    input[channel * plane + at] = 0.0;
+            let mask = grown(&mask, 2);
+            for (at, &hole) in mask.iter().enumerate() {
+                if hole > 0.5 {
+                    for channel in 0..3 {
+                        input[channel * plane + at] = 0.0;
+                    }
+                }
+            }
+            let output = fill(&input, &mask, index, total.max(index + 1))?;
+            index += 1;
+            let (columns, rows) = kept((x, y));
+            for row in rows {
+                for column in columns.clone() {
+                    let from = row * across + column;
+                    if filled[from] {
+                        continue;
+                    }
+                    let at = (row - y) * SIDE + column - x;
+                    let pixel = [0, 1, 2].map(|channel| output[channel * plane + at].round().clamp(0.0, 255.0) as u8);
+                    work.put_pixel(column as u32, row as u32, Rgb(pixel));
+                    filled[from] = true;
                 }
             }
         }
 
-        let environment = match folder {
-            Some(folder) => crate::models::environment(folder)?,
-            None => crate::models::environment(Path::new(""))?,
-        };
-        let mut session = Session::builder(environment)
-            .map_err(|error| error.to_string())?
-            .with_auto_device(AutoDevicePolicy::PreferCPU)
-            .map_err(|error| error.to_string())?
-            .commit_from_file(model)
-            .map_err(|error| error.to_string())?;
-        let image = TensorRef::from_array_view(([1usize, 3, SIDE, SIDE], &*input)).map_err(|error| error.to_string())?;
-        let holes_tensor = TensorRef::from_array_view(([1usize, 1, SIDE, SIDE], &*mask)).map_err(|error| error.to_string())?;
-        let outputs = session
-            .run_with_options(ort::inputs!["image" => image, "mask" => holes_tensor], options)
-            .map_err(|error| error.to_string())?;
-        let (_, output) = outputs[0].try_extract_tensor::<f32>().map_err(|error| error.to_string())?;
-        if output.len() != 3 * plane {
-            return Err("unexpected output".to_owned());
-        }
-        // 0 to 255, though some exports give 0 to 1
-        let range = if output.iter().copied().fold(0f32, f32::max) <= 1.5 { 255.0 } else { 1.0 };
-        let filled = RgbImage::from_fn(inner_width, inner_height, |x, y| {
-            let at = y as usize * SIDE + x as usize;
-            Rgb([0, 1, 2].map(|channel| (output[channel * plane + at] * range).round().clamp(0.0, 255.0) as u8))
-        });
-        drop(outputs);
-        drop(session);
-        let large = imageops::resize(&filled, width as u32, height as u32, FilterType::CatmullRom);
-        blend(canvas, &large);
+        let large = imageops::resize(&work, width as u32, height as u32, FilterType::CatmullRom);
+        drop(work);
+        blend(canvas, &large, scale);
         Ok(())
     }
 
     /// `mask` grown by `by` pixels
-    fn grown(mask: &[f32], by: usize) -> Vec<f32> {
+    pub(super) fn grown(mask: &[f32], by: usize) -> Vec<f32> {
         let mut out = mask.to_vec();
         for y in 0..SIDE {
             for x in 0..SIDE {
@@ -950,10 +1104,10 @@ mod lama {
         out
     }
 
-    /// The fill LaMa gave, scaled up, put where the canvas is to be filled,
-    /// with how far its colors are off from the image's along the edge
-    /// taken away, less so farther in
-    fn blend(canvas: &mut Canvas, large: &RgbImage) {
+    /// The fill LaMa gave, scaled up from `scale`, put where the canvas is
+    /// to be filled, with how far its colors are off from the image's along
+    /// the edge taken away, less so farther in
+    fn blend(canvas: &mut Canvas, large: &RgbImage, scale: f32) {
         let (width, height) = (canvas.width, canvas.height);
         let mut offset = vec![[0f32; 3]; width * height];
         for (at, &known) in canvas.known.iter().enumerate() {
@@ -964,7 +1118,7 @@ mod lama {
             }
         }
         let depth = diffuse(&mut offset, &canvas.known, width, height);
-        let fade = (width.max(height) as f32 / SIDE as f32 * 6.0).max(6.0);
+        let fade = (6.0 / scale).max(6.0);
         for (at, &known) in canvas.known.iter().enumerate() {
             if known {
                 continue;
@@ -981,21 +1135,330 @@ mod lama {
         use super::*;
 
         /// Runs LaMa from `LIGMA_LAMA`, a path to lama_fp32.onnx, on
-        /// `LIGMA_EXPAND_IMAGE`, grown a third to the right, and writes it
-        /// next to the image. `cargo test -- --ignored lama`
+        /// `LIGMA_EXPAND_IMAGE`, grown as `LIGMA_EXPAND_GROW` says, "left,
+        /// top,right,bottom" in fractions of it, and writes it next to the
+        /// image. `cargo test --release -- --ignored lama`
         #[test]
         #[ignore]
         fn lama_grows_an_image() {
             let (Ok(model), Ok(path)) = (std::env::var("LIGMA_LAMA"), std::env::var("LIGMA_EXPAND_IMAGE")) else {
                 return;
             };
-            let image = image::open(&path).unwrap().into_rgba8();
-            let request = super::super::Request { method: "generative".into(), left: 0.0, top: 0.1, right: 0.35, bottom: 0.1, sample: vec![] };
+            let grow = std::env::var("LIGMA_EXPAND_GROW").unwrap_or_else(|_| "0,0.1,0.35,0.1".to_owned());
+            let [left, top, right, bottom]: [f32; 4] = grow.split(',').map(|side| side.trim().parse().unwrap()).collect::<Vec<_>>().try_into().unwrap();
+            let mut image = image::open(&path).unwrap().into_rgba8();
+            if let Ok(times) = std::env::var("LIGMA_EXPAND_UPSCALE") {
+                let times: f32 = times.parse().unwrap();
+                let (width, height) = ((image.width() as f32 * times) as u32, (image.height() as f32 * times) as u32);
+                image = imageops::resize(&image, width, height, FilterType::CatmullRom);
+            }
+            let request = super::super::Request { method: "generative".into(), left, top, right, bottom, sample: vec![] };
             let mut canvas = Canvas::grown(&image, &request).unwrap();
             let options = RunOptions::new().unwrap();
-            run(Path::new(&model), None, &mut canvas, &options).unwrap();
-            let png = canvas.png().unwrap();
-            std::fs::write(format!("{path}.generative.png"), png).unwrap();
+            let started = std::time::Instant::now();
+            run(Path::new(&model), None, &mut canvas, &options, &|| false, &|text| eprintln!("{text}")).unwrap();
+            eprintln!("{}x{} in {:?}", canvas.width, canvas.height, started.elapsed());
+            std::fs::write(format!("{path}.generative.png"), canvas.png().unwrap()).unwrap();
+        }
+    }
+}
+
+/// Generative with Stable Diffusion 1.5 Inpainting, which draws what's new
+/// rather than carrying the image on: 512 pixel squares of the grown image
+/// (see `lama::squares`) are each denoised over `STEPS` steps of DDIM with
+/// what's new masked, without a prompt, then decoded
+#[cfg(birefnet)]
+mod diffusion {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use ort::session::builder::AutoDevicePolicy;
+    use ort::session::{RunOptions, Session};
+    use ort::value::{Tensor, TensorElementType, TensorRef};
+    use tauri::AppHandle;
+
+    use super::lama::squares;
+    use super::{failed, Canvas};
+    use crate::models::{Missing, DIFFUSION, DIFFUSION_DECODER, DIFFUSION_ENCODER, DIFFUSION_UNET};
+
+    /// What the text encoder makes of an empty prompt, 77 tokens of 768, as
+    /// half floats, so its 492 MB aren't needed (see `empty_prompt_encodes`)
+    const EMPTY_PROMPT: &[u8] = include_bytes!("../assets/empty-prompt.f16");
+    const TOKENS: usize = 77;
+    const WIDTH: usize = 768;
+    const STEPS: usize = 25;
+    /// It draws 512 pixel squares, as latents 64 across
+    const SIDE: usize = 512;
+    const LATENT: usize = 64;
+    /// What's new is at most this many of a square's pixels from the image,
+    /// as it draws, so it has the image to go on and room to draw
+    const DEPTH: f32 = 320.0;
+    /// How the VAE's latents are scaled for the UNet
+    const LATENT_SCALE: f32 = 0.18215;
+
+    pub fn fill(app: &AppHandle, tab: u32, job: u64, canvas: &mut Canvas, chosen: bool) -> Result<(), &'static str> {
+        let ensured = if chosen { DIFFUSION.ensure_chosen(app, tab, job) } else { DIFFUSION.ensure(app, tab, job) };
+        let (_held, folder) = ensured.map_err(|missing| match missing {
+            Missing::Cancelled => "cancelled",
+            Missing::Failed => "failed",
+        })?;
+        let options = Arc::new(RunOptions::new().map_err(failed)?);
+        let terminate = options.clone();
+        crate::handoff::on_cancel(tab, job, move || {
+            let _ = terminate.terminate();
+        });
+        let stopped = || crate::handoff::cancelled(tab, job);
+        let progress = |text: &str| crate::handoff::progress(app, tab, job, text);
+        let files = [DIFFUSION_UNET.file, DIFFUSION_ENCODER.file, DIFFUSION_DECODER.file].map(|file| folder.join(file));
+        run([&files[0], &files[1], &files[2]], Some(&folder), canvas, &options, &stopped, &progress).map_err(|error| {
+            if stopped() {
+                "cancelled"
+            } else {
+                failed(error)
+            }
+        })
+    }
+
+    fn session(model: &Path, folder: Option<&Path>) -> Result<Session, String> {
+        let environment = crate::models::environment(folder.unwrap_or(Path::new("")))?;
+        Session::builder(environment)
+            .map_err(|error| error.to_string())?
+            .with_auto_device(AutoDevicePolicy::PreferCPU)
+            .map_err(|error| error.to_string())?
+            .commit_from_file(model)
+            .map_err(|error| error.to_string())
+    }
+
+    /// A half float's value
+    fn half(bits: u16) -> f32 {
+        let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+        let exponent = (bits >> 10) & 0x1f;
+        let fraction = (bits & 0x3ff) as f32;
+        sign * match exponent {
+            0 => fraction * 2f32.powi(-24),
+            31 => f32::INFINITY,
+            _ => (1.0 + fraction / 1024.0) * 2f32.powi(exponent as i32 - 15),
+        }
+    }
+
+    /// Normally distributed numbers, seeded so an image comes out the same
+    /// each time
+    struct Noise(u64);
+
+    impl Noise {
+        fn uniform(&mut self) -> f32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            ((self.0 >> 40) as f32 + 0.5) / (1u64 << 24) as f32
+        }
+
+        fn normal(&mut self) -> f32 {
+            let (a, b) = (self.uniform(), self.uniform());
+            (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * b).cos()
+        }
+    }
+
+    /// The noise schedule SD 1.5 was trained with: how much of the image is
+    /// left at each of the 1,000 steps
+    fn alphas() -> Vec<f32> {
+        let (start, end) = (0.00085f64.sqrt(), 0.012f64.sqrt());
+        let mut product = 1.0f64;
+        (0..1000)
+            .map(|step| {
+                let beta = (start + (end - start) * step as f64 / 999.0).powi(2);
+                product *= 1.0 - beta;
+                product as f32
+            })
+            .collect()
+    }
+
+    /// Fills `canvas` with the UNet, VAE encoder and decoder in `models`,
+    /// ONNX Runtime from `folder` where it's downloaded, or as linked in
+    /// without one, saying how far it's got with `progress`
+    pub fn run(
+        models: [&Path; 3],
+        folder: Option<&Path>,
+        canvas: &mut Canvas,
+        options: &RunOptions,
+        stopped: &dyn Fn() -> bool,
+        progress: &dyn Fn(&str),
+    ) -> Result<(), String> {
+        let error = |error: ort::Error| error.to_string();
+        let prompt: Vec<f32> = EMPTY_PROMPT.as_chunks::<2>().0.iter().map(|&bytes| half(u16::from_le_bytes(bytes))).collect();
+        if prompt.len() != TOKENS * WIDTH {
+            return Err("unexpected prompt".to_owned());
+        }
+        progress("Expanding… 0%");
+        let mut encoder = session(models[1], folder)?;
+        let mut unet = session(models[0], folder)?;
+        let mut decoder = session(models[2], folder)?;
+        let timestep_type = unet.inputs().iter().find(|input| input.name() == "timestep").and_then(|input| input.dtype().tensor_type());
+        let alphas = alphas();
+        // DDIM's steps, spaced from the start, offset by one as SD 1.5's are
+        let ratio = 1000 / STEPS;
+        let steps: Vec<usize> = (0..STEPS).rev().map(|step| step * ratio + 1).collect();
+        let (plane, cells) = (SIDE * SIDE, LATENT * LATENT);
+
+        squares(canvas, DEPTH, stopped, &mut |input, mask, index, total| {
+            // The image, -1 to 1, blank where it's new
+            let masked: Vec<f32> = input.iter().enumerate().map(|(at, &value)| if mask[at % plane] > 0.5 { 0.0 } else { value * 2.0 - 1.0 }).collect();
+            // What's new, in the latents' cells: any of a cell new is new
+            let mut cells_mask = vec![0f32; cells];
+            for (at, &hole) in mask.iter().enumerate() {
+                if hole > 0.5 {
+                    cells_mask[(at / SIDE / 8) * LATENT + (at % SIDE) / 8] = 1.0;
+                }
+            }
+            let masked_latents: Vec<f32> = {
+                let input = TensorRef::from_array_view(([1usize, 3, SIDE, SIDE], &*masked)).map_err(error)?;
+                let outputs = encoder.run_with_options(ort::inputs![input], options).map_err(error)?;
+                let (_, latents) = outputs[0].try_extract_tensor::<f32>().map_err(error)?;
+                if latents.len() != 4 * cells {
+                    return Err("unexpected encoder output".to_owned());
+                }
+                latents.iter().map(|value| value * LATENT_SCALE).collect()
+            };
+            let mut noise = Noise(0x5DEE_CE66_D1CE_4E5B ^ index as u64);
+            let mut latents: Vec<f32> = (0..4 * cells).map(|_| noise.normal()).collect();
+            let mut sample = vec![0f32; 9 * cells];
+            for (number, &step) in steps.iter().enumerate() {
+                if stopped() {
+                    return Err("cancelled".to_owned());
+                }
+                sample[..4 * cells].copy_from_slice(&latents);
+                sample[4 * cells..5 * cells].copy_from_slice(&cells_mask);
+                sample[5 * cells..].copy_from_slice(&masked_latents);
+                let input = TensorRef::from_array_view(([1usize, 9, LATENT, LATENT], &*sample)).map_err(error)?;
+                let hidden = TensorRef::from_array_view(([1usize, TOKENS, WIDTH], &*prompt)).map_err(error)?;
+                let outputs = match timestep_type {
+                    Some(TensorElementType::Float32) => {
+                        let timestep = Tensor::from_array(([1usize], vec![step as f32])).map_err(error)?;
+                        unet.run_with_options(ort::inputs!["sample" => input, "timestep" => timestep, "encoder_hidden_states" => hidden], options)
+                    }
+                    _ => {
+                        let timestep = Tensor::from_array(([1usize], vec![step as i64])).map_err(error)?;
+                        unet.run_with_options(ort::inputs!["sample" => input, "timestep" => timestep, "encoder_hidden_states" => hidden], options)
+                    }
+                }
+                .map_err(error)?;
+                let (_, predicted) = outputs[0].try_extract_tensor::<f32>().map_err(error)?;
+                if predicted.len() != 4 * cells {
+                    return Err("unexpected UNet output".to_owned());
+                }
+                // DDIM, without noise: the image it predicts, then back to
+                // the next step's noise level
+                let alpha = alphas[step];
+                let previous = step.checked_sub(ratio).map_or(alphas[0], |previous| alphas[previous]);
+                for (latent, &noise) in latents.iter_mut().zip(predicted.iter()) {
+                    let original = (*latent - (1.0 - alpha).sqrt() * noise) / alpha.sqrt();
+                    *latent = previous.sqrt() * original + (1.0 - previous).sqrt() * noise;
+                }
+                progress(&format!("Expanding… {}%", (index * STEPS + number + 1) * 95 / (total * STEPS)));
+            }
+            let scaled: Vec<f32> = latents.iter().map(|value| value / LATENT_SCALE).collect();
+            let input = TensorRef::from_array_view(([1usize, 4, LATENT, LATENT], &*scaled)).map_err(error)?;
+            let outputs = decoder.run_with_options(ort::inputs![input], options).map_err(error)?;
+            let (_, image) = outputs[0].try_extract_tensor::<f32>().map_err(error)?;
+            if image.len() != 3 * plane {
+                return Err("unexpected decoder output".to_owned());
+            }
+            Ok(image.iter().map(|value| (value + 1.0) * 127.5).collect())
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn halves_read_as_floats() {
+            assert_eq!(half(0x3c00), 1.0);
+            assert_eq!(half(0xc000), -2.0);
+            assert_eq!(half(0x0000), 0.0);
+            assert!((half(0x3555) - 0.333).abs() < 1e-3);
+        }
+
+        #[test]
+        fn the_built_in_prompt_is_whole() {
+            assert_eq!(EMPTY_PROMPT.len(), TOKENS * WIDTH * 2);
+        }
+
+        /// Runs Stable Diffusion from `LIGMA_DIFFUSION`, a folder with
+        /// unet/model.onnx, vae_encoder/model.onnx and
+        /// vae_decoder/model.onnx, on `LIGMA_EXPAND_IMAGE`, grown as
+        /// `LIGMA_EXPAND_GROW` says, and writes it next to the image.
+        /// `cargo test --release -- --ignored diffusion_grows`
+        #[test]
+        #[ignore]
+        fn diffusion_grows_an_image() {
+            let (Ok(folder), Ok(path)) = (std::env::var("LIGMA_DIFFUSION"), std::env::var("LIGMA_EXPAND_IMAGE")) else {
+                return;
+            };
+            let folder = Path::new(&folder);
+            let grow = std::env::var("LIGMA_EXPAND_GROW").unwrap_or_else(|_| "0,0,0,0.35".to_owned());
+            let [left, top, right, bottom]: [f32; 4] =
+                grow.split(',').map(|side| side.trim().parse().unwrap()).collect::<Vec<_>>().try_into().unwrap();
+            let image = image::open(&path).unwrap().into_rgba8();
+            let request = super::super::Request { method: "generative".into(), left, top, right, bottom, sample: vec![] };
+            let mut canvas = Canvas::grown(&image, &request).unwrap();
+            let options = RunOptions::new().unwrap();
+            let files = ["unet/model.onnx", "vae_encoder/model.onnx", "vae_decoder/model.onnx"].map(|file| folder.join(file));
+            let started = std::time::Instant::now();
+            run([&files[0], &files[1], &files[2]], None, &mut canvas, &options, &|| false, &|text| eprintln!("{text} {:?}", started.elapsed()))
+                .unwrap();
+            eprintln!("{}x{} in {:?}", canvas.width, canvas.height, started.elapsed());
+            std::fs::write(format!("{path}.diffusion.png"), canvas.png().unwrap()).unwrap();
+        }
+
+        /// Writes what the text encoder in `LIGMA_TEXT_ENCODER` makes of an
+        /// empty prompt to assets/empty-prompt.f16: SD 1.5's tokenizer
+        /// gives the start token, then the end token, which pads it too.
+        /// `cargo test --release -- --ignored empty_prompt_encodes`
+        #[test]
+        #[ignore]
+        fn empty_prompt_encodes() {
+            let Ok(model) = std::env::var("LIGMA_TEXT_ENCODER") else {
+                return;
+            };
+            let mut encoder = session(Path::new(&model), None).unwrap();
+            let kind = encoder.inputs()[0].dtype().tensor_type();
+            let mut ids = vec![49407i64; TOKENS];
+            ids[0] = 49406;
+            let outputs = if kind == Some(TensorElementType::Int32) {
+                let ids: Vec<i32> = ids.iter().map(|&id| id as i32).collect();
+                encoder.run(ort::inputs![Tensor::from_array(([1usize, TOKENS], ids)).unwrap()]).unwrap()
+            } else {
+                encoder.run(ort::inputs![Tensor::from_array(([1usize, TOKENS], ids)).unwrap()]).unwrap()
+            };
+            let (_, hidden) = outputs[0].try_extract_tensor::<f32>().unwrap();
+            assert_eq!(hidden.len(), TOKENS * WIDTH);
+            let mut bytes = Vec::with_capacity(hidden.len() * 2);
+            for &value in hidden.iter() {
+                bytes.extend_from_slice(&to_half(value).to_le_bytes());
+            }
+            std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/empty-prompt.f16"), bytes).unwrap();
+        }
+
+        /// The nearest half float to `value`, for the values a text encoder
+        /// gives
+        fn to_half(value: f32) -> u16 {
+            let bits = value.to_bits();
+            let sign = ((bits >> 16) & 0x8000) as u16;
+            let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+            let mantissa = bits & 0x7f_ffff;
+            if exponent <= 0 {
+                if exponent < -10 {
+                    return sign;
+                }
+                let mantissa = (mantissa | 0x80_0000) >> (1 - exponent);
+                return sign | ((mantissa + 0x1000) >> 13) as u16;
+            }
+            if exponent >= 31 {
+                return sign | 0x7c00;
+            }
+            let rounded = ((exponent as u32) << 10 | (mantissa >> 13)) + ((mantissa >> 12) & 1);
+            sign | rounded as u16
         }
     }
 }
