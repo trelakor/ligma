@@ -92,11 +92,9 @@ pub fn show(app: &AppHandle, tab: u32, items: Vec<Item>, extras: Extras, pick: P
     {
         builder = builder.owner_raw(main.hwnd()?);
     }
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder.parent_raw(main.ns_window()?);
-    }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    // Not a child window on macOS until shown (`set_owner`): AppKit puts a
+    // child on screen as soon as it's attached, before it's been placed
+    #[cfg(not(windows))]
     let _ = main;
     let window = builder.build()?;
     #[cfg(windows)]
@@ -133,6 +131,7 @@ pub fn is_open() -> bool {
 pub fn hide(app: &AppHandle) {
     OPEN.lock().unwrap().take();
     if let Some(window) = app.get_webview_window(WINDOW) {
+        release(&window);
         let _ = window.hide();
     }
 }
@@ -251,6 +250,34 @@ pub fn set_owner(window: &WebviewWindow, owner: &Window) {
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     let _ = (window, owner);
+}
+
+/// Undoes `set_owner`, for a window about to be hidden. On macOS a hidden
+/// child window comes back on screen whenever its parent is ordered in, as
+/// when the app is switched back to, so it can't stay a child while hidden
+pub fn release(window: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let child = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            if let Ok(child) = child.ns_window() {
+                unsafe { remove_parent(child.cast()) };
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
+/// Call on the main thread
+#[cfg(target_os = "macos")]
+unsafe fn remove_parent(ns_window: *mut objc2::runtime::AnyObject) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let current: *mut AnyObject = msg_send![ns_window, parentWindow];
+    if !current.is_null() {
+        let _: () = msg_send![current, removeChildWindow: ns_window];
+    }
 }
 
 /// Makes `ns_window` a child window of `parent`, unless it is already.

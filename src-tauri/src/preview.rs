@@ -81,11 +81,14 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
             builder = builder.background_color(color);
         }
     }
+    // Not a child window on macOS until shown (`tab_menu::set_owner`):
+    // AppKit puts a child on screen as soon as it's attached, so the card
+    // would show empty, mid-screen
     #[cfg(target_os = "macos")]
     {
-        builder = builder.shadow(true).parent_raw(main.ns_window()?);
+        builder = builder.shadow(true);
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(windows))]
     let _ = main;
     let window = builder.build()?;
     // Clicks and hovers go to whatever is under the card
@@ -109,6 +112,7 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
 pub fn hide(app: &AppHandle) {
     OPEN.lock().unwrap().take();
     if let Some(window) = app.get_webview_window(WINDOW) {
+        crate::tab_menu::release(&window);
         #[cfg(windows)]
         crate::frame::show_inactive(&window, false);
         #[cfg(not(windows))]
