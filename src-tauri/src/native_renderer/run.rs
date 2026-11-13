@@ -153,6 +153,13 @@ fn start_pushing(webview: &Webview) -> bool {
             move |key, body| {
                 if key.starts_with('f') {
                     frames().put(&tab, body);
+                } else if let Some(drawn) = key.strip_prefix("ov-") {
+                    // Figma's worker drew its overlay for the frame
+                    let seq = drawn.rsplit('-').next().and_then(|seq| seq.parse::<u64>().ok());
+                    if let (Some(seq), Some(ctx)) = (seq, CTX.lock().unwrap().clone()) {
+                        super::render::trace(|| format!("overlay {seq} drawn"));
+                        ctx.hub.overlay_drawn(seq);
+                    }
                 } else {
                     pushed().put(key, body);
                 }
@@ -294,7 +301,7 @@ fn take_frames(ctx: Arc<Ctx>) {
                 }
             }
             follow_canvas(&ctx, &view);
-            ctx.hub.set_view(view);
+            ctx.hub.frame_view(frame.header.seq, view);
             super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it", frame.header.seq, super::render::since_epoch_ms() - frame.header.at));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
@@ -1268,6 +1275,11 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             Ok(report.to_string())
         }
         "profile" if super::dev() => Ok(super::profile::report()),
+        _ if action.starts_with("overlay:") && super::dev() => {
+            let ms = action["overlay:".len()..].parse::<f64>().map_err(|error| error.to_string())?;
+            super::present::set_overlay_latency(ms);
+            Ok(String::new())
+        }
         "profile-reset" if super::dev() => {
             super::profile::reset();
             Ok("reset".into())

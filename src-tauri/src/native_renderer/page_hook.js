@@ -66,6 +66,71 @@
         return getContext.call(this, type, attributes);
       };
     } catch {}
+    // Tells Ligma when the overlay for each frame Ligma tagged is drawn, so
+    // it shows its own drawing of the frame then. The worker draws in its
+    // animation frames once it asks for them, else as frames come
+    try {
+      let last = 0;
+      let told = 0;
+      let to = null;
+      let animated = false;
+      const tell = () => {
+        if (last <= told || !to) return;
+        told = last;
+        fetch(to + last, { method: "POST", cache: "no-store", credentials: "omit" }).catch(() => {});
+      };
+      const wrapped = new WeakMap();
+      const wrap = (listener) => {
+        if (typeof listener !== "function" && typeof listener?.handleEvent !== "function") return listener;
+        if (!wrapped.has(listener)) {
+          wrapped.set(listener, function (event) {
+            const tag = event?.data?.params?.ligmaSeq;
+            if (tag) {
+              last = tag;
+              to = event.data.params.ligmaTo;
+            }
+            const result = typeof listener === "function" ? listener.apply(this, arguments) : listener.handleEvent(event);
+            if (tag && !animated) tell();
+            return result;
+          });
+        }
+        return wrapped.get(listener);
+      };
+      const add = MessagePort.prototype.addEventListener;
+      const remove = MessagePort.prototype.removeEventListener;
+      MessagePort.prototype.addEventListener = function (type, listener, options) {
+        return add.call(this, type, type === "message" ? wrap(listener) : listener, options);
+      };
+      MessagePort.prototype.removeEventListener = function (type, listener, options) {
+        return remove.call(this, type, type === "message" && wrapped.has(listener) ? wrapped.get(listener) : listener, options);
+      };
+      const onmessage = Object.getOwnPropertyDescriptor(MessagePort.prototype, "onmessage");
+      if (onmessage?.set) {
+        Object.defineProperty(MessagePort.prototype, "onmessage", {
+          configurable: true,
+          enumerable: onmessage.enumerable,
+          get() {
+            return onmessage.get.call(this);
+          },
+          set(listener) {
+            onmessage.set.call(this, wrap(listener));
+          },
+        });
+      }
+      const frame = self.requestAnimationFrame;
+      if (frame) {
+        self.requestAnimationFrame = function (callback) {
+          animated = true;
+          return frame.call(self, function () {
+            try {
+              return callback.apply(this, arguments);
+            } finally {
+              tell();
+            }
+          });
+        };
+      }
+    } catch {}
   };
   const NativeWorker = window.Worker;
   try {
@@ -188,6 +253,11 @@
     if (!hook.replacing) {
       emptySent = false;
       return;
+    }
+    // For the worker to say when it's drawn the overlay for it
+    if (hook.pushTo) {
+      params.ligmaSeq = seq;
+      params.ligmaTo = location.origin + hook.pushTo + `ov-${session}-`;
     }
     // Figma sends the whole scene when its worker lost what it had, so the
     // worker starts from the empty scene again rather than one it lost

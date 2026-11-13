@@ -921,6 +921,10 @@ pub struct Painter {
     kept: Kept,
     /// Effects waiting on images the node draws, run once they come
     effects_waiting: Vec<(String, f64)>,
+    /// Where units were drawn without images or effects not here yet, or
+    /// with them at another size, by image: drawn again once they come,
+    /// though the pictures that drew them may have gone by then
+    waiting_areas: HashMap<String, Vec<Rect>>,
 }
 
 impl Painter {
@@ -999,6 +1003,7 @@ impl Painter {
             requests,
             effects,
             effects_waiting: Vec::new(),
+            waiting_areas: HashMap::new(),
             kept,
         }
     }
@@ -1290,6 +1295,15 @@ impl Painter {
         if quick {
             self.thumb_deadline = Some(Instant::now() + THUMB_TIME);
         }
+        // What the last whole view drew, which stands in for units whose
+        // thumbs aren't made yet, a little blurred, rather than them
+        // blinking out
+        let last = if quick { self.whole.as_ref().map(|whole| (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px)) } else { None };
+        let stand_in = last.and_then(|(tex, x, y, layer_px)| {
+            let image = gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None)?;
+            Some((image, x, y, layer_px))
+        });
+        let mut stood_in = 0;
         for unit in 0..self.units.len() {
             let bounds = self.units[unit].bounds;
             if !Rect::intersects2(&bounds, &reach) {
@@ -1313,9 +1327,19 @@ impl Painter {
                     continue;
                 }
                 // Left out till its thumb is made, rather than the view
-                // waiting on it
+                // waiting on it, with what the last whole view drew there
+                // in its place
                 if std::mem::take(&mut self.thumb_later) {
                     left_out += 1;
+                    if let Some((image, x, y, layer_px)) = &stand_in {
+                        let drawn = Rect::from_xywh(*x as f32 / layer_px, *y as f32 / layer_px, image.width() as f32 / layer_px, image.height() as f32 / layer_px);
+                        let mut to = bounds;
+                        if to.intersect(drawn) {
+                            let from = Rect::from_ltrb(to.left * layer_px - *x as f32, to.top * layer_px - *y as f32, to.right * layer_px - *x as f32, to.bottom * layer_px - *y as f32);
+                            pictures.push(Drawn::Thumb(image.clone(), from, to, true));
+                            stood_in += 1;
+                        }
+                    }
                     continue;
                 }
             }
@@ -1351,6 +1375,7 @@ impl Painter {
         let wait = self.whole.is_none();
         let image = self.finish(&backend, wait);
         drop(surface);
+        drop(stand_in);
         if image.is_none() {
             return;
         }
@@ -1358,7 +1383,7 @@ impl Painter {
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| {
             format!(
-                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} cleared={} thumbs_took={:.1}ms drawn_took={:.1}ms slowest={:.1}ms:{} margin={margin} recorded={:.1}ms played={:.1}ms {:.1}ms wait={wait} vram={vram} gpu={}",
+                "  whole px={px:.3} pictures={} thumbs={} made={} derived={} left_out={left_out} stood_in={stood_in} cleared={} thumbs_took={:.1}ms drawn_took={:.1}ms slowest={:.1}ms:{} margin={margin} recorded={:.1}ms played={:.1}ms {:.1}ms wait={wait} vram={vram} gpu={}",
                 pictures.len(),
                 pictures.iter().filter(|item| matches!(item, Drawn::Thumb(..))).count(),
                 std::mem::take(&mut self.thumbs_made),
@@ -1378,7 +1403,7 @@ impl Painter {
                 }
             )
         });
-        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts }, fence, Some(at));
+        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts, behind: false }, fence, Some(at));
         if let Some(whole) = self.whole.as_mut() {
             whole.partial = left_out > 0;
         }
@@ -1522,7 +1547,7 @@ impl Painter {
         }
         let fence = self.gpu.signal();
         let counts = self.whole.as_ref().map(|whole| whole.layer.counts).unwrap_or_default();
-        self.hand_whole(Layer { tex, x, y, px, counts }, fence, None);
+        self.hand_whole(Layer { tex, x, y, px, counts, behind: false }, fence, None);
         trace(|| {
             format!(
                 "  patch areas={} pictures={} recorded={recorded} {:.1}ms played={:.1}ms {:.1}ms",
@@ -1674,13 +1699,17 @@ impl Painter {
         let mut shown = self.hub.shown.lock().unwrap();
         // Tiles out of date don't cover the whole view drawn since
         let whole_current = self.whole.as_ref().is_some_and(|whole| whole.at == self.at && !whole.stale);
+        // Nor does what they show win over it where it's somewhere else,
+        // as while the view moves during an edit, which would show the
+        // edit back as it was a frame
+        let whole_fresh = self.whole.as_ref().is_some_and(|whole| !whole.stale && whole.patch.is_empty());
         shown.tiles = self
             .tiles
             .iter()
             .filter(|(_, tile)| !(whole_current && tile.stale))
             .filter_map(|(key, tile)| {
                 let tex = if tile.fence <= passed { &tile.tex } else { tile.previous.as_ref()? };
-                Some(Layer { tex: tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts })
+                Some(Layer { tex: tex.clone(), x: key.x * TILE, y: key.y * TILE, px: key.px(), counts: tile.counts, behind: tile.stale && whole_fresh })
             })
             .collect();
         shown.live = self.whole.as_ref().and_then(|whole| if whole.fence <= passed { Some(whole.layer.clone()) } else { whole.previous.clone() });
@@ -1700,7 +1729,7 @@ impl Painter {
         // next frame a refresh of the screen
         let layer = |layer: &Layer| {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            (Arc::as_ptr(&layer.tex) as usize, layer.x, layer.y, layer.px.to_bits()).hash(&mut hasher);
+            (Arc::as_ptr(&layer.tex) as usize, layer.x, layer.y, layer.px.to_bits(), layer.behind).hash(&mut hasher);
             hasher.finish()
         };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1954,10 +1983,15 @@ impl Painter {
         }
         let waiting: Vec<(usize, bool, i32, bool)> =
             self.pictures.iter().filter(|(_, recorded)| recorded.missing.contains(&key)).map(|(&key, _)| key).collect();
-        let areas: Vec<Rect> = waiting
+        let mut areas: Vec<Rect> = waiting
             .iter()
             .filter_map(|&(slot, _, _, _)| self.units.iter().find(|unit| unit.slot == slot).map(|unit| unit.bounds))
             .collect();
+        for area in self.waiting_areas.remove(&key).unwrap_or_default() {
+            if !areas.contains(&area) {
+                areas.push(area);
+            }
+        }
         for picture in waiting {
             self.pictures.remove(&picture);
         }
@@ -2020,6 +2054,7 @@ impl Painter {
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
         if first {
+            self.waiting_areas.clear();
             self.pictures.clear();
             self.thumbs.clear();
             self.clear_rasters();
@@ -2456,7 +2491,8 @@ impl Painter {
                 drop(drawer);
                 let picture = recorder.finish_recording_as_picture(None)?;
                 self.ask(&images);
-                let missing = images.into_iter().map(|(key, _)| key).collect();
+                let missing: Vec<String> = images.into_iter().map(|(key, _)| key).collect();
+                self.wait_for(&missing, bounds);
                 self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources: Vec::new(), uses });
                 slow(&self.pictures);
                 return self.pictures.get(&key);
@@ -2492,11 +2528,22 @@ impl Painter {
             let picture = recorder.finish_recording_as_picture(None)?;
             self.ask(&images);
             self.ask_exact(&exact);
-            let missing = images.into_iter().chain(exact).map(|(key, _)| key).collect();
+            let missing: Vec<String> = images.into_iter().chain(exact).map(|(key, _)| key).collect();
+            self.wait_for(&missing, bounds);
             self.pictures.insert(key, Recorded { picture, counts, reason, missing, waiting, sources, uses });
             slow(&self.pictures);
         }
         self.pictures.get(&key)
+    }
+
+    /// Notes that what's drawn over `bounds` waits on `missing`
+    fn wait_for(&mut self, missing: &[String], bounds: Rect) {
+        for key in missing {
+            let areas = self.waiting_areas.entry(key.clone()).or_default();
+            if !areas.contains(&bounds) {
+                areas.push(bounds);
+            }
+        }
     }
 
     /// Unit `unit` as drawn at `scale` device pixels a unit, with its

@@ -120,6 +120,9 @@ pub struct Layer {
     pub y: i32,
     pub px: f32,
     pub counts: Counts,
+    /// An out of date tile, shown only where the whole view, drawn since,
+    /// isn't
+    pub behind: bool,
 }
 
 /// What the render thread has drawn for the view
@@ -152,6 +155,11 @@ pub struct Hub {
     pub tree_failures: std::sync::atomic::AtomicU32,
     /// Memory shared with the tab drawn, to tell it the last frame drawn
     pub shared: Mutex<Option<crate::webview2::Shared>>,
+    /// Views of frames of the render tree not shown yet, with when Figma's
+    /// worker drew its overlay for each, the first the one shown now
+    frames: Mutex<std::collections::VecDeque<FrameView>>,
+    /// When Figma's worker last said it drew its overlay
+    overlay_at: Mutex<Option<Instant>>,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -166,6 +174,8 @@ impl Hub {
             stop: AtomicBool::new(false),
             tree_failures: std::sync::atomic::AtomicU32::new(0),
             shared: Mutex::new(None),
+            frames: Mutex::new(std::collections::VecDeque::new()),
+            overlay_at: Mutex::new(None),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
@@ -178,8 +188,67 @@ impl Hub {
     }
 
     pub fn set_view(&self, view: View) {
+        self.frames.lock().unwrap().clear();
         *self.view.lock().unwrap() = Some(view);
         self.poke();
+    }
+
+    /// The view of frame `seq` of the render tree, shown once Figma's
+    /// worker has drawn its overlay for it, so the two show together
+    pub fn frame_view(&self, seq: u64, view: View) {
+        let mut frames = self.frames.lock().unwrap();
+        // Lost track: shown at once
+        if frames.back().is_some_and(|last| last.seq >= seq) {
+            frames.clear();
+        }
+        frames.push_back(FrameView { seq, view: view.clone(), came: Instant::now(), drawn: None });
+        while frames.len() > 64 {
+            frames.pop_front();
+        }
+        drop(frames);
+        *self.view.lock().unwrap() = Some(view);
+        self.poke();
+    }
+
+    /// Figma's worker drew its overlay for frames up to `seq`
+    pub fn overlay_drawn(&self, seq: u64) {
+        let now = Instant::now();
+        *self.overlay_at.lock().unwrap() = Some(now);
+        for frame in self.frames.lock().unwrap().iter_mut().filter(|frame| frame.seq <= seq) {
+            frame.drawn.get_or_insert(now);
+        }
+        self.poke();
+    }
+
+    /// The view to show now: the latest whose overlay Figma's worker has
+    /// drawn, `OVERLAY_LATENCY` ago, or that's waited `OVERLAY_HOLD`. With
+    /// how long until the next is due, if one waits
+    fn shown_view(&self) -> (Option<View>, Option<Duration>) {
+        let mut frames = self.frames.lock().unwrap();
+        if frames.is_empty() {
+            return (self.view.lock().unwrap().clone(), None);
+        }
+        let now = Instant::now();
+        // The worker isn't saying, so views aren't held for it
+        let heard = self.overlay_at.lock().unwrap().is_some_and(|at| now - at < Duration::from_secs(1));
+        let latency = overlay_latency();
+        let due = |frame: &FrameView| {
+            let Some(latency) = latency.filter(|_| heard) else {
+                return frame.came;
+            };
+            let drawn = frame.drawn.map_or(frame.came + OVERLAY_HOLD, |drawn| drawn + latency);
+            drawn.min(frame.came + OVERLAY_HOLD)
+        };
+        let mut next = None;
+        while frames.len() > 1 {
+            let at = due(&frames[1]);
+            if at > now {
+                next = Some(at - now);
+                break;
+            }
+            frames.pop_front();
+        }
+        (frames.front().map(|frame| frame.view.clone()), next)
     }
 
     /// Waits until poked after `seen`, or `timeout`, and returns the count
@@ -188,6 +257,31 @@ impl Hub {
         let (changes, _) = self.changed.wait_timeout_while(changes, timeout, |changes| *changes == seen).unwrap();
         *changes
     }
+}
+
+struct FrameView {
+    seq: u64,
+    view: View,
+    came: Instant,
+    drawn: Option<Instant>,
+}
+
+/// Longest a frame's view waits for Figma's worker to draw its overlay
+const OVERLAY_HOLD: Duration = Duration::from_millis(50);
+
+/// From when Figma's worker draws its overlay to when it's on screen,
+/// past what it takes this thread to show a frame, in microseconds, or
+/// negative for views not to wait for it (`set_overlay_latency`)
+static OVERLAY_LATENCY: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn overlay_latency() -> Option<Duration> {
+    let micros = OVERLAY_LATENCY.load(Ordering::Relaxed);
+    (micros >= 0).then(|| Duration::from_micros(micros as u64))
+}
+
+/// For the dev build, to tune it
+pub fn set_overlay_latency(ms: f64) {
+    OVERLAY_LATENCY.store((ms * 1000.0) as i64, Ordering::Relaxed);
 }
 
 /// Where frames go: a window of their own, or a layer of the main window's
@@ -378,7 +472,7 @@ impl Screen {
                 unsafe { WaitForSingleObjectEx(self.waitable, 250, true) };
                 room = true;
             }
-            let view = hub.view.lock().unwrap().clone();
+            let (view, due) = hub.shown_view();
             let size = match (&self.layer, &view) {
                 (Some(_), Some(view)) => view.canvas(),
                 _ => *hub.size.lock().unwrap(),
@@ -406,7 +500,7 @@ impl Screen {
             };
             let now = (view.clone(), what.generation, self.size);
             if shown.as_ref() == Some(&now) {
-                seen = hub.wait(seen, Duration::from_millis(100));
+                seen = hub.wait(seen, due.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)));
                 continue;
             }
             self.frame(&view, &what);
@@ -472,7 +566,7 @@ impl Screen {
         let mut layers: Vec<(f32, &Layer)> = what
             .tiles
             .iter()
-            .map(|layer| (if layer.px == drawn { 0.0 } else { 2.0 + (layer.px / drawn).log2().abs() }, layer))
+            .map(|layer| (if layer.px == drawn && !layer.behind { 0.0 } else { 2.0 + (layer.px / drawn).log2().abs() }, layer))
             .chain(what.live.iter().map(|layer| (if layer.px == drawn { 1.0 } else { 1.5 + (layer.px / drawn).log2().abs() }, layer)))
             .collect();
         layers.sort_by(|a, b| a.0.total_cmp(&b.0));
