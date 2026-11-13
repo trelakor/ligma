@@ -1232,7 +1232,9 @@ impl<'a> Drawer<'a> {
                 // A few pixels across, what shows through at the edge can't
                 // be seen, and a layer each costs a lot far out
                 let tiny = bounds.width().max(bounds.height()) * self.device_scale() < 4.0;
-                let one = !self.aa || tiny || (self.single_draw(color) && !self.tree.info(color).blends);
+                // A background blur has to be over what it blurs, which in a
+                // layer of its own it isn't
+                let one = !self.aa || tiny || op == MaskOpType::BackgroundBlur || (self.single_draw(color) && !self.tree.info(color).blends);
                 if one && matches!(op, MaskOpType::Normal | MaskOpType::Pattern | MaskOpType::BackgroundBlur) {
                     if let Some((fill, at)) = self.tree.clip_of(alpha) {
                         if let Some(outline) = self.tree.outline(fill) {
