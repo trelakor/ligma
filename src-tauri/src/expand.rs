@@ -439,6 +439,18 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
             let (x, y) = (at % width, at / width);
             (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
         }
+        // On a smooth surface, like rendered metal or a flat panel, there's
+        // no texture to carry, only light to match, and a copy brings in
+        // whatever edge lies beside the spot: the whole spot is evened out
+        // from its surroundings at once instead, seamlessly
+        let grain = grain_around(canvas, &hole, &spot, (left, top, right, bottom));
+        if grain < SMOOTH {
+            smooth_into(canvas, &hole, &spot);
+            for &at in &spot {
+                hole[at] = false;
+            }
+            continue;
+        }
         if right - left < 2 * PIECE && bottom - top < 2 * PIECE {
             pieces.push(spot);
             continue;
@@ -519,6 +531,49 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
     }
     Ok(())
 }
+
+/// How grainy the image is around `spot`, in the box `bounds`: how far
+/// each pixel within `RING` of it is from the average of the four around
+/// it, out of 255, a quarter of the way up from the least, so edges
+/// passing by, or what's left of what's painted over, don't count
+fn grain_around(canvas: &Canvas, hole: &[bool], spot: &[usize], (left, top, right, bottom): (usize, usize, usize, usize)) -> f32 {
+    let (width, height) = (canvas.width, canvas.height);
+    let (x0, y0) = (left.saturating_sub(RING), top.saturating_sub(RING));
+    let (x1, y1) = ((right + RING + 1).min(width), (bottom + RING + 1).min(height));
+    let (across, down) = (x1 - x0, y1 - y0);
+    let mut mask = vec![false; across * down];
+    for &at in spot {
+        mask[(at / width - y0) * across + at % width - x0] = true;
+    }
+    let near = grown_by(&mask, across, down, RING);
+    let mut found: Vec<f32> = Vec::new();
+    for (i, &near) in near.iter().enumerate() {
+        let (x, y) = (x0 + i % across, y0 + i / across);
+        if !near || x == 0 || y == 0 || x + 1 >= width || y + 1 >= height {
+            continue;
+        }
+        let neighbours = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)];
+        if hole[y * width + x] || neighbours.iter().any(|&(nx, ny)| hole[ny * width + nx]) {
+            continue;
+        }
+        let pixel = canvas.pixels[y * width + x];
+        let mut sum = 0f32;
+        for (channel, value) in pixel.iter().enumerate() {
+            let mean = neighbours.iter().map(|&(nx, ny)| canvas.pixels[ny * width + nx][channel]).sum::<f32>() / 4.0;
+            sum += (value - mean).powi(2);
+        }
+        found.push(sum.sqrt());
+    }
+    if found.is_empty() {
+        return f32::INFINITY;
+    }
+    let quarter = found.len() / 4;
+    *found.select_nth_unstable_by(quarter, f32::total_cmp).1
+}
+
+/// Around a spot smoother than this, in `grain_around`, it's evened out
+/// rather than copied over
+const SMOOTH: f32 = 1.5;
 
 /// Fills `piece` evenly from what's around it, for a piece with nowhere to
 /// copy from
