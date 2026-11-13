@@ -1210,8 +1210,14 @@ impl<'a> Drawer<'a> {
                 if matches!(op, MaskOpType::Glass | MaskOpType::Unknown(_)) {
                     self.approximate("glass");
                 }
-                // A mask that's an opaque shape is a clip
-                if matches!(op, MaskOpType::Normal | MaskOpType::Pattern | MaskOpType::BackgroundBlur) {
+                // A mask that's an opaque shape is a clip, where that comes
+                // out the same: clipped with smoothed edges, each shape
+                // under it is cut on its own, so at the edge those beneath
+                // show through those over them, and blends add to what's
+                // already mixed with what's outside. Masked as Figma does,
+                // what's under the mask is cut once, as one
+                let one = !self.aa || (self.single_draw(color) && !self.tree.info(color).blends);
+                if one && matches!(op, MaskOpType::Normal | MaskOpType::Pattern | MaskOpType::BackgroundBlur) {
                     if let Some((fill, at)) = self.tree.clip_of(alpha) {
                         if let Some(outline) = self.tree.outline(fill) {
                             self.canvas.save();

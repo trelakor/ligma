@@ -543,6 +543,8 @@ struct Pending {
     scratch: Surface,
     margin: i32,
     ss: i32,
+    /// Drawn with 4 samples a pixel by the GPU rather than supersampled
+    msaa: bool,
     offset: (f32, f32),
     counts: Counts,
     timing: bool,
@@ -558,10 +560,10 @@ struct Pending {
 
 /// Widest margin a tile is drawn with, in pixels
 const MAX_MARGIN: i32 = 256;
-/// Zoomed in past this many pixels a unit, exact tiles take one sample a
-/// pixel with smoothed edges: 16 samples would look no different there,
-/// but cost 16 times as much, which with big blurs is hundreds of
-/// milliseconds a tile
+/// Zoomed in past this many pixels a unit, exact tiles take 4 samples a
+/// pixel from the GPU rather than 16 drawn bigger: 16 would look no
+/// different there, but cost 16 times as much, which with big blurs is
+/// hundreds of milliseconds a tile
 const SUPERSAMPLE_UNTIL: f32 = 2.0;
 /// Time to spend per frame drawing tiles not ready yet, so a newly shown
 /// part of the page fills in over a few frames rather than stalling one
@@ -3428,7 +3430,15 @@ impl Painter {
         }
         self.rasters_made = 0;
         let ss = if exact { self.supersample(key.px()) } else { 1 };
+        // Exact tiles not supersampled take 4 samples a pixel instead of
+        // smoothing each shape's edges alone, which where shapes share an
+        // edge lets what's under them show through as a seam
+        let msaa = exact && ss == 1 && self.config.samples < 4;
+        let samples = if msaa { 4 } else { self.config.samples };
+        // Skia takes the samples only for what's drawn anti-aliased
         let aa = ss < 4;
+        // Scratch surfaces are told apart by `ss`, multisampled ones as 0
+        let kind = if msaa { 0 } else { ss };
         let area = key.area();
         let px = key.px();
         let margin = self.margin(key);
@@ -3474,10 +3484,10 @@ impl Painter {
         let pictures = self.unpage(pictures);
         let recorded = start.elapsed();
         let before = if tracing() { gpu_counters() } else { [0.0; 6] };
-        let scratch = match self.scratch.iter().position(|(kept, samples, _)| (*kept, *samples) == (margin, ss)) {
+        let scratch = match self.scratch.iter().position(|(kept, of, _)| (*kept, *of) == (margin, kind)) {
             Some(found) => self.scratch.swap_remove(found).2,
             // Outside Skia's cache, so its memory goes as soon as it does
-            None => self.gpu.own_surface((TILE + margin * 2) * ss, (TILE + margin * 2) * ss, self.config.samples)?,
+            None => self.gpu.own_surface((TILE + margin * 2) * ss, (TILE + margin * 2) * ss, samples)?,
         };
         let offset = (((margin - key.x * TILE) * ss) as f32 - self.frac.0 * ss as f32, ((margin - key.y * TILE) * ss) as f32 - self.frac.1 * ss as f32);
         let mut pending = Pending {
@@ -3491,6 +3501,7 @@ impl Painter {
             scratch,
             margin,
             ss,
+            msaa,
             offset,
             counts,
             timing,
@@ -3552,7 +3563,7 @@ impl Painter {
                 pending.group = (pending.group * 2).min(64);
             }
         }
-        let Pending { key, exact, draft, pictures, names, mut scratch, margin, ss, offset, counts, timing, started, recorded, played, flushed, before, steps, longest, .. } = pending;
+        let Pending { key, exact, draft, pictures, names, mut scratch, margin, ss, msaa, offset, counts, timing, started, recorded, played, flushed, before, steps, longest, .. } = pending;
         let px = key.px();
         let tail = Instant::now();
         if timing {
@@ -3631,7 +3642,7 @@ impl Painter {
         }
         // Margins are rare, so their bigger surfaces aren't kept
         if margin == 0 {
-            self.scratch.push((margin, ss, scratch));
+            self.scratch.push((margin, if msaa { 0 } else { ss }, scratch));
         }
         Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft })
     }
