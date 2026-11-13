@@ -692,8 +692,12 @@ struct Tile {
     /// what it replaces, if anything
     fence: u64,
     previous: Option<Arc<Tex>>,
-    /// The last frame whose edits it has
+    /// The last frame whose edits it has, and `previous`
     seq: u64,
+    previous_seq: u64,
+    /// `previous` is out of date: something changed under it since it was
+    /// drawn
+    previous_stale: bool,
 }
 
 impl Drop for Gpu {
@@ -1672,9 +1676,13 @@ impl Painter {
                     self.retire(previous);
                 }
                 tile.previous = Some(old.tex);
+                tile.previous_seq = old.seq;
+                tile.previous_stale = old.stale;
             } else {
                 // Never shown, so what it was to replace still is
                 tile.previous = old.previous;
+                tile.previous_seq = old.previous_seq;
+                tile.previous_stale = old.previous_stale;
                 self.retire(old.tex);
             }
         }
@@ -1780,10 +1788,14 @@ impl Painter {
         shown.tiles = self
             .tiles
             .iter()
-            .filter(|(_, tile)| !(whole_current && tile.stale))
             .filter_map(|(key, tile)| {
-                let (tex, seq) = if tile.fence <= passed { (&tile.tex, tile.seq) } else { (tile.previous.as_ref()?, 0) };
-                let behind = tile.stale && whole_seq.is_some_and(|whole| whole > seq);
+                // What a tile drawn again shows till the GPU's done, which
+                // is as out of date as the tile it replaces
+                let (tex, seq, stale) = if tile.fence <= passed { (&tile.tex, tile.seq, tile.stale) } else { (tile.previous.as_ref()?, tile.previous_seq, tile.previous_stale) };
+                if whole_current && stale {
+                    return None;
+                }
+                let behind = stale && whole_seq.is_some_and(|whole| whole > seq);
                 if behind && !whole_current && !whole_fresh {
                     kept_under += 1;
                 }
@@ -2410,6 +2422,7 @@ impl Painter {
             let area = key.area();
             if areas.iter().any(|other| Rect::intersects2(&area, other)) {
                 tile.stale = true;
+                tile.previous_stale = true;
             }
         }
         if let Some(pending) = &self.pending {
@@ -3362,7 +3375,7 @@ impl Painter {
         if margin == 0 {
             self.scratch.push((margin, ss, scratch));
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, fence, previous: None, seq: self.seq })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, fence, previous: None, seq: self.seq, previous_seq: 0, previous_stale: false })
     }
 
     fn background(&self) -> Color4f {
