@@ -180,13 +180,24 @@
   button.sec-h:hover b { color: var(--text); }
   .sec-h .chev { width: 12px; height: 12px; transition: transform 160ms var(--ease); }
   .sec-h b { color: var(--text2); font-weight: 550; }
-  /* Pin a team to the top, from the star that shows on its row */
+  /* A team's ⋯ (its menu, settings first) and star (pin to the top) take
+     the plan's place while the pointer or keys are on its row; a pinned
+     team keeps its star. Lit while its window is open, so nothing else on
+     the row has to stay shown */
   .team-row { position: relative; }
-  .team-star { position: absolute; top: 4px; right: 36px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: var(--hover); color: var(--text2); opacity: 0; }
-  .team-row:hover .team-star, .team-star:focus-visible { opacity: 1; }
-  .team-row:hover .tier { visibility: hidden; }
-  .team-star:hover { color: var(--text); background: var(--bg3); }
-  .team-star.on .i { fill: #ffc700; }
+  .team-more, .team-star { position: absolute; top: 4px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--text2); opacity: 0; }
+  .team-star { right: 36px; }
+  .team-more { right: 62px; }
+  .team-star.on { opacity: 1; }
+  .team-star.on .i { fill: #ffc700; stroke: #e6a800; }
+  .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) :is(.team-more, .team-star) { opacity: 1; }
+  .team-more:hover, .team-star:hover, .team-more[aria-expanded="true"] { color: var(--text); background: var(--bg3); }
+  /* The name gives way to what shows over the plan's place */
+  .team-row:has(.team-star.on) .tier { display: none; }
+  .team-row:has(.team-star.on) .nav.team .lbl { margin-right: 24px; }
+  .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .tier { display: none; }
+  .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .nav.team .lbl { margin-right: 50px; }
+  .team-row.lit .nav.team { background: var(--sel); }
   .tm { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: #fff; font: 600 10px/1 var(--font); }
   .sfoot { flex: none; padding: 8px 0; border-top: 1px solid var(--line); }
   .sfoot .ext { margin-left: auto; }
@@ -680,15 +691,19 @@
 
   /* Team settings and sharing: a window like the inbox, beside what
      opened it */
-  .team-gear { position: absolute; top: 4px; right: 62px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: var(--hover); color: var(--text2); opacity: 0; }
-  .team-row:hover .team-gear, .team-gear:focus-visible, .team-gear[aria-expanded="true"] { opacity: 1; }
-  .team-gear:hover, .team-gear[aria-expanded="true"] { color: var(--text); background: var(--bg3); }
   #win { position: fixed; z-index: 45; display: none; flex-direction: column; width: 400px; max-height: min(640px, calc(100vh - 16px)); overflow: hidden; border-radius: 13px; background: var(--menu); box-shadow: var(--shadow), 0 0 0 1px var(--menu-line); outline: none; }
   #win.open { display: flex; animation: pop 120ms var(--ease); }
   .wh { display: flex; flex: none; align-items: center; gap: 10px; min-height: 56px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--menu-line); }
   .wh .tm, .wh .fbig { width: 32px; height: 32px; border-radius: 8px; font-size: 13px; }
   .wh .fbig { display: grid; place-items: center; flex: none; background: var(--bg2); }
   .wh .fbig .i { width: 24px; height: 24px; margin: 0; }
+  /* The team's picture: a new one from a click or a dropped image */
+  .wh .pic { position: relative; flex: none; overflow: hidden; }
+  .wh .pic .ov { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 120ms; }
+  .wh .pic:hover .ov, .wh .pic:focus-visible .ov, .wh .pic.drop .ov, .wh .pic.busy .ov { opacity: 1; }
+  .wh .pic .ov .i { width: 16px; height: 16px; margin: 0; color: #fff; }
+  .wh .pic.busy .ov .i { animation: pulse 700ms ease-in-out infinite alternate; }
+  .wh .pic.drop { box-shadow: 0 0 0 2px var(--accent); }
   .wt { display: flex; flex: 1; flex-direction: column; min-width: 0; }
   .wt h2 { display: flex; margin: 0 0 0 -6px; font-size: 13px; line-height: 20px; font-weight: 550; }
   .wt h2 .hname { height: 24px; line-height: 24px; }
@@ -713,6 +728,15 @@
   .mem small { display: block; overflow: hidden; color: var(--text2); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
   .mem .role { color: var(--text2); white-space: nowrap; }
   .mem .ib { margin-right: -4px; }
+  .mem .ib.more { width: 28px; justify-content: center; padding: 0; }
+  .mem.pending b { color: var(--text2); }
+  /* Removing someone asks first, in their row */
+  .mem.ask { background: var(--hover); }
+  .mem.ask b { white-space: normal; }
+  .mem.ask small { white-space: normal; }
+  .mem .acts { display: flex; align-items: center; gap: 4px; }
+  .btn.danger { background: #e03e1a; color: #fff; box-shadow: none; }
+  .btn.danger:hover { filter: brightness(0.94); }
   .wnote { padding: 8px; color: var(--text2); }
   .invite { display: flex; gap: 6px; padding: 4px 0 0; }
   .invite input { flex: 1; min-width: 0; height: 32px; padding: 0 8px; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--text) 7%, var(--menu)); color: var(--text); font: inherit; font-size: 13px; outline: none; -webkit-user-select: text; user-select: text; }
@@ -843,8 +867,8 @@ const ICONS = {
   heart: '<path d="M8 13s-5-3-5-6.5A2.5 2.5 0 0 1 8 5a2.5 2.5 0 0 1 5 1.5C13 10 8 13 8 13z"/>',
   right: '<path d="m6.5 4.5 3.5 3.5-3.5 3.5"/>',
   list: '<path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><circle cx="2.75" cy="4.5" r=".6"/><circle cx="2.75" cy="8" r=".6"/><circle cx="2.75" cy="11.5" r=".6"/>',
-  sliders: '<path d="M2.5 5.5h6M11.5 5.5h2M2.5 10.5h2M7.5 10.5h6"/><circle cx="10" cy="5.5" r="1.5"/><circle cx="6" cy="10.5" r="1.5"/>',
   link: '<path d="M7 9a2.5 2.5 0 0 0 3.5 0l2-2A2.5 2.5 0 0 0 9 3.5l-.75.75M9 7a2.5 2.5 0 0 0-3.5 0l-2 2A2.5 2.5 0 0 0 7 12.5l.75-.75"/>',
+  camera: '<path d="M2.5 5.5a1 1 0 0 1 1-1h1.75l1-1.5h3.5l1 1.5h1.75a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/><circle cx="8" cy="8.25" r="2"/>',
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 // Figma's own UI icons, as its file browser and account menu draw them:
@@ -2051,7 +2075,9 @@ const scroller = $("#scroll");
 const rail = $("#rail");
 // The window for a team's settings and people, or for sharing a project
 const win = $("#win");
-const winState = { kind: null, team: null, project: null, anchor: null, back: null, editing: null, level: null, busy: false };
+// ask: someone about to be removed, with what that does to their files.
+// picBusy: a new team picture on its way to Figma
+const winState = { kind: null, team: null, project: null, anchor: null, back: null, editing: null, level: null, busy: false, ask: null, picBusy: false };
 
 // iconName: one of Figma's icons, or an icon's own markup
 function navRow(view, iconName, label, count, extra = "", tail = "") {
@@ -2089,8 +2115,9 @@ function renderSide() {
     const open = !state.collapsed.has(team.id);
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
-    let out = `<div class="team-row" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
-    out += `<button class="team-gear" data-team-win="${team.id}" aria-haspopup="dialog" aria-expanded="${win.classList.contains("open") && winState.team === team.id}" aria-label="${esc(team.name)} settings and people" title="Settings and people">${icon("sliders")}</button>`;
+    const lit = win.classList.contains("open") && winState.kind === "team" && winState.team === team.id;
+    let out = `<div class="team-row${lit ? " lit" : ""}" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
+    out += `<button class="team-more" data-team-more="${team.id}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(team.name)}" title="Settings, people and more">${icon("more")}</button>`;
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${fig(isStarred ? "starOn" : "star")}</button></div>`;
     if (!open) return out;
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
@@ -3337,9 +3364,14 @@ function trashProject(id) {
   });
 }
 
-/* Teams: the menu on a team, and a window with its name, description,
-   people and invites. Roles, libraries, AI, transfer and deleting the
-   team stay in Figma: they differ by plan and reach other people */
+/* Teams: the menu on a team, and a window with its picture, name,
+   description, people and invites. Seats, libraries, AI, transfer and
+   deleting the team stay in Figma: they bill or can't be undone */
+
+// Only an Organization's teams have roles. Starter and Professional teams
+// stand alone: everyone in them can edit, and the owner runs them
+const standalone = (plan) => plan.tier !== "Organization";
+const canAdmin = (id) => TEAM_INFO[id]?.admin ?? true;
 
 function teamMenu(id, at) {
   const found = teamById(id);
@@ -3349,8 +3381,9 @@ function teamMenu(id, at) {
     { label: "Settings and people", act: () => openTeamWin(id, at) },
     { label: "Invite people…", act: () => openTeamWin(id, at, "invite") },
     { label: "Copy invite link", act: () => copyTeamLink(id) },
-    { label: "Rename", act: () => openTeamWin(id, at, "rename") },
     null,
+    { label: "Rename", act: () => openTeamWin(id, at, "rename") },
+    ...(canAdmin(id) ? [{ label: "Change picture…", act: () => pickTeamImage(id) }] : []),
     { label: pinned ? "Unpin team" : "Pin to the top", act: () => toggleTeamStar(id) },
     { label: "New project here", act: () => newProject(at instanceof DOMRect ? { x: at.left, y: at.bottom } : at, id) },
     null,
@@ -3359,24 +3392,115 @@ function teamMenu(id, at) {
 }
 
 const SAMPLE_ROLES = { me: 999, sam: 900, priya: 300, ana: 100, jonas: null };
+const byPeople = (a, b) => b.me - a.me || a.pending - b.pending || (b.level ?? 0) - (a.level ?? 0) || a.name.localeCompare(b.name);
 async function loadTeamInfo(id) {
-  const { team } = teamById(id) ?? {};
+  const { team, plan } = teamById(id) ?? {};
   if (!team) return;
   if (!LIVE) {
-    TEAM_INFO[id] ??= { description: team.description ?? "", admin: true, members: Object.entries(SAMPLE_ROLES).map(([pid, level]) => ({ id: pid, name: PEOPLE[pid].name, email: `${pid}@example.com`, color: PEOPLE[pid].color, level, me: pid === "me" })) };
+    const own = standalone(plan);
+    const members = Object.entries(SAMPLE_ROLES).map(([pid, level]) => {
+      level = own && level !== null && level < ROLE_LEVELS.owner ? ROLE_LEVELS.editor : level;
+      return { id: pid, name: PEOPLE[pid].name, email: `${pid}@example.com`, color: PEOPLE[pid].color, level, role: level === null ? null : { id: `role-${pid}`, level }, pending: false, me: pid === "me" };
+    });
+    members.push({ id: "invite:lee", name: "lee@example.com", email: null, level: ROLE_LEVELS.editor, role: { id: "role-lee", level: ROLE_LEVELS.editor }, pending: true, me: false });
+    TEAM_INFO[id] ??= { description: team.description ?? "", admin: true, members: members.sort(byPeople) };
     return;
   }
-  const [meta, members] = await Promise.all([api(`/api/teams/${id}`), api(`/api/teams/${id}/members`)]);
+  const [meta, members, roles] = await Promise.all([api(`/api/teams/${id}`), api(`/api/teams/${id}/members`), api(`/api/roles/team/${id}`).catch(() => [])]);
   team.name = meta.name ?? team.name;
   team.img = meta.img_url ?? team.img;
+  team.img500 = meta.img_url_500_500 ?? team.img500 ?? null;
   team.description = meta.description ?? "";
-  const list = (Array.isArray(members) ? members : []).map((m) => ({ id: m.id, name: m.name || m.email, email: m.email, img_url: m.img_url, level: m.team_role?.level ?? null, me: m.id === Live.uid }));
-  list.sort((a, b) => b.me - a.me || (b.level ?? 0) - (a.level ?? 0) || a.name.localeCompare(b.name));
+  const list = (Array.isArray(members) ? members : []).filter((m) => m.id).map((m) => ({ id: m.id, name: m.name || m.email, email: m.email, img_url: m.img_url, level: m.team_role?.level ?? null, role: m.team_role ?? null, pending: false, me: m.id === Live.uid }));
+  // Invites not taken up yet: roles with an email and no one behind them
+  for (const r of Array.isArray(roles) ? roles : []) {
+    if (r.pending && !list.some((m) => m.role?.id === r.id)) list.push({ id: `invite:${r.id}`, name: r.pending_email ?? r.user?.email ?? "Someone", email: null, level: r.level, role: r, pending: true, me: false });
+  }
+  list.sort(byPeople);
   TEAM_INFO[id] = { description: team.description, admin: (list.find((m) => m.me)?.level ?? 0) >= ROLE_LEVELS.admin, members: list };
 }
 
-// A team's invite link, as Figma's Invite by link makes it: Starter teams
-// only have links that join as members (editor level)
+/* A team's picture: square, as Figma keeps them, at 120 and 500 px.
+   Figma can replace one but not take it away */
+
+function pickTeamImage(id) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg,image/gif,image/webp";
+  input.addEventListener("change", () => input.files[0] && setTeamImage(id, input.files[0]));
+  input.click();
+}
+async function squareJpeg(bitmap, size) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  // JPEG has no transparency: a logo's clear parts go white, not black
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.imageSmoothingQuality = "high";
+  const side = Math.min(bitmap.width, bitmap.height);
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+// Figma's own upload for profile pictures, named by the image's SHA-1
+async function uploadProfileImage(bytes) {
+  const sha1 = [...new Uint8Array(await crypto.subtle.digest("SHA-1", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const res = await fetch(`/api/upnode/image?purpose=profile&sha1=${sha1}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "image/jpeg", "X-Csrf-Bypass": "yes", "X-Figma-User-ID": Live.uid },
+    body: bytes,
+  });
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {}
+  if (!res.ok || body?.error === true || !body?.meta?.url) throw new Error(body?.message || `Figma answered ${res.status}`);
+  return body.meta.url;
+}
+async function setTeamImage(id, file) {
+  const { team } = teamById(id) ?? {};
+  if (!team) return;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return toast("Couldn't read that image, try a PNG or JPEG");
+  }
+  if (Math.min(bitmap.width, bitmap.height) < 120) return toast("Pick an image at least 120 × 120 px");
+  const [small, large] = await Promise.all([squareJpeg(bitmap, 120), squareJpeg(bitmap, 500)]);
+  bitmap.close();
+  const old = { img: team.img ?? null, img500: team.img500 ?? null };
+  const show = (img, img500, busy = false) => {
+    team.img = img;
+    team.img500 = img500;
+    winState.picBusy = busy;
+    render();
+    drawWin();
+  };
+  const preview = URL.createObjectURL(new Blob([large], { type: "image/jpeg" }));
+  show(preview, null, LIVE);
+  if (!LIVE) return toast(`Changed the picture of ${team.name}`, () => show(old.img, old.img500));
+  try {
+    const [img, img500] = await Promise.all([uploadProfileImage(small), uploadProfileImage(large)]);
+    await api(`/api/teams/${id}`, { method: "PUT", json: { img_url: img, img_url_500_500: img500 } });
+    show(img, img500);
+    // With no picture before, there's none to go back to
+    toast(`Changed the picture of ${team.name}`, old.img && (() => {
+      show(old.img, old.img500);
+      send(api(`/api/teams/${id}`, { method: "PUT", json: { img_url: old.img, img_url_500_500: old.img500 ?? old.img } }), () => show(img, img500), "put the picture back");
+    }));
+  } catch (error) {
+    show(old.img, old.img500);
+    toast(`Couldn't change the picture: ${error.message}`);
+  } finally {
+    URL.revokeObjectURL(preview);
+  }
+}
+
+// A team's invite link, as Figma's Invite by link makes it: Starter and
+// Professional teams only have links that join as members (editor level)
 async function copyTeamLink(id) {
   const { team, plan } = teamById(id) ?? {};
   if (!team) return;
@@ -3388,7 +3512,7 @@ async function copyTeamLink(id) {
   try {
     let meta;
     try {
-      meta = await get(plan.tier === "Free" ? ROLE_LEVELS.editor : ROLE_LEVELS.viewer);
+      meta = await get(standalone(plan) ? ROLE_LEVELS.editor : ROLE_LEVELS.viewer);
     } catch (error) {
       if (!/editor/i.test(error.message)) throw error;
       meta = await get(ROLE_LEVELS.editor);
@@ -3427,12 +3551,12 @@ function openShare(id, at) {
 const ROLES = {};
 async function loadRoles(id) {
   if (!LIVE) {
-    ROLES[id] ??= { list: Object.entries(SAMPLE_ROLES).slice(0, 3).map(([pid, level]) => ({ name: PEOPLE[pid].name, color: PEOPLE[pid].color, id: pid, level: level ?? 300, me: pid === "me" })) };
+    ROLES[id] ??= { list: Object.entries(SAMPLE_ROLES).slice(0, 4).map(([pid, level]) => ({ name: PEOPLE[pid].name, color: PEOPLE[pid].color, id: pid, level: level ?? 300, role: { id: `role-${pid}`, level: level ?? 300 }, pending: false, me: pid === "me" })) };
     return;
   }
   const roles = await api(`/api/roles/folder/${id}`);
   ROLES[id] = {
-    list: (Array.isArray(roles) ? roles : []).map((r) => ({ id: r.user?.id ?? r.id, name: r.user?.handle ?? r.pending_email ?? "Someone", img_url: r.user?.img_url, email: r.pending ? r.pending_email : null, pending: !!r.pending, level: r.level, me: r.user_id === Live.uid })).sort((a, b) => b.me - a.me || b.level - a.level),
+    list: (Array.isArray(roles) ? roles : []).map((r) => ({ id: r.user?.id ?? r.id, name: r.user?.handle ?? r.pending_email ?? "Someone", img_url: r.user?.img_url, email: null, pending: !!r.pending, level: r.level, role: r, me: r.user_id === Live.uid })).sort(byPeople),
   };
 }
 
@@ -3442,7 +3566,7 @@ function openWin(what, at, focus = null) {
   if (pal.open) pal.close();
   const again = win.classList.contains("open") && winState.kind === what.kind && winState.team === what.team && winState.project === what.project;
   if (!again) winState.back = document.activeElement;
-  Object.assign(winState, what, { anchor: at, level: null });
+  Object.assign(winState, what, { anchor: at, level: null, ask: null });
   win.classList.add("open");
   drawWin();
   renderSide();
@@ -3456,7 +3580,7 @@ function closeWin(restore = true) {
   win.classList.remove("open");
   win.innerHTML = "";
   const back = winState.back;
-  Object.assign(winState, { kind: null, team: null, project: null, anchor: null, back: null });
+  Object.assign(winState, { kind: null, team: null, project: null, anchor: null, back: null, ask: null });
   renderSide();
   renderHead(order.length);
   if (restore && back?.isConnected) back.focus({ preventScroll: true });
@@ -3476,10 +3600,50 @@ function placeWin() {
 }
 
 const levelName = (level) => (level >= ROLE_LEVELS.editor ? "Can edit" : "Can view");
-function personRow(m, tier, extra = "") {
+// control: what takes the role's place, for someone who can be managed
+function personRow(m, tier, control = null) {
   const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
-  const role = m.pending ? "Invited" : roleName(m.level, tier);
-  return `<div class="mem" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${esc(m.name)}${m.me ? " <i>(you)</i>" : ""}</b>${m.email ? `<small>${esc(m.email)}</small>` : ""}</span><span class="role">${esc(role)}</span>${extra}</div>`;
+  const role = roleName(m.level, tier);
+  const sub = m.pending ? "Invited, hasn't joined yet" : m.email;
+  return `<div class="mem${m.pending ? " pending" : ""}" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${esc(m.name)}${m.me ? " <i>(you)</i>" : ""}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>${control ?? `<span class="role">${esc(role)}</span>`}</div>`;
+}
+// Asking before someone's removed, with what happens to their files
+function askRow(m) {
+  const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
+  const ask = winState.ask;
+  const team = winState.kind === "team";
+  const question = m.pending ? `Cancel the invite to ${m.name}?` : `Remove ${m.name} from ${peopleWhere()}?`;
+  let note = m.pending ? "The link in their email stops working" : team ? "They lose access to the team's projects and files" : "They keep any access they have through the team";
+  const impact = ask.impact;
+  if (!m.pending && impact) {
+    const parts = [];
+    if (impact.files_no_owner) parts.push(`${impact.files_no_owner} ${impact.files_no_owner === 1 ? "file" : "files"} will have no owner`);
+    if (impact.files_view_only) parts.push(`${impact.files_view_only} will become view only`);
+    if (impact.drafts_to_unassigned) parts.push(`${impact.drafts_to_unassigned} ${impact.drafts_to_unassigned === 1 ? "draft moves" : "drafts move"} to the team`);
+    if (parts.length) note += `. ${parts.join(", ")}`;
+  }
+  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b id="ask-q">${esc(question)}</b><small>${esc(note)}</small></span><span class="acts"><button class="btn sm" data-w="ask-no">${m.pending ? "Keep" : "Cancel"}</button><button class="btn sm danger" data-w="ask-yes" aria-describedby="ask-q">${m.pending ? "Cancel invite" : "Remove"}</button></span></div>`;
+}
+// The people in the open window: a team's members, or who a project's
+// shared with
+const peopleOf = () => (winState.kind === "team" ? TEAM_INFO[winState.team]?.members : ROLES[winState.project]?.list);
+const peopleWhere = () => (winState.kind === "team" ? teamById(winState.team)?.team.name : PROJECTS[winState.project]?.name) ?? "here";
+// Roles to pick: a project's on any plan, a team's only in an Organization
+function rolesFor(m) {
+  if (!m.role) return [];
+  if (winState.kind === "share") return [ROLE_LEVELS.viewer, ROLE_LEVELS.editor];
+  return standalone(teamById(winState.team).plan) ? [] : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor, ROLE_LEVELS.admin];
+}
+// The role, as a menu where it can change; elsewhere a ⋯ with what can be
+// done: remove, or resend and cancel an invite. Only for those who manage
+// the people here: a team's admins, a project's editors
+function memberControl(m, i, tier) {
+  const mine = peopleOf()?.find((p) => p.me)?.level ?? 0;
+  const manage = winState.kind === "team" ? TEAM_INFO[winState.team]?.admin : mine >= ROLE_LEVELS.editor;
+  if (!manage || m.me || (m.level ?? 0) >= ROLE_LEVELS.owner) return null;
+  const role = roleName(m.level, tier);
+  if (rolesFor(m).length) return `<button class="ib" data-w="person" data-i="${i}" aria-haspopup="menu" aria-label="${esc(m.name)}: ${esc(role)}">${esc(role)}${icon("down")}</button>`;
+  return `<span class="acts"><span class="role">${esc(role)}</span><button class="ib more" data-w="person" data-i="${i}" aria-haspopup="menu" aria-label="More for ${esc(m.name)}" title="More">${icon("more")}</button></span>`;
 }
 function inviteForm(label, levels) {
   const level = winState.level ?? levels?.[0] ?? null;
@@ -3495,18 +3659,25 @@ function teamWinHtml() {
   const tier = plan.teams.length === 1 ? plan.tier : plan.name;
   const edit = !info || info.admin;
   const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
-  const count = info?.members ? ` · ${info.members.length} ${info.members.length === 1 ? "person" : "people"}` : "";
-  let html = `<div class="wh"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><div class="wt"><h2 id="win-title">` +
+  const people = info?.members?.filter((m) => !m.pending).length;
+  const count = info?.members ? ` · ${people} ${people === 1 ? "person" : "people"}` : "";
+  const bg = `background:${team.img ? "transparent" : team.color}`;
+  const pic = edit
+    ? `<button class="tm pic${winState.picBusy ? " busy" : ""}" data-w="picture" style="${bg}" aria-label="Change the picture of ${esc(team.name)}" title="Change picture, or drop an image here">${face}<span class="ov">${icon("camera")}</span></button>`
+    : `<span class="tm" style="${bg}">${face}</span>`;
+  let html = `<div class="wh">${pic}<div class="wt"><h2 id="win-title">` +
     (edit ? `<button class="hname" data-w="rename" title="Rename">${esc(team.name)}</button>` : `<span class="hname static">${esc(team.name)}</span>`) +
     `</h2><small>${esc(tier)}${count}</small></div><button class="ib x" data-w="close" aria-label="Close" title="Close">${icon("x")}</button></div><div class="wb">`;
   const about = info?.description ?? team.description ?? "";
   html += `<section class="ws"><h3>About</h3>` + (edit ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : `<p class="about static${about ? "" : " blank"}">${esc(about || "No description")}</p>`) + `</section>`;
-  html += `<section class="ws"><h3>People<a href="https://www.figma.com/files/team/${esc(team.id)}" target="_blank" rel="noopener" title="Change roles or remove people in Figma">Roles in Figma${fig("ext")}</a></h3>`;
-  html += inviteForm(`Invite people to ${team.name}`, tier === "Free" ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor]);
+  // Professional teams pay per seat: seats stay with Figma's billing
+  const seats = plan.tier === "Pro" && edit ? `<a href="https://www.figma.com/files/team/${esc(team.id)}" target="_blank" rel="noopener" title="Seats are billed, so they change in Figma">Seats in Figma${fig("ext")}</a>` : "";
+  html += `<section class="ws"><h3>People${seats}</h3>`;
+  html += inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor]);
   html += `<button class="ib wlink" data-w="team-link">${icon("link")}Copy invite link</button>`;
   if (info?.error) html += `<p class="wnote" role="alert">Couldn't load the people: ${esc(info.error)}</p>`;
   else if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div><div class="wsk"></div>`;
-  else html += `<div role="list" aria-label="People in ${esc(team.name)}">${info.members.map((m) => personRow(m, tier)).join("")}</div>`;
+  else html += `<div role="list" aria-label="People in ${esc(team.name)}">${info.members.map((m, i) => (winState.ask?.id === m.id ? askRow(m) : personRow(m, tier, memberControl(m, i, tier)))).join("")}</div>`;
   html += `</section></div><div class="wfoot"><a class="ib" href="https://www.figma.com/files/team/${esc(team.id)}" target="_blank" rel="noopener">Libraries, AI, transfer and deleting in Figma<span class="x">${fig("ext")}</span></a></div>`;
   return html;
 }
@@ -3526,8 +3697,8 @@ function shareWinHtml() {
     (p.plan.tier === "Free" ? `<span class="role">${access}</span>` : `<button class="ib" data-w="team-access" aria-haspopup="menu" aria-label="What ${esc(everyone)} can do: ${access}">${access}${icon("down")}</button>`) + `</div>`;
   if (roles?.error) html += `<p class="wnote" role="alert">Couldn't load who has access: ${esc(roles.error)}</p>`;
   else if (!roles) html += `<div class="wsk"></div><div class="wsk"></div>`;
-  else html += roles.list.map((r) => personRow({ ...r, level: r.level }, null)).join("");
-  html += `</div></section></div><div class="wfoot"><button class="ib" data-w="project-link">${icon("link")}Copy link</button><a class="ib" href="${projectUrl(p.id)}" target="_blank" rel="noopener" style="flex:none">Change roles in Figma<span class="x">${fig("ext")}</span></a></div>`;
+  else html += roles.list.map((m, i) => (winState.ask?.id === m.id ? askRow(m) : personRow(m, null, memberControl(m, i, null)))).join("");
+  html += `</div></section></div><div class="wfoot"><button class="ib" data-w="project-link">${icon("link")}Copy link</button></div>`;
   return html;
 }
 
@@ -3540,7 +3711,10 @@ function drawWin() {
   const was = $(".invite input", win);
   const typed = was?.value ?? "";
   const focused = document.activeElement;
-  const refocus = was && focused === was ? "emails" : win.contains(focused) ? focused.dataset?.w : null;
+  // What had focus, found again in the new contents: a person's button by
+  // their place in the list
+  const { w, i } = win.contains(focused) ? focused.dataset ?? {} : {};
+  const refocus = was && focused === was ? "emails" : w ? `[data-w="${w}"]${i ? `[data-i="${i}"]` : ""}` : null;
   win.setAttribute("aria-label", winState.kind === "team" ? "Team settings and people" : "Share");
   win.innerHTML = winState.kind === "team" ? teamWinHtml() : shareWinHtml();
   const input = $(".invite input", win);
@@ -3549,7 +3723,7 @@ function drawWin() {
     inviteReady();
   }
   if (refocus === "emails") input?.focus();
-  else if (refocus) $(`[data-w="${refocus}"]`, win)?.focus();
+  else if (refocus) $(refocus, win)?.focus();
   placeWin();
 }
 
@@ -3569,8 +3743,9 @@ function sendInvites() {
   const team = winState.kind === "team";
   const id = team ? winState.team : winState.project;
   const { plan } = teamById(winState.team);
-  // Starter teams invite members, with no level to pick: as their links do
-  const level = team && plan.tier === "Free" ? ROLE_LEVELS.editor : winState.level ?? ROLE_LEVELS.viewer;
+  // Starter and Professional teams invite members, with no level to pick:
+  // as their links do
+  const level = team && standalone(plan) ? ROLE_LEVELS.editor : winState.level ?? ROLE_LEVELS.viewer;
   const done = () => {
     input.value = "";
     inviteReady();
@@ -3659,11 +3834,104 @@ function teamAccessMenu(at) {
   })), at);
 }
 
+/* People in a team or a project: roles in a project and in an
+   Organization's teams; removing people and invites anywhere. Nothing here
+   can be undone in Figma but a role, so removing asks first */
+
+const ROLE_DETAIL = { team: ["Opens the team's files", "Edits the team's files", "Also manages the team and its people"], share: ["Opens the project's files", "Edits the project's files"] };
+function personMenu(i, at) {
+  const m = peopleOf()?.[i];
+  if (!m) return;
+  const levels = rolesFor(m);
+  const items = levels.map((level, j) => ({ label: level === ROLE_LEVELS.admin ? "Admin" : levelName(level), detail: ROLE_DETAIL[winState.kind][j], checked: m.level === level, act: () => setRole(m, level) }));
+  if (items.length) items.push(null);
+  if (m.pending) items.push({ label: "Send the invite again", act: () => resendInvite(m) }, { label: "Cancel invite…", act: () => askRemove(m) });
+  else items.push({ label: `Remove from ${peopleWhere()}…`, act: () => askRemove(m) });
+  showMenu(items, at);
+}
+
+// The window's resource, to know a change still belongs to what's open
+const winKey = () => `${winState.kind}:${winState.kind === "team" ? winState.team : winState.project}`;
+
+function setRole(m, level) {
+  const key = winKey();
+  if (m.level === level) return;
+  const put = (to, from) => {
+    m.level = to;
+    m.role = { ...m.role, level: to };
+    drawWin();
+    if (LIVE) send(api(`/api/roles/${m.role.id}`, { method: "PUT", json: { ...m.role, level: to, response_version: 2 } }), () => {
+      m.level = from;
+      m.role = { ...m.role, level: from };
+      if (winKey() === key) drawWin();
+    }, "change the role");
+  };
+  const old = m.level;
+  put(level, old);
+  toast(`${m.name} ${level >= ROLE_LEVELS.admin ? "is an admin now" : levelName(level).toLowerCase()}`, () => put(old, level));
+}
+
+function resendInvite(m) {
+  if (!LIVE) return toast(`Sent the invite to ${m.name} again`);
+  const team = winState.kind === "team";
+  api("/api/invites/resend", { method: "POST", json: { email: m.name, resource_type: team ? "team" : "folder", resource_id_or_key: team ? winState.team : winState.project } })
+    .then(() => toast(`Sent the invite to ${m.name} again`), (error) => toast(`Couldn't send the invite: ${error.message}`));
+}
+
+// Into the person's row: what removing them from a team does to its files
+// comes in as Figma works it out
+function askRemove(m) {
+  const key = winKey();
+  winState.ask = { id: m.id, impact: null };
+  drawWin();
+  $("[data-w=ask-no]", win)?.focus();
+  if (!LIVE || m.pending || winState.kind !== "team") return;
+  api(`/api/teams/${winState.team}/users/removal_impact?user_ids[]=${encodeURIComponent(m.id)}`).then((impact) => {
+    if (winKey() !== key || winState.ask?.id !== m.id) return;
+    winState.ask.impact = impact;
+    drawWin();
+  }, () => {});
+}
+
+function removePerson(m) {
+  const key = winKey();
+  const list = peopleOf();
+  const where = peopleWhere();
+  if (!list) return;
+  const at = list.indexOf(m);
+  winState.ask = null;
+  list.splice(at, 1);
+  drawWin();
+  $(".invite input", win)?.focus();
+  toast(m.pending ? `Canceled the invite to ${m.name}` : `Removed ${m.name} from ${where}`);
+  if (!LIVE) return;
+  // An invite, a project's person or an Organization team's member goes
+  // with their role; a Starter or Professional team's member, as Figma's
+  // own Members page removes them
+  const viaTeam = winState.kind === "team" && !m.pending && (standalone(teamById(winState.team).plan) || !m.role);
+  const request = viaTeam
+    ? api(`/api/teams/${winState.team}/users`, { method: "DELETE", json: { user_ids: [m.id] } })
+    : api(`/api/roles/${m.role.id}`, { method: "DELETE" });
+  send(request, () => {
+    if (!list.includes(m)) list.splice(Math.min(at, list.length), 0, m);
+    if (winKey() === key) drawWin();
+  }, m.pending ? "cancel the invite" : "remove them");
+}
+
 win.addEventListener("click", (e) => {
   const el = e.target.closest("[data-w]");
   const act = el?.dataset.w;
   if (!act || act === "invite") return;
-  if (act === "close") closeWin();
+  const ask = () => peopleOf()?.find((m) => m.id === winState.ask?.id);
+  if (act === "picture") pickTeamImage(winState.team);
+  else if (act === "person") personMenu(Number(el.dataset.i), el.getBoundingClientRect());
+  else if (act === "ask-yes") ask() && removePerson(ask());
+  else if (act === "ask-no") {
+    const i = peopleOf()?.indexOf(ask());
+    winState.ask = null;
+    drawWin();
+    $(`[data-w=person][data-i="${i}"]`, win)?.focus();
+  } else if (act === "close") closeWin();
   else if (act === "rename") renameTeam(winState.team);
   else if (act === "about") describeTeam(winState.team);
   else if (act === "team-link") copyTeamLink(winState.team);
@@ -3682,13 +3950,33 @@ win.addEventListener("submit", (e) => {
 });
 win.addEventListener("input", (e) => e.target.matches(".invite input") && inviteReady());
 win.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    closeWin();
-  }
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  // Out of asking about a removal first, then out of the window
+  if (winState.ask) $("[data-w=ask-no]", win)?.click();
+  else closeWin();
+});
+// An image dropped on the team's picture becomes its new one
+win.addEventListener("dragover", (e) => {
+  const pic = e.target.closest?.("[data-w=picture]");
+  if (!pic || !e.dataTransfer?.types.includes("Files")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = "copy";
+  pic.classList.add("drop");
+});
+win.addEventListener("dragleave", (e) => e.target.closest?.("[data-w=picture]")?.classList.remove("drop"));
+win.addEventListener("drop", (e) => {
+  const pic = e.target.closest?.("[data-w=picture]");
+  if (!pic) return;
+  e.preventDefault();
+  e.stopPropagation();
+  pic.classList.remove("drop");
+  const file = [...(e.dataTransfer?.files ?? [])].find((f) => f.type.startsWith("image/"));
+  file ? setTeamImage(winState.team, file) : toast("Drop an image to use it as the picture");
 });
 addEventListener("pointerdown", (e) => {
-  if (!win.classList.contains("open") || win.contains(e.target) || e.target.closest?.("#toast, .menu, [data-team-win], [data-pact=share]")) return;
+  if (!win.classList.contains("open") || win.contains(e.target) || e.target.closest?.("#toast, .menu, [data-pact=share]")) return;
   closeWin(false);
 }, true);
 addEventListener("resize", () => win.classList.contains("open") && placeWin());
@@ -4156,6 +4444,8 @@ function menuRows(items, list, prefix, checks = items.some((item) => item && "ch
 function showMenu(items, at, options = {}) {
   closeMenu();
   menuReturn = document.activeElement;
+  // The button that opened it says so while it's open
+  if (menuReturn?.matches?.('[aria-haspopup="menu"]')) menuReturn.setAttribute("aria-expanded", "true");
   menuKeys = null;
   menuItems = [];
   menu.innerHTML = menuRows(items, menuItems, "mi", options.checks);
@@ -4171,6 +4461,7 @@ function closeMenu() {
   menu.classList.remove("open");
   menu.innerHTML = "";
   menuKeys = null;
+  if (menuReturn?.matches?.('[aria-haspopup="menu"]')) menuReturn.setAttribute("aria-expanded", "false");
   if (menuReturn?.isConnected) menuReturn.focus({ preventScroll: true });
   menuReturn = null;
 }
@@ -4395,15 +4686,12 @@ $("#side").addEventListener("contextmenu", (e) => {
 });
 
 $("#side").addEventListener("click", (e) => {
-  const gear = e.target.closest("[data-team-win]");
-  if (gear) {
-    const id = gear.dataset.teamWin;
-    return win.classList.contains("open") && winState.kind === "team" && winState.team === id ? closeWin() : openTeamWin(id, gear.closest(".team-row").getBoundingClientRect());
-  }
-  const view = e.target.closest("[data-view]");
-  if (view) return go(view.dataset.view);
+  const more = e.target.closest("[data-team-more]");
+  if (more) return teamMenu(more.dataset.teamMore, more.getBoundingClientRect());
   const star = e.target.closest("[data-star-team]");
   if (star) return toggleTeamStar(star.dataset.starTeam);
+  const view = e.target.closest("[data-view]");
+  if (view) return go(view.dataset.view);
   const fold = e.target.closest("[data-team], [data-section]");
   if (fold) {
     const id = fold.dataset.team ?? fold.dataset.section;
@@ -4582,7 +4870,7 @@ function paletteCommands() {
     );
   }
   for (const team of allTeams()) {
-    const at = () => $(`[data-team-win="${CSS.escape(team.id)}"]`, side)?.closest(".team-row").getBoundingClientRect() ?? { x: 248, y: 64 };
+    const at = () => $(`[data-team-more="${CSS.escape(team.id)}"]`, side)?.closest(".team-row").getBoundingClientRect() ?? { x: 248, y: 64 };
     list.push(
       { label: `${team.name} settings and people`, act: () => openTeamWin(team.id, at()), icon: "users" },
       { label: `Invite people to ${team.name}`, act: () => openTeamWin(team.id, at(), "invite"), icon: "users" },
