@@ -2295,7 +2295,13 @@ const PAGE_JS: &str = r##"(() => {
   const LINGER = 4000;
 
   const closeHealing = () => {
-    if (!healing || healing.working) return;
+    if (!healing) return;
+    // Mid-heal, the heal is cancelled, and Heal closes once it's stopped
+    if (healing.working) {
+      healing.closing = true;
+      healing.controller?.abort();
+      return;
+    }
     if (healing.session) handOff("heal", request({ op: "close", session: healing.session })).catch(() => {});
     cancelAnimationFrame(healing.frame);
     healing.root.remove();
@@ -2426,6 +2432,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!current || current.working) return;
     const { figma, node } = current;
     current.working = true;
+    current.controller = new AbortController();
     busy = true;
     showHealing();
     try {
@@ -2438,7 +2445,7 @@ const PAGE_JS: &str = r##"(() => {
         current.opening = openHealing(current);
         await current.opening;
       }
-      const ask = () => handOff("heal", request({ op: "heal", session: current.session, strokes: [{ points, radius }] }));
+      const ask = () => handOff("heal", request({ op: "heal", session: current.session, strokes: [{ points, radius }] }), undefined, "", current.controller.signal);
       let reply;
       try {
         reply = await ask();
@@ -2481,8 +2488,12 @@ const PAGE_JS: &str = r##"(() => {
     }
     busy = false;
     current.working = false;
+    current.controller = null;
     current.stroke.removeAttribute("d");
-    if (healing === current) showHealing();
+    if (healing === current) {
+      if (current.closing) closeHealing();
+      else showHealing();
+    }
     tidy();
   };
 
