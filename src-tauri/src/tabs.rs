@@ -1911,6 +1911,34 @@ fn reload(app: &AppHandle, id: u32) {
     }
 }
 
+/// WebKit ended `webview`'s web content process, most often a hidden tab
+/// over its memory limit. Tauri's own handler reloads right inside WebKit's
+/// callback, which throws and aborts Ligma when the tab is frozen. Here a
+/// hidden tab is put to sleep, so it loads afresh when selected, and the
+/// rest reload. Off the main thread, so it all runs after the callback
+#[cfg(target_os = "macos")]
+pub fn on_process_terminated(webview: &Webview) {
+    let app = webview.app_handle().clone();
+    let name = webview.label().to_string();
+    std::thread::spawn(move || {
+        let Some(id) = name.strip_prefix("tab-").and_then(|id| id.parse::<u32>().ok()) else {
+            if let Some(webview) = app.get_webview(&name) {
+                let _ = webview.reload();
+            }
+            return;
+        };
+        let hidden = {
+            let state = app.state::<Tabs>().inner().0.lock().unwrap();
+            state.tabs.iter().find(|tab| tab.id == id).map(|tab| (!state.is_active(tab), tab.hidden_since))
+        };
+        match hidden {
+            Some((true, since)) => sleep_now(&app, id, since),
+            Some((false, _)) => reload(&app, id),
+            None => {}
+        }
+    });
+}
+
 /// Loads `url` in tab `id` and selects it, or in a new tab if `id` is
 /// gone. A frozen tab is put to sleep first, like in `reload`, and wakes
 /// with `url`
