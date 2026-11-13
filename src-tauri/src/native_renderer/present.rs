@@ -183,6 +183,9 @@ pub struct Snapshot {
     /// Tells it from the one before
     pub serial: u64,
     pub layers: Vec<Layer>,
+    /// Where there's anything drawn, in units: past it the view shows only
+    /// the canvas, so needs no layer
+    pub content: Option<Rect>,
     /// The view the whole view is drawn for, if it's up to date: its
     /// corner and zoom, see `view_at`
     pub whole_at: Option<(i32, i32, u32)>,
@@ -331,7 +334,7 @@ pub struct Piece {
 /// nearest what Figma shows first, the tiles of its zoom, then the whole
 /// view drawn at it, then the rest, scaled, each where those before don't
 /// cover. And whether that leaves some of the view out
-pub fn cover(layers: &[Layer], view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
+pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
     if view.outline().is_some() {
         return (Vec::new(), false);
     }
@@ -358,6 +361,16 @@ pub fn cover(layers: &[Layer], view: &View, size: (u32, u32)) -> (Vec<Piece>, bo
     ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut left = skia_safe::Region::new();
     left.set_rect(skia_safe::IRect::from_wh(size.0 as i32, size.1 as i32));
+    if let Some(content) = content {
+        let at = Rect::from_ltrb(
+            (content.left as f64 * px as f64 - ox) as f32,
+            (content.top as f64 * px as f64 - oy) as f32,
+            (content.right as f64 * px as f64 - ox) as f32,
+            (content.bottom as f64 * px as f64 - oy) as f32,
+        );
+        let at = skia_safe::IRect::from_ltrb(at.left.floor() as i32 - 1, at.top.floor() as i32 - 1, at.right.ceil() as i32 + 1, at.bottom.ceil() as i32 + 1);
+        left.op_rect(at, skia_safe::region::RegionOp::Intersect);
+    }
     let mut pieces = Vec::new();
     for (_, i) in ranked {
         if left.is_empty() {
@@ -703,11 +716,11 @@ impl Screen {
             // All of the view or nothing: what's shown stays till the
             // render thread has drawn what the view needs. Its whole view
             // is drawn for the view itself, so it's what there is
-            let (pieces, holes) = cover(&snapshot.layers, &view, self.size);
+            let (pieces, holes) = cover(&snapshot.layers, snapshot.content, &view, self.size);
             if holes && snapshot.whole_at != Some(view_at(&view, self.size)) {
                 stats().lock().unwrap().holes(true);
                 let before = complete.clone().filter(|before| before.serial != snapshot.serial).and_then(|before| {
-                    let (pieces, holes) = cover(&before.layers, &view, self.size);
+                    let (pieces, holes) = cover(&before.layers, before.content, &view, self.size);
                     let then = (before.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
                     (!holes && shown.as_ref() != Some(&then)).then_some((before, pieces, then))
                 });

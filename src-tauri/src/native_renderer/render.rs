@@ -653,6 +653,11 @@ const SETTLE: Duration = Duration::from_millis(120);
 /// tiles are drawn, so it never shows nothing
 const COARSE_TILES: usize = 16;
 
+/// Tiles of the levels further out kept, 1 MB each (see `Painter::pyramid`)
+const PYRAMID_TILES: usize = 96;
+/// Most levels further out
+const PYRAMID_LEVELS: usize = 9;
+
 /// How far ahead of a pan tiles are drawn, as time at its speed
 const LOOKAHEAD: f64 = 0.3;
 
@@ -1009,6 +1014,11 @@ pub struct Painter {
     backdrops: Vec<(Rect, f32)>,
     config: Config,
     cleaned: Instant,
+    /// Dev tools: see `verify_tile`
+    verifying: bool,
+    verified: u64,
+    /// The zooms of the levels further out the view has now
+    pyramid: Vec<u32>,
     /// When a frame was last drawn, and whether memory was given back since
     drawn: Instant,
     released: bool,
@@ -1135,6 +1145,9 @@ impl Painter {
             backdrops: Vec::new(),
             config: config(),
             cleaned: Instant::now(),
+            verifying: false,
+            verified: 0,
+            pyramid: Vec::new(),
             drawn: Instant::now(),
             released: true,
             freed: true,
@@ -1275,6 +1288,51 @@ impl Painter {
         keys
     }
 
+    /// The levels further out than the coarse one, each a power of two
+    /// below the last, over what the view would show zoomed out to it, but
+    /// only where there's anything, down to where all there is fits in
+    /// view. Zooming out, the present thread scales them to the view while
+    /// it's drawn exactly, rather than wait for that. Their tiles, the
+    /// furthest level first, as it covers the most and has the fewest, and
+    /// each level's area and zoom
+    fn pyramid(&self, center: (f32, f32), width: i32, height: i32, cp: f32) -> (Vec<TileKey>, Vec<(Rect, f32)>) {
+        let Some(content) = self.content() else { return (Vec::new(), Vec::new()) };
+        let mut levels = Vec::new();
+        let mut pk = cp / 2.0;
+        for _ in 0..PYRAMID_LEVELS {
+            let (w, h) = (width as f32 / pk, height as f32 / pk);
+            let mut area = Rect::from_xywh(center.0 - w / 2.0, center.1 - h / 2.0, w, h);
+            if area.intersect(content) {
+                levels.push((area, pk));
+            }
+            if content.width() * pk <= width as f32 && content.height() * pk <= height as f32 {
+                break;
+            }
+            pk /= 2.0;
+        }
+        levels.reverse();
+        let mut keys = Vec::new();
+        let mut kept = Vec::new();
+        for (area, pk) in levels {
+            let (x, y) = ((area.left * pk).floor() as i32, (area.top * pk).floor() as i32);
+            let (r, b) = ((area.right * pk).ceil() as i32, (area.bottom * pk).ceil() as i32);
+            let level = Self::tiles_over(x, y, r - x - 1, b - y - 1, pk.to_bits(), 0);
+            if keys.len() + level.len() > PYRAMID_TILES {
+                break;
+            }
+            keys.extend(level);
+            kept.push((area, pk));
+        }
+        (keys, kept)
+    }
+
+    /// Where there's anything drawn, in units
+    fn content(&self) -> Option<Rect> {
+        let mut units = self.units.iter().map(|unit| unit.bounds);
+        let first = units.next()?;
+        Some(units.fold(first, |all, bounds| Rect::join2(all, bounds)))
+    }
+
     /// Draws what the view needs next: the whole view while the zoom changes or when most of it is missing,
     /// otherwise the tile it needs most. Tiles in view come first, quickly,
     /// then those around it, so panning finds them ready, then exactly once
@@ -1326,8 +1384,11 @@ impl Painter {
             coarse_around.extend(ahead);
         }
         coarse_around.truncate(COARSE_TILES.saturating_sub(coarse_view.len()));
+        let center = ((ox + width / 2) as f32 / px, (oy + height / 2) as f32 / px);
+        let (pyramid, levels) = self.pyramid(center, width, height, cp);
+        self.pyramid = levels.iter().map(|(_, pk)| pk.to_bits()).collect();
         let frame = self.frame;
-        for key in in_view.iter().chain(&around).chain(&coarse_view).chain(&coarse_around) {
+        for key in in_view.iter().chain(&around).chain(&coarse_view).chain(&coarse_around).chain(&pyramid) {
             if let Some(tile) = self.tiles.get_mut(key) {
                 tile.used = frame;
             }
@@ -1396,7 +1457,7 @@ impl Painter {
         }
         // Frames are composed only of what's up to date, all of the view,
         // so where that isn't drawn yet the whole view's drawn first
-        if cover(&self.layers(), &view, self.gpu.size).1 && !self.whole_at(&view) {
+        if cover(&self.layers(), self.content(), &view, self.gpu.size).1 && !self.whole_at(&view) {
             if self.whole_busy() {
                 return Some(Duration::from_millis(1));
             }
@@ -1446,8 +1507,19 @@ impl Painter {
             }
         }
         self.update_reason(&view, px, width, height);
-        if rough.is_empty() && self.moved.elapsed() > Duration::from_millis(300) && self.prewarm(&view, px) {
-            return Some(Duration::ZERO);
+        if rough.is_empty() && self.moved.elapsed() > Duration::from_millis(300) {
+            if self.prewarm(&view, px, &levels) {
+                return Some(Duration::ZERO);
+            }
+            if let Some(&key) = pyramid.iter().find(|key| !self.tiles.get(key).is_some_and(|tile| !tile.stale)) {
+                if let Some(tile) = self.draw_tile(key, false, false) {
+                    self.put_tile(key, tile);
+                    self.drew = true;
+                }
+                self.evict(pxb, cpb);
+                self.dirty = true;
+                return Some(Duration::ZERO);
+            }
         }
         (!rough.is_empty()).then_some(refine)
     }
@@ -1937,6 +2009,7 @@ impl Painter {
             value,
             serial: self.serial,
             layers,
+            content: self.content(),
             whole_at,
             background,
             transparent,
@@ -3161,17 +3234,21 @@ impl Painter {
     /// Makes thumbs ahead, a little at a time, for the view as it is and
     /// zoomed out up to 16 times, so zooming out has them. True if there's
     /// more to make
-    fn prewarm(&mut self, view: &View, px: f32) -> bool {
+    fn prewarm(&mut self, view: &View, px: f32, levels: &[(Rect, f32)]) -> bool {
         let start = Instant::now();
         let (cx, cy) = ((view.x + view.w / 2.0) as f32, (view.y + view.h / 2.0) as f32);
         self.thumbs_ahead = true;
         self.thumb_deadline = Some(start + Duration::from_millis(4));
         let mut more = false;
-        'out: for n in 0..=4 {
+        // The levels further out first, then as the view is and zoomed out
+        // a little
+        let near = (0..=1).map(|n| {
             let grow = (1 << n) as f32;
             let (w, h) = (view.w as f32 * grow, view.h as f32 * grow);
-            let area = Rect::from_xywh(cx - w / 2.0, cy - h / 2.0, w, h);
-            let scale = px / grow;
+            (Rect::from_xywh(cx - w / 2.0, cy - h / 2.0, w, h), px / grow)
+        });
+        let targets: Vec<(Rect, f32)> = levels.iter().copied().chain(near).collect();
+        'out: for (area, scale) in targets {
             let power = scale.log2().ceil() as i32;
             let mut near: Vec<(f32, usize)> = (0..self.units.len())
                 .filter(|&unit| Rect::intersects2(&self.units[unit].bounds, &area))
@@ -3906,10 +3983,22 @@ impl Painter {
     fn evict(&mut self, current: u32, coarse: u32) {
         let frame = self.frame;
         let gone: Vec<TileKey> =
-            self.tiles.iter().filter(|(key, tile)| !(tile.exact || key.px == current || key.px == coarse || frame - tile.used < PASSING)).map(|(key, _)| *key).collect();
+            self.tiles.iter().filter(|(key, tile)| !(tile.exact || key.px == current || key.px == coarse || self.pyramid.contains(&key.px) || frame - tile.used < PASSING)).map(|(key, _)| *key).collect();
         for key in gone {
             if let Some(tile) = self.tiles.remove(&key) {
                 self.drop_tile(tile);
+            }
+        }
+        // As do the levels further out
+        let pyramid = std::mem::take(&mut self.pyramid);
+        let own = |key: &TileKey| key.px == coarse || (key.px != current && pyramid.contains(&key.px));
+        let mut kept: Vec<(u64, TileKey)> = self.tiles.iter().filter(|(key, _)| key.px != coarse && own(key)).map(|(key, tile)| (tile.used, *key)).collect();
+        if kept.len() > PYRAMID_TILES {
+            kept.sort_unstable_by_key(|(used, _)| std::cmp::Reverse(*used));
+            for (_, key) in kept.split_off(PYRAMID_TILES) {
+                if let Some(tile) = self.tiles.remove(&key) {
+                    self.drop_tile(tile);
+                }
             }
         }
         // The coarse level has room of its own
@@ -3928,14 +4017,16 @@ impl Painter {
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(5), None);
         }
         let max = self.config.max_tiles;
-        let fine = self.tiles.keys().filter(|key| key.px != coarse).count();
+        let fine = self.tiles.keys().filter(|key| !own(key)).count();
         if fine <= max {
+            self.pyramid = pyramid;
             return;
         }
-        let mut used: Vec<u64> = self.tiles.iter().filter(|(key, _)| key.px != coarse).map(|(_, tile)| tile.used).collect();
+        let mut used: Vec<u64> = self.tiles.iter().filter(|(key, _)| !own(key)).map(|(_, tile)| tile.used).collect();
         used.sort_unstable();
         let cutoff = used[fine - max];
-        let gone: Vec<TileKey> = self.tiles.iter().filter(|(key, tile)| key.px != coarse && tile.used < cutoff).map(|(key, _)| *key).collect();
+        let gone: Vec<TileKey> = self.tiles.iter().filter(|(key, tile)| !own(key) && tile.used < cutoff).map(|(key, _)| *key).collect();
+        self.pyramid = pyramid;
         for key in gone {
             if let Some(tile) = self.tiles.remove(&key) {
                 self.drop_tile(tile);
@@ -4178,7 +4269,7 @@ impl Painter {
     fn snapshot_at(&mut self, view: &View) -> Option<Vec<u8>> {
         let snapshot = self.hub.snapshot.lock().unwrap().clone()?;
         let size = self.gpu.size;
-        let (pieces, _) = cover(&snapshot.layers, view, size);
+        let (pieces, _) = cover(&snapshot.layers, snapshot.content, view, size);
         let mut images: Vec<Option<Image>> = vec![None; snapshot.layers.len()];
         for piece in &pieces {
             let backend = snapshot.layers[piece.layer].tex.backend();
