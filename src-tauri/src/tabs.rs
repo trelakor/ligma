@@ -330,6 +330,9 @@ struct Tab {
     kind: &'static str,
     /// No webview; reloads from `url` when selected
     asleep: bool,
+    /// Waking from sleep or reloading, until its page or file is drawn. Its
+    /// bar shows a spinner, and its title stays as it was meanwhile
+    loading: bool,
     /// Kept left of the other tabs, after Home, and shown as its icon only
     pinned: bool,
     #[serde(skip)]
@@ -566,6 +569,7 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
                 title: saved.title,
                 kind: if home { "home" } else { kind(&url) },
                 asleep: true,
+                loading: false,
                 pinned: saved.pinned && !home,
                 file_key: if home { None } else { file_key(&url) },
                 url,
@@ -737,6 +741,7 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
             title: String::new(),
             kind: if id == HOME_ID { "home" } else { kind(&url) },
             asleep: false,
+            loading: false,
             pinned: false,
             file_key: key,
             url: url.clone(),
@@ -749,13 +754,13 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
         });
         id
     };
-    create_webview(app, id, url, false)?;
+    create_webview(app, id, url)?;
     select(app, id)
 }
 
-/// Loads tab `id`'s webview, for a new tab or one `waking` from sleep or
+/// Loads tab `id`'s webview, for a new tab or one waking from sleep or
 /// reopened from the last session
-fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Result<()> {
+fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     let window = with_tab(app, id, |tab| tab.window.clone())
         .and_then(|label| app.get_window(&label))
         .or_else(|| app.get_window(MAIN))
@@ -780,6 +785,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
                 let _ = webview.set_zoom(scale(webview.app_handle()));
                 crate::plugins::push_to(&webview);
                 crate::appearance::push_to(&webview);
+                finish_loading(webview.app_handle(), id);
             }
         })
         .initialization_script(BEFOREUNLOAD_JS)
@@ -793,6 +799,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
         .initialization_script(crate::modules::PAGE_JS)
         .initialization_script(crate::layers::page_js())
         .initialization_script(crate::home::page_js())
+        .initialization_script(crate::new_home::SETTINGS_JS)
         .initialization_script(crate::toolbar::page_js())
         .initialization_script(crate::adjustments::page_js())
         .initialization_script(crate::ai_actions::page_js())
@@ -802,7 +809,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url, waking: bool) -> tauri::Re
         .initialization_script(crate::mcp_bridge::PANEL_JS)
         .initialization_script(crate::split::PAGE_JS)
         .initialization_script(crate::split::CARRY_JS)
-        .initialization_script(crate::view_state::page_js(waking));
+        .initialization_script(crate::view_state::PAGE_JS);
     // Ligma's home page, which Home may load whatever the setting was when
     // it was made
     if id == HOME_ID {
@@ -986,7 +993,16 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
         let Some(tab) = state.tabs.iter_mut().find(|tab| tab.id == id) else {
             return;
         };
-        tab.title = tab_title(title, url.as_ref().map_or("page", kind));
+        let title = tab_title(title, url.as_ref().map_or("page", kind));
+        // A page that's loading is titled "Figma" or the like before its
+        // own title comes. Keep the name it had meanwhile
+        let same_page = url.as_ref().is_none_or(|url| match &tab.file_key {
+            Some(key) => file_key(url).as_ref() == Some(key),
+            None => url.path() == tab.url.path(),
+        });
+        if !(same_page && is_loading_title(&title) && !is_loading_title(&tab.title)) {
+            tab.title = title;
+        }
         if let Some(url) = url {
             if id != HOME_ID {
                 tab.kind = kind(&url);
@@ -996,6 +1012,13 @@ fn on_title_changed(app: &AppHandle, id: u32, webview: &Webview, title: &str) {
         }
     }
     push_state(app);
+}
+
+/// Whether `title` is one a page shows while it loads rather than its own:
+/// none, a bare product name or "Loading…"
+fn is_loading_title(title: &str) -> bool {
+    let title = title.trim().trim_end_matches(['.', '…']);
+    title.is_empty() || title.eq_ignore_ascii_case("loading") || PRODUCTS.contains(&title)
 }
 
 /// Products Figma ends page titles with ("<name> – FigJam")
@@ -1039,6 +1062,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
             std::mem::take(&mut tab.suspended)
         };
         let wake = std::mem::take(&mut tab.asleep).then(|| tab.url.clone());
+        tab.loading |= wake.is_some();
         // Waking with a snapshot: show it while the page loads
         tab.revealing |= snapshots && wake.is_some() && tab.snapshot.is_some() && tab.file_key.is_some();
         // Kept otherwise, for the tab's preview once it's hidden again
@@ -1086,9 +1110,10 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
     if let Some(url) = wake {
         // Fails if the old webview is still closing. Stay asleep, so
         // selecting the tab again retries
-        if create_webview(app, id, url, true).is_err() {
+        if create_webview(app, id, url).is_err() {
             with_tab(app, id, |tab| {
                 tab.asleep = true;
+                tab.loading = false;
                 tab.revealing = false;
             });
         } else if snapshot.is_some() {
@@ -1401,6 +1426,48 @@ pub fn preview(app: &AppHandle, id: u32) -> Option<Preview> {
         image: tab.snapshot.clone(),
         crop: tab.crop,
     })
+}
+
+/// Ends loading tab `id`'s spinner once its page has loaded: a file's once
+/// `READY_JS` says it's drawn, or after `REVEAL_TIMEOUT`
+fn finish_loading(app: &AppHandle, id: u32) {
+    match with_tab(app, id, |tab| (tab.loading, tab.file_key.is_some())) {
+        Some((true, false)) => {
+            with_tab(app, id, |tab| tab.loading = false);
+            push_state(app);
+        }
+        Some((true, true)) => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let started = Instant::now();
+                loop {
+                    std::thread::sleep(Duration::from_millis(250));
+                    // Not while it's frozen: see `suspended`
+                    match with_tab(&app, id, |tab| (tab.loading, tab.suspended)) {
+                        Some((true, false)) => {}
+                        Some((true, true)) if started.elapsed() < REVEAL_TIMEOUT => continue,
+                        Some((true, true)) => break,
+                        _ => return,
+                    }
+                    let Some(webview) = app.get_webview(&label(id)) else {
+                        return;
+                    };
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let _ = webview.eval_with_callback(READY_JS, move |json| {
+                        let _ = tx.send(json == "true");
+                    });
+                    let ready = rx.recv_timeout(Duration::from_secs(1)).unwrap_or(false);
+                    if ready || started.elapsed() >= REVEAL_TIMEOUT {
+                        break;
+                    }
+                }
+                if with_tab(&app, id, |tab| std::mem::take(&mut tab.loading)) == Some(true) {
+                    push_state(&app);
+                }
+            });
+        }
+        _ => {}
+    }
 }
 
 /// Shows reloading tab `id` once `READY_JS` has said the file is drawn
@@ -1895,6 +1962,8 @@ fn reload(app: &AppHandle, id: u32) {
             if let Some(url) = url {
                 tab.url = url;
             }
+        } else {
+            tab.loading = true;
         }
         frozen
     });
@@ -1905,9 +1974,38 @@ fn reload(app: &AppHandle, id: u32) {
         }
         Some(false) => {
             let _ = webview.reload();
+            push_state(app);
         }
         None => {}
     }
+}
+
+/// WebKit ended `webview`'s web content process, most often a hidden tab
+/// over its memory limit. Tauri's own handler reloads right inside WebKit's
+/// callback, which throws and aborts Ligma when the tab is frozen. Here a
+/// hidden tab is put to sleep, so it loads afresh when selected, and the
+/// rest reload. Off the main thread, so it all runs after the callback
+#[cfg(target_os = "macos")]
+pub fn on_process_terminated(webview: &Webview) {
+    let app = webview.app_handle().clone();
+    let name = webview.label().to_string();
+    std::thread::spawn(move || {
+        let Some(id) = name.strip_prefix("tab-").and_then(|id| id.parse::<u32>().ok()) else {
+            if let Some(webview) = app.get_webview(&name) {
+                let _ = webview.reload();
+            }
+            return;
+        };
+        let hidden = {
+            let state = app.state::<Tabs>().inner().0.lock().unwrap();
+            state.tabs.iter().find(|tab| tab.id == id).map(|tab| (!state.is_active(tab), tab.hidden_since))
+        };
+        match hidden {
+            Some((true, since)) => sleep_now(&app, id, since),
+            Some((false, _)) => reload(&app, id),
+            None => {}
+        }
+    });
 }
 
 /// Loads `url` in tab `id` and selects it, or in a new tab if `id` is
@@ -2411,6 +2509,7 @@ fn sleep_now(app: &AppHandle, id: u32, since: Option<Instant>) {
             return false;
         }
         tab.asleep = true;
+        tab.loading = false;
         tab.suspended = false;
         tab.revealing = false;
         if let Some(url) = url {

@@ -17,6 +17,10 @@
     --bg: #ffffff;
     --bg2: #f5f5f5;
     --bg3: #e6e6e6;
+    /* Figma's own secondary and tertiary backgrounds, which the tab bar
+       takes on: Home's differ in dark mode */
+    --fig-bg2: #f5f5f5;
+    --fig-bg3: #e6e6e6;
     --line: #e6e6e6;
     --hover: #f5f5f5;
     --text: #1e1e1e;
@@ -31,6 +35,8 @@
     --menu-line: #e6e6e6;
     --toast: #1e1e1e;
     --shadow: 0 2px 5px rgba(0, 0, 0, 0.08), 0 10px 24px rgba(0, 0, 0, 0.12);
+    --danger: #dc3412;
+    --ok: #0f8a49;
     --ease: cubic-bezier(0.16, 1, 0.3, 1);
     --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", sans-serif;
   }
@@ -40,6 +46,8 @@
       --bg: #2c2c2c;
       --bg2: #1e1e1e;
       --bg3: #383838;
+      --fig-bg2: #383838;
+      --fig-bg3: #444444;
       --line: #444444;
       --hover: #383838;
       --text: #ffffff;
@@ -54,6 +62,8 @@
       --menu-line: #383838;
       --toast: #111111;
       --shadow: 0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4);
+      --danger: #ff7a5c;
+      --ok: #79d297;
     }
   }
   /* Picked in the account menu while the system is light */
@@ -63,6 +73,8 @@
       --bg: #2c2c2c;
       --bg2: #1e1e1e;
       --bg3: #383838;
+      --fig-bg2: #383838;
+      --fig-bg3: #444444;
       --line: #444444;
       --hover: #383838;
       --text: #ffffff;
@@ -77,6 +89,8 @@
       --menu-line: #383838;
       --toast: #111111;
       --shadow: 0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4);
+      --danger: #ff7a5c;
+      --ok: #79d297;
     }
   }
   * { box-sizing: border-box; }
@@ -343,8 +357,8 @@
   /* What Ligma's tab bar and windows read their colors from (tabs.rs) */
   [data-preferred-theme] {
     --color-bg: var(--bg);
-    --color-bg-secondary: var(--bg2);
-    --color-bg-tertiary: var(--bg3);
+    --color-bg-secondary: var(--fig-bg2);
+    --color-bg-tertiary: var(--fig-bg3);
     --color-text: var(--text);
     --color-text-secondary: var(--text2);
     --color-text-tertiary: var(--text3);
@@ -736,8 +750,6 @@
   .mem.ask b { white-space: normal; }
   .mem.ask small { white-space: normal; }
   .mem .acts { display: flex; align-items: center; gap: 4px; }
-  .btn.danger { background: #e03e1a; color: #fff; box-shadow: none; }
-  .btn.danger:hover { filter: brightness(0.94); }
   .wnote { padding: 8px; color: var(--text2); }
   .invite { display: flex; gap: 6px; padding: 4px 0 0; }
   .invite input { flex: 1; min-width: 0; height: 32px; padding: 0 8px; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--text) 7%, var(--menu)); color: var(--text); font: inherit; font-size: 13px; outline: none; -webkit-user-select: text; user-select: text; }
@@ -746,26 +758,22 @@
   .invite .ib { height: 32px; }
   .invite .btn { height: 32px; }
   .btn:disabled { opacity: 0.4; pointer-events: none; }
-  /* People to invite, as an address is typed: those met in Figma and
-     invited before */
-  .sugg { margin-top: 4px; }
-  .sugg:empty { display: none; }
-  .sugg .opt { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 40px; padding: 4px 8px; border-radius: 6px; cursor: default; }
-  .sugg .opt[aria-selected="true"] { background: var(--hover); }
-  .sugg .opt b { display: block; overflow: hidden; font-weight: 450; font-size: 13px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
-  .sugg .opt small { display: block; overflow: hidden; color: var(--text2); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
-  .sugg mark { background: none; color: inherit; font-weight: 600; }
-  .sugg .opt b mark { font-weight: 650; }
-  .sugg .why { max-width: 120px; overflow: hidden; color: var(--text2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-  /* Emails out of sight while sharing a screen, one at a time under the
-     pointer when needed */
-  body.hide-em .em { filter: blur(4px); transition: filter 120ms; }
-  body.hide-em .em:hover { filter: none; }
-  .ws h3 button + button { margin-left: 0; }
-  .ws h3 [data-blur] .i { width: 14px; height: 14px; }
-  .sec h2 [data-blur] { display: flex; align-self: baseline; align-items: center; gap: 4px; margin-left: auto; padding: 2px 6px; border-radius: 4px; color: var(--text2); font-size: 11px; font-weight: 450; }
-  .sec h2 [data-blur]:hover { background: var(--hover); color: var(--text); }
-  .sec h2 [data-blur] .i { width: 14px; height: 14px; margin: 0; }
+  /* People to invite, as an address is typed: the box opens downward into
+     a list over what's under it, one field with one focus ring */
+  .invite input[aria-expanded="true"] { border-radius: 5px 5px 0 0; box-shadow: inset 1px 0 0 var(--accent), inset -1px 0 0 var(--accent), inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--menu-line); }
+  #invite-sugg { position: fixed; z-index: 46; display: none; overflow-y: auto; padding: 4px; border-radius: 0 0 8px 8px; background: color-mix(in srgb, var(--text) 7%, var(--menu)); box-shadow: inset 1px 0 0 var(--accent), inset -1px 0 0 var(--accent), inset 0 -1px 0 var(--accent), 0 12px 24px -10px rgba(0, 0, 0, 0.45); overscroll-behavior: contain; }
+  #invite-sugg.open { display: block; animation: drop 120ms var(--ease); }
+  @keyframes drop { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+  #invite-sugg .opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 0 8px; align-items: center; min-height: 0; padding: 5px 6px; border-radius: 5px; color: var(--text); cursor: default; }
+  #invite-sugg .av { width: 20px; height: 20px; font-size: 10px; }
+  #invite-sugg .ln { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  #invite-sugg b { flex: 1; min-width: 0; overflow: hidden; font-weight: 450; font-size: 13px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+  #invite-sugg small { display: block; overflow: hidden; color: var(--text2); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  #invite-sugg .why { flex: none; max-width: 45%; overflow: hidden; color: var(--text2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  #invite-sugg mark { background: none; color: inherit; font-weight: 650; }
+  #invite-sugg .opt[aria-selected="true"] { background: var(--accent); color: #fff; }
+  #invite-sugg .opt[aria-selected="true"] :is(small, .why) { color: rgba(255, 255, 255, 0.8); }
+  #invite-sugg .veil > span { filter: blur(3px); }
   .wlink { margin: 6px 0 0 -2px; }
   .wfoot { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px; border-top: 1px solid var(--menu-line); }
   .wfoot .ib { flex: 1; justify-content: flex-start; }
@@ -778,16 +786,16 @@
   .setp { max-width: 680px; }
   .setp .sec + .sec { margin-top: 20px; }
   .setp .sec h2 { height: 44px; }
-  .srow { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 10px 0; border-top: 1px solid var(--line); }
-  .sec h2 + .srow, .sec h2 + .seats .srow:first-child { border-top: 0; }
-  .srow .st { flex: 1; min-width: 0; }
-  .srow b { display: block; font-size: 13px; line-height: 20px; font-weight: 450; }
-  .srow small { display: block; color: var(--text2); font-size: 11px; line-height: 16px; }
-  .srow .ctl { display: flex; flex: none; align-items: center; gap: 6px; }
-  .srow .av { flex: none; width: 24px; height: 24px; }
-  a.srow:hover b { text-decoration: underline; text-underline-offset: 2px; }
-  .srow.ask { flex-wrap: wrap; row-gap: 8px; margin: 0 -12px; padding: 12px; border-top-color: transparent; border-radius: 8px; background: var(--hover); }
-  .srow.ask + .srow { border-top-color: transparent; }
+  .setp .srow { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 0; }
+  .setp .sec h2 + .srow, .setp .sec h2 + .seats .srow:first-child { border-top: 0; }
+  .setp .srow .st { flex: 1; min-width: 0; }
+  .setp .srow b { display: block; font-size: 13px; line-height: 20px; font-weight: 450; }
+  .setp .srow small { display: block; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .setp .srow .ctl { display: flex; flex: none; align-items: center; gap: 6px; }
+  .setp .srow .av { flex: none; width: 24px; height: 24px; }
+  .setp a.srow:hover b { text-decoration: underline; text-underline-offset: 2px; }
+  .setp .srow.ask { flex-wrap: wrap; row-gap: 8px; margin: 0 -12px; padding: 12px; border-top-color: transparent; border-radius: 8px; background: var(--hover); }
+  .setp .srow.ask + .srow { border-top-color: transparent; }
   .tgl { position: relative; flex: none; width: 28px; height: 16px; border-radius: 8px; background: var(--bg3); box-shadow: inset 0 0 0 1px var(--line); transition: background 120ms; }
   .tgl::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 160ms var(--ease); }
   .tgl[aria-checked="true"] { background: var(--accent); box-shadow: none; }
@@ -803,6 +811,143 @@
   .fhint.bad { color: #e03e1a; }
   .sform .acts { display: flex; justify-content: flex-end; gap: 6px; }
   .snote { padding: 10px 0 0; color: var(--text2); }
+  /* Account settings: a window over the page, sections down the left */
+  #acs {
+    width: min(760px, calc(100vw - 32px));
+    height: min(660px, calc(100vh - 64px));
+    max-width: none;
+    max-height: none;
+    margin: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 13px;
+    background: var(--bg);
+    color: var(--text);
+    box-shadow: var(--shadow), 0 0 0 1px var(--line);
+    overflow: hidden;
+  }
+  #acs[open] { display: flex; flex-direction: column; animation: pop 140ms var(--ease); }
+  #acs::backdrop { background: rgba(0, 0, 0, 0.24); }
+  .ah { display: flex; flex: none; align-items: center; gap: 8px; height: 48px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); }
+  .ah h2 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 550; white-space: nowrap; }
+  .ah .who { min-width: 0; overflow: hidden; color: var(--text2); text-overflow: ellipsis; white-space: nowrap; }
+  .ah .x { margin-left: auto; }
+  .ab { display: grid; grid-template-columns: 184px minmax(0, 1fr); flex: 1; min-height: 0; }
+  .an { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-right: 1px solid var(--line); }
+  .an .nav[aria-selected="true"] { background: var(--sel); font-weight: 550; }
+  .an .nav[aria-selected="true"] .i { color: var(--text); }
+  .kbd .an .nav:focus-visible { outline-offset: -2px; }
+  .ac { min-height: 0; overflow-y: auto; padding: 4px 24px 40px; outline: none; }
+  .ac h3 { display: flex; align-items: center; gap: 8px; margin: 28px 0 0; font-size: 13px; line-height: 20px; font-weight: 550; }
+  .ac h3:first-child { margin-top: 16px; }
+  .ac h3 .btn { margin-left: auto; font: 550 11px/16px var(--font); }
+  .ac h3 .btn.quiet { font-weight: 450; }
+  .srow.apart { margin-top: 16px; }
+  .lede { max-width: 62ch; margin: 2px 0 4px; color: var(--text2); }
+  .srow { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .srow:last-child { border-bottom: 0; }
+  .srow.top { align-items: flex-start; }
+  .sl { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+  .sl > small { color: var(--text2); font-size: 11px; line-height: 16px; }
+  .sl > span { overflow: hidden; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+  .sl > span.wrap { white-space: normal; }
+  .sl > em { color: var(--text2); font-style: normal; }
+  .sact { display: flex; flex: none; align-items: center; gap: 8px; }
+  .sact .note-txt { color: var(--text2); }
+  .btn.sm .i { width: 12px; height: 12px; }
+  .btn.sm .fi { width: 18px; height: 18px; margin: -3px -4px -3px -2px; }
+  .btn:disabled, .btn[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+  .btn.danger { color: var(--danger); }
+  .btn.danger.solid { background: var(--danger); color: #fff; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12); }
+  .btn.danger.solid:hover { background: var(--danger); filter: brightness(0.94); }
+  .btn.quiet { box-shadow: none; color: var(--text2); font-weight: 450; }
+  .btn.quiet:hover { color: var(--text); }
+  .btn.busy { position: relative; color: transparent !important; pointer-events: none; }
+  .btn.busy::after { content: ""; position: absolute; inset: 0; margin: auto; width: 12px; height: 12px; border: 1.5px solid #fff; border-right-color: transparent; border-radius: 50%; animation: spin 700ms linear infinite; }
+  .btn.busy:not(.primary):not(.solid)::after { border-color: var(--text2); border-right-color: transparent; }
+  @keyframes spin { to { transform: rotate(1turn); } }
+  .slink { color: var(--accent-text); font-weight: 550; cursor: pointer; }
+  .slink:hover { text-decoration: underline; text-underline-offset: 2px; }
+  /* Who you are, at the top of Account */
+  .aprof { display: flex; align-items: center; gap: 16px; padding: 20px 0 16px; border-bottom: 1px solid var(--line); }
+  .aprof .av { width: 56px; height: 56px; font-size: 22px; }
+  .aprof .pw2 { position: relative; flex: none; border-radius: 50%; }
+  .aprof .pw2::after { content: ""; position: absolute; inset: 0; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08); pointer-events: none; }
+  .aprof .pw2.busy .av { opacity: 0.4; }
+  .aprof .id { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+  .aprof .id b { overflow: hidden; font-size: 13px; line-height: 20px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .aprof .id span { overflow: hidden; color: var(--text2); text-overflow: ellipsis; white-space: nowrap; }
+  /* Fields, switches, radios and checkboxes, drawn as Figma's */
+  .field {
+    width: 100%;
+    height: 32px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 5px;
+    background: var(--bg2);
+    color: var(--text);
+    font: 450 13px/20px var(--font);
+    outline: none;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .field::placeholder { color: var(--text3); }
+  .field:hover { box-shadow: inset 0 0 0 1px var(--line); }
+  .field:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+  .field[aria-invalid="true"] { box-shadow: inset 0 0 0 1px var(--danger); }
+  .kbd .field:focus-visible { outline: none; }
+  .prefix { position: relative; flex: 1; }
+  .prefix > i { position: absolute; left: 8px; top: 6px; color: var(--text2); font-style: normal; font-size: 13px; line-height: 20px; pointer-events: none; }
+  .prefix .field { padding-left: 22px; }
+  .form { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 4px 0 6px; }
+  .form label { display: flex; flex-direction: column; gap: 4px; color: var(--text2); }
+  .form .row2 { display: flex; align-items: center; gap: 8px; }
+  .form .msg { min-height: 16px; color: var(--text2); }
+  .form .msg.ok { color: var(--ok); }
+  .form .msg.bad { color: var(--danger); }
+  .form .end { display: flex; align-items: center; gap: 8px; }
+  .form .end .grow { flex: 1; }
+  .sw { position: relative; flex: none; width: 28px; height: 16px; border-radius: 8px; background: var(--bg3); transition: background 120ms; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); transition: transform 160ms var(--ease); }
+  .sw[aria-checked="true"] { background: var(--accent); }
+  .sw[aria-checked="true"]::after { transform: translateX(12px); }
+  .kbd .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .opts { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+  .opt { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--text); font-size: 13px; line-height: 20px; }
+  .opts[aria-disabled="true"] .opt { opacity: 0.45; pointer-events: none; }
+  .opt input, .scope input { appearance: none; flex: none; width: 14px; height: 14px; margin: 0; border: 1px solid var(--text3); background: var(--bg); transition: border-width 100ms, background 100ms; }
+  .opt input[type="radio"] { border-radius: 50%; }
+  .opt input[type="radio"]:checked { border: 4.5px solid var(--accent); }
+  .opt input[type="checkbox"], .scope input { border-radius: 3px; }
+  .opt input[type="checkbox"]:checked, .scope input:checked { border-color: var(--accent); background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.5l2.5 2.5 4.5-5.5' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 12px no-repeat; }
+  .kbd :is(.opt, .scope) input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pol { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .pol:last-child { border-bottom: 0; }
+  .pol > b { display: block; font-size: 11px; line-height: 16px; font-weight: 450; color: var(--text2); }
+  /* Token scopes, in Figma's groups */
+  .scopes-g { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 16px; }
+  .scopes-g h4 { grid-column: 1 / -1; margin: 4px 0 -6px; color: var(--text2); font-size: 11px; line-height: 16px; font-weight: 450; }
+  .form label.scope { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 2px 8px; align-items: start; align-content: start; color: var(--text); }
+  .scope input { margin-top: 1px; }
+  .scope code { font: 500 11px/16px ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace; }
+  .scope small { grid-column: 2; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .secret { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-radius: 6px; background: var(--sel); }
+  .secret code { flex: 1; min-width: 0; overflow: hidden; font: 500 12px/20px ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; -webkit-user-select: all; user-select: all; }
+  /* Email and IP addresses stay blurred until they're clicked */
+  .veil { padding: 0 2px; margin: 0 -2px; border-radius: 3px; font: inherit; color: inherit; }
+  button.veil:hover { background: var(--hover); }
+  .veil > span { filter: blur(4px); transition: filter 160ms var(--ease); }
+  .veil[aria-pressed="true"] > span { filter: none; -webkit-user-select: text; user-select: text; }
+  .kbd .veil:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  .ttag { flex: none; height: 20px; padding: 0 6px; border-radius: 4px; background: var(--bg2); color: var(--text2); font-size: 11px; line-height: 20px; }
+  .ttag.on { background: var(--sel); color: var(--accent-text); font-weight: 550; }
+  .applogo { flex: none; width: 32px; height: 32px; overflow: hidden; border-radius: 7px; background: var(--bg2); box-shadow: inset 0 0 0 1px var(--line); }
+  .applogo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .ac .sk .bar { width: 40%; height: 10px; margin: 0 0 6px; }
+  .ac .sk .bar + .bar { width: 64%; margin: 0; }
+  .aerr { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 24px 0; color: var(--text2); }
+  .aerr b { color: var(--text); font-size: 13px; font-weight: 550; }
+  .aempty { padding: 12px 0; color: var(--text2); }
 
   @media (max-width: 860px) {
     #app { grid-template-columns: minmax(0, 1fr); }
@@ -821,6 +966,11 @@
     .pb.split { grid-template-columns: minmax(0, 1fr); }
     .pb.split > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); }
     .pp, .pfoot span:nth-child(n + 3) { display: none; }
+    .ab { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .an { flex-direction: row; gap: 4px; padding: 8px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    .an .nav { width: auto; margin: 0; flex: none; }
+    .ac { padding: 4px 16px 32px; }
+    .srow { flex-wrap: wrap; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -855,6 +1005,18 @@
   </div>
   <div class="pb" id="pal-body" role="listbox" aria-label="Results"></div>
   <div class="pfoot" id="pal-foot"></div>
+</dialog>
+<dialog id="acs" aria-labelledby="acs-title">
+  <header class="ah">
+    <h2 id="acs-title">Settings</h2>
+    <span class="who" id="acs-who"></span>
+    <button class="ib x" data-acs="close" aria-label="Close"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 5 6 6M11 5l-6 6"/></svg></button>
+  </header>
+  <div class="ab">
+    <div class="an" id="acs-nav" role="tablist" aria-orientation="vertical" aria-label="Settings"></div>
+    <div class="ac" id="acs-body" role="tabpanel" tabindex="-1"></div>
+  </div>
+  <input type="file" id="acs-photo" accept="image/png, image/jpeg, image/gif, image/webp" hidden>
 </dialog>
 <script>
 "use strict";
@@ -921,8 +1083,6 @@ const ICONS = {
   list: '<path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><circle cx="2.75" cy="4.5" r=".6"/><circle cx="2.75" cy="8" r=".6"/><circle cx="2.75" cy="11.5" r=".6"/>',
   link: '<path d="M7 9a2.5 2.5 0 0 0 3.5 0l2-2A2.5 2.5 0 0 0 9 3.5l-.75.75M9 7a2.5 2.5 0 0 0-3.5 0l-2 2A2.5 2.5 0 0 0 7 12.5l.75-.75"/>',
   camera: '<path d="M2.5 5.5a1 1 0 0 1 1-1h1.75l1-1.5h3.5l1 1.5h1.75a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/><circle cx="8" cy="8.25" r="2"/>',
-  eye: '<path d="M1.75 8S4 3.75 8 3.75 14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8z"/><circle cx="8" cy="8" r="2"/>',
-  eyeoff: '<path d="M6.6 3.9A6 6 0 0 1 8 3.75C12 3.75 14.25 8 14.25 8a11 11 0 0 1-1.6 2.2M10.1 10.1A3 3 0 0 1 5.9 5.9M4 5A11 11 0 0 0 1.75 8S4 12.25 8 12.25a6 6 0 0 0 2.8-.7M2.5 2.5l11 11"/>',
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 // Figma's own UI icons, as its file browser and account menu draw them:
@@ -1968,6 +2128,7 @@ function showCached() {
 }
 
 async function switchAccount(uid) {
+  if (acs.open) acs.close();
   // A load still under way picked its account already: let it finish, then
   // load the new one
   await booting?.catch(() => {});
@@ -3603,20 +3764,20 @@ function openShare(id, at) {
   openWin({ kind: "share", team: p.team.id, project: id }, at);
   loadRoles(id).then(() => winState.project === id && drawWin(), (error) => {
     if (winState.project !== id) return;
-    ROLES[id] = { error: error.message };
+    SHARED_WITH[id] = { error: error.message };
     drawWin();
   });
 }
 
 // Who a project's been shared with: Figma's roles on it
-const ROLES = {};
+const SHARED_WITH = {};
 async function loadRoles(id) {
   if (!LIVE) {
-    ROLES[id] ??= { list: Object.entries(SAMPLE_ROLES).slice(0, 4).map(([pid, level]) => ({ name: PEOPLE[pid].name, color: PEOPLE[pid].color, id: pid, level: level ?? 300, role: { id: `role-${pid}`, level: level ?? 300 }, pending: false, me: pid === "me" })) };
+    SHARED_WITH[id] ??= { list: Object.entries(SAMPLE_ROLES).slice(0, 4).map(([pid, level]) => ({ name: PEOPLE[pid].name, color: PEOPLE[pid].color, id: pid, level: level ?? 300, role: { id: `role-${pid}`, level: level ?? 300 }, pending: false, me: pid === "me" })) };
     return;
   }
   const roles = await api(`/api/roles/folder/${id}`);
-  ROLES[id] = {
+  SHARED_WITH[id] = {
     list: (Array.isArray(roles) ? roles : []).map((r) => ({ id: r.user?.id ?? r.id, name: r.user?.handle ?? r.pending_email ?? "Someone", img_url: r.user?.img_url, email: null, pending: !!r.pending, level: r.level, role: r, me: r.user_id === Live.uid })).sort(byPeople),
   };
 }
@@ -3639,8 +3800,10 @@ function openWin(what, at, focus = null) {
 }
 function closeWin(restore = true) {
   if (!win.classList.contains("open")) return;
+  reblur(win);
   win.classList.remove("open");
   win.innerHTML = "";
+  clearSugg();
   const back = winState.back;
   Object.assign(winState, { kind: null, team: null, project: null, anchor: null, back: null, ask: null });
   renderSide();
@@ -3667,16 +3830,16 @@ function personRow(m, tier, control = null) {
   const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
   const role = roleName(m.level, tier);
   const sub = m.pending ? "Invited, hasn't joined yet" : m.email;
-  // An invite's name is the address it went to
-  const name = m.pending ? `<span class="em">${esc(m.name)}</span>` : esc(m.name);
-  return `<div class="mem${m.pending ? " pending" : ""}" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${name}${m.me ? " <i>(you)</i>" : ""}</b>${sub ? `<small${m.pending ? "" : ` class="em"`}>${esc(sub)}</small>` : ""}</span>${control ?? `<span class="role">${esc(role)}</span>`}</div>`;
+  // An invite's name is the address it went to, veiled like any email
+  const name = nameOrVeil(m.name);
+  return `<div class="mem${m.pending ? " pending" : ""}" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${name}${m.me ? " <i>(you)</i>" : ""}</b>${sub ? `<small>${m.pending ? esc(sub) : nameOrVeil(sub)}</small>` : ""}</span>${control ?? `<span class="role">${esc(role)}</span>`}</div>`;
 }
 // Asking before someone's removed, with what happens to their files
 function askRow(m) {
   const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
   const ask = winState.ask;
   const team = winState.kind === "team";
-  const question = m.pending ? `Cancel the invite to <span class="em">${esc(m.name)}</span>?` : esc(`Remove ${m.name} from ${peopleWhere()}?`);
+  const question = m.pending ? `Cancel the invite to ${nameOrVeil(m.name)}?` : `Remove ${nameOrVeil(m.name)} from ${esc(peopleWhere())}?`;
   let note = m.pending ? "The link in their email stops working" : team ? "They lose access to the team's projects and files" : "They keep any access they have through the team";
   const impact = ask.impact;
   if (!m.pending && impact) {
@@ -3686,11 +3849,11 @@ function askRow(m) {
     if (impact.drafts_to_unassigned) parts.push(`${impact.drafts_to_unassigned} ${impact.drafts_to_unassigned === 1 ? "draft moves" : "drafts move"} to the team`);
     if (parts.length) note += `. ${parts.join(", ")}`;
   }
-  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b id="ask-q">${question}</b><small>${esc(note)}</small></span><span class="acts"><button class="btn sm" data-w="ask-no">${m.pending ? "Keep" : "Cancel"}</button><button class="btn sm danger" data-w="ask-yes" aria-describedby="ask-q">${m.pending ? "Cancel invite" : "Remove"}</button></span></div>`;
+  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b id="ask-q">${question}</b><small>${esc(note)}</small></span><span class="acts"><button class="btn sm" data-w="ask-no">${m.pending ? "Keep" : "Cancel"}</button><button class="btn sm danger solid" data-w="ask-yes" aria-describedby="ask-q">${m.pending ? "Cancel invite" : "Remove"}</button></span></div>`;
 }
 // The people in the open window: a team's members, or who a project's
 // shared with
-const peopleOf = () => (winState.kind === "team" ? TEAM_INFO[winState.team]?.members : ROLES[winState.project]?.list);
+const peopleOf = () => (winState.kind === "team" ? TEAM_INFO[winState.team]?.members : SHARED_WITH[winState.project]?.list);
 const peopleWhere = () => (winState.kind === "team" ? teamById(winState.team)?.team.name : PROJECTS[winState.project]?.name) ?? "here";
 // Roles to pick: a project's on any plan, a team's only in an Organization
 function rolesFor(m) {
@@ -3714,23 +3877,8 @@ function inviteForm(label, levels) {
   winState.level = level;
   return `<form class="invite" data-w="invite"><input type="text" inputmode="email" autocomplete="off" spellcheck="false" placeholder="Names or emails, comma separated" aria-label="${esc(label)}" role="combobox" aria-autocomplete="list" aria-controls="invite-sugg" aria-expanded="false">` +
     (levels ? `<button type="button" class="ib" data-w="level" aria-haspopup="menu" aria-label="Invite as: ${levelName(level)}">${levelName(level)}${icon("down")}</button>` : "") +
-    `<button type="submit" class="btn sm primary" disabled>Invite</button></form><div class="sugg" id="invite-sugg" role="listbox" aria-label="Suggested people"></div>`;
+    `<button type="submit" class="btn sm primary" disabled>Invite</button></form>`;
 }
-
-/* Emails blurred, for sharing a screen: on until turned off, everywhere
-   people are listed */
-let hideEmails = store.get("hide-emails", true);
-document.body.classList.toggle("hide-em", hideEmails);
-const blurToggle = () => `<button data-blur aria-pressed="${hideEmails}" title="${hideEmails ? "Show emails" : "Blur emails, for sharing your screen"}" aria-label="Blur emails">${icon(hideEmails ? "eyeoff" : "eye")}</button>`;
-function toggleEmails() {
-  hideEmails = !hideEmails;
-  store.set("hide-emails", hideEmails);
-  document.body.classList.toggle("hide-em", hideEmails);
-  for (const el of document.querySelectorAll("[data-blur]")) el.outerHTML = blurToggle();
-  $("[data-blur]", win.classList.contains("open") ? win : scroller)?.focus();
-  toast(hideEmails ? "Emails blurred, hover one to see it" : "Showing emails");
-}
-document.addEventListener("click", (e) => e.target.closest?.("[data-blur]") && toggleEmails());
 
 /* Suggestions for the invite box, for the address being typed: people in
    your other teams, those you've invited from here before, then Figma's
@@ -3824,27 +3972,55 @@ function suggest() {
   }, 120);
 }
 // The typed part of a name or address, in bold
-function marked(text, q) {
+function markTyped(text, q) {
   const at = text.toLowerCase().indexOf(q);
   if (at < 0 || !q) return esc(text);
   return esc(text.slice(0, at)) + `<mark>${esc(text.slice(at, at + q.length))}</mark>` + esc(text.slice(at + q.length));
 }
+// Addresses in the list stay veiled, with no click to show them: a click
+// picks the person. The same stand-in each time the list is drawn
+const standIns = new Map();
+function stillVeiled(text) {
+  if (!standIns.has(text)) standIns.set(text, scramble(text));
+  return `<span class="veil"><span aria-hidden="true">${esc(standIns.get(text))}</span></span>`;
+}
+// The list lives outside the window, which would clip it, and is placed
+// under the box as if part of it
+const suggBox = Object.assign(document.createElement("div"), { id: "invite-sugg" });
+suggBox.setAttribute("role", "listbox");
+suggBox.setAttribute("aria-label", "Suggested people");
+document.body.append(suggBox);
 function drawSugg() {
-  const list = $("#invite-sugg", win);
   const input = $(".invite input", win);
-  if (!list || !input) return;
+  const show = !!input && sugg.items.length > 0;
+  if (input) input.setAttribute("aria-expanded", String(show));
+  if (!show) {
+    input?.removeAttribute("aria-activedescendant");
+    suggBox.classList.remove("open");
+    suggBox.innerHTML = "";
+    return;
+  }
   const q = sugg.q;
-  list.innerHTML = sugg.items.map((p, i) => {
+  suggBox.innerHTML = sugg.items.map((p, i) => {
     const face = p.img_url ? `<img src="${esc(p.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((p.name || "?")[0].toUpperCase());
-    const same = p.name === p.email;
-    return `<div class="opt" role="option" id="sugg-${i}" data-sugg="${i}" aria-selected="${i === sugg.active}"><span class="av" style="background:${p.img_url ? "transparent" : p.color ?? colorForTeam(p.id)}">${face}</span><span>` +
-      (same ? `<b class="em">${marked(p.email, q)}</b>` : `<b>${marked(p.name, q)}</b><small class="em">${marked(p.email, q)}</small>`) +
-      `</span><span class="why">${esc(p.why)}</span></div>`;
+    const why = `<span class="why">${esc(p.why)}</span>`;
+    const lines = p.name === p.email
+      ? `<span class="ln"><b>${stillVeiled(p.email)}</b>${why}</span>`
+      : `<span class="ln"><b>${markTyped(p.name, q)}</b>${why}</span><small>${stillVeiled(p.email)}</small>`;
+    return `<div class="opt" role="option" id="sugg-${i}" data-sugg="${i}" aria-selected="${i === sugg.active}" aria-label="${esc(p.name === p.email ? "Someone invited before" : p.name)}, ${esc(p.why)}"><span class="av" style="background:${p.img_url ? "transparent" : p.color ?? colorForTeam(p.id)}">${face}</span><span>${lines}</span></div>`;
   }).join("");
-  input.setAttribute("aria-expanded", String(sugg.items.length > 0));
-  if (sugg.items.length) input.setAttribute("aria-activedescendant", `sugg-${sugg.active}`);
-  else input.removeAttribute("aria-activedescendant");
-  placeWin();
+  input.setAttribute("aria-activedescendant", `sugg-${sugg.active}`);
+  placeSugg();
+  suggBox.classList.add("open");
+}
+function placeSugg() {
+  const input = $(".invite input", win);
+  if (!input || !suggBox.classList.contains("open") && !sugg.items.length) return;
+  const r = input.getBoundingClientRect();
+  suggBox.style.left = `${r.left}px`;
+  suggBox.style.top = `${r.bottom}px`;
+  suggBox.style.width = `${r.width}px`;
+  suggBox.style.maxHeight = `${Math.max(120, innerHeight - r.bottom - 8)}px`;
 }
 // The address being typed swapped for the one picked, ready for the next
 function pickSugg(i) {
@@ -3887,7 +4063,7 @@ function teamWinHtml() {
   html += `<section class="ws"><h3>About</h3>` + (edit ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : `<p class="about static${about ? "" : " blank"}">${esc(about || "No description")}</p>`) + `</section>`;
   // Professional teams pay per seat: their seats are on the settings page
   const seats = plan.tier === "Pro" && edit ? `<button data-w="all-settings">Seats${fig("right")}</button>` : "";
-  html += `<section class="ws"><h3>People${blurToggle()}${seats}</h3>`;
+  html += `<section class="ws"><h3>People${seats}</h3>`;
   html += inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor]);
   html += `<button class="ib wlink" data-w="team-link">${icon("link")}Copy invite link</button>`;
   if (info?.error) html += `<p class="wnote" role="alert">Couldn't load the people: ${esc(info.error)}</p>`;
@@ -3900,7 +4076,7 @@ function teamWinHtml() {
 const ACCESS = [["edit", "Can edit"], ["view", "Can view"], ["none", "No access"]];
 function shareWinHtml() {
   const p = PROJECTS[winState.project];
-  const roles = ROLES[p.id];
+  const roles = SHARED_WITH[p.id];
   const access = ACCESS.find(([k]) => k === accessOf(p.id))[1];
   const everyone = orgWide(p.id) ? p.plan.name : p.team.name;
   const tm = p.team.img ? `<img src="${esc(p.team.img)}" alt="" referrerpolicy="no-referrer">` : esc(p.team.name[0]);
@@ -3939,9 +4115,9 @@ function drawWin() {
   }
   if (refocus === "emails") input?.focus();
   else if (refocus) $(refocus, win)?.focus();
-  if (refocus === "emails") drawSugg();
-  else sugg.items = [];
+  if (refocus !== "emails") sugg.items = [];
   placeWin();
+  drawSugg();
 }
 
 const emailsIn = (text) => text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
@@ -4256,7 +4432,7 @@ function seatsSection(id, seats) {
   const sub = sum.monthly_subscription ?? sum.annual_subscription;
   const term = sum.monthly_subscription ? "month" : "year";
   const plan = sub ? `${money(sub.estimated_amount_due ?? 0, sum.currency)} a ${term} · ${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${dayOf(sub.current_period_end)}` : "";
-  let html = `<section class="sec"><h2>Seats<small>${esc(plan)}</small>${blurToggle()}</h2><div class="seats">`;
+  let html = `<section class="sec"><h2>Seats<small>${esc(plan)}</small></h2><div class="seats">`;
   const ask = TEAM_SET[id].askSeat;
   for (const u of seats.users ?? []) {
     const key = u.active_seat_type?.key ?? "";
@@ -4271,11 +4447,11 @@ function seatsSection(id, seats) {
       const bits = [];
       if (to) bits.push(spareSeats(seats, to) > 0 ? `It uses a ${seatName(to)} this team already pays for` : `It adds ${price ?? "a seat"} to this team's bill`);
       if (key && sub) bits.push(`Their ${seatName(key)} stays on the bill until the plan renews on ${dayOf(sub.current_period_end)}, for someone else to use`);
-      html += `<div class="srow ask">${avatar}<span class="st"><b id="seat-q">Give ${esc(name)} a ${seatName(to)}?</b><small>${esc(bits.join(". "))}</small></span><span class="ctl"><button class="btn sm" data-set="seat-no">Cancel</button><button class="btn sm primary" data-set="seat-yes" aria-describedby="seat-q">${to ? `${spareSeats(seats, to) > 0 ? "Give" : "Add"} ${seatName(to)}` : "Change seat"}</button></span></div>`;
+      html += `<div class="srow ask">${avatar}<span class="st"><b id="seat-q">Give ${nameOrVeil(name)} a ${seatName(to)}?</b><small>${esc(bits.join(". "))}</small></span><span class="ctl"><button class="btn sm" data-set="seat-no">Cancel</button><button class="btn sm primary" data-set="seat-yes" aria-describedby="seat-q">${to ? `${spareSeats(seats, to) > 0 ? "Give" : "Add"} ${seatName(to)}` : "Change seat"}</button></span></div>`;
       continue;
     }
     const price = seatPrice(seats, key);
-    html += `<div class="srow">${avatar}<span class="st"><b>${esc(name)}${me ? ` <i style="color:var(--text2);font-style:normal">(you)</i>` : ""}</b><small class="em">${esc(who.email ?? "")}</small></span><span class="ctl"><button class="ib" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? ` · ${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}` : ""}${icon("down")}</button></span></div>`;
+    html += `<div class="srow">${avatar}<span class="st"><b>${nameOrVeil(name)}${me ? ` <i style="color:var(--text2);font-style:normal">(you)</i>` : ""}</b><small>${who.email ? veil(who.email) : ""}</small></span><span class="ctl"><button class="ib" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? ` · ${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}` : ""}${icon("down")}</button></span></div>`;
   }
   return html + `</div></section>`;
 }
@@ -4306,7 +4482,7 @@ function deleteRow(id, s, plan, off) {
   const ok = d.typed.trim() === team.name.trim();
   return `<div class="srow ask"><span class="st"><b id="del-q">Delete ${esc(team.name)}?</b><small>${esc(detail)}. Everyone in it loses access</small></span>
     <div class="sform"><label>Type the team's name to confirm<input data-set-field="typed" value="${esc(d.typed)}" spellcheck="false" autocomplete="off" aria-describedby="del-q"></label>
-    <div class="acts"><button class="btn sm" data-set="delete-cancel">Cancel</button><button class="btn sm danger" data-set="delete-yes"${ok && !d.busy ? "" : " disabled"}>Delete team</button></div></div></div>`;
+    <div class="acts"><button class="btn sm" data-set="delete-cancel">Cancel</button><button class="btn sm danger solid" data-set="delete-yes"${ok && !d.busy ? "" : " disabled"}>Delete team</button></div></div></div>`;
 }
 
 // The toggles: optimistic, with Undo, rolled back if Figma refuses
@@ -4583,19 +4759,23 @@ win.addEventListener("focusout", (e) => {
   if (!e.target.matches?.(".invite input")) return;
   setTimeout(() => document.activeElement?.matches?.(".invite input") || clearSugg());
 });
-win.addEventListener("pointerdown", (e) => {
+suggBox.addEventListener("pointerdown", (e) => {
   const opt = e.target.closest?.("[data-sugg]");
   if (!opt) return;
   // The box keeps focus
   e.preventDefault();
   pickSugg(Number(opt.dataset.sugg));
 });
-win.addEventListener("pointermove", (e) => {
+suggBox.addEventListener("pointerdown", (e) => e.preventDefault());
+suggBox.addEventListener("pointermove", (e) => {
   const i = Number(e.target.closest?.("[data-sugg]")?.dataset.sugg ?? -1);
   if (i < 0 || i === sugg.active) return;
   sugg.active = i;
   drawSugg();
 });
+// Kept under the box as the window's contents scroll
+win.addEventListener("scroll", placeSugg, true);
+addEventListener("resize", placeSugg);
 win.addEventListener("keydown", (e) => {
   if (e.target.matches?.(".invite input")) {
     const n = sugg.items.length;
@@ -4603,7 +4783,7 @@ win.addEventListener("keydown", (e) => {
       e.preventDefault();
       sugg.active = (sugg.active + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
       drawSugg();
-      $(`#sugg-${sugg.active}`, win)?.scrollIntoView({ block: "nearest" });
+      $(`#sugg-${sugg.active}`, suggBox)?.scrollIntoView({ block: "nearest" });
       return;
     }
     if ((e.key === "Enter" || e.key === "Tab") && n && !e.shiftKey) {
@@ -4644,13 +4824,14 @@ win.addEventListener("drop", (e) => {
   file ? setTeamImage(winState.team, file) : toast("Drop an image to use it as the picture");
 });
 addEventListener("pointerdown", (e) => {
-  if (!win.classList.contains("open") || win.contains(e.target) || e.target.closest?.("#toast, .menu, [data-pact=share]")) return;
+  if (!win.classList.contains("open") || win.contains(e.target) || e.target.closest?.("#toast, .menu, #invite-sugg, [data-pact=share]")) return;
   closeWin(false);
 }, true);
 addEventListener("resize", () => win.classList.contains("open") && placeWin());
 
 function go(view) {
   if (!viewName(view)) return;
+  if (state.view.startsWith("s:")) reblur(scroller);
   state.view = view;
   state.sel.clear();
   state.focus = null;
@@ -4840,10 +5021,10 @@ function noteRow(note) {
       : `<div class="pt nt ni" aria-hidden="true">${icon(note.about === "team" ? "users" : note.about === "folder" ? "folder" : "bell")}</div>`;
     const face = note.avatar ? `<img src="${esc(note.avatar)}" alt="" referrerpolicy="no-referrer">` : esc(note.initial);
     // As Figma's bell words it: who, then what happened and where
-    const line = `<b>${esc(note.who)}</b>`;
+    const line = `<b>${nameOrVeil(note.who, false)}</b>`;
     const what = [note.action, note.target].filter(Boolean).join(" · ");
     const where = what ? `<span class="nwhere">${esc(what)}</span>` : "";
-    const label = (note.unread ? "Unread. " : "") + `${note.who} ${note.action} ${note.target}`.trim() + ", " + short(note.at);
+    const label = (note.unread ? "Unread. " : "") + `${EMAIL.test(note.who) ? "Someone" : note.who} ${note.action} ${note.target}`.trim() + ", " + short(note.at);
     const read = `<button class="tool rd" data-note-act="read" tabindex="-1" aria-label="Mark as ${note.unread ? "read" : "unread"}" title="Mark as ${note.unread ? "read" : "unread"} (U)">${icon(note.unread ? "check" : "bell")}</button>`;
     return `<div class="note${note.unread ? " unread" : ""}" role="option" id="nt-${esc(note.id)}" data-note="${esc(note.id)}" tabindex="-1" aria-selected="${state.noteFocus === note.id}" aria-label="${esc(label)}">
       <span class="ud" aria-hidden="true"></span><span class="av lg" aria-hidden="true" style="background:${colorForTeam(note.initial)}">${face}</span>
@@ -4930,6 +5111,7 @@ function openInbox() {
 }
 function closeInbox(restore = true) {
   if (!inboxEl.classList.contains("open")) return;
+  reblur(inboxEl);
   inboxEl.classList.remove("open");
   renderSide();
   if (restore) ($("#bell") ?? bellReturn)?.focus({ preventScroll: true });
@@ -5105,7 +5287,8 @@ function menuRows(items, list, prefix, checks = items.some((item) => item && "ch
     const check = checks ? `<span class="ck">${fig("check")}</span>` : "";
     const swatch = item.swatch ? `<span class="sw" style="background:${item.swatch}"></span>` : "";
     const tail = item.sub ? `<span class="x">${fig("right")}</span>` : item.kbd ? `<span class="k">${esc(item.kbd)}</span>` : item.ext ? `<span class="x">${fig("ext")}</span>` : "";
-    const label = item.detail ? `<span class="two"><span>${esc(item.label)}</span><small>${esc(item.detail)}</small></span>` : esc(item.label);
+    const text = item.labelHtml ?? esc(item.label);
+    const label = item.detail ? `<span class="two"><span>${text}</span><small>${item.detailHtml ?? esc(item.detail)}</small></span>` : text;
     return `<button class="mi${item.detail ? " tall" : ""}" id="${prefix}${i}" tabindex="-1" role="${radio ? "menuitemradio" : "menuitem"}" data-i="${i}" ${radio ? `aria-checked="${!!item.checked}"` : ""} ${item.sub ? 'aria-haspopup="menu" aria-expanded="false"' : ""} ${item.disabled ? 'aria-disabled="true"' : ""}>${check}${swatch}${item.iconHtml ? `<span class="mic">${item.iconHtml}</span>` : ""}${label}${tail}</button>`;
   }).join("");
 }
@@ -5126,6 +5309,7 @@ function showMenu(items, at, options = {}) {
 function closeMenu() {
   closeSub();
   if (!menu.classList.contains("open")) return;
+  reblur(menu);
   menu.classList.remove("open");
   menu.innerHTML = "";
   menuKeys = null;
@@ -5218,6 +5402,7 @@ function openSub(i, focus = false) {
 }
 function closeSub() {
   if (subOwner < 0) return;
+  reblur(submenu);
   $(`#mi${subOwner}`, menu)?.setAttribute("aria-expanded", "false");
   submenu.classList.remove("open");
   submenu.innerHTML = "";
@@ -5403,8 +5588,8 @@ function applyTheme() {
   const accent = (s) => vars[`--ligma-accent-${s}`] ?? LIGMA_BLUE[mode][step(s)];
   const white = vars["--ramp-white-1000"] ?? "#ffffff";
   const tokens = dark
-    ? { bg: grey(800), bg2: grey(900), bg3: grey(700), line: grey(600), hover: grey(700), text: "#ffffff", text2: "rgba(255, 255, 255, 0.7)", text3: "rgba(255, 255, 255, 0.4)", canvas: grey(900), accent: accent(500), "accent-text": accent(300), sel: `color-mix(in srgb, ${accent(500)} 24%, ${grey(800)})`, "sel-strong": accent(700), menu: grey(900), "menu-line": grey(700), toast: grey(1000), shadow: "0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4)" }
-    : { bg: white, bg2: grey(100), bg3: grey(200), line: grey(200), hover: grey(100), text: grey(900), text2: `color-mix(in srgb, ${grey(500)} 84%, ${grey(900)})`, text3: grey(400), canvas: grey(100), accent: accent(500), "accent-text": accent(700), sel: accent(200), "sel-strong": accent(300), menu: white, "menu-line": grey(200), toast: grey(900), shadow: "0 2px 5px rgba(0, 0, 0, 0.08), 0 10px 24px rgba(0, 0, 0, 0.12)" };
+    ? { bg: grey(800), bg2: grey(900), bg3: grey(700), "fig-bg2": grey(700), "fig-bg3": grey(600), line: grey(600), hover: grey(700), text: "#ffffff", text2: "rgba(255, 255, 255, 0.7)", text3: "rgba(255, 255, 255, 0.4)", canvas: grey(900), accent: accent(500), "accent-text": accent(300), sel: `color-mix(in srgb, ${accent(500)} 24%, ${grey(800)})`, "sel-strong": accent(700), menu: grey(900), "menu-line": grey(700), toast: grey(1000), shadow: "0 2px 5px rgba(0, 0, 0, 0.3), 0 10px 24px rgba(0, 0, 0, 0.4)" }
+    : { bg: white, bg2: grey(100), bg3: grey(200), "fig-bg2": grey(100), "fig-bg3": grey(200), line: grey(200), hover: grey(100), text: grey(900), text2: `color-mix(in srgb, ${grey(500)} 84%, ${grey(900)})`, text3: grey(400), canvas: grey(100), accent: accent(500), "accent-text": accent(700), sel: accent(200), "sel-strong": accent(300), menu: white, "menu-line": grey(200), toast: grey(900), shadow: "0 2px 5px rgba(0, 0, 0, 0.08), 0 10px 24px rgba(0, 0, 0, 0.12)" };
   for (const [name, value] of Object.entries(tokens)) root.style.setProperty("--" + name, value);
 }
 darkQuery.addEventListener("change", applyTheme);
@@ -5422,37 +5607,87 @@ function signal(action, params = {}) {
   setTimeout(() => frame.remove(), 1000);
 }
 
+// Email and IP addresses are blurred until clicked, and blurred again when
+// the menu or window showing them closes. Inside a menu item or a row that
+// opens something, a plain span (focusable: false) takes the click first.
+// While blurred, the page holds a random stand-in of the same shape, not
+// the address: it's kept here, under an id that says nothing about it
+const revealed = new Set();
+const veilIds = new Map();
+const veiled = new Map();
+const EMAIL = /^[^\s@]+@[^\s@]+$/;
+const veilLabel = (noun, text, shown) => (shown ? `${noun} ${text}, click to hide` : `${noun} hidden, click to show`);
+function scramble(text) {
+  const pick = (chars) => chars[crypto.getRandomValues(new Uint32Array(1))[0] % chars.length];
+  const lower = "abcdefghijklmnopqrstuvwxyz";
+  return [...text].map((c) => (/\d/.test(c) ? pick("0123456789") : /[A-Z]/.test(c) ? pick(lower).toUpperCase() : /\p{L}/u.test(c) ? pick(lower) : c)).join("");
+}
+function veil(text, { key = "email:" + text, noun = "Email address", focusable = true } = {}) {
+  let id = veilIds.get(key);
+  if (!id) veilIds.set(key, (id = "v" + (veilIds.size + 1)));
+  veiled.set(id, text);
+  const shown = revealed.has(id);
+  const attrs = `class="veil" data-veil="${id}" data-noun="${esc(noun)}" aria-pressed="${shown}" aria-label="${esc(veilLabel(noun, text, shown))}" title="${shown ? "Hide" : "Show"} ${esc(noun.toLowerCase())}"`;
+  const inner = `<span aria-hidden="true">${esc(shown ? text : scramble(text))}</span>`;
+  return focusable ? `<button type="button" ${attrs}>${inner}</button>` : `<span role="button" ${attrs}>${inner}</span>`;
+}
+// A name, or an email address standing in for one
+const nameOrVeil = (text, focusable = true) => (EMAIL.test(text ?? "") ? veil(text, { focusable }) : esc(text ?? ""));
+function reblur(root) {
+  for (const el of root.querySelectorAll(".veil[aria-pressed=true]")) revealed.delete(el.dataset.veil);
+}
+// Ahead of the menu, inbox and window handlers, so the click shows the
+// address and does nothing else
+addEventListener("click", (e) => {
+  const el = e.target.closest?.(".veil");
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const id = el.dataset.veil;
+  const text = veiled.get(id) ?? "";
+  const shown = !revealed.has(id);
+  shown ? revealed.add(id) : revealed.delete(id);
+  for (const v of document.querySelectorAll(`.veil[data-veil="${CSS.escape(id)}"]`)) {
+    v.firstElementChild.textContent = shown ? text : scramble(text);
+    v.setAttribute("aria-pressed", shown);
+    v.setAttribute("aria-label", veilLabel(v.dataset.noun, text, shown));
+    v.title = `${shown ? "Hide" : "Show"} ${v.dataset.noun.toLowerCase()}`;
+  }
+}, true);
+
 const avatar = (user, cls = "") =>
   `<span class="av ${cls}" style="background:${colorForTeam(user.id)}">${user.img_url ? `<img src="${esc(user.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((user.name || user.email || "?")[0])}</span>`;
 
+// Light, dark or the system's: Ligma's color scheme, for Figma and Ligma alike
+const currentScheme = () => (LIVE ? Live.appearance?.scheme ?? "system" : pref.mode);
+function setScheme(value) {
+  if (!LIVE) {
+    pref.mode = value;
+    return applyTheme();
+  }
+  Live.appearance = { ...Live.appearance, scheme: value };
+  signal("scheme", { value });
+}
+
+const SAMPLE_USERS = [{ id: "me", name: "Chris", email: "chris@example.com", community_profile_handle: "chris" }, { id: "work", name: "Chris (work)", email: "chris@northwind.example" }];
+
 // Figma's account menu, as its home page has it. Theme is Ligma's color
-// scheme, for Figma and Ligma alike; Settings, Ligma's. Figma's own
-// settings open only as a dialog of its file browser, with no link
+// scheme; Settings, the account's own (see Account settings below)
 function accountMenu(at) {
-  const users = LIVE ? Live.users : [{ id: "me", name: "Chris", email: "chris@example.com", community_profile_handle: "chris" }, { id: "work", name: "Chris (work)", email: "chris@northwind.example" }];
+  const users = LIVE ? Live.users : SAMPLE_USERS;
   const me = users.find((u) => u.id === (LIVE ? Live.uid : "me"));
   if (!me) return;
-  const scheme = LIVE ? Live.appearance?.scheme ?? "system" : pref.mode;
-  const setScheme = (value) => {
-    if (!LIVE) {
-      pref.mode = value;
-      return applyTheme();
-    }
-    Live.appearance = { ...Live.appearance, scheme: value };
-    signal("scheme", { value });
-  };
+  const scheme = currentScheme();
   const open = (url) => window.open(url, "_blank");
-  const logOutItem = users.length < 2
-    ? { label: "Log out", act: () => logOut(me) }
-    : { label: "Log out", sub: [...users.map((u) => ({ label: u.email ?? u.name, act: () => logOut(u) })), null, { label: "Log out of all accounts", act: () => logOut(null) }] };
   // Figma's order, with its icons where it has them. The card is the
-  // account you're on; the others are one click away, not in a submenu
+  // account you're on; the others are one click away, not in a submenu,
+  // by name only
   const others = users.filter((u) => u.id !== me.id);
   showMenu([
-    { html: `<div class="acard" aria-hidden="true">${avatar(me)}<b>${esc(me.name ?? me.email)}</b>${me.email ? `<span>${esc(me.email)}</span>` : ""}</div>` },
+    { html: `<div class="acard">${avatar(me)}<b>${nameOrVeil(me.name ?? me.email, false)}</b>${me.email ? `<span>${veil(me.email, { focusable: false })}</span>` : ""}</div>` },
     null,
     ...(others.length
-      ? [{ header: "Switch account" }, ...others.map((u) => ({ label: u.name ?? u.email, detail: u.name ? u.email : "", iconHtml: avatar(u, "sm"), act: () => LIVE && switchAccount(u.id) }))]
+      ? [{ header: "Switch account" }, ...others.map((u) => ({ label: u.name || u.handle || "Figma account", iconHtml: avatar(u, "sm"), act: () => LIVE && switchAccount(u.id) }))]
       : []),
     // Figma allows 10 accounts at once
     { label: "Add account", iconHtml: fig("plus"), disabled: users.length >= 10, act: () => open("https://www.figma.com/login?cont=") },
@@ -5465,22 +5700,23 @@ function accountMenu(at) {
       label: "Change theme",
       sub: [["light", "Light"], ["dark", "Dark"], ["system", "System theme"]].map(([value, label]) => ({ label, checked: scheme === value, act: () => setScheme(value) })),
     },
-    { label: "Settings", act: () => (LIVE ? signal("settings") : toast("Opens Ligma's settings")) },
+    { label: "Settings", act: () => openSettings() },
     null,
-    logOutItem,
+    // Out of the account you're on; Home moves to another signed in, if any
+    { label: "Log out", act: () => logOut(me) },
   ], at, { account: true });
 }
 
 // Figma's logout: one account, or every one (user null). What's left of
 // the session loads again, or the sign-in page if nothing is
 async function logOut(user) {
-  if (!LIVE) return toast(`Logs out of ${user ? user.email : "every account"}`);
+  if (!LIVE) return toast(`Logs out of ${user ? user.name ?? "that account" : "every account"}`);
   try {
     await api(user ? `/api/session/logout/${user.id}` : "/api/session/logout", { method: "POST", user: null });
   } catch (error) {
     return toast(`Couldn't log out: ${error.message}`);
   }
-  toast(user ? `Logged out of ${user.email ?? user.name}` : "Logged out of every account");
+  toast(user ? `Logged out of ${user.name ?? "that account"}` : "Logged out of every account");
   // What this page kept of the account goes too
   for (const u of user ? [user] : Live.users) for (const key of ["cache", "trash"]) store.drop(`${key}:${u.id}`);
   if (user && user.id !== Live.uid) {
@@ -5491,6 +5727,839 @@ async function logOut(user) {
   const next = user ? Live.users.find((u) => u.id !== user.id) : null;
   await switchAccount(next?.id ?? null);
 }
+
+/* Account settings: Figma's, in a window over the page, sent to Figma
+   through the calls its own settings dialog makes. The few that need
+   Figma's own checks (a new email, two-factor, deleting the account or the
+   public profile) open its dialog in a tab, on the right section
+   (new_home.rs, SETTINGS_JS) */
+
+const acs = $("#acs");
+const acsNav = $("#acs-nav");
+const acsBody = $("#acs-body");
+const acsPhoto = $("#acs-photo");
+const ACS_TABS = [
+  { id: "account", label: "Account", icon: "users" },
+  { id: "community", label: "Community", icon: "community" },
+  { id: "notifications", label: "Notifications", icon: "bell" },
+  { id: "security", label: "Security", icon: "lock" },
+];
+// What Figma stores for each choice of its Change role dialog
+const ROLES = [
+  ["student", "Student"],
+  ["educator", "Educator"],
+  ["developer", "Software development"],
+  ["researcher", "Research"],
+  ["designer", "Design"],
+  ["marketer", "Marketing"],
+  ["product-manager", "Product management"],
+  ["ux-writer", "UX Writing"],
+  ["data", "Data analytics"],
+  ["something_else", "Other"],
+];
+// Older words for the same roles, as Figma reads them
+const ROLE_ALIASES = { design: "designer", "software-development": "developer", engineer: "developer", "product-management": "product-manager", "product_manager": "product-manager", marketing: "marketer", research: "researcher", "user-research": "researcher", "ux-researcher": "researcher", ux_writing: "ux-writer", data_analytics: "data", other: "something_else" };
+const LANGUAGES = [
+  ["en", "English"],
+  ["ja", "日本語"],
+  ["fr", "Français"],
+  ["de", "Deutsch"],
+  ["es-es", "Español (España)"],
+  ["es-la", "Español (Latinoamérica)"],
+  ["ko-kr", "한국어"],
+  ["pt-br", "Português (Brasil)"],
+];
+const EXPIRIES = [[86400, "1 day"], [604800, "7 days"], [2592000, "30 days"], [7776000, "90 days"]];
+// Personal access token scopes, in the groups Figma's Generate new token shows
+const TOKEN_SCOPES = [
+  ["Users", [["current_user:read", "Read the current user's name, email, and profile image"]]],
+  ["Files", [
+    ["file_comments:read", "Read comments in accessible files"],
+    ["file_comments:write", "Create, modify, and delete comments in accessible files"],
+    ["file_content:read", "Read the contents of and render images from files"],
+    ["file_metadata:read", "Read metadata of files"],
+    ["file_versions:read", "Read version history of files"],
+  ]],
+  ["Design systems", [
+    ["library_assets:read", "Read data about individual components and styles"],
+    ["library_content:read", "Read components and styles published from individual files"],
+    ["team_library_content:read", "Read components and styles published in team libraries"],
+  ]],
+  ["Development", [
+    ["file_dev_resources:read", "Read and list dev resources in accessible files"],
+    ["file_dev_resources:write", "Create and modify dev resources in accessible files"],
+    ["private_sandbox:connect", "Register private sandboxes and connect them to Figma"],
+  ]],
+  ["Folders", [["folders:read", "Read team folder structure"]]],
+  ["Webhooks", [["webhooks:read", "Read and list webhooks"], ["webhooks:write", "Create, modify, and delete webhooks"]]],
+];
+const NOTIFICATION_POLICIES = "FileComments,InvitesAndRequests,CommunityComments,CommunityWeeklySummary,WorkspaceActivity";
+
+const acsState = {
+  tab: "account",
+  user: null,
+  error: null,
+  sessions: null,
+  sessionsError: null,
+  prefs: null,
+  prefsError: null,
+  // The row being changed: name, role, language, handle, password or token
+  edit: null,
+  // A row asking before it signs out or revokes: "session:<id>" and so on
+  confirm: null,
+  busy: new Set(),
+  token: null,
+  photoBusy: false,
+  // Focus goes to a change's first field once, as it opens
+  focusEdit: false,
+};
+
+// Sample account, for the page opened from disk
+const SAMPLE_ACCOUNT = () => ({
+  id: "me",
+  name: "Chris",
+  email: "chris@example.com",
+  img_url: null,
+  profile: { job_title: "designer" },
+  locale: "en",
+  community_profile_id: "p1",
+  community_profile_handle: "chris",
+  two_factor_enabled: false,
+  google_sso_only: false,
+  dev_tokens: [{ id: "t1", description: "Token export script", created_at: new Date(Date.now() - 12 * DAY).toISOString(), expires_at: new Date(Date.now() + 18 * DAY).toISOString(), scopes: ["file_content:read", "file_metadata:read"] }],
+  oauth_tokens: [{ client_id: "c1", name: "Figma for Chrome", website: "https://www.figma.com", granted_at: new Date(Date.now() - 29 * DAY).toISOString() }],
+});
+const SAMPLE_SESSIONS = () => [
+  { id: "s1", is_current: true, os: MAC ? "macOS" : "Windows", browser: "Ligma", type: "App", last_city: "Cambridge", last_country: "United Kingdom", last_ip: "92.22.30.62", last_accessed: new Date().toISOString(), created_at: new Date(Date.now() - 20 * DAY).toISOString() },
+  { id: "s2", os: "macOS", browser: "Figma Desktop", type: "App", last_city: "Cambridge", last_country: "United Kingdom", last_ip: "92.22.30.62", last_accessed: new Date(Date.now() - 2 * HOUR).toISOString(), created_at: new Date(Date.now() - 180 * DAY).toISOString() },
+  { id: "s3", os: null, browser: "Figma Mobile", type: "App", last_city: "London", last_country: "United Kingdom", last_ip: "78.149.68.91", last_accessed: new Date(Date.now() - 31 * DAY).toISOString(), created_at: new Date(Date.now() - 40 * DAY).toISOString() },
+];
+const SAMPLE_PREFS = () => ({
+  channelOn: true,
+  singleOptionPolicies: { CommunityWeeklySummary: { type: "CommunityWeeklySummary", value: true, optionText: "Activity on my Community resources · Weekly", titleText: "Activity digests" } },
+  multiOptionPolicies: {
+    FileComments: { type: "FileComments", value: "all", titleText: "File comments", allValuesToTextArr: [["all", "All comments, mentions, and replies"], ["mentions_and_replies_only", "Only mentions and replies"], ["none", "None"]] },
+    InvitesAndRequests: { type: "InvitesAndRequests", value: "all", titleText: "Invites and requests", allValuesToTextArr: [["all", "All types of invites and requests"], ["actionables_only", "Only invites and requests that need my response"], ["none", "None"]] },
+    CommunityComments: { type: "CommunityComments", value: "mentions_and_replies_only", titleText: "Community comments", allValuesToTextArr: [["all", "All comments on my published resources"], ["mentions_and_replies_only", "Only mentions and replies"], ["none", "None"]] },
+  },
+});
+
+const acsUid = () => (LIVE ? Live.uid : "me");
+const longDate = (t) => new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+function openSettings(tab = "account") {
+  closeMenu();
+  closeInbox(false);
+  if (pal.open) pal.close();
+  if (LIVE && !Live.uid) return;
+  Object.assign(acsState, { tab, edit: null, confirm: null, token: null });
+  if (!acs.open) {
+    // The menus and the toast are drawn above everything else in the
+    // window, which leaves the page behind it out of reach
+    acs.append(menu, submenu, toastEl);
+    acs.showModal();
+  }
+  loadAccount();
+  drawAcs();
+  $(`[data-acs-tab="${tab}"]`, acsNav)?.focus();
+}
+function closeSettings() {
+  if (acs.open) acs.close();
+}
+acs.addEventListener("close", () => {
+  closeMenu();
+  document.body.append(menu, submenu, toastEl);
+  Object.assign(acsState, { edit: null, confirm: null, token: null });
+  reblur(acs);
+});
+// Esc steps back out of a change before it closes the window
+acs.addEventListener("cancel", (e) => {
+  if (menu.classList.contains("open")) {
+    e.preventDefault();
+    return closeMenu();
+  }
+  if (acsState.edit || acsState.confirm || acsState.token) {
+    e.preventDefault();
+    acsState.edit = acsState.confirm = acsState.token = null;
+    drawAcs();
+    acsBody.focus({ preventScroll: true });
+  }
+});
+
+async function loadAccount() {
+  const uid = acsUid();
+  acsState.error = null;
+  const fresh = (acsState.user?.id === uid);
+  if (!fresh) acsState.user = acsState.sessions = acsState.prefs = null;
+  if (!LIVE) {
+    acsState.user ??= SAMPLE_ACCOUNT();
+    acsState.sessions ??= SAMPLE_SESSIONS();
+    acsState.prefs ??= SAMPLE_PREFS();
+    return drawAcs();
+  }
+  const tasks = [
+    api("/api/user").then((user) => (acsState.user = user), (error) => (acsState.error = error.message)),
+    api("/api/session/sessions").then((meta) => ((acsState.sessions = meta.sessions ?? []), (acsState.sessionsError = null)), (error) => (acsState.sessionsError = error.message)),
+    api(`/api/user_communication_preference?channel_type=email&policy_types_csv=${encodeURIComponent(NOTIFICATION_POLICIES)}`).then((prefs) => ((acsState.prefs = prefs), (acsState.prefsError = null)), (error) => (acsState.prefsError = error.message)),
+  ];
+  await Promise.all(tasks);
+  if (acsUid() === uid && acs.open) drawAcs();
+}
+
+// The account as it is now, everywhere the page shows it
+function applyUser(meta) {
+  if (!meta) return;
+  acsState.user = { ...acsState.user, ...meta, profile: { ...acsState.user?.profile, ...meta.profile } };
+  if (!LIVE) return;
+  const u = Live.users.find((user) => user.id === Live.uid);
+  if (!u) return;
+  for (const key of ["name", "email", "img_url", "handle", "community_profile_handle"]) if (key in meta) u[key] = meta[key];
+  saveCache();
+  renderSide();
+}
+
+/* Drawing */
+
+function drawAcs() {
+  if (!acs.open) return;
+  const u = acsState.user;
+  $("#acs-who").innerHTML = u?.email ? veil(u.email) : "";
+  acsNav.innerHTML = ACS_TABS.map((t) => `<button class="nav" role="tab" id="acs-t-${t.id}" data-acs-tab="${t.id}" aria-selected="${t.id === acsState.tab}" aria-controls="acs-body" tabindex="${t.id === acsState.tab ? 0 : -1}">${FIG[t.icon] ? fig(t.icon) : icon(t.icon)}<span class="lbl">${t.label}</span></button>`).join("");
+  acsBody.setAttribute("aria-labelledby", `acs-t-${acsState.tab}`);
+  const scroll = acsBody.scrollTop;
+  // What's been typed into the open form stays through a redraw
+  const kept = new Map($$("form [name]", acsBody).filter((i) => i.type !== "checkbox").map((i) => [i.name, i.value]));
+  const scopes = new Set($$("form [name=scope]:checked", acsBody).map((i) => i.value));
+  const expiry = $("[data-acs=expiry][aria-pressed=true]", acsBody)?.dataset.value;
+  const focused = acsBody.contains(document.activeElement) ? document.activeElement.name : null;
+  if (!u && acsState.error) acsBody.innerHTML = errorBlock("Couldn't load your account", acsState.error);
+  else if (!u) acsBody.innerHTML = skeleton(5);
+  else acsBody.innerHTML = { account: accountTab, community: communityTab, notifications: notificationsTab, security: securityTab }[acsState.tab](u);
+  for (const input of $$("form [name]", acsBody)) {
+    if (input.name === "scope") input.checked = scopes.has(input.value);
+    else if (kept.has(input.name)) input.value = kept.get(input.name);
+  }
+  if (expiry) {
+    for (const b of $$("[data-acs=expiry]", acsBody)) {
+      b.setAttribute("aria-pressed", b.dataset.value === expiry);
+      b.setAttribute("aria-checked", b.dataset.value === expiry);
+    }
+  }
+  acsBody.scrollTop = scroll;
+  if (acsState.focusEdit) {
+    acsState.focusEdit = false;
+    $("[data-autofocus]", acsBody)?.focus();
+  } else if (focused) $(`[name="${focused}"]`, acsBody)?.focus({ preventScroll: true });
+}
+const skeleton = (n) => `<div aria-busy="true" aria-label="Loading">${Array.from({ length: n }, () => `<div class="srow sk"><div class="sl"><div class="bar"></div><div class="bar"></div></div></div>`).join("")}</div>`;
+const errorBlock = (title, message) => `<div class="aerr" role="alert"><b>${esc(title)}</b><span>${esc(message)}</span><button class="btn sm" data-acs="retry">Try again</button></div>`;
+const busyCls = (key) => (acsState.busy.has(key) ? " busy" : "");
+const extIcon = icon("ext");
+const setRow = (label, value, actions = "", cls = "") => `<div class="srow${cls ? " " + cls : ""}"><div class="sl"><small>${label}</small>${value}</div>${actions ? `<div class="sact">${actions}</div>` : ""}</div>`;
+// A row that says what something does, under its name
+const infoRow = (title, text, actions = "", cls = "") => `<div class="srow${cls ? " " + cls : ""}"><div class="sl"><span>${esc(title)}</span><em>${esc(text)}</em></div>${actions ? `<div class="sact">${actions}</div>` : ""}</div>`;
+// Buttons to Figma's own dialog say so with the arrow out
+const figmaBtn = (tab, label, cls = "") => `<button class="btn sm${cls ? " " + cls : ""}" data-acs="figma" data-figma-tab="${tab}">${esc(label)}${extIcon}</button>`;
+
+function roleOf(u) {
+  const raw = u.profile?.job_title ?? "";
+  const value = ROLES.some(([v]) => v === raw) ? raw : ROLE_ALIASES[raw.toLowerCase()] ?? null;
+  return { value, label: value ? ROLES.find(([v]) => v === value)[1] : raw || "Not set" };
+}
+function languageOf(u) {
+  return LANGUAGES.find(([v]) => v === u.locale)?.[1] ?? u.locale ?? "English";
+}
+
+function accountTab(u) {
+  const e = acsState.edit;
+  const role = roleOf(u);
+  const name = e === "name"
+    ? `<div class="srow"><form class="form" data-form="name"><label>Name<input class="field" name="name" maxlength="100" value="${esc(u.name ?? "")}" autocomplete="name" spellcheck="false" data-autofocus></label>${formEnd("name", "Save")}</form></div>`
+    : setRow("Name", `<span>${esc(u.name || "Not set")}</span>`, `<button class="btn sm" data-acs="edit" data-edit="name">Change name</button>`);
+  const roleRow = e === "role-other"
+    ? `<div class="srow"><form class="form" data-form="role-other"><label>What kind of work do you do?<input class="field" name="role" maxlength="60" value="${esc(role.value ? "" : u.profile?.job_title ?? "")}" placeholder="Your role" spellcheck="false" data-autofocus></label>${formEnd("role-other", "Save")}</form></div>`
+    : setRow("Role", `<span>${esc(role.label)}</span>`, `<button class="btn sm${busyCls("role")}" data-acs="role" aria-haspopup="menu">Change role</button>`);
+  const scheme = currentScheme();
+  return `
+    <div class="aprof">
+      <div class="pw2${acsState.photoBusy ? " busy" : ""}">${avatar(u)}</div>
+      <div class="id"><b>${nameOrVeil(u.name || u.email)}</b><span>${u.email ? veil(u.email) : ""}</span></div>
+      <button class="btn sm${acsState.photoBusy ? " busy" : ""}" data-acs="photo">Change photo</button>
+    </div>
+    ${name}
+    ${setRow("Email", `<span>${u.email ? veil(u.email) : ""}</span>${u.email_validated_at ? "" : `<em>Not verified yet</em>`}`, `${u.email_validated_at ? "" : `<button class="btn sm quiet${busyCls("verify")}" data-acs="verify">Send link again</button>`}${figmaBtn("account", "Change email")}`)}
+    ${roleRow}
+    ${setRow("Language", `<span>${esc(languageOf(u))}</span><em>Figma's own pages, files and emails. Home stays in English</em>`, `<button class="btn sm${busyCls("language")}" data-acs="language" aria-haspopup="menu">Change language</button>`)}
+    ${setRow("Theme", `<span>${{ light: "Light", dark: "Dark", system: "System theme" }[scheme]}</span><em>For Figma and Ligma. Colors are in <a class="slink" data-acs="ligma">Ligma's settings</a></em>`, `<div class="seg" role="group" aria-label="Theme">${[["light", "Light"], ["dark", "Dark"], ["system", "System"]].map(([v, l]) => `<button data-acs="scheme" data-value="${v}" aria-pressed="${scheme === v}">${l}</button>`).join("")}</div>`)}
+    ${infoRow("Delete account", "Your files, drafts and Community profile go with it. Figma asks you to confirm in its own settings", figmaBtn("account", "Delete in Figma", "danger"), "apart")}`;
+}
+
+function communityTab(u) {
+  const handle = u.community_profile_handle;
+  if (!handle || !u.community_profile_id) {
+    return `<h3>Community profile</h3><p class="lede">You don't have a public profile yet. One lets you publish files, plugins and widgets, follow people and save what you like</p>${setRow("Profile", `<span>None yet</span>`, `<button class="btn sm" data-acs="open" data-url="https://www.figma.com/community">Go to Community${extIcon}</button>`)}`;
+  }
+  const edit = acsState.edit === "handle"
+    ? `<div class="srow"><form class="form" data-form="handle"><label>Unique handle<div class="prefix"><i>@</i><input class="field" name="handle" maxlength="30" value="${esc(handle)}" autocomplete="off" spellcheck="false" data-autofocus></div></label><div class="msg" id="acs-handle-msg" aria-live="polite">Your profile moves to figma.com/@ and the new handle</div>${formEnd("handle", "Save")}</form></div>`
+    : setRow("Unique handle", `<span>@${esc(handle)}</span>`, `<button class="btn sm" data-acs="edit" data-edit="handle">Change handle</button>`);
+  return `
+    <h3>Community profile</h3>
+    ${setRow("Display name", `<span>${esc(u.name ?? "")}</span><em>Your account's name, from Account</em>`)}
+    ${edit}
+    ${setRow("Public profile", `<span>figma.com/@${esc(handle)}</span>`, `<button class="btn sm" data-acs="open" data-url="https://www.figma.com/@${esc(handle)}">View profile${extIcon}</button>`)}
+    <h3>Connections</h3>
+    ${infoRow("Profile connections", "Link more Figma accounts to this profile, so you publish and get notified without switching", figmaBtn("community", "Manage in Figma"))}
+    ${infoRow("Delete public profile", "Your published resources are removed from Community", figmaBtn("community", "Delete in Figma", "danger"))}`;
+}
+
+function notificationsTab() {
+  const p = acsState.prefs;
+  if (!p && acsState.prefsError) return errorBlock("Couldn't load your notification settings", acsState.prefsError);
+  if (!p) return skeleton(4);
+  const on = !!p.channelOn;
+  const multi = Object.values(p.multiOptionPolicies ?? {});
+  const single = Object.values(p.singleOptionPolicies ?? {});
+  const options = (pol) => (pol.allValuesToTextArr ?? Object.entries(pol.allValuesToText ?? {}));
+  return `
+    <h3>Email</h3>
+    <div class="srow"><div class="sl"><span>Send notifications by email</span><em>You'll still get emails about your account and billing</em></div><button class="sw" role="switch" aria-checked="${on}" aria-label="Send notifications by email" data-acs="channel"${acsState.busy.has("channel") ? " disabled" : ""}></button></div>
+    ${multi.map((pol) => `<div class="pol" role="radiogroup" aria-labelledby="pol-${esc(pol.type)}"><b id="pol-${esc(pol.type)}">${esc(pol.titleText ?? pol.type)}</b><div class="opts"${on ? "" : ' aria-disabled="true"'}>${options(pol).map(([value, text]) => `<label class="opt"><input type="radio" name="pol-${esc(pol.type)}" data-policy="${esc(pol.type)}" value="${esc(value)}"${pol.value === value ? " checked" : ""}${on ? "" : " disabled"}>${esc(text)}</label>`).join("")}</div></div>`).join("")}
+    ${single.map((pol) => `<div class="pol"><b>${esc(pol.titleText ?? pol.type)}</b><div class="opts"${on ? "" : ' aria-disabled="true"'}><label class="opt"><input type="checkbox" data-policy="${esc(pol.type)}" data-single="1"${pol.value ? " checked" : ""}${on ? "" : " disabled"}>${esc(pol.optionText ?? pol.type)}</label></div></div>`).join("")}
+    <h3>In Ligma</h3>
+    ${infoRow("Inbox", "The bell at the top of the sidebar has every comment, mention, invite and request as it arrives", `<button class="btn sm" data-acs="inbox">Open the inbox</button>`)}`;
+}
+
+function securityTab(u) {
+  const e = acsState.edit;
+  let password;
+  if (u.google_sso_only || u.saml_sso_only) password = setRow("Password", `<span>You sign in with ${u.saml_sso_only ? "your organization's single sign-on" : "Google"}, so there's no password</span>`);
+  else if (e === "password") {
+    password = `<div class="srow"><form class="form" data-form="password">
+      <label>Current password<input class="field" type="password" name="old" autocomplete="current-password" data-autofocus></label>
+      <label>New password<input class="field" type="password" name="new" autocomplete="new-password" minlength="8"></label>
+      <div class="msg" id="acs-pw-msg" aria-live="polite">At least 8 characters</div>
+      <div class="end"><button type="button" class="slink" data-acs="forgot">Forgot your password?</button><span class="grow"></span><button type="button" class="btn sm" data-acs="cancel">Cancel</button><button class="btn sm primary${busyCls("password")}">Change password</button></div>
+    </form></div>`;
+  } else password = setRow("Password", `<span>••••••••</span>`, `<button class="btn sm" data-acs="edit" data-edit="password">Change password</button>`);
+  const twoFactor = setRow("Two-factor authentication", `<span>${u.two_factor_enabled ? "On" : "Off"}</span><em>${u.two_factor_enabled ? "A code from your authenticator app or phone, as well as your password" : "Ask for a code from an app or your phone as well as your password"}</em>`, figmaBtn("security", u.two_factor_enabled ? "Manage in Figma" : "Set up in Figma"));
+  return `
+    <h3>Sign in</h3>
+    ${password}
+    ${twoFactor}
+    ${sessionsBlock()}
+    ${tokensBlock(u)}
+    ${appsBlock(u)}`;
+}
+
+function sessionsBlock() {
+  const list = acsState.sessions;
+  const others = (list ?? []).filter((s) => !s.is_current);
+  const head = `<h3>Where you're signed in${others.length > 1 ? `<button class="btn sm quiet${busyCls("sessions")}" data-acs="end-others">Sign out everywhere else</button>` : ""}</h3><p class="lede">Sign out of any session you don't recognize</p>`;
+  if (!list && acsState.sessionsError) return head + errorBlock("Couldn't load your sessions", acsState.sessionsError);
+  if (!list) return head + skeleton(3);
+  const sorted = [...list].sort((a, b) => (b.is_current - a.is_current) || Date.parse(b.last_accessed ?? 0) - Date.parse(a.last_accessed ?? 0));
+  return head + sorted.map((s) => {
+    const what = [s.os, s.browser].filter(Boolean).join(" · ") || "Unknown device";
+    const place = [s.last_city, s.last_country].filter(Boolean).join(", ");
+    const ip = s.last_ip ? veil(s.last_ip, { key: `ip:${s.id}`, noun: "IP address" }) : "";
+    const seen = s.is_current ? "Now" : s.last_accessed ? `Active ${when(Date.parse(s.last_accessed))}` : "";
+    const key = `session:${s.id}`;
+    const acts = s.is_current
+      ? `<span class="ttag on">This device</span>`
+      : acsState.confirm === key
+        ? `<button class="btn sm" data-acs="unconfirm">Cancel</button><button class="btn sm danger solid${busyCls(key)}" data-acs="end-session" data-id="${esc(s.id)}">Sign out</button>`
+        : `<button class="btn sm" data-acs="confirm" data-key="${esc(key)}">Sign out</button>`;
+    return `<div class="srow"><div class="sl"><span>${esc(what)}</span><small>${[esc(place), ip, esc(seen)].filter(Boolean).join(" · ")}</small></div><div class="sact">${acts}</div></div>`;
+  }).join("");
+}
+
+function tokensBlock(u) {
+  const tokens = u.dev_tokens ?? [];
+  const generating = acsState.edit === "token";
+  let html = `<h3>Personal access tokens${generating || acsState.token ? "" : `<button class="btn sm" data-acs="edit" data-edit="token">${icon("plus")}Generate new token</button>`}</h3><p class="lede">A token reads and changes your files through Figma's API as you. Give it only to tools you trust</p>`;
+  if (acsState.token) {
+    html += `<div class="srow top"><div class="sl" style="gap:8px"><small>Copy your new token now. Figma won't show it again</small><div class="secret"><code>${esc(acsState.token)}</code><button class="btn sm primary" data-acs="copy-token">Copy</button></div></div><div class="sact"><button class="btn sm" data-acs="token-done">Done</button></div></div>`;
+  }
+  if (generating) {
+    html += `<div class="srow"><form class="form" data-form="token">
+      <label>Token name<input class="field" name="desc" maxlength="100" placeholder="What it's for" autocomplete="off" spellcheck="false" data-autofocus></label>
+      <div><div class="sl"><small>Expires</small></div><div class="seg" role="radiogroup" aria-label="Expires" style="display:inline-flex;margin-top:4px">${EXPIRIES.map(([s, l], i) => `<button type="button" role="radio" data-acs="expiry" data-value="${s}" aria-pressed="${i === 0}" aria-checked="${i === 0}">${l}</button>`).join("")}</div></div>
+      <div class="scopes-g">${TOKEN_SCOPES.map(([group, scopes]) => `<h4>${group}</h4>${scopes.map(([scope, text]) => `<label class="scope"><input type="checkbox" name="scope" value="${scope}"><code>${scope}</code><small>${esc(text)}</small></label>`).join("")}`).join("")}</div>
+      <div class="msg" id="acs-token-msg" aria-live="polite"></div>
+      ${formEnd("token", "Generate token")}
+    </form></div>`;
+  }
+  if (!tokens.length && !generating && !acsState.token) return html + `<div class="aempty">No tokens</div>`;
+  return html + tokens.map((t) => {
+    const key = `token:${t.id}`;
+    const expires = t.expires_at ? (Date.parse(t.expires_at) < Date.now() ? `Expired ${longDate(t.expires_at)}` : `Expires ${longDate(t.expires_at)}`) : "Never expires";
+    const scopes = Array.isArray(t.scopes) && t.scopes.length ? ` · ${t.scopes.length === 1 ? t.scopes[0] : `${t.scopes.length} scopes`}` : "";
+    const acts = acsState.confirm === key
+      ? `<button class="btn sm" data-acs="unconfirm">Cancel</button><button class="btn sm danger solid${busyCls(key)}" data-acs="revoke-token" data-id="${esc(t.id)}">Revoke</button>`
+      : `<button class="btn sm" data-acs="confirm" data-key="${esc(key)}">Revoke</button>`;
+    return `<div class="srow"><div class="sl"><span>${esc(t.description || t.desc || t.name || "Untitled token")}</span><small>${esc(expires + scopes)}</small></div><div class="sact">${acts}</div></div>`;
+  }).join("");
+}
+
+function appsBlock(u) {
+  const apps = u.oauth_tokens ?? [];
+  const head = `<h3>Connected apps</h3><p class="lede">These apps can reach your Figma files for you. Remove any you don't expect</p>`;
+  if (!apps.length) return head + `<div class="aempty">No apps</div>`;
+  return head + apps.map((a) => {
+    const key = `app:${a.client_id}`;
+    let site = "";
+    try {
+      site = a.website ? new URL(a.website).host : "";
+    } catch {}
+    const acts = acsState.confirm === key
+      ? `<button class="btn sm" data-acs="unconfirm">Cancel</button><button class="btn sm danger solid${busyCls(key)}" data-acs="revoke-app" data-id="${esc(a.client_id)}">Revoke access</button>`
+      : `<button class="btn sm" data-acs="confirm" data-key="${esc(key)}">Revoke access</button>`;
+    const logo = a.logo ? `<img src="${esc(a.logo)}" alt="" referrerpolicy="no-referrer">` : "";
+    return `<div class="srow"><span class="applogo">${logo}</span><div class="sl"><span>${esc(a.name ?? "App")}</span><small>${esc([site, a.granted_at ? `Connected ${longDate(a.granted_at)}` : ""].filter(Boolean).join(" · "))}</small></div><div class="sact">${acts}</div></div>`;
+  }).join("");
+}
+
+const formEnd = (key, label) => `<div class="end"><span class="grow"></span><button type="button" class="btn sm" data-acs="cancel">Cancel</button><button class="btn sm primary${busyCls(key)}">${esc(label)}</button></div>`;
+
+/* Changes */
+
+async function acsDo(key, run) {
+  if (acsState.busy.has(key)) return;
+  acsState.busy.add(key);
+  drawAcs();
+  try {
+    return await run();
+  } catch (error) {
+    toast(error.message || "Something went wrong");
+    return undefined;
+  } finally {
+    acsState.busy.delete(key);
+    drawAcs();
+  }
+}
+// The account as Figma has it after a change, or the sample's
+async function putUser(fields) {
+  if (!LIVE) return { ...acsState.user, ...fields, profile: { ...acsState.user.profile, ...(fields.job_title !== undefined ? { job_title: fields.job_title } : {}) } };
+  return api("/api/user", { method: "PUT", json: { id: Live.uid, ...fields } });
+}
+
+function figmaSettings(tab) {
+  if (!LIVE) return toast("Opens Figma's settings in a new tab");
+  window.open(`https://www.figma.com/files?fuid=${encodeURIComponent(Live.uid)}#ligma-settings=${tab}`, "_blank");
+  closeSettings();
+}
+
+function pickRole(at) {
+  const u = acsState.user;
+  const role = roleOf(u);
+  showMenu(ROLES.map(([value, label]) => ({
+    label,
+    checked: role.value === value || (value === "something_else" && !role.value && !!u.profile?.job_title),
+    act: () => {
+      if (value === "something_else") {
+        acsState.edit = "role-other";
+        acsState.focusEdit = true;
+        return drawAcs();
+      }
+      if (value === role.value) return;
+      saveRole(value, "change_job_modal_selection");
+    },
+  })), at, { checks: true });
+}
+async function saveRole(value, source) {
+  await acsDo("role", async () => {
+    const meta = await putUser({ job_title: value, job_title_source: source });
+    applyUser({ ...meta, profile: { ...meta?.profile, job_title: value } });
+    acsState.edit = null;
+    toast("Role changed");
+  });
+}
+function pickLanguage(at) {
+  const u = acsState.user;
+  showMenu(LANGUAGES.map(([value, label]) => ({
+    label,
+    checked: u.locale === value,
+    act: () => value !== u.locale && acsDo("language", async () => {
+      applyUser({ ...(await putUser({ locale: value })), locale: value });
+      toast(`Figma is in ${label} now`);
+    }),
+  })), at, { checks: true });
+}
+
+// A profile photo as Figma makes one: the middle square, at 120 and 500
+// pixels, each uploaded, then both set on the account
+async function uploadPhoto(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type)) return toast("Choose a PNG, JPEG, GIF or WebP image");
+  acsState.photoBusy = true;
+  drawAcs();
+  try {
+    const bitmap = await createImageBitmap(file);
+    const side = Math.min(bitmap.width, bitmap.height);
+    const sx = (bitmap.width - side) / 2;
+    const sy = (bitmap.height - side) / 2;
+    const jpeg = async (size) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = size;
+      const g = canvas.getContext("2d");
+      g.fillStyle = "#fff";
+      g.fillRect(0, 0, size, size);
+      g.drawImage(bitmap, sx, sy, side, side, 0, 0, size, size);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+      return new Uint8Array(await blob.arrayBuffer());
+    };
+    const [small, large] = await Promise.all([jpeg(120), jpeg(500)]);
+    if (!LIVE) {
+      applyUser({ img_url: URL.createObjectURL(new Blob([large], { type: "image/jpeg" })) });
+      return toast("Photo changed");
+    }
+    const upload = async (bytes) => {
+      const sha1 = [...new Uint8Array(await crypto.subtle.digest("SHA-1", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const res = await fetch(`/api/upnode/image?purpose=profile&sha1=${sha1}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "image/jpeg", "X-Csrf-Bypass": "yes", "X-Figma-User-ID": Live.uid },
+        body: bytes,
+      });
+      let body = null;
+      try {
+        body = await res.json();
+      } catch {}
+      if (!res.ok || !body?.meta?.url) throw new Error(body?.message || `Figma answered ${res.status}`);
+      return body.meta.url;
+    };
+    const [smallUrl, largeUrl] = await Promise.all([upload(small), upload(large)]);
+    applyUser(await api("/api/user", { method: "PUT", json: { img_url: smallUrl, img_url_500_500: largeUrl } }));
+    toast("Photo changed");
+  } catch (error) {
+    toast(`Couldn't change your photo: ${error.message}`);
+  } finally {
+    acsState.photoBusy = false;
+    acsPhoto.value = "";
+    drawAcs();
+  }
+}
+
+// Passwords go to Figma sealed, as its own pages send them: AES-GCM under
+// a fresh key, the key under Figma's RSA key. Figma takes them plain when
+// it can't open them, and says so
+async function sealPassword(value) {
+  const config = (await api("/api/session/password_encryption_config", { user: null }))?.password_encryption_config;
+  if (config?.alg !== "rsa-oaep-sha256+a256gcm:v1" || !crypto?.subtle) return null;
+  const b64 = (bytes) => {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 1024) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 1024));
+    return "figma_sensitive_.pe.1." + btoa(s);
+  };
+  const spki = Uint8Array.from(atob(config.public_key_spki_base64), (c) => c.charCodeAt(0));
+  const rsa = await crypto.subtle.importKey("spki", spki, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+  const aes = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aes, new TextEncoder().encode(value));
+  const key = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, rsa, await crypto.subtle.exportKey("raw", aes));
+  return { alg: config.alg, kid: config.kid, key_encrypted: b64(new Uint8Array(key)), iv: b64(iv), ciphertext: b64(new Uint8Array(ciphertext)) };
+}
+async function postPasswords(path, plain, keys) {
+  const send = async (body) => {
+    const res = await fetch(path, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json", "Content-Type": "application/json", "X-Csrf-Bypass": "yes", "X-Figma-User-ID": Live.uid },
+      body: JSON.stringify(body),
+    });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {}
+    return { ok: res.ok && data?.error !== true, status: res.status, data };
+  };
+  let sealedBody = null;
+  try {
+    const sealed = await Promise.all(keys.map((k) => sealPassword(plain[k])));
+    if (sealed.every(Boolean)) {
+      sealedBody = { ...plain };
+      keys.forEach((k, i) => {
+        delete sealedBody[k];
+        sealedBody["protected_" + k] = sealed[i];
+      });
+    }
+  } catch {}
+  let result = await send(sealedBody ?? plain);
+  if (sealedBody && !result.ok && result.status === 503 && result.data?.error_code === "password_protection_plaintext_retry_allowed") result = await send(plain);
+  if (!result.ok) throw new Error(result.data?.message || `Figma answered ${result.status}`);
+  return result.data?.meta;
+}
+
+async function submitForm(form) {
+  const kind = form.dataset.form;
+  const data = new FormData(form);
+  const u = acsState.user;
+  if (kind === "name") {
+    const name = String(data.get("name")).trim();
+    if (!name) return $("[name=name]", form).setAttribute("aria-invalid", "true");
+    if (name === u.name) return cancelEdit();
+    return acsDo("name", async () => {
+      applyUser(await putUser({ name }));
+      acsState.edit = null;
+      toast("Name changed");
+    });
+  }
+  if (kind === "role-other") {
+    const role = String(data.get("role")).trim();
+    if (!role) return $("[name=role]", form).setAttribute("aria-invalid", "true");
+    return saveRole(role, "change_job_modal_custom");
+  }
+  if (kind === "handle") {
+    const handle = String(data.get("handle")).trim().replace(/^@/, "");
+    if (!handle) return $("[name=handle]", form).setAttribute("aria-invalid", "true");
+    if (handle === u.community_profile_handle) return cancelEdit();
+    return acsDo("handle", async () => {
+      if (LIVE) {
+        const check = await api(`/api/profile/handle/${encodeURIComponent(handle)}/available`);
+        if (!check.available) throw new Error(`@${handle} is taken. Try another`);
+        await api(`/api/profile/${u.community_profile_id}`, { method: "PUT", json: { profile_handle: handle } });
+      }
+      applyUser({ community_profile_handle: handle });
+      acsState.edit = null;
+      toast(`Your profile is at figma.com/@${handle} now`);
+    });
+  }
+  if (kind === "password") {
+    const old = String(data.get("old"));
+    const next = String(data.get("new"));
+    const msg = $("#acs-pw-msg");
+    if (!old) return $("[name=old]", form).setAttribute("aria-invalid", "true");
+    if (next.length < 8) {
+      $("[name=new]", form).setAttribute("aria-invalid", "true");
+      msg.className = "msg bad";
+      return (msg.textContent = "The new password needs at least 8 characters");
+    }
+    if (acsState.busy.has("password")) return;
+    acsState.busy.add("password");
+    $("button.primary", form).classList.add("busy");
+    try {
+      if (LIVE) await postPasswords("/api/password/change", { password_old: old, password_new: next }, ["password_old", "password_new"]);
+      acsState.busy.delete("password");
+      acsState.edit = null;
+      drawAcs();
+      toast("Password changed");
+    } catch (error) {
+      acsState.busy.delete("password");
+      $("button.primary", form).classList.remove("busy");
+      msg.className = "msg bad";
+      msg.textContent = error.message;
+    }
+    return;
+  }
+  if (kind === "token") {
+    const desc = String(data.get("desc")).trim();
+    const scopes = data.getAll("scope");
+    const expiration = Number($("[data-acs=expiry][aria-pressed=true]", form)?.dataset.value ?? EXPIRIES[0][0]);
+    const msg = $("#acs-token-msg");
+    if (!desc) return $("[name=desc]", form).setAttribute("aria-invalid", "true");
+    if (!scopes.length) {
+      msg.className = "msg bad";
+      return (msg.textContent = "Pick at least one scope");
+    }
+    return acsDo("token", async () => {
+      if (!LIVE) {
+        acsState.user.dev_tokens = [{ id: "t" + Date.now(), description: desc, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + expiration * 1000).toISOString(), scopes }, ...(acsState.user.dev_tokens ?? [])];
+        acsState.token = "figd_sample_" + Math.random().toString(36).slice(2, 14);
+      } else {
+        const meta = await api("/api/user/dev_tokens", { method: "POST", json: { desc, scopes, expiration } });
+        const secret = typeof meta?.token === "string" ? meta.token : meta?.token?.token ?? meta?.token?.key;
+        if (Array.isArray(meta?.tokens)) applyUser({ dev_tokens: meta.tokens });
+        else applyUser({ dev_tokens: (await api("/api/user")).dev_tokens });
+        acsState.token = secret ?? null;
+        if (!secret) toast("Token made. Figma didn't send it back to show");
+      }
+      acsState.edit = null;
+    });
+  }
+}
+function cancelEdit() {
+  acsState.edit = null;
+  drawAcs();
+}
+
+async function setPolicy(type, value) {
+  const p = acsState.prefs;
+  const pol = p.multiOptionPolicies?.[type] ?? p.singleOptionPolicies?.[type];
+  if (!pol) return;
+  const single = type in (p.singleOptionPolicies ?? {});
+  const before = pol.value;
+  pol.value = single ? value === "all" : value;
+  try {
+    if (LIVE) await api("/api/user_communication_preference/single_policy", { method: "PUT", json: { channel_type: "email", policy_type: type, policy_setting: value } });
+  } catch (error) {
+    pol.value = before;
+    drawAcs();
+    toast(`Couldn't change it: ${error.message}`);
+  }
+}
+async function setChannel(on) {
+  const p = acsState.prefs;
+  const before = p.channelOn;
+  p.channelOn = on;
+  await acsDo("channel", async () => {
+    try {
+      if (LIVE) await api("/api/user_communication_preference/channel_policy", { method: "POST", json: { channel_type: "email", channel_setting: on } });
+    } catch (error) {
+      p.channelOn = before;
+      throw error;
+    }
+  });
+}
+
+acsNav.addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-acs-tab]")?.dataset.acsTab;
+  if (!tab || tab === acsState.tab) return;
+  Object.assign(acsState, { tab, edit: null, confirm: null, token: null });
+  drawAcs();
+  acsBody.scrollTop = 0;
+  $(`[data-acs-tab="${tab}"]`, acsNav)?.focus();
+});
+acsNav.addEventListener("keydown", (e) => {
+  const keys = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+  if (!(e.key in keys) && e.key !== "Home" && e.key !== "End") return;
+  e.preventDefault();
+  const i = ACS_TABS.findIndex((t) => t.id === acsState.tab);
+  const j = e.key === "Home" ? 0 : e.key === "End" ? ACS_TABS.length - 1 : (i + keys[e.key] + ACS_TABS.length) % ACS_TABS.length;
+  $(`[data-acs-tab="${ACS_TABS[j].id}"]`, acsNav).click();
+});
+acs.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-acs]");
+  if (!el || el.disabled) return;
+  const act = el.dataset.acs;
+  if (act === "close") return closeSettings();
+  if (act === "retry") return loadAccount();
+  if (act === "edit") {
+    Object.assign(acsState, { edit: el.dataset.edit, confirm: null, token: null, focusEdit: true });
+    return drawAcs();
+  }
+  if (act === "cancel") return cancelEdit();
+  if (act === "role") return pickRole(el.getBoundingClientRect());
+  if (act === "language") return pickLanguage(el.getBoundingClientRect());
+  if (act === "photo") return acsPhoto.click();
+  if (act === "figma") return figmaSettings(el.dataset.figmaTab);
+  if (act === "open") return window.open(el.dataset.url, "_blank");
+  if (act === "ligma") return LIVE ? signal("settings") : toast("Opens Ligma's settings");
+  if (act === "inbox") {
+    closeSettings();
+    return openInbox();
+  }
+  if (act === "scheme") {
+    setScheme(el.dataset.value);
+    return drawAcs();
+  }
+  if (act === "verify") {
+    return acsDo("verify", async () => {
+      if (LIVE) await api("/api/validation/email/send", { method: "POST" });
+      toast("Figma sent the link again. Check your email");
+    });
+  }
+  if (act === "forgot") {
+    return acsDo("forgot", async () => {
+      if (LIVE) await api("/api/password/forgot", { method: "POST", user: null, json: { username: acsState.user.email } });
+      toast("Figma sent you an email to reset your password");
+    });
+  }
+  if (act === "confirm") {
+    acsState.confirm = el.dataset.key;
+    drawAcs();
+    return $(`.danger.solid`, acsBody)?.focus();
+  }
+  if (act === "unconfirm") {
+    acsState.confirm = null;
+    return drawAcs();
+  }
+  if (act === "end-session") {
+    const id = el.dataset.id;
+    return acsDo(`session:${id}`, async () => {
+      if (LIVE) await api(`/api/session/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      acsState.sessions = acsState.sessions.filter((s) => s.id !== id);
+      acsState.confirm = null;
+      toast("Signed out of that session");
+    });
+  }
+  if (act === "end-others") {
+    return acsDo("sessions", async () => {
+      const others = acsState.sessions.filter((s) => !s.is_current);
+      const results = LIVE ? await pool(others, 3, (s) => api(`/api/session/sessions/${encodeURIComponent(s.id)}`, { method: "DELETE" })) : [];
+      const failed = new Set(others.filter((s, i) => results[i] instanceof Error).map((s) => s.id));
+      acsState.sessions = acsState.sessions.filter((s) => s.is_current || failed.has(s.id));
+      toast(failed.size ? `Couldn't sign out of ${failed.size} of them` : "Signed out everywhere else");
+    });
+  }
+  if (act === "revoke-token") {
+    const id = el.dataset.id;
+    return acsDo(`token:${id}`, async () => {
+      const meta = LIVE ? await api(`/api/user/dev_tokens/${encodeURIComponent(id)}`, { method: "DELETE" }) : null;
+      applyUser({ dev_tokens: Array.isArray(meta?.tokens) ? meta.tokens : acsState.user.dev_tokens.filter((t) => t.id !== id) });
+      acsState.confirm = null;
+      toast("Token revoked");
+    });
+  }
+  if (act === "revoke-app") {
+    const id = el.dataset.id;
+    return acsDo(`app:${id}`, async () => {
+      const meta = LIVE ? await api(`/api/oauth/token/${encodeURIComponent(id)}`, { method: "DELETE" }) : null;
+      applyUser({ oauth_tokens: Array.isArray(meta?.tokens) ? meta.tokens : acsState.user.oauth_tokens.filter((a) => a.client_id !== id) });
+      acsState.confirm = null;
+      toast("Access revoked");
+    });
+  }
+  if (act === "expiry") {
+    for (const b of $$("[data-acs=expiry]", el.parentElement)) {
+      b.setAttribute("aria-pressed", b === el);
+      b.setAttribute("aria-checked", b === el);
+    }
+    return;
+  }
+  if (act === "copy-token") {
+    navigator.clipboard.writeText(acsState.token).then(() => toast("Token copied"), () => toast("Couldn't copy. Select it and copy instead"));
+    return;
+  }
+  if (act === "token-done") {
+    acsState.token = null;
+    return drawAcs();
+  }
+  if (act === "channel") return setChannel(el.getAttribute("aria-checked") !== "true");
+});
+acs.addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitForm(e.target);
+});
+acs.addEventListener("change", (e) => {
+  const input = e.target.closest("[data-policy]");
+  if (!input) return;
+  setPolicy(input.dataset.policy, input.dataset.single ? (input.checked ? "all" : "none") : input.value);
+});
+// A handle is checked as it's typed
+let handleTimer = 0;
+acs.addEventListener("input", (e) => {
+  e.target.removeAttribute("aria-invalid");
+  if (e.target.name !== "handle") return;
+  clearTimeout(handleTimer);
+  const msg = $("#acs-handle-msg");
+  const handle = e.target.value.trim().replace(/^@/, "");
+  if (!handle || handle === acsState.user.community_profile_handle) {
+    msg.className = "msg";
+    return (msg.textContent = "Your profile moves to figma.com/@ and the new handle");
+  }
+  handleTimer = setTimeout(async () => {
+    try {
+      const ok = LIVE ? (await api(`/api/profile/handle/${encodeURIComponent(handle)}/available`)).available : handle !== "taken";
+      if (e.target.value.trim().replace(/^@/, "") !== handle) return;
+      msg.className = ok ? "msg ok" : "msg bad";
+      msg.textContent = ok ? `figma.com/@${handle} is free` : `@${handle} is taken`;
+    } catch (error) {
+      msg.className = "msg bad";
+      msg.textContent = error.message;
+    }
+  }, 300);
+});
+acsPhoto.addEventListener("change", () => uploadPhoto(acsPhoto.files[0]));
 
 /* Search: a window over the page. Empty, it shows what you worked on last;
    typed into, it finds files, projects and actions. in:, type: and by:
@@ -5519,7 +6588,9 @@ const COMMANDS = [
   { label: "Go to Trash", view: "trash", icon: "trash" },
   { label: "Open the inbox", act: () => openInbox(), icon: "bell" },
   { label: "Figma's file browser", url: "https://www.figma.com/files", icon: "home" },
-  { label: "Account settings in Figma", url: "https://www.figma.com/settings", icon: "users" },
+  { label: "Account settings", act: () => openSettings(), icon: "users" },
+  { label: "Notification settings", act: () => openSettings("notifications"), icon: "bell" },
+  { label: "Security settings", act: () => openSettings("security"), icon: "lock" },
   { label: "Figma Community", url: "https://www.figma.com/community", icon: "grid" },
 ];
 
@@ -6322,6 +7393,7 @@ side.addEventListener("drop", (e) => {
 });
 
 addEventListener("keydown", (e) => {
+  if (acs.open) return;
   const typing = e.target.closest?.("input, textarea, [contenteditable]");
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing && toastUndo && !toastEl.hidden) {
     e.preventDefault();

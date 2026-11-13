@@ -2,6 +2,29 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.42.3 - 2026-11-13
+
+- On macOS, an empty tab preview card no longer stays in the middle of the screen, and hidden tab menus and emoji pickers no longer come back when you switch back to Ligma.
+
+## 0.42.2 - 2026-11-13
+
+- A tab waking from sleep or reloading keeps its name instead of showing "Figma" or "Loading…", and shows a spinner as its icon until it has loaded.
+
+## 0.42.1 - 2026-11-13
+
+- Ligma no longer quits when macOS ends a background tab to free memory. The tab reloads when you select it.
+
+## 0.42.0 - 2026-11-13
+
+- Settings in Home's account menu opens a Settings window for your Figma account, like the one on Figma's home page. Change your photo, name, role, language, community handle, email notifications and password, and manage your sessions, access tokens and connected apps. The command palette opens each of its tabs.
+- Log out logs out of the account you're on, and Switch account shows names only.
+- Email and IP addresses in Home, the account menu, the inbox and the Settings window are blurred until you click them. Toasts no longer show email addresses.
+- Files open where you left them, at the same page, position and zoom, also after a tab sleeps, reloads or comes back from your last session. This now covers Design and FigJam files, and the setting to turn it off is gone.
+- Discord only offers a party in files someone else can edit.
+- A tab preview no longer leaves an empty card on screen.
+- The tab bar keeps its colors on Home in dark mode.
+- Ligma MCP shows only on the Design tab of the right panel, not on Prototype.
+
 ## 0.41.0 - 2026-11-12
 
 - New tabs no longer flash white while they load. They open in the color of Figma's loading screen, in your color theme.

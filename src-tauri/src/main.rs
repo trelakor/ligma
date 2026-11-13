@@ -203,7 +203,7 @@ fn shut_down(app: &tauri::AppHandle) {
 fn main() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(build_menu);
+    let builder = builder.menu(build_menu).on_web_content_process_terminate(tabs::on_process_terminated);
 
     builder
         // First, so a second launch exits before anything else starts. It
@@ -328,7 +328,6 @@ fn main() {
             ai_actions::init(&settings);
             copy_code::init(&settings);
             lasso::init(&settings);
-            view_state::init(&settings);
             game_mode::init(&settings);
             notifications::init(&settings);
             mcp_bridge::init(&settings);

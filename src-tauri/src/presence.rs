@@ -178,6 +178,49 @@ const PEOPLE_JS: &str = r#"(() => {
   return Math.max(1, sessions.size + more);
 })()"#;
 
+/// Whether file `key` lets anyone but the user edit it, or null until
+/// known: its link, the people invited to it, and, outside drafts, to its
+/// project and team. Asked of Figma in the background, at most every
+/// `SHARED_FOR` ms per file, so each call answers from the last answer.
+/// Roles at level 300 and up can edit (999 is the owner)
+const SHARED_JS: &str = r#"((key) => {
+  const SHARED_FOR = 120000;
+  const cache = (window.__ligmaShared ??= {});
+  const known = cache[key];
+  if ((!known || Date.now() - known.at > SHARED_FOR) && !known?.asking) {
+    cache[key] = { value: known?.value ?? null, at: known?.at ?? 0, asking: true };
+    const get = async (path) => {
+      const response = await fetch(path, { credentials: "include" });
+      if (!response.ok) throw new Error(`${path}: ${response.status}`);
+      return (await response.json()).meta;
+    };
+    (async () => {
+      const metadata = await get(`/api/file_metadata/${key}`);
+      const me = String(metadata.current_team_user?.user_id ?? window.INITIAL_OPTIONS?.user_data?.id);
+      const editors = (roles) => (roles ?? []).some((role) => String(role.user_id) !== me && role.level >= 300);
+      const team = () => get(`/api/roles/team/${file.team_id}`).then(editors);
+      const found = await get(`/api/files/${key}`);
+      const file = found.file ?? found;
+      // Anyone with the link, or in the organization
+      if (file.link_access === "edit" || file.link_access === "org_edit") return true;
+      // Anyone in the plan: the organization, or the team's members
+      if (file.link_access === "plan_edit" && (file.parent_org_id || (file.team_id && (await team())))) return true;
+      if (editors(await get(`/api/roles/file/${key}`))) return true;
+      if (!file.folder_id || file.folder_id === metadata.current_team_user?.drafts_folder_id) return false;
+      const folder = await get(`/api/folders/${file.folder_id}`).then((found) => found.folder ?? found);
+      if (editors(await get(`/api/roles/folder/${file.folder_id}`))) return true;
+      // Drafts are invite only
+      if (folder.sharing_audience_control === "invite_only" || folder.is_invite_only) return false;
+      return !!file.team_id && folder.team_access === "team_edit" && (await team());
+    })().then(
+      (value) => (cache[key] = { value, at: Date.now() }),
+      // Asked again next time
+      () => (cache[key] = { value: cache[key].value, at: 0, asking: false, failed: Date.now() }),
+    );
+  }
+  return cache[key]?.value ?? null;
+})"#;
+
 /// The open file as a Discord party
 #[derive(Clone, PartialEq)]
 struct Invite {
@@ -399,15 +442,21 @@ pub fn sync(app: &AppHandle) {
         return;
     }
     let script = format!(
-        "[{}, {}, {}]",
+        "[{}, {}, {}, {}]",
         if show_tool { TOOL_JS } else { "null" },
         if invite.is_some() { PEOPLE_JS } else { "1" },
         if show_subtext { format!("{SUBTEXT_JS}({:?})", active.view) } else { "null".to_owned() },
+        if invite.is_some() { format!("{SHARED_JS}({:?})", active.key) } else { "null".to_owned() },
     );
     let _ = active.webview.eval_with_callback(script, move |json| {
-        let (tool, people, subtext) =
-            serde_json::from_str::<(Option<String>, i32, Option<String>)>(&json).unwrap_or((None, 1, None));
-        let invite = invite.clone().map(|invite| Invite { people: people.max(1), ..invite });
+        let (tool, people, subtext, shared) =
+            serde_json::from_str::<(Option<String>, i32, Option<String>, Option<bool>)>(&json)
+                .unwrap_or((None, 1, None, None));
+        // No party in a file nobody else can edit, nor until that's known
+        let invite = invite
+            .clone()
+            .filter(|_| shared == Some(true))
+            .map(|invite| Invite { people: people.max(1), ..invite });
         let status = Status { file: Some(file.clone()), verb, subtext, tool, focused, invite, app_icon: app_icon.clone() };
         let _ = tx.send(Message::Status(status));
     });

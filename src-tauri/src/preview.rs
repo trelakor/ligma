@@ -81,11 +81,14 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
             builder = builder.background_color(color);
         }
     }
+    // Not a child window on macOS until shown (`tab_menu::set_owner`):
+    // AppKit puts a child on screen as soon as it's attached, so the card
+    // would show empty, mid-screen
     #[cfg(target_os = "macos")]
     {
-        builder = builder.shadow(true).parent_raw(main.ns_window()?);
+        builder = builder.shadow(true);
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(windows))]
     let _ = main;
     let window = builder.build()?;
     // Clicks and hovers go to whatever is under the card
@@ -104,12 +107,12 @@ fn show(app: &AppHandle, tab: u32, left: f64) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Hides the card, if shown
+/// Hides the card. Whether or not one is open: a card shown just as it
+/// was dropped would otherwise stay on screen
 pub fn hide(app: &AppHandle) {
-    if OPEN.lock().unwrap().take().is_none() {
-        return;
-    }
+    OPEN.lock().unwrap().take();
     if let Some(window) = app.get_webview_window(WINDOW) {
+        crate::tab_menu::release(&window);
         #[cfg(windows)]
         crate::frame::show_inactive(&window, false);
         #[cfg(not(windows))]
@@ -211,4 +214,44 @@ pub async fn tab_preview_ready(app: AppHandle, webview: Webview, seq: u64, width
     crate::frame::show_inactive(&window, true);
     #[cfg(not(windows))]
     let _ = window.show();
+    // Dropped while it was being shown
+    if !is_open(seq) {
+        hide(&app);
+        return;
+    }
+    std::thread::spawn(move || watch(&app, seq, &main));
+}
+
+fn is_open(seq: u64) -> bool {
+    OPEN.lock().unwrap().as_ref().is_some_and(|open| open.seq == seq)
+}
+
+/// Hides card `seq` once the pointer is off the tab bar of `main`. The tab
+/// bar drops it as the pointer leaves, but misses that when the pointer
+/// goes too fast, or the window moves or minimizes under it
+fn watch(app: &AppHandle, seq: u64, main: &Window) {
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        if !is_open(seq) {
+            return;
+        }
+        if !over_tab_bar(app, main) {
+            hide(app);
+            return;
+        }
+    }
+}
+
+fn over_tab_bar(app: &AppHandle, main: &Window) -> bool {
+    if main.is_minimized().unwrap_or(true) || !main.is_visible().unwrap_or(false) {
+        return false;
+    }
+    let (Ok(at), Ok(origin), Ok(size), Ok(scale)) =
+        (app.cursor_position(), main.inner_position(), main.inner_size(), main.scale_factor())
+    else {
+        return false;
+    };
+    let px = scale * crate::tabs::scale(app);
+    let (x, y) = (at.x - origin.x as f64, at.y - origin.y as f64);
+    x >= 0.0 && x < size.width as f64 && y >= 0.0 && y < crate::tabs::TAB_BAR_HEIGHT * px
 }
