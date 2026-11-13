@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.42.2 - 2026-11-13
+
+- A tab waking from sleep or reloading keeps its name instead of showing "Figma" or "Loading…", and shows a spinner as its icon until it has loaded.
+
 ## 0.42.1 - 2026-11-13
 
 - Ligma no longer quits when macOS ends a background tab to free memory. The tab reloads when you select it.
