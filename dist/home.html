@@ -746,6 +746,26 @@
   .invite .ib { height: 32px; }
   .invite .btn { height: 32px; }
   .btn:disabled { opacity: 0.4; pointer-events: none; }
+  /* People to invite, as an address is typed: those met in Figma and
+     invited before */
+  .sugg { margin-top: 4px; }
+  .sugg:empty { display: none; }
+  .sugg .opt { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 40px; padding: 4px 8px; border-radius: 6px; cursor: default; }
+  .sugg .opt[aria-selected="true"] { background: var(--hover); }
+  .sugg .opt b { display: block; overflow: hidden; font-weight: 450; font-size: 13px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+  .sugg .opt small { display: block; overflow: hidden; color: var(--text2); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  .sugg mark { background: none; color: inherit; font-weight: 600; }
+  .sugg .opt b mark { font-weight: 650; }
+  .sugg .why { max-width: 120px; overflow: hidden; color: var(--text2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  /* Emails out of sight while sharing a screen, one at a time under the
+     pointer when needed */
+  body.hide-em .em { filter: blur(4px); transition: filter 120ms; }
+  body.hide-em .em:hover { filter: none; }
+  .ws h3 button + button { margin-left: 0; }
+  .ws h3 [data-blur] .i { width: 14px; height: 14px; }
+  .sec h2 [data-blur] { display: flex; align-self: baseline; align-items: center; gap: 4px; margin-left: auto; padding: 2px 6px; border-radius: 4px; color: var(--text2); font-size: 11px; font-weight: 450; }
+  .sec h2 [data-blur]:hover { background: var(--hover); color: var(--text); }
+  .sec h2 [data-blur] .i { width: 14px; height: 14px; margin: 0; }
   .wlink { margin: 6px 0 0 -2px; }
   .wfoot { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px; border-top: 1px solid var(--menu-line); }
   .wfoot .ib { flex: 1; justify-content: flex-start; }
@@ -901,6 +921,8 @@ const ICONS = {
   list: '<path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><circle cx="2.75" cy="4.5" r=".6"/><circle cx="2.75" cy="8" r=".6"/><circle cx="2.75" cy="11.5" r=".6"/>',
   link: '<path d="M7 9a2.5 2.5 0 0 0 3.5 0l2-2A2.5 2.5 0 0 0 9 3.5l-.75.75M9 7a2.5 2.5 0 0 0-3.5 0l-2 2A2.5 2.5 0 0 0 7 12.5l.75-.75"/>',
   camera: '<path d="M2.5 5.5a1 1 0 0 1 1-1h1.75l1-1.5h3.5l1 1.5h1.75a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/><circle cx="8" cy="8.25" r="2"/>',
+  eye: '<path d="M1.75 8S4 3.75 8 3.75 14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8z"/><circle cx="8" cy="8" r="2"/>',
+  eyeoff: '<path d="M6.6 3.9A6 6 0 0 1 8 3.75C12 3.75 14.25 8 14.25 8a11 11 0 0 1-1.6 2.2M10.1 10.1A3 3 0 0 1 5.9 5.9M4 5A11 11 0 0 0 1.75 8S4 12.25 8 12.25a6 6 0 0 0 2.8-.7M2.5 2.5l11 11"/>',
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 // Figma's own UI icons, as its file browser and account menu draw them:
@@ -3606,6 +3628,7 @@ function openWin(what, at, focus = null) {
   const again = win.classList.contains("open") && winState.kind === what.kind && winState.team === what.team && winState.project === what.project;
   if (!again) winState.back = document.activeElement;
   Object.assign(winState, what, { anchor: at, level: null, ask: null });
+  Object.assign(sugg, { items: [], q: "" });
   win.classList.add("open");
   drawWin();
   renderSide();
@@ -3644,14 +3667,16 @@ function personRow(m, tier, control = null) {
   const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
   const role = roleName(m.level, tier);
   const sub = m.pending ? "Invited, hasn't joined yet" : m.email;
-  return `<div class="mem${m.pending ? " pending" : ""}" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${esc(m.name)}${m.me ? " <i>(you)</i>" : ""}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>${control ?? `<span class="role">${esc(role)}</span>`}</div>`;
+  // An invite's name is the address it went to
+  const name = m.pending ? `<span class="em">${esc(m.name)}</span>` : esc(m.name);
+  return `<div class="mem${m.pending ? " pending" : ""}" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${name}${m.me ? " <i>(you)</i>" : ""}</b>${sub ? `<small${m.pending ? "" : ` class="em"`}>${esc(sub)}</small>` : ""}</span>${control ?? `<span class="role">${esc(role)}</span>`}</div>`;
 }
 // Asking before someone's removed, with what happens to their files
 function askRow(m) {
   const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
   const ask = winState.ask;
   const team = winState.kind === "team";
-  const question = m.pending ? `Cancel the invite to ${m.name}?` : `Remove ${m.name} from ${peopleWhere()}?`;
+  const question = m.pending ? `Cancel the invite to <span class="em">${esc(m.name)}</span>?` : esc(`Remove ${m.name} from ${peopleWhere()}?`);
   let note = m.pending ? "The link in their email stops working" : team ? "They lose access to the team's projects and files" : "They keep any access they have through the team";
   const impact = ask.impact;
   if (!m.pending && impact) {
@@ -3661,7 +3686,7 @@ function askRow(m) {
     if (impact.drafts_to_unassigned) parts.push(`${impact.drafts_to_unassigned} ${impact.drafts_to_unassigned === 1 ? "draft moves" : "drafts move"} to the team`);
     if (parts.length) note += `. ${parts.join(", ")}`;
   }
-  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b id="ask-q">${esc(question)}</b><small>${esc(note)}</small></span><span class="acts"><button class="btn sm" data-w="ask-no">${m.pending ? "Keep" : "Cancel"}</button><button class="btn sm danger" data-w="ask-yes" aria-describedby="ask-q">${m.pending ? "Cancel invite" : "Remove"}</button></span></div>`;
+  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b id="ask-q">${question}</b><small>${esc(note)}</small></span><span class="acts"><button class="btn sm" data-w="ask-no">${m.pending ? "Keep" : "Cancel"}</button><button class="btn sm danger" data-w="ask-yes" aria-describedby="ask-q">${m.pending ? "Cancel invite" : "Remove"}</button></span></div>`;
 }
 // The people in the open window: a team's members, or who a project's
 // shared with
@@ -3687,9 +3712,160 @@ function memberControl(m, i, tier) {
 function inviteForm(label, levels) {
   const level = winState.level ?? levels?.[0] ?? null;
   winState.level = level;
-  return `<form class="invite" data-w="invite"><input type="text" inputmode="email" autocomplete="off" spellcheck="false" placeholder="Emails, comma separated" aria-label="${esc(label)}">` +
+  return `<form class="invite" data-w="invite"><input type="text" inputmode="email" autocomplete="off" spellcheck="false" placeholder="Names or emails, comma separated" aria-label="${esc(label)}" role="combobox" aria-autocomplete="list" aria-controls="invite-sugg" aria-expanded="false">` +
     (levels ? `<button type="button" class="ib" data-w="level" aria-haspopup="menu" aria-label="Invite as: ${levelName(level)}">${levelName(level)}${icon("down")}</button>` : "") +
-    `<button type="submit" class="btn sm primary" disabled>Invite</button></form>`;
+    `<button type="submit" class="btn sm primary" disabled>Invite</button></form><div class="sugg" id="invite-sugg" role="listbox" aria-label="Suggested people"></div>`;
+}
+
+/* Emails blurred, for sharing a screen: on until turned off, everywhere
+   people are listed */
+let hideEmails = store.get("hide-emails", true);
+document.body.classList.toggle("hide-em", hideEmails);
+const blurToggle = () => `<button data-blur aria-pressed="${hideEmails}" title="${hideEmails ? "Show emails" : "Blur emails, for sharing your screen"}" aria-label="Blur emails">${icon(hideEmails ? "eyeoff" : "eye")}</button>`;
+function toggleEmails() {
+  hideEmails = !hideEmails;
+  store.set("hide-emails", hideEmails);
+  document.body.classList.toggle("hide-em", hideEmails);
+  for (const el of document.querySelectorAll("[data-blur]")) el.outerHTML = blurToggle();
+  $("[data-blur]", win.classList.contains("open") ? win : scroller)?.focus();
+  toast(hideEmails ? "Emails blurred, hover one to see it" : "Showing emails");
+}
+document.addEventListener("click", (e) => e.target.closest?.("[data-blur]") && toggleEmails());
+
+/* Suggestions for the invite box, for the address being typed: people in
+   your other teams, those you've invited from here before, then Figma's
+   own contacts, the ones its share dialog suggests */
+const sugg = { q: "", items: [], active: 0, seq: 0, timer: 0, cache: new Map(), members: {}, loading: false };
+const lastAddress = (text) => text.split(/[\s,;]+/).pop() ?? "";
+// Your teams' people, fetched once the invite box is first used, for the
+// teams whose window hasn't been opened
+function loadTeamPeople() {
+  if (!LIVE || sugg.loading) return;
+  sugg.loading = true;
+  const teams = PLANS.flatMap((plan) => plan.teams).filter((team) => !TEAM_INFO[team.id]).slice(0, 20);
+  for (const team of teams) {
+    api(`/api/teams/${team.id}/members`).then((list) => {
+      sugg.members[team.id] = (Array.isArray(list) ? list : []).filter((m) => m.id && m.email).map((m) => ({ id: m.id, name: m.name || m.email, email: m.email, img_url: m.img_url }));
+      if (sugg.q) suggest();
+    }, () => {});
+  }
+}
+function rememberInvited(emails) {
+  const had = store.get("invited", []).filter((e) => !emails.includes(e));
+  store.set("invited", [...emails, ...had].slice(0, 40));
+}
+// Who's already here, or typed in already, isn't suggested again
+function notHere() {
+  const input = $(".invite input", win);
+  // Not counting the address still being typed
+  const value = input?.value ?? "";
+  const typed = lastAddress(value) ? emailsIn(value).slice(0, -1) : emailsIn(value);
+  const ids = new Set([LIVE ? Live.uid : "me"]);
+  const emails = new Set(typed.map((e) => e.toLowerCase()));
+  for (const m of peopleOf() ?? []) {
+    ids.add(m.id);
+    if (m.email) emails.add(m.email.toLowerCase());
+    if (m.pending) emails.add(m.name.toLowerCase());
+  }
+  return (p) => !ids.has(p.id) && !emails.has(p.email.toLowerCase());
+}
+// How well someone matches: their name's start, then a word in it or
+// their address's start, then anywhere in the address
+function matchRank(p, q) {
+  const name = (p.name ?? "").toLowerCase();
+  const email = p.email.toLowerCase();
+  if (name.startsWith(q)) return 0;
+  if (name.split(/\s+/).some((w) => w.startsWith(q)) || email.startsWith(q)) return 1;
+  if (email.includes(q)) return 2;
+  return -1;
+}
+function knownPeople() {
+  const people = new Map();
+  const add = (p, why) => p.email && !people.has(p.email.toLowerCase()) && people.set(p.email.toLowerCase(), { ...p, why });
+  if (!LIVE) for (const [pid, p] of Object.entries(PEOPLE)) add({ id: pid, name: p.name, email: `${pid}@example.com`, color: p.color }, "In your teams");
+  const teams = { ...sugg.members };
+  for (const [tid, info] of Object.entries(TEAM_INFO)) teams[tid] = (info.members ?? []).filter((m) => !m.pending);
+  for (const [tid, members] of Object.entries(teams)) {
+    const name = teamById(tid)?.team.name;
+    for (const m of members) add({ id: m.id, name: m.name, email: m.email, img_url: m.img_url }, name ? `In ${name}` : "In your teams");
+  }
+  for (const user of LIVE ? Live.users : []) add({ id: user.id, name: user.name, email: user.email, img_url: user.img_url }, "Your account");
+  for (const email of store.get("invited", [])) add({ id: `invited:${email}`, name: email, email }, "Invited before");
+  return [...people.values()];
+}
+function suggest() {
+  const input = $(".invite input", win);
+  const atEnd = input && document.activeElement === input && input.selectionEnd === input.value.length;
+  const q = atEnd ? lastAddress(input.value).toLowerCase() : "";
+  sugg.q = q;
+  clearTimeout(sugg.timer);
+  const seq = ++sugg.seq;
+  if (!q) {
+    sugg.items = [];
+    return drawSugg();
+  }
+  const fresh = notHere();
+  const local = knownPeople().filter(fresh).map((p) => [matchRank(p, q), p]).filter(([r]) => r >= 0).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).map(([, p]) => p);
+  const show = (found) => {
+    const was = sugg.items[sugg.active]?.email;
+    const seen = new Set();
+    sugg.items = [...local, ...found.filter(fresh)].filter((p) => !seen.has(p.email.toLowerCase()) && seen.add(p.email.toLowerCase())).slice(0, 6);
+    sugg.active = Math.max(0, sugg.items.findIndex((p) => p.email === was));
+    drawSugg();
+  };
+  show(sugg.cache.get(q) ?? []);
+  if (!LIVE || sugg.cache.has(q)) return;
+  sugg.timer = setTimeout(() => {
+    api(`/api/contacts/share?query=${encodeURIComponent(q)}&limit=8`).then((list) => {
+      const found = (Array.isArray(list) ? list : []).filter((c) => c.email).map((c) => ({ id: c.id, name: c.handle || c.email, email: c.email, img_url: c.img_url, why: "Worked with in Figma" }));
+      sugg.cache.set(q, found);
+      if (seq === sugg.seq) show(found);
+    }, () => {});
+  }, 120);
+}
+// The typed part of a name or address, in bold
+function marked(text, q) {
+  const at = text.toLowerCase().indexOf(q);
+  if (at < 0 || !q) return esc(text);
+  return esc(text.slice(0, at)) + `<mark>${esc(text.slice(at, at + q.length))}</mark>` + esc(text.slice(at + q.length));
+}
+function drawSugg() {
+  const list = $("#invite-sugg", win);
+  const input = $(".invite input", win);
+  if (!list || !input) return;
+  const q = sugg.q;
+  list.innerHTML = sugg.items.map((p, i) => {
+    const face = p.img_url ? `<img src="${esc(p.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((p.name || "?")[0].toUpperCase());
+    const same = p.name === p.email;
+    return `<div class="opt" role="option" id="sugg-${i}" data-sugg="${i}" aria-selected="${i === sugg.active}"><span class="av" style="background:${p.img_url ? "transparent" : p.color ?? colorForTeam(p.id)}">${face}</span><span>` +
+      (same ? `<b class="em">${marked(p.email, q)}</b>` : `<b>${marked(p.name, q)}</b><small class="em">${marked(p.email, q)}</small>`) +
+      `</span><span class="why">${esc(p.why)}</span></div>`;
+  }).join("");
+  input.setAttribute("aria-expanded", String(sugg.items.length > 0));
+  if (sugg.items.length) input.setAttribute("aria-activedescendant", `sugg-${sugg.active}`);
+  else input.removeAttribute("aria-activedescendant");
+  placeWin();
+}
+// The address being typed swapped for the one picked, ready for the next
+function pickSugg(i) {
+  const p = sugg.items[i];
+  const input = $(".invite input", win);
+  if (!p || !input) return;
+  const typed = lastAddress(input.value);
+  input.value = `${input.value.slice(0, input.value.length - typed.length)}${p.email}, `;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  sugg.items = [];
+  sugg.q = "";
+  drawSugg();
+  inviteReady();
+}
+function clearSugg() {
+  clearTimeout(sugg.timer);
+  sugg.seq++;
+  sugg.items = [];
+  sugg.q = "";
+  drawSugg();
 }
 
 function teamWinHtml() {
@@ -3711,7 +3887,7 @@ function teamWinHtml() {
   html += `<section class="ws"><h3>About</h3>` + (edit ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : `<p class="about static${about ? "" : " blank"}">${esc(about || "No description")}</p>`) + `</section>`;
   // Professional teams pay per seat: their seats are on the settings page
   const seats = plan.tier === "Pro" && edit ? `<button data-w="all-settings">Seats${fig("right")}</button>` : "";
-  html += `<section class="ws"><h3>People${seats}</h3>`;
+  html += `<section class="ws"><h3>People${blurToggle()}${seats}</h3>`;
   html += inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor]);
   html += `<button class="ib wlink" data-w="team-link">${icon("link")}Copy invite link</button>`;
   if (info?.error) html += `<p class="wnote" role="alert">Couldn't load the people: ${esc(info.error)}</p>`;
@@ -3763,6 +3939,8 @@ function drawWin() {
   }
   if (refocus === "emails") input?.focus();
   else if (refocus) $(refocus, win)?.focus();
+  if (refocus === "emails") drawSugg();
+  else sugg.items = [];
   placeWin();
 }
 
@@ -3787,6 +3965,8 @@ function sendInvites() {
   const level = team && standalone(plan) ? ROLE_LEVELS.editor : winState.level ?? ROLE_LEVELS.viewer;
   const done = () => {
     input.value = "";
+    rememberInvited(emails);
+    clearSugg();
     inviteReady();
     toast(emails.length === 1 ? `Invited ${emails[0]}` : `Invited ${emails.length} people`);
     (team ? loadTeamInfo(id) : loadRoles(id)).then(drawWin, () => {});
@@ -4076,7 +4256,7 @@ function seatsSection(id, seats) {
   const sub = sum.monthly_subscription ?? sum.annual_subscription;
   const term = sum.monthly_subscription ? "month" : "year";
   const plan = sub ? `${money(sub.estimated_amount_due ?? 0, sum.currency)} a ${term} · ${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${dayOf(sub.current_period_end)}` : "";
-  let html = `<section class="sec"><h2>Seats<small>${esc(plan)}</small></h2><div class="seats">`;
+  let html = `<section class="sec"><h2>Seats<small>${esc(plan)}</small>${blurToggle()}</h2><div class="seats">`;
   const ask = TEAM_SET[id].askSeat;
   for (const u of seats.users ?? []) {
     const key = u.active_seat_type?.key ?? "";
@@ -4095,7 +4275,7 @@ function seatsSection(id, seats) {
       continue;
     }
     const price = seatPrice(seats, key);
-    html += `<div class="srow">${avatar}<span class="st"><b>${esc(name)}${me ? ` <i style="color:var(--text2);font-style:normal">(you)</i>` : ""}</b><small>${esc(who.email ?? "")}</small></span><span class="ctl"><button class="ib" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? ` · ${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}` : ""}${icon("down")}</button></span></div>`;
+    html += `<div class="srow">${avatar}<span class="st"><b>${esc(name)}${me ? ` <i style="color:var(--text2);font-style:normal">(you)</i>` : ""}</b><small class="em">${esc(who.email ?? "")}</small></span><span class="ctl"><button class="ib" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? ` · ${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}` : ""}${icon("down")}</button></span></div>`;
   }
   return html + `</div></section>`;
 }
@@ -4392,8 +4572,52 @@ win.addEventListener("submit", (e) => {
   e.preventDefault();
   sendInvites();
 });
-win.addEventListener("input", (e) => e.target.matches(".invite input") && inviteReady());
+win.addEventListener("input", (e) => {
+  if (!e.target.matches(".invite input")) return;
+  inviteReady();
+  suggest();
+});
+win.addEventListener("focusin", (e) => e.target.matches?.(".invite input") && loadTeamPeople());
+// Gone once the box is left, unless it's only being drawn again
+win.addEventListener("focusout", (e) => {
+  if (!e.target.matches?.(".invite input")) return;
+  setTimeout(() => document.activeElement?.matches?.(".invite input") || clearSugg());
+});
+win.addEventListener("pointerdown", (e) => {
+  const opt = e.target.closest?.("[data-sugg]");
+  if (!opt) return;
+  // The box keeps focus
+  e.preventDefault();
+  pickSugg(Number(opt.dataset.sugg));
+});
+win.addEventListener("pointermove", (e) => {
+  const i = Number(e.target.closest?.("[data-sugg]")?.dataset.sugg ?? -1);
+  if (i < 0 || i === sugg.active) return;
+  sugg.active = i;
+  drawSugg();
+});
 win.addEventListener("keydown", (e) => {
+  if (e.target.matches?.(".invite input")) {
+    const n = sugg.items.length;
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && n) {
+      e.preventDefault();
+      sugg.active = (sugg.active + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      drawSugg();
+      $(`#sugg-${sugg.active}`, win)?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    if ((e.key === "Enter" || e.key === "Tab") && n && !e.shiftKey) {
+      e.preventDefault();
+      pickSugg(sugg.active);
+      return;
+    }
+    if (e.key === "Escape" && n) {
+      e.preventDefault();
+      clearSugg();
+      return;
+    }
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") setTimeout(suggest);
+  }
   if (e.key !== "Escape") return;
   e.preventDefault();
   // Out of asking about a removal first, then out of the window
