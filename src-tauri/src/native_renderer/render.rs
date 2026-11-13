@@ -299,6 +299,13 @@ fn half_octave(px: f32) -> f32 {
     2f32.powf((px.max(1e-6).log2() * 2.0).ceil() / 2.0)
 }
 
+/// The node and content the custom effects image `key` is of, for one of
+/// the tree's (see `Tree::custom_effect`)
+fn tree_effect_of(key: &str) -> Option<(u32, u64)> {
+    let (id, content) = key.strip_prefix(EFFECT)?.strip_prefix('t')?.split_once('.')?;
+    Some((id.parse().ok()?, content.parse().ok()?))
+}
+
 /// Side of the pages thumbs of units are drawn on, in pixels
 const THUMB_PAGE: i32 = 2048;
 /// Pages of thumbs kept at most, 16 MB each
@@ -2188,7 +2195,7 @@ impl Painter {
         self.seq = frame.header.seq;
         let applied_ms = start.elapsed().as_secs_f64() * 1000.0;
         // What custom effects of nodes gone drew goes with them
-        let gone = |key: &str| key.strip_prefix(EFFECT).and_then(|key| key.strip_prefix('t')).and_then(|id| id.parse::<u32>().ok()).is_some_and(|id| tree.node(id).is_none());
+        let gone = |key: &str| tree_effect_of(key).is_some_and(|(id, content)| tree.node(id).is_none() || tree.content(id) != content);
         self.images.retain(|key, _| !gone(key));
         self.kept.lock().unwrap().retain(|key| !gone(key));
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
@@ -3087,7 +3094,7 @@ impl Painter {
         let Some(name) = key.strip_prefix(EFFECT) else {
             return;
         };
-        if let Some(id) = name.strip_prefix('t').and_then(|id| id.parse::<u32>().ok()) {
+        if let Some((id, _)) = tree_effect_of(key) {
             return self.tree_effect(key, id, width);
         }
         let (owner, child) = match name.split_once('>') {

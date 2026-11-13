@@ -193,6 +193,26 @@ pub struct CustomEffect {
 /// children where that draws the same, so a change redraws less
 const SPLIT: u32 = 1500;
 
+/// Feeds what's written to a hasher
+struct HashWrite<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+
+impl std::fmt::Write for HashWrite<'_> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0.write(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// A hash of a path's outline: Figma's own, when it sends one
+fn path_hash(path: &rt::Path) -> u64 {
+    if let Some(hash) = path.content_hash {
+        return hash;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let _ = std::fmt::Write::write_fmt(&mut HashWrite(&mut hasher), format_args!("{path:?}"));
+    hasher.finish()
+}
+
 /// Nested nodes drawn at most, against a tree that refers to itself
 const DEPTH: u8 = 96;
 
@@ -202,6 +222,10 @@ pub struct Tree {
     pub root: Option<u32>,
     pub header: Option<Header>,
     info: RefCell<IdMap<u32, Info>>,
+    /// A hash of what each node draws, with all under it, by which units
+    /// are known: Figma sends a node again under another id, unchanged, and
+    /// an id again for another node
+    contents: IdMap<u32, u64>,
     /// Skia's copy of each path, by the path's address, kept with it
     paths: RefCell<HashMap<usize, (Arc<rt::Path>, Path)>>,
     /// Pattern tiles: by source, tiling and zoom level
@@ -218,6 +242,7 @@ impl Tree {
             root: None,
             header: None,
             info: RefCell::default(),
+            contents: IdMap::default(),
             paths: RefCell::default(),
             patterns: RefCell::default(),
             octaves: Vec::new(),
@@ -231,6 +256,8 @@ impl Tree {
         if header.mode != 0 && self.root.is_none() {
             return Err("a change before the whole scene".into());
         }
+        // What a whole scene's nodes were, to know those sent again the same
+        let previous = (header.mode == 0).then(|| self.forest.nodes.clone());
         let applied = self.forest.apply(frame.forest(), header.mode, &header.released, self.schema)?;
         if !self.forest.nodes.contains_key(&header.root) {
             self.root = None;
@@ -245,6 +272,7 @@ impl Tree {
             }
         }
         drop(info);
+        self.renew(&applied, previous.as_ref(), &header.released);
         if header.mode == 0 || !header.released.is_empty() {
             self.paths.borrow_mut().retain(|_, (path, _)| Arc::strong_count(path) > 1);
             self.patterns.borrow_mut().clear();
@@ -255,6 +283,95 @@ impl Tree {
         self.root = Some(header.root);
         self.header = Some(header.clone());
         Ok(applied)
+    }
+
+    /// Hashes what the frame's new nodes draw, each after those it refers
+    /// to, as they come. Of a whole scene, a node the same as the one its
+    /// id was, over nodes all the same too, keeps its hash, which is most
+    /// of them and far quicker than hashing them again
+    fn renew(&mut self, applied: &rt::Applied, previous: Option<&IdMap<u32, Arc<Node>>>, released: &[u32]) {
+        let before = match previous {
+            Some(_) => std::mem::take(&mut self.contents),
+            None => {
+                for id in released {
+                    self.contents.remove(id);
+                }
+                IdMap::default()
+            }
+        };
+        for &id in &applied.new_nodes {
+            let Some(node) = self.forest.get(id) else { continue };
+            let kept = previous
+                .and_then(|previous| previous.get(&id))
+                .filter(|old| ***old == **node)
+                .and_then(|_| before.get(&id))
+                .filter(|_| node.refs().all(|r| before.get(&r) == self.contents.get(&r)));
+            let content = match kept {
+                Some(&content) => content,
+                None => self.hash_node(node),
+            };
+            self.contents.insert(id, content);
+        }
+    }
+
+    /// A hash of what node `id` draws, see `contents`
+    pub fn content(&self, id: u32) -> u64 {
+        self.contents.get(&id).copied().unwrap_or(0)
+    }
+
+    fn hash_node(&self, node: &Node) -> u64 {
+        use std::fmt::Write;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        // Each field, so one added to `Node` has to be thought of here
+        let Node {
+            id,
+            op,
+            children,
+            child,
+            transform,
+            paint_size,
+            geometry,
+            fill_geometries,
+            stroke_geometries,
+            stroke_mode,
+            bg_blur_expansion_for_frame_fill,
+            is_created_from_brush,
+            blend_mode,
+            opacity,
+            alpha_node,
+            color_node,
+            mask_op,
+            color,
+            radius,
+            ext,
+            extra,
+        } = node;
+        // Custom effects are run and kept by node
+        if matches!(op, Op::CustomEffect) {
+            id.hash(&mut hasher);
+        }
+        let _ = write!(
+            HashWrite(&mut hasher),
+            "{op:?}{transform:?}{paint_size:?}{stroke_mode:?}{bg_blur_expansion_for_frame_fill:?}{is_created_from_brush:?}{blend_mode:?}{opacity:?}{mask_op:?}{color:?}{radius:?}{ext:?}{extra:?}"
+        );
+        for geometry in geometry.iter().chain(fill_geometries).chain(stroke_geometries) {
+            let rt::Geometry { path, paints, glyph_batch, glyph_metadata, extra } = geometry;
+            path.as_deref().map(path_hash).hash(&mut hasher);
+            let _ = write!(HashWrite(&mut hasher), "{paints:?}{glyph_metadata:?}{extra:?}");
+            if let Some(batch) = glyph_batch {
+                let rt::GlyphBatch { glyphs, decoration_paths, should_round_y, extra } = &**batch;
+                let _ = write!(HashWrite(&mut hasher), "{glyphs:?}{should_round_y:?}{extra:?}");
+                for path in decoration_paths {
+                    path_hash(path).hash(&mut hasher);
+                }
+            }
+            0xfeu8.hash(&mut hasher);
+        }
+        (children.len(), child.is_some(), alpha_node.is_some(), color_node.is_some()).hash(&mut hasher);
+        for id in node.refs() {
+            self.content(id).hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     pub fn node(&self, id: u32) -> Option<&Arc<Node>> {
@@ -416,6 +533,18 @@ impl Tree {
         if let Some(root) = self.root {
             self.expand(root, Matrix::default(), &mut Vec::new(), 0, &mut out);
         }
+        // The same drawn twice in the same place is two units, for either
+        // to go on its own
+        let mut seen: HashMap<usize, usize> = HashMap::with_capacity(out.len());
+        for unit in &mut out {
+            let count = seen.entry(unit.key).or_insert(0);
+            if *count > 0 {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                (unit.key, *count).hash(&mut hasher);
+                unit.key = hasher.finish() as usize;
+            }
+            *count += 1;
+        }
         out
     }
 
@@ -465,7 +594,7 @@ impl Tree {
             }
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        id.hash(&mut hasher);
+        self.content(id).hash(&mut hasher);
         let mut values = [0.0f32; 9];
         for m in std::iter::once(&at).chain(clips.iter().map(|(_, m)| m)) {
             m.get_9(&mut values);
@@ -474,7 +603,7 @@ impl Tree {
             }
         }
         for (fill, _) in clips.iter() {
-            fill.hash(&mut hasher);
+            self.content(*fill).hash(&mut hasher);
         }
         out.push(TreeUnit {
             key: hasher.finish() as usize,
@@ -544,7 +673,7 @@ impl Tree {
         }
         let guid = texture.node_guid.unwrap_or_default();
         Some(CustomEffect {
-            key: format!("{}t{id}", draw::EFFECT),
+            key: format!("{}t{id}.{}", draw::EFFECT, self.content(id)),
             node: format!("{}:{}", guid.session_id, guid.local_id),
             chain,
             area,
