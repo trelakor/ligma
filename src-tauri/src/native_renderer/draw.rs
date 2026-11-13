@@ -692,7 +692,7 @@ impl<'a> Encoder<'a> {
         let sampling = if at_scale {
             SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
         } else if scale > self.px * 1.5 {
-            SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+            sampled(&img.image, FilterMode::Linear, MipmapMode::Linear)
         } else {
             SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
         };
@@ -760,7 +760,7 @@ impl<'a> Encoder<'a> {
             let px = self.px * m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y()));
             let scale = img.image.width() as f32 / area.width();
             let sampling = if scale > px * 1.5 {
-                SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+                sampled(&img.image, FilterMode::Linear, MipmapMode::Linear)
             } else {
                 SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
             };
@@ -1499,6 +1499,15 @@ impl<'a> Encoder<'a> {
     }
 }
 
+/// Sampling `image` with mipmaps only where it has them or Skia makes them
+/// on the CPU. Those Skia makes on the GPU, for an image there without
+/// them, leave a texture whose state it records wrongly, so whatever next
+/// takes that texture from its cache is written in a state it isn't in
+pub fn sampled(image: &Image, filter: FilterMode, mipmap: MipmapMode) -> SamplingOptions {
+    let mipmap = if image.is_texture_backed() && !image.has_mipmaps() { MipmapMode::None } else { mipmap };
+    SamplingOptions::new(filter, mipmap)
+}
+
 /// An image fill's shader: `img` placed by `to_node`, which maps the
 /// original's pixels to the node's own coordinates, in a node `transform`
 /// maps to the canvas, drawn at `px` pixels a unit where the whole image
@@ -1537,9 +1546,9 @@ pub(super) fn image_shader(kit: &Kit, img: &Img, to_node: Matrix, tile: TileMode
                 }
             }
         }
-        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+        sampled(&img.image, FilterMode::Linear, MipmapMode::Linear)
     } else if texels > 4.0 {
-        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+        sampled(&img.image, FilterMode::Linear, MipmapMode::Linear)
     } else {
         SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
     };

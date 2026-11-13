@@ -1077,7 +1077,7 @@ impl<'a> Drawer<'a> {
                 img.area.is_some_and(|area| {
                     let scale = img.image.width() as f32 / area.width().max(1e-6);
                     let sampling = if scale > self.device_scale() * 1.5 {
-                        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear)
+                        draw::sampled(&img.image, FilterMode::Linear, MipmapMode::Linear)
                     } else {
                         SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
                     };
