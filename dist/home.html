@@ -237,6 +237,7 @@
   .kbd .new button:focus-visible { outline-color: #fff; }
 
   #filters { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 16px 8px 32px; }
+  #filters:empty { min-height: 0; padding-bottom: 0; }
   .seg { display: flex; padding: 2px; border-radius: 6px; background: var(--bg2); }
   .seg button { height: 24px; padding: 0 10px; border-radius: 4px; color: var(--text2); }
   .seg button:hover { color: var(--text); }
@@ -751,6 +752,37 @@
   .wfoot .ib .x { margin-left: auto; }
   .wsk { height: 44px; margin: 0 8px; border-radius: 6px; background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
   .wsk + .wsk { margin-top: 4px; }
+
+  /* A team's settings page: rows of a setting and its control, the
+     consequential ones asking in place before they act */
+  .setp { max-width: 680px; }
+  .setp .sec + .sec { margin-top: 20px; }
+  .setp .sec h2 { height: 44px; }
+  .srow { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .sec h2 + .srow, .sec h2 + .seats .srow:first-child { border-top: 0; }
+  .srow .st { flex: 1; min-width: 0; }
+  .srow b { display: block; font-size: 13px; line-height: 20px; font-weight: 450; }
+  .srow small { display: block; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .srow .ctl { display: flex; flex: none; align-items: center; gap: 6px; }
+  .srow .av { flex: none; width: 24px; height: 24px; }
+  a.srow:hover b { text-decoration: underline; text-underline-offset: 2px; }
+  .srow.ask { flex-wrap: wrap; row-gap: 8px; margin: 0 -12px; padding: 12px; border-top-color: transparent; border-radius: 8px; background: var(--hover); }
+  .srow.ask + .srow { border-top-color: transparent; }
+  .tgl { position: relative; flex: none; width: 28px; height: 16px; border-radius: 8px; background: var(--bg3); box-shadow: inset 0 0 0 1px var(--line); transition: background 120ms; }
+  .tgl::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 160ms var(--ease); }
+  .tgl[aria-checked="true"] { background: var(--accent); box-shadow: none; }
+  .tgl[aria-checked="true"]::after { transform: translateX(12px); }
+  .tgl:disabled { opacity: 0.4; }
+  .btn.warn { color: #e03e1a; }
+  .sform { display: grid; gap: 10px; width: 100%; padding-top: 4px; }
+  .sform label { display: grid; gap: 4px; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .sform input, .sform textarea { height: 32px; padding: 0 8px; border: 0; border-radius: 5px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); color: var(--text); font: 450 13px/20px var(--font); outline: none; -webkit-user-select: text; user-select: text; }
+  .sform textarea { height: 64px; padding: 6px 8px; resize: none; }
+  .sform input:focus, .sform textarea:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+  .fhint { color: var(--text2); }
+  .fhint.bad { color: #e03e1a; }
+  .sform .acts { display: flex; justify-content: flex-end; gap: 6px; }
+  .snote { padding: 10px 0 0; color: var(--text2); }
 
   @media (max-width: 860px) {
     #app { grid-template-columns: minmax(0, 1fr); }
@@ -2024,6 +2056,7 @@ function viewName(view) {
   const team = /^[dt]:/.test(view) && teamById(view.slice(2))?.team.name;
   if (view.startsWith("d:")) return team && `Drafts · ${team}`;
   if (view.startsWith("t:")) return team && `Trash · ${team}`;
+  if (view.startsWith("s:")) return teamById(view.slice(2))?.team.name;
   return { home: "Home", recents: "Recents", starred: "Starred", shared: "Shared with you", drafts: "Drafts", trash: "Trash" }[view];
 }
 
@@ -2115,7 +2148,7 @@ function renderSide() {
     const open = !state.collapsed.has(team.id);
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
-    const lit = win.classList.contains("open") && winState.kind === "team" && winState.team === team.id;
+    const lit = (win.classList.contains("open") && winState.kind === "team" && winState.team === team.id) || state.view === `s:${team.id}`;
     let out = `<div class="team-row${lit ? " lit" : ""}" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
     out += `<button class="team-more" data-team-more="${team.id}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(team.name)}" title="Settings, people and more">${icon("more")}</button>`;
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${fig(isStarred ? "starOn" : "star")}</button></div>`;
@@ -2152,7 +2185,8 @@ function renderHead(count) {
   // Not while the project's name or description is being edited
   if ($("input", head)) return;
   const name = viewName(state.view);
-  const n = state.mode === "loading" || state.view === "home" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  const settings = settingsTeam() && teamById(settingsTeam());
+  const n = settings ? `${tierOf(settings.plan)} · Settings` : state.mode === "loading" || state.view === "home" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
   const project = state.view.startsWith("p:") ? PROJECTS[state.view.slice(2)] : null;
   morph(head, `<button class="menu-btn" data-act="side" aria-label="Show sidebar">${icon("side")}</button>
     ${project ? projectTitle(project, n) : `<h1><span>${esc(name)}</span><small>${n}</small></h1>`}<span class="grow"></span>${project ? projectTools(project) : ""}
@@ -2162,6 +2196,8 @@ function renderHead(count) {
 
 function renderFilters() {
   let html;
+  // A team's settings page has no files to filter
+  if (settingsTeam()) return morph(filters, LIVE && Live.error ? `<div class="banner" role="alert">${esc(`Couldn't reach Figma (${Live.error})`)}<button data-act="retry">Try again</button></div>` : "");
   // A tab for each kind of file you have, in the New menu's order, and the
   // one picked even if its last file went
   const have = new Set(FILES.filter((f) => !f.trashed).map((f) => f.type));
@@ -2494,7 +2530,8 @@ function render({ keepScroll = true } = {}) {
   const ready = LIVE && (state.view === "home" ? Live.ready.has("recents") || Live.ready.has("starred") : Live.ready.has(state.view));
   const home = state.view === "home" && state.mode !== "empty" && (!LIVE || ready) ? homeLayout() : null;
   if (home) homeKey = home.key;
-  const list = state.mode === "empty" ? [] : home ? home.files : viewFiles();
+  const settings = settingsTeam();
+  const list = state.mode === "empty" || settings ? [] : home ? home.files : viewFiles();
   order = list.map((f) => f.id);
   for (const id of state.sel) if (!order.includes(id)) state.sel.delete(id);
   renderSide();
@@ -2502,7 +2539,8 @@ function render({ keepScroll = true } = {}) {
   renderFilters();
   sections = [];
   let html = "";
-  if (state.mode === "loading") html = renderSkeleton();
+  if (settings) html = settingsPage(settings);
+  else if (state.mode === "loading") html = renderSkeleton();
   else if (LIVE && Live.signedOut) html = `<div class="empty"><div class="ic">${icon("users")}</div><h2>Sign in to Figma</h2><p>Your files show here once you're signed in</p><a class="btn primary" href="https://www.figma.com/login">Sign in</a></div>`;
   else if (LIVE && !ready && !Live.error) {
     need(state.view);
@@ -3020,7 +3058,7 @@ function toggleTeamStar(id) {
 function currentTeam() {
   const view = state.view;
   if (view.startsWith("p:")) return PROJECTS[view.slice(2)]?.team.id;
-  if (view.startsWith("d:") || view.startsWith("t:")) return view.slice(2);
+  if (/^[dts]:/.test(view)) return view.slice(2);
   return [...pinnedTeams][0] ?? FILES.filter((f) => f.recent && f.team).sort((a, b) => b.at - a.at)[0]?.team ?? PLANS[0]?.teams[0]?.id;
 }
 
@@ -3379,6 +3417,7 @@ function teamMenu(id, at) {
   const pinned = STARRED_TEAMS().has(id);
   showMenu([
     { label: "Settings and people", act: () => openTeamWin(id, at) },
+    { label: "All settings", act: () => go(`s:${id}`) },
     { label: "Invite people…", act: () => openTeamWin(id, at, "invite") },
     { label: "Copy invite link", act: () => copyTeamLink(id) },
     null,
@@ -3670,15 +3709,15 @@ function teamWinHtml() {
     `</h2><small>${esc(tier)}${count}</small></div><button class="ib x" data-w="close" aria-label="Close" title="Close">${icon("x")}</button></div><div class="wb">`;
   const about = info?.description ?? team.description ?? "";
   html += `<section class="ws"><h3>About</h3>` + (edit ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : `<p class="about static${about ? "" : " blank"}">${esc(about || "No description")}</p>`) + `</section>`;
-  // Professional teams pay per seat: seats stay with Figma's billing
-  const seats = plan.tier === "Pro" && edit ? `<a href="https://www.figma.com/files/team/${esc(team.id)}" target="_blank" rel="noopener" title="Seats are billed, so they change in Figma">Seats in Figma${fig("ext")}</a>` : "";
+  // Professional teams pay per seat: their seats are on the settings page
+  const seats = plan.tier === "Pro" && edit ? `<button data-w="all-settings">Seats${fig("right")}</button>` : "";
   html += `<section class="ws"><h3>People${seats}</h3>`;
   html += inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor]);
   html += `<button class="ib wlink" data-w="team-link">${icon("link")}Copy invite link</button>`;
   if (info?.error) html += `<p class="wnote" role="alert">Couldn't load the people: ${esc(info.error)}</p>`;
   else if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div><div class="wsk"></div>`;
   else html += `<div role="list" aria-label="People in ${esc(team.name)}">${info.members.map((m, i) => (winState.ask?.id === m.id ? askRow(m) : personRow(m, tier, memberControl(m, i, tier)))).join("")}</div>`;
-  html += `</section></div><div class="wfoot"><a class="ib" href="https://www.figma.com/files/team/${esc(team.id)}" target="_blank" rel="noopener">Libraries, AI, transfer and deleting in Figma<span class="x">${fig("ext")}</span></a></div>`;
+  html += `</section></div><div class="wfoot"><button class="ib" data-w="all-settings">${plan.tier === "Pro" ? "Seats, libraries, AI, transfer and deleting" : "Libraries, AI, transfer and deleting"}<span class="x">${fig("right")}</span></button></div>`;
   return html;
 }
 
@@ -3918,6 +3957,407 @@ function removePerson(m) {
   }, m.pending ? "cancel the invite" : "remove them");
 }
 
+/* A team's settings page, in Home's main area: its plan and seats,
+   libraries, AI, and transferring or deleting it, as Figma's own team
+   settings have them. Each change that costs money or can't be undone says
+   what it does, in place, before it's made */
+
+const TEAM_SET = {};
+const settingsTeam = () => (state.view.startsWith("s:") && teamById(state.view.slice(2)) ? state.view.slice(2) : null);
+const tierOf = (plan) => (plan.teams.length === 1 ? plan.tier : plan.name);
+// Figma's seat types, as its members page names them; "" is a View seat
+const SEATS = [["expert", "Full seat"], ["developer", "Dev seat"], ["collaborator", "Collab seat"], ["", "View seat"]];
+const seatName = (key) => SEATS.find(([k]) => k === (key ?? ""))?.[1] ?? "View seat";
+const money = (cents, currency = "usd") => new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: cents % 100 ? 2 : 0 }).format(cents / 100);
+const dayOf = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+const SAMPLE_SET = {
+  meta: { ai_features_disabled: false, ai_data_sharing_enabled: true, figma_provided_libraries_disabled: false },
+  counts: { team_active_project_count: 3, active_project_active_file_count: 24, active_drafts_count: 6, team_trashed_file_count: 2 },
+  libraries: [{ library_key: "sample", library_file_key: "sample", library_name: "Ligma UI", num_components: 48, num_styles: 12, num_variables: 30 }],
+};
+async function loadTeamSettings(id) {
+  const { team, plan } = teamById(id) ?? {};
+  if (!team) return;
+  // What's open on the page stays open through a reload that ends later
+  const kept = () => ({ transfer: TEAM_SET[id]?.transfer ?? null, deleting: TEAM_SET[id]?.deleting ?? null });
+  try {
+    if (!LIVE) {
+      await loadTeamInfo(id);
+      const seats = plan.tier === "Pro"
+        ? {
+            users: TEAM_INFO[id].members.filter((m) => !m.pending).map((m, i) => ({ user_id: m.id, user: { handle: m.name, email: m.email }, active_seat_type: i < 2 ? { key: "expert" } : null })),
+            summary: { currency: "usd", monthly_subscription: { estimated_amount_due: 4000, current_period_end: new Date(Date.now() + 18 * 864e5).toISOString() }, monthly_seats: { expert: 2 }, total_upgraded_user_counts: { expert: 2 } },
+            rates: { product_prices: [["expert", 2000], ["developer", 1500], ["collaborator", 500]].map(([key, amount]) => ({ tier: "pro", billable_product_key: key, renewal_term: "month", currency: "usd", amount })) },
+          }
+        : null;
+      TEAM_SET[id] = { ...structuredClone(SAMPLE_SET), seats, ...kept() };
+    } else {
+      await loadTeamInfo(id).catch(() => {});
+      const [meta, counts, libraries] = await Promise.all([
+        api(`/api/teams/${id}`),
+        api(`/api/teams/${id}/deletion_file_count`).catch(() => null),
+        api("/api/design_systems/v2/libraries").catch(() => []),
+      ]);
+      // Seats are a Professional team's, and only its admins see them
+      let seats = null;
+      if (meta.pro_team && TEAM_INFO[id]?.admin) {
+        const [users, summary, rates] = await Promise.all([
+          api(`/api/teams/${id}/team_users`),
+          api(`/api/subscriptions/team/${id}/summary`),
+          api(`/api/pricing/rates?plan_parent_id=${id}&plan_type=team`),
+        ]);
+        seats = { users, summary, rates };
+      }
+      TEAM_SET[id] = { meta, counts, libraries: (Array.isArray(libraries) ? libraries : []).filter((l) => String(l.team_id) === id), seats, ...kept() };
+    }
+  } catch (error) {
+    TEAM_SET[id] = { error: error.message, ...kept() };
+  }
+  if (settingsTeam() === id) drawSettingsKeepingFocus();
+}
+
+// What a seat costs here: Figma's price for this plan, billed as it's billed
+function seatPrice(seats, key) {
+  if (!key) return null;
+  const sum = seats.summary;
+  const term = sum.annual_subscription && !sum.monthly_subscription ? "year" : "month";
+  const price = seats.rates.product_prices?.find((p) => p.tier === "pro" && p.billable_product_key === key && p.renewal_term === term && p.currency === (sum.currency ?? "usd"));
+  return price ? `${money(price.amount, price.currency)} a ${term}` : null;
+}
+// Paid seats of a type nobody has: given out without adding to the bill
+function spareSeats(seats, key) {
+  const sum = seats.summary;
+  return (sum.monthly_seats?.[key] ?? 0) + (sum.annual_seats?.[key] ?? 0) - (sum.total_upgraded_user_counts?.[key] ?? 0);
+}
+
+const settingRow = (title, detail, control, extra = "") => `<div class="srow"${extra}><span class="st"><b>${title}</b>${detail ? `<small>${detail}</small>` : ""}</span>${control ? `<span class="ctl">${control}</span>` : ""}</div>`;
+const toggle = (key, label, on, off) => `<button class="tgl" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-set="${key}"${off ? " disabled" : ""}></button>`;
+
+function settingsPage(id) {
+  const { team, plan } = teamById(id);
+  const s = TEAM_SET[id];
+  if (!s) {
+    loadTeamSettings(id);
+    return renderSkeleton();
+  }
+  if (s.error) return `<div class="empty"><div class="ic">${icon("users")}</div><h2>Couldn't load ${esc(team.name)}'s settings</h2><p>${esc(s.error)}</p><button class="btn" data-set="reload">Try again</button></div>`;
+  const admin = TEAM_INFO[id]?.admin ?? !LIVE;
+  const off = !admin;
+  let html = `<div class="setp">`;
+  if (!admin) html += `<p class="snote">Only the team's admins can change these</p>`;
+  if (s.seats) html += seatsSection(id, s.seats);
+  // Libraries: Figma's own kits for the team's files, and what it publishes
+  const kits = !s.meta.figma_provided_libraries_disabled;
+  html += `<section class="sec"><h2>Libraries</h2>`;
+  // Starter teams always have them: Figma takes the setting and ignores it
+  const starter = !!s.meta.starter_team;
+  html += settingRow("Figma's UI kits and libraries", starter ? "Starter teams always have the libraries Figma provides, like its iOS, Android and Material kits" : "Lets this team's files use the libraries Figma provides, like its iOS, Android and Material kits", toggle("kits", "Figma's UI kits and libraries", starter || kits, off || starter));
+  if (s.libraries.length) {
+    for (const l of s.libraries) {
+      const parts = [[l.num_components, "component"], [l.num_styles, "style"], [l.num_variables, "variable"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`);
+      html += `<a class="srow" href="https://www.figma.com/design/${esc(l.library_file_key ?? l.library_key)}" target="_blank" rel="noopener"><span class="st"><b>${esc(l.library_name ?? "Library")}</b><small>Published library${parts.length ? ` · ${parts.join(", ")}` : ""}</small></span><span class="ctl">${fig("ext")}</span></a>`;
+    }
+  } else html += settingRow("No libraries published from this team", "A library published from one of its files shows here");
+  html += `</section>`;
+  // AI: Figma's AI in the team's files, and whether Figma learns from them
+  const ai = !s.meta.ai_features_disabled;
+  const student = !!s.meta.student_team_at;
+  html += `<section class="sec"><h2>AI</h2>`;
+  html += settingRow("AI features", "Lets people use Figma's AI tools in this team's files", toggle("ai", "AI features", ai, off));
+  html += settingRow("Share content to train Figma's AI", student ? "Off for education teams" : "Lets Figma use this team's files to improve its AI models", toggle("ai-data", "Share content to train Figma's AI", !student && !!s.meta.ai_data_sharing_enabled, off || student));
+  html += `</section>`;
+  html += `<section class="sec"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section>`;
+  return html + `</div>`;
+}
+
+function seatsSection(id, seats) {
+  const sum = seats.summary;
+  const sub = sum.monthly_subscription ?? sum.annual_subscription;
+  const term = sum.monthly_subscription ? "month" : "year";
+  const plan = sub ? `${money(sub.estimated_amount_due ?? 0, sum.currency)} a ${term} · ${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${dayOf(sub.current_period_end)}` : "";
+  let html = `<section class="sec"><h2>Seats<small>${esc(plan)}</small></h2><div class="seats">`;
+  const ask = TEAM_SET[id].askSeat;
+  for (const u of seats.users ?? []) {
+    const key = u.active_seat_type?.key ?? "";
+    const who = u.user ?? {};
+    const name = who.handle || who.email || "Someone";
+    const face = who.img_url ? `<img src="${esc(who.img_url)}" alt="" referrerpolicy="no-referrer">` : esc(name[0]);
+    const avatar = `<span class="av" style="background:${who.img_url ? "transparent" : colorForTeam(u.user_id)}">${face}</span>`;
+    const me = u.user_id === (LIVE ? Live.uid : "me");
+    if (ask?.user === u.user_id) {
+      const to = ask.seat;
+      const price = seatPrice(seats, to);
+      const bits = [];
+      if (to) bits.push(spareSeats(seats, to) > 0 ? `It uses a ${seatName(to)} this team already pays for` : `It adds ${price ?? "a seat"} to this team's bill`);
+      if (key && sub) bits.push(`Their ${seatName(key)} stays on the bill until the plan renews on ${dayOf(sub.current_period_end)}, for someone else to use`);
+      html += `<div class="srow ask">${avatar}<span class="st"><b id="seat-q">Give ${esc(name)} a ${seatName(to)}?</b><small>${esc(bits.join(". "))}</small></span><span class="ctl"><button class="btn sm" data-set="seat-no">Cancel</button><button class="btn sm primary" data-set="seat-yes" aria-describedby="seat-q">${to ? `${spareSeats(seats, to) > 0 ? "Give" : "Add"} ${seatName(to)}` : "Change seat"}</button></span></div>`;
+      continue;
+    }
+    const price = seatPrice(seats, key);
+    html += `<div class="srow">${avatar}<span class="st"><b>${esc(name)}${me ? ` <i style="color:var(--text2);font-style:normal">(you)</i>` : ""}</b><small>${esc(who.email ?? "")}</small></span><span class="ctl"><button class="ib" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? ` · ${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}` : ""}${icon("down")}</button></span></div>`;
+  }
+  return html + `</div></section>`;
+}
+
+function transferRow(id, s, off) {
+  const t = s.transfer;
+  if (t?.sent) return settingRow("Transfer requested", `Sent to ${esc(t.email)}${t.orgName ? ` at ${esc(t.orgName)}` : ""}. The team moves once they accept`, t.requestId ? `<button class="btn sm" data-set="transfer-withdraw">Withdraw</button>` : "");
+  if (!t?.open) return settingRow("Transfer to another organization", "Moves the team, its projects, files and people to an organization. An admin there accepts it", `<button class="btn sm" data-set="transfer-open"${off ? " disabled" : ""}>Transfer…</button>`);
+  const hint = t.error ? `<span class="fhint bad" role="alert">${esc(t.error)}</span>` : t.orgName ? `<span class="fhint">To ${esc(t.orgName)}</span>` : `<span class="fhint">Copy the link of any page in that organization in Figma</span>`;
+  return `<div class="srow ask"><span class="st"><b>Transfer ${esc(teamById(id).team.name)} to another organization</b><small>The team, its projects, files and people move once an admin there accepts. Libraries and fonts it used may not come along</small></span>
+    <div class="sform"><label>Link to the organization<input data-set-field="org" value="${esc(t.org ?? "")}" placeholder="https://www.figma.com/files/…" spellcheck="false" autocomplete="off">${hint}</label>
+    <label>An admin's email<input data-set-field="email" type="email" value="${esc(t.email ?? "")}" placeholder="admin@example.com" spellcheck="false" autocomplete="off"></label>
+    <label>Message, if any<textarea data-set-field="message">${esc(t.message ?? "")}</textarea></label>
+    <div class="acts"><button class="btn sm" data-set="transfer-cancel">Cancel</button><button class="btn sm primary" data-set="transfer-send"${transferReady(t) ? "" : " disabled"}>Send request</button></div></div></div>`;
+}
+const transferReady = (t) => !!t.orgId && isEmail(t.email ?? "") && !t.sending;
+
+function deleteRow(id, s, plan, off) {
+  const { team } = teamById(id);
+  const c = s.counts;
+  const what = c ? [[c.team_active_project_count, "project"], [c.active_project_active_file_count, "file"], [c.active_drafts_count, "draft"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`) : [];
+  const detail = `Deletes it with ${what.length ? what.join(", ") : "everything in it"}. Figma can restore it for a while`;
+  // A paid plan is cancelled before its team goes: billing stays Figma's
+  if (s.meta.pro_team && s.meta.subscription === "ok" && !s.seats?.summary?.plan_canceled)
+    return settingRow("Delete team", "Cancel the Professional plan before deleting this team, so it stops billing", `<a class="btn sm" href="https://www.figma.com/files/team/${esc(id)}" target="_blank" rel="noopener">Cancel plan in Figma${fig("ext")}</a>`);
+  const d = s.deleting;
+  if (!d) return settingRow("Delete team", esc(detail), `<button class="btn sm warn" data-set="delete-open"${off ? " disabled" : ""}>Delete…</button>`);
+  const ok = d.typed.trim() === team.name.trim();
+  return `<div class="srow ask"><span class="st"><b id="del-q">Delete ${esc(team.name)}?</b><small>${esc(detail)}. Everyone in it loses access</small></span>
+    <div class="sform"><label>Type the team's name to confirm<input data-set-field="typed" value="${esc(d.typed)}" spellcheck="false" autocomplete="off" aria-describedby="del-q"></label>
+    <div class="acts"><button class="btn sm" data-set="delete-cancel">Cancel</button><button class="btn sm danger" data-set="delete-yes"${ok && !d.busy ? "" : " disabled"}>Delete team</button></div></div></div>`;
+}
+
+// The toggles: optimistic, with Undo, rolled back if Figma refuses
+const TEAM_FLAGS = {
+  kits: { field: "figma_provided_libraries_disabled", on: false, say: ["Figma's UI kits are on for", "Figma's UI kits are off for"], put: (id, on) => api(`/api/teams/${id}`, { method: "PUT", json: { figma_provided_libraries_disabled: !on } }) },
+  ai: { field: "ai_features_disabled", on: false, say: ["AI features are on for", "AI features are off for"], put: (id, on) => api(`/api/teams/${id}`, { method: "PUT", json: { ai_features_disabled: !on } }) },
+  "ai-data": { field: "ai_data_sharing_enabled", on: true, say: ["Figma can train its AI on", "Figma won't train its AI on"], put: (id, on) => api(`/api/teams/${id}/ai_data_sharing`, { method: "PUT", json: { enabled: on } }) },
+};
+function setTeamFlag(id, key) {
+  const flag = TEAM_FLAGS[key];
+  const s = TEAM_SET[id];
+  const name = teamById(id).team.name;
+  const isOn = () => s.meta[flag.field] === flag.on;
+  const put = (on) => {
+    s.meta[flag.field] = on ? flag.on : !flag.on;
+    render();
+    if (LIVE) send(flag.put(id, on), () => {
+      s.meta[flag.field] = on ? !flag.on : flag.on;
+    }, "change the setting");
+  };
+  const on = !isOn();
+  put(on);
+  toast(`${flag.say[on ? 0 : 1]} ${name}`, () => put(!on));
+}
+
+function seatMenu(id, userId, at) {
+  const s = TEAM_SET[id];
+  const u = s.seats.users.find((x) => x.user_id === userId);
+  if (!u) return;
+  const current = u.active_seat_type?.key ?? "";
+  showMenu(SEATS.map(([key, label]) => ({
+    label,
+    detail: key ? `${seatPrice(s.seats, key) ?? "Paid"}${spareSeats(s.seats, key) > 0 ? ", one's free to give" : ""}` : "Free",
+    checked: key === current,
+    act: () => {
+      if (key === current) return;
+      s.askSeat = { user: userId, seat: key };
+      render();
+      $("[data-set=seat-no]", scroller)?.focus();
+    },
+  })), at);
+}
+function changeSeat(id) {
+  const s = TEAM_SET[id];
+  const { user, seat } = s.askSeat;
+  const u = s.seats.users.find((x) => x.user_id === user);
+  s.askSeat = null;
+  const name = u?.user?.handle ?? "them";
+  const done = () => {
+    toast(`${name} has a ${seatName(seat)} now`);
+    loadTeamSettings(id);
+  };
+  if (!LIVE) {
+    if (u) u.active_seat_type = seat ? { key: seat } : null;
+    render();
+    return done();
+  }
+  render();
+  api(`/api/teams/${id}/team_user_batch`, { method: "PUT", json: { team_id: id, team_user_deltas: [{ user_id: user, seat_type: seat, seat_increase_authorized: true }], entry_point: "members_tab" } })
+    .then(done, (error) => toast(`Couldn't change the seat: ${error.message}`));
+}
+
+// The organization a pasted link points into: figma.com/files/<org id>/…
+async function transferOrg(id) {
+  const t = TEAM_SET[id].transfer;
+  const org = (t.org ?? "").match(/figma\.com\/files\/(\d+)(?:[/?#]|$)/)?.[1] ?? null;
+  t.orgId = null;
+  t.orgName = null;
+  t.error = t.org && !org ? "That's not a link into an organization. Open any page of it in Figma and copy its link" : null;
+  if (org) {
+    try {
+      const name = LIVE ? await api(`/api/orgs/${org}/org_name`) : "Northwind Studio";
+      if (TEAM_SET[id].transfer !== t) return;
+      t.orgId = org;
+      t.orgName = typeof name === "string" ? name : name?.name ?? null;
+    } catch {
+      t.error = "Couldn't find that organization";
+    }
+  }
+  drawSettingsKeepingFocus();
+}
+function sendTransfer(id) {
+  const t = TEAM_SET[id].transfer;
+  if (!transferReady(t)) return;
+  t.sending = true;
+  drawSettingsKeepingFocus();
+  const sent = (meta) => {
+    TEAM_SET[id].transfer = { sent: true, email: t.email, orgName: t.orgName, requestId: meta?.id ?? meta?.asset_transfer_request?.id ?? null };
+    render();
+    toast(`Sent the transfer request to ${t.email}`);
+  };
+  if (!LIVE) return sent({ id: "sample" });
+  api("/api/asset_transfer/create_request", { method: "POST", json: { transfer_type: "team", team_id: id, destination_user_email: t.email.trim(), destination_team_id: null, destination_org_id: t.orgId, message: t.message?.trim() || null, is_transfer_copy: false } })
+    .then(sent, (error) => {
+      t.sending = false;
+      t.error = error.message;
+      drawSettingsKeepingFocus();
+    });
+}
+function withdrawTransfer(id) {
+  const t = TEAM_SET[id].transfer;
+  const back = () => {
+    TEAM_SET[id].transfer = null;
+    render();
+    toast("Withdrew the transfer request");
+  };
+  if (!LIVE) return back();
+  api(`/api/asset_transfer/${t.requestId}`, { method: "DELETE" }).then(back, (error) => toast(`Couldn't withdraw it: ${error.message}`));
+}
+
+// Deleted teams can be restored for a while, so Undo restores this one
+function deleteTeam(id) {
+  const { team, plan } = teamById(id) ?? {};
+  const s = TEAM_SET[id];
+  if (!team || s.deleting?.typed.trim() !== team.name.trim()) return;
+  s.deleting.busy = true;
+  render();
+  const gone = () => {
+    plan.teams.splice(plan.teams.indexOf(team), 1);
+    if (!plan.teams.length) PLANS.splice(PLANS.indexOf(plan), 1);
+    delete TEAM_SET[id];
+    go("home");
+    toast(`Deleted ${team.name}`, () => {
+      const back = () => {
+        if (!PLANS.includes(plan)) PLANS.push(plan);
+        if (!plan.teams.includes(team)) plan.teams.push(team);
+        render();
+        toast(`Restored ${team.name}`);
+      };
+      if (!LIVE) return back();
+      api(`/api/teams/${id}/restore`, { method: "PUT" }).then(() => {
+        back();
+        boot();
+      }, (error) => toast(`Couldn't restore it: ${error.message}`));
+    });
+  };
+  if (!LIVE) return gone();
+  api(`/api/teams/${id}`, { method: "DELETE" }).then(gone, (error) => {
+    s.deleting.busy = false;
+    render();
+    toast(`Couldn't delete the team: ${error.message}`);
+  });
+}
+
+// Redrawn as typed, with the field being typed in keeping focus and caret
+function drawSettingsKeepingFocus() {
+  const el = document.activeElement;
+  const field = el?.dataset?.setField;
+  const at = field ? [el.selectionStart, el.selectionEnd] : null;
+  render();
+  if (!field) return;
+  const again = $(`[data-set-field="${field}"]`, scroller);
+  again?.focus({ preventScroll: true });
+  if (again && at) again.setSelectionRange(...at);
+}
+
+function settingsClick(el) {
+  const id = settingsTeam();
+  const s = id && TEAM_SET[id];
+  if (!s) return;
+  const act = el.dataset.set;
+  if (act === "reload") {
+    delete TEAM_SET[id];
+    return render();
+  }
+  if (TEAM_FLAGS[act]) return setTeamFlag(id, act);
+  if (act === "seat") return seatMenu(id, el.dataset.user, el.getBoundingClientRect());
+  if (act === "seat-yes") return changeSeat(id);
+  if (act === "seat-no") {
+    const user = s.askSeat?.user;
+    s.askSeat = null;
+    render();
+    return $(`[data-set=seat][data-user="${CSS.escape(user ?? "")}"]`, scroller)?.focus();
+  }
+  if (act === "transfer-open") {
+    s.transfer = { open: true };
+    render();
+    return $("[data-set-field=org]", scroller)?.focus();
+  }
+  if (act === "transfer-cancel") {
+    s.transfer = null;
+    render();
+    return $("[data-set=transfer-open]", scroller)?.focus();
+  }
+  if (act === "transfer-send") return sendTransfer(id);
+  if (act === "transfer-withdraw") return withdrawTransfer(id);
+  if (act === "delete-open") {
+    s.deleting = { typed: "" };
+    render();
+    return $("[data-set-field=typed]", scroller)?.focus();
+  }
+  if (act === "delete-cancel") {
+    s.deleting = null;
+    render();
+    return $("[data-set=delete-open]", scroller)?.focus();
+  }
+  if (act === "delete-yes") return deleteTeam(id);
+}
+scroller.addEventListener("input", (e) => {
+  const field = e.target.dataset?.setField;
+  const id = settingsTeam();
+  if (!field || !id) return;
+  const s = TEAM_SET[id];
+  if (field === "typed") {
+    s.deleting.typed = e.target.value;
+    const ok = e.target.value.trim() === teamById(id).team.name.trim();
+    const yes = $("[data-set=delete-yes]", scroller);
+    if (yes) yes.disabled = !ok;
+    return;
+  }
+  s.transfer[field] = e.target.value;
+  if (field === "org") {
+    clearTimeout(s.transfer.lookup);
+    s.transfer.lookup = setTimeout(() => transferOrg(id), 300);
+  }
+  const send = $("[data-set=transfer-send]", scroller);
+  if (send) send.disabled = !transferReady(s.transfer);
+});
+scroller.addEventListener("keydown", (e) => {
+  const id = settingsTeam();
+  if (!id || !e.target.closest?.(".sform")) return;
+  const s = TEAM_SET[id];
+  if (e.key === "Escape") {
+    e.preventDefault();
+    $(s.deleting ? "[data-set=delete-cancel]" : "[data-set=transfer-cancel]", scroller)?.click();
+  } else if (e.key === "Enter" && e.target.tagName === "INPUT") {
+    e.preventDefault();
+    $(s.deleting ? "[data-set=delete-yes]" : "[data-set=transfer-send]", scroller)?.click();
+  }
+}, true);
+
 win.addEventListener("click", (e) => {
   const el = e.target.closest("[data-w]");
   const act = el?.dataset.w;
@@ -3931,6 +4371,10 @@ win.addEventListener("click", (e) => {
     winState.ask = null;
     drawWin();
     $(`[data-w=person][data-i="${i}"]`, win)?.focus();
+  } else if (act === "all-settings") {
+    const id = winState.team;
+    closeWin(false);
+    go(`s:${id}`);
   } else if (act === "close") closeWin();
   else if (act === "rename") renameTeam(winState.team);
   else if (act === "about") describeTeam(winState.team);
@@ -4873,6 +5317,7 @@ function paletteCommands() {
     const at = () => $(`[data-team-more="${CSS.escape(team.id)}"]`, side)?.closest(".team-row").getBoundingClientRect() ?? { x: 248, y: 64 };
     list.push(
       { label: `${team.name} settings and people`, act: () => openTeamWin(team.id, at()), icon: "users" },
+      { label: `All settings for ${team.name}: seats, libraries, AI`, act: () => go(`s:${team.id}`), icon: "users" },
       { label: `Invite people to ${team.name}`, act: () => openTeamWin(team.id, at(), "invite"), icon: "users" },
     );
   }
@@ -5182,6 +5627,8 @@ scroller.addEventListener("click", (e) => {
     liftJustEnded = false;
     return;
   }
+  const set = e.target.closest("[data-set]");
+  if (set) return set.disabled || settingsClick(set);
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "new") return createFile("design");
   if (act === "clear-filters") {
@@ -5255,7 +5702,7 @@ function edgeScroll() {
 }
 
 scroller.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0 || e.pointerType === "touch" || e.target.closest(".card, button, a, input, .empty")) return;
+  if (e.button !== 0 || e.pointerType === "touch" || e.target.closest(".card, button, a, input, textarea, .empty, .setp")) return;
   // Not on the scrollbar
   if (e.target === scroller && e.offsetX > scroller.clientWidth) return;
   // A box left over from a release the page never heard about
