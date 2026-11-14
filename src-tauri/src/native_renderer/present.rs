@@ -587,6 +587,7 @@ pub struct Screen {
     /// Textures frames read, held till the GPU's drawn them, so the render
     /// thread draws into none the GPU's still reading here
     reading: std::collections::VecDeque<(u64, Vec<Arc<Tex>>)>,
+    hud: Option<super::hud::Hud>,
 }
 
 impl Screen {
@@ -657,6 +658,7 @@ impl Screen {
             fence,
             frames: 0,
             reading: std::collections::VecDeque::new(),
+            hud: None,
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -751,6 +753,10 @@ impl Screen {
         let mut seen = 0;
         // Whether the swap chain has room for a frame already waited for
         let mut room = false;
+        // With Show stats on, the tick they were last drawn in, so they're
+        // drawn again every tick while nothing else changes
+        let started = Instant::now();
+        let mut ticked: Option<u128> = None;
         while !hub.stop.load(Ordering::Relaxed) {
             if !room {
                 unsafe { WaitForSingleObjectEx(self.waitable, 250, true) };
@@ -784,7 +790,9 @@ impl Screen {
                 self.place(at);
             }
             let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
-            if shown.as_ref() == Some(&now) {
+            let tick = super::show_stats().then(|| started.elapsed().as_millis() / super::hud::TICK.as_millis());
+            let again = shown.as_ref() == Some(&now);
+            if again && tick == ticked {
                 drop(snapshot);
                 seen = hub.wait(seen, Duration::from_millis(100));
                 continue;
@@ -819,7 +827,8 @@ impl Screen {
                 });
                 if let Some((merged, pieces)) = merged {
                     hub.shown_seq.store(seq, Ordering::Relaxed);
-                    self.frame(&merged, &pieces, &view, overlay.as_ref(), seq);
+                    self.frame(&merged, &pieces, &view, overlay.as_ref(), seq, again);
+                    ticked = tick;
                     room = false;
                     shown = Some(now);
                     continue;
@@ -851,13 +860,15 @@ impl Screen {
                     continue;
                 };
                 hub.shown_seq.store(seq, Ordering::Relaxed);
-                self.frame(&before, &pieces, &view, overlay.as_ref(), seq);
+                self.frame(&before, &pieces, &view, overlay.as_ref(), seq, false);
+                ticked = tick;
                 room = false;
                 shown = Some(then);
                 continue;
             }
             hub.shown_seq.store(seq, Ordering::Relaxed);
-            self.frame(&snapshot, &pieces, &view, overlay.as_ref(), seq);
+            self.frame(&snapshot, &pieces, &view, overlay.as_ref(), seq, again);
+            ticked = tick;
             room = false;
             shown = Some(now);
             complete = Some(snapshot);
@@ -900,8 +911,8 @@ impl Screen {
     }
 
     /// Shows `pieces` of `snapshot` at `view`, and what Figma draws over it
-    /// in frame `seq`
-    fn frame(&mut self, snapshot: &Snapshot, pieces: &[Piece], view: &View, overlay: Option<&skia_safe::Picture>, seq: u64) {
+    /// in frame `seq`, `again` when it's only to draw the stats again
+    fn frame(&mut self, snapshot: &Snapshot, pieces: &[Piece], view: &View, overlay: Option<&skia_safe::Picture>, seq: u64, again: bool) {
         let start = Instant::now();
         let index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() } as usize;
         if index >= self.buffers.len() {
@@ -921,6 +932,26 @@ impl Screen {
             canvas.scale((sx as f32, sy as f32));
             canvas.draw_picture(overlay, None, None);
             canvas.restore();
+        }
+        if super::show_stats() {
+            let numbers = {
+                let stats = stats().lock().unwrap();
+                super::hud::Numbers {
+                    present_ms: stats.frame_ms,
+                    vello_tiles_ms: stats.vello_tiles_ms,
+                    tile_ms: stats.tile_record_ms + stats.tile_play_ms + stats.tile_gpu_ms,
+                    whole_ms: stats.whole_ms,
+                    vram_ligma: stats.vram_ligma,
+                    vram_webview: stats.vram_webview,
+                    native: stats.native,
+                    approximate: stats.approximate,
+                    tiles: stats.tiles,
+                    zoom: stats.zoom,
+                }
+            };
+            self.hud.get_or_insert_with(super::hud::Hud::new).draw(canvas, view.dpr as f32, &numbers);
+        } else {
+            self.hud = None;
         }
         let encoded = start.elapsed();
         // Left ready to present, and what it reads held till the GPU's done
@@ -960,6 +991,12 @@ impl Screen {
                 snapshot.seq
             )
         });
+        if again {
+            return;
+        }
+        if let Some(hud) = &mut self.hud {
+            hud.presented(Instant::now());
+        }
         let mut stats = stats().lock().unwrap();
         stats.holes(false);
         stats.record_frame(encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, counts.native, counts.approximate, counts.skipped, view.zoom, snapshot.pending);

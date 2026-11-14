@@ -2199,6 +2199,7 @@ impl Painter {
             self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, exact, draft: false });
         }
         self.drew = true;
+        super::stats().lock().unwrap().vello_tiles_ms = started.elapsed().as_secs_f64() * 1000.0;
         trace(|| {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             format!("  vello tiles px={px:.4} at {x0},{y0} {}x{} exact={exact} rendered={:.1}ms {:.1}ms {stats} gpu:{stages}", x1 - x0 + 1, y1 - y0 + 1, ms(rendered), ms(started.elapsed()))
@@ -2246,6 +2247,7 @@ impl Painter {
             Ok(None) => {
                 trace(|| format!("  whole vello px={:.3} {} checked={:.1}ms {:.1}ms gpu:{stages}", last.layer.px, last.stats, waited.as_secs_f64() * 1000.0, last.started.elapsed().as_secs_f64() * 1000.0));
                 self.whole_took = last.started.elapsed();
+                stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
                 self.hand_whole(last.layer, last.fence, last.at, last.rough, true);
             }
             // Never shown, and drawn again with the room it needs where
@@ -2735,6 +2737,7 @@ impl Painter {
         });
         self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole }, fence, at, false, false);
         self.whole_took = started.elapsed();
+        stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
         self.drew = true;
     }
 

@@ -177,6 +177,8 @@ pub struct Settings {
     /// renderer (see native_renderer.rs). Only while `experimental` is on.
     /// Windows only
     pub native_renderer: bool,
+    /// Frame times and GPU memory drawn over the canvas by Ligma's renderer
+    pub renderer_stats: bool,
 }
 
 impl Default for Settings {
@@ -237,6 +239,7 @@ impl Default for Settings {
             ligma_mcp: true,
             experimental: false,
             native_renderer: false,
+            renderer_stats: false,
         }
     }
 }

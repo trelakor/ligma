@@ -51,6 +51,8 @@ mod emit;
 #[cfg(windows)]
 mod gpu_memory;
 #[cfg(windows)]
+mod hud;
+#[cfg(windows)]
 mod gpu_census;
 #[cfg(windows)]
 mod overlay;
@@ -82,6 +84,13 @@ pub const WINDOW: &str = "native-renderer";
 pub const OVERLAY: &str = "native-overlay";
 
 static ON: AtomicBool = AtomicBool::new(false);
+
+/// Settings' Show stats: frame times and GPU memory drawn over the canvas
+static SHOW_STATS: AtomicBool = AtomicBool::new(false);
+
+pub fn show_stats() -> bool {
+    SHOW_STATS.load(Ordering::Relaxed)
+}
 
 fn enabled(settings: &Settings) -> bool {
     (settings.experimental && settings.native_renderer) || std::env::var("LIGMA_NATIVE_RENDERER").is_ok_and(|value| value == "1")
@@ -118,6 +127,7 @@ pub fn autorun() -> bool {
 
 /// Call once the main window is up
 pub fn init(app: &AppHandle, settings: &Settings) {
+    SHOW_STATS.store(settings.renderer_stats, Ordering::Relaxed);
     if enabled(settings) {
         ON.store(true, Ordering::Relaxed);
         start(app);
@@ -125,6 +135,7 @@ pub fn init(app: &AppHandle, settings: &Settings) {
 }
 
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
+    SHOW_STATS.store(settings.renderer_stats, Ordering::Relaxed);
     let on = enabled(settings);
     if ON.swap(on, Ordering::Relaxed) == on {
         return;
@@ -195,6 +206,10 @@ pub struct Stats {
     pub tile_play_ms: f64,
     pub tile_gpu_ms: f64,
     pub tiles_drawn: u64,
+    /// The last tiles drawn with Vello, all together, and the last whole
+    /// view, from starting till the GPU was done, in ms
+    pub vello_tiles_ms: f64,
+    pub whole_ms: f64,
     /// Dedicated GPU memory of Ligma's own process (the native renderer)
     /// and of WebView2's (Figma), in bytes
     pub vram_ligma: u64,
