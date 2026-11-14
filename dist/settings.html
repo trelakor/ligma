@@ -613,6 +613,12 @@
         </span>
         <input type="checkbox" class="switch" id="layer-previews">
       </label>
+      <label class="row">
+        <span class="label">Color frames
+          <div class="hint">Each frame in the layers panel gets a color of the rainbow, in order, and what's in it a lighter tint. Frames inside a frame are a shade darker, so it's clear where each one starts and ends.</div>
+        </span>
+        <input type="checkbox" class="switch" id="frame-colors">
+      </label>
     </section>
     <section>
       <h2>Images</h2>
@@ -1090,7 +1096,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1437,6 +1443,7 @@
     $("rail-widgets").checked = settings.railWidgets;
     $("actions-plugins-tab").checked = settings.actionsPluginsTab;
     $("layer-previews").checked = settings.layerPreviews;
+    $("frame-colors").checked = settings.frameColors;
     $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
     $("adjustments-bar").checked = settings.adjustmentsBar;
     $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
@@ -1524,6 +1531,7 @@
       railWidgets: $("rail-widgets").checked,
       actionsPluginsTab: $("actions-plugins-tab").checked,
       layerPreviews: $("layer-previews").checked,
+      frameColors: $("frame-colors").checked,
       adjustmentsClipboard: $("adjustments-clipboard").checked,
       adjustmentsBar: $("adjustments-bar").checked,
       hideFreeAiActions: $("hide-free-ai-actions").checked,

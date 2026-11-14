@@ -101,6 +101,9 @@ pub struct Settings {
     /// Show each layer's preview in the layers panel in every mode, as in
     /// Draw mode. Figma renders them all, so off by default
     pub layer_previews: bool,
+    /// Color each frame in the layers panel, and a tint of it what's in it,
+    /// a step darker for each frame inside
+    pub frame_colors: bool,
     /// Show Draw in the mode switch on the right of Figma Design's
     /// toolbar. With one mode left, the toolbar shows no switch,
     pub show_draw_mode: bool,
@@ -197,6 +200,7 @@ impl Default for Settings {
             rail_widgets: true,
             actions_plugins_tab: false,
             layer_previews: false,
+            frame_colors: false,
             show_draw_mode: true,
             show_design_mode: true,
             show_motion_mode: true,
@@ -471,6 +475,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::appearance::apply_settings(app, &settings);
     crate::presence::apply_settings(app, &settings);
     crate::layers::apply_settings(app, &settings);
+    crate::frame_colors::apply_settings(app, &settings);
     crate::home::apply_settings(app, &settings);
     crate::new_home::apply_settings(app, &settings);
     crate::toolbar::apply_settings(app, &settings);
