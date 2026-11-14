@@ -1870,20 +1870,52 @@ const PAGE_JS: &str = r##"(() => {
     };
   };
 
+  // Figma shows a new image only once it's loaded, empty until then, so
+  // each is loaded on a small layer out of the way before it's put in place,
+  // and the old one shows until then. Read back, a loaded one isn't empty
+  const loaded = async (current, fill) => {
+    const { figma, bounds } = current;
+    if (current.closed) return;
+    if (!current.loader || current.loader.removed) {
+      current.loader = figma.createRectangle();
+      current.loader.name = "Ligma loading";
+      figma.currentPage.insertChild(0, current.loader);
+      current.loader.resizeWithoutConstraints(8, 8);
+      current.loader.x = bounds.x + AWAY;
+      current.loader.y = bounds.y;
+    }
+    current.loader.fills = [fill];
+    const until = performance.now() + 400;
+    while (performance.now() < until && !current.loader.removed) {
+      try {
+        const bytes = await current.loader.exportAsync({ format: "PNG", constraint: { type: "WIDTH", value: 8 } });
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const context = Object.assign(document.createElement("canvas"), { width: 8, height: 8 }).getContext("2d", { willReadFrequently: true });
+        context.drawImage(bitmap, 0, 0, 8, 8);
+        if (context.getImageData(0, 0, 8, 8).data.some((value, at) => at % 4 === 3 && value > 0)) return;
+      } catch {
+        return;
+      }
+    }
+  };
+
   const placeDrawn = async (current, drawn, k) => {
     const { figma, result, bounds } = current;
     if (!drawn || result.removed) return;
     const blob = await new Promise((resolve) => drawn.canvas.toBlob(resolve, "image/png"));
     const bytes = new Uint8Array(await blob.arrayBuffer());
     if (result.removed) return;
-    const hash = figma.createImage(bytes).hash;
+    const fill = { type: "IMAGE", imageHash: figma.createImage(bytes).hash, scaleMode: "FILL" };
+    await loaded(current, fill);
+    // Closed meanwhile, as it was is kept
+    if (result.removed || current.closed) return;
     const place = toParent(result.parent, bounds.x + drawn.x / k, bounds.y + drawn.y / k);
     result.resizeWithoutConstraints(Math.max(0.01, drawn.width / k), Math.max(0.01, drawn.height / k));
     result.relativeTransform = [
       [place.linear[0], place.linear[1], place.x],
       [place.linear[2], place.linear[3], place.y],
     ];
-    result.fills = [{ type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+    result.fills = [fill];
     result.visible = true;
   };
 
@@ -2177,6 +2209,8 @@ const PAGE_JS: &str = r##"(() => {
     if (disintegrating !== current) return;
     disintegrating = null;
     clearTimeout(current.timer);
+    current.closed = true;
+    if (current.loader && !current.loader.removed) current.loader.remove();
     if (!applied) {
       const { figma, source, result, home, wrap } = current;
       if (current.group) {
@@ -2803,6 +2837,8 @@ const PAGE_JS: &str = r##"(() => {
     if (crushing !== current) return;
     crushing = null;
     clearTimeout(current.timer);
+    current.closed = true;
+    if (current.loader && !current.loader.removed) current.loader.remove();
     if (!applied) {
       const { figma, source, result, home, wrap } = current;
       if (current.group) {
