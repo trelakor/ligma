@@ -44,7 +44,10 @@ fn read_transform(transform_base: u32, ix: u32) -> Transform {
     let c5 = bitcast<f32>(scene[base + 5u]);
     let matrx = vec4(c0, c1, c2, c3);
     let translate = vec2(c4, c5);
-    return Transform(matrx, translate);
+    // Ligma: then where the view puts the scene
+    let view = vec4(config.view_a, config.view_b, config.view_c, config.view_d);
+    let view_t = vec2(config.view_e, config.view_f);
+    return Transform(view.xyxy * matrx.xxzz + view.zwzw * matrx.yyww, view.xy * translate.x + view.zw * translate.y + view_t);
 }
 
 var<workgroup> sh_scratch: array<DrawMonoid, WG_SIZE>;

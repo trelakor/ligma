@@ -114,7 +114,8 @@ impl Timer {
                 let stamps: &[u64] = bytemuck::cast_slice(&view);
                 let first = stamps.first().copied().unwrap_or(0);
                 let last = stamps.iter().copied().max().unwrap_or(0);
-                each += &format!("{:.1},", last.saturating_sub(first) as f64 * self.period / 1e6);
+                let fine = labels.iter().position(|l| l.contains("fine")).map_or(0.0, |index| stamps[index * 2 + 1].saturating_sub(stamps[index * 2]) as f64 * self.period / 1e6);
+                each += &format!("{:.1}(fine{fine:.1}),", last.saturating_sub(first) as f64 * self.period / 1e6);
                 for (index, label) in labels.iter().enumerate() {
                     let ms = stamps[index * 2 + 1].saturating_sub(stamps[index * 2]) as f64 * self.period / 1e6;
                     match totals.iter_mut().find(|(l, ..)| l == label) {

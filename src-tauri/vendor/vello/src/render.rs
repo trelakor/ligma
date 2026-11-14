@@ -22,7 +22,17 @@ enum AtlasProxyAction {
 /// Ligma: the scene buffer last uploaded, to pack the next into
 pub(crate) static SPARE: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
+/// Ligma: a scene kept on the GPU after it's drawn, to draw again
+pub struct Retained {
+    pub id: u64,
+    layout: vello_encoding::Layout,
+    scene: BufferProxy,
+    gradient: ResourceProxy,
+}
+
 pub struct Render {
+    /// Ligma: the scene and its gradients are kept, not freed
+    kept: bool,
     fine_wg_count: Option<WorkgroupSize>,
     fine_resources: Option<FineResources>,
     mask_buf: Option<ResourceProxy>,
@@ -91,6 +101,7 @@ impl Default for Render {
 impl Render {
     pub fn new() -> Self {
         Self {
+            kept: false,
             fine_wg_count: None,
             fine_resources: None,
             mask_buf: None,
@@ -109,11 +120,30 @@ impl Render {
         resolver: &mut Resolver,
         shaders: &FullShaders,
         persistent_image_atlas: &mut Option<ImageProxy>,
+        retained: &mut Option<Retained>,
         params: &RenderParams,
         robust: bool,
     ) -> Recording {
         use vello_encoding::RenderConfig;
         let mut recording = Recording::default();
+        // Ligma: the kept scene drawn again, as it's packed and uploaded
+        // already, with the images it draws in the atlas as they were
+        if params.reuse
+            && let (Some(kept), Some(image_atlas)) = (retained.as_ref(), *persistent_image_atlas)
+            && kept.id == params.retain
+        {
+            self.kept = true;
+            let (layout, scene, gradient) = (kept.layout, kept.scene, kept.gradient);
+            let mut cpu_config = RenderConfig::new(&layout, params.width, params.height, &params.base_color);
+            cpu_config.gpu.view = params.view;
+            self.record_coarse(&mut recording, shaders, &cpu_config, ResourceProxy::Buffer(scene), gradient, image_atlas, params, robust);
+            return recording;
+        }
+        // Any other scene drawn takes the atlas, so what's kept goes
+        if let Some(kept) = retained.take() {
+            recording.free_resource(ResourceProxy::Buffer(kept.scene));
+            recording.free_resource(kept.gradient);
+        }
         // Ligma: the last frame's, so its memory's used again
         let mut packed = std::mem::take(&mut *SPARE.lock().unwrap());
         packed.clear();
@@ -174,8 +204,9 @@ impl Render {
         for image in images.images {
             recording.write_image(image_atlas, image.1, image.2, image.0.clone());
         }
-        let cpu_config =
+        let mut cpu_config =
             RenderConfig::new(&layout, params.width, params.height, &params.base_color);
+        cpu_config.gpu.view = params.view;
         // HACK: The coarse workgroup counts is the number of active bins.
         if (cpu_config.workgroup_counts.coarse.0
             * cpu_config.workgroup_counts.coarse.1
@@ -189,9 +220,6 @@ impl Render {
                 params.height
             );
         }
-        let buffer_sizes = &cpu_config.buffer_sizes;
-        let wg_counts = &cpu_config.workgroup_counts;
-
         if packed.is_empty() {
             // HACK: wgpu doesn't allow empty buffers, so we make sure that the scene buffer we upload
             // can contain at least one array item.
@@ -199,7 +227,32 @@ impl Render {
             // is zero.
             packed.resize(size_of::<u32>(), u8::MAX);
         }
-        let scene_buf = ResourceProxy::Buffer(recording.upload("vello.scene", packed));
+        let scene_proxy = recording.upload("vello.scene", packed);
+        let scene_buf = ResourceProxy::Buffer(scene_proxy);
+        if params.retain != 0 {
+            self.kept = true;
+            *retained = Some(Retained { id: params.retain, layout, scene: scene_proxy, gradient: gradient_image });
+        }
+        self.record_coarse(&mut recording, shaders, &cpu_config, scene_buf, gradient_image, image_atlas, params, robust);
+        recording
+    }
+
+    /// Ligma: what `render_encoding_coarse` records once the scene's on the
+    /// GPU
+    #[allow(clippy::too_many_arguments)]
+    fn record_coarse(
+        &mut self,
+        recording: &mut Recording,
+        shaders: &FullShaders,
+        cpu_config: &vello_encoding::RenderConfig,
+        scene_buf: ResourceProxy,
+        gradient_image: ResourceProxy,
+        image_atlas: ImageProxy,
+        params: &RenderParams,
+        robust: bool,
+    ) {
+        let buffer_sizes = &cpu_config.buffer_sizes;
+        let wg_counts = &cpu_config.workgroup_counts;
         let config_buf = ResourceProxy::Buffer(
             recording.upload_uniform("vello.config", bytemuck::bytes_of(&cpu_config.gpu)),
         );
@@ -475,7 +528,9 @@ impl Render {
         );
         recording.free_buffer(indirect_count_buf);
         recording.free_resource(seg_counts_buf);
-        recording.free_resource(scene_buf);
+        if !self.kept {
+            recording.free_resource(scene_buf);
+        }
         recording.free_resource(draw_monoid_buf);
         recording.free_resource(bin_header_buf);
         recording.free_resource(path_buf);
@@ -526,7 +581,6 @@ impl Render {
             recording.free_resource(lines_buf);
         }
 
-        recording
     }
 
     /// Run fine rasterization assuming the coarse phase succeeded.
@@ -596,7 +650,9 @@ impl Render {
         recording.free_resource(fine.tile_buf);
         recording.free_resource(fine.segments_buf);
         recording.free_resource(fine.ptcl_buf);
-        recording.free_resource(fine.gradient_image);
+        if !self.kept {
+            recording.free_resource(fine.gradient_image);
+        }
         recording.free_resource(fine.info_bin_data_buf);
         recording.free_resource(fine.blend_spill_buf);
         // TODO: make mask buf persistent

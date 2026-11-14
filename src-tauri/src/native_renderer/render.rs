@@ -511,6 +511,27 @@ struct Unchecked {
     rough: bool,
 }
 
+/// A scene Vello keeps on the GPU
+struct KeptScene {
+    id: u64,
+    /// The zoom, as bits, and its corner and size in device pixels
+    px: u32,
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+    /// When it was built
+    built: Instant,
+}
+
+/// What changes in a kept scene, images coming in and the like, builds it
+/// again no sooner than this after it was built, as they come many at once
+const KEPT_CHANGES: Duration = Duration::from_millis(100);
+
+/// How far past the view a kept scene reaches on each side, of the view's
+/// size, so a pan stays in it a while
+const KEPT_MARGIN: f32 = 0.5;
+
 struct Whole {
     layer: Layer,
     /// Its corner in device pixels and its zoom, as bits
@@ -1061,6 +1082,13 @@ pub struct Painter {
     vello_paths: super::vello::Paths,
     /// Tiles Vello couldn't draw, which Skia draws
     vello_cant: std::collections::HashSet<TileKey>,
+    /// The scene Vello keeps on the GPU, drawn again for each view inside
+    /// it at its zoom
+    scene_kept: Option<KeptScene>,
+    /// Something in the kept scene changed since it was built
+    kept_stale: bool,
+    /// What the last scene kept was kept as
+    kept_serial: u64,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
     /// Images units drew with when Vello last drew them, by unit, as
     /// pictures keep them
@@ -1206,6 +1234,9 @@ impl Painter {
             vello: None,
             vello_paths: Default::default(),
             vello_cant: Default::default(),
+            scene_kept: None,
+            kept_stale: false,
+            kept_serial: 0,
             vello_starting,
             vello_uses: HashMap::new(),
             fragments: HashMap::new(),
@@ -1546,6 +1577,11 @@ impl Painter {
         // Vello draws tiles, of a level at or past the zoom while it changes,
         // which frames scale till the zoom leaves them, and exactly at the
         // zoom once it's settled
+        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() && std::env::var_os("LIGMA_NATIVE_VELLO_TILES").is_none() {
+            if let Some(next) = self.fill_kept(px, (ox, oy, width, height)) {
+                return next;
+            }
+        }
         if self.vello_ready() && self.tree.is_some() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
             let furthest = levels.first().map(|(_, pk)| pk.to_bits());
             return self.fill_vello(px, (ox, oy, width, height), furthest, &pyramid, !settle.is_zero());
@@ -1779,6 +1815,109 @@ impl Painter {
         }
     }
 
+    /// Vello draws the view from the scene it keeps on the GPU, built again
+    /// only where the view leaves it, its zoom changes or something in it
+    /// does. None where Vello can't, for tiles to be drawn instead
+    fn fill_kept(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32)) -> Option<Option<Duration>> {
+        let pxb = px.to_bits();
+        let at = (ox, oy, pxb);
+        let inside = self.scene_kept.as_ref().filter(|kept| kept.px == pxb && (!self.kept_stale || kept.built.elapsed() < KEPT_CHANGES) && ox >= kept.left && oy >= kept.top && ox + width <= kept.left + kept.width && oy + height <= kept.top + kept.height);
+        let shown = self.whole.as_ref().is_some_and(|whole| whole.at == at && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello);
+        if inside.is_some() && (shown || self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == at)) {
+            // Built again once it's been kept a while
+            return Some(self.kept_stale.then(|| KEPT_CHANGES.saturating_sub(self.scene_kept.as_ref().map_or(Duration::ZERO, |kept| kept.built.elapsed()))));
+        }
+        let started = Instant::now();
+        let inside = inside.map(|kept| (kept.id, kept.left, kept.top));
+        let drawn = match inside {
+            Some(kept) => {
+                let (id, x, y) = (kept.0, kept.1 - ox, kept.2 - oy);
+                self.vello_again(id, x, y, width, height)
+            }
+            None => {
+                let why = match &self.scene_kept {
+                    None => "none",
+                    Some(kept) if kept.px != pxb => "zoom",
+                    Some(_) if self.kept_stale => "changed",
+                    Some(_) => "outside",
+                };
+                trace(|| format!("  kept vello built again: {why}"));
+                self.scene_kept = None;
+                self.kept_stale = false;
+                let (mx, my) = ((width as f32 * KEPT_MARGIN) as i32, (height as f32 * KEPT_MARGIN) as i32);
+                let (left, top, w, h) = (ox - mx, oy - my, width + 2 * mx, height + 2 * my);
+                let reach = Rect::from_xywh(left as f32 / px, top as f32 / px, w as f32 / px, h as f32 / px);
+                self.kept_serial += 1;
+                let id = self.kept_serial;
+                let kept = super::vello::Kept::at(id, false, (left - ox) as f32, (top - oy) as f32);
+                self.settle_unchecked();
+                let drawn = self.vello_render(left, top, w, h, px, reach, None, true, Some((kept, width, height))).map(|(tex, counts, stats, _)| (tex, counts, stats));
+                if drawn.is_ok() {
+                    self.scene_kept = Some(KeptScene { id, px: pxb, left, top, width: w, height: h, built: Instant::now() });
+                }
+                drawn
+            }
+        };
+        match drawn {
+            Ok((tex, counts, stats)) => {
+                let fence = self.gpu.signal();
+                let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
+                if let Some(last) = last {
+                    self.settle(last);
+                }
+                self.drew = true;
+                Some(Some(Duration::ZERO))
+            }
+            // What was kept is gone: built again next frame
+            Err(why) if inside.is_some() => {
+                trace(|| format!("  kept vello px={px:.3} again can't: {why}"));
+                self.scene_kept = None;
+                Some(Some(Duration::ZERO))
+            }
+            Err(why) => {
+                trace(|| format!("  kept vello px={px:.3} can't: {why}"));
+                self.scene_kept = None;
+                None
+            }
+        }
+    }
+
+    /// The scene Vello keeps as `id` drawn again, its corner at (`x`, `y`)
+    /// in a `w` by `h` view
+    fn vello_again(&mut self, id: u64, x: i32, y: i32, w: i32, h: i32) -> Result<(Arc<Tex>, Counts, String), String> {
+        let started = Instant::now();
+        let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
+        let plan = super::vello::Plan::new(w);
+        let kept = super::vello::Kept::at(id, true, x as f32, y as f32);
+        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &vello::Scene::new(), w, h, 0, &[], &plan, kept);
+        self.vello = Some(vello);
+        let out = rendered?;
+        let cpu = started.elapsed();
+        let tex = self.vello_copy(&out, w, h)?;
+        Ok((tex, Counts::default(), format!("{w}x{h} again at {x},{y} cpu={:.2}ms copied={:.2}ms", cpu.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0)))
+    }
+
+    /// What Vello drew into `out`, unpremultiplied, copied into a texture
+    /// of the kind the present thread shows
+    fn vello_copy(&mut self, out: &Arc<Tex>, w: i32, h: i32) -> Result<Arc<Tex>, String> {
+        let tex = self.tex(w, h).ok_or("texture")?;
+        let backend = tex.backend();
+        let mut surface = self.target(&tex).ok_or("surface")?;
+        let drawn = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or("Vello's texture")?;
+        let mut paint = Paint::default();
+        paint.set_blend_mode(skia_safe::BlendMode::Src);
+        let all = Rect::from_wh(w as f32, h as f32);
+        surface.canvas().draw_image_rect(&drawn, Some((&all, skia_safe::canvas::SrcRectConstraint::Fast)), all, &paint);
+        let image = self.finish(&backend, false);
+        drop(surface);
+        drop(drawn);
+        if image.is_none() {
+            return Err("submit".into());
+        }
+        Ok(tex)
+    }
+
     /// What `fill` does with Vello: the view's tiles at the level it's
     /// drawn at, then those of the level the zoom's headed to, then the
     /// furthest level, which stands in wherever the others don't reach
@@ -1907,7 +2046,7 @@ impl Painter {
             // can take tens of milliseconds to encode, which the next level
             // doesn't wait for. Tiles once it's still are exact
             let budget = (!exact).then_some(Duration::ZERO);
-            let (out, counts, stats, _) = self.vello_render(left, top, w, h, px, reach, budget, false).map_err(fail)?;
+            let (out, counts, stats, _) = self.vello_render(left, top, w, h, px, reach, budget, false, None).map_err(fail)?;
             let vello = self.vello.as_mut().ok_or_else(|| fail("no Vello".into()))?;
             match vello.check(usize::MAX).map_err(fail)? {
                 Some(why) => trace(|| format!("  vello ran out of room, drawing again: {why}")),
@@ -2035,13 +2174,13 @@ impl Painter {
     }
 
     fn vello_view_once(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
-        self.vello_render(left, top, w, h, px, reach, budget, true)
+        self.vello_render(left, top, w, h, px, reach, budget, true, None)
     }
 
     /// As `vello_view_once`, handing back Vello's own target, unpremultiplied
     /// and drawn into again by its next render, where `copy` isn't set
     #[allow(clippy::too_many_arguments)]
-    fn vello_render(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool) -> Result<(Arc<Tex>, Counts, String, bool), String> {
+    fn vello_render(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool, kept: Option<(super::vello::Kept, i32, i32)>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let _ = self.gpu.context.flush_and_submit();
@@ -2276,7 +2415,9 @@ impl Painter {
             let e = scene.encoding();
             (size(&e.path_tags[..]) + size(&e.path_data[..]) + size(&e.draw_tags[..]) + size(&e.draw_data[..]) + size(&e.transforms[..]) + size(&e.styles[..])) as f64 / 1048576.0
         };
-        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, w, h, used_pages, &pictures, &plan);
+        // A scene kept is drawn into a target of the view's size
+        let (kept, tw, th) = kept.unwrap_or((super::vello::Kept::NOT, w, h));
+        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, tw, th, used_pages, &pictures, &plan, kept);
         lap(&mut steps);
         drop(plan);
         vello.spare = scene;
@@ -2291,25 +2432,7 @@ impl Painter {
         let vello_took = started.elapsed() - encoded;
         // What Vello drew, unpremultiplied, copied into a texture of the
         // kind the present thread shows
-        let tex = if !copy {
-            out
-        } else {
-            let tex = self.tex(w, h).ok_or("texture")?;
-            let backend = tex.backend();
-            let mut surface = self.target(&tex).ok_or("surface")?;
-            let drawn = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or("Vello's texture")?;
-            let mut paint = Paint::default();
-            paint.set_blend_mode(skia_safe::BlendMode::Src);
-            let all = Rect::from_wh(w as f32, h as f32);
-            surface.canvas().draw_image_rect(&drawn, Some((&all, skia_safe::canvas::SrcRectConstraint::Fast)), all, &paint);
-            let image = self.finish(&backend, false);
-            drop(surface);
-            drop(drawn);
-            if image.is_none() {
-                return Err("submit".into());
-            }
-            tex
-        };
+        let tex = if !copy { out } else { self.vello_copy(&out, tw, th)? };
         for (unit, bounds, asked) in asked {
             let super::vello::Asked { missing, sharper, used } = asked;
             let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).map(|(key, _)| key.clone()).collect();
@@ -3678,6 +3801,13 @@ impl Painter {
         }
         if let Some(whole) = &mut self.whole {
             whole.patch.extend_from_slice(areas);
+        }
+        if let Some(kept) = &self.scene_kept {
+            let px = f32::from_bits(kept.px);
+            let area = Rect::from_xywh(kept.left as f32 / px, kept.top as f32 / px, kept.width as f32 / px, kept.height as f32 / px);
+            if areas.iter().any(|other| Rect::intersects2(&area, other)) {
+                self.kept_stale = true;
+            }
         }
         self.drop_last_whole();
     }

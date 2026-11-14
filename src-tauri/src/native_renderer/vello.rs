@@ -297,6 +297,7 @@ impl Vello {
         pages: usize,
         pictures: &[(String, u32)],
         plan: &Plan,
+        kept: Kept,
     ) -> Result<Arc<Tex>, String> {
         let out = Self::target(skia, &self.device, &mut self.out, width, height)?;
         self.signalled += 1;
@@ -331,6 +332,9 @@ impl Vello {
             } else {
                 vello::AaConfig::Msaa4
             },
+            view: kept.view,
+            retain: kept.id,
+            reuse: kept.again,
         };
         let at = std::time::Instant::now();
         let dropped = vello::low_level::vello_encoding::DROPPED_IMAGES.load(std::sync::atomic::Ordering::Relaxed);
@@ -441,7 +445,7 @@ impl Vello {
                 self.renderer.override_image(&blur.image, Some(base));
             }
             let view = texture.create_view(&Default::default());
-            let params = vello::RenderParams { base_color: AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]), width, height, antialiasing_method };
+            let params = vello::RenderParams { base_color: AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]), width, height, antialiasing_method, view: IDENTITY, retain: 0, reuse: false };
             self.renderer.render_to_texture(&self.device, &self.queue, &depth.scene, &view, &params).map_err(|error| format!("blur's source: {error}"))?;
             self.sync("sources");
             let blurrer = self.blurrer.get_or_insert_with(|| Blurrer::new(&self.device));
@@ -1003,6 +1007,30 @@ fn shape_of(tree: &Tree, id: u32, depth: u32) -> String {
 /// Dev tools: fills and their segments by size in device pixels, under
 /// 1/4, 1, 4, 16, 64, 256 and over
 /// 1/4, 1, 4, 16, 64, 256 and over, then layers pushed by what for
+/// What leaves a scene where it is
+const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// How a render keeps its scene on the GPU, or draws the one kept again
+#[derive(Clone, Copy)]
+pub struct Kept {
+    /// What it's kept as, or 0 for it not to be
+    pub id: u64,
+    /// The kept scene drawn again, rather than the one passed
+    pub again: bool,
+    /// Where the scene's put in the target
+    pub view: [f32; 6],
+}
+
+impl Kept {
+    /// Neither kept nor drawn again
+    pub const NOT: Kept = Kept { id: 0, again: false, view: IDENTITY };
+
+    /// Kept as `id`, its corner put at (`x`, `y`) in the target
+    pub fn at(id: u64, again: bool, x: f32, y: f32) -> Kept {
+        Kept { id, again, view: [1.0, 0.0, 0.0, 1.0, x, y] }
+    }
+}
+
 pub static SIZES: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
 pub static TIMES: [std::sync::atomic::AtomicU64; 12] = [const { std::sync::atomic::AtomicU64::new(0) }; 12];
 pub struct Timer(usize, std::time::Instant);
@@ -1428,7 +1456,7 @@ impl<'a> Encoder<'a> {
     fn fill<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
         // Small, it's drawn with fewer lines no further than this from it,
         // in device pixels for fragments' largest zoom
-        let tolerance = if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 };
+        let tolerance = std::env::var("LIGMA_NATIVE_VELLO_TOL").ok().and_then(|t| t.parse().ok()).unwrap_or(if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 });
         let env = timer(4);
         let whole = std::env::var_os("LIGMA_NATIVE_VELLO_WHOLE").is_none();
         drop(env);

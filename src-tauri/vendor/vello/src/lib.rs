@@ -308,6 +308,11 @@ pub enum Error {
     #[error("Ran out of room in the GPU's buffers")]
     OutOfRoom,
 
+    /// Ligma: what was to be drawn again isn't kept any more
+    #[cfg(feature = "wgpu")]
+    #[error("The scene to draw again isn't kept")]
+    NotRetained,
+
     /// Failed to create [`GpuProfiler`].
     /// See [`wgpu_profiler::CreationError`] for more information.
     #[cfg(feature = "wgpu-profiler")]
@@ -346,6 +351,8 @@ pub struct Renderer {
     engine: WgpuEngine,
     resolver: Resolver,
     image_atlas: Option<recording::ImageProxy>,
+    /// Ligma: the scene last drawn, kept on the GPU to draw again
+    retained: Option<render::Retained>,
     shaders: FullShaders,
     #[cfg(feature = "debug_layers")]
     debug: debug::DebugRenderer,
@@ -386,6 +393,16 @@ pub struct RenderParams {
     /// The anti-aliasing algorithm. The selected algorithm must have been initialized while
     /// constructing the `Renderer`.
     pub antialiasing_method: AaConfig,
+
+    /// Ligma: where the scene is put in the target, after its own
+    /// transforms, as the coefficients of an affine
+    pub view: [f32; 6],
+    /// Ligma: kept on the GPU as this, where not 0, to be drawn again with
+    /// `reuse`
+    pub retain: u64,
+    /// Ligma: the scene kept as `retain` drawn again where `view` puts it,
+    /// the scene passed being left alone
+    pub reuse: bool,
 }
 
 #[cfg(feature = "wgpu")]
@@ -467,6 +484,7 @@ impl Renderer {
             engine,
             resolver: Resolver::new(),
             image_atlas: None,
+            retained: None,
             shaders,
             #[cfg(feature = "debug_layers")]
             debug,
@@ -504,12 +522,16 @@ impl Renderer {
         // Ligma: what each buffer coarse allocates from took is read back
         // once the GPU's done, see `check`
         let at = std::time::Instant::now();
+        if params.reuse && !self.retained.as_ref().is_some_and(|kept| kept.id == params.retain && params.retain != 0) {
+            return Err(Error::NotRetained);
+        }
         let mut render = Render::new();
         let mut recording = render.render_encoding_coarse(
             scene.encoding(),
             &mut self.resolver,
             &self.shaders,
             &mut self.image_atlas,
+            &mut self.retained,
             params,
             true,
         );
@@ -592,6 +614,7 @@ impl Renderer {
     /// Ligma: gives back the GPU memory kept between renders, for when
     /// nothing's drawn for a while
     pub fn trim(&mut self) {
+        self.retained = None;
         self.engine.trim(self.image_atlas.take());
         self.resolver.trim();
     }
@@ -604,7 +627,9 @@ impl Renderer {
     /// Ligma: dev tools, each stage's GPU time since asked last, once
     /// checked
     pub fn times(&mut self) -> String {
-        self.engine.timer.as_mut().map(|timer| timer.read()).unwrap_or_default()
+        let t = *LAST_TOOK.lock().unwrap();
+        let took = format!(" took=binning {} ptcl {} tile {} seg_counts {} segments {} blend {} lines {}", t[0], t[1], t[2], t[3], t[4], t[5], t[6]);
+        self.engine.timer.as_mut().map(|timer| timer.read() + &took).unwrap_or_default()
     }
 
     /// Overwrite `image` with `texture`.
@@ -711,6 +736,7 @@ impl Renderer {
         }
         self.engine = engine;
         self.image_atlas = None;
+        self.retained = None;
         self.shaders = shaders;
         #[cfg(feature = "debug_layers")]
         {
@@ -826,6 +852,7 @@ impl Renderer {
             &mut self.resolver,
             &self.shaders,
             &mut self.image_atlas,
+            &mut self.retained,
             params,
             robust,
         );
@@ -895,11 +922,15 @@ fn size_class(x: u32) -> u32 {
     x.div_ceil(step).saturating_mul(step)
 }
 
+/// Ligma: dev tools, what the last render checked took of each buffer
+pub static LAST_TOOK: std::sync::Mutex<[u32; 7]> = std::sync::Mutex::new([0; 7]);
+
 fn fit(bump: &BumpAllocators) -> Option<String> {
     use std::sync::atomic::Ordering::Relaxed;
     use vello_encoding::CAPACITY as C;
     let room = C.all();
     let took = [bump.binning, bump.ptcl, bump.tile, bump.seg_counts, bump.segments, bump.blend, bump.lines];
+    *LAST_TOOK.lock().unwrap() = took;
     let had = room.map(|room| room.load(Relaxed));
     let names = ["binning", "ptcl", "tile", "seg_counts", "segments", "blend", "lines"];
     let mut short = (bump.failed != 0).then(|| format!("failed={:#x}", bump.failed));

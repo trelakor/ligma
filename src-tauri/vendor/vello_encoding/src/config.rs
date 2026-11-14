@@ -152,6 +152,12 @@ pub struct ConfigUniform {
     pub blend_size: u32,
     /// Size of per-tile command list buffer allocation (in `u32`s).
     pub ptcl_size: u32,
+    /// Ligma: where the scene is put in the target, after its own
+    /// transforms
+    pub view: [f32; 6],
+    /// Ligma: dev tools, what the fine stage leaves out to time apart
+    pub ablate: u32,
+    pub pad: u32,
 }
 
 /// CPU side setup and configuration.
@@ -233,6 +239,9 @@ impl RenderConfig {
                 segments_size: buffer_sizes.segments.len(),
                 blend_size: buffer_sizes.blend_spill.len(),
                 ptcl_size: buffer_sizes.ptcl.len(),
+                ablate: std::env::var("LIGMA_NATIVE_VELLO_ABLATE").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+                pad: 0,
+                view: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
                 layout: *layout,
             },
             workgroup_counts,

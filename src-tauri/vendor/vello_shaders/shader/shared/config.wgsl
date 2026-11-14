@@ -39,6 +39,16 @@ struct Config {
     segments_size: u32,
     blend_size: u32,
     ptcl_size: u32,
+    // Ligma: where the scene is put in the target, after its own
+    // transforms
+    view_a: f32,
+    view_b: f32,
+    view_c: f32,
+    view_d: f32,
+    view_e: f32,
+    view_f: f32,
+    ablate: u32,
+    pad: u32,
 }
 
 // Geometry of tiles and bins

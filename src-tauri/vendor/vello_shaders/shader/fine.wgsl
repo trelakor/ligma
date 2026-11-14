@@ -1210,6 +1210,37 @@ fn main(
         if tag == CMD_END {
             break;
         }
+        // Ligma: dev tools, kinds of command left out to time apart
+        let ablate = config.ablate;
+        if ablate != 0u {
+            if (ablate & 1u) != 0u && tag == CMD_IMAGE {
+                cmd_ix += 2u;
+                continue;
+            }
+            if (ablate & 2u) != 0u && (tag == CMD_LIN_GRAD || tag == CMD_RAD_GRAD || tag == CMD_SWEEP_GRAD) {
+                cmd_ix += 3u;
+                continue;
+            }
+            if (ablate & 4u) != 0u && (tag == CMD_BEGIN_CLIP || tag == CMD_BEGIN_CLIP_COPY) {
+                cmd_ix += 1u;
+                continue;
+            }
+            if (ablate & 4u) != 0u && tag == CMD_END_CLIP {
+                cmd_ix += 3u;
+                continue;
+            }
+            if (ablate & 8u) != 0u && tag == CMD_BLUR_RECT {
+                cmd_ix += 3u;
+                continue;
+            }
+            if (ablate & 16u) != 0u && tag == CMD_FILL {
+                for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                    area[i] = 0.5;
+                }
+                cmd_ix += 4u;
+                continue;
+            }
+        }
         switch tag {
             case CMD_FILL: {
                 let fill = read_fill(cmd_ix);
