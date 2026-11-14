@@ -2397,6 +2397,9 @@ const PAGE_JS: &str = r##"(() => {
     compare.layer.remove();
     URL.revokeObjectURL(compare.url);
     current.comparing = null;
+    // The divider's cursor goes with it, even with the pointer still over
+    // where the layer was, as nothing moves the pointer to clear it
+    document.documentElement.removeAttribute("data-ligma-compare-pointer");
     closeUpscaling();
     if (keep) figma.notify(`Upscaled to ${compare.width} × ${compare.height} px`, { timeout: 2000 });
     tidy();
