@@ -115,7 +115,7 @@ const PAGE_JS: &str = r##"(() => {
     link.remove();
     return url;
   };
-  const handOff = (kind, bytes, onProgress, suffix = "", signal) =>
+  const handOff = (kind, bytes, onProgress, suffix = "", signal, patience = 300000) =>
     new Promise((resolve, reject) => {
       if (signal?.aborted) return reject("cancelled");
       const job = ++lastJob;
@@ -142,7 +142,7 @@ const PAGE_JS: &str = r##"(() => {
         timer = setTimeout(() => {
           finish();
           reject("failed");
-        }, 300000);
+        }, patience);
       };
       wait();
       // A large result comes in parts, then `done` with null
@@ -2177,8 +2177,17 @@ const PAGE_JS: &str = r##"(() => {
   const HEAL = "data-ligma-heal";
   const HEALING = "data-ligma-healing";
   let healing = null;
-  // The brush's size, in the image's own pixels, once chosen
-  const healOptions = { size: null };
+  // The brush's size, in the image's own pixels, once chosen, and whether
+  // it heals, copying texture from close by, or scrubs, evening what's
+  // painted out from around it, for text or marks on smooth surfaces
+  const healOptions = { size: null, mode: "heal" };
+  const HEAL_MODES = [
+    ["heal", "Heal", "Copies matching texture from close by"],
+    ["scrub", "Scrub", "Smooths it away from what's around it, for text and marks on smooth surfaces"],
+  ];
+  // How long a heal may take before it's given up, and reading the image
+  const HEAL_PATIENCE = 60000;
+  const READ_PATIENCE = 20000;
   // A bandage, its pad solid with its holes showing through, over a dashed
   // spot, as Photoshop's Spot Healing Brush has it
   const HEAL_ICON = icon(`<defs><mask id="ligma-heal-pad"><rect width="24" height="24" fill="#fff"/><g transform="translate(13 13) rotate(-45)" fill="#000"><circle cx="-1.25" cy="-1.25" r=".75"/><circle cx="1.25" cy="-1.25" r=".75"/><circle cx="-1.25" cy="1.25" r=".75"/><circle cx="1.25" cy="1.25" r=".75"/></g></mask></defs><path ${STROKE} stroke-dasharray="1.7 1.5" d="M5 14.6A7 7 0 0 1 14.6 5"/><g transform="translate(13 13) rotate(-45)"><rect ${STROKE} x="-9" y="-4" width="18" height="8" rx="4"/></g><g mask="url(#ligma-heal-pad)"><rect ${FILL} x="-3.5" y="-4" width="7" height="8" transform="translate(13 13) rotate(-45)"/></g>`);
@@ -2215,6 +2224,20 @@ const PAGE_JS: &str = r##"(() => {
     root.className = bar.closest("[data-secondary-toolbelt]")?.className ?? "";
     const strip = root.appendChild(Object.assign(document.createElement("div"), { className: bar.className }));
     strip.append(Object.assign(document.createElement("span"), { className: "hint", textContent: "Paint over what to remove" }));
+    barDivider(strip);
+    const modes = strip.appendChild(Object.assign(document.createElement("div"), { className: "segments" }));
+    modes.setAttribute("role", "radiogroup");
+    modes.setAttribute("aria-label", "Mode");
+    for (const [value, label, tip] of HEAL_MODES) {
+      const button = modes.appendChild(Object.assign(document.createElement("button"), { type: "button", textContent: label }));
+      button.setAttribute("role", "radio");
+      button.dataset.value = value;
+      Object.assign(button.dataset, { tooltip: tip, tooltipType: "text", tooltipShowAbove: "true" });
+      button.addEventListener("click", () => {
+        healOptions.mode = value;
+        if (healing) showHealing();
+      });
+    }
     barDivider(strip);
     const field = strip.appendChild(Object.assign(document.createElement("label"), { className: "field size" }));
     Object.assign(field.dataset, { tooltip: "Brush size, in pixels, [ and ] to resize", tooltipType: "text", tooltipShowAbove: "true" });
@@ -2269,6 +2292,7 @@ const PAGE_JS: &str = r##"(() => {
       stroke,
       brush,
       input,
+      modes,
       size: 0,
       scales: { native: 1, full: 1 },
       drag: null,
@@ -2443,8 +2467,9 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const showHealing = () => {
-    const { input, brush, size, scales, working, layer } = healing;
+    const { input, brush, size, scales, working, layer, modes } = healing;
     if (document.activeElement !== input) input.value = size;
+    for (const button of modes.children) button.setAttribute("aria-checked", String(button.dataset.value === healOptions.mode));
     brush.setAttribute("r", size / 2 / Math.max(scales.native, 1e-6));
     layer.classList.toggle("working", working);
   };
@@ -2480,6 +2505,11 @@ const PAGE_JS: &str = r##"(() => {
 
   // Heals what `points`, in fractions of the image, paint over, `radius` a
   // fraction of its width
+  // `promise`, or "unread" thrown once it's taken longer than reading the
+  // image may
+  const within = (promise) =>
+    Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject("unread"), READ_PATIENCE))]);
+
   const runHeal = async (points, radius) => {
     const current = healing;
     if (!current || current.working) return;
@@ -2489,8 +2519,10 @@ const PAGE_JS: &str = r##"(() => {
     busy = true;
     showHealing();
     try {
-      // Read again if reading it failed before
-      await current.opening?.catch(() => reopenHealing(current));
+      // Read again if reading it failed before. Given up on if it takes
+      // too long, as when Figma never hands it over, and read again next
+      // time, so the brush is never stuck
+      await within(current.opening?.catch(() => reopenHealing(current)));
       // Undone, or changed some other way since, the image is read again,
       // unless a heal is still being handed to Figma
       const top = fillsOf(node).at(-1);
@@ -2498,9 +2530,10 @@ const PAGE_JS: &str = r##"(() => {
       if (current.stale || changed) {
         handOff("heal", request({ op: "close", session: current.session })).catch(() => {});
         Object.assign(current, { hash: null, stale: false });
-        await reopenHealing(current);
+        await within(reopenHealing(current));
       }
-      const ask = () => handOff("heal", request({ op: "heal", session: current.session, strokes: [{ points, radius }] }), undefined, "", current.controller.signal);
+      const ask = () =>
+        handOff("heal", request({ op: "heal", session: current.session, mode: healOptions.mode, strokes: [{ points, radius }] }), undefined, "", current.controller.signal, HEAL_PATIENCE);
       let reply;
       try {
         reply = await ask();
@@ -2508,7 +2541,7 @@ const PAGE_JS: &str = r##"(() => {
         // Ligma let it go, as when another tab opened one: handed back as
         // drawn here, so heals Figma doesn't have yet aren't lost
         if (reason !== "closed") throw reason;
-        await reopenHealing(current, true);
+        await within(reopenHealing(current, true));
         reply = await ask();
       }
       const { png, x, y } = JSON.parse(reply);
@@ -2523,7 +2556,13 @@ const PAGE_JS: &str = r##"(() => {
       Object.assign(current, { patched: true, shownAt: performance.now(), dirty: true });
       commitHeal(current);
     } catch (reason) {
-      if (reason !== "empty" && reason !== "cancelled" && reason !== "closed") figma.notify("Couldn't heal the image", { timeout: 3000 });
+      if (reason === "unread") {
+        // Read afresh before the next stroke
+        Object.assign(current, { opening: null, stale: true });
+        figma.notify("Couldn't read the image, try again", { timeout: 3000 });
+      } else if (reason !== "empty" && reason !== "cancelled" && reason !== "closed") {
+        figma.notify("Couldn't heal the image", { timeout: 3000 });
+      }
     }
     busy = false;
     current.working = false;
@@ -3319,13 +3358,13 @@ const PAGE_JS: &str = r##"(() => {
     [${RECOLOR}] .done { background: var(--color-bg-brand, #0d99ff); color: var(--color-icon-onbrand, #fff); }
     [${RECOLOR}] .done:hover { background: var(--color-bg-brand-hover, var(--color-bg-brand, #0d99ff)); }
     [${EXPAND}=""] .sampling { display: flex; align-items: center; gap: 4px; }
-    [${UPSCALE}=""] .segments { display: flex; padding: 2px; border-radius: 6px; background: var(--color-bg-secondary, #383838); }
-    [${UPSCALE}=""] .segments button {
+    :is([${UPSCALE}=""], [${HEAL}=""]) .segments { display: flex; padding: 2px; border-radius: 6px; background: var(--color-bg-secondary, #383838); }
+    :is([${UPSCALE}=""], [${HEAL}=""]) .segments button {
       height: 20px; padding: 0 8px; border: 0; border-radius: 4px; background: none; white-space: nowrap;
       color: var(--color-text-secondary, #b3b3b3); font: inherit; font-variant-numeric: tabular-nums;
     }
-    [${UPSCALE}=""] .segments button:hover { color: var(--color-text, #fff); }
-    [${UPSCALE}=""] .segments button[aria-checked="true"] {
+    :is([${UPSCALE}=""], [${HEAL}=""]) .segments button:hover { color: var(--color-text, #fff); }
+    :is([${UPSCALE}=""], [${HEAL}=""]) .segments button[aria-checked="true"] {
       background: var(--color-bg, #2c2c2c); color: var(--color-text, #fff); box-shadow: 0 0 0 1px var(--color-border, #444);
     }
     [${UPSCALE}=""] .hint { padding: 0 4px 0 8px; font-variant-numeric: tabular-nums; }

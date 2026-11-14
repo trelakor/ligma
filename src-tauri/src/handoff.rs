@@ -92,6 +92,7 @@ pub fn on_requested(webview: &Webview, url: &Url, destination: &mut PathBuf) -> 
     if !matches!(kind, Kind::Cancel) {
         RUNNING.lock().unwrap().insert((tab, job), Running::default());
     }
+    log::info!("Handoff: {prefix}{job} from tab {tab}");
     PENDING.lock().unwrap().push(Pending { url: url.clone(), kind, tab, job, pixel, temp: temp.clone() });
     *destination = temp;
     true

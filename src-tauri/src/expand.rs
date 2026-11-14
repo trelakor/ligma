@@ -282,6 +282,9 @@ struct Healing {
     session: u64,
     #[serde(default)]
     strokes: Vec<Stroke>,
+    /// "scrub" to even it out from what's around it rather than copy
+    #[serde(default)]
+    mode: String,
 }
 
 /// The image Spot healing has open, and the session that names it: one at a
@@ -311,6 +314,7 @@ pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
         "open" => {
             let png = bytes.get(split + 1..).unwrap_or_default();
             let image = image::load_from_memory(png).map_err(failed)?.into_rgba8();
+            log::info!("Spot healing: opened {}x{}", image.width(), image.height());
             *open = Some((job, image));
             Ok(format!(r#"{{"session":{job}}}"#))
         }
@@ -324,8 +328,13 @@ pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
             let (_, image) = open.as_mut().filter(|(session, _)| *session == request.session).ok_or("closed")?;
             let stopped = || crate::handoff::cancelled(tab, job);
             let started = std::time::Instant::now();
-            let (x, y, patch) = heal_strokes(image, &request.strokes, &stopped)?;
-            log::info!("Spot healing: {}x{} patch in {:?}", patch.width(), patch.height(), started.elapsed());
+            let scrub = request.mode == "scrub";
+            let (x, y, patch) = heal_strokes(image, &request.strokes, scrub, &stopped).inspect_err(|reason| {
+                if *reason != "empty" && *reason != "cancelled" {
+                    log::warn!("Spot healing: {reason} after {:?}", started.elapsed());
+                }
+            })?;
+            log::info!("Spot healing{}: {}x{} patch in {:?}", if scrub { " (scrub)" } else { "" }, patch.width(), patch.height(), started.elapsed());
             let mut out = Vec::new();
             {
                 use image::ImageEncoder;
@@ -341,7 +350,7 @@ pub fn heal(tab: u32, job: u64, bytes: &[u8]) -> Result<String, &'static str> {
 
 /// Fills what `strokes` paint over in `image` from the image around it, in
 /// place, and gives the square of it that changed, and where it is
-fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn Fn() -> bool) -> Result<(usize, usize, image::RgbaImage), &'static str> {
+fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], scrub: bool, stopped: &dyn Fn() -> bool) -> Result<(usize, usize, image::RgbaImage), &'static str> {
     let (width, height) = (image.width() as usize, image.height() as usize);
     let hole = painted(strokes, (image.width(), image.height()), (0, 0), (width, height), stopped);
     if stopped() {
@@ -381,7 +390,11 @@ fn heal_strokes(image: &mut image::RgbaImage, strokes: &[Stroke], stopped: &dyn 
     if !canvas.known.contains(&true) {
         return Err("failed");
     }
-    heal_spots(&mut canvas, stopped)?;
+    if scrub {
+        scrub_spots(&mut canvas, stopped)?;
+    } else {
+        heal_spots(&mut canvas, stopped)?;
+    }
     // Only the square around what's painted comes back, and it's as small
     // as the hole and a few pixels around it, as nothing else changed
     let (px0, py0) = (left.saturating_sub(2), top.saturating_sub(2));
@@ -531,6 +544,42 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
     Ok(())
 }
 
+/// Scrub: evens each spot painted over in `canvas` out from what's around
+/// it, whole, as one smooth membrane, so text or a mark on a smooth
+/// surface comes off cleanly, without anything beside it copied in
+fn scrub_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'static str> {
+    let (width, height) = (canvas.width, canvas.height);
+    let mut hole: Vec<bool> = canvas.known.iter().map(|&known| !known).collect();
+    let mut seen = vec![false; hole.len()];
+    for start in 0..hole.len() {
+        if !hole[start] || seen[start] {
+            continue;
+        }
+        if stopped() {
+            return Err("cancelled");
+        }
+        let mut spot = vec![start];
+        seen[start] = true;
+        let mut next = 0;
+        while next < spot.len() {
+            let at = spot[next];
+            next += 1;
+            let (x, y) = (at % width, at / width);
+            for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
+                if nx < width && ny < height && hole[ny * width + nx] && !seen[ny * width + nx] {
+                    seen[ny * width + nx] = true;
+                    spot.push(ny * width + nx);
+                }
+            }
+        }
+        smooth_into(canvas, &hole, &spot);
+        for &at in &spot {
+            hole[at] = false;
+        }
+    }
+    Ok(())
+}
+
 /// Fills `piece` evenly from what's around it, for a piece with nowhere to
 /// copy from
 fn smooth_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize]) {
@@ -597,28 +646,6 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
         window[i] = [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
         known[i] = true;
     }
-    let strongest = {
-        let mut found: Vec<f32> = Vec::new();
-        for (i, &inside) in in_piece.iter().enumerate() {
-            let (x, y) = (x0 + i % across, y0 + i / across);
-            if inside || x == 0 || y == 0 || x + 1 >= width || y + 1 >= height {
-                continue;
-            }
-            let neighbours = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)];
-            if hole[y * width + x] || neighbours.iter().any(|&(nx, ny)| hole[ny * width + nx]) {
-                continue;
-            }
-            let pixel = canvas.pixels[y * width + x];
-            let mut sum = 0f32;
-            for (channel, value) in pixel.iter().enumerate() {
-                let mean = neighbours.iter().map(|&(nx, ny)| canvas.pixels[ny * width + nx][channel]).sum::<f32>() / 4.0;
-                sum += (value - mean).powi(2);
-            }
-            found.push(sum);
-        }
-        let grain = if found.is_empty() { 0.0 } else { (found.iter().sum::<f32>() / found.len() as f32).sqrt() };
-        DETAIL * grain + DETAIL_FLOOR
-    };
     // Where the surroundings differ from the copy's far more than most
     // do, it's something left of what's removed, or an edge the copy
     // hasn't, and carrying that in would smear it over the spot
@@ -638,40 +665,13 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
             }
         }
     }
-    // The copy evened out from its own surroundings: what it has beyond
-    // that is its detail, kept only as strong as the spot's surroundings'
-    // grain allows, so texture comes with it, but not a line or an edge
-    // beside the spot on a smooth surface
-    // Both evened out together: how far off the copy is, and the copy
-    let mut both: Vec<[f32; 8]> = (0..across * down)
-        .map(|i| {
-            let mut value = [0f32; 8];
-            if known[i] {
-                let copy = canvas.pixels[source((y0 + i / across) * width + x0 + i % across)];
-                value[..4].copy_from_slice(&window[i]);
-                value[4..].copy_from_slice(&copy);
-            }
-            value
-        })
-        .collect();
     if known.contains(&true) {
-        let depth = diffuse(&mut both, &known, across, down);
-        relax(&mut both, &known, across, down, deepest(&depth));
+        let depth = diffuse(&mut window, &known, across, down);
+        relax(&mut window, &known, across, down, deepest(&depth));
     }
     for &at in piece {
-        let i = (at / width - y0) * across + at % width - x0;
-        let offset: [f32; 4] = both[i][..4].try_into().unwrap_or_default();
-        let mut copied = canvas.pixels[source(at)];
-        let base: [f32; 4] = both[i][4..].try_into().unwrap_or_default();
-        let detail: Vec<f32> = (0..4).map(|channel| copied[channel] - base[channel]).collect();
-        let size = detail.iter().map(|value| value * value).sum::<f32>().sqrt();
-        // Past what's allowed it fades, and twice as strong it's gone
-        if size > strongest {
-            let keep = ((2.0 * strongest - size) / size).max(0.0);
-            for channel in 0..4 {
-                copied[channel] = base[channel] + detail[channel] * keep;
-            }
-        }
+        let offset = window[(at / width - y0) * across + at % width - x0];
+        let copied = canvas.pixels[source(at)];
         let alpha = (copied[3] + offset[3]).clamp(0.0, 255.0);
         canvas.pixels[at] = [
             (copied[0] + offset[0]).clamp(0.0, alpha),
@@ -681,12 +681,6 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
         ];
     }
 }
-
-/// A copy's detail is kept at most this many times as strong as the
-/// grain around the spot, how far its pixels are from the average of the
-/// four around them, and `DETAIL_FLOOR` more, out of 255
-const DETAIL: f32 = 3.0;
-const DETAIL_FLOOR: f32 = 6.0;
 
 /// Around a spot, where the surroundings differ from the copy's more than
 /// this many times as far as typically, and `OUTLIER_FLOOR` more, out of
@@ -1863,7 +1857,7 @@ mod tests {
     }
 
     #[test]
-    fn heals_a_tight_spot_from_what_surrounds_it() {
+    fn scrubs_a_tight_spot_from_what_surrounds_it() {
         // A small white panel on black, a dark mark in it, and nowhere
         // white clear of the mark to copy from
         let mut image = image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 10, 10, 255]));
@@ -1874,7 +1868,7 @@ mod tests {
             }
         }
         let strokes: Vec<Stroke> = serde_json::from_str(r#"[{"points":[[0.328,0.328]],"radius":0.09}]"#).unwrap();
-        heal_strokes(&mut image, &strokes, &|| false).unwrap();
+        heal_strokes(&mut image, &strokes, true, &|| false).unwrap();
         for (x, y) in [(21, 21), (18, 18), (24, 24)] {
             assert!(image.get_pixel(x, y)[0] > 200, "{x}, {y}: {:?}", image.get_pixel(x, y));
         }
@@ -1892,7 +1886,7 @@ mod tests {
         let mut image = image::open(&path).unwrap().into_rgba8();
         let strokes: Vec<Stroke> = serde_json::from_str(&strokes).unwrap();
         let started = std::time::Instant::now();
-        heal_strokes(&mut image, &strokes, &|| false).unwrap();
+        heal_strokes(&mut image, &strokes, std::env::var("LIGMA_HEAL_SCRUB").is_ok(), &|| false).unwrap();
         eprintln!("healed in {:?}", started.elapsed());
         image.save(format!("{path}.healed.png")).unwrap();
     }
