@@ -348,6 +348,8 @@
   .pname { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 4px; color: var(--text2); }
   .pname b { overflow: hidden; color: var(--text); font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
   .pname svg { flex: none; }
+  .pname .pedit { flex: 1; min-width: 0; }
+  .pname .pedit input { width: 100%; height: 22px; margin: -2px 0 -2px -4px; padding: 0 4px; border: 0; border-radius: 4px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: inherit; font-weight: 550; -webkit-user-select: text; user-select: text; }
   .pmeta { display: flex; gap: 8px; justify-content: space-between; padding: 0 4px 0 26px; color: var(--text2); font-size: 11px; line-height: 16px; white-space: nowrap; }
   .pmeta span:first-child { overflow: hidden; text-overflow: ellipsis; }
 
@@ -606,6 +608,9 @@
   }
   #pal[open] { display: flex; flex-direction: column; animation: pop 140ms var(--ease); }
   #pal::backdrop { background: rgba(0, 0, 0, 0.24); }
+  /* A new tab's search: over the page, which waits behind it out of focus */
+  .launch #pal::backdrop { background: color-mix(in srgb, var(--bg) 55%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  .launch #pal[open] { animation: none; }
   .pf { display: flex; flex: none; align-items: center; gap: 8px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--line); }
   .pf > .i { color: var(--text2); }
   .chips { display: contents; }
@@ -2032,6 +2037,7 @@ async function start() {
   Live.status = "Loading your files";
   Live.error = null;
   showCached();
+  takeReturn();
   render();
   try {
     const session = await api("/api/session/state", { user: null });
@@ -2084,6 +2090,7 @@ async function start() {
     PLANS.splice(0, PLANS.length, ...plans);
     for (const k of Object.keys(PROJECTS)) delete PROJECTS[k];
     for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
+    takeReturn();
     render();
     await LG.load(VIEWS.recents);
     takeFromStore();
@@ -2350,10 +2357,27 @@ function activity(file) {
 
 /* State */
 
+// Ligma passes the page to open on as the URL's fragment (new_home.rs),
+// then `tab` in a tab of its own rather than Home, and `search` to start
+// with search for a new tab to pick what it opens
+const hashParts = () => location.hash.slice(1).split("&");
+const IN_TAB = hashParts().includes("tab");
 const START_VIEWS = ["home", "recents", "starred", "shared", "drafts"];
 function startView() {
-  const view = location.hash.slice(1);
+  const view = hashParts()[0];
   return START_VIEWS.includes(view) ? view : "home";
+}
+// A reload, or going back to the page, comes back where it was: its
+// history entry keeps that. Projects and teams wait for their names
+let returnTo = typeof history.state?.view === "string" ? history.state.view : null;
+const LAUNCH = hashParts().includes("search") && !returnTo;
+function takeReturn() {
+  if (!returnTo || !viewName(returnTo)) return;
+  state.view = returnTo;
+  returnTo = null;
+  try {
+    history.replaceState({ view: state.view, scroll: 0 }, "");
+  } catch {}
 }
 // Picking another start page in the settings goes there at once
 addEventListener("hashchange", () => go(startView()));
@@ -2892,8 +2916,9 @@ function render({ keepScroll = true } = {}) {
     lift.rerender = true;
     return;
   }
-  // Not under a team's name or description being edited on its page
-  if (settingsTeam() && $(".dash .editing", scroller)) return;
+  // Not under a team's name or description being edited on its page, or a
+  // suggested project's name
+  if ((settingsTeam() && $(".dash .editing", scroller)) || $(".ptile .editing", scroller)) return;
   const started = performance.now();
   const ready = LIVE && (state.view === "home" ? Live.ready.has("recents") || Live.ready.has("starred") : Live.ready.has(state.view));
   const home = state.view === "home" && state.mode !== "empty" && (!LIVE || ready) ? homeLayout() : null;
@@ -2905,6 +2930,8 @@ function render({ keepScroll = true } = {}) {
   renderSide();
   renderHead(list.length);
   renderFilters();
+  // What a new tab's search shows before anything is typed, once it's loaded
+  if (launching && pal.open && !palInput.value && !chips.length) drawPalette();
   sections = [];
   let html = "";
   if (settings) html = settingsPage(settings);
@@ -3223,6 +3250,12 @@ function openFiles(ids, background = false) {
   if (!ids.length) return;
   const now = Date.now();
   if (LIVE) {
+    // A tab of its own opens one file in its place, as a browser's new tab
+    // would
+    if (IN_TAB && !background && ids.length === 1) {
+      upsertFile(ids[0], { viewedAt: now, recent: true });
+      return void location.assign(fileUrl(byId(ids[0])));
+    }
     // Home hands Figma links to tabs of their own (tabs.rs)
     for (const id of ids) {
       window.open(fileUrl(byId(id)), "_blank");
@@ -3380,7 +3413,9 @@ function createFile(type = "design", name = "Untitled", project) {
       .then((meta) => {
         const file = fromRest(meta.fig_file ?? meta);
         upsertFile(file.key, { viewedAt: Date.now(), recent: true });
-        window.open(meta.fig_file?.url ?? fileUrl(file), "_blank");
+        const url = meta.fig_file?.url ?? fileUrl(file);
+        if (IN_TAB) return void location.assign(url);
+        window.open(url, "_blank");
         toast(`Opening new ${TYPES[type].noun} “${file.name}” in ${placeOf(file.project)}`);
         render();
       })
@@ -3550,13 +3585,13 @@ function projectTools(p) {
 function colorItems(id) {
   return FOLDER_COLORS.map(([key, label, hex]) => ({ label, iconHtml: folderIcon(id, hex), checked: FOLDER[id]?.color === key, act: () => setProjectColor(id, key) }));
 }
-function projectMenu(id, at, { open = false } = {}) {
+function projectMenu(id, at, { open = false, tile = null } = {}) {
   const p = PROJECTS[id];
   if (!p) return;
   const others = allTeams().filter((t) => t.id !== p.team.id);
   showMenu([
     ...(open ? [{ label: "Open", act: () => go("p:" + id) }, null] : []),
-    { label: "Rename", act: () => renameProject(id) },
+    { label: "Rename", act: () => renameProject(id, tile) },
     { label: FOLDER[id]?.description ? "Edit description" : "Add a description", act: () => describeProject(id) },
     { label: "Color", sub: colorItems(id) },
     null,
@@ -3631,11 +3666,36 @@ function editInPlace(el, { value, label, multiline = false, wrap }, save, after)
   input.addEventListener("blur", () => finish(true));
 }
 
-// Renames in place: in the header when the project is open, else on its
-// row in the sidebar, else it opens to rename there
-function renameProject(id) {
+// Renames in place: on the tile it was picked from, in the header when the
+// project is open, else on its row in the sidebar, else it opens to rename
+// there
+function renameProject(id, tile = null) {
   const p = PROJECTS[id];
   if (!p) return;
+  if (tile?.isConnected && $(".pname b", tile)) {
+    // A field inside a button can't be clicked into: a suggested project's
+    // tile is a plain box while it's renamed
+    if (tile.tagName === "BUTTON") {
+      const box = document.createElement("div");
+      box.className = tile.className;
+      box.innerHTML = tile.innerHTML;
+      tile.replaceWith(box);
+      tile = box;
+    }
+    return editInPlace($(".pname b", tile), {
+      value: p.name,
+      label: "Project name",
+      wrap: (input) => {
+        const box = document.createElement("span");
+        box.className = "pedit editing";
+        box.append(input);
+        return box;
+      },
+    }, (name) => saveProjectName(id, name), () => {
+      render();
+      refocus($(`.ptile[data-project="${CSS.escape(id)}"]`, scroller));
+    });
+  }
   const row = $(`.nav[data-view="p:${CSS.escape(id)}"]`, side);
   if (state.view !== "p:" + id && row) {
     return editInPlace(row, {
@@ -5034,7 +5094,7 @@ function settingsClick(el) {
   if (act === "pin") return toggleTeamStar(id);
   if (act === "p-new") return newProject(el.getBoundingClientRect(), id);
   if (act === "p-share") return openShare(el.dataset.project, el.getBoundingClientRect());
-  if (act === "p-more") return projectMenu(el.dataset.project, el.getBoundingClientRect(), { open: true });
+  if (act === "p-more") return projectMenu(el.dataset.project, el.getBoundingClientRect(), { open: true, tile: el.closest(".dtile") });
   if (act === "seat") return seatMenu(id, el.dataset.user, el.getBoundingClientRect());
   if (act === "seat-yes") return changeSeat(id);
   if (act === "seat-no") {
@@ -5234,6 +5294,7 @@ addEventListener("resize", () => win.classList.contains("open") && placeWin());
 
 function go(view, { back = false } = {}) {
   if (!viewName(view)) return;
+  returnTo = null;
   if (state.view.startsWith("s:")) reblur(scroller);
   const moved = view !== state.view;
   state.view = view;
@@ -5255,6 +5316,7 @@ function go(view, { back = false } = {}) {
    a keyboard's Back and Forward keys, or a two-finger swipe sideways. Each
    page is a step in the page's own history, with where it was scrolled to.
    Nothing on screen: it's what the hands already do */
+takeReturn();
 try {
   history.replaceState({ view: state.view, scroll: 0 }, "");
 } catch {}
@@ -7147,7 +7209,27 @@ function openPalette() {
 pal.addEventListener("pointerdown", (e) => {
   if (e.target === pal) pal.close();
 });
+// A new tab that starts with search (new_home.rs): search floats over an
+// empty page until something is picked. Closed without, the tab closes too
+let launching = false;
+function openLauncher() {
+  launching = true;
+  document.documentElement.classList.add("launch");
+  document.title = "New tab";
+  openPalette();
+}
+function endLaunch() {
+  if (!launching) return false;
+  launching = false;
+  document.documentElement.classList.remove("launch");
+  document.title = "Home";
+  return true;
+}
 pal.addEventListener("close", () => {
+  if (launching) {
+    endLaunch();
+    return signal("close");
+  }
   if (document.activeElement && document.activeElement !== document.body && !pal.contains(document.activeElement)) return;
   const card = state.focus && cardEl(state.focus);
   card?.focus({ preventScroll: true });
@@ -7297,6 +7379,7 @@ function activate(item, background = false) {
     drawPalette();
     return;
   }
+  endLaunch();
   pal.close();
   if (item.kind === "file") {
     state.focus = item.id;
@@ -7555,7 +7638,7 @@ scroller.addEventListener("contextmenu", (e) => {
   const project = e.target.closest("[data-project]")?.dataset.project;
   if (project) {
     e.preventDefault();
-    return projectMenu(project, { x: e.clientX, y: e.clientY }, { open: true });
+    return projectMenu(project, { x: e.clientX, y: e.clientY }, { open: true, tile: e.target.closest(".ptile, .dtile") });
   }
   const card = e.target.closest(".card[data-id]");
   if (!card) return;
@@ -7936,6 +8019,7 @@ else {
   seedNotes();
   render({ keepScroll: false });
 }
+if (LAUNCH) openLauncher();
 if (state.mode === "loading") setTimeout(() => {
   state.mode = null;
   render({ keepScroll: false });

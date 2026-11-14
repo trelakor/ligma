@@ -96,6 +96,9 @@ pub const SETTINGS_JS: &str = r##"(() => {
 
 static ON: AtomicBool = AtomicBool::new(false);
 
+/// New tabs start with the page's search (`ligmaHomeNewTabSearch`)
+static SEARCH: AtomicBool = AtomicBool::new(true);
+
 /// The Figma account the page is showing (its user id), so turning the page
 /// off opens Figma's file browser on that same account
 static ACCOUNT: Mutex<Option<String>> = Mutex::new(None);
@@ -114,6 +117,7 @@ fn start(settings: &Settings) -> String {
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.ligma_home, Ordering::Relaxed);
+    SEARCH.store(settings.ligma_home_new_tab_search, Ordering::Relaxed);
     *START.lock().unwrap() = start(settings);
 }
 
@@ -130,6 +134,20 @@ pub fn home_url() -> Url {
         url.query_pairs_mut().append_pair("fuid", account);
     }
     url
+}
+
+/// What a new tab loads: Ligma's home page while it's on, marked `tab` so
+/// it opens files in place, and `search` to start with its search. `None`
+/// for Figma's file browser
+pub fn new_tab_url(search: bool) -> Option<Url> {
+    if !ON.load(Ordering::Relaxed) {
+        return None;
+    }
+    let mut url: Url = URL.parse().unwrap();
+    let start = START.lock().unwrap().clone();
+    let search = search && SEARCH.load(Ordering::Relaxed);
+    url.set_fragment(Some(&format!("{start}&tab{}", if search { "&search" } else { "" })));
+    Some(url)
 }
 
 /// Whether `url` is Ligma's home page, on whichever page
@@ -151,10 +169,11 @@ pub fn page_js() -> String {
 /// which account it's on
 pub const SIGNAL_HOST: &str = "home.ligma.invalid";
 
-/// A request from the page in tab `tab`, taken only from Home. Not from
-/// within the webview's own callback, which is still deciding on the page
+/// A request from the page in tab `tab`, taken only from Home or a tab
+/// showing the page. Not from within the webview's own callback, which is
+/// still deciding on the page
 pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
-    if tab != crate::tabs::HOME_ID {
+    if tab != crate::tabs::HOME_ID && !crate::tabs::shows_url(app, tab, is_url) {
         return;
     }
     let path = url.path().to_owned();
@@ -168,6 +187,10 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
     }
     let app = app.clone();
     std::thread::spawn(move || match path.as_str() {
+        // A new tab's search closed without picking anything
+        "/close" => {
+            let _ = crate::tabs::close(&app, tab);
+        }
         "/settings" => {
             if let Err(error) = crate::settings::open_window(&app) {
                 log::warn!("Couldn't open Settings: {error}");
@@ -197,6 +220,7 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
 
 /// Moves Home to the other page when the setting changes
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
+    SEARCH.store(settings.ligma_home_new_tab_search, Ordering::Relaxed);
     let switched = ON.swap(settings.ligma_home, Ordering::Relaxed) != settings.ligma_home;
     let moved = {
         let start = start(settings);

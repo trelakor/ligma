@@ -559,6 +559,11 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
             // where it was in Figma's file browser
             let url = match url {
                 Some(url) if home && (crate::new_home::is_url(&url) || crate::new_home::is_url(&crate::new_home::home_url())) => Some(crate::new_home::home_url()),
+                // A new tab still on Ligma's home page comes back to it
+                // without its search, or to Figma's file browser
+                Some(url) if !home && crate::new_home::is_url(&url) => {
+                    Some(crate::new_home::new_tab_url(false).unwrap_or_else(|| HOME_URL.parse().unwrap()))
+                }
                 url => url,
             };
             let Some(url) = url.or_else(|| home.then(crate::new_home::home_url)) else {
@@ -814,6 +819,9 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .or_else(|| app.get_window(MAIN))
         .expect("main window exists");
     let (nav_app, popup_app, title_app) = (app.clone(), app.clone(), app.clone());
+    // Ligma's home page, which Home may load whatever the setting was when
+    // it was made, as may a new tab
+    let home_page = id == HOME_ID || crate::new_home::is_url(&url);
     #[allow(unused_mut)]
     let mut builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
         // Let Figma receive HTML5 drag-and-drop (image/file imports)
@@ -859,9 +867,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::split::PAGE_JS)
         .initialization_script(crate::split::CARRY_JS)
         .initialization_script(crate::view_state::PAGE_JS);
-    // Ligma's home page, which Home may load whatever the setting was when
-    // it was made
-    if id == HOME_ID {
+    if home_page {
         builder = builder.initialization_script(crate::new_home::page_js());
     }
     #[cfg(target_os = "macos")]
@@ -2305,8 +2311,16 @@ pub fn cycle(app: &AppHandle, offset: isize) -> tauri::Result<()> {
     select(app, id)
 }
 
+/// Opens a new tab: Ligma's home page while it's on, which may start with
+/// its search (see new_home.rs), else Figma's file browser
 pub fn new_tab(app: &AppHandle) -> tauri::Result<()> {
-    open(app, HOME_URL.parse().unwrap())
+    open(app, crate::new_home::new_tab_url(true).unwrap_or_else(|| HOME_URL.parse().unwrap()))
+}
+
+/// Whether tab `id` was last known on a page `test` accepts. From its
+/// state, not its webview, which may be the one asking
+pub fn shows_url(app: &AppHandle, id: u32, test: impl Fn(&Url) -> bool) -> bool {
+    with_tab(app, id, |tab| test(&tab.url)).unwrap_or(false)
 }
 
 /// Webview of tab `id` if its page can run JavaScript now: loaded, and not

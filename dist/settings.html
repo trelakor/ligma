@@ -673,6 +673,12 @@
         <span class="label">Opens on</span>
         <button type="button" class="picker" id="new-home-start" aria-haspopup="listbox" aria-expanded="false" data-options='[["home","Home"],["recents","Recents"],["starred","Starred"],["shared","Shared with you"],["drafts","Drafts"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </label>
+      <label class="row nested" id="new-home-tab-search-row" data-keywords="new tab arc search launcher">
+        <span class="label">Search in new tabs
+          <div class="hint">A new tab starts with search, to pick the file it opens</div>
+        </span>
+        <input type="checkbox" class="switch" id="new-home-tab-search">
+      </label>
       <label class="row" data-keywords="new old file browser">
         <span class="label">Use the classic home page
           <div class="hint">Keeps Figma's usual home page on accounts trying its new one</div>
@@ -1247,7 +1253,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "new-home-tab-search", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1793,6 +1799,7 @@
     $("classic-home").checked = settings.classicHome;
     $("new-home").checked = settings.ligmaHome;
     $("new-home-start").value = settings.ligmaHomeStart;
+    $("new-home-tab-search").checked = settings.ligmaHomeNewTabSearch;
     $("ligma-mcp").checked = settings.ligmaMcp;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
@@ -1810,6 +1817,7 @@
       ["local-upscale-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
       ["new-home-start-row", settings.ligmaHome],
+      ["new-home-tab-search-row", settings.ligmaHome],
       ["frame-palette-row", settings.frameColors],
       ["frame-tint-row", settings.frameColors],
       ["discord-file-row", settings.discordRichPresence],
@@ -1884,6 +1892,7 @@
       classicHome: $("classic-home").checked,
       ligmaHome: $("new-home").checked,
       ligmaHomeStart: $("new-home-start").value,
+      ligmaHomeNewTabSearch: $("new-home-tab-search").checked,
       ligmaMcp: $("ligma-mcp").checked,
       ...changes,
     };
