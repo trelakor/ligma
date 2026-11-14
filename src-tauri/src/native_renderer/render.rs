@@ -476,7 +476,7 @@ const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 const VELLO_STILL: Duration = Duration::from_secs(1);
 
 /// How long the view stays put before Vello draws it at once
-const PAN_STILL: Duration = Duration::from_millis(100);
+const PAN_STILL: Duration = Duration::from_millis(300);
 
 /// Tiles a side Vello draws at most at once
 const VELLO_BLOCK: i32 = 1;
@@ -1609,7 +1609,7 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
-        if self.whole.as_ref().is_some_and(|whole| !whole.patch.is_empty() && whole.at == (ox, oy, pxb) && !whole.stale) {
+        if self.moved.elapsed() >= PAN_STILL && self.whole.as_ref().is_some_and(|whole| !whole.patch.is_empty() && whole.at == (ox, oy, pxb) && !whole.stale) {
             if self.whole_busy() {
                 return Some(Duration::from_millis(1));
             }
