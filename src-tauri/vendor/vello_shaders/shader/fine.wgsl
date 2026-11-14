@@ -81,6 +81,21 @@ const MASK_WIDTH = 64u;
 const MASK_HEIGHT = 64u;
 const SH_SAMPLES_SIZE = 1024u;
 const SAMPLE_WORDS_PER_PIXEL = 4u;
+// Ligma: which of each pixel's samples the last fill covers, sample s of
+// word s / 4 at bit 8 * (s % 4) + 7 - s / 4, as the non-zero rule's count
+// leaves them
+var<private> ms_mask: array<u32, PIXELS_PER_THREAD>;
+const MS_ALL = 0xF0F0F0F0u;
+
+// The even-odd rule's mask, a bit a sample in order, laid out as the
+// non-zero rule's
+fn ms_from_ordered(ordered: u32) -> u32 {
+    var out = 0u;
+    for (var w = 0u; w < 4u; w++) {
+        out |= ((((ordered >> (w * 4u)) & 0xfu) * 0x204081u) & 0x1010101u) << (7u - w);
+    }
+    return out;
+}
 @group(0) @binding(MASK_LUT_INDEX)
 var<storage> mask_lut: array<u32, 2048u>;
 #endif
@@ -631,6 +646,9 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
         // be equal to the expected value, thus all resulting bits are 1.
         if expected_zero >= 256u {
             area[i] = 1.0;
+#ifdef msaa16
+            ms_mask[i] = MS_ALL;
+#endif
         } else {
 #ifdef msaa8
             let samples0 = atomicLoad(&sh_samples[pix_ix * 2u]);
@@ -682,6 +700,7 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
             // bits 8 * k + {4, 5, 6, 7} contain 8-reductions
             let xored8 = xored4 | (xored4 * 16u);
             area[i] = f32(countOneBits(xored8 & 0xF0F0F0F0u)) * 0.0625;
+            ms_mask[i] = xored8 & MS_ALL;
 #endif
         }
     }
@@ -836,6 +855,7 @@ fn fill_path_ms_evenodd(fill: CmdFill, local_id: vec2<u32>, result: ptr<function
 #endif
 #ifdef msaa16
         area[i] = f32(countOneBits((samples ^ pix_mask) & 0xffffu)) * 0.0625;
+        ms_mask[i] = ms_from_ordered((samples ^ pix_mask) & 0xffffu);
 #endif
     }
     *result = area;
@@ -1272,6 +1292,16 @@ fn main(
     var blend_stack: array<array<u32, PIXELS_PER_THREAD>, BLEND_STACK_SPLIT>;
     var clip_depth = 0u;
     var area: array<f32, PIXELS_PER_THREAD>;
+#ifdef msaa16
+    // Ligma: the samples opaque solid fills have covered in this layer, and
+    // what they add to the pixel. A fill covering some of them takes their
+    // place, rather than blending over the whole pixel, so shapes meeting
+    // within a pixel cover it as Figma's samples do, rather than show what's
+    // under them through both their edges. Any other paint, or a layer,
+    // leaves the pixel as one color again
+    var solid: array<u32, PIXELS_PER_THREAD>;
+    var solid_rgba: array<vec4<f32>, PIXELS_PER_THREAD>;
+#endif
     var cmd_ix = tile_ix * PTCL_INITIAL_ALLOC;
     let blend_offset = ptcl[cmd_ix];
     cmd_ix += 1u;
@@ -1307,11 +1337,25 @@ fn main(
             if (ablate & 16u) != 0u && tag == CMD_FILL || (ablate & 32u) != 0u && tag == CMD_FILL && (ptcl[cmd_ix + 1u] >> 2u) <= (ablate >> 8u) || (ablate & 64u) != 0u && tag == CMD_FILL && (ptcl[cmd_ix + 1u] >> 2u) > (ablate >> 8u) {
                 for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                     area[i] = 0.5;
+#ifdef msaa16
+                    ms_mask[i] = 0xF0F00000u;
+#endif
                 }
                 cmd_ix += 4u;
                 continue;
             }
         }
+#ifdef msaa16
+        if tag != CMD_FILL && tag != CMD_SOLID && tag != CMD_COLOR && tag != CMD_JUMP {
+            let layer = tag == CMD_BEGIN_CLIP || tag == CMD_BEGIN_CLIP_COPY || tag == CMD_END_CLIP;
+            for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                if layer || area[i] > 0.0 {
+                    solid[i] = 0u;
+                    solid_rgba[i] = vec4(0.0);
+                }
+            }
+        }
+#endif
         switch tag {
             case CMD_FILL: {
                 let fill = read_fill(cmd_ix);
@@ -1324,6 +1368,9 @@ fn main(
                 if (fill.size_and_rule & 2u) != 0u {
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                         area[i] = 1.0 - area[i];
+#ifdef msaa16
+                        ms_mask[i] = ~ms_mask[i] & MS_ALL;
+#endif
                     }
                 }
                 cmd_ix += 4u;
@@ -1331,16 +1378,48 @@ fn main(
             case CMD_SOLID: {
                 for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                     area[i] = 1.0;
+#ifdef msaa16
+                    ms_mask[i] = MS_ALL;
+#endif
                 }
                 cmd_ix += 1u;
             }
             case CMD_COLOR: {
                 let color = read_color(cmd_ix);
                 let fg = unpack4x8unorm(color.rgba_color);
+#ifdef msaa16
+                if fg.a >= 1.0 {
+                    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                        let m = ms_mask[i];
+                        let k = solid[i];
+                        // Those of its samples already covered keep their
+                        // share of the color, as do those not, and the
+                        // fill takes the place of both under it, each taken
+                        // as one color
+                        let covered = f32(countOneBits(k));
+                        let open = 16.0 - covered;
+                        let kept = solid_rgba[i] * select(0.0, (covered - f32(countOneBits(k & m))) / covered, covered > 0.0);
+                        let rest = max(rgba[i] - solid_rgba[i], vec4(0.0)) * select(0.0, (open - f32(countOneBits(m & ~k))) / open, open > 0.0);
+                        solid_rgba[i] = kept + fg * (f32(countOneBits(m)) * 0.0625);
+                        solid[i] = k | m;
+                        rgba[i] = solid_rgba[i] + rest;
+                    }
+                } else {
+                    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                        let fg_i = fg * area[i];
+                        rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+                        if area[i] > 0.0 {
+                            solid[i] = 0u;
+                            solid_rgba[i] = vec4(0.0);
+                        }
+                    }
+                }
+#else
                 for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                     let fg_i = fg * area[i];
                     rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
                 }
+#endif
                 cmd_ix += 2u;
             }
             case CMD_BEGIN_CLIP, CMD_BEGIN_CLIP_COPY: {
