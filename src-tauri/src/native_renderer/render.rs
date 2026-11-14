@@ -1577,9 +1577,18 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
-        // Over a view Vello drew, which is as exact, tiles are drawn exactly
-        // at once rather than quickly first
-        let direct = whole_here && self.whole.as_ref().is_some_and(|whole| whole.vello);
+        // A view Vello drew is as exact as tiles, and takes less memory, so
+        // it's kept rather than tiles drawn, which close up can take seconds
+        if whole_here && self.whole.as_ref().is_some_and(|whole| whole.vello) {
+            if !self.tiles.is_empty() {
+                for (_, tile) in std::mem::take(&mut self.tiles) {
+                    self.drop_tile(tile);
+                }
+                self.dirty = true;
+            }
+            self.update_reason(&view, px, width, height);
+            return None;
+        }
         let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale && (!tile.draft || key.px != pxb));
         let mut order: Vec<(TileKey, bool)> = Vec::new();
         // Where tiles are missing, the coarse level first: it covers four
@@ -1587,12 +1596,12 @@ impl Painter {
         if missing > 0 && !whole_here {
             order.extend(coarse_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         }
-        order.extend(in_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, direct)));
+        order.extend(in_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         // Then the view's tiles exactly, before anything else, once it's
         // still, nor while the page changes, as while a file loads, which
         // would draw them again soon anyway
         let refine = REFINE_AFTER.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
-        if refine.is_zero() || direct {
+        if refine.is_zero() {
             order.extend(rough.iter().map(|&key| (key, true)));
         }
         // Then the furthest level, all there is, which zooming out shows
