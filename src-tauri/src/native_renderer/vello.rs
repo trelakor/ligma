@@ -164,7 +164,10 @@ impl Vello {
             .ok_or("no wgpu adapter for Skia's GPU")?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("ligma vello"),
-            required_features: adapter.features() & wgpu::Features::CLEAR_TEXTURE,
+            // Dev tools: timing what's drawn on the GPU
+            required_features: adapter.features()
+                & (wgpu::Features::CLEAR_TEXTURE
+                    | if std::env::var_os("LIGMA_NATIVE_VELLO_TIMES").is_some() { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() }),
             required_limits: adapter.limits(),
             ..Default::default()
         }))
@@ -177,7 +180,7 @@ impl Vello {
         }));
         let renderer = vello::Renderer::new(
             &device,
-            vello::RendererOptions { antialiasing_support: vello::AaSupport { area: std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some(), msaa8: false, msaa16: true }, ..Default::default() },
+            vello::RendererOptions { antialiasing_support: vello::AaSupport { area: std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some(), msaa4: true, msaa8: false, msaa16: std::env::var_os("LIGMA_NATIVE_VELLO_MSAA16").is_some() }, ..Default::default() },
         )
         .map_err(|error| format!("renderer: {error}"))?;
         let raw = Self::raw_device(&device)?;
@@ -314,7 +317,13 @@ impl Vello {
             base_color: AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]),
             width: width as u32,
             height: height as u32,
-            antialiasing_method: if std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some() { vello::AaConfig::Area } else { vello::AaConfig::Msaa16 },
+            antialiasing_method: if std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some() {
+                vello::AaConfig::Area
+            } else if std::env::var_os("LIGMA_NATIVE_VELLO_MSAA16").is_some() {
+                vello::AaConfig::Msaa16
+            } else {
+                vello::AaConfig::Msaa4
+            },
         };
         let at = std::time::Instant::now();
         let dropped = vello::low_level::vello_encoding::DROPPED_IMAGES.load(std::sync::atomic::Ordering::Relaxed);
@@ -358,6 +367,7 @@ impl Vello {
         let at = std::time::Instant::now();
         let fits = self.renderer.check(&self.device).map_err(|error| format!("check: {error}"));
         self.waited = at.elapsed();
+        self.stages += &self.renderer.times();
         // Dev tools: what Vello's memory holds
         if let Some(report) = self.device.generate_allocator_report() {
             let mut named: HashMap<String, (u64, u32)> = HashMap::new();
@@ -722,6 +732,91 @@ impl Fragment {
     }
 }
 
+/// `shape` drawn by `transform`, as lines no further than `tolerance` from
+/// it, where it's small enough that's fewer than it has
+fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64) -> Option<BezPath> {
+    let bounds = transform.transform_rect_bbox(shape.bounding_box());
+    if bounds.width().max(bounds.height()) > 64.0 {
+        return None;
+    }
+    let had = shape.path_elements(0.1).count();
+    let mut out = BezPath::new();
+    let mut line: Vec<kurbo::Point> = Vec::new();
+    let mut keep = Vec::new();
+    // Half the tolerance flattening, half leaving points out
+    let mut close = |line: &mut Vec<kurbo::Point>, out: &mut BezPath| {
+        if line.len() >= 3 {
+            let first = line[0];
+            if line.last() != Some(&first) {
+                line.push(first);
+            }
+            fewer(line, tolerance / 2.0, &mut keep);
+            if keep.len() >= 4 {
+                out.move_to(line[keep[0]]);
+                for &index in &keep[1..keep.len() - 1] {
+                    out.line_to(line[index]);
+                }
+                out.close_path();
+            }
+        }
+        line.clear();
+    };
+    kurbo::flatten(shape.path_elements(0.1).map(|element| transform * element), tolerance / 2.0, |element| match element {
+        kurbo::PathEl::MoveTo(p) => {
+            close(&mut line, &mut out);
+            line.push(p);
+        }
+        kurbo::PathEl::LineTo(p) => line.push(p),
+        _ => close(&mut line, &mut out),
+    });
+    close(&mut line, &mut out);
+    (out.elements().len() < had).then_some(out)
+}
+
+/// The indices of the points of the closed `line` that keep it within
+/// `tolerance` of itself, by Douglas and Peucker's way
+fn fewer(line: &[kurbo::Point], tolerance: f64, keep: &mut Vec<usize>) {
+    keep.clear();
+    let last = line.len() - 1;
+    // A closed line splits at the point furthest from its start first
+    let far = (1..last).max_by(|&a, &b| (line[a] - line[0]).hypot2().total_cmp(&(line[b] - line[0]).hypot2())).unwrap_or(0);
+    let mut kept = vec![false; line.len()];
+    kept[0] = true;
+    kept[last] = true;
+    if (line[far] - line[0]).hypot() <= tolerance {
+        return;
+    }
+    kept[far] = true;
+    let mut spans = vec![(0, far), (far, last)];
+    while let Some((a, b)) = spans.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let (p, q) = (line[a], line[b]);
+        let d = q - p;
+        let length = d.hypot();
+        let (mut worst, mut at) = (0.0, a);
+        for (index, &point) in line.iter().enumerate().take(b).skip(a + 1) {
+            let off = point - p;
+            let distance = if length > 0.0 { (off.x * d.y - off.y * d.x).abs() / length } else { off.hypot() };
+            if distance > worst {
+                worst = distance;
+                at = index;
+            }
+        }
+        if worst > tolerance {
+            kept[at] = true;
+            spans.push((a, at));
+            spans.push((at, b));
+        }
+    }
+    keep.extend(kept.iter().enumerate().filter(|(_, &k)| k).map(|(index, _)| index));
+}
+
+/// Dev tools: fills and their segments by size in device pixels, under
+/// 1/4, 1, 4, 16, 64, 256 and over
+pub static SIZES: [std::sync::atomic::AtomicU64; 14] = [const { std::sync::atomic::AtomicU64::new(0) }; 14];
+
 /// The level of fragments drawn at `px`
 pub fn level(px: f32) -> i32 {
     px.log2().floor().clamp(-16.0, 16.0) as i32
@@ -1058,6 +1153,32 @@ impl<'a> Encoder<'a> {
 
     /// A fill, cut by the soft clip if there is one
     fn fill<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
+        // Small, it's drawn with fewer lines no further than this from it,
+        // in device pixels for fragments' largest zoom
+        let tolerance = if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 };
+        if std::env::var_os("LIGMA_NATIVE_VELLO_WHOLE").is_none() {
+            if let Some(lines) = simplified(shape, transform, tolerance) {
+                // What the brush is drawn by stays as it was
+                let brush: peniko::BrushRef<'b> = brush.into();
+                let brush_transform = match brush {
+                    peniko::BrushRef::Solid(_) => None,
+                    _ => Some(transform * brush_transform.unwrap_or(Affine::IDENTITY)),
+                };
+                return self.fill_shape(style, Affine::IDENTITY, brush, brush_transform, &lines);
+            }
+        }
+        self.fill_shape(style, transform, brush, brush_transform, shape)
+    }
+
+    fn fill_shape<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
+        if std::env::var_os("LIGMA_NATIVE_VELLO_SIZES").is_some() {
+            let b = transform.transform_rect_bbox(shape.bounding_box());
+            let size = b.width().max(b.height());
+            let bucket = [0.25, 1.0, 4.0, 16.0, 64.0, 256.0].iter().position(|&edge| size < edge).unwrap_or(6);
+            let segments = shape.path_elements(0.1).count() as u64;
+            SIZES[bucket * 2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            SIZES[bucket * 2 + 1].fetch_add(segments, std::sync::atomic::Ordering::Relaxed);
+        }
         match &self.soft {
             Some(soft) => {
                 self.scene.push_clip_layer(fill_of(soft), Affine::IDENTITY, &bez(soft));
@@ -1613,7 +1734,7 @@ impl<'a> Encoder<'a> {
     fn stand_in(&mut self, rect: kurbo::Rect) -> Option<(usize, usize)> {
         let brush = ImageBrush { image: nothing(), sampler: ImageSampler { x_extend: Extend::Reflect, y_extend: Extend::Reflect, quality: ImageQuality::Low, alpha: 1.0 } };
         // Its own transform, which a view sets, unlike any other
-        self.fill(Fill::NonZero, Affine::IDENTITY, &brush, Some(Affine::scale(0.123456789)), &rect);
+        self.fill_shape(Fill::NonZero, Affine::IDENTITY, &brush, Some(Affine::scale(0.123456789)), &rect);
         let encoding = self.scene.encoding();
         if !matches!(encoding.resources.patches.last(), Some(Patch::Image { .. })) {
             self.fail("effect's image");

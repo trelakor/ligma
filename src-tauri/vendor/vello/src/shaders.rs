@@ -37,6 +37,7 @@ pub struct FullShaders {
     pub path_tiling_setup: ShaderId,
     pub path_tiling: ShaderId,
     pub fine_area: Option<ShaderId>,
+    pub fine_msaa4: Option<ShaderId>,
     pub fine_msaa8: Option<ShaderId>,
     pub fine_msaa16: Option<ShaderId>,
     // 2-level dispatch works for CPU pathtag scan even for large
@@ -227,6 +228,15 @@ pub(crate) fn full_shaders(
     } else {
         None
     };
+    let fine_msaa4 = if aa_support.msaa4 {
+        Some(add_shader!(
+            fine_msaa4,
+            fine_resources,
+            CpuShaderType::Missing
+        ))
+    } else {
+        None
+    };
     let fine_msaa8 = if aa_support.msaa8 {
         Some(add_shader!(
             fine_msaa8,
@@ -267,6 +277,7 @@ pub(crate) fn full_shaders(
         path_tiling_setup,
         path_tiling,
         fine_area,
+        fine_msaa4,
         fine_msaa8,
         fine_msaa16,
         pathtag_is_cpu: options.use_cpu,

@@ -45,6 +45,91 @@ pub(crate) struct WgpuEngine {
     /// the GPU's copied from them, rather than wgpu making new memory
     /// ready for each
     staging: Staging,
+    /// Ligma: dev tools, each stage's time on the GPU
+    pub(crate) timer: Option<Timer>,
+    timer_tried: bool,
+}
+
+pub(crate) struct Timer {
+    set: wgpu::QuerySet,
+    period: f64,
+    labels: Vec<&'static str>,
+    pending: Vec<(Buffer, Vec<&'static str>, std::sync::Arc<std::sync::atomic::AtomicBool>, bool)>,
+}
+
+impl Timer {
+    fn new(device: &Device, queue: &Queue) -> Option<Self> {
+        if std::env::var_os("LIGMA_NATIVE_VELLO_TIMES").is_none() || !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            return None;
+        }
+        let set = device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("ligma.times"), ty: wgpu::QueryType::Timestamp, count: 512 });
+        Some(Self { set, period: queue.get_timestamp_period() as f64, labels: Vec::new(), pending: Vec::new() })
+    }
+
+    fn pass(&mut self, label: &'static str) -> ComputePassDescriptor<'_> {
+        let at = self.labels.len() as u32 * 2;
+        if at >= 512 {
+            return ComputePassDescriptor::default();
+        }
+        self.labels.push(label);
+        ComputePassDescriptor {
+            label: None,
+            timestamp_writes: Some(wgpu::ComputePassTimestampWrites { query_set: &self.set, beginning_of_pass_write_index: Some(at), end_of_pass_write_index: Some(at + 1) }),
+        }
+    }
+
+    fn resolve(&mut self, device: &Device, encoder: &mut CommandEncoder) {
+        if self.labels.is_empty() {
+            return;
+        }
+        let size = self.labels.len() as u64 * 16;
+        let resolve = device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: BufferUsages::QUERY_RESOLVE | BufferUsages::COPY_SRC, mapped_at_creation: false });
+        let read = device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST, mapped_at_creation: false });
+        encoder.resolve_query_set(&self.set, 0..self.labels.len() as u32 * 2, &resolve, 0);
+        encoder.copy_buffer_to_buffer(&resolve, 0, &read, 0, size);
+        self.pending.push((read, std::mem::take(&mut self.labels), Default::default(), false));
+    }
+
+    fn submitted(&mut self) {
+        for (read, _, mapped, asked) in &mut self.pending {
+            if !*asked {
+                *asked = true;
+                let done = mapped.clone();
+                read.slice(..).map_async(wgpu::MapMode::Read, move |result| done.store(result.is_ok(), std::sync::atomic::Ordering::Relaxed));
+            }
+        }
+    }
+
+    /// Each stage's time since last read, in ms, once the GPU's done
+    pub(crate) fn read(&mut self) -> String {
+        let mut totals: Vec<(&'static str, f64, u32)> = Vec::new();
+        for (read, labels, mapped, _) in std::mem::take(&mut self.pending) {
+            if !mapped.load(std::sync::atomic::Ordering::Relaxed) {
+                continue;
+            }
+            if let Ok(view) = read.slice(..).get_mapped_range() {
+                let stamps: &[u64] = bytemuck::cast_slice(&view);
+                for (index, label) in labels.iter().enumerate() {
+                    let ms = stamps[index * 2 + 1].saturating_sub(stamps[index * 2]) as f64 * self.period / 1e6;
+                    match totals.iter_mut().find(|(l, ..)| l == label) {
+                        Some(total) => {
+                            total.1 += ms;
+                            total.2 += 1;
+                        }
+                        None => totals.push((label, ms, 1)),
+                    }
+                }
+            }
+            read.unmap();
+        }
+        totals.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let all: f64 = totals.iter().map(|t| t.1).sum();
+        let mut out = format!(" passes={all:.1}");
+        for (label, ms, count) in totals.iter().take(10) {
+            out += &format!(" {label}={ms:.1}/{count}");
+        }
+        out
+    }
 }
 
 #[derive(Default)]
@@ -450,6 +535,10 @@ impl WgpuEngine {
         let mut free_images: HashSet<ResourceId> = HashSet::default();
         let mut transient_map = TransientBindMap::new(external_resources);
 
+        if !self.timer_tried {
+            self.timer_tried = true;
+            self.timer = Timer::new(device, queue);
+        }
         let mut encoder =
             device.create_command_encoder(&CommandEncoderDescriptor { label: Some(label) });
         #[cfg(feature = "wgpu-profiler")]
@@ -625,8 +714,10 @@ impl WgpuEngine {
                                 &wgpu_shader.bind_group_layout,
                                 bindings,
                             );
-                            let mut cpass =
-                                encoder.begin_compute_pass(&ComputePassDescriptor::default());
+                            let mut cpass = match &mut self.timer {
+                                Some(timer) => encoder.begin_compute_pass(&timer.pass(shader.label)),
+                                None => encoder.begin_compute_pass(&ComputePassDescriptor::default()),
+                            };
                             #[cfg(feature = "wgpu-profiler")]
                             let query = profiler
                                 .begin_query(shader.label, &mut cpass)
@@ -683,8 +774,10 @@ impl WgpuEngine {
                                 queue,
                                 proxy,
                             );
-                            let mut cpass =
-                                encoder.begin_compute_pass(&ComputePassDescriptor::default());
+                            let mut cpass = match &mut self.timer {
+                                Some(timer) => encoder.begin_compute_pass(&timer.pass(shader.label)),
+                                None => encoder.begin_compute_pass(&ComputePassDescriptor::default()),
+                            };
                             #[cfg(feature = "wgpu-profiler")]
                             let query = profiler
                                 .begin_query(shader.label, &mut cpass)
@@ -814,8 +907,14 @@ impl WgpuEngine {
         // TODO: This only actually needs to happen once per frame, but run_recording happens two or three times
         #[cfg(feature = "wgpu-profiler")]
         profiler.resolve_queries(&mut encoder);
+        if let Some(timer) = &mut self.timer {
+            timer.resolve(device, &mut encoder);
+        }
         queue.submit(Some(encoder.finish()));
         self.staging.submitted();
+        if let Some(timer) = &mut self.timer {
+            timer.submitted();
+        }
         for id in free_bufs {
             if let Some(buf) = self.bind_map.buf_map.remove(&id)
                 && let MaterializedBuffer::Gpu(gpu_buf) = buf.buffer

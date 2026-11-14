@@ -184,6 +184,8 @@ pub enum AaConfig {
     ///
     /// Can only be used if [enabled][AaSupport::area] for the `Renderer`.
     Area,
+    /// Ligma: 4x multisampling, where GPUs' standard pattern has them
+    Msaa4,
     /// 8x Multisampling
     ///
     /// Can only be used if [enabled][AaSupport::msaa8] for the `Renderer`.
@@ -205,6 +207,8 @@ pub enum AaConfig {
 pub struct AaSupport {
     /// Support [`AaConfig::Area`].
     pub area: bool,
+    /// Support [`AaConfig::Msaa4`].
+    pub msaa4: bool,
     /// Support [`AaConfig::Msaa8`].
     pub msaa8: bool,
     /// Support [`AaConfig::Msaa16`].
@@ -218,6 +222,7 @@ impl AaSupport {
     pub fn all() -> Self {
         Self {
             area: true,
+            msaa4: true,
             msaa8: true,
             msaa16: true,
         }
@@ -229,6 +234,7 @@ impl AaSupport {
     pub fn area_only() -> Self {
         Self {
             area: true,
+            msaa4: false,
             msaa8: false,
             msaa16: false,
         }
@@ -239,12 +245,14 @@ impl FromIterator<AaConfig> for AaSupport {
     fn from_iter<T: IntoIterator<Item = AaConfig>>(iter: T) -> Self {
         let mut result = Self {
             area: false,
+            msaa4: false,
             msaa8: false,
             msaa16: false,
         };
         for config in iter {
             match config {
                 AaConfig::Area => result.area = true,
+                AaConfig::Msaa4 => result.msaa4 = true,
                 AaConfig::Msaa8 => result.msaa8 = true,
                 AaConfig::Msaa16 => result.msaa16 = true,
             }
@@ -576,6 +584,12 @@ impl Renderer {
             }
         }
         Ok(short)
+    }
+
+    /// Ligma: dev tools, each stage's GPU time since asked last, once
+    /// checked
+    pub fn times(&mut self) -> String {
+        self.engine.timer.as_mut().map(|timer| timer.read()).unwrap_or_default()
     }
 
     /// Overwrite `image` with `texture`.

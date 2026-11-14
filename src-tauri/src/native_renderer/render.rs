@@ -1873,7 +1873,8 @@ impl Painter {
             self.vello_uses.insert(unit, uses);
         }
         let stats = format!(
-            "{w}x{h} units={units} reused={reused} made={made} scene={scene_mb:.1}MB blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
+            "{w}x{h} units={units} reused={reused} made={made} scene={scene_mb:.1}MB sizes={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
+            super::vello::SIZES.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(),
             fell_back / 1000,
             encoded.as_secs_f64() * 1000.0,
             stamped.as_secs_f64() * 1000.0,

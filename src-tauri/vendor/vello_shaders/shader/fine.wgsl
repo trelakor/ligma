@@ -54,6 +54,16 @@ var image_atlas: texture_2d<f32>;
 
 const MASK_LUT_INDEX: u32 = 8;
 
+#ifdef msaa4
+// Ligma: 4 samples a pixel where GPUs' standard pattern has them
+const MASK_WIDTH = 64u;
+const MASK_HEIGHT = 64u;
+const SH_SAMPLES_SIZE = 256u;
+const SAMPLE_WORDS_PER_PIXEL = 1u;
+@group(0) @binding(MASK_LUT_INDEX)
+var<storage> mask_lut: array<u32, 1024u>;
+#endif
+
 #ifdef msaa8
 const MASK_WIDTH = 32u;
 const MASK_HEIGHT = 32u;
@@ -331,6 +341,28 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
             atomicAdd(&sh_samples[pix_ix * 2u], mask0_signed);
             atomicAdd(&sh_samples[pix_ix * 2u + 1u], mask1_signed);
 #endif
+#ifdef msaa4
+            var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
+            mask &= 0xfu;
+            // Intersect with y half-plane masks
+            if sub_ix == 0u && !is_bump {
+                let mask_shift = u32(round(4.0 * (xy0.y - f32(y))));
+                mask &= 0xfu << mask_shift;
+            }
+            if last_pixel && xy1.x != 0.0 {
+                let mask_shift = u32(round(4.0 * (xy1.y - f32(y))));
+                mask &= ~(0xfu << mask_shift);
+            }
+            // Each of the 4 bits to a byte of its own
+            let mask_a = mask ^ (mask << 7u);
+            let mask_b = mask_a ^ (mask_a << 14u);
+            let mask0_exp = mask_b & 0x1010101u;
+            var mask0_signed = select(mask0_exp, u32(-i32(mask0_exp)), is_down);
+            if is_bump {
+                mask0_signed += select(u32(-0x1010101i), 0x1010101u, is_down);
+            }
+            atomicAdd(&sh_samples[pix_ix], mask0_signed);
+#endif
 #ifdef msaa16
             var mask = mask_lut[mask_ix / 2u] >> ((mask_ix % 2u) * 16u);
             mask &= 0xffffu;
@@ -466,6 +498,15 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
             // bits 8 * k + 6 and 8 * k + 7 contain 8-reductions
             let xored8 = xored4 | (xored4 * 16u);
             area[i] = f32(countOneBits(xored8 & 0xC0C0C0C0u)) * 0.125;
+#endif
+#ifdef msaa4
+            let samples0 = atomicLoad(&sh_samples[pix_ix]);
+            let xored0 = (expected_zero * 0x1010101u) ^ samples0;
+            let xored2 = xored0 | (xored0 * 2u);
+            let xored4 = xored2 | (xored2 * 4u);
+            // bits 8 * k + 7 contain 8-reductions
+            let xored8 = xored4 | (xored4 * 16u);
+            area[i] = f32(countOneBits(xored8 & 0x80808080u)) * 0.25;
 #endif
 #ifdef msaa16
             let samples0 = atomicLoad(&sh_samples[pix_ix * 4u]);
@@ -652,6 +693,22 @@ fn fill_path_ms_evenodd(fill: CmdFill, local_id: vec2<u32>, result: ptr<function
             }
             atomicXor(&sh_samples[pix_ix], mask);
 #endif
+#ifdef msaa4
+            var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
+            mask &= 0xfu;
+            if sub_ix == 0u && !is_bump {
+                let mask_shift = u32(round(4.0 * (xy0.y - f32(y))));
+                mask &= 0xfu << mask_shift;
+            }
+            if last_pixel && xy1.x != 0.0 {
+                let mask_shift = u32(round(4.0 * (xy1.y - f32(y))));
+                mask &= ~(0xfu << mask_shift);
+            }
+            if is_bump {
+                mask ^= 0xfu;
+            }
+            atomicXor(&sh_samples[pix_ix], mask);
+#endif
 #ifdef msaa16
             var mask = mask_lut[mask_ix / 2u] >> ((mask_ix % 2u) * 16u);
             mask &= 0xffffu;
@@ -700,6 +757,9 @@ fn fill_path_ms_evenodd(fill: CmdFill, local_id: vec2<u32>, result: ptr<function
         // pix_mask is pix_party broadcast to all bits in the word.
 #ifdef msaa8
         area[i] = f32(countOneBits((samples ^ pix_mask) & 0xffu)) * 0.125;
+#endif
+#ifdef msaa4
+        area[i] = f32(countOneBits((samples ^ pix_mask) & 0xfu)) * 0.25;
 #endif
 #ifdef msaa16
         area[i] = f32(countOneBits((samples ^ pix_mask) & 0xffffu)) * 0.0625;

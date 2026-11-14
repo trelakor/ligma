@@ -9,7 +9,7 @@ use crate::{AaConfig, RenderParams};
 
 #[cfg(feature = "wgpu")]
 
-use vello_encoding::{Encoding, Resolver, WorkgroupSize, make_mask_lut, make_mask_lut_16};
+use vello_encoding::{Encoding, Resolver, WorkgroupSize, make_mask_lut, make_mask_lut_4, make_mask_lut_16};
 
 #[derive(Clone, Copy, Debug)]
 enum AtlasProxyAction {
@@ -557,6 +557,7 @@ impl Render {
                     let mask_lut = match fine.aa_config {
                         AaConfig::Msaa16 => make_mask_lut_16(),
                         AaConfig::Msaa8 => make_mask_lut(),
+                        AaConfig::Msaa4 => make_mask_lut_4(),
                         _ => unreachable!(),
                     };
                     let buf = recording.upload("vello.mask_lut", mask_lut);
@@ -569,6 +570,9 @@ impl Render {
                     AaConfig::Msaa8 => shaders
                         .fine_msaa8
                         .expect("shaders not configured to support AA mode: msaa8"),
+                    AaConfig::Msaa4 => shaders
+                        .fine_msaa4
+                        .expect("shaders not configured to support AA mode: msaa4"),
                     _ => unreachable!(),
                 };
                 recording.dispatch(

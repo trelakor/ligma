@@ -47,6 +47,44 @@ pub fn make_mask_lut() -> Vec<u8> {
         .collect()
 }
 
+// Ligma: GPUs' standard 4 sample pattern, at x of 3/8, 7/8, 1/8 and 5/8
+// for each quarter down
+const PATTERN_4: [u8; 4] = [1, 3, 0, 2];
+
+fn one_mask_4(slope: f64, mut translation: f64, is_pos: bool) -> u8 {
+    if is_pos {
+        translation = 1. - translation;
+    }
+    let mut result = 0;
+    for (i, item) in PATTERN_4.iter().enumerate() {
+        let mut y = (i as f64 + 0.5) * 0.25;
+        let x = (*item as f64 + 0.5) * 0.25;
+        if !is_pos {
+            y = 1. - y;
+        }
+        if (x - (1.0 - translation)) * (1. - slope) - (y - translation) * slope >= 0. {
+            result |= 1 << i;
+        }
+    }
+    result
+}
+
+/// Ligma: a lookup table of half-plane masks for 4 samples, a byte each,
+/// as finely as 16 samples have
+pub fn make_mask_lut_4() -> Vec<u8> {
+    (0..MASK16_WIDTH * MASK16_HEIGHT)
+        .map(|i| {
+            const HALF_HEIGHT: usize = MASK16_HEIGHT / 2;
+            let u = i % MASK16_WIDTH;
+            let v = i / MASK16_WIDTH;
+            let is_pos = v >= HALF_HEIGHT;
+            let y = ((v % HALF_HEIGHT) as f64 + 0.5) * (1.0 / HALF_HEIGHT as f64);
+            let x = (u as f64 + 0.5) * (1.0 / MASK16_WIDTH as f64);
+            one_mask_4(y, x, is_pos)
+        })
+        .collect()
+}
+
 // Width is number of discrete translations
 const MASK16_WIDTH: usize = 64;
 // Height is the number of discrete slopes

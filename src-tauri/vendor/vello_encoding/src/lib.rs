@@ -58,7 +58,7 @@ pub use draw::{
 };
 pub use encoding::{Encoding, Resources, StreamOffsets};
 pub use glyph::{FontEmbolden, Glyph, GlyphRun};
-pub use mask::{make_mask_lut, make_mask_lut_16};
+pub use mask::{make_mask_lut, make_mask_lut_4, make_mask_lut_16};
 pub use math::Transform;
 pub use monoid::Monoid;
 pub use path::{
