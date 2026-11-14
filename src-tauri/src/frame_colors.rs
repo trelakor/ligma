@@ -80,12 +80,19 @@ const PAGE_JS: &str = r##"(() => {
   // Shapes' icons are outlines Figma colors through `stroke`, the rest
   // through `--fpl-icon-color`
   const style = document.createElement("style");
-  // With Tint rows, Figma's hover box, behind the row's name, takes the
-  // row's color, paler and whiter; selected rows keep Figma's highlight
+  // With Tint rows, Figma's boxes behind the row's name take the row's
+  // color in place of grey and blue: hover paler and whiter, the selected
+  // row brighter still, and the band down what's in a selection softly
   style.textContent = `
     ${ICON}[${MARKED}] .svg-container svg { stroke: var(--fpl-icon-color); }
-    ${ROW}[${MARKED}][class*="object_row--hovered--"]:not([class*="object_row--selected--"])[style*="--ligma-hover"]::after {
+    ${ROW}[${MARKED}][class*="object_row--hovered--"][style*="--ligma-hover"]::after {
       background-color: var(--ligma-hover) !important;
+    }
+    ${ROW}[${MARKED}][class*="object_row--selected--"][style*="--ligma-hover"]::after {
+      background-color: var(--ligma-selected) !important;
+    }
+    ${ROW}[${MARKED}][style*="--ligma-hover"]::before {
+      background-color: var(--ligma-band) !important;
     }`;
 
   // A frame's expand arrow is centered this far past where its row's last
@@ -147,11 +154,12 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
+  const LOOKS = ["--ligma-hover", "--ligma-selected", "--ligma-band"];
   const GUIDES = ["background-image", "background-position", "background-size", "background-repeat"];
   const clear = (row) => {
     row.removeAttribute(MARKED);
     row.style.removeProperty("background-image");
-    row.style.removeProperty("--ligma-hover");
+    for (const property of LOOKS) row.style.removeProperty(property);
     const strip = row.querySelector(`${INDENTS}[${MARKED}]`);
     if (strip) {
       for (const property of GUIDES) strip.style.removeProperty(property);
@@ -242,10 +250,16 @@ const PAGE_JS: &str = r##"(() => {
         else row.style.removeProperty("background-image");
       }
       const hue = wash && tint.match(/([\d.]+)\)$/)?.[1];
-      const hover = hue ? (dark ? `oklch(0.93 0.07 ${hue} / 0.16)` : `oklch(0.94 0.06 ${hue})`) : "";
-      if (row.style.getPropertyValue("--ligma-hover") !== hover) {
-        if (hover) row.style.setProperty("--ligma-hover", hover);
-        else row.style.removeProperty("--ligma-hover");
+      const looks = hue
+        ? dark
+          ? { "--ligma-hover": `oklch(0.93 0.07 ${hue} / 0.16)`, "--ligma-selected": `oklch(0.86 0.13 ${hue} / 0.36)`, "--ligma-band": `oklch(0.86 0.12 ${hue} / 0.14)` }
+          : { "--ligma-hover": `oklch(0.95 0.05 ${hue})`, "--ligma-selected": `oklch(0.87 0.1 ${hue})`, "--ligma-band": `oklch(0.95 0.045 ${hue})` }
+        : {};
+      for (const property of LOOKS) {
+        const value = looks[property] ?? "";
+        if (row.style.getPropertyValue(property) === value) continue;
+        if (value) row.style.setProperty(property, value);
+        else row.style.removeProperty(property);
       }
       if (layers.length || tint) row.setAttribute(MARKED, "");
       else row.removeAttribute(MARKED);
