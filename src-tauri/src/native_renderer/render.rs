@@ -524,13 +524,14 @@ struct KeptScene {
     built: Instant,
 }
 
-/// What changes in a kept scene, images coming in and the like, builds it
-/// again no sooner than this after it was built, as they come many at once
+/// What changes in a kept scene other than edits, images coming in and the
+/// like, builds it again no sooner than this after it was built, as they
+/// come many at once
 const KEPT_CHANGES: Duration = Duration::from_millis(100);
 
 /// How far past the view a kept scene reaches on each side, of the view's
 /// size, so a pan stays in it a while
-const KEPT_MARGIN: f32 = 0.5;
+const KEPT_MARGIN: f32 = 0.25;
 
 struct Whole {
     layer: Layer,
@@ -1089,6 +1090,8 @@ pub struct Painter {
     kept_stale: bool,
     /// What the last scene kept was kept as
     kept_serial: u64,
+    /// The kept scene last drawn and where
+    kept_drawn: Option<(u64, (i32, i32, u32))>,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
     /// Images units drew with when Vello last drew them, by unit, as
     /// pictures keep them
@@ -1237,6 +1240,7 @@ impl Painter {
             scene_kept: None,
             kept_stale: false,
             kept_serial: 0,
+            kept_drawn: None,
             vello_starting,
             vello_uses: HashMap::new(),
             fragments: HashMap::new(),
@@ -1547,6 +1551,13 @@ impl Painter {
         // While the zoom changes, Figma changes what it shows of some nodes
         // each frame, which isn't an edit to keep up with exactly
         let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
+        // Vello draws the view from the scene it keeps, edits and all, so
+        // one way of drawing shows what's there, rather than two in turn
+        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() && std::env::var_os("LIGMA_NATIVE_VELLO_TILES").is_none() {
+            if let Some(next) = self.fill_kept(px, (ox, oy, width, height)) {
+                return next;
+            }
+        }
         if !editing.is_zero() && settle.is_zero() && (behind || missing > 0 || self.whole.is_some()) {
             let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale && !whole.rough);
             // One drawn at a time, what changes meanwhile drawn together
@@ -1577,11 +1588,6 @@ impl Painter {
         // Vello draws tiles, of a level at or past the zoom while it changes,
         // which frames scale till the zoom leaves them, and exactly at the
         // zoom once it's settled
-        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() && std::env::var_os("LIGMA_NATIVE_VELLO_TILES").is_none() {
-            if let Some(next) = self.fill_kept(px, (ox, oy, width, height)) {
-                return next;
-            }
-        }
         if self.vello_ready() && self.tree.is_some() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
             let furthest = levels.first().map(|(_, pk)| pk.to_bits());
             return self.fill_vello(px, (ox, oy, width, height), furthest, &pyramid, !settle.is_zero());
@@ -1821,14 +1827,16 @@ impl Painter {
     fn fill_kept(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32)) -> Option<Option<Duration>> {
         let pxb = px.to_bits();
         let at = (ox, oy, pxb);
-        let inside = self.scene_kept.as_ref().filter(|kept| kept.px == pxb && (!self.kept_stale || kept.built.elapsed() < KEPT_CHANGES) && ox >= kept.left && oy >= kept.top && ox + width <= kept.left + kept.width && oy + height <= kept.top + kept.height);
-        let shown = self.whole.as_ref().is_some_and(|whole| whole.at == at && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello);
-        if inside.is_some() && (shown || self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == at)) {
+        let inside = self.scene_kept.as_ref().filter(|kept| kept.px == pxb && (!self.kept_stale || (kept.built.elapsed() < KEPT_CHANGES && self.edited.elapsed() >= EDITING)) && ox >= kept.left && oy >= kept.top && ox + width <= kept.left + kept.width && oy + height <= kept.top + kept.height);
+        if inside.is_some_and(|kept| self.kept_drawn == Some((kept.id, at))) {
             // Built again once it's been kept a while
             return Some(self.kept_stale.then(|| KEPT_CHANGES.saturating_sub(self.scene_kept.as_ref().map_or(Duration::ZERO, |kept| kept.built.elapsed()))));
         }
         let started = Instant::now();
         let inside = inside.map(|kept| (kept.id, kept.left, kept.top));
+        if let Some(whole) = self.whole.as_mut() {
+            whole.patch.clear();
+        }
         let drawn = match inside {
             Some(kept) => {
                 let (id, x, y) = (kept.0, kept.1 - ox, kept.2 - oy);
@@ -1862,6 +1870,7 @@ impl Painter {
             Ok((tex, counts, stats)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
+                self.kept_drawn = self.scene_kept.as_ref().map(|kept| (kept.id, at));
                 let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
                 if let Some(last) = last {
                     self.settle(last);
@@ -2126,11 +2135,13 @@ impl Painter {
             Ok(Some(why)) => {
                 trace(|| format!("  vello ran out of room, drawing again: {why}"));
                 self.retire(last.layer.tex);
+                self.kept_drawn = None;
                 self.dirty = true;
             }
             Err(why) => {
                 trace(|| format!("  whole vello can't check: {why}"));
                 self.retire(last.layer.tex);
+                self.kept_drawn = None;
                 self.dirty = true;
             }
         }
