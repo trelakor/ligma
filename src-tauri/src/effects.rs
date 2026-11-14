@@ -1277,7 +1277,7 @@ const PAGE_JS: &str = r##"(() => {
     // dissolving into dust that lifts away, and a wipe across the top of
     // a phone mockup, sweeping off to the right
     ["Dissolve", () => ({ mode: "snap", pattern: "glass", pieces: 1800, force1: force(66, 36, 0, 23, 0.5), force2: force(64, 72, 0, 14, 0.4), time: 1, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 9, gravityDirection: -80, spread: 1.6, ragged: 40, softness: 12, fade: 15, shrink: 5, lighten: 0 })],
-    ["Wipe", () => ({ mode: "snap", pattern: "glass", pieces: 12000, force1: force(32, -8, 0, 35, 0.4), force2: force(76, 6, 0, 38, 0.4), time: 1.25, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 5, gravityDirection: -20, spread: 1.3, ragged: 50, softness: 20, fade: 45, shrink: 10, lighten: 20 })],
+    ["Wipe", () => ({ mode: "snap", pattern: "cells", pieces: 7000, force1: force(32, -8, 0, 35, 0.4), force2: force(76, 6, 0, 38, 0.4), time: 1.25, rotation: 0.4, tumble: "free", randomness: 0.35, viscosity: 0.4, mass: 50, gravity: 12, gravityDirection: -5, spread: 1.3, ragged: 50, softness: 20, fade: 80, shrink: 10, lighten: 30 })],
     ["Snap", () => ({ mode: "snap", pattern: "glass", pieces: 6000, force1: force(100, 50, 0, 110, 0.3), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 5, gravityDirection: -15, spread: 1.8, ragged: 60, softness: 30, fade: 75, shrink: 30, lighten: 30 })],
     ["Dust", () => ({ mode: "snap", pattern: "glass", pieces: 12000, force1: force(80, 35, 0, 120, 0.6), force2: force(25, 70, 0, 60, 0.4), time: 1.4, rotation: 1.5, tumble: "free", randomness: 0.8, viscosity: 0.6, mass: 60, gravity: 3, gravityDirection: -40, spread: 1.8, ragged: 75, softness: 45, fade: 90, shrink: 50, lighten: 50 })],
     ["Glass", () => ({ mode: "shatter", pattern: "glass", pieces: 400, force1: force(50, 50, 10, 40, 5), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.2, tumble: "free", randomness: 0.1, viscosity: 0.1, mass: 30, gravity: 3, gravityDirection: 90 })],
@@ -1629,10 +1629,18 @@ const PAGE_JS: &str = r##"(() => {
       const turn = (r2 - 0.5) * 2 * random * 1.5;
       const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
       let [ux, uy, uz] = [(vx * cos - vy * sin) * speed, (vx * sin + vy * cos) * speed, vz * speed];
-      // Snap's dust lifts off with a little of its own
-      if (snap) {
-        ux += (r3 - 0.5) * random * unit * 2;
-        uy += (r4 - 0.5) * random * unit * 2;
+      // And a velocity of its own in any direction, as AE's Randomness
+      // gives, in 3D, so with enough of it some pieces go against the
+      // force and gravity, back over what's still whole or toward the
+      // camera, and the cloud scatters every way rather than as one sheet
+      {
+        const along = hash(i, 7, s.seed + 31) * Math.PI * 2;
+        const up = hash(i, 8, s.seed + 31) * 2 - 1;
+        const across = Math.sqrt(1 - up * up);
+        const own = random * unit * 2 * (0.25 + hash(i, 9, s.seed + 31));
+        ux += Math.cos(along) * across * own;
+        uy += Math.sin(along) * across * own;
+        uz += up * own * 0.6;
       }
       // Moved by its speed, slowed by viscosity, and by gravity
       const travel = drag > 0 ? (1 - Math.exp(-drag * t)) / drag : t;
@@ -1648,7 +1656,7 @@ const PAGE_JS: &str = r##"(() => {
       const roll = s.tumble === "none" ? 0 : spin;
       const axis = r1 * Math.PI;
       // Never quite edge-on, as AE's pieces have thickness that shows
-      const flat = Math.sign(Math.cos(tilt) || 1) * Math.max(0.3, Math.abs(Math.cos(tilt)));
+      const flat = Math.sign(Math.cos(tilt) || 1) * Math.max(0.55, Math.abs(Math.cos(tilt)));
       // R(roll) · R(axis) · diag(1, flat) · R(-axis), sized by depth and shrink
       const life = snap ? Math.min(1, t / Math.max(0.2, s.spread * 0.5)) : 0;
       const size2 = depth * (snap ? Math.max(0.05, 1 - (s.shrink / 100) * life) : 1);
