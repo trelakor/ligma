@@ -1896,7 +1896,7 @@ const PAGE_JS: &str = r##"(() => {
       current.loader.y = bounds.y;
     }
     current.loader.fills = [fill];
-    const until = performance.now() + 400;
+    const until = performance.now() + 2000;
     while (performance.now() < until && !current.loader.removed) {
       try {
         const bytes = await current.loader.exportAsync({ format: "PNG", constraint: { type: "WIDTH", value: 8 } });
@@ -1928,6 +1928,9 @@ const PAGE_JS: &str = r##"(() => {
     ];
     result.fills = [fill];
     result.visible = true;
+    // The original's hidden once there's something in its place, so the
+    // layer never shows empty
+    if (!current.source.removed) current.source.visible = false;
   };
 
   const disintegrateOf = (node) => {
@@ -2039,7 +2042,6 @@ const PAGE_JS: &str = r##"(() => {
       current.result.setSharedPluginData(PLUGIN, ROLE, "result");
       current.result.visible = false;
     }
-    source.visible = false;
     figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
     current.ready = true;
     if (run) return applyDisintegrate(current);
@@ -2769,7 +2771,6 @@ const PAGE_JS: &str = r##"(() => {
       current.result.setSharedPluginData(PLUGIN, ROLE, "result");
       current.result.visible = false;
     }
-    source.visible = false;
     figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
     current.ready = true;
     if (run) return applyBitcrush(current);
