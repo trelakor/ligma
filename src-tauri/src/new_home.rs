@@ -1,4 +1,4 @@
-//! Ligma's home page (Settings > Features > Home, on by default): the Home
+//! Ligma's home page (Settings > General > Home, on by default): the Home
 //! tab shows `dist/home.html` in place of Figma's file browser. Starred,
 //! suggestions, Recents, Shared with you, Drafts, teams, search, the inbox
 //! and organizing files, read from and sent to Figma with the user's session

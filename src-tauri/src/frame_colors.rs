@@ -1,4 +1,4 @@
-//! Frame colors (Settings > Features > Layers): frames in the layers panel
+//! Frame colors (Settings > Editor > Layers): frames in the layers panel
 //! get a color each, down the list, from a palette: the rainbow over again,
 //! red, orange, yellow, green, blue and purple, or a colorway, Sunset, Ocean,
 //! Forest, Aurora, Candy or Ember, stepping from one hue to another and

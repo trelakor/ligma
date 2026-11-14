@@ -363,9 +363,9 @@ pub fn open_window_at(app: &AppHandle, section: Option<&str>) -> tauri::Result<(
     Ok(())
 }
 
-/// The settings window's size at the interface scale: fits the longest page
-/// (Discord). On a small screen it fits the screen instead, and the page
-/// scrolls
+/// The settings window's size at the interface scale: fits most pages, and
+/// longer ones (Images) scroll. On a small screen it fits the screen
+/// instead
 fn window_size(app: &AppHandle) -> LogicalSize<f64> {
     let scale = crate::tabs::scale(app);
     let (mut width, mut height) = (680.0 * scale, 600.0 * scale);

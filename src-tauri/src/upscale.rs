@@ -1,4 +1,4 @@
-//! Upscale on this device (Settings > Features > Images): the image bar's
+//! Upscale on this device (Settings > Images): the image bar's
 //! Upscale in free projects (see ai_actions.rs), which makes an image 2 or
 //! 4 times as large: Photo with 4xNomosWebPhoto_RealPLKSR (Philip Hofmann,
 //! CC BY 4.0), trained on real photos to keep their texture, grain and
