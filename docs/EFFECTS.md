@@ -24,15 +24,15 @@ Repeats the selected layer, live. Its panel has a preview of the whole result up
 
 ## Disintegrate (built)
 
-Breaks the selected layer into pieces and moves them, live, as After Effects' Shatter does, with Snap for the Thanos-snap dust look:
+Breaks the selected layer into pieces and throws them, live, as After Effects' Shatter does, with the same controls and model:
 
-- **Shape:** Pattern (Glass, Squares, Bricks or Triangles) and how many Pieces, about. Glass is Voronoi cells around a seed jittered in each square of a grid, each cut by the lines halfway to the seeds around it, so every piece is a polygon with straight edges. Shuffle changes the pattern.
-- **Forces:** one or two, as AE's Force 1 and Force 2, each with a Position, a Radius and a Strength. Only the pieces within a force's radius break, so the damage can stay close to the subject. Each force shows in the preview as a dot and a dashed ring: drag the dot to move it, or the ring to change its radius.
-- **Time:** how far along it is, 0 whole to 100.
-- **Shatter's physics:** pieces are thrown out from each force, harder near its middle, by its strength; Rotation speed turns them, Randomness varies each one's direction and speed, Viscosity slows them, and Gravity pulls them in its direction.
-- **Snap's dust:** a ragged front, Raggedness and Edge softness, spreads out from each force as Time goes, as far as its radius; the pieces it passes leave, slow at first then faster, with the wind (Wind direction), as far as the force's strength takes them, scattering, shrinking, fading late so a trail stays near what's left, and lightening.
-- **Drawing:** the layer is exported as a picture (up to 2× and 4,096 pixels across); the moving pieces are cut out of it and each drawn where it goes with the canvas, turned and sized about its center and clipped to its polygon, so edges stay smooth and sharp. The preview draws at once; the image in the file follows a moment after, and Disintegrate makes it at full size.
-- **Presets:** Drift and Dust (Snap); Glass, Crack, Explode and Tiles (Shatter). Picking a mode starts from its first preset, keeping the forces.
+- **Shape:** Pattern (Glass, Squares, Triangles, Bricks, Planks or Hexagons) and how many Pieces, counted over the part of the layer that isn't transparent. Glass, as AE's, is irregular Voronoi cells around seeds anywhere in each square of a grid, each cut again by a line or two at random into sharp slivers. Every piece is a polygon with straight edges. Shuffle changes the pattern.
+- **Forces:** one or two, as AE's Force 1 and Force 2: Position, Depth, Radius and Strength. A force is a sphere, Depth behind the layer and Radius across, in percent of the layer's larger side. The pieces inside it fly away from its middle, fastest at the middle and slowing to nothing at its edge, so those in the middle mostly come at the camera, growing as they near it, while those toward the edge barely move; the damage stays on the subject unless Strength is high. Negative Strength pulls in. Each force shows in the preview as a dot and a dashed ring where its sphere meets the layer: drag the dot to move it, or the ring to change its radius.
+- **Time,** in seconds, as AE's comp time.
+- **Physics,** as AE's: Rotation speed (turns a second), Tumble axis (Free tumbles in 3D, a piece thinning as it turns edge-on, though never quite flat, as AE's have thickness; Spin only turns in the layer's plane; None), Randomness, Viscosity, Mass variance, and Gravity with its direction, in tenths of the layer's size a second, as speed is. A camera as far from the layer as about twice its size gives the depth.
+- **Snap:** the Thanos snap as it's made in AE, with Shatter, tiny pieces and a gradient wipe: the same physics, with each piece only breaking once a ragged wipe (Raggedness, Edge softness) spreading from each force over Spread time reaches it, a little force, and gravity as a wind. Pieces then fade, shrink and lighten.
+- **Drawing:** the layer is exported as a picture (up to 2× and 4,096 pixels across); the pieces that moved are cut out of it and each drawn where it's gone with the canvas, farthest from the camera first, transformed and clipped to its polygon, so edges stay smooth and sharp. The preview draws at once; the image in the file follows a moment after, and Disintegrate makes it at full size.
+- **Presets:** Snap and Dust; Glass (AE's defaults), Crack, Explode and Bricks. Picking a mode starts from its first preset.
 - **Result:** an image of what's drawn, over the original. With Keep editable (on by default) the original is kept under it, hidden, in a Disintegrate group: select it and open Disintegrate to change it, made again from the original. Without it, only the image is left.
 
 ## Planned

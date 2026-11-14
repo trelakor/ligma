@@ -467,7 +467,8 @@ const PAGE_JS: &str = r##"(() => {
   const makeSlider = ({ s, unit, rows, change, limits = {}, scrub = {}, fresh = () => false, digits = 0 }) => ([key, label, suffix, range]) => {
     const shape = range(unit);
     const [floor, ceiling] = limits[key] ?? [-Infinity, Infinity];
-    const round = (number) => (digits ? Math.round(number * 10 ** digits) / 10 ** digits : Math.round(number));
+    const places = shape.digits ?? digits;
+    const round = (number) => (places ? Math.round(number * 10 ** places) / 10 ** places : Math.round(number));
     const clamp = (number) => Math.min(ceiling, Math.max(floor, round(number)));
     const input = element("input", { type: "range", min: 0, max: 1000, step: 1 });
     input.setAttribute("aria-label", label);
@@ -1232,78 +1233,88 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Disintegrate ----------
 
-  // Breaks the layer into pieces, as After Effects' Shatter does, and
-  // moves them: Shatter as AE does, the pieces within each force's radius
-  // thrown out from it by its strength, turning, slowed by viscosity and
-  // pulled by gravity, the rest left whole; Snap as dust, a ragged front
-  // spreading out from each force as far as its radius, the pieces it
-  // passes blown off with the wind, shrinking, fading and lightening.
-  // Pieces are polygons, cut from the layer's picture with smooth, straight
-  // edges, drawn here in the page and put back as an image, the original
-  // kept under it, hidden
+  // Breaks the layer into pieces and throws them, as After Effects'
+  // Shatter does (see `simulate`), Snap the same with a wipe deciding when
+  // each piece goes, as a Thanos snap is made in AE. Pieces are polygons,
+  // cut from the layer's picture with smooth, straight edges, drawn here
+  // in the page and put back as an image, the original kept under it,
+  // hidden
   const DISINTEGRATE = "disintegrate";
   const MAX_SIDE = 4096;
 
-  const force = (x, y, radius, strength, on = true) => ({ x, y, radius, strength, on });
+  // A force, as AE's Force 1 and Force 2: where it is on the layer, in
+  // percent, how far in front of it (Depth) and how large a sphere
+  // (Radius), in percent of the layer's larger side, and how hard it
+  // throws what's in it (Strength, negative pulls in)
+  const force = (x, y, depth, radius, strength, on = true) => ({ x, y, depth, radius, strength, on });
   const DISINTEGRATE_DEFAULTS = {
-    mode: "snap",
+    mode: "shatter",
     pattern: "glass",
-    pieces: 1500,
+    pieces: 400,
     seed: 1,
-    force1: force(85, 50, 70, 40),
-    force2: force(20, 30, 30, 30, false),
-    time: 50,
-    // Shatter's physics
-    rotation: 90,
-    randomness: 30,
-    viscosity: 20,
-    gravity: 0,
+    force1: force(50, 50, 10, 40, 5),
+    force2: force(25, 30, 10, 25, 5, false),
+    time: 1,
+    // Physics, as AE's
+    rotation: 0.2,
+    tumble: "free",
+    randomness: 0.1,
+    viscosity: 0.1,
+    mass: 30,
+    gravity: 3,
     gravityDirection: 90,
-    // Snap's wind
-    wind: 0,
-    scatter: 40,
+    // Snap: when each piece goes, as a gradient wipe out from the forces
+    spread: 1.5,
     ragged: 55,
-    softness: 35,
+    softness: 30,
     fade: 80,
-    shrink: 45,
+    shrink: 30,
     lighten: 30,
     editable: true,
   };
   const DISINTEGRATE_PRESETS = [
-    ["Drift", () => ({ mode: "snap", pattern: "glass", pieces: 2500, force1: force(90, 50, 80, 45), force2: force(20, 30, 30, 30, false), time: 50, wind: 0, scatter: 40, ragged: 55, softness: 35, fade: 80, shrink: 45, lighten: 30 })],
-    ["Dust", () => ({ mode: "snap", pattern: "glass", pieces: 5000, force1: force(80, 30, 90, 70), force2: force(30, 80, 40, 40), time: 60, wind: -20, scatter: 70, ragged: 75, softness: 60, fade: 92, shrink: 65, lighten: 55 })],
-    ["Glass", () => ({ mode: "shatter", pattern: "glass", pieces: 160, force1: force(50, 50, 45, 35), force2: force(20, 30, 30, 30, false), time: 50, rotation: 90, randomness: 30, viscosity: 20, gravity: 20, gravityDirection: 90 })],
-    ["Crack", () => ({ mode: "shatter", pattern: "glass", pieces: 220, force1: force(60, 45, 35, 8), force2: force(30, 60, 20, 6, false), time: 40, rotation: 25, randomness: 50, viscosity: 60, gravity: 10, gravityDirection: 90 })],
-    ["Explode", () => ({ mode: "shatter", pattern: "glass", pieces: 300, force1: force(50, 50, 100, 80), force2: force(20, 30, 30, 30, false), time: 55, rotation: 180, randomness: 40, viscosity: 10, gravity: 25, gravityDirection: 90 })],
-    ["Tiles", () => ({ mode: "shatter", pattern: "squares", pieces: 120, force1: force(85, 50, 60, 30), force2: force(20, 30, 30, 30, false), time: 50, rotation: 60, randomness: 25, viscosity: 30, gravity: 40, gravityDirection: 90 })],
+    ["Snap", () => ({ mode: "snap", pattern: "glass", pieces: 6000, force1: force(100, 50, 0, 110, 0.3), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 5, gravityDirection: -15, spread: 1.8, ragged: 60, softness: 30, fade: 75, shrink: 30, lighten: 30 })],
+    ["Dust", () => ({ mode: "snap", pattern: "glass", pieces: 12000, force1: force(80, 35, 0, 120, 0.6), force2: force(25, 70, 0, 60, 0.4), time: 1.4, rotation: 1.5, tumble: "free", randomness: 0.8, viscosity: 0.6, mass: 60, gravity: 3, gravityDirection: -40, spread: 1.8, ragged: 75, softness: 45, fade: 90, shrink: 50, lighten: 50 })],
+    ["Glass", () => ({ mode: "shatter", pattern: "glass", pieces: 400, force1: force(50, 50, 10, 40, 5), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.2, tumble: "free", randomness: 0.1, viscosity: 0.1, mass: 30, gravity: 3, gravityDirection: 90 })],
+    ["Crack", () => ({ mode: "shatter", pattern: "glass", pieces: 500, force1: force(55, 45, 10, 35, 1.5), force2: force(25, 30, 10, 25, 5, false), time: 0.4, rotation: 0.1, tumble: "free", randomness: 0.2, viscosity: 0.3, mass: 30, gravity: 1, gravityDirection: 90 })],
+    ["Explode", () => ({ mode: "shatter", pattern: "glass", pieces: 600, force1: force(50, 50, 5, 90, 12), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.6, tumble: "free", randomness: 0.3, viscosity: 0.05, mass: 30, gravity: 3, gravityDirection: 90 })],
+    ["Bricks", () => ({ mode: "shatter", pattern: "bricks", pieces: 120, force1: force(50, 60, 10, 50, 4), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.2, tumble: "free", randomness: 0.1, viscosity: 0.1, mass: 30, gravity: 6, gravityDirection: 90 })],
   ];
   const PATTERNS = [
     ["glass", "Glass"],
     ["squares", "Squares"],
-    ["bricks", "Bricks"],
     ["triangles", "Triangles"],
+    ["bricks", "Bricks"],
+    ["planks", "Planks"],
+    ["hexagons", "Hexagons"],
+  ];
+  const TUMBLES = [
+    ["free", "Free"],
+    ["spin", "Spin only"],
+    ["none", "None"],
   ];
   // Rows, each [key, label, unit, range]; a force's keys are "force1.x"
   // and so on
   const forceRows = (n) => [
     [`force${n}.x`, "Position X", "%", () => ({ min: 0, max: 100 })],
     [`force${n}.y`, "Position Y", "%", () => ({ min: 0, max: 100 })],
+    [`force${n}.depth`, "Depth", "%", () => ({ min: 0, max: 100, shape: "curve" })],
     [`force${n}.radius`, "Radius", "%", () => ({ min: 0, max: 150, shape: "curve" })],
-    [`force${n}.strength`, "Strength", "%", () => ({ min: 0, max: 100, shape: "curve" })],
+    [`force${n}.strength`, "Strength", "", () => ({ min: -20, max: 20, shape: "curve", digits: 1 })],
   ];
   const DISINTEGRATE_ROWS = {
-    shape: [["pieces", "Pieces", "", () => ({ min: 10, max: 6000, shape: "curve" })]],
-    time: [["time", "Time", "%", () => ({ min: 0, max: 100 })]],
+    shape: [["pieces", "Pieces", "", () => ({ min: 10, max: 20000, shape: "curve" })]],
+    time: [["time", "Time", "s", () => ({ min: 0, max: 5, digits: 2 })]],
     physics: [
-      ["rotation", "Rotation speed", "°", () => ({ min: 0, max: 720, shape: "curve" })],
-      ["randomness", "Randomness", "%", () => ({ min: 0, max: 100 })],
-      ["viscosity", "Viscosity", "%", () => ({ min: 0, max: 100 })],
-      ["gravity", "Gravity", "%", () => ({ min: 0, max: 100, shape: "curve" })],
+      ["rotation", "Rotation speed", "", () => ({ min: 0, max: 5, shape: "curve", digits: 2 })],
+      ["randomness", "Randomness", "", () => ({ min: 0, max: 1, digits: 2 })],
+      ["viscosity", "Viscosity", "", () => ({ min: 0, max: 1, digits: 2 })],
+      ["mass", "Mass variance", "%", () => ({ min: 0, max: 100 })],
+      ["gravity", "Gravity", "", () => ({ min: 0, max: 20, shape: "curve", digits: 1 })],
       ["gravityDirection", "Gravity direction", "°", () => ({ min: -180, max: 180 })],
     ],
-    wind: [
-      ["wind", "Wind direction", "°", () => ({ min: -180, max: 180 })],
-      ["scatter", "Scatter", "%", () => ({ min: 0, max: 100 })],
+    snap: [
+      ["spread", "Spread time", "s", () => ({ min: 0.05, max: 5, digits: 2 })],
       ["ragged", "Raggedness", "%", () => ({ min: 0, max: 100 })],
       ["softness", "Edge softness", "%", () => ({ min: 0, max: 100 })],
       ["fade", "Fade", "%", () => ({ min: 0, max: 100 })],
@@ -1311,27 +1322,29 @@ const PAGE_JS: &str = r##"(() => {
       ["lighten", "Lighten", "%", () => ({ min: 0, max: 100 })],
     ],
   };
+  const forceLimits = (n) => ({
+    [`force${n}.x`]: [-100, 200],
+    [`force${n}.y`]: [-100, 200],
+    [`force${n}.depth`]: [0, 400],
+    [`force${n}.radius`]: [0, 400],
+    [`force${n}.strength`]: [-100, 100],
+  });
   const DISINTEGRATE_LIMITS = {
-    pieces: [2, 20000],
-    time: [0, 100],
-    rotation: [0, 3600],
-    randomness: [0, 100],
-    viscosity: [0, 100],
-    gravity: [0, 400],
-    scatter: [0, 100],
+    pieces: [2, 40000],
+    time: [0, 30],
+    rotation: [0, 50],
+    randomness: [0, 1],
+    viscosity: [0, 1],
+    mass: [0, 100],
+    gravity: [0, 200],
+    spread: [0.05, 30],
     ragged: [0, 100],
     softness: [0, 100],
     fade: [0, 100],
     shrink: [0, 100],
     lighten: [0, 100],
-    "force1.x": [-100, 200],
-    "force1.y": [-100, 200],
-    "force1.radius": [0, 400],
-    "force1.strength": [0, 400],
-    "force2.x": [-100, 200],
-    "force2.y": [-100, 200],
-    "force2.radius": [0, 400],
-    "force2.strength": [0, 400],
+    ...forceLimits(1),
+    ...forceLimits(2),
   };
   // The settings with a force's fields readable as "force1.x" and so on,
   // for the shared slider rows
@@ -1352,7 +1365,7 @@ const PAGE_JS: &str = r##"(() => {
     h = Math.imul(h ^ (h >>> 13), 1274126177);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   };
-  // Smooth noise, 0 to 1, for a ragged front
+  // Smooth noise, 0 to 1, for a ragged wipe
   const noise = (x, y, seed) => {
     const [ix, iy] = [Math.floor(x), Math.floor(y)];
     const [fx, fy] = [x - ix, y - iy];
@@ -1383,9 +1396,12 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // The pieces of a `width` by `height` picture in `pattern`, about
-  // `count` of them: polygons, each with its center and randomness
-  const cutPieces = (width, height, pattern, count, seed) => {
-    const cell = Math.max(2, Math.sqrt((width * height) / Math.max(1, count)));
+  // `count` of them over `covered`, the share of it that isn't
+  // transparent: polygons, each with its center and randomness
+  const cutPieces = (width, height, pattern, count, seed, covered = 1) => {
+    // Glass splits each cell in two or three, so it starts with fewer
+    const cells = pattern === "glass" ? count / 2.2 : pattern === "triangles" ? count / 2 : count;
+    const cell = Math.max(1.5, Math.sqrt((width * height * covered) / Math.max(1, cells)));
     const pieces = [];
     const add = (polygon) => {
       // Inside the picture
@@ -1405,9 +1421,9 @@ const PAGE_JS: &str = r##"(() => {
         cx += (a[0] + b[0]) * cross;
         cy += (a[1] + b[1]) * cross;
       }
-      if (Math.abs(area) < 1e-6) return;
+      if (Math.abs(area) < 0.05) return;
       const i = pieces.length;
-      pieces.push({ polygon, x: cx / (3 * area), y: cy / (3 * area), random: [0, 1, 2, 3].map((k) => hash(i, k, seed + 101)) });
+      pieces.push({ polygon, x: cx / (3 * area), y: cy / (3 * area), random: [0, 1, 2, 3, 4, 5].map((k) => hash(i, k, seed + 101)) });
     };
     const across = Math.ceil(width / cell);
     const down = Math.ceil(height / cell);
@@ -1416,7 +1432,7 @@ const PAGE_JS: &str = r##"(() => {
         for (let gx = 0; gx < across; gx++) {
           const [x0, y0, x1, y1] = [gx * cell, gy * cell, (gx + 1) * cell, (gy + 1) * cell];
           if (pattern === "squares") add([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
-          else if (hash(gx, gy, seed) < 0.5) {
+          else if ((gx + gy) % 2) {
             add([[x0, y0], [x1, y0], [x1, y1]]);
             add([[x0, y0], [x1, y1], [x0, y1]]);
           } else {
@@ -1425,158 +1441,198 @@ const PAGE_JS: &str = r##"(() => {
           }
         }
       }
-    } else if (pattern === "bricks") {
-      const [w, h] = [cell * 1.6, cell * 0.65];
+    } else if (pattern === "bricks" || pattern === "planks") {
+      // Bricks offset by half each row; planks long, offset anywhere
+      const [w, h] = pattern === "bricks" ? [cell * 1.6, cell * 0.62] : [cell * 4, cell * 0.5];
       for (let row = 0; row * h < height; row++) {
-        const shift = row % 2 ? w / 2 : 0;
+        const shift = pattern === "bricks" ? (row % 2 ? w / 2 : 0) : hash(row, 0, seed) * w;
         for (let x = -shift; x < width; x += w) add([[x, row * h], [x + w, row * h], [x + w, (row + 1) * h], [x, (row + 1) * h]]);
       }
+    } else if (pattern === "hexagons") {
+      const r = cell / Math.sqrt(1.5 * Math.sqrt(3));
+      const [dx, dy] = [Math.sqrt(3) * r, 1.5 * r];
+      for (let row = 0; row * dy - r < height; row++) {
+        for (let column = 0; column * dx - dx < width; column++) {
+          const [cx, cy] = [column * dx + (row % 2 ? dx / 2 : 0), row * dy];
+          add([0, 1, 2, 3, 4, 5].map((k) => [cx + r * Math.cos(((60 * k - 30) * Math.PI) / 180), cy + r * Math.sin(((60 * k - 30) * Math.PI) / 180)]));
+        }
+      }
     } else {
-      // Glass: Voronoi cells around a seed jittered in each square of a
-      // grid, each cut by the lines halfway to the seeds around it
+      // Glass, as AE's: irregular cells around seeds anywhere in each
+      // square of a grid, each cut again by a line or two at random, into
+      // the sharp slivers broken glass has
       const gw = across + 4;
       const gh = down + 4;
-      const seedAt = (gx, gy) => [(gx - 2 + 0.5 + (hash(gx, gy, seed) - 0.5) * 0.9) * cell, (gy - 2 + 0.5 + (hash(gx, gy, seed + 7) - 0.5) * 0.9) * cell];
+      const seedAt = (gx, gy) => [(gx - 2 + hash(gx, gy, seed)) * cell, (gy - 2 + hash(gx, gy, seed + 7)) * cell];
       for (let gy = 2; gy < gh - 2; gy++) {
         for (let gx = 2; gx < gw - 2; gx++) {
           const [sx, sy] = seedAt(gx, gy);
           let polygon = [
-            [sx - cell * 2, sy - cell * 2],
-            [sx + cell * 2, sy - cell * 2],
-            [sx + cell * 2, sy + cell * 2],
-            [sx - cell * 2, sy + cell * 2],
+            [sx - cell * 3, sy - cell * 3],
+            [sx + cell * 3, sy - cell * 3],
+            [sx + cell * 3, sy + cell * 3],
+            [sx - cell * 3, sy + cell * 3],
           ];
-          for (let dy = -2; dy <= 2; dy++) {
-            for (let dx = -2; dx <= 2; dx++) {
+          for (let dy = -2; dy <= 2 && polygon.length >= 3; dy++) {
+            for (let dx = -2; dx <= 2 && polygon.length >= 3; dx++) {
               if (!dx && !dy) continue;
               const [ox, oy] = seedAt(gx + dx, gy + dy);
               polygon = clipPolygon(polygon, [(sx + ox) / 2, (sy + oy) / 2], [ox - sx, oy - sy]);
-              if (polygon.length < 3) break;
             }
           }
-          if (polygon.length >= 3) add(polygon);
+          if (polygon.length < 3) continue;
+          // Cut by lines through a point near its middle, at random angles
+          const parts = [polygon];
+          const cuts = 1 + (hash(gx, gy, seed + 13) < 0.45 ? 1 : 0);
+          for (let c = 0; c < cuts; c++) {
+            const at = parts.length - 1 - Math.floor(hash(gx, gy, seed + 17 + c) * parts.length * 0.99);
+            const part = parts.splice(at, 1)[0];
+            let [mx, my] = [0, 0];
+            for (const [x, y] of part) [mx, my] = [mx + x / part.length, my + y / part.length];
+            const shift = (hash(gx, gy, seed + 19 + c) - 0.5) * cell * 0.5;
+            const angle = hash(gx, gy, seed + 23 + c) * Math.PI;
+            const normal = [Math.cos(angle), Math.sin(angle)];
+            const point = [mx + normal[0] * shift, my + normal[1] * shift];
+            const one = clipPolygon(part, point, normal);
+            const two = clipPolygon(part, point, [-normal[0], -normal[1]]);
+            for (const piece of [one, two]) if (piece.length >= 3) parts.push(piece);
+          }
+          for (const part of parts) add(part);
         }
       }
     }
     return pieces;
   };
 
-  // Where each piece goes at the settings' time: its move, turn (radians),
-  // size and opacity, or null where it stays whole. `size` is the layer's
-  // larger side, in the picture's pixels
+  // Where each piece is at the settings' time, as AE's Shatter works it
+  // out: a 2D transform of the piece, its depth and its look, or null
+  // where it's still whole. The layer is lit in 3D: a force is a sphere
+  // its Depth in front of the layer, and the pieces in it fly away from
+  // its middle, faster the nearer they are to it, so those in the middle
+  // mostly fly toward the camera, growing and tumbling, rather than out
+  // to the sides. Viscosity slows them, gravity pulls them, each turns
+  // about its own random axis, and the camera, as far as the layer is
+  // across, gives the depth. With Snap, a ragged wipe spreads from each
+  // force over Spread time, and each piece only starts once it's reached
   const simulate = (pieces, s, width, height, size) => {
     const forces = [s.force1, s.force2]
       .filter((f) => f.on && f.radius > 0)
-      .map((f) => ({ x: (f.x / 100) * width, y: (f.y / 100) * height, radius: (f.radius / 100) * size, strength: f.strength / 100 }));
-    const time = s.time / 100;
+      .map((f) => ({ x: (f.x / 100) * width, y: (f.y / 100) * height, z: -(f.depth / 100) * size, radius: (f.radius / 100) * size, strength: f.strength }));
     const moves = new Array(pieces.length).fill(null);
-    if (!forces.length || time <= 0) return moves;
-    if (s.mode === "shatter") {
-      // Thrown out from each force, more near its middle, then slowed by
-      // viscosity and pulled by gravity, as AE's Shatter
-      const viscosity = (s.viscosity / 100) * 4;
-      const travel = viscosity > 0 ? (1 - Math.exp(-viscosity * time)) / viscosity : time;
-      const fall = ((s.gravity / 100) * size * 1.5 * time * time) / 2;
-      const ga = (s.gravityDirection * Math.PI) / 180;
-      const randomness = s.randomness / 100;
-      pieces.forEach((piece, i) => {
-        let [vx, vy, hit] = [0, 0, 0];
-        for (const f of forces) {
-          const [dx, dy] = [piece.x - f.x, piece.y - f.y];
-          const d = Math.hypot(dx, dy);
-          if (d >= f.radius) continue;
-          const push = f.strength * (1 - d / f.radius);
-          const [ux, uy] = d > 1e-6 ? [dx / d, dy / d] : [Math.cos(piece.random[0] * 6.283), Math.sin(piece.random[0] * 6.283)];
-          vx += ux * push;
-          vy += uy * push;
-          hit = Math.max(hit, push);
-        }
-        if (!hit) return;
-        const [r0, r1, r2] = piece.random;
-        // Randomness turns and speeds each piece a little differently
-        const turn = (r0 - 0.5) * 2 * randomness * 1.2;
-        const speed = (1 + (r1 - 0.5) * 2 * randomness) * size * 1.5;
-        const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
-        const [mx, my] = [(vx * cos - vy * sin) * speed * travel, (vx * sin + vy * cos) * speed * travel];
-        moves[i] = {
-          x: mx + Math.cos(ga) * fall,
-          y: my + Math.sin(ga) * fall,
-          turn: (((r2 - 0.5) * 2 * s.rotation * time * Math.min(1, hit * 2 + 0.3)) * Math.PI) / 180,
-          scale: 1,
-          opacity: 1,
-          light: 0,
-        };
-      });
-    } else {
-      // Dust: a ragged front spreads out from each force as time goes, as
-      // far as its radius; what it passes is blown off with the wind
-      const wa = (s.wind * Math.PI) / 180;
-      const [wx, wy] = [Math.cos(wa), Math.sin(wa)];
-      const soft = 0.03 + (s.softness / 100) * 0.6;
-      const rag = s.ragged / 100;
-      const scale = size / 8;
-      pieces.forEach((piece, i) => {
-        let life = 0;
-        let strength = 0;
-        for (const f of forces) {
-          const reach = Math.hypot(piece.x - f.x, piece.y - f.y) / f.radius;
-          if (reach >= 1) continue;
-          const rough = rag * (noise(piece.x / scale, piece.y / scale, s.seed) * 0.7 + noise((piece.x * 3) / scale, (piece.y * 3) / scale, s.seed + 3) * 0.3);
-          const when = reach * (1 - rag * 0.6) + rough * 0.6 + (piece.random[3] - 0.5) * 0.06;
-          const gone = Math.min(1, Math.max(0, (time * (1 + soft) - when) / soft));
-          if (gone > life) [life, strength] = [gone, f.strength];
-        }
-        if (life <= 0) return;
-        const [r0, r1, r2] = piece.random;
-        // Slow to leave, then faster
-        const distance = strength * size * 1.5 * life * life * (0.4 + r0 * 1.2);
-        const side = (r1 - 0.5) * 2 * (s.scatter / 100) * distance;
-        moves[i] = {
-          x: wx * distance - wy * side,
-          y: wy * distance + wx * side,
-          turn: (r2 - 0.5) * 2 * Math.PI * life,
-          scale: Math.max(0.05, 1 - (s.shrink / 100) * life * (0.6 + piece.random[3] * 0.8)),
-          opacity: 1 - (s.fade / 100) * life * life,
-          light: (s.lighten / 100) * life,
-        };
-      });
-    }
+    if (!forces.length || s.time <= 0) return moves;
+    // AE's units: speed and gravity in tenths of the layer's size a second
+    const unit = size * 0.1;
+    const drag = s.viscosity * 4;
+    const ga = (s.gravityDirection * Math.PI) / 180;
+    const [gx, gy] = [Math.cos(ga) * s.gravity * unit, Math.sin(ga) * s.gravity * unit];
+    const focal = size * 2.2;
+    const [cx, cy] = [width / 2, height / 2];
+    const snap = s.mode === "snap";
+    const soft = 0.03 + (s.softness / 100) * 0.6;
+    const rag = s.ragged / 100;
+    const scale = size / 8;
+    pieces.forEach((piece, i) => {
+      // The velocity the forces give it, and how far into each it is
+      let [vx, vy, vz] = [0, 0, 0];
+      let within = 1;
+      for (const f of forces) {
+        const [dx, dy, dz] = [piece.x - f.x, piece.y - f.y, -f.z];
+        const d = Math.hypot(dx, dy, dz);
+        if (d >= f.radius) continue;
+        const power = f.strength * unit * (1 - d / f.radius);
+        const n = d > 1e-6 ? 1 / d : 0;
+        vx += dx * n * power;
+        vy += dy * n * power;
+        vz += (d > 1e-6 ? dz * n : 1) * power;
+        within = Math.min(within, Math.hypot(dx, dy) / f.radius);
+      }
+      if (within >= 1) return;
+      const [r0, r1, r2, r3, r4, r5] = piece.random;
+      // When it breaks: at once, or with Snap once the wipe reaches it
+      let start = 0;
+      if (snap) {
+        const rough = rag * (noise(piece.x / scale, piece.y / scale, s.seed) * 0.7 + noise((piece.x * 3) / scale, (piece.y * 3) / scale, s.seed + 3) * 0.3);
+        start = (within * (1 - rag * 0.6) + rough * 0.6 + (r5 - 0.5) * soft) * s.spread;
+      }
+      const t = s.time - start;
+      if (t <= 0) return;
+      // Randomness turns and speeds each piece differently, and heavier
+      // ones are slower
+      const random = s.randomness;
+      const speed = (1 + (r0 - 0.5) * 2 * random) / (1 + ((r1 - 0.5) * 2 * s.mass) / 100);
+      const turn = (r2 - 0.5) * 2 * random * 1.5;
+      const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
+      let [ux, uy, uz] = [(vx * cos - vy * sin) * speed, (vx * sin + vy * cos) * speed, vz * speed];
+      // Snap's dust lifts off with a little of its own
+      if (snap) {
+        ux += (r3 - 0.5) * random * unit * 2;
+        uy += (r4 - 0.5) * random * unit * 2;
+      }
+      // Moved by its speed, slowed by viscosity, and by gravity
+      const travel = drag > 0 ? (1 - Math.exp(-drag * t)) / drag : t;
+      const fall = (t * t) / 2;
+      const [mx, my, mz] = [ux * travel + gx * fall, uy * travel + gy * fall, uz * travel];
+      // Seen from the camera: nearer is larger, and farther from the middle
+      if (focal - mz <= focal * 0.05) return;
+      const depth = focal / (focal - mz);
+      const [px, py] = [cx + (piece.x + mx - cx) * depth, cy + (piece.y + my - cy) * depth];
+      // Tumbling about a random axis: as it turns, it thins along it
+      const spin = (r3 - 0.5) * 2 * Math.PI * 2 * s.rotation * t * (0.5 + r4);
+      const tilt = s.tumble === "free" ? Math.PI * 2 * s.rotation * t * (0.5 + r5) : 0;
+      const roll = s.tumble === "none" ? 0 : spin;
+      const axis = r1 * Math.PI;
+      // Never quite edge-on, as AE's pieces have thickness that shows
+      const flat = Math.sign(Math.cos(tilt) || 1) * Math.max(0.3, Math.abs(Math.cos(tilt)));
+      // R(roll) · R(axis) · diag(1, flat) · R(-axis), sized by depth and shrink
+      const life = snap ? Math.min(1, t / Math.max(0.2, s.spread * 0.5)) : 0;
+      const size2 = depth * (snap ? Math.max(0.05, 1 - (s.shrink / 100) * life) : 1);
+      const [ca, sa] = [Math.cos(axis), Math.sin(axis)];
+      const m = [ca * ca + flat * sa * sa, ca * sa - flat * ca * sa, ca * sa - flat * sa * ca, sa * sa + flat * ca * ca];
+      const [cr, sr] = [Math.cos(roll), Math.sin(roll)];
+      const a = (cr * m[0] - sr * m[2]) * size2;
+      const b = (sr * m[0] + cr * m[2]) * size2;
+      const c = (cr * m[1] - sr * m[3]) * size2;
+      const d = (sr * m[1] + cr * m[3]) * size2;
+      moves[i] = {
+        // Maps the piece's own points to where they're drawn
+        matrix: [a, b, c, d, px - (a * piece.x + c * piece.y), py - (b * piece.x + d * piece.y)],
+        depth: mz,
+        opacity: snap ? 1 - (s.fade / 100) * life * life : 1,
+        light: snap ? (s.lighten / 100) * life : 0,
+      };
+    });
     return moves;
   };
 
-  // Draws the broken layer from `picture`, a canvas of it, `k` its pixels
-  // per layer pixel. Gives a canvas cropped to what's drawn, and where it
-  // sits relative to the picture's top left, in its pixels
-  const drawBroken = (picture, pieces, s, k) => {
+  // Draws the broken layer from `picture`, a canvas of it. Gives a canvas
+  // cropped to what's drawn, and where it sits relative to the picture's
+  // top left, in its pixels
+  const drawBroken = (picture, pieces, s) => {
     const { width, height } = picture;
     const moves = simulate(pieces, s, width, height, Math.max(width, height));
     // The bounds of everything drawn
     let [left, top, right, bottom] = [0, 0, width, height];
-    const corners = [];
+    const drawn = [];
     pieces.forEach((piece, i) => {
       const move = moves[i];
       if (!move || move.opacity <= 0.02) return;
-      const [cos, sin] = [Math.cos(move.turn), Math.sin(move.turn)];
-      for (const [px, py] of piece.polygon) {
-        const [dx, dy] = [(px - piece.x) * move.scale, (py - piece.y) * move.scale];
-        const x = piece.x + move.x + dx * cos - dy * sin;
-        const y = piece.y + move.y + dx * sin + dy * cos;
-        if (x < left) left = x;
-        if (x > right) right = x;
-        if (y < top) top = y;
-        if (y > bottom) bottom = y;
+      const [a, b, c, d, e, f] = move.matrix;
+      for (const [x, y] of piece.polygon) {
+        const [px, py] = [a * x + c * y + e, b * x + d * y + f];
+        if (px < left) left = px;
+        if (px > right) right = px;
+        if (py < top) top = py;
+        if (py > bottom) bottom = py;
       }
-      corners.push(i);
+      drawn.push(i);
     });
-    [left, top, right, bottom] = [Math.floor(left) - 1, Math.floor(top) - 1, Math.ceil(right) + 1, Math.ceil(bottom) + 1];
+    // Kept to a sensible size, as pieces flying past the camera can be huge
+    const most = Math.max(width, height) * 4;
+    [left, top] = [Math.max(-most, Math.floor(left) - 1), Math.max(-most, Math.floor(top) - 1)];
+    [right, bottom] = [Math.min(width + most, Math.ceil(right) + 1), Math.min(height + most, Math.ceil(bottom) + 1)];
     const canvas = Object.assign(document.createElement("canvas"), { width: right - left, height: bottom - top });
     const context = canvas.getContext("2d");
-    const path = (polygon) => {
-      context.beginPath();
-      polygon.forEach(([x, y], j) => (j ? context.lineTo(x, y) : context.moveTo(x, y)));
-      context.closePath();
-    };
-    // The picture, with the moving pieces cut out of it
+    // The picture, with the pieces that moved cut out of it
     context.drawImage(picture, -left, -top);
     context.globalCompositeOperation = "destination-out";
     context.setTransform(1, 0, 0, 1, -left, -top);
@@ -1588,19 +1644,17 @@ const PAGE_JS: &str = r##"(() => {
     });
     context.fill();
     context.globalCompositeOperation = "source-over";
-    // Each moving piece, those gone least first, so the farthest are on top
-    corners.sort((a, b) => Math.hypot(moves[a].x, moves[a].y) - Math.hypot(moves[b].x, moves[b].y));
-    for (const i of corners) {
+    // Each piece where it's gone, the farthest from the camera first
+    drawn.sort((a, b) => moves[a].depth - moves[b].depth);
+    for (const i of drawn) {
       const piece = pieces[i];
       const move = moves[i];
-      const [cos, sin] = [Math.cos(move.turn), Math.sin(move.turn)];
       context.save();
-      // To where it's going, turned and sized about its center
       context.setTransform(1, 0, 0, 1, -left, -top);
-      context.translate(piece.x + move.x, piece.y + move.y);
-      context.transform(cos * move.scale, sin * move.scale, -sin * move.scale, cos * move.scale, 0, 0);
-      context.translate(-piece.x, -piece.y);
-      path(piece.polygon);
+      context.transform(...move.matrix);
+      context.beginPath();
+      piece.polygon.forEach(([x, y], j) => (j ? context.lineTo(x, y) : context.moveTo(x, y)));
+      context.closePath();
       context.clip();
       context.globalAlpha = move.opacity;
       let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
@@ -1634,13 +1688,21 @@ const PAGE_JS: &str = r##"(() => {
     const { picture } = current.levels[level];
     const key = `${s.pattern}:${s.pieces}:${s.seed}`;
     current.cuts ??= {};
-    if (current.cuts[level]?.key !== key) current.cuts[level] = { key, pieces: cutPieces(picture.width, picture.height, s.pattern, s.pieces, s.seed) };
+    if (current.cuts[level]?.key !== key) {
+      // How much of the picture isn't transparent, so the count is of
+      // pieces with something in them
+      const { data } = picture.getContext("2d").getImageData(0, 0, picture.width, picture.height);
+      let solid = 0;
+      for (let at = 3; at < data.length; at += 16) if (data[at] > 0) solid++;
+      const covered = Math.max(0.02, solid / (data.length / 16));
+      current.cuts[level] = { key, pieces: cutPieces(picture.width, picture.height, s.pattern, s.pieces, s.seed, covered) };
+    }
     return current.cuts[level].pieces;
   };
 
   const renderAt = (current, level) => {
-    const { picture, k } = current.levels[level];
-    return drawBroken(picture, piecesFor(current, level), current.settings, k);
+    const { picture } = current.levels[level];
+    return drawBroken(picture, piecesFor(current, level), current.settings);
   };
 
   // From the page to the coordinates of what's in `parent`: a frame's
@@ -1700,7 +1762,7 @@ const PAGE_JS: &str = r##"(() => {
       try {
         const saved = JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE));
         // Settings from before forces, which aren't kept
-        if (saved.force1) Object.assign(settings, saved);
+        if (saved.force1 && "depth" in saved.force1) Object.assign(settings, saved);
       } catch {}
       if (!source) {
         group = null;
@@ -1817,7 +1879,8 @@ const PAGE_JS: &str = r##"(() => {
       if (!f.on) return;
       const x = ox + (f.x / 100) * width * fit;
       const y = oy + (f.y / 100) * height * fit;
-      const r = (f.radius / 100) * size * fit;
+      // Where its sphere meets the layer
+      const r = Math.sqrt(Math.max(0, f.radius ** 2 - f.depth ** 2)) / 100 * size * fit;
       context.strokeStyle = "rgba(13, 153, 255, 0.9)";
       context.fillStyle = "#fff";
       context.lineWidth = 1;
@@ -1851,7 +1914,7 @@ const PAGE_JS: &str = r##"(() => {
         if (!f.on) continue;
         const x = v.ox + (f.x / 100) * v.width * v.fit;
         const y = v.oy + (f.y / 100) * v.height * v.fit;
-        const r = (f.radius / 100) * size * v.fit;
+        const r = (Math.sqrt(Math.max(0, f.radius ** 2 - f.depth ** 2)) / 100) * size * v.fit;
         const d = Math.hypot(px - x, py - y);
         if (d <= 8) return { n, what: "move", px, py, x, y };
         if (Math.abs(d - r) <= 6) return { n, what: "size", px, py, x, y };
@@ -1877,7 +1940,10 @@ const PAGE_JS: &str = r##"(() => {
           change(`force${at.n}.x`, Math.round(((px - v.ox) / (v.width * v.fit)) * 100));
           change(`force${at.n}.y`, Math.round(((py - v.oy) / (v.height * v.fit)) * 100));
         } else {
-          change(`force${at.n}.radius`, Math.round((Math.hypot(px - at.x, py - at.y) / (size * v.fit)) * 100));
+          // The radius whose sphere meets the layer where the ring's dragged
+          const f = current.settings[`force${at.n}`];
+          const across = (Math.hypot(px - at.x, py - at.y) / (size * v.fit)) * 100;
+          change(`force${at.n}.radius`, Math.round(Math.hypot(across, f.depth)));
         }
       };
       canvas.addEventListener("pointermove", move);
@@ -1981,7 +2047,7 @@ const PAGE_JS: &str = r##"(() => {
       show();
     };
     const presets = makeChips(DISINTEGRATE_PRESETS, pick);
-    // Picking a mode starts from its first preset, keeping the forces
+    // Picking a mode starts from its first preset
     const mode = segments(
       "Mode",
       [
@@ -1991,9 +2057,8 @@ const PAGE_JS: &str = r##"(() => {
       () => s.mode,
       (value) => {
         if (value === s.mode) return;
-        const [force1, force2] = [s.force1, s.force2];
         const first = DISINTEGRATE_PRESETS.find(([, values]) => values().mode === value);
-        Object.assign(s, structuredClone(first[1]()), { force1, force2 });
+        Object.assign(s, structuredClone(first[1]()));
         refreshDisintegrate(current);
         show();
       },
@@ -2021,8 +2086,15 @@ const PAGE_JS: &str = r##"(() => {
     const force2Rows = element("div", { className: "rows" }, ...forceRows(2).map(slider));
     const force2 = element("section", {}, checkRow("Force 2", second), force2Rows);
     const time = element("section", {}, element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.time.map(slider)));
-    const physics = element("section", {}, element("div", { className: "caption", textContent: "Physics" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.physics.map(slider)));
-    const wind = element("section", {}, element("div", { className: "caption", textContent: "Dust" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.wind.map(slider)));
+    const tumble = select("Tumble axis", TUMBLES, () => s.tumble, (value) => change("tumble", value));
+    const physics = element(
+      "section",
+      {},
+      element("div", { className: "caption", textContent: "Physics" }),
+      element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.physics.map(slider)),
+      element("label", { className: "row" }, element("span", { className: "label", textContent: "Tumble axis" }), tumble),
+    );
+    const wind = element("section", {}, element("div", { className: "caption", textContent: "Snap" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.snap.map(slider)));
     const editable = element("input", { type: "checkbox" });
     editable.addEventListener("change", () => change("editable", editable.checked));
     const result = element("section", {}, checkRow("Keep editable", editable, "The original kept, hidden, in a group Disintegrate can change later"));
@@ -2045,7 +2117,7 @@ const PAGE_JS: &str = r##"(() => {
       for (const row of rows) row.show();
       second.checked = s.force2.on;
       force2Rows.hidden = !s.force2.on;
-      physics.hidden = s.mode !== "shatter";
+      tumble.show();
       wind.hidden = s.mode !== "snap";
       editable.checked = s.editable;
       drawDisintegratePreview(current);
@@ -2057,7 +2129,10 @@ const PAGE_JS: &str = r##"(() => {
         go.disabled = on;
         go.textContent = on ? "Making…" : current.group ? "Update" : "Disintegrate";
       },
-      close: () => pattern.close(),
+      close: () => {
+        pattern.close();
+        tumble.close();
+      },
     };
     current.keys = panelKeys(root, () => disintegrating === current, () => closeDisintegrate(current, false), () => !current.busy && applyDisintegrate(current));
     addEventListener("keydown", current.keys, true);
