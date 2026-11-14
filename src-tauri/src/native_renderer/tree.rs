@@ -1211,21 +1211,13 @@ impl<'a> Drawer<'a> {
     /// Draws `id` as what casts a silhouette
     /// Node `id` is one shape with one paint, drawn in one go
     fn single_draw(&self, id: u32) -> bool {
-        let mut id = id;
-        for _ in 0..8 {
-            let Some(node) = self.tree.node(id) else { return false };
-            match node.op {
-                Op::StaticTransformBinding => match node.child {
-                    Some(child) => id = child,
-                    None => return false,
-                },
-                Op::Group if node.children.len() == 1 => id = node.children[0],
-                Op::Fill => return node.geometry.as_ref().is_some_and(|g| g.path.is_some() && g.paints.len() == 1),
-                Op::FillGlyphs => return node.ext().painted_glyph_geometry.as_ref().is_some_and(|g| g.paints.len() == 1),
-                _ => return false,
-            }
-        }
-        false
+        single_draw(self.tree, id)
+    }
+
+    /// Draws what casts a silhouette, in `shade` if there's one
+    pub(super) fn casting(&mut self, shade: Option<Color4f>) {
+        self.cast = true;
+        self.shade = shade.and_then(|shade| color_filters::blend(shade.to_color(), BlendMode::SrcIn));
     }
 
     fn cast_with(&mut self, id: u32) {
@@ -1788,4 +1780,23 @@ pub(super) fn image_layout(paint: &rt::Paint, w: f32, h: f32, img: &Img) -> Opti
         }
     };
     Some((to_node, tile))
+}
+
+/// Whether `id` draws one paint over one path, and nothing else
+pub(super) fn single_draw(tree: &Tree, id: u32) -> bool {
+    let mut id = id;
+    for _ in 0..8 {
+        let Some(node) = tree.node(id) else { return false };
+        match node.op {
+            Op::StaticTransformBinding => match node.child {
+                Some(child) => id = child,
+                None => return false,
+            },
+            Op::Group if node.children.len() == 1 => id = node.children[0],
+            Op::Fill => return node.geometry.as_ref().is_some_and(|g| g.path.is_some() && g.paints.len() == 1),
+            Op::FillGlyphs => return node.ext().painted_glyph_geometry.as_ref().is_some_and(|g| g.paints.len() == 1),
+            _ => return false,
+        }
+    }
+    false
 }

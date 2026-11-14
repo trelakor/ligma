@@ -1206,7 +1206,8 @@ fn main(
                             rgba[i] = bg;
                             continue;
                         }
-                        let luminance = clamp(svg_lum(unpremultiply(fg)) * fg.a, 0.0, 1.0);
+                        // Ligma: Figma's luminance, of the premultiplied color
+                        let luminance = clamp(sqrt(dot(fg.rgb * fg.rgb, vec3(0.299, 0.587, 0.114))) * fg.a, 0.0, 1.0);
                         rgba[i] = bg * luminance;
                     } else {
                         rgba[i] = blend_mix_compose(bg, fg, end_clip.blend);
@@ -1370,6 +1371,10 @@ fn main(
                                 // Use pixel centers (+0.5) rather than pixel corners for correct sampling
                                 let my_xy = vec2(xy.x + f32(i) + 0.5, xy.y + 0.5);
                                 var atlas_uv = image.matrx.xy * my_xy.x + image.matrx.zw * my_xy.y + image.xlat;
+                                // Ligma: reflect is transparent outside the image
+                                if (image.x_extend_mode == EXTEND_REFLECT && (atlas_uv.x < 0.0 || atlas_uv.x >= image.extents.x)) || (image.y_extend_mode == EXTEND_REFLECT && (atlas_uv.y < 0.0 || atlas_uv.y >= image.extents.y)) {
+                                    continue;
+                                }
                                 atlas_uv.x = extend_mode(atlas_uv.x, image.x_extend_mode, image.extents.x);
                                 atlas_uv.y = extend_mode(atlas_uv.y, image.y_extend_mode, image.extents.y);
                                 atlas_uv = atlas_uv + image.atlas_offset;

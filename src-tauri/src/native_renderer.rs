@@ -74,6 +74,8 @@ mod scene;
 mod tree;
 #[cfg(windows)]
 mod vello;
+#[cfg(windows)]
+mod vello_blur;
 
 /// The native renderer's window, and the overlay webview in it
 pub const WINDOW: &str = "native-renderer";

@@ -438,7 +438,7 @@ fn reads_behind(scene: &Scene, unit: &Unit) -> Option<f32> {
 /// can't draw it. Made again once `stamp` isn't the unit's
 struct Encoded {
     stamp: u64,
-    made: Result<Option<super::vello::Fragment>, String>,
+    made: Result<super::vello::Fragment, String>,
     used: Instant,
 }
 
@@ -1641,6 +1641,39 @@ impl Painter {
     /// `top`), of units over `reach`, drawn by Vello into a texture of the
     /// kind the present thread shows, submitted, and how long that took
     fn vello_view(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect) -> Result<(Arc<Tex>, Counts, String), String> {
+        // Drawn again where it ran out of room in Vello's buffers, which
+        // then have more, before it's shown
+        for _ in 0..8 {
+            let (tex, counts, stats) = self.vello_view_once(left, top, w, h, px, reach)?;
+            let vello = self.vello.as_mut().ok_or("no Vello")?;
+            let short = vello.check()?;
+            if let Some(why) = short {
+                trace(|| format!("  vello ran out of room, drawing again: {why}"));
+            } else {
+                let c = &vello::low_level::vello_encoding::CAPACITY;
+                let r = |a: &std::sync::atomic::AtomicU32| a.load(std::sync::atomic::Ordering::Relaxed) >> 10;
+                return Ok((
+                    tex,
+                    counts,
+                    format!(
+                        "{stats} checked={:.1}ms gpu:{} room(k)=bin {} ptcl {} tile {} segc {} seg {} blend {} lines {}",
+                        vello.waited.as_secs_f64() * 1000.0,
+                        vello.stages,
+                        r(&c.binning),
+                        r(&c.ptcl),
+                        r(&c.tile),
+                        r(&c.seg_counts),
+                        r(&c.segments),
+                        r(&c.blend),
+                        r(&c.lines)
+                    ),
+                ));
+            }
+        }
+        Err("out of room in Vello's buffers".into())
+    }
+
+    fn vello_view_once(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect) -> Result<(Arc<Tex>, Counts, String), String> {
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let _ = self.gpu.context.flush_and_submit();
@@ -1662,10 +1695,15 @@ impl Painter {
                 hasher.finish()
             })
             .collect();
+        let stamped = started.elapsed();
+        let (mut put_took, mut append_took) = (Duration::ZERO, Duration::ZERO);
         let mut fragments = std::mem::take(&mut self.fragments);
         // Image fills' textures the view draws, by key
         let mut pictures: Vec<(String, u32)> = Vec::new();
-        let (mut reused, mut made, mut per_frame) = (0, 0, 0);
+        let (mut reused, mut made) = (0, 0);
+        // Blurs, drawn and put in place for the view
+        let mut plan = super::vello::Plan::new(w);
+        let whole = vello::kurbo::Rect::new(0.0, 0.0, w as f64, h as f64);
         let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
             None => (vello::Scene::new(), Some("not a tree".to_string()), 0, Vec::new()),
             Some(tree) => {
@@ -1684,6 +1722,11 @@ impl Painter {
                     let key = (unit.slot, unit.section, level);
                     if fresh {
                         encoder.place(place, &post);
+                        let (mut effects, mut scene) = (std::mem::take(&mut encoder.effects), std::mem::take(&mut encoder.scene));
+                        if let Err(why) = encoder.put(&mut plan, &mut effects, scene.encoding_mut(), vello::kurbo::Affine::IDENTITY, whole, 0) {
+                            encoder.failed = Some(why);
+                        }
+                        encoder.scene = scene;
                         pictures.extend(encoder.pictures.drain(..).map(|(key, level, _)| (key, level)));
                         asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
                         units += 1;
@@ -1698,7 +1741,7 @@ impl Painter {
                     let current = fragments.get(&key).is_some_and(|encoded| {
                         encoded.stamp == stamp
                             && match &encoded.made {
-                                Ok(Some(fragment)) => fragment.pictures.iter().all(|(key, level, id)| {
+                                Ok(fragment) => fragment.pictures.iter().all(|(key, level, id)| {
                                     images.get(key).and_then(|img| encoder.vello.picture(key, img, *level)).is_some_and(|data| data.data.id() == *id)
                                 }),
                                 _ => true,
@@ -1721,18 +1764,27 @@ impl Painter {
                         }
                     };
                     encoded.used = now;
-                    match &encoded.made {
-                        Ok(Some(fragment)) => {
-                            encoder.scene.append(&fragment.scene, Some(fragment.at(px, left, top)));
+                    match &mut encoded.made {
+                        Ok(fragment) => {
+                            let at = fragment.at(px, left, top);
+                            let timer = Instant::now();
+                            // What Skia draws in it, drawn for the view, asks
+                            // about images of its own
+                            if let Err(why) = encoder.put(&mut plan, &mut fragment.effects, fragment.scene.encoding_mut(), at, whole, 0) {
+                                encoder.failed = Some(why);
+                            }
+                            put_took += timer.elapsed();
+                            let timer = Instant::now();
+                            encoder.scene.append(&fragment.scene, Some(at));
+                            append_took += timer.elapsed();
                             pictures.extend(fragment.pictures.iter().map(|(key, level, _)| (key.clone(), *level)));
                             encoder.counts += fragment.counts;
-                            asked.push(((unit.slot, unit.section), unit.bounds, fragment.asked.clone()));
-                        }
-                        Ok(None) => {
-                            per_frame += 1;
-                            encoder.place(place, &post);
-                            pictures.extend(encoder.pictures.drain(..).map(|(key, level, _)| (key, level)));
-                            asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
+                            let mut unit_asked = fragment.asked.clone();
+                            let mut drawn = std::mem::take(&mut encoder.asked);
+                            unit_asked.missing.append(&mut drawn.missing);
+                            unit_asked.sharper.append(&mut drawn.sharper);
+                            unit_asked.used.append(&mut drawn.used);
+                            asked.push(((unit.slot, unit.section), unit.bounds, unit_asked));
                         }
                         Err(why) => encoder.failed = Some(why.clone()),
                     }
@@ -1769,7 +1821,21 @@ impl Painter {
             return Err(format!("images need {}M px of Vello's atlas", area >> 20));
         }
         let _ = self.gpu.context.flush_and_submit();
-        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, w, h, used_pages, &pictures);
+        // Dev tools: Skia's GPU work for the view done first, to time apart
+        let skia_gpu = std::env::var_os("LIGMA_NATIVE_VELLO_SYNC").map(|_| {
+            let at = Instant::now();
+            let _ = self.gpu.context.flush_submit_and_sync_cpu();
+            at.elapsed().as_secs_f64() * 1000.0
+        });
+        let blurs = plan.len();
+        let scene_mb = {
+            use std::mem::size_of_val as size;
+            let e = scene.encoding();
+            (size(&e.path_tags[..]) + size(&e.path_data[..]) + size(&e.draw_tags[..]) + size(&e.draw_data[..]) + size(&e.transforms[..]) + size(&e.styles[..])) as f64 / 1048576.0
+        };
+        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, w, h, used_pages, &pictures, &plan);
+        drop(plan);
+        vello.spare = scene;
         vello.keep_pictures(&self.images);
         vello.prune();
         self.vello = Some(vello);
@@ -1807,11 +1873,15 @@ impl Painter {
             self.vello_uses.insert(unit, uses);
         }
         let stats = format!(
-            "{w}x{h} units={units} reused={reused} made={made} per_frame={per_frame} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms skia={:.1}ms vello_cpu={:.1}ms vello={:.1}ms {}",
+            "{w}x{h} units={units} reused={reused} made={made} scene={scene_mb:.1}MB blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
             fell_back / 1000,
             encoded.as_secs_f64() * 1000.0,
+            stamped.as_secs_f64() * 1000.0,
+            put_took.as_secs_f64() * 1000.0,
+            append_took.as_secs_f64() * 1000.0,
             skia_took.as_secs_f64() * 1000.0,
             self.vello.as_ref().map_or(0.0, |vello| vello.took.as_secs_f64() * 1000.0),
+            self.vello.as_ref().map_or(0.0, |vello| vello.took_blurs.as_secs_f64() * 1000.0),
             vello_took.as_secs_f64() * 1000.0,
             kinds.replace('"', "")
         );

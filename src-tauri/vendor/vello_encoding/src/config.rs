@@ -1,6 +1,7 @@
 // Copyright 2023 the Vello Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use crate::SegmentCount;
 
 use super::{
@@ -164,6 +165,35 @@ pub struct RenderConfig {
     pub buffer_sizes: BufferSizes,
 }
 
+/// Ligma: the room each buffer the GPU allocates from has, beyond what's
+/// set aside up front, set from what renders needed. Vello's own sizes to
+/// start with
+pub struct Capacity {
+    pub binning: AtomicU32,
+    pub ptcl: AtomicU32,
+    pub tile: AtomicU32,
+    pub seg_counts: AtomicU32,
+    pub segments: AtomicU32,
+    pub blend: AtomicU32,
+    pub lines: AtomicU32,
+}
+
+pub static CAPACITY: Capacity = Capacity {
+    binning: AtomicU32::new(1 << 18),
+    ptcl: AtomicU32::new(1 << 23),
+    tile: AtomicU32::new(1 << 21),
+    seg_counts: AtomicU32::new(1 << 21),
+    segments: AtomicU32::new(1 << 21),
+    blend: AtomicU32::new(1 << 20),
+    lines: AtomicU32::new(1 << 21),
+};
+
+/// Ligma: the up front part of the per tile command list, which the GPU
+/// allocates past
+pub fn ptcl_start(width: u32, height: u32) -> u32 {
+    width.div_ceil(TILE_WIDTH) * height.div_ceil(TILE_HEIGHT) * 64
+}
+
 impl RenderConfig {
     pub fn new(layout: &Layout, width: u32, height: u32, base_color: &peniko::Color) -> Self {
         let new_width = width.next_multiple_of(TILE_WIDTH);
@@ -173,7 +203,15 @@ impl RenderConfig {
         let n_path_tags = layout.path_tags_size();
         let workgroup_counts =
             WorkgroupCounts::new(layout, width_in_tiles, height_in_tiles, n_path_tags);
-        let buffer_sizes = BufferSizes::new(layout, &workgroup_counts);
+        let mut buffer_sizes = BufferSizes::new(layout, &workgroup_counts);
+        let room = |at: &AtomicU32| at.load(Ordering::Relaxed);
+        buffer_sizes.bin_data = BufferSize::new(layout.bin_data_start + room(&CAPACITY.binning));
+        buffer_sizes.ptcl = BufferSize::new(ptcl_start(width, height) + room(&CAPACITY.ptcl));
+        buffer_sizes.tiles = BufferSize::new(room(&CAPACITY.tile));
+        buffer_sizes.seg_counts = BufferSize::new(room(&CAPACITY.seg_counts));
+        buffer_sizes.segments = BufferSize::new(room(&CAPACITY.segments));
+        buffer_sizes.blend_spill = BufferSize::new(room(&CAPACITY.blend));
+        buffer_sizes.lines = BufferSize::new(room(&CAPACITY.lines));
         Self {
             gpu: ConfigUniform {
                 width_in_tiles,

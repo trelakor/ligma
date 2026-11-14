@@ -34,6 +34,9 @@ struct ResidentImage {
     last_used_generation: u64,
 }
 
+/// Ligma: renders that take less than half the atlas before it's halved
+const ROOMY_RENDERS: u32 = 120;
+
 pub(crate) struct ImageCache {
     atlas: AtlasAllocator,
     /// Maximum side length for the square image atlas texture.
@@ -45,6 +48,8 @@ pub(crate) struct ImageCache {
     /// This is exposed through [`Images::evicted`] for renderer-side debug logging, and also
     /// prevents repeated stale-eviction scans during the same resolve pass.
     evicted_in_resolve: usize,
+    /// Ligma: renders in a row that took less than half the atlas
+    roomy: u32,
     /// Map from image blob id to atlas residency.
     map: HashMap<u64, ResidentImage>,
     /// Images that must be uploaded in the current resolve pass, with atlas locations.
@@ -68,6 +73,7 @@ impl ImageCache {
             max_size,
             generation: 0,
             evicted_in_resolve: 0,
+            roomy: 0,
             map: HashMap::default(),
             images: Vec::default(),
         }
@@ -79,11 +85,15 @@ impl ImageCache {
         self.images.clear();
         // Ligma: packed afresh each frame with only the images it draws, so
         // what earlier frames drew doesn't crowd it out, at the size the last
-        // frame needed, halved while that's still twice what it took
+        // frame needed, halved once renders have taken less than half of
+        // that for a while, so a texture isn't made each time renders that
+        // need more and less take turns
         let used: i64 = self.map.values().map(|resident| resident.image.width as i64 * resident.image.height as i64).sum();
         let mut size = self.atlas.size().width;
-        while size > DEFAULT_ATLAS_SIZE && used * 2 <= (size as i64 / 2).pow(2) {
+        self.roomy = if size > DEFAULT_ATLAS_SIZE && used * 2 <= (size as i64 / 2).pow(2) { self.roomy + 1 } else { 0 };
+        if self.roomy > ROOMY_RENDERS {
             size /= 2;
+            self.roomy = 0;
         }
         self.map.clear();
         self.atlas = AtlasAllocator::new(size2(size, size));
