@@ -2739,12 +2739,15 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Ligma effects in the right panel ----------
 
-  // Under Figma's own Effects, kept apart from them, a list of the Ligma
-  // effects on the selected layer, the last applied on top, as Figma lists
-  // its own. A row opens its effect to change; dragging rows reorders the
-  // stack and − removes one, both by making the stack again from the
-  // original, each effect with its saved settings
+  // Under Figma's own Effects, drawn as they are but apart from them, the
+  // Ligma effects on the selected layer, the last applied on top, as Figma
+  // lists its own. A row opens its effect to change, the eye hides or shows
+  // it, dragging rows by their grip reorders the stack and − removes one.
+  // Reordering and removing make the stack again from the original, each
+  // effect with its saved settings, under the old one, which stays until
+  // the new one's done, so nothing flashes
   const SECTION = "data-ligma-effects-section";
+  const OFF = "off";
   const effectOf = (node) => (node ? EFFECTS.find((effect) => effect.of(node)) : null);
   // The source inside an effect's group
   const sourceOf = (group) => group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source") ?? null;
@@ -2759,62 +2762,88 @@ const PAGE_JS: &str = r##"(() => {
     for (let at = node; at && effectOf(at); at = sourceOf(at)) stack.push(at);
     return stack;
   };
+  const isOff = (group) => group.getSharedPluginData(PLUGIN, OFF) === "1";
+  // Hides an effect, showing what it was made from, or shows it again
+  const setOff = (group, off) => {
+    group.setSharedPluginData(PLUGIN, OFF, off ? "1" : "");
+    const source = sourceOf(group);
+    for (const child of group.children) child.visible = child === source ? off || effectOf(group) === EFFECTS[0] : !off;
+  };
 
-  // Makes the stack again from its original, with `layers`, outermost
-  // first, each { effect, settings }
+  // Makes the stack again from `base` with `layers`, outermost first, each
+  // { effect, settings, off }, in place of `outer`. `base` is copied, so
+  // the old stack shows until the new one's made
   let restacking = false;
-  const restack = async (figma, stack, layers) => {
+  const restack = async (figma, outer, base, layers) => {
     if (restacking || repeating || disintegrating || crushing) return;
     restacking = true;
+    showSection();
+    const parent = outer.parent;
+    let top = base.clone();
     try {
-      const outer = stack[0];
-      let base = sourceOf(stack.at(-1));
-      const parent = outer.parent;
-      const index = parent.children.indexOf(outer);
-      parent.insertChild(index, base);
-      base.visible = true;
-      base.setSharedPluginData(PLUGIN, ROLE, "");
-      outer.remove();
-      figma.currentPage.selection = [base];
-      for (const { effect, settings } of [...layers].reverse()) {
-        figma.currentPage.selection = [base];
+      parent.insertChild(parent.children.indexOf(outer), top);
+      if (top.getSharedPluginData(PLUGIN, ROLE) === "source") top.setSharedPluginData(PLUGIN, ROLE, "");
+      top.visible = true;
+      for (const { effect, settings, off } of [...layers].reverse()) {
+        figma.currentPage.selection = [top];
         await effect.open(figma, false, settings);
-        base = figma.currentPage.selection[0] ?? base;
+        const made = figma.currentPage.selection[0];
+        if (!made || made === top || !effectOf(made)) throw new Error("not made");
+        top = made;
+        if (off) setOff(top, true);
       }
-      figma.currentPage.selection = [base];
+      // Where the old one was, as it was
+      top.visible = outer.visible;
+      outer.remove();
+      figma.currentPage.selection = [top];
       try {
         figma.commitUndo();
       } catch {}
     } catch {
+      if (top && !top.removed && top !== outer) top.remove();
+      figma.currentPage.selection = [outer];
       figma.notify("Couldn't change the effects", { timeout: 2000 });
     }
     restacking = false;
+    sectionKey = "";
     showSection();
   };
 
-  const REMOVE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M18 11.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1 0-1h11a.5.5 0 0 1 .5.5" clip-rule="evenodd"/></svg>`;
-  const ADD = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M12 6a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 12 6" clip-rule="evenodd"/></svg>`;
+  const icon24 = (d, rule = "") => `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" ${rule} d="${d}"/></svg>`;
+  const REMOVE = icon24("M18 11.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1 0-1h11a.5.5 0 0 1 .5.5", 'fill-rule="evenodd"');
+  const ADD = icon24("M12 6a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 12 6", 'fill-rule="evenodd"');
+  // Figma's eye, open and shut
+  const EYE = icon24("M12 8c2.6 0 4.7 1.6 5.9 3.7a.6.6 0 0 1 0 .6C16.7 14.4 14.6 16 12 16s-4.7-1.6-5.9-3.7a.6.6 0 0 1 0-.6C7.3 9.6 9.4 8 12 8m0 1c-2.1 0-3.9 1.3-4.9 3 1 1.7 2.8 3 4.9 3s3.9-1.3 4.9-3c-1-1.7-2.8-3-4.9-3m0 1a2 2 0 1 1 0 4 2 2 0 0 1 0-4m0 1a1 1 0 1 0 0 2 1 1 0 0 0 0-2");
+  const EYE_SHUT = icon24("M6.15 11.15a.5.5 0 0 1 .7 0C8 12.3 9.8 13 12 13s4-.7 5.15-1.85a.5.5 0 1 1 .7.7l-.66.6.92 1.3a.5.5 0 1 1-.82.58l-.92-1.3q-.86.53-1.86.82l.36 1.5a.5.5 0 1 1-.97.24l-.37-1.54a8 8 0 0 1-3.06 0l-.37 1.54a.5.5 0 1 1-.97-.24l.36-1.5q-1-.29-1.86-.82l-.92 1.3a.5.5 0 1 1-.82-.58l.92-1.3-.66-.6a.5.5 0 0 1 0-.7");
   const GRIP = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path fill="currentColor" d="M6 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m0 3.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-1 4.5a1 1 0 1 0 0-2 1 1 0 0 0 0 2M12 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0M11 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2m1 2.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/></svg>`;
 
+  // As Figma lays out its own: a 32-pixel title row 16 pixels in, then
+  // 32-pixel rows of 24-pixel cards with a 1-pixel inset border, the eye
+  // showing on hover in place of the card's end, and − on the right
   const sectionStyle = document.createElement("style");
   sectionStyle.textContent = `
-    [${SECTION}] { padding-bottom: 12px; border-bottom: 1px solid var(--color-border); font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; color: var(--color-text); }
-    [${SECTION}] .head { display: flex; align-items: center; height: 40px; padding: 0 8px 0 16px; }
+    [${SECTION}] { padding: 4px 0 12px; border-bottom: 1px solid var(--color-border); font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; font-weight: 450; letter-spacing: 0.005em; color: var(--color-text); -webkit-font-smoothing: antialiased; }
+    [${SECTION}] .head { display: flex; align-items: center; height: 32px; padding: 0 8px 0 16px; }
     [${SECTION}] h2 { flex: 1; margin: 0; font-size: 11px; font-weight: 550; letter-spacing: 0.01em; line-height: 32px; }
-    [${SECTION}] .tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: var(--color-bg-secondary); color: var(--color-text-secondary); font-weight: 450; }
     [${SECTION}] .icon-button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; color: inherit; }
     [${SECTION}] .icon-button:hover { background: var(--color-bg-hover); }
-    [${SECTION}] .row { position: relative; display: grid; grid-template-columns: 16px 1fr 8px 24px; align-items: center; height: 32px; padding: 0 8px 0 0; }
-    [${SECTION}] .grip { display: grid; place-items: center; height: 24px; color: var(--color-icon-tertiary, var(--color-text-tertiary)); opacity: 0; cursor: grab; }
+    [${SECTION}] .row { position: relative; display: flex; align-items: center; height: 32px; padding: 0 8px 0 16px; transition: transform 120ms ease-out; }
+    [${SECTION}] .row.dragging { z-index: 1; transition: none; }
+    [${SECTION}] .grip { position: absolute; left: 0; top: 8px; display: grid; place-items: center; width: 16px; height: 16px; color: var(--color-icon-tertiary, var(--color-text-tertiary)); opacity: 0; cursor: grab; }
     [${SECTION}] .row:hover .grip, [${SECTION}] .row.dragging .grip { opacity: 1; }
-    [${SECTION}] .card { display: flex; align-items: center; gap: 0; min-width: 0; height: 24px; padding: 0 8px 0 0; border: 0; border-radius: 5px; background: var(--color-bg); color: inherit; font: inherit; text-align: left; }
-    [${SECTION}] .card:hover { background: var(--color-bg-hover); }
-    [${SECTION}] .card svg { flex: none; }
-    [${SECTION}] .card svg [stroke] { stroke: var(--color-icon); }
-    [${SECTION}] .card .name { flex: none; font-weight: 450; }
+    [${SECTION}] .card { display: flex; align-items: center; width: 184px; height: 24px; padding: 0 8px 0 0; border: 0; border-radius: 5px; background: var(--color-bg); box-shadow: inset 0 0 0 1px var(--color-border); color: inherit; font: inherit; text-align: left; overflow: hidden; }
+    [${SECTION}] .card:hover { box-shadow: inset 0 0 0 1px var(--color-border-strong, #555); }
+    [${SECTION}] .row.dragging .card { box-shadow: inset 0 0 0 1px var(--color-border-selected, #0d99ff), var(--elevation-200); }
+    [${SECTION}] .card .glyph { flex: none; display: grid; place-items: center; width: 24px; height: 24px; }
+    [${SECTION}] .card .glyph svg { width: 16px; height: 16px; }
+    [${SECTION}] .card .glyph svg [stroke] { stroke: var(--color-icon); stroke-width: 1.5; }
+    [${SECTION}] .card .name { flex: none; }
     [${SECTION}] .card .about { flex: 1; min-width: 0; margin-left: 6px; overflow: hidden; color: var(--color-text-secondary); text-overflow: ellipsis; white-space: nowrap; }
-    [${SECTION}] .row .icon-button { grid-column: 4; }
-    [${SECTION}] .row.dragging { z-index: 1; background: var(--color-bg); box-shadow: var(--elevation-200); }
+    [${SECTION}] .row.off .card :is(.name, .about, .glyph) { opacity: 0.4; }
+    [${SECTION}] .eye { display: none; margin-left: 8px; }
+    [${SECTION}] .row:hover .card, [${SECTION}] .row.off .card { width: 152px; }
+    [${SECTION}] .row:hover .eye, [${SECTION}] .row.off .eye { display: grid; }
+    [${SECTION}] .remove { margin-left: auto; }
     [${SECTION}] .rows.busy { opacity: 0.5; pointer-events: none; }
     [${SECTION}] :focus-visible { outline: 1px solid var(--color-border-selected, #0d99ff); outline-offset: -1px; }`;
 
@@ -2824,10 +2853,15 @@ const PAGE_JS: &str = r##"(() => {
     const anchor = document.getElementById("effects-panel")?.closest(".cachedSubtree");
     let section = document.querySelector(`[${SECTION}]`);
     const [only] = figma?.currentPage.selection ?? [];
-    const stack = state.on && figma && figma.currentPage.selection.length === 1 ? stackOf(only) : [];
+    let stack = [];
+    try {
+      stack = state.on && figma && figma.currentPage.selection.length === 1 ? stackOf(only) : [];
+    } catch {}
     if (!stack.length || !anchor) {
-      section?.remove();
-      sectionKey = "";
+      if (!restacking) {
+        section?.remove();
+        sectionKey = "";
+      }
       return;
     }
     if (!sectionStyle.isConnected) document.head.append(sectionStyle);
@@ -2837,9 +2871,9 @@ const PAGE_JS: &str = r##"(() => {
       try {
         settings = effect.saved(group);
       } catch {}
-      return { group, effect, settings };
+      return { group, effect, settings, off: isOff(group) };
     });
-    const key = layers.map(({ group, settings }) => group.id + JSON.stringify(settings)).join("|") + restacking;
+    const key = layers.map(({ group, settings, off }) => group.id + off + JSON.stringify(settings)).join("|") + restacking;
     if (section && section.previousElementSibling === anchor && key === sectionKey) return;
     sectionKey = key;
     section ??= document.createElement("div");
@@ -2847,10 +2881,10 @@ const PAGE_JS: &str = r##"(() => {
     section.innerHTML = "";
     const head = section.appendChild(document.createElement("div"));
     head.className = "head";
-    head.innerHTML = `<h2>Ligma effects<span class="tag">${layers.length}</span></h2>`;
+    head.innerHTML = `<h2>Ligma Effects</h2>`;
     const add = head.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon-button", innerHTML: ADD }));
-    add.setAttribute("aria-label", "Add a Ligma effect on top");
-    Object.assign(add.dataset, { tooltip: "Add a Ligma effect", tooltipType: "text" });
+    add.setAttribute("aria-label", "Add a Ligma effect");
+    Object.assign(add.dataset, { tooltip: "Add effect", tooltipType: "text" });
     add.addEventListener("click", () => {
       figma.currentPage.selection = [stack[0]];
       openMenu(add);
@@ -2858,26 +2892,45 @@ const PAGE_JS: &str = r##"(() => {
     const rows = section.appendChild(document.createElement("div"));
     rows.className = "rows";
     if (restacking) rows.classList.add("busy");
+    const base = sourceOf(stack.at(-1));
     layers.forEach((layer, i) => {
       const row = rows.appendChild(document.createElement("div"));
-      row.className = "row";
+      row.className = layer.off ? "row off" : "row";
       const grip = row.appendChild(Object.assign(document.createElement("span"), { className: "grip", innerHTML: GRIP }));
       grip.setAttribute("aria-hidden", "true");
       const card = row.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "card" }));
-      card.innerHTML = `${layer.effect.icon}<span class="name">${layer.effect.name}</span><span class="about">${layer.effect.summary(layer.settings)}</span>`;
+      card.innerHTML = `<span class="glyph">${layer.effect.icon}</span><span class="name">${layer.effect.name}</span><span class="about">${layer.effect.summary(layer.settings)}</span>`;
       card.setAttribute("aria-label", `Edit ${layer.effect.name}`);
       card.addEventListener("click", () => {
         figma.currentPage.selection = [layer.group];
         layer.effect.open(figma, true);
       });
-      const remove = row.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon-button", innerHTML: REMOVE }));
+      const eye = row.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon-button eye", innerHTML: layer.off ? EYE_SHUT : EYE }));
+      eye.setAttribute("aria-label", "Toggle visibility");
+      Object.assign(eye.dataset, { tooltip: "Toggle visibility", tooltipType: "text" });
+      eye.addEventListener("click", () => {
+        if (i === 0) {
+          // The top one only changes what shows
+          setOff(layer.group, !layer.off);
+          try {
+            figma.commitUndo();
+          } catch {}
+          sectionKey = "";
+          showSection();
+        } else {
+          // One under others: those above are made again from it
+          setOff(layer.group, !layer.off);
+          restack(figma, stack[0], layer.group, layers.slice(0, i));
+        }
+      });
+      const remove = row.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon-button remove", innerHTML: REMOVE }));
       remove.setAttribute("aria-label", `Remove ${layer.effect.name}`);
       Object.assign(remove.dataset, { tooltip: "Remove", tooltipType: "text" });
-      remove.addEventListener("click", () => restack(figma, stack, layers.filter((_, j) => j !== i)));
+      remove.addEventListener("click", () => restack(figma, stack[0], base, layers.filter((_, j) => j !== i)));
       // Dragging a row moves it among the others, and letting go makes the
       // stack again in the new order
       grip.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0 || layers.length < 2) return;
+        if (event.button !== 0 || layers.length < 2 || restacking) return;
         event.preventDefault();
         grip.setPointerCapture(event.pointerId);
         row.classList.add("dragging");
@@ -2899,12 +2952,16 @@ const PAGE_JS: &str = r##"(() => {
           "lostpointercapture",
           () => {
             grip.removeEventListener("pointermove", move);
-            for (const other of rows.children) other.style.transform = "";
             row.classList.remove("dragging");
-            if (to === i) return;
+            if (to === i) {
+              for (const other of rows.children) other.style.transform = "";
+              return;
+            }
+            // Kept where they were dropped while the stack's made again
+            row.style.transform = `translateY(${(to - i) * height}px)`;
             const order = [...layers];
             order.splice(to, 0, order.splice(i, 1)[0]);
-            restack(figma, stack, order);
+            restack(figma, stack[0], base, order);
           },
           { once: true },
         );
