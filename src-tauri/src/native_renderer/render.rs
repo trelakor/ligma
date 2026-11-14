@@ -1085,6 +1085,8 @@ pub struct Painter {
     scene: Scene,
     /// Figma's render tree, once frames of it come
     tree: Option<Tree>,
+    /// Figma's noise octaves, which can come before the tree does
+    octaves: Vec<f32>,
     units: Vec<Unit>,
     /// By unit, zoom level and whether edges are anti-aliased
     pictures: HashMap<(usize, bool, i32, bool), Recorded>,
@@ -1283,6 +1285,7 @@ impl Painter {
             kit: Kit::new(),
             scene: Scene::default(),
             tree: None,
+            octaves: Vec::new(),
             units: Vec::new(),
             pictures: HashMap::new(),
             images: HashMap::new(),
@@ -3161,6 +3164,7 @@ impl Painter {
         match message {
             Msg::Frame(frame) => self.frame(*frame),
             Msg::Octaves(octaves) => {
+                self.octaves = octaves.clone();
                 if let Some(tree) = &mut self.tree {
                     if tree.octaves != octaves {
                         tree.octaves = octaves;
@@ -3446,8 +3450,12 @@ impl Painter {
     fn frame(&mut self, frame: Frame) {
         let first = self.tree.is_none();
         let tree = self.tree.get_or_insert_with(|| Tree::new(super::rt::Schema::bundled()));
-        if tree.octaves.is_empty() && self.scene.noise_octaves.len() >= 36 {
-            tree.octaves = self.scene.noise_octaves.clone();
+        if tree.octaves.is_empty() {
+            if self.octaves.len() >= 36 {
+                tree.octaves = self.octaves.clone();
+            } else if self.scene.noise_octaves.len() >= 36 {
+                tree.octaves = self.scene.noise_octaves.clone();
+            }
         }
         let start = Instant::now();
         let applied = match tree.apply(&frame) {
