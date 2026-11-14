@@ -1618,6 +1618,17 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
+        // Once the zoom settles, Vello draws the view at once, exactly, so
+        // it's sharp in one pass rather than tile by tile, whose tiles are
+        // drawn behind it for pans
+        let sharp = in_view.iter().all(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && tile.exact));
+        let whole_at = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello);
+        let unchecked_at = self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb));
+        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && !sharp && !whole_at && !unchecked_at && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
+            if let Some(next) = self.fill_once(px, (ox, oy, width, height)) {
+                return next;
+            }
+        }
         // Vello draws tiles, of a level at or past the zoom while it changes,
         // which frames scale till the zoom leaves them, and exactly at the
         // zoom once it's settled
@@ -1857,6 +1868,31 @@ impl Painter {
     /// Vello draws the view from the scene it keeps on the GPU, built again
     /// only where the view leaves it, its zoom changes or something in it
     /// does. None where Vello can't, for tiles to be drawn instead
+    /// The view drawn by Vello at once, exactly, shown once it's checked.
+    /// None where Vello can't, for tiles to be drawn instead
+    fn fill_once(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32)) -> Option<Option<Duration>> {
+        let started = Instant::now();
+        let reach = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
+        self.settle_unchecked();
+        match self.vello_render(ox, oy, width, height, px, reach, None, true, None) {
+            Ok((tex, counts, stats, _)) => {
+                let fence = self.gpu.signal();
+                let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
+                let at = (ox, oy, px.to_bits());
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
+                if let Some(last) = last {
+                    self.settle(last);
+                }
+                self.drew = true;
+                Some(Some(Duration::ZERO))
+            }
+            Err(why) => {
+                trace(|| format!("  once vello px={px:.3} can't: {why}"));
+                None
+            }
+        }
+    }
+
     fn fill_kept(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32)) -> Option<Option<Duration>> {
         let pxb = px.to_bits();
         let at = (ox, oy, pxb);
@@ -2019,9 +2055,9 @@ impl Painter {
         let far_missing: Vec<TileKey> = match zooming && self.tiles.keys().any(|key| key.px <= far.first().map_or(0, |key| key.px)) {
             true => Vec::new(),
             // One there that's out of date waits till images stop coming
-            // in, as a file opens, as each takes long and stands in only
-            // while the zoom goes out
-            false => far.iter().copied().filter(|key| !ready(&self.tiles, key) && (!self.tiles.contains_key(key) || self.image_came_at.elapsed() >= IMAGES_QUIET)).collect(),
+            // in, as a file opens, and the view's still, as each takes long
+            // and stands in only while the zoom goes out
+            false => far.iter().copied().filter(|key| !ready(&self.tiles, key) && (!self.tiles.contains_key(key) || (self.image_came_at.elapsed() >= IMAGES_QUIET && self.moved.elapsed() >= VELLO_STILL))).collect(),
         };
         // While the zoom changes, the level it's headed to first, which
         // drawn before it gets there is never shown scaled up
@@ -2044,7 +2080,7 @@ impl Painter {
         }
         // Back once images stop coming in, for those waiting on that
         if far.iter().any(|key| !ready(&self.tiles, key)) {
-            return Some(IMAGES_QUIET.saturating_sub(self.image_came_at.elapsed()).max(Duration::from_millis(1)));
+            return Some(IMAGES_QUIET.saturating_sub(self.image_came_at.elapsed()).max(VELLO_STILL.saturating_sub(self.moved.elapsed())).max(Duration::from_millis(1)));
         }
         let view = self.view.clone()?;
         self.update_reason(&view, px, width, height);
