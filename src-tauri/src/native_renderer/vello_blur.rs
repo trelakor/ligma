@@ -165,7 +165,7 @@ pub struct Blurrer {
     vertical: wgpu::ComputePipeline,
     up: wgpu::ComputePipeline,
     /// Two textures blurs are worked on in, kept while big enough
-    work: Option<(wgpu::Texture, wgpu::Texture, u32, u32)>,
+    pub work: Option<(wgpu::Texture, wgpu::Texture, u32, u32)>,
 }
 
 /// Blurred at a level where it's at most this wide, as Skia does

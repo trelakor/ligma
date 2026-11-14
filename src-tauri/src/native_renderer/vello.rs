@@ -171,6 +171,9 @@ impl Vello {
                 & (wgpu::Features::CLEAR_TEXTURE
                     | if std::env::var_os("LIGMA_NATIVE_VELLO_TIMES").is_some() { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() }),
             required_limits: adapter.limits(),
+            // Smaller blocks of GPU memory, rather than ones far bigger than
+            // what's in them
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             ..Default::default()
         }))
         .map_err(|error| format!("device: {error}"))?;
@@ -521,6 +524,21 @@ impl Vello {
         let pictures: u64 = keys.iter().filter_map(|key| self.pictures.get(key)).map(|picture| (picture.data.width as u64 + 2) * (picture.data.height as u64 + 2)).sum();
         let pages: u64 = self.pages.iter().take(pages).map(|page| page.target.tex.width as u64 * page.target.tex.height as u64).sum();
         pictures + pages
+    }
+
+    /// Gives back the GPU memory kept for drawing the next view, as when
+    /// nothing's drawn for a while: the next view takes a few milliseconds
+    /// more, to make it again
+    pub fn trim(&mut self) {
+        self.renderer.trim();
+        self.out = None;
+        self.pages.clear();
+        self.blurred.clear();
+        if let Some(blurrer) = &mut self.blurrer {
+            blurrer.work = None;
+        }
+        self.spare = vello::Scene::new();
+        let _ = self.device.poll(wgpu::PollType::Poll);
     }
 
     /// Lets go of pictures of images Skia no longer has as they were

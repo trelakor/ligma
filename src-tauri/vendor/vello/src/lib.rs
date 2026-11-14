@@ -589,6 +589,13 @@ impl Renderer {
         Ok(short)
     }
 
+    /// Ligma: gives back the GPU memory kept between renders, for when
+    /// nothing's drawn for a while
+    pub fn trim(&mut self) {
+        self.engine.trim(self.image_atlas.take());
+        self.resolver.trim();
+    }
+
     /// Ligma: how many renders haven't been checked
     pub fn unchecked(&self) -> usize {
         self.pending.len()

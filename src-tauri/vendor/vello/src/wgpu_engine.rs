@@ -289,6 +289,20 @@ enum TransientBuf<'a> {
 }
 
 impl WgpuEngine {
+    /// Ligma: gives back the buffers kept to use again, and the persistent
+    /// image `atlas`, for when nothing's drawn for a while
+    pub(crate) fn trim(&mut self, atlas: Option<ImageProxy>) {
+        if let Some((texture, _)) = atlas.and_then(|atlas| self.bind_map.image_map.remove(&atlas.id)) {
+            texture.destroy();
+        }
+        for (buf, _) in self.pool.bufs.drain().flat_map(|(_, bufs)| bufs) {
+            buf.destroy();
+        }
+        self.pool.most.clear();
+        self.staging.free.clear();
+        self.staging.ready.lock().unwrap().clear();
+    }
+
     pub fn new(use_cpu: bool, pipeline_cache: Option<PipelineCache>) -> Self {
         Self {
             use_cpu,

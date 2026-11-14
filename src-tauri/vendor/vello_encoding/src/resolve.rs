@@ -173,6 +173,11 @@ impl Resolver {
         Self::default()
     }
 
+    /// Ligma: the image atlas back to its first size, its images gone
+    pub fn trim(&mut self) {
+        self.image_cache = ImageCache::new();
+    }
+
     /// Marks the atlas entry for `image` as dirty.
     ///
     /// If `image` is already resident in the atlas and appears in a later resolve pass,

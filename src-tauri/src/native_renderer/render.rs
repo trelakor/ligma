@@ -545,7 +545,7 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 /// mipmaps shows the same as a smaller copy, till together they pass this
 /// many bytes. Then those needed longest ago go, never any in view, down
 /// to three quarters of it, so it's seldom
-const IMAGES_BUDGET: usize = 384 << 20;
+const IMAGES_BUDGET: usize = 128 << 20;
 /// Images let go are kept this many pixels on their longest side, so
 /// there's something to show where they're drawn till they come again
 const PLACEHOLDER: i32 = 256;
@@ -3040,7 +3040,16 @@ impl Painter {
     /// only make again, as an edit's first draw would wait on that
     fn trim(&mut self) {
         self.fit_images();
-        self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE) || Arc::strong_count(tex) > 1);
+        if let Some(vello) = self.vello.as_mut() {
+            vello.trim();
+        }
+        // The whole view before this one only stands in while zooming, and
+        // what's shown lets go of textures dropped here once it's done
+        if self.last_whole.is_some() {
+            self.drop_last_whole();
+            self.publish();
+        }
+        self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE));
         self.scratch.retain(|(_, ss, _)| *ss == 1);
         let _ = self.gpu.context.flush_and_submit();
         self.gpu.context.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::ScratchResourcesOnly);
