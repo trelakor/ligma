@@ -2063,7 +2063,8 @@ const PAGE_JS: &str = r##"(() => {
   // nearly everywhere. So it's how often a pixel differs gently from the
   // one beside or below it, by more than compression leaves on flat color
   // but less than an edge, both opaque. Read at most 1,024 pixels across,
-  // as shrunk much further a photo's gentle changes add up to edges
+  // as shrunk much further a photo's gentle changes add up to edges, but
+  // only every fourth row, which reads as well, so Figma's page isn't held
   const looksDrawn = async (bytes) => {
     try {
       const bitmap = await createImageBitmap(new Blob([bytes]));
@@ -2081,7 +2082,7 @@ const PAGE_JS: &str = r##"(() => {
         pairs++;
         if (most > 2 && most <= 24) gentle++;
       };
-      for (let y = 0; y < height; y++) {
+      for (let y = 0; y < height; y += 4) {
         for (let x = 0; x < width; x++) {
           const at = (y * width + x) * 4;
           if (x + 1 < width) compare(at, at + 4);
@@ -2282,7 +2283,10 @@ const PAGE_JS: &str = r##"(() => {
       const before = drawn(figma, node, scale);
       // Awaited only once there's a result
       before.catch(() => {});
-      await current.picked;
+      // The toast's X cancels while the quality's still being picked too
+      const aborted = new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true }));
+      await Promise.race([current.picked, aborted]);
+      if (controller.signal.aborted) throw "cancelled";
       const bytes = await current.bytes;
       const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale, quality: current.quality }, bytes), show, "", controller.signal));
       if (node.removed || upscaling !== current) throw "cancelled";
@@ -2296,6 +2300,8 @@ const PAGE_JS: &str = r##"(() => {
       if (original.scaleMode === "TILE") larger.scalingFactor = (original.scalingFactor ?? 1) * (size.width / reply.width);
       node.fills = [...fills.slice(0, index), { ...original, visible: false }, larger, ...fills.slice(index + 1)];
       openCompare(current, fills, beforeBytes, reply.width, reply.height);
+      // Not needed again, as the bar closes after comparing
+      current.bytes = null;
       shown = true;
     } catch (reason) {
       if (reason === "large") figma.notify("The image is as large as Figma keeps images", { timeout: 3000 });
