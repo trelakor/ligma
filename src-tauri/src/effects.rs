@@ -57,6 +57,23 @@ const PAGE_JS: &str = r##"(() => {
   const CHEVRON = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m5.5 7 2.5 2.5L10.5 7"/></svg>`;
   const CLOSE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m8 8 8 8m0-8-8 8"/></svg>`;
   const CHECK = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m4.5 8.5 2.5 2.5 4.5-5.5"/></svg>`;
+  // Field glyphs, 16 pixels, in the field's secondary text color
+  const glyph = (d) => `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="${d}"/></svg>`;
+  const GLYPHS = {
+    copies: glyph("M3.5 3.5h6v6h-6zM6.5 12.5h6v-6"),
+    turn: glyph("M12.5 8a4.5 4.5 0 1 1-1.3-3.2M12.5 3v2.5H10"),
+    curve: glyph("M3.5 12.5C3.5 7 7 3.5 12.5 3.5"),
+    radius: glyph("M8 8h4.5M8 8m-1 0a1 1 0 1 0 2 0a1 1 0 1 0-2 0M3.5 8a4.5 4.5 0 0 1 9 0"),
+    start: glyph("M3.5 12.5h9M3.5 12.5l6-7.5"),
+    sweep: glyph("M3.5 10a4.5 4.5 0 0 1 9 0M12.5 10l-1.5-1.5M12.5 10l1-1.8"),
+    columns: glyph("M3.5 3.5v9M8 3.5v9M12.5 3.5v9"),
+    rows: glyph("M3.5 3.5h9M3.5 8h9M3.5 12.5h9"),
+    gapX: glyph("M2.5 4v8M13.5 4v8M5 8h6M6.5 6.5 5 8l1.5 1.5M9.5 6.5 11 8l-1.5 1.5"),
+    gapY: glyph("M4 2.5h8M4 13.5h8M8 5v6M6.5 6.5 8 5l1.5 1.5M6.5 9.5 8 11l1.5-1.5"),
+    size: glyph("M3.5 6.5v-3h3M12.5 9.5v3h-3M3.5 3.5l3.5 3.5M12.5 12.5 9 9"),
+    opacity: glyph("M8 3.5a4.5 4.5 0 1 0 0 9zM8 3.5a4.5 4.5 0 1 1 0 9"),
+    amount: glyph("M3.5 12.5l9-9M5 4.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0-2 0M11 11.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0-2 0"),
+  };
   const PRESETS_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M6.5 8.5h11M6.5 12h11M6.5 15.5h7"/></svg>`;
 
   const style = document.createElement("style");
@@ -156,8 +173,10 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}="panel"] .field:focus-within { border-color: var(--color-border-selected, #0d99ff); }
     [${ROOT}="panel"] .field .glyph {
       flex: none;
+      display: grid;
+      place-items: center;
       width: 24px;
-      text-align: center;
+      height: 100%;
       color: var(--color-text-secondary);
       cursor: ew-resize;
       user-select: none;
@@ -334,7 +353,9 @@ const PAGE_JS: &str = r##"(() => {
   const numberField = ({ glyph, title, unit = "", min = -Infinity, max = Infinity, step = 1, get, set }) => {
     const input = element("input", { type: "text", inputMode: "decimal", spellcheck: false });
     input.setAttribute("aria-label", title);
-    const mark = element("span", { className: "glyph", textContent: glyph, title });
+    const mark = element("span", { className: "glyph", title });
+    if (glyph.startsWith("<")) mark.innerHTML = glyph;
+    else mark.textContent = glyph;
     const field = element("label", { className: "field", title }, mark, input);
     const clamp = (value) => Math.min(max, Math.max(min, value));
     const show = () => {
@@ -462,21 +483,28 @@ const PAGE_JS: &str = r##"(() => {
     endOpacity: 100,
     ease: "even",
     blend: false,
-    blendColor: "#ff4d4d",
+    blendColor: "#0d99ff",
     blendAmount: 100,
     below: true,
     editable: true,
   };
+  // Distances are in sizes of the layer, `u` its larger side, so a
+  // preset fits a small icon and a large frame alike
   const PRESETS = [
-    ["Trail", { mode: "trail", copies: 8, stepX: 24, stepY: 0, curve: 0, turn: 0, endScale: 100, endOpacity: 100 }],
-    ["Fade out", { mode: "trail", copies: 6, stepX: 16, stepY: 8, curve: 0, turn: 0, endScale: 100, endOpacity: 0 }],
-    ["Spiral", { mode: "trail", copies: 24, stepX: 28, stepY: 0, curve: 18, turn: 18, endScale: 30, endOpacity: 100, ease: "out" }],
-    ["Arc", { mode: "trail", copies: 10, stepX: 40, stepY: 0, curve: 9, turn: 9, endScale: 100, endOpacity: 100 }],
-    ["Ring", { mode: "radial", copies: 11, radius: 140, start: 0, sweep: 360, orient: true, endScale: 100, endOpacity: 100 }],
-    ["Fan", { mode: "radial", copies: 6, radius: 220, start: -90, sweep: 70, orient: true, endScale: 100, endOpacity: 100 }],
-    ["Grid", { mode: "grid", columns: 4, rows: 3, gapX: 16, gapY: 16, endScale: 100, endOpacity: 100 }],
-    ["Echo", { mode: "trail", copies: 5, stepX: 0, stepY: 0, curve: 0, turn: 0, endScale: 160, endOpacity: 0, ease: "out" }],
+    ["Trail", (u) => ({ mode: "trail", copies: 8, stepX: u * 0.6, stepY: 0, curve: 0, turn: 0, endScale: 100, endOpacity: 100 })],
+    ["Fade out", (u) => ({ mode: "trail", copies: 6, stepX: u * 0.2, stepY: u * 0.1, curve: 0, turn: 0, endScale: 100, endOpacity: 0 })],
+    ["Spiral", (u) => ({ mode: "trail", copies: 30, stepX: u * 0.45, stepY: 0, curve: 20, turn: 20, endScale: 25, endOpacity: 100, ease: "out" })],
+    ["Arc", (u) => ({ mode: "trail", copies: 10, stepX: u * 0.5, stepY: 0, curve: 8, turn: 8, endScale: 100, endOpacity: 100 })],
+    ["Ring", (u) => ({ mode: "radial", copies: 11, radius: u * 1.2, start: 0, sweep: 360, orient: true, endScale: 100, endOpacity: 100 })],
+    ["Fan", (u) => ({ mode: "radial", copies: 6, radius: u * 2, start: -90, sweep: 90, orient: true, endScale: 100, endOpacity: 100 })],
+    ["Grid", (u) => ({ mode: "grid", columns: 4, rows: 3, gapX: u * 0.15, gapY: u * 0.15, endScale: 100, endOpacity: 100 })],
+    ["Echo", () => ({ mode: "trail", copies: 5, stepX: 0, stepY: 0, curve: 0, turn: 0, endScale: 160, endOpacity: 0, ease: "out" })],
   ];
+  // Whole pixels for distances, as Figma's fields have them
+  const fit = (values) => {
+    for (const key of ["stepX", "stepY", "radius", "gapX", "gapY"]) if (key in values) values[key] = Math.round(values[key]);
+    return values;
+  };
   const EASES = {
     even: (t) => t,
     in: (t) => t * t,
@@ -504,6 +532,7 @@ const PAGE_JS: &str = r##"(() => {
     let group = repeaterOf(selected[0]);
     let source;
     let settings = { ...DEFAULTS };
+    const unit = () => Math.max(1, Math.round(Math.max(selected[0].width ?? 100, selected[0].height ?? 100)));
     if (group) {
       source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source") ?? group.children.at(-1);
       try {
@@ -515,6 +544,8 @@ const PAGE_JS: &str = r##"(() => {
         figma.notify("Sections can't be repeated", { timeout: 2000 });
         return;
       }
+      // Starting as the Trail preset, sized to the layer
+      Object.assign(settings, fit(PRESETS[0][1](unit())));
     }
     try {
       figma.commitUndo();
@@ -771,16 +802,16 @@ const PAGE_JS: &str = r##"(() => {
     const trail = element(
       "div",
       {},
-      element("div", { className: "grid" }, field("copies", "#", "Copies", { min: 1, max: MAX_COPIES }), field("turn", "↻", "Turn each step", { unit: "°" })),
+      element("div", { className: "grid" }, field("copies", GLYPHS.copies, "Copies", { min: 1, max: MAX_COPIES }), field("turn", GLYPHS.turn, "Turn each step", { unit: "°" })),
       element("div", { className: "grid" }, field("stepX", "X", "Step right", { unit: "" }), field("stepY", "Y", "Step down", { unit: "" })),
-      element("div", { className: "grid" }, field("curve", "⌒", "Curve each step", { unit: "°" })),
+      element("div", { className: "grid" }, field("curve", GLYPHS.curve, "Curve each step", { unit: "°" })),
     );
     for (const grid of trail.children) grid.style.marginTop = "8px";
     const radial = element(
       "div",
       {},
-      element("div", { className: "grid" }, field("copies", "#", "Copies", { min: 1, max: MAX_COPIES }), field("radius", "R", "Radius", { min: 0 })),
-      element("div", { className: "grid" }, field("start", "∠", "Start angle", { unit: "°" }), field("sweep", "◠", "Sweep", { unit: "°", min: -360, max: 360 })),
+      element("div", { className: "grid" }, field("copies", GLYPHS.copies, "Copies", { min: 1, max: MAX_COPIES }), field("radius", GLYPHS.radius, "Radius", { min: 0 })),
+      element("div", { className: "grid" }, field("start", GLYPHS.start, "Start angle", { unit: "°" }), field("sweep", GLYPHS.sweep, "Sweep", { unit: "°", min: -360, max: 360 })),
     );
     for (const grid of radial.children) grid.style.marginTop = "8px";
     const orient = element("input", { type: "checkbox" });
@@ -790,8 +821,8 @@ const PAGE_JS: &str = r##"(() => {
     const grid = element(
       "div",
       {},
-      element("div", { className: "grid" }, field("columns", "▥", "Columns", { min: 1, max: 40 }), field("rows", "▤", "Rows", { min: 1, max: 40 })),
-      element("div", { className: "grid" }, field("gapX", "↔", "Gap across", {}), field("gapY", "↕", "Gap down", {})),
+      element("div", { className: "grid" }, field("columns", GLYPHS.columns, "Columns", { min: 1, max: 40 }), field("rows", GLYPHS.rows, "Rows", { min: 1, max: 40 })),
+      element("div", { className: "grid" }, field("gapX", GLYPHS.gapX, "Gap across", {}), field("gapY", GLYPHS.gapY, "Gap down", {})),
     );
     for (const each of grid.children) each.style.marginTop = "8px";
     const layoutSection = element("section", {}, element("div", { className: "section-title", textContent: "Layout" }), mode, trail, radial, grid);
@@ -823,13 +854,13 @@ const PAGE_JS: &str = r##"(() => {
     });
     hex.addEventListener("keydown", (event) => event.key === "Enter" && hex.blur());
     const color = element("label", { className: "field color" }, swatch, hex, picker);
-    const amount = field("blendAmount", "%", "Blend amount", { min: 0, max: 100, unit: "%" });
+    const amount = field("blendAmount", GLYPHS.amount, "Blend amount", { min: 0, max: 100, unit: "%" });
     const blendRow = element("div", { className: "grid" }, color, amount);
     const toEnd = element(
       "section",
       {},
       element("div", { className: "section-title", textContent: "To the last copy" }),
-      element("div", { className: "grid" }, field("endScale", "S", "Size", { min: 1, max: 1000, unit: "%" }), field("endOpacity", "O", "Opacity", { min: 0, max: 100, unit: "%" })),
+      element("div", { className: "grid" }, field("endScale", GLYPHS.size, "Size", { min: 1, max: 1000, unit: "%" }), field("endOpacity", GLYPHS.opacity, "Opacity", { min: 0, max: 100, unit: "%" })),
       element("div", { className: "line" }, element("span", { className: "label", textContent: "Progression" }), ease),
       element("label", { className: "check" }, blend, "Blend toward a color"),
       blendRow,
@@ -889,7 +920,7 @@ const PAGE_JS: &str = r##"(() => {
         item.innerHTML = `<span class="name">${name}</span>`;
         item.addEventListener("click", () => {
           closePresets();
-          Object.assign(s, { ease: "even" }, values);
+          Object.assign(s, { ease: "even" }, fit(values(Math.max(current.source.width, current.source.height))));
           schedule(current, s.blend);
           show();
         });
