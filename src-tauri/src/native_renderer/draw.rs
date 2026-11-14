@@ -187,6 +187,25 @@ pub fn tent_sigma(radius: f64) -> f32 {
 /// Skia blurs no more than this many pixels wide, however wide it's asked
 pub(super) const MAX_SIGMA: f32 = 500.0;
 
+/// `wide_blur` of a white box over `area`, the weight a blur clamped to it
+/// divides by. Wider than Skia blurs, the box is made at the lower
+/// resolution it's blurred at: made at full resolution first, zoomed in on
+/// something big, it'd be a texture as big as the GPU allows, a gigabyte,
+/// only to be scaled down
+pub(super) fn wide_blur_box(area: Rect, sigma: f32, device: f32) -> Option<ImageFilter> {
+    let white = skia_safe::shaders::color(skia_safe::Color::WHITE);
+    let k = sigma * device / MAX_SIGMA;
+    if k <= 1.0 {
+        return wide_blur(sigma, device, image_filters::shader(white, CropRect::from(area)), None);
+    }
+    let small = Rect::from_ltrb(area.left / k, area.top / k, area.right / k, area.bottom / k);
+    let boxed = image_filters::shader(white, CropRect::from(small));
+    let blurred = image_filters::blur((sigma / k, sigma / k), TileMode::Decal, boxed, None);
+    let linear = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+    let up = image_filters::matrix_transform(&Matrix::scale((k, k)), linear, blurred);
+    image_filters::offset((0.0, 0.0), up, CropRect::default())
+}
+
 /// A blur of `sigma` in the canvas's units, where one is `device` pixels.
 /// Wider than Skia goes, it's blurred at a lower resolution instead, as
 /// Figma's big blurs show zoomed in
@@ -1385,8 +1404,7 @@ impl<'a> Encoder<'a> {
         let behind = image_filters::crop(area, TileMode::Decal, None);
         let device = self.device_scale();
         let inside = wide_blur(sigma, device, behind, None);
-        let box_ = image_filters::shader(skia_safe::shaders::color(skia_safe::Color::WHITE), CropRect::from(area));
-        let weight = wide_blur(sigma, device, box_, None);
+        let weight = wide_blur_box(area, sigma, device);
         let Some(blur) = self.kit.divide.clone().and_then(|divide| image_filters::blend(divide, weight, inside, None)) else {
             return;
         };

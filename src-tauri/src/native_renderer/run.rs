@@ -1518,6 +1518,11 @@ pub fn action(app: &AppHandle, action: &str) -> Result<String, String> {
             stats().lock().unwrap().report = Some(shown.clone());
             Ok(shown)
         }
+        _ if super::dev() && action.starts_with("probe:") => {
+            let (send, receive) = mpsc::channel();
+            let _ = ctx.messages.send(Msg::Probe { spec: action["probe:".len()..].to_string(), reply: send });
+            receive.recv_timeout(Duration::from_secs(120)).map_err(|_| "the renderer didn't answer".to_string())
+        }
         "parity" | "bench" if super::dev() => {
             if ctx.busy.swap(true, Ordering::Relaxed) {
                 return Err("already running".into());

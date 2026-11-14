@@ -17,7 +17,6 @@ use std::sync::Arc;
 use serde::Deserialize;
 use skia_safe::canvas::{SaveLayerFlags, SaveLayerRec};
 use skia_safe::gradient::{shaders as gradients, Colors, Gradient, Interpolation};
-use skia_safe::image_filters::CropRect;
 use skia_safe::{
     color_filters, image_filters, BlendMode, Canvas, ClipOp, Color4f, ColorChannel, Data, FilterMode, Matrix, MipmapMode, Paint, Path, Picture,
     PictureRecorder, Point, Rect, SamplingOptions, TileMode,
@@ -27,6 +26,78 @@ use super::adjust::Adjust;
 use super::draw::{self, Counts, Img, Kit, MAX_SIGMA};
 use super::rt::{self, Forest, IdMap, MaskOpType, Node, Op, PaintType, Schema};
 use super::scene::Rgba;
+
+/// Dev tools (see `Painter::probe`): what the drawer leaves out, to time
+/// what each kind of thing costs. 1 masks drawn as their content alone, 2
+/// blends and opacity without layers, 4 blurs left out, 8 silhouettes left
+/// out, 16 paths drawn without smoothed edges, 32 no paths drawn
+pub static SKIP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Dev tools: masks drawn as layers and as clips, blend layers, blur
+/// layers, silhouette layers, paths drawn and their points
+pub static COUNTED: [std::sync::atomic::AtomicU64; 7] = [const { std::sync::atomic::AtomicU64::new(0) }; 7];
+
+/// `path` with no more detail than `tolerance` shows: segments shorter
+/// than it, and curves within it of a line, as lines, or left out
+fn coarse(path: &Path, tolerance: f32) -> Path {
+    use skia_safe::PathVerb;
+    let mut out = skia_safe::PathBuilder::new();
+    out.set_fill_type(path.fill_type());
+    let mut last = Point::default();
+    let far = |a: Point, b: Point| (a.x - b.x).abs().max((a.y - b.y).abs()) >= tolerance;
+    for rec in path.iter() {
+        let points = rec.points();
+        match rec.verb() {
+            PathVerb::Move => {
+                last = points[0];
+                out.move_to(last);
+            }
+            PathVerb::Close => {
+                out.close();
+            }
+            verb => {
+                let end = *points.last().unwrap_or(&last);
+                let (mut left, mut top, mut right, mut bottom) = (end.x, end.y, end.x, end.y);
+                for point in points {
+                    left = left.min(point.x);
+                    top = top.min(point.y);
+                    right = right.max(point.x);
+                    bottom = bottom.max(point.y);
+                }
+                let small = right - left < tolerance * 2.0 && bottom - top < tolerance * 2.0;
+                if verb == PathVerb::Line || small {
+                    if far(end, last) {
+                        out.line_to(end);
+                        last = end;
+                    }
+                    continue;
+                }
+                match verb {
+                    PathVerb::Quad => out.quad_to(points[1], points[2]),
+                    PathVerb::Conic => out.conic_to(points[1], points[2], rec.conic_weight()),
+                    _ => out.cubic_to(points[1], points[2], points[3]),
+                };
+                last = end;
+            }
+        }
+    }
+    out.detach()
+}
+
+/// Dev tools: nodes under this many device pixels left out, and layers
+/// under this many drawn without their layer, as f32 bits
+pub static SMALL: [std::sync::atomic::AtomicU32; 2] = [const { std::sync::atomic::AtomicU32::new(0) }; 2];
+
+fn small(which: usize) -> f32 {
+    f32::from_bits(SMALL[which].load(std::sync::atomic::Ordering::Relaxed))
+}
+
+fn skip(bit: u32) -> bool {
+    SKIP.load(std::sync::atomic::Ordering::Relaxed) & bit != 0
+}
+
+fn count(what: usize, n: u64) {
+    COUNTED[what].fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// What page_hook.js sends with each frame, ahead of its forest
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -376,6 +447,23 @@ impl Tree {
 
     pub fn node(&self, id: u32) -> Option<&Arc<Node>> {
         self.forest.get(id)
+    }
+
+    /// Dev tools: how many of each op node `id` and what's under it have,
+    /// and the points of their paths
+    pub fn census(&self, id: u32) -> String {
+        let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut points = 0;
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.node(id) else { continue };
+            *counts.entry(format!("{:?}", node.op)).or_default() += 1;
+            for geometry in node.geometry.iter().chain(&node.fill_geometries).chain(&node.stroke_geometries) {
+                points += geometry.path.as_ref().map_or(0, |path| path.points.len());
+            }
+            stack.extend(node.children.iter().copied().chain(node.child).chain(node.alpha_node).chain(node.color_node));
+        }
+        format!("{counts:?} points={points}")
     }
 
     /// Pattern tiles drawn without image `key`, or all of them
@@ -830,11 +918,16 @@ impl<'a> Drawer<'a> {
         for (fill, at) in &place.clips {
             if let Some(outline) = self.tree.outline(*fill) {
                 self.canvas.clip_path(&self.volatile(outline.with_transform(at)), ClipOp::Intersect, self.aa);
+                super::emit::clip(self.canvas);
             }
         }
         self.canvas.concat(&place.at);
         self.draw(place.id);
         self.canvas.restore();
+    }
+
+    fn flat(&self, bounds: Rect) -> bool {
+        bounds.width().max(bounds.height()) * self.device_scale() < small(1)
     }
 
     fn device_scale(&self) -> f32 {
@@ -868,7 +961,7 @@ impl<'a> Drawer<'a> {
             return;
         };
         let device = self.device_scale();
-        if bounds.width().max(bounds.height()) * device < if self.draft { 2.0 } else { 0.5 } {
+        if bounds.width().max(bounds.height()) * device < if self.draft { 2.0 } else { small(0).max(0.5) } {
             self.counts.skipped += 1;
             return;
         }
@@ -949,14 +1042,16 @@ impl<'a> Drawer<'a> {
                     return;
                 }
                 let isolate = !pass_through(node.blend_mode) || self.tree.info(child).blends;
-                if opacity >= 0.999 && !blends(node.blend_mode) && !isolate {
+                if (opacity >= 0.999 && !blends(node.blend_mode) && !isolate) || skip(2) || self.flat(bounds) {
                     self.draw(child);
                     return;
                 }
+                count(2, 1);
                 let mut paint = Paint::default();
                 paint.set_alpha_f(opacity);
                 self.set_blend(&mut paint, node.blend_mode);
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&paint));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.draw(child);
                 self.canvas.restore();
             }
@@ -966,9 +1061,10 @@ impl<'a> Drawer<'a> {
                     return self.progressive(node, child, bounds);
                 }
                 let sigma = draw::tent_sigma(finite(node.radius) as f64);
-                if sigma <= 0.0 {
+                if sigma <= 0.0 || skip(4) || self.flat(bounds) {
                     return self.draw(child);
                 }
+                count(3, 1);
                 let device = self.device_scale();
                 let filter = match ext.clamp {
                     // Figma blurs only what's inside, each pixel the
@@ -977,7 +1073,7 @@ impl<'a> Drawer<'a> {
                     Some(clamp) => {
                         let area = clamp.to_skia();
                         let inside = draw::wide_blur(sigma, device, image_filters::crop(area, TileMode::Decal, None), None);
-                        let weight = draw::wide_blur(sigma, device, image_filters::shader(skia_safe::shaders::color(skia_safe::Color::WHITE), CropRect::from(area)), None);
+                        let weight = draw::wide_blur_box(area, sigma, device);
                         self.kit.divide.clone().and_then(|divide| image_filters::blend(divide, weight, inside, None))
                     }
                     None => draw::wide_blur(sigma, device, None, None),
@@ -985,11 +1081,15 @@ impl<'a> Drawer<'a> {
                 let mut paint = Paint::default();
                 paint.set_image_filter(filter);
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&paint));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.draw(child);
                 self.canvas.restore();
             }
             Op::HardMaskWithColor => {
                 let Some(alpha) = node.alpha_node else { return };
+                if skip(8) || self.flat(bounds) {
+                    return;
+                }
                 let color = node.color.unwrap_or_default();
                 let shade = color_filters::blend(draw::color(rgba(color), 1.0).to_color(), BlendMode::SrcIn);
                 // A silhouette drawn at once comes out the same colored as
@@ -1004,14 +1104,22 @@ impl<'a> Drawer<'a> {
                 if !self.cast {
                     paint.set_color_filter(shade);
                 }
+                count(4, 1);
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&paint));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.cast_with(alpha);
                 self.canvas.restore();
+            }
+            Op::Mask if skip(1) || self.flat(bounds) => {
+                if let Some(color) = node.color_node {
+                    self.draw(color);
+                }
             }
             Op::Mask => self.mask(node, bounds),
             Op::Noise => {
                 let Some(child) = node.child else { return };
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.draw(child);
                 if !self.cast {
                     self.noise(node, bounds);
@@ -1024,6 +1132,7 @@ impl<'a> Drawer<'a> {
                 let mut paint = Paint::default();
                 paint.set_image_filter(filter);
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&paint));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.draw(child);
                 self.canvas.restore();
             }
@@ -1083,6 +1192,7 @@ impl<'a> Drawer<'a> {
                     };
                     let at = Rect::from_xywh(effect.area.left, effect.area.top, area.width(), area.height());
                     self.canvas.draw_image_rect_with_sampling_options(&img.image, None, at, sampling, &Paint::default());
+                    super::emit::fill_rect(self.canvas, &at, Color4f::new(0.5, 0.5, 0.5, 1.0));
                     true
                 })
             }
@@ -1145,9 +1255,11 @@ impl<'a> Drawer<'a> {
         match (node.stroke_mode, outline) {
             (Some(rt::StrokeMask::Inside), Some(outline)) => {
                 self.canvas.clip_path(&self.volatile(outline), ClipOp::Intersect, self.aa);
+                super::emit::clip(self.canvas);
             }
             (Some(rt::StrokeMask::Outside), Some(outline)) => {
                 self.canvas.clip_path(&self.volatile(outline), ClipOp::Difference, self.aa);
+                super::emit::clip(self.canvas);
             }
             _ => {}
         }
@@ -1170,10 +1282,12 @@ impl<'a> Drawer<'a> {
         match op {
             MaskOpType::KnockoutShadow => {
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.draw(color);
                 let mut out = Paint::default();
                 out.set_blend_mode(BlendMode::DstOut);
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&out));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.cast_with(alpha);
                 self.canvas.restore();
                 self.canvas.restore();
@@ -1182,22 +1296,27 @@ impl<'a> Drawer<'a> {
                 // The shadow's color where the shape, moved and blurred,
                 // isn't, kept inside the shape
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds));
+                super::emit::layer(self.canvas, Some(&bounds));
                 if !self.cast {
                     let fill = ext.inner_shadow_fill.unwrap_or_default();
                     let mut paint = Paint::new(draw::color(rgba(fill), 1.0), None);
                     paint.set_anti_alias(false);
                     self.canvas.draw_rect(bounds, &paint);
+                    super::emit::fill_rect(self.canvas, &bounds, Color4f::new(0.5, 0.5, 0.5, 1.0));
                 } else {
                     self.canvas.draw_rect(bounds, &Paint::new(Color4f::new(0.0, 0.0, 0.0, 1.0), None));
+                    super::emit::fill_rect(self.canvas, &bounds, Color4f::new(0.5, 0.5, 0.5, 1.0));
                 }
                 let mut out = Paint::default();
                 out.set_blend_mode(BlendMode::DstOut);
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&out));
+                super::emit::layer(self.canvas, Some(&bounds));
                 self.draw(color);
                 self.canvas.restore();
                 let mut keep = Paint::default();
                 keep.set_blend_mode(BlendMode::DstIn);
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&keep));
+                super::emit::layer(self.canvas, Some(&bounds));
                 if ext.inner_shadow_alpha_requires_hard_mask {
                     self.cast_with(alpha);
                 } else {
@@ -1222,8 +1341,10 @@ impl<'a> Drawer<'a> {
                 if one && matches!(op, MaskOpType::Normal | MaskOpType::Pattern | MaskOpType::BackgroundBlur) {
                     if let Some((fill, at)) = self.tree.clip_of(alpha) {
                         if let Some(outline) = self.tree.outline(fill) {
+                            count(1, 1);
                             self.canvas.save();
                             self.canvas.clip_path(&self.volatile(outline.with_transform(&at)), ClipOp::Intersect, self.aa);
+                            super::emit::clip(self.canvas);
                             self.draw(color);
                             self.canvas.restore();
                             return;
@@ -1233,11 +1354,13 @@ impl<'a> Drawer<'a> {
                 // What's masked blends with what's under the mask, as
                 // masks don't isolate it in Figma: it's drawn over a copy of
                 // that, then the copy is kept only where the mask is
+                count(0, 1);
                 let mut rec = SaveLayerRec::default().bounds(&bounds);
                 if !self.cast && self.tree.info(color).blends {
                     rec = rec.flags(SaveLayerFlags::INIT_WITH_PREVIOUS);
                 }
                 self.canvas.save_layer(&rec);
+                super::emit::layer(self.canvas, None);
                 self.draw(color);
                 let mut keep = Paint::default();
                 keep.set_blend_mode(BlendMode::DstIn);
@@ -1245,6 +1368,7 @@ impl<'a> Drawer<'a> {
                     keep.set_color_filter(self.kit.luminance.clone().unwrap_or_else(skia_safe::luma_color_filter::new));
                 }
                 self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&keep));
+                super::emit::layer(self.canvas, Some(&bounds));
                 // What a background blur shows is opaque, so it shows
                 // wherever its shape is at all
                 if op == MaskOpType::BackgroundBlur {
@@ -1318,7 +1442,21 @@ impl<'a> Drawer<'a> {
                 return;
             }
         }
-        self.canvas.draw_path(&self.volatile(path.clone()), &out);
+        if skip(32) {
+            return;
+        }
+        if skip(16) {
+            out.set_anti_alias(false);
+        }
+        let path = if skip(64) {
+            coarse(path, 0.2 / self.device_scale().max(1e-6))
+        } else {
+            path.clone()
+        };
+        count(5, 1);
+        count(6, path.count_points() as u64);
+        super::emit::path(self.canvas, &path, out.color4f());
+        self.canvas.draw_path(&self.volatile(path), &out);
     }
 
     fn image(&mut self, paint: &rt::Paint, w: f32, h: f32) -> Option<skia_safe::Shader> {
@@ -1514,6 +1652,7 @@ impl<'a> Drawer<'a> {
         self.canvas.save();
         self.canvas.concat(&space);
         self.canvas.draw_rect(inverse.map_rect(bounds.with_outset((1.0, 1.0))).0, &paint);
+        super::emit::fill_rect(self.canvas, &inverse.map_rect(bounds.with_outset((1.0, 1.0))).0, Color4f::new(0.5, 0.5, 0.5, 1.0));
         self.canvas.restore();
     }
 
@@ -1558,6 +1697,7 @@ impl<'a> Drawer<'a> {
         let mut dest_in = Paint::default();
         dest_in.set_blend_mode(BlendMode::DstIn);
         self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds));
+        super::emit::layer(self.canvas, Some(&bounds));
         for level in 0..levels {
             let at = level as f32 / (levels - 1) as f32;
             let radius = start + (end - start) * at;
@@ -1570,15 +1710,18 @@ impl<'a> Drawer<'a> {
             let ramp = Gradient::new(Colors::new(&colors, Some(&positions), TileMode::Clamp, None), Interpolation::default());
             dest_in.set_shader(gradients::linear_gradient((p0, p1), &ramp, None));
             self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&plus));
+            super::emit::layer(self.canvas, Some(&bounds));
             let mut blurred = Paint::default();
             let sigma = draw::tent_sigma(radius as f64);
             if sigma > 0.0 {
                 blurred.set_image_filter(draw::wide_blur(sigma, device, None, None));
             }
             self.canvas.save_layer(&SaveLayerRec::default().bounds(&bounds).paint(&blurred));
+            super::emit::layer(self.canvas, Some(&bounds));
             self.draw(child);
             self.canvas.restore();
             self.canvas.draw_rect(bounds, &dest_in);
+            super::emit::fill_rect(self.canvas, &bounds, Color4f::new(0.5, 0.5, 0.5, 1.0));
             self.canvas.restore();
         }
         self.canvas.restore();

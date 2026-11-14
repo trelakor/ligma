@@ -153,6 +153,10 @@ pub enum Msg {
     /// Figma's canvas, and send back each frame's time in ms, cold (no
     /// tiles kept) and then warm
     Replay { views: Vec<View>, reply: Sender<Vec<(f64, f64)>> },
+    /// Dev tools: draw views offscreen as a whole view is drawn, without
+    /// touching what's drawn or shown, and send back where the time went
+    /// (see `Painter::probe`)
+    Probe { spec: String, reply: Sender<String> },
     Tint(bool),
     /// The GPU has passed a fence, so what it drew can be shown
     Gpu,
@@ -484,22 +488,16 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
         .unwrap_or(image)
 }
 
-/// Images past this many bytes go once nothing drawn uses them
-const IMAGE_BUDGET: usize = 64 << 20;
-/// Past this many bytes, images in use are kept no bigger than they're drawn
-const IMAGES_MAX: usize = 96 << 20;
+/// Images are kept as big as they were ever needed, which drawn with
+/// mipmaps shows the same as a smaller copy, till together they pass this
+/// many bytes. Then those needed longest ago go, never any in view, down
+/// to three quarters of it, so it's seldom
+const IMAGES_BUDGET: usize = 384 << 20;
 /// Images let go are kept this many pixels on their longest side, so
 /// there's something to show where they're drawn till they come again
 const PLACEHOLDER: i32 = 256;
 /// Bytes of those kept of images nothing near the view draws
 const PLACEHOLDERS: usize = 32 << 20;
-/// Images and effects needed this lately stay as big as they were needed,
-/// past the budgets above, so zooming out and back in or panning back to
-/// them doesn't decode them again, run them again, and draw again all that
-/// uses them each time
-const IMAGE_LINGER: Duration = Duration::from_secs(30);
-/// Past this many bytes, images are let go however lately they were needed
-const IMAGES_CEILING: usize = 384 << 20;
 
 /// Settings that trade memory for quality, which can be set by environment
 /// variable in a dev build to measure them
@@ -529,7 +527,9 @@ fn config() -> Config {
         samples: get("LIGMA_NATIVE_SAMPLES", 1),
         supersample: get("LIGMA_NATIVE_SUPERSAMPLE", 4).clamp(1, 4) as i32,
         max_tiles: get("LIGMA_NATIVE_TILES", 40),
-        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 256) << 20,
+        // Skia's working set while zoomed out on a big file, past which it
+        // makes again the layers and masks it would reuse, thousands a view
+        cache_limit: get("LIGMA_NATIVE_CACHE_MB", 768) << 20,
     }
 }
 
@@ -853,6 +853,8 @@ impl Gpu {
         // made again while panning
         let mut options = gpu::ContextOptions::new();
         options.runtime_program_cache_size = 4096;
+        // Masks of paths drawn again at the same scale, as tiles are, kept
+        options.allow_path_mask_caching = true;
         let mut context = unsafe { gpu::direct_contexts::make_d3d(&backend, &options) }.ok_or("Skia couldn't start on D3D12")?;
         context.set_resource_cache_limit(config().cache_limit);
         let gpu = Self {
@@ -971,9 +973,8 @@ pub struct Painter {
     images: HashMap<String, Img>,
     /// Widths images were asked for at
     asked: HashMap<String, f64>,
-    /// The widest each image was needed at lately, and when (see
-    /// `IMAGE_LINGER`)
-    wanted: HashMap<String, (f64, Instant)>,
+    /// When each image was last needed near the view
+    wanted: HashMap<String, Instant>,
     /// Images that couldn't be had, and when
     failed: HashMap<String, Instant>,
     tiles: HashMap<TileKey, Tile>,
@@ -1310,15 +1311,19 @@ impl Painter {
     fn pyramid(&self, center: (f32, f32), width: i32, height: i32, cp: f32) -> (Vec<TileKey>, Vec<(Rect, f32)>) {
         let Some(content) = self.content() else { return (Vec::new(), Vec::new()) };
         let mut levels = Vec::new();
-        let mut pk = cp / 2.0;
+        // Powers of two, whatever the zoom, so zooming in a little keeps them
+        let mut pk = (cp / 2.0).log2().floor().exp2();
         for _ in 0..PYRAMID_LEVELS {
+            // The furthest is all there is, wherever the view is, so no
+            // zoom out ever finds nothing drawn
+            if content.width() * pk <= width as f32 && content.height() * pk <= height as f32 {
+                levels.push((content, pk));
+                break;
+            }
             let (w, h) = (width as f32 / pk, height as f32 / pk);
             let mut area = Rect::from_xywh(center.0 - w / 2.0, center.1 - h / 2.0, w, h);
             if area.intersect(content) {
                 levels.push((area, pk));
-            }
-            if content.width() * pk <= width as f32 && content.height() * pk <= height as f32 {
-                break;
             }
             pk /= 2.0;
         }
@@ -1469,7 +1474,7 @@ impl Painter {
         }
         // Frames are composed only of what's up to date, all of the view,
         // so where that isn't drawn yet the whole view's drawn first
-        if cover(&self.layers(), self.content(), &view, self.gpu.size).1 && !self.whole_at(&view) {
+        if cover(&self.layers(false), self.content(), &view, self.gpu.size).1 && !self.whole_at(&view) {
             if self.whole_busy() {
                 return Some(Duration::from_millis(1));
             }
@@ -1485,11 +1490,18 @@ impl Painter {
             order.extend(coarse_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         }
         order.extend(in_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
+        // Then the furthest level, all there is, which zooming out shows
+        // till what's nearer is drawn, so none ever waits. Once drawn it's
+        // shown, while out of date too, so it's drawn again only when idle
+        let furthest = levels.first().map(|(_, pk)| pk.to_bits());
+        order.extend(pyramid.iter().copied().filter(|key| Some(key.px) == furthest && !self.tiles.contains_key(key)).map(|key| (key, false)));
         // An out of date tile is drawn again as well as it was, the whole
         // view standing in meanwhile
         order.extend(in_view.iter().filter_map(|key| self.tiles.get(key).filter(|tile| tile.stale || tile.draft).map(|tile| (*key, tile.exact))));
         order.extend(around.iter().copied().filter(|key| !ready(&self.tiles, key)).map(|key| (key, false)));
         order.extend(coarse_view.iter().chain(&coarse_around).copied().filter(|key| !ready(&self.tiles, key) && key.px != pxb).map(|key| (key, false)));
+        // And the levels between, so zooming out shows them less blurred
+        order.extend(pyramid.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         let rough: Vec<TileKey> = in_view.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.draft && !tile.exact)).collect();
         // Nor while the page changes, as while a file loads, which would
         // draw them again soon anyway
@@ -1500,7 +1512,7 @@ impl Painter {
         let mut seen = std::collections::HashSet::new();
         order.retain(|item| seen.insert(*item));
         if let Some(&(key, exact)) = order.first() {
-            if let Some(tile) = self.draw_tile(key, exact, key.px != pxb) {
+            if let Some(tile) = self.draw_tile(key, exact, key.px != pxb && !self.pyramid.contains(&key.px)) {
                 self.put_tile(key, tile);
                 self.verify_tile(key);
                 self.drew = true;
@@ -2030,16 +2042,26 @@ impl Painter {
     }
 
     /// What's drawn and up to date: tiles, and the whole view
-    fn layers(&self) -> Vec<Layer> {
-        let tiles = self.tiles.iter().filter(|(_, tile)| !tile.stale).map(|(key, tile)| Layer {
+    /// What's drawn, with tiles being drawn again as they were if `stale`
+    fn layers(&self, stale: bool) -> Vec<Layer> {
+        let tiles = self.tiles.iter().filter(|(_, tile)| stale || !tile.stale).map(|(key, tile)| Layer {
             tex: tile.tex.clone(),
             x: key.x * TILE,
             y: key.y * TILE,
             px: key.px(),
             counts: tile.counts,
-            kind: if tile.draft { LayerKind::Draft } else { LayerKind::Tile },
+            kind: if tile.stale {
+                LayerKind::Stale
+            } else if tile.draft {
+                LayerKind::Draft
+            } else {
+                LayerKind::Tile
+            },
         });
-        let whole = self.whole.as_ref().filter(|whole| !whole.stale && whole.patch.is_empty()).map(|whole| whole.layer.clone());
+        let whole = self.whole.as_ref().and_then(|whole| match !whole.stale && whole.patch.is_empty() {
+            true => Some(whole.layer.clone()),
+            false => stale.then(|| Layer { kind: LayerKind::Stale, ..whole.layer.clone() }),
+        });
         tiles.chain(whole).chain(self.last_whole.clone()).collect()
     }
 
@@ -2047,7 +2069,7 @@ impl Painter {
     /// as of the latest frame of Figma's render tree, when that's changed
     fn publish(&mut self) {
         self.check();
-        let layers = self.layers();
+        let layers = self.layers(true);
         let background = self.background();
         let (transparent, dark) = match self.tree.as_ref().and_then(Tree::background) {
             Some((_, transparent, dark)) => (transparent, dark),
@@ -2225,6 +2247,9 @@ impl Painter {
                 let _ = reply.send(self.offscreen(&id, bounds, width, height, backdrop));
                 self.release();
             }
+            Msg::Probe { spec, reply } => {
+                let _ = reply.send(self.probe(&spec));
+            }
             Msg::Replay { views, reply } => {
                 let _ = reply.send(self.replay(views));
                 self.release();
@@ -2318,6 +2343,7 @@ impl Painter {
             !kept.stale && kept.area == img.area && (kept.image.width(), kept.image.height()) == (img.image.width(), img.image.height())
         });
         if same && !key.starts_with(RENDER) && !key.starts_with(EFFECT) {
+            self.wake_effects(&key);
             return;
         }
         // All that drew without it, or with it at another size, is drawn
@@ -2364,21 +2390,26 @@ impl Painter {
         }
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
-        let effect = key.starts_with(EFFECT);
         self.images.insert(key.clone(), img);
         self.drop_tiles(&areas);
-        // Effects that waited on an image the node draws
-        if !effect && !self.effects_waiting.is_empty() {
-            let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.effects_waiting).into_iter().partition(|(_, _, on)| on.contains(&key));
-            self.effects_waiting = waiting;
-            for (effect, width, _) in ready {
-                self.asked.remove(&effect);
-                self.ask(&[(effect, width)]);
-            }
-        }
+        self.wake_effects(&key);
         self.fresh = true;
         self.update_memory();
         self.dirty = true;
+    }
+
+    /// Runs again the effects that waited on image `key`, which may itself
+    /// be another node's effects
+    fn wake_effects(&mut self, key: &str) {
+        if self.effects_waiting.is_empty() {
+            return;
+        }
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.effects_waiting).into_iter().partition(|(_, _, on)| on.iter().any(|image| image == key));
+        self.effects_waiting = waiting;
+        for (effect, width, _) in ready {
+            self.asked.remove(&effect);
+            self.ask(&[(effect, width)]);
+        }
     }
 
     /// A frame of Figma's render tree: the units it changed are drawn
@@ -2472,11 +2503,9 @@ impl Painter {
         self.update_memory();
     }
 
-    /// Keeps images within budget: past `IMAGE_BUDGET` the biggest nothing
-    /// near the view uses are let go, and past `IMAGES_MAX` those kept bigger
-    /// than what's drawn from them needs are decoded again smaller, from the
-    /// bytes kept. Only then, as that draws again all that uses them, and
-    /// drawn with mipmaps a bigger copy comes out the same
+    /// Keeps images within `IMAGES_BUDGET`. An image is never made smaller
+    /// while it's needed, as that draws again all that uses it, blurrier
+    /// till it's had bigger again, so it'd flicker
     fn fit_images(&mut self) {
         // As run.rs sizes images it fetches
         let fitted = |(w, h): (u32, u32), width: f64| {
@@ -2533,88 +2562,24 @@ impl Painter {
             }
         }
         let now = Instant::now();
-        for (key, &width) in &need {
-            let wanted = self.wanted.entry(key.clone()).or_insert((width, now));
-            // The widest lately, kept till that's not needed for a while
-            if width >= wanted.0 || now - wanted.1 > IMAGE_LINGER {
-                *wanted = (width, now);
-            }
+        for key in need.keys() {
+            self.wanted.insert(key.clone(), now);
         }
-        self.wanted.retain(|_, (_, at)| now - *at <= IMAGE_LINGER);
         let mut total: usize = self.images.values().map(Img::bytes).sum();
-        // What was needed lately is kept as it is, the latest first, as much
-        // as fits under the ceiling
-        let mut recent: Vec<(&String, f64, Instant)> = self.wanted.iter().map(|(key, &(width, at))| (key, width, at)).collect();
-        recent.sort_by(|a, b| b.2.cmp(&a.2));
-        let mut lately: HashMap<String, f64> = HashMap::new();
-        let mut held = 0;
-        for (key, width, _) in recent {
-            let bytes = self.images.get(key).map_or(0, Img::bytes);
-            if held + bytes > IMAGES_CEILING {
-                break;
-            }
-            held += bytes;
-            lately.insert(key.clone(), width);
-        }
-        trace(|| format!("images {} MB, {} needed lately, {} MB of them kept", total >> 20, lately.len(), held >> 20));
-        let wanted = |key: &str, img: &Img| {
-            lately.get(key).is_some_and(|&width| width <= 0.0 || fitted(img.original, width) as f64 >= img.image.width().max(img.image.height()) as f64)
-        };
-        let mut smaller = Vec::new();
-        let mut unused = Vec::new();
-        for (key, img) in &self.images {
-            if key.starts_with(RENDER) || wanted(key, img) {
-                continue;
-            }
-            let kept = img.image.width().max(img.image.height()) as f64;
-            match need.get(key.as_str()) {
-                // Smaller where what the page would send for it now is
-                Some(&width) if width > 0.0 && kept > fitted(img.original, width) as f64 => {
-                    let ratio = fitted(img.original, width) as f64 / kept;
-                    let saving = (img.bytes() as f64 * (1.0 - ratio * ratio)) as usize;
-                    smaller.push((key.clone(), width, saving));
-                }
-                Some(_) => {}
-                // Small copies kept are looked at apart, below
-                None if key.starts_with(EFFECT) || img.image.width().max(img.image.height()) > PLACEHOLDER => unused.push((key.clone(), img.bytes())),
-                None => {}
-            }
-        }
-        unused.sort_by(|a, b| b.1.cmp(&a.1));
-        let mut gone = Vec::new();
-        for (key, _) in unused {
-            if total <= IMAGE_BUDGET {
-                break;
-            }
-            total = self.shrink(&key, total);
-            gone.push(key);
-        }
-        self.forget_images(&gone);
-        smaller.sort_by(|a, b| b.2.cmp(&a.2));
-        for (key, width, saving) in smaller {
-            if total <= IMAGES_MAX {
-                break;
-            }
-            total = total.saturating_sub(saving);
-            if self.asked.get(&key) == Some(&width) {
-                continue;
-            }
-            self.asked.insert(key.clone(), width);
-            self.request(&key, width);
-        }
-        // Still past it, those only near the view go, biggest first. What's
-        // drawn of them stays, and they come back from the page's bytes
-        if total > IMAGES_MAX {
-            let mut aside: Vec<(String, usize)> = self
+        trace(|| format!("images {} MB, {} near the view, {} in it", total >> 20, need.len(), in_view.len()));
+        if total > IMAGES_BUDGET {
+            // Those not in view, needed longest ago (or never) first, and of
+            // those the biggest
+            let mut aside: Vec<(Option<Instant>, usize, String)> = self
                 .images
                 .iter()
-                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !wanted(key, img))
-                .map(|(key, img)| (key.clone(), img.bytes()))
+                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && (key.starts_with(EFFECT) || img.image.width().max(img.image.height()) > PLACEHOLDER))
+                .map(|(key, img)| (self.wanted.get(key).copied(), img.bytes(), key.clone()))
                 .collect();
-            aside.sort_by(|a, b| b.1.cmp(&a.1));
+            aside.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
             let mut gone = Vec::new();
-            for (key, _) in aside {
-                if total <= IMAGES_MAX {
+            for (_, _, key) in aside {
+                if total <= IMAGES_BUDGET * 3 / 4 {
                     break;
                 }
                 total = self.shrink(&key, total);
@@ -2622,6 +2587,35 @@ impl Painter {
             }
             self.forget_images(&gone);
         }
+        // Those in view alone past it, as far out with many images each
+        // zoomed in on before: each more than twice what it's drawn at is
+        // had again at that, the same on screen
+        if total > IMAGES_BUDGET {
+            let mut smaller: Vec<(usize, String, f64)> = self
+                .images
+                .iter()
+                .filter(|(key, _)| !key.starts_with(RENDER) && !key.starts_with(EFFECT))
+                .filter_map(|(key, img)| {
+                    let width = *need.get(key.as_str()).filter(|width| **width > 0.0)?;
+                    let kept = img.image.width().max(img.image.height()) as f64;
+                    let fits = fitted(img.original, width) as f64;
+                    (kept > fits * 2.0).then(|| ((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize, key.clone(), width))
+                })
+                .collect();
+            smaller.sort_by(|a, b| b.0.cmp(&a.0));
+            for (saving, key, width) in smaller {
+                if total <= IMAGES_BUDGET * 3 / 4 {
+                    break;
+                }
+                total = total.saturating_sub(saving);
+                if self.asked.get(&key) != Some(&width) {
+                    self.asked.insert(key.clone(), width);
+                    self.request(&key, width);
+                }
+            }
+        }
+        let images = &self.images;
+        self.wanted.retain(|key, _| images.contains_key(key));
         // Small copies of images far off are let go past their own budget,
         // the biggest first
         let mut small: Vec<(String, usize)> = self
@@ -4490,6 +4484,167 @@ impl Painter {
             level = node.children.clone();
         }
         path
+    }
+
+    /// Draws each view `spec` gives, `;` between them, each
+    /// `px,x,y,width,height[,samples[,thumbs[,alone]]]`: `px` pixels a unit
+    /// centered on (`x`, `y`) in units, `width` by `height` pixels, with
+    /// `samples` MSAA samples, from thumbs where there are any if `thumbs`
+    /// is 1, as while the zoom changes, and the `alone` slowest units timed
+    /// each on its own. As JSON, a line a view
+    fn probe(&mut self, spec: &str) -> String {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        let mut out = Vec::new();
+        for one in spec.split(';').map(str::trim).filter(|one| !one.is_empty()) {
+            let v: Vec<f64> = one.split(',').filter_map(|value| value.trim().parse().ok()).collect();
+            if v.len() < 5 {
+                out.push(format!("{{\"error\":\"{one}\"}}"));
+                continue;
+            }
+            let (px, cx, cy, w, h) = (v[0] as f32, v[1] as f32, v[2] as f32, v[3] as i32, v[4] as i32);
+            let samples = v.get(5).copied().unwrap_or(1.0) as usize;
+            let thumbs = v.get(6).copied().unwrap_or(0.0) > 0.0;
+            let alone = v.get(7).copied().unwrap_or(0.0) as usize;
+            // What's left out is recorded afresh, and those pictures let go
+            // after, never drawn in the window
+            let mut skip = v.get(8).copied().unwrap_or(0.0) as u32;
+            for (which, at) in [11, 12].into_iter().enumerate() {
+                let px = v.get(at).copied().unwrap_or(0.0) as f32;
+                super::tree::SMALL[which].store(px.to_bits(), std::sync::atomic::Ordering::Relaxed);
+                if px > 0.0 {
+                    skip |= 1 << 30;
+                }
+            }
+            let emit = v.get(13).copied().unwrap_or(0.0) > 0.0;
+            if emit {
+                skip |= 1 << 30;
+                super::emit::start();
+            }
+            if skip != 0 {
+                self.pictures.clear();
+            }
+            super::tree::SKIP.store(skip, std::sync::atomic::Ordering::Relaxed);
+            for counted in &super::tree::COUNTED {
+                counted.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
+            let area = Rect::from_xywh(cx - w as f32 / px / 2.0, cy - h as f32 / px / 2.0, w as f32 / px, h as f32 / px);
+            let offset = (-(area.left * px).floor(), -(area.top * px).floor());
+            let started = Instant::now();
+            let before = gpu_counters();
+            let _ = super::committed::take_kinds();
+            let (mut pictures, mut units, mut thumbed) = (Vec::new(), Vec::new(), 0);
+            for unit in 0..self.units.len() {
+                let bounds = self.units[unit].bounds;
+                if !Rect::intersects2(&bounds, &area) || bounds.width().max(bounds.height()) * px < 0.5 {
+                    continue;
+                }
+                if thumbs {
+                    if let Some((drawn, _)) = self.thumb(unit, px) {
+                        pictures.push(drawn);
+                        units.push(unit);
+                        thumbed += 1;
+                        continue;
+                    }
+                }
+                let level = self.level(&self.units[unit], px, false);
+                if emit {
+                    let mut post = skia_safe::Matrix::translate(offset);
+                    post.pre_scale((px, px), None);
+                    super::emit::unit(post);
+                }
+                if let Some((drawn, _)) = self.drawn(unit, level, true, px, true) {
+                    pictures.push(drawn);
+                    units.push(unit);
+                }
+            }
+            let pictures = self.unpage(pictures);
+            let recorded = started.elapsed();
+            if emit {
+                let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-emit-{px}.bin")), super::emit::finish());
+            }
+            super::tree::SKIP.store(0, std::sync::atomic::Ordering::Relaxed);
+            for small in &super::tree::SMALL {
+                small.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
+            let counted: Vec<u64> = super::tree::COUNTED.iter().map(|counted| counted.load(std::sync::atomic::Ordering::Relaxed)).collect();
+            // The view's drawing saved, to replay elsewhere
+            if v.get(9).copied().unwrap_or(0.0) > 0.0 {
+                let mut recorder = PictureRecorder::new();
+                play(recorder.begin_recording(Rect::from_wh(w as f32, h as f32), false), &pictures, offset, px);
+                if let Some(picture) = recorder.finish_recording_as_picture(None) {
+                    let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-view-{px}.skp")), picture.serialize().as_bytes());
+                }
+            }
+            let Some(mut surface) = self.gpu.own_surface(w, h, samples) else {
+                out.push(format!("{{\"error\":\"no surface for {one}\"}}"));
+                continue;
+            };
+            let at = Instant::now();
+            surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            play(surface.canvas(), &pictures, offset, px);
+            let played = at.elapsed();
+            let _ = self.gpu.context.flush_and_submit_surface(&mut surface, Some(SyncCpu::Yes));
+            let flushed = at.elapsed() - played;
+            let after = gpu_counters();
+            // What it drew, to compare
+            if v.get(10).copied().unwrap_or(0.0) > 0.0 {
+                let image = surface.image_snapshot();
+                if let Some(png) = image.encode(Some(&mut self.gpu.context), skia_safe::EncodedImageFormat::PNG, None) {
+                    let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-probe-{px}-{skip}-{samples}-{}-{}.png", v.get(11).copied().unwrap_or(0.0), v.get(12).copied().unwrap_or(0.0))), png.as_bytes());
+                }
+            }
+            let kinds = super::committed::take_kinds();
+            let usage = self.gpu.context.resource_cache_usage();
+            let mut slow = Vec::new();
+            if alone > 0 {
+                for (picture, &unit) in pictures.iter().zip(&units) {
+                    surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+                    let at = Instant::now();
+                    let made = gpu_counters()[0];
+                    play(surface.canvas(), std::slice::from_ref(picture), offset, px);
+                    let _ = self.gpu.context.flush_and_submit_surface(&mut surface, Some(SyncCpu::Yes));
+                    slow.push((at.elapsed(), unit, gpu_counters()[0] - made));
+                }
+                slow.sort_by(|a, b| b.0.cmp(&a.0));
+                slow.truncate(alone);
+            }
+            drop(pictures);
+            if skip != 0 {
+                self.pictures.clear();
+            }
+            let slow: Vec<String> = slow
+                .iter()
+                .map(|(took, unit, made)| {
+                    let u = &self.units[*unit];
+                    let id = match (&u.place, &self.tree) {
+                        (Some(place), Some(tree)) => tree.census(place.id),
+                        _ => self.scene.node(u.slot).map(|node| format!("{} {}", node.id, node.type_name)).unwrap_or_default(),
+                    };
+                    format!("{{\"ms\":{:.2},\"made\":{made},\"node\":\"{id}\",\"px\":\"{}x{}\",\"alone\":{}}}", ms(*took), (u.bounds.width() * px) as i32, (u.bounds.height() * px) as i32, u.alone)
+                })
+                .collect();
+            out.push(format!(
+                "{{\"view\":\"{one}\",\"counted\":\"mask layers {} mask clips {} blends {} blurs {} silhouettes {} paths {} points {}\",\"units\":{},\"thumbs\":{thumbed},\"record_ms\":{:.1},\"play_ms\":{:.1},\"gpu_ms\":{:.1},\"made\":{},\"made_ms\":{:.1},\"programs\":{},\"cache_mb\":{},\"kinds\":\"{}\",\"slowest\":[{}]}}",
+                counted[0],
+                counted[1],
+                counted[2],
+                counted[3],
+                counted[4],
+                counted[5],
+                counted[6],
+                units.len(),
+                ms(recorded),
+                ms(played),
+                ms(flushed),
+                after[0] - before[0],
+                after[1] - before[1],
+                after[2] - before[2],
+                usage.resource_bytes >> 20,
+                kinds.replace('"', "'"),
+                slow.join(",")
+            ));
+        }
+        out.join("\n")
     }
 
     fn replay(&mut self, views: Vec<View>) -> Vec<(f64, f64)> {

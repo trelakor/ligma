@@ -157,6 +157,11 @@ pub enum LayerKind {
     /// All of the view and around it, drawn while the zoom changes, while
     /// things change, or before its tiles are drawn
     Whole,
+    /// A tile or the whole view as it was before something in it changed,
+    /// being drawn again: what was shown there a moment ago, so preferred
+    /// to anything up to date but much blurrier, which would show the
+    /// view go soft and sharp again
+    Stale,
 }
 
 /// Something drawn at `px` device pixels a unit, its top left corner at
@@ -335,6 +340,12 @@ pub struct Piece {
 /// view drawn at it, then the rest, scaled, each where those before don't
 /// cover. And whether that leaves some of the view out
 pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
+    cover_over(layers, layers.len(), content, view, size)
+}
+
+/// As `cover`, with the layers from `behind` on used only where those
+/// before them leave holes
+fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
     if view.outline().is_some() {
         return (Vec::new(), false);
     }
@@ -353,9 +364,10 @@ pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u
                 (LayerKind::Whole, true) => 1.0,
                 (LayerKind::Draft, true) => 1.2,
                 (LayerKind::Whole, false) => 1.5 + distance(layer.px),
+                (LayerKind::Stale, _) => 1.6 + distance(layer.px),
                 _ => 2.0 + distance(layer.px),
             };
-            (rank, i)
+            (if i >= behind { rank + 1000.0 } else { rank }, i)
         })
         .collect();
     ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -450,7 +462,7 @@ impl Patterns {
                 continue;
             };
             let layer = &snapshot.layers[piece.layer];
-            if layer.px == drawn && layer.kind != LayerKind::Draft {
+            if layer.px == drawn && !matches!(layer.kind, LayerKind::Draft | LayerKind::Stale) {
                 counts += layer.counts;
             }
             // Rect by rect, each a scissor, as a region's clip would take a
@@ -719,6 +731,35 @@ impl Screen {
             let (pieces, holes) = cover(&snapshot.layers, snapshot.content, &view, self.size);
             if holes && snapshot.whole_at != Some(view_at(&view, self.size)) {
                 stats().lock().unwrap().holes(true);
+                // Its holes filled from the last snapshot shown whole, as
+                // it was a moment before, so the view never stands still
+                // for what's being drawn again
+                let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial).and_then(|before| {
+                    let mut layers = snapshot.layers.clone();
+                    layers.extend(before.layers.iter().cloned());
+                    let (pieces, holes) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size);
+                    let merged = Snapshot {
+                        seq: snapshot.seq,
+                        fence: snapshot.fence.clone(),
+                        value: snapshot.value,
+                        serial: snapshot.serial,
+                        layers,
+                        content: snapshot.content,
+                        whole_at: snapshot.whole_at,
+                        background: snapshot.background,
+                        transparent: snapshot.transparent,
+                        dark: snapshot.dark,
+                        pending: snapshot.pending,
+                    };
+                    (!holes).then_some((merged, pieces))
+                });
+                if let Some((merged, pieces)) = merged {
+                    hub.shown_seq.store(seq, Ordering::Relaxed);
+                    self.frame(&merged, &pieces, &view, overlay.as_ref(), seq);
+                    room = false;
+                    shown = Some(now);
+                    continue;
+                }
                 let before = complete.clone().filter(|before| before.serial != snapshot.serial).and_then(|before| {
                     let (pieces, holes) = cover(&before.layers, before.content, &view, self.size);
                     let then = (before.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);

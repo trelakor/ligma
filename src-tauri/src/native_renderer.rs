@@ -47,6 +47,8 @@ mod effect_host;
 #[cfg(windows)]
 mod effects;
 #[cfg(windows)]
+mod emit;
+#[cfg(windows)]
 mod gpu_memory;
 #[cfg(windows)]
 mod gpu_census;
