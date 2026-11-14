@@ -45,6 +45,9 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 /// cleared as they're placed
 const NOT_ZEROED: D3D12_HEAP_FLAGS = D3D12_HEAP_FLAGS(0x1000);
 
+/// Most bytes of zeros kept to clear textures from, a band of rows at a time
+const ZEROS_MAX: u64 = 4 << 20;
+
 /// A kind of resource placed in shared heaps: the heaps', their size, the
 /// steps resources are placed in, and the largest placed
 struct Kind {
@@ -152,8 +155,14 @@ impl Clears {
             }
             let done = self.fence.GetCompletedValue();
             self.outgrown.retain(|(until, _)| *until > done);
-            if !self.zeros.as_ref().is_some_and(|(_, size)| *size >= total) {
-                let size = total.max(1 << 20);
+            // Copied a band of rows at a time from zeros no bigger than
+            // this, rather than as many as the biggest texture takes
+            let pitch = footprint.Footprint.RowPitch as u64;
+            let rows = footprint.Footprint.Height.max(1);
+            let band = ((ZEROS_MAX / pitch.max(1)) as u32).clamp(1, rows);
+            let needed = pitch * band as u64;
+            if !self.zeros.as_ref().is_some_and(|(_, size)| *size >= needed) {
+                let size = needed.max(1 << 20);
                 let buffer = D3D12_RESOURCE_DESC {
                     Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
                     Width: size,
@@ -189,12 +198,18 @@ impl Clears {
                 Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
                 Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
             };
-            let from = D3D12_TEXTURE_COPY_LOCATION {
-                pResource: std::mem::transmute_copy(&zeros),
-                Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: footprint },
-            };
-            self.list.CopyTextureRegion(&to, 0, 0, 0, &from, None);
+            let mut top = 0;
+            while top < rows {
+                let mut part = footprint;
+                part.Footprint.Height = band.min(rows - top);
+                let from = D3D12_TEXTURE_COPY_LOCATION {
+                    pResource: std::mem::transmute_copy(&zeros),
+                    Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                    Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: part },
+                };
+                self.list.CopyTextureRegion(&to, 0, top, 0, &from, None);
+                top += part.Footprint.Height;
+            }
             if moving {
                 self.list.ResourceBarrier(&[transition(resource, D3D12_RESOURCE_STATE_COPY_DEST, state)]);
             }
