@@ -1821,13 +1821,13 @@ const PAGE_JS: &str = r##"(() => {
     stroke.setAttribute("stroke-width", size / Math.max(scales.native, 1e-6));
   };
 
-  // Heals what `points`, in fractions of the image, paint over, `radius` a
-  // fraction of its width
   // `promise`, or "unread" thrown once it's taken longer than reading the
   // image may
   const within = (promise) =>
     Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject("unread"), READ_PATIENCE))]);
 
+  // Heals what `points`, in fractions of the image, paint over, `radius` a
+  // fraction of its width
   const runHeal = async (points, radius) => {
     const current = healing;
     if (!current || current.working) return;

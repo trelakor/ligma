@@ -356,11 +356,6 @@ mod download {
             self.downloads().all(|download| folder.join(download.file).is_file())
         }
 
-        /// Whether it's downloaded, so using it won't ask to download it
-        pub fn is_installed(&self, app: &AppHandle) -> bool {
-            folder(app).is_ok_and(|folder| self.installed(&folder))
-        }
-
         pub fn state(&self, app: &AppHandle) -> ModelState {
             let downloading = *self.downloading.lock().unwrap();
             let Ok(folder) = folder(app) else {

@@ -34,8 +34,9 @@ log = "0.4"
 # Vectorize in src/vectorize.rs: reading the image and tracing it
 image = { version = "0.25", default-features = false, features = ["png"] }
 visioncortex = "0.9"
-# The images Expand grows (src/expand.rs), sent back to the page, and tab
-# preview images as `data:` URLs on Windows (src/webview2.rs)
+# Images sent back to the page (Remove background, Select object, Spot
+# healing, Upscale), and tab preview images as `data:` URLs on Windows
+# (src/webview2.rs)
 base64 = "0.22"
 # The WebSocket to Figwright's MCP server, on this computer only, and the
 # MessagePack it speaks, in
@@ -90,8 +91,8 @@ objc2 = { version = "0.6", features = ["exception"] }
 block2 = "0.6"
 
 # Images are decoded, filled, traced, upscaled and encoded on the CPU
-# (Vectorize, Expand, Spot healing, Upscale), which takes many times as
-# long unoptimized, so debug builds optimize the crates that do it, and
+# (Vectorize, Spot healing, Upscale), which takes many times as long
+# unoptimized, so debug builds optimize the crates that do it, and
 # Ligma itself a little
 [profile.dev]
 opt-level = 1

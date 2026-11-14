@@ -122,8 +122,7 @@ pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
     std::thread::spawn(move || {
         let bytes = if success { read(&temp) } else { None };
         let _ = std::fs::remove_file(&temp);
-        // A job that panics still answers, so the page isn't left waiting
-        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match (kind, bytes) {
+        let reply = match (kind, bytes) {
             (_, None) => Err("failed"),
             (Kind::Background, Some(bytes)) => crate::background::remove(&app, tab, job, &bytes),
             (Kind::Vectorize, Some(bytes)) => crate::vectorize::trace(&bytes, pixel.unwrap_or(100) as f64 / 100.0),
@@ -131,8 +130,7 @@ pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
             (Kind::Heal, Some(bytes)) => crate::heal::heal(tab, job, &bytes),
             (Kind::Upscale, Some(bytes)) => crate::upscale::handle(&app, tab, job, &bytes),
             (Kind::Cancel, Some(_)) => unreachable!(),
-        }))
-        .unwrap_or(Err("failed"));
+        };
         send(&app, tab, job, reply);
     });
     true
