@@ -554,10 +554,16 @@ const PAGE_JS: &str = r##"(() => {
     });
     value.addEventListener("blur", () => row.show());
     // Dragging the value scrubs it, with the pointer locked so it goes on
-    // past the screen's edge; a click without a drag types in it
+    // past the screen's edge; a click without a drag types in it. Where
+    // the pointer can't be locked, as in apps' web views on macOS, it's
+    // captured instead, so the drag goes on outside the window, up to the
+    // screen's edge
     value.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || document.activeElement === value) return;
       event.preventDefault();
+      try {
+        value.setPointerCapture(event.pointerId);
+      } catch {}
       const start = s[key];
       let moved = 0;
       let scrubbing = false;
@@ -567,21 +573,28 @@ const PAGE_JS: &str = r##"(() => {
         if (!scrubbing && Math.abs(moved) < 3) return;
         if (!scrubbing) {
           scrubbing = true;
-          value.requestPointerLock?.()?.catch?.(() => {});
+          try {
+            value.requestPointerLock?.()?.catch?.(() => {});
+          } catch {}
         }
         change(key, clamp(start + moved * rate * (event.shiftKey ? 10 : 1)), fresh(key));
       };
-      const up = () => {
+      const up = (event) => {
         removeEventListener("pointermove", move, true);
         removeEventListener("pointerup", up, true);
+        removeEventListener("pointercancel", up, true);
+        try {
+          if (value.hasPointerCapture(event.pointerId)) value.releasePointerCapture(event.pointerId);
+        } catch {}
         if (document.pointerLockElement === value) document.exitPointerLock();
-        if (!scrubbing) {
+        if (!scrubbing && event.type === "pointerup") {
           value.focus();
           value.select();
         }
       };
       addEventListener("pointermove", move, true);
       addEventListener("pointerup", up, true);
+      addEventListener("pointercancel", up, true);
     });
     const row = element("label", { className: "row" }, element("span", { className: "label", textContent: label }), input, value);
     // A click on the label doesn't put the cursor in the value
@@ -1769,10 +1782,14 @@ const PAGE_JS: &str = r##"(() => {
     return moves;
   };
 
-  // Draws the broken layer from `picture`, a canvas of it. Gives a canvas
+  // Pieces cut out of the picture in one go, as one path
+  const CUT_BATCH = 256;
+
+  // Draws the broken layer from `picture`, a canvas of it: `order`, the
+  // pieces that moved, each drawn by `draw`, and `result`, a canvas
   // cropped to what's drawn, and where it sits relative to the picture's
   // top left, in its pixels
-  const drawBroken = (picture, pieces, s) => {
+  const brokenFrame = (picture, pieces, s) => {
     const { width, height } = picture;
     const moves = simulate(pieces, s, width, height, Math.max(width, height));
     // The bounds of everything drawn
@@ -1803,18 +1820,41 @@ const PAGE_JS: &str = r##"(() => {
     context.setTransform(shrink, 0, 0, shrink, -left * shrink, -top * shrink);
     context.drawImage(picture, 0, 0);
     context.globalCompositeOperation = "destination-out";
-    context.setTransform(shrink, 0, 0, shrink, -left * shrink, -top * shrink);
-    context.beginPath();
-    pieces.forEach((piece, i) => {
-      if (!moves[i]) return;
-      piece.polygon.forEach(([x, y], j) => (j ? context.lineTo(x, y) : context.moveTo(x, y)));
-      context.closePath();
-    });
-    context.fill();
+    const moved = pieces.filter((piece, i) => moves[i]);
+    const trace = (target, list) => {
+      target.beginPath();
+      for (const piece of list) {
+        piece.polygon.forEach(([x, y], j) => (j ? target.lineTo(x, y) : target.moveTo(x, y)));
+        target.closePath();
+      }
+    };
+    if (moved.length <= CUT_BATCH * 4) {
+      trace(context, moved);
+      context.fill();
+    } else {
+      // One path of thousands of pieces is slow to fill, its cost growing
+      // with the square of their number, so they're filled in batches on
+      // a mask over the picture, adding up. As pieces don't overlap, the
+      // sum along the edges they share is what one path would give
+      const [ox, oy] = [-left * shrink, -top * shrink];
+      const [ix, iy] = [Math.floor(ox), Math.floor(oy)];
+      const mask = Object.assign(document.createElement("canvas"), { width: Math.ceil(width * shrink) + 1, height: Math.ceil(height * shrink) + 1 });
+      const ink = mask.getContext("2d");
+      ink.setTransform(shrink, 0, 0, shrink, ox - ix, oy - iy);
+      ink.globalCompositeOperation = "lighter";
+      for (let at = 0; at < moved.length; at += CUT_BATCH) {
+        trace(ink, moved.slice(at, at + CUT_BATCH));
+        ink.fill();
+      }
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.drawImage(mask, ix, iy);
+      mask.width = mask.height = 0;
+      context.setTransform(shrink, 0, 0, shrink, -left * shrink, -top * shrink);
+    }
     context.globalCompositeOperation = "source-over";
     // Each piece where it's gone, the farthest from the camera first
     drawn.sort((a, b) => moves[a].depth - moves[b].depth);
-    for (const i of drawn) {
+    const draw = (i) => {
       const piece = pieces[i];
       const move = moves[i];
       context.save();
@@ -1837,8 +1877,31 @@ const PAGE_JS: &str = r##"(() => {
         context.fill();
       }
       context.restore();
+    };
+    return { order: drawn, draw, result: { canvas, x: left, y: top, width: right - left, height: bottom - top } };
+  };
+
+  // For the panel and the file while it's changed
+  const drawBroken = (picture, pieces, s) => {
+    const frame = brokenFrame(picture, pieces, s);
+    for (const i of frame.order) frame.draw(i);
+    return frame.result;
+  };
+
+  // For applying, at full size, with breaks so Figma keeps up. Null once
+  // `alive` says it's no longer wanted
+  const drawBrokenFully = async (picture, pieces, s, alive) => {
+    const frame = brokenFrame(picture, pieces, s);
+    let until = performance.now() + 12;
+    for (const i of frame.order) {
+      frame.draw(i);
+      if (performance.now() > until) {
+        await new Promise((resolve) => setTimeout(resolve));
+        if (!alive()) return null;
+        until = performance.now() + 12;
+      }
     }
-    return { canvas, x: left, y: top, width: right - left, height: bottom - top };
+    return frame.result;
   };
 
   // A picture of `bitmap` at most `most` pixels across, as a canvas, and
@@ -1871,6 +1934,10 @@ const PAGE_JS: &str = r##"(() => {
   const renderAt = (current, level) => {
     const { picture } = current.levels[level];
     return drawBroken(picture, piecesFor(current, level), current.settings);
+  };
+  const renderFully = (current) => {
+    const { picture } = current.levels.full;
+    return drawBrokenFully(picture, piecesFor(current, "full"), structuredClone(current.settings), () => !current.closed);
   };
 
   // From the page to the coordinates of what's in `parent`: a frame's
@@ -2262,7 +2329,7 @@ const PAGE_JS: &str = r##"(() => {
       if (!current.ready && (disintegrating !== current && crushing !== current)) return;
     }
     current.again = false;
-    await placeDrawn(current, renderAt(current, "full"), current.levels.full.k);
+    await placeDrawn(current, await renderFully(current), current.levels.full.k);
     if (disintegrating !== current) return;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
@@ -2551,9 +2618,13 @@ const PAGE_JS: &str = r##"(() => {
     const high = (((x >> 1) & 1) ^ ((y >> 1) & 1)) * 2 + ((y >> 1) & 1);
     return (low * 4 + high + 0.5) / 16 - 0.5;
   };
-  const crush = (image, s, k) => {
-    const { width: W, height: H, data } = image;
-    const out = new ImageData(W, H);
+  // Rows `from` to `to` of it, as their own ImageData. It uses nothing of
+  // the page's but `fract`, `seededHash` and `bayer4`, so workers run it
+  // as it is
+  const crushRows = (image, s, k, from, to) => {
+    const { width: W, data } = image;
+    const H = image.height;
+    const out = new ImageData(W, Math.max(1, to - from));
     const o = out.data;
     const [dw, dh] = [W / k, H / k];
     // A pixel, premultiplied, 0 to 1, nearest to where `ux`, `uy` falls,
@@ -2581,9 +2652,10 @@ const PAGE_JS: &str = r##"(() => {
     const levels = 2 ** Math.min(8, Math.max(1, Math.round(s.bitDepth))) - 1;
     const ditherScale = Math.max(s.ditherScale, 1);
     const seed = s.randomSeed;
-    for (let y = 0; y < H; y++) {
+    for (let y = from; y < to; y++) {
       for (let x = 0; x < W; x++) {
         const at = (y * W + x) * 4;
+        const put = ((y - from) * W + x) * 4;
         const px = (x + 0.5) / k;
         const py = (y + 0.5) / k;
         const [bx, by] = [Math.floor(px / block), Math.floor(py / block)];
@@ -2623,28 +2695,132 @@ const PAGE_JS: &str = r##"(() => {
         const m = s.effectMix;
         const outA = ia + (a - ia) * m;
         const mixOne = (inV, crushed) => ((data[at + inV] / 255) * ia * (1 - m) + crushed * a * m) / Math.max(outA, 0.00001);
-        o[at] = Math.round(mixOne(0, q(r)) * 255);
-        o[at + 1] = Math.round(mixOne(1, q(g)) * 255);
-        o[at + 2] = Math.round(mixOne(2, q(b)) * 255);
-        o[at + 3] = Math.round(outA * 255);
+        o[put] = Math.round(mixOne(0, q(r)) * 255);
+        o[put + 1] = Math.round(mixOne(1, q(g)) * 255);
+        o[put + 2] = Math.round(mixOne(2, q(b)) * 255);
+        o[put + 3] = Math.round(outA * 255);
       }
     }
     return out;
   };
 
-  // The crushed picture for `level`, as `drawBroken` gives its own
-  const crushAt = (current, level) => {
-    const entry = current.levels[level];
-    entry.pixels ??= entry.picture.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, entry.picture.width, entry.picture.height);
-    const canvas = Object.assign(document.createElement("canvas"), { width: entry.picture.width, height: entry.picture.height });
-    canvas.getContext("2d").putImageData(crush(entry.pixels, current.settings, entry.k), 0, 0);
+  // The pixel loop for the file's pictures runs in workers, a band of rows
+  // each, so Figma keeps up while a large one's crushed. Two at most, as
+  // each gets its own copy of the picture. Where workers can't start, it
+  // runs in the page a few rows at a time, with breaks between
+  const CRUSH_WORKER = [
+    `const fract = ${fract};`,
+    `const seededHash = ${seededHash};`,
+    `const bayer4 = ${bayer4};`,
+    `const crushRows = ${crushRows};`,
+    `onmessage = ({ data: { id, image, s, k, from, to } }) => {`,
+    `  const out = crushRows(image, s, k, from, to);`,
+    `  postMessage({ id, out }, [out.data.buffer]);`,
+    `};`,
+    `postMessage({ ready: true });`,
+  ].join("\n");
+  let crushers = null;
+  let crushersReady = null;
+  let crushJob = 0;
+  const crushJobs = new Map();
+  const stopCrushers = () => {
+    for (const worker of crushers ?? []) worker.terminate();
+    crushers = [];
+    for (const job of crushJobs.values()) job.reject(new Error("Worker stopped"));
+    crushJobs.clear();
+  };
+  // The workers, once each has said it's loaded. One that can't load, as
+  // where the page's rules forbid it, or that's slow to, stops them all,
+  // and the page crushes from then on
+  const crushWorkers = async () => {
+    if (!crushers) {
+      crushers = [];
+      const loads = [];
+      try {
+        const url = URL.createObjectURL(new Blob([CRUSH_WORKER], { type: "text/javascript" }));
+        for (let i = 0; i < Math.min(2, Math.max(1, (navigator.hardwareConcurrency || 2) - 1)); i++) {
+          const worker = new Worker(url);
+          loads.push(
+            new Promise((resolve) => {
+              worker.onmessage = ({ data }) => {
+                if (data.ready) return resolve(true);
+                const job = crushJobs.get(data.id);
+                crushJobs.delete(data.id);
+                job?.resolve(data.out);
+              };
+              worker.onerror = (event) => {
+                event.preventDefault();
+                resolve(false);
+                stopCrushers();
+              };
+            }),
+          );
+          crushers.push(worker);
+        }
+      } catch {
+        loads.push(false);
+      }
+      const late = new Promise((resolve) => setTimeout(() => resolve(false), 2000));
+      crushersReady = Promise.race([Promise.all(loads).then((all) => all.every(Boolean)), late]).then((ready) => ready || stopCrushers());
+    }
+    await crushersReady;
+    return crushers;
+  };
+  const inWorker = (worker, message) =>
+    new Promise((resolve, reject) => {
+      const id = ++crushJob;
+      crushJobs.set(id, { resolve, reject });
+      worker.postMessage({ id, ...message });
+    });
+  // Null once `alive` says it's no longer wanted
+  const crushApart = async (image, s, k, alive) => {
+    const { width: W, height: H } = image;
+    const out = new ImageData(W, H);
+    const workers = await crushWorkers();
+    if (!alive()) return null;
+    if (workers.length) {
+      try {
+        const band = Math.ceil(H / workers.length);
+        const parts = await Promise.all(
+          workers.map((worker, i) => {
+            const [from, to] = [i * band, Math.min(H, (i + 1) * band)];
+            return from < to ? inWorker(worker, { image, s, k, from, to }).then((part) => [from, part]) : null;
+          }),
+        );
+        for (const part of parts) if (part) out.data.set(part[1].data, part[0] * W * 4);
+        return out;
+      } catch {}
+    }
+    const rows = Math.max(1, Math.floor(150000 / W));
+    for (let from = 0; from < H; from += rows) {
+      if (!alive()) return null;
+      const to = Math.min(H, from + rows);
+      out.data.set(crushRows(image, s, k, from, to).data, from * W * 4);
+      await new Promise((resolve) => setTimeout(resolve));
+    }
+    return out;
+  };
+
+  const crushedPixels = (entry) => (entry.pixels ??= entry.picture.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, entry.picture.width, entry.picture.height));
+  const crushedCanvas = (image) => {
+    const canvas = Object.assign(document.createElement("canvas"), { width: image.width, height: image.height });
+    canvas.getContext("2d").putImageData(image, 0, 0);
     return { canvas, x: 0, y: 0, width: canvas.width, height: canvas.height };
+  };
+  // The crushed picture for `level`, as `drawBroken` gives its own: the
+  // panel's small one at once, the file's apart from the page
+  const crushAt = async (current, level) => {
+    const entry = current.levels[level];
+    const image = await crushApart(crushedPixels(entry), structuredClone(current.settings), entry.k, () => !current.closed);
+    return image && crushedCanvas(image);
   };
 
   const drawBitcrushPreview = (current) => {
     const canvas = current.preview;
     if (!canvas || !current.levels.preview) return;
-    const drawn = crushAt(current, "preview");
+    const entry = current.levels.preview;
+    const pixels = crushedPixels(entry);
+    const drawn = crushedCanvas(crushRows(pixels, current.settings, entry.k, 0, pixels.height));
     const ratio = devicePixelRatio || 1;
     const box = canvas.getBoundingClientRect();
     canvas.width = Math.round(box.width * ratio);
@@ -2878,7 +3054,7 @@ const PAGE_JS: &str = r##"(() => {
       try {
         do {
           current.again = false;
-          await placeDrawn(current, crushAt(current, "live"), current.levels.live.k);
+          await placeDrawn(current, await crushAt(current, "live"), current.levels.live.k);
         } while (current.again && !current.busy && crushing === current);
       } catch {}
       current.placing = false;
@@ -2907,7 +3083,7 @@ const PAGE_JS: &str = r##"(() => {
       if (!current.ready && (disintegrating !== current && crushing !== current)) return;
     }
     current.again = false;
-    await placeDrawn(current, crushAt(current, "full"), current.levels.full.k);
+    await placeDrawn(current, await crushAt(current, "full"), current.levels.full.k);
     if (crushing !== current) return;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
@@ -2943,6 +3119,10 @@ const PAGE_JS: &str = r##"(() => {
     crushing = null;
     clearTimeout(current.timer);
     current.closed = true;
+    // The workers go with the panel, as their memory's only needed while
+    // it's open
+    stopCrushers();
+    crushers = null;
     if (current.loader && !current.loader.removed) current.loader.remove();
     if (!applied) {
       const { figma, source, result, home, wrap } = current;
@@ -3234,23 +3414,31 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Setting ----------
 
+  // Every half second while it's on, so the button and section follow
+  // Figma's toolbar and panel. Off, it's all taken away and stops
+  let ticking = null;
   const tick = () => {
     if (!state.on) {
+      clearInterval(ticking);
+      ticking = null;
       button()?.remove();
       closeMenu();
       cancelOpen();
       document.querySelector(`[${SECTION}]`)?.remove();
       style.remove();
       sectionStyle.remove();
+      stopCrushers();
+      crushers = null;
       return;
     }
+    ticking ??= setInterval(tick, 500);
     if (!style.isConnected && document.head) document.head.append(style);
     place();
     try {
       showSection();
     } catch {}
   };
-  setInterval(tick, 500);
+  ticking = setInterval(tick, 500);
 
   const applyState = (next) => {
     state = next;
