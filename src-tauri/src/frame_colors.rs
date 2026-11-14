@@ -1,6 +1,9 @@
 //! Frame colors (Settings > Features > Layers): frames in the layers panel
-//! get a color each, the rainbow over again down the list, red, orange,
-//! yellow, green, blue and purple, on their icons, and a guide in that
+//! get a color each, down the list, from a palette: the rainbow over again,
+//! red, orange, yellow, green, blue and purple, or a colorway, Sunset, Ocean,
+//! Forest, Aurora, Candy or Ember, stepping from one hue to another and
+//! back, neighbors lighter and darker by turns,
+//! on their icons, and a guide in that
 //! color runs down the indent of everything in them, as a code editor's
 //! indent guides do, so it's clear where each frame starts and ends. The
 //! frames inside a frame are a step darker. Off by default
@@ -14,15 +17,15 @@
 //! indents are drawn on, so hover and selection stay Figma's, and the icons
 //! of what's in a frame, like images and vectors, take its color too
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::AppHandle;
 
 use crate::settings::Settings;
 
-/// Runs in Figma tabs. `__LIGMA_FRAME_COLORS__` is `{ on, rev }`: the
-/// setting when the tab was made. A page loaded later in the same tab may
+/// Runs in Figma tabs. `__LIGMA_FRAME_COLORS__` is `{ on, palette, rev }`:
+/// the settings when the tab was made. A page loaded later in the same tab may
 /// find a newer one in `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window) return;
@@ -35,6 +38,29 @@ const PAGE_JS: &str = r##"(() => {
 
   // The rainbow, in OKLCH hues: red, orange, yellow, green, blue, purple
   const HUES = [25, 60, 95, 150, 240, 305];
+  // The other palettes step from one hue to another over 4 frames, and
+  // back, each step a third of the way, and frames beside each other
+  // lighter and darker by turns, so they stay apart
+  const SWEEPS = {
+    sunset: [345, 445],
+    ocean: [170, 280],
+    forest: [95, 185],
+    aurora: [150, 310],
+    candy: [280, 380],
+    ember: [15, 100],
+  };
+  const STEPS = 4;
+  const SHIFT = 0.06;
+  // The hue for the frame `index` frames down, and how much lighter or
+  // darker it is than the frames around it
+  const hueAt = (index) => {
+    const sweep = SWEEPS[state.palette];
+    if (!sweep) return { hue: HUES[index % HUES.length], shift: 0 };
+    const cycle = 2 * (STEPS - 1);
+    const step = index % cycle;
+    const t = (step < STEPS ? step : cycle - step) / (STEPS - 1);
+    return { hue: (sweep[0] + (sweep[1] - sweep[0]) * t) % 360, shift: index % 2 ? -SHIFT : SHIFT / 2 };
+  };
   // What counts as a frame. Sections and groups hold frames without being
   // one
   const FRAMES = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"]);
@@ -95,10 +121,10 @@ const PAGE_JS: &str = r##"(() => {
       if (count > most) [most, start] = [count, i];
     }
     const first = frames[start];
-    const hue = HUES[(first.parent ? framesIn(first.parent).index.get(first.id) ?? 0 : 0) % HUES.length];
+    const { hue, shift } = hueAt(first.parent ? framesIn(first.parent).index.get(first.id) ?? 0 : 0);
     // Each step darker, from light enough to read on the panel
-    const lightness = dark ? Math.max(0.48, 0.8 - start * 0.11) : Math.max(0.34, 0.62 - start * 0.09);
-    const color = `oklch(${lightness.toFixed(3)} ${dark ? 0.15 : 0.17} ${hue})`;
+    const lightness = shift + (dark ? Math.max(0.48, 0.8 - start * 0.11) : Math.max(0.34, 0.62 - start * 0.09));
+    const color = `oklch(${lightness.toFixed(3)} ${dark ? 0.15 : 0.17} ${Math.round(hue)})`;
     shades.set(frame.id, color);
     return color;
   };
@@ -255,8 +281,16 @@ const PAGE_JS: &str = r##"(() => {
   else document.addEventListener("DOMContentLoaded", start, { once: true });
 })()"##;
 
-/// The setting,
+/// The setting, and the palette, by its place in `PALETTES`
 static ON: AtomicBool = AtomicBool::new(false);
+static PALETTE: AtomicUsize = AtomicUsize::new(0);
+
+/// The palettes `PAGE_JS` knows, Rainbow first and the default
+const PALETTES: [&str; 7] = ["rainbow", "sunset", "ocean", "forest", "aurora", "candy", "ember"];
+
+fn palette(settings: &Settings) -> usize {
+    PALETTES.iter().position(|&name| name == settings.frame_palette).unwrap_or(0)
+}
 /// and when it last changed, for `PAGE_JS` to tell it from an older one in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
@@ -267,12 +301,14 @@ fn now() -> u64 {
 
 fn state() -> String {
     let (on, rev) = (ON.load(Ordering::Relaxed), REV.load(Ordering::Relaxed));
-    format!(r#"{{"on":{on},"rev":{rev}}}"#)
+    let palette = PALETTES[PALETTE.load(Ordering::Relaxed).min(PALETTES.len() - 1)];
+    format!(r#"{{"on":{on},"palette":"{palette}","rev":{rev}}}"#)
 }
 
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.frame_colors, Ordering::Relaxed);
+    PALETTE.store(palette(settings), Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
 
@@ -283,7 +319,9 @@ pub fn page_js() -> String {
 
 /// Sends a changed setting to every loaded tab
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
-    if ON.swap(settings.frame_colors, Ordering::Relaxed) == settings.frame_colors {
+    let on = ON.swap(settings.frame_colors, Ordering::Relaxed) != settings.frame_colors;
+    let palette = PALETTE.swap(palette(settings), Ordering::Relaxed) != palette(settings);
+    if !on && !palette {
         return;
     }
     REV.store(now(), Ordering::Relaxed);

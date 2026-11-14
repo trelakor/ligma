@@ -104,6 +104,9 @@ pub struct Settings {
     /// Color each frame in the layers panel, and a tint of it what's in it,
     /// a step darker for each frame inside
     pub frame_colors: bool,
+    /// Which colors: "rainbow", or a colorway, "sunset", "ocean", "forest",
+    /// "aurora", "candy" or "ember" (see frame_colors.rs)
+    pub frame_palette: String,
     /// Show Draw in the mode switch on the right of Figma Design's
     /// toolbar. With one mode left, the toolbar shows no switch,
     pub show_draw_mode: bool,
@@ -201,6 +204,7 @@ impl Default for Settings {
             actions_plugins_tab: false,
             layer_previews: false,
             frame_colors: false,
+            frame_palette: "rainbow".into(),
             show_draw_mode: true,
             show_design_mode: true,
             show_motion_mode: true,
