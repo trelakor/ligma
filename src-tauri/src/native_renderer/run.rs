@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -428,7 +428,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
     let output = if window.is_some() { Output::Window(hwnd) } else { Output::Layer(hwnd) };
 
     let (messages, receive) = mpsc::channel();
-    let (requests, requested) = mpsc::channel();
+    let requests = Arc::new(super::render::Requests::default());
     let (jobs, job_queue) = mpsc::channel();
     let ctx = Arc::new(Ctx {
         app: app.clone(),
@@ -461,14 +461,14 @@ fn open(app: &AppHandle) -> Result<(), String> {
     let kept = super::effects::Kept::default();
     super::effects::spawn(job_queue, ctx.messages.clone(), device.as_ref().ok().map(|device| device.name.clone()), code, kept.clone());
     let (started, start) = mpsc::channel();
-    let (hub, render_device, wake) = (ctx.hub.clone(), device.clone(), ctx.messages.clone());
+    let (hub, render_device, wake, asks) = (ctx.hub.clone(), device.clone(), ctx.messages.clone(), requests.clone());
     std::thread::Builder::new()
         .name("native-render".into())
         .spawn(move || match render_device.and_then(|device| Gpu::new(&device, size.width, size.height)) {
             Ok(mut gpu) => {
                 gpu.watch(wake, hub.clone());
                 let _ = started.send(Ok(gpu.adapter.clone()));
-                Painter::new(gpu, requests, jobs, kept, hub).run(receive);
+                Painter::new(gpu, asks, jobs, kept, hub).run(receive);
             }
             Err(error) => {
                 let _ = started.send(Err(error));
@@ -531,11 +531,10 @@ fn open(app: &AppHandle) -> Result<(), String> {
     spawn("native-view", ctx.clone(), poll_view);
     spawn("native-frames", ctx.clone(), take_frames);
     spawn("native-memory", ctx.clone(), sample_memory);
-    let requested = Arc::new(Mutex::new(requested));
     // Images come from the page in parallel, each decoded on its own thread
     for _ in 0..6 {
-        let requested = requested.clone();
-        spawn("native-fetch", ctx.clone(), move |ctx| fetch(ctx, requested));
+        let requests = requests.clone();
+        spawn("native-fetch", ctx.clone(), move |ctx| fetch(ctx, requests));
     }
     sync(ctx);
     Ok(())
@@ -1092,10 +1091,9 @@ fn sample_memory(ctx: Arc<Ctx>) {
 }
 
 /// Fetches the images the render thread asks for
-fn fetch(ctx: Arc<Ctx>, requests: Arc<Mutex<Receiver<Request>>>) {
+fn fetch(ctx: Arc<Ctx>, requests: Arc<super::render::Requests>) {
     while !ctx.stop.load(Ordering::Relaxed) {
-        let request = requests.lock().unwrap().recv_timeout(Duration::from_millis(500));
-        let Ok(Request { key, width }) = request else {
+        let Some(Request { key, width }) = requests.take(Duration::from_millis(500)) else {
             continue;
         };
         let Some(webview) = current(&ctx) else {

@@ -198,6 +198,38 @@ pub struct Request {
     pub width: f64,
 }
 
+/// Images asked for and not yet taken to be fetched. The widest goes
+/// first, as what's biggest on screen is what the view is waiting on most,
+/// and the furthest level's tiles, drawn behind the view, show every image
+/// at a few pixels. An image asked for again before it's taken is fetched
+/// once, at the larger width
+#[derive(Default)]
+pub struct Requests {
+    queue: std::sync::Mutex<Vec<Request>>,
+    added: std::sync::Condvar,
+}
+
+impl Requests {
+    pub fn send(&self, request: Request) {
+        let mut queue = self.queue.lock().unwrap();
+        match queue.iter_mut().find(|queued| queued.key == request.key) {
+            Some(queued) => queued.width = queued.width.max(request.width),
+            None => queue.push(request),
+        }
+        self.added.notify_one();
+    }
+
+    /// The widest asked for, waiting up to `timeout` for one
+    pub fn take(&self, timeout: Duration) -> Option<Request> {
+        let mut queue = self.queue.lock().unwrap();
+        if queue.is_empty() {
+            queue = self.added.wait_timeout(queue, timeout).unwrap().0;
+        }
+        let widest = (0..queue.len()).max_by(|&a, &b| queue[a].width.total_cmp(&queue[b].width).then(b.cmp(&a)))?;
+        Some(queue.remove(widest))
+    }
+}
+
 /// In a dev build with LIGMA_NATIVE_TRACE=1, frame and tile timings are
 /// written to ligma-trace.txt in the temp folder
 pub(super) fn tracing() -> bool {
@@ -1198,7 +1230,7 @@ pub struct Painter {
     frame: u64,
     tint: bool,
     dirty: bool,
-    requests: Sender<Request>,
+    requests: Arc<Requests>,
     /// Nodes' custom effects to run, see effects.rs
     effects: Sender<Job>,
     /// What effects drew, whole, kept on their thread
@@ -1237,7 +1269,7 @@ pub struct Painter {
 type Mark = ((usize, bool), [u32; 4], u64, u64);
 
 impl Painter {
-    pub fn new(gpu: Gpu, requests: Sender<Request>, effects: Sender<Job>, kept: Kept, hub: Arc<Hub>) -> Self {
+    pub fn new(gpu: Gpu, requests: Arc<Requests>, effects: Sender<Job>, kept: Kept, hub: Arc<Hub>) -> Self {
         let vello_starting = std::env::var_os("LIGMA_NATIVE_VELLO").filter(|value| value != "0").map(|_| super::vello::start(&gpu.device));
         Self {
             vello: None,
@@ -4448,7 +4480,7 @@ impl Painter {
         if key.starts_with(EFFECT) {
             self.effect(key, width);
         } else {
-            let _ = self.requests.send(Request { key: key.to_string(), width });
+            self.requests.send(Request { key: key.to_string(), width });
         }
     }
 
