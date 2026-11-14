@@ -869,13 +869,13 @@ fn read_image(cmd_ix: u32) -> CmdImage {
     let m1 = bitcast<f32>(info[info_offset + 1u]);
     let m2 = bitcast<f32>(info[info_offset + 2u]);
     let m3 = bitcast<f32>(info[info_offset + 3u]);
-    let matrx = vec4(m0, m1, m2, m3);
-    let xlat = vec2(bitcast<f32>(info[info_offset + 4u]), bitcast<f32>(info[info_offset + 5u]));
+    var matrx = vec4(m0, m1, m2, m3);
+    var xlat = vec2(bitcast<f32>(info[info_offset + 4u]), bitcast<f32>(info[info_offset + 5u]));
     let xy = info[info_offset + 6u];
     let width_height = info[info_offset + 7u];
     let sample_alpha = info[info_offset + 8u];
     let alpha = f32(sample_alpha & 0xFFu) / 255.0;
-    let format = sample_alpha >> 15u;
+    let format = (sample_alpha >> 15u) & 0x1u;
     let alpha_type = (sample_alpha >> 14u) & 0x1u;
     let quality = (sample_alpha >> 12u) & 0x3u;
     let x_extend = (sample_alpha >> 10u) & 0x3u;
@@ -885,6 +885,13 @@ fn read_image(cmd_ix: u32) -> CmdImage {
     let y = f32(xy & 0xffffu);
     let width = f32(width_height >> 16u);
     let height = f32(width_height & 0xffffu);
+    // Ligma: placed from 0 to 1 across the image, so any of its mipmap
+    // levels is drawn by the same transform
+    if ((sample_alpha >> 16u) & 0x1u) != 0u {
+        let size = vec2(width, height);
+        matrx = matrx * vec4(size, size);
+        xlat = xlat * size;
+    }
     return CmdImage(matrx, xlat, vec2(x, y), vec2(width, height), format, x_extend, y_extend, quality, alpha, alpha_type);
 }
 

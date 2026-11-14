@@ -766,59 +766,139 @@ fn outside(shape: &Path, device: IRect) -> Option<Path> {
 /// `shape` drawn by `transform`, as lines no further than `tolerance` from
 /// it, where it's small enough that's fewer than it has
 fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64) -> Option<BezPath> {
-    let bounds = transform.transform_rect_bbox(shape.bounding_box());
-    if bounds.width().max(bounds.height()) > 64.0 {
+    // Half the tolerance flattening, half leaving points out
+    let half = tolerance / 2.0;
+    // Its control points' bounds, which hold it, and how many parts it has
+    let mut had = 0;
+    let (mut low, mut high) = (kurbo::Point::new(f64::MAX, f64::MAX), kurbo::Point::new(f64::MIN, f64::MIN));
+    for element in shape.path_elements(0.1) {
+        had += 1;
+        element_points(&(transform * element), |point| {
+            (low.x, low.y, high.x, high.y) = (low.x.min(point.x), low.y.min(point.y), high.x.max(point.x), high.y.max(point.y));
+        });
+    }
+    if had == 0 || (high.x - low.x).max(high.y - low.y) > 64.0 {
         return None;
     }
-    let had = shape.path_elements(0.1).count();
-    let mut out = BezPath::new();
-    let mut line: Vec<kurbo::Point> = Vec::new();
-    let mut keep = Vec::new();
-    // Half the tolerance flattening, half leaving points out
-    let mut close = |line: &mut Vec<kurbo::Point>, out: &mut BezPath| {
-        if line.len() >= 3 {
-            let first = line[0];
-            if line.last() != Some(&first) {
-                line.push(first);
-            }
-            fewer(line, tolerance / 2.0, &mut keep);
-            if keep.len() >= 4 {
-                out.move_to(line[keep[0]]);
-                for &index in &keep[1..keep.len() - 1] {
-                    out.line_to(line[index]);
+    SCRATCH.with_borrow_mut(|(line, keep, kept, spans)| {
+        let mut out = BezPath::new();
+        let mut close = |line: &mut Vec<kurbo::Point>, out: &mut BezPath| {
+            if line.len() >= 3 {
+                let first = line[0];
+                if line.last() != Some(&first) {
+                    line.push(first);
                 }
-                out.close_path();
+                fewer(line, half, keep, kept, spans);
+                if keep.len() >= 4 {
+                    out.move_to(line[keep[0]]);
+                    for &index in &keep[1..keep.len() - 1] {
+                        out.line_to(line[index]);
+                    }
+                    out.close_path();
+                }
+            }
+            line.clear();
+        };
+        line.clear();
+        let mut last = kurbo::Point::ZERO;
+        for element in shape.path_elements(0.1) {
+            let element = transform * element;
+            match element {
+                kurbo::PathEl::MoveTo(p) => {
+                    close(line, &mut out);
+                    line.push(p);
+                    last = p;
+                }
+                kurbo::PathEl::LineTo(p) => {
+                    line.push(p);
+                    last = p;
+                }
+                kurbo::PathEl::QuadTo(c, p) => {
+                    // Mostly far under a pixel, so as near as its chord
+                    if !flat(last, &[c], p, half) {
+                        kurbo::flatten([kurbo::PathEl::MoveTo(last), element], half, |part| {
+                            if let kurbo::PathEl::LineTo(q) = part {
+                                line.push(q);
+                            }
+                        });
+                    }
+                    line.push(p);
+                    last = p;
+                }
+                kurbo::PathEl::CurveTo(c1, c2, p) => {
+                    if !flat(last, &[c1, c2], p, half) {
+                        kurbo::flatten([kurbo::PathEl::MoveTo(last), element], half, |part| {
+                            if let kurbo::PathEl::LineTo(q) = part {
+                                line.push(q);
+                            }
+                        });
+                    }
+                    line.push(p);
+                    last = p;
+                }
+                kurbo::PathEl::ClosePath => close(line, &mut out),
             }
         }
-        line.clear();
-    };
-    kurbo::flatten(shape.path_elements(0.1).map(|element| transform * element), tolerance / 2.0, |element| match element {
-        kurbo::PathEl::MoveTo(p) => {
-            close(&mut line, &mut out);
-            line.push(p);
+        close(line, &mut out);
+        (out.elements().len() < had).then_some(out)
+    })
+}
+
+thread_local! {
+    /// What `simplified` works in, kept for the next
+    static SCRATCH: std::cell::RefCell<(Vec<kurbo::Point>, Vec<usize>, Vec<bool>, Vec<(usize, usize)>)> = const { std::cell::RefCell::new((Vec::new(), Vec::new(), Vec::new(), Vec::new())) };
+}
+
+fn element_points(element: &kurbo::PathEl, mut f: impl FnMut(kurbo::Point)) {
+    match *element {
+        kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => f(p),
+        kurbo::PathEl::QuadTo(a, b) => {
+            f(a);
+            f(b);
         }
-        kurbo::PathEl::LineTo(p) => line.push(p),
-        _ => close(&mut line, &mut out),
-    });
-    close(&mut line, &mut out);
-    (out.elements().len() < had).then_some(out)
+        kurbo::PathEl::CurveTo(a, b, c) => {
+            f(a);
+            f(b);
+            f(c);
+        }
+        kurbo::PathEl::ClosePath => {}
+    }
+}
+
+/// Whether the curve from `from` to `to` by `controls` is no further than
+/// `tolerance` from its chord, its controls being so, alongside it
+fn flat(from: kurbo::Point, controls: &[kurbo::Point], to: kurbo::Point, tolerance: f64) -> bool {
+    let d = to - from;
+    let length2 = d.hypot2();
+    controls.iter().all(|&c| {
+        let off = c - from;
+        if length2 <= 1e-18 {
+            return off.hypot2() <= tolerance * tolerance;
+        }
+        let cross = off.x * d.y - off.y * d.x;
+        let along = off.x * d.x + off.y * d.y;
+        let length = length2.sqrt();
+        cross * cross <= tolerance * tolerance * length2 && along >= -tolerance * length && along <= length2 + tolerance * length
+    })
 }
 
 /// The indices of the points of the closed `line` that keep it within
 /// `tolerance` of itself, by Douglas and Peucker's way
-fn fewer(line: &[kurbo::Point], tolerance: f64, keep: &mut Vec<usize>) {
+fn fewer(line: &[kurbo::Point], tolerance: f64, keep: &mut Vec<usize>, kept: &mut Vec<bool>, spans: &mut Vec<(usize, usize)>) {
     keep.clear();
     let last = line.len() - 1;
     // A closed line splits at the point furthest from its start first
     let far = (1..last).max_by(|&a, &b| (line[a] - line[0]).hypot2().total_cmp(&(line[b] - line[0]).hypot2())).unwrap_or(0);
-    let mut kept = vec![false; line.len()];
+    kept.clear();
+    kept.resize(line.len(), false);
     kept[0] = true;
     kept[last] = true;
     if (line[far] - line[0]).hypot() <= tolerance {
         return;
     }
     kept[far] = true;
-    let mut spans = vec![(0, far), (far, last)];
+    spans.clear();
+    spans.extend([(0, far), (far, last)]);
     while let Some((a, b)) = spans.pop() {
         if b <= a + 1 {
             continue;
@@ -870,6 +950,16 @@ fn shape_of(tree: &Tree, id: u32, depth: u32) -> String {
 /// 1/4, 1, 4, 16, 64, 256 and over
 /// 1/4, 1, 4, 16, 64, 256 and over, then layers pushed by what for
 pub static SIZES: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
+pub static TIMES: [std::sync::atomic::AtomicU64; 12] = [const { std::sync::atomic::AtomicU64::new(0) }; 12];
+pub struct Timer(usize, std::time::Instant);
+impl Drop for Timer {
+    fn drop(&mut self) {
+        TIMES[self.0].fetch_add(self.1.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+pub fn timer(i: usize) -> Timer {
+    Timer(i, std::time::Instant::now())
+}
 
 /// The level of fragments drawn at `px`
 pub fn level(px: f32) -> i32 {
@@ -901,6 +991,12 @@ enum Kind {
         /// The area it's clamped to, if it is
         clamp: Option<kurbo::Rect>,
     },
+    /// An image fill, `width` device pixels wide in the scene's space, which
+    /// each view has drawn from the mipmap level for the zoom it's at
+    Image {
+        key: String,
+        width: f32,
+    },
     /// What Skia draws, with `m` from what's drawn to the scene's space,
     /// which each view has it draw onto the atlas at the zoom it's at
     Skia {
@@ -913,6 +1009,13 @@ enum Kind {
 
 /// What Skia draws for a view
 type SkiaDraw = Box<dyn for<'d> Fn(&mut Drawer<'d>) + Send>;
+
+/// How many times smaller a blur of `sigma` pixels has its source drawn:
+/// half what the blur averages it down by (see vello_blur.rs)
+fn shrink(sigma: f64) -> i32 {
+    let level = if sigma <= 4.0 { 0 } else { (sigma / 4.0).log2().ceil().clamp(0.0, 12.0) as i32 };
+    1 << (level - 1).max(0)
+}
 
 /// Most blurs inside each other, each a texture
 const BLUR_DEPTH: usize = 4;
@@ -1005,6 +1108,13 @@ impl Plan {
 
     /// Has `effect` draw `image`, with `transform` from its pixels to the
     /// scene's space
+    fn patch_image(encoding: &mut Encoding, effect: &Effect, image: ImageData) {
+        if let Some(Patch::Image { image: was, draw_data_offset }) = encoding.resources.patches.get_mut(effect.patch) {
+            encoding.draw_data[*draw_data_offset + 1] = (image.width << 16) | (image.height & 0xFFFF);
+            *was = image;
+        }
+    }
+
     fn patch(encoding: &mut Encoding, effect: &Effect, image: ImageData, transform: Affine) {
         encoding.transforms[effect.transform] = Transform::from_kurbo(&transform);
         if let Some(Patch::Image { image: was, draw_data_offset }) = encoding.resources.patches.get_mut(effect.patch) {
@@ -1034,6 +1144,8 @@ pub struct Encoder<'a> {
     m: Matrix,
     pub counts: Counts,
     pub asked: Asked,
+    /// Images views have drawn, at the levels they drew them
+    pub drawn: Vec<(String, u32)>,
     /// Why the view can't be drawn this way, if it can't
     pub failed: Option<String>,
     /// Pixels Skia drew into the atlas
@@ -1105,6 +1217,7 @@ impl<'a> Encoder<'a> {
             depth: 0,
             retained: false,
             pictures: Vec::new(),
+            drawn: Vec::new(),
             cast: None,
             alpha_only: false,
             effects: Vec::new(),
@@ -1202,6 +1315,7 @@ impl<'a> Encoder<'a> {
     }
 
     fn clip(&mut self, device: Path) {
+        let _t = timer(10);
         let saved = self.soft.take();
         let shape = match &saved {
             Some(soft) => Path::op(soft, &device, skia_safe::PathOp::Intersect).unwrap_or(device),
@@ -1242,8 +1356,14 @@ impl<'a> Encoder<'a> {
         // Small, it's drawn with fewer lines no further than this from it,
         // in device pixels for fragments' largest zoom
         let tolerance = if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 };
-        if std::env::var_os("LIGMA_NATIVE_VELLO_WHOLE").is_none() {
-            if let Some(lines) = simplified(shape, transform, tolerance) {
+        let env = timer(4);
+        let whole = std::env::var_os("LIGMA_NATIVE_VELLO_WHOLE").is_none();
+        drop(env);
+        if whole {
+            let simple = timer(2);
+            let lines = simplified(shape, transform, tolerance);
+            drop(simple);
+            if let Some(lines) = lines {
                 // What the brush is drawn by stays as it was
                 let brush: peniko::BrushRef<'b> = brush.into();
                 let brush_transform = match brush {
@@ -1257,6 +1377,7 @@ impl<'a> Encoder<'a> {
     }
 
     fn fill_shape<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
+        let _t = timer(3);
         if std::env::var_os("LIGMA_NATIVE_VELLO_SIZES").is_some() {
             let b = transform.transform_rect_bbox(shape.bounding_box());
             let size = b.width().max(b.height());
@@ -1328,7 +1449,10 @@ impl<'a> Encoder<'a> {
         if self.depth >= tree::DEPTH || self.failed.is_some() {
             return;
         }
+        let _all = (self.depth == 0).then(|| timer(0));
+        let clone = timer(1);
         let Some(node) = self.tree.node(id).cloned() else { return };
+        drop(clone);
         let Some(bounds) = self.tree.info(id).bounds else { return };
         // A fragment's shown up to twice as big as it's encoded
         let least = if self.retained { 0.25 } else { 0.5 };
@@ -1390,6 +1514,7 @@ impl<'a> Encoder<'a> {
             Op::FillGlyphs => {
                 self.counts.native += 1;
                 let Some(glyphs) = &ext.painted_glyph_geometry else { return };
+                let glyph_timer = timer(6);
                 let mut outline = skia_safe::PathBuilder::new();
                 for glyph in &glyphs.glyphs {
                     let Some(path) = &glyph.path else { continue };
@@ -1402,6 +1527,7 @@ impl<'a> Encoder<'a> {
                 }
                 let outline = outline.detach();
                 let shape = bez(&outline);
+                drop(glyph_timer);
                 self.with(Some(&node.transform.unwrap_or(rt::IDENTITY)), |this| {
                     for paint in &glyphs.paints {
                         this.paint(node, paint, &outline, &shape);
@@ -1500,12 +1626,14 @@ impl<'a> Encoder<'a> {
         if node.stroke_geometries.iter().all(|g| g.paints.is_empty()) {
             return;
         }
+        let outline_timer = timer(7);
         let outlines: Vec<Path> = node.fill_geometries.iter().filter_map(|g| g.path.as_ref()).map(|path| self.tree.skia_path(path)).collect();
         let outline = match outlines.as_slice() {
             [] => None,
             [one] => Some(one.clone()),
             [first, rest @ ..] => Some(rest.iter().fold(first.clone(), |all, path| all.op(path, skia_safe::PathOp::Union).unwrap_or(all))),
         };
+        drop(outline_timer);
         let strokes = |this: &mut Self| {
             for geometry in &node.stroke_geometries {
                 let Some(path) = &geometry.path else { continue };
@@ -1578,9 +1706,13 @@ impl<'a> Encoder<'a> {
                 }
             };
         }
+        let mut image = None;
         let brush: Option<(peniko::Brush, Option<Affine>)> = match kind {
             PaintType::Image => match self.image(paint, node.paint_size.unwrap_or([1.0, 1.0]), opacity) {
-                Picture::Drawn(brush, at) => Some((peniko::Brush::Image(brush), Some(at))),
+                Picture::Drawn(brush, at, key, width) => {
+                    image = Some((key, width));
+                    Some((peniko::Brush::Image(brush), Some(at)))
+                }
                 Picture::Nothing => return,
                 Picture::Skia => None,
             },
@@ -1601,18 +1733,40 @@ impl<'a> Encoder<'a> {
             Some(mode) => self.push(mode, 1.0, skia.bounds().with_outset((1.0, 1.0))),
             None => false,
         };
+        let patches = self.scene.encoding().resources.patches.len();
         self.fill(fill_of(skia), affine(&self.m), &brush, brush_transform, path);
+        if let Some((key, width)) = image {
+            self.image_drawn(patches, key, width, skia);
+        }
         if blended {
             self.pop();
         }
+    }
+
+    /// An image just drawn over `skia`, whose patches were `patches`
+    /// before, with its level picked for each view (see `Kind::Image`):
+    /// where its sampling's encoded, if it was drawn
+    fn image_drawn(&mut self, patches: usize, key: String, width: f32, skia: &Path) -> Option<usize> {
+        let encoding = self.scene.encoding_mut();
+        if encoding.resources.patches.len() <= patches {
+            return None;
+        }
+        let patch = encoding.resources.patches.len() - 1;
+        let Some(Patch::Image { draw_data_offset, .. }) = encoding.resources.patches.last() else { return None };
+        let at = *draw_data_offset + 2;
+        encoding.draw_data[at] |= 1 << 16;
+        let bounds = self.m.map_rect(skia.bounds()).0;
+        let bounds = kurbo::Rect::new(bounds.left as f64, bounds.top as f64, bounds.right as f64, bounds.bottom as f64);
+        self.effects.push(Effect { kind: Kind::Image { key, width }, bounds, transform: usize::MAX, patch });
+        Some(at)
     }
 
     /// Image fill `paint`'s silhouette in `cast`, as Skia casts it: each of
     /// its texels that isn't clear solid, then sampled as the image is. False
     /// where Vello can't draw the image
     fn image_silhouette(&mut self, node: &Node, paint: &rt::Paint, skia: &Path, path: &BezPath, cast: Color4f) -> bool {
-        let brush = match self.image(paint, node.paint_size.unwrap_or([1.0, 1.0]), 1.0) {
-            Picture::Drawn(brush, at) => (peniko::Brush::Image(brush), at),
+        let (brush, key, width) = match self.image(paint, node.paint_size.unwrap_or([1.0, 1.0]), 1.0) {
+            Picture::Drawn(brush, at, key, width) => ((peniko::Brush::Image(brush), at), key, width),
             Picture::Nothing => return true,
             Picture::Skia => return false,
         };
@@ -1625,13 +1779,9 @@ impl<'a> Encoder<'a> {
         }
         let patches = self.scene.encoding().resources.patches.len();
         self.fill(fill_of(skia), affine(&self.m), &brush.0, Some(brush.1), path);
-        let encoding = self.scene.encoding_mut();
-        if encoding.resources.patches.len() > patches {
-            if let Some(Patch::Image { draw_data_offset, .. }) = encoding.resources.patches.last() {
-                // Ligma's shaders take the quality otherwise unused for it
-                let at = *draw_data_offset + 2;
-                encoding.draw_data[at] |= 3 << 12;
-            }
+        if let Some(at) = self.image_drawn(patches, key, width, skia) {
+            // Ligma's shaders take the quality otherwise unused for it
+            self.scene.encoding_mut().draw_data[at] |= 3 << 12;
         }
         if !tinted {
             return true;
@@ -1649,6 +1799,7 @@ impl<'a> Encoder<'a> {
     /// stroke, or a stroke kept inside or outside its outline. None where
     /// it's more
     fn cover(&mut self, id: u32, casting: bool) -> Option<Cover> {
+        let _t = timer(5);
         let tree = self.tree;
         let mut m = self.m;
         let mut id = id;
@@ -1788,6 +1939,7 @@ impl<'a> Encoder<'a> {
     /// Image fill `paint` of a node `size` big, as `Drawer::image` draws it,
     /// with what it asked about the image
     fn image(&mut self, paint: &rt::Paint, size: [f32; 2], opacity: f32) -> Picture {
+        let _t = timer(9);
         let Some(key) = tree::image_key(paint) else { return Picture::Nothing };
         let (w, h) = (size[0].max(1e-3), size[1].max(1e-3));
         // A fragment's shown up to twice as big as it's encoded
@@ -1816,16 +1968,18 @@ impl<'a> Encoder<'a> {
             return Picture::Skia;
         };
         let mut local = to_node;
-        local.pre_scale((iw / data.width as f32, ih / data.height as f32), None);
+        local.pre_scale((iw, ih), None);
+        let width = shown / if self.retained { 2.0 } else { 1.0 };
         // Ligma's shaders take reflect for transparent outside the image,
         // and high quality for Figma's sampling
         let extend = if tile == skia_safe::TileMode::Repeat { Extend::Repeat } else { Extend::Reflect };
-        self.pictures.push((key, level, data.data.id()));
+        self.pictures.push((key.clone(), level, data.data.id()));
         let brush = ImageBrush { image: data, sampler: ImageSampler { x_extend: extend, y_extend: extend, quality: ImageQuality::High, alpha: opacity } };
-        Picture::Drawn(brush, affine(&local))
+        Picture::Drawn(brush, affine(&local), key, width)
     }
 
     fn mask(&mut self, node: &Node, id: u32, bounds: Rect) {
+        let _t = timer(11);
         let (Some(alpha), Some(color)) = (node.alpha_node, node.color_node) else {
             return;
         };
@@ -2059,6 +2213,7 @@ impl<'a> Encoder<'a> {
     /// What Skia draws with `draw`, over `bounds` in the current space,
     /// which each view has it draw onto the atlas at the zoom it's at
     fn fall_back(&mut self, kind: &'static str, blends: bool, bounds: Rect, draw: SkiaDraw) {
+        let _t = timer(8);
         // Drawn alone, it can't mix with what's under it
         if blends {
             return self.fail("blends in what Skia draws");
@@ -2089,7 +2244,14 @@ impl<'a> Encoder<'a> {
                     }
                     let region = shown.inflate(margin, margin);
                     let (left, top) = (region.x0.floor() as i32, region.y0.floor() as i32);
-                    let (width, height) = (region.x1.ceil() as i32 - left, region.y1.ceil() as i32 - top);
+                    // A wide blur's source is drawn smaller, which the blur
+                    // would average it down to anyway, as Skia does, by
+                    // half as much, for each of its pixels to be of 16
+                    // samples still
+                    let shrink = shrink(sigma.0.max(sigma.1));
+                    let (width, height) = ((region.x1.ceil() as i32 - left + shrink - 1) / shrink, (region.y1.ceil() as i32 - top + shrink - 1) / shrink);
+                    let f = 1.0 / shrink as f64;
+                    let sigma = (sigma.0 * f, sigma.1 * f);
                     if depth >= BLUR_DEPTH {
                         return Err("blurs too deep in each other".into());
                     }
@@ -2101,7 +2263,7 @@ impl<'a> Encoder<'a> {
                     }
                     let soft = plan.width;
                     let (x, y) = plan.depths[depth].room(width, height, soft).ok_or("blurs past their texture")?;
-                    let to_slot = Affine::translate(((x - left) as f64, (y - top) as f64)) * t;
+                    let to_slot = Affine::translate((x as f64, y as f64)) * Affine::scale(f) * Affine::translate((-left as f64, -top as f64)) * t;
                     let slot = kurbo::Rect::new(x as f64, y as f64, (x + width) as f64, (y + height) as f64);
                     self.put(plan, effects, source.encoding_mut(), to_slot, slot, depth + 1)?;
                     let scene = &mut plan.depths[depth].scene;
@@ -2120,8 +2282,32 @@ impl<'a> Encoder<'a> {
                         [(clamp.x0 - x as f64) as f32, (clamp.y0 - y as f64) as f32, (clamp.x1 - x as f64) as f32, (clamp.y1 - y as f64) as f32]
                     });
                     let job = Job { slot: [x, y, width, height], sigma: (sigma.0 as f32, sigma.1 as f32), clamp };
-                    Plan::patch(encoding, effect, image.clone(), t.inverse() * Affine::translate((left as f64, top as f64)));
+                    Plan::patch(encoding, effect, image.clone(), t.inverse() * Affine::translate((left as f64, top as f64)) * Affine::scale(shrink as f64));
+                    // Drawn bigger, it's sampled smoothly, as Skia scales a
+                    // blur back up
+                    if let Some(Patch::Image { draw_data_offset, .. }) = encoding.resources.patches.get(effect.patch) {
+                        let at = *draw_data_offset + 2;
+                        let quality = if shrink > 1 { ImageQuality::Medium } else { ImageQuality::Low };
+                        encoding.draw_data[at] = (encoding.draw_data[at] & !(3 << 12)) | (quality as u32) << 12;
+                    }
                     plan.depths[depth].blurs.push(Placed { job, image });
+                }
+                Kind::Image { key, width } => {
+                    let shown = t.transform_rect_bbox(effect.bounds).intersect(view);
+                    // Out of view, it takes no room in Vello's atlas
+                    if shown.width() <= 0.0 || shown.height() <= 0.0 {
+                        Plan::patch_image(encoding, effect, nothing());
+                        continue;
+                    }
+                    let Some(img) = self.images.get(key.as_str()) else { return Err("image gone".into()) };
+                    // As `image` picks it, for how wide it's shown here
+                    let texels = img.image.width() as f32 / (*width * scale as f32).max(1e-6);
+                    let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
+                    let Some((data, level)) = (0..=level).rev().find_map(|level| self.vello.picture(key, img, level).map(|data| (data, level))) else {
+                        return Err("image Vello can't draw".into());
+                    };
+                    self.drawn.push((key.clone(), level));
+                    Plan::patch_image(encoding, effect, data);
                 }
                 Kind::Skia { name, m, cast, draw } => {
                     let shown = t.transform_rect_bbox(effect.bounds).intersect(view);
@@ -2177,7 +2363,10 @@ impl<'a> Encoder<'a> {
 
 /// An image fill as Vello draws it, or not
 enum Picture {
-    Drawn(ImageBrush, Affine),
+    /// Its brush, placed from 0 to 1 across the image, with the level
+    /// encoded for now, and the image's key and how wide it's shown, in
+    /// device pixels (see `Kind::Image`)
+    Drawn(ImageBrush, Affine, String, f32),
     /// Nothing, as there's no image yet or it has no layout
     Nothing,
     /// As Skia draws it

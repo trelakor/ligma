@@ -446,8 +446,29 @@ struct Encoded {
 /// may take, leaving room for how they're packed
 const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 
+/// How long the view stays still before tiles to stand in where Vello falls
+/// behind are drawn
+const VELLO_STILL: Duration = Duration::from_secs(1);
+
 /// How long fragments no view used are kept
 const FRAGMENTS_KEPT: Duration = Duration::from_secs(3);
+
+/// Time a view drawn while the zoom changes spends at most encoding units
+/// at its level, past which those encoded at a level near it stand in
+const ENCODE_ZOOMING: Duration = Duration::from_millis(6);
+/// The same once it's settled, as the one before stays shown meanwhile
+const ENCODE_SETTLED: Duration = Duration::from_millis(30);
+
+/// Whether `encoded` is of the unit as it is, `stamp`, with the textures of
+/// the images it draws those Vello has. One Vello can't draw is only of
+/// use at its own level, to fall back to Skia
+fn usable(encoded: &Encoded, stamp: u64, own: bool, images: &HashMap<String, Img>, vello: &mut super::vello::Vello) -> bool {
+    encoded.stamp == stamp
+        && match &encoded.made {
+            Ok(fragment) => fragment.pictures.iter().all(|(key, level, id)| images.get(key).and_then(|img| vello.picture(key, img, *level)).is_some_and(|data| data.data.id() == *id)),
+            Err(_) => own,
+        }
+}
 
 struct Recorded {
     picture: Picture,
@@ -476,6 +497,7 @@ struct Unchecked {
     renders: usize,
     started: Instant,
     stats: String,
+    rough: bool,
 }
 
 struct Whole {
@@ -490,6 +512,11 @@ struct Whole {
     fence: u64,
     /// Changes with what's drawn in it
     serial: u64,
+    /// Drawn by Vello with some units encoded at other levels, to draw
+    /// again exactly
+    rough: bool,
+    /// Drawn by Vello, all of it at its zoom
+    vello: bool,
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -1473,7 +1500,7 @@ impl Painter {
         // each frame, which isn't an edit to keep up with exactly
         let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
         if !editing.is_zero() && settle.is_zero() && (behind || missing > 0 || self.whole.is_some()) {
-            let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale);
+            let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale && !whole.rough);
             // One drawn at a time, what changes meanwhile drawn together
             // once the GPU's done
             if self.whole_busy() {
@@ -1499,7 +1526,7 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
-        let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty());
+        let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty() && !whole.rough);
         // While the zoom changes, tiles of it are of no use a moment later,
         // so the whole view is drawn instead, as Figma draws every frame
         if !settle.is_zero() {
@@ -1535,6 +1562,21 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
+        let rough: Vec<TileKey> = in_view.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.draft && !tile.exact)).collect();
+        // A view Vello drew with units of other levels standing in, shown
+        // till exact tiles cover it, is drawn again exactly first
+        let rough_whole = self.whole.as_ref().is_some_and(|whole| whole.rough && whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty());
+        if rough_whole && (missing > 0 || behind || !rough.is_empty()) && self.vello_ready() {
+            if self.whole_busy() {
+                return Some(Duration::from_millis(1));
+            }
+            self.draw_whole(ox, oy, width, height, px, true);
+            self.dirty = true;
+            return Some(Duration::ZERO);
+        }
+        // Over a view Vello drew, which is as exact, tiles are drawn exactly
+        // at once rather than quickly first
+        let direct = whole_here && self.whole.as_ref().is_some_and(|whole| whole.vello);
         let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale && (!tile.draft || key.px != pxb));
         let mut order: Vec<(TileKey, bool)> = Vec::new();
         // Where tiles are missing, the coarse level first: it covers four
@@ -1542,25 +1584,35 @@ impl Painter {
         if missing > 0 && !whole_here {
             order.extend(coarse_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         }
-        order.extend(in_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
+        order.extend(in_view.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, direct)));
+        // Then the view's tiles exactly, before anything else, once it's
+        // still, nor while the page changes, as while a file loads, which
+        // would draw them again soon anyway
+        let refine = REFINE_AFTER.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
+        if refine.is_zero() || direct {
+            order.extend(rough.iter().map(|&key| (key, true)));
+        }
         // Then the furthest level, all there is, which zooming out shows
         // till what's nearer is drawn, so none ever waits. Once drawn it's
         // shown, while out of date too, so it's drawn again only when idle
         let furthest = levels.first().map(|(_, pk)| pk.to_bits());
-        order.extend(pyramid.iter().copied().filter(|key| Some(key.px) == furthest && !self.tiles.contains_key(key)).map(|key| (key, false)));
+        // Vello draws the whole view each frame, wherever it goes, so tiles
+        // only stand in where it falls behind, which the furthest level
+        // does, drawn once the view's been still a while, as a tile of it
+        // is hundreds of milliseconds no frame can be drawn in
+        let vello = self.vello.is_some();
+        let still = VELLO_STILL.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
+        if !vello || still.is_zero() {
+            order.extend(pyramid.iter().copied().filter(|key| Some(key.px) == furthest && !self.tiles.contains_key(key)).map(|key| (key, false)));
+        }
         // An out of date tile is drawn again as well as it was, the whole
         // view standing in meanwhile
         order.extend(in_view.iter().filter_map(|key| self.tiles.get(key).filter(|tile| tile.stale || tile.draft).map(|tile| (*key, tile.exact))));
-        order.extend(around.iter().copied().filter(|key| !ready(&self.tiles, key)).map(|key| (key, false)));
-        order.extend(coarse_view.iter().chain(&coarse_around).copied().filter(|key| !ready(&self.tiles, key) && key.px != pxb).map(|key| (key, false)));
-        // And the levels between, so zooming out shows them less blurred
-        order.extend(pyramid.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
-        let rough: Vec<TileKey> = in_view.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && !tile.draft && !tile.exact)).collect();
-        // Nor while the page changes, as while a file loads, which would
-        // draw them again soon anyway
-        let refine = REFINE_AFTER.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
-        if refine.is_zero() {
-            order.extend(rough.iter().map(|&key| (key, true)));
+        if !vello {
+            order.extend(around.iter().copied().filter(|key| !ready(&self.tiles, key)).map(|key| (key, false)));
+            order.extend(coarse_view.iter().chain(&coarse_around).copied().filter(|key| !ready(&self.tiles, key) && key.px != pxb).map(|key| (key, false)));
+            // And the levels between, so zooming out shows them less blurred
+            order.extend(pyramid.iter().copied().filter(|key| !self.tiles.contains_key(key)).map(|key| (key, false)));
         }
         let mut seen = std::collections::HashSet::new();
         order.retain(|item| seen.insert(*item));
@@ -1585,6 +1637,14 @@ impl Painter {
             }
         }
         self.update_reason(&view, px, width, height);
+        if vello {
+            let waiting = pyramid.iter().any(|key| Some(key.px) == furthest && !self.tiles.contains_key(key));
+            return match (rough.is_empty(), waiting) {
+                (false, _) => Some(refine),
+                (true, true) => Some(still),
+                (true, false) => None,
+            };
+        }
         if rough.is_empty() && self.moved.elapsed() > Duration::from_millis(300) {
             if self.prewarm(&view, px, &levels) {
                 return Some(Duration::ZERO);
@@ -1644,12 +1704,13 @@ impl Painter {
         let margin = self.reach(view_area, px);
         let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
         let (w, h) = (width + margin * 2, height + margin * 2);
+        let budget = if SETTLE.saturating_sub(self.zoom.1.elapsed()).is_zero() { ENCODE_SETTLED } else { ENCODE_ZOOMING };
         // Drawn while the GPU draws the last, which is checked after
-        match self.vello_view_once(ox - margin, oy - margin, w, h, px, reach) {
-            Ok((tex, counts, stats)) => {
+        match self.vello_view_once(ox - margin, oy - margin, w, h, px, reach, Some(budget)) {
+            Ok((tex, counts, stats, rough)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -1682,7 +1743,7 @@ impl Painter {
             Ok(None) => {
                 trace(|| format!("  whole vello px={:.3} {} checked={:.1}ms {:.1}ms", last.layer.px, last.stats, waited.as_secs_f64() * 1000.0, last.started.elapsed().as_secs_f64() * 1000.0));
                 self.whole_took = last.started.elapsed();
-                self.hand_whole(last.layer, last.fence, last.at);
+                self.hand_whole(last.layer, last.fence, last.at, last.rough, true);
             }
             // Never shown, and drawn again with the room it needs where
             // it's still wanted
@@ -1707,7 +1768,7 @@ impl Painter {
         // Drawn again where it ran out of room in Vello's buffers, which
         // then have more, before it's shown
         for _ in 0..8 {
-            let (tex, counts, stats) = self.vello_view_once(left, top, w, h, px, reach)?;
+            let (tex, counts, stats, _) = self.vello_view_once(left, top, w, h, px, reach, None)?;
             let vello = self.vello.as_mut().ok_or("no Vello")?;
             let short = vello.check(usize::MAX)?;
             if let Some(why) = short {
@@ -1736,7 +1797,7 @@ impl Painter {
         Err("out of room in Vello's buffers".into())
     }
 
-    fn vello_view_once(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect) -> Result<(Arc<Tex>, Counts, String), String> {
+    fn vello_view_once(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let _ = self.gpu.context.flush_and_submit();
@@ -1764,6 +1825,7 @@ impl Painter {
         // Image fills' textures the view draws, by key
         let mut pictures: Vec<(String, u32)> = Vec::new();
         let (mut reused, mut made) = (0, 0);
+        let (mut encoding, mut rough) = (Duration::ZERO, false);
         // Blurs, drawn and put in place for the view
         let mut plan = super::vello::Plan::new(w);
         let whole = vello::kurbo::Rect::new(0.0, 0.0, w as f64, h as f64);
@@ -1790,7 +1852,8 @@ impl Painter {
                             encoder.failed = Some(why);
                         }
                         encoder.scene = scene;
-                        pictures.extend(encoder.pictures.drain(..).map(|(key, level, _)| (key, level)));
+                        encoder.pictures.clear();
+                        pictures.extend(encoder.drawn.drain(..));
                         asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
                         units += 1;
                         if encoder.failed.is_some() {
@@ -1798,26 +1861,39 @@ impl Painter {
                         }
                         continue;
                     }
-                    // Kept while it's of the unit as it is, and the textures of
-                    // the images it draws are those Vello has
-                    let images = &self.images;
-                    let current = fragments.get(&key).is_some_and(|encoded| {
-                        encoded.stamp == stamp
-                            && match &encoded.made {
-                                Ok(fragment) => fragment.pictures.iter().all(|(key, level, id)| {
-                                    images.get(key).and_then(|img| encoder.vello.picture(key, img, *level)).is_some_and(|data| data.data.id() == *id)
-                                }),
-                                _ => true,
-                            }
-                    });
-                    let encoded = match fragments.get_mut(&key).filter(|_| current) {
+                    // Kept while it's of the unit as it is
+                    let current = fragments.get(&key).is_some_and(|encoded| usable(encoded, stamp, true, &self.images, encoder.vello));
+                    // Past the time to encode, one of a level near stands
+                    // in, more detailed first, for the view to be drawn
+                    // again exactly once there's time
+                    let near = match (current, budget) {
+                        (false, Some(budget)) if encoding >= budget => [level + 1, level + 2, level + 3, level - 1, level - 2]
+                            .into_iter()
+                            .map(|other| (unit.slot, unit.section, other))
+                            .find(|other| fragments.get(other).is_some_and(|encoded| usable(encoded, stamp, false, &self.images, encoder.vello))),
+                        _ => None,
+                    };
+                    // With none, one a level coarser, which has less to it,
+                    // is encoded to stand in
+                    let short = !current && near.is_none() && budget.is_some_and(|budget| encoding >= budget);
+                    let level = if short { level - 1 } else { level };
+                    let key = match (near, short) {
+                        (Some(near), _) => near,
+                        (None, true) => (unit.slot, unit.section, level),
+                        (None, false) => key,
+                    };
+                    rough |= near.is_some() || short;
+                    let current = current || (short && fragments.get(&key).is_some_and(|encoded| usable(encoded, stamp, true, &self.images, encoder.vello)));
+                    let encoded = match fragments.get_mut(&key).filter(|_| current || near.is_some()) {
                         Some(encoded) => {
                             reused += 1;
                             encoded
                         }
                         None => {
                             made += 1;
+                            let timer = Instant::now();
                             let fragment = encoder.fragment(place, (unit.bounds.left, unit.bounds.top), level);
+                            encoding += timer.elapsed();
                             let made = match encoder.failed.take() {
                                 Some(why) => Err(why),
                                 None => Ok(fragment),
@@ -1840,7 +1916,7 @@ impl Painter {
                             let timer = Instant::now();
                             encoder.scene.append(&fragment.scene, Some(at));
                             append_took += timer.elapsed();
-                            pictures.extend(fragment.pictures.iter().map(|(key, level, _)| (key.clone(), *level)));
+                            pictures.extend(encoder.drawn.drain(..));
                             encoder.counts += fragment.counts;
                             let mut unit_asked = fragment.asked.clone();
                             let mut drawn = std::mem::take(&mut encoder.asked);
@@ -1937,10 +2013,11 @@ impl Painter {
             self.vello_uses.insert(unit, uses);
         }
         let stats = format!(
-            "{w}x{h} units={units} reused={reused} made={made} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
+            "{w}x{h} units={units} reused={reused} made={made} rough={rough} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
             paths,
             clips,
             super::vello::SIZES.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(),
+            super::vello::TIMES.iter().map(|n| (n.swap(0, std::sync::atomic::Ordering::Relaxed) / 100_000) as f64 / 10.0).collect::<Vec<_>>(),
             fell_back / 1000,
             encoded.as_secs_f64() * 1000.0,
             stamped.as_secs_f64() * 1000.0,
@@ -1952,7 +2029,7 @@ impl Painter {
             vello_took.as_secs_f64() * 1000.0,
             kinds.replace('"', "")
         );
-        Ok((tex, counts, stats))
+        Ok((tex, counts, stats, rough))
     }
 
     fn draw_whole(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32, quick: bool) {
@@ -2085,7 +2162,7 @@ impl Painter {
                 }
             )
         });
-        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at);
+        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at, false, false);
         self.whole_took = started.elapsed();
         self.drew = true;
     }
@@ -2097,7 +2174,7 @@ impl Painter {
 
     /// Makes `layer`, which the GPU draws till `fence` passes, the whole
     /// view of `at`
-    fn hand_whole(&mut self, layer: Layer, fence: u64, at: (i32, i32, u32)) {
+    fn hand_whole(&mut self, layer: Layer, fence: u64, at: (i32, i32, u32), rough: bool, vello: bool) {
         self.serial += 1;
         let serial = self.serial;
         let mut older = None;
@@ -2111,10 +2188,11 @@ impl Painter {
                 whole.at = at;
                 whole.stale = false;
                 whole.patch.clear();
+                (whole.rough, whole.vello) = (rough, vello);
                 Some(std::mem::replace(&mut whole.layer, layer))
             }
             None => {
-                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial });
+                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial, rough, vello });
                 None
             }
         };
@@ -2445,7 +2523,7 @@ impl Painter {
     /// The whole view is drawn for `view` itself, up to date
     fn whole_at(&self, view: &View) -> bool {
         let at = view_at(view, self.gpu.size);
-        self.whole.as_ref().is_some_and(|whole| whole.at == at && !whole.stale && whole.patch.is_empty())
+        self.whole.as_ref().is_some_and(|whole| whole.at == at && !whole.stale && whole.patch.is_empty() && !whole.rough)
     }
 
     /// What's drawn and up to date: tiles, and the whole view
@@ -5044,8 +5122,8 @@ impl Painter {
                     for frame in 0..frames {
                         let px = px * (1.0 + frame as f32 * 0.002);
                         let (left, top) = ((cx * px - w as f32 / 2.0).floor() as i32, (cy * px - h as f32 / 2.0).floor() as i32);
-                        match self.vello_view_once(left, top, w, h, px, area) {
-                            Ok((tex, _, stats)) => {
+                        match self.vello_view_once(left, top, w, h, px, area, None) {
+                            Ok((tex, _, stats, _)) => {
                                 seen = stats;
                                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                                 if let Some((tex, renders)) = last.replace((tex, renders)) {
