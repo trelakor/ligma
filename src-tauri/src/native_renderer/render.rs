@@ -101,6 +101,17 @@ impl View {
         (snapped(self.cx, self.cw), snapped(self.cy, self.ch))
     }
 
+    /// How much the browser stretches Figma's canvas, whose pixels are its
+    /// size times the device's ratio, rounded, to the device pixels its
+    /// edges are snapped to, where `size` is those
+    pub fn stretch(&self, size: (u32, u32)) -> (f64, f64) {
+        if size != self.canvas() {
+            return (1.0, 1.0);
+        }
+        let pixels = |at: f64| (at * self.dpr).round().max(1.0);
+        (size.0 as f64 / pixels(self.cw), size.1 as f64 / pixels(self.ch))
+    }
+
     /// Device pixels a unit in a window `width` pixels wide
     pub fn px(&self, width: u32) -> f32 {
         (width as f64 / self.w) as f32
@@ -1087,6 +1098,8 @@ pub struct Painter {
     tree: Option<Tree>,
     /// Figma's noise octaves, which can come before the tree does
     octaves: Vec<f32>,
+    /// How far into its pixel the view is, as Figma draws from there
+    phase: (f32, f32),
     units: Vec<Unit>,
     /// By unit, zoom level and whether edges are anti-aliased
     pictures: HashMap<(usize, bool, i32, bool), Recorded>,
@@ -1286,6 +1299,7 @@ impl Painter {
             scene: Scene::default(),
             tree: None,
             octaves: Vec::new(),
+            phase: (0.0, 0.0),
             units: Vec::new(),
             pictures: HashMap::new(),
             images: HashMap::new(),
@@ -1534,11 +1548,13 @@ impl Painter {
         }
         self.frame += 1;
         let pxb = px.to_bits();
-        // A preview's pixels are magnified, so it's drawn from the pixel
-        // the window's corner is in
-        let snap = |at: f64| if preview { at.floor() } else { at.round() } as i32;
-        let ox = snap(view.x * px as f64);
-        let oy = snap(view.y * px as f64);
+        // From the pixel the window's corner is in, as Figma draws from a
+        // fraction of one, and a preview's pixels are magnified. Figma's
+        // canvas can be a pixel wider than where the browser shows it
+        let (width, height) = if preview { (width, height) } else { (width + 2, height + 2) };
+        let ((ox, phase_x), (oy, phase_y)) = (super::present::phase(view.x * px as f64), super::present::phase(view.y * px as f64));
+        let phase = if preview { (0.0, 0.0) } else { (phase_x, phase_y) };
+        self.phase = phase;
         let in_view = Self::tiles_over(ox, oy, width, height, pxb, 0);
         let mut around: Vec<TileKey> = Self::tiles_over(ox, oy, width, height, pxb, 1).into_iter().filter(|key| !in_view.contains(key)).collect();
         // Where a pan is headed, so its tiles are drawn before it gets there
@@ -1631,10 +1647,13 @@ impl Painter {
         // tiles are shown, which a frame only moves
         let still = self.moved.elapsed() >= PAN_STILL;
         let sharp = in_view.iter().all(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && tile.exact));
-        let whole_at = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello);
-        let unchecked_at = self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb));
-        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && still && !sharp && !whole_at && !unchecked_at && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
-            if let Some(next) = self.fill_once(px, (ox, oy, width, height)) {
+        let whole_at = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && whole.layer.phase == phase && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello);
+        let unchecked_at = self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb) && unchecked.layer.phase == phase);
+        // Tiles land on whole pixels, so where Figma draws the view from a
+        // fraction of one, it's drawn from there too once it's still
+        let between = phase != (0.0, 0.0);
+        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && still && (!sharp || between) && !whole_at && !unchecked_at && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
+            if let Some(next) = self.fill_once(px, (ox, oy, width, height), phase) {
                 return next;
             }
         }
@@ -1857,7 +1876,7 @@ impl Painter {
             Ok((tex, counts, stats, rough)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -1879,16 +1898,16 @@ impl Painter {
     /// does. None where Vello can't, for tiles to be drawn instead
     /// The view drawn by Vello at once, exactly, shown once it's checked.
     /// None where Vello can't, for tiles to be drawn instead
-    fn fill_once(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32)) -> Option<Option<Duration>> {
+    fn fill_once(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), phase: (f32, f32)) -> Option<Option<Duration>> {
         let started = Instant::now();
         let reach = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
         self.settle_unchecked();
-        match self.vello_render(ox, oy, width, height, px, reach, None, true, None) {
+        match self.vello_render(ox, oy, phase, width, height, px, reach, None, true, None) {
             Ok((tex, counts, stats, _)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 let at = (ox, oy, px.to_bits());
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -1937,7 +1956,7 @@ impl Painter {
                 let id = self.kept_serial;
                 let kept = super::vello::Kept::at(id, false, (left - ox) as f32, (top - oy) as f32);
                 self.settle_unchecked();
-                let drawn = self.vello_render(left, top, w, h, px, reach, None, true, Some((kept, width, height))).map(|(tex, counts, stats, _)| (tex, counts, stats));
+                let drawn = self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, None, true, Some((kept, width, height))).map(|(tex, counts, stats, _)| (tex, counts, stats));
                 if drawn.is_ok() {
                     self.scene_kept = Some(KeptScene { id, px: pxb, left, top, width: w, height: h, built: Instant::now() });
                 }
@@ -1949,7 +1968,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 self.kept_drawn = self.scene_kept.as_ref().map(|kept| (kept.id, at));
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2049,9 +2068,12 @@ impl Painter {
         // zoomed can be of the same level
         let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale && (zooming || tile.exact || Some(key.px) == furthest));
         let missing: Vec<TileKey> = here.iter().copied().filter(|key| !ready(&self.tiles, key)).collect();
+        // Drawn from the fraction of a pixel the view is at, it's sharper
+        // than tiles moved there
+        let between = self.phase != (0.0, 0.0) && self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, px.to_bits()) && whole.layer.phase == self.phase);
         if missing.is_empty() {
             // All of the view's there, so what stood in for it goes
-            if let Some(whole) = self.whole.take() {
+            if let Some(whole) = self.whole.take_if(|_| !between) {
                 self.retire_whole(whole);
                 self.dirty = true;
             }
@@ -2151,7 +2173,7 @@ impl Painter {
             // can take tens of milliseconds to encode, which the next level
             // doesn't wait for. Tiles once it's still are exact
             let budget = (!exact).then_some(Duration::ZERO);
-            let (out, counts, stats, _) = self.vello_render(left, top, w, h, px, reach, budget, false, None).map_err(fail)?;
+            let (out, counts, stats, _) = self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, false, None).map_err(fail)?;
             let vello = self.vello.as_mut().ok_or_else(|| fail("no Vello".into()))?;
             match vello.check(usize::MAX).map_err(fail)? {
                 Some(why) => trace(|| format!("  vello ran out of room, drawing again: {why}")),
@@ -2281,17 +2303,21 @@ impl Painter {
     }
 
     fn vello_view_once(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
-        self.vello_render(left, top, w, h, px, reach, budget, true, None)
+        self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, true, None)
     }
 
     /// As `vello_view_once`, handing back Vello's own target, unpremultiplied
     /// and drawn into again by its next render, where `copy` isn't set
     #[allow(clippy::too_many_arguments)]
-    fn vello_render(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool, kept: Option<(super::vello::Kept, i32, i32)>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
+    /// The view from (`left`, `top`) and `phase` of a pixel further, in
+    /// device pixels, `w` by `h`
+    #[allow(clippy::too_many_arguments)]
+    fn vello_render(&mut self, left: i32, top: i32, phase: (f32, f32), w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool, kept: Option<(super::vello::Kept, i32, i32)>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let _ = self.gpu.context.flush_and_submit();
-        let mut post = skia_safe::Matrix::translate((-left as f32, -top as f32));
+        let (from_x, from_y) = (left as f64 + phase.0 as f64, top as f64 + phase.1 as f64);
+        let mut post = skia_safe::Matrix::translate((-from_x as f32, -from_y as f32));
         post.pre_scale((px, px), None);
         let mut asked = Vec::new();
         let (mut units, mut counts, mut inexact, mut skia_took, mut kinds) = (0, Counts::default(), 0, Duration::ZERO, String::new());
@@ -2448,7 +2474,7 @@ impl Painter {
                     encoded.used = now;
                     match &mut encoded.made {
                         Ok(fragment) => {
-                            let at = fragment.at(px, left, top);
+                            let at = fragment.at(px, from_x, from_y);
                             let timer = Instant::now();
                             // What Skia draws in it, drawn for the view, asks
                             // about images of its own
@@ -2707,7 +2733,7 @@ impl Painter {
                 }
             )
         });
-        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at, false, false);
+        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole }, fence, at, false, false);
         self.whole_took = started.elapsed();
         self.drew = true;
     }
@@ -3078,6 +3104,7 @@ impl Painter {
             tex: tile.tex.clone(),
             x: key.x * TILE,
             y: key.y * TILE,
+            phase: (0.0, 0.0),
             px: key.px(),
             counts: tile.counts,
             kind: if tile.stale {

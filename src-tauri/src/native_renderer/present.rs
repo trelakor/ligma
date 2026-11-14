@@ -196,12 +196,13 @@ pub enum LayerKind {
 }
 
 /// Something drawn at `px` device pixels a unit, its top left corner at
-/// (`x`, `y`) device pixels at that zoom
+/// (`x`, `y`) device pixels at that zoom, and `phase` of a pixel further
 #[derive(Clone)]
 pub struct Layer {
     pub tex: Arc<Tex>,
     pub x: i32,
     pub y: i32,
+    pub phase: (f32, f32),
     pub px: f32,
     pub counts: Counts,
     pub kind: LayerKind,
@@ -346,14 +347,21 @@ struct FrameView {
     edits: bool,
 }
 
+/// The pixel `at`, in device pixels, is in, and how far into it, which is
+/// a fifth of one or so, as Figma's view moves by CSS pixels. To a
+/// hundredth, as `at`'s worked out from a zoom in single precision
+pub fn phase(at: f64) -> (i32, f32) {
+    let pixel = (at + 5e-3).floor();
+    (pixel as i32, (((at - pixel) * 100.0).round() / 100.0).max(0.0) as f32)
+}
+
 /// The view's corner in device pixels at the zoom it's drawn at in a window
 /// `size`, and that zoom, as bits
 pub fn view_at(view: &View, size: (u32, u32)) -> (i32, i32, u32) {
-    let (px, preview, _, _) = view.drawn(size);
-    // A preview's pixels are magnified, so it's drawn from the pixel the
-    // window's corner is in
-    let snap = |at: f64| if preview { at.floor() } else { at.round() } as i32;
-    (snap(view.x * px as f64), snap(view.y * px as f64), px.to_bits())
+    let (px, _, _, _) = view.drawn(size);
+    // From the pixel the window's corner is in, as Figma draws from a
+    // fraction of one, and a preview's pixels are magnified
+    (phase(view.x * px as f64).0, phase(view.y * px as f64).0, px.to_bits())
 }
 
 /// Part of a frame: layer `layer` drawn at `dest` in it, where `clip` is
@@ -383,8 +391,14 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
     let px = view.px(size.0);
     let (drawn, preview, _, _) = view.drawn(size);
     let (ox, oy) = (view.x * px as f64, view.y * px as f64);
-    // Tiles of this zoom land on whole pixels, as Figma's do
     let (rx, ry) = (ox.round() as i32, oy.round() as i32);
+    // Figma draws from where the view is, which can be a fraction of a
+    // pixel, and the browser stretches its canvas to the pixels it's
+    // snapped to, so only where neither happens do tiles of this zoom land
+    // on whole pixels
+    let (sx, sy) = view.stretch(size);
+    let ((fx, px_x), (fy, px_y)) = (phase(ox), phase(oy));
+    let at_phase = |layer: &Layer| (layer.phase.0 - px_x).abs() < 2e-3 && (layer.phase.1 - px_y).abs() < 2e-3;
     // One coarser than the view is scaled up, blurring it, so one as much
     // finer comes first
     let distance = |at: f32| {
@@ -395,7 +409,10 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
         .iter()
         .enumerate()
         .map(|(i, layer)| {
-            let rank = match (layer.kind, layer.px == drawn) {
+            // One drawn from the fraction of a pixel the view is at is
+            // sharper there than one moved to it
+            let off = if !preview && layer.px == drawn && !at_phase(layer) { 1.1 } else { 0.0 };
+            let rank = off + match (layer.kind, layer.px == drawn) {
                 (LayerKind::Tile, true) => 0.0,
                 (LayerKind::Whole, true) => 1.0,
                 (LayerKind::Draft, true) => 1.2,
@@ -411,10 +428,10 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
     left.set_rect(skia_safe::IRect::from_wh(size.0 as i32, size.1 as i32));
     if let Some(content) = content {
         let at = Rect::from_ltrb(
-            (content.left as f64 * px as f64 - ox) as f32,
-            (content.top as f64 * px as f64 - oy) as f32,
-            (content.right as f64 * px as f64 - ox) as f32,
-            (content.bottom as f64 * px as f64 - oy) as f32,
+            ((content.left as f64 * px as f64 - ox) * sx) as f32,
+            ((content.top as f64 * px as f64 - oy) * sy) as f32,
+            ((content.right as f64 * px as f64 - ox) * sx) as f32,
+            ((content.bottom as f64 * px as f64 - oy) * sy) as f32,
         );
         let at = skia_safe::IRect::from_ltrb(at.left.floor() as i32 - 1, at.top.floor() as i32 - 1, at.right.ceil() as i32 + 1, at.bottom.ceil() as i32 + 1);
         left.op_rect(at, skia_safe::region::RegionOp::Intersect);
@@ -426,20 +443,27 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
         }
         let layer = &layers[i];
         let same = layer.px == px;
-        let square = same || (preview && layer.px == drawn);
-        let dest = if same {
-            Rect::from_xywh((layer.x - rx) as f32, (layer.y - ry) as f32, layer.tex.width as f32, layer.tex.height as f32)
+        let unstretched = sx == 1.0 && sy == 1.0;
+        let square = (same && unstretched && at_phase(layer)) || (preview && layer.px == drawn && unstretched);
+        let dest = if same && square {
+            Rect::from_xywh((layer.x - fx) as f32, (layer.y - fy) as f32, layer.tex.width as f32, layer.tex.height as f32)
         } else {
             let scale = (px / layer.px) as f64;
             // A preview's squares are placed from the whole pixel the view
             // lands on, as Figma places them
-            let (ox, oy) = if square { (rx as f64, ry as f64) } else { (ox, oy) };
+            let (ox, oy) = if preview && layer.px == drawn { (rx as f64, ry as f64) } else { (ox, oy) };
             // Each edge from where it is on the grid, so neighbors' meet
             // exactly, as one's right edge worked out from its width can
             // round to another pixel than the next one's left, and leave a
             // column of neither
-            let edge = |at: i32, o: f64| (at as f64 * scale - o) as f32;
-            Rect::from_ltrb(edge(layer.x, ox), edge(layer.y, oy), edge(layer.x + layer.tex.width, ox), edge(layer.y + layer.tex.height, oy))
+            let (lx, ly) = (layer.phase.0 as f64, layer.phase.1 as f64);
+            let edge = |at: i32, phase: f64, o: f64, stretch: f64| (((at as f64 + phase) * scale - o) * stretch) as f32;
+            Rect::from_ltrb(
+                edge(layer.x, lx, ox, sx),
+                edge(layer.y, ly, oy, sy),
+                edge(layer.x + layer.tex.width, lx, ox, sx),
+                edge(layer.y + layer.tex.height, ly, oy, sy),
+            )
         };
         let covers = dest.round();
         let mut clip = skia_safe::Region::new();
@@ -486,9 +510,14 @@ impl Patterns {
         if outline.is_some() {
             return Counts::default();
         }
+        // What Figma draws in its canvas, as the browser stretches it
+        let (sx, sy) = view.stretch(size);
         if snapshot.transparent {
             if let Some(paint) = self.checker.as_ref().and_then(|checker| checker_paint(checker, snapshot.dark, origin, px, view.zoom)) {
+                canvas.save();
+                canvas.scale((sx as f32, sy as f32));
                 canvas.draw_paint(&paint);
+                canvas.restore();
             }
         }
         let (drawn, ..) = view.drawn(size);
@@ -513,7 +542,10 @@ impl Patterns {
         }
         if view.grid {
             if let Some(paint) = self.grid.as_ref().and_then(|grid| grid_paint(grid, origin, px)) {
-                canvas.draw_rect(Rect::from_iwh(size.0 as i32, size.1 as i32), &paint);
+                canvas.save();
+                canvas.scale((sx as f32, sy as f32));
+                canvas.draw_rect(Rect::from_wh((size.0 as f64 / sx) as f32, (size.1 as f64 / sy) as f32), &paint);
+                canvas.restore();
             }
         }
         counts
@@ -884,7 +916,11 @@ impl Screen {
         let canvas = surface.canvas();
         let counts = self.patterns.paint(canvas, snapshot, &images, pieces, view, size);
         if let Some(overlay) = overlay {
+            let (sx, sy) = view.stretch(size);
+            canvas.save();
+            canvas.scale((sx as f32, sy as f32));
             canvas.draw_picture(overlay, None, None);
+            canvas.restore();
         }
         let encoded = start.elapsed();
         // Left ready to present, and what it reads held till the GPU's done

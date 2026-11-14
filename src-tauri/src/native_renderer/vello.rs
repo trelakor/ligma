@@ -791,9 +791,9 @@ pub struct Fragment {
 impl Fragment {
     /// What places it in a view at `px` whose corner is at (`left`, `top`)
     /// in device pixels
-    pub fn at(&self, px: f32, left: i32, top: i32) -> Affine {
+    pub fn at(&self, px: f32, left: f64, top: f64) -> Affine {
         let ratio = px as f64 / 2f64.powi(self.level);
-        Affine::translate((self.origin.0 as f64 * px as f64 - left as f64, self.origin.1 as f64 * px as f64 - top as f64)) * Affine::scale(ratio)
+        Affine::translate((self.origin.0 as f64 * px as f64 - left, self.origin.1 as f64 * px as f64 - top)) * Affine::scale(ratio)
     }
 }
 
