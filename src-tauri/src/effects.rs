@@ -1276,12 +1276,14 @@ const PAGE_JS: &str = r##"(() => {
     ["Snap", () => ({ mode: "snap", pattern: "glass", pieces: 6000, force1: force(100, 50, 0, 110, 0.3), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 5, gravityDirection: -15, spread: 1.8, ragged: 60, softness: 30, fade: 75, shrink: 30, lighten: 30 })],
     ["Dust", () => ({ mode: "snap", pattern: "glass", pieces: 12000, force1: force(80, 35, 0, 120, 0.6), force2: force(25, 70, 0, 60, 0.4), time: 1.4, rotation: 1.5, tumble: "free", randomness: 0.8, viscosity: 0.6, mass: 60, gravity: 3, gravityDirection: -40, spread: 1.8, ragged: 75, softness: 45, fade: 90, shrink: 50, lighten: 50 })],
     ["Glass", () => ({ mode: "shatter", pattern: "glass", pieces: 400, force1: force(50, 50, 10, 40, 5), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.2, tumble: "free", randomness: 0.1, viscosity: 0.1, mass: 30, gravity: 3, gravityDirection: 90 })],
+    ["Corner", () => ({ mode: "shatter", pattern: "glass", pieces: 200, force1: force(88, 22, 10, 50, 4), force2: force(25, 30, 10, 25, 5, false), time: 0.5, rotation: 0.2, tumble: "free", randomness: 0.3, viscosity: 0.1, mass: 30, gravity: 0, gravityDirection: 90 })],
     ["Crack", () => ({ mode: "shatter", pattern: "glass", pieces: 500, force1: force(55, 45, 10, 35, 1.5), force2: force(25, 30, 10, 25, 5, false), time: 0.4, rotation: 0.1, tumble: "free", randomness: 0.2, viscosity: 0.3, mass: 30, gravity: 1, gravityDirection: 90 })],
     ["Explode", () => ({ mode: "shatter", pattern: "glass", pieces: 600, force1: force(50, 50, 5, 90, 12), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.6, tumble: "free", randomness: 0.3, viscosity: 0.05, mass: 30, gravity: 3, gravityDirection: 90 })],
     ["Bricks", () => ({ mode: "shatter", pattern: "bricks", pieces: 120, force1: force(50, 60, 10, 50, 4), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.2, tumble: "free", randomness: 0.1, viscosity: 0.1, mass: 30, gravity: 6, gravityDirection: 90 })],
   ];
   const PATTERNS = [
     ["glass", "Glass"],
+    ["cells", "Cells"],
     ["squares", "Squares"],
     ["triangles", "Triangles"],
     ["bricks", "Bricks"],
@@ -1399,8 +1401,8 @@ const PAGE_JS: &str = r##"(() => {
   // `count` of them over `covered`, the share of it that isn't
   // transparent: polygons, each with its center and randomness
   const cutPieces = (width, height, pattern, count, seed, covered = 1) => {
-    // Glass splits each cell in two or three, so it starts with fewer
-    const cells = pattern === "glass" ? count / 2.2 : pattern === "triangles" ? count / 2 : count;
+    // Cells splits each in two or three, so it starts with fewer
+    const cells = pattern === "cells" ? count / 2.2 : pattern === "triangles" ? count / 2 : count;
     const cell = Math.max(1.5, Math.sqrt((width * height * covered) / Math.max(1, cells)));
     const pieces = [];
     const add = (polygon) => {
@@ -1457,8 +1459,67 @@ const PAGE_JS: &str = r##"(() => {
           add([0, 1, 2, 3, 4, 5].map((k) => [cx + r * Math.cos(((60 * k - 30) * Math.PI) / 180), cy + r * Math.sin(((60 * k - 30) * Math.PI) / 180)]));
         }
       }
+    } else if (pattern === "glass") {
+      // Glass, as AE's: the layer split again and again by straight lines
+      // at random angles, the largest piece each time, so cracks run on
+      // across pieces and they come out as the long, sharp slivers broken
+      // glass has, until there are as many as asked for over what isn't
+      // transparent
+      const target = Math.max(1, Math.round(count / covered));
+      // A heap, the largest on top
+      const parts = [];
+      const push = (part) => {
+        let i = parts.push(part) - 1;
+        while (i > 0) {
+          const up = (i - 1) >> 1;
+          if (parts[up].area >= parts[i].area) break;
+          [parts[up], parts[i]] = [parts[i], parts[up]];
+          i = up;
+        }
+      };
+      const pop = () => {
+        const top = parts[0];
+        const last = parts.pop();
+        if (parts.length) {
+          parts[0] = last;
+          let i = 0;
+          for (;;) {
+            const [l, r] = [i * 2 + 1, i * 2 + 2];
+            let big = i;
+            if (l < parts.length && parts[l].area > parts[big].area) big = l;
+            if (r < parts.length && parts[r].area > parts[big].area) big = r;
+            if (big === i) break;
+            [parts[big], parts[i]] = [parts[i], parts[big]];
+            i = big;
+          }
+        }
+        return top;
+      };
+      push({ polygon: [[0, 0], [width, 0], [width, height], [0, height]], area: width * height });
+      let n = 0;
+      while (parts.length < target && n < target * 4) {
+        n++;
+        const part = pop();
+        let [mx, my] = [0, 0];
+        for (const [x, y] of part.polygon) [mx, my] = [mx + x / part.polygon.length, my + y / part.polygon.length];
+        const spread = Math.sqrt(part.area) * 0.35;
+        const point = [mx + (hash(n, 1, seed) - 0.5) * spread, my + (hash(n, 2, seed) - 0.5) * spread];
+        const angle = hash(n, 3, seed) * Math.PI;
+        const normal = [Math.cos(angle), Math.sin(angle)];
+        for (const side of [normal, [-normal[0], -normal[1]]]) {
+          const polygon = clipPolygon(part.polygon, point, side);
+          if (polygon.length < 3) continue;
+          let area = 0;
+          for (let i = 0; i < polygon.length; i++) {
+            const [a, b] = [polygon[i], polygon[(i + 1) % polygon.length]];
+            area += a[0] * b[1] - b[0] * a[1];
+          }
+          push({ polygon, area: Math.abs(area) / 2 });
+        }
+      }
+      for (const part of parts) add(part.polygon);
     } else {
-      // Glass, as AE's: irregular cells around seeds anywhere in each
+      // Cells: irregular cells around seeds anywhere in each
       // square of a grid, each cut again by a line or two at random, into
       // the sharp slivers broken glass has
       const gw = across + 4;
