@@ -1474,13 +1474,13 @@ impl Painter {
     fn pyramid(&self, center: (f32, f32), width: i32, height: i32, cp: f32) -> (Vec<TileKey>, Vec<(Rect, f32)>) {
         let Some(content) = self.content() else { return (Vec::new(), Vec::new()) };
         let mut levels = Vec::new();
+        // The furthest is all there is, wherever the view is and however
+        // far in it's zoomed, so no zoom out ever finds nothing drawn
+        let fits = (width as f32 / content.width()).min(height as f32 / content.height()).log2().floor().exp2();
         // Powers of two, whatever the zoom, so zooming in a little keeps them
         let mut pk = (cp / 2.0).log2().floor().exp2();
-        for _ in 0..PYRAMID_LEVELS {
-            // The furthest is all there is, wherever the view is, so no
-            // zoom out ever finds nothing drawn
-            if content.width() * pk <= width as f32 && content.height() * pk <= height as f32 {
-                levels.push((content, pk));
+        for _ in 0..PYRAMID_LEVELS - 1 {
+            if pk <= fits {
                 break;
             }
             let (w, h) = (width as f32 / pk, height as f32 / pk);
@@ -1490,6 +1490,7 @@ impl Painter {
             }
             pk /= 2.0;
         }
+        levels.push((content, fits));
         levels.reverse();
         let mut keys = Vec::new();
         let mut kept = Vec::new();
@@ -2022,7 +2023,10 @@ impl Painter {
             let center = area.center();
             let (w, h) = (area.width() * grow, area.height() * grow);
             let (x, y) = (center.x + (self.velocity.0 * lag) as f32, center.y + (self.velocity.1 * lag) as f32);
-            if next != level { over(next, Rect::from_xywh(x - w / 2.0, y - h / 2.0, w, h)) } else { Vec::new() }
+            // Past the furthest level, which is always there, a zoom out
+            // shows nothing more
+            let past = furthest.is_some_and(|furthest| next < f32::from_bits(furthest));
+            if next != level && !past { over(next, Rect::from_xywh(x - w / 2.0, y - h / 2.0, w, h)) } else { Vec::new() }
         } else if self.moved.elapsed() < Duration::from_millis(150) {
             // Where a pan's headed
             let lag = 0.25;

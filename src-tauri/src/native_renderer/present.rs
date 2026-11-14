@@ -797,9 +797,24 @@ impl Screen {
                     let then = (before.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
                     (!holes && shown.as_ref() != Some(&then)).then_some((before, pieces, then))
                 });
+                let drawn_seq = snapshot.seq;
+                let snapshot_levels = {
+                    let mut counted: Vec<(f32, LayerKind, usize)> = Vec::new();
+                    for layer in &snapshot.layers {
+                        match counted.iter_mut().find(|(px, kind, _)| *px == layer.px && *kind == layer.kind) {
+                            Some(entry) => entry.2 += 1,
+                            None => counted.push((layer.px, layer.kind, 1)),
+                        }
+                    }
+                    counted
+                };
                 drop(snapshot);
                 let Some((before, pieces, then)) = before else {
-                    super::render::trace(|| format!("present held: seq={seq} px={:.3}", view.px(self.size.0)));
+                    super::render::trace(|| {
+                        let mut levels: Vec<String> = snapshot_levels.iter().map(|(px, kind, n)| format!("{px:.4}{kind:?}x{n}")).collect();
+                        levels.sort();
+                        format!("present held: seq={seq} px={:.3} drawn={drawn_seq} layers={}", view.px(self.size.0), levels.join(","))
+                    });
                     seen = hub.wait(seen, Duration::from_millis(100));
                     continue;
                 };
