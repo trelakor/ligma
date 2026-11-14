@@ -35,12 +35,10 @@ Breaks the selected layer into pieces and throws them, live, as After Effects' S
 - **Presets:** Dissolve (the default) and Wipe, matched against Thanos snaps made with AE's Shatter, a figure's side dissolving into dust that lifts away and a wipe sweeping across the top of a phone mockup; Snap and Dust; Glass (AE's defaults), Corner (a corner breaking off, matched against AE's Shatter on an app icon), Crack, Explode and Bricks. Picking a mode starts from its first preset.
 - **Result:** an image of what's drawn, over the original. With Keep editable (on by default) the original is kept under it, hidden, in a Disintegrate group: select it and open Disintegrate to change it, made again from the original. Without it, only the image is left.
 
+## Bitcrush (built)
+
+Pixelates, posterizes, dithers and glitches the selected layer: Figma's "Bitcrush lab" shader effect (its `main.ts` and `features.json`), its WGSL ported line for line to run on the layer's picture in the page, as the plugin API can't make Figma's shader effects. Every control is the shader's, with its ranges and defaults: Pixel size and aspect, Color bit depth, Color mode (RGB or Grayscale), Dither pattern (Off, Ordered Bayer or Noise), strength and scale, Glitch block size, displacement and amount, RGB split distance and angle, Noise, Contrast, Saturation, Mix, and a random seed (Shuffle). Sizes are in points, as the shader's are, so the look holds however large the picture. Presets are Bitcrush lab (the shader's defaults), Game Boy, 8-bit, Glitch and Dither. The result is an image the layer's size over the original, kept, hidden, in an editable Bitcrush group, as Disintegrate's is.
+
+Selecting a layer inside any effect's group, its original, a copy or its result, and clicking Effects opens that group to change, rather than making another effect inside it.
+
 ## Planned
-
-### Bitcrush shader: feasible, best as a native shader
-
-Pixelate, posterize and dither a layer.
-
-- Figma now has shader effects of its own (Effects > Shader effects), which run live on the canvas, non-destructively. If they can be made through the plugin API or Figma's effect data, Bitcrush should be one: pixel size, bit depth, dither, color mode and mix, all live and editable later in the right panel.
-- Without that, it works destructively: export the layer, process it on a canvas (downsample, quantize to the bit depth or a palette, ordered or error-diffusion dither, optional RGB split), and put the result back as an image fill, previewed live at screen size and made at full size on Apply.
-- Next step: check what the plugin API exposes for shader effects before building it.

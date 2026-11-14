@@ -56,6 +56,8 @@ const PAGE_JS: &str = r##"(() => {
   const REPEATER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="4.5" y="4.5" width="9" height="9" rx="1.5"/><path ${STROKE} d="M16.5 7.5v7a2 2 0 0 1-2 2h-7"/><path ${STROKE} d="M19.5 10.5v7a2 2 0 0 1-2 2h-7"/></svg>`;
   // A square breaking into flakes toward its top right
   const DISINTEGRATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12.5 6.5h-6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-5"/><path ${STROKE} d="m15 9 1.5-1M17.5 5.5l1-1M19.5 9.5h1M14.5 4.5l.5-1M17 12l1 .5"/></svg>`;
+  // A circle stepped into pixels
+  const BITCRUSH_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M9.5 4.5h5v2h2v2h2v7h-2v2h-2v2h-5v-2h-2v-2h-2v-7h2v-2h2z"/><path ${STROKE} d="M10.5 10.5h2v2h-2z"/></svg>`;
   const CHEVRON = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m5.5 7 2.5 2.5L10.5 7"/></svg>`;
   const CLOSE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m8 8 8 8m0-8-8 8"/></svg>`;
   const CHECK = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m4.5 8.5 2.5 2.5 4.5-5.5"/></svg>`;
@@ -298,6 +300,13 @@ const PAGE_JS: &str = r##"(() => {
       icon: DISINTEGRATE_ICON,
       open: (figma) => openDisintegrate(figma),
     },
+    {
+      id: "bitcrush",
+      name: "Bitcrush",
+      about: "Pixelate, posterize, dither and glitch it",
+      icon: BITCRUSH_ICON,
+      open: (figma) => openBitcrush(figma),
+    },
   ];
 
   // The wheel over a panel or menu is the panel's: Figma's listeners,
@@ -327,7 +336,17 @@ const PAGE_JS: &str = r##"(() => {
     const figma = api();
     const anchor = button();
     if (!figma || !anchor) return;
-    // A Repeater group selected opens it to change
+    // A layer inside an effect's group, its original, copies or result,
+    // stands for the group, so the effect opens it to change rather than
+    // making another inside it
+    {
+      const [only] = figma.currentPage.selection;
+      const parent = only?.parent;
+      if (figma.currentPage.selection.length === 1 && parent && (repeaterOf(parent) || disintegrateOf(parent) || bitcrushOf(parent))) {
+        figma.currentPage.selection = [parent];
+      }
+    }
+    // An effect's group selected opens it to change
     const selected = figma.currentPage.selection;
     if (selected.length === 1 && repeaterOf(selected[0])) {
       openRepeater(figma);
@@ -335,6 +354,10 @@ const PAGE_JS: &str = r##"(() => {
     }
     if (selected.length === 1 && disintegrateOf(selected[0])) {
       openDisintegrate(figma);
+      return;
+    }
+    if (selected.length === 1 && bitcrushOf(selected[0])) {
+      openBitcrush(figma);
       return;
     }
     menu = document.createElement("div");
@@ -685,7 +708,7 @@ const PAGE_JS: &str = r##"(() => {
   let repeating = null;
 
   const openRepeater = (figma) => {
-    if (repeating || disintegrating) return;
+    if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to repeat" : "Select a layer to repeat", { timeout: 2000 });
@@ -1823,7 +1846,7 @@ const PAGE_JS: &str = r##"(() => {
   let disintegrating = null;
 
   const openDisintegrate = async (figma) => {
-    if (repeating || disintegrating) return;
+    if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to disintegrate" : "Select a layer to disintegrate", { timeout: 2000 });
@@ -2215,6 +2238,480 @@ const PAGE_JS: &str = r##"(() => {
     addEventListener("keydown", current.keys, true);
     go.focus();
   };
+
+  // ---------- Bitcrush ----------
+
+  // Pixelates, posterizes and dithers the layer, with glitch blocks, an
+  // RGB split, noise, contrast and saturation: Figma's "Bitcrush lab"
+  // shader effect, its WGSL ported here line for line to run on the
+  // layer's picture in the page, as the plugin API can't make shader
+  // effects. Sizes are in points, as the shader's are, so the look is the
+  // same however large the picture. Put back as an image the layer's
+  // size, the original kept under it, hidden
+  const BITCRUSH = "bitcrush";
+  const BITCRUSH_DEFAULTS = {
+    pixelSize: 8,
+    pixelAspect: 1,
+    bitDepth: 3,
+    colorMode: 0,
+    ditherMode: 1,
+    ditherStrength: 0.35,
+    ditherScale: 3,
+    glitchBlockSize: 48,
+    glitchDisplacement: 24,
+    glitchAmount: 0.06,
+    splitDistance: 0,
+    splitAngle: 0,
+    noiseAmount: 0.015,
+    randomSeed: 17,
+    contrastAmount: 1.1,
+    saturationAmount: 1,
+    effectMix: 1,
+    editable: true,
+  };
+  const BITCRUSH_PRESETS = [
+    ["Bitcrush lab", () => ({ ...BITCRUSH_DEFAULTS })],
+    ["Game Boy", () => ({ ...BITCRUSH_DEFAULTS, pixelSize: 4, bitDepth: 2, colorMode: 1, ditherMode: 1, ditherStrength: 0.6, ditherScale: 4, glitchAmount: 0, noiseAmount: 0, contrastAmount: 1.2 })],
+    ["8-bit", () => ({ ...BITCRUSH_DEFAULTS, pixelSize: 6, bitDepth: 2, ditherMode: 1, ditherStrength: 0.5, ditherScale: 6, glitchAmount: 0, noiseAmount: 0, saturationAmount: 1.3 })],
+    ["Glitch", () => ({ ...BITCRUSH_DEFAULTS, pixelSize: 3, bitDepth: 5, ditherMode: 2, ditherStrength: 0.3, glitchBlockSize: 32, glitchDisplacement: 60, glitchAmount: 0.25, splitDistance: 6, splitAngle: 0, noiseAmount: 0.04 })],
+    ["Dither", () => ({ ...BITCRUSH_DEFAULTS, pixelSize: 1, bitDepth: 1, colorMode: 1, ditherMode: 1, ditherStrength: 1, ditherScale: 2, glitchAmount: 0, noiseAmount: 0, contrastAmount: 1.3 })],
+  ];
+  const BITCRUSH_ROWS = {
+    pixels: [
+      ["pixelSize", "Pixel size", "pt", () => ({ min: 1, max: 100, shape: "curve" })],
+      ["pixelAspect", "Pixel aspect", "", () => ({ min: 0.25, max: 4, middle: 1, digits: 2 })],
+      ["bitDepth", "Color bit depth", "", () => ({ min: 1, max: 8 })],
+    ],
+    dither: [
+      ["ditherStrength", "Strength", "", () => ({ min: 0, max: 2, digits: 2 })],
+      ["ditherScale", "Scale", "pt", () => ({ min: 1, max: 48, shape: "curve" })],
+    ],
+    glitch: [
+      ["glitchBlockSize", "Block size", "pt", () => ({ min: 4, max: 400, shape: "curve" })],
+      ["glitchDisplacement", "Displacement", "pt", () => ({ min: 0, max: 400, shape: "curve" })],
+      ["glitchAmount", "Amount", "", () => ({ min: 0, max: 1, digits: 2 })],
+    ],
+    split: [
+      ["splitDistance", "Distance", "pt", () => ({ min: 0, max: 100, shape: "curve", digits: 1 })],
+      ["splitAngle", "Angle", "°", () => ({ min: -180, max: 180 })],
+    ],
+    tone: [
+      ["noiseAmount", "Noise", "", () => ({ min: 0, max: 1, shape: "curve", digits: 3 })],
+      ["contrastAmount", "Contrast", "", () => ({ min: 0, max: 3, middle: 1, digits: 2 })],
+      ["saturationAmount", "Saturation", "", () => ({ min: 0, max: 3, middle: 1, digits: 2 })],
+      ["effectMix", "Mix", "", () => ({ min: 0, max: 1, digits: 2 })],
+    ],
+  };
+  const BITCRUSH_LIMITS = {
+    pixelSize: [1, 1000],
+    pixelAspect: [0.05, 20],
+    bitDepth: [1, 8],
+    ditherStrength: [0, 10],
+    ditherScale: [1, 500],
+    glitchBlockSize: [1, 4000],
+    glitchDisplacement: [0, 4000],
+    glitchAmount: [0, 1],
+    splitDistance: [0, 1000],
+    splitAngle: [-360, 360],
+    noiseAmount: [0, 1],
+    contrastAmount: [0, 10],
+    saturationAmount: [0, 10],
+    effectMix: [0, 1],
+  };
+
+  // The shader's seededHash, bayer4 and fragment, on `image`, straight
+  // ImageData, `k` its pixels a point
+  const fract = (x) => x - Math.floor(x);
+  const seededHash = (x, y, seed) => {
+    let q0 = fract(x * 0.1031);
+    let q1 = fract(y * 0.103);
+    let q2 = fract(seed * 0.0973);
+    const d = q0 * (q1 + 33.33) + q1 * (q2 + 33.33) + q2 * (q0 + 33.33);
+    q0 += d;
+    q1 += d;
+    q2 += d;
+    return fract((q0 + q1) * q2);
+  };
+  const bayer4 = (px, py) => {
+    const x = ((px % 4) + 4) % 4;
+    const y = ((py % 4) + 4) % 4;
+    const low = ((x & 1) ^ (y & 1)) * 2 + (y & 1);
+    const high = (((x >> 1) & 1) ^ ((y >> 1) & 1)) * 2 + ((y >> 1) & 1);
+    return (low * 4 + high + 0.5) / 16 - 0.5;
+  };
+  const crush = (image, s, k) => {
+    const { width: W, height: H, data } = image;
+    const out = new ImageData(W, H);
+    const o = out.data;
+    const [dw, dh] = [W / k, H / k];
+    // A pixel, premultiplied, 0 to 1, nearest to where `ux`, `uy` falls,
+    // or nothing outside the picture with `zero`
+    const sample = (ux, uy, zero, into) => {
+      if (zero && (ux < 0 || uy < 0 || ux > 1 || uy > 1)) {
+        into[0] = into[1] = into[2] = into[3] = 0;
+        return into;
+      }
+      const ix = Math.min(W - 1, Math.max(0, Math.floor(Math.min(1, Math.max(0, ux)) * W)));
+      const iy = Math.min(H - 1, Math.max(0, Math.floor(Math.min(1, Math.max(0, uy)) * H)));
+      const at = (iy * W + ix) * 4;
+      const a = data[at + 3] / 255;
+      into[0] = (data[at] / 255) * a;
+      into[1] = (data[at + 1] / 255) * a;
+      into[2] = (data[at + 2] / 255) * a;
+      into[3] = a;
+      return into;
+    };
+    const [center, red, blue] = [new Float32Array(4), new Float32Array(4), new Float32Array(4)];
+    const block = Math.max(s.glitchBlockSize, 1);
+    const [cw, ch] = [Math.max(s.pixelSize * s.pixelAspect, 1), Math.max(s.pixelSize, 1)];
+    const angle = s.splitAngle * 0.01745329252;
+    const [sx, sy] = [(Math.cos(angle) * s.splitDistance) / dw, (Math.sin(angle) * s.splitDistance) / dh];
+    const levels = 2 ** Math.min(8, Math.max(1, Math.round(s.bitDepth))) - 1;
+    const ditherScale = Math.max(s.ditherScale, 1);
+    const seed = s.randomSeed;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const at = (y * W + x) * 4;
+        const px = (x + 0.5) / k;
+        const py = (y + 0.5) / k;
+        const [bx, by] = [Math.floor(px / block), Math.floor(py / block)];
+        const enabled = seededHash(bx, by, seed) < s.glitchAmount ? 1 : 0;
+        const dx = enabled ? (seededHash(bx + 19, by + 7, seed) * 2 - 1) * s.glitchDisplacement : 0;
+        const dy = enabled ? (seededHash(bx + 3, by + 29, seed) * 2 - 1) * 0.2 * s.glitchDisplacement : 0;
+        const [qx, qy] = [px + dx, py + dy];
+        const [ox, oy] = [Math.floor(qx / cw) * cw, Math.floor(qy / ch) * ch];
+        const ux = (ox + Math.min(cw, Math.max(dw - ox, 0)) * 0.5) / dw;
+        const uy = (oy + Math.min(ch, Math.max(dh - oy, 0)) * 0.5) / dh;
+        sample(ux, uy, true, center);
+        sample(ux + sx, uy + sy, true, red);
+        sample(ux - sx, uy - sy, true, blue);
+        let r = red[0] / Math.max(red[3], 0.00001);
+        let g = center[1] / Math.max(center[3], 0.00001);
+        let b = blue[2] / Math.max(blue[3], 0.00001);
+        let luma = r * 0.2126 + g * 0.7152 + b * 0.0722;
+        r = luma + (r - luma) * s.saturationAmount;
+        g = luma + (g - luma) * s.saturationAmount;
+        b = luma + (b - luma) * s.saturationAmount;
+        r = (r - 0.5) * s.contrastAmount + 0.5;
+        g = (g - 0.5) * s.contrastAmount + 0.5;
+        b = (b - 0.5) * s.contrastAmount + 0.5;
+        if (s.colorMode === 1) r = g = b = r * 0.2126 + g * 0.7152 + b * 0.0722;
+        const n = (seededHash(Math.floor(px), Math.floor(py), seed + 47) * 2 - 1) * s.noiseAmount;
+        r += n;
+        g += n;
+        b += n;
+        let dither = 0;
+        if (s.ditherMode === 1) dither = bayer4(Math.floor(px / ditherScale), Math.floor(py / ditherScale));
+        else if (s.ditherMode === 2) dither = seededHash(Math.floor(px / ditherScale), Math.floor(py / ditherScale), seed + 101) - 0.5;
+        const d = (dither * s.ditherStrength) / levels;
+        const q = (v) => Math.floor(Math.min(1, Math.max(0, v + d)) * levels + 0.5) / levels;
+        const a = center[3];
+        // The input, premultiplied, mixed toward the crushed
+        const ia = data[at + 3] / 255;
+        const m = s.effectMix;
+        const outA = ia + (a - ia) * m;
+        const mixOne = (inV, crushed) => ((data[at + inV] / 255) * ia * (1 - m) + crushed * a * m) / Math.max(outA, 0.00001);
+        o[at] = Math.round(mixOne(0, q(r)) * 255);
+        o[at + 1] = Math.round(mixOne(1, q(g)) * 255);
+        o[at + 2] = Math.round(mixOne(2, q(b)) * 255);
+        o[at + 3] = Math.round(outA * 255);
+      }
+    }
+    return out;
+  };
+
+  // The crushed picture for `level`, as `drawBroken` gives its own
+  const crushAt = (current, level) => {
+    const entry = current.levels[level];
+    entry.pixels ??= entry.picture.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, entry.picture.width, entry.picture.height);
+    const canvas = Object.assign(document.createElement("canvas"), { width: entry.picture.width, height: entry.picture.height });
+    canvas.getContext("2d").putImageData(crush(entry.pixels, current.settings, entry.k), 0, 0);
+    return { canvas, x: 0, y: 0, width: canvas.width, height: canvas.height };
+  };
+
+  const drawBitcrushPreview = (current) => {
+    const canvas = current.preview;
+    if (!canvas || !current.levels.preview) return;
+    const drawn = crushAt(current, "preview");
+    const ratio = devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+    const fit = Math.min((box.width - 24) / drawn.width, (box.height - 24) / drawn.height);
+    // Pixels stay sharp, as they're the point
+    context.imageSmoothingEnabled = fit < 1;
+    context.drawImage(drawn.canvas, (box.width - drawn.width * fit) / 2, (box.height - drawn.height * fit) / 2, drawn.width * fit, drawn.height * fit);
+  };
+
+  const buildBitcrushPanel = (current) => {
+    const s = current.settings;
+    const rows = [];
+    const change = (key, value) => {
+      s[key] = value;
+      refreshBitcrush(current);
+      show();
+    };
+    const slider = makeSlider({ s, unit: current.unit, rows, change, limits: BITCRUSH_LIMITS });
+    const canvas = element("canvas", { className: "preview" });
+    canvas.setAttribute("aria-hidden", "true");
+    current.preview = canvas;
+    const pick = (values) => {
+      Object.assign(s, values(), { editable: s.editable });
+      refreshBitcrush(current);
+      show();
+    };
+    const presets = makeChips(BITCRUSH_PRESETS, pick);
+    const colorMode = segments(
+      "Color mode",
+      [
+        ["0", "RGB"],
+        ["1", "Grayscale"],
+      ],
+      () => String(s.colorMode),
+      (value) => change("colorMode", Number(value)),
+    );
+    const ditherMode = select(
+      "Dither pattern",
+      [
+        ["0", "Off"],
+        ["1", "Ordered Bayer"],
+        ["2", "Noise"],
+      ],
+      () => String(s.ditherMode),
+      (value) => change("ditherMode", Number(value)),
+    );
+    const caption = (text) => element("div", { className: "caption", textContent: text });
+    const rowsOf = (list) => element("div", { className: "rows" }, ...list.map(slider));
+    const labelled = (text, control) => element("div", { className: "row" }, element("span", { className: "label", textContent: text }), control);
+    const shuffle = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
+    shuffle.addEventListener("click", () => change("randomSeed", Math.floor(Math.random() * 65536)));
+    shuffle.style.gridColumn = "span 2";
+    shuffle.style.justifySelf = "start";
+    const pixels = element("section", {}, caption("Pixels"), rowsOf(BITCRUSH_ROWS.pixels), labelled("Color mode", colorMode));
+    const dither = element("section", {}, caption("Dither"), labelled("Pattern", ditherMode), rowsOf(BITCRUSH_ROWS.dither));
+    const glitch = element("section", {}, caption("Glitch"), rowsOf(BITCRUSH_ROWS.glitch), labelled("Random seed", shuffle));
+    const split = element("section", {}, caption("RGB split"), rowsOf(BITCRUSH_ROWS.split));
+    const tone = element("section", {}, caption("Tone"), rowsOf(BITCRUSH_ROWS.tone));
+    const editable = element("input", { type: "checkbox" });
+    editable.addEventListener("change", () => change("editable", editable.checked));
+    const result = element("section", {}, checkRow("Keep editable", editable, "The original kept, hidden, in a group Bitcrush can change later"));
+    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => pick(BITCRUSH_PRESETS[0][1]));
+    const scroll = element("div", { className: "scroll" }, presets, pixels, dither, glitch, split, tone, result, element("div", { className: "under" }, reset));
+    const name = element("div", { className: "source", textContent: current.source.name });
+    const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
+    cancel.addEventListener("click", () => closeBitcrush(current, false));
+    const go = element("button", { type: "button", className: "button primary", textContent: current.group ? "Update" : "Bitcrush" });
+    go.addEventListener("click", () => !current.busy && applyBitcrush(current));
+    const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
+    const root = makePanel(current.group ? `Bitcrush · ${current.source.name}` : "Bitcrush", () => closeBitcrush(current, false), canvas, scroll, footer);
+    const show = () => {
+      colorMode.show();
+      ditherMode.show();
+      for (const row of rows) row.show();
+      editable.checked = s.editable;
+      drawBitcrushPreview(current);
+    };
+    show();
+    current.root = root;
+    current.panel = {
+      busy: (on) => {
+        go.disabled = on;
+        go.textContent = on ? "Making…" : current.group ? "Update" : "Bitcrush";
+      },
+      close: () => ditherMode.close(),
+    };
+    current.keys = panelKeys(root, () => crushing === current, () => closeBitcrush(current, false), () => !current.busy && applyBitcrush(current));
+    addEventListener("keydown", current.keys, true);
+    go.focus();
+  };
+
+  const bitcrushOf = (node) => {
+    try {
+      return node?.type === "GROUP" && node.getSharedPluginData(PLUGIN, BITCRUSH) ? node : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let crushing = null;
+
+  const openBitcrush = async (figma) => {
+    if (repeating || disintegrating || crushing) return;
+    const selected = figma.currentPage.selection;
+    if (selected.length !== 1) {
+      figma.notify(selected.length ? "Select one layer to bitcrush" : "Select a layer to bitcrush", { timeout: 2000 });
+      return;
+    }
+    let group = bitcrushOf(selected[0]);
+    let source;
+    let result = null;
+    const settings = structuredClone(BITCRUSH_DEFAULTS);
+    if (group) {
+      source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
+      result = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "result") ?? null;
+      try {
+        const saved = JSON.parse(group.getSharedPluginData(PLUGIN, BITCRUSH));
+        Object.assign(settings, saved);
+      } catch {}
+      if (!source) {
+        group = null;
+        source = selected[0];
+      }
+    } else {
+      source = selected[0];
+    }
+    if (source.type === "SECTION" || !("exportAsync" in source)) {
+      figma.notify("Sections can't be bitcrushed", { timeout: 2000 });
+      return;
+    }
+
+    const current = {
+      figma,
+      group,
+      source,
+      settings,
+      unit: Math.max(1, Math.max(source.width ?? 100, source.height ?? 100)),
+      result,
+      kept: result ? { fills: JSON.stringify(result.fills), width: result.width, height: result.height, transform: result.relativeTransform } : null,
+      levels: {},
+      wasVisible: source.visible,
+    };
+    crushing = current;
+    try {
+      figma.commitUndo();
+    } catch {}
+    // The layer as a picture, as large as an image can be in Figma
+    const visible = source.visible;
+    source.visible = true;
+    try {
+      current.bounds = source.absoluteRenderBounds ?? source.absoluteBoundingBox;
+      const most = Math.min(2, MAX_SIDE / 2 / Math.max(1, current.bounds.width, current.bounds.height));
+      const bytes = await source.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: most } });
+      current.bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    } catch {
+      source.visible = visible;
+      crushing = null;
+      figma.notify("Couldn't read the layer", { timeout: 2000 });
+      return;
+    }
+    if (crushing !== current) return;
+    const k = current.bitmap.width / current.bounds.width;
+    current.levels = {
+      preview: scaledPicture(current.bitmap, 360, k),
+      live: scaledPicture(current.bitmap, 900, k),
+      full: scaledPicture(current.bitmap, MAX_SIDE, k),
+    };
+    // Grouped from the start, as Disintegrate's are
+    const parent = source.parent;
+    if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
+      current.home = { parent, index: parent.children.indexOf(source) };
+      try {
+        current.wrap = figma.group([source], parent, current.home.index);
+        current.wrap.name = `Bitcrush · ${source.name}`;
+      } catch {
+        current.wrap = null;
+      }
+    }
+    if (!current.result) {
+      current.result = figma.createRectangle();
+      current.result.name = `${source.name} bitcrushed`;
+      const holder = source.parent;
+      holder.insertChild(holder.children.indexOf(source) + 1, current.result);
+      if ("layoutMode" in holder && holder.layoutMode !== "NONE") current.result.layoutPositioning = "ABSOLUTE";
+      current.result.setSharedPluginData(PLUGIN, ROLE, "result");
+      current.result.visible = false;
+    }
+    source.visible = false;
+    figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
+    buildBitcrushPanel(current);
+    refreshBitcrush(current);
+  };
+
+  // The panel's preview at once, and the file's a moment after
+  const refreshBitcrush = (current) => {
+    drawBitcrushPreview(current);
+    clearTimeout(current.timer);
+    current.timer = setTimeout(async () => {
+      if (crushing !== current) return;
+      await placeDrawn(current, crushAt(current, "live"), current.levels.live.k);
+    }, 120);
+  };
+
+  const applyBitcrush = async (current) => {
+    const { figma, source, settings } = current;
+    clearTimeout(current.timer);
+    current.busy = true;
+    current.panel?.busy(true);
+    await placeDrawn(current, crushAt(current, "full"), current.levels.full.k);
+    if (crushing !== current) return;
+    let result = current.group ?? current.wrap;
+    if (settings.editable) {
+      if (!result || result.removed) {
+        const parent = source.parent;
+        result = figma.group([source, current.result], parent, parent.children.indexOf(source));
+        result.name = `Bitcrush · ${source.name}`;
+      }
+      source.setSharedPluginData(PLUGIN, ROLE, "source");
+      result.setSharedPluginData(PLUGIN, BITCRUSH, JSON.stringify(settings));
+      figma.currentPage.selection = [result];
+    } else {
+      // Only the image, the original gone
+      current.result.setSharedPluginData(PLUGIN, ROLE, "");
+      if (result && !result.removed) result.setSharedPluginData(PLUGIN, BITCRUSH, "");
+      const image = current.result;
+      const holder = current.wrap ?? current.group;
+      if (holder && !holder.removed) figma.ungroup(holder);
+      if (!source.removed) source.remove();
+      image.name = image.name.replace(/ bitcrushed$/, "");
+      figma.currentPage.selection = [image];
+    }
+    try {
+      figma.commitUndo();
+    } catch {}
+    closeBitcrush(current, true);
+  };
+
+  const closeBitcrush = (current, applied) => {
+    if (crushing !== current) return;
+    crushing = null;
+    clearTimeout(current.timer);
+    if (!applied) {
+      const { figma, source, result, home, wrap } = current;
+      if (current.group) {
+        // What it was before: its image, size and place
+        try {
+          if (current.kept && !result.removed) {
+            result.resizeWithoutConstraints(current.kept.width, current.kept.height);
+            result.relativeTransform = current.kept.transform;
+            result.fills = JSON.parse(current.kept.fills);
+            result.visible = true;
+          }
+        } catch {}
+      } else {
+        if (result && !result.removed) result.remove();
+        if (!source.removed) source.visible = current.wasVisible;
+        if (wrap && home && !source.removed && !home.parent.removed) {
+          try {
+            home.parent.insertChild(Math.min(home.index, home.parent.children.length), source);
+            if (!wrap.removed) wrap.remove();
+          } catch {}
+        }
+      }
+      try {
+        if (current.group && !current.group.removed) figma.currentPage.selection = [current.group];
+        else if (!source.removed) figma.currentPage.selection = [source];
+      } catch {}
+    }
+    current.bitmap?.close?.();
+    current.panel?.close();
+    current.root?.remove();
+    removeEventListener("keydown", current.keys, true);
+  };
+
 
   // ---------- Setting ----------
 
