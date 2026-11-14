@@ -237,6 +237,9 @@
   .picker:hover, .picker[aria-expanded="true"] { border-color: var(--border); }
   .picker:focus-visible { border-color: var(--brand); }
   .row.disabled .picker { opacity: 0.4; border-color: transparent; }
+  /* A palette's colors, beside its name */
+  .swatch { flex: none; width: 24px; height: 8px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12); }
+  .picker-label:has(.swatch) { display: flex; align-items: center; gap: 6px; }
   .menu {
     position: fixed;
     z-index: 100;
@@ -612,6 +615,22 @@
           <div class="hint">A small picture of each layer in the layers panel, in every mode, like in Draw mode. Large files may feel slower. Turning it on reloads files already open, each when you next look at it.</div>
         </span>
         <input type="checkbox" class="switch" id="layer-previews">
+      </label>
+      <label class="row">
+        <span class="label">Color frames
+          <div class="hint">Frames in the layers panel take turns through the rainbow, on their icons, with a guide in their color down everything in them. Frames inside a frame are a shade darker, so it's clear where each one starts and ends.</div>
+        </span>
+        <input type="checkbox" class="switch" id="frame-colors">
+      </label>
+      <label class="row nested" id="frame-palette-row">
+        <span class="label">Palette</span>
+        <button type="button" class="picker" id="frame-palette" aria-haspopup="listbox" aria-expanded="false" data-options='[["rainbow","Rainbow","linear-gradient(90deg, oklch(0.78 0.15 25) 0% 17%, oklch(0.78 0.15 60) 17% 33%, oklch(0.78 0.15 95) 33% 50%, oklch(0.78 0.15 150) 50% 67%, oklch(0.78 0.15 240) 67% 83%, oklch(0.78 0.15 305) 83% 100%)"],["sunset","Sunset","linear-gradient(90deg, oklch(0.83 0.15 345) 0% 25%, oklch(0.72 0.15 18) 25% 50%, oklch(0.83 0.15 52) 50% 75%, oklch(0.72 0.15 85) 75% 100%)"],["ocean","Ocean","linear-gradient(90deg, oklch(0.83 0.15 170) 0% 25%, oklch(0.72 0.15 207) 25% 50%, oklch(0.83 0.15 243) 50% 75%, oklch(0.72 0.15 280) 75% 100%)"],["forest","Forest","linear-gradient(90deg, oklch(0.83 0.15 95) 0% 25%, oklch(0.72 0.15 125) 25% 50%, oklch(0.83 0.15 155) 50% 75%, oklch(0.72 0.15 185) 75% 100%)"],["aurora","Aurora","linear-gradient(90deg, oklch(0.83 0.15 150) 0% 25%, oklch(0.72 0.15 203) 25% 50%, oklch(0.83 0.15 257) 50% 75%, oklch(0.72 0.15 310) 75% 100%)"],["candy","Candy","linear-gradient(90deg, oklch(0.83 0.15 280) 0% 25%, oklch(0.72 0.15 313) 25% 50%, oklch(0.83 0.15 347) 50% 75%, oklch(0.72 0.15 20) 75% 100%)"],["ember","Ember","linear-gradient(90deg, oklch(0.83 0.15 15) 0% 25%, oklch(0.72 0.15 43) 25% 50%, oklch(0.83 0.15 72) 50% 75%, oklch(0.72 0.15 100) 75% 100%)"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </label>
+      <label class="row nested" id="frame-tint-row">
+        <span class="label">Tint rows
+          <div class="hint">Each layer's row also takes a light wash of its frame's color, fading toward its name. Hover and selection take its color too, instead of grey and blue.</div>
+        </span>
+        <input type="checkbox" class="switch" id="frame-tint">
       </label>
     </section>
     <section>
@@ -998,7 +1017,9 @@
       get: () => value,
       set: (next) => {
         value = options.some(([key]) => key === next) ? next : options[0][0];
-        label.textContent = options.find(([key]) => key === value)[1];
+        const [, text, swatch] = options.find(([key]) => key === value);
+        label.textContent = text;
+        if (swatch) label.prepend(Object.assign(document.createElement("i"), { className: "swatch", style: `background: ${swatch}` }));
       },
     });
     button.value = value;
@@ -1029,7 +1050,9 @@
       menu.setAttribute("role", "listbox");
       menu.setAttribute("aria-label", button.closest(".row").querySelector(".label").textContent.trim());
       menu.tabIndex = -1;
-      menu.innerHTML = options.map(([key, text], i) => `<div role="option" id="${button.id}-${i}" data-value="${key}" aria-selected="${key === value}">${check}<span>${text}</span></div>`).join("");
+      menu.innerHTML = options
+        .map(([key, text, swatch], i) => `<div role="option" id="${button.id}-${i}" data-value="${key}" aria-selected="${key === value}">${check}${swatch ? `<i class="swatch" style="background: ${swatch}"></i>` : ""}<span>${text}</span></div>`)
+        .join("");
       document.body.append(menu);
       button.setAttribute("aria-expanded", "true");
       const items = [...menu.children];
@@ -1090,7 +1113,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1437,6 +1460,9 @@
     $("rail-widgets").checked = settings.railWidgets;
     $("actions-plugins-tab").checked = settings.actionsPluginsTab;
     $("layer-previews").checked = settings.layerPreviews;
+    $("frame-colors").checked = settings.frameColors;
+    $("frame-palette").value = settings.framePalette;
+    $("frame-tint").checked = settings.frameTint;
     $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
     $("adjustments-bar").checked = settings.adjustmentsBar;
     $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
@@ -1469,6 +1495,8 @@
       ["local-upscale-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
       ["new-home-start-row", settings.ligmaHome],
+      ["frame-palette-row", settings.frameColors],
+      ["frame-tint-row", settings.frameColors],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -1524,6 +1552,9 @@
       railWidgets: $("rail-widgets").checked,
       actionsPluginsTab: $("actions-plugins-tab").checked,
       layerPreviews: $("layer-previews").checked,
+      frameColors: $("frame-colors").checked,
+      framePalette: $("frame-palette").value,
+      frameTint: $("frame-tint").checked,
       adjustmentsClipboard: $("adjustments-clipboard").checked,
       adjustmentsBar: $("adjustments-bar").checked,
       hideFreeAiActions: $("hide-free-ai-actions").checked,
