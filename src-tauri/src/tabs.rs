@@ -413,6 +413,10 @@ struct TabState {
 /// Tabs saved for the next launch, in the app data folder
 const SESSION_FILE: &str = "session.json";
 
+/// Held while `SESSION_FILE` is written or removed, so the timer thread
+/// and the main thread can't write over each other or leave an older file
+static SESSION_WRITE: Mutex<()> = Mutex::new(());
+
 /// The tabs as `SESSION_FILE` keeps them. Home comes first
 #[derive(Deserialize, Serialize)]
 struct Session {
@@ -525,6 +529,7 @@ pub fn apply_settings(app: &AppHandle, settings: &crate::settings::Settings) {
     if settings.restore_tabs {
         save_session(app);
     } else if let Ok(dir) = app.path().app_data_dir() {
+        let _guard = SESSION_WRITE.lock().unwrap();
         let _ = std::fs::remove_file(dir.join(SESSION_FILE));
     }
     rest_idle(app);
@@ -590,26 +595,41 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
 /// timer: a Figma tab keeps where you are in a file in its address (see
 /// view_state.rs) without loading anything, which nothing else hears of
 pub fn keep_session(app: &AppHandle) {
-    let awake: Vec<u32> = app.state::<Tabs>().inner().0.lock().unwrap().tabs.iter().filter(|tab| !tab.asleep).map(|tab| tab.id).collect();
+    let awake: Vec<u32> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        if !state.restore {
+            return;
+        }
+        // A loading tab may not show the address it's going to yet
+        state.tabs.iter().filter(|tab| tab.file_key.is_some() && !tab.asleep && !tab.suspended && !tab.loading).map(|tab| tab.id).collect()
+    };
+    let mut moved = false;
     for id in awake {
         let Some(url) = app.get_webview(&label(id)).and_then(|webview| webview.url().ok()).filter(is_figma) else {
             continue;
         };
         // Only the same file: opening another is a navigation, followed
         // as such
-        with_tab(app, id, |tab| {
-            if tab.file_key.is_some() && tab.file_key == file_key(&url) {
+        moved |= with_tab(app, id, |tab| {
+            let same = !tab.loading && tab.file_key.is_some() && tab.file_key == file_key(&url) && tab.url != url;
+            if same {
+                tab.kind = kind(&url);
                 tab.url = url;
             }
-        });
+            same
+        })
+        .unwrap_or(false);
     }
-    save_session(app);
+    if moved {
+        save_session(app);
+    }
 }
 
 /// Writes the tabs to `SESSION_FILE` if they changed and `restoreTabs` is on
 fn save_session(app: &AppHandle) {
+    let _guard = SESSION_WRITE.lock().unwrap();
     let json = {
-        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
         // No tabs yet: launching, and `restore` hasn't read the file
         if !state.restore || state.tabs.is_empty() {
             return;
@@ -630,12 +650,20 @@ fn save_session(app: &AppHandle) {
         if state.saved_session.as_ref() == Some(&json) {
             return;
         }
-        state.saved_session = Some(json.clone());
         json
     };
-    if let Ok(dir) = app.path().app_data_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join(SESSION_FILE), json);
+    let Ok(dir) = app.path().app_data_dir() else {
+        return;
+    };
+    // Into a file beside it first, then over it, so ending mid-write
+    // leaves the last whole session rather than a cut-off one
+    let temp = dir.join(format!("{SESSION_FILE}.tmp"));
+    let _ = std::fs::create_dir_all(&dir);
+    if std::fs::write(&temp, &json).and_then(|_| std::fs::rename(&temp, dir.join(SESSION_FILE))).is_ok() {
+        let mut state = app.state::<Tabs>().inner().0.lock().unwrap();
+        if state.restore {
+            state.saved_session = Some(json);
+        }
     }
 }
 
@@ -818,6 +846,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::loading_logo::PAGE_JS)
         .initialization_script(crate::modules::PAGE_JS)
         .initialization_script(crate::layers::page_js())
+        .initialization_script(crate::frame_colors::page_js())
         .initialization_script(crate::home::page_js())
         .initialization_script(crate::new_home::SETTINGS_JS)
         .initialization_script(crate::toolbar::page_js())
@@ -2042,6 +2071,9 @@ pub fn navigate(app: &AppHandle, id: u32, url: Url) {
         tab.snapshot = None;
         tab.crop = None;
         tab.url = url.clone();
+        // Until the page loads, so `keep_session` doesn't put back the
+        // address it's leaving
+        tab.loading = !tab.asleep;
         !tab.asleep
     });
     match (live, webview) {

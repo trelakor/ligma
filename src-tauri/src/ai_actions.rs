@@ -1699,7 +1699,7 @@ const PAGE_JS: &str = r##"(() => {
       let frame = 0;
       const follow = () => {
         placeOver(figma, node, canvas, layer, svg, picture);
-        picture.style.display = closed.committing || closed.dirty || topImage(node) === closed.hash ? "block" : "";
+        picture.style.display = healShown(closed) ? "block" : "";
         frame = requestAnimationFrame(follow);
       };
       follow();
@@ -1768,12 +1768,15 @@ const PAGE_JS: &str = r##"(() => {
     return top?.type === "IMAGE" ? top.imageHash : null;
   };
 
+  // Whether the healed copy is shown over the layer: healed, and not undone
+  // or changed some other way since, as the copy still has those heals
+  const healShown = ({ node, patched, hash }) => patched && (!hash || topImage(node) === hash);
+
   const placeHealOverlay = () => {
     if (!healing) return;
-    const { figma, node, canvas, layer, svg, picture, patched, working, committing, dirty, hash } = healing;
+    const { figma, node, canvas, layer, svg, picture } = healing;
     placeOver(figma, node, canvas, layer, svg, picture);
-    // Healing, or healed and not undone or changed some other way since
-    if (picture) picture.style.display = patched && (working || committing || dirty || (hash && topImage(node) === hash)) ? "block" : "";
+    if (picture) picture.style.display = healShown(healing) ? "block" : "";
     healing.frame = requestAnimationFrame(placeHealOverlay);
   };
 
@@ -1843,11 +1846,10 @@ const PAGE_JS: &str = r##"(() => {
       await within(current.opening?.catch(() => reopenHealing(current)));
       // Undone, or changed some other way since, the image is read again,
       // unless a heal is still being handed to Figma
-      const top = fillsOf(node).at(-1);
-      const changed = current.hash && !current.committing && !current.dirty && !(top?.type === "IMAGE" && top.imageHash === current.hash);
+      const changed = current.hash && !current.committing && !current.dirty && topImage(node) !== current.hash;
       if (current.stale || changed) {
         handOff("heal", request({ op: "close", session: current.session })).catch(() => {});
-        Object.assign(current, { hash: null, stale: false });
+        Object.assign(current, { hash: null, stale: false, patched: false });
         await within(reopenHealing(current));
       }
       const ask = () =>
@@ -1910,9 +1912,11 @@ const PAGE_JS: &str = r##"(() => {
         const last = fills.at(-1);
         const ours = last?.type === "IMAGE" && last.imageHash === current.hash;
         // Undone or changed meanwhile: left as it is, rather than undoing
-        // the undo, and read again before the next stroke
+        // the undo, and read again before the next stroke. The stroke healed
+        // into the copy is lost with it
         if (current.hash && !ours) {
-          Object.assign(current, { dirty: false, stale: true });
+          Object.assign(current, { dirty: false, stale: true, patched: false });
+          figma.notify("The image changed while healing, heal it again", { timeout: 3000 });
           break;
         }
         node.fills = ours
@@ -2047,9 +2051,10 @@ const PAGE_JS: &str = r##"(() => {
   const UPSCALING = "data-ligma-upscaling";
   let upscaling = null;
   // Photo keeps texture and grain, Illustration keeps lines and flat
-  // color clean, and Fast is several times as quick. Until one's chosen,
-  // it's picked for each image by how it looks (see `looksDrawn`)
-  const upscaleOptions = { scale: 2, quality: null };
+  // color clean, and Fast is several times as quick. Photo or Illustration
+  // is picked for each image by how it looks (see `looksDrawn`), unless
+  // another's chosen for it
+  const upscaleOptions = { scale: 2 };
   const QUALITIES = [
     ["fast", "Fast", "Quicker, and smoother"],
     ["photo", "Photo", "For photos: keeps texture, grain and noise"],
@@ -2057,30 +2062,41 @@ const PAGE_JS: &str = r##"(() => {
   ];
 
   // Whether an image looks drawn rather than photographed: drawings,
-  // renders and graphics have many hard edges between flat colors, where
-  // photos change gently. Read at 128 pixels across
+  // renders, graphics and screenshots are flat color, changing sharply at
+  // edges if at all, where grain, noise and light change photos a little
+  // nearly everywhere. So it's how often a pixel differs gently from the
+  // one beside or below it, by more than compression leaves on flat color
+  // but less than an edge, both opaque. Read at most 1,024 pixels across,
+  // as shrunk much further a photo's gentle changes add up to edges, but
+  // only every fourth row, which reads as well, so Figma's page isn't held
   const looksDrawn = async (bytes) => {
     try {
       const bitmap = await createImageBitmap(new Blob([bytes]));
-      const scale = 128 / Math.max(bitmap.width, bitmap.height);
-      const [width, height] = [Math.max(8, Math.round(bitmap.width * scale)), Math.max(8, Math.round(bitmap.height * scale))];
+      const scale = Math.min(1, 1024 / Math.max(bitmap.width, bitmap.height));
+      const [width, height] = [Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale))];
       const context = Object.assign(document.createElement("canvas"), { width, height }).getContext("2d", { willReadFrequently: true });
+      context.imageSmoothingQuality = "high";
       context.drawImage(bitmap, 0, 0, width, height);
       bitmap.close();
       const { data } = context.getImageData(0, 0, width, height);
-      let hard = 0;
-      for (let y = 0; y < height - 1; y++) {
-        for (let x = 0; x < width - 1; x++) {
+      let [pairs, gentle] = [0, 0];
+      const compare = (at, next) => {
+        if (data[at + 3] < 200 || data[next + 3] < 200) return;
+        const most = Math.max(Math.abs(data[at] - data[next]), Math.abs(data[at + 1] - data[next + 1]), Math.abs(data[at + 2] - data[next + 2]));
+        pairs++;
+        if (most > 2 && most <= 24) gentle++;
+      };
+      for (let y = 0; y < height; y += 4) {
+        for (let x = 0; x < width; x++) {
           const at = (y * width + x) * 4;
-          let most = 0;
-          for (let channel = 0; channel < 3; channel++) {
-            const value = data[at + channel];
-            most = Math.max(most, Math.abs(value - data[at + 4 + channel]), Math.abs(value - data[at + width * 4 + channel]));
-          }
-          if (most > 40) hard++;
+          if (x + 1 < width) compare(at, at + 4);
+          if (y + 1 < height) compare(at, at + width * 4);
         }
       }
-      return hard / ((width - 1) * (height - 1)) > 0.08;
+      // Every photo tried differs gently in over a sixth of its pairs, and
+      // most drawings in far fewer. The line's a little short of a sixth,
+      // as Photo suits a drawing better than Illustration a photo
+      return pairs >= 256 && gentle / pairs < 0.15;
     } catch {
       return false;
     }
@@ -2151,8 +2167,8 @@ const PAGE_JS: &str = r##"(() => {
       button.dataset.value = value;
       Object.assign(button.dataset, { tooltip: tip, tooltipType: "text", tooltipShowAbove: "true" });
       button.addEventListener("click", () => {
-        upscaleOptions.quality = value;
-        if (upscaling) upscaling.quality = value;
+        if (!upscaling) return;
+        upscaling.quality = value;
         showUpscaling();
       });
     }
@@ -2168,12 +2184,16 @@ const PAGE_JS: &str = r##"(() => {
     const cancel = strip.appendChild(barButton(crop, "Cancel"));
     cancel.addEventListener("click", () => (upscaling?.comparing ? finishUpscale(false) : closeUpscaling()));
 
-    upscaling = {
+    // Read once, to pick a quality by and then to upscale
+    const bytes = figma.getImageByHash(paint.imageHash).getBytesAsync();
+    bytes.catch(() => {});
+    const current = (upscaling = {
       figma,
       node,
       index,
       paint,
       size,
+      bytes,
       canvas,
       root,
       scales,
@@ -2184,21 +2204,21 @@ const PAGE_JS: &str = r##"(() => {
       apply,
       working: false,
       comparing: null,
-      quality: upscaleOptions.quality ?? "photo",
-    };
+      quality: null,
+      picked: null,
+    });
     document.documentElement.setAttribute(UPSCALING, "");
     placeUpscaling();
     showUpscaling();
     // Photo or Illustration, by how the image looks, unless one's chosen
-    if (!upscaleOptions.quality) {
-      const current = upscaling;
-      const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync().catch(() => new Uint8Array());
-      const drawn = await looksDrawn(bytes);
-      if (upscaling === current && !upscaleOptions.quality && !current.working) {
+    // first. Upscale waits for it
+    current.picked = bytes
+      .then(looksDrawn, () => false)
+      .then((drawn) => {
+        if (current.quality) return;
         current.quality = drawn ? "illustration" : "photo";
-        showUpscaling();
-      }
-    }
+        if (upscaling === current) showUpscaling();
+      });
   };
 
   // The size the image becomes at the chosen scale, at most `LARGEST`
@@ -2267,7 +2287,11 @@ const PAGE_JS: &str = r##"(() => {
       const before = drawn(figma, node, scale);
       // Awaited only once there's a result
       before.catch(() => {});
-      const bytes = await figma.getImageByHash(paint.imageHash).getBytesAsync();
+      // The toast's X cancels while the quality's still being picked too
+      const aborted = new Promise((resolve) => controller.signal.addEventListener("abort", resolve, { once: true }));
+      await Promise.race([current.picked, aborted]);
+      if (controller.signal.aborted) throw "cancelled";
+      const bytes = await current.bytes;
       const reply = JSON.parse(await handOff("upscale", request({ scale: upscaleOptions.scale, quality: current.quality }, bytes), show, "", controller.signal));
       if (node.removed || upscaling !== current) throw "cancelled";
       const fills = fillsOf(node);
@@ -2280,6 +2304,8 @@ const PAGE_JS: &str = r##"(() => {
       if (original.scaleMode === "TILE") larger.scalingFactor = (original.scalingFactor ?? 1) * (size.width / reply.width);
       node.fills = [...fills.slice(0, index), { ...original, visible: false }, larger, ...fills.slice(index + 1)];
       openCompare(current, fills, beforeBytes, reply.width, reply.height);
+      // Not needed again, as the bar closes after comparing
+      current.bytes = null;
       shown = true;
     } catch (reason) {
       if (reason === "large") figma.notify("The image is as large as Figma keeps images", { timeout: 3000 });
@@ -2381,6 +2407,9 @@ const PAGE_JS: &str = r##"(() => {
     compare.layer.remove();
     URL.revokeObjectURL(compare.url);
     current.comparing = null;
+    // The divider's cursor goes with it, even with the pointer still over
+    // where the layer was, as nothing moves the pointer to clear it
+    document.documentElement.removeAttribute("data-ligma-compare-pointer");
     closeUpscaling();
     if (keep) figma.notify(`Upscaled to ${compare.width} × ${compare.height} px`, { timeout: 2000 });
     tidy();
