@@ -1,4 +1,4 @@
-//! Vectorize on this device (Settings > Features > Images): the image bar's
+//! Vectorize on this device (Settings > Images): the image bar's
 //! Vectorize in free projects, which Ligma adds in place of the one in
 //! Figma's More menu (see ai_actions.rs). Figma's sends the layer as a PNG
 //! to its servers and gets back an SVG of flat-colored shapes, each a
