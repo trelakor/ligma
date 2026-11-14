@@ -86,6 +86,11 @@ const SAMPLE_WORDS_PER_PIXEL = 4u;
 // leaves them
 var<private> ms_mask: array<u32, PIXELS_PER_THREAD>;
 const MS_ALL = 0xF0F0F0F0u;
+// Ligma: for each pixel, up to SOLIDS opaque colors and the samples each
+// covers, apart, of what opaque fills drew (see `main`)
+const SOLIDS = 4u;
+var<private> solid_mask: array<u32, 16>;
+var<private> solid_color: array<u32, 16>;
 
 // The even-odd rule's mask, a bit a sample in order, laid out as the
 // non-zero rule's
@@ -1269,6 +1274,92 @@ fn fill_path(fill: CmdFill, xy: vec2<f32>, result: ptr<function, array<f32, PIXE
 
 #endif
 
+#ifdef msaa16
+// Ligma: what pixel `i`'s opaque samples add to it, and which they are
+fn solid_sum(i: u32) -> vec4<f32> {
+    var sum = vec4(0.0);
+    for (var j = 0u; j < SOLIDS; j += 1u) {
+        sum += unpack4x8unorm(solid_color[i * SOLIDS + j]) * (f32(countOneBits(solid_mask[i * SOLIDS + j])) * 0.0625);
+    }
+    return sum;
+}
+
+fn solid_samples(i: u32) -> u32 {
+    var all = 0u;
+    for (var j = 0u; j < SOLIDS; j += 1u) {
+        all |= solid_mask[i * SOLIDS + j];
+    }
+    return all;
+}
+
+fn clear_solid(i: u32) {
+    for (var j = 0u; j < SOLIDS; j += 1u) {
+        solid_mask[i * SOLIDS + j] = 0u;
+    }
+}
+
+// Ligma: `fg`, opaque, drawn where `ms_mask` covers pixel `i`'s samples. It
+// takes their place whatever covered them: the opaque colors under it lose
+// those samples, and what isn't opaque its share of them
+fn take_samples(i: u32, fg: vec4<f32>, rgba: ptr<function, array<vec4<f32>, PIXELS_PER_THREAD>>) {
+    let m = ms_mask[i];
+    let k = solid_samples(i);
+    let open = 16.0 - f32(countOneBits(k));
+    let rest = max((*rgba)[i] - solid_sum(i), vec4(0.0)) * select(0.0, (open - f32(countOneBits(m & ~k))) / open, open > 0.0);
+    var free = SOLIDS;
+    for (var j = 0u; j < SOLIDS; j += 1u) {
+        solid_mask[i * SOLIDS + j] &= ~m;
+        if solid_mask[i * SOLIDS + j] == 0u {
+            free = j;
+        }
+    }
+    if m != 0u {
+        // Full, the two that cover least are taken as one
+        if free == SOLIDS {
+            var a = 0u;
+            var b = 1u;
+            for (var j = 0u; j < SOLIDS; j += 1u) {
+                let n = countOneBits(solid_mask[i * SOLIDS + j]);
+                if n < countOneBits(solid_mask[i * SOLIDS + a]) {
+                    b = a;
+                    a = j;
+                } else if j != a && n < countOneBits(solid_mask[i * SOLIDS + b]) {
+                    b = j;
+                }
+            }
+            let na = f32(countOneBits(solid_mask[i * SOLIDS + a]));
+            let nb = f32(countOneBits(solid_mask[i * SOLIDS + b]));
+            let mixed = (unpack4x8unorm(solid_color[i * SOLIDS + a]) * na + unpack4x8unorm(solid_color[i * SOLIDS + b]) * nb) / (na + nb);
+            solid_mask[i * SOLIDS + a] |= solid_mask[i * SOLIDS + b];
+            solid_color[i * SOLIDS + a] = pack4x8unorm(mixed);
+            free = b;
+        }
+        solid_mask[i * SOLIDS + free] = m;
+        solid_color[i * SOLIDS + free] = pack4x8unorm(vec4(fg.rgb, 1.0));
+    }
+    (*rgba)[i] = solid_sum(i) + rest;
+}
+
+// Ligma: `fg` blended over pixel `i`. Over all its samples, it's over each
+// alike, so what opaque fills covered stays covered. Over some, the pixel's
+// one color again
+fn painted(i: u32, fg: vec4<f32>) {
+    if fg.a <= 0.0 {
+        return;
+    }
+    if ms_mask[i] == MS_ALL {
+        for (var j = 0u; j < SOLIDS; j += 1u) {
+            let at = i * SOLIDS + j;
+            if solid_mask[at] != 0u {
+                solid_color[at] = pack4x8unorm(unpack4x8unorm(solid_color[at]) * (1.0 - fg.a) + fg);
+            }
+        }
+    } else {
+        clear_solid(i);
+    }
+}
+#endif
+
 // The X size should be 16 / PIXELS_PER_THREAD
 @compute @workgroup_size(4, 16)
 fn main(
@@ -1293,14 +1384,18 @@ fn main(
     var clip_depth = 0u;
     var area: array<f32, PIXELS_PER_THREAD>;
 #ifdef msaa16
-    // Ligma: the samples opaque solid fills have covered in this layer, and
-    // what they add to the pixel. A fill covering some of them takes their
-    // place, rather than blending over the whole pixel, so shapes meeting
-    // within a pixel cover it as Figma's samples do, rather than show what's
-    // under them through both their edges. Any other paint, or a layer,
-    // leaves the pixel as one color again
-    var solid: array<u32, PIXELS_PER_THREAD>;
-    var solid_rgba: array<vec4<f32>, PIXELS_PER_THREAD>;
+    // Ligma: the samples opaque fills have covered, each fill's color apart
+    // (see `take_samples`). A fill covering some of them takes their place,
+    // rather than blending over the whole pixel, so shapes meeting within a
+    // pixel cover it as Figma's samples do, rather than show what's under
+    // them through both their edges. A clip or layer of normal blend, opaque
+    // over the pixel, takes the place of the samples its shape covers the
+    // same way, and paint over the whole pixel tints each alike. Any other
+    // paint, or layer, leaves the pixel as one color again. Only of what's
+    // under all layers, what's in one drawn as it is
+    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+        clear_solid(i);
+    }
 #endif
     var cmd_ix = tile_ix * PTCL_INITIAL_ALLOC;
     let blend_offset = ptcl[cmd_ix];
@@ -1346,12 +1441,12 @@ fn main(
             }
         }
 #ifdef msaa16
-        if tag != CMD_FILL && tag != CMD_SOLID && tag != CMD_COLOR && tag != CMD_JUMP {
-            let layer = tag == CMD_BEGIN_CLIP || tag == CMD_BEGIN_CLIP_COPY || tag == CMD_END_CLIP;
+        let paints = tag == CMD_BLUR_RECT || tag == CMD_LIN_GRAD || tag == CMD_RAD_GRAD || tag == CMD_SWEEP_GRAD || tag == CMD_IMAGE;
+        if clip_depth == 0u && !paints && tag != CMD_FILL && tag != CMD_SOLID && tag != CMD_COLOR && tag != CMD_JUMP && tag != CMD_BEGIN_CLIP && tag != CMD_END_CLIP {
+            let layer = tag == CMD_BEGIN_CLIP_COPY;
             for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                 if layer || area[i] > 0.0 {
-                    solid[i] = 0u;
-                    solid_rgba[i] = vec4(0.0);
+                    clear_solid(i);
                 }
             }
         }
@@ -1388,29 +1483,16 @@ fn main(
                 let color = read_color(cmd_ix);
                 let fg = unpack4x8unorm(color.rgba_color);
 #ifdef msaa16
-                if fg.a >= 1.0 {
+                if fg.a >= 1.0 && clip_depth == 0u {
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
-                        let m = ms_mask[i];
-                        let k = solid[i];
-                        // Those of its samples already covered keep their
-                        // share of the color, as do those not, and the
-                        // fill takes the place of both under it, each taken
-                        // as one color
-                        let covered = f32(countOneBits(k));
-                        let open = 16.0 - covered;
-                        let kept = solid_rgba[i] * select(0.0, (covered - f32(countOneBits(k & m))) / covered, covered > 0.0);
-                        let rest = max(rgba[i] - solid_rgba[i], vec4(0.0)) * select(0.0, (open - f32(countOneBits(m & ~k))) / open, open > 0.0);
-                        solid_rgba[i] = kept + fg * (f32(countOneBits(m)) * 0.0625);
-                        solid[i] = k | m;
-                        rgba[i] = solid_rgba[i] + rest;
+                        take_samples(i, fg, &rgba);
                     }
                 } else {
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                         let fg_i = fg * area[i];
                         rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
-                        if area[i] > 0.0 {
-                            solid[i] = 0u;
-                            solid_rgba[i] = vec4(0.0);
+                        if clip_depth == 0u {
+                            painted(i, fg_i);
                         }
                     }
                 }
@@ -1456,6 +1538,21 @@ fn main(
                         bg_rgba = blend_spill[local_blend_start + i];
                     }
                     let bg = unpack4x8unorm(bg_rgba);
+#ifdef msaa16
+                    // Ligma: opaque over the pixel, it takes the place of
+                    // the samples its shape covers, as an opaque fill does
+                    if clip_depth == 0u {
+                        if (end_clip.blend & 0x7fffu) == COMPOSE_SRC_OVER && end_clip.blend < 0x10000u && end_clip.alpha >= 1.0 && rgba[i].a >= 0.998 {
+                            let content = rgba[i];
+                            rgba[i] = bg;
+                            take_samples(i, content, &rgba);
+                            continue;
+                        }
+                        if area[i] > 0.0 {
+                            clear_solid(i);
+                        }
+                    }
+#endif
                     let fg = rgba[i] * area[i] * end_clip.alpha;
                     if end_clip.blend == LUMINANCE_MASK_LAYER {
                         // TODO: Does this case apply more generally?
@@ -1527,6 +1624,11 @@ fn main(
                     let fg_rgba = blur_rgba * alpha;
                     let fg_i = fg_rgba * area[i];
                     rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+#ifdef msaa16
+                    if clip_depth == 0u {
+                        painted(i, fg_i);
+                    }
+#endif
                 }
                 cmd_ix += 3u;
             }
@@ -1539,6 +1641,11 @@ fn main(
                     let fg_rgba = textureLoad(gradients, vec2(x, i32(lin.index)), 0);
                     let fg_i = fg_rgba * area[i];
                     rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+#ifdef msaa16
+                    if clip_depth == 0u {
+                        painted(i, fg_i);
+                    }
+#endif
                 }
                 cmd_ix += 3u;
             }
@@ -1583,6 +1690,11 @@ fn main(
                         let fg_rgba = textureLoad(gradients, vec2(x, i32(rad.index)), 0);
                         let fg_i = fg_rgba * area[i];
                         rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+#ifdef msaa16
+                        if clip_depth == 0u {
+                            painted(i, fg_i);
+                        }
+#endif
                     }
                 }
                 cmd_ix += 3u;
@@ -1617,6 +1729,11 @@ fn main(
                     let fg_rgba = textureLoad(gradients, vec2(ramp_x, i32(sweep.index)), 0);
                     let fg_i = fg_rgba * area[i];
                     rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+#ifdef msaa16
+                    if clip_depth == 0u {
+                        painted(i, fg_i);
+                    }
+#endif
                 }
                 cmd_ix += 3u;
             }
@@ -1644,6 +1761,11 @@ fn main(
                                 let fg_rgba = maybe_premul_alpha(textureLoad(image_atlas, vec2<i32>(atlas_uv_clamped), 0), image.alpha_type);
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+#ifdef msaa16
+                                if clip_depth == 0u {
+                                    painted(i, fg_i);
+                                }
+#endif
                             }
                         }
                     }
@@ -1671,6 +1793,11 @@ fn main(
                                 let fg_rgba = mix(mix(a, b, uv_frac.y), mix(c, d, uv_frac.y), uv_frac.x);
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+#ifdef msaa16
+                                if clip_depth == 0u {
+                                    painted(i, fg_i);
+                                }
+#endif
                             }
                         }
                     }
@@ -1682,6 +1809,11 @@ fn main(
                                 let fg_rgba = figma_sample(image, uv);
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
+#ifdef msaa16
+                                if clip_depth == 0u {
+                                    painted(i, fg_i);
+                                }
+#endif
                             }
                         }
                     }
