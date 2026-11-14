@@ -86,6 +86,7 @@ const PAGE_JS: &str = r##"(() => {
       color: var(--color-text-menu, #fff);
       box-shadow: var(--elevation-500);
     }
+    [${ROOT}="menu"] .separator { height: 1px; margin: 8px -8px; background: var(--color-border-menu, #383838); }
     [${ROOT}="menu"] .heading { padding: 0 8px; height: 24px; display: flex; align-items: center; color: var(--color-text-menu-secondary, #ffffffb2); }
     [${ROOT}="menu"] .item {
       display: grid;
@@ -291,21 +292,24 @@ const PAGE_JS: &str = r##"(() => {
       name: "Repeater",
       about: "Repeat a layer in a trail, ring or grid",
       icon: REPEATER_ICON,
-      open: (figma) => openRepeater(figma),
+      of: (node) => repeaterOf(node),
+      open: (figma, edit) => openRepeater(figma, edit),
     },
     {
       id: "disintegrate",
       name: "Disintegrate",
       about: "Snap it into dust, or shatter it like glass",
       icon: DISINTEGRATE_ICON,
-      open: (figma) => openDisintegrate(figma),
+      of: (node) => disintegrateOf(node),
+      open: (figma, edit) => openDisintegrate(figma, edit),
     },
     {
       id: "bitcrush",
       name: "Bitcrush",
       about: "Pixelate, posterize, dither and glitch it",
       icon: BITCRUSH_ICON,
-      open: (figma) => openBitcrush(figma),
+      of: (node) => bitcrushOf(node),
+      open: (figma, edit) => openBitcrush(figma, edit),
     },
   ];
 
@@ -337,45 +341,43 @@ const PAGE_JS: &str = r##"(() => {
     const anchor = button();
     if (!figma || !anchor) return;
     // A layer inside an effect's group, its original, copies or result,
-    // stands for the group, so the effect opens it to change rather than
-    // making another inside it
+    // stands for the group, so the effect it's in can be changed
     {
       const [only] = figma.currentPage.selection;
       const parent = only?.parent;
-      if (figma.currentPage.selection.length === 1 && parent && (repeaterOf(parent) || disintegrateOf(parent) || bitcrushOf(parent))) {
+      // Unless it's an effect's group itself, stacked under another
+      if (figma.currentPage.selection.length === 1 && parent && !EFFECTS.some((effect) => effect.of(only)) && EFFECTS.some((effect) => effect.of(parent))) {
         figma.currentPage.selection = [parent];
       }
     }
-    // An effect's group selected opens it to change
-    const selected = figma.currentPage.selection;
-    if (selected.length === 1 && repeaterOf(selected[0])) {
-      openRepeater(figma);
-      return;
-    }
-    if (selected.length === 1 && disintegrateOf(selected[0])) {
-      openDisintegrate(figma);
-      return;
-    }
-    if (selected.length === 1 && bitcrushOf(selected[0])) {
-      openBitcrush(figma);
-      return;
-    }
+    // An effect's group selected: the effect to change it first, then the
+    // rest, which apply another on top of it
+    const [only] = figma.currentPage.selection;
+    const applied = figma.currentPage.selection.length === 1 ? EFFECTS.find((effect) => effect.of(only)) : null;
     menu = document.createElement("div");
     menu.setAttribute(ROOT, "menu");
     menu.setAttribute("role", "menu");
     menu.setAttribute("aria-label", "Effects");
-    menu.innerHTML = `<div class="heading">Effects</div>`;
-    for (const effect of EFFECTS) {
-      const item = menu.appendChild(document.createElement("button"));
-      item.type = "button";
-      item.className = "item";
-      item.setAttribute("role", "menuitem");
-      item.innerHTML = `${effect.icon}<span class="name">${effect.name}</span><span class="about">${effect.about}</span>`;
-      item.addEventListener("click", () => {
+    menu.innerHTML = "";
+    const item = (icon, name, about, run) => {
+      const button = menu.appendChild(document.createElement("button"));
+      button.type = "button";
+      button.className = "item";
+      button.setAttribute("role", "menuitem");
+      button.innerHTML = `${icon}<span class="name">${name}</span><span class="about">${about}</span>`;
+      button.addEventListener("click", () => {
         closeMenu();
-        effect.open(figma);
+        run();
       });
+    };
+    if (applied) {
+      menu.insertAdjacentHTML("beforeend", `<div class="heading">This layer</div>`);
+      item(applied.icon, `Edit ${applied.name}`, "Change the effect already applied", () => applied.open(figma, true));
+      menu.insertAdjacentHTML("beforeend", `<div class="separator"></div><div class="heading">Add an effect on top</div>`);
+    } else {
+      menu.insertAdjacentHTML("beforeend", `<div class="heading">Effects</div>`);
     }
+    for (const effect of EFFECTS) item(effect.icon, effect.name, effect.about, () => effect.open(figma, false));
     document.body.append(menu);
     const box = anchor.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, box.left + box.width / 2 - menu.offsetWidth / 2))}px`;
@@ -707,14 +709,14 @@ const PAGE_JS: &str = r##"(() => {
 
   let repeating = null;
 
-  const openRepeater = (figma) => {
+  const openRepeater = (figma, edit = false) => {
     if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to repeat" : "Select a layer to repeat", { timeout: 2000 });
       return;
     }
-    let group = repeaterOf(selected[0]);
+    let group = edit ? repeaterOf(selected[0]) : null;
     let source;
     let settings = { ...DEFAULTS };
     const unit = () => Math.max(1, Math.round(Math.max(selected[0].width ?? 100, selected[0].height ?? 100)));
@@ -1845,14 +1847,14 @@ const PAGE_JS: &str = r##"(() => {
 
   let disintegrating = null;
 
-  const openDisintegrate = async (figma) => {
+  const openDisintegrate = async (figma, edit = false) => {
     if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to disintegrate" : "Select a layer to disintegrate", { timeout: 2000 });
       return;
     }
-    let group = disintegrateOf(selected[0]);
+    let group = edit ? disintegrateOf(selected[0]) : null;
     let source;
     let result = null;
     const settings = structuredClone(DISINTEGRATE_DEFAULTS);
@@ -2539,14 +2541,14 @@ const PAGE_JS: &str = r##"(() => {
 
   let crushing = null;
 
-  const openBitcrush = async (figma) => {
+  const openBitcrush = async (figma, edit = false) => {
     if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to bitcrush" : "Select a layer to bitcrush", { timeout: 2000 });
       return;
     }
-    let group = bitcrushOf(selected[0]);
+    let group = edit ? bitcrushOf(selected[0]) : null;
     let source;
     let result = null;
     const settings = structuredClone(BITCRUSH_DEFAULTS);
