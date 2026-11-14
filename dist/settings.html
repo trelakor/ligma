@@ -626,6 +626,12 @@
         <span class="label">Palette</span>
         <button type="button" class="picker" id="frame-palette" aria-haspopup="listbox" aria-expanded="false" data-options='[["rainbow","Rainbow","linear-gradient(90deg, oklch(0.78 0.15 25) 0% 17%, oklch(0.78 0.15 60) 17% 33%, oklch(0.78 0.15 95) 33% 50%, oklch(0.78 0.15 150) 50% 67%, oklch(0.78 0.15 240) 67% 83%, oklch(0.78 0.15 305) 83% 100%)"],["sunset","Sunset","linear-gradient(90deg, oklch(0.83 0.15 345) 0% 25%, oklch(0.72 0.15 18) 25% 50%, oklch(0.83 0.15 52) 50% 75%, oklch(0.72 0.15 85) 75% 100%)"],["ocean","Ocean","linear-gradient(90deg, oklch(0.83 0.15 170) 0% 25%, oklch(0.72 0.15 207) 25% 50%, oklch(0.83 0.15 243) 50% 75%, oklch(0.72 0.15 280) 75% 100%)"],["forest","Forest","linear-gradient(90deg, oklch(0.83 0.15 95) 0% 25%, oklch(0.72 0.15 125) 25% 50%, oklch(0.83 0.15 155) 50% 75%, oklch(0.72 0.15 185) 75% 100%)"],["aurora","Aurora","linear-gradient(90deg, oklch(0.83 0.15 150) 0% 25%, oklch(0.72 0.15 203) 25% 50%, oklch(0.83 0.15 257) 50% 75%, oklch(0.72 0.15 310) 75% 100%)"],["candy","Candy","linear-gradient(90deg, oklch(0.83 0.15 280) 0% 25%, oklch(0.72 0.15 313) 25% 50%, oklch(0.83 0.15 347) 50% 75%, oklch(0.72 0.15 20) 75% 100%)"],["ember","Ember","linear-gradient(90deg, oklch(0.83 0.15 15) 0% 25%, oklch(0.72 0.15 43) 25% 50%, oklch(0.83 0.15 72) 50% 75%, oklch(0.72 0.15 100) 75% 100%)"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </label>
+      <label class="row nested" id="frame-tint-row">
+        <span class="label">Tint rows
+          <div class="hint">Each layer's row also takes a light wash of its frame's color, fading toward its name.</div>
+        </span>
+        <input type="checkbox" class="switch" id="frame-tint">
+      </label>
     </section>
     <section>
       <h2>Images</h2>
@@ -1107,7 +1113,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1456,6 +1462,7 @@
     $("layer-previews").checked = settings.layerPreviews;
     $("frame-colors").checked = settings.frameColors;
     $("frame-palette").value = settings.framePalette;
+    $("frame-tint").checked = settings.frameTint;
     $("adjustments-clipboard").checked = settings.adjustmentsClipboard;
     $("adjustments-bar").checked = settings.adjustmentsBar;
     $("hide-free-ai-actions").checked = settings.hideFreeAiActions;
@@ -1489,6 +1496,7 @@
       ["mcp-status-row", settings.ligmaMcp],
       ["new-home-start-row", settings.ligmaHome],
       ["frame-palette-row", settings.frameColors],
+      ["frame-tint-row", settings.frameColors],
       ["discord-file-row", settings.discordRichPresence],
       ["discord-tool-row", settings.discordRichPresence],
       ["discord-invites-row", settings.discordRichPresence],
@@ -1546,6 +1554,7 @@
       layerPreviews: $("layer-previews").checked,
       frameColors: $("frame-colors").checked,
       framePalette: $("frame-palette").value,
+      frameTint: $("frame-tint").checked,
       adjustmentsClipboard: $("adjustments-clipboard").checked,
       adjustmentsBar: $("adjustments-bar").checked,
       hideFreeAiActions: $("hide-free-ai-actions").checked,

@@ -16,6 +16,9 @@
 //! frames each layer is in from Figma's plugin API. Only the icons and the
 //! indents are drawn on, so hover and selection stay Figma's, and the icons
 //! of what's in a frame, like images and vectors, take its color too
+//!
+//! Tint rows, off by default, also washes each row with its frame's color,
+//! lightly, from the guides' side, fading toward its name
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,7 +27,7 @@ use tauri::AppHandle;
 
 use crate::settings::Settings;
 
-/// Runs in Figma tabs. `__LIGMA_FRAME_COLORS__` is `{ on, palette, rev }`:
+/// Runs in Figma tabs. `__LIGMA_FRAME_COLORS__` is `{ on, tint, palette, rev }`:
 /// the settings when the tab was made. A page loaded later in the same tab may
 /// find a newer one in `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
@@ -77,7 +80,13 @@ const PAGE_JS: &str = r##"(() => {
   // Shapes' icons are outlines Figma colors through `stroke`, the rest
   // through `--fpl-icon-color`
   const style = document.createElement("style");
-  style.textContent = `${ICON}[${MARKED}] .svg-container svg { stroke: var(--fpl-icon-color); }`;
+  // With Tint rows, Figma's hover box, behind the row's name, takes the
+  // row's color, paler and whiter; selected rows keep Figma's highlight
+  style.textContent = `
+    ${ICON}[${MARKED}] .svg-container svg { stroke: var(--fpl-icon-color); }
+    ${ROW}[${MARKED}][class*="object_row--hovered--"]:not([class*="object_row--selected--"])[style*="--ligma-hover"]::after {
+      background-color: var(--ligma-hover) !important;
+    }`;
 
   // A frame's expand arrow is centered this far past where its row's last
   // indent starts, and its guide drawn there, this wide
@@ -141,6 +150,8 @@ const PAGE_JS: &str = r##"(() => {
   const GUIDES = ["background-image", "background-position", "background-size", "background-repeat"];
   const clear = (row) => {
     row.removeAttribute(MARKED);
+    row.style.removeProperty("background-image");
+    row.style.removeProperty("--ligma-hover");
     const strip = row.querySelector(`${INDENTS}[${MARKED}]`);
     if (strip) {
       for (const property of GUIDES) strip.style.removeProperty(property);
@@ -222,6 +233,20 @@ const PAGE_JS: &str = r##"(() => {
           icon.removeAttribute(MARKED);
         }
       }
+      // With Tint rows, a wash of the frame's color from the guides' side,
+      // fading toward the name. It's the row's own background, under
+      // Figma's hover and selection, which cover it as they would the row
+      const wash = state.tint && tint ? `linear-gradient(90deg, ${tint.replace(")", " / 0.13)")}, ${tint.replace(")", " / 0.03)")} 70%)` : "";
+      if (row.style.getPropertyValue("background-image") !== wash) {
+        if (wash) row.style.setProperty("background-image", wash);
+        else row.style.removeProperty("background-image");
+      }
+      const hue = wash && tint.match(/([\d.]+)\)$/)?.[1];
+      const hover = hue ? (dark ? `oklch(0.93 0.07 ${hue} / 0.16)` : `oklch(0.94 0.06 ${hue})`) : "";
+      if (row.style.getPropertyValue("--ligma-hover") !== hover) {
+        if (hover) row.style.setProperty("--ligma-hover", hover);
+        else row.style.removeProperty("--ligma-hover");
+      }
       if (layers.length || tint) row.setAttribute(MARKED, "");
       else row.removeAttribute(MARKED);
     }
@@ -281,8 +306,10 @@ const PAGE_JS: &str = r##"(() => {
   else document.addEventListener("DOMContentLoaded", start, { once: true });
 })()"##;
 
-/// The setting, and the palette, by its place in `PALETTES`
+/// The setting, whether rows are tinted too, and the palette, by its place
+/// in `PALETTES`
 static ON: AtomicBool = AtomicBool::new(false);
+static TINT: AtomicBool = AtomicBool::new(false);
 static PALETTE: AtomicUsize = AtomicUsize::new(0);
 
 /// The palettes `PAGE_JS` knows, Rainbow first and the default
@@ -302,12 +329,14 @@ fn now() -> u64 {
 fn state() -> String {
     let (on, rev) = (ON.load(Ordering::Relaxed), REV.load(Ordering::Relaxed));
     let palette = PALETTES[PALETTE.load(Ordering::Relaxed).min(PALETTES.len() - 1)];
-    format!(r#"{{"on":{on},"palette":"{palette}","rev":{rev}}}"#)
+    let tint = TINT.load(Ordering::Relaxed);
+    format!(r#"{{"on":{on},"tint":{tint},"palette":"{palette}","rev":{rev}}}"#)
 }
 
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.frame_colors, Ordering::Relaxed);
+    TINT.store(settings.frame_tint, Ordering::Relaxed);
     PALETTE.store(palette(settings), Ordering::Relaxed);
     REV.store(now(), Ordering::Relaxed);
 }
@@ -321,7 +350,8 @@ pub fn page_js() -> String {
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     let on = ON.swap(settings.frame_colors, Ordering::Relaxed) != settings.frame_colors;
     let palette = PALETTE.swap(palette(settings), Ordering::Relaxed) != palette(settings);
-    if !on && !palette {
+    let tint = TINT.swap(settings.frame_tint, Ordering::Relaxed) != settings.frame_tint;
+    if !on && !palette && !tint {
         return;
     }
     REV.store(now(), Ordering::Relaxed);
