@@ -24,23 +24,6 @@ pub fn available() -> bool {
     true
 }
 
-/// Whether a subject can be found now, without asking to download the
-/// model first: with Vision on macOS, unless BiRefNet is chosen, or once
-/// BiRefNet is downloaded
-pub fn ready(app: &AppHandle) -> bool {
-    #[cfg(target_os = "macos")]
-    if !(cfg!(birefnet) && crate::settings::current(app).use_background_model) {
-        return vision::available();
-    }
-    #[cfg(birefnet)]
-    return crate::models::BACKGROUND.is_installed(app);
-    #[cfg(not(birefnet))]
-    {
-        let _ = app;
-        false
-    }
-}
-
 enum Failure {
     /// Nothing to keep was found
     NoSubject,
@@ -363,25 +346,5 @@ mod birefnet {
             .write_image(image.as_raw(), width, height, image::ExtendedColorType::Rgba8)
             .map_err(failed)?;
         Ok(base64::engine::general_purpose::STANDARD.encode(png))
-    }
-
-    #[cfg(test)]
-    mod tests {
-        /// Cuts out `LIGMA_EXPAND_IMAGE` with the model in the folder
-        /// `LIGMA_BIREFNET` and writes it next to the image, for Expand's
-        /// tests to leave its subject out. `cargo test --release --
-        /// --ignored cuts_out`
-        #[test]
-        #[ignore]
-        fn cuts_out_an_image() {
-            use base64::Engine;
-            let (Ok(folder), Ok(path)) = (std::env::var("LIGMA_BIREFNET"), std::env::var("LIGMA_EXPAND_IMAGE")) else {
-                return;
-            };
-            let Ok(cut) = super::cut_out(std::path::Path::new(&folder), 0, 0, &std::fs::read(&path).unwrap()) else {
-                panic!("couldn't cut it out");
-            };
-            std::fs::write(format!("{path}.subject.png"), base64::engine::general_purpose::STANDARD.decode(cut).unwrap()).unwrap();
-        }
     }
 }

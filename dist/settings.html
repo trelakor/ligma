@@ -676,12 +676,6 @@
         </span>
         <input type="checkbox" class="switch" id="local-vectorize">
       </label>
-      <label class="row nested" id="local-expand-row">
-        <span class="label"><span id="local-expand-label">Expand on this Mac</span>
-          <div class="hint" id="local-expand-hint">Ligma's own Expand grows the image past its edges, in place of the one in Figma's More menu. Drag the frame to choose how far, and it fills what's new from the image's background on your Mac, or only from what you paint.</div>
-        </span>
-        <input type="checkbox" class="switch" id="local-expand">
-      </label>
       <label class="row nested" id="local-heal-row">
         <span class="label"><span id="local-heal-label">Spot healing on this Mac</span>
           <div class="hint" id="local-heal-hint">Paint over a spot, a stray object or text in the image, and it's filled from the image around it on your Mac, as Photoshop's Spot Healing Brush does</div>
@@ -1096,7 +1090,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-expand", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1127,8 +1121,6 @@
     $("local-remove-background-hint").textContent = "Ligma's own Remove background takes the place of Figma's and finds the subject on your PC. The first time, it downloads a 224 MB model from Hugging Face.";
     $("local-vectorize-label").textContent = "Vectorize on this PC";
     $("local-vectorize-hint").textContent = $("local-vectorize-hint").textContent.replace("your Mac", "your PC");
-    $("local-expand-label").textContent = "Expand on this PC";
-    $("local-expand-hint").textContent = $("local-expand-hint").textContent.replace("your Mac", "your PC");
     $("local-heal-label").textContent = "Spot healing on this PC";
     $("local-heal-hint").textContent = $("local-heal-hint").textContent.replace("your Mac", "your PC");
     $("local-upscale-label").textContent = "Upscale on this PC";
@@ -1452,7 +1444,6 @@
     $("use-background-model").checked = settings.useBackgroundModel;
     $("local-vectorize").checked = settings.localVectorize;
     $("local-select-object").checked = settings.localSelectObject;
-    $("local-expand").checked = settings.localExpand;
     $("local-heal").checked = settings.localHeal;
     $("local-upscale").checked = settings.localUpscale;
     $("image-bar-icons").checked = settings.imageBarIcons;
@@ -1474,7 +1465,6 @@
       ["use-background-model-row", settings.hideFreeAiActions && settings.localRemoveBackground],
       ["local-vectorize-row", settings.hideFreeAiActions],
       ["local-select-object-row", settings.hideFreeAiActions],
-      ["local-expand-row", settings.hideFreeAiActions],
       ["local-heal-row", settings.hideFreeAiActions],
       ["local-upscale-row", settings.hideFreeAiActions],
       ["mcp-status-row", settings.ligmaMcp],
@@ -1541,7 +1531,6 @@
       useBackgroundModel: $("use-background-model").checked,
       localVectorize: $("local-vectorize").checked,
       localSelectObject: $("local-select-object").checked,
-      localExpand: $("local-expand").checked,
       localHeal: $("local-heal").checked,
       localUpscale: $("local-upscale").checked,
       imageBarIcons: $("image-bar-icons").checked,

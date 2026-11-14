@@ -11,13 +11,13 @@ mod copy_code;
 mod discord_ipc;
 mod downloads;
 mod emoji_picker;
-mod expand;
 #[cfg(windows)]
 mod figma_scheme;
 #[cfg(windows)]
 mod frame;
 mod game_mode;
 mod handoff;
+mod heal;
 mod home;
 mod lasso;
 mod layers;

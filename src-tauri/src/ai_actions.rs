@@ -18,13 +18,9 @@
 //! vectors: in full color, grayscale or black and white, keeping fewer
 //! colors. On by default
 //!
-//! After Vectorize goes Ligma's own Expand, in place of the one in Figma's
-//! More menu, which grows the image past its edges as a frame over the
-//! canvas says, and fills what's new from the image itself on this device,
-//! or only from what's painted (see expand.rs). On by default
-//!
-//! After Expand go Ligma's own Spot healing, which paints out what's in
-//! the way and fills it from the image around it, and Upscale, which makes
+//! After Vectorize go Ligma's own Spot healing, which paints out what's in
+//! the way and fills it from the image around it (see heal.rs), and
+//! Upscale, which makes
 //! the image 2 or 4 times as large, keeping its texture, on this device (see
 //! upscale.rs). On by default
 //!
@@ -52,7 +48,7 @@ use tauri::AppHandle;
 use crate::settings::Settings;
 
 /// Runs in Figma tabs. `__LIGMA_FREE_AI_ACTIONS__` is `{ on, local,
-/// vectorize, objects, expand, heal, upscale, icons, rev }`: the settings when the
+/// vectorize, objects, heal, upscale, icons, rev }`: the settings when the
 /// tab was made, `local`, `objects` and `upscale` only where this device
 /// can remove backgrounds, select objects and upscale images.
 /// `localStorage`; the higher `rev` wins
@@ -1486,687 +1482,9 @@ const PAGE_JS: &str = r##"(() => {
     );
   }
 
-  // Expand grows one image past its edges, in place of the one in Figma's
-  // More menu, and fills what's new from the image itself, as Photoshop's
-  // Content-Aware Fill does. A frame around the image shows what it grows
-  // to: its edges and corners drag out, Alt (Option) from both sides at
-  // once and Shift keeping its proportions, and the frame drags to move it
-  // around the image. The bar sets the new width and height, and its brush
-  // paints where in the image the fill takes from, Alt taking away; without
-  // any, it takes from the image's background, leaving out its subject.
-  // Expand, or Enter, grows the layer and fills it as one undo step, the
-  // fills before hidden under it; Cancel, Escape or a click on the canvas
-  // off the frame leaves. Ligma does the filling (see expand.rs)
-  const EXPAND = "data-ligma-expand";
-  // On <html> while it's open, to hide Figma's own bars, and with the
-  // cursor for what the pointer is over
-  const EXPANDING = "data-ligma-expanding";
-  const EXPAND_POINTER = "data-ligma-expand-pointer";
-  let expanding = null;
-  // The bar's choices, kept while the tab is open: the tool and the brush's
-  // size, in the image's own pixels, once chosen
-  const expandOptions = { tool: "frame", size: null };
-  // A dashed frame around the image, as it grows to
-  const EXPAND_ICON = icon(`<rect ${STROKE} x="4.5" y="4.5" width="15" height="15" rx="1.5" stroke-dasharray="2 2"/><rect ${STROKE} x="8.5" y="8.5" width="7" height="7" rx="1"/>`);
-  const EXPAND_TOOLS = [
-    ["frame", "Drag the frame's edges to expand, or the frame to move it", icon(`<path ${STROKE} stroke-linecap="round" stroke-linejoin="round" d="M8.5 4.5v15M15.5 4.5v15M4.5 8.5h15M4.5 15.5h15"/>`)],
-    ["brush", `Paint where to take from, ${ALT} to take away, [ and ] to resize`, TOOLS[1][2]],
-  ];
-  // The largest the grown image is drawn, in pixels in all
-  const EXPAND_PIXELS = 6e6;
-  const sides = () => ["left", "top", "right", "bottom"];
-
-  const expandImage = async (bar, crop) => {
-    const figma = api();
-    if (!figma || busy || picking || expanding) return;
-    const image = (paint) => paint?.type === "IMAGE" && !!paint.imageHash && paint.visible !== false;
-    const selection = figma.currentPage.selection;
-    if (selection.length !== 1 || !fillsOf(selection[0]).some(image) || !("resize" in selection[0]) || selection[0].type === "TEXT") {
-      figma.notify(selection.length > 1 ? "Select one image to expand" : "No images selected", { timeout: 2000 });
-      return;
-    }
-    const node = selection[0];
-    const canvas = mainCanvas();
-    if (!canvas) return;
-    closeRecolor();
-    barClasses = { root: bar.closest("[data-secondary-toolbelt]")?.className ?? "", bar: bar.className };
-
-    const root = document.createElement("div");
-    root.setAttribute(EXPAND, "");
-    root.setAttribute("data-fullscreen-prevent-event-capture", "true");
-    root.className = barClasses.root;
-    const strip = root.appendChild(Object.assign(document.createElement("div"), { className: barClasses.bar }));
-    const divider = () => strip.appendChild(Object.assign(document.createElement("span"), { className: "divider" }));
-    const tip = (element, text) => Object.assign(element.dataset, { tooltip: text, tooltipType: "text", tooltipShowAbove: "true" });
-    const labelled = (label, svg) => {
-      const button = Object.assign(document.createElement("button"), { type: "button", className: crop.className });
-      const text = crop.querySelector("span")?.cloneNode(false) ?? document.createElement("span");
-      text.textContent = label;
-      if (svg) button.innerHTML = svg;
-      button.append(text);
-      return button;
-    };
-
-
-    // The tools, the brush's size and Clear
-    const sampling = strip.appendChild(Object.assign(document.createElement("div"), { className: "sampling" }));
-    const tools = sampling.appendChild(Object.assign(document.createElement("div"), { className: "group" }));
-    tools.setAttribute("role", "radiogroup");
-    tools.setAttribute("aria-label", "Tool");
-    for (const [value, name, svg] of EXPAND_TOOLS) {
-      const button = tools.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon", innerHTML: svg }));
-      button.setAttribute("role", "radio");
-      button.setAttribute("aria-label", name);
-      button.dataset.value = value;
-      tip(button, name);
-      button.addEventListener("click", () => setExpand("tool", value));
-    }
-    const clear = sampling.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon", innerHTML: ERASE_ICON }));
-    clear.setAttribute("aria-label", "Clear what's painted, to take from the background");
-    tip(clear, "Clear what's painted, to take from the background");
-    clear.addEventListener("click", () => {
-      if (!expanding?.strokes.length) return;
-      remember();
-      expanding.strokes = [];
-      showExpand();
-    });
-    sampling.append(Object.assign(document.createElement("span"), { className: "divider" }));
-
-    // Fields, whose labels drag to change them, as Figma's do
-    const fields = {};
-    const field = (parent, key, label, text, set, perPixel) => {
-      const element = parent.appendChild(Object.assign(document.createElement("label"), { className: `field ${key}` }));
-      tip(element, text);
-      const name = element.appendChild(Object.assign(document.createElement("span"), { textContent: label }));
-      const input = element.appendChild(Object.assign(document.createElement("input"), { type: "text", inputMode: "numeric", spellcheck: false }));
-      input.setAttribute("aria-label", text);
-      input.addEventListener("change", () => {
-        const value = Number(input.value);
-        if (Number.isFinite(value)) set(value);
-        else showExpand();
-      });
-      name.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0 || !expanding || expanding.working) return;
-        event.preventDefault();
-        name.setPointerCapture(event.pointerId);
-        const [from, start] = [event.clientX, Number(input.value) || 0];
-        if (key !== "size") remember();
-        const move = (event) => set(start + (event.clientX - from) * perPixel, true);
-        name.addEventListener("pointermove", move);
-        name.addEventListener("lostpointercapture", () => name.removeEventListener("pointermove", move), { once: true });
-      });
-      fields[key] = { element, input };
-    };
-    field(sampling, "size", "Size", "Brush size, in pixels", (value) => setExpand("size", Math.min(2000, Math.max(1, Math.round(value)))), 1);
-    sampling.append(Object.assign(document.createElement("span"), { className: "divider" }));
-    field(strip, "width", "W", "Width after expanding", (value, dragging) => resizeTo("width", value, dragging), 1);
-    field(strip, "height", "H", "Height after expanding", (value, dragging) => resizeTo("height", value, dragging), 1);
-    divider();
-    const go = strip.appendChild(labelled("Expand", EXPAND_ICON));
-    tip(go, "Expand the image");
-    go.disabled = true;
-    go.addEventListener("click", () => runExpand());
-    divider();
-    const cancel = strip.appendChild(labelled("Cancel"));
-    // While it works, Cancel stops it, then leaves
-    cancel.addEventListener("click", () => {
-      if (!expanding?.working) return closeExpanding();
-      expanding.cancelled = true;
-      expanding.controller?.abort();
-    });
-
-    // The frame over the canvas, in the layer's own units, and its size
-    // below it
-    const layer = document.createElement("div");
-    layer.setAttribute(EXPAND, "overlay");
-    canvas.after(layer);
-    const svg = layer.appendChild(document.createElementNS(SVG_NS, "svg"));
-    const make = (name, className, parent = svg) => {
-      const element = parent.appendChild(document.createElementNS(SVG_NS, name));
-      if (className) element.setAttribute("class", className);
-      return element;
-    };
-    const maskId = `ligma-expand-sample-${Date.now()}`;
-    const defs = make("defs");
-    const mask = make("mask", "", defs);
-    mask.id = maskId;
-    mask.setAttribute("maskUnits", "userSpaceOnUse");
-    // Diagonal lines over what's new, the same on screen at any zoom
-    const hatch = make("pattern", "", defs);
-    hatch.id = `${maskId}-hatch`;
-    hatch.setAttribute("patternUnits", "userSpaceOnUse");
-    hatch.setAttribute("patternTransform", "rotate(45)");
-    const line = make("rect", "line", hatch);
-    const area = make("path", "area");
-    const lines = make("path", "lines");
-    lines.setAttribute("fill", `url(#${hatch.id})`);
-    const sampled = make("rect", "sampled");
-    sampled.setAttribute("mask", `url(#${maskId})`);
-    const edge = make("rect", "edge");
-    const frame = make("rect", "frame");
-    const handles = Array.from({ length: 8 }, () => make("rect", "handle"));
-    const brush = make("circle", "brush");
-    const size = layer.appendChild(Object.assign(document.createElement("div"), { className: "size" }));
-
-    expanding = {
-      figma,
-      node,
-      canvas,
-      root,
-      layer,
-      svg,
-      parts: { area, lines, hatch, line, sampled, edge, frame, handles, brush, mask, size },
-      sampling,
-      tools,
-      clear,
-      fields,
-      go,
-      // How far each side grows, in the layer's units
-      box: { left: 0, top: 0, right: 0, bottom: 0 },
-      // The brush's strokes, in fractions of the image
-      strokes: [],
-      undone: [],
-      redone: [],
-      scales: { native: 1, full: 1 },
-      values: { ...expandOptions, size: expandOptions.size ?? 0 },
-      drag: null,
-      working: false,
-      frame: 0,
-    };
-    document.documentElement.setAttribute(EXPANDING, "");
-    placeExpanding();
-    placeExpandOverlay();
-    showExpand();
-    const current = expanding;
-    current.scales = await imageScales(figma, node);
-    if (expanding !== current) return;
-    // A brush a 20th of the image across, until one is chosen
-    current.values.size = expandOptions.size ?? Math.max(2, Math.round((Math.max(node.width, node.height) * current.scales.native) / 20));
-    showExpand();
-  };
-
-  const closeExpanding = () => {
-    if (!expanding) return;
-    cancelAnimationFrame(expanding.frame);
-    expanding.root.remove();
-    expanding.layer.remove();
-    document.documentElement.removeAttribute(EXPANDING);
-    document.documentElement.removeAttribute(EXPAND_POINTER);
-    expanding = null;
-  };
-
-  // Keeps the bar above the toolbar, and closes it once the image isn't
-  // what's selected
-  const placeExpanding = () => {
-    if (!expanding) return;
-    const selection = api()?.currentPage.selection ?? [];
-    if (!state.expand || expanding.node.removed || selection.length !== 1 || selection[0] !== expanding.node) {
-      if (!expanding.working) closeExpanding();
-      return;
-    }
-    const wrapper = document.querySelector('[data-testid="design-toolbelt-wrapper"]');
-    expanding.root.classList.toggle("floating", !wrapper);
-    const parent = wrapper ?? document.body;
-    if (expanding.root.parentElement !== parent) parent.append(expanding.root);
-  };
-
-  // The image's size and the frame's, in the layer's units
-  const expandSize = () => {
-    const { node, box } = expanding;
-    return { width: node.width, height: node.height, total: [node.width + box.left + box.right, node.height + box.top + box.bottom] };
-  };
-
-  // Keeps the frame on the image as the canvas pans and zooms, its handles
-  // and the size below it the same size on screen
-  const placeExpandOverlay = () => {
-    if (!expanding) return;
-    const { figma, node, canvas, layer, svg, box, parts } = expanding;
-    Object.assign(layer.style, {
-      left: `${canvas.offsetLeft}px`,
-      top: `${canvas.offsetTop}px`,
-      width: `${canvas.offsetWidth}px`,
-      height: `${canvas.offsetHeight}px`,
-    });
-    try {
-      const { bounds } = figma.viewport;
-      const zoom = figma.viewport.zoom;
-      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
-      const { width, height, total } = expandSize();
-      const [x0, y0] = [-box.left, -box.top];
-      const screen = (x, y) => [(e + a * x + c * y - bounds.x) * zoom, (f + b * x + d * y - bounds.y) * zoom];
-      const [sx, sy] = screen(x0, y0);
-      svg.setAttribute("width", Math.max(total[0] * zoom, 1));
-      svg.setAttribute("height", Math.max(total[1] * zoom, 1));
-      svg.setAttribute("viewBox", `${x0} ${y0} ${Math.max(total[0], 1e-3)} ${Math.max(total[1], 1e-3)}`);
-      svg.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${sx}, ${sy})`;
-      const rect = (element, x, y, w, h) => {
-        element.setAttribute("x", x);
-        element.setAttribute("y", y);
-        element.setAttribute("width", Math.max(w, 0));
-        element.setAttribute("height", Math.max(h, 0));
-      };
-      rect(parts.frame, x0, y0, total[0], total[1]);
-      rect(parts.edge, 0, 0, width, height);
-      rect(parts.sampled, 0, 0, width, height);
-      const outside = `M${x0} ${y0}h${total[0]}v${total[1]}h${-total[0]}zM0 0v${height}h${width}v${-height}z`;
-      parts.area.setAttribute("d", outside);
-      parts.lines.setAttribute("d", outside);
-      const gap = 6 / zoom;
-      parts.hatch.setAttribute("width", gap);
-      parts.hatch.setAttribute("height", gap);
-      rect(parts.line, 0, 0, 1 / zoom, gap);
-      const handle = 7 / zoom;
-      const [x1, y1] = [x0 + total[0], y0 + total[1]];
-      const [mx, my] = [(x0 + x1) / 2, (y0 + y1) / 2];
-      [[x0, y0], [mx, y0], [x1, y0], [x1, my], [x1, y1], [mx, y1], [x0, y1], [x0, my]].forEach(([x, y], i) =>
-        rect(parts.handles[i], x - handle / 2, y - handle / 2, handle, handle),
-      );
-      // Below the frame's lowest corner on screen, centered on it
-      const corners = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => screen(x, y));
-      const lowest = Math.max(...corners.map(([, y]) => y));
-      const middle = (Math.min(...corners.map(([x]) => x)) + Math.max(...corners.map(([x]) => x))) / 2;
-      parts.size.style.transform = `translate(${middle}px, ${lowest + 8}px) translateX(-50%)`;
-    } catch {}
-    expanding.frame = requestAnimationFrame(placeExpandOverlay);
-  };
-
-  // The bar, the frame's size and what's painted, as they are
-  const showExpand = () => {
-    if (!expanding) return;
-    const { values, tools, clear, fields, go, parts, box, strokes, working, scales } = expanding;
-    for (const button of tools.children) button.setAttribute("aria-checked", String(button.dataset.value === values.tool));
-    clear.disabled = !strokes.length || working;
-    const { total } = expandSize();
-    const shown = { size: values.size, width: Math.round(total[0]), height: Math.round(total[1]) };
-    for (const [key, { element, input }] of Object.entries(fields)) {
-      if (document.activeElement !== input) input.value = shown[key];
-      const off = key === "size" && values.tool !== "brush";
-      element.classList.toggle("off", off || working);
-      input.disabled = off || working;
-    }
-    for (const button of tools.children) button.disabled = working;
-    const grows = sides().some((side) => box[side] > 0);
-    go.disabled = !grows || working;
-    parts.size.textContent = grows ? `${shown.width} × ${shown.height}` : "Drag an edge to expand";
-    parts.size.classList.toggle("hint", !grows);
-    expanding.layer.classList.toggle("working", working);
-    // What's painted, shown over the image
-    parts.mask.replaceChildren(
-      ...strokes.map((stroke) => {
-        const path = document.createElementNS(SVG_NS, "path");
-        strokePath(path, stroke);
-        return path;
-      }),
-    );
-    parts.sampled.style.display = strokes.length ? "" : "none";
-    parts.brush.setAttribute("r", (values.size / 2) / Math.max(scales.native, 1e-6));
-    if (expanding.drag?.stroke) parts.mask.append(expanding.drag.path);
-  };
-
-  // A stroke of the brush as a path in the layer's units, white where it
-  // paints and black where it takes away, for the mask
-  const strokePath = (path, { points, radius, subtract }) => {
-    const { node } = expanding;
-    const d = points.map(([u, v], i) => `${i ? "L" : "M"}${u * node.width} ${v * node.height}`).join("");
-    path.setAttribute("d", points.length === 1 ? `${d}l0.001 0` : d);
-    path.setAttribute("stroke", subtract ? "#000" : "#fff");
-    path.setAttribute("stroke-width", radius * 2 * node.width);
-    path.setAttribute("fill", "none");
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
-  };
-
-  // The brush's radius, as a fraction of the image's width
-  const expandBrush = () => {
-    const { values, scales, node } = expanding;
-    return values.size / 2 / Math.max(node.width * scales.native, 1);
-  };
-
-  // The frame and strokes before each change, and those undone, for Undo
-  // and Redo
-  const snapshot = () => ({ box: { ...expanding.box }, strokes: expanding.strokes });
-  const remember = () => {
-    expanding.undone.push(snapshot());
-    expanding.redone = [];
-  };
-  const undoExpand = (redo) => {
-    const [from, to] = redo ? [expanding.redone, expanding.undone] : [expanding.undone, expanding.redone];
-    if (!from.length || expanding.working) return;
-    to.push(snapshot());
-    const { box, strokes } = from.pop();
-    Object.assign(expanding, { box, strokes });
-    showExpand();
-  };
-
-  const setExpand = (key, value) => {
-    if (!expanding || expanding.working) return;
-    expanding.values[key] = value;
-    expandOptions[key] = value;
-    showExpand();
-  };
-
-  // A new width or height from the bar: it grows or shrinks on the sides
-  // it has already grown on, as much as they have, or evenly
-  const resizeTo = (axis, value, dragging) => {
-    if (!expanding || expanding.working) return;
-    const { box, node } = expanding;
-    const [a, b, base] = axis === "width" ? ["left", "right", node.width] : ["top", "bottom", node.height];
-    const extra = Math.max(0, Math.round(Math.min(value, base * 20) - base));
-    if (!dragging) remember();
-    const grown = box[a] + box[b];
-    const share = grown > 0 ? box[a] / grown : 0.5;
-    box[a] = Math.round(extra * share);
-    box[b] = extra - box[a];
-    showExpand();
-  };
-
-  // Where `event` is in the layer's own units, or null when it's not over
-  // the canvas
-  const onLayer = (event) => {
-    const { figma, node, canvas } = expanding;
-    const rect = canvas.getBoundingClientRect();
-    const [x, y] = [event.clientX - rect.left, event.clientY - rect.top];
-    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
-    const target = event.target;
-    if (target instanceof Element && target !== canvas && target.closest(`[${EXPAND}=""], [data-secondary-toolbelt], [data-testid="design-toolbelt-wrapper"], [role="toolbar"], [role="dialog"], [role="menu"]`)) return null;
-    try {
-      const { bounds } = figma.viewport;
-      const zoom = figma.viewport.zoom;
-      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
-      const [dx, dy] = [bounds.x + x / zoom - e, bounds.y + y / zoom - f];
-      const det = a * d - b * c;
-      return { x: (d * dx - c * dy) / det, y: (a * dy - b * dx) / det, zoom };
-    } catch {
-      return null;
-    }
-  };
-
-  // What the pointer at `at` is over: the frame's edges or corners, as the
-  // sides they move, inside it, or nothing
-  const expandHit = (at) => {
-    const { box } = expanding;
-    const { width, height } = expandSize();
-    const reach = 6 / at.zoom;
-    const [x0, y0, x1, y1] = [-box.left, -box.top, width + box.right, height + box.bottom];
-    const within = (value, low, high) => value >= low - reach && value <= high + reach;
-    if (!within(at.x, x0, x1) || !within(at.y, y0, y1)) return null;
-    const edges = {
-      left: Math.abs(at.x - x0) <= reach,
-      right: Math.abs(at.x - x1) <= reach && !(Math.abs(at.x - x0) <= reach),
-      top: Math.abs(at.y - y0) <= reach,
-      bottom: Math.abs(at.y - y1) <= reach && !(Math.abs(at.y - y0) <= reach),
-    };
-    if (sides().some((side) => edges[side])) return { edges };
-    return at.x >= x0 && at.x <= x1 && at.y >= y0 && at.y <= y1 ? { inside: true, image: at.x >= 0 && at.y >= 0 && at.x <= width && at.y <= height } : null;
-  };
-
-  // The cursor for what's under the pointer
-  const expandPointer = (hit, event) => {
-    const root = document.documentElement;
-    const { values, working } = expanding;
-    let value = null;
-    if (working && hit) value = "wait";
-    else if (hit?.edges) {
-      const { left, right, top, bottom } = hit.edges;
-      const horizontal = left || right;
-      const vertical = top || bottom;
-      value = horizontal && vertical ? ((left && top) || (right && bottom) ? "nwse" : "nesw") : horizontal ? "ew" : "ns";
-    } else if (hit?.inside) {
-      value = values.tool === "brush" && hit.image ? (event.altKey ? "draw-subtract" : "draw-add") : "move";
-    }
-    if (value) root.setAttribute(EXPAND_POINTER, value);
-    else root.removeAttribute(EXPAND_POINTER);
-    const brushing = value?.startsWith("draw-") || !!expanding.drag?.stroke;
-    expanding.parts.brush.style.display = brushing ? "block" : "";
-    expanding.parts.brush.classList.toggle("subtract", value === "draw-subtract");
-  };
-
-  // The frame as dragged from where `drag` started to `at`
-  const dragFrame = (drag, at, event) => {
-    const { node } = expanding;
-    const box = { ...drag.box };
-    const [dx, dy] = [at.x - drag.start.x, at.y - drag.start.y];
-    if (drag.move) {
-      const x = Math.min(drag.box.left, Math.max(-drag.box.right, dx));
-      const y = Math.min(drag.box.top, Math.max(-drag.box.bottom, dy));
-      Object.assign(box, { left: drag.box.left - x, right: drag.box.right + x, top: drag.box.top - y, bottom: drag.box.bottom + y });
-    } else {
-      const { edges } = drag;
-      const both = event.altKey;
-      if (edges.left) {
-        box.left = drag.box.left - dx;
-        if (both) box.right = drag.box.right - dx;
-      }
-      if (edges.right) {
-        box.right = drag.box.right + dx;
-        if (both) box.left = drag.box.left + dx;
-      }
-      if (edges.top) {
-        box.top = drag.box.top - dy;
-        if (both) box.bottom = drag.box.bottom - dy;
-      }
-      if (edges.bottom) {
-        box.bottom = drag.box.bottom + dy;
-        if (both) box.top = drag.box.top + dy;
-      }
-      // Shift on a corner keeps the frame's proportions
-      if (event.shiftKey && (edges.left || edges.right) && (edges.top || edges.bottom)) {
-        const ratio = (node.width + drag.box.left + drag.box.right) / Math.max(node.height + drag.box.top + drag.box.bottom, 1e-6);
-        const width = node.width + Math.max(0, box.left) + Math.max(0, box.right);
-        const height = node.height + Math.max(0, box.top) + Math.max(0, box.bottom);
-        const [h, v] = [edges.left ? "left" : "right", edges.top ? "top" : "bottom"];
-        if (width / ratio > height) box[v] += width / ratio - height;
-        else box[h] += height * ratio - width;
-      }
-    }
-    for (const side of sides()) box[side] = Math.max(0, Math.round(box[side]));
-    expanding.box = box;
-    showExpand();
-  };
-
-  // Grows the layer as the frame says and fills what's new, as one undo
-  // step: its fills before stay under the grown image, hidden
-  const runExpand = async () => {
-    const current = expanding;
-    if (!current || current.working || busy) return;
-    const { figma, node, box, strokes } = current;
-    if (!sides().some((side) => box[side] > 0)) return;
-    current.working = true;
-    busy = true;
-    expandPointer(null, {});
-    showExpand();
-    const controller = new AbortController();
-    current.controller = controller;
-    current.cancelled = false;
-    const { show, hide } = toast(figma, () => controller.abort());
-    show("Expanding…");
-    const grown = { ...box };
-    let done = false;
-    try {
-      const { total } = expandSize();
-      const largest = Math.max(current.scales.native, workingScale(node));
-      const scale = Math.max(0.01, Math.min(largest, 4096 / Math.max(...total), Math.sqrt(EXPAND_PIXELS / (total[0] * total[1]))));
-      const bytes = await drawn(figma, node, scale, true);
-      const header = {
-        left: grown.left / node.width,
-        top: grown.top / node.height,
-        right: grown.right / node.width,
-        bottom: grown.bottom / node.height,
-        sample: strokes,
-      };
-      const { png } = JSON.parse(await handOff("expand", request(header, bytes), show, "", controller.signal));
-      if (node.removed) throw "failed";
-      placeExpanded(figma, node, grown, png);
-      try {
-        figma.commitUndo();
-      } catch {}
-      done = true;
-    } catch (reason) {
-      if (reason !== "cancelled") figma.notify(reason === "empty" ? "Nothing to expand" : "Couldn't expand the image", { timeout: 3000 });
-    }
-    hide();
-    busy = false;
-    current.working = false;
-    current.controller = null;
-    if (expanding === current) {
-      if (done || current.cancelled) closeExpanding();
-      else showExpand();
-    }
-    tidy();
-  };
-
-  // The grown image Ligma sent, in place of `node`'s fills, which stay
-  // under it, hidden, with the layer grown by `grown` on each side and
-  // what's in it kept where it was
-  const placeExpanded = (figma, node, grown, png) => {
-    const hash = figma.createImage(Uint8Array.from(atob(png), (char) => char.charCodeAt(0))).hash;
-    const fills = fillsOf(node);
-    const [[a, c, e], [b, d, f]] = node.relativeTransform;
-    const { left, top, right, bottom } = grown;
-    const [width, height] = [node.width + left + right, node.height + top + bottom];
-    if ("resizeWithoutConstraints" in node) node.resizeWithoutConstraints(width, height);
-    else node.resize(width, height);
-    node.relativeTransform = [
-      [a, c, e - a * left - c * top],
-      [b, d, f - b * left - d * top],
-    ];
-    node.fills = [...fills.map((fill) => ({ ...fill, visible: false })), { type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
-    const laidOut = node.layoutMode && node.layoutMode !== "NONE";
-    if ("children" in node) {
-      for (const child of node.children) {
-        if (laidOut && child.layoutPositioning !== "ABSOLUTE") continue;
-        child.x += left;
-        child.y += top;
-      }
-    }
-  };
-
-  // Pointer events over the frame are Expand's while it's open: this runs
-  // before Figma's own scripts, so it comes first. Space held, or a button
-  // other than the main one, leaves them to Figma to pan
-  for (const type of POINTER_TYPES) {
-    addEventListener(
-      type,
-      (event) => {
-        if (!expanding) return;
-        const drag = expanding.drag;
-        if (drag) {
-          swallow(event);
-          const at = onLayer(event);
-          if (type === "pointermove" && at) {
-            if (drag.stroke) {
-              const { node } = expanding;
-              const [u, v] = [at.x / node.width, at.y / node.height];
-              placeExpandBrush(at);
-              const [lu, lv] = drag.stroke.points.at(-1);
-              const step = Math.max(0.5, (drag.stroke.radius * node.width) / 2);
-              if (Math.hypot((u - lu) * node.width, (v - lv) * node.height) < step) return;
-              drag.stroke.points.push([u, v]);
-              strokePath(drag.path, drag.stroke);
-            } else dragFrame(drag, at, event);
-          } else if (type === "pointerup") {
-            expanding.drag = null;
-            if (drag.stroke) {
-              remember();
-              expanding.strokes = [...expanding.strokes, drag.stroke];
-            } else if (sides().some((side) => drag.box[side] !== expanding.box[side])) {
-              expanding.undone.push({ box: drag.box, strokes: expanding.strokes });
-              expanding.redone = [];
-            }
-            showExpand();
-          }
-          return;
-        }
-        const at = onLayer(event);
-        const hit = at && expandHit(at);
-        if (type === "pointermove") {
-          expandPointer(hit, event);
-          if (at) placeExpandBrush(at);
-        }
-        if (!hit) {
-          // A click on the canvas off the frame leaves, and goes to Figma
-          if (type === "pointerdown" && at && event.button === 0 && !space && !expanding.working) closeExpanding();
-          return;
-        }
-        if (space || event.button > 0 || (event.buttons & ~1) !== 0) return;
-        swallow(event);
-        if (type !== "pointerdown" || expanding.working) return;
-        const { values, node } = expanding;
-        if (!hit.edges && hit.image && values.tool === "brush") {
-          const stroke = { points: [[at.x / node.width, at.y / node.height]], radius: expandBrush(), subtract: event.altKey };
-          const path = document.createElementNS(SVG_NS, "path");
-          strokePath(path, stroke);
-          expanding.drag = { stroke, path };
-          expanding.parts.mask.append(path);
-          expanding.parts.sampled.style.display = "";
-          return;
-        }
-        expanding.drag = { start: at, box: { ...expanding.box }, edges: hit.edges, move: !hit.edges };
-      },
-      true,
-    );
-  }
-
-  // Keeps the brush's circle under the pointer
-  const placeExpandBrush = (at) => {
-    expanding.parts.brush.setAttribute("cx", at.x);
-    expanding.parts.brush.setAttribute("cy", at.y);
-  };
-
-  // While it's open, Escape leaves, Enter expands, Delete is kept from
-  // deleting the image, Undo and Redo step through the frame and what's
-  // painted rather than the file and [ and ] resize the brush. Alt changes
-  // the cursor, and Space is left to Figma, to pan. Keys typed in the bar's
-  // fields stop here, before Figma sees them
-  for (const type of ["keydown", "keypress", "keyup"]) {
-    addEventListener(
-      type,
-      (event) => {
-        if (!expanding) return;
-        const input = event.target;
-        if (input instanceof HTMLInputElement && input.closest(`[${EXPAND}=""]`)) {
-          event.stopImmediatePropagation();
-          if (type !== "keydown") return;
-          if (event.key === "Enter") input.blur();
-          if (event.key === "Escape") {
-            showExpand();
-            input.blur();
-          }
-          return;
-        }
-        if (type === "keypress") return;
-        if (event.target.closest?.(':is(input, textarea):not([readonly]), [contenteditable]:not([contenteditable="false"])')) return;
-        const pointer = document.documentElement.getAttribute(EXPAND_POINTER);
-        if (pointer?.startsWith("draw-")) {
-          const value = event.altKey ? "draw-subtract" : "draw-add";
-          document.documentElement.setAttribute(EXPAND_POINTER, value);
-          expanding.parts.brush.classList.toggle("subtract", event.altKey);
-        }
-        if (type !== "keydown") return;
-        if (event.key === "Escape") {
-          swallow(event);
-          if (!expanding.working) closeExpanding();
-        } else if (event.key === "Enter") {
-          swallow(event);
-          runExpand();
-        } else if ((MAC ? event.metaKey : event.ctrlKey) && !event.altKey && /^[zy]$/i.test(event.key)) {
-          swallow(event);
-          undoExpand(event.key.toLowerCase() === "y" || event.shiftKey);
-        } else if ((event.key === "[" || event.key === "]") && expanding.values.tool === "brush" && !event.ctrlKey && !event.metaKey) {
-          swallow(event);
-          const size = expanding.values.size;
-          setExpand("size", Math.max(1, Math.round(event.key === "]" ? Math.max(size + 1, size * 1.2) : Math.min(size - 1, size / 1.2))));
-        } else if (event.key === "Delete" || event.key === "Backspace") {
-          swallow(event);
-        }
-      },
-      true,
-    );
-  }
-
   // Spot healing paints over what to take out of one image, as Photoshop's
   // Spot Healing Brush does: each stroke, once the button's let go, is
-  // filled from the image around it on this device (see expand.rs), as one
+  // filled from the image around it on this device (see heal.rs), as one
   // undo step. The first hides the layer's fills under one image fill, as
   // Remove background leaves them, and the strokes after change that image.
   // Ligma keeps the image while it's open, so a stroke only sends where it
@@ -2206,7 +1524,7 @@ const PAGE_JS: &str = r##"(() => {
 
   const healImage = async (bar, crop) => {
     const figma = api();
-    if (!figma || busy || picking || expanding || healing || upscaling) return;
+    if (!figma || busy || picking || healing || upscaling) return;
     const image = (paint) => paint?.type === "IMAGE" && !!paint.imageHash && paint.visible !== false;
     const selection = figma.currentPage.selection;
     if (selection.length !== 1 || !fillsOf(selection[0]).some(image) || selection[0].type === "TEXT") {
@@ -2776,7 +2094,7 @@ const PAGE_JS: &str = r##"(() => {
   let upscaleOpening = false;
   const upscaleImage = async (bar, crop) => {
     const figma = api();
-    if (!figma || busy || picking || expanding || healing || upscaling) return;
+    if (!figma || busy || picking || healing || upscaling) return;
     const image = (paint) => paint?.type === "IMAGE" && !!paint.imageHash && paint.visible !== false;
     const selection = figma.currentPage.selection;
     const node = selection[0];
@@ -3142,8 +2460,8 @@ const PAGE_JS: &str = r##"(() => {
     true,
   );
 
-  // Ligma's Select object, Remove background, Vectorize, Expand, Spot
-  // healing and Upscale, after Crop and Ligma's adjustments, each where
+  // Ligma's Select object, Remove background, Vectorize, Spot healing
+  // and Upscale, after Crop and Ligma's adjustments, each where
   // it's on
   const BUTTONS = [
     {
@@ -3170,13 +2488,6 @@ const PAGE_JS: &str = r##"(() => {
         barClasses = { root: bar.closest("[data-secondary-toolbelt]")?.className ?? "", bar: bar.className };
         vectorize();
       },
-    },
-    {
-      attribute: "data-ligma-expand-image",
-      on: () => state.expand,
-      label: "Expand",
-      icon: EXPAND_ICON,
-      run: (bar, crop) => expandImage(bar, crop),
     },
     {
       attribute: "data-ligma-heal-image",
@@ -3255,13 +2566,11 @@ const PAGE_JS: &str = r##"(() => {
     iconsOnly();
     placeRecolor();
     placePicking();
-    placeExpanding();
     placeHealing();
     placeUpscaling();
     const hide = state.on && free();
     if (!hide) {
       if (!picking?.working) closePicking();
-      if (!expanding?.working) closeExpanding();
       closeHealing();
       closeUpscaling();
       for (const node of document.querySelectorAll(`[${HIDDEN}]`)) node.removeAttribute(HIDDEN);
@@ -3280,8 +2589,8 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const style = document.createElement("style");
-  // Select object's bar and Expand's, styled alike
-  const BARS = `:is([${OBJECTS}=""], [${EXPAND}=""], [${HEAL}=""], [${UPSCALE}=""])`;
+  // Select object's, Spot healing's and Upscale's bars, styled alike
+  const BARS = `:is([${OBJECTS}=""], [${HEAL}=""], [${UPSCALE}=""])`;
   style.textContent = `[${HIDDEN}] { display: none !important; }
     [${SHIMMER}] { position: absolute; overflow: hidden; pointer-events: none; transition: opacity 200ms ease-out; }
     [${SHIMMER}].done { opacity: 0; }
@@ -3295,7 +2604,7 @@ const PAGE_JS: &str = r##"(() => {
     :is([${SHIMMER}="vectorize"], [${SHIMMER}="objects"]) > div::after { background: linear-gradient(100deg, transparent 20%, rgb(190 226 255 / 0.4) 50%, transparent 80%); }
     @keyframes ligma-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
     @media (prefers-reduced-motion: reduce) { [${SHIMMER}] > div::after { animation: none; opacity: 0; } }
-    :is(html[${RECOLORING}], html[${PICKING}], html[${EXPANDING}], html[${HEALING}], html[${UPSCALING}]) [data-secondary-toolbelt] { display: none !important; }
+    :is(html[${RECOLORING}], html[${PICKING}], html[${HEALING}], html[${UPSCALING}]) [data-secondary-toolbelt] { display: none !important; }
     :is([${RECOLOR}], ${BARS}).floating { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 10; }
     :is([${RECOLOR}], ${BARS}) > div {
       display: flex; align-items: center; gap: 4px; height: 40px; box-sizing: border-box; padding: 8px; border-radius: 13px;
@@ -3357,7 +2666,6 @@ const PAGE_JS: &str = r##"(() => {
     [${RECOLOR}] .slider { width: 96px; margin: 0 4px; accent-color: var(--color-bg-brand, #0d99ff); }
     [${RECOLOR}] .done { background: var(--color-bg-brand, #0d99ff); color: var(--color-icon-onbrand, #fff); }
     [${RECOLOR}] .done:hover { background: var(--color-bg-brand-hover, var(--color-bg-brand, #0d99ff)); }
-    [${EXPAND}=""] .sampling { display: flex; align-items: center; gap: 4px; }
     :is([${UPSCALE}=""], [${HEAL}=""]) .segments { display: flex; padding: 2px; border-radius: 6px; background: var(--color-bg-secondary, #383838); }
     :is([${UPSCALE}=""], [${HEAL}=""]) .segments button {
       height: 20px; padding: 0 8px; border: 0; border-radius: 4px; background: none; white-space: nowrap;
@@ -3397,46 +2705,14 @@ const PAGE_JS: &str = r##"(() => {
     [${HEAL}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
     [${HEAL}="overlay"] svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }
     [${HEAL}="overlay"] .stroke { fill: none; stroke: color-mix(in srgb, var(--color-border-selected, #0d99ff) 45%, transparent); stroke-linecap: round; stroke-linejoin: round; }
-    [${HEAL}="overlay"].working .stroke { animation: ligma-expand-working 900ms ease-in-out infinite alternate; }
+    [${HEAL}="overlay"].working .stroke { animation: ligma-working 900ms ease-in-out infinite alternate; }
     [${HEAL}="overlay"] { transition: opacity 200ms ease-out; }
     [${HEAL}="overlay"] .picture { display: none; position: absolute; left: 0; top: 0; transform-origin: 0 0; }
     [${HEAL}="overlay"].gone { opacity: 0; }
     [${HEAL}="overlay"].lingering :is(.stroke, .brush) { display: none; }
     [${HEAL}="overlay"] .brush { display: none; vector-effect: non-scaling-stroke; fill: none; stroke: #fff; stroke-width: 1.5px; filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.8)); }
     @media (prefers-reduced-motion: reduce) { [${HEAL}="overlay"].working .stroke { animation: none; } }
-    [${EXPAND}=""] .field input { width: 48px; }
-    [${EXPAND}=""] .field.size input { width: 40px; }
-    [${EXPAND}="overlay"] { position: absolute; overflow: hidden; pointer-events: none; }
-    [${EXPAND}="overlay"] svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }
-    [${EXPAND}="overlay"] :is(path, rect) { vector-effect: non-scaling-stroke; }
-    [${EXPAND}="overlay"] .area { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 10%, transparent); fill-rule: evenodd; }
-    [${EXPAND}="overlay"] .lines { fill-rule: evenodd; }
-    [${EXPAND}="overlay"] .line { fill: color-mix(in srgb, var(--color-border-selected, #0d99ff) 55%, transparent); }
-    [${EXPAND}="overlay"].working :is(.area, .lines) { animation: ligma-expand-working 900ms ease-in-out infinite alternate; }
-    [${EXPAND}="overlay"] .sampled { fill: rgb(20 174 92 / 0.4); }
-    [${EXPAND}="overlay"] .edge { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-dasharray: 4 3; }
-    [${EXPAND}="overlay"] .frame { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; }
-    [${EXPAND}="overlay"] .handle { fill: #fff; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; }
-    [${EXPAND}="overlay"].working .handle { display: none; }
-    [${EXPAND}="overlay"] .brush { display: none; vector-effect: non-scaling-stroke; fill: none; stroke: #fff; stroke-width: 1.5px; filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.8)); }
-    [${EXPAND}="overlay"] .brush.subtract { stroke-dasharray: 4 3; }
-    [${EXPAND}="overlay"] .size {
-      position: absolute; left: 0; top: 0; padding: 0 4px; border-radius: 2px; white-space: nowrap; font: 500 11px/16px Inter, system-ui, sans-serif;
-      background: var(--color-bg-brand, #0d99ff); color: var(--color-text-onbrand, #fff); font-variant-numeric: tabular-nums;
-    }
-    [${EXPAND}="overlay"] .size.hint { padding: 0 6px; background: var(--color-bg-tooltip, #1e1e1e); color: var(--color-text-tooltip, #fff); }
-    html[${ICONS}] ${BAR} > button:has(> svg) > span { display: none; }
-    html[${ICONS}] ${BAR} > button:has(> svg) { padding-left: 4px; padding-right: 4px; }
-    @keyframes ligma-expand-working { from { opacity: 0.35; } to { opacity: 1; } }
-    @media (prefers-reduced-motion: reduce) { [${EXPAND}="overlay"].working :is(.area, .lines) { animation: none; } }
-    html[${EXPAND_POINTER}="ew"], html[${EXPAND_POINTER}="ew"] * { cursor: ew-resize !important; }
-    html[${EXPAND_POINTER}="ns"], html[${EXPAND_POINTER}="ns"] * { cursor: ns-resize !important; }
-    html[${EXPAND_POINTER}="nwse"], html[${EXPAND_POINTER}="nwse"] * { cursor: nwse-resize !important; }
-    html[${EXPAND_POINTER}="nesw"], html[${EXPAND_POINTER}="nesw"] * { cursor: nesw-resize !important; }
-    html[${EXPAND_POINTER}="move"], html[${EXPAND_POINTER}="move"] * { cursor: move !important; }
-    html[${EXPAND_POINTER}="wait"], html[${EXPAND_POINTER}="wait"] * { cursor: progress !important; }
-    html[${EXPAND_POINTER}="draw-add"], html[${EXPAND_POINTER}="draw-add"] * { cursor: ${cursor("add", true)} !important; }
-    html[${EXPAND_POINTER}="draw-subtract"], html[${EXPAND_POINTER}="draw-subtract"] * { cursor: ${cursor("subtract", true)} !important; }`;
+    @keyframes ligma-working { from { opacity: 0.35; } to { opacity: 1; } }`;
   const mount = () => {
     if (style.isConnected) return true;
     const parent = document.head ?? document.documentElement;
@@ -3486,8 +2762,6 @@ static LOCAL: AtomicBool = AtomicBool::new(true);
 static VECTORIZE: AtomicBool = AtomicBool::new(true);
 /// and its Select object, where it works,
 static OBJECTS: AtomicBool = AtomicBool::new(true);
-/// and its Expand,
-static EXPAND: AtomicBool = AtomicBool::new(true);
 /// and its Spot healing,
 static HEAL: AtomicBool = AtomicBool::new(true);
 /// and its Upscale, where it works,
@@ -3505,10 +2779,9 @@ fn now() -> u64 {
 fn state() -> String {
     let (on, local, vectorize) = (ON.load(Ordering::Relaxed), LOCAL.load(Ordering::Relaxed), VECTORIZE.load(Ordering::Relaxed));
     let objects = OBJECTS.load(Ordering::Relaxed);
-    let expand = EXPAND.load(Ordering::Relaxed);
     let (heal, upscale, icons) = (HEAL.load(Ordering::Relaxed), UPSCALE.load(Ordering::Relaxed), ICONS.load(Ordering::Relaxed));
     format!(
-        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"expand":{expand},"heal":{heal},"upscale":{upscale},"icons":{icons},"rev":{}}}"#,
+        r#"{{"on":{on},"local":{local},"vectorize":{vectorize},"objects":{objects},"heal":{heal},"upscale":{upscale},"icons":{icons},"rev":{}}}"#,
         REV.load(Ordering::Relaxed)
     )
 }
@@ -3531,7 +2804,6 @@ pub fn init(settings: &Settings) {
     LOCAL.store(local(settings), Ordering::Relaxed);
     VECTORIZE.store(settings.local_vectorize, Ordering::Relaxed);
     OBJECTS.store(objects(settings), Ordering::Relaxed);
-    EXPAND.store(settings.local_expand, Ordering::Relaxed);
     HEAL.store(settings.local_heal, Ordering::Relaxed);
     UPSCALE.store(upscale(settings), Ordering::Relaxed);
     ICONS.store(settings.image_bar_icons, Ordering::Relaxed);
@@ -3549,11 +2821,10 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     let local = LOCAL.swap(local(settings), Ordering::Relaxed) != local(settings);
     let vectorize = VECTORIZE.swap(settings.local_vectorize, Ordering::Relaxed) != settings.local_vectorize;
     let objects = OBJECTS.swap(objects(settings), Ordering::Relaxed) != objects(settings);
-    let expand = EXPAND.swap(settings.local_expand, Ordering::Relaxed) != settings.local_expand;
     let heal = HEAL.swap(settings.local_heal, Ordering::Relaxed) != settings.local_heal;
     let upscale = UPSCALE.swap(upscale(settings), Ordering::Relaxed) != upscale(settings);
     let icons = ICONS.swap(settings.image_bar_icons, Ordering::Relaxed) != settings.image_bar_icons;
-    if !on && !local && !vectorize && !objects && !expand && !heal && !upscale && !icons {
+    if !on && !local && !vectorize && !objects && !heal && !upscale && !icons {
         return;
     }
     REV.store(now(), Ordering::Relaxed);
