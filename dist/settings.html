@@ -6,7 +6,8 @@
 <!-- Settings window (Ligma > Settings…). Edits settings.json through
      `get_settings` / `set_settings` in src-tauri/src/settings.rs; each
      change is saved and applied right away. Each category has its own
-     page, picked in the sidebar. Appearance picks the color scheme and
+     page, picked in the sidebar, and the search above it finds a setting
+     on any page (`runSearch`). Appearance picks the color scheme and
      the themes (dist/themes.js, src-tauri/src/appearance.rs). App Icon
      picks the app's icon (dist/app-icons.js, src-tauri/src/app_icon.rs). Plugins imports development plugins
      (src-tauri/src/plugins.rs) and switches them on and off. About checks for updates and reports a
@@ -98,21 +99,55 @@
 
   #body { display: flex; flex: 1; min-height: 0; }
 
-  /* The categories, one page each */
+  /* Search, then the categories in groups, one page each */
   nav {
     display: flex;
     flex: none;
     flex-direction: column;
-    gap: 2px;
-    width: 176px;
+    gap: 8px;
+    width: 184px;
     padding: 8px;
     border-right: 1px solid var(--border);
   }
-  nav button {
+  .search {
     display: flex;
+    flex: none;
+    align-items: center;
+    height: 28px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+  }
+  .search:hover { border-color: var(--border); }
+  .search:focus-within { border-color: var(--brand); }
+  .search > svg { flex: none; margin-left: 5px; }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 4px;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    caret-color: var(--brand);
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .search input::placeholder { color: var(--text-secondary); }
+  .search input::-webkit-search-cancel-button { display: none; }
+  .search .icon-button { flex: none; width: 22px; height: 22px; margin-right: 2px; color: var(--text-secondary); }
+  .search .icon-button:hover { color: var(--text); }
+  .search .icon-button[hidden] { display: none; }
+  .pages { display: flex; flex: 1; flex-direction: column; gap: 2px; min-height: 0; }
+  .pages button {
+    display: flex;
+    flex: none;
     align-items: center;
     gap: 8px;
-    height: 32px;
+    height: 28px;
     padding: 0 8px;
     border: 0;
     border-radius: 5px;
@@ -121,22 +156,44 @@
     font: inherit;
     text-align: left;
   }
-  nav button:hover { background: var(--hover); color: var(--text); }
-  nav button[aria-selected="true"] { background: var(--bg-secondary); color: var(--text); font-weight: 550; }
-  nav svg { flex: none; }
+  .pages button:hover { background: var(--hover); color: var(--text); }
+  .pages button[aria-selected="true"] { background: var(--bg-secondary); color: var(--text); font-weight: 550; }
+  .pages svg { flex: none; }
+  .divider { flex: none; height: 1px; margin: 4px 8px; background: var(--border); }
+  .divider.bottom { margin-top: auto; }
+  .count { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; font-weight: 450; }
+  /* While searching: pages with results show how many, the rest fade */
+  .searching .pages button.no-hits { color: var(--text-tertiary); }
 
   main { flex: 1; min-width: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--bg-tertiary) transparent; }
   main > [role="tabpanel"] { padding-bottom: 12px; }
   main > [hidden] { display: none; }
+  .page-title { padding: 14px 16px 2px; font-size: 13px; font-weight: 600; line-height: 20px; }
+
+  /* Search results: every page with a match, one after another, under
+     its name. Rows and sections without one are left out */
+  .miss { display: none !important; }
+  .searching .page-title { position: sticky; z-index: 2; top: 0; background: var(--bg); }
+  .searching main > [role="tabpanel"]:not([hidden]) ~ [role="tabpanel"]:not([hidden]) { border-top: 1px solid var(--border); }
+  ::highlight(search) { background-color: color-mix(in srgb, var(--brand) 32%, transparent); }
+  #no-results { padding: 64px 24px; text-align: center; }
+  #no-results .title { font-size: 13px; font-weight: 550; line-height: 20px; overflow-wrap: anywhere; }
+  #no-results .hint { margin-top: 4px; }
+  /* A result opened on its page */
+  .flash { animation: flash 1.6s cubic-bezier(0.2, 0.9, 0.3, 1); }
+  @keyframes flash { from { background-color: color-mix(in srgb, var(--brand) 22%, transparent); } }
 
   section { padding: 8px 0 12px; }
-  section + section { border-top: 1px solid var(--border); }
+  section:not(.miss) ~ section:not(.miss) { border-top: 1px solid var(--border); }
+  .models:not(:has(.row:not([hidden]))) { display: none; }
   h2 {
     padding: 8px 16px 4px;
     font-size: 11px;
     font-weight: 550;
     line-height: 16px;
   }
+  h2.disabled { color: var(--text-tertiary); }
+  .section-hint { padding: 0 16px 4px; }
 
   .row {
     display: flex;
@@ -155,6 +212,53 @@
   .nested.deepest { padding-left: 64px; }
   .row.disabled .label { color: var(--text-tertiary); }
   .row.disabled .hint { color: var(--text-tertiary); }
+
+  /* A caveat worth seeing at a glance, beside the setting's name */
+  .tag {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-weight: 450;
+    line-height: 16px;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+  .row.disabled .tag { color: var(--text-tertiary); }
+
+  /* A setting made of several checkboxes, under its name */
+  .row.stack { flex-direction: column; align-items: stretch; gap: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -6px; }
+  .chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 8px 0 4px;
+    border-radius: 5px;
+  }
+  .chip input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; }
+  .chip:has(input:not(:disabled)):hover { background: var(--hover); }
+  .chip:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: -2px; }
+  .chip .box {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 12px;
+    height: 12px;
+    margin: 2px;
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px var(--text-secondary);
+    color: #fff;
+    pointer-events: none;
+  }
+  .chip .box svg { visibility: hidden; }
+  .chip input:checked + .box { background: var(--brand); box-shadow: none; }
+  .chip input:checked + .box svg { visibility: visible; }
+  .row.disabled .chip { opacity: 0.4; }
 
   /* Figma's switch */
   .switch {
@@ -393,7 +497,6 @@
     box-shadow: 0 0 0 1.5px var(--brand);
   }
   .orb[aria-checked="true"] .badge { display: grid; }
-  .themes-hint { padding: 0 16px 4px; }
 
   /* App icon: the one in use, large, then every icon by collection */
   .current-icon { display: flex; align-items: center; gap: 16px; padding: 8px 16px 4px; }
@@ -440,8 +543,6 @@
 
   /* AI tools: quick connect, one row per tool found, and the server's
      settings for adding it by hand */
-  .subhead { padding: 12px 16px 2px 32px; color: var(--text-secondary); font-weight: 550; }
-  .subhead.disabled { color: var(--text-tertiary); }
   .client .label { overflow: hidden; }
   .client .path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .client .problem { color: var(--danger); }
@@ -451,7 +552,7 @@
     align-items: center;
     gap: 4px;
     min-height: 32px;
-    padding: 6px 16px 6px 28px;
+    padding: 6px 16px 6px 12px;
     color: var(--text-secondary);
     font-weight: 550;
     list-style: none;
@@ -482,8 +583,10 @@
     outline: 2px solid var(--brand);
     outline-offset: 1px;
   }
+  .search .icon-button:focus-visible { outline-offset: -2px; }
 
   @media (prefers-reduced-motion: reduce) {
+    .flash { animation: none; }
     .switch, .switch::before, .orb, .icon-choice img, .manual summary svg { transition: none; }
     .icon-choice:hover img, .icon-choice:active img { transform: none; }
     .orb .mesh::before { animation: none; }
@@ -498,43 +601,100 @@
   </button>
 </header>
 <div id="body">
-<nav role="tablist" aria-orientation="vertical" aria-label="Settings">
-  <button role="tab" id="tab-appearance" aria-controls="appearance">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 6h11"/></svg>
-    Appearance
-  </button>
-  <button role="tab" id="tab-app-icon" aria-controls="app-icon-panel">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5c3.9 0 5.5.6 5.5 5.5S11.9 13.5 8 13.5 2.5 11.9 2.5 8 4.1 2.5 8 2.5z"/><path d="M6.5 5.2v5.3" stroke-linecap="round"/><circle cx="9.6" cy="9.6" r="1.1" fill="currentColor" stroke="none"/></svg>
-    App Icon
-  </button>
-  <button role="tab" id="tab-features" aria-controls="features">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5l1.4 3.6 3.6 1.4-3.6 1.4L8 12.5 6.6 8.9 3 7.5l3.6-1.4z"/></svg>
-    Features
-  </button>
-  <button role="tab" id="tab-tabs" aria-controls="tabs">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M2.5 13h11"/></svg>
-    Tabs &amp; Memory
-  </button>
-  <button role="tab" id="tab-discord" aria-controls="discord-panel">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 4.5a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5H7.5L4.5 14v-2.5a2 2 0 0 1-2-2z"/></svg>
-    Discord
-  </button>
-  <button role="tab" id="tab-plugins" aria-controls="plugins-panel">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M3 5.5h2.2a1.3 1.3 0 1 1 2.6 0H10v2.2a1.3 1.3 0 1 1 0 2.6v2.2H7.8a1.3 1.3 0 1 0-2.6 0H3z"/></svg>
-    Plugins
-  </button>
-  <button role="tab" id="tab-about" aria-controls="about">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3"/><circle cx="8" cy="5.5" r=".7" fill="currentColor" stroke="none"/></svg>
-    About
-  </button>
+<nav aria-label="Settings">
+  <div class="search">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="7" cy="7" r="4"/><path d="m10 10 3 3"/></svg>
+    <input type="search" id="search" placeholder="Search" aria-label="Search settings" autocomplete="off" spellcheck="false">
+    <button class="icon-button" id="search-clear" title="Clear" aria-label="Clear search" hidden>
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/></svg>
+    </button>
+  </div>
+  <div class="pages" role="tablist" aria-orientation="vertical" aria-label="Settings">
+    <button role="tab" id="tab-general" aria-controls="general">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.5 5.5h2M7.5 5.5h6M2.5 10.5h6M11.5 10.5h2"/><circle cx="6" cy="5.5" r="1.5"/><circle cx="10" cy="10.5" r="1.5"/></svg>
+      General<span class="count" aria-hidden="true"></span>
+    </button>
+    <button role="tab" id="tab-appearance" aria-controls="appearance">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 0 0 11z" fill="currentColor" stroke="none"/></svg>
+      Appearance<span class="count" aria-hidden="true"></span>
+    </button>
+    <button role="tab" id="tab-app-icon" aria-controls="app-icon-panel">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5c3.9 0 5.5.6 5.5 5.5S11.9 13.5 8 13.5 2.5 11.9 2.5 8 4.1 2.5 8 2.5z"/><path d="M6.5 5.2v5.3" stroke-linecap="round"/><circle cx="9.6" cy="9.6" r="1.1" fill="currentColor" stroke="none"/></svg>
+      App Icon<span class="count" aria-hidden="true"></span>
+    </button>
+    <button role="tab" id="tab-tabs" aria-controls="tabs">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 13V5.5a1 1 0 0 1 1-1h3l1 1.5h5a1 1 0 0 1 1 1V13z"/><path d="M2.5 13h11"/></svg>
+      Tabs &amp; Memory<span class="count" aria-hidden="true"></span>
+    </button>
+    <div class="divider" aria-hidden="true"></div>
+    <button role="tab" id="tab-editor" aria-controls="editor">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5 12 7l-1.5 5h-5L4 7z"/><path d="M8 2.5V7" stroke-linecap="round"/><circle cx="8" cy="8" r="1"/><path d="M5.5 13.5h5" stroke-linecap="round"/></svg>
+      Editor<span class="count" aria-hidden="true"></span>
+    </button>
+    <button role="tab" id="tab-images" aria-controls="images">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><circle cx="6" cy="6.5" r="1"/><path d="m2.5 11.5 3.5-3 3 2.5 1.5-1.5 3 2.5"/></svg>
+      Images<span class="count" aria-hidden="true"></span>
+    </button>
+    <button role="tab" id="tab-plugins" aria-controls="plugins-panel">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M3 5.5h2.2a1.3 1.3 0 1 1 2.6 0H10v2.2a1.3 1.3 0 1 1 0 2.6v2.2H7.8a1.3 1.3 0 1 0-2.6 0H3z"/></svg>
+      Plugins<span class="count" aria-hidden="true"></span>
+    </button>
+    <div class="divider" aria-hidden="true"></div>
+    <button role="tab" id="tab-ai" aria-controls="ai-panel">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 2.5l1.4 3.6 3.6 1.4-3.6 1.4L8 12.5 6.6 8.9 3 7.5l3.6-1.4z"/></svg>
+      AI Tools<span class="count" aria-hidden="true"></span>
+    </button>
+    <button role="tab" id="tab-discord" aria-controls="discord-panel">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.5 4.5a1.5 1.5 0 0 1 1.5-1.5h8a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1-1.5 1.5H7.5L4.5 14v-2.5a2 2 0 0 1-2-2z"/></svg>
+      Discord<span class="count" aria-hidden="true"></span>
+    </button>
+    <div class="divider bottom" aria-hidden="true"></div>
+    <button role="tab" id="tab-about" aria-controls="about">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3"/><circle cx="8" cy="5.5" r=".7" fill="currentColor" stroke="none"/></svg>
+      About<span class="count" aria-hidden="true"></span>
+    </button>
+  </div>
 </nav>
 <main>
-  <div role="tabpanel" id="appearance" aria-labelledby="tab-appearance">
+  <div role="tabpanel" id="general" aria-labelledby="tab-general">
+    <div class="page-title">General</div>
+    <section>
+      <h2>Home</h2>
+      <label class="row" data-keywords="start file browser recents starred drafts">
+        <span class="label">Ligma's home page
+          <div class="hint">A faster home of Ligma's own, with starred files, Recents and search</div>
+        </span>
+        <input type="checkbox" class="switch" id="new-home">
+      </label>
+      <label class="row nested" id="new-home-start-row" data-keywords="start default">
+        <span class="label">Opens on</span>
+        <button type="button" class="picker" id="new-home-start" aria-haspopup="listbox" aria-expanded="false" data-options='[["home","Home"],["recents","Recents"],["starred","Starred"],["shared","Shared with you"],["drafts","Drafts"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </label>
+      <label class="row" data-keywords="new old file browser">
+        <span class="label">Use the classic home page
+          <div class="hint">Keeps Figma's usual home page on accounts trying its new one</div>
+        </span>
+        <input type="checkbox" class="switch" id="classic-home">
+      </label>
+    </section>
+    <section>
+      <h2>Notifications</h2>
+      <label class="row" data-keywords="bell alerts comments replies mentions invites desktop">
+        <span class="label">Show Figma notifications
+          <div class="hint">Comments, mentions, invites and the rest of Figma's bell, on your desktop</div>
+        </span>
+        <input type="checkbox" class="switch" id="figma-notifications">
+      </label>
+    </section>
+  </div>
+
+  <div role="tabpanel" id="appearance" aria-labelledby="tab-appearance" hidden>
+    <div class="page-title">Appearance</div>
     <section>
       <h2>Interface</h2>
-      <div class="row">
+      <div class="row" data-keywords="zoom size bigger smaller larger text">
         <span class="label">Interface scale
-          <div class="hint">Zooms Figma, the tab bar, menus, prompts and this window together, like a browser's zoom</div>
+          <div class="hint">Zooms Figma and Ligma's windows together</div>
         </span>
         <span class="stepper">
           <button class="icon-button" id="scale-down" title="Smaller" aria-label="Smaller">
@@ -549,23 +709,24 @@
     </section>
     <section>
       <h2 id="scheme-heading">Color scheme</h2>
-      <div class="cards" id="schemes" role="radiogroup" aria-labelledby="scheme-heading"></div>
+      <div class="cards" id="schemes" role="radiogroup" aria-labelledby="scheme-heading" data-unit data-keywords="light dark mode system"></div>
     </section>
     <section>
       <h2 id="themes-heading">Themes</h2>
-      <div class="hint themes-hint">Pick a theme for light mode and one for dark mode. It colors Figma's panels, toolbars and menus and Ligma's tabs, but not the canvas.</div>
-      <div class="themes" id="themes" aria-labelledby="themes-heading"></div>
+      <div class="hint section-hint">One for light mode, one for dark. They color Figma's interface, not the canvas.</div>
+      <div class="themes" id="themes" aria-labelledby="themes-heading" data-unit data-keywords="colors palette light dark mode"></div>
     </section>
   </div>
 
   <div role="tabpanel" id="app-icon-panel" aria-labelledby="tab-app-icon" hidden>
+    <div class="page-title">App Icon</div>
     <section>
-      <h2>App icon</h2>
-      <div class="current-icon">
+      <h2>Current icon</h2>
+      <div class="current-icon" data-unit data-keywords="dock taskbar logo">
         <img id="app-icon-current" src="app-icon-macos.png" alt="">
         <span class="label">
           <span class="name" id="app-icon-name"></span>
-          <span class="hint" id="app-icon-hint">Shows in the Dock and in Finder. After an update, Ligma puts it back the next time it opens.</span>
+          <span class="hint" id="app-icon-hint">In the Dock and Finder, and kept after updates</span>
           <span class="hint" id="app-icon-error" role="alert" hidden></span>
         </span>
         <button class="button" id="app-icon-reset">Use Ligma's icon</button>
@@ -574,380 +735,288 @@
     <div id="app-icon-collections"></div>
   </div>
 
-  <div role="tabpanel" id="features" aria-labelledby="tab-features" hidden>
-    <section>
-      <h2>Toolbar</h2>
-      <div class="row">
-        <span class="label">Modes to switch between
-          <div class="hint">On the right of Figma Design's toolbar. With one left, the switch is hidden. Hiding the mode a file is in switches it to the first one shown. Right-click the switch to change these there. Hiding one reloads files already open, each when you next look at it.</div>
-        </span>
-      </div>
-      <label class="row nested">
-        <span class="label">Draw</span>
-        <input type="checkbox" class="switch" id="mode-draw">
-      </label>
-      <label class="row nested">
-        <span class="label">Design</span>
-        <input type="checkbox" class="switch" id="mode-design">
-      </label>
-      <label class="row nested">
-        <span class="label">Motion</span>
-        <input type="checkbox" class="switch" id="mode-motion">
-      </label>
-      <label class="row nested">
-        <span class="label">Dev Mode</span>
-        <input type="checkbox" class="switch" id="mode-dev">
-      </label>
-      <label class="row">
-        <span class="label">Lasso fill
-          <div class="hint">A tool under Pencil in the Creation tools menu. Draw around an area to fill it with color, like Procreate's lasso fill. Pick its fills, strokes and stroke weight in the panel on the right. Only in files you can edit.</div>
-        </span>
-        <input type="checkbox" class="switch" id="lasso-fill">
-      </label>
-    </section>
-    <section>
-      <h2>Layers</h2>
-      <label class="row">
-        <span class="label">Show layer previews
-          <div class="hint">A small picture of each layer in the layers panel, in every mode, like in Draw mode. Large files may feel slower. Turning it on reloads files already open, each when you next look at it.</div>
-        </span>
-        <input type="checkbox" class="switch" id="layer-previews">
-      </label>
-    </section>
-    <section>
-      <h2>Images</h2>
-      <label class="row">
-        <span class="label">Copy and paste adjustments
-          <div class="hint" id="adjustments-hint">With an image's fill open, MOD+Shift+C copies its exposure, contrast and other sliders. MOD+Shift+V then pastes them onto every selected image, keeping each image. The button by Rotate, or a right-click on the sliders or an image's row, also offers Copy, Paste and Reset.</div>
-        </span>
-        <input type="checkbox" class="switch" id="adjustments-clipboard">
-      </label>
-      <label class="row nested" id="adjustments-bar-row">
-        <span class="label">Show in the image bar
-          <div class="hint">Copy adjustments and Paste adjustments after Crop, above the toolbar</div>
-        </span>
-        <input type="checkbox" class="switch" id="adjustments-bar">
-      </label>
-      <label class="row">
-        <span class="label">Icons only in the image bar
-          <div class="hint">The buttons above the toolbar for a selected image show only their icons, with their names on hover</div>
-        </span>
-        <input type="checkbox" class="switch" id="image-bar-icons">
-      </label>
-      <label class="row">
-        <span class="label">Hide AI actions in free projects
-          <div class="hint">In files from a free project, the bar above the toolbar for a selected image keeps only Crop and Ligma's adjustments, without Select area, Remove background, Edit with prompt and More</div>
-        </span>
-        <input type="checkbox" class="switch" id="hide-free-ai-actions">
-      </label>
-      <label class="row nested" id="local-select-object-row" hidden>
-        <span class="label"><span id="local-select-object-label">Select objects on this Mac</span>
-          <div class="hint" id="local-select-object-hint">Ligma's own Select object takes the place of Select area: point at an object in the image to see it, click to pick it, and Isolate puts it in a new layer or Erase cuts it out of the image. SAM 2.1 finds the objects on your Mac, once downloaded.</div>
-        </span>
-        <input type="checkbox" class="switch" id="local-select-object">
-      </label>
-      <div class="row nested deeper" id="objects-model-row" hidden>
-        <span class="label">Object model
-          <div class="hint" id="objects-model-hint"></div>
-        </span>
-        <button class="button" id="objects-model-button"></button>
-      </div>
-      <label class="row nested" id="local-remove-background-row">
-        <span class="label"><span id="local-remove-background-label">Remove backgrounds on this Mac</span>
-          <div class="hint" id="local-remove-background-hint">Ligma's own Remove background takes the place of Figma's and finds the subject on your Mac, as Preview does. Needs macOS 14 or later.</div>
-        </span>
-        <input type="checkbox" class="switch" id="local-remove-background">
-      </label>
-      <label class="row nested deeper" id="use-background-model-row" hidden>
-        <span class="label">Use BiRefNet instead of Vision
-          <div class="hint">BiRefNet, the open model Ligma uses on Windows, finds the subject in place of Apple's Vision. It needs a download the first time.</div>
-        </span>
-        <input type="checkbox" class="switch" id="use-background-model">
-      </label>
-      <div class="row nested deeper" id="background-model-row" hidden>
-        <span class="label">Background model
-          <div class="hint" id="background-model-hint"></div>
-        </span>
-        <button class="button" id="background-model-button"></button>
-      </div>
-      <label class="row nested" id="local-vectorize-row">
-        <span class="label"><span id="local-vectorize-label">Vectorize on this Mac</span>
-          <div class="hint" id="local-vectorize-hint">Ligma's own Vectorize turns the image into flat-colored vector shapes on your Mac, as Figma's does in the More menu, with a bar to recolor them after</div>
-        </span>
-        <input type="checkbox" class="switch" id="local-vectorize">
-      </label>
-      <label class="row nested" id="local-heal-row">
-        <span class="label"><span id="local-heal-label">Spot healing on this Mac</span>
-          <div class="hint" id="local-heal-hint">Paint over a spot, a stray object or text in the image, and it's filled from the image around it on your Mac, as Photoshop's Spot Healing Brush does</div>
-        </span>
-        <input type="checkbox" class="switch" id="local-heal">
-      </label>
-      <label class="row nested" id="local-upscale-row" hidden>
-        <span class="label"><span id="local-upscale-label">Upscale on this Mac</span>
-          <div class="hint" id="local-upscale-hint">Makes the image 2 or 4 times as large and sharper on your Mac, on its graphics, as a photo keeping its texture, as an illustration keeping its lines clean, or fast, once downloaded</div>
-        </span>
-        <input type="checkbox" class="switch" id="local-upscale">
-      </label>
-      <div class="row nested deeper" id="upscale-model-row" hidden>
-        <span class="label">Photo upscale model
-          <div class="hint" id="upscale-model-hint"></div>
-        </span>
-        <button class="button" id="upscale-model-button"></button>
-      </div>
-      <div class="row nested deeper" id="upscale-art-model-row" hidden>
-        <span class="label">Illustration upscale model
-          <div class="hint" id="upscale-art-model-hint"></div>
-        </span>
-        <button class="button" id="upscale-art-model-button"></button>
-      </div>
-      <div class="row nested deeper" id="upscale-fast-model-row" hidden>
-        <span class="label">Fast upscale model
-          <div class="hint" id="upscale-fast-model-hint"></div>
-        </span>
-        <button class="button" id="upscale-fast-model-button"></button>
-      </div>
-    </section>
-    <section>
-      <h2>Code</h2>
-      <label class="row">
-        <span class="label">Copy as code without Dev Mode
-          <div class="hint">Copy/Paste as > Copy as code in the right-click menu offers Tailwind, Tailwind (all layers) and React on every plan, in place of the ad for Dev Mode. Only in files you can edit. Turning it on applies to files you open after.</div>
-        </span>
-        <input type="checkbox" class="switch" id="copy-as-code">
-      </label>
-    </section>
-    <section>
-      <h2>Home</h2>
-      <label class="row">
-        <span class="label">Use the classic home page
-          <div class="hint">Figma is trying a new home page on some accounts, with your files sorted by plan. This keeps the usual one, with you in the top left and your teams in the sidebar, for every account.</div>
-        </span>
-        <input type="checkbox" class="switch" id="classic-home">
-      </label>
-      <label class="row">
-        <span class="label">Ligma's home page
-          <div class="hint">A faster home of Ligma's own: your starred files, suggestions, Recents, Shared with you and Drafts, search on Ctrl+K, an inbox and moving files by dragging. It reads your files from Figma in place of loading Figma's home page. Off, Home is Figma's file browser, which stays one click away for admin and sharing either way.</div>
-        </span>
-        <input type="checkbox" class="switch" id="new-home">
-      </label>
-      <label class="row nested" id="new-home-start-row">
-        <span class="label">Opens on</span>
-        <button type="button" class="picker" id="new-home-start" aria-haspopup="listbox" aria-expanded="false" data-options='[["home","Home"],["recents","Recents"],["starred","Starred"],["shared","Shared with you"],["drafts","Drafts"]]'><span class="picker-label"></span><svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-      </label>
-    </section>
-    <section>
-      <h2>Notifications</h2>
-      <label class="row">
-        <span class="label">Show Figma notifications
-          <div class="hint">Comments, replies, mentions, invites and the rest of Figma's bell show as desktop notifications. Click one to open it. Checked every 30 seconds while a Figma tab is loaded.</div>
-        </span>
-        <input type="checkbox" class="switch" id="figma-notifications">
-      </label>
-    </section>
-  </div>
-
   <div role="tabpanel" id="tabs" aria-labelledby="tab-tabs" hidden>
+    <div class="page-title">Tabs &amp; Memory</div>
     <section>
       <h2>Tabs</h2>
-      <label class="row">
+      <label class="row" data-keywords="restore session startup launch">
         <span class="label">Reopen tabs from last time
-          <div class="hint">Brings back your tabs and the one you had open. Each loads when you select it.</div>
+          <div class="hint">Each loads when you select it</div>
         </span>
         <input type="checkbox" class="switch" id="restore">
       </label>
-      <label class="row">
+      <label class="row" data-keywords="hover thumbnail card">
         <span class="label">Preview tabs on hover
-          <div class="hint">Shows a tab's name and how it last looked when you point at it</div>
+          <div class="hint">Shows how a tab last looked</div>
         </span>
         <input type="checkbox" class="switch" id="previews">
       </label>
-      <label class="row">
+      <label class="row" data-keywords="side by side two files compare">
         <span class="label">Split view
-          <div class="hint">Shows two files side by side, from a tab's menu or by dragging a tab onto the canvas</div>
+          <div class="hint">Two files side by side, from a tab's menu or by dragging a tab onto the canvas</div>
         </span>
         <input type="checkbox" class="switch" id="split-view">
       </label>
-      <label class="row nested" id="uniform-split-row">
+      <label class="row nested" id="uniform-split-row" data-keywords="split view layers properties">
         <span class="label">Share panels and toolbar
-          <div class="hint">Both files share one layers panel, properties panel and toolbar, the focused file's. Otherwise each half is a whole Figma window, and objects can't be dragged between them.</div>
+          <div class="hint">One set of panels for both files, so objects drag between them</div>
         </span>
         <input type="checkbox" class="switch" id="uniform-split">
       </label>
     </section>
     <section>
       <h2>Memory</h2>
-      <label class="row">
+      <label class="row" data-keywords="sleep performance ram unload">
         <span class="label">Put hidden tabs to sleep
-          <div class="hint">Closes a tab you aren't looking at to free its memory. It reloads when selected.</div>
+          <div class="hint">Frees a hidden tab's memory. It reloads when selected.</div>
         </span>
         <input type="checkbox" class="switch" id="sleep">
       </label>
-      <label class="row nested" id="sleep-after-row">
+      <label class="row nested" id="sleep-after-row" data-keywords="minutes timeout">
         <span class="label">After being hidden for</span>
         <span class="field scrub"><input type="number" id="sleep-after" min="1" step="1">min</span>
       </label>
-      <label class="row nested" id="limit-row">
+      <label class="row nested" id="limit-row" data-keywords="maximum">
         <span class="label">Limit hidden tabs kept loaded
-          <div class="hint">Past the limit, the oldest hidden tab sleeps right away. Home goes first.</div>
+          <div class="hint">Past the limit, the oldest sleeps first</div>
         </span>
         <input type="checkbox" class="switch" id="limit">
       </label>
-      <label class="row nested" id="max-hidden-row">
+      <label class="row nested" id="max-hidden-row" data-keywords="maximum limit">
         <span class="label">Hidden tabs kept loaded</span>
         <span class="field scrub"><input type="number" id="max-hidden" min="0" step="1">tabs</span>
       </label>
-      <label class="row nested" id="snapshots-row">
+      <label class="row nested" id="snapshots-row" data-keywords="loading screen snapshot">
         <span class="label">Show last image while a tab reloads
-          <div class="hint">In place of Figma's loading screen, after a file tab wakes from sleep</div>
+          <div class="hint">In place of Figma's loading screen</div>
         </span>
         <input type="checkbox" class="switch" id="snapshots">
       </label>
-      <label class="row">
+      <label class="row" data-keywords="games gaming performance ram sleep">
         <span class="label">Game mode
-          <div class="hint">While a game is in front, every tab sleeps to free its memory for the game. Tabs on screen reload when you come back.</div>
+          <div class="hint">Every tab sleeps while a game is in front</div>
         </span>
         <input type="checkbox" class="switch" id="game-mode">
       </label>
     </section>
   </div>
 
-  <div role="tabpanel" id="discord-panel" aria-labelledby="tab-discord" hidden>
+  <div role="tabpanel" id="editor" aria-labelledby="tab-editor" hidden>
+    <div class="page-title">Editor</div>
     <section>
-      <h2>Rich Presence</h2>
-      <label class="row">
-        <span class="label">Show what you're working on
-          <div class="hint">Shows the open file, where you are in it and the selected tool on your Discord profile</div>
+      <h2>Toolbar</h2>
+      <div class="row stack" data-keywords="mode switch dev mode">
+        <span class="label">Modes to switch between
+          <div class="hint">In the toolbar's switch, also changed by right-clicking it. Hiding one reloads open files.</div>
         </span>
-        <input type="checkbox" class="switch" id="discord">
-      </label>
-      <label class="row nested" id="discord-file-row">
-        <span class="label">Show file name
-          <div class="hint">When off, Discord doesn't name the file</div>
-        </span>
-        <input type="checkbox" class="switch" id="discord-file">
-      </label>
-      <label class="row nested deeper" id="discord-hide-files-row">
-        <span class="label">Hide files by default
-          <div class="hint">Every file shows as "Editing a file" until you choose Show File on Discord in its tab's menu. When off, every file shows until you choose Hide File on Discord.</div>
-        </span>
-        <input type="checkbox" class="switch" id="discord-hide-files">
-      </label>
-      <div class="row nested deeper" id="discord-where-row">
-        <span class="label">Show where you are in the file
-          <div class="hint">Under the file's name, for each Figma product. Needs the file name shown.</div>
-        </span>
+        <div class="chips" role="group" aria-label="Modes to switch between">
+          <label class="chip"><input type="checkbox" id="mode-draw"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Draw</label>
+          <label class="chip"><input type="checkbox" id="mode-design"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Design</label>
+          <label class="chip"><input type="checkbox" id="mode-motion"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Motion</label>
+          <label class="chip"><input type="checkbox" id="mode-dev"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Dev Mode</label>
+        </div>
       </div>
-      <label class="row nested deepest" id="discord-page-row">
-        <span class="label">Page in Figma Design</span>
-        <input type="checkbox" class="switch" id="discord-page">
-      </label>
-      <label class="row nested deepest" id="discord-figjam-page-row">
-        <span class="label">Page in FigJam</span>
-        <input type="checkbox" class="switch" id="discord-figjam-page">
-      </label>
-      <label class="row nested deepest" id="discord-slide-row">
-        <span class="label">Slide in Figma Slides and presentations</span>
-        <input type="checkbox" class="switch" id="discord-slide">
-      </label>
-      <label class="row nested deepest" id="discord-chat-row">
-        <span class="label">Chat in Figma Make</span>
-        <input type="checkbox" class="switch" id="discord-chat">
-      </label>
-      <label class="row nested deepest" id="discord-asset-row">
-        <span class="label">Asset in Figma Buzz</span>
-        <input type="checkbox" class="switch" id="discord-asset">
-      </label>
-      <label class="row nested deepest" id="discord-webpage-row">
-        <span class="label">Webpage in Figma Sites</span>
-        <input type="checkbox" class="switch" id="discord-webpage">
-      </label>
-      <label class="row nested" id="discord-tool-row">
-        <span class="label">Show selected tool
-          <div class="hint">The tool's icon, named when hovered</div>
+      <label class="row" data-keywords="pencil procreate draw tool">
+        <span class="label">Lasso fill<span class="tag">Editable files</span>
+          <div class="hint">Under Pencil: draw around an area to fill it, like Procreate</div>
         </span>
-        <input type="checkbox" class="switch" id="discord-tool">
+        <input type="checkbox" class="switch" id="lasso-fill">
       </label>
     </section>
     <section>
-      <h2>Invites</h2>
-      <label class="row" id="discord-invites-row">
-        <span class="label">Invites to files
-          <div class="hint">Lets Discord friends join the open file in their Ligma, if they have access in Figma. Shows how many are in it. Needs Rich Presence.</div>
+      <h2>Layers</h2>
+      <label class="row" data-keywords="thumbnail layers panel">
+        <span class="label">Show layer previews<span class="tag">Reloads open files</span>
+          <div class="hint">A thumbnail of each layer, in every mode. Large files may feel slower.</div>
         </span>
-        <input type="checkbox" class="switch" id="discord-invites">
+        <input type="checkbox" class="switch" id="layer-previews">
       </label>
-      <label class="row nested" id="discord-join-requests-row">
-        <span class="label">Ask me about join requests
-          <div class="hint">When a friend asks to join, Ligma asks whether to invite them. Off, requests only show in Discord.</div>
+    </section>
+    <section>
+      <h2>Code</h2>
+      <label class="row" data-keywords="tailwind react css export dev mode">
+        <span class="label">Copy as code without Dev Mode<span class="tag">Editable files</span>
+          <div class="hint">Tailwind and React in the right-click menu on every plan, in files opened after</div>
         </span>
-        <input type="checkbox" class="switch" id="discord-join-requests">
+        <input type="checkbox" class="switch" id="copy-as-code">
       </label>
     </section>
   </div>
 
+  <div role="tabpanel" id="images" aria-labelledby="tab-images" hidden>
+    <div class="page-title">Images</div>
+    <section>
+      <h2>Image bar</h2>
+      <label class="row" data-keywords="toolbar buttons labels compact">
+        <span class="label">Icons only
+          <div class="hint">The bar above a selected image shows names on hover</div>
+        </span>
+        <input type="checkbox" class="switch" id="image-bar-icons">
+      </label>
+    </section>
+    <section>
+      <h2>Adjustments</h2>
+      <label class="row" data-keywords="exposure contrast sliders clipboard copy paste">
+        <span class="label">Copy and paste adjustments
+          <div class="hint" id="adjustments-hint">MOD+Shift+C copies an image's sliders. MOD+Shift+V pastes them onto selected images.</div>
+        </span>
+        <input type="checkbox" class="switch" id="adjustments-clipboard">
+      </label>
+      <label class="row nested" id="adjustments-bar-row" data-keywords="image bar">
+        <span class="label">Show in the image bar
+          <div class="hint">After Crop</div>
+        </span>
+        <input type="checkbox" class="switch" id="adjustments-bar">
+      </label>
+    </section>
+    <section>
+      <h2>AI actions</h2>
+      <label class="row" data-keywords="free plan remove background select area local on device">
+        <span class="label">Hide in free projects
+          <div class="hint" id="hide-free-ai-actions-hint">Ligma's own tools below take their place, running on this Mac</div>
+        </span>
+        <input type="checkbox" class="switch" id="hide-free-ai-actions">
+      </label>
+      <label class="row nested" id="local-select-object-row" data-keywords="isolate erase sam segment" hidden>
+        <span class="label">Select objects
+          <div class="hint">Point at an object to isolate or erase it, in place of Select area</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-select-object">
+      </label>
+      <label class="row nested" id="local-remove-background-row" data-keywords="cutout subject vision birefnet">
+        <span class="label">Remove backgrounds
+          <div class="hint" id="local-remove-background-hint">With Apple's Vision, as Preview does. Needs macOS 14 or later.</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-remove-background">
+      </label>
+      <label class="row nested deeper" id="use-background-model-row" data-keywords="birefnet vision model" hidden>
+        <span class="label">Use BiRefNet instead of Vision
+          <div class="hint">The open model Ligma uses on Windows</div>
+        </span>
+        <input type="checkbox" class="switch" id="use-background-model">
+      </label>
+      <label class="row nested" id="local-vectorize-row" data-keywords="vector trace svg shapes">
+        <span class="label">Vectorize
+          <div class="hint">Turns the image into flat-colored shapes you can recolor</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-vectorize">
+      </label>
+      <label class="row nested" id="local-heal-row" data-keywords="heal retouch photoshop remove object inpaint">
+        <span class="label">Spot healing
+          <div class="hint">Paint over a spot or object to fill it from the image around it</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-heal">
+      </label>
+      <label class="row nested" id="local-upscale-row" data-keywords="enlarge resolution sharpen 2x 4x" hidden>
+        <span class="label">Upscale
+          <div class="hint">2 or 4 times as large and sharper, as a photo, an illustration or fast</div>
+        </span>
+        <input type="checkbox" class="switch" id="local-upscale">
+      </label>
+    </section>
+    <section class="models" data-keywords="download models storage disk">
+      <h2>Models</h2>
+      <div class="hint section-hint">Downloaded the first time they're needed, or here ahead of time</div>
+      <div class="row" id="objects-model-row" data-keywords="sam select objects" hidden>
+        <span class="label">Object model
+          <div class="hint" id="objects-model-hint"></div>
+        </span>
+        <button class="button" id="objects-model-button"></button>
+      </div>
+      <div class="row" id="background-model-row" data-keywords="birefnet remove backgrounds" hidden>
+        <span class="label">Background model
+          <div class="hint" id="background-model-hint"></div>
+        </span>
+        <button class="button" id="background-model-button"></button>
+      </div>
+      <div class="row" id="upscale-model-row" data-keywords="upscale" hidden>
+        <span class="label">Photo upscale model
+          <div class="hint" id="upscale-model-hint"></div>
+        </span>
+        <button class="button" id="upscale-model-button"></button>
+      </div>
+      <div class="row" id="upscale-art-model-row" data-keywords="upscale" hidden>
+        <span class="label">Illustration upscale model
+          <div class="hint" id="upscale-art-model-hint"></div>
+        </span>
+        <button class="button" id="upscale-art-model-button"></button>
+      </div>
+      <div class="row" id="upscale-fast-model-row" data-keywords="upscale" hidden>
+        <span class="label">Fast upscale model
+          <div class="hint" id="upscale-fast-model-hint"></div>
+        </span>
+        <button class="button" id="upscale-fast-model-button"></button>
+      </div>
+    </section>
+  </div>
+
   <div role="tabpanel" id="plugins-panel" aria-labelledby="tab-plugins" hidden>
+    <div class="page-title">Plugins</div>
     <section>
       <h2>Left sidebar</h2>
-      <label class="row">
+      <label class="row" data-keywords="rail">
         <span class="label">Show plugins
-          <div class="hint">Your development plugins and the plugins saved to your Figma account, in the editor's left sidebar. Click one to run it.</div>
+          <div class="hint">Your development and saved plugins, one click to run</div>
         </span>
         <input type="checkbox" class="switch" id="rail-plugins">
       </label>
-      <label class="row">
+      <label class="row" data-keywords="rail">
         <span class="label">Show widgets
-          <div class="hint">The widgets saved to your Figma account. Click one to put it on the canvas.</div>
+          <div class="hint">Your saved widgets, one click to put on the canvas</div>
         </span>
         <input type="checkbox" class="switch" id="rail-widgets">
       </label>
     </section>
     <section>
       <h2>Actions menu</h2>
-      <label class="row">
+      <label class="row" data-keywords="widgets tab">
         <span class="label">Open on Plugins &amp; widgets
-          <div class="hint">Figma's Actions menu opens on its Plugins &amp; widgets tab rather than All</div>
+          <div class="hint">Rather than on All</div>
         </span>
         <input type="checkbox" class="switch" id="actions-plugins-tab">
       </label>
     </section>
     <section>
-      <h2>Development</h2>
-      <div class="row">
-        <span class="label">Import plugin from manifest
-          <div class="hint">Pick a plugin's manifest.json. Plugins that are on show in Figma's Actions panel, under Plugins &amp; widgets, in files you can edit. They aren't sandboxed like in the Figma app, so only import plugins you trust.</div>
+      <h2>Development plugins</h2>
+      <div class="row" data-keywords="manifest import local dev">
+        <span class="label">Import plugin from manifest<span class="tag">Editable files</span>
+          <div class="hint">They aren't sandboxed like in the Figma app, so only import plugins you trust</div>
         </span>
         <button class="button" id="import-plugin">Import…</button>
       </div>
       <div class="row" id="plugin-error" role="alert" hidden></div>
-    </section>
-    <section>
-      <h2>Imported plugins</h2>
       <div id="plugin-list"></div>
-      <div class="row empty" id="no-plugins">None yet</div>
+      <div class="row empty" id="no-plugins">None imported yet</div>
     </section>
+  </div>
+
+  <div role="tabpanel" id="ai-panel" aria-labelledby="tab-ai" hidden>
+    <div class="page-title">AI Tools</div>
     <section id="ai-tools">
-      <h2>AI tools</h2>
-      <label class="row">
-        <span class="label">Connect AI tools to your files
-          <div class="hint">Lets AI tools like Claude Code, Cursor and Codex read and edit the files open in Ligma, through Figwright's MCP server instead of Figma's, which a free plan can call 6 times a month. Only in files you can edit. What they do shows under Ligma MCP in Figma's right panel.</div>
+      <h2>MCP server</h2>
+      <label class="row" data-keywords="mcp figwright claude code cursor codex agent">
+        <span class="label">Connect AI tools to your files<span class="tag">Editable files</span>
+          <div class="hint">Claude Code, Cursor, Codex and others read and edit open files, through Figwright's MCP server</div>
         </span>
         <input type="checkbox" class="switch" id="ligma-mcp">
       </label>
-      <div class="row nested" id="mcp-status-row" aria-live="polite">
+      <div class="row nested" id="mcp-status-row" aria-live="polite" data-keywords="status connected">
         <span class="label"><span id="mcp-status">Off</span>
           <div class="hint" id="mcp-status-hint"></div>
         </span>
       </div>
-      <div class="subhead" id="mcp-clients-head">Quick connect</div>
+    </section>
+    <section>
+      <h2 id="mcp-clients-head">Quick connect</h2>
       <div id="mcp-clients"></div>
-      <div class="row nested empty" id="no-mcp-clients" hidden>
+      <div class="row empty" id="no-mcp-clients" hidden>
         <span class="label">No AI tools found
           <div class="hint">Add the MCP server to yours by hand, below</div>
         </span>
       </div>
-      <details class="manual">
+      <details class="manual" data-unit data-keywords="json npx node config command manual">
         <summary><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4.5 10 8l-3.5 3.5"/></svg>Set up by hand</summary>
-        <div class="hint">For an AI tool not listed above. Add this to its MCP settings. The tool starts the server with npx, so it needs Node.js 20.19 or later.</div>
+        <div class="hint">For an AI tool not listed above, add this to its MCP settings. It starts the server with npx, which needs Node.js 20.19 or later.</div>
         <div class="snippet">
           <div class="snippet-head"><span>JSON</span><button class="icon-button" id="copy-mcp-json" title="Copy" aria-label="Copy JSON"></button></div>
           <pre id="mcp-json"></pre>
@@ -960,25 +1029,90 @@
     </section>
   </div>
 
+  <div role="tabpanel" id="discord-panel" aria-labelledby="tab-discord" hidden>
+    <div class="page-title">Discord</div>
+    <section>
+      <h2>Rich Presence</h2>
+      <label class="row" data-keywords="status profile activity">
+        <span class="label">Show what you're working on
+          <div class="hint">The open file, where you are in it and your tool, on your profile</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord">
+      </label>
+      <label class="row nested" id="discord-file-row" data-keywords="privacy name">
+        <span class="label">Show file name
+          <div class="hint">Off, it says “Editing a file”</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-file">
+      </label>
+      <label class="row nested deeper" id="discord-hide-files-row" data-keywords="privacy private">
+        <span class="label">Hide files by default
+          <div class="hint">Show each one from its tab's menu</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-hide-files">
+      </label>
+      <div class="row nested deeper stack" id="discord-where-row" data-keywords="page slide chat asset webpage figjam make buzz sites">
+        <span class="label">Show where you are
+          <div class="hint">The page, slide, chat, asset or webpage, under the file's name</div>
+        </span>
+        <div class="chips" role="group" aria-label="Show where you are in">
+          <label class="chip" title="Page in Figma Design"><input type="checkbox" id="discord-page"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Design</label>
+          <label class="chip" title="Page in FigJam"><input type="checkbox" id="discord-figjam-page"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>FigJam</label>
+          <label class="chip" title="Slide in Figma Slides and presentations"><input type="checkbox" id="discord-slide"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Slides</label>
+          <label class="chip" title="Chat in Figma Make"><input type="checkbox" id="discord-chat"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Make</label>
+          <label class="chip" title="Asset in Figma Buzz"><input type="checkbox" id="discord-asset"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Buzz</label>
+          <label class="chip" title="Webpage in Figma Sites"><input type="checkbox" id="discord-webpage"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Sites</label>
+        </div>
+      </div>
+      <label class="row nested" id="discord-tool-row" data-keywords="icon">
+        <span class="label">Show selected tool
+          <div class="hint">Its icon, named on hover</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-tool">
+      </label>
+    </section>
+    <section>
+      <h2>Invites</h2>
+      <label class="row" id="discord-invites-row" data-keywords="join friends">
+        <span class="label">Invites to files
+          <div class="hint">Discord friends with access in Figma can join the open file</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-invites">
+      </label>
+      <label class="row nested" id="discord-join-requests-row" data-keywords="join friends ask">
+        <span class="label">Ask me about join requests
+          <div class="hint">Off, requests only show in Discord</div>
+        </span>
+        <input type="checkbox" class="switch" id="discord-join-requests">
+      </label>
+    </section>
+  </div>
+
   <div role="tabpanel" id="about" aria-labelledby="tab-about" hidden>
+    <div class="page-title">About</div>
     <section>
       <h2>Updates</h2>
-      <div class="row">
+      <div class="row" data-keywords="version upgrade">
         <span class="label"><span id="version">Ligma</span>
-          <div class="hint">Ligma checks for updates on launch and every 6 hours</div>
+          <div class="hint">Checked on launch and every 6 hours</div>
         </span>
         <button class="button" id="check-updates">Check for Updates</button>
       </div>
     </section>
     <section>
       <h2>Help</h2>
-      <div class="row">
+      <div class="row" data-keywords="bug issue feedback github log support">
         <span class="label">Report a problem
-          <div class="hint">Opens a GitHub issue with Ligma's version, your system and its recent log, for you to read and edit before sending. Nothing is sent otherwise.</div>
+          <div class="hint">Opens a GitHub issue with your system and log, for you to edit before sending</div>
         </span>
         <button class="button" id="report">Report…</button>
       </div>
     </section>
+  </div>
+
+  <div id="no-results" hidden>
+    <div class="title" id="no-results-title"></div>
+    <div class="hint">Try another word, like theme, memory or Discord</div>
   </div>
 </main>
 </div>
@@ -1117,16 +1251,8 @@
   // Removing backgrounds uses macOS's Vision, or on Windows a model
   // downloaded the first time
   if (!macos) {
-    $("local-remove-background-label").textContent = "Remove backgrounds on this PC";
-    $("local-remove-background-hint").textContent = "Ligma's own Remove background takes the place of Figma's and finds the subject on your PC. The first time, it downloads a 224 MB model from Hugging Face.";
-    $("local-vectorize-label").textContent = "Vectorize on this PC";
-    $("local-vectorize-hint").textContent = $("local-vectorize-hint").textContent.replace("your Mac", "your PC");
-    $("local-heal-label").textContent = "Spot healing on this PC";
-    $("local-heal-hint").textContent = $("local-heal-hint").textContent.replace("your Mac", "your PC");
-    $("local-upscale-label").textContent = "Upscale on this PC";
-    $("local-upscale-hint").textContent = "Makes the image 2 or 4 times as large and sharper on your PC, on its graphics card where it can, as a photo keeping its texture, as an illustration keeping its lines clean, or fast. The first time, each downloads a model, 30, 18 or 5 MB.";
-    $("local-select-object-label").textContent = "Select objects on this PC";
-    $("local-select-object-hint").textContent = $("local-select-object-hint").textContent.replace("your Mac, once downloaded.", "your PC. The first time, it downloads a 74 MB model from Hugging Face.");
+    $("hide-free-ai-actions-hint").textContent = $("hide-free-ai-actions-hint").textContent.replace("this Mac", "this PC");
+    $("local-remove-background-hint").textContent = "With BiRefNet, an open model";
   }
   // The platform's shortcuts
   const adjustmentsHint = $("adjustments-hint");
@@ -1135,15 +1261,33 @@
   const close = () => invoke("plugin:window|close", { label: "settings" });
   $("close").addEventListener("click", close);
   addEventListener("keydown", (e) => {
+    // Ctrl+F (⌘F) searches, and so does typing with nothing focused
+    if ((macos ? e.metaKey : e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      search.focus();
+      search.select();
+      return;
+    }
+    const idle = document.activeElement === document.body || tabs.includes(document.activeElement);
+    if (idle && e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      search.focus();
+      return;
+    }
     if (e.key !== "Escape") return;
-    // Esc leaves a number field first, then closes
-    if (document.activeElement?.matches("input[type=number]")) document.activeElement.blur();
-    else close();
+    // Esc leaves a number field first, then clears a search, then closes
+    if (document.activeElement?.matches("main input[type=number]")) document.activeElement.blur();
+    else if (search.value) {
+      clearSearch();
+      search.focus();
+    } else close();
   });
 
   // The sidebar's pages. The last one shown opens again next time
   const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const panels = tabs.map((tab) => $(tab.getAttribute("aria-controls")));
+  let current;
   const showPage = (tab, focus = false) => {
+    current = tab;
     for (const other of tabs) {
       const selected = other === tab;
       other.setAttribute("aria-selected", selected);
@@ -1151,17 +1295,157 @@
       $(other.getAttribute("aria-controls")).hidden = !selected;
     }
     if (focus) tab.focus();
+    document.querySelector("main").scrollTop = 0;
     localStorage.setItem("settingsPage", tab.id);
   };
-  for (const tab of tabs) tab.addEventListener("click", () => showPage(tab));
-  document.querySelector("nav").addEventListener("keydown", (e) => {
+  // Picking a page during a search opens it at its first result
+  const openPage = (tab, focus = false) => {
+    const hit = searching && firstHits.get(tab);
+    if (searching) clearSearch();
+    showPage(tab, focus);
+    if (hit) reveal(hit);
+  };
+  for (const tab of tabs) tab.addEventListener("click", () => openPage(tab));
+  document.querySelector(".pages").addEventListener("keydown", (e) => {
     const at = tabs.indexOf(document.activeElement);
     if (at < 0) return;
     const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
     if (to == null) return;
     e.preventDefault();
-    showPage(tabs[(to + tabs.length) % tabs.length], true);
+    openPage(tabs[(to + tabs.length) % tabs.length], true);
   });
+
+  // A row scrolled to and lit for a moment
+  const reveal = (el) => {
+    el.scrollIntoView({ block: "center" });
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
+    el.addEventListener("animationend", () => el.classList.remove("flash"), { once: true });
+  };
+
+  // Search runs across every page and shows each page's matching rows
+  // under its name, controls and all. Every word typed has to match the
+  // row's name, hint or keywords (`data-keywords`), or its section's or
+  // page's name. A nested row brings the rows it depends on, and a row
+  // the options under it
+  const search = $("search");
+  let searching = false;
+  const firstHits = new Map();
+  const fold = (text) => text.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const depth = (row) => ["nested", "deeper", "deepest"].filter((name) => row.classList.contains(name)).length;
+  const textOf = (el) => `${el.textContent} ${el.dataset?.keywords ?? ""}`;
+  function runSearch() {
+    const terms = fold(search.value).split(/\s+/).filter(Boolean);
+    $("search-clear").hidden = !search.value;
+    for (const el of document.querySelectorAll(".miss")) el.classList.remove("miss");
+    firstHits.clear();
+    if (!terms.length) {
+      if (searching) {
+        searching = false;
+        document.body.classList.remove("searching");
+        for (const tab of tabs) {
+          tab.classList.remove("no-hits");
+          tab.querySelector(".count").textContent = "";
+        }
+        $("no-results").hidden = true;
+        CSS.highlights?.delete("search");
+        showPage(current);
+      }
+      return;
+    }
+    searching = true;
+    document.body.classList.add("searching");
+    let total = 0;
+    tabs.forEach((tab, i) => {
+      const panel = panels[i];
+      panel.hidden = false;
+      const pageText = `${tab.textContent} ${panel.dataset.keywords ?? ""}`;
+      let hits = 0;
+      for (const section of panel.querySelectorAll("section")) {
+        const sectionText = `${pageText} ${section.querySelector("h2")?.textContent ?? ""} ${section.dataset.keywords ?? ""}`;
+        const units = [...section.querySelectorAll(".row, [data-unit]")].filter((unit) => !unit.closest("[hidden]"));
+        const shown = new Set();
+        units.forEach((unit, at) => {
+          const text = fold(`${sectionText} ${textOf(unit)}`);
+          if (!terms.every((term) => text.includes(term))) return;
+          hits++;
+          if (!firstHits.has(tab)) firstHits.set(tab, unit);
+          shown.add(unit);
+          let level = depth(unit);
+          for (let j = at - 1; j >= 0 && level > 0; j--) {
+            if (depth(units[j]) < level) {
+              shown.add(units[j]);
+              level = depth(units[j]);
+            }
+          }
+          for (let j = at + 1; j < units.length && depth(units[j]) > depth(unit); j++) shown.add(units[j]);
+        });
+        for (const unit of units) unit.classList.toggle("miss", !shown.has(unit));
+        section.classList.toggle("miss", shown.size === 0);
+      }
+      panel.hidden = hits === 0;
+      tab.setAttribute("aria-selected", "false");
+      tab.classList.toggle("no-hits", hits === 0);
+      tab.querySelector(".count").textContent = hits || "";
+      total += hits;
+    });
+    $("no-results").hidden = total > 0;
+    $("no-results-title").textContent = `No settings match “${search.value.trim()}”`;
+    highlight(terms);
+  }
+  // Marks the words found, where the browser can (the CSS Custom
+  // Highlight API), without touching the page's text
+  function highlight(terms) {
+    if (!window.Highlight || !CSS.highlights) return;
+    const ranges = [];
+    for (const root of document.querySelectorAll("main .page-title, main h2, main .row, main [data-unit]")) {
+      if (!root.getClientRects().length) continue;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        const lower = text.data.toLowerCase();
+        for (const term of terms) {
+          for (let at = lower.indexOf(term); at >= 0; at = lower.indexOf(term, at + term.length)) {
+            const range = new Range();
+            range.setStart(text, at);
+            range.setEnd(text, at + term.length);
+            ranges.push(range);
+          }
+        }
+      }
+    }
+    CSS.highlights.set("search", new Highlight(...ranges));
+  }
+  // Lists filled in again (plugins, AI tools, the themes) are searched again
+  const refreshSearch = () => searching && runSearch();
+  function clearSearch() {
+    search.value = "";
+    runSearch();
+  }
+  search.addEventListener("input", () => {
+    runSearch();
+    document.querySelector("main").scrollTop = 0;
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && search.value) {
+      // Clears the search rather than closing the window
+      e.preventDefault();
+      e.stopPropagation();
+      clearSearch();
+    } else if ((e.key === "Enter" || e.key === "ArrowDown") && searching) {
+      // Into the results, at their first control
+      const control = [...document.querySelectorAll("main input, main button, main summary")]
+        .find((el) => !el.disabled && el.getClientRects().length && !el.closest(".miss, [hidden]"));
+      if (!control) return;
+      e.preventDefault();
+      control.focus();
+    }
+  });
+  $("search-clear").addEventListener("click", () => {
+    clearSearch();
+    search.focus();
+  });
+
   showPage($(localStorage.getItem("settingsPage")) ?? tabs[0]);
 
   // Opens the page holding section `id` and scrolls to it, for links from
@@ -1171,6 +1455,7 @@
     const page = section?.closest('[role="tabpanel"]');
     const tab = page && tabs.find((tab) => tab.getAttribute("aria-controls") === page.id);
     if (!tab) return;
+    if (searching) clearSearch();
     showPage(tab);
     // The lists above it fill in as they load, so it's kept in view until
     // they have, or until the page is scrolled
@@ -1296,6 +1581,7 @@
     const heading = node("h2", { id: `icons-${collection.id}`, textContent: collection.name });
     const grid = node("div", { className: "icons" });
     grid.setAttribute("role", "radiogroup");
+    grid.dataset.unit = "";
     grid.setAttribute("aria-labelledby", heading.id);
     for (const icon of LIGMA_APP_ICONS.filter((icon) => icon.collection === collection.id && !(macos && icon.windowsOnly))) {
       const choice = node("button", { className: "icon-choice", title: icon.name });
@@ -1476,13 +1762,12 @@
       // Where you are shows under the file's name, so not without it
       ["discord-hide-files-row", settings.discordRichPresence && settings.discordShowFile],
       ["discord-where-row", settings.discordRichPresence && settings.discordShowFile],
-      ...Object.keys(whereFields).map((id) => [`${id}-row`, settings.discordRichPresence && settings.discordShowFile]),
     ]) {
       $(id).classList.toggle("disabled", !enabled);
-      const input = $(id).querySelector("input, .picker");
-      if (input) input.disabled = !enabled;
+      for (const input of $(id).querySelectorAll("input, .picker")) input.disabled = !enabled;
     }
     lockMcpClients();
+    refreshSearch();
   }
 
   function whole(input, min, fallback) {
@@ -1646,7 +1931,7 @@
     } else {
       const what = MODELS[name].what + (macos ? " and ONNX Runtime to run it" : "");
       const from = name === "upscale" ? "GitHub" : macos ? "Hugging Face and GitHub" : "Hugging Face";
-      hint = `${what}, ${megabytes(state.bytes)} from ${from}. Without it, Ligma asks to download it when it's first needed.`;
+      hint = `${what}, ${megabytes(state.bytes)} from ${from}`;
       button.textContent = "Download";
     }
     $(`${name}-model-hint`).textContent = hint;
@@ -1704,6 +1989,7 @@
       row.append(label, reveal, remove, toggle);
       return row;
     }));
+    refreshSearch();
   }
   $("import-plugin").addEventListener("click", async () => {
     pluginError(null);
@@ -1761,7 +2047,7 @@
     }
   }
   function clientRow(client) {
-    const row = node("div", { className: "row nested client" });
+    const row = node("div", { className: "row client" });
     row.dataset.id = client.id;
     const label = node("span", { className: "label" });
     label.append(node("div", { className: "name", textContent: client.name }));
@@ -1808,12 +2094,14 @@
     }
     $("mcp-clients").querySelector(`[data-id="${client.id}"]`)?.replaceWith(clientRow(changed));
     lockMcpClients();
+    refreshSearch();
   }
   async function showMcpClients() {
     const clients = await invoke("get_mcp_clients");
     $("mcp-clients").replaceChildren(...clients.map(clientRow));
     $("no-mcp-clients").hidden = clients.length > 0;
     lockMcpClients();
+    refreshSearch();
   }
   // A tool installed or set up meanwhile
   addEventListener("focus", () => {
