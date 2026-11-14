@@ -1031,12 +1031,32 @@ impl Kept {
     }
 }
 
+/// Dev switches read while encoding, read once as there are many encoded
+struct Switches {
+    sizes: bool,
+    nolayers: bool,
+    whole: bool,
+    shapes: bool,
+    tolerance: Option<f64>,
+}
+
+fn switches() -> &'static Switches {
+    static ON: std::sync::OnceLock<Switches> = std::sync::OnceLock::new();
+    ON.get_or_init(|| Switches {
+        sizes: std::env::var_os("LIGMA_NATIVE_VELLO_SIZES").is_some(),
+        nolayers: std::env::var_os("LIGMA_NATIVE_VELLO_NOLAYERS").is_some(),
+        whole: std::env::var_os("LIGMA_NATIVE_VELLO_WHOLE").is_none(),
+        shapes: std::env::var_os("LIGMA_NATIVE_VELLO_SHAPES").is_some(),
+        tolerance: std::env::var("LIGMA_NATIVE_VELLO_TOL").ok().and_then(|t| t.parse().ok()),
+    })
+}
+
 /// Dev tools: layers and clips encoded, by the line that made them
 pub static LAYERS: std::sync::Mutex<Option<HashMap<u32, u64>>> = std::sync::Mutex::new(None);
 
 #[track_caller]
 fn count_layer() {
-    if std::env::var_os("LIGMA_NATIVE_VELLO_SIZES").is_some() {
+    if switches().sizes {
         *LAYERS.lock().unwrap().get_or_insert_with(HashMap::new).entry(std::panic::Location::caller().line()).or_default() += 1;
     }
 }
@@ -1393,7 +1413,7 @@ impl<'a> Encoder<'a> {
     fn push(&mut self, mode: BlendMode, alpha: f32, bounds: Rect) -> bool {
         count_layer();
         let Some(device) = self.device(bounds) else { return false };
-        if std::env::var_os("LIGMA_NATIVE_VELLO_NOLAYERS").is_some() {
+        if switches().nolayers {
             self.saved.push((self.soft.take(), false));
             return true;
         }
@@ -1438,7 +1458,7 @@ impl<'a> Encoder<'a> {
             Some(soft) => Path::op(soft, &device, skia_safe::PathOp::Intersect).unwrap_or(device),
             None => device,
         };
-        if std::env::var_os("LIGMA_NATIVE_VELLO_NOLAYERS").is_some() {
+        if switches().nolayers {
             self.saved.push((saved, false));
             return;
         }
@@ -1472,9 +1492,9 @@ impl<'a> Encoder<'a> {
     fn fill<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
         // Small, it's drawn with fewer lines no further than this from it,
         // in device pixels for fragments' largest zoom
-        let tolerance = std::env::var("LIGMA_NATIVE_VELLO_TOL").ok().and_then(|t| t.parse().ok()).unwrap_or(if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 });
+        let tolerance = switches().tolerance.unwrap_or(if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 });
         let env = timer(4);
-        let whole = std::env::var_os("LIGMA_NATIVE_VELLO_WHOLE").is_none();
+        let whole = switches().whole;
         drop(env);
         if whole {
             let simple = timer(2);
@@ -1495,7 +1515,7 @@ impl<'a> Encoder<'a> {
 
     fn fill_shape<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
         let _t = timer(3);
-        if std::env::var_os("LIGMA_NATIVE_VELLO_SIZES").is_some() {
+        if switches().sizes {
             let b = transform.transform_rect_bbox(shape.bounding_box());
             let size = b.width().max(b.height());
             let bucket = [0.25, 1.0, 4.0, 16.0, 64.0, 256.0].iter().position(|&edge| size < edge).unwrap_or(6);
@@ -2109,7 +2129,7 @@ impl<'a> Encoder<'a> {
         match op {
             MaskOpType::KnockoutShadow => {
                 SIZES[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if std::env::var_os("LIGMA_NATIVE_VELLO_SHAPES").is_some() && SIZES[0].load(std::sync::atomic::Ordering::Relaxed) % 40 == 1 {
+                if switches().shapes && SIZES[0].load(std::sync::atomic::Ordering::Relaxed) % 40 == 1 {
                     super::render::trace(|| format!("  knockout alpha {}", shape_of(self.tree, alpha, 0)));
                 }
                 // Where the shape's paths, the shadow's kept where none of
@@ -2221,7 +2241,7 @@ impl<'a> Encoder<'a> {
         // isolate it in Figma: it's drawn over a copy of that, then the copy
         // is kept only where the mask is
         SIZES[4].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if std::env::var_os("LIGMA_NATIVE_VELLO_SHAPES").is_some() && SIZES[4].load(std::sync::atomic::Ordering::Relaxed) % 60 == 1 {
+        if switches().shapes && SIZES[4].load(std::sync::atomic::Ordering::Relaxed) % 60 == 1 {
             super::render::trace(|| format!("  mask {:?} alpha {} color {}", op, shape_of(self.tree, alpha, 0), shape_of(self.tree, color, 2)));
         }
         if tree::single_draw(self.tree, alpha) {
