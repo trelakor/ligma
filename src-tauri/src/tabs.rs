@@ -586,6 +586,26 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
     select(app, active)
 }
 
+/// Saves the session now, with each loaded tab where it is, for `main`'s
+/// timer: a Figma tab keeps where you are in a file in its address (see
+/// view_state.rs) without loading anything, which nothing else hears of
+pub fn keep_session(app: &AppHandle) {
+    let awake: Vec<u32> = app.state::<Tabs>().inner().0.lock().unwrap().tabs.iter().filter(|tab| !tab.asleep).map(|tab| tab.id).collect();
+    for id in awake {
+        let Some(url) = app.get_webview(&label(id)).and_then(|webview| webview.url().ok()).filter(is_figma) else {
+            continue;
+        };
+        // Only the same file: opening another is a navigation, followed
+        // as such
+        with_tab(app, id, |tab| {
+            if tab.file_key.is_some() && tab.file_key == file_key(&url) {
+                tab.url = url;
+            }
+        });
+    }
+    save_session(app);
+}
+
 /// Writes the tabs to `SESSION_FILE` if they changed and `restoreTabs` is on
 fn save_session(app: &AppHandle) {
     let json = {

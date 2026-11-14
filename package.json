@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "license": "MIT",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "tauri dev --no-dev-server",
     "build": "tauri build",
     "icon": "node scripts/icon.mjs",
     "tauri": "tauri",

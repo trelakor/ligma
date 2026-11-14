@@ -34,6 +34,10 @@ log = "0.4"
 # Vectorize in src/vectorize.rs: reading the image and tracing it
 image = { version = "0.25", default-features = false, features = ["png"] }
 visioncortex = "0.9"
+# Images sent back to the page (Remove background, Select object, Spot
+# healing, Upscale), and tab preview images as `data:` URLs on Windows
+# (src/webview2.rs)
+base64 = "0.22"
 # The WebSocket to Figwright's MCP server, on this computer only, and the
 # MessagePack it speaks, in
 # src/mcp_bridge.rs
@@ -51,16 +55,15 @@ windows-core = "0.62"
 # app in front, its executable and full screen state and trimming Ligma's
 # memory for game mode (src/game_mode.rs), and the toasts Figma's
 # notifications show as (src/notifications.rs), and the picked app icon on
-# Ligma's shortcuts (src/app_icon.rs)
-windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem"] }
-# Tab preview images as `data:` URLs (src/webview2.rs)
-base64 = "0.22"
+# Ligma's shortcuts (src/app_icon.rs), and checking and loading Windows'
+# DirectML for Upscale (src/upscale.rs)
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader"] }
 # figma:// registration in src/figma_scheme.rs
 windows-registry = "0.6"
 # Remove background in src/background.rs: ONNX Runtime, linked in, to run
 # the model on the CPU, the model's download and check, and reading and
 # writing the images
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-22"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-22", "directml"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
@@ -69,11 +72,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Windows, but with ONNX Runtime downloaded along with the model, as it
 # needs macOS 14. The download is a .tgz, hence flate2 and tar
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-22"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-22", "coreml"] }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-base64 = "0.22"
 flate2 = "1"
 tar = "0.4"
 
@@ -87,6 +89,16 @@ libc = "0.2"
 mac-notification-sys = "0.6"
 objc2 = { version = "0.6", features = ["exception"] }
 block2 = "0.6"
+
+# Images are decoded, filled, traced, upscaled and encoded on the CPU
+# (Vectorize, Spot healing, Upscale), which takes many times as long
+# unoptimized, so debug builds optimize the crates that do it, and
+# Ligma itself a little
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
 
 # Small, fast release binary. Thin LTO and the default codegen units keep
 # release builds (and CI) quick for a slightly larger binary than full LTO

@@ -1,6 +1,7 @@
 //! The models Ligma runs on this device with ONNX Runtime: BiRefNet for
-//! Remove background (see background.rs) and SAM 2.1 for Select object
-//! (see objects.rs). Each is downloaded when it's first needed, once asked,
+//! Remove background (see background.rs), SAM 2.1 for Select object (see
+//! objects.rs) and 4xNomosWebPhoto_RealPLKSR and two Real-ESRGAN models
+//! for Upscale (see upscale.rs). Each is downloaded when it's first needed, once asked,
 //! or from Settings, which can also remove it. Downloads are checked
 //! against their SHA-256. ONNX Runtime is linked in on Windows. Macs with
 //! Apple silicon download it along with the first model, as it needs
@@ -30,10 +31,11 @@ pub fn supported() -> bool {
 #[cfg(birefnet)]
 pub use download::*;
 
-/// The model Settings names: "background" or "objects"
+/// The model Settings names: "background", "objects", "upscale",
+/// "upscale-fast" or "upscale-art"
 #[cfg(birefnet)]
 fn named(name: &str) -> Option<&'static Model> {
-    [&BACKGROUND, &OBJECTS].into_iter().find(|model| model.name == name)
+    ALL.into_iter().find(|model| model.name == name)
 }
 
 fn model_state(app: &AppHandle, name: &str) -> ModelState {
@@ -182,6 +184,45 @@ mod download {
         entry: None,
     };
 
+    /// 4xNomosWebPhoto_RealPLKSR by Philip Hofmann
+    /// (https://github.com/Phhofm/models, CC BY 4.0), a RealPLKSR model
+    /// trained on real photos from the web to make them 4 times as large
+    /// keeping their texture and grain, as ONNX from its author's release
+    pub const NOMOS: Download = Download {
+        url: "https://github.com/Phhofm/models/releases/download/4xNomosWebPhoto_RealPLKSR/4xNomosWebPhoto_RealPLKSR_fp32_opset17.onnx",
+        sha256: "146669e66cd3b22a4b97b0cf83f9bb2bcf20cd4ffd51fe76f91b95a4a8002df6",
+        size: 29_805_849,
+        file: "4xNomosWebPhoto_RealPLKSR.onnx",
+        entry: None,
+    };
+
+    /// Real-ESRGAN's compact general model, realesr-general-x4v3
+    /// (https://github.com/xinntao/Real-ESRGAN, BSD 3-Clause), for Upscale's
+    /// Fast, as ONNX from
+    /// https://huggingface.co/CoderViking/realesr-general-x4v3-onnx, pinned
+    /// to one revision
+    pub const REAL_ESRGAN: Download = Download {
+        url: "https://huggingface.co/CoderViking/realesr-general-x4v3-onnx/resolve/c6a971706797c7502945a2b4c4274fce4900d4ab/realesr-general-x4v3.onnx",
+        sha256: "1940a93ee08283a0a7286183186357b1688fe9fa8ede74604b424586aaddf112",
+        size: 4_866_417,
+        file: "realesr-general-x4v3.onnx",
+        entry: None,
+    };
+
+    /// Real-ESRGAN's x4plus anime 6B (https://github.com/xinntao/Real-ESRGAN,
+    /// BSD 3-Clause), for Upscale's Illustration, trained on drawings, so
+    /// lines and flat color stay clean, as ONNX from
+    /// https://huggingface.co/skillsafe-ai/realesrgan-x4plus-anime-6b,
+    /// converted reproducibly from the official weights, pinned to one
+    /// revision
+    pub const REAL_ESRGAN_ART: Download = Download {
+        url: "https://huggingface.co/skillsafe-ai/realesrgan-x4plus-anime-6b/resolve/c001be50fae1c7a2bae8b2b4dec5e6fcbdbcca96/model.onnx",
+        sha256: "9a029dae374b2cd4c3eb2dbbed857e22e6d785687c767aa12828e7356b9fb378",
+        size: 17_939_975,
+        file: "RealESRGAN_x4plus_anime_6B.onnx",
+        entry: None,
+    };
+
     /// A model and what Ligma says about it
     pub struct Model {
         /// As Settings names it
@@ -229,6 +270,48 @@ mod download {
         cancels: AtomicU32::new(0),
         watchers: Mutex::new(Vec::new()),
     };
+
+    pub static UPSCALE: Model = Model {
+        name: "upscale",
+        files: &[&NOMOS],
+        doing: "Upscaling photos",
+        model: "4xNomosWebPhoto",
+        title: "Download Photo Upscale Model",
+        progress: "Downloading the photo upscale model…",
+        after: "Upscaling…",
+        downloading: Mutex::new(None),
+        cancels: AtomicU32::new(0),
+        watchers: Mutex::new(Vec::new()),
+    };
+
+    pub static UPSCALE_FAST: Model = Model {
+        name: "upscale-fast",
+        files: &[&REAL_ESRGAN],
+        doing: "Fast upscaling",
+        model: "Real-ESRGAN",
+        title: "Download Fast Upscale Model",
+        progress: "Downloading the fast upscale model…",
+        after: "Upscaling…",
+        downloading: Mutex::new(None),
+        cancels: AtomicU32::new(0),
+        watchers: Mutex::new(Vec::new()),
+    };
+
+    pub static UPSCALE_ART: Model = Model {
+        name: "upscale-art",
+        files: &[&REAL_ESRGAN_ART],
+        doing: "Upscaling illustrations",
+        model: "Real-ESRGAN",
+        title: "Download Illustration Upscale Model",
+        progress: "Downloading the illustration upscale model…",
+        after: "Upscaling…",
+        downloading: Mutex::new(None),
+        cancels: AtomicU32::new(0),
+        watchers: Mutex::new(Vec::new()),
+    };
+
+    /// Every model, for what they share
+    pub const ALL: [&Model; 5] = [&BACKGROUND, &OBJECTS, &UPSCALE, &UPSCALE_FAST, &UPSCALE_ART];
 
     /// Why a model isn't there to use
     pub enum Missing {
@@ -361,7 +444,7 @@ mod download {
                 }
                 let _held = lock();
                 if let Ok(folder) = folder(&app) {
-                    let others = [&BACKGROUND, &OBJECTS].into_iter().filter(|other| other.name != self.name);
+                    let others = ALL.into_iter().filter(|other| other.name != self.name);
                     let shared = others.filter(|other| other.installed(&folder)).flat_map(|other| other.downloads()).collect::<Vec<_>>();
                     for download in self.downloads().filter(|download| !shared.iter().any(|kept| kept.file == download.file)) {
                         let path = folder.join(download.file);
@@ -372,7 +455,7 @@ mod download {
                         }
                     }
                 }
-                for model in [&BACKGROUND, &OBJECTS] {
+                for model in ALL {
                     super::show_state(&app, model.name);
                 }
             });
@@ -392,15 +475,18 @@ mod download {
                 self.downloads().filter(|download| !folder.join(download.file).is_file()).map(|download| download.size).sum();
             let runtime = self.files.iter().map(|download| download.size).sum::<u64>() < missing;
             let (doing, model) = (self.doing, self.model);
+            // Upscale's model is on GitHub, the others on Hugging Face
+            let host = if self.files.iter().all(|download| download.url.starts_with("https://github.com/")) { "GitHub" } else { "Hugging Face" };
             let message = if cfg!(windows) {
-                format!("{doing} on this PC needs {model}, a {own} MB model that Ligma downloads once from Hugging Face. You can remove it in Settings.")
+                format!("{doing} on this PC needs {model}, a {own} MB model that Ligma downloads once from {host}. You can remove it in Settings.")
             } else if runtime {
                 format!(
-                    "{doing} with {model} needs the {own} MB model and ONNX Runtime to run it, {} MB in all, that Ligma downloads once from Hugging Face and GitHub. You can remove them in Settings.",
-                    megabytes(missing)
+                    "{doing} with {model} needs the {own} MB model and ONNX Runtime to run it, {} MB in all, that Ligma downloads once from {}. You can remove them in Settings.",
+                    megabytes(missing),
+                    if host == "GitHub" { "GitHub" } else { "Hugging Face and GitHub" }
                 )
             } else {
-                format!("{doing} with {model} needs a {own} MB model that Ligma downloads once from Hugging Face. You can remove it in Settings.")
+                format!("{doing} with {model} needs a {own} MB model that Ligma downloads once from {host}. You can remove it in Settings.")
             };
             let (send, receive) = mpsc::channel();
             crate::prompt::show(app, self.title, message, &["Cancel", "Download"], move |choice| {
@@ -448,8 +534,8 @@ mod download {
                 before += download.size;
             }
             *self.downloading.lock().unwrap() = None;
-            // ONNX Runtime may now be there for the other model too
-            for model in [&BACKGROUND, &OBJECTS] {
+            // ONNX Runtime may now be there for the other models too
+            for model in ALL {
                 super::show_state(app, model.name);
             }
             if result.is_ok() {

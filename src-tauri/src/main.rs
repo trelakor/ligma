@@ -17,6 +17,7 @@ mod figma_scheme;
 mod frame;
 mod game_mode;
 mod handoff;
+mod heal;
 mod home;
 mod lasso;
 mod layers;
@@ -44,6 +45,7 @@ mod tabs;
 mod titlebar;
 mod toolbar;
 mod updater;
+mod upscale;
 mod vectorize;
 mod view_state;
 #[cfg(windows)]
@@ -381,6 +383,11 @@ fn main() {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     tabs::sync_theme(&handle);
                     presence::sync(&handle);
+                    // Where you are in each file, for the next launch,
+                    // even one that ends without warning
+                    if second % 3 == 0 {
+                        tabs::keep_session(&handle);
+                    }
                     if second % 30 == 0 || (second % 5 == 0 && tabs::under_pressure()) {
                         tabs::rest_idle(&handle);
                     }
