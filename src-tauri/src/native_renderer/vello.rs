@@ -989,7 +989,7 @@ pub struct Encoder<'a> {
     /// Time Skia took drawing onto the atlas
     pub skia_took: std::time::Duration,
     /// Dev tools: what Skia drew, how many and their pixels
-    pub kinds: std::collections::BTreeMap<&'static str, (u32, i64)>,
+    pub kinds: std::collections::BTreeMap<&'static str, (u32, i64, u32)>,
     /// Cuts each thing drawn, in device pixels (see `soften`)
     soft: Option<Path>,
     /// The soft clip to put back as each layer's popped
@@ -1462,6 +1462,7 @@ impl<'a> Encoder<'a> {
             return match self.silhouette(node, paint, kind, opacity) {
                 Some(true) => self.fill(fill_of(skia), affine(&self.m), color(cast), None, path),
                 Some(false) => {}
+                None if kind == PaintType::Image && self.image_silhouette(node, paint, skia, path, cast) => {}
                 None => {
                     let bounds = skia.bounds().with_outset((1.0, 1.0));
                     let (node, paint, skia) = (node.clone(), paint.clone(), skia.clone());
@@ -1493,6 +1494,37 @@ impl<'a> Encoder<'a> {
         if blended {
             self.pop();
         }
+    }
+
+    /// Image fill `paint`'s silhouette in `cast`, as Skia casts it: each of
+    /// its texels that isn't clear solid, then sampled as the image is. False
+    /// where Vello can't draw the image
+    fn image_silhouette(&mut self, node: &Node, paint: &rt::Paint, skia: &Path, path: &BezPath, cast: Color4f) -> bool {
+        let brush = match self.image(paint, node.paint_size.unwrap_or([1.0, 1.0]), 1.0) {
+            Picture::Drawn(brush, at) => (peniko::Brush::Image(brush), at),
+            Picture::Nothing => return true,
+            Picture::Skia => return false,
+        };
+        let bounds = skia.bounds().with_outset((1.0, 1.0));
+        if !self.push(BlendMode::default(), 1.0, bounds) {
+            return true;
+        }
+        let patches = self.scene.encoding().resources.patches.len();
+        self.fill(fill_of(skia), affine(&self.m), &brush.0, Some(brush.1), path);
+        let encoding = self.scene.encoding_mut();
+        if encoding.resources.patches.len() > patches {
+            if let Some(Patch::Image { draw_data_offset, .. }) = encoding.resources.patches.last() {
+                // Ligma's shaders take the quality otherwise unused for it
+                let at = *draw_data_offset + 2;
+                encoding.draw_data[at] |= 3 << 12;
+            }
+        }
+        if self.push(BlendMode::new(Mix::Normal, Compose::SrcIn), 1.0, bounds) {
+            self.fill(fill_of(skia), affine(&self.m), color(cast), None, path);
+            self.pop();
+        }
+        self.pop();
+        true
     }
 
     /// Whether `paint` casts a silhouette over all its path, or none of it,
@@ -1837,6 +1869,9 @@ impl<'a> Encoder<'a> {
                     }
                     draw(&mut drawer);
                     self.skia_took += at.elapsed();
+                    if let Some(entry) = self.kinds.get_mut(name) {
+                        entry.2 += at.elapsed().as_micros() as u32;
+                    }
                     let counts = drawer.counts;
                     let mut asked = Asked {
                         missing: std::mem::take(&mut drawer.missing_images),

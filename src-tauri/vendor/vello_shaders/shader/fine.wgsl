@@ -28,6 +28,8 @@ const GRADIENT_WIDTH = 512;
 const IMAGE_QUALITY_LOW = 0u;
 const IMAGE_QUALITY_MEDIUM = 1u;
 const IMAGE_QUALITY_HIGH = 2u;
+// Ligma: high, each texel that isn't clear solid white, for silhouettes
+const IMAGE_QUALITY_SILHOUETTE = 3u;
 
 const LUMINANCE_MASK_LAYER = 0x10000u;
 
@@ -1066,7 +1068,11 @@ fn figma_texel(image: CmdImage, uv: vec2<f32>) -> vec4<f32> {
         p.y = p.y - floor(p.y / image.extents.y) * image.extents.y;
     }
     p = clamp(p, vec2(0.0), image.extents - vec2(1.0)) + image.atlas_offset;
-    return maybe_premul_alpha(textureLoad(image_atlas, vec2<i32>(p), 0), image.alpha_type);
+    let texel = maybe_premul_alpha(textureLoad(image_atlas, vec2<i32>(p), 0), image.alpha_type);
+    if image.quality == IMAGE_QUALITY_SILHOUETTE {
+        return select(vec4(0.0), vec4(1.0), texel.a > 0.0);
+    }
+    return texel;
 }
 
 // Ligma: an image as Figma's canvas shows it. Shrunk, each pixel's the
@@ -1474,7 +1480,7 @@ fn main(
                             }
                         }
                     }
-                    case IMAGE_QUALITY_HIGH: {
+                    case IMAGE_QUALITY_HIGH, IMAGE_QUALITY_SILHOUETTE: {
                         for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                             if area[i] != 0.0 {
                                 let my_xy = vec2(xy.x + f32(i) + 0.5, xy.y + 0.5);
