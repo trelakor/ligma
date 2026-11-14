@@ -15,7 +15,7 @@ Ligma keeps a few files in its app data folder (`%APPDATA%\dev.ligma.client` on 
 - `settings.json`: your settings.
 - `session.json`: your open and pinned tabs, if Reopen tabs from last time is on.
 - The window's size and position.
-- `models`, in the local app data folder (`%LOCALAPPDATA%\dev.ligma.client` on Windows), if you download the models Remove background and Select object use. Settings > Features can remove them.
+- `models`, in the local app data folder (`%LOCALAPPDATA%\dev.ligma.client` on Windows), if you download the models Remove background and Select object use. Settings > Images > Models can remove them.
 - `ligma.log`, a log of what Ligma did, such as checking for and installing updates, and errors. It's in Ligma's log folder (`%LOCALAPPDATA%\dev.ligma.client\logs` on Windows, `~/Library/Logs/dev.ligma.client` on macOS) and holds no Figma file names or links.
 
 Figma's own data, such as cookies and your signed-in session, is kept by the system webview (WebView2 on Windows, WKWebView on macOS) on your computer. Uninstalling Ligma and deleting its app data folder removes all of it.

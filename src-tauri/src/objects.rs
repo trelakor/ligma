@@ -1,4 +1,4 @@
-//! Select object on this device (Settings > Features > Images): the image
+//! Select object on this device (Settings > Images): the image
 //! bar's Select object in free projects (see ai_actions.rs), which picks
 //! out objects in an image as Photoshop's Object Selection does. SAM 2.1
 //! Tiny (see models.rs) reads the image once, then finds the object at a

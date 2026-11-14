@@ -2,6 +2,14 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.44.0 - 2026-11-14
+
+- Color frames, in Settings > Editor > Layers, colors each frame in the layers panel, with a guide in its color down everything inside it, so you can see where each one starts and ends. Pick Rainbow or a palette: Sunset, Ocean, Forest, Aurora, Candy or Ember. Tint rows also washes each row in its frame's color, hover and selection included.
+- Settings has a search box, and its pages are regrouped into General, Editor, Images and AI Tools, with shorter descriptions.
+- Ligma keeps where you were in each file across restarts, and a crash while saving no longer loses your tabs.
+- Upscale reads images in fewer, larger tiles on your graphics card, so it's faster and uses less of the card, and picks Photo or Illustration for each image by how it looks. Its cancel button works while it's still picking.
+- Heal no longer shows heals you've undone while a new stroke is healing, and tells you if the image changed and needs healing again.
+
 ## 0.43.1 - 2026-11-13
 
 - Icons only in the image bar hides the buttons' names again.

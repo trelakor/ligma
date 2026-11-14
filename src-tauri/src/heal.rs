@@ -1,4 +1,4 @@
-//! Spot healing on this device (Settings > Features > Images): the image
+//! Spot healing on this device (Settings > Images): the image
 //! bar's Heal in free projects (see ai_actions.rs), which paints out spots,
 //! blemishes, stray objects or text in an image, as Photoshop's Spot
 //! Healing Brush does. Pure Rust, on every platform, with no download

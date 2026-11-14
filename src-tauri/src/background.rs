@@ -1,4 +1,4 @@
-//! Remove background on this device (Settings > Features > Images): the
+//! Remove background on this device (Settings > Images): the
 //! image bar's Remove background in free projects, which Ligma puts in
 //! place of Figma's (see ai_actions.rs). On macOS 14 and later, Apple's
 //! Vision finds the image's subject, as Preview's Remove Background does.

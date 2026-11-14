@@ -1,4 +1,4 @@
-//! Copy as code without Dev Mode (Settings > Features > Code): Figma's
+//! Copy as code without Dev Mode (Settings > Editor > Code): Figma's
 //! right-click menu, under Copy/Paste as > Copy as code, offers CSS, CSS
 //! (all layers), iOS and Android on every plan, then an upsell for Dev
 //! Mode's Tailwind, React and the rest. After them, in place of the upsell

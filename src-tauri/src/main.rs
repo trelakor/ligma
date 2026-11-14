@@ -14,6 +14,7 @@ mod effects;
 mod emoji_picker;
 #[cfg(windows)]
 mod figma_scheme;
+mod frame_colors;
 #[cfg(windows)]
 mod frame;
 mod game_mode;
@@ -324,6 +325,7 @@ fn main() {
             appearance::init(app.handle(), &settings);
             app_icon::init(app.handle(), &settings);
             layers::init(&settings);
+            frame_colors::init(&settings);
             home::init(&settings);
             new_home::init(&settings);
             toolbar::init(&settings);

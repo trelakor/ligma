@@ -101,6 +101,14 @@ pub struct Settings {
     /// Show each layer's preview in the layers panel in every mode, as in
     /// Draw mode. Figma renders them all, so off by default
     pub layer_previews: bool,
+    /// Color each frame in the layers panel, and a tint of it what's in it,
+    /// a step darker for each frame inside
+    pub frame_colors: bool,
+    /// Which colors: "rainbow", or a colorway, "sunset", "ocean", "forest",
+    /// "aurora", "candy" or "ember" (see frame_colors.rs)
+    pub frame_palette: String,
+    /// With `frame_colors`, also wash each row lightly with its frame's color
+    pub frame_tint: bool,
     /// Show Draw in the mode switch on the right of Figma Design's
     /// toolbar. With one mode left, the toolbar shows no switch,
     pub show_draw_mode: bool,
@@ -199,6 +207,9 @@ impl Default for Settings {
             rail_widgets: true,
             actions_plugins_tab: false,
             layer_previews: false,
+            frame_colors: false,
+            frame_palette: "rainbow".into(),
+            frame_tint: false,
             show_draw_mode: true,
             show_design_mode: true,
             show_motion_mode: true,
@@ -355,9 +366,9 @@ pub fn open_window_at(app: &AppHandle, section: Option<&str>) -> tauri::Result<(
     Ok(())
 }
 
-/// The settings window's size at the interface scale: fits the longest page
-/// (Discord). On a small screen it fits the screen instead, and the page
-/// scrolls
+/// The settings window's size at the interface scale: fits most pages, and
+/// longer ones (Images) scroll. On a small screen it fits the screen
+/// instead
 fn window_size(app: &AppHandle) -> LogicalSize<f64> {
     let scale = crate::tabs::scale(app);
     let (mut width, mut height) = (680.0 * scale, 600.0 * scale);
@@ -474,6 +485,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::appearance::apply_settings(app, &settings);
     crate::presence::apply_settings(app, &settings);
     crate::layers::apply_settings(app, &settings);
+    crate::frame_colors::apply_settings(app, &settings);
     crate::home::apply_settings(app, &settings);
     crate::new_home::apply_settings(app, &settings);
     crate::toolbar::apply_settings(app, &settings);

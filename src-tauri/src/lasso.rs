@@ -1,4 +1,4 @@
-//! Lasso fill (Settings > Features > Toolbar): a tool in Figma Design's
+//! Lasso fill (Settings > Editor > Toolbar): a tool in Figma Design's
 //! Creation tools menu, under Pencil, that fills what's drawn around with
 //! color, as Procreate's lasso fill does. On by default
 //!
