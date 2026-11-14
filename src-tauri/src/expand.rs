@@ -439,18 +439,6 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
             let (x, y) = (at % width, at / width);
             (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
         }
-        // On a smooth surface, like rendered metal or a flat panel, there's
-        // no texture to carry, only light to match, and a copy brings in
-        // whatever edge lies beside the spot: the whole spot is evened out
-        // from its surroundings at once instead, seamlessly
-        let grain = grain_around(canvas, &hole, &spot, (left, top, right, bottom));
-        if grain < SMOOTH {
-            smooth_into(canvas, &hole, &spot);
-            for &at in &spot {
-                hole[at] = false;
-            }
-            continue;
-        }
         if right - left < 2 * PIECE && bottom - top < 2 * PIECE {
             pieces.push(spot);
             continue;
@@ -515,7 +503,7 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
         if stopped() {
             return Err("cancelled");
         }
-        match offset.flatten() {
+        match offset {
             Some(offset) => copy_into(canvas, &hole, &piece, offset),
             None => smooth_into(canvas, &hole, &piece),
         }
@@ -531,49 +519,6 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
     }
     Ok(())
 }
-
-/// How grainy the image is around `spot`, in the box `bounds`: how far
-/// each pixel within `RING` of it is from the average of the four around
-/// it, out of 255, a quarter of the way up from the least, so edges
-/// passing by, or what's left of what's painted over, don't count
-fn grain_around(canvas: &Canvas, hole: &[bool], spot: &[usize], (left, top, right, bottom): (usize, usize, usize, usize)) -> f32 {
-    let (width, height) = (canvas.width, canvas.height);
-    let (x0, y0) = (left.saturating_sub(RING), top.saturating_sub(RING));
-    let (x1, y1) = ((right + RING + 1).min(width), (bottom + RING + 1).min(height));
-    let (across, down) = (x1 - x0, y1 - y0);
-    let mut mask = vec![false; across * down];
-    for &at in spot {
-        mask[(at / width - y0) * across + at % width - x0] = true;
-    }
-    let near = grown_by(&mask, across, down, RING);
-    let mut found: Vec<f32> = Vec::new();
-    for (i, &near) in near.iter().enumerate() {
-        let (x, y) = (x0 + i % across, y0 + i / across);
-        if !near || x == 0 || y == 0 || x + 1 >= width || y + 1 >= height {
-            continue;
-        }
-        let neighbours = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)];
-        if hole[y * width + x] || neighbours.iter().any(|&(nx, ny)| hole[ny * width + nx]) {
-            continue;
-        }
-        let pixel = canvas.pixels[y * width + x];
-        let mut sum = 0f32;
-        for (channel, value) in pixel.iter().enumerate() {
-            let mean = neighbours.iter().map(|&(nx, ny)| canvas.pixels[ny * width + nx][channel]).sum::<f32>() / 4.0;
-            sum += (value - mean).powi(2);
-        }
-        found.push(sum.sqrt());
-    }
-    if found.is_empty() {
-        return f32::INFINITY;
-    }
-    let quarter = found.len() / 4;
-    *found.select_nth_unstable_by(quarter, f32::total_cmp).1
-}
-
-/// Around a spot smoother than this, in `grain_around`, it's evened out
-/// rather than copied over
-const SMOOTH: f32 = 1.5;
 
 /// Fills `piece` evenly from what's around it, for a piece with nowhere to
 /// copy from
@@ -637,6 +582,28 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
         window[i] = [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]];
         known[i] = true;
     }
+    let strongest = {
+        let mut found: Vec<f32> = Vec::new();
+        for (i, &inside) in in_piece.iter().enumerate() {
+            let (x, y) = (x0 + i % across, y0 + i / across);
+            if inside || x == 0 || y == 0 || x + 1 >= width || y + 1 >= height {
+                continue;
+            }
+            let neighbours = [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)];
+            if hole[y * width + x] || neighbours.iter().any(|&(nx, ny)| hole[ny * width + nx]) {
+                continue;
+            }
+            let pixel = canvas.pixels[y * width + x];
+            let mut sum = 0f32;
+            for (channel, value) in pixel.iter().enumerate() {
+                let mean = neighbours.iter().map(|&(nx, ny)| canvas.pixels[ny * width + nx][channel]).sum::<f32>() / 4.0;
+                sum += (value - mean).powi(2);
+            }
+            found.push(sum);
+        }
+        let grain = if found.is_empty() { 0.0 } else { (found.iter().sum::<f32>() / found.len() as f32).sqrt() };
+        DETAIL * grain + DETAIL_FLOOR
+    };
     // Where the surroundings differ from the copy's far more than most
     // do, it's something left of what's removed, or an edge the copy
     // hasn't, and carrying that in would smear it over the spot
@@ -656,13 +623,35 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
             }
         }
     }
+    // The copy evened out from its own surroundings: what it has beyond
+    // that is its detail, kept only as strong as the spot's surroundings'
+    // grain allows, so texture comes with it, but not a line or an edge
+    // beside the spot on a smooth surface
+    let mut evened: Vec<[f32; 4]> = (0..across * down)
+        .map(|i| if known[i] { canvas.pixels[source((y0 + i / across) * width + x0 + i % across)] } else { [0.0; 4] })
+        .collect();
+    if known.contains(&true) {
+        diffuse(&mut evened, &known, across, down);
+        relax(&mut evened, &known, across, down);
+    }
     if known.contains(&true) {
         diffuse(&mut window, &known, across, down);
         relax(&mut window, &known, across, down);
     }
     for &at in piece {
-        let offset = window[(at / width - y0) * across + at % width - x0];
-        let copied = canvas.pixels[source(at)];
+        let i = (at / width - y0) * across + at % width - x0;
+        let offset = window[i];
+        let mut copied = canvas.pixels[source(at)];
+        let base = evened[i];
+        let detail: Vec<f32> = (0..4).map(|channel| copied[channel] - base[channel]).collect();
+        let size = detail.iter().map(|value| value * value).sum::<f32>().sqrt();
+        // Past what's allowed it fades, and twice as strong it's gone
+        if size > strongest {
+            let keep = ((2.0 * strongest - size) / size).max(0.0);
+            for channel in 0..4 {
+                copied[channel] = base[channel] + detail[channel] * keep;
+            }
+        }
         let alpha = (copied[3] + offset[3]).clamp(0.0, 255.0);
         canvas.pixels[at] = [
             (copied[0] + offset[0]).clamp(0.0, alpha),
@@ -672,6 +661,12 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
         ];
     }
 }
+
+/// A copy's detail is kept at most this many times as strong as the
+/// grain around the spot, how far its pixels are from the average of the
+/// four around them, and `DETAIL_FLOOR` more, out of 255
+const DETAIL: f32 = 3.0;
+const DETAIL_FLOOR: f32 = 6.0;
 
 /// Around a spot, where the surroundings differ from the copy's more than
 /// this many times as far as typically, and `OUTLIER_FLOOR` more, out of
@@ -720,7 +715,7 @@ const FARTHER: f32 = 0.08;
 /// there looks most like the spot's own ring, nearer places counting for a
 /// little more. Places are tried coarsely, then finer around the best. None
 /// when there's no such place, or once `stopped`
-fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], stopped: &dyn Fn() -> bool) -> Option<Option<(isize, isize)>> {
+fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], stopped: &dyn Fn() -> bool) -> Option<(isize, isize)> {
     let (width, height) = (canvas.width, canvas.height);
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
     for &at in spot {
@@ -883,13 +878,7 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
             oy += step;
         }
     }
-    let ((ox, oy), _) = best?;
-    // Where every copy strays far from the flat around it, as in a tight
-    // spot, it's evened out from its surroundings instead
-    if strays(ox, oy, f32::INFINITY) > TOO_STRAY {
-        return Some(None);
-    }
-    Some(Some((ox, oy)))
+    best.map(|(offset, _)| offset)
 }
 
 /// A spot is copied from at most this many times its size away, and at
@@ -905,9 +894,6 @@ const RING_SAMPLES: usize = 600;
 const INSIDE_SAMPLES: usize = 300;
 const GRAIN: f32 = 3.0;
 const GRAIN_FLOOR: f32 = 16.0;
-/// Where the best copy strays this far, on average, squared, the spot is
-/// evened out instead
-const TOO_STRAY: f32 = 400.0;
 
 
 /// What's painted over is grown by this many pixels
