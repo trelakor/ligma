@@ -434,12 +434,12 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
             // A preview's squares are placed from the whole pixel the view
             // lands on, as Figma places them
             let (ox, oy) = if square { (rx as f64, ry as f64) } else { (ox, oy) };
-            Rect::from_xywh(
-                (layer.x as f64 * scale - ox) as f32,
-                (layer.y as f64 * scale - oy) as f32,
-                (layer.tex.width as f64 * scale) as f32,
-                (layer.tex.height as f64 * scale) as f32,
-            )
+            // Each edge from where it is on the grid, so neighbors' meet
+            // exactly, as one's right edge worked out from its width can
+            // round to another pixel than the next one's left, and leave a
+            // column of neither
+            let edge = |at: i32, o: f64| (at as f64 * scale - o) as f32;
+            Rect::from_ltrb(edge(layer.x, ox), edge(layer.y, oy), edge(layer.x + layer.tex.width, ox), edge(layer.y + layer.tex.height, oy))
         };
         let covers = dest.round();
         let mut clip = skia_safe::Region::new();
