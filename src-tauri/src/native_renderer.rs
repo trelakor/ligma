@@ -72,6 +72,8 @@ mod run;
 mod scene;
 #[cfg(windows)]
 mod tree;
+#[cfg(windows)]
+mod vello;
 
 /// The native renderer's window, and the overlay webview in it
 pub const WINDOW: &str = "native-renderer";

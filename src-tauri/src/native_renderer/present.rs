@@ -26,7 +26,7 @@ use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::Graphics::Direct3D12::{
     ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12Resource, D3D12_COMMAND_QUEUE_DESC, D3D12_FENCE_FLAG_NONE, D3D12_COMMAND_QUEUE_PRIORITY_HIGH, D3D12_HEAP_FLAG_NONE,
     D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-    D3D12_RESOURCE_FLAGS, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS, D3D12_RESOURCE_STATE_COMMON,
+    D3D12_RESOURCE_FLAGS, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_HEAP_FLAG_SHARED, D3D12_RESOURCE_STATE_COMMON,
     D3D12_TEXTURE_LAYOUT_UNKNOWN,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -123,6 +123,37 @@ impl Tex {
         let resource = resource?;
         let _ = unsafe { resource.SetName(windows::core::w!("Ligma shared texture")) };
         Some(Arc::new(Tex { resource: std::mem::ManuallyDrop::new(resource), width, height }))
+    }
+
+    /// One another device can open too, through a shared handle, and that
+    /// compute shaders can write
+    pub fn new_shared(device: &ID3D12Device, width: i32, height: i32) -> Option<Arc<Tex>> {
+        let heap = D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_DEFAULT, ..Default::default() };
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Alignment: 0,
+            Width: width.max(1) as u64,
+            Height: height.max(1) as u32,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            Flags: D3D12_RESOURCE_FLAGS(
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET.0 | D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS.0 | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS.0,
+            ),
+        };
+        let mut resource: Option<ID3D12Resource> = None;
+        unsafe { device.CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &desc, D3D12_RESOURCE_STATE_COMMON, None, &mut resource) }
+            .map_err(|error| log::warn!("native renderer: shared texture: {error}"))
+            .ok()?;
+        let resource = resource?;
+        let _ = unsafe { resource.SetName(windows::core::w!("Ligma Vello texture")) };
+        Some(Arc::new(Tex { resource: std::mem::ManuallyDrop::new(resource), width, height }))
+    }
+
+    pub fn resource(&self) -> &ID3D12Resource {
+        &self.resource
     }
 
     /// For a Skia context to wrap, in the common state it's always in

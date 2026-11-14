@@ -990,6 +990,13 @@ pub struct Painter {
     rasters: HashMap<(usize, bool, i32, bool, u32), Raster>,
     raster_bytes: usize,
     rasters_off: bool,
+    /// Draws the whole view, with LIGMA_NATIVE_VELLO set (see vello.rs),
+    /// once it's started
+    vello: Option<super::vello::Vello>,
+    vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
+    /// Images units drew with when Vello last drew them, by unit, as
+    /// pictures keep them
+    vello_uses: HashMap<(usize, bool), Vec<(String, f64)>>,
     /// Images of units made for the tile or view being drawn
     rasters_made: u32,
     /// Textures to use again once the present thread has let go of them
@@ -1121,7 +1128,11 @@ type Mark = ((usize, bool), [u32; 4], u64, u64);
 
 impl Painter {
     pub fn new(gpu: Gpu, requests: Sender<Request>, effects: Sender<Job>, kept: Kept, hub: Arc<Hub>) -> Self {
+        let vello_starting = std::env::var_os("LIGMA_NATIVE_VELLO").filter(|value| value != "0").map(|_| super::vello::start(&gpu.device));
         Self {
+            vello: None,
+            vello_starting,
+            vello_uses: HashMap::new(),
             gpu,
             kit: Kit::new(),
             scene: Scene::default(),
@@ -1553,7 +1564,159 @@ impl Painter {
     /// its size in pixels at `px` a unit, with a margin for background blurs
     /// near its edges to see what they blur, for frames where tiles of the
     /// zoom aren't drawn or up to date
+    /// Vello, once it's started and while it works
+    fn vello_ready(&mut self) -> bool {
+        if let Some(starting) = &self.vello_starting {
+            match starting.try_recv() {
+                Ok(started) => {
+                    self.vello = started.ok();
+                    self.vello_starting = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.vello_starting = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self.vello.as_ref().is_some_and(|vello| vello.broken()) {
+            log::warn!("native renderer: Vello stopped after an error, Skia draws the view");
+            self.vello = None;
+        }
+        self.vello.is_some()
+    }
+
+    /// The whole view drawn by Vello at the zoom it's at, every path of it
+    /// each time, over what `draw_whole` draws. False where it can't be,
+    /// for Skia to draw it
+    fn draw_whole_vello(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32) -> bool {
+        let _purpose = super::gpu_census::purpose("whole");
+        let started = Instant::now();
+        let at = (ox, oy, px.to_bits());
+        let lag = (self.whole_took.as_secs_f64() + 0.03).min(0.12) * 2.0;
+        let area = self.ahead(Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px), lag);
+        let area = area.with_outset((area.width() / 16.0, area.height() / 16.0));
+        let (ox, oy, width, height) = {
+            let (left, top) = ((area.left * px).floor() as i32, (area.top * px).floor() as i32);
+            let step = |size: i32| (size + 127) / 128 * 128;
+            (left, top, step((area.right * px).ceil() as i32 - left), step((area.bottom * px).ceil() as i32 - top))
+        };
+        let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
+        let margin = self.reach(view_area, px);
+        let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
+        let (w, h) = (width + margin * 2, height + margin * 2);
+        match self.vello_view(ox - margin, oy - margin, w, h, px, reach) {
+            Ok((tex, counts, stats)) => {
+                let fence = self.gpu.signal();
+                trace(|| format!("  whole vello px={px:.3} {stats} {:.1}ms", started.elapsed().as_secs_f64() * 1000.0));
+                self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at);
+                self.whole_took = started.elapsed();
+                self.drew = true;
+                true
+            }
+            Err(why) => {
+                trace(|| format!("  whole vello px={px:.3} can't: {why}"));
+                false
+            }
+        }
+    }
+
+    /// The `w` by `h` device pixels at `px` whose corner is at (`left`,
+    /// `top`), of units over `reach`, drawn by Vello into a texture of the
+    /// kind the present thread shows, submitted, and how long that took
+    fn vello_view(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect) -> Result<(Arc<Tex>, Counts, String), String> {
+        let started = Instant::now();
+        let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
+        let _ = self.gpu.context.flush_and_submit();
+        let mut post = skia_safe::Matrix::translate((-left as f32, -top as f32));
+        post.pre_scale((px, px), None);
+        let mut asked = Vec::new();
+        let (mut units, mut counts, mut inexact, mut skia_took, mut kinds) = (0, Counts::default(), 0, Duration::ZERO, String::new());
+        let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
+            None => (vello::Scene::new(), Some("not a tree".to_string()), 0, Vec::new()),
+            Some(tree) => {
+                let mut encoder = super::vello::Encoder::new(tree, &self.images, &self.kit, &mut vello, &self.gpu.device, &mut self.gpu.context, w, h);
+                for unit in &self.units {
+                    if !Rect::intersects2(&unit.bounds, &reach) || unit.bounds.width().max(unit.bounds.height()) * px < 0.5 {
+                        continue;
+                    }
+                    let Some(place) = &unit.place else {
+                        encoder.failed = Some("not a tree".into());
+                        break;
+                    };
+                    encoder.place(place, &post);
+                    asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
+                    units += 1;
+                    if encoder.failed.is_some() {
+                        break;
+                    }
+                }
+                counts += encoder.counts;
+                inexact = encoder.inexact;
+                skia_took = encoder.skia_took;
+                kinds = format!("{:?}", encoder.kinds);
+                (std::mem::take(&mut encoder.scene), encoder.failed.take(), encoder.fell_back, encoder.take_pages())
+            }
+        };
+        let encoded = started.elapsed();
+        let used_pages = pages.len();
+        for page in &mut pages {
+            self.gpu.flush(page);
+        }
+        drop(pages);
+        if let Some(why) = failed {
+            self.vello = Some(vello);
+            return Err(why);
+        }
+        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, w, h, used_pages);
+        vello.prune();
+        self.vello = Some(vello);
+        let out = rendered.map_err(|error| {
+            log::warn!("native renderer: Vello: {error}");
+            error
+        })?;
+        let vello_took = started.elapsed() - encoded;
+        // What Vello drew, unpremultiplied, copied into a texture of the
+        // kind the present thread shows
+        let tex = self.tex(w, h).ok_or("texture")?;
+        let backend = tex.backend();
+        let mut surface = self.target(&tex).ok_or("surface")?;
+        let drawn = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or("Vello's texture")?;
+        let mut paint = Paint::default();
+        paint.set_blend_mode(skia_safe::BlendMode::Src);
+        let all = Rect::from_wh(w as f32, h as f32);
+        surface.canvas().draw_image_rect(&drawn, Some((&all, skia_safe::canvas::SrcRectConstraint::Fast)), all, &paint);
+        let image = self.finish(&backend, false);
+        drop(surface);
+        drop(drawn);
+        if image.is_none() {
+            return Err("submit".into());
+        }
+        for (unit, bounds, asked) in asked {
+            let super::vello::Asked { missing, sharper, used } = asked;
+            let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).map(|(key, _)| key.clone()).collect();
+            let images: Vec<(String, f64)> = missing.iter().chain(&sharper).cloned().collect();
+            self.ask(&images);
+            let waiting: Vec<String> = missing.into_iter().map(|(key, _)| key).collect();
+            self.wait_for(&waiting, bounds);
+            self.drew_with(drew, unit);
+            let mut uses = used;
+            uses.extend(images);
+            self.vello_uses.insert(unit, uses);
+        }
+        let stats = format!(
+            "{w}x{h} units={units} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms skia={:.1}ms vello_cpu={:.1}ms vello={:.1}ms {}",
+            fell_back / 1000,
+            encoded.as_secs_f64() * 1000.0,
+            skia_took.as_secs_f64() * 1000.0,
+            self.vello.as_ref().map_or(0.0, |vello| vello.took.as_secs_f64() * 1000.0),
+            vello_took.as_secs_f64() * 1000.0,
+            kinds.replace('"', "")
+        );
+        Ok((tex, counts, stats))
+    }
+
     fn draw_whole(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32, quick: bool) {
+        if quick && self.tree.is_some() && self.vello_ready() && self.draw_whole_vello(ox, oy, width, height, px) {
+            return;
+        }
         let _purpose = super::gpu_census::purpose("whole");
         let started = Instant::now();
         let at = (ox, oy, px.to_bits());
@@ -2556,6 +2719,19 @@ impl Painter {
                 if this_zoom {
                     *entry = entry.max(*width);
                 }
+                if shown {
+                    in_view.insert(key.clone());
+                }
+            }
+        }
+        // And what Vello drew them with
+        for (unit, uses) in &self.vello_uses {
+            let Some(&shown) = near_units.get(unit) else {
+                continue;
+            };
+            for (key, width) in uses {
+                let entry = need.entry(key.clone()).or_insert(0.0);
+                *entry = entry.max(*width);
                 if shown {
                     in_view.insert(key.clone());
                 }
@@ -4593,6 +4769,27 @@ impl Painter {
                     let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-probe-{px}-{skip}-{samples}-{}-{}.png", v.get(11).copied().unwrap_or(0.0), v.get(12).copied().unwrap_or(0.0))), png.as_bytes());
                 }
             }
+            let vello = match v.get(14).copied().unwrap_or(0.0) > 0.0 && self.vello_ready() {
+                false => String::new(),
+                true => {
+                    let at = Instant::now();
+                    match self.vello_view(-offset.0 as i32, -offset.1 as i32, w, h, px, area) {
+                        Ok((tex, _, stats)) => {
+                            let _ = self.gpu.context.flush_submit_and_sync_cpu();
+                            let took = at.elapsed();
+                            if let Some(pixels) = self.read_tex(&tex) {
+                                let info = ImageInfo::new((tex.width, tex.height), ColorType::RGBA8888, AlphaType::Premul, None);
+                                let image = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(&pixels), (tex.width * 4) as usize);
+                                if let Some(png) = image.and_then(|image| image.encode(None, skia_safe::EncodedImageFormat::PNG, None)) {
+                                    let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-vello-{px}.png")), png.as_bytes());
+                                }
+                            }
+                            format!("{stats} all={:.1}ms", took.as_secs_f64() * 1000.0)
+                        }
+                        Err(why) => format!("can't: {why}"),
+                    }
+                }
+            };
             let kinds = super::committed::take_kinds();
             let usage = self.gpu.context.resource_cache_usage();
             let mut slow = Vec::new();
@@ -4624,7 +4821,7 @@ impl Painter {
                 })
                 .collect();
             out.push(format!(
-                "{{\"view\":\"{one}\",\"counted\":\"mask layers {} mask clips {} blends {} blurs {} silhouettes {} paths {} points {}\",\"units\":{},\"thumbs\":{thumbed},\"record_ms\":{:.1},\"play_ms\":{:.1},\"gpu_ms\":{:.1},\"made\":{},\"made_ms\":{:.1},\"programs\":{},\"cache_mb\":{},\"kinds\":\"{}\",\"slowest\":[{}]}}",
+                "{{\"view\":\"{one}\",\"vello\":\"{vello}\",\"counted\":\"mask layers {} mask clips {} blends {} blurs {} silhouettes {} paths {} points {}\",\"units\":{},\"thumbs\":{thumbed},\"record_ms\":{:.1},\"play_ms\":{:.1},\"gpu_ms\":{:.1},\"made\":{},\"made_ms\":{:.1},\"programs\":{},\"cache_mb\":{},\"kinds\":\"{}\",\"slowest\":[{}]}}",
                 counted[0],
                 counted[1],
                 counted[2],

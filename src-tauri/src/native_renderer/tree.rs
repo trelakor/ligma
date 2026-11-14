@@ -213,13 +213,13 @@ impl Frame {
 
 /// What's worked out once for a node and what's under it
 #[derive(Clone, Copy)]
-struct Info {
+pub(super) struct Info {
     /// Where it draws, in the space it's drawn in
-    bounds: Option<Rect>,
+    pub(super) bounds: Option<Rect>,
     /// Nodes under it, itself included, counting shared ones each time
     count: u32,
     /// Draws with a blend mode that reaches what's drawn before it
-    blends: bool,
+    pub(super) blends: bool,
     /// Has a custom effect, drawn as Figma's canvas draws it at its zoom
     custom: bool,
     /// Has something only drawn close to Figma's look
@@ -285,7 +285,7 @@ fn path_hash(path: &rt::Path) -> u64 {
 }
 
 /// Nested nodes drawn at most, against a tree that refers to itself
-const DEPTH: u8 = 96;
+pub(super) const DEPTH: u8 = 96;
 
 pub struct Tree {
     pub forest: Forest,
@@ -474,7 +474,7 @@ impl Tree {
         }
     }
 
-    fn info(&self, id: u32) -> Info {
+    pub(super) fn info(&self, id: u32) -> Info {
         self.info_at(id, 0)
     }
 
@@ -704,7 +704,7 @@ impl Tree {
 
     /// When node `id` is no more than an opaque shape, the fill node it is
     /// and where that's drawn, for a mask of it to be a clip instead
-    fn clip_of(&self, id: u32) -> Option<(u32, Matrix)> {
+    pub(super) fn clip_of(&self, id: u32) -> Option<(u32, Matrix)> {
         let mut at = Matrix::default();
         let mut id = id;
         for _ in 0..8 {
@@ -771,7 +771,7 @@ impl Tree {
     }
 
     /// The outline of fill node `id`, in its own space
-    fn outline(&self, id: u32) -> Option<Path> {
+    pub(super) fn outline(&self, id: u32) -> Option<Path> {
         let node = self.forest.get(id)?;
         node.geometry.as_ref()?.path.as_ref().map(|path| self.skia_path(path))
     }
@@ -824,12 +824,12 @@ fn finite(value: Option<f32>) -> f32 {
     value.filter(|value| value.is_finite()).unwrap_or(0.0).max(0.0)
 }
 
-fn pass_through(mode: Option<rt::BlendMode>) -> bool {
+pub(super) fn pass_through(mode: Option<rt::BlendMode>) -> bool {
     matches!(mode, None | Some(rt::BlendMode::None) | Some(rt::BlendMode::PassThrough))
 }
 
 /// A blend mode that reaches what's drawn before
-fn blends(mode: Option<rt::BlendMode>) -> bool {
+pub(super) fn blends(mode: Option<rt::BlendMode>) -> bool {
     !matches!(mode, None | Some(rt::BlendMode::None) | Some(rt::BlendMode::PassThrough) | Some(rt::BlendMode::Normal))
 }
 
@@ -859,7 +859,7 @@ fn blend_name(mode: rt::BlendMode) -> Option<&'static str> {
     })
 }
 
-fn rgba(color: rt::Color) -> Rgba {
+pub(super) fn rgba(color: rt::Color) -> Rgba {
     Rgba { r: color.r, g: color.g, b: color.b, a: color.a }
 }
 
@@ -1394,7 +1394,7 @@ impl<'a> Drawer<'a> {
     }
 
     /// One paint over `path`, in the node's own coordinates
-    fn paint(&mut self, node: &Node, paint: &rt::Paint, path: &Path) {
+    pub(super) fn paint(&mut self, node: &Node, paint: &rt::Paint, path: &Path) {
         let size = node.paint_size.unwrap_or([1.0, 1.0]);
         let (w, h) = (size[0].max(1e-3), size[1].max(1e-3));
         let opacity = paint.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
