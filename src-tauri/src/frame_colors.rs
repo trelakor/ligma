@@ -2,9 +2,8 @@
 //! get a color each, down the list, from a palette: the rainbow over again,
 //! red, orange, yellow, green, blue and purple, or a colorway, Sunset, Ocean,
 //! Forest, Aurora, Candy or Ember, stepping from one hue to another and
-//! back, neighbors lighter and darker by turns,
-//! on their icons, and a guide in that
-//! color runs down the indent of everything in them, as a code editor's
+//! back, neighbors lighter and darker by turns. Each shows on the frame's
+//! icon, and a guide in that color runs down the indent of everything in them, as a code editor's
 //! indent guides do, so it's clear where each frame starts and ends. The
 //! frames inside a frame are a step darker. Off by default
 //!
@@ -13,8 +12,9 @@
 //! their own color rather than the board's. Sections and groups hold frames
 //! without being one. The panel draws only the rows in view, each with its
 //! layer's ID, so `PAGE_JS` colors those as they're drawn, reading the
-//! frames each layer is in from Figma's plugin API. Only the icons and the
-//! indents are drawn on, so hover and selection stay Figma's, and the icons
+//! frames each layer is in from Figma's plugin API. Without Tint rows only
+//! the icons and the indents are drawn on, so hover and selection stay
+//! Figma's, and the icons
 //! of what's in a frame, like images and vectors, take its color too
 //!
 //! Tint rows, off by default, also washes each row with its frame's color,
@@ -101,8 +101,10 @@ const PAGE_JS: &str = r##"(() => {
   const GUIDE = 2;
 
   // How many frames are directly in `node`, read again at most once a
-  // second
+  // second. Cleared when the file or page changes, as IDs repeat across
+  // files
   const counts = new Map();
+  let shown = "";
   const framesIn = (node) => {
     const known = counts.get(node.id);
     if (known && performance.now() - known.at < 1000) return known;
@@ -145,10 +147,12 @@ const PAGE_JS: &str = r##"(() => {
     return color;
   };
 
+  // The async lookup, as the sync one throws with dynamic page loading.
+  // The rows are on the current page, which is loaded, so it's quick
   const nodeOf = (figma, row) => {
     const id = row.querySelector(ID)?.dataset.testid?.slice(0, -"-layers-panel-row".length);
     try {
-      return id ? figma.getNodeById(id) : null;
+      return id ? figma.getNodeByIdAsync(id).catch(() => null) : null;
     } catch {
       return null;
     }
@@ -175,27 +179,45 @@ const PAGE_JS: &str = r##"(() => {
   // Each row: its icon in its frame's color, or the color of the frame
   // it's in, a guide down the column of each frame it's in, in that frame's
   // color, and below an open frame's arrow, the start of its own
-  const paint = () => {
+  const paintRows = async () => {
     const figma = window.figma;
-    const rows = document.querySelectorAll(ROW);
-    if (!state.on || !figma) {
+    if (!state.on || !figma || !panel) {
       for (const row of document.querySelectorAll(`${ROW}[${MARKED}]`)) clear(row);
       return;
     }
+    let nodes;
+    try {
+      const where = `${location.pathname} ${figma.currentPage.id}`;
+      if (where !== shown) {
+        shown = where;
+        counts.clear();
+      }
+      nodes = await Promise.all([...panel.querySelectorAll(ROW)].map(async (row) => [row, await nodeOf(figma, row)]));
+    } catch {
+      return;
+    }
+    if (!state.on) return;
     shades.clear();
+    // Everything is measured before anything is written, so the rows lay
+    // out once rather than once each
+    const rows = nodes.filter(([row]) => row.isConnected);
     // Light text on the panel means a dark theme
-    const text = rows[0] && getComputedStyle(rows[0]).color.match(/[\d.]+/g)?.map(Number);
+    const text = rows[0] && getComputedStyle(rows[0][0]).color.match(/[\d.]+/g)?.map(Number);
     if (text) dark = 0.299 * text[0] + 0.587 * text[1] + 0.114 * text[2] > 128;
-    for (const row of rows) {
-      const node = nodeOf(figma, row);
+    const measured = rows.map(([row, node]) => {
+      const strip = node && row.querySelector(INDENTS);
+      if (!strip) return { row, node };
+      const box = strip.getBoundingClientRect();
+      const indents = [...strip.querySelectorAll(INDENT)].map((indent) => indent.getBoundingClientRect().left - box.left);
+      const caret = row.querySelector(CARET);
+      return { row, node, strip, indents, top: caret && Math.round(caret.getBoundingClientRect().bottom - box.top - 2) };
+    });
+    for (const { row, node, strip, indents, top } of measured) {
       if (!node) {
         if (row.hasAttribute(MARKED)) clear(row);
         continue;
       }
-      const strip = row.querySelector(INDENTS);
       if (!strip) continue;
-      const box = strip.getBoundingClientRect();
-      const indents = [...strip.querySelectorAll(INDENT)].map((indent) => indent.getBoundingClientRect().left - box.left);
       const layers = [];
       // The nearest frame it's in, for its icon
       let within = null;
@@ -212,10 +234,8 @@ const PAGE_JS: &str = r##"(() => {
       }
       const own = FRAMES.has(node.type) ? colorOf(node) : null;
       const tint = own ?? within;
-      const caret = row.querySelector(CARET);
-      if (own && caret && /object_row--expanded--/.test(row.className) && indents.length) {
+      if (own && top != null && /object_row--expanded--/.test(row.className) && indents.length) {
         const x = Math.round(indents.at(-1) + ARROW - GUIDE / 2);
-        const top = Math.round(caret.getBoundingClientRect().bottom - box.top - 2);
         layers.push({ color: own, position: `${x}px ${top}px`, size: `${GUIDE}px calc(100% - ${top}px)` });
       }
       const set = (property, value) => {
@@ -266,6 +286,36 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
+  // One paint at a time, and one more a little after, once `counts` can be
+  // read again, for frames added, moved or reordered since. `late` is -1
+  // while that one is on its way, so it doesn't queue another
+  let painting = false;
+  let again = false;
+  let late = 0;
+  const paint = async () => {
+    if (painting) {
+      again = true;
+      return;
+    }
+    painting = true;
+    try {
+      await paintRows();
+    } finally {
+      painting = false;
+      if (again) {
+        again = false;
+        queue();
+      } else if (late === -1) {
+        late = 0;
+      } else if (state.on && !late) {
+        late = setTimeout(() => {
+          late = -1;
+          queue();
+        }, 1100);
+      }
+    }
+  };
+
   // Colors the rows as the panel draws them, scrolls or changes, once a
   // frame
   let panel = null;
@@ -290,11 +340,16 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
   // The panel comes and goes with the file, the page and the left sidebar
-  setInterval(watch, 1000);
+  let watching = 0;
 
   const apply = (next) => {
     state = next;
     if (state.on && !style.isConnected) document.head.append(style);
+    if (state.on && !watching) watching = setInterval(watch, 1000);
+    else if (!state.on && watching) {
+      clearInterval(watching);
+      watching = 0;
+    }
     watch();
     paint();
     if (!state.on) style.remove();
@@ -329,12 +384,13 @@ static PALETTE: AtomicUsize = AtomicUsize::new(0);
 /// The palettes `PAGE_JS` knows, Rainbow first and the default
 const PALETTES: [&str; 7] = ["rainbow", "sunset", "ocean", "forest", "aurora", "candy", "ember"];
 
+/// When the settings last changed, for `PAGE_JS` to tell them from older
+/// ones in `localStorage`. Launch counts as a change
+static REV: AtomicU64 = AtomicU64::new(0);
+
 fn palette(settings: &Settings) -> usize {
     PALETTES.iter().position(|&name| name == settings.frame_palette).unwrap_or(0)
 }
-/// and when it last changed, for `PAGE_JS` to tell it from an older one in
-/// `localStorage`. Launch counts as a change
-static REV: AtomicU64 = AtomicU64::new(0);
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_millis() as u64)
