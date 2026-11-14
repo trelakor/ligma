@@ -1273,6 +1273,11 @@ const PAGE_JS: &str = r##"(() => {
     editable: true,
   };
   const DISINTEGRATE_PRESETS = [
+    // Matched against Thanos snaps made with AE's Shatter: a figure's side
+    // dissolving into dust that lifts away, and a wipe across the top of
+    // a phone mockup, sweeping off to the right
+    ["Dissolve", () => ({ mode: "snap", pattern: "glass", pieces: 1800, force1: force(66, 36, 0, 23, 0.5), force2: force(64, 72, 0, 14, 0.4), time: 1, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 9, gravityDirection: -80, spread: 1.6, ragged: 40, softness: 12, fade: 15, shrink: 5, lighten: 0 })],
+    ["Wipe", () => ({ mode: "snap", pattern: "glass", pieces: 12000, force1: force(32, -8, 0, 35, 0.4), force2: force(76, 6, 0, 38, 0.4), time: 1.25, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 5, gravityDirection: -20, spread: 1.3, ragged: 50, softness: 20, fade: 45, shrink: 10, lighten: 20 })],
     ["Snap", () => ({ mode: "snap", pattern: "glass", pieces: 6000, force1: force(100, 50, 0, 110, 0.3), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 1, tumble: "free", randomness: 0.5, viscosity: 0.4, mass: 50, gravity: 5, gravityDirection: -15, spread: 1.8, ragged: 60, softness: 30, fade: 75, shrink: 30, lighten: 30 })],
     ["Dust", () => ({ mode: "snap", pattern: "glass", pieces: 12000, force1: force(80, 35, 0, 120, 0.6), force2: force(25, 70, 0, 60, 0.4), time: 1.4, rotation: 1.5, tumble: "free", randomness: 0.8, viscosity: 0.6, mass: 60, gravity: 3, gravityDirection: -40, spread: 1.8, ragged: 75, softness: 45, fade: 90, shrink: 50, lighten: 50 })],
     ["Glass", () => ({ mode: "shatter", pattern: "glass", pieces: 400, force1: force(50, 50, 10, 40, 5), force2: force(25, 30, 10, 25, 5, false), time: 1, rotation: 0.2, tumble: "free", randomness: 0.1, viscosity: 0.1, mass: 30, gravity: 3, gravityDirection: 90 })],
@@ -1688,15 +1693,18 @@ const PAGE_JS: &str = r##"(() => {
       drawn.push(i);
     });
     // Kept to a sensible size, as pieces flying past the camera can be huge
-    const most = Math.max(width, height) * 4;
+    const most = Math.max(width, height) * 1.5;
     [left, top] = [Math.max(-most, Math.floor(left) - 1), Math.max(-most, Math.floor(top) - 1)];
     [right, bottom] = [Math.min(width + most, Math.ceil(right) + 1), Math.min(height + most, Math.ceil(bottom) + 1)];
-    const canvas = Object.assign(document.createElement("canvas"), { width: right - left, height: bottom - top });
+    // Drawn no larger than Figma keeps an image, smaller if need be
+    const shrink = Math.min(1, MAX_SIDE / Math.max(right - left, bottom - top));
+    const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round((right - left) * shrink)), height: Math.max(1, Math.round((bottom - top) * shrink)) });
     const context = canvas.getContext("2d");
     // The picture, with the pieces that moved cut out of it
-    context.drawImage(picture, -left, -top);
+    context.setTransform(shrink, 0, 0, shrink, -left * shrink, -top * shrink);
+    context.drawImage(picture, 0, 0);
     context.globalCompositeOperation = "destination-out";
-    context.setTransform(1, 0, 0, 1, -left, -top);
+    context.setTransform(shrink, 0, 0, shrink, -left * shrink, -top * shrink);
     context.beginPath();
     pieces.forEach((piece, i) => {
       if (!moves[i]) return;
@@ -1711,7 +1719,7 @@ const PAGE_JS: &str = r##"(() => {
       const piece = pieces[i];
       const move = moves[i];
       context.save();
-      context.setTransform(1, 0, 0, 1, -left, -top);
+      context.setTransform(shrink, 0, 0, shrink, -left * shrink, -top * shrink);
       context.transform(...move.matrix);
       context.beginPath();
       piece.polygon.forEach(([x, y], j) => (j ? context.lineTo(x, y) : context.moveTo(x, y)));
@@ -1731,7 +1739,7 @@ const PAGE_JS: &str = r##"(() => {
       }
       context.restore();
     }
-    return { canvas, x: left, y: top };
+    return { canvas, x: left, y: top, width: right - left, height: bottom - top };
   };
 
   // A picture of `bitmap` at most `most` pixels across, as a canvas, and
@@ -1787,7 +1795,7 @@ const PAGE_JS: &str = r##"(() => {
     if (result.removed) return;
     const hash = figma.createImage(bytes).hash;
     const place = toParent(result.parent, bounds.x + drawn.x / k, bounds.y + drawn.y / k);
-    result.resizeWithoutConstraints(Math.max(0.01, drawn.canvas.width / k), Math.max(0.01, drawn.canvas.height / k));
+    result.resizeWithoutConstraints(Math.max(0.01, drawn.width / k), Math.max(0.01, drawn.height / k));
     result.relativeTransform = [
       [place.linear[0], place.linear[1], place.x],
       [place.linear[2], place.linear[3], place.y],
@@ -1932,7 +1940,7 @@ const PAGE_JS: &str = r##"(() => {
     current.view = { fit, ox: (box.width - (right - left) * fit) / 2 - left * fit, oy: (box.height - (bottom - top) * fit) / 2 - top * fit, width, height };
     const { ox, oy } = current.view;
     context.imageSmoothingQuality = "high";
-    context.drawImage(drawn.canvas, ox + drawn.x * fit, oy + drawn.y * fit, drawn.canvas.width * fit, drawn.canvas.height * fit);
+    context.drawImage(drawn.canvas, ox + drawn.x * fit, oy + drawn.y * fit, drawn.width * fit, drawn.height * fit);
     // The forces: a dot to drag, and a ring for its radius
     const s = current.settings;
     const size = Math.max(width, height);
