@@ -1075,8 +1075,9 @@ pub struct Painter {
     effects: Sender<Job>,
     /// What effects drew, whole, kept on their thread
     kept: Kept,
-    /// Effects waiting on images the node draws, run once they come
-    effects_waiting: Vec<(String, f64)>,
+    /// Effects waiting on images the node draws, and those images, each
+    /// run again once one of its own comes
+    effects_waiting: Vec<(String, f64, Vec<String>)>,
     /// Where units were drawn without images or effects not here yet, or
     /// with them at another size, by image: drawn again once they come,
     /// though the pictures that drew them may have gone by then
@@ -2353,13 +2354,15 @@ impl Painter {
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
         let effect = key.starts_with(EFFECT);
-        self.images.insert(key, img);
+        self.images.insert(key.clone(), img);
         self.drop_tiles(&areas);
         // Effects that waited on an image the node draws
         if !effect && !self.effects_waiting.is_empty() {
-            for (key, width) in std::mem::take(&mut self.effects_waiting) {
-                self.asked.remove(&key);
-                self.ask(&[(key, width)]);
+            let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.effects_waiting).into_iter().partition(|(_, _, on)| on.contains(&key));
+            self.effects_waiting = waiting;
+            for (effect, width, _) in ready {
+                self.asked.remove(&effect);
+                self.ask(&[(effect, width)]);
             }
         }
         self.fresh = true;
@@ -3495,10 +3498,11 @@ impl Painter {
         let images: Vec<(String, f64)> = encoder.missing_images.drain(..).filter(|(missing, _)| missing != key).collect();
         drop(encoder);
         if !images.is_empty() {
-            self.asked.remove(key);
-            if !self.effects_waiting.iter().any(|(waiting, _)| waiting == key) {
-                self.effects_waiting.push((key.to_string(), width));
-            }
+            // Asked for still: run again once one of those images comes,
+            // not each time what draws it is recorded or another image comes
+            let on: Vec<String> = images.iter().map(|(image, _)| image.clone()).collect();
+            self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
+            self.effects_waiting.push((key.to_string(), width, on));
             self.ask(&images);
             return;
         }
@@ -3546,10 +3550,11 @@ impl Painter {
         let images: Vec<(String, f64)> = drawer.missing_images.drain(..).filter(|(missing, _)| missing != key).collect();
         drop(drawer);
         if !images.is_empty() {
-            self.asked.remove(key);
-            if !self.effects_waiting.iter().any(|(waiting, _)| waiting == key) {
-                self.effects_waiting.push((key.to_string(), width));
-            }
+            // Asked for still: run again once one of those images comes,
+            // not each time what draws it is recorded or another image comes
+            let on: Vec<String> = images.iter().map(|(image, _)| image.clone()).collect();
+            self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
+            self.effects_waiting.push((key.to_string(), width, on));
             self.ask(&images);
             return;
         }
