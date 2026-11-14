@@ -538,7 +538,12 @@ impl Vello {
             blurrer.work = None;
         }
         self.spare = vello::Scene::new();
-        let _ = self.device.poll(wgpu::PollType::Poll);
+        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        // Dev tools: what's left
+        if let Some(report) = std::env::var_os("LIGMA_NATIVE_VELLO_MEMORY").and_then(|_| self.device.generate_allocator_report()) {
+            let names: Vec<String> = report.allocations.iter().map(|allocation| format!("{} {}MB", allocation.name, allocation.size >> 20)).collect();
+            super::render::trace(|| format!("vello trimmed to {}/{}MB in {} blocks: {names:?}", report.total_allocated_bytes >> 20, report.total_reserved_bytes >> 20, report.blocks.len()));
+        }
     }
 
     /// Lets go of pictures of images Skia no longer has as they were

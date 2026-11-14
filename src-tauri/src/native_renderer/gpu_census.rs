@@ -31,6 +31,11 @@ thread_local! {
     static PURPOSE: std::cell::Cell<&'static str> = const { std::cell::Cell::new("") };
 }
 
+/// What this thread's making is for, see `purpose`
+pub fn current() -> &'static str {
+    PURPOSE.with(|cell| cell.get())
+}
+
 /// What this thread makes from now until the guard goes is counted as for
 /// `purpose`
 pub fn purpose(purpose: &'static str) -> impl Drop {

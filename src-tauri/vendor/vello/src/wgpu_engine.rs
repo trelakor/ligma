@@ -185,7 +185,7 @@ impl Staging {
             });
         }
         self.free.sort_by_key(|b| std::cmp::Reverse(b.size()));
-        self.free.truncate(3);
+        self.free.truncate(1);
     }
 }
 
@@ -269,7 +269,7 @@ struct ResourcePool {
 }
 
 /// Ligma: recordings a free buffer's kept for without being used
-const POOL_KEPT: u64 = 24;
+const POOL_KEPT: u64 = 6;
 
 /// The transient bind map contains short-lifetime resources.
 ///
@@ -938,7 +938,16 @@ impl WgpuEngine {
                 && let MaterializedBuffer::Gpu(gpu_buf) = buf.buffer
             {
                 let kind = (buf.label, gpu_buf.usage());
-                self.pool.bufs.entry(kind).or_default().push((gpu_buf, recordings));
+                let bufs = self.pool.bufs.entry(kind).or_default();
+                bufs.push((gpu_buf, recordings));
+                // Two of a kind at most, the biggest, as a render takes some
+                // kinds twice
+                if bufs.len() > 2 {
+                    bufs.sort_by_key(|(buf, _)| std::cmp::Reverse(buf.size()));
+                    for (buf, _) in bufs.drain(2..) {
+                        buf.destroy();
+                    }
+                }
             }
         }
         self.pool.recordings += 1;
@@ -1159,7 +1168,7 @@ impl BindMap {
     }
 }
 
-const SIZE_CLASS_BITS: u32 = 1;
+const SIZE_CLASS_BITS: u32 = 2;
 
 impl ResourcePool {
     /// Get a buffer from the pool or create one.

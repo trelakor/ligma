@@ -888,6 +888,13 @@ const PEAK_KEPT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Ligma: sizes the buffers coarse allocates from to what renders take,
 /// with room to spare, and what ran out where this one did
 #[cfg(feature = "wgpu")]
+/// `x` rounded up to a power of two, or a quarter, half or three quarters
+/// past one
+fn size_class(x: u32) -> u32 {
+    let step = (x.checked_next_power_of_two().unwrap_or(1 << 31) / 8).max(1);
+    x.div_ceil(step).saturating_mul(step)
+}
+
 fn fit(bump: &BumpAllocators) -> Option<String> {
     use std::sync::atomic::Ordering::Relaxed;
     use vello_encoding::CAPACITY as C;
@@ -902,11 +909,10 @@ fn fit(bump: &BumpAllocators) -> Option<String> {
             *taken = (took, Some(std::time::Instant::now()));
         }
         let most = taken.0;
-        // A quarter more than it's taken lately, in powers of two so the
-        // pool's buffers are used again, and never so little that zooming
-        // out from close up runs out
-        let want = (most.saturating_add(most / 4)).max(1 << 20).checked_next_power_of_two().unwrap_or(1 << 31).min(1 << 27);
-        if took > have || took > have - have / 8 || (bump.failed == 0 && want < have / 2) {
+        // A quarter more than it's taken lately, in the pool's size classes
+        // so its buffers are used again
+        let want = size_class(most.saturating_add(most / 4).max(1 << 18)).min(1 << 27);
+        if took > have || took > have - have / 8 || (bump.failed == 0 && want < have - have / 4) {
             room.store(want.max(took.min(1 << 27)), Relaxed);
         }
         if took > have {

@@ -453,7 +453,7 @@ const VELLO_STILL: Duration = Duration::from_secs(1);
 /// Tiles a side Vello draws at most at once
 const VELLO_BLOCK: i32 = 2;
 /// Tiles kept drawn by Vello, 1 MB each, past those the view needs
-const VELLO_TILES: usize = 96;
+const VELLO_TILES: usize = 64;
 
 /// The level Vello draws tiles at while the zoom changes: the power of two
 /// at or past it, which frames only ever scale down
@@ -556,7 +556,7 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 /// mipmaps shows the same as a smaller copy, till together they pass this
 /// many bytes. Then those needed longest ago go, never any in view, down
 /// to three quarters of it, so it's seldom
-const IMAGES_BUDGET: usize = 384 << 20;
+const IMAGES_BUDGET: usize = 128 << 20;
 /// Images let go are kept this many pixels on their longest side, so
 /// there's something to show where they're drawn till they come again
 const PLACEHOLDER: i32 = 256;
@@ -1932,6 +1932,13 @@ impl Painter {
     /// Tiles past `VELLO_TILES` go, those shown longest ago first, never
     /// those of `keep` or the furthest level
     fn evict_vello(&mut self, keep: &[TileKey], furthest: Option<u32>) {
+        // What Skia makes drawing what Vello can't, often textures of a
+        // pixel or two, each taking 64 KiB though Skia counts it as a few
+        // bytes, so its cache's budget never lets them go
+        if self.cleaned.elapsed() > Duration::from_millis(500) {
+            self.cleaned = Instant::now();
+            self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
+        }
         let extra = self.tiles.len().saturating_sub(VELLO_TILES);
         if extra == 0 {
             return;
@@ -3265,8 +3272,12 @@ impl Painter {
         }
         self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE));
         self.scratch.retain(|(_, ss, _)| *ss == 1);
+        // Tiles show the view while Vello's memory is made again
+        if let Some(vello) = self.vello.as_mut() {
+            vello.trim();
+        }
         let _ = self.gpu.context.flush_and_submit();
-        self.gpu.context.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::ScratchResourcesOnly);
+        self.gpu.context.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::AllResources);
         super::committed::trim();
         self.update_memory();
         trace(|| format!("trimmed to {} MB in Skia's cache, {} MB used", self.gpu.context.resource_cache_usage().resource_bytes >> 20, self.gpu.used() >> 20));

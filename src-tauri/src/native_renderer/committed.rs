@@ -345,6 +345,7 @@ impl Pool {
     /// Gives back slots, and a heap left empty unless it's the only one
     /// with room
     fn give(&mut self, index: usize, first: usize, count: usize) {
+        PLACED.lock().unwrap().remove(&(self as *const Pool as usize, index, first));
         let Some(Some(slab)) = self.slabs.get_mut(index) else {
             return;
         };
@@ -373,6 +374,10 @@ impl Pool {
     }
 }
 
+/// Dev tools: what's placed, by pool, heap and first slot
+#[allow(clippy::type_complexity)]
+static PLACED: std::sync::LazyLock<Mutex<std::collections::HashMap<(usize, usize, usize), (String, u64)>>> = std::sync::LazyLock::new(Default::default);
+
 /// The pools of the allocators made, to trim
 static POOLS: Mutex<Vec<std::sync::Weak<Mutex<Pool>>>> = Mutex::new(Vec::new());
 
@@ -380,9 +385,27 @@ static POOLS: Mutex<Vec<std::sync::Weak<Mutex<Pool>>>> = Mutex::new(Vec::new());
 pub fn trim() {
     let mut pools = POOLS.lock().unwrap();
     pools.retain(|pool| pool.strong_count() > 0);
+    let mut kept = Vec::new();
     for pool in pools.iter().filter_map(std::sync::Weak::upgrade) {
-        pool.lock().unwrap().trim();
+        let mut pool = pool.lock().unwrap();
+        pool.trim();
+        // Dev tools: each kind's heaps, and how full each is
+        let slots = pool.slots();
+        let full: Vec<String> = pool.slabs.iter().flatten().map(|slab| format!("{}/{slots}", slab.in_use)).collect();
+        if !full.is_empty() {
+            kept.push(format!("{}MB slabs {full:?}", pool.kind.slab >> 20));
+        }
     }
+    let mut by: std::collections::HashMap<String, (u64, usize)> = std::collections::HashMap::new();
+    for (what, bytes) in PLACED.lock().unwrap().values() {
+        let entry = by.entry(what.clone()).or_default();
+        entry.0 += bytes;
+        entry.1 += 1;
+    }
+    let mut by: Vec<_> = by.into_iter().collect();
+    by.sort_by_key(|(_, (bytes, _))| std::cmp::Reverse(*bytes));
+    let top: Vec<String> = by.iter().take(12).map(|(what, (bytes, count))| format!("{what} {}KB x{count}", bytes >> 10)).collect();
+    super::render::trace(|| format!("skia heaps: {} placed: {top:?}", kept.join(", ")));
 }
 
 static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -581,6 +604,12 @@ unsafe fn placed(
     }
     let count = info.SizeInBytes.div_ceil(slot) as usize;
     let (slab, first, heap) = pool.lock().unwrap().take(&this.device, count)?;
+    // Dev tools: what each slot's taken for
+    if std::env::var_os("LIGMA_NATIVE_CENSUS").is_some() {
+        let what = format!("{} {}x{}{}", super::gpu_census::current(), desc.Width, desc.Height, if targets { " target" } else { "" });
+        let at = &*pool.lock().unwrap() as *const Pool as usize;
+        PLACED.lock().unwrap().insert((at, slab, first), (what, count as u64 * slot));
+    }
     let mut resource: Option<ID3D12Resource> = None;
     if let Err(error) = this.device.CreatePlacedResource(&heap, first as u64 * slot, &desc, state, clear, &mut resource) {
         log::warn!("native renderer: GPU memory: {error}");
