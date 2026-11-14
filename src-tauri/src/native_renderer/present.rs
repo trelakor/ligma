@@ -385,7 +385,12 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
     let (ox, oy) = (view.x * px as f64, view.y * px as f64);
     // Tiles of this zoom land on whole pixels, as Figma's do
     let (rx, ry) = (ox.round() as i32, oy.round() as i32);
-    let distance = |at: f32| (at / drawn).log2().abs();
+    // One coarser than the view is scaled up, blurring it, so one as much
+    // finer comes first
+    let distance = |at: f32| {
+        let octaves = (at / drawn).log2();
+        if octaves < 0.0 { -octaves * 2.0 } else { octaves }
+    };
     let mut ranked: Vec<(f32, usize)> = layers
         .iter()
         .enumerate()

@@ -450,6 +450,17 @@ const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 /// behind are drawn
 const VELLO_STILL: Duration = Duration::from_secs(1);
 
+/// Tiles a side Vello draws at most at once
+const VELLO_BLOCK: i32 = 2;
+/// Tiles kept drawn by Vello, 1 MB each, past those the view needs
+const VELLO_TILES: usize = 96;
+
+/// The level Vello draws tiles at while the zoom changes: the power of two
+/// at or past it, which frames only ever scale down
+fn level_up(px: f32) -> f32 {
+    2f32.powf(px.max(1e-6).log2().ceil())
+}
+
 /// How long fragments no view used are kept
 const FRAGMENTS_KEPT: Duration = Duration::from_secs(3);
 
@@ -1048,6 +1059,8 @@ pub struct Painter {
     vello: Option<super::vello::Vello>,
     /// Vello's copies of the tree's paths
     vello_paths: super::vello::Paths,
+    /// Tiles Vello couldn't draw, which Skia draws
+    vello_cant: std::collections::HashSet<TileKey>,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
     /// Images units drew with when Vello last drew them, by unit, as
     /// pictures keep them
@@ -1192,6 +1205,7 @@ impl Painter {
         Self {
             vello: None,
             vello_paths: Default::default(),
+            vello_cant: Default::default(),
             vello_starting,
             vello_uses: HashMap::new(),
             fragments: HashMap::new(),
@@ -1529,6 +1543,13 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
+        // Vello draws tiles, of a level at or past the zoom while it changes,
+        // which frames scale till the zoom leaves them, and exactly at the
+        // zoom once it's settled
+        if self.vello_ready() && self.tree.is_some() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
+            let furthest = levels.first().map(|(_, pk)| pk.to_bits());
+            return self.fill_vello(px, (ox, oy, width, height), furthest, &pyramid, !settle.is_zero());
+        }
         let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty() && !whole.rough);
         // While the zoom changes, tiles of it are of no use a moment later,
         // so the whole view is drawn instead, as Figma draws every frame
@@ -1758,6 +1779,172 @@ impl Painter {
         }
     }
 
+    /// What `fill` does with Vello: the view's tiles at the level it's
+    /// drawn at, then those of the level the zoom's headed to, then the
+    /// furthest level, which stands in wherever the others don't reach
+    fn fill_vello(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), furthest: Option<u32>, pyramid: &[TileKey], zooming: bool) -> Option<Duration> {
+        let frame = self.frame;
+        let area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
+        let over = |level: f32, area: Rect| {
+            let (left, top) = ((area.left * level).floor() as i32, (area.top * level).floor() as i32);
+            let (right, bottom) = ((area.right * level).ceil() as i32, (area.bottom * level).ceil() as i32);
+            Self::tiles_over(left, top, (right - left - 1).max(0), (bottom - top - 1).max(0), level.to_bits(), 0)
+        };
+        let level = if zooming { level_up(px) } else { px };
+        let here = over(level, area);
+        // Where the zoom will be in a moment, at the level it'll be drawn at
+        let ahead = if zooming {
+            let lag = 0.25;
+            let grow = 2f64.powf((self.widening * lag).clamp(-2.0, 2.0)) as f32;
+            let next = level_up(px / grow);
+            let center = area.center();
+            let (w, h) = (area.width() * grow, area.height() * grow);
+            let (x, y) = (center.x + (self.velocity.0 * lag) as f32, center.y + (self.velocity.1 * lag) as f32);
+            if next != level { over(next, Rect::from_xywh(x - w / 2.0, y - h / 2.0, w, h)) } else { Vec::new() }
+        } else {
+            Vec::new()
+        };
+        let far: Vec<TileKey> = pyramid.iter().copied().filter(|key| Some(key.px) == furthest).collect();
+        for key in here.iter().chain(&ahead).chain(&far) {
+            if let Some(tile) = self.tiles.get_mut(key) {
+                tile.used = frame;
+            }
+        }
+        let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale);
+        let missing: Vec<TileKey> = here.iter().copied().filter(|key| !ready(&self.tiles, key)).collect();
+        if missing.is_empty() {
+            // All of the view's there, so what stood in for it goes
+            if let Some(whole) = self.whole.take() {
+                self.retire_whole(whole);
+                self.dirty = true;
+            }
+            if self.last_whole.is_some() {
+                self.drop_last_whole();
+                self.dirty = true;
+            }
+        }
+        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).copied().collect();
+        let ahead_missing: Vec<TileKey> = ahead.iter().copied().filter(|key| !ready(&self.tiles, key)).collect();
+        // The furthest level changes as the zoom goes out, past which the
+        // one there is stands in till it's still
+        let far_missing: Vec<TileKey> = match zooming && self.tiles.keys().any(|key| key.px <= far.first().map_or(0, |key| key.px)) {
+            true => Vec::new(),
+            false => far.iter().copied().filter(|key| !ready(&self.tiles, key)).collect(),
+        };
+        // Zooming out, the level it's headed to covers more, and for longer
+        let todo = match zooming && self.widening > 0.0 {
+            true => [(ahead_missing, false), (missing, false), (far_missing, false)],
+            false => [(missing, !zooming), (ahead_missing, false), (far_missing, false)],
+        };
+        for (keys, exact) in todo {
+            if keys.is_empty() {
+                continue;
+            }
+            self.vello_or_skia(&keys, exact);
+            self.evict_vello(&keep, furthest);
+            self.dirty = true;
+            return Some(Duration::ZERO);
+        }
+        self.evict_vello(&keep, furthest);
+        if zooming {
+            return Some(SETTLE.saturating_sub(self.zoom.1.elapsed()));
+        }
+        let view = self.view.clone()?;
+        self.update_reason(&view, px, width, height);
+        None
+    }
+
+    /// Draws the first of `keys` and those near it with Vello, or Skia where
+    /// Vello can't
+    fn vello_or_skia(&mut self, keys: &[TileKey], exact: bool) {
+        let vello: Vec<TileKey> = keys.iter().copied().filter(|key| !self.vello_cant.contains(key)).collect();
+        if !vello.is_empty() {
+            if let Err((key, why)) = self.vello_tiles(&vello, exact) {
+                trace(|| format!("  vello tile {},{} px={:.4} can't: {why}", key.x, key.y, key.px()));
+                if self.vello_cant.len() > 4096 {
+                    self.vello_cant.clear();
+                }
+                self.vello_cant.insert(key);
+            }
+            return;
+        }
+        let key = keys[0];
+        if let Some(tile) = self.draw_tile(key, exact, false) {
+            self.put_tile(key, tile);
+            self.drew = true;
+        }
+    }
+
+    /// Draws the tiles of `keys` in the block of `VELLO_BLOCK` tiles a side
+    /// the first is in with Vello, at once, all of a level
+    fn vello_tiles(&mut self, keys: &[TileKey], exact: bool) -> Result<(), (TileKey, String)> {
+        let first = keys[0];
+        let _purpose = super::gpu_census::purpose("drawing tiles");
+        let started = Instant::now();
+        let block = std::env::var("LIGMA_NATIVE_VELLO_BLOCK").ok().and_then(|n| n.parse().ok()).unwrap_or(VELLO_BLOCK).max(1);
+        let corner = |key: &TileKey| (key.x.div_euclid(block), key.y.div_euclid(block));
+        let mine: Vec<TileKey> = keys.iter().copied().filter(|key| key.px == first.px && corner(key) == corner(&first)).collect();
+        let (x0, y0) = (mine.iter().map(|key| key.x).min().unwrap_or(first.x), mine.iter().map(|key| key.y).min().unwrap_or(first.y));
+        let (x1, y1) = (mine.iter().map(|key| key.x).max().unwrap_or(first.x), mine.iter().map(|key| key.y).max().unwrap_or(first.y));
+        let (left, top, w, h) = (x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
+        let px = first.px();
+        let reach = Rect::from_xywh(left as f32 / px, top as f32 / px, w as f32 / px, h as f32 / px);
+        self.settle_unchecked();
+        let fail = |why: String| (first, why);
+        let mut drawn = None;
+        for _ in 0..8 {
+            // Tiles to scale while the zoom changes have units encoded for
+            // other levels stand in for those that would take long
+            let budget = (!exact).then_some(ENCODE_ZOOMING);
+            let (out, counts, stats, _) = self.vello_render(left, top, w, h, px, reach, budget, false).map_err(fail)?;
+            let vello = self.vello.as_mut().ok_or_else(|| fail("no Vello".into()))?;
+            match vello.check(usize::MAX).map_err(fail)? {
+                Some(why) => trace(|| format!("  vello ran out of room, drawing again: {why}")),
+                None => {
+                    drawn = Some((out, counts, stats, std::mem::take(&mut vello.stages)));
+                    break;
+                }
+            }
+        }
+        let (out, counts, stats, stages) = drawn.ok_or_else(|| fail("out of room in Vello's buffers".into()))?;
+        let rendered = started.elapsed();
+        let image = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or_else(|| fail("Vello's texture".into()))?;
+        let mut paint = Paint::default();
+        paint.set_blend_mode(skia_safe::BlendMode::Src);
+        for &key in &mine {
+            let tex = self.tex(TILE, TILE).ok_or_else(|| fail("texture".into()))?;
+            let backend = tex.backend();
+            let mut surface = self.target(&tex).ok_or_else(|| fail("surface".into()))?;
+            let from = Rect::from_xywh(((key.x - x0) * TILE) as f32, ((key.y - y0) * TILE) as f32, TILE as f32, TILE as f32);
+            surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
+            drop(surface);
+            let tile_image = self.finish(&backend, false).ok_or_else(|| fail("submit".into()))?;
+            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, exact, draft: false });
+        }
+        self.drew = true;
+        trace(|| {
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            format!("  vello tiles px={px:.4} at {x0},{y0} {}x{} exact={exact} rendered={:.1}ms {:.1}ms {stats} gpu:{stages}", x1 - x0 + 1, y1 - y0 + 1, ms(rendered), ms(started.elapsed()))
+        });
+        Ok(())
+    }
+
+    /// Tiles past `VELLO_TILES` go, those shown longest ago first, never
+    /// those of `keep` or the furthest level
+    fn evict_vello(&mut self, keep: &[TileKey], furthest: Option<u32>) {
+        let extra = self.tiles.len().saturating_sub(VELLO_TILES);
+        if extra == 0 {
+            return;
+        }
+        let mut old: Vec<(u64, TileKey)> = self.tiles.iter().filter(|(key, _)| Some(key.px) != furthest && !keep.contains(key)).map(|(key, tile)| (tile.used, *key)).collect();
+        old.sort_unstable_by_key(|(used, _)| *used);
+        for (_, key) in old.into_iter().take(extra) {
+            if let Some(tile) = self.tiles.remove(&key) {
+                self.drop_tile(tile);
+            }
+        }
+    }
+
     /// Hands over the whole view Vello drew last once it's checked it had
     /// room for it, waiting for the GPU to draw it
     fn settle_unchecked(&mut self) {
@@ -1830,6 +2017,13 @@ impl Painter {
     }
 
     fn vello_view_once(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
+        self.vello_render(left, top, w, h, px, reach, budget, true)
+    }
+
+    /// As `vello_view_once`, handing back Vello's own target, unpremultiplied
+    /// and drawn into again by its next render, where `copy` isn't set
+    #[allow(clippy::too_many_arguments)]
+    fn vello_render(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool) -> Result<(Arc<Tex>, Counts, String, bool), String> {
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let _ = self.gpu.context.flush_and_submit();
@@ -2079,20 +2273,25 @@ impl Painter {
         let vello_took = started.elapsed() - encoded;
         // What Vello drew, unpremultiplied, copied into a texture of the
         // kind the present thread shows
-        let tex = self.tex(w, h).ok_or("texture")?;
-        let backend = tex.backend();
-        let mut surface = self.target(&tex).ok_or("surface")?;
-        let drawn = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or("Vello's texture")?;
-        let mut paint = Paint::default();
-        paint.set_blend_mode(skia_safe::BlendMode::Src);
-        let all = Rect::from_wh(w as f32, h as f32);
-        surface.canvas().draw_image_rect(&drawn, Some((&all, skia_safe::canvas::SrcRectConstraint::Fast)), all, &paint);
-        let image = self.finish(&backend, false);
-        drop(surface);
-        drop(drawn);
-        if image.is_none() {
-            return Err("submit".into());
-        }
+        let tex = if !copy {
+            out
+        } else {
+            let tex = self.tex(w, h).ok_or("texture")?;
+            let backend = tex.backend();
+            let mut surface = self.target(&tex).ok_or("surface")?;
+            let drawn = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or("Vello's texture")?;
+            let mut paint = Paint::default();
+            paint.set_blend_mode(skia_safe::BlendMode::Src);
+            let all = Rect::from_wh(w as f32, h as f32);
+            surface.canvas().draw_image_rect(&drawn, Some((&all, skia_safe::canvas::SrcRectConstraint::Fast)), all, &paint);
+            let image = self.finish(&backend, false);
+            drop(surface);
+            drop(drawn);
+            if image.is_none() {
+                return Err("submit".into());
+            }
+            tex
+        };
         for (unit, bounds, asked) in asked {
             let super::vello::Asked { missing, sharper, used } = asked;
             let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).map(|(key, _)| key.clone()).collect();
