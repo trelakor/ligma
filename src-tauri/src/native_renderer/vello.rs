@@ -1753,14 +1753,31 @@ impl<'a> Encoder<'a> {
     }
 
     fn fill_stroke(&mut self, node: &Node) {
-        for geometry in &node.fill_geometries {
-            let Some(path) = &geometry.path else { continue };
-            let (skia, bez) = (self.tree.skia_path(path), self.paths.path(self.tree, path));
-            for paint in &geometry.paints {
-                self.paint(node, paint, &skia, &bez);
+        let fills = |this: &mut Self| {
+            for geometry in &node.fill_geometries {
+                let Some(path) = &geometry.path else { continue };
+                let (skia, bez) = (this.tree.skia_path(path), this.paths.path(this.tree, path));
+                for paint in &geometry.paints {
+                    this.paint(node, paint, &skia, &bez);
+                }
             }
+        };
+        let stroked = node.stroke_geometries.iter().any(|g| !g.paints.is_empty());
+        // An outside stroke under fills that hide all of what's inside it
+        // needs no clip, whose edge would meet the fill's and leave a seam
+        // of what's beneath where both cover part of a pixel
+        if stroked && node.stroke_mode == Some(rt::StrokeMask::Outside) && self.fills_hide(node) {
+            for geometry in &node.stroke_geometries {
+                let Some(path) = &geometry.path else { continue };
+                let (skia, bez) = (self.tree.skia_path(path), self.paths.path(self.tree, path));
+                for paint in &geometry.paints {
+                    self.paint(node, paint, &skia, &bez);
+                }
+            }
+            return fills(self);
         }
-        if node.stroke_geometries.iter().all(|g| g.paints.is_empty()) {
+        fills(self);
+        if !stroked {
             return;
         }
         let outline_timer = timer(7);
@@ -1825,6 +1842,33 @@ impl<'a> Encoder<'a> {
             }
             _ => strokes(self),
         }
+    }
+
+    /// Whether `node`'s fills hide anything drawn under them inside its
+    /// outline: each of its shapes has a paint that's opaque all over, or
+    /// solid in a silhouette drawn opaque, and its strokes don't blend
+    fn fills_hide(&mut self, node: &Node) -> bool {
+        if node.fill_geometries.is_empty() {
+            return false;
+        }
+        match self.cast {
+            Some(cast) if cast.a >= 1.0 => {}
+            Some(_) => return false,
+            None if node.stroke_geometries.iter().any(|g| g.paints.iter().any(|paint| tree::blends(paint.blend_mode))) => return false,
+            None => {}
+        }
+        let cast = self.cast.is_some();
+        node.fill_geometries.iter().all(|g| {
+            g.path.is_some()
+                && g.paints.iter().any(|paint| {
+                    let kind = paint.kind.unwrap_or(PaintType::Solid);
+                    let opacity = paint.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+                    if cast {
+                        return self.silhouette(node, paint, kind, opacity) == Some(true);
+                    }
+                    kind == PaintType::Solid && mix(paint.blend_mode).is_none() && !tree::blends(paint.blend_mode) && tree::rgba(paint.color.unwrap_or_default()).a * opacity >= 1.0
+                })
+        })
     }
 
     /// One paint over `path`, in the node's own coordinates
