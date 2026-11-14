@@ -604,6 +604,12 @@
         </span>
         <input type="checkbox" class="switch" id="lasso-fill">
       </label>
+      <label class="row">
+        <span class="label">Effects
+          <div class="hint">A button after Actions in the toolbar, with effects Ligma makes right in the file, like Repeater, which repeats a layer in a trail, ring or grid as you change it. Only in files you can edit.</div>
+        </span>
+        <input type="checkbox" class="switch" id="effects-library">
+      </label>
     </section>
     <section>
       <h2>Layers</h2>
@@ -1090,7 +1096,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "effects-library", "classic-home", "new-home", "new-home-start", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1449,6 +1455,7 @@
     $("image-bar-icons").checked = settings.imageBarIcons;
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
+    $("effects-library").checked = settings.effectsLibrary;
     $("classic-home").checked = settings.classicHome;
     $("new-home").checked = settings.ligmaHome;
     $("new-home-start").value = settings.ligmaHomeStart;
@@ -1536,6 +1543,7 @@
       imageBarIcons: $("image-bar-icons").checked,
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
+      effectsLibrary: $("effects-library").checked,
       classicHome: $("classic-home").checked,
       ligmaHome: $("new-home").checked,
       ligmaHomeStart: $("new-home-start").value,

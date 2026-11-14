@@ -146,6 +146,8 @@ pub struct Settings {
     pub copy_as_code: bool,
     /// Lasso fill in the Creation tools menu, under Pencil (see lasso.rs)
     pub lasso_fill: bool,
+    /// The Effects button in the toolbar, after Actions (see effects.rs)
+    pub effects_library: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -213,6 +215,7 @@ impl Default for Settings {
             image_bar_icons: false,
             copy_as_code: true,
             lasso_fill: true,
+            effects_library: true,
             classic_home: false,
             ligma_home: true,
             ligma_home_start: "home".into(),
@@ -478,6 +481,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
     crate::lasso::apply_settings(app, &settings);
+    crate::effects::apply_settings(app, &settings);
     crate::mcp_bridge::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
