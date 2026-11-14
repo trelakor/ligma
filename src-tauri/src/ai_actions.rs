@@ -2604,6 +2604,8 @@ const PAGE_JS: &str = r##"(() => {
     :is([${SHIMMER}="vectorize"], [${SHIMMER}="objects"]) > div::after { background: linear-gradient(100deg, transparent 20%, rgb(190 226 255 / 0.4) 50%, transparent 80%); }
     @keyframes ligma-shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
     @media (prefers-reduced-motion: reduce) { [${SHIMMER}] > div::after { animation: none; opacity: 0; } }
+    html[${ICONS}] ${BAR} > button:has(> svg) > span { display: none; }
+    html[${ICONS}] ${BAR} > button:has(> svg) { padding-left: 4px; padding-right: 4px; }
     :is(html[${RECOLORING}], html[${PICKING}], html[${HEALING}], html[${UPSCALING}]) [data-secondary-toolbelt] { display: none !important; }
     :is([${RECOLOR}], ${BARS}).floating { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 10; }
     :is([${RECOLOR}], ${BARS}) > div {
