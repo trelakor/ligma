@@ -161,8 +161,8 @@ mod esrgan {
     /// A session for the model at `model`, on the graphics card if `gpu`
     /// and there's one to use: DirectML on Windows, picking the fastest
     /// card, and Core ML on Macs. Where it can't, ONNX Runtime runs it on
-    /// the CPU instead
-    fn session(environment: &'static ort::environment::Environment, model: &Path, gpu: bool) -> Result<Session, String> {
+    /// the CPU instead. With whether it's meant for the graphics card
+    fn session(environment: &'static ort::environment::Environment, model: &Path, gpu: bool) -> Result<(Session, bool), String> {
         #[cfg(windows)]
         let gpu = gpu && directml();
         let builder = Session::builder(environment).map_err(|error| error.to_string())?;
@@ -185,7 +185,7 @@ mod esrgan {
         } else {
             builder.with_auto_device(AutoDevicePolicy::PreferCPU).map_err(|error| error.to_string())?
         };
-        builder.commit_from_file(model).map_err(|error| error.to_string())
+        builder.commit_from_file(model).map(|session| (session, gpu)).map_err(|error| error.to_string())
     }
 
     /// Whether DirectML can run the model: Windows' own DirectML.dll is
@@ -455,8 +455,7 @@ mod esrgan {
         let environment = crate::models::environment(folder.unwrap_or(Path::new("")))?;
         // Tests can ask for the CPU, to compare
         let gpu = !(cfg!(test) && std::env::var("LIGMA_UPSCALE_CPU").is_ok());
-        let mut session = session(environment, model, gpu).or_else(|_| session(environment, model, false))?;
-        let mut on_gpu = gpu;
+        let (mut session, mut on_gpu) = session(environment, model, gpu).or_else(|_| session(environment, model, false))?;
         // Transparent pixels as they'd show on black, as the model reads color
         let rgb = RgbImage::from_fn(width as u32, height as u32, |x, y| {
             let [r, g, b, a] = image.get_pixel(x, y).0;
@@ -487,7 +486,7 @@ mod esrgan {
             // model makes is never held 4 times as large in full
             let size = if pass + 1 == passes { target } else { (work.width() * TIMES as u32, work.height() * TIMES as u32) };
             let step = |done: usize| progress(&format!("Upscaling… {}%", (pass * 100 + done) / passes));
-            out = enlarge(&mut session, environment, model, gpu, &mut on_gpu, &work, size, most, options, stopped, &step)?;
+            out = enlarge(&mut session, environment, model, &mut on_gpu, &work, size, most, options, stopped, &step)?;
         }
         drop(session);
         progress("Finishing…");
@@ -556,8 +555,10 @@ mod esrgan {
     /// How a `width` by `height` image is split into tiles all the same
     /// size, none reading more than `most` pixels with what's around it:
     /// across and down, those that read the fewest in all, so the least is
-    /// read twice
+    /// read twice. At least a pixel's read with what's around it, however
+    /// little `most` is
     fn layout(width: usize, height: usize, most: usize) -> ((usize, Vec<usize>), (usize, Vec<usize>)) {
+        let most = most.max((1 + 2 * PAD).pow(2));
         let mut best = (usize::MAX, 1, 1);
         for columns in 1..=width {
             let read_across = width.div_ceil(columns) + 2 * PAD;
@@ -586,15 +587,14 @@ mod esrgan {
 
     /// `rgb` made `TIMES` as large with `session`, a tile at a time, each
     /// reading at most `most` pixels on a graphics card, and read back at
-    /// `size`, at most that large, moved to the CPU, in `on_gpu`, if the
-    /// graphics card fails, saying how far it's got, in percent, with
-    /// `progress`
+    /// `size`, at most that large, moved to the CPU, in `on_gpu`, and
+    /// started over in its tiles if the graphics card fails, saying how far
+    /// it's got, in percent, with `progress`
     #[allow(clippy::too_many_arguments)]
     fn enlarge(
         session: &mut Session,
         environment: &'static ort::environment::Environment,
         model: &Path,
-        gpu: bool,
         on_gpu: &mut bool,
         rgb: &RgbImage,
         size: (u32, u32),
@@ -614,7 +614,7 @@ mod esrgan {
         // one size only, and the image is split into as few as fit. On the
         // CPU, where that costs nothing, they're smaller, and those at the
         // edges smaller still, so less is read twice
-        let tiles: Vec<Tile> = if gpu {
+        let tiles: Vec<Tile> = if *on_gpu {
             let ((across, xs), (down, ys)) = layout(width, height, most);
             ys.into_iter()
                 .flat_map(|y| xs.iter().map(move |&x| (x, y)))
@@ -682,12 +682,13 @@ mod esrgan {
             };
             let output = match ask(session) {
                 Ok(output) => output,
-                // The graphics card failed: the CPU from then on
+                // The graphics card failed: the CPU from then on, in its
+                // own tiles, as the card's are too large for it
                 Err(_) if *on_gpu && !stopped() => {
                     log::warn!("Upscale: the graphics card failed, using the CPU");
-                    *session = self::session(environment, model, false)?;
+                    *session = self::session(environment, model, false)?.0;
                     *on_gpu = false;
-                    ask(session)?
+                    return enlarge(session, environment, model, on_gpu, rgb, size, most, options, stopped, progress);
                 }
                 Err(error) => return Err(error),
             };
@@ -782,9 +783,9 @@ mod esrgan {
 
         #[test]
         fn tiles_read_no_more_than_they_may() {
-            for (width, height, most) in [(960, 643, PHOTO_READ), (782, 1200, ILLUSTRATION_READ), (4096, 64, FAST_READ), (1, 1, PHOTO_READ), (2048, 2048, PHOTO_READ)] {
+            for (width, height, most) in [(960, 643, PHOTO_READ), (782, 1200, ILLUSTRATION_READ), (4096, 64, FAST_READ), (1, 1, PHOTO_READ), (2048, 2048, PHOTO_READ), (300, 200, 0)] {
                 let ((across, xs), (down, ys)) = layout(width, height, most);
-                assert!((across + 2 * PAD) * (down + 2 * PAD) <= most, "{width} {height}");
+                assert!((across + 2 * PAD) * (down + 2 * PAD) <= most.max((1 + 2 * PAD).pow(2)), "{width} {height}");
                 assert_eq!((xs.last().unwrap() + across, ys.last().unwrap() + down), (width, height));
             }
             // An image that fits is one tile
