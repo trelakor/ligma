@@ -1699,7 +1699,7 @@ const PAGE_JS: &str = r##"(() => {
       let frame = 0;
       const follow = () => {
         placeOver(figma, node, canvas, layer, svg, picture);
-        picture.style.display = closed.committing || closed.dirty || topImage(node) === closed.hash ? "block" : "";
+        picture.style.display = healShown(closed) ? "block" : "";
         frame = requestAnimationFrame(follow);
       };
       follow();
@@ -1768,12 +1768,15 @@ const PAGE_JS: &str = r##"(() => {
     return top?.type === "IMAGE" ? top.imageHash : null;
   };
 
+  // Whether the healed copy is shown over the layer: healed, and not undone
+  // or changed some other way since, as the copy still has those heals
+  const healShown = ({ node, patched, hash }) => patched && (!hash || topImage(node) === hash);
+
   const placeHealOverlay = () => {
     if (!healing) return;
-    const { figma, node, canvas, layer, svg, picture, patched, working, committing, dirty, hash } = healing;
+    const { figma, node, canvas, layer, svg, picture } = healing;
     placeOver(figma, node, canvas, layer, svg, picture);
-    // Healing, or healed and not undone or changed some other way since
-    if (picture) picture.style.display = patched && (working || committing || dirty || (hash && topImage(node) === hash)) ? "block" : "";
+    if (picture) picture.style.display = healShown(healing) ? "block" : "";
     healing.frame = requestAnimationFrame(placeHealOverlay);
   };
 
@@ -1832,12 +1835,6 @@ const PAGE_JS: &str = r##"(() => {
     const current = healing;
     if (!current || current.working) return;
     const { figma, node } = current;
-    // Undone, or changed some other way since, the image is read again,
-    // unless a heal is still being handed to Figma. The copy here still
-    // has the undone heals, so it isn't shown over the layer meanwhile
-    const top = fillsOf(node).at(-1);
-    const changed = current.hash && !current.committing && !current.dirty && !(top?.type === "IMAGE" && top.imageHash === current.hash);
-    if (current.stale || changed) current.patched = false;
     current.working = true;
     current.controller = new AbortController();
     busy = true;
@@ -1847,9 +1844,12 @@ const PAGE_JS: &str = r##"(() => {
       // too long, as when Figma never hands it over, and read again next
       // time, so the brush is never stuck
       await within(current.opening?.catch(() => reopenHealing(current)));
+      // Undone, or changed some other way since, the image is read again,
+      // unless a heal is still being handed to Figma
+      const changed = current.hash && !current.committing && !current.dirty && topImage(node) !== current.hash;
       if (current.stale || changed) {
         handOff("heal", request({ op: "close", session: current.session })).catch(() => {});
-        Object.assign(current, { hash: null, stale: false });
+        Object.assign(current, { hash: null, stale: false, patched: false });
         await within(reopenHealing(current));
       }
       const ask = () =>
@@ -1912,9 +1912,11 @@ const PAGE_JS: &str = r##"(() => {
         const last = fills.at(-1);
         const ours = last?.type === "IMAGE" && last.imageHash === current.hash;
         // Undone or changed meanwhile: left as it is, rather than undoing
-        // the undo, and read again before the next stroke
+        // the undo, and read again before the next stroke. The stroke healed
+        // into the copy is lost with it
         if (current.hash && !ours) {
           Object.assign(current, { dirty: false, stale: true, patched: false });
+          figma.notify("The image changed while healing, heal it again", { timeout: 3000 });
           break;
         }
         node.fills = ours
