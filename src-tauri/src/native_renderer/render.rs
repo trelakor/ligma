@@ -524,6 +524,10 @@ struct KeptScene {
     built: Instant,
 }
 
+/// How long since an image last came in before the furthest level's tiles
+/// are drawn again for what changed
+const IMAGES_QUIET: Duration = Duration::from_secs(1);
+
 /// What changes in a kept scene other than edits, images coming in and the
 /// like, builds it again no sooner than this after it was built, as they
 /// come many at once
@@ -1092,6 +1096,8 @@ pub struct Painter {
     kept_serial: u64,
     /// The kept scene last drawn and where
     kept_drawn: Option<(u64, (i32, i32, u32))>,
+    /// When an image last came in
+    image_came_at: Instant,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
     /// Images units drew with when Vello last drew them, by unit, as
     /// pictures keep them
@@ -1241,6 +1247,7 @@ impl Painter {
             kept_stale: false,
             kept_serial: 0,
             kept_drawn: None,
+            image_came_at: Instant::now(),
             vello_starting,
             vello_uses: HashMap::new(),
             fragments: HashMap::new(),
@@ -1986,7 +1993,10 @@ impl Painter {
         // one there is stands in till it's still
         let far_missing: Vec<TileKey> = match zooming && self.tiles.keys().any(|key| key.px <= far.first().map_or(0, |key| key.px)) {
             true => Vec::new(),
-            false => far.iter().copied().filter(|key| !ready(&self.tiles, key)).collect(),
+            // One there that's out of date waits till images stop coming
+            // in, as a file opens, as each takes long and stands in only
+            // while the zoom goes out
+            false => far.iter().copied().filter(|key| !ready(&self.tiles, key) && (!self.tiles.contains_key(key) || self.image_came_at.elapsed() >= IMAGES_QUIET)).collect(),
         };
         // While the zoom changes, the level it's headed to first, which
         // drawn before it gets there is never shown scaled up
@@ -2006,6 +2016,10 @@ impl Painter {
         self.evict_vello(&keep, furthest);
         if zooming {
             return Some(SETTLE.saturating_sub(self.zoom.1.elapsed()));
+        }
+        // Back once images stop coming in, for those waiting on that
+        if far.iter().any(|key| !ready(&self.tiles, key)) {
+            return Some(IMAGES_QUIET.saturating_sub(self.image_came_at.elapsed()).max(Duration::from_millis(1)));
         }
         let view = self.view.clone()?;
         self.update_reason(&view, px, width, height);
@@ -3271,6 +3285,7 @@ impl Painter {
 
     /// Image `key` came: what waited for it is drawn again
     fn image_came(&mut self, key: String, img: Img) {
+        self.image_came_at = Instant::now();
         self.failed.remove(&key);
         // Asked for twice, by pictures wanting it at sizes that came
         // to the same: what's drawn with it is right as it is
