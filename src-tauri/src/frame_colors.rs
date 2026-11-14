@@ -11,7 +11,8 @@
 //! without being one. The panel draws only the rows in view, each with its
 //! layer's ID, so `PAGE_JS` colors those as they're drawn, reading the
 //! frames each layer is in from Figma's plugin API. Only the icons and the
-//! indents are drawn on, so hover and selection stay Figma's
+//! indents are drawn on, so hover and selection stay Figma's, and the icons
+//! of what's in a frame, like images and vectors, take its color too
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,29 +41,22 @@ const PAGE_JS: &str = r##"(() => {
   const ROW = '[class*="object_row--row--"]';
   const ID = '[data-testid$="-layers-panel-row"]';
   const INDENT = '[class*="object_row--indent--"]';
+  // The strip of indents at the start of each row, full height, under the
+  // row's name and over Figma's hover and selection, where guides go
+  const INDENTS = '[class*="object_row--indents--"]';
   const ICON = '[class*="object_row--layerIcon--"]';
   const CARET = '[data-testid="layers-panel-expand-caret"]';
   const MARKED = "data-ligma-frame-color";
+
+  // Shapes' icons are outlines Figma colors through `stroke`, the rest
+  // through `--fpl-icon-color`
+  const style = document.createElement("style");
+  style.textContent = `${ICON}[${MARKED}] .svg-container svg { stroke: var(--fpl-icon-color); }`;
+
   // A frame's expand arrow is centered this far past where its row's last
   // indent starts, and its guide drawn there, this wide
   const ARROW = 16;
   const GUIDE = 2;
-
-  // The guides are drawn over the row, above Figma's hover and selection,
-  // and under nothing, as they keep to the indents
-  const style = document.createElement("style");
-  style.textContent = `
-    ${ROW}[${MARKED}]::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      z-index: 2;
-      pointer-events: none;
-      background-image: var(--ligma-guides, none);
-      background-position: var(--ligma-guides-at, 0 0);
-      background-size: var(--ligma-guides-size, 0 0);
-      background-repeat: no-repeat;
-    }`;
 
   // How many frames are directly in `node`, read again at most once a
   // second
@@ -103,8 +97,8 @@ const PAGE_JS: &str = r##"(() => {
     const first = frames[start];
     const hue = HUES[(first.parent ? framesIn(first.parent).index.get(first.id) ?? 0 : 0) % HUES.length];
     // Each step darker, from light enough to read on the panel
-    const lightness = dark ? Math.max(0.5, 0.78 - start * 0.09) : Math.max(0.36, 0.62 - start * 0.08);
-    const color = `oklch(${lightness} ${dark ? 0.15 : 0.17} ${hue})`;
+    const lightness = dark ? Math.max(0.48, 0.8 - start * 0.11) : Math.max(0.34, 0.62 - start * 0.09);
+    const color = `oklch(${lightness.toFixed(3)} ${dark ? 0.15 : 0.17} ${hue})`;
     shades.set(frame.id, color);
     return color;
   };
@@ -118,17 +112,24 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
-  const GUIDES = ["--ligma-guides", "--ligma-guides-at", "--ligma-guides-size"];
+  const GUIDES = ["background-image", "background-position", "background-size", "background-repeat"];
   const clear = (row) => {
     row.removeAttribute(MARKED);
-    for (const property of GUIDES) row.style.removeProperty(property);
-    row.querySelector(`${ICON}[${MARKED}]`)?.style.removeProperty("--fpl-icon-color");
-    row.querySelector(`${ICON}[${MARKED}]`)?.removeAttribute(MARKED);
+    const strip = row.querySelector(`${INDENTS}[${MARKED}]`);
+    if (strip) {
+      for (const property of GUIDES) strip.style.removeProperty(property);
+      strip.removeAttribute(MARKED);
+    }
+    const icon = row.querySelector(`${ICON}[${MARKED}]`);
+    if (icon) {
+      icon.style.removeProperty("--fpl-icon-color");
+      icon.removeAttribute(MARKED);
+    }
   };
 
-  // Each row: its frame's icon in its color, a guide down the column of
-  // each frame it's in, in that frame's color, and below an open frame's
-  // arrow, the start of its own
+  // Each row: its icon in its frame's color, or the color of the frame
+  // it's in, a guide down the column of each frame it's in, in that frame's
+  // color, and below an open frame's arrow, the start of its own
   const paint = () => {
     const figma = window.figma;
     const rows = document.querySelectorAll(ROW);
@@ -146,9 +147,13 @@ const PAGE_JS: &str = r##"(() => {
         if (row.hasAttribute(MARKED)) clear(row);
         continue;
       }
-      const box = row.getBoundingClientRect();
-      const indents = [...row.querySelectorAll(INDENT)].map((indent) => indent.getBoundingClientRect().left - box.left);
+      const strip = row.querySelector(INDENTS);
+      if (!strip) continue;
+      const box = strip.getBoundingClientRect();
+      const indents = [...strip.querySelectorAll(INDENT)].map((indent) => indent.getBoundingClientRect().left - box.left);
       const layers = [];
+      // The nearest frame it's in, for its icon
+      let within = null;
       // The frames it's in, `steps` levels up
       let steps = 1;
       for (let at = node.parent; at && at.type !== "PAGE" && at.type !== "DOCUMENT"; at = at.parent, steps++) {
@@ -157,9 +162,11 @@ const PAGE_JS: &str = r##"(() => {
         if (!FRAMES.has(at.type)) continue;
         const x = Math.round(indents[column] + ARROW - GUIDE / 2);
         const color = colorOf(at);
+        within ??= color;
         layers.push({ color, position: `${x}px 0`, size: `${GUIDE}px 100%` });
       }
       const own = FRAMES.has(node.type) ? colorOf(node) : null;
+      const tint = own ?? within;
       const caret = row.querySelector(CARET);
       if (own && caret && /object_row--expanded--/.test(row.className) && indents.length) {
         const x = Math.round(indents.at(-1) + ARROW - GUIDE / 2);
@@ -167,26 +174,29 @@ const PAGE_JS: &str = r##"(() => {
         layers.push({ color: own, position: `${x}px ${top}px`, size: `${GUIDE}px calc(100% - ${top}px)` });
       }
       const set = (property, value) => {
-        if (row.style.getPropertyValue(property) !== value) row.style.setProperty(property, value);
+        if (strip.style.getPropertyValue(property) !== value) strip.style.setProperty(property, value);
       };
       if (layers.length) {
         set(GUIDES[0], layers.map(({ color }) => `linear-gradient(${color}, ${color})`).join(", "));
         set(GUIDES[1], layers.map(({ position }) => position).join(", "));
         set(GUIDES[2], layers.map(({ size }) => size).join(", "));
-      } else {
-        for (const property of GUIDES) row.style.removeProperty(property);
+        set(GUIDES[3], "no-repeat");
+        strip.setAttribute(MARKED, "");
+      } else if (strip.hasAttribute(MARKED)) {
+        for (const property of GUIDES) strip.style.removeProperty(property);
+        strip.removeAttribute(MARKED);
       }
       const icon = row.querySelector(ICON);
       if (icon) {
-        if (own) {
-          icon.style.setProperty("--fpl-icon-color", own);
+        if (tint) {
+          if (icon.style.getPropertyValue("--fpl-icon-color") !== tint) icon.style.setProperty("--fpl-icon-color", tint);
           icon.setAttribute(MARKED, "");
         } else if (icon.hasAttribute(MARKED)) {
           icon.style.removeProperty("--fpl-icon-color");
           icon.removeAttribute(MARKED);
         }
       }
-      if (layers.length || own) row.setAttribute(MARKED, "");
+      if (layers.length || tint) row.setAttribute(MARKED, "");
       else row.removeAttribute(MARKED);
     }
   };
