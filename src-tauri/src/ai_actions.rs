@@ -1832,6 +1832,12 @@ const PAGE_JS: &str = r##"(() => {
     const current = healing;
     if (!current || current.working) return;
     const { figma, node } = current;
+    // Undone, or changed some other way since, the image is read again,
+    // unless a heal is still being handed to Figma. The copy here still
+    // has the undone heals, so it isn't shown over the layer meanwhile
+    const top = fillsOf(node).at(-1);
+    const changed = current.hash && !current.committing && !current.dirty && !(top?.type === "IMAGE" && top.imageHash === current.hash);
+    if (current.stale || changed) current.patched = false;
     current.working = true;
     current.controller = new AbortController();
     busy = true;
@@ -1841,10 +1847,6 @@ const PAGE_JS: &str = r##"(() => {
       // too long, as when Figma never hands it over, and read again next
       // time, so the brush is never stuck
       await within(current.opening?.catch(() => reopenHealing(current)));
-      // Undone, or changed some other way since, the image is read again,
-      // unless a heal is still being handed to Figma
-      const top = fillsOf(node).at(-1);
-      const changed = current.hash && !current.committing && !current.dirty && !(top?.type === "IMAGE" && top.imageHash === current.hash);
       if (current.stale || changed) {
         handOff("heal", request({ op: "close", session: current.session })).catch(() => {});
         Object.assign(current, { hash: null, stale: false });
@@ -1912,7 +1914,7 @@ const PAGE_JS: &str = r##"(() => {
         // Undone or changed meanwhile: left as it is, rather than undoing
         // the undo, and read again before the next stroke
         if (current.hash && !ours) {
-          Object.assign(current, { dirty: false, stale: true });
+          Object.assign(current, { dirty: false, stale: true, patched: false });
           break;
         }
         node.fills = ours
