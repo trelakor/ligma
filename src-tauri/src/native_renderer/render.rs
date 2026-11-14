@@ -2067,15 +2067,23 @@ impl Painter {
         // While the zoom changes, the level it's headed to first, which
         // drawn before it gets there is never shown scaled up
         let todo = match zooming {
-            true => [(ahead_missing, false), (missing, false), (far_missing, false)],
-            false => [(missing, true), (ahead_missing, true), (far_missing, false)],
+            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true)],
+            false => [(missing, true, false), (ahead_missing, true, true), (far_missing, false, true)],
         };
-        for (keys, exact) in todo {
+        // While the view moves, tiles it doesn't show yet take the GPU at
+        // most half the time, as the browser drawing Figma's frames shares
+        // it, and Figma sends none while it waits
+        let moving = self.moved.elapsed() < VELLO_STILL;
+        for (keys, exact, later) in todo {
             if keys.is_empty() {
                 continue;
             }
+            let started = Instant::now();
             self.vello_or_skia(&keys, exact);
             self.evict_vello(&keep, furthest);
+            if later && moving {
+                return Some(started.elapsed());
+            }
             self.dirty = true;
             return Some(Duration::ZERO);
         }
