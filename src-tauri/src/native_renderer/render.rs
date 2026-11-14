@@ -101,13 +101,6 @@ impl View {
         (snapped(self.cx, self.cw), snapped(self.cy, self.ch))
     }
 
-    /// How much the browser stretches those pixels across the canvas's own
-    /// size, which isn't a whole number of them
-    pub fn stretch(&self) -> (f64, f64) {
-        let (w, h) = self.canvas();
-        ((self.cw * self.dpr / w as f64).max(1e-3), (self.ch * self.dpr / h as f64).max(1e-3))
-    }
-
     /// Device pixels a unit in a window `width` pixels wide
     pub fn px(&self, width: u32) -> f32 {
         (width as f64 / self.w) as f32

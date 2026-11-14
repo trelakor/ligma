@@ -33,7 +33,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC, DXGI_STANDARD_MULTISAMPLE_QUALITY_PATTERN,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionTarget, IDCompositionVisual2, DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR,
+    DCompositionCreateDevice2, IDCompositionDesktopDevice, IDCompositionTarget, IDCompositionVisual2, DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_ALPHA_MODE_IGNORE, DXGI_ALPHA_MODE_UNSPECIFIED};
 use windows::Win32::Graphics::Dxgi::{
@@ -532,8 +532,8 @@ struct Composed {
     device: IDCompositionDesktopDevice,
     _target: IDCompositionTarget,
     visual: IDCompositionVisual2,
-    /// Where it is, and how much it's stretched, in hundred thousandths
-    at: Option<((i32, i32), (i32, i32))>,
+    /// Where it is
+    at: Option<(i32, i32)>,
 }
 
 pub struct Screen {
@@ -746,13 +746,9 @@ impl Screen {
                 shown = None;
             }
             if self.layer.is_some() {
-                // Where the browser would put Figma's canvas: at the nearest
-                // device pixel, stretched to its size
-                let at = (*hub.origin.lock().unwrap()).filter(|_| view.visible).map(|(x, y)| {
-                    let (sx, sy) = view.stretch();
-                    let at = (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32);
-                    (at, ((sx * 1e5).round() as i32, (sy * 1e5).round() as i32))
-                });
+                // Where the browser puts Figma's canvas: at the nearest
+                // device pixel, a pixel of it to a pixel of the screen
+                let at = (*hub.origin.lock().unwrap()).filter(|_| view.visible).map(|(x, y)| (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32));
                 self.place(at);
             }
             let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
@@ -822,7 +818,7 @@ impl Screen {
     }
 
     /// Moves the layer to `at` in the window, or hides it
-    fn place(&mut self, at: Option<((i32, i32), (i32, i32))>) {
+    fn place(&mut self, at: Option<(i32, i32)>) {
         let Some(layer) = &mut self.layer else {
             return;
         };
@@ -832,12 +828,10 @@ impl Screen {
         layer.at = at;
         unsafe {
             match at {
-                Some(((x, y), (sx, sy))) => {
-                    let _ = layer.visual.SetOffsetX2(0.0);
-                    let _ = layer.visual.SetOffsetY2(0.0);
-                    let matrix = windows_numerics::Matrix3x2 { M11: sx as f32 / 1e5, M12: 0.0, M21: 0.0, M22: sy as f32 / 1e5, M31: x as f32, M32: y as f32 };
-                    let _ = layer.visual.SetTransform2(&matrix);
-                    let _ = layer.visual.SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR);
+                Some((x, y)) => {
+                    let _ = layer.visual.SetOffsetX2(x as f32);
+                    let _ = layer.visual.SetOffsetY2(y as f32);
+                    let _ = layer.visual.SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
                     let _ = layer.visual.SetContent(&self.swap_chain);
                 }
                 None => {
@@ -911,7 +905,7 @@ impl Screen {
                 rendered.as_secs_f64() * 1000.0,
                 (view.x * px as f64).round(),
                 (view.y * px as f64).round(),
-                self.layer.as_ref().and_then(|layer| layer.at).map(|(at, _)| at),
+                self.layer.as_ref().and_then(|layer| layer.at),
                 snapshot.seq
             )
         });
