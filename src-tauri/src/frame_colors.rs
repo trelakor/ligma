@@ -1,14 +1,17 @@
-//! Frame colors (Settings > Features > Layers): each frame in the layers
-//! panel gets a color, the rainbow over again down the list, red, orange,
-//! yellow, green, blue and purple, and everything in it a lighter tint of
-//! it, each frame inside a step darker, so it's clear where one frame, or
-//! a frame in it, starts and ends. Sections and groups hold frames without
-//! being one, so the frames in them each start a color of their own. Off
-//! by default
+//! Frame colors (Settings > Features > Layers): frames in the layers panel
+//! get a color each, the rainbow over again down the list, red, orange,
+//! yellow, green, blue and purple, on their icons, and a guide in that
+//! color runs down the indent of everything in them, as a code editor's
+//! indent guides do, so it's clear where each frame starts and ends. The
+//! frames inside a frame are a step darker. Off by default
 //!
-//! The panel draws only the rows in view, each with its layer's ID, so
-//! `PAGE_JS` colors those as they're drawn, reading the frames each layer
-//! is in from Figma's plugin API. Selected rows keep Figma's own highlight
+//! A design's colors start at the list that holds the most frames side by
+//! side, as a board of designs does, so the designs on a board each get
+//! their own color rather than the board's. Sections and groups hold frames
+//! without being one. The panel draws only the rows in view, each with its
+//! layer's ID, so `PAGE_JS` colors those as they're drawn, reading the
+//! frames each layer is in from Figma's plugin API. Only the icons and the
+//! indents are drawn on, so hover and selection stay Figma's
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,77 +33,161 @@ const PAGE_JS: &str = r##"(() => {
   } catch {}
 
   // The rainbow, in OKLCH hues: red, orange, yellow, green, blue, purple
-  const HUES = [25, 60, 100, 150, 245, 305];
+  const HUES = [25, 60, 95, 150, 240, 305];
   // What counts as a frame. Sections and groups hold frames without being
-  // one, so the frames in them each get a color of their own
+  // one
   const FRAMES = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE"]);
   const ROW = '[class*="object_row--row--"]';
   const ID = '[data-testid$="-layers-panel-row"]';
-  const COLORED = "data-ligma-frame-color";
-  const TINT = "--ligma-frame-tint";
+  const INDENT = '[class*="object_row--indent--"]';
+  const ICON = '[class*="object_row--layerIcon--"]';
+  const CARET = '[data-testid="layers-panel-expand-caret"]';
+  const MARKED = "data-ligma-frame-color";
+  // A frame's expand arrow is centered this far past where its row's last
+  // indent starts, and its guide drawn there, this wide
+  const ARROW = 16;
+  const GUIDE = 2;
 
-  // Under what's in the row, and under Figma's highlight on selected rows
+  // The guides are drawn over the row, above Figma's hover and selection,
+  // and under nothing, as they keep to the indents
   const style = document.createElement("style");
   style.textContent = `
-    ${ROW}[${COLORED}]:not([class*="object_row--selected--"]) {
-      background-image: linear-gradient(var(${TINT}), var(${TINT})) !important;
+    ${ROW}[${MARKED}]::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      pointer-events: none;
+      background-image: var(--ligma-guides, none);
+      background-position: var(--ligma-guides-at, 0 0);
+      background-size: var(--ligma-guides-size, 0 0);
+      background-repeat: no-repeat;
     }`;
 
-  // A frame `depth` frames deep in the one `index` frames down its list:
-  // its hue, a step darker for each frame it's in. Frames' own rows are
-  // stronger than what's in them, so each one's start stands out
-  const tint = (index, depth, own) => {
-    const lightness = Math.max(0.42, 0.74 - depth * 0.08);
-    return `oklch(${lightness} 0.15 ${HUES[index % HUES.length]} / ${own ? 0.3 : 0.12})`;
+  // How many frames are directly in `node`, read again at most once a
+  // second
+  const counts = new Map();
+  const framesIn = (node) => {
+    const known = counts.get(node.id);
+    if (known && performance.now() - known.at < 1000) return known;
+    const index = new Map();
+    let at = 0;
+    const children = "children" in node ? [...node.children] : [];
+    // Top to bottom as the panel lists them: last first, but in auto
+    // layout in order
+    if (!node.layoutMode || node.layoutMode === "NONE") children.reverse();
+    for (const child of children) if (FRAMES.has(child.type)) index.set(child.id, at++);
+    const order = { at: performance.now(), count: at, index };
+    counts.set(node.id, order);
+    return order;
   };
 
-  // Where each outermost frame comes among the frames beside it, top to
-  // bottom as the panel lists them, read again at most once a second
-  const orders = new Map();
-  const indexOf = (node) => {
-    const parent = node.parent;
-    if (!parent) return 0;
-    let order = orders.get(parent.id);
-    if (!order || performance.now() - order.at > 1000) {
-      const index = new Map();
-      let at = 0;
-      const children = parent.children;
-      for (let i = children.length - 1; i >= 0; i--) if (FRAMES.has(children[i].type)) index.set(children[i].id, at++);
-      order = { at: performance.now(), index };
-      orders.set(parent.id, order);
-    }
-    return order.index.get(node.id) ?? 0;
-  };
-
-  // The color for the layer with `id`: of the frame it's in, or its own,
-  // or null outside any frame
-  const colorOf = (figma, id) => {
-    let node;
-    try {
-      node = figma.getNodeById(id);
-    } catch {}
-    if (!node) return null;
-    // The frames it's in, itself first if it's one, out to the outermost
+  // A frame's color. The frames a design is made of start their colors at
+  // the list that holds the most frames side by side, as a board of
+  // designs does, each taking the next color of the rainbow, and the frames
+  // in each a step darker. A frame holding that list, like the board
+  // itself, takes its color from its own list
+  let dark = true;
+  const shades = new Map();
+  const colorOf = (frame) => {
+    if (shades.has(frame.id)) return shades.get(frame.id);
     const frames = [];
-    for (let at = node; at && at.type !== "PAGE" && at.type !== "DOCUMENT"; at = at.parent) {
-      if (FRAMES.has(at.type)) frames.push(at);
+    for (let at = frame; at && at.type !== "PAGE" && at.type !== "DOCUMENT"; at = at.parent) if (FRAMES.has(at.type)) frames.push(at);
+    let start = 0;
+    let most = -1;
+    // Outermost first, so the outer one wins a tie
+    for (let i = frames.length - 1; i >= 0; i--) {
+      const count = frames[i].parent ? framesIn(frames[i].parent).count : 0;
+      if (count > most) [most, start] = [count, i];
     }
-    if (!frames.length) return null;
-    return tint(indexOf(frames.at(-1)), frames.length - 1, FRAMES.has(node.type));
+    const first = frames[start];
+    const hue = HUES[(first.parent ? framesIn(first.parent).index.get(first.id) ?? 0 : 0) % HUES.length];
+    // Each step darker, from light enough to read on the panel
+    const lightness = dark ? Math.max(0.5, 0.78 - start * 0.09) : Math.max(0.36, 0.62 - start * 0.08);
+    const color = `oklch(${lightness} ${dark ? 0.15 : 0.17} ${hue})`;
+    shades.set(frame.id, color);
+    return color;
   };
 
+  const nodeOf = (figma, row) => {
+    const id = row.querySelector(ID)?.dataset.testid?.slice(0, -"-layers-panel-row".length);
+    try {
+      return id ? figma.getNodeById(id) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const GUIDES = ["--ligma-guides", "--ligma-guides-at", "--ligma-guides-size"];
+  const clear = (row) => {
+    row.removeAttribute(MARKED);
+    for (const property of GUIDES) row.style.removeProperty(property);
+    row.querySelector(`${ICON}[${MARKED}]`)?.style.removeProperty("--fpl-icon-color");
+    row.querySelector(`${ICON}[${MARKED}]`)?.removeAttribute(MARKED);
+  };
+
+  // Each row: its frame's icon in its color, a guide down the column of
+  // each frame it's in, in that frame's color, and below an open frame's
+  // arrow, the start of its own
   const paint = () => {
     const figma = window.figma;
-    for (const row of document.querySelectorAll(`${ROW}, ${ROW}[${COLORED}]`)) {
-      const id = row.querySelector(ID)?.dataset.testid?.slice(0, -"-layers-panel-row".length);
-      const color = state.on && figma && id ? colorOf(figma, id) : null;
-      if (color) {
-        if (row.style.getPropertyValue(TINT) !== color) row.style.setProperty(TINT, color);
-        if (!row.hasAttribute(COLORED)) row.setAttribute(COLORED, "");
-      } else if (row.hasAttribute(COLORED)) {
-        row.removeAttribute(COLORED);
-        row.style.removeProperty(TINT);
+    const rows = document.querySelectorAll(ROW);
+    if (!state.on || !figma) {
+      for (const row of document.querySelectorAll(`${ROW}[${MARKED}]`)) clear(row);
+      return;
+    }
+    shades.clear();
+    // Light text on the panel means a dark theme
+    const text = rows[0] && getComputedStyle(rows[0]).color.match(/[\d.]+/g)?.map(Number);
+    if (text) dark = 0.299 * text[0] + 0.587 * text[1] + 0.114 * text[2] > 128;
+    for (const row of rows) {
+      const node = nodeOf(figma, row);
+      if (!node) {
+        if (row.hasAttribute(MARKED)) clear(row);
+        continue;
       }
+      const box = row.getBoundingClientRect();
+      const indents = [...row.querySelectorAll(INDENT)].map((indent) => indent.getBoundingClientRect().left - box.left);
+      const layers = [];
+      // The frames it's in, `steps` levels up
+      let steps = 1;
+      for (let at = node.parent; at && at.type !== "PAGE" && at.type !== "DOCUMENT"; at = at.parent, steps++) {
+        const column = indents.length - steps - 1;
+        if (column < 0) break;
+        if (!FRAMES.has(at.type)) continue;
+        const x = Math.round(indents[column] + ARROW - GUIDE / 2);
+        const color = colorOf(at);
+        layers.push({ color, position: `${x}px 0`, size: `${GUIDE}px 100%` });
+      }
+      const own = FRAMES.has(node.type) ? colorOf(node) : null;
+      const caret = row.querySelector(CARET);
+      if (own && caret && /object_row--expanded--/.test(row.className) && indents.length) {
+        const x = Math.round(indents.at(-1) + ARROW - GUIDE / 2);
+        const top = Math.round(caret.getBoundingClientRect().bottom - box.top - 2);
+        layers.push({ color: own, position: `${x}px ${top}px`, size: `${GUIDE}px calc(100% - ${top}px)` });
+      }
+      const set = (property, value) => {
+        if (row.style.getPropertyValue(property) !== value) row.style.setProperty(property, value);
+      };
+      if (layers.length) {
+        set(GUIDES[0], layers.map(({ color }) => `linear-gradient(${color}, ${color})`).join(", "));
+        set(GUIDES[1], layers.map(({ position }) => position).join(", "));
+        set(GUIDES[2], layers.map(({ size }) => size).join(", "));
+      } else {
+        for (const property of GUIDES) row.style.removeProperty(property);
+      }
+      const icon = row.querySelector(ICON);
+      if (icon) {
+        if (own) {
+          icon.style.setProperty("--fpl-icon-color", own);
+          icon.setAttribute(MARKED, "");
+        } else if (icon.hasAttribute(MARKED)) {
+          icon.style.removeProperty("--fpl-icon-color");
+          icon.removeAttribute(MARKED);
+        }
+      }
+      if (layers.length || own) row.setAttribute(MARKED, "");
+      else row.removeAttribute(MARKED);
     }
   };
 
