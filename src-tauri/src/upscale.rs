@@ -81,13 +81,22 @@ mod esrgan {
     use super::factor;
     use crate::models::{Missing, NOMOS, REAL_ESRGAN, REAL_ESRGAN_ART, UPSCALE, UPSCALE_ART, UPSCALE_FAST};
 
-    /// The model makes images 4 times as large, a tile this size at a time,
-    /// each read with this much more of the image around it, as far as its
-    /// large kernels see, so the tiles meet without seams
+    /// The model makes images 4 times as large, a tile at most this size at
+    /// a time, each read with this much more of the image around it, as far
+    /// as its large kernels see, so the tiles meet without seams
     const TIMES: usize = 4;
-    const GPU_TILE: usize = 512;
     const CPU_TILE: usize = 256;
     const PAD: usize = 32;
+    /// On a graphics card each model reads tiles of at most this many
+    /// pixels, as many as it can before it needs much more of the card's
+    /// memory: past these it holds gigabytes more, at 4 times the size, more
+    /// than a card shares with Figma, so it slows several times over, and
+    /// everything else on screen with it. Smaller, more is read twice, and
+    /// Photo's model evens out its features over each tile, so the larger
+    /// they are the closer it comes to the whole image made larger at once
+    const PHOTO_READ: usize = 704 * 704;
+    const ILLUSTRATION_READ: usize = 320 * 320;
+    const FAST_READ: usize = 576 * 576;
 
     /// A tile, `across` by `down` at `x` and `y`, read as `read_across` by
     /// `read_down` from `x0` and `y0`, which may be past the image's edge
@@ -110,10 +119,10 @@ mod esrgan {
     pub fn upscale(app: &AppHandle, tab: u32, job: u64, scale: f32, quality: &str, bytes: &[u8]) -> Result<String, &'static str> {
         let image = decode(bytes)?;
         let factor = factor(image.width(), image.height(), scale).ok_or("large")?;
-        let (model, file) = match quality {
-            "fast" => (&UPSCALE_FAST, REAL_ESRGAN.file),
-            "illustration" => (&UPSCALE_ART, REAL_ESRGAN_ART.file),
-            _ => (&UPSCALE, NOMOS.file),
+        let (model, file, most) = match quality {
+            "fast" => (&UPSCALE_FAST, REAL_ESRGAN.file, FAST_READ),
+            "illustration" => (&UPSCALE_ART, REAL_ESRGAN_ART.file, ILLUSTRATION_READ),
+            _ => (&UPSCALE, NOMOS.file, PHOTO_READ),
         };
         // Photo makes up texture most readily, so it's kept to most of its
         // way, the rest a smooth enlargement
@@ -129,7 +138,7 @@ mod esrgan {
         });
         let stopped = || crate::handoff::cancelled(tab, job);
         let progress = |text: &str| crate::handoff::progress(app, tab, job, text);
-        let larger = run(&folder.join(file), Some(&folder), &image, factor, strength, &options, &stopped, &progress).map_err(|error| {
+        let larger = run(&folder.join(file), Some(&folder), &image, factor, strength, most, &options, &stopped, &progress).map_err(|error| {
             if stopped() {
                 "cancelled"
             } else {
@@ -139,7 +148,7 @@ mod esrgan {
         // Encoded quickly: it's large, and Figma compresses it again anyway
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new_with_quality(&mut png, CompressionType::Fast, PngFilter::Adaptive)
-            .write_image(larger.as_raw(), larger.width(), larger.height(), image::ExtendedColorType::Rgba8)
+            .write_image(larger.as_bytes(), larger.width(), larger.height(), larger.color().into())
             .map_err(failed)?;
         Ok(format!(
             r#"{{"png":"{}","width":{},"height":{}}}"#,
@@ -152,8 +161,8 @@ mod esrgan {
     /// A session for the model at `model`, on the graphics card if `gpu`
     /// and there's one to use: DirectML on Windows, picking the fastest
     /// card, and Core ML on Macs. Where it can't, ONNX Runtime runs it on
-    /// the CPU instead
-    fn session(environment: &'static ort::environment::Environment, model: &Path, gpu: bool) -> Result<Session, String> {
+    /// the CPU instead. With whether it's meant for the graphics card
+    fn session(environment: &'static ort::environment::Environment, model: &Path, gpu: bool) -> Result<(Session, bool), String> {
         #[cfg(windows)]
         let gpu = gpu && directml();
         let builder = Session::builder(environment).map_err(|error| error.to_string())?;
@@ -176,7 +185,7 @@ mod esrgan {
         } else {
             builder.with_auto_device(AutoDevicePolicy::PreferCPU).map_err(|error| error.to_string())?
         };
-        builder.commit_from_file(model).map_err(|error| error.to_string())
+        builder.commit_from_file(model).map(|session| (session, gpu)).map_err(|error| error.to_string())
     }
 
     /// Whether DirectML can run the model: Windows' own DirectML.dll is
@@ -427,8 +436,9 @@ mod esrgan {
 
     /// `image` made `factor` times as large with the model at `model`, ONNX
     /// Runtime from `folder` where it's downloaded, or as linked in without
-    /// one, its detail kept to `strength` of the way (see `settle`), saying
-    /// how far it's got with `progress`
+    /// one, its detail kept to `strength` of the way (see `settle`), in
+    /// tiles that read at most `most` pixels on a graphics card, saying how
+    /// far it's got with `progress`
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         model: &Path,
@@ -436,16 +446,16 @@ mod esrgan {
         image: &RgbaImage,
         factor: f32,
         strength: f32,
+        most: usize,
         options: &RunOptions,
         stopped: &dyn Fn() -> bool,
         progress: &dyn Fn(&str),
-    ) -> Result<RgbaImage, String> {
+    ) -> Result<DynamicImage, String> {
         let (width, height) = (image.width() as usize, image.height() as usize);
         let environment = crate::models::environment(folder.unwrap_or(Path::new("")))?;
         // Tests can ask for the CPU, to compare
         let gpu = !(cfg!(test) && std::env::var("LIGMA_UPSCALE_CPU").is_ok());
-        let mut session = session(environment, model, gpu).or_else(|_| session(environment, model, false))?;
-        let mut on_gpu = gpu;
+        let (mut session, mut on_gpu) = session(environment, model, gpu).or_else(|_| session(environment, model, false))?;
         // Transparent pixels as they'd show on black, as the model reads color
         let rgb = RgbImage::from_fn(width as u32, height as u32, |x, y| {
             let [r, g, b, a] = image.get_pixel(x, y).0;
@@ -476,12 +486,16 @@ mod esrgan {
             // model makes is never held 4 times as large in full
             let size = if pass + 1 == passes { target } else { (work.width() * TIMES as u32, work.height() * TIMES as u32) };
             let step = |done: usize| progress(&format!("Upscaling… {}%", (pass * 100 + done) / passes));
-            out = enlarge(&mut session, environment, model, gpu, &mut on_gpu, &work, size, options, stopped, &step)?;
+            out = enlarge(&mut session, environment, model, &mut on_gpu, &work, size, most, options, stopped, &step)?;
         }
         drop(session);
         progress("Finishing…");
         settle(&work, &mut out, strength);
         let (out_width, out_height) = (out.width(), out.height());
+        // An opaque image stays so, without its transparency read
+        if image.pixels().all(|pixel| pixel[3] == 255) {
+            return Ok(DynamicImage::ImageRgb8(out));
+        }
         // Transparency scaled up smoothly, and the color back off black
         let alpha = imageops::resize(
             &image::GrayImage::from_fn(width as u32, height as u32, |x, y| image::Luma([image.get_pixel(x, y)[3]])),
@@ -489,10 +503,9 @@ mod esrgan {
             out_height,
             FilterType::CatmullRom,
         );
-        let opaque = image.pixels().all(|pixel| pixel[3] == 255);
         let larger = RgbaImage::from_fn(out_width, out_height, |x, y| {
             let [r, g, b] = out.get_pixel(x, y).0;
-            let a = if opaque { 255 } else { alpha.get_pixel(x, y)[0] };
+            let a = alpha.get_pixel(x, y)[0];
             if a == 255 {
                 return image::Rgba([r, g, b, 255]);
             }
@@ -502,7 +515,7 @@ mod esrgan {
             let unmultiply = |value: u8| ((value as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
             image::Rgba([unmultiply(r), unmultiply(g), unmultiply(b), a])
         });
-        Ok(larger)
+        Ok(DynamicImage::ImageRgba8(larger))
     }
 
     /// How each pixel along a side `size` long is read from one `big` long,
@@ -529,19 +542,63 @@ mod esrgan {
             .collect()
     }
 
-    /// `rgb` made `TIMES` as large with `session`, a tile at a time, and
-    /// read back at `size`, at most that large, moved to the CPU, in
-    /// `on_gpu`, if the graphics card fails, saying how far it's got, in
-    /// percent, with `progress`
+    /// `count` tiles as long along a side `size` long: how long, and where
+    /// each starts, so they meet rather than the last overlapping the one
+    /// before by most of its length
+    fn split(size: usize, count: usize) -> (usize, Vec<usize>) {
+        let tile = size.div_ceil(count.clamp(1, size));
+        let mut starts: Vec<usize> = (0..count).map(|i| (i * tile).min(size - tile)).collect();
+        starts.dedup();
+        (tile, starts)
+    }
+
+    /// How a `width` by `height` image is split into tiles all the same
+    /// size, none reading more than `most` pixels with what's around it:
+    /// across and down, those that read the fewest in all, so the least is
+    /// read twice. At least a pixel's read with what's around it, however
+    /// little `most` is
+    fn layout(width: usize, height: usize, most: usize) -> ((usize, Vec<usize>), (usize, Vec<usize>)) {
+        let most = most.max((1 + 2 * PAD).pow(2));
+        let mut best = (usize::MAX, 1, 1);
+        for columns in 1..=width {
+            let read_across = width.div_ceil(columns) + 2 * PAD;
+            // As few rows as fit
+            let Some(down) = (most / read_across).checked_sub(2 * PAD).filter(|&down| down > 0) else {
+                continue;
+            };
+            let rows = height.div_ceil(down);
+            let read = columns * rows * read_across * (height.div_ceil(rows) + 2 * PAD);
+            if read < best.0 {
+                best = (read, columns, rows);
+            }
+        }
+        (split(width, best.1), split(height, best.2))
+    }
+
+    /// The color every pixel `t` reads has, if they all have the same: the
+    /// model would only make that color larger, so it isn't asked
+    fn uniform(rgb: &RgbImage, t: &Tile) -> Option<image::Rgb<u8>> {
+        let (width, height) = (rgb.width() as isize, rgb.height() as isize);
+        let (left, top) = (t.x0.clamp(0, width - 1) as u32, t.y0.clamp(0, height - 1) as u32);
+        let (right, bottom) = ((t.x0 + t.read_across as isize).clamp(1, width) as u32, (t.y0 + t.read_down as isize).clamp(1, height) as u32);
+        let first = *rgb.get_pixel(left, top);
+        (top..bottom).all(|y| (left..right).all(|x| *rgb.get_pixel(x, y) == first)).then_some(first)
+    }
+
+    /// `rgb` made `TIMES` as large with `session`, a tile at a time, each
+    /// reading at most `most` pixels on a graphics card, and read back at
+    /// `size`, at most that large, moved to the CPU, in `on_gpu`, and
+    /// started over in its tiles if the graphics card fails, saying how far
+    /// it's got, in percent, with `progress`
     #[allow(clippy::too_many_arguments)]
     fn enlarge(
         session: &mut Session,
         environment: &'static ort::environment::Environment,
         model: &Path,
-        gpu: bool,
         on_gpu: &mut bool,
         rgb: &RgbImage,
         size: (u32, u32),
+        most: usize,
         options: &RunOptions,
         stopped: &dyn Fn() -> bool,
         progress: &dyn Fn(usize),
@@ -554,24 +611,17 @@ mod esrgan {
         let (columns, rows) = (spans(size.0 as usize, width * TIMES), spans(size.1 as usize, height * TIMES));
         // Tiles on a graphics card are all read the same size, their edge
         // pixels carried on past the image's, so the model is prepared for
-        // one size only. On the CPU, where that costs nothing, they're
-        // smaller, and those at the edges smaller still, so less is read
-        // twice
-        let tile = if gpu { GPU_TILE } else { CPU_TILE };
-        let tiles: Vec<Tile> = if gpu {
-            let (across, down) = (tile.min(width), tile.min(height));
-            let starts = |size: usize, tile: usize| {
-                let mut starts: Vec<usize> = (0..size.saturating_sub(tile)).step_by(tile).collect();
-                starts.push(size - tile);
-                starts.dedup();
-                starts
-            };
-            starts(height, down)
-                .into_iter()
-                .flat_map(|y| starts(width, across).into_iter().map(move |x| (x, y)))
+        // one size only, and the image is split into as few as fit. On the
+        // CPU, where that costs nothing, they're smaller, and those at the
+        // edges smaller still, so less is read twice
+        let tiles: Vec<Tile> = if *on_gpu {
+            let ((across, xs), (down, ys)) = layout(width, height, most);
+            ys.into_iter()
+                .flat_map(|y| xs.iter().map(move |&x| (x, y)))
                 .map(|(x, y)| Tile { x, y, across, down, x0: x as isize - PAD as isize, y0: y as isize - PAD as isize, read_across: across + 2 * PAD, read_down: down + 2 * PAD })
                 .collect()
         } else {
+            let tile = CPU_TILE;
             (0..height)
                 .step_by(tile)
                 .flat_map(|y| (0..width).step_by(tile).map(move |x| (x, y)))
@@ -591,11 +641,26 @@ mod esrgan {
                 })
                 .collect()
         };
+        // Only the pixels whose middle is in a tile itself, not in what was
+        // read around it
+        let within = |spans: &[Span], from: usize, to: usize| {
+            let (from, to) = ((from * TIMES) as f32, (to * TIMES) as f32);
+            spans.partition_point(|span| span.middle < from)..spans.partition_point(|span| span.middle < to)
+        };
         for (index, t) in tiles.iter().enumerate() {
             if stopped() {
                 return Err("cancelled".to_owned());
             }
             progress(index * 100 / tiles.len());
+            // Like a plain background, or what's see-through
+            if let Some(color) = uniform(rgb, t) {
+                for oy in within(&rows, t.y, t.y + t.down) {
+                    for ox in within(&columns, t.x, t.x + t.across) {
+                        out.put_pixel(ox as u32, oy as u32, color);
+                    }
+                }
+                continue;
+            }
             let (across, down) = (t.read_across, t.read_down);
             let plane = across * down;
             let mut input = vec![0f32; 3 * plane];
@@ -617,12 +682,13 @@ mod esrgan {
             };
             let output = match ask(session) {
                 Ok(output) => output,
-                // The graphics card failed: the CPU from then on
+                // The graphics card failed: the CPU from then on, in its
+                // own tiles, as the card's are too large for it
                 Err(_) if *on_gpu && !stopped() => {
                     log::warn!("Upscale: the graphics card failed, using the CPU");
-                    *session = self::session(environment, model, false)?;
+                    *session = self::session(environment, model, false)?.0;
                     *on_gpu = false;
-                    ask(session)?
+                    return enlarge(session, environment, model, on_gpu, rgb, size, most, options, stopped, progress);
                 }
                 Err(error) => return Err(error),
             };
@@ -631,13 +697,7 @@ mod esrgan {
                 return Err("unexpected output".to_owned());
             }
             let big_plane = big_across * big_down;
-            // Only the pixels whose middle is in the tile itself, not in
-            // what was read around it
             let (origin_x, origin_y) = (t.x0 * TIMES as isize, t.y0 * TIMES as isize);
-            let within = |spans: &[Span], from: usize, to: usize| {
-                let (from, to) = ((from * TIMES) as f32, (to * TIMES) as f32);
-                spans.partition_point(|span| span.middle < from)..spans.partition_point(|span| span.middle < to)
-            };
             for oy in within(&rows, t.y, t.y + t.down) {
                 let row = &rows[oy];
                 for ox in within(&columns, t.x, t.x + t.across) {
@@ -708,9 +768,47 @@ mod esrgan {
             assert!(spans(8, 8).iter().enumerate().all(|(i, span)| span.start == i && span.weights == [1.0]));
         }
 
+        #[test]
+        fn tiles_split_sides_evenly() {
+            for (size, count) in [(1, 1), (384, 1), (385, 2), (1100, 3), (4096, 16), (777, 3), (5, 4)] {
+                let (tile, starts) = split(size, count);
+                assert!(starts.len() <= count, "{size} {count}");
+                assert_eq!(starts[0], 0);
+                assert_eq!(starts.last().unwrap() + tile, size);
+                // Each meets the next, overlapping it by less than one pixel per tile
+                assert!(starts.windows(2).all(|pair| pair[1] > pair[0] && pair[1] <= pair[0] + tile && pair[0] + tile - pair[1] < count));
+            }
+            assert_eq!(split(1100, 3), (367, vec![0, 367, 733]));
+        }
+
+        #[test]
+        fn tiles_read_no_more_than_they_may() {
+            for (width, height, most) in [(960, 643, PHOTO_READ), (782, 1200, ILLUSTRATION_READ), (4096, 64, FAST_READ), (1, 1, PHOTO_READ), (2048, 2048, PHOTO_READ), (300, 200, 0)] {
+                let ((across, xs), (down, ys)) = layout(width, height, most);
+                assert!((across + 2 * PAD) * (down + 2 * PAD) <= most.max((1 + 2 * PAD).pow(2)), "{width} {height}");
+                assert_eq!((xs.last().unwrap() + across, ys.last().unwrap() + down), (width, height));
+            }
+            // An image that fits is one tile
+            assert_eq!(layout(600, 400, PHOTO_READ), ((600, vec![0]), (400, vec![0])));
+            // and one that nearly does two, not four
+            let ((_, xs), (_, ys)) = layout(960, 643, PHOTO_READ);
+            assert_eq!(xs.len() * ys.len(), 2);
+        }
+
+        #[test]
+        fn plain_tiles_are_found() {
+            let mut rgb = RgbImage::from_pixel(100, 100, image::Rgb([10, 20, 30]));
+            let tile = Tile { x: 0, y: 0, across: 40, down: 40, x0: -(PAD as isize), y0: -(PAD as isize), read_across: 40 + 2 * PAD, read_down: 40 + 2 * PAD };
+            assert_eq!(uniform(&rgb, &tile), Some(image::Rgb([10, 20, 30])));
+            // A pixel just within what's read around the tile
+            rgb.put_pixel(71, 5, image::Rgb([10, 20, 31]));
+            assert_eq!(uniform(&rgb, &tile), None);
+        }
+
         /// Upscales `LIGMA_UPSCALE_IMAGE` with the model at `LIGMA_UPSCALE`
         /// 4 times and writes it next to the image, on the graphics card
-        /// unless `LIGMA_UPSCALE_CPU` is set. `cargo test --release --
+        /// unless `LIGMA_UPSCALE_CPU` is set, in tiles that read as much as
+        /// a square `LIGMA_UPSCALE_TILE` across. `cargo test --release --
         /// --ignored upscales`
         #[test]
         #[ignore]
@@ -723,7 +821,8 @@ mod esrgan {
             let started = std::time::Instant::now();
             let factor = factor(image.width(), image.height(), 4.0).unwrap();
             let strength = std::env::var("LIGMA_UPSCALE_STRENGTH").ok().and_then(|value| value.parse().ok()).unwrap_or(PHOTO_STRENGTH);
-            let larger = run(Path::new(&model), None, &image, factor, strength, &options, &|| false, &|_| {}).unwrap();
+            let most = std::env::var("LIGMA_UPSCALE_TILE").ok().and_then(|value| value.parse::<usize>().ok()).map_or(PHOTO_READ, |side| side * side);
+            let larger = run(Path::new(&model), None, &image, factor, strength, most, &options, &|| false, &|_| {}).unwrap();
             eprintln!("{}x{} in {:?}", larger.width(), larger.height(), started.elapsed());
             larger.save(format!("{path}.upscaled.png")).unwrap();
         }
