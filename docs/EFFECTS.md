@@ -6,15 +6,15 @@ The Effects button in Figma Design's toolbar, after Actions, lists effects Ligma
 
 - **No plugins.** Ligma's page script runs in Figma's page, where Figma's console plugin API, `window.figma`, works on the open file. Effects call it directly, so there's no plugin window, no plugin sandbox, no network and no paywall. The API exists only in files that can be edited, so the button only shows there.
 - **Live in the file.** What an effect makes is real layers on the canvas from the first change, updated once a frame as you drag a field. Cancel removes them. Apply calls `figma.commitUndo()` once, so the whole result is one undo step.
-- **Figma's own controls.** Panels and menus are drawn from Figma's CSS variables (`--color-bg`, `--color-bg-secondary`, `--color-border`, `--color-bg-menu`, `--elevation-500`, `--radius-large` and so on), which Figma sets on the page's body for the light or dark theme. They use its type (Inter, 11px), its 24px number fields with a glyph that scrubs when dragged, its segmented controls and its menus, so they look and behave like Figma's panels rather than a plugin's.
-- **Adding one.** Each effect is an entry in `EFFECTS` (`id`, `name`, `about`, `icon`, `open`). `open(figma)` gets the plugin API and the selection, and builds its panel from the shared controls: `numberField`, `segments`, `select`, sections and the footer.
+- **Figma's own controls.** Panels and menus are drawn from Figma's CSS variables (`--color-bg`, `--color-bg-secondary`, `--color-border`, `--color-bg-menu`, `--elevation-500`, `--radius-large` and so on), which Figma sets on the page's body for the light or dark theme. They use its type (Inter, 11px), its dropdowns, segmented controls and menus, and its brand blue on sliders and the main button, so they sit with Figma's own panels rather than looking like a plugin's.
+- **Adding one.** Each effect is an entry in `EFFECTS` (`id`, `name`, `about`, `icon`, `open`). `open(figma)` gets the plugin API and the selection, and builds its panel from the shared controls: `select`, `segments`, sections and the footer, as Repeater's does with its labeled sliders.
 - **Editable results.** An effect can keep what it made in a group tagged with shared plugin data (`ligma` namespace), with its settings, so selecting the group and opening the effect again changes it instead of starting over.
 
 ## Repeater (built)
 
-Repeats the selected layer, live:
+Repeats the selected layer, live. Its panel has a preview of the whole result up top, drawn from a picture of the layer, so it shows even when the copies are off screen; preset chips; Repeat as; labeled sliders, each with its value beside it, which can be typed in past the slider's ends (arrow keys step it, Shift by 10); Reset; and Place, which says how many copies it places:
 
-- **Trail:** each copy a step right and down from the last, turned by a set angle, and curving: the step's direction turns each time, so trails bend into arcs and spirals.
+- **Trail:** each copy a step right and down from the last, turned by a set angle, and curving: the step's direction turns each time, so trails bend into arcs, and each step is as much smaller or larger as the copies are, so shrinking copies spiral inward.
 - **Radial:** around a ring through the original, over a sweep of up to 360°, turning the copies to follow the ring or not.
 - **Grid:** rows and columns, with gaps.
 - **To the last copy:** size, opacity and a blend toward a color change from the first copy to the last, evenly or easing in, out or both.

@@ -57,24 +57,6 @@ const PAGE_JS: &str = r##"(() => {
   const CHEVRON = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m5.5 7 2.5 2.5L10.5 7"/></svg>`;
   const CLOSE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m8 8 8 8m0-8-8 8"/></svg>`;
   const CHECK = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m4.5 8.5 2.5 2.5 4.5-5.5"/></svg>`;
-  // Field glyphs, 16 pixels, in the field's secondary text color
-  const glyph = (d) => `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="${d}"/></svg>`;
-  const GLYPHS = {
-    copies: glyph("M3.5 3.5h6v6h-6zM6.5 12.5h6v-6"),
-    turn: glyph("M12.5 8a4.5 4.5 0 1 1-1.3-3.2M12.5 3v2.5H10"),
-    curve: glyph("M3.5 12.5C3.5 7 7 3.5 12.5 3.5"),
-    radius: glyph("M8 8h4.5M8 8m-1 0a1 1 0 1 0 2 0a1 1 0 1 0-2 0M3.5 8a4.5 4.5 0 0 1 9 0"),
-    start: glyph("M3.5 12.5h9M3.5 12.5l6-7.5"),
-    sweep: glyph("M3.5 10a4.5 4.5 0 0 1 9 0M12.5 10l-1.5-1.5M12.5 10l1-1.8"),
-    columns: glyph("M3.5 3.5v9M8 3.5v9M12.5 3.5v9"),
-    rows: glyph("M3.5 3.5h9M3.5 8h9M3.5 12.5h9"),
-    gapX: glyph("M2.5 4v8M13.5 4v8M5 8h6M6.5 6.5 5 8l1.5 1.5M9.5 6.5 11 8l-1.5 1.5"),
-    gapY: glyph("M4 2.5h8M4 13.5h8M8 5v6M6.5 6.5 8 5l1.5 1.5M6.5 9.5 8 11l1.5-1.5"),
-    size: glyph("M3.5 6.5v-3h3M12.5 9.5v3h-3M3.5 3.5l3.5 3.5M12.5 12.5 9 9"),
-    opacity: glyph("M8 3.5a4.5 4.5 0 1 0 0 9zM8 3.5a4.5 4.5 0 1 1 0 9"),
-    amount: glyph("M3.5 12.5l9-9M5 4.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0-2 0M11 11.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0-2 0"),
-  };
-  const PRESETS_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M6.5 8.5h11M6.5 12h11M6.5 15.5h7"/></svg>`;
 
   const style = document.createElement("style");
   style.textContent = `
@@ -119,12 +101,13 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}="menu"] .item .name { font-weight: 500; }
     [${ROOT}="menu"] .item .about { color: var(--color-text-menu-secondary, #ffffffb2); }
     [${ROOT}="menu"] .item:hover .about { color: inherit; }
-    /* An effect's panel, as Figma's own panels are */
+    /* An effect's panel: a preview up top, then labeled sliders, in
+       Figma's colors and type */
     [${ROOT}="panel"] {
       position: fixed;
       z-index: 8;
-      width: 248px;
-      max-height: calc(100vh - 120px);
+      width: 300px;
+      max-height: calc(100vh - 96px);
       display: flex;
       flex-direction: column;
       border-radius: var(--radius-large, 13px);
@@ -135,15 +118,15 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}="panel"] .title {
       display: flex;
       align-items: center;
+      gap: 8px;
       height: 40px;
+      flex: none;
       padding: 0 8px 0 16px;
-      border-bottom: 1px solid var(--color-border);
       font-weight: 600;
       cursor: grab;
       user-select: none;
     }
-    [${ROOT}="panel"] .title span { flex: 1; }
-    [${ROOT}="panel"] .scroll { overflow-y: auto; }
+    [${ROOT}="panel"] .title span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     [${ROOT}="panel"] .icon-button {
       display: grid;
       place-items: center;
@@ -154,46 +137,88 @@ const PAGE_JS: &str = r##"(() => {
       border-radius: 5px;
       background: none;
     }
-    [${ROOT}="panel"] .icon-button:hover, [${ROOT}="panel"] .icon-button[aria-expanded="true"] { background: var(--color-bg-hover); }
-    [${ROOT}="panel"] section { padding: 8px 16px 12px; border-bottom: 1px solid var(--color-border); }
-    [${ROOT}="panel"] section:last-of-type { border-bottom: 0; }
-    [${ROOT}="panel"] .section-title { display: flex; align-items: center; justify-content: space-between; height: 24px; margin-bottom: 4px; font-weight: 600; }
-    [${ROOT}="panel"] .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    [${ROOT}="panel"] .grid + .grid, [${ROOT}="panel"] .grid + .line, [${ROOT}="panel"] .line + .grid, [${ROOT}="panel"] .segments + .grid { margin-top: 8px; }
-    [${ROOT}="panel"] .field {
-      display: flex;
-      align-items: center;
-      height: 24px;
-      min-width: 0;
-      border: 1px solid transparent;
-      border-radius: 5px;
-      background: var(--color-bg-secondary);
-    }
-    [${ROOT}="panel"] .field:hover { border-color: var(--color-border); }
-    [${ROOT}="panel"] .field:focus-within { border-color: var(--color-border-selected, #0d99ff); }
-    [${ROOT}="panel"] .field .glyph {
+    [${ROOT}="panel"] .icon-button:hover { background: var(--color-bg-hover); }
+    [${ROOT}="panel"] .preview {
+      display: block;
       flex: none;
-      display: grid;
-      place-items: center;
-      width: 24px;
-      height: 100%;
-      color: var(--color-text-secondary);
-      cursor: ew-resize;
-      user-select: none;
+      width: 100%;
+      height: 200px;
+      background: var(--color-bg-secondary);
+      border-block: 1px solid var(--color-border);
     }
-    [${ROOT}="panel"] .field input {
-      flex: 1;
-      min-width: 0;
-      height: 100%;
-      padding: 0 6px 0 0;
-      border: 0;
+    [${ROOT}="panel"] .scroll { overflow-y: auto; min-height: 0; }
+    [${ROOT}="panel"] section { padding: 8px 16px; border-bottom: 1px solid var(--color-border); }
+    [${ROOT}="panel"] .caption { height: 24px; display: flex; align-items: center; color: var(--color-text-secondary); }
+    [${ROOT}="panel"] .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 6px; }
+    [${ROOT}="panel"] .chip {
+      height: 24px;
+      padding: 0 10px;
+      border: 1px solid var(--color-border);
+      border-radius: 12px;
+      background: none;
+    }
+    [${ROOT}="panel"] .chip:hover { background: var(--color-bg-hover); border-color: var(--color-text-tertiary, var(--color-border)); }
+    [${ROOT}="panel"] .chip:active { background: var(--color-bg-pressed, var(--color-bg-hover)); }
+    [${ROOT}="panel"] .rows { display: flex; flex-direction: column; }
+    [${ROOT}="panel"] .row {
+      display: grid;
+      grid-template-columns: 96px 1fr 52px;
+      align-items: center;
+      column-gap: 8px;
+      min-height: 28px;
+    }
+    [${ROOT}="panel"] .row > .label { color: var(--color-text-secondary); }
+    [${ROOT}="panel"] .row > .select, [${ROOT}="panel"] .row > .segments { grid-column: span 2; width: auto; }
+    [${ROOT}="panel"] .row.check { grid-template-columns: 1fr auto auto; cursor: default; user-select: none; }
+    [${ROOT}="panel"] .row.check input[type="checkbox"] { width: 12px; height: 12px; margin: 0 2px; accent-color: var(--color-bg-brand, #0d99ff); }
+    [${ROOT}="panel"] input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 16px;
+      margin: 0;
+      background:
+        linear-gradient(var(--color-bg-brand, #0d99ff), var(--color-bg-brand, #0d99ff)) 0 50% / var(--fill, 0%) 2px no-repeat,
+        linear-gradient(var(--color-border), var(--color-border)) 0 50% / 100% 2px no-repeat;
+      cursor: default;
+    }
+    [${ROOT}="panel"] input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 0 0 1px rgb(0 0 0 / 0.2), 0 1px 3px rgb(0 0 0 / 0.3);
+    }
+    [${ROOT}="panel"] input[type="range"]:focus-visible { outline: 0; }
+    [${ROOT}="panel"] input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--color-border-selected, #0d99ff); }
+    [${ROOT}="panel"] .value {
+      width: 100%;
+      height: 22px;
+      padding: 0 4px;
+      border: 1px solid transparent;
+      border-radius: 4px;
       outline: 0;
       background: none;
       color: inherit;
       font: inherit;
       font-variant-numeric: tabular-nums;
+      text-align: right;
     }
-    [${ROOT}="panel"] .field input::selection { background: var(--color-bg-selected-strong, #0d99ff66); }
+    [${ROOT}="panel"] .value:hover { background: var(--color-bg-secondary); }
+    [${ROOT}="panel"] .value:focus { border-color: var(--color-border-selected, #0d99ff); background: var(--color-bg-secondary); text-align: left; }
+    [${ROOT}="panel"] .select {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 24px;
+      padding: 0 2px 0 8px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: var(--color-bg-secondary);
+      text-align: left;
+    }
+    [${ROOT}="panel"] .select:hover, [${ROOT}="panel"] .select[aria-expanded="true"] { border-color: var(--color-border); }
     [${ROOT}="panel"] .segments { display: flex; padding: 2px; gap: 2px; border-radius: 5px; background: var(--color-bg-secondary); }
     [${ROOT}="panel"] .segments button {
       flex: 1;
@@ -203,55 +228,52 @@ const PAGE_JS: &str = r##"(() => {
       border-radius: 4px;
       background: none;
       color: var(--color-text-secondary);
+      white-space: nowrap;
     }
     [${ROOT}="panel"] .segments button:hover { color: var(--color-text); }
     [${ROOT}="panel"] .segments button[aria-checked="true"] { background: var(--color-bg); color: var(--color-text); box-shadow: 0 0 0 1px var(--color-border); }
-    [${ROOT}="panel"] .line { display: flex; align-items: center; gap: 8px; min-height: 24px; }
-    [${ROOT}="panel"] .line .label { flex: 1; color: var(--color-text-secondary); }
-    [${ROOT}="panel"] .select {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 112px;
-      height: 24px;
-      padding: 0 2px 0 8px;
-      border: 1px solid transparent;
-      border-radius: 5px;
-      background: var(--color-bg-secondary);
-      text-align: left;
-    }
-    [${ROOT}="panel"] .select:hover, [${ROOT}="panel"] .select[aria-expanded="true"] { border-color: var(--color-border); }
-    [${ROOT}="panel"] .check { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: default; user-select: none; }
-    [${ROOT}="panel"] .check input { width: 12px; height: 12px; margin: 0; accent-color: var(--color-bg-brand, #0d99ff); }
     [${ROOT}="panel"] .swatch {
-      flex: none;
       width: 16px;
       height: 16px;
-      margin-left: 4px;
       padding: 0;
       border: 0;
-      border-radius: 3px;
+      border-radius: 4px;
       box-shadow: inset 0 0 0 1px var(--color-bordertranslucent, #0000001a);
     }
-    [${ROOT}="panel"] .field.color { gap: 4px; }
-    [${ROOT}="panel"] .field.color input[type="color"] { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+    [${ROOT}="panel"] .hidden-picker { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+    [${ROOT}="panel"] .under { display: flex; justify-content: flex-end; padding: 8px 16px 12px; }
+    [${ROOT}="panel"] .link {
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--color-text-secondary);
+    }
+    [${ROOT}="panel"] .link:hover { color: var(--color-text); text-decoration: underline; text-underline-offset: 2px; }
     [${ROOT}="panel"] .footer {
+      flex: none;
       display: flex;
-      align-items: center;
+      flex-direction: column;
       gap: 8px;
-      padding: 12px 16px;
+      padding: 12px 16px 16px;
       border-top: 1px solid var(--color-border);
     }
-    [${ROOT}="panel"] .footer .count { flex: 1; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+    [${ROOT}="panel"] .footer .source { color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    [${ROOT}="panel"] .footer .actions { display: flex; gap: 8px; }
     [${ROOT}="panel"] .button {
-      height: 24px;
-      padding: 0 8px;
+      height: 32px;
+      padding: 0 12px;
       border: 1px solid var(--color-border);
-      border-radius: 5px;
+      border-radius: 6px;
       background: none;
+      font-weight: 500;
     }
     [${ROOT}="panel"] .button:hover { background: var(--color-bg-hover); }
-    [${ROOT}="panel"] .button.primary { border-color: transparent; background: var(--color-bg-brand, #0d99ff); color: var(--color-text-onbrand, #fff); }
+    [${ROOT}="panel"] .button.primary {
+      flex: 1;
+      border-color: transparent;
+      background: var(--color-bg-brand, #0d99ff);
+      color: var(--color-text-onbrand, #fff);
+    }
     [${ROOT}="panel"] .button.primary:hover { background: var(--color-bg-brand-hover, var(--color-bg-brand, #0d99ff)); }
     [${ROOT}="panel"] :focus-visible { outline: 1px solid var(--color-border-selected, #0d99ff); outline-offset: -1px; }
     [${ROOT}="panel"] [hidden] { display: none !important; }
@@ -346,51 +368,6 @@ const PAGE_JS: &str = r##"(() => {
     const node = Object.assign(document.createElement(tag), props);
     node.append(...children);
     return node;
-  };
-
-  // A number field: a glyph that scrubs it when dragged, as Figma's do,
-  // and the value with its unit. Arrow keys step it, Shift by 10
-  const numberField = ({ glyph, title, unit = "", min = -Infinity, max = Infinity, step = 1, get, set }) => {
-    const input = element("input", { type: "text", inputMode: "decimal", spellcheck: false });
-    input.setAttribute("aria-label", title);
-    const mark = element("span", { className: "glyph", title });
-    if (glyph.startsWith("<")) mark.innerHTML = glyph;
-    else mark.textContent = glyph;
-    const field = element("label", { className: "field", title }, mark, input);
-    const clamp = (value) => Math.min(max, Math.max(min, value));
-    const show = () => {
-      if (document.activeElement !== input) input.value = `${Math.round(get() * 100) / 100}${unit}`;
-    };
-    const commit = (value) => {
-      if (!Number.isFinite(value)) return show();
-      set(clamp(Math.round(value / step) * step));
-      show();
-    };
-    input.addEventListener("change", () => commit(parseFloat(input.value)));
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") input.blur();
-      else if (event.key === "Escape") {
-        event.stopPropagation();
-        input.blur();
-        show();
-      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-        event.preventDefault();
-        commit(get() + (event.key === "ArrowUp" ? 1 : -1) * step * (event.shiftKey ? 10 : 1));
-        input.select();
-      }
-    });
-    input.addEventListener("blur", show);
-    mark.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      mark.setPointerCapture(event.pointerId);
-      const [from, start] = [event.clientX, get()];
-      const move = (event) => commit(start + Math.round((event.clientX - from) / 2) * step * (event.shiftKey ? 10 : 1));
-      mark.addEventListener("pointermove", move);
-      mark.addEventListener("lostpointercapture", () => mark.removeEventListener("pointermove", move), { once: true });
-    });
-    field.show = show;
-    return field;
   };
 
   // A segmented control: one of a few, side by side
@@ -586,10 +563,12 @@ const PAGE_JS: &str = r##"(() => {
       const opacity = 1 + (s.endOpacity / 100 - 1) * t;
       let turn = 0;
       if (s.mode === "trail") {
-        // Each step turns by the curve, so the trail bends
+        // Each step turns by the curve, so the trail bends, and is as much
+        // smaller or larger as the copies are, so shrinking copies spiral in
         const angle = ((s.curve * (i - 1)) * Math.PI) / 180;
-        x += s.stepX * Math.cos(angle) - s.stepY * Math.sin(angle);
-        y += s.stepX * Math.sin(angle) + s.stepY * Math.cos(angle);
+        const size = Math.max(0.01, 1 + (s.endScale / 100 - 1) * ease(count === 1 ? 1 : (i - 1) / count));
+        x += (s.stepX * Math.cos(angle) - s.stepY * Math.sin(angle)) * size;
+        y += (s.stepX * Math.sin(angle) + s.stepY * Math.cos(angle)) * size;
         turn = -s.turn * i;
       } else if (s.mode === "radial") {
         // Around a ring through the original, which sits at the start
@@ -765,69 +744,210 @@ const PAGE_JS: &str = r##"(() => {
     removeEventListener("keydown", current.keys, true);
   };
 
+  // The slider rows each layout shows: key, label, unit, and its range,
+  // `u` the layer's larger side, so distances suit it. Typing goes past
+  // the slider's ends
+  const ROWS = {
+    trail: [
+      ["copies", "Copies", "", () => [1, 100, 1]],
+      ["stepX", "Step right", "px", (u) => [-Math.round(u * 2), Math.round(u * 2), 1]],
+      ["stepY", "Step down", "px", (u) => [-Math.round(u * 2), Math.round(u * 2), 1]],
+      ["turn", "Turn each step", "°", () => [-180, 180, 1]],
+      ["curve", "Curve each step", "°", () => [-90, 90, 1]],
+    ],
+    radial: [
+      ["copies", "Copies", "", () => [1, 100, 1]],
+      ["radius", "Radius", "px", (u) => [0, Math.round(u * 5), 1]],
+      ["start", "Start angle", "°", () => [-180, 180, 1]],
+      ["sweep", "Sweep", "°", () => [-360, 360, 1]],
+    ],
+    grid: [
+      ["columns", "Columns", "", () => [1, 20, 1]],
+      ["rows", "Rows", "", () => [1, 20, 1]],
+      ["gapX", "Gap across", "px", (u) => [0, Math.round(u), 1]],
+      ["gapY", "Gap down", "px", (u) => [0, Math.round(u), 1]],
+    ],
+    end: [
+      ["endScale", "End size", "%", () => [1, 300, 1]],
+      ["endOpacity", "End opacity", "%", () => [0, 100, 1]],
+    ],
+    blend: [["blendAmount", "Blend amount", "%", () => [0, 100, 1]]],
+  };
+  const LIMITS = { copies: [1, MAX_COPIES], columns: [1, 40], rows: [1, 40], radius: [0, Infinity], gapX: [-Infinity, Infinity], gapY: [-Infinity, Infinity], endScale: [1, 1000], endOpacity: [0, 100], blendAmount: [0, 100], sweep: [-360, 360] };
+
+  // The layer as a picture, for the panel's preview, at most `PREVIEW`
+  // pixels across
+  const PREVIEW = 160;
+  const snapshot = async (source) => {
+    const scale = Math.min(2, PREVIEW / Math.max(1, source.width, source.height));
+    const bytes = await source.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale } });
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    return { bitmap, scale };
+  };
+
+  // Draws the original and its copies into the preview, fitted to it
+  const drawPreview = (current) => {
+    const { canvas, image } = current.preview ?? {};
+    if (!canvas || !image) return;
+    const s = current.settings;
+    const width = current.source.width;
+    const height = current.source.height;
+    const placed = [{ x: 0, y: 0, turn: 0, scale: 1, opacity: 1, t: 0, original: true }, ...layout(s, width, height)];
+    // The bounds of them all, turned
+    let [left, top, right, bottom] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const spot of placed) {
+      const r = (-spot.turn * Math.PI) / 180;
+      const [hw, hh] = [(width * spot.scale) / 2, (height * spot.scale) / 2];
+      const ex = Math.abs(hw * Math.cos(r)) + Math.abs(hh * Math.sin(r));
+      const ey = Math.abs(hw * Math.sin(r)) + Math.abs(hh * Math.cos(r));
+      left = Math.min(left, spot.x - ex);
+      right = Math.max(right, spot.x + ex);
+      top = Math.min(top, spot.y - ey);
+      bottom = Math.max(bottom, spot.y + ey);
+    }
+    const ratio = devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+    const pad = 16;
+    const fit = Math.min((box.width - pad * 2) / Math.max(1, right - left), (box.height - pad * 2) / Math.max(1, bottom - top));
+    const ox = box.width / 2 - ((left + right) / 2) * fit;
+    const oy = box.height / 2 - ((top + bottom) / 2) * fit;
+    // The farthest drawn first when copies go under the original
+    const order = s.below ? [...placed].reverse() : placed;
+    const tint = hexToRgb(s.blendColor);
+    for (const spot of order) {
+      context.save();
+      context.globalAlpha = spot.opacity;
+      context.translate(ox + spot.x * fit, oy + spot.y * fit);
+      context.rotate((-spot.turn * Math.PI) / 180);
+      const [w, h] = [width * spot.scale * fit, height * spot.scale * fit];
+      const amount = s.blend && !spot.original ? (s.blendAmount / 100) * spot.t : 0;
+      if (amount > 0) {
+        // Tinted on its own, then drawn
+        const off = current.preview.scratch ?? (current.preview.scratch = document.createElement("canvas"));
+        off.width = image.width;
+        off.height = image.height;
+        const c = off.getContext("2d");
+        c.clearRect(0, 0, off.width, off.height);
+        c.drawImage(image, 0, 0);
+        c.globalCompositeOperation = "source-atop";
+        c.fillStyle = `rgba(${tint.r * 255}, ${tint.g * 255}, ${tint.b * 255}, ${amount})`;
+        c.fillRect(0, 0, off.width, off.height);
+        context.drawImage(off, -w / 2, -h / 2, w, h);
+      } else {
+        context.drawImage(image, -w / 2, -h / 2, w, h);
+      }
+      context.restore();
+    }
+  };
+
   const buildPanel = (current) => {
     const s = current.settings;
+    const unit = Math.max(1, Math.max(current.source.width, current.source.height));
     const root = element("div");
     root.setAttribute(ROOT, "panel");
     root.setAttribute("role", "dialog");
     root.setAttribute("aria-label", "Repeater");
+    const rows = [];
     const change = (key, value, fresh = false) => {
       s[key] = value;
       schedule(current, fresh);
       show();
     };
-    const field = (key, glyph, title, options = {}) =>
-      numberField({ glyph, title, ...options, get: () => s[key], set: (value) => change(key, value, key === "blendAmount" && s.blend) });
 
-    // Title, with presets and close
-    const presets = element("button", { type: "button", className: "icon-button", title: "Presets" });
-    presets.innerHTML = PRESETS_ICON;
-    presets.setAttribute("aria-haspopup", "menu");
+    // A labeled slider, with its value beside it, which can be typed in
+    const slider = ([key, label, suffix, range]) => {
+      const [min, max, step] = range(unit);
+      const [floor, ceiling] = LIMITS[key] ?? [-Infinity, Infinity];
+      const input = element("input", { type: "range", min, max, step });
+      input.setAttribute("aria-label", label);
+      const value = element("input", { type: "text", className: "value", inputMode: "decimal", spellcheck: false });
+      value.setAttribute("aria-label", `${label} value`);
+      // Blended copies are made again when how far each blends changes
+      const fresh = () => s.blend && ["blendAmount", "copies", "columns", "rows"].includes(key);
+      input.addEventListener("input", () => change(key, Number(input.value), fresh()));
+      const commit = () => {
+        const number = parseFloat(value.value);
+        if (Number.isFinite(number)) change(key, Math.min(ceiling, Math.max(floor, Math.round(number))), fresh());
+        else show();
+      };
+      value.addEventListener("change", commit);
+      value.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") value.blur();
+        else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+          event.preventDefault();
+          const next = s[key] + (event.key === "ArrowUp" ? 1 : -1) * step * (event.shiftKey ? 10 : 1);
+          change(key, Math.min(ceiling, Math.max(floor, next)), fresh());
+          value.select();
+        }
+      });
+      value.addEventListener("blur", () => show());
+      const row = element("label", { className: "row" }, element("span", { className: "label", textContent: label }), input, value);
+      row.show = () => {
+        input.value = String(s[key]);
+        // The filled part of the track, up to the thumb
+        const t = (Math.min(max, Math.max(min, s[key])) - min) / Math.max(1e-9, max - min);
+        input.style.setProperty("--fill", `${t * 100}%`);
+        if (document.activeElement !== value) value.value = `${Math.round(s[key] * 100) / 100}${suffix}`;
+      };
+      rows.push(row);
+      return row;
+    };
+
+    // Title
     const close = element("button", { type: "button", className: "icon-button", title: "Cancel" });
     close.innerHTML = CLOSE;
     close.addEventListener("click", () => closeRepeater(current, false));
-    const title = element("div", { className: "title" }, element("span", { textContent: "Repeater" }), presets, close);
+    const title = element("div", { className: "title" }, element("span", { textContent: current.group ? `Repeater · ${current.source.name}` : "Repeater" }), close);
 
-    // Layout
-    const mode = segments(
-      "Layout",
+    // Preview
+    const canvas = element("canvas", { className: "preview" });
+    canvas.setAttribute("aria-hidden", "true");
+    current.preview = { canvas, image: null };
+    snapshot(current.source)
+      .then(({ bitmap }) => {
+        if (repeating !== current) return bitmap.close();
+        current.preview.image = bitmap;
+        drawPreview(current);
+      })
+      .catch(() => {});
+
+    // Presets, as chips
+    const chips = element("div", { className: "chips" });
+    for (const [name, values] of PRESETS) {
+      const chip = chips.appendChild(element("button", { type: "button", className: "chip", textContent: name }));
+      chip.addEventListener("click", () => {
+        Object.assign(s, { ease: "even" }, fit(values(unit)));
+        schedule(current, s.blend);
+        show();
+      });
+    }
+    const presets = element("section", {}, element("div", { className: "caption", textContent: "Presets" }), chips);
+
+    // How it repeats
+    const mode = select(
+      "Repeat as",
       [
-        ["trail", "Trail", "Each copy a step on from the last"],
-        ["radial", "Radial", "Around a ring"],
-        ["grid", "Grid", "In rows and columns"],
+        ["trail", "Trail, step by step"],
+        ["radial", "Radial, around a ring"],
+        ["grid", "Grid, rows and columns"],
       ],
       () => s.mode,
       (value) => change("mode", value),
     );
-    const trail = element(
-      "div",
-      {},
-      element("div", { className: "grid" }, field("copies", GLYPHS.copies, "Copies", { min: 1, max: MAX_COPIES }), field("turn", GLYPHS.turn, "Turn each step", { unit: "°" })),
-      element("div", { className: "grid" }, field("stepX", "X", "Step right", { unit: "" }), field("stepY", "Y", "Step down", { unit: "" })),
-      element("div", { className: "grid" }, field("curve", GLYPHS.curve, "Curve each step", { unit: "°" })),
-    );
-    for (const grid of trail.children) grid.style.marginTop = "8px";
-    const radial = element(
-      "div",
-      {},
-      element("div", { className: "grid" }, field("copies", GLYPHS.copies, "Copies", { min: 1, max: MAX_COPIES }), field("radius", GLYPHS.radius, "Radius", { min: 0 })),
-      element("div", { className: "grid" }, field("start", GLYPHS.start, "Start angle", { unit: "°" }), field("sweep", GLYPHS.sweep, "Sweep", { unit: "°", min: -360, max: 360 })),
-    );
-    for (const grid of radial.children) grid.style.marginTop = "8px";
+    mode.classList.add("wide");
+    const groups = {};
+    for (const name of ["trail", "radial", "grid"]) groups[name] = element("div", { className: "rows" }, ...ROWS[name].map(slider));
     const orient = element("input", { type: "checkbox" });
     orient.addEventListener("change", () => change("orient", orient.checked));
-    radial.append(element("label", { className: "check" }, orient, "Turn copies to follow the ring"));
-    radial.lastChild.style.marginTop = "8px";
-    const grid = element(
-      "div",
-      {},
-      element("div", { className: "grid" }, field("columns", GLYPHS.columns, "Columns", { min: 1, max: 40 }), field("rows", GLYPHS.rows, "Rows", { min: 1, max: 40 })),
-      element("div", { className: "grid" }, field("gapX", GLYPHS.gapX, "Gap across", {}), field("gapY", GLYPHS.gapY, "Gap down", {})),
-    );
-    for (const each of grid.children) each.style.marginTop = "8px";
-    const layoutSection = element("section", {}, element("div", { className: "section-title", textContent: "Layout" }), mode, trail, radial, grid);
+    groups.radial.append(element("label", { className: "row check" }, element("span", { className: "label", textContent: "Turn copies with the ring" }), orient));
+    const repeat = element("section", {}, element("label", { className: "row" }, element("span", { className: "label", textContent: "Repeat as" }), mode), groups.trail, groups.radial, groups.grid);
 
-    // From the first copy to the last
+    // Toward the last copy
     const ease = select(
       "Progression",
       [
@@ -839,39 +959,33 @@ const PAGE_JS: &str = r##"(() => {
       () => s.ease,
       (value) => change("ease", value, s.blend),
     );
+    ease.classList.add("wide");
     const blend = element("input", { type: "checkbox" });
     blend.addEventListener("change", () => change("blend", blend.checked, true));
-    const picker = element("input", { type: "color" });
+    const picker = element("input", { type: "color", className: "hidden-picker" });
     picker.addEventListener("input", () => change("blendColor", picker.value, true));
     const swatch = element("button", { type: "button", className: "swatch", title: "Blend color" });
-    swatch.addEventListener("click", () => picker.click());
-    const hex = element("input", { type: "text", spellcheck: false });
-    hex.setAttribute("aria-label", "Blend color");
-    hex.addEventListener("change", () => {
-      const value = hex.value.trim().replace(/^#?/, "#");
-      if (/^#[0-9a-f]{6}$/i.test(value)) change("blendColor", value.toLowerCase(), true);
-      show();
+    swatch.addEventListener("click", (event) => {
+      event.preventDefault();
+      picker.click();
     });
-    hex.addEventListener("keydown", (event) => event.key === "Enter" && hex.blur());
-    const color = element("label", { className: "field color" }, swatch, hex, picker);
-    const amount = field("blendAmount", GLYPHS.amount, "Blend amount", { min: 0, max: 100, unit: "%" });
-    const blendRow = element("div", { className: "grid" }, color, amount);
-    const toEnd = element(
+    const blendRow = element("label", { className: "row check" }, element("span", { className: "label", textContent: "Blend toward a color" }), swatch, picker, blend);
+    const blendAmount = element("div", { className: "rows" }, ...ROWS.blend.map(slider));
+    const toward = element(
       "section",
       {},
-      element("div", { className: "section-title", textContent: "To the last copy" }),
-      element("div", { className: "grid" }, field("endScale", GLYPHS.size, "Size", { min: 1, max: 1000, unit: "%" }), field("endOpacity", GLYPHS.opacity, "Opacity", { min: 0, max: 100, unit: "%" })),
-      element("div", { className: "line" }, element("span", { className: "label", textContent: "Progression" }), ease),
-      element("label", { className: "check" }, blend, "Blend toward a color"),
+      element("div", { className: "rows" }, ...ROWS.end.map(slider)),
+      element("label", { className: "row" }, element("span", { className: "label", textContent: "Progression" }), ease),
       blendRow,
+      blendAmount,
     );
 
     // The result
     const order = segments(
-      "Stack",
+      "Copies go",
       [
-        ["below", "Copies below"],
-        ["above", "Copies above"],
+        ["below", "Below"],
+        ["above", "Above"],
       ],
       () => (s.below ? "below" : "above"),
       (value) => change("below", value === "below"),
@@ -881,69 +995,39 @@ const PAGE_JS: &str = r##"(() => {
     const result = element(
       "section",
       {},
-      element("div", { className: "section-title", textContent: "Result" }),
-      order,
-      element("label", { className: "check", title: "Kept in a group Repeater can change later, the copies made again from the original" }, editable, "Keep editable"),
+      element("div", { className: "row" }, element("span", { className: "label", textContent: "Copies go" }), order),
+      element(
+        "label",
+        { className: "row check", title: "Kept in a group Repeater can change later, the copies made again from the original as it is then" },
+        element("span", { className: "label", textContent: "Keep editable" }),
+        editable,
+      ),
     );
-    result.lastChild.style.marginTop = "8px";
+
+    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => {
+      Object.assign(s, { ...DEFAULTS, below: s.below, editable: s.editable }, fit(PRESETS[0][1](unit)));
+      schedule(current, true);
+      show();
+    });
+    const scroll = element("div", { className: "scroll" }, presets, repeat, toward, result, element("div", { className: "under" }, reset));
 
     // Footer
-    const count = element("span", { className: "count" });
+    const name = element("div", { className: "source", textContent: current.source.name });
     const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
     cancel.addEventListener("click", () => closeRepeater(current, false));
-    const go = element("button", { type: "button", className: "button primary", textContent: current.group ? "Update" : "Apply" });
+    const go = element("button", { type: "button", className: "button primary" });
     go.addEventListener("click", () => apply(current));
-    const footer = element("div", { className: "footer" }, count, cancel, go);
+    const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
 
-    const scroll = element("div", { className: "scroll" }, layoutSection, toEnd, result);
-    root.append(title, scroll, footer);
+    root.append(title, canvas, scroll, footer);
     document.body.append(root);
-
-    // Presets menu
-    let presetMenu = null;
-    const closePresets = () => {
-      presetMenu?.remove();
-      presetMenu = null;
-      presets.setAttribute("aria-expanded", "false");
-    };
-    presets.addEventListener("click", () => {
-      if (presetMenu) return closePresets();
-      presetMenu = element("div");
-      presetMenu.setAttribute(ROOT, "menu");
-      presetMenu.setAttribute("role", "menu");
-      presetMenu.style.width = "160px";
-      presetMenu.innerHTML = `<div class="heading">Presets</div>`;
-      for (const [name, values] of PRESETS) {
-        const item = presetMenu.appendChild(element("button", { type: "button", className: "item" }));
-        item.style.gridTemplateColumns = "1fr";
-        item.style.padding = "4px 8px";
-        item.innerHTML = `<span class="name">${name}</span>`;
-        item.addEventListener("click", () => {
-          closePresets();
-          Object.assign(s, { ease: "even" }, fit(values(Math.max(current.source.width, current.source.height))));
-          schedule(current, s.blend);
-          show();
-        });
-      }
-      document.body.append(presetMenu);
-      const box = presets.getBoundingClientRect();
-      presetMenu.style.left = `${Math.min(innerWidth - presetMenu.offsetWidth - 8, box.left)}px`;
-      presetMenu.style.top = `${box.bottom + 4}px`;
-      presets.setAttribute("aria-expanded", "true");
-      const outside = (event) => {
-        if (presetMenu && !presetMenu.contains(event.target) && !presets.contains(event.target)) {
-          closePresets();
-          removeEventListener("pointerdown", outside, true);
-        }
-      };
-      addEventListener("pointerdown", outside, true);
-    });
 
     // Placed over the canvas's top right, clear of the right panel, and
     // dragged by its title
-    const canvas = document.querySelector("canvas")?.getBoundingClientRect() ?? { right: innerWidth, top: 48 };
-    root.style.left = `${Math.max(8, canvas.right - root.offsetWidth - 16)}px`;
-    root.style.top = `${Math.max(8, canvas.top + 16)}px`;
+    const area = document.querySelector("canvas")?.getBoundingClientRect() ?? { right: innerWidth, top: 48 };
+    root.style.left = `${Math.max(8, area.right - root.offsetWidth - 16)}px`;
+    root.style.top = `${Math.max(8, area.top + 16)}px`;
     title.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || event.target.closest("button")) return;
       title.setPointerCapture(event.pointerId);
@@ -951,7 +1035,7 @@ const PAGE_JS: &str = r##"(() => {
       const box = root.getBoundingClientRect();
       const [dx, dy] = [event.clientX - box.left, event.clientY - box.top];
       const move = (event) => {
-        root.style.left = `${Math.min(innerWidth - 48, Math.max(8 - box.width + 48, event.clientX - dx))}px`;
+        root.style.left = `${Math.min(innerWidth - 48, Math.max(48 - box.width, event.clientX - dx))}px`;
         root.style.top = `${Math.min(innerHeight - 40, Math.max(8, event.clientY - dy))}px`;
       };
       title.addEventListener("pointermove", move);
@@ -965,39 +1049,40 @@ const PAGE_JS: &str = r##"(() => {
       );
     });
 
-    const fields = [...root.querySelectorAll(".field:not(.color)")];
     const show = () => {
       mode.show();
-      trail.hidden = s.mode !== "trail";
-      radial.hidden = s.mode !== "radial";
-      grid.hidden = s.mode !== "grid";
+      for (const [key, group] of Object.entries(groups)) group.hidden = s.mode !== key;
+      for (const row of rows) row.show();
       orient.checked = s.orient;
-      for (const each of fields) each.show?.();
       ease.show();
       blend.checked = s.blend;
-      blendRow.hidden = !s.blend;
+      blendAmount.hidden = !s.blend;
       swatch.style.background = s.blendColor;
       picker.value = s.blendColor;
-      if (document.activeElement !== hex) hex.value = s.blendColor.slice(1).toUpperCase();
       order.show();
       editable.checked = s.editable;
+      for (const chip of chips.children) chip.setAttribute("aria-pressed", "false");
+      drawPreview(current);
     };
     show();
     current.root = root;
     current.panel = {
       update: () => {
         const n = current.clones.length;
-        count.textContent = `${n} ${n === 1 ? "copy" : "copies"}`;
+        go.textContent = current.group ? `Update ${n} ${n === 1 ? "copy" : "copies"}` : `Place ${n} ${n === 1 ? "copy" : "copies"}`;
+        drawPreview(current);
       },
       close: () => {
+        mode.close();
         ease.close();
-        closePresets();
+        current.preview?.image?.close?.();
       },
     };
+    current.panel.update();
     // Escape cancels, Enter applies, while the panel's open and not typing
     current.keys = (event) => {
       if (repeating !== current) return;
-      const typing = event.target.closest?.("input:not([type=checkbox]), textarea, [contenteditable]");
+      const typing = event.target.closest?.("input[type=text], textarea, [contenteditable]");
       if (event.key === "Escape" && !typing) {
         event.preventDefault();
         event.stopImmediatePropagation();
