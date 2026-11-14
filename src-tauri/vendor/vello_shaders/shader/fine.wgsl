@@ -132,6 +132,299 @@ const SEG_SIZE = 5u;
 const ONE_MINUS_ULP: f32 = 0.99999994;
 const ROBUST_EPSILON: f32 = 2e-7;
 
+// Ligma: segments per tile above which each thread rasterizes its own
+const DENSE_SEGS = 128u;
+
+fn ms_nonzero_pixel(segment: Segment, sub_ix: u32, last_pixel: bool) {
+    // Coordinates are relative to tile origin
+    let xy0_in = segment.point0;
+    let xy1_in = segment.point1;
+    let is_down = xy1_in.y >= xy0_in.y;
+    let xy0 = select(xy1_in, xy0_in, is_down);
+    let xy1 = select(xy0_in, xy1_in, is_down);
+
+    // Set up data for line rasterization
+    // Note: this is duplicated work if total count exceeds a workgroup.
+    // One alternative is to compute it in a separate dispatch.
+    let dx = abs(xy1.x - xy0.x);
+    let dy = xy1.y - xy0.y;
+    let idxdy = 1.0 / (dx + dy);
+    var a = dx * idxdy;
+    // is_positive_slope is true for \ and | slopes, false for /. For
+    // horizontal lines, it follows the original data.
+    let is_positive_slope = xy1.x >= xy0.x;
+    let x_sign = select(-1.0, 1.0, is_positive_slope);
+    let xt0 = floor(xy0.x * x_sign);
+    let c = xy0.x * x_sign - xt0;
+    let y0i = floor(xy0.y);
+    let ytop = y0i + 1.0;
+    let b = min((dy * c + dx * (ytop - xy0.y)) * idxdy, ONE_MINUS_ULP);
+    let count_x = span(xy0.x, xy1.x) - 1u;
+    let count = count_x + span(xy0.y, xy1.y);
+    let robust_err = floor(a * (f32(count) - 1.0) + b) - f32(count_x);
+    if robust_err != 0.0 {
+        a -= ROBUST_EPSILON * sign(robust_err);
+    }
+    let x0i = i32(xt0 * x_sign + 0.5 * (x_sign - 1.0));
+    // Use line equation to plot pixel coordinates
+
+    let zf = a * f32(sub_ix) + b;
+    let z = floor(zf);
+    let x = x0i + i32(x_sign * z);
+    let y = i32(y0i) + i32(sub_ix) - i32(z);
+    // is_delta captures whether the line crosses the top edge of this
+    // pixel. If so, then a delta is added to `sh_winding`, followed by
+    // a prefix sum, so that a winding number delta is applied to all
+    // pixels to the right of this one.
+    var is_delta: bool;
+    // is_bump captures whether x0 crosses the left edge of this pixel.
+    var is_bump = false;
+    let zp = floor(a * f32(sub_ix - 1u) + b);
+    if sub_ix == 0u {
+        // The first (top-most) pixel in the line. It is considered to be
+        // a line crossing when it touches the top of the pixel.
+        //
+        // Note: horizontal lines aligned to the pixel grid have already
+        // been discarded.
+        is_delta = y0i == xy0.y;
+        // The pixel is counted as a left edge crossing only at the left
+        // edge of the tile (and when it is not the top left corner,
+        // using logic analogous to tiling).
+        is_bump = xy0.x == 0.0 && y0i != xy0.y;
+    } else {
+        // Pixels other than the first are a crossing at the top or on
+        // the side, based on the conservative line rasterization. When
+        // positive slope, the crossing is on the left.
+        is_delta = z == zp;
+        is_bump = is_positive_slope && !is_delta;
+    }
+    let pix_ix = u32(y) * TILE_WIDTH + u32(x);
+    if u32(x) < TILE_WIDTH - 1u && u32(y) < TILE_HEIGHT {
+        let delta_pix = pix_ix + 1u;
+        if is_delta {
+            let delta = select(u32(-1i), 1u, is_down) << ((delta_pix & 3u) << 3u);
+            atomicAdd(&sh_winding[delta_pix >> 2u], delta);
+        }
+    }
+    // Apply sample mask
+    let mask_block = u32(is_positive_slope) * (MASK_WIDTH * MASK_HEIGHT / 2u);
+    let half_height = f32(MASK_HEIGHT / 2u);
+    let mask_row = floor(min(a * half_height, half_height - 1.0)) * f32(MASK_WIDTH);
+    let mask_col = floor((zf - z) * f32(MASK_WIDTH));
+    let mask_ix = mask_block + u32(mask_row + mask_col);
+#ifdef msaa8
+    var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
+    mask &= 0xffu;
+    // Intersect with y half-plane masks
+    if sub_ix == 0u && !is_bump {
+        let mask_shift = u32(round(8.0 * (xy0.y - f32(y))));
+        mask &= 0xffu << mask_shift;
+    }
+    if last_pixel && xy1.x != 0.0 {
+        let mask_shift = u32(round(8.0 * (xy1.y - f32(y))));
+        mask &= ~(0xffu << mask_shift);
+    }
+    // Expand an 8 bit mask value to 8 1-bit values, packed 4 to a subword,
+    // so that two words are used to represent the result. An efficient
+    // technique is carry-less multiplication by 0b10_0000_0100_0000_1000_0001
+    // followed by and-masking to extract bit in position 4 * k.
+    //
+    // See https://en.wikipedia.org/wiki/Carry-less_product
+    let mask_a = mask ^ (mask << 7u);
+    let mask_b = mask_a ^ (mask_a << 14u);
+    let mask0_exp = mask_b & 0x1010101u;
+    var mask0_signed = select(mask0_exp, u32(-i32(mask0_exp)), is_down);
+    let mask1_exp = (mask_b >> 4u) & 0x1010101u;
+    var mask1_signed = select(mask1_exp, u32(-i32(mask1_exp)), is_down);
+    if is_bump {
+        let bump_delta = select(u32(-0x1010101i), 0x1010101u, is_down);
+        mask0_signed += bump_delta;
+        mask1_signed += bump_delta;
+    }
+    atomicAdd(&sh_samples[pix_ix * 2u], mask0_signed);
+    atomicAdd(&sh_samples[pix_ix * 2u + 1u], mask1_signed);
+#endif
+#ifdef msaa4
+    var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
+    mask &= 0xfu;
+    // Intersect with y half-plane masks
+    if sub_ix == 0u && !is_bump {
+        let mask_shift = u32(round(4.0 * (xy0.y - f32(y))));
+        mask &= 0xfu << mask_shift;
+    }
+    if last_pixel && xy1.x != 0.0 {
+        let mask_shift = u32(round(4.0 * (xy1.y - f32(y))));
+        mask &= ~(0xfu << mask_shift);
+    }
+    // Each of the 4 bits to a byte of its own
+    let mask_a = mask ^ (mask << 7u);
+    let mask_b = mask_a ^ (mask_a << 14u);
+    let mask0_exp = mask_b & 0x1010101u;
+    var mask0_signed = select(mask0_exp, u32(-i32(mask0_exp)), is_down);
+    if is_bump {
+        mask0_signed += select(u32(-0x1010101i), 0x1010101u, is_down);
+    }
+    atomicAdd(&sh_samples[pix_ix], mask0_signed);
+#endif
+#ifdef msaa16
+    var mask = mask_lut[mask_ix / 2u] >> ((mask_ix % 2u) * 16u);
+    mask &= 0xffffu;
+    // Intersect with y half-plane masks
+    if sub_ix == 0u && !is_bump {
+        let mask_shift = u32(round(16.0 * (xy0.y - f32(y))));
+        mask &= 0xffffu << mask_shift;
+    }
+    if last_pixel && xy1.x != 0.0 {
+        let mask_shift = u32(round(16.0 * (xy1.y - f32(y))));
+        mask &= ~(0xffffu << mask_shift);
+    }
+    // Similar logic as above, only a 16 bit mask is divided into
+    // two 8 bit halves first, then each is expanded as above.
+    // Mask is 0bABCD_EFGH_IJKL_MNOP. Expand to 4 32 bit words
+    // mask0_exp will be 0b0000_000M_0000_000N_0000_000O_0000_000P
+    // mask3_exp will be 0b0000_000A_0000_000B_0000_000C_0000_000D
+    let mask0 = mask & 0xffu;
+    // mask0_a = 0b0IJK_LMNO_*JKL_MNOP
+    let mask0_a = mask0 ^ (mask0 << 7u);
+    // mask0_b = 0b000I_JKLM_NO*J_KLMN_O*K_LMNO_*JKL_MNOP
+    //                ^    ^    ^    ^   ^    ^    ^    ^
+    let mask0_b = mask0_a ^ (mask0_a << 14u);
+    let mask0_exp = mask0_b & 0x1010101u;
+    var mask0_signed = select(mask0_exp, u32(-i32(mask0_exp)), is_down);
+    let mask1_exp = (mask0_b >> 4u) & 0x1010101u;
+    var mask1_signed = select(mask1_exp, u32(-i32(mask1_exp)), is_down);
+    let mask1 = (mask >> 8u) & 0xffu;
+    let mask1_a = mask1 ^ (mask1 << 7u);
+    // mask1_a = 0b0ABC_DEFG_*BCD_EFGH
+    let mask1_b = mask1_a ^ (mask1_a << 14u);
+    // mask1_b = 0b000A_BCDE_FG*B_CDEF_G*C_DEFG_*BCD_EFGH
+    let mask2_exp = mask1_b & 0x1010101u;
+    var mask2_signed = select(mask2_exp, u32(-i32(mask2_exp)), is_down);
+    let mask3_exp = (mask1_b >> 4u) & 0x1010101u;
+    var mask3_signed = select(mask3_exp, u32(-i32(mask3_exp)), is_down);
+    if is_bump {
+        let bump_delta = select(u32(-0x1010101i), 0x1010101u, is_down);
+        mask0_signed += bump_delta;
+        mask1_signed += bump_delta;
+        mask2_signed += bump_delta;
+        mask3_signed += bump_delta;
+    }
+    atomicAdd(&sh_samples[pix_ix * 4u], mask0_signed);
+    atomicAdd(&sh_samples[pix_ix * 4u + 1u], mask1_signed);
+    atomicAdd(&sh_samples[pix_ix * 4u + 2u], mask2_signed);
+    atomicAdd(&sh_samples[pix_ix * 4u + 3u], mask3_signed);
+#endif
+}
+
+fn ms_evenodd_pixel(segment: Segment, sub_ix: u32, last_pixel: bool) {
+    let xy0_in = segment.point0;
+    let xy1_in = segment.point1;
+    let is_down = xy1_in.y >= xy0_in.y;
+    let xy0 = select(xy1_in, xy0_in, is_down);
+    let xy1 = select(xy0_in, xy1_in, is_down);
+
+    // Set up data for line rasterization
+    // Note: this is duplicated work if total count exceeds a workgroup.
+    // One alternative is to compute it in a separate dispatch.
+    let dx = abs(xy1.x - xy0.x);
+    let dy = xy1.y - xy0.y;
+    let idxdy = 1.0 / (dx + dy);
+    var a = dx * idxdy;
+    let is_positive_slope = xy1.x >= xy0.x;
+    let x_sign = select(-1.0, 1.0, is_positive_slope);
+    let xt0 = floor(xy0.x * x_sign);
+    let c = xy0.x * x_sign - xt0;
+    let y0i = floor(xy0.y);
+    let ytop = y0i + 1.0;
+    let b = min((dy * c + dx * (ytop - xy0.y)) * idxdy, ONE_MINUS_ULP);
+    let count_x = span(xy0.x, xy1.x) - 1u;
+    let count = count_x + span(xy0.y, xy1.y);
+    let robust_err = floor(a * (f32(count) - 1.0) + b) - f32(count_x);
+    if robust_err != 0.0 {
+        a -= ROBUST_EPSILON * sign(robust_err);
+    }
+    let x0i = i32(xt0 * x_sign + 0.5 * (x_sign - 1.0));
+    // Use line equation to plot pixel coordinates
+
+    let zf = a * f32(sub_ix) + b;
+    let z = floor(zf);
+    let x = x0i + i32(x_sign * z);
+    let y = i32(y0i) + i32(sub_ix) - i32(z);
+    var is_delta: bool;
+    // See comments in nonzero case.
+    var is_bump = false;
+    let zp = floor(a * f32(sub_ix - 1u) + b);
+    if sub_ix == 0u {
+        is_delta = y0i == xy0.y;
+        is_bump = xy0.x == 0.0;
+    } else {
+        is_delta = z == zp;
+        is_bump = is_positive_slope && !is_delta;
+    }
+    if u32(x) < TILE_WIDTH - 1u && u32(y) < TILE_HEIGHT {
+        if is_delta {
+            atomicXor(&sh_winding[y], 2u << u32(x));
+        }
+    }
+    // Apply sample mask
+    let mask_block = u32(is_positive_slope) * (MASK_WIDTH * MASK_HEIGHT / 2u);
+    let half_height = f32(MASK_HEIGHT / 2u);
+    let mask_row = floor(min(a * half_height, half_height - 1.0)) * f32(MASK_WIDTH);
+    let mask_col = floor((zf - z) * f32(MASK_WIDTH));
+    let mask_ix = mask_block + u32(mask_row + mask_col);
+    let pix_ix = u32(y) * TILE_WIDTH + u32(x);
+#ifdef msaa8
+    var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
+    mask &= 0xffu;
+    // Intersect with y half-plane masks
+    if sub_ix == 0u && !is_bump {
+        let mask_shift = u32(round(8.0 * (xy0.y - f32(y))));
+        mask &= 0xffu << mask_shift;
+    }
+    if last_pixel && xy1.x != 0.0 {
+        let mask_shift = u32(round(8.0 * (xy1.y - f32(y))));
+        mask &= ~(0xffu << mask_shift);
+    }
+    if is_bump {
+        mask ^= 0xffu;
+    }
+    atomicXor(&sh_samples[pix_ix], mask);
+#endif
+#ifdef msaa4
+    var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
+    mask &= 0xfu;
+    if sub_ix == 0u && !is_bump {
+        let mask_shift = u32(round(4.0 * (xy0.y - f32(y))));
+        mask &= 0xfu << mask_shift;
+    }
+    if last_pixel && xy1.x != 0.0 {
+        let mask_shift = u32(round(4.0 * (xy1.y - f32(y))));
+        mask &= ~(0xfu << mask_shift);
+    }
+    if is_bump {
+        mask ^= 0xfu;
+    }
+    atomicXor(&sh_samples[pix_ix], mask);
+#endif
+#ifdef msaa16
+    var mask = mask_lut[mask_ix / 2u] >> ((mask_ix % 2u) * 16u);
+    mask &= 0xffffu;
+    // Intersect with y half-plane masks
+    if sub_ix == 0u && !is_bump {
+        let mask_shift = u32(round(16.0 * (xy0.y - f32(y))));
+        mask &= 0xffffu << mask_shift;
+    }
+    if last_pixel && xy1.x != 0.0 {
+        let mask_shift = u32(round(16.0 * (xy1.y - f32(y))));
+        mask &= ~(0xffffu << mask_shift);
+    }
+    if is_bump {
+        mask ^= 0xffffu;
+    }
+    atomicXor(&sh_samples[pix_ix], mask);
+#endif
+}
+
 // Multisampled path rendering algorithm.
 //
 // FIXME: This could return an array when https://github.com/gfx-rs/naga/issues/1930 is fixed.
@@ -178,15 +471,14 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
         atomicStore(&sh_samples[th_ix * sample_count + i], 0x80808080u);
     }
     workgroupBarrier();
-    let n_batch = (n_segs + (WG_SIZE - 1u)) / WG_SIZE;
-    for (var batch = 0u; batch < n_batch; batch++) {
-        let seg_ix = batch * WG_SIZE + th_ix;
-        let seg_off = fill.seg_data + seg_ix;
-        var count = 0u;
-        let slice_size = min(n_segs - batch * WG_SIZE, WG_SIZE);
-        // TODO: might save a register rewriting this in terms of limit
-        if th_ix < slice_size {
-            let segment = segments[seg_off];
+    // Ligma: with many segments, as a shape far smaller than its points
+    // are many has in one tile, each thread rasterizes its own whole,
+    // with no waiting on the others between batches. The same masks
+    // add up in another order, to the same
+    if n_segs > DENSE_SEGS {
+        for (var seg_ix = th_ix; seg_ix < n_segs; seg_ix += WG_SIZE) {
+            let segment = segments[fill.seg_data + seg_ix];
+            var count = 0u;
             let xy0 = segment.point0;
             let xy1 = segment.point1;
             var y_edge_f = f32(TILE_HEIGHT);
@@ -204,217 +496,71 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
             if y_edge < TILE_HEIGHT {
                 atomicAdd(&sh_winding_y[y_edge >> 2u], u32(delta) << ((y_edge & 3u) << 3u));
             }
-        }
-        // workgroup prefix sum of counts
-        sh_count[th_ix] = count;
-        let lg_n = firstLeadingBit(slice_size * 2u - 1u);
-        for (var i = 0u; i < lg_n; i++) {
-            workgroupBarrier();
-            if th_ix >= 1u << i {
-                count += sh_count[th_ix - (1u << i)];
+            for (var sub_ix = 0u; sub_ix < count; sub_ix += 1u) {
+                ms_nonzero_pixel(segment, sub_ix, sub_ix + 1u == count);
             }
-            workgroupBarrier();
-            sh_count[th_ix] = count;
-        }
-        let total = workgroupUniformLoad(&sh_count[slice_size - 1u]);
-        for (var i = th_ix; i < total; i += WG_SIZE) {
-            // binary search to find pixel
-            var lo = 0u;
-            var hi = slice_size;
-            let goal = i;
-            while hi > lo + 1u {
-                let mid = (lo + hi) >> 1u;
-                if goal >= sh_count[mid - 1u] {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            let el_ix = lo;
-            let last_pixel = i + 1u == sh_count[el_ix];
-            let sub_ix = i - select(0u, sh_count[el_ix - 1u], el_ix > 0u);
-            let seg_off = fill.seg_data + batch * WG_SIZE + el_ix;
-            let segment = segments[seg_off];
-            // Coordinates are relative to tile origin
-            let xy0_in = segment.point0;
-            let xy1_in = segment.point1;
-            let is_down = xy1_in.y >= xy0_in.y;
-            let xy0 = select(xy1_in, xy0_in, is_down);
-            let xy1 = select(xy0_in, xy1_in, is_down);
-
-            // Set up data for line rasterization
-            // Note: this is duplicated work if total count exceeds a workgroup.
-            // One alternative is to compute it in a separate dispatch.
-            let dx = abs(xy1.x - xy0.x);
-            let dy = xy1.y - xy0.y;
-            let idxdy = 1.0 / (dx + dy);
-            var a = dx * idxdy;
-            // is_positive_slope is true for \ and | slopes, false for /. For
-            // horizontal lines, it follows the original data.
-            let is_positive_slope = xy1.x >= xy0.x;
-            let x_sign = select(-1.0, 1.0, is_positive_slope);
-            let xt0 = floor(xy0.x * x_sign);
-            let c = xy0.x * x_sign - xt0;
-            let y0i = floor(xy0.y);
-            let ytop = y0i + 1.0;
-            let b = min((dy * c + dx * (ytop - xy0.y)) * idxdy, ONE_MINUS_ULP);
-            let count_x = span(xy0.x, xy1.x) - 1u;
-            let count = count_x + span(xy0.y, xy1.y);
-            let robust_err = floor(a * (f32(count) - 1.0) + b) - f32(count_x);
-            if robust_err != 0.0 {
-                a -= ROBUST_EPSILON * sign(robust_err);
-            }
-            let x0i = i32(xt0 * x_sign + 0.5 * (x_sign - 1.0));
-            // Use line equation to plot pixel coordinates
-
-            let zf = a * f32(sub_ix) + b;
-            let z = floor(zf);
-            let x = x0i + i32(x_sign * z);
-            let y = i32(y0i) + i32(sub_ix) - i32(z);
-            // is_delta captures whether the line crosses the top edge of this
-            // pixel. If so, then a delta is added to `sh_winding`, followed by
-            // a prefix sum, so that a winding number delta is applied to all
-            // pixels to the right of this one.
-            var is_delta: bool;
-            // is_bump captures whether x0 crosses the left edge of this pixel.
-            var is_bump = false;
-            let zp = floor(a * f32(sub_ix - 1u) + b);
-            if sub_ix == 0u {
-                // The first (top-most) pixel in the line. It is considered to be
-                // a line crossing when it touches the top of the pixel.
-                //
-                // Note: horizontal lines aligned to the pixel grid have already
-                // been discarded.
-                is_delta = y0i == xy0.y;
-                // The pixel is counted as a left edge crossing only at the left
-                // edge of the tile (and when it is not the top left corner,
-                // using logic analogous to tiling).
-                is_bump = xy0.x == 0.0 && y0i != xy0.y;
-            } else {
-                // Pixels other than the first are a crossing at the top or on
-                // the side, based on the conservative line rasterization. When
-                // positive slope, the crossing is on the left.
-                is_delta = z == zp;
-                is_bump = is_positive_slope && !is_delta;
-            }
-            let pix_ix = u32(y) * TILE_WIDTH + u32(x);
-            if u32(x) < TILE_WIDTH - 1u && u32(y) < TILE_HEIGHT {
-                let delta_pix = pix_ix + 1u;
-                if is_delta {
-                    let delta = select(u32(-1i), 1u, is_down) << ((delta_pix & 3u) << 3u);
-                    atomicAdd(&sh_winding[delta_pix >> 2u], delta);
-                }
-            }
-            // Apply sample mask
-            let mask_block = u32(is_positive_slope) * (MASK_WIDTH * MASK_HEIGHT / 2u);
-            let half_height = f32(MASK_HEIGHT / 2u);
-            let mask_row = floor(min(a * half_height, half_height - 1.0)) * f32(MASK_WIDTH);
-            let mask_col = floor((zf - z) * f32(MASK_WIDTH));
-            let mask_ix = mask_block + u32(mask_row + mask_col);
-#ifdef msaa8
-            var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
-            mask &= 0xffu;
-            // Intersect with y half-plane masks
-            if sub_ix == 0u && !is_bump {
-                let mask_shift = u32(round(8.0 * (xy0.y - f32(y))));
-                mask &= 0xffu << mask_shift;
-            }
-            if last_pixel && xy1.x != 0.0 {
-                let mask_shift = u32(round(8.0 * (xy1.y - f32(y))));
-                mask &= ~(0xffu << mask_shift);
-            }
-            // Expand an 8 bit mask value to 8 1-bit values, packed 4 to a subword,
-            // so that two words are used to represent the result. An efficient
-            // technique is carry-less multiplication by 0b10_0000_0100_0000_1000_0001
-            // followed by and-masking to extract bit in position 4 * k.
-            //
-            // See https://en.wikipedia.org/wiki/Carry-less_product
-            let mask_a = mask ^ (mask << 7u);
-            let mask_b = mask_a ^ (mask_a << 14u);
-            let mask0_exp = mask_b & 0x1010101u;
-            var mask0_signed = select(mask0_exp, u32(-i32(mask0_exp)), is_down);
-            let mask1_exp = (mask_b >> 4u) & 0x1010101u;
-            var mask1_signed = select(mask1_exp, u32(-i32(mask1_exp)), is_down);
-            if is_bump {
-                let bump_delta = select(u32(-0x1010101i), 0x1010101u, is_down);
-                mask0_signed += bump_delta;
-                mask1_signed += bump_delta;
-            }
-            atomicAdd(&sh_samples[pix_ix * 2u], mask0_signed);
-            atomicAdd(&sh_samples[pix_ix * 2u + 1u], mask1_signed);
-#endif
-#ifdef msaa4
-            var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
-            mask &= 0xfu;
-            // Intersect with y half-plane masks
-            if sub_ix == 0u && !is_bump {
-                let mask_shift = u32(round(4.0 * (xy0.y - f32(y))));
-                mask &= 0xfu << mask_shift;
-            }
-            if last_pixel && xy1.x != 0.0 {
-                let mask_shift = u32(round(4.0 * (xy1.y - f32(y))));
-                mask &= ~(0xfu << mask_shift);
-            }
-            // Each of the 4 bits to a byte of its own
-            let mask_a = mask ^ (mask << 7u);
-            let mask_b = mask_a ^ (mask_a << 14u);
-            let mask0_exp = mask_b & 0x1010101u;
-            var mask0_signed = select(mask0_exp, u32(-i32(mask0_exp)), is_down);
-            if is_bump {
-                mask0_signed += select(u32(-0x1010101i), 0x1010101u, is_down);
-            }
-            atomicAdd(&sh_samples[pix_ix], mask0_signed);
-#endif
-#ifdef msaa16
-            var mask = mask_lut[mask_ix / 2u] >> ((mask_ix % 2u) * 16u);
-            mask &= 0xffffu;
-            // Intersect with y half-plane masks
-            if sub_ix == 0u && !is_bump {
-                let mask_shift = u32(round(16.0 * (xy0.y - f32(y))));
-                mask &= 0xffffu << mask_shift;
-            }
-            if last_pixel && xy1.x != 0.0 {
-                let mask_shift = u32(round(16.0 * (xy1.y - f32(y))));
-                mask &= ~(0xffffu << mask_shift);
-            }
-            // Similar logic as above, only a 16 bit mask is divided into
-            // two 8 bit halves first, then each is expanded as above.
-            // Mask is 0bABCD_EFGH_IJKL_MNOP. Expand to 4 32 bit words
-            // mask0_exp will be 0b0000_000M_0000_000N_0000_000O_0000_000P
-            // mask3_exp will be 0b0000_000A_0000_000B_0000_000C_0000_000D
-            let mask0 = mask & 0xffu;
-            // mask0_a = 0b0IJK_LMNO_*JKL_MNOP
-            let mask0_a = mask0 ^ (mask0 << 7u);
-            // mask0_b = 0b000I_JKLM_NO*J_KLMN_O*K_LMNO_*JKL_MNOP
-            //                ^    ^    ^    ^   ^    ^    ^    ^
-            let mask0_b = mask0_a ^ (mask0_a << 14u);
-            let mask0_exp = mask0_b & 0x1010101u;
-            var mask0_signed = select(mask0_exp, u32(-i32(mask0_exp)), is_down);
-            let mask1_exp = (mask0_b >> 4u) & 0x1010101u;
-            var mask1_signed = select(mask1_exp, u32(-i32(mask1_exp)), is_down);
-            let mask1 = (mask >> 8u) & 0xffu;
-            let mask1_a = mask1 ^ (mask1 << 7u);
-            // mask1_a = 0b0ABC_DEFG_*BCD_EFGH
-            let mask1_b = mask1_a ^ (mask1_a << 14u);
-            // mask1_b = 0b000A_BCDE_FG*B_CDEF_G*C_DEFG_*BCD_EFGH
-            let mask2_exp = mask1_b & 0x1010101u;
-            var mask2_signed = select(mask2_exp, u32(-i32(mask2_exp)), is_down);
-            let mask3_exp = (mask1_b >> 4u) & 0x1010101u;
-            var mask3_signed = select(mask3_exp, u32(-i32(mask3_exp)), is_down);
-            if is_bump {
-                let bump_delta = select(u32(-0x1010101i), 0x1010101u, is_down);
-                mask0_signed += bump_delta;
-                mask1_signed += bump_delta;
-                mask2_signed += bump_delta;
-                mask3_signed += bump_delta;
-            }
-            atomicAdd(&sh_samples[pix_ix * 4u], mask0_signed);
-            atomicAdd(&sh_samples[pix_ix * 4u + 1u], mask1_signed);
-            atomicAdd(&sh_samples[pix_ix * 4u + 2u], mask2_signed);
-            atomicAdd(&sh_samples[pix_ix * 4u + 3u], mask3_signed);
-#endif
         }
         workgroupBarrier();
+    } else {
+        let n_batch = (n_segs + (WG_SIZE - 1u)) / WG_SIZE;
+        for (var batch = 0u; batch < n_batch; batch++) {
+            let seg_ix = batch * WG_SIZE + th_ix;
+            let seg_off = fill.seg_data + seg_ix;
+            var count = 0u;
+            let slice_size = min(n_segs - batch * WG_SIZE, WG_SIZE);
+            // TODO: might save a register rewriting this in terms of limit
+            if th_ix < slice_size {
+                let segment = segments[seg_off];
+                let xy0 = segment.point0;
+                let xy1 = segment.point1;
+                var y_edge_f = f32(TILE_HEIGHT);
+                var delta = select(-1, 1, xy1.x <= xy0.x);
+                if xy0.x == 0.0 {
+                    y_edge_f = xy0.y;
+                } else if xy1.x == 0.0 {
+                    y_edge_f = xy1.y;
+                }
+                // discard horizontal lines aligned to pixel grid
+                if !(xy0.y == xy1.y && xy0.y == floor(xy0.y)) {
+                    count = span(xy0.x, xy1.x) + span(xy0.y, xy1.y) - 1u;
+                }
+                let y_edge = u32(ceil(y_edge_f));
+                if y_edge < TILE_HEIGHT {
+                    atomicAdd(&sh_winding_y[y_edge >> 2u], u32(delta) << ((y_edge & 3u) << 3u));
+                }
+            }
+            // workgroup prefix sum of counts
+            sh_count[th_ix] = count;
+            let lg_n = firstLeadingBit(slice_size * 2u - 1u);
+            for (var i = 0u; i < lg_n; i++) {
+                workgroupBarrier();
+                if th_ix >= 1u << i {
+                    count += sh_count[th_ix - (1u << i)];
+                }
+                workgroupBarrier();
+                sh_count[th_ix] = count;
+            }
+            let total = workgroupUniformLoad(&sh_count[slice_size - 1u]);
+            for (var i = th_ix; i < total; i += WG_SIZE) {
+                // binary search to find pixel
+                var lo = 0u;
+                var hi = slice_size;
+                let goal = i;
+                while hi > lo + 1u {
+                    let mid = (lo + hi) >> 1u;
+                    if goal >= sh_count[mid - 1u] {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let el_ix = lo;
+                let last_pixel = i + 1u == sh_count[el_ix];
+                let sub_ix = i - select(0u, sh_count[el_ix - 1u], el_ix > 0u);
+                ms_nonzero_pixel(segments[fill.seg_data + batch * WG_SIZE + el_ix], sub_ix, last_pixel);
+            }
+            workgroupBarrier();
+        }
     }
     var area: array<f32, PIXELS_PER_THREAD>;
     let major = (th_ix * PIXELS_PER_THREAD) >> 2u;
@@ -565,15 +711,14 @@ fn fill_path_ms_evenodd(fill: CmdFill, local_id: vec2<u32>, result: ptr<function
         atomicStore(&sh_samples[th_ix * sample_count + i], 0u);
     }
     workgroupBarrier();
-    let n_batch = (n_segs + (WG_SIZE - 1u)) / WG_SIZE;
-    for (var batch = 0u; batch < n_batch; batch++) {
-        let seg_ix = batch * WG_SIZE + th_ix;
-        let seg_off = fill.seg_data + seg_ix;
-        var count = 0u;
-        let slice_size = min(n_segs - batch * WG_SIZE, WG_SIZE);
-        // TODO: might save a register rewriting this in terms of limit
-        if th_ix < slice_size {
-            let segment = segments[seg_off];
+    // Ligma: with many segments, as a shape far smaller than its points
+    // are many has in one tile, each thread rasterizes its own whole,
+    // with no waiting on the others between batches. The same masks
+    // add up in another order, to the same
+    if n_segs > DENSE_SEGS {
+        for (var seg_ix = th_ix; seg_ix < n_segs; seg_ix += WG_SIZE) {
+            let segment = segments[fill.seg_data + seg_ix];
+            var count = 0u;
             // Coordinates are relative to tile origin
             let xy0 = segment.point0;
             let xy1 = segment.point1;
@@ -591,145 +736,71 @@ fn fill_path_ms_evenodd(fill: CmdFill, local_id: vec2<u32>, result: ptr<function
             if y_edge < TILE_HEIGHT {
                 atomicXor(&sh_winding_y[0], 1u << y_edge);
             }
-        }
-        // workgroup prefix sum of counts
-        sh_count[th_ix] = count;
-        let lg_n = firstLeadingBit(slice_size * 2u - 1u);
-        for (var i = 0u; i < lg_n; i++) {
-            workgroupBarrier();
-            if th_ix >= 1u << i {
-                count += sh_count[th_ix - (1u << i)];
+            for (var sub_ix = 0u; sub_ix < count; sub_ix += 1u) {
+                ms_evenodd_pixel(segment, sub_ix, sub_ix + 1u == count);
             }
-            workgroupBarrier();
-            sh_count[th_ix] = count;
-        }
-        let total = workgroupUniformLoad(&sh_count[slice_size - 1u]);
-        for (var i = th_ix; i < total; i += WG_SIZE) {
-            // binary search to find pixel
-            var lo = 0u;
-            var hi = slice_size;
-            let goal = i;
-            while hi > lo + 1u {
-                let mid = (lo + hi) >> 1u;
-                if goal >= sh_count[mid - 1u] {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            let el_ix = lo;
-            let last_pixel = i + 1u == sh_count[el_ix];
-            let sub_ix = i - select(0u, sh_count[el_ix - 1u], el_ix > 0u);
-            let seg_off = fill.seg_data + batch * WG_SIZE + el_ix;
-            let segment = segments[seg_off];
-            let xy0_in = segment.point0;
-            let xy1_in = segment.point1;
-            let is_down = xy1_in.y >= xy0_in.y;
-            let xy0 = select(xy1_in, xy0_in, is_down);
-            let xy1 = select(xy0_in, xy1_in, is_down);
-
-            // Set up data for line rasterization
-            // Note: this is duplicated work if total count exceeds a workgroup.
-            // One alternative is to compute it in a separate dispatch.
-            let dx = abs(xy1.x - xy0.x);
-            let dy = xy1.y - xy0.y;
-            let idxdy = 1.0 / (dx + dy);
-            var a = dx * idxdy;
-            let is_positive_slope = xy1.x >= xy0.x;
-            let x_sign = select(-1.0, 1.0, is_positive_slope);
-            let xt0 = floor(xy0.x * x_sign);
-            let c = xy0.x * x_sign - xt0;
-            let y0i = floor(xy0.y);
-            let ytop = y0i + 1.0;
-            let b = min((dy * c + dx * (ytop - xy0.y)) * idxdy, ONE_MINUS_ULP);
-            let count_x = span(xy0.x, xy1.x) - 1u;
-            let count = count_x + span(xy0.y, xy1.y);
-            let robust_err = floor(a * (f32(count) - 1.0) + b) - f32(count_x);
-            if robust_err != 0.0 {
-                a -= ROBUST_EPSILON * sign(robust_err);
-            }
-            let x0i = i32(xt0 * x_sign + 0.5 * (x_sign - 1.0));
-            // Use line equation to plot pixel coordinates
-
-            let zf = a * f32(sub_ix) + b;
-            let z = floor(zf);
-            let x = x0i + i32(x_sign * z);
-            let y = i32(y0i) + i32(sub_ix) - i32(z);
-            var is_delta: bool;
-            // See comments in nonzero case.
-            var is_bump = false;
-            let zp = floor(a * f32(sub_ix - 1u) + b);
-            if sub_ix == 0u {
-                is_delta = y0i == xy0.y;
-                is_bump = xy0.x == 0.0;
-            } else {
-                is_delta = z == zp;
-                is_bump = is_positive_slope && !is_delta;
-            }
-            if u32(x) < TILE_WIDTH - 1u && u32(y) < TILE_HEIGHT {
-                if is_delta {
-                    atomicXor(&sh_winding[y], 2u << u32(x));
-                }
-            }
-            // Apply sample mask
-            let mask_block = u32(is_positive_slope) * (MASK_WIDTH * MASK_HEIGHT / 2u);
-            let half_height = f32(MASK_HEIGHT / 2u);
-            let mask_row = floor(min(a * half_height, half_height - 1.0)) * f32(MASK_WIDTH);
-            let mask_col = floor((zf - z) * f32(MASK_WIDTH));
-            let mask_ix = mask_block + u32(mask_row + mask_col);
-            let pix_ix = u32(y) * TILE_WIDTH + u32(x);
-#ifdef msaa8
-            var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
-            mask &= 0xffu;
-            // Intersect with y half-plane masks
-            if sub_ix == 0u && !is_bump {
-                let mask_shift = u32(round(8.0 * (xy0.y - f32(y))));
-                mask &= 0xffu << mask_shift;
-            }
-            if last_pixel && xy1.x != 0.0 {
-                let mask_shift = u32(round(8.0 * (xy1.y - f32(y))));
-                mask &= ~(0xffu << mask_shift);
-            }
-            if is_bump {
-                mask ^= 0xffu;
-            }
-            atomicXor(&sh_samples[pix_ix], mask);
-#endif
-#ifdef msaa4
-            var mask = mask_lut[mask_ix / 4u] >> ((mask_ix % 4u) * 8u);
-            mask &= 0xfu;
-            if sub_ix == 0u && !is_bump {
-                let mask_shift = u32(round(4.0 * (xy0.y - f32(y))));
-                mask &= 0xfu << mask_shift;
-            }
-            if last_pixel && xy1.x != 0.0 {
-                let mask_shift = u32(round(4.0 * (xy1.y - f32(y))));
-                mask &= ~(0xfu << mask_shift);
-            }
-            if is_bump {
-                mask ^= 0xfu;
-            }
-            atomicXor(&sh_samples[pix_ix], mask);
-#endif
-#ifdef msaa16
-            var mask = mask_lut[mask_ix / 2u] >> ((mask_ix % 2u) * 16u);
-            mask &= 0xffffu;
-            // Intersect with y half-plane masks
-            if sub_ix == 0u && !is_bump {
-                let mask_shift = u32(round(16.0 * (xy0.y - f32(y))));
-                mask &= 0xffffu << mask_shift;
-            }
-            if last_pixel && xy1.x != 0.0 {
-                let mask_shift = u32(round(16.0 * (xy1.y - f32(y))));
-                mask &= ~(0xffffu << mask_shift);
-            }
-            if is_bump {
-                mask ^= 0xffffu;
-            }
-            atomicXor(&sh_samples[pix_ix], mask);
-#endif
         }
         workgroupBarrier();
+    } else {
+        let n_batch = (n_segs + (WG_SIZE - 1u)) / WG_SIZE;
+        for (var batch = 0u; batch < n_batch; batch++) {
+            let seg_ix = batch * WG_SIZE + th_ix;
+            let seg_off = fill.seg_data + seg_ix;
+            var count = 0u;
+            let slice_size = min(n_segs - batch * WG_SIZE, WG_SIZE);
+            // TODO: might save a register rewriting this in terms of limit
+            if th_ix < slice_size {
+                let segment = segments[seg_off];
+                // Coordinates are relative to tile origin
+                let xy0 = segment.point0;
+                let xy1 = segment.point1;
+                var y_edge_f = f32(TILE_HEIGHT);
+                if xy0.x == 0.0 {
+                    y_edge_f = xy0.y;
+                } else if xy1.x == 0.0 {
+                    y_edge_f = xy1.y;
+                }
+                // discard horizontal lines aligned to pixel grid
+                if !(xy0.y == xy1.y && xy0.y == floor(xy0.y)) {
+                    count = span(xy0.x, xy1.x) + span(xy0.y, xy1.y) - 1u;
+                }
+                let y_edge = u32(ceil(y_edge_f));
+                if y_edge < TILE_HEIGHT {
+                    atomicXor(&sh_winding_y[0], 1u << y_edge);
+                }
+            }
+            // workgroup prefix sum of counts
+            sh_count[th_ix] = count;
+            let lg_n = firstLeadingBit(slice_size * 2u - 1u);
+            for (var i = 0u; i < lg_n; i++) {
+                workgroupBarrier();
+                if th_ix >= 1u << i {
+                    count += sh_count[th_ix - (1u << i)];
+                }
+                workgroupBarrier();
+                sh_count[th_ix] = count;
+            }
+            let total = workgroupUniformLoad(&sh_count[slice_size - 1u]);
+            for (var i = th_ix; i < total; i += WG_SIZE) {
+                // binary search to find pixel
+                var lo = 0u;
+                var hi = slice_size;
+                let goal = i;
+                while hi > lo + 1u {
+                    let mid = (lo + hi) >> 1u;
+                    if goal >= sh_count[mid - 1u] {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let el_ix = lo;
+                let last_pixel = i + 1u == sh_count[el_ix];
+                let sub_ix = i - select(0u, sh_count[el_ix - 1u], el_ix > 0u);
+                ms_evenodd_pixel(segments[fill.seg_data + batch * WG_SIZE + el_ix], sub_ix, last_pixel);
+            }
+            workgroupBarrier();
+        }
     }
     var area: array<f32, PIXELS_PER_THREAD>;
     var scan_x = atomicLoad(&sh_winding[local_id.y]);
@@ -1233,7 +1304,7 @@ fn main(
                 cmd_ix += 3u;
                 continue;
             }
-            if (ablate & 16u) != 0u && tag == CMD_FILL {
+            if (ablate & 16u) != 0u && tag == CMD_FILL || (ablate & 32u) != 0u && tag == CMD_FILL && (ptcl[cmd_ix + 1u] >> 2u) <= (ablate >> 8u) || (ablate & 64u) != 0u && tag == CMD_FILL && (ptcl[cmd_ix + 1u] >> 2u) > (ablate >> 8u) {
                 for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                     area[i] = 0.5;
                 }
