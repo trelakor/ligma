@@ -493,6 +493,13 @@ const IMAGES_MAX: usize = 96 << 20;
 const PLACEHOLDER: i32 = 256;
 /// Bytes of those kept of images nothing near the view draws
 const PLACEHOLDERS: usize = 32 << 20;
+/// Images and effects needed this lately stay as big as they were needed,
+/// past the budgets above, so zooming out and back in or panning back to
+/// them doesn't decode them again, run them again, and draw again all that
+/// uses them each time
+const IMAGE_LINGER: Duration = Duration::from_secs(30);
+/// Past this many bytes, images are let go however lately they were needed
+const IMAGES_CEILING: usize = 384 << 20;
 
 /// Settings that trade memory for quality, which can be set by environment
 /// variable in a dev build to measure them
@@ -964,6 +971,9 @@ pub struct Painter {
     images: HashMap<String, Img>,
     /// Widths images were asked for at
     asked: HashMap<String, f64>,
+    /// The widest each image was needed at lately, and when (see
+    /// `IMAGE_LINGER`)
+    wanted: HashMap<String, (f64, Instant)>,
     /// Images that couldn't be had, and when
     failed: HashMap<String, Instant>,
     tiles: HashMap<TileKey, Tile>,
@@ -1119,6 +1129,7 @@ impl Painter {
             pictures: HashMap::new(),
             images: HashMap::new(),
             asked: HashMap::new(),
+            wanted: HashMap::new(),
             failed: HashMap::new(),
             tiles: HashMap::new(),
             scratch: Vec::new(),
@@ -2521,10 +2532,38 @@ impl Painter {
                 }
             }
         }
+        let now = Instant::now();
+        for (key, &width) in &need {
+            let wanted = self.wanted.entry(key.clone()).or_insert((width, now));
+            // The widest lately, kept till that's not needed for a while
+            if width >= wanted.0 || now - wanted.1 > IMAGE_LINGER {
+                *wanted = (width, now);
+            }
+        }
+        self.wanted.retain(|_, (_, at)| now - *at <= IMAGE_LINGER);
+        let mut total: usize = self.images.values().map(Img::bytes).sum();
+        // What was needed lately is kept as it is, the latest first, as much
+        // as fits under the ceiling
+        let mut recent: Vec<(&String, f64, Instant)> = self.wanted.iter().map(|(key, &(width, at))| (key, width, at)).collect();
+        recent.sort_by(|a, b| b.2.cmp(&a.2));
+        let mut lately: HashMap<String, f64> = HashMap::new();
+        let mut held = 0;
+        for (key, width, _) in recent {
+            let bytes = self.images.get(key).map_or(0, Img::bytes);
+            if held + bytes > IMAGES_CEILING {
+                break;
+            }
+            held += bytes;
+            lately.insert(key.clone(), width);
+        }
+        trace(|| format!("images {} MB, {} needed lately, {} MB of them kept", total >> 20, lately.len(), held >> 20));
+        let wanted = |key: &str, img: &Img| {
+            lately.get(key).is_some_and(|&width| width <= 0.0 || fitted(img.original, width) as f64 >= img.image.width().max(img.image.height()) as f64)
+        };
         let mut smaller = Vec::new();
         let mut unused = Vec::new();
         for (key, img) in &self.images {
-            if key.starts_with(RENDER) {
+            if key.starts_with(RENDER) || wanted(key, img) {
                 continue;
             }
             let kept = img.image.width().max(img.image.height()) as f64;
@@ -2541,7 +2580,6 @@ impl Painter {
                 None => {}
             }
         }
-        let mut total: usize = self.images.values().map(Img::bytes).sum();
         unused.sort_by(|a, b| b.1.cmp(&a.1));
         let mut gone = Vec::new();
         for (key, _) in unused {
@@ -2570,7 +2608,7 @@ impl Painter {
             let mut aside: Vec<(String, usize)> = self
                 .images
                 .iter()
-                .filter(|(key, _)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()))
+                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !wanted(key, img))
                 .map(|(key, img)| (key.clone(), img.bytes()))
                 .collect();
             aside.sort_by(|a, b| b.1.cmp(&a.1));
