@@ -12,7 +12,7 @@ The Effects button in Figma Design's toolbar, after Actions, lists effects Ligma
 
 ## Repeater (built)
 
-Repeats the selected layer, live. Its panel has a preview of the whole result up top, drawn from a picture of the layer, so it shows even when the copies are off screen; preset chips; Repeat as; labeled sliders, each with its value beside it, which can be typed in past the slider's ends (arrow keys step it, Shift by 10); Reset; and Place, which says how many copies it places:
+Repeats the selected layer, live. Its panel has a preview of the whole result up top, drawn from a picture of the layer, so it shows even when the copies are off screen; preset chips; Repeat as; labeled sliders, each with its value beside it, where distances and turns ease out from zero so small values get most of the slider, and End size has 100% in the middle; values can be typed in past the slider's ends, dragged left and right as Figma's fields are, or stepped with the arrow keys (Shift by 10); Reset; and Place, which says how many copies it places. The preview is grouped from the start, so the layers panel shows one group, and Cancel puts the original back where it was (not in auto layout, where a group would join the flow):
 
 - **Trail:** each copy a step right and down from the last, turned by a set angle, and curving: the step's direction turns each time, so trails bend into arcs, and each step is as much smaller or larger as the copies are, so shrinking copies spiral inward.
 - **Radial:** around a ring through the original, over a sweep of up to 360°, turning the copies to follow the ring or not.

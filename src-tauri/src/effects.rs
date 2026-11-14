@@ -178,7 +178,7 @@ const PAGE_JS: &str = r##"(() => {
       height: 16px;
       margin: 0;
       background:
-        linear-gradient(var(--color-bg-brand, #0d99ff), var(--color-bg-brand, #0d99ff)) 0 50% / var(--fill, 0%) 2px no-repeat,
+        linear-gradient(var(--color-bg-brand, #0d99ff), var(--color-bg-brand, #0d99ff)) var(--from, 0%) 50% / var(--fill, 0%) 2px no-repeat,
         linear-gradient(var(--color-border), var(--color-border)) 0 50% / 100% 2px no-repeat;
       cursor: default;
     }
@@ -205,6 +205,7 @@ const PAGE_JS: &str = r##"(() => {
       font-variant-numeric: tabular-nums;
       text-align: right;
     }
+    [${ROOT}="panel"] .value:not(:focus) { cursor: ew-resize; }
     [${ROOT}="panel"] .value:hover { background: var(--color-bg-secondary); }
     [${ROOT}="panel"] .value:focus { border-color: var(--color-border-selected, #0d99ff); background: var(--color-bg-secondary); text-align: left; }
     [${ROOT}="panel"] .select {
@@ -543,6 +544,20 @@ const PAGE_JS: &str = r##"(() => {
     // An existing Repeater's copies are hidden while new ones preview,
     // made again from the original as it is now
     for (const node of current.kept) node.visible = false;
+    // A new one's preview is grouped from the start, so the layers panel
+    // shows one group rather than every copy. In auto layout it isn't, as
+    // a group there would move the layer into the flow
+    const parent = source.parent;
+    if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
+      current.home = { parent, index: parent.children.indexOf(source) };
+      try {
+        current.wrap = figma.group([source], parent, current.home.index);
+        current.wrap.name = `Repeater · ${source.name}`;
+        figma.currentPage.selection = [current.wrap];
+      } catch {
+        current.wrap = null;
+      }
+    }
     buildPanel(current);
     rebuild(current, true);
   };
@@ -698,7 +713,7 @@ const PAGE_JS: &str = r##"(() => {
   const apply = (current) => {
     const { figma, source, settings } = current;
     for (const node of current.kept) if (!node.removed) node.remove();
-    let result = current.group;
+    let result = current.group ?? current.wrap;
     if (settings.editable) {
       const parent = source.parent;
       const nodes = [source, ...current.clones];
@@ -712,12 +727,13 @@ const PAGE_JS: &str = r##"(() => {
       result.setSharedPluginData(PLUGIN, SETTINGS, JSON.stringify(settings));
       figma.currentPage.selection = [result];
     } else {
-      // Plain copies, which Repeater forgets
+      // Plain copies, which Repeater forgets, out of the preview's group
       for (const clone of current.clones) clone.setSharedPluginData(PLUGIN, ROLE, "");
       if (result && !result.removed) {
         result.setSharedPluginData(PLUGIN, SETTINGS, "");
         source.setSharedPluginData(PLUGIN, ROLE, "");
       }
+      if (current.wrap && !current.wrap.removed) figma.ungroup(current.wrap);
       figma.currentPage.selection = [source, ...current.clones];
     }
     try {
@@ -734,6 +750,15 @@ const PAGE_JS: &str = r##"(() => {
     if (!applied) {
       for (const clone of current.clones) if (!clone.removed) clone.remove();
       for (const node of current.kept) if (!node.removed) node.visible = true;
+      // The original back where it was, and the preview's group with it
+      // gone, as Figma removes empty groups
+      const { home, wrap, source } = current;
+      if (wrap && home && !source.removed && !home.parent.removed) {
+        try {
+          home.parent.insertChild(Math.min(home.index, home.parent.children.length), source);
+          if (!wrap.removed) wrap.remove();
+        } catch {}
+      }
       try {
         if (current.group && !current.group.removed) current.figma.currentPage.selection = [current.group];
         else if (!current.source.removed) current.figma.currentPage.selection = [current.source];
@@ -745,33 +770,56 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // The slider rows each layout shows: key, label, unit, and its range,
-  // `u` the layer's larger side, so distances suit it. Typing goes past
-  // the slider's ends
+  // `u` the layer's larger side, so distances suit it. Distances and
+  // turns ease out from zero, so small values get most of the slider,
+  // and End size has 100% in the middle. Typing and dragging the value go
+  // past the slider's ends
+  const near = (u, least, times) => Math.max(least, Math.round(u * times));
   const ROWS = {
     trail: [
-      ["copies", "Copies", "", () => [1, 100, 1]],
-      ["stepX", "Step right", "px", (u) => [-Math.round(u * 2), Math.round(u * 2), 1]],
-      ["stepY", "Step down", "px", (u) => [-Math.round(u * 2), Math.round(u * 2), 1]],
-      ["turn", "Turn each step", "°", () => [-180, 180, 1]],
-      ["curve", "Curve each step", "°", () => [-90, 90, 1]],
+      ["copies", "Copies", "", () => ({ min: 1, max: 60 })],
+      ["stepX", "Step right", "px", (u) => ({ min: -near(u, 50, 1.5), max: near(u, 50, 1.5), shape: "curve" })],
+      ["stepY", "Step down", "px", (u) => ({ min: -near(u, 50, 1.5), max: near(u, 50, 1.5), shape: "curve" })],
+      ["turn", "Turn each step", "°", () => ({ min: -180, max: 180, shape: "curve" })],
+      ["curve", "Curve each step", "°", () => ({ min: -90, max: 90, shape: "curve" })],
     ],
     radial: [
-      ["copies", "Copies", "", () => [1, 100, 1]],
-      ["radius", "Radius", "px", (u) => [0, Math.round(u * 5), 1]],
-      ["start", "Start angle", "°", () => [-180, 180, 1]],
-      ["sweep", "Sweep", "°", () => [-360, 360, 1]],
+      ["copies", "Copies", "", () => ({ min: 1, max: 60 })],
+      ["radius", "Radius", "px", (u) => ({ min: 0, max: near(u, 100, 4), shape: "curve" })],
+      ["start", "Start angle", "°", () => ({ min: -180, max: 180 })],
+      ["sweep", "Sweep", "°", () => ({ min: -360, max: 360 })],
     ],
     grid: [
-      ["columns", "Columns", "", () => [1, 20, 1]],
-      ["rows", "Rows", "", () => [1, 20, 1]],
-      ["gapX", "Gap across", "px", (u) => [0, Math.round(u), 1]],
-      ["gapY", "Gap down", "px", (u) => [0, Math.round(u), 1]],
+      ["columns", "Columns", "", () => ({ min: 1, max: 20 })],
+      ["rows", "Rows", "", () => ({ min: 1, max: 20 })],
+      ["gapX", "Gap across", "px", (u) => ({ min: 0, max: near(u, 40, 1), shape: "curve" })],
+      ["gapY", "Gap down", "px", (u) => ({ min: 0, max: near(u, 40, 1), shape: "curve" })],
     ],
     end: [
-      ["endScale", "End size", "%", () => [1, 300, 1]],
-      ["endOpacity", "End opacity", "%", () => [0, 100, 1]],
+      ["endScale", "End size", "%", () => ({ min: 1, max: 300, middle: 100 })],
+      ["endOpacity", "End opacity", "%", () => ({ min: 0, max: 100 })],
     ],
-    blend: [["blendAmount", "Blend amount", "%", () => [0, 100, 1]]],
+    blend: [["blendAmount", "Blend amount", "%", () => ({ min: 0, max: 100 })]],
+  };
+  // How much dragging a value changes it, a pixel at a time
+  const SCRUB = { copies: 0.2, columns: 0.1, rows: 0.1 };
+  // From a slider's place, 0 to 1, to its value and back
+  const CURVE = 2.5;
+  const toValue = ({ min, max, shape, middle }, at) => {
+    if (middle !== undefined) return at < 0.5 ? min + (middle - min) * (at / 0.5) : middle + (max - middle) * ((at - 0.5) / 0.5);
+    if (shape !== "curve") return min + (max - min) * at;
+    if (min < 0) {
+      const q = 2 * at - 1;
+      return Math.sign(q) * Math.abs(q) ** CURVE * max;
+    }
+    return min + (max - min) * at ** CURVE;
+  };
+  const toPlace = ({ min, max, shape, middle }, value) => {
+    const v = Math.min(max, Math.max(min, value));
+    if (middle !== undefined) return v < middle ? ((v - min) / (middle - min)) * 0.5 : 0.5 + ((v - middle) / (max - middle)) * 0.5;
+    if (shape !== "curve") return (v - min) / (max - min);
+    if (min < 0) return (Math.sign(v) * Math.abs(v / max) ** (1 / CURVE) + 1) / 2;
+    return ((v - min) / (max - min)) ** (1 / CURVE);
   };
   const LIMITS = { copies: [1, MAX_COPIES], columns: [1, 40], rows: [1, 40], radius: [0, Infinity], gapX: [-Infinity, Infinity], gapY: [-Infinity, Infinity], endScale: [1, 1000], endOpacity: [0, 100], blendAmount: [0, 100], sweep: [-360, 360] };
 
@@ -859,20 +907,22 @@ const PAGE_JS: &str = r##"(() => {
       show();
     };
 
-    // A labeled slider, with its value beside it, which can be typed in
+    // A labeled slider, with its value beside it, which can be typed in,
+    // or dragged left and right to change it, as Figma's fields are
     const slider = ([key, label, suffix, range]) => {
-      const [min, max, step] = range(unit);
+      const shape = range(unit);
       const [floor, ceiling] = LIMITS[key] ?? [-Infinity, Infinity];
-      const input = element("input", { type: "range", min, max, step });
+      const clamp = (number) => Math.min(ceiling, Math.max(floor, Math.round(number)));
+      const input = element("input", { type: "range", min: 0, max: 1000, step: 1 });
       input.setAttribute("aria-label", label);
       const value = element("input", { type: "text", className: "value", inputMode: "decimal", spellcheck: false });
       value.setAttribute("aria-label", `${label} value`);
       // Blended copies are made again when how far each blends changes
       const fresh = () => s.blend && ["blendAmount", "copies", "columns", "rows"].includes(key);
-      input.addEventListener("input", () => change(key, Number(input.value), fresh()));
+      input.addEventListener("input", () => change(key, clamp(toValue(shape, Number(input.value) / 1000)), fresh()));
       const commit = () => {
         const number = parseFloat(value.value);
-        if (Number.isFinite(number)) change(key, Math.min(ceiling, Math.max(floor, Math.round(number))), fresh());
+        if (Number.isFinite(number)) change(key, clamp(number), fresh());
         else show();
       };
       value.addEventListener("change", commit);
@@ -880,18 +930,55 @@ const PAGE_JS: &str = r##"(() => {
         if (event.key === "Enter") value.blur();
         else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
           event.preventDefault();
-          const next = s[key] + (event.key === "ArrowUp" ? 1 : -1) * step * (event.shiftKey ? 10 : 1);
-          change(key, Math.min(ceiling, Math.max(floor, next)), fresh());
+          change(key, clamp(s[key] + (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 10 : 1)), fresh());
           value.select();
         }
       });
       value.addEventListener("blur", () => show());
+      // Dragging the value scrubs it, with the pointer locked so it goes on
+      // past the screen's edge; a click without a drag types in it
+      value.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || document.activeElement === value) return;
+        event.preventDefault();
+        const start = s[key];
+        let moved = 0;
+        let scrubbing = false;
+        const rate = SCRUB[key] ?? 1;
+        const move = (event) => {
+          moved += event.movementX;
+          if (!scrubbing && Math.abs(moved) < 3) return;
+          if (!scrubbing) {
+            scrubbing = true;
+            value.requestPointerLock?.()?.catch?.(() => {});
+          }
+          change(key, clamp(start + moved * rate * (event.shiftKey ? 10 : 1)), fresh());
+        };
+        const up = () => {
+          removeEventListener("pointermove", move, true);
+          removeEventListener("pointerup", up, true);
+          if (document.pointerLockElement === value) document.exitPointerLock();
+          if (!scrubbing) {
+            value.focus();
+            value.select();
+          }
+        };
+        addEventListener("pointermove", move, true);
+        addEventListener("pointerup", up, true);
+      });
       const row = element("label", { className: "row" }, element("span", { className: "label", textContent: label }), input, value);
+      // A click on the label doesn't put the cursor in the value
+      row.addEventListener("click", (event) => event.target === row.firstChild && event.preventDefault());
       row.show = () => {
-        input.value = String(s[key]);
-        // The filled part of the track, up to the thumb
-        const t = (Math.min(max, Math.max(min, s[key])) - min) / Math.max(1e-9, max - min);
-        input.style.setProperty("--fill", `${t * 100}%`);
+        const at = toPlace(shape, s[key]);
+        input.value = String(Math.round(at * 1000));
+        // Filled from the neutral value: the middle where it goes both
+        // ways, or 100% is, and otherwise the start
+        const from = shape.min < 0 || shape.middle !== undefined ? 0.5 : 0;
+        const [left, width] = [Math.min(from, at), Math.abs(at - from)];
+        // A background's position counts from the space it leaves, so it's
+        // given as a fraction of that
+        input.style.setProperty("--from", width >= 1 ? "0%" : `${(left / (1 - width)) * 100}%`);
+        input.style.setProperty("--fill", `${width * 100}%`);
         if (document.activeElement !== value) value.value = `${Math.round(s[key] * 100) / 100}${suffix}`;
       };
       rows.push(row);
