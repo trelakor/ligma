@@ -96,7 +96,8 @@ fn write_path(tile: Tile, tile_ix: u32, draw_flags: u32) {
         alloc_cmd(4u);
         ptcl[cmd_offset] = CMD_FILL;
         let even_odd = (draw_flags & DRAW_INFO_FLAGS_FILL_RULE_BIT) != 0u;
-        let size_and_rule = (n_segs << 1u) | u32(even_odd);
+        let inverse = (draw_flags & DRAW_INFO_FLAGS_INVERSE_BIT) != 0u;
+        let size_and_rule = (n_segs << 2u) | (u32(inverse) << 1u) | u32(even_odd);
         let fill = CmdFill(size_and_rule, seg_ix, tile.backdrop);
         ptcl[cmd_offset + 1u] = fill.size_and_rule;
         ptcl[cmd_offset + 2u] = fill.seg_data;
@@ -337,7 +338,8 @@ fn main(
             // If this draw object represents an even-odd fill and we know that no line segment
             // crosses this tile and then this draw object should not contribute to the tile if its
             // backdrop (i.e. the winding number of its top-left corner) is even.
-            let backdrop_clear = select(tile.backdrop, abs(tile.backdrop) & 1, even_odd) == 0;
+            let inverse = (draw_flags & DRAW_INFO_FLAGS_INVERSE_BIT) != 0u;
+            let backdrop_clear = (select(tile.backdrop, abs(tile.backdrop) & 1, even_odd) == 0) != inverse;
             let include_tile = n_segs != 0u || (backdrop_clear == is_clip) || is_blend;
             if include_tile {
                 let el_slice = el_ix / 32u;
@@ -413,7 +415,8 @@ fn main(
                     }
                     case DRAWTAG_BEGIN_CLIP: {
                         let even_odd = (draw_flags & DRAW_INFO_FLAGS_FILL_RULE_BIT) != 0u;
-                        let backdrop_clear = select(tile.backdrop, abs(tile.backdrop) & 1, even_odd) == 0;
+                        let inverse = (draw_flags & DRAW_INFO_FLAGS_INVERSE_BIT) != 0u;
+                        let backdrop_clear = (select(tile.backdrop, abs(tile.backdrop) & 1, even_odd) == 0) != inverse;
                         if tile.segment_count_or_ix == 0u && backdrop_clear {
                             clip_zero_depth = clip_depth + 1u;
                         } else {

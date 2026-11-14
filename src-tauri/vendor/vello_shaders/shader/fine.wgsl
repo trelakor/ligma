@@ -163,7 +163,7 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
         fill_path_ms_evenodd(fill, local_id, result);
         return;
     }
-    let n_segs = fill.size_and_rule >> 1u;
+    let n_segs = fill.size_and_rule >> 2u;
     let th_ix = local_id.y * (TILE_WIDTH / PIXELS_PER_THREAD) + local_id.x;
     // Initialize winding number arrays to a winding number of 0, which is 0x80 in an
     // 8 bit biased signed integer encoding.
@@ -552,7 +552,7 @@ fn fill_path_ms(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<
 //
 // TODO: factor some logic out to reduce code duplication.
 fn fill_path_ms_evenodd(fill: CmdFill, local_id: vec2<u32>, result: ptr<function, array<f32, PIXELS_PER_THREAD>>) {
-    let n_segs = fill.size_and_rule >> 1u;
+    let n_segs = fill.size_and_rule >> 2u;
     let th_ix = local_id.y * (TILE_WIDTH / PIXELS_PER_THREAD) + local_id.x;
     if th_ix < TILE_HEIGHT {
         if th_ix == 0u {
@@ -1114,7 +1114,7 @@ const PIXELS_PER_THREAD = 4u;
 //
 // FIXME: This should return an array when https://github.com/gfx-rs/naga/issues/1930 is fixed.
 fn fill_path(fill: CmdFill, xy: vec2<f32>, result: ptr<function, array<f32, PIXELS_PER_THREAD>>) {
-    let n_segs = fill.size_and_rule >> 1u;
+    let n_segs = fill.size_and_rule >> 2u;
     let even_odd = (fill.size_and_rule & 1u) != 0u;
     var area: array<f32, PIXELS_PER_THREAD>;
     let backdrop_f = f32(fill.backdrop);
@@ -1211,6 +1211,12 @@ fn main(
 #else
                 fill_path(fill, local_xy, &area);
 #endif
+                // Ligma: covering where the path doesn't
+                if (fill.size_and_rule & 2u) != 0u {
+                    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                        area[i] = 1.0 - area[i];
+                    }
+                }
                 cmd_ix += 4u;
             }
             case CMD_SOLID: {

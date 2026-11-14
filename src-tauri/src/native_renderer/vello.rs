@@ -738,6 +738,14 @@ impl Fragment {
     }
 }
 
+/// What a node covers, as paths in device pixels
+enum Cover {
+    /// Where any of them is
+    Any(Vec<Path>),
+    /// Where all of them are, each a path or where it isn't
+    All(Vec<(Path, bool)>),
+}
+
 /// Where `shape` isn't, inside `device`, as one path: `device` and
 /// `shape` filled even-odd, where `shape`'s filled even-odd or is one
 /// convex contour, so covers nothing twice. Skia's simplifying it to that
@@ -1180,6 +1188,19 @@ impl<'a> Encoder<'a> {
     }
 
     /// Clipped to `device`, a path in device pixels, and any soft clip
+    /// Clipped to where `shape`, in device pixels, isn't inside `device`,
+    /// where there's no soft clip. False where there is
+    fn clip_outside(&mut self, shape: &Path, device: IRect) -> bool {
+        if self.soft.is_some() {
+            return false;
+        }
+        let around = kurbo::Rect::new(device.left as f64, device.top as f64, device.right as f64, device.bottom as f64);
+        self.scene.push_clip_layer_outside(fill_of(shape), Affine::IDENTITY, &bez(shape), around);
+        SIZES[15].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.saved.push((None, true));
+        true
+    }
+
     fn clip(&mut self, device: Path) {
         let saved = self.soft.take();
         let shape = match &saved {
@@ -1516,12 +1537,13 @@ impl<'a> Encoder<'a> {
                 });
                 SIZES[12].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let blends = self.cast.is_none() && node.stroke_geometries.iter().any(|g| g.paints.iter().any(|paint| tree::blends(paint.blend_mode)));
-                if !blends {
-                    if let Some(outside) = self.device(bounds).and_then(|device| outside(&outline.with_transform(&self.m), device)) {
+                if let (false, Some(device)) = (blends, self.device(bounds)) {
+                    if let Some(n) = self.push_clips(vec![(outline.with_transform(&self.m), true)], device) {
                         SIZES[13].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        self.clip(outside);
                         strokes(self);
-                        self.pop();
+                        for _ in 0..n {
+                            self.pop();
+                        }
                         return;
                     }
                 }
@@ -1622,11 +1644,11 @@ impl<'a> Encoder<'a> {
         true
     }
 
-    /// Paths in device pixels whose clips together cover what node `id`
-    /// does, drawn solid, or as a silhouette while casting: one solid path,
-    /// or one stroke and, where it's kept inside or outside its outline,
-    /// that or where it isn't inside `device`. None where it's more
-    fn mask_clips(&mut self, id: u32, device: IRect) -> Option<Vec<Path>> {
+    /// What node `id` covers, drawn solid, or as a silhouette where
+    /// `casting`, as paths in device pixels: one solid path, a fill and a
+    /// stroke, or a stroke kept inside or outside its outline. None where
+    /// it's more
+    fn cover(&mut self, id: u32, casting: bool) -> Option<Cover> {
         let tree = self.tree;
         let mut m = self.m;
         let mut id = id;
@@ -1638,7 +1660,7 @@ impl<'a> Encoder<'a> {
                     id = node.child?;
                 }
                 Op::Group if node.children.len() == 1 => id = node.children[0],
-                Op::Blend if self.cast.is_some() || (node.opacity.unwrap_or(1.0) >= 0.999 && !tree::blends(node.blend_mode) && tree::pass_through(node.blend_mode)) => id = node.child?,
+                Op::Blend if casting || (node.opacity.unwrap_or(1.0) >= 0.999 && !tree::blends(node.blend_mode) && tree::pass_through(node.blend_mode)) => id = node.child?,
                 Op::Fill | Op::FillStroke => break,
                 _ => return None,
             }
@@ -1648,7 +1670,7 @@ impl<'a> Encoder<'a> {
         let bounds = tree.info(id).bounds?;
         let scale = m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y()));
         if bounds.width().max(bounds.height()) * scale < if self.retained { 0.25 } else { 0.5 } {
-            return Some(vec![Path::new()]);
+            return Some(Cover::Any(Vec::new()));
         }
         let at = Matrix::concat(&m, &rt::to_matrix(&node.transform.unwrap_or(rt::IDENTITY)));
         // Whether paints draw their path solid, or none of it
@@ -1657,7 +1679,7 @@ impl<'a> Encoder<'a> {
             for paint in paints {
                 let kind = paint.kind.unwrap_or(PaintType::Solid);
                 let opacity = paint.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
-                let solid = if self.cast.is_some() {
+                let solid = if casting {
                     self.silhouette(node, paint, kind, opacity)?
                 } else {
                     if kind != PaintType::Solid || tree::blends(paint.blend_mode) {
@@ -1676,11 +1698,12 @@ impl<'a> Encoder<'a> {
             }
             Some(any)
         };
+        let device = |path: &std::sync::Arc<rt::Path>| tree.skia_path(path).with_transform(&at);
         match node.op {
             Op::Fill => {
                 let geometry = node.geometry.as_ref()?;
                 let path = geometry.path.as_ref()?;
-                drawn(&geometry.paints)?.then(|| vec![tree.skia_path(path).with_transform(&at)])
+                Some(Cover::Any(if drawn(&geometry.paints)? { vec![device(path)] } else { Vec::new() }))
             }
             Op::FillStroke if node.ext().instance_transforms.is_empty() => {
                 let mut fills = Vec::new();
@@ -1695,23 +1718,40 @@ impl<'a> Encoder<'a> {
                         strokes.push(geometry.path.as_ref()?);
                     }
                 }
-                match (fills.as_slice(), strokes.as_slice()) {
-                    ([fill], []) => Some(vec![tree.skia_path(fill).with_transform(&at)]),
-                    ([], [stroke]) => {
-                        let stroke = tree.skia_path(stroke).with_transform(&at);
-                        let outlines: Vec<&std::sync::Arc<rt::Path>> = node.fill_geometries.iter().filter_map(|g| g.path.as_ref()).collect();
-                        match (node.stroke_mode, outlines.as_slice()) {
-                            (Some(rt::StrokeMask::Inside), [outline]) => Some(vec![stroke, tree.skia_path(outline).with_transform(&at)]),
-                            (Some(rt::StrokeMask::Outside), [outline]) => Some(vec![stroke, outside(&tree.skia_path(outline).with_transform(&at), device)?]),
-                            (Some(rt::StrokeMask::Inside | rt::StrokeMask::Outside), [_, _, ..]) => None,
-                            _ => Some(vec![stroke]),
-                        }
-                    }
+                let outlines: Vec<&std::sync::Arc<rt::Path>> = node.fill_geometries.iter().filter_map(|g| g.path.as_ref()).collect();
+                let kept = node.stroke_mode.filter(|_| !outlines.is_empty());
+                match (fills.as_slice(), strokes.as_slice(), kept, outlines.as_slice()) {
+                    (_, [], ..) => Some(Cover::Any(fills.iter().map(|path| device(path)).collect())),
+                    ([], [stroke], None | Some(rt::StrokeMask::Unknown(_)), _) => Some(Cover::Any(vec![device(stroke)])),
+                    ([], [stroke], Some(rt::StrokeMask::Inside), [outline]) => Some(Cover::All(vec![(device(stroke), false), (device(outline), false)])),
+                    ([], [stroke], Some(rt::StrokeMask::Outside), [outline]) => Some(Cover::All(vec![(device(stroke), false), (device(outline), true)])),
+                    // The fill's the outline, which the stroke's kept inside
+                    // of or not
+                    ([fill], [_], Some(rt::StrokeMask::Inside), [_]) => Some(Cover::Any(vec![device(fill)])),
+                    ([fill], [stroke], None | Some(rt::StrokeMask::Unknown(_) | rt::StrokeMask::Outside), [_]) => Some(Cover::Any(vec![device(fill), device(stroke)])),
                     _ => None,
                 }
             }
             _ => None,
         }
+    }
+
+    /// Clips to all of `clips`, each a path or where it isn't inside
+    /// `device`, and how many there are to pop. None where that's not to
+    /// be had, with nothing pushed
+    fn push_clips(&mut self, clips: Vec<(Path, bool)>, device: IRect) -> Option<usize> {
+        if self.soft.is_some() && clips.iter().any(|(path, outside)| *outside && self::outside(path, device).is_none()) {
+            return None;
+        }
+        let n = clips.len();
+        for (path, outside) in clips {
+            if !outside {
+                self.clip(path);
+            } else if !self.clip_outside(&path, device) {
+                self.clip(self::outside(&path, device)?);
+            }
+        }
+        Some(n)
     }
 
     /// Whether `paint` casts a silhouette over all its path, or none of it,
@@ -1797,8 +1837,18 @@ impl<'a> Encoder<'a> {
                 if std::env::var_os("LIGMA_NATIVE_VELLO_SHAPES").is_some() && SIZES[0].load(std::sync::atomic::Ordering::Relaxed) % 40 == 1 {
                     super::render::trace(|| format!("  knockout alpha {}", shape_of(self.tree, alpha, 0)));
                 }
-                if self.tree.clip_of(alpha).is_some() {
-                    SIZES[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // Where the shape's paths, the shadow's kept where none of
+                // them is
+                let blends = self.cast.is_none() && self.tree.info(color).blends;
+                if let (false, Some(Cover::Any(paths)), Some(device)) = (blends, self.cover(alpha, true), self.device(bounds)) {
+                    if let Some(n) = self.push_clips(paths.into_iter().map(|path| (path, true)).collect(), device) {
+                        SIZES[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.draw(color);
+                        for _ in 0..n {
+                            self.pop();
+                        }
+                        return;
+                    }
                 }
                 if !self.push(BlendMode::default(), 1.0, bounds) {
                     return;
@@ -1872,17 +1922,24 @@ impl<'a> Encoder<'a> {
         // outline, is clips to those, which Vello passes over where a tile's
         // all inside or outside them
         if !blends && matches!(op, MaskOpType::Normal | MaskOpType::Pattern) {
-            if let Some(clips) = self.device(bounds).and_then(|device| self.mask_clips(alpha, device)) {
-                SIZES[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let n = clips.len();
-                for clip in clips {
-                    self.clip(clip);
+            let clips = match self.cover(alpha, self.cast.is_some()) {
+                Some(Cover::All(clips)) => Some(clips),
+                Some(Cover::Any(paths)) if paths.len() <= 1 => Some(paths.into_iter().map(|path| (path, false)).collect()),
+                _ => None,
+            };
+            if let (Some(clips), Some(device)) = (clips, self.device(bounds)) {
+                if let Some(n) = self.push_clips(clips, device) {
+                    SIZES[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // Where it covers nothing, nothing's drawn
+                    if n == 0 {
+                        return;
+                    }
+                    self.draw(color);
+                    for _ in 0..n {
+                        self.pop();
+                    }
+                    return;
                 }
-                self.draw(color);
-                for _ in 0..n {
-                    self.pop();
-                }
-                return;
             }
         }
         // What's masked blends with what's under the mask, as masks don't

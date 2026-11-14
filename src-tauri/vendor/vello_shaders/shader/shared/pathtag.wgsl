@@ -25,6 +25,8 @@ const STYLE_SIZE_IN_WORDS: u32 = 2u;
 
 const STYLE_FLAGS_STYLE: u32 = 0x80000000u;
 const STYLE_FLAGS_FILL: u32 = 0x40000000u;
+// Ligma: a fill covering where its path doesn't
+const STYLE_FLAGS_INVERSE: u32 = 0x00800000u;
 const STYLE_MITER_LIMIT_MASK: u32 = 0xFFFFu;
 
 const STYLE_FLAGS_START_CAP_MASK: u32 = 0x0C000000u;

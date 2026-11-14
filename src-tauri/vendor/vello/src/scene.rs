@@ -201,6 +201,35 @@ impl Scene {
         self.push_layer_inner(DrawBeginClip::clip(), clip_style.into(), transform, clip);
     }
 
+    /// Ligma: pushes a clip to where `clip` isn't, inside `around`. Around
+    /// it twice, both ways, which covers nothing, the path's as big as
+    /// `around` for Vello to cover what's in it there
+    pub fn push_clip_layer_outside(&mut self, fill: Fill, transform: Affine, clip: &impl Shape, around: Rect) {
+        let mut path = BezPath::new();
+        for element in clip.path_elements(0.1) {
+            path.push(element);
+        }
+        path.move_to((around.x0, around.y0));
+        path.line_to((around.x1, around.y0));
+        path.line_to((around.x1, around.y1));
+        path.line_to((around.x0, around.y1));
+        path.close_path();
+        path.move_to((around.x0, around.y0));
+        path.line_to((around.x0, around.y1));
+        path.line_to((around.x1, around.y1));
+        path.line_to((around.x1, around.y0));
+        path.close_path();
+        let t = Transform::from_kurbo(&transform);
+        self.encoding.encode_transform(t);
+        let mut style = vello_encoding::Style::from_fill(fill);
+        style.flags_and_miter_limit |= vello_encoding::Style::FLAGS_INVERSE_BIT;
+        self.encoding.encode_style(style);
+        if !self.encoding.encode_shape(&path, true) {
+            self.encoding.encode_empty_shape();
+        }
+        self.encoding.encode_begin_clip(DrawBeginClip::clip());
+    }
+
     /// Helper for logic shared between [`Self::push_layer`] and [`Self::push_luminance_mask_layer`]
     fn push_layer_inner<'a>(
         &mut self,

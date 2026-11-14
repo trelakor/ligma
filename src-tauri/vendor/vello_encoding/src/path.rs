@@ -40,6 +40,9 @@ impl Style {
     /// 0 for non-zero, 1 for even-odd
     pub const FLAGS_FILL_BIT: u32 = 0x4000_0000;
 
+    /// Ligma: a fill covering where its path doesn't, inside its bounds
+    pub const FLAGS_INVERSE_BIT: u32 = 0x0080_0000;
+
     /// Encodings for join style:
     ///    - 0b00 -> bevel
     ///    - 0b01 -> miter
