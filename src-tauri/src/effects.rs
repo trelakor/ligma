@@ -293,7 +293,9 @@ const PAGE_JS: &str = r##"(() => {
       about: "Repeat a layer in a trail, ring or grid",
       icon: REPEATER_ICON,
       of: (node) => repeaterOf(node),
-      open: (figma, edit) => openRepeater(figma, edit),
+      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, SETTINGS) || "{}"),
+      summary: (s) => (s.mode === "grid" ? `Grid · ${s.columns} × ${s.rows}` : `${s.mode === "radial" ? "Radial" : "Trail"} · ${s.copies} ${s.copies === 1 ? "copy" : "copies"}`),
+      open: (figma, edit, run) => openRepeater(figma, edit, run),
     },
     {
       id: "disintegrate",
@@ -301,7 +303,9 @@ const PAGE_JS: &str = r##"(() => {
       about: "Snap it into dust, or shatter it like glass",
       icon: DISINTEGRATE_ICON,
       of: (node) => disintegrateOf(node),
-      open: (figma, edit) => openDisintegrate(figma, edit),
+      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE) || "{}"),
+      summary: (s) => `${s.mode === "snap" ? "Snap" : "Shatter"} · ${s.pieces} pieces`,
+      open: (figma, edit, run) => openDisintegrate(figma, edit, run),
     },
     {
       id: "bitcrush",
@@ -309,7 +313,9 @@ const PAGE_JS: &str = r##"(() => {
       about: "Pixelate, posterize, dither and glitch it",
       icon: BITCRUSH_ICON,
       of: (node) => bitcrushOf(node),
-      open: (figma, edit) => openBitcrush(figma, edit),
+      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, BITCRUSH) || "{}"),
+      summary: (s) => `${s.pixelSize}pt · ${s.bitDepth}-bit`,
+      open: (figma, edit, run) => openBitcrush(figma, edit, run),
     },
   ];
 
@@ -322,6 +328,10 @@ const PAGE_JS: &str = r##"(() => {
     },
     { capture: true, passive: true },
   );
+
+  // A layer's name without the effects' names an effect group starts with,
+  // so stacked effects are named after the original rather than each other
+  const plainName = (name) => name.replace(/^(?:(?:Repeater|Disintegrate|Bitcrush) · )+/, "");
 
   // ---------- The toolbar button and the library ----------
 
@@ -336,9 +346,9 @@ const PAGE_JS: &str = r##"(() => {
   const outsideMenu = (event) => {
     if (menu && !menu.contains(event.target) && !button()?.contains(event.target)) closeMenu();
   };
-  const openMenu = () => {
+  const openMenu = (from = null) => {
     const figma = api();
-    const anchor = button();
+    const anchor = from ?? button();
     if (!figma || !anchor) return;
     // A layer inside an effect's group, its original, copies or result,
     // stands for the group, so the effect it's in can be changed
@@ -381,7 +391,8 @@ const PAGE_JS: &str = r##"(() => {
     document.body.append(menu);
     const box = anchor.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, box.left + box.width / 2 - menu.offsetWidth / 2))}px`;
-    menu.style.top = `${box.top - menu.offsetHeight - 12}px`;
+    menu.style.top = from ? `${Math.min(innerHeight - menu.offsetHeight - 8, box.bottom + 4)}px` : `${box.top - menu.offsetHeight - 12}px`;
+    if (from) menu.style.left = `${Math.max(8, box.right - menu.offsetWidth)}px`;
     anchor.setAttribute("aria-expanded", "true");
     addEventListener("pointerdown", outsideMenu, true);
     menu.querySelector(".item")?.focus();
@@ -709,7 +720,7 @@ const PAGE_JS: &str = r##"(() => {
 
   let repeating = null;
 
-  const openRepeater = (figma, edit = false) => {
+  const openRepeater = (figma, edit = false, run = null) => {
     if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
@@ -734,6 +745,7 @@ const PAGE_JS: &str = r##"(() => {
       // Starting as the Trail preset, sized to the layer
       Object.assign(settings, fit(PRESETS[0][1](unit())));
     }
+    if (run) Object.assign(settings, structuredClone(run), { editable: true });
     try {
       figma.commitUndo();
     } catch {}
@@ -761,11 +773,16 @@ const PAGE_JS: &str = r##"(() => {
       current.home = { parent, index: parent.children.indexOf(source) };
       try {
         current.wrap = figma.group([source], parent, current.home.index);
-        current.wrap.name = `Repeater · ${source.name}`;
+        current.wrap.name = `Repeater · ${plainName(source.name)}`;
         figma.currentPage.selection = [current.wrap];
       } catch {
         current.wrap = null;
       }
+    }
+    if (run) {
+      rebuild(current, true);
+      apply(current, true);
+      return;
     }
     buildPanel(current);
     rebuild(current, true);
@@ -919,7 +936,7 @@ const PAGE_JS: &str = r##"(() => {
     });
   };
 
-  const apply = (current) => {
+  const apply = (current, quiet = false) => {
     const { figma, source, settings } = current;
     for (const node of current.kept) if (!node.removed) node.remove();
     let result = current.group ?? current.wrap;
@@ -928,7 +945,7 @@ const PAGE_JS: &str = r##"(() => {
       const nodes = [source, ...current.clones];
       if (!result || result.removed) {
         result = figma.group(nodes, parent, parent.children.indexOf(source));
-        result.name = `Repeater · ${source.name}`;
+        result.name = `Repeater · ${plainName(source.name)}`;
       } else {
         for (const clone of current.clones) if (clone.parent !== result) result.appendChild(clone);
       }
@@ -950,7 +967,7 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
     const count = current.clones.length;
     closeRepeater(current, true);
-    figma.notify(`${count} ${count === 1 ? "copy" : "copies"} made`, { timeout: 1500 });
+    if (!quiet) figma.notify(`${count} ${count === 1 ? "copy" : "copies"} made`, { timeout: 1500 });
   };
 
   const closeRepeater = (current, applied) => {
@@ -1220,7 +1237,7 @@ const PAGE_JS: &str = r##"(() => {
     go.addEventListener("click", () => apply(current));
     const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
 
-    const root = makePanel(current.group ? `Repeater · ${current.source.name}` : "Repeater", () => closeRepeater(current, false), canvas, scroll, footer);
+    const root = makePanel(current.group ? `Repeater · ${plainName(current.source.name)}` : "Repeater", () => closeRepeater(current, false), canvas, scroll, footer);
 
     const show = () => {
       mode.show();
@@ -1847,7 +1864,7 @@ const PAGE_JS: &str = r##"(() => {
 
   let disintegrating = null;
 
-  const openDisintegrate = async (figma, edit = false) => {
+  const openDisintegrate = async (figma, edit = false, run = null) => {
     if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
@@ -1878,6 +1895,7 @@ const PAGE_JS: &str = r##"(() => {
       return;
     }
     if (!group) Object.assign(settings, structuredClone(DISINTEGRATE_PRESETS[0][1]()));
+    if (run) Object.assign(settings, structuredClone(run), { editable: true });
     const current = {
       figma,
       group,
@@ -1921,7 +1939,7 @@ const PAGE_JS: &str = r##"(() => {
       current.home = { parent, index: parent.children.indexOf(source) };
       try {
         current.wrap = figma.group([source], parent, current.home.index);
-        current.wrap.name = `Disintegrate · ${source.name}`;
+        current.wrap.name = `Disintegrate · ${plainName(source.name)}`;
       } catch {
         current.wrap = null;
       }
@@ -1937,6 +1955,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     source.visible = false;
     figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
+    if (run) return applyDisintegrate(current);
     buildDisintegratePanel(current);
     refreshDisintegrate(current);
   };
@@ -2065,7 +2084,7 @@ const PAGE_JS: &str = r##"(() => {
       if (!result || result.removed) {
         const parent = source.parent;
         result = figma.group([source, current.result], parent, parent.children.indexOf(source));
-        result.name = `Disintegrate · ${source.name}`;
+        result.name = `Disintegrate · ${plainName(source.name)}`;
       }
       source.setSharedPluginData(PLUGIN, ROLE, "source");
       result.setSharedPluginData(PLUGIN, DISINTEGRATE, JSON.stringify(settings));
@@ -2212,7 +2231,7 @@ const PAGE_JS: &str = r##"(() => {
     go.addEventListener("click", () => !current.busy && applyDisintegrate(current));
     const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
 
-    const root = makePanel(current.group ? `Disintegrate · ${current.source.name}` : "Disintegrate", () => closeDisintegrate(current, false), canvas, scroll, footer);
+    const root = makePanel(current.group ? `Disintegrate · ${plainName(current.source.name)}` : "Disintegrate", () => closeDisintegrate(current, false), canvas, scroll, footer);
     const show = () => {
       mode.show();
       pattern.show();
@@ -2272,7 +2291,7 @@ const PAGE_JS: &str = r##"(() => {
     editable: true,
   };
   const BITCRUSH_PRESETS = [
-    ["Bitcrush lab", () => ({ ...BITCRUSH_DEFAULTS })],
+    ["Classic", () => ({ ...BITCRUSH_DEFAULTS })],
     ["Game Boy", () => ({ ...BITCRUSH_DEFAULTS, pixelSize: 4, bitDepth: 2, colorMode: 1, ditherMode: 1, ditherStrength: 0.6, ditherScale: 4, glitchAmount: 0, noiseAmount: 0, contrastAmount: 1.2 })],
     ["8-bit", () => ({ ...BITCRUSH_DEFAULTS, pixelSize: 6, bitDepth: 2, ditherMode: 1, ditherStrength: 0.5, ditherScale: 6, glitchAmount: 0, noiseAmount: 0, saturationAmount: 1.3 })],
     ["Glitch", () => ({ ...BITCRUSH_DEFAULTS, pixelSize: 3, bitDepth: 5, ditherMode: 2, ditherStrength: 0.3, glitchBlockSize: 32, glitchDisplacement: 60, glitchAmount: 0.25, splitDistance: 6, splitAngle: 0, noiseAmount: 0.04 })],
@@ -2509,7 +2528,7 @@ const PAGE_JS: &str = r##"(() => {
     const go = element("button", { type: "button", className: "button primary", textContent: current.group ? "Update" : "Bitcrush" });
     go.addEventListener("click", () => !current.busy && applyBitcrush(current));
     const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
-    const root = makePanel(current.group ? `Bitcrush · ${current.source.name}` : "Bitcrush", () => closeBitcrush(current, false), canvas, scroll, footer);
+    const root = makePanel(current.group ? `Bitcrush · ${plainName(current.source.name)}` : "Bitcrush", () => closeBitcrush(current, false), canvas, scroll, footer);
     const show = () => {
       colorMode.show();
       ditherMode.show();
@@ -2541,7 +2560,7 @@ const PAGE_JS: &str = r##"(() => {
 
   let crushing = null;
 
-  const openBitcrush = async (figma, edit = false) => {
+  const openBitcrush = async (figma, edit = false, run = null) => {
     if (repeating || disintegrating || crushing) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
@@ -2570,6 +2589,7 @@ const PAGE_JS: &str = r##"(() => {
       figma.notify("Sections can't be bitcrushed", { timeout: 2000 });
       return;
     }
+    if (run) Object.assign(settings, structuredClone(run), { editable: true });
 
     const current = {
       figma,
@@ -2613,7 +2633,7 @@ const PAGE_JS: &str = r##"(() => {
       current.home = { parent, index: parent.children.indexOf(source) };
       try {
         current.wrap = figma.group([source], parent, current.home.index);
-        current.wrap.name = `Bitcrush · ${source.name}`;
+        current.wrap.name = `Bitcrush · ${plainName(source.name)}`;
       } catch {
         current.wrap = null;
       }
@@ -2629,6 +2649,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     source.visible = false;
     figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
+    if (run) return applyBitcrush(current);
     buildBitcrushPanel(current);
     refreshBitcrush(current);
   };
@@ -2655,7 +2676,7 @@ const PAGE_JS: &str = r##"(() => {
       if (!result || result.removed) {
         const parent = source.parent;
         result = figma.group([source, current.result], parent, parent.children.indexOf(source));
-        result.name = `Bitcrush · ${source.name}`;
+        result.name = `Bitcrush · ${plainName(source.name)}`;
       }
       source.setSharedPluginData(PLUGIN, ROLE, "source");
       result.setSharedPluginData(PLUGIN, BITCRUSH, JSON.stringify(settings));
@@ -2715,6 +2736,183 @@ const PAGE_JS: &str = r##"(() => {
   };
 
 
+
+  // ---------- Ligma effects in the right panel ----------
+
+  // Under Figma's own Effects, kept apart from them, a list of the Ligma
+  // effects on the selected layer, the last applied on top, as Figma lists
+  // its own. A row opens its effect to change; dragging rows reorders the
+  // stack and − removes one, both by making the stack again from the
+  // original, each effect with its saved settings
+  const SECTION = "data-ligma-effects-section";
+  const effectOf = (node) => (node ? EFFECTS.find((effect) => effect.of(node)) : null);
+  // The source inside an effect's group
+  const sourceOf = (group) => group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source") ?? null;
+  // The stack `node` is in, outermost first: each an effect's group whose
+  // source is the next
+  const stackOf = (node) => {
+    if (!node) return [];
+    if (!effectOf(node) && node.parent && effectOf(node.parent)) node = node.parent;
+    if (!effectOf(node)) return [];
+    while (node.parent && effectOf(node.parent) && sourceOf(node.parent) === node) node = node.parent;
+    const stack = [];
+    for (let at = node; at && effectOf(at); at = sourceOf(at)) stack.push(at);
+    return stack;
+  };
+
+  // Makes the stack again from its original, with `layers`, outermost
+  // first, each { effect, settings }
+  let restacking = false;
+  const restack = async (figma, stack, layers) => {
+    if (restacking || repeating || disintegrating || crushing) return;
+    restacking = true;
+    try {
+      const outer = stack[0];
+      let base = sourceOf(stack.at(-1));
+      const parent = outer.parent;
+      const index = parent.children.indexOf(outer);
+      parent.insertChild(index, base);
+      base.visible = true;
+      base.setSharedPluginData(PLUGIN, ROLE, "");
+      outer.remove();
+      figma.currentPage.selection = [base];
+      for (const { effect, settings } of [...layers].reverse()) {
+        figma.currentPage.selection = [base];
+        await effect.open(figma, false, settings);
+        base = figma.currentPage.selection[0] ?? base;
+      }
+      figma.currentPage.selection = [base];
+      try {
+        figma.commitUndo();
+      } catch {}
+    } catch {
+      figma.notify("Couldn't change the effects", { timeout: 2000 });
+    }
+    restacking = false;
+    showSection();
+  };
+
+  const REMOVE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M18 11.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1 0-1h11a.5.5 0 0 1 .5.5" clip-rule="evenodd"/></svg>`;
+  const ADD = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M12 6a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 12 6" clip-rule="evenodd"/></svg>`;
+  const GRIP = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path fill="currentColor" d="M6 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m0 3.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0m-1 4.5a1 1 0 1 0 0-2 1 1 0 0 0 0 2M12 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0M11 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2m1 2.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0"/></svg>`;
+
+  const sectionStyle = document.createElement("style");
+  sectionStyle.textContent = `
+    [${SECTION}] { padding-bottom: 12px; border-bottom: 1px solid var(--color-border); font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; color: var(--color-text); }
+    [${SECTION}] .head { display: flex; align-items: center; height: 40px; padding: 0 8px 0 16px; }
+    [${SECTION}] h2 { flex: 1; margin: 0; font-size: 11px; font-weight: 550; letter-spacing: 0.01em; line-height: 32px; }
+    [${SECTION}] .tag { margin-left: 6px; padding: 0 5px; border-radius: 4px; background: var(--color-bg-secondary); color: var(--color-text-secondary); font-weight: 450; }
+    [${SECTION}] .icon-button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; color: inherit; }
+    [${SECTION}] .icon-button:hover { background: var(--color-bg-hover); }
+    [${SECTION}] .row { position: relative; display: grid; grid-template-columns: 16px 1fr 8px 24px; align-items: center; height: 32px; padding: 0 8px 0 0; }
+    [${SECTION}] .grip { display: grid; place-items: center; height: 24px; color: var(--color-icon-tertiary, var(--color-text-tertiary)); opacity: 0; cursor: grab; }
+    [${SECTION}] .row:hover .grip, [${SECTION}] .row.dragging .grip { opacity: 1; }
+    [${SECTION}] .card { display: flex; align-items: center; gap: 0; min-width: 0; height: 24px; padding: 0 8px 0 0; border: 0; border-radius: 5px; background: var(--color-bg); color: inherit; font: inherit; text-align: left; }
+    [${SECTION}] .card:hover { background: var(--color-bg-hover); }
+    [${SECTION}] .card svg { flex: none; }
+    [${SECTION}] .card svg [stroke] { stroke: var(--color-icon); }
+    [${SECTION}] .card .name { flex: none; font-weight: 450; }
+    [${SECTION}] .card .about { flex: 1; min-width: 0; margin-left: 6px; overflow: hidden; color: var(--color-text-secondary); text-overflow: ellipsis; white-space: nowrap; }
+    [${SECTION}] .row .icon-button { grid-column: 4; }
+    [${SECTION}] .row.dragging { z-index: 1; background: var(--color-bg); box-shadow: var(--elevation-200); }
+    [${SECTION}] .rows.busy { opacity: 0.5; pointer-events: none; }
+    [${SECTION}] :focus-visible { outline: 1px solid var(--color-border-selected, #0d99ff); outline-offset: -1px; }`;
+
+  let sectionKey = "";
+  const showSection = () => {
+    const figma = api();
+    const anchor = document.getElementById("effects-panel")?.closest(".cachedSubtree");
+    let section = document.querySelector(`[${SECTION}]`);
+    const [only] = figma?.currentPage.selection ?? [];
+    const stack = state.on && figma && figma.currentPage.selection.length === 1 ? stackOf(only) : [];
+    if (!stack.length || !anchor) {
+      section?.remove();
+      sectionKey = "";
+      return;
+    }
+    if (!sectionStyle.isConnected) document.head.append(sectionStyle);
+    const layers = stack.map((group) => {
+      const effect = effectOf(group);
+      let settings = {};
+      try {
+        settings = effect.saved(group);
+      } catch {}
+      return { group, effect, settings };
+    });
+    const key = layers.map(({ group, settings }) => group.id + JSON.stringify(settings)).join("|") + restacking;
+    if (section && section.previousElementSibling === anchor && key === sectionKey) return;
+    sectionKey = key;
+    section ??= document.createElement("div");
+    section.setAttribute(SECTION, "");
+    section.innerHTML = "";
+    const head = section.appendChild(document.createElement("div"));
+    head.className = "head";
+    head.innerHTML = `<h2>Ligma effects<span class="tag">${layers.length}</span></h2>`;
+    const add = head.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon-button", innerHTML: ADD }));
+    add.setAttribute("aria-label", "Add a Ligma effect on top");
+    Object.assign(add.dataset, { tooltip: "Add a Ligma effect", tooltipType: "text" });
+    add.addEventListener("click", () => {
+      figma.currentPage.selection = [stack[0]];
+      openMenu(add);
+    });
+    const rows = section.appendChild(document.createElement("div"));
+    rows.className = "rows";
+    if (restacking) rows.classList.add("busy");
+    layers.forEach((layer, i) => {
+      const row = rows.appendChild(document.createElement("div"));
+      row.className = "row";
+      const grip = row.appendChild(Object.assign(document.createElement("span"), { className: "grip", innerHTML: GRIP }));
+      grip.setAttribute("aria-hidden", "true");
+      const card = row.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "card" }));
+      card.innerHTML = `${layer.effect.icon}<span class="name">${layer.effect.name}</span><span class="about">${layer.effect.summary(layer.settings)}</span>`;
+      card.setAttribute("aria-label", `Edit ${layer.effect.name}`);
+      card.addEventListener("click", () => {
+        figma.currentPage.selection = [layer.group];
+        layer.effect.open(figma, true);
+      });
+      const remove = row.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "icon-button", innerHTML: REMOVE }));
+      remove.setAttribute("aria-label", `Remove ${layer.effect.name}`);
+      Object.assign(remove.dataset, { tooltip: "Remove", tooltipType: "text" });
+      remove.addEventListener("click", () => restack(figma, stack, layers.filter((_, j) => j !== i)));
+      // Dragging a row moves it among the others, and letting go makes the
+      // stack again in the new order
+      grip.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || layers.length < 2) return;
+        event.preventDefault();
+        grip.setPointerCapture(event.pointerId);
+        row.classList.add("dragging");
+        const height = row.offsetHeight;
+        const from = event.clientY;
+        let to = i;
+        const move = (event) => {
+          const dy = event.clientY - from;
+          row.style.transform = `translateY(${dy}px)`;
+          to = Math.max(0, Math.min(layers.length - 1, i + Math.round(dy / height)));
+          [...rows.children].forEach((other, j) => {
+            if (other === row) return;
+            const shift = i < to && j > i && j <= to ? -height : i > to && j < i && j >= to ? height : 0;
+            other.style.transform = shift ? `translateY(${shift}px)` : "";
+          });
+        };
+        grip.addEventListener("pointermove", move);
+        grip.addEventListener(
+          "lostpointercapture",
+          () => {
+            grip.removeEventListener("pointermove", move);
+            for (const other of rows.children) other.style.transform = "";
+            row.classList.remove("dragging");
+            if (to === i) return;
+            const order = [...layers];
+            order.splice(to, 0, order.splice(i, 1)[0]);
+            restack(figma, stack, order);
+          },
+          { once: true },
+        );
+      });
+    });
+    if (section.previousElementSibling !== anchor) anchor.after(section);
+  };
+
   // ---------- Setting ----------
 
   const tick = () => {
@@ -2722,10 +2920,14 @@ const PAGE_JS: &str = r##"(() => {
       button()?.remove();
       closeMenu();
       if (repeating) closeRepeater(repeating, false);
+      document.querySelector(`[${SECTION}]`)?.remove();
       return;
     }
     if (!style.isConnected && document.head) document.head.append(style);
     place();
+    try {
+      showSection();
+    } catch {}
   };
   setInterval(tick, 500);
 
