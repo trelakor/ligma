@@ -475,6 +475,9 @@ const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 /// behind are drawn
 const VELLO_STILL: Duration = Duration::from_secs(1);
 
+/// How long the view stays put before Vello draws it at once
+const PAN_STILL: Duration = Duration::from_millis(100);
+
 /// Tiles a side Vello draws at most at once
 const VELLO_BLOCK: i32 = 1;
 /// Tiles kept drawn by Vello, 1 MB each, past those the view needs
@@ -1618,13 +1621,15 @@ impl Painter {
             self.dirty = true;
             return Some(Duration::ZERO);
         }
-        // Once the zoom settles, Vello draws the view at once, exactly, so
-        // it's sharp in one pass rather than tile by tile, whose tiles are
-        // drawn behind it for pans
+        // Once the zoom settles and the view's still, Vello draws the view
+        // at once, exactly, so it's sharp in one pass rather than tile by
+        // tile, whose tiles are drawn behind it for pans. While it pans,
+        // tiles are shown, which a frame only moves
+        let still = self.moved.elapsed() >= PAN_STILL;
         let sharp = in_view.iter().all(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && tile.exact));
         let whole_at = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello);
         let unchecked_at = self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb));
-        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && !sharp && !whole_at && !unchecked_at && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
+        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && still && !sharp && !whole_at && !unchecked_at && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
             if let Some(next) = self.fill_once(px, (ox, oy, width, height)) {
                 return next;
             }
