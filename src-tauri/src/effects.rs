@@ -1839,6 +1839,17 @@ const PAGE_JS: &str = r##"(() => {
     return { x: ia * (x - e) + ic * (y - f), y: ib * (x - e) + id * (y - f), linear: [ia, ic, ib, id] };
   };
 
+  // The transform in `parent` that puts a layer at `absolute` on the page
+  const relativeFor = (parent, absolute) => {
+    const [[a, c, e], [b, d, f]] = absolute;
+    const { x, y, linear } = toParent(parent, e, f);
+    const [l0, l1, l2, l3] = linear;
+    return [
+      [l0 * a + l1 * b, l0 * c + l1 * d, x],
+      [l2 * a + l3 * b, l2 * c + l3 * d, y],
+    ];
+  };
+
   // Puts `drawn`, from `renderAt`, on the result layer, as an image the
   // size it covers in the file
   // Reads `node` as a picture without changing what shows. Figma reads a
@@ -2919,6 +2930,9 @@ const PAGE_JS: &str = r##"(() => {
     let top = base.clone();
     try {
       parent.insertChild(parent.children.indexOf(outer), top);
+      // A copy of a layer in a group, moved out of it, is placed as if the
+      // group were at the page's origin, so it's put back where it was
+      top.relativeTransform = relativeFor(top.parent, base.absoluteTransform);
       if (top.getSharedPluginData(PLUGIN, ROLE) === "source") top.setSharedPluginData(PLUGIN, ROLE, "");
       top.visible = true;
       for (const { effect, settings, off } of [...layers].reverse()) {
