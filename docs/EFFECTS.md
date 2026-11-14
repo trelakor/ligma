@@ -1,6 +1,6 @@
 # Effects library
 
-The Effects button in Figma Design's toolbar, after Actions, lists effects Ligma makes right in the file (`src-tauri/src/effects.rs`). This is how they're built, and what's planned.
+The Effects button in Figma Design's toolbar, after Actions, lists effects Ligma makes right in the file (`src-tauri/src/effects.rs`). This is how they're built.
 
 ## How effects work
 
