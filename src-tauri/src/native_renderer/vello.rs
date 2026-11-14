@@ -1409,7 +1409,7 @@ impl<'a> Encoder<'a> {
 
     /// A layer over `bounds`, which only bound what's in it, so are whole
     /// pixels, not an edge that's smoothed. Under a soft clip, the layer's
-    /// cut by that instead, as what's in it is drawn alone
+    /// cut by that too, as what's in it is drawn alone
     #[track_caller]
     fn push(&mut self, mode: BlendMode, alpha: f32, bounds: Rect) -> bool {
         count_layer();
@@ -1422,7 +1422,11 @@ impl<'a> Encoder<'a> {
         SIZES[if mode == BlendMode::default() { 18 } else { 19 }].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match self.soft.take() {
             Some(soft) => {
-                self.scene.push_layer(fill_of(&soft), mode, alpha, Affine::IDENTITY, &bez(&soft));
+                // A mask's DestIn layer only clears inside its own bounds, so
+                // what's outside them is cut here
+                let rect = Path::rect(Rect::from(device), None);
+                let shape = Path::op(&soft, &rect, skia_safe::PathOp::Intersect).unwrap_or(rect);
+                self.scene.push_layer(fill_of(&shape), mode, alpha, Affine::IDENTITY, &bez(&shape));
                 self.saved.push((Some(soft), true));
             }
             None => {
