@@ -810,10 +810,10 @@
           <div class="hint">In the toolbar's switch, also changed by right-clicking it. Hiding one reloads open files.</div>
         </span>
         <div class="chips" role="group" aria-label="Modes to switch between">
-          <label class="chip"><input type="checkbox" id="mode-draw"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Draw</label>
-          <label class="chip"><input type="checkbox" id="mode-design"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Design</label>
-          <label class="chip"><input type="checkbox" id="mode-motion"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Motion</label>
-          <label class="chip"><input type="checkbox" id="mode-dev"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Dev Mode</label>
+          <label class="chip"><input type="checkbox" id="mode-draw"><span class="box"></span>Draw</label>
+          <label class="chip"><input type="checkbox" id="mode-design"><span class="box"></span>Design</label>
+          <label class="chip"><input type="checkbox" id="mode-motion"><span class="box"></span>Motion</label>
+          <label class="chip"><input type="checkbox" id="mode-dev"><span class="box"></span>Dev Mode</label>
         </div>
       </div>
       <label class="row" data-keywords="pencil procreate draw tool">
@@ -873,7 +873,7 @@
       <h2>AI actions</h2>
       <label class="row" data-keywords="free plan remove background select area local on device">
         <span class="label">Hide in free projects
-          <div class="hint" id="hide-free-ai-actions-hint">Ligma's own tools below take their place, running on this Mac</div>
+          <div class="hint" id="hide-free-ai-actions-hint">Hides Select area, Remove background, Edit with prompt and More</div>
         </span>
         <input type="checkbox" class="switch" id="hide-free-ai-actions">
       </label>
@@ -1056,12 +1056,12 @@
           <div class="hint">The page, slide, chat, asset or webpage, under the file's name</div>
         </span>
         <div class="chips" role="group" aria-label="Show where you are in">
-          <label class="chip" title="Page in Figma Design"><input type="checkbox" id="discord-page"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Design</label>
-          <label class="chip" title="Page in FigJam"><input type="checkbox" id="discord-figjam-page"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>FigJam</label>
-          <label class="chip" title="Slide in Figma Slides and presentations"><input type="checkbox" id="discord-slide"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Slides</label>
-          <label class="chip" title="Chat in Figma Make"><input type="checkbox" id="discord-chat"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Make</label>
-          <label class="chip" title="Asset in Figma Buzz"><input type="checkbox" id="discord-asset"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Buzz</label>
-          <label class="chip" title="Webpage in Figma Sites"><input type="checkbox" id="discord-webpage"><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Sites</label>
+          <label class="chip" title="Page in Figma Design"><input type="checkbox" id="discord-page"><span class="box"></span>Design</label>
+          <label class="chip" title="Page in FigJam"><input type="checkbox" id="discord-figjam-page"><span class="box"></span>FigJam</label>
+          <label class="chip" title="Slide in Figma Slides and presentations"><input type="checkbox" id="discord-slide"><span class="box"></span>Slides</label>
+          <label class="chip" title="Chat in Figma Make"><input type="checkbox" id="discord-chat"><span class="box"></span>Make</label>
+          <label class="chip" title="Asset in Figma Buzz"><input type="checkbox" id="discord-asset"><span class="box"></span>Buzz</label>
+          <label class="chip" title="Webpage in Figma Sites"><input type="checkbox" id="discord-webpage"><span class="box"></span>Sites</label>
         </div>
       </div>
       <label class="row nested" id="discord-tool-row" data-keywords="icon">
@@ -1251,9 +1251,10 @@
   // Removing backgrounds uses macOS's Vision, or on Windows a model
   // downloaded the first time
   if (!macos) {
-    $("hide-free-ai-actions-hint").textContent = $("hide-free-ai-actions-hint").textContent.replace("this Mac", "this PC");
     $("local-remove-background-hint").textContent = "With BiRefNet, an open model";
   }
+  // The chips' checkmark
+  for (const box of document.querySelectorAll(".chip .box")) box.innerHTML = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg>';
   // The platform's shortcuts
   const adjustmentsHint = $("adjustments-hint");
   adjustmentsHint.textContent = adjustmentsHint.textContent.replace("MOD+Shift+C", macos ? "⇧⌘C" : "Ctrl+Shift+C").replace("MOD+Shift+V", macos ? "⇧⌘V" : "Ctrl+Shift+V");
@@ -1284,6 +1285,8 @@
 
   // The sidebar's pages. The last one shown opens again next time
   const tabs = [...document.querySelectorAll('[role="tab"]')];
+  // Read before search fills in the counts
+  const tabNames = tabs.map((tab) => tab.textContent.trim());
   const panels = tabs.map((tab) => $(tab.getAttribute("aria-controls")));
   let current;
   const showPage = (tab, focus = false) => {
@@ -1312,7 +1315,10 @@
     const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
     if (to == null) return;
     e.preventDefault();
-    openPage(tabs[(to + tabs.length) % tabs.length], true);
+    // While searching, only moves focus so the results stay
+    const tab = tabs[(to + tabs.length) % tabs.length];
+    if (searching) tab.focus();
+    else openPage(tab, true);
   });
 
   // A row scrolled to and lit for a moment
@@ -1334,7 +1340,13 @@
   const firstHits = new Map();
   const fold = (text) => text.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   const depth = (row) => ["nested", "deeper", "deepest"].filter((name) => row.classList.contains(name)).length;
-  const textOf = (el) => `${el.textContent} ${el.dataset?.keywords ?? ""}`;
+  // Caveat tags and a row's button labels aren't what it's about
+  const SKIPPED = ".tag, .row button";
+  const textOf = (el) => {
+    const copy = el.cloneNode(true);
+    for (const skip of copy.querySelectorAll(el.matches(".row") ? ".tag, button" : SKIPPED)) skip.remove();
+    return `${copy.textContent} ${el.dataset?.keywords ?? ""}`;
+  };
   function runSearch() {
     const terms = fold(search.value).split(/\s+/).filter(Boolean);
     $("search-clear").hidden = !search.value;
@@ -1360,7 +1372,7 @@
     tabs.forEach((tab, i) => {
       const panel = panels[i];
       panel.hidden = false;
-      const pageText = `${tab.textContent} ${panel.dataset.keywords ?? ""}`;
+      const pageText = `${tabNames[i]} ${panel.dataset.keywords ?? ""}`;
       let hits = 0;
       for (const section of panel.querySelectorAll("section")) {
         const sectionText = `${pageText} ${section.querySelector("h2")?.textContent ?? ""} ${section.dataset.keywords ?? ""}`;
@@ -1403,12 +1415,20 @@
       if (!root.getClientRects().length) continue;
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-        const lower = text.data.toLowerCase();
+        if (text.parentElement.closest(SKIPPED)) continue;
+        // Folded like the match, with each folded character's place in the text
+        let folded = "";
+        const from = [];
+        for (let i = 0; i < text.data.length; i++) {
+          const part = fold(text.data[i]);
+          folded += part;
+          for (let j = 0; j < part.length; j++) from.push(i);
+        }
         for (const term of terms) {
-          for (let at = lower.indexOf(term); at >= 0; at = lower.indexOf(term, at + term.length)) {
+          for (let at = folded.indexOf(term); at >= 0; at = folded.indexOf(term, at + term.length)) {
             const range = new Range();
-            range.setStart(text, at);
-            range.setEnd(text, at + term.length);
+            range.setStart(text, from[at]);
+            range.setEnd(text, from[at + term.length - 1] + 1);
             ranges.push(range);
           }
         }
@@ -1417,7 +1437,16 @@
     CSS.highlights.set("search", new Highlight(...ranges));
   }
   // Lists filled in again (plugins, AI tools, the themes) are searched again
-  const refreshSearch = () => searching && runSearch();
+  // Once per frame, however many lists change together
+  let refreshing = false;
+  const refreshSearch = () => {
+    if (!searching || refreshing) return;
+    refreshing = true;
+    requestAnimationFrame(() => {
+      refreshing = false;
+      if (searching) runSearch();
+    });
+  };
   function clearSearch() {
     search.value = "";
     runSearch();
@@ -1574,7 +1603,7 @@
     img.style.maskSize = "100% 100%";
   };
   const iconName = (id) => LIGMA_APP_ICONS.find((icon) => icon.id === id)?.name ?? "Ligma";
-  if (!macos) $("app-icon-hint").textContent = "Shows on the taskbar, in the Start menu and on Ligma's shortcuts. After an update, Ligma puts it back the next time it opens.";
+  if (!macos) $("app-icon-hint").textContent = "On the taskbar and in the Start menu, and kept after updates";
   const iconChoices = [];
   $("app-icon-collections").replaceChildren(...LIGMA_APP_ICON_COLLECTIONS.map((collection) => {
     const section = node("section");
@@ -1935,6 +1964,7 @@
       button.textContent = "Download";
     }
     $(`${name}-model-hint`).textContent = hint;
+    refreshSearch();
   };
   for (const name of Object.keys(MODELS)) {
     $(`${name}-model-button`).addEventListener("click", () => {
