@@ -1831,8 +1831,9 @@ impl Painter {
             true => Vec::new(),
             false => far.iter().copied().filter(|key| !ready(&self.tiles, key)).collect(),
         };
-        // Zooming out, the level it's headed to covers more, and for longer
-        let todo = match zooming && self.widening > 0.0 {
+        // While the zoom changes, the level it's headed to first, which
+        // drawn before it gets there is never shown scaled up
+        let todo = match zooming {
             true => [(ahead_missing, false), (missing, false), (far_missing, false)],
             false => [(missing, !zooming), (ahead_missing, false), (far_missing, false)],
         };
@@ -1894,8 +1895,10 @@ impl Painter {
         let mut drawn = None;
         for _ in 0..8 {
             // Tiles to scale while the zoom changes have units encoded for
-            // other levels stand in for those that would take long
-            let budget = (!exact).then_some(ENCODE_ZOOMING);
+            // other levels stand in, drawn at this one's scale, as one unit
+            // can take tens of milliseconds to encode, which the next level
+            // doesn't wait for. Tiles once it's still are exact
+            let budget = (!exact).then_some(Duration::ZERO);
             let (out, counts, stats, _) = self.vello_render(left, top, w, h, px, reach, budget, false).map_err(fail)?;
             let vello = self.vello.as_mut().ok_or_else(|| fail("no Vello".into()))?;
             match vello.check(usize::MAX).map_err(fail)? {
