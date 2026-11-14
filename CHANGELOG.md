@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.43.1 - 2026-11-13
+
+- Icons only in the image bar hides the buttons' names again.
+
 ## 0.43.0 - 2026-11-13
 
 - Heal in the image bar paints out spots, blemishes, stray objects or text in an image, on your computer. Scrub evens a spot out from what's around it instead, for text or marks on smooth surfaces. `[` and `]` resize the brush.
