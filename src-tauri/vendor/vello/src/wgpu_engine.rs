@@ -48,6 +48,8 @@ pub(crate) struct WgpuEngine {
     /// Ligma: dev tools, each stage's time on the GPU
     pub(crate) timer: Option<Timer>,
     timer_tried: bool,
+    /// Ligma: the last recording's submission
+    pub(crate) submitted: Option<wgpu::SubmissionIndex>,
 }
 
 pub(crate) struct Timer {
@@ -103,12 +105,16 @@ impl Timer {
     /// Each stage's time since last read, in ms, once the GPU's done
     pub(crate) fn read(&mut self) -> String {
         let mut totals: Vec<(&'static str, f64, u32)> = Vec::new();
+        let mut each = String::new();
         for (read, labels, mapped, _) in std::mem::take(&mut self.pending) {
             if !mapped.load(std::sync::atomic::Ordering::Relaxed) {
                 continue;
             }
             if let Ok(view) = read.slice(..).get_mapped_range() {
                 let stamps: &[u64] = bytemuck::cast_slice(&view);
+                let first = stamps.first().copied().unwrap_or(0);
+                let last = stamps.iter().copied().max().unwrap_or(0);
+                each += &format!("{:.1},", last.saturating_sub(first) as f64 * self.period / 1e6);
                 for (index, label) in labels.iter().enumerate() {
                     let ms = stamps[index * 2 + 1].saturating_sub(stamps[index * 2]) as f64 * self.period / 1e6;
                     match totals.iter_mut().find(|(l, ..)| l == label) {
@@ -124,7 +130,7 @@ impl Timer {
         }
         totals.sort_by(|a, b| b.1.total_cmp(&a.1));
         let all: f64 = totals.iter().map(|t| t.1).sum();
-        let mut out = format!(" passes={all:.1}");
+        let mut out = format!(" passes={all:.1} renders={each}");
         for (label, ms, count) in totals.iter().take(10) {
             out += &format!(" {label}={ms:.1}/{count}");
         }
@@ -910,7 +916,7 @@ impl WgpuEngine {
         if let Some(timer) = &mut self.timer {
             timer.resolve(device, &mut encoder);
         }
-        queue.submit(Some(encoder.finish()));
+        self.submitted = Some(queue.submit(Some(encoder.finish())));
         self.staging.submitted();
         if let Some(timer) = &mut self.timer {
             timer.submitted();

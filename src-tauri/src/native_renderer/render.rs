@@ -468,6 +468,16 @@ const TILE: i32 = 512;
 const SPARE: usize = 12;
 
 /// The whole view, see `Painter::draw_whole`
+/// A whole view Vello's GPU work's been submitted for, not yet checked
+struct Unchecked {
+    layer: Layer,
+    fence: u64,
+    at: (i32, i32, u32),
+    renders: usize,
+    started: Instant,
+    stats: String,
+}
+
 struct Whole {
     layer: Layer,
     /// Its corner in device pixels and its zoom, as bits
@@ -1076,6 +1086,9 @@ pub struct Painter {
     widening: f64,
     /// How long the whole view last took to draw
     whole_took: Duration,
+    /// The whole view Vello drew last, handed over once Vello's checked it
+    /// had room for it, meanwhile drawing the next
+    unchecked: Option<Unchecked>,
     /// The last frame of Figma's render tree applied
     seq: u64,
     /// Units drawn small at powers of two, on pages of their own, for the
@@ -1208,6 +1221,7 @@ impl Painter {
             velocity: (0.0, 0.0),
             widening: 0.0,
             whole_took: Duration::ZERO,
+            unchecked: None,
             seq: 0,
             thumbs: HashMap::new(),
             thumb_pages: Vec::new(),
@@ -1288,6 +1302,11 @@ impl Painter {
             self.dirty = false;
             self.publish();
             next = self.fill();
+            // With nothing more to draw at once, the whole view Vello drew
+            // last is shown once it's drawn
+            if next != Some(Duration::ZERO) && self.unchecked.is_some() {
+                self.settle_unchecked();
+            }
             self.publish();
             if std::mem::take(&mut self.drew) {
                 self.drawn = Instant::now();
@@ -1441,6 +1460,10 @@ impl Painter {
             }
         }
         self.at = (ox, oy, pxb);
+        // The view Vello drew here last is shown rather than drawn again
+        if self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb)) {
+            self.settle_unchecked();
+        }
         let missing = in_view.iter().filter(|key| !self.tiles.contains_key(key)).count();
         let behind = in_view.iter().any(|key| self.tiles.get(key).is_some_and(|tile| tile.stale));
         // While something's changing, what changed is drawn into the whole
@@ -1621,18 +1644,57 @@ impl Painter {
         let margin = self.reach(view_area, px);
         let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
         let (w, h) = (width + margin * 2, height + margin * 2);
-        match self.vello_view(ox - margin, oy - margin, w, h, px, reach) {
+        // Drawn while the GPU draws the last, which is checked after
+        match self.vello_view_once(ox - margin, oy - margin, w, h, px, reach) {
             Ok((tex, counts, stats)) => {
                 let fence = self.gpu.signal();
-                trace(|| format!("  whole vello px={px:.3} {stats} {:.1}ms", started.elapsed().as_secs_f64() * 1000.0));
-                self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at);
-                self.whole_took = started.elapsed();
+                let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats });
+                if let Some(last) = last {
+                    self.settle(last);
+                }
                 self.drew = true;
                 true
             }
             Err(why) => {
                 trace(|| format!("  whole vello px={px:.3} can't: {why}"));
+                // What was drawn before is checked and shown, and Skia
+                // draws this
+                self.settle_unchecked();
                 false
+            }
+        }
+    }
+
+    /// Hands over the whole view Vello drew last once it's checked it had
+    /// room for it, waiting for the GPU to draw it
+    fn settle_unchecked(&mut self) {
+        if let Some(last) = self.unchecked.take() {
+            self.settle(last);
+        }
+    }
+
+    fn settle(&mut self, last: Unchecked) {
+        let Some(vello) = self.vello.as_mut() else { return };
+        let short = vello.check(last.renders);
+        let waited = vello.waited;
+        match short {
+            Ok(None) => {
+                trace(|| format!("  whole vello px={:.3} {} checked={:.1}ms {:.1}ms", last.layer.px, last.stats, waited.as_secs_f64() * 1000.0, last.started.elapsed().as_secs_f64() * 1000.0));
+                self.whole_took = last.started.elapsed();
+                self.hand_whole(last.layer, last.fence, last.at);
+            }
+            // Never shown, and drawn again with the room it needs where
+            // it's still wanted
+            Ok(Some(why)) => {
+                trace(|| format!("  vello ran out of room, drawing again: {why}"));
+                self.retire(last.layer.tex);
+                self.dirty = true;
+            }
+            Err(why) => {
+                trace(|| format!("  whole vello can't check: {why}"));
+                self.retire(last.layer.tex);
+                self.dirty = true;
             }
         }
     }
@@ -1641,12 +1703,13 @@ impl Painter {
     /// `top`), of units over `reach`, drawn by Vello into a texture of the
     /// kind the present thread shows, submitted, and how long that took
     fn vello_view(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect) -> Result<(Arc<Tex>, Counts, String), String> {
+        self.settle_unchecked();
         // Drawn again where it ran out of room in Vello's buffers, which
         // then have more, before it's shown
         for _ in 0..8 {
             let (tex, counts, stats) = self.vello_view_once(left, top, w, h, px, reach)?;
             let vello = self.vello.as_mut().ok_or("no Vello")?;
-            let short = vello.check()?;
+            let short = vello.check(usize::MAX)?;
             if let Some(why) = short {
                 trace(|| format!("  vello ran out of room, drawing again: {why}"));
             } else {
@@ -1828,6 +1891,7 @@ impl Painter {
             at.elapsed().as_secs_f64() * 1000.0
         });
         let blurs = plan.len();
+        let (paths, clips) = (scene.encoding().n_paths, scene.encoding().n_clips);
         let scene_mb = {
             use std::mem::size_of_val as size;
             let e = scene.encoding();
@@ -1873,7 +1937,9 @@ impl Painter {
             self.vello_uses.insert(unit, uses);
         }
         let stats = format!(
-            "{w}x{h} units={units} reused={reused} made={made} scene={scene_mb:.1}MB sizes={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
+            "{w}x{h} units={units} reused={reused} made={made} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
+            paths,
+            clips,
             super::vello::SIZES.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(),
             fell_back / 1000,
             encoded.as_secs_f64() * 1000.0,
@@ -1893,6 +1959,8 @@ impl Painter {
         if quick && self.tree.is_some() && self.vello_ready() && self.draw_whole_vello(ox, oy, width, height, px) {
             return;
         }
+        // What Vello drew before is shown before what Skia draws now
+        self.settle_unchecked();
         let _purpose = super::gpu_census::purpose("whole");
         let started = Instant::now();
         let at = (ox, oy, px.to_bits());
@@ -4963,8 +5031,52 @@ impl Painter {
                     let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-probe-{px}-{skip}-{samples}-{}-{}{}.png", v.get(11).copied().unwrap_or(0.0), v.get(12).copied().unwrap_or(0.0), if v.get(15).copied().unwrap_or(0.0) > 0.0 { "-exact" } else { "" })), png.as_bytes());
                 }
             }
+            let frames = v.get(16).copied().unwrap_or(0.0) as usize;
             let vello = match v.get(14).copied().unwrap_or(0.0) > 0.0 && self.vello_ready() {
                 false => String::new(),
+                // Frames zooming in a little each, each drawn while the GPU
+                // draws the last, as the window draws them
+                true if frames > 0 => {
+                    self.settle_unchecked();
+                    let at = Instant::now();
+                    let (mut last, mut short, mut failed): (Option<(Arc<Tex>, usize)>, usize, Option<String>) = (None, 0, None);
+                    let mut seen = String::new();
+                    for frame in 0..frames {
+                        let px = px * (1.0 + frame as f32 * 0.002);
+                        let (left, top) = ((cx * px - w as f32 / 2.0).floor() as i32, (cy * px - h as f32 / 2.0).floor() as i32);
+                        match self.vello_view_once(left, top, w, h, px, area) {
+                            Ok((tex, _, stats)) => {
+                                seen = stats;
+                                let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
+                                if let Some((tex, renders)) = last.replace((tex, renders)) {
+                                    if self.vello.as_mut().map(|vello| vello.check(renders)).is_some_and(|checked| !matches!(checked, Ok(None))) {
+                                        short += 1;
+                                    }
+                                    self.retire(tex);
+                                }
+                            }
+                            Err(why) => {
+                                failed = Some(why);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some((tex, renders)) = last.take() {
+                        if self.vello.as_mut().map(|vello| vello.check(renders)).is_some_and(|checked| !matches!(checked, Ok(None))) {
+                            short += 1;
+                        }
+                        self.retire(tex);
+                    }
+                    if let Some(vello) = self.vello.as_ref() {
+                        seen += " gpu ";
+                        seen += &vello.stages;
+                    }
+                    let _ = self.gpu.context.flush_submit_and_sync_cpu();
+                    match failed {
+                        Some(why) => format!("can't: {why}"),
+                        None => format!("pipelined {frames} frames {:.1}ms each, {short} short, last {seen}", at.elapsed().as_secs_f64() * 1000.0 / frames as f64),
+                    }
+                }
                 true => {
                     let at = Instant::now();
                     match self.vello_view(-offset.0 as i32, -offset.1 as i32, w, h, px, area) {

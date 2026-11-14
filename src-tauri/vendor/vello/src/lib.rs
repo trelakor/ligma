@@ -359,7 +359,7 @@ pub struct Renderer {
     pub profile_result: Option<Vec<wgpu_profiler::GpuTimerQueryResult>>,
     /// Ligma: renders' allocation counts being read back, and whether
     /// they've mapped
-    pending: Vec<(wgpu::Buffer, std::sync::Arc<std::sync::Mutex<Option<bool>>>)>,
+    pending: Vec<(wgpu::Buffer, std::sync::Arc<std::sync::Mutex<Option<bool>>>, Option<wgpu::SubmissionIndex>)>,
     /// Ligma: how long the last render took to record and to run, in ms
     pub timing: (f64, f64),
 }
@@ -541,7 +541,7 @@ impl Renderer {
             buf.slice(..).map_async(wgpu::MapMode::Read, move |result| {
                 *done.lock().unwrap() = Some(result.is_ok());
             });
-            self.pending.push((buf, mapped));
+            self.pending.push((buf, mapped, self.engine.submitted.clone()));
         }
         self.engine.free_download(bump_buf);
         self.timing = (recorded.as_secs_f64() * 1000.0, (at.elapsed() - recorded).as_secs_f64() * 1000.0);
@@ -563,14 +563,17 @@ impl Renderer {
     /// Ligma: once the GPU's done with what's been rendered, sizes the
     /// buffers coarse allocates from to what it took, and false if any of
     /// it ran out of room, drawing what didn't fit wrong, to render again,
-    /// with what ran out
-    pub fn check(&mut self, device: &Device) -> Result<Option<String>> {
-        if self.pending.is_empty() {
+    /// with what ran out, of the first `renders` of those not yet checked,
+    /// waiting for no others
+    pub fn check(&mut self, device: &Device, renders: usize) -> Result<Option<String>> {
+        let renders = renders.min(self.pending.len());
+        if renders == 0 {
             return Ok(None);
         }
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let submission_index = self.pending[renders - 1].2.clone();
+        let _ = device.poll(wgpu::PollType::Wait { submission_index, timeout: None });
         let mut short = None;
-        for (buf, mapped) in std::mem::take(&mut self.pending) {
+        for (buf, mapped, _) in self.pending.drain(..renders).collect::<Vec<_>>() {
             if *mapped.lock().unwrap() != Some(true) {
                 return Err(Error::OutOfRoom);
             }
@@ -584,6 +587,11 @@ impl Renderer {
             }
         }
         Ok(short)
+    }
+
+    /// Ligma: how many renders haven't been checked
+    pub fn unchecked(&self) -> usize {
+        self.pending.len()
     }
 
     /// Ligma: dev tools, each stage's GPU time since asked last, once

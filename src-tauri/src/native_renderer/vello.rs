@@ -76,6 +76,8 @@ pub struct Vello {
     /// The last view's scene, cleared, so its memory's used again rather
     /// than new memory made ready each frame
     pub spare: vello::Scene,
+    /// How many renders of Vello's the last view took
+    pub renders: usize,
     out: Option<Target>,
     pages: Vec<Page>,
     /// Vello's copies of paths, by the path they're of
@@ -201,6 +203,7 @@ impl Vello {
             waited: std::time::Duration::ZERO,
             stages: String::new(),
             spare: vello::Scene::new(),
+            renders: 0,
             out: None,
             pages: Vec::new(),
             paths: HashMap::new(),
@@ -327,6 +330,7 @@ impl Vello {
         };
         let at = std::time::Instant::now();
         let dropped = vello::low_level::vello_encoding::DROPPED_IMAGES.load(std::sync::atomic::Ordering::Relaxed);
+        let unchecked = self.renderer.unchecked();
         self.stages.clear();
         self.sync("start");
         let blurred = self.blur(plan, params.antialiasing_method);
@@ -334,6 +338,7 @@ impl Vello {
         let rendered = blurred.and_then(|()| self.renderer.render_to_texture(&self.device, &self.queue, scene, &view, &params).map_err(|error| format!("render: {error}")));
         self.stages += &format!(" record={:.1} run={:.1}", self.renderer.timing.0, self.renderer.timing.1);
         self.sync("main");
+        self.renders = self.renderer.unchecked() - unchecked;
         for depth in &plan.depths {
             for blur in &depth.blurs {
                 self.renderer.override_image(&blur.image, None);
@@ -363,13 +368,14 @@ impl Vello {
     /// Once the GPU's drawn what's been rendered, what ran out of room in
     /// Vello's buffers if any of it did, which are made bigger for it to be
     /// rendered again
-    pub fn check(&mut self) -> Result<Option<String>, String> {
+    /// of the first `renders` not yet checked, waiting for those alone
+    pub fn check(&mut self, renders: usize) -> Result<Option<String>, String> {
         let at = std::time::Instant::now();
-        let fits = self.renderer.check(&self.device).map_err(|error| format!("check: {error}"));
+        let fits = self.renderer.check(&self.device, renders).map_err(|error| format!("check: {error}"));
         self.waited = at.elapsed();
         self.stages += &self.renderer.times();
         // Dev tools: what Vello's memory holds
-        if let Some(report) = self.device.generate_allocator_report() {
+        if let Some(report) = std::env::var_os("LIGMA_NATIVE_VELLO_MEMORY").and_then(|_| self.device.generate_allocator_report()) {
             let mut named: HashMap<String, (u64, u32)> = HashMap::new();
             for allocation in &report.allocations {
                 let entry = named.entry(allocation.name.clone()).or_default();
@@ -732,6 +738,23 @@ impl Fragment {
     }
 }
 
+/// Where `shape` isn't, inside `device`, as one path: `device` and
+/// `shape` filled even-odd, where `shape`'s filled even-odd or is one
+/// convex contour, so covers nothing twice. Skia's simplifying it to that
+/// otherwise moves its edges
+fn outside(shape: &Path, device: IRect) -> Option<Path> {
+    let simple = shape.fill_type() == PathFillType::EvenOdd || (shape.is_convex() && shape.iter().filter(|v| v.verb() == skia_safe::PathVerb::Move).count() <= 1);
+    if !simple {
+        return None;
+    }
+    let mut out = skia_safe::PathBuilder::new();
+    out.add_path(shape, None);
+    out.add_rect(Rect::from(device), None, None);
+    let mut out = out.detach();
+    out.set_fill_type(PathFillType::EvenOdd);
+    Some(out)
+}
+
 /// `shape` drawn by `transform`, as lines no further than `tolerance` from
 /// it, where it's small enough that's fewer than it has
 fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64) -> Option<BezPath> {
@@ -813,9 +836,32 @@ fn fewer(line: &[kurbo::Point], tolerance: f64, keep: &mut Vec<usize>) {
     keep.extend(kept.iter().enumerate().filter(|(_, &k)| k).map(|(index, _)| index));
 }
 
+    /// Dev tools: what node `id` is, a few levels down
+fn shape_of(tree: &Tree, id: u32, depth: u32) -> String {
+        let Some(node) = tree.node(id) else { return "?".into() };
+        let mut out = format!("{:?}", node.op);
+        if let Some(geometry) = &node.geometry {
+            out += &format!("[{}]", geometry.paints.iter().map(|p| format!("{:?}{:?}", p.kind.unwrap_or(PaintType::Solid), p.color.map(|c| (c.a * 100.0) as i32))).collect::<Vec<_>>().join(","));
+        }
+        if !node.fill_geometries.is_empty() || !node.stroke_geometries.is_empty() {
+            out += &format!("[fills {} strokes {} {:?}]", node.fill_geometries.iter().map(|g| g.paints.len()).sum::<usize>(), node.stroke_geometries.iter().map(|g| g.paints.len()).sum::<usize>(), node.stroke_mode);
+        }
+        if depth < 3 {
+            let kids: Vec<u32> = node.children.iter().copied().chain(node.child).collect();
+            if !kids.is_empty() {
+                out += &format!("({})", kids.iter().take(4).map(|&k| shape_of(tree, k, depth + 1)).collect::<Vec<_>>().join(" "));
+                if kids.len() > 4 {
+                    out += &format!("+{}", kids.len() - 4);
+                }
+            }
+        }
+        out
+    }
+
 /// Dev tools: fills and their segments by size in device pixels, under
 /// 1/4, 1, 4, 16, 64, 256 and over
-pub static SIZES: [std::sync::atomic::AtomicU64; 14] = [const { std::sync::atomic::AtomicU64::new(0) }; 14];
+/// 1/4, 1, 4, 16, 64, 256 and over, then layers pushed by what for
+pub static SIZES: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
 
 /// The level of fragments drawn at `px`
 pub fn level(px: f32) -> i32 {
@@ -993,7 +1039,9 @@ pub struct Encoder<'a> {
     /// Cuts each thing drawn, in device pixels (see `soften`)
     soft: Option<Path>,
     /// The soft clip to put back as each layer's popped
-    saved: Vec<Option<Path>>,
+    /// The clip before each layer or clip, and whether Vello has a layer
+    /// for it
+    saved: Vec<(Option<Path>, bool)>,
     depth: u8,
     /// Encoding a fragment, for any view: nothing's cut by the view
     retained: bool,
@@ -1003,6 +1051,8 @@ pub struct Encoder<'a> {
     /// Drawing what casts a silhouette, in this color: every paint solid
     /// wherever it's at all, as Figma casts shadows
     cast: Option<Color4f>,
+    /// Whether only the silhouette's alpha is taken, not its color
+    alpha_only: bool,
     /// Blurs in the scene, to be put in place
     pub effects: Vec<Effect>,
 }
@@ -1048,6 +1098,7 @@ impl<'a> Encoder<'a> {
             retained: false,
             pictures: Vec::new(),
             cast: None,
+            alpha_only: false,
             effects: Vec::new(),
         }
     }
@@ -1108,15 +1159,21 @@ impl<'a> Encoder<'a> {
     /// cut by that instead, as what's in it is drawn alone
     fn push(&mut self, mode: BlendMode, alpha: f32, bounds: Rect) -> bool {
         let Some(device) = self.device(bounds) else { return false };
+        if std::env::var_os("LIGMA_NATIVE_VELLO_NOLAYERS").is_some() {
+            self.saved.push((self.soft.take(), false));
+            return true;
+        }
+        SIZES[14].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SIZES[if mode == BlendMode::default() { 18 } else { 19 }].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match self.soft.take() {
             Some(soft) => {
                 self.scene.push_layer(fill_of(&soft), mode, alpha, Affine::IDENTITY, &bez(&soft));
-                self.saved.push(Some(soft));
+                self.saved.push((Some(soft), true));
             }
             None => {
                 let rect = kurbo::Rect::new(device.left as f64, device.top as f64, device.right as f64, device.bottom as f64);
                 self.scene.push_layer(Fill::NonZero, mode, alpha, Affine::IDENTITY, &rect);
-                self.saved.push(None);
+                self.saved.push((None, true));
             }
         }
         true
@@ -1129,13 +1186,21 @@ impl<'a> Encoder<'a> {
             Some(soft) => Path::op(soft, &device, skia_safe::PathOp::Intersect).unwrap_or(device),
             None => device,
         };
+        if std::env::var_os("LIGMA_NATIVE_VELLO_NOLAYERS").is_some() {
+            self.saved.push((saved, false));
+            return;
+        }
         self.scene.push_clip_layer(fill_of(&shape), Affine::IDENTITY, &bez(&shape));
-        self.saved.push(saved);
+        SIZES[15].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.saved.push((saved, true));
     }
 
     fn pop(&mut self) {
-        self.scene.pop_layer();
-        self.soft = self.saved.pop().flatten();
+        let Some((soft, layer)) = self.saved.pop() else { return };
+        if layer {
+            self.scene.pop_layer();
+        }
+        self.soft = soft;
     }
 
     /// What's drawn from now on is cut by `device` too, a path in device
@@ -1181,6 +1246,7 @@ impl<'a> Encoder<'a> {
         }
         match &self.soft {
             Some(soft) => {
+                SIZES[16].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.scene.push_clip_layer(fill_of(soft), Affine::IDENTITY, &bez(soft));
                 self.scene.fill(style, transform, brush, brush_transform, shape);
                 self.scene.pop_layer();
@@ -1336,6 +1402,13 @@ impl<'a> Encoder<'a> {
                     self.draw(child);
                     return;
                 }
+                SIZES[6].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if mix(node.blend_mode).is_none() && !isolate && tree::single_draw(self.tree, child) {
+                    SIZES[7].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                if mix(node.blend_mode).is_some() {
+                    SIZES[8].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 if self.push(mix(node.blend_mode).unwrap_or_default(), opacity, bounds) {
                     self.draw(child);
                     self.pop();
@@ -1357,12 +1430,14 @@ impl<'a> Encoder<'a> {
                     self.cast = None;
                     return;
                 }
+                SIZES[10].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 if !self.push(BlendMode::default(), 1.0, bounds) {
                     return;
                 }
                 self.cast = Some(BLACK);
+                self.alpha_only = true;
                 self.draw(alpha);
-                self.cast = None;
+                (self.cast, self.alpha_only) = (None, false);
                 if self.push(BlendMode::new(Mix::Normal, Compose::SrcIn), 1.0, bounds) {
                     let rect = kurbo::Rect::new(bounds.left as f64, bounds.top as f64, bounds.right as f64, bounds.bottom as f64);
                     self.fill(Fill::NonZero, affine(&self.m), color(shade), None, &rect);
@@ -1439,6 +1514,17 @@ impl<'a> Encoder<'a> {
                     all.join(b);
                     all
                 });
+                SIZES[12].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let blends = self.cast.is_none() && node.stroke_geometries.iter().any(|g| g.paints.iter().any(|paint| tree::blends(paint.blend_mode)));
+                if !blends {
+                    if let Some(outside) = self.device(bounds).and_then(|device| outside(&outline.with_transform(&self.m), device)) {
+                        SIZES[13].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.clip(outside);
+                        strokes(self);
+                        self.pop();
+                        return;
+                    }
+                }
                 if !self.push(BlendMode::default(), 1.0, bounds) {
                     return;
                 }
@@ -1486,6 +1572,9 @@ impl<'a> Encoder<'a> {
             let (node, paint, skia) = (node.clone(), paint.clone(), skia.clone());
             return self.fall_back(paint_name(kind), tree::blends(paint.blend_mode), bounds, Box::new(move |drawer| drawer.paint(&node, &paint, &skia)));
         };
+        if mix(paint.blend_mode).is_some() {
+            SIZES[11].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let blended = match mix(paint.blend_mode) {
             Some(mode) => self.push(mode, 1.0, skia.bounds().with_outset((1.0, 1.0))),
             None => false,
@@ -1506,7 +1595,10 @@ impl<'a> Encoder<'a> {
             Picture::Skia => return false,
         };
         let bounds = skia.bounds().with_outset((1.0, 1.0));
-        if !self.push(BlendMode::default(), 1.0, bounds) {
+        SIZES[9].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Where only its alpha's taken, it's drawn white without a layer
+        let tinted = !self.alpha_only;
+        if tinted && !self.push(BlendMode::default(), 1.0, bounds) {
             return true;
         }
         let patches = self.scene.encoding().resources.patches.len();
@@ -1518,6 +1610,9 @@ impl<'a> Encoder<'a> {
                 let at = *draw_data_offset + 2;
                 encoding.draw_data[at] |= 3 << 12;
             }
+        }
+        if !tinted {
+            return true;
         }
         if self.push(BlendMode::new(Mix::Normal, Compose::SrcIn), 1.0, bounds) {
             self.fill(fill_of(skia), affine(&self.m), color(cast), None, path);
@@ -1606,6 +1701,13 @@ impl<'a> Encoder<'a> {
         let ext = node.ext();
         match op {
             MaskOpType::KnockoutShadow => {
+                SIZES[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if std::env::var_os("LIGMA_NATIVE_VELLO_SHAPES").is_some() && SIZES[0].load(std::sync::atomic::Ordering::Relaxed) % 40 == 1 {
+                    super::render::trace(|| format!("  knockout alpha {}", shape_of(self.tree, alpha, 0)));
+                }
+                if self.tree.clip_of(alpha).is_some() {
+                    SIZES[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 if !self.push(BlendMode::default(), 1.0, bounds) {
                     return;
                 }
@@ -1618,6 +1720,10 @@ impl<'a> Encoder<'a> {
                 return;
             }
             MaskOpType::InnerShadow => {
+                SIZES[2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if self.tree.clip_of(alpha).is_some() {
+                    SIZES[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 // The shadow's color where the shape, moved and blurred,
                 // isn't, kept inside the shape
                 if !self.push(BlendMode::default(), 1.0, bounds) {
@@ -1673,6 +1779,13 @@ impl<'a> Encoder<'a> {
         // What's masked blends with what's under the mask, as masks don't
         // isolate it in Figma: it's drawn over a copy of that, then the copy
         // is kept only where the mask is
+        SIZES[4].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if std::env::var_os("LIGMA_NATIVE_VELLO_SHAPES").is_some() && SIZES[4].load(std::sync::atomic::Ordering::Relaxed) % 60 == 1 {
+            super::render::trace(|| format!("  mask {:?} alpha {} color {}", op, shape_of(self.tree, alpha, 0), shape_of(self.tree, color, 2)));
+        }
+        if tree::single_draw(self.tree, alpha) {
+            SIZES[5].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         if !self.push(if blends { OVER_COPY } else { BlendMode::default() }, 1.0, bounds) {
             return;
         }
@@ -1698,16 +1811,18 @@ impl<'a> Encoder<'a> {
         let Some(device) = self.device(bounds) else { return false };
         let rect = kurbo::Rect::new(device.left as f64, device.top as f64, device.right as f64, device.bottom as f64);
         self.scene.push_luminance_mask_layer(Fill::NonZero, 1.0, Affine::IDENTITY, &rect);
-        self.saved.push(self.soft.take());
+        SIZES[17].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.saved.push((self.soft.take(), true));
         true
     }
 
     /// `id` drawn as what casts a silhouette, where only its shape matters
     fn casting(&mut self, id: u32) {
-        let was = self.cast;
+        let (was, alpha_only) = (self.cast, self.alpha_only);
         self.cast = Some(was.unwrap_or(BLACK));
+        self.alpha_only = true;
         self.draw(id);
-        self.cast = was;
+        (self.cast, self.alpha_only) = (was, alpha_only);
     }
 
     /// A blur of `node`'s child: its source drawn in a scene of its own,
