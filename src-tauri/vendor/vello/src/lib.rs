@@ -878,22 +878,38 @@ static TAKEN: [std::sync::atomic::AtomicU32; 7] = [const { std::sync::atomic::At
 fn fit(bump: &BumpAllocators) -> Option<String> {
     use std::sync::atomic::Ordering::Relaxed;
     use vello_encoding::CAPACITY as C;
-    let room = [&C.binning, &C.ptcl, &C.tile, &C.seg_counts, &C.segments, &C.blend, &C.lines];
+    let room = C.all();
     let took = [bump.binning, bump.ptcl, bump.tile, bump.seg_counts, bump.segments, bump.blend, bump.lines];
+    let had = room.map(|room| room.load(Relaxed));
     let names = ["binning", "ptcl", "tile", "seg_counts", "segments", "blend", "lines"];
     let mut short = (bump.failed != 0).then(|| format!("failed={:#x}", bump.failed));
-    for (((room, took), taken), name) in room.into_iter().zip(took).zip(&TAKEN).zip(names) {
+    for ((((room, took), have), taken), name) in room.into_iter().zip(took).zip(had).zip(&TAKEN).zip(names) {
         let most = took.max(taken.load(Relaxed).saturating_sub(taken.load(Relaxed) / 64));
         taken.store(most, Relaxed);
-        let have = room.load(Relaxed);
         // A quarter more than it's taken lately, in powers of two so the
-        // pool's buffers are used again
-        let want = (most.saturating_add(most / 4)).max(1 << 14).checked_next_power_of_two().unwrap_or(1 << 31).min(1 << 27);
-        if took > have || took > have - have / 8 || want < have / 2 {
+        // pool's buffers are used again, and never so little that zooming
+        // out from close up runs out
+        let want = (most.saturating_add(most / 4)).max(1 << 20).checked_next_power_of_two().unwrap_or(1 << 31).min(1 << 27);
+        if took > have || took > have - have / 8 || (bump.failed == 0 && want < have / 2) {
             room.store(want.max(took.min(1 << 27)), Relaxed);
         }
         if took > have {
             *short.get_or_insert_with(String::new) += &format!(" {name} {took}>{have}");
+        }
+    }
+    if bump.failed != 0 {
+        // What's past the first that ran out, in the order the GPU fills
+        // them, never took all it would, so grows as much as that did
+        let stage = [1, 4, 2, 3, 5, 4, 0];
+        let (first, grow) = took.iter().zip(had).zip(stage).filter(|((took, have), _)| **took > *have).fold((usize::MAX, 1.25f64), |(first, grow), ((took, have), stage)| {
+            (first.min(stage), grow.max(*took as f64 / have.max(1) as f64 * 1.25))
+        });
+        let first = if first == usize::MAX { 0 } else { first };
+        for ((room, (took, have)), stage) in room.into_iter().zip(took.into_iter().zip(had)).zip(stage) {
+            if stage > first && took <= have {
+                let want = ((have as f64 * grow.min(8.0)) as u32).checked_next_power_of_two().unwrap_or(1 << 27).min(1 << 27);
+                room.store(want.max(room.load(Relaxed)), Relaxed);
+            }
         }
     }
     short

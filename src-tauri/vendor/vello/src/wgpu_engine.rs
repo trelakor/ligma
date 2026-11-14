@@ -257,22 +257,19 @@ struct BindMap {
     pending_clears: HashSet<ResourceId>,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-struct BufferProperties {
-    size: u64,
-    usages: BufferUsages,
-    name: &'static str,
-}
-
+/// Ligma: buffers free to use again, by name and usage, each with the
+/// recording it was last used in, and the biggest asked for of each lately,
+/// so one buffer of each serves however much is asked for, rather than one
+/// of every size it's been
 #[derive(Default)]
 struct ResourcePool {
-    bufs: HashMap<BufferProperties, Vec<Buffer>>,
-    /// Ligma: the recording each kind of buffer was last asked for in, so
-    /// those no longer asked for go rather than the pool keeping every size
-    /// buffers have been
-    asked: HashMap<BufferProperties, u64>,
+    bufs: HashMap<(&'static str, BufferUsages), Vec<(Buffer, u64)>>,
+    most: HashMap<(&'static str, BufferUsages), (u64, u64)>,
     recordings: u64,
 }
+
+/// Ligma: recordings a free buffer's kept for without being used
+const POOL_KEPT: u64 = 24;
 
 /// The transient bind map contains short-lifetime resources.
 ///
@@ -921,23 +918,31 @@ impl WgpuEngine {
         if let Some(timer) = &mut self.timer {
             timer.submitted();
         }
+        let recordings = self.pool.recordings;
         for id in free_bufs {
             if let Some(buf) = self.bind_map.buf_map.remove(&id)
                 && let MaterializedBuffer::Gpu(gpu_buf) = buf.buffer
             {
-                let props = BufferProperties {
-                    size: gpu_buf.size(),
-                    usages: gpu_buf.usage(),
-                    name: buf.label,
-                };
-                self.pool.bufs.entry(props).or_default().push(gpu_buf);
+                let kind = (buf.label, gpu_buf.usage());
+                self.pool.bufs.entry(kind).or_default().push((gpu_buf, recordings));
             }
         }
         self.pool.recordings += 1;
         let recordings = self.pool.recordings;
-        let asked = &self.pool.asked;
-        self.pool.bufs.retain(|props, _| asked.get(props).is_some_and(|&at| at + 24 > recordings));
-        self.pool.asked.retain(|_, at| *at + 24 > recordings);
+        // Those not used lately, or much bigger than any asked for lately, go
+        let most = &self.pool.most;
+        for (kind, bufs) in &mut self.pool.bufs {
+            let most = most.get(kind).filter(|(_, at)| at + POOL_KEPT > recordings).map_or(0, |(size, _)| *size);
+            bufs.retain(|(buf, at)| {
+                let keep = at + POOL_KEPT > recordings && buf.size() <= most.saturating_mul(2);
+                if !keep {
+                    buf.destroy();
+                }
+                keep
+            });
+        }
+        self.pool.bufs.retain(|_, bufs| !bufs.is_empty());
+        self.pool.most.retain(|_, (_, at)| *at + POOL_KEPT > recordings);
         for id in free_images {
             if let Some((texture, _view)) = self.bind_map.image_map.remove(&id) {
                 // TODO: have a pool to avoid needless re-allocation
@@ -1152,16 +1157,18 @@ impl ResourcePool {
         device: &Device,
     ) -> Buffer {
         let rounded_size = Self::size_class(size, SIZE_CLASS_BITS);
-        let props = BufferProperties {
-            size: rounded_size,
-            usages: usage,
-            name,
-        };
-        self.asked.insert(props.clone(), self.recordings);
-        if let Some(buf_vec) = self.bufs.get_mut(&props)
-            && let Some(buf) = buf_vec.pop()
-        {
-            return buf;
+        let kind = (name, usage);
+        let recordings = self.recordings;
+        let most = self.most.entry(kind).or_insert((0, recordings));
+        if rounded_size >= most.0 || most.1 + POOL_KEPT <= recordings {
+            *most = (rounded_size, recordings);
+        }
+        if let Some(bufs) = self.bufs.get_mut(&kind) {
+            // The smallest that's big enough
+            let fits = bufs.iter().enumerate().filter(|(_, (buf, _))| buf.size() >= rounded_size).min_by_key(|(_, (buf, _))| buf.size()).map(|(index, _)| index);
+            if let Some(index) = fits {
+                return bufs.swap_remove(index).0;
+            }
         }
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(name),

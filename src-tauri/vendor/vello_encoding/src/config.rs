@@ -188,6 +188,13 @@ pub static CAPACITY: Capacity = Capacity {
     lines: AtomicU32::new(1 << 21),
 };
 
+impl Capacity {
+    /// In the order of `PER_TAGS`
+    pub fn all(&self) -> [&AtomicU32; 7] {
+        [&self.binning, &self.ptcl, &self.tile, &self.seg_counts, &self.segments, &self.blend, &self.lines]
+    }
+}
+
 /// Ligma: the up front part of the per tile command list, which the GPU
 /// allocates past
 pub fn ptcl_start(width: u32, height: u32) -> u32 {
