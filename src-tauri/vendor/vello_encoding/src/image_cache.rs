@@ -89,14 +89,16 @@ impl ImageCache {
         // that for a while, so a texture isn't made each time renders that
         // need more and less take turns
         let used: i64 = self.map.values().map(|resident| resident.image.width as i64 * resident.image.height as i64).sum();
-        let mut size = self.atlas.size().width;
-        self.roomy = if size > DEFAULT_ATLAS_SIZE && used * 2 <= (size as i64 / 2).pow(2) { self.roomy + 1 } else { 0 };
+        let size = self.atlas.size();
+        let mut size = (size.width, size.height);
+        let smaller = shrunk(size);
+        self.roomy = if smaller != size && used * 2 <= smaller.0 as i64 * smaller.1 as i64 { self.roomy + 1 } else { 0 };
         if self.roomy > ROOMY_RENDERS {
-            size /= 2;
+            size = smaller;
             self.roomy = 0;
         }
         self.map.clear();
-        self.atlas = AtlasAllocator::new(size2(size, size));
+        self.atlas = AtlasAllocator::new(size2(size.0, size.1));
     }
 
     pub(crate) fn restart_resolve_pass(&mut self) {
@@ -119,15 +121,19 @@ impl ImageCache {
     }
 
     pub(crate) fn bump_size(&mut self) -> bool {
-        let mut new_size = self.atlas.size().width * 2;
-        while new_size <= self.max_size {
-            if self.repack_to_size(new_size) {
+        let size = self.atlas.size();
+        let mut size = (size.width, size.height);
+        loop {
+            let next = grown(size, self.max_size);
+            if next == size {
+                return false;
+            }
+            size = next;
+            if self.repack_to_size(size.0, size.1) {
                 self.images.clear();
                 return true;
             }
-            new_size *= 2;
         }
-        false
     }
 
     pub(crate) fn get_or_insert(&mut self, image: &ImageData) -> Option<(u32, u32)> {
@@ -201,8 +207,8 @@ impl ImageCache {
         self.evicted_in_resolve != 0
     }
 
-    fn repack_to_size(&mut self, size: i32) -> bool {
-        let mut atlas = AtlasAllocator::new(size2(size, size));
+    fn repack_to_size(&mut self, width: i32, height: i32) -> bool {
+        let mut atlas = AtlasAllocator::new(size2(width, height));
         let mut entries: Vec<_> = self.map.iter().collect();
         entries.sort_by_key(|(id, _)| *id);
         let mut map = HashMap::with_capacity(self.map.len());
@@ -223,6 +229,20 @@ impl ImageCache {
         self.map = map;
         true
     }
+}
+
+/// Ligma: the atlas half as big again, its shorter side grown, rather than
+/// twice as wide and high, so it's no more than half as big again as it
+/// needs to be
+fn grown((width, height): (i32, i32), max: i32) -> (i32, i32) {
+    let step = |side: i32| ((side + side / 2 + 255) / 256 * 256).min(max);
+    if width <= height && width < max { (step(width), height) } else if height < max { (width, step(height)) } else { (width, height) }
+}
+
+/// Ligma: the size `grown` came from, no less than the atlas starts at
+fn shrunk((width, height): (i32, i32)) -> (i32, i32) {
+    let step = |side: i32| ((side * 2 / 3) / 256 * 256).max(DEFAULT_ATLAS_SIZE);
+    if height > width || (height == width && height > DEFAULT_ATLAS_SIZE) { (width, step(height)) } else { (step(width), height) }
 }
 
 #[cfg(test)]
@@ -359,7 +379,7 @@ mod tests {
         cache.begin_resolve();
         let xy = cache.get_or_insert(&image).unwrap();
 
-        assert!(!cache.repack_to_size(8));
+        assert!(!cache.repack_to_size(8, 8));
         assert_eq!(cache.atlas.size().width, 16);
         assert_eq!(cache.get_or_insert(&image), Some(xy));
         assert_eq!(cache.map.len(), 1);
