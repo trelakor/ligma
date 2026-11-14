@@ -482,6 +482,9 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
         })
     };
     let mut boxes: Vec<(usize, usize, usize, usize)> = pieces.iter().map(|piece| bounds(piece)).collect();
+    let started = std::time::Instant::now();
+    let mut recounted = started;
+    let mut hints: Vec<(isize, isize)> = Vec::new();
     let mut scores: Vec<usize> = pieces.iter().map(|piece| around(&hole, piece)).collect();
     while !pieces.is_empty() {
         if stopped() {
@@ -495,16 +498,24 @@ fn heal_spots(canvas: &mut Canvas, stopped: &dyn Fn() -> bool) -> Result<(), &'s
         // Nowhere clear of what's still to heal: what's been healed can
         // be copied from too, and failing that, the piece is evened out
         // from what's around it
-        let mut offset = best_offset(canvas, &hole, &holes, &piece, stopped);
-        if offset.is_none() && !stopped() {
+        let quick = started.elapsed() > BUDGET;
+        let mut offset = best_offset(canvas, &hole, &holes, &piece, &hints, quick, stopped);
+        // Counted again at most once in a while, as that's the whole image
+        if offset.is_none() && !stopped() && recounted.elapsed() > RECOUNT {
             holes = counts(&hole);
-            offset = best_offset(canvas, &hole, &holes, &piece, stopped);
+            recounted = std::time::Instant::now();
+            offset = best_offset(canvas, &hole, &holes, &piece, &hints, quick, stopped);
         }
         if stopped() {
             return Err("cancelled");
         }
         match offset {
-            Some(offset) => copy_into(canvas, &hole, &piece, offset),
+            Some(offset) => {
+                copy_into(canvas, &hole, &piece, offset);
+                hints.retain(|&hint| hint != offset);
+                hints.insert(0, offset);
+                hints.truncate(HINTS);
+            }
             None => smooth_into(canvas, &hole, &piece),
         }
         for &at in &piece {
@@ -537,8 +548,8 @@ fn smooth_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize]) {
     if !known.contains(&true) {
         return;
     }
-    diffuse(&mut window, &known, across, down);
-    relax(&mut window, &known, across, down);
+    let depth = diffuse(&mut window, &known, across, down);
+    relax(&mut window, &known, across, down, deepest(&depth));
     for &at in piece {
         canvas.pixels[at] = window[(at / width - y0) * across + at % width - x0];
     }
@@ -546,6 +557,10 @@ fn smooth_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize]) {
 
 /// Long strokes are healed in squares this many pixels across
 const PIECE: usize = 40;
+/// Where the last this many pieces copied from is tried first
+const HINTS: usize = 6;
+/// What's left to heal is counted again at most this often
+const RECOUNT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Copies what's `offset` away over `piece`, with how far the copy's
 /// surroundings are off from the piece's carried in from its edge,
@@ -627,22 +642,27 @@ fn copy_into(canvas: &mut Canvas, hole: &[bool], piece: &[usize], (ox, oy): (isi
     // that is its detail, kept only as strong as the spot's surroundings'
     // grain allows, so texture comes with it, but not a line or an edge
     // beside the spot on a smooth surface
-    let mut evened: Vec<[f32; 4]> = (0..across * down)
-        .map(|i| if known[i] { canvas.pixels[source((y0 + i / across) * width + x0 + i % across)] } else { [0.0; 4] })
+    // Both evened out together: how far off the copy is, and the copy
+    let mut both: Vec<[f32; 8]> = (0..across * down)
+        .map(|i| {
+            let mut value = [0f32; 8];
+            if known[i] {
+                let copy = canvas.pixels[source((y0 + i / across) * width + x0 + i % across)];
+                value[..4].copy_from_slice(&window[i]);
+                value[4..].copy_from_slice(&copy);
+            }
+            value
+        })
         .collect();
     if known.contains(&true) {
-        diffuse(&mut evened, &known, across, down);
-        relax(&mut evened, &known, across, down);
-    }
-    if known.contains(&true) {
-        diffuse(&mut window, &known, across, down);
-        relax(&mut window, &known, across, down);
+        let depth = diffuse(&mut both, &known, across, down);
+        relax(&mut both, &known, across, down, deepest(&depth));
     }
     for &at in piece {
         let i = (at / width - y0) * across + at % width - x0;
-        let offset = window[i];
+        let offset: [f32; 4] = both[i][..4].try_into().unwrap_or_default();
         let mut copied = canvas.pixels[source(at)];
-        let base = evened[i];
+        let base: [f32; 4] = both[i][4..].try_into().unwrap_or_default();
         let detail: Vec<f32> = (0..4).map(|channel| copied[channel] - base[channel]).collect();
         let size = detail.iter().map(|value| value * value).sum::<f32>().sqrt();
         // Past what's allowed it fades, and twice as strong it's gone
@@ -678,31 +698,103 @@ const OUTLIER_FLOOR: f32 = 24.0;
 /// membrane, each pixel the average of the four around it, as Poisson
 /// blending with no texture of its own would, so the tone carried in from
 /// the edge has no ridges
-fn relax(values: &mut [[f32; 4]], known: &[bool], width: usize, height: usize) {
-    let rounds = 2 * width.max(height);
-    for _ in 0..rounds {
-        for parity in 0..2 {
-            for y in 0..height {
-                for x in 0..width {
-                    let at = y * width + x;
-                    if known[at] || (x + y) % 2 != parity {
-                        continue;
-                    }
-                    let (mut sum, mut count) = ([0f32; 4], 0f32);
-                    for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
-                        if nx < width && ny < height {
-                            for (total, value) in sum.iter_mut().zip(values[ny * width + nx]) {
-                                *total += value;
+/// `depth` is how far the farthest of it is from what's known, as
+/// `diffuse` gives it: a few rounds for each pixel of that settle it.
+/// Deep, it's settled at half the size first, a quarter of the pixels
+/// in half the rounds, and then only finished here
+fn relax<const N: usize>(values: &mut [[f32; N]], known: &[bool], width: usize, height: usize, depth: u32) {
+    let mut rounds = (RELAX * depth as usize + 4).min(2 * width.max(height));
+    if depth > COARSE_FROM && width >= 4 && height >= 4 {
+        let (across, down) = (width.div_ceil(2), height.div_ceil(2));
+        // Each 2 by 2 block: known where any of it is, as the average of
+        // that, and otherwise the average of what it's been filled with
+        let mut coarse = vec![[0f32; N]; across * down];
+        let mut coarse_known = vec![false; across * down];
+        for cy in 0..down {
+            for cx in 0..across {
+                let (mut all, mut all_count, mut sure, mut sure_count) = ([0f32; N], 0f32, [0f32; N], 0f32);
+                for y in 2 * cy..(2 * cy + 2).min(height) {
+                    for x in 2 * cx..(2 * cx + 2).min(width) {
+                        let value = values[y * width + x];
+                        for channel in 0..N {
+                            all[channel] += value[channel];
+                        }
+                        all_count += 1.0;
+                        if known[y * width + x] {
+                            for channel in 0..N {
+                                sure[channel] += value[channel];
                             }
-                            count += 1.0;
+                            sure_count += 1.0;
                         }
                     }
-                    values[at] = sum.map(|total| total / count);
+                }
+                let at = cy * across + cx;
+                coarse_known[at] = sure_count > 0.0;
+                coarse[at] = if sure_count > 0.0 { sure.map(|total| total / sure_count) } else { all.map(|total| total / all_count) };
+            }
+        }
+        relax(&mut coarse, &coarse_known, across, down, depth.div_ceil(2));
+        for y in 0..height {
+            for x in 0..width {
+                if !known[y * width + x] {
+                    values[y * width + x] = coarse[(y / 2) * across + x / 2];
+                }
+            }
+        }
+        rounds = rounds.min(FINISH);
+    }
+    // Only what isn't known, split into the two checkerboard colors
+    let mut free: [Vec<(usize, [usize; 4], f32)>; 2] = [Vec::new(), Vec::new()];
+    for y in 0..height {
+        for x in 0..width {
+            let at = y * width + x;
+            if known[at] {
+                continue;
+            }
+            let mut near = [at; 4];
+            let mut count = 0;
+            for (nx, ny) in [(x.wrapping_sub(1), y), (x + 1, y), (x, y.wrapping_sub(1)), (x, y + 1)] {
+                if nx < width && ny < height {
+                    near[count] = ny * width + nx;
+                    count += 1;
+                }
+            }
+            free[(x + y) % 2].push((at, near, count as f32));
+        }
+    }
+    for _ in 0..rounds {
+        for color in &free {
+            for &(at, near, count) in color {
+                let mut sum = [0f32; N];
+                for &neighbor in &near[..count as usize] {
+                    for (total, value) in sum.iter_mut().zip(values[neighbor]) {
+                        *total += value;
+                    }
+                }
+                // Past the average, as over-relaxation does, which settles
+                // in far fewer rounds
+                let old = values[at];
+                for (channel, total) in sum.iter().enumerate() {
+                    values[at][channel] = old[channel] + OVER * (total / count - old[channel]);
                 }
             }
         }
     }
 }
+
+/// The farthest of `depth`, as `diffuse` gives it, from what's known
+fn deepest(depth: &[u32]) -> u32 {
+    depth.iter().copied().filter(|&depth| depth != u32::MAX).max().unwrap_or(0)
+}
+
+/// `relax` runs this many rounds for each pixel the unknown reaches
+const RELAX: usize = 3;
+/// `relax` settles what's deeper than this at half the size first, and
+/// then finishes it in this many rounds
+const COARSE_FROM: u32 = 6;
+const FINISH: usize = 10;
+/// How far past the average `relax` moves each pixel each round
+const OVER: f32 = 1.8;
 
 /// How far the edge around a spot is compared, in pixels
 const RING: usize = 4;
@@ -715,7 +807,16 @@ const FARTHER: f32 = 0.08;
 /// there looks most like the spot's own ring, nearer places counting for a
 /// little more. Places are tried coarsely, then finer around the best. None
 /// when there's no such place, or once `stopped`
-fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], stopped: &dyn Fn() -> bool) -> Option<(isize, isize)> {
+#[allow(clippy::too_many_arguments)]
+fn best_offset(
+    canvas: &Canvas,
+    hole: &[bool],
+    holes: &[u32],
+    spot: &[usize],
+    hints: &[(isize, isize)],
+    quick: bool,
+    stopped: &dyn Fn() -> bool,
+) -> Option<(isize, isize)> {
     let (width, height) = (canvas.width, canvas.height);
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
     for &at in spot {
@@ -750,8 +851,8 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
     // beside it. Texture as fine as the surroundings' costs nothing
     let mut guess: Vec<[f32; 4]> = (0..across * down).map(|i| canvas.pixels[(y0 + i / across) * width + x0 + i % across]).collect();
     let known: Vec<bool> = (0..across * down).map(|i| !hole[(y0 + i / across) * width + x0 + i % across]).collect();
-    diffuse(&mut guess, &known, across, down);
-    relax(&mut guess, &known, across, down);
+    let depth = diffuse(&mut guess, &known, across, down);
+    relax(&mut guess, &known, across, down, deepest(&depth));
     let mut inside: Vec<(isize, isize, [f32; 4])> = spot
         .iter()
         .map(|&at| {
@@ -834,19 +935,20 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
     // cost more than it for being far, so the search stops there. Then
     // finer and finer around the best
     let mut step = ((across.max(down) / 24).max(2)) as isize;
-    let reach = (across.max(down) * REACH).max(MIN_REACH) as isize;
-    let mut offsets: Vec<(isize, isize)> = Vec::new();
-    let mut oy = -reach;
-    while oy <= reach {
-        let mut ox = -reach;
-        while ox <= reach {
-            offsets.push((ox, oy));
-            ox += step;
-        }
-        oy += step;
-    }
-    offsets.sort_by_key(|&(ox, oy)| ox * ox + oy * oy);
+    // Pressed for time, only close by
+    let reach = if quick { QUICK_REACH } else { (across.max(down) * REACH).max(MIN_REACH) } as isize;
+    let offsets = nearest_first(step, reach);
+    // Where the pieces healed last copied from first, as the next piece
+    // along a stroke most often fits there too, so far fewer places are
+    // tried after
     let mut best: Option<((isize, isize), f32)> = None;
+    for &(ox, oy) in hints {
+        let limit = best.map_or(f32::INFINITY, |(_, cost)| cost);
+        let found = cost(ox, oy, limit);
+        if found < limit {
+            best = Some(((ox, oy), found));
+        }
+    }
     for (tried, &(ox, oy)) in offsets.iter().enumerate() {
         if tried.is_multiple_of(4096) && stopped() {
             return None;
@@ -881,10 +983,43 @@ fn best_offset(canvas: &Canvas, hole: &[bool], holes: &[u32], spot: &[usize], st
     best.map(|(offset, _)| offset)
 }
 
+/// Places `step` apart, as far as `reach` each way, nearest first, kept
+/// for the next piece, which most often asks for the same
+fn nearest_first(step: isize, reach: isize) -> std::rc::Rc<Vec<(isize, isize)>> {
+    type Kept = Option<((isize, isize), std::rc::Rc<Vec<(isize, isize)>>)>;
+    thread_local! {
+        static KEPT: std::cell::RefCell<Kept> = const { std::cell::RefCell::new(None) };
+    }
+    KEPT.with(|kept| {
+        if let Some((key, offsets)) = &*kept.borrow() {
+            if *key == (step, reach) {
+                return offsets.clone();
+            }
+        }
+        let mut offsets: Vec<(isize, isize)> = Vec::new();
+        let mut oy = -reach;
+        while oy <= reach {
+            let mut ox = -reach;
+            while ox <= reach {
+                offsets.push((ox, oy));
+                ox += step;
+            }
+            oy += step;
+        }
+        offsets.sort_by_key(|&(ox, oy)| ox * ox + oy * oy);
+        let offsets = std::rc::Rc::new(offsets);
+        *kept.borrow_mut() = Some(((step, reach), offsets.clone()));
+        offsets
+    })
+}
+
 /// A spot is copied from at most this many times its size away, and at
-/// least `MIN_REACH` pixels
+/// least `MIN_REACH` pixels, or, once a heal has taken `BUDGET`, only
+/// `QUICK_REACH`, so a long scribble still comes back quickly
 const REACH: usize = 4;
 const MIN_REACH: usize = 96;
+const QUICK_REACH: usize = 48;
+const BUDGET: std::time::Duration = std::time::Duration::from_millis(800);
 /// The ring is compared at most this many of its pixels
 const RING_SAMPLES: usize = 600;
 /// What's copied is compared to what the spot would be, evened out, at
