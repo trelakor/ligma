@@ -85,11 +85,20 @@ pub const OVERLAY: &str = "native-overlay";
 
 static ON: AtomicBool = AtomicBool::new(false);
 
-/// Settings' Show stats: frame times and GPU memory drawn over the canvas
+/// Settings' Show stats: frame times and GPU memory over the canvas, of
+/// Ligma's renderer or Figma's
 static SHOW_STATS: AtomicBool = AtomicBool::new(false);
 
 pub fn show_stats() -> bool {
     SHOW_STATS.load(Ordering::Relaxed)
+}
+
+fn show_stats_if(app: &AppHandle, settings: &Settings) {
+    SHOW_STATS.store(cfg!(windows) && settings.experimental && settings.renderer_stats, Ordering::Relaxed);
+    #[cfg(windows)]
+    hud::follow(app);
+    #[cfg(not(windows))]
+    let _ = app;
 }
 
 fn enabled(settings: &Settings) -> bool {
@@ -127,7 +136,7 @@ pub fn autorun() -> bool {
 
 /// Call once the main window is up
 pub fn init(app: &AppHandle, settings: &Settings) {
-    SHOW_STATS.store(settings.renderer_stats, Ordering::Relaxed);
+    show_stats_if(app, settings);
     if enabled(settings) {
         ON.store(true, Ordering::Relaxed);
         start(app);
@@ -135,7 +144,7 @@ pub fn init(app: &AppHandle, settings: &Settings) {
 }
 
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
-    SHOW_STATS.store(settings.renderer_stats, Ordering::Relaxed);
+    show_stats_if(app, settings);
     let on = enabled(settings);
     if ON.swap(on, Ordering::Relaxed) == on {
         return;

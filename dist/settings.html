@@ -876,7 +876,7 @@
       </label>
       <label class="row nested deeper" id="renderer-stats-row" hidden data-keywords="fps frame time gpu memory vram graph debug performance">
         <span class="label">Show stats
-          <div class="hint">Frame times and GPU memory in the corner of the canvas, with graphs of the last few seconds</div>
+          <div class="hint">Frame times and GPU memory in the corner of the canvas, with graphs. After switching renderers, the one used before shows beside it to compare</div>
         </span>
         <input type="checkbox" class="switch" id="renderer-stats">
       </label>
@@ -1821,7 +1821,7 @@
     $("renderer-row").hidden = !settings.experimental;
     $("renderer").value = settings.nativeRenderer ? "ligma" : "figma";
     $("renderer-stats").checked = settings.rendererStats;
-    $("renderer-stats-row").hidden = !settings.experimental || !settings.nativeRenderer;
+    $("renderer-stats-row").hidden = !settings.experimental;
     // Without sleep nothing is unloaded, so the other memory options do nothing
     for (const [id, enabled] of [
       ["sleep-after-row", sleeping],

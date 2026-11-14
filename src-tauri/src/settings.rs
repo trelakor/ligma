@@ -177,7 +177,8 @@ pub struct Settings {
     /// renderer (see native_renderer.rs). Only while `experimental` is on.
     /// Windows only
     pub native_renderer: bool,
-    /// Frame times and GPU memory drawn over the canvas by Ligma's renderer
+    /// Frame times and GPU memory over the canvas, of whichever renderer
+    /// draws it, beside the one used before. Only while `experimental` is on
     pub renderer_stats: bool,
 }
 
