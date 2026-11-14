@@ -208,11 +208,8 @@ impl Render {
             RenderConfig::new(&layout, params.width, params.height, &params.base_color);
         cpu_config.gpu.view = params.view;
         // HACK: The coarse workgroup counts is the number of active bins.
-        if (cpu_config.workgroup_counts.coarse.0
-            * cpu_config.workgroup_counts.coarse.1
-            * cpu_config.workgroup_counts.coarse.2)
-            > 256
-        {
+        // Ligma: binning covers any number of bins, in blocks
+        if false {
             log::warn!(
                 "Trying to paint too large image. {}x{}.\n\
                 See https://github.com/linebender/vello/issues/680 for details",

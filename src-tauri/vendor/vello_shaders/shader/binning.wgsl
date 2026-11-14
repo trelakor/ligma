@@ -46,10 +46,10 @@ const WG_SIZE = 256u;
 const N_SLICE = WG_SIZE / 32u;
 const N_SUBSLICE = 4u;
 
-var<workgroup> sh_bitmaps: array<array<atomic<u32>, N_TILE>, N_SLICE>;
+var<workgroup> sh_bitmaps: array<array<atomic<u32>, N_BIN_BLOCK>, N_SLICE>;
 // store count values packed two u16's to a u32
-var<workgroup> sh_count: array<array<u32, N_TILE>, N_SUBSLICE>;
-var<workgroup> sh_chunk_offset: array<u32, N_TILE>;
+var<workgroup> sh_count: array<array<u32, N_BIN_BLOCK>, N_SUBSLICE>;
+var<workgroup> sh_chunk_offset: array<u32, N_BIN_BLOCK>;
 var<workgroup> sh_previous_failed: u32;
 
 @compute @workgroup_size(256)
@@ -111,10 +111,10 @@ fn main(
             y1 = i32(ceil(bbox.w * SY));
         }
     }
-    let width_in_bins = i32((config.width_in_tiles + N_TILE_X - 1u) / N_TILE_X);
-    let height_in_bins = i32((config.height_in_tiles + N_TILE_Y - 1u) / N_TILE_Y);
+    let width_in_bins = i32((config.width_in_tiles + N_BIN_BLOCK_X - 1u) / N_BIN_BLOCK_X);
+    let height_in_bins = i32((config.height_in_tiles + N_BIN_BLOCK_Y - 1u) / N_BIN_BLOCK_Y);
     let n_bins = u32(width_in_bins * height_in_bins);
-    let aligned_n_bins = (n_bins + N_TILE - 1u) & ~(N_TILE - 1u);
+    let aligned_n_bins = (n_bins + N_BIN_BLOCK - 1u) & ~(N_BIN_BLOCK - 1u);
 
     x0 = clamp(x0, 0, width_in_bins);
     y0 = clamp(y0, 0, height_in_bins);
@@ -130,8 +130,8 @@ fn main(
     let my_slice = local_id.x / 32u;
     let my_mask = 1u << (local_id.x & 31u);
 
-    // Loop over the blocks of bins in chunks of N_TILE (256)
-    var next_block = N_TILE;
+    // Loop over the blocks of bins in chunks of N_BIN_BLOCK (256)
+    var next_block = N_BIN_BLOCK;
     for (var block_start = 0u; block_start < n_bins; ) {
         // Write coverage for the current block
         for (var y_offset = y0_width; y_offset < y1_width; y_offset += width_in_bins) {
@@ -197,7 +197,7 @@ fn main(
                 atomicStore(&sh_bitmaps[i][local_id.x], 0u);
             }
             workgroupBarrier();
-            next_block += N_TILE;
+            next_block += N_BIN_BLOCK;
         }
     }
 }

@@ -302,8 +302,9 @@ impl WorkgroupCounts {
         let clip_reduce_wgs = n_clips.saturating_sub(1) / CLIP_REDUCE_WG;
         let clip_wgs = n_clips.div_ceil(CLIP_REDUCE_WG);
         let path_wgs = n_paths.div_ceil(PATH_BBOX_WG);
-        let width_in_bins = width_in_tiles.div_ceil(16);
-        let height_in_bins = height_in_tiles.div_ceil(16);
+        // Ligma: bins 8 tiles a side, as the shaders' N_TILE_X and N_TILE_Y
+        let width_in_bins = width_in_tiles.div_ceil(8);
+        let height_in_bins = height_in_tiles.div_ceil(8);
         Self {
             use_large_path_scan,
             path_reduce: (path_tag_wgs, 1, 1),

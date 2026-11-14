@@ -1551,9 +1551,10 @@ impl Painter {
         // While the zoom changes, Figma changes what it shows of some nodes
         // each frame, which isn't an edit to keep up with exactly
         let settle = SETTLE.saturating_sub(self.zoom.1.elapsed());
-        // Vello draws the view from the scene it keeps, edits and all, so
-        // one way of drawing shows what's there, rather than two in turn
-        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() && std::env::var_os("LIGMA_NATIVE_VELLO_TILES").is_none() {
+        // Dev tools: Vello draws the view from the scene it keeps, edits and
+        // all, so one way of drawing shows what's there. Each frame draws it
+        // all again, which takes the GPU longer than tiles do for now
+        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && std::env::var_os("LIGMA_NATIVE_VELLO_KEPT").is_some() {
             if let Some(next) = self.fill_kept(px, (ox, oy, width, height)) {
                 return next;
             }
@@ -2460,7 +2461,11 @@ impl Painter {
             "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} atlas={}k {}",
             paths,
             clips,
-            super::vello::SIZES.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(),
+            {
+                let mut layers: Vec<(u32, u64)> = super::vello::LAYERS.lock().unwrap().take().unwrap_or_default().into_iter().collect();
+                layers.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+                (super::vello::SIZES.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(), layers)
+            },
             super::vello::TIMES.iter().map(|n| (n.swap(0, std::sync::atomic::Ordering::Relaxed) / 100_000) as f64 / 10.0).collect::<Vec<_>>(),
             fell_back / 1000,
             encoded.as_secs_f64() * 1000.0,

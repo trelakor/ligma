@@ -46,7 +46,9 @@ var<storage, read_write> ptcl: array<u32>;
 
 // Much of this code assumes WG_SIZE == N_TILE. If these diverge, then
 // a fair amount of fixup is needed.
-const WG_SIZE = 256u;
+const WG_SIZE = N_TILE;
+// Draw objects in each of binning's partitions
+const PART_SIZE = 256u;
 const N_SLICE = WG_SIZE / 32u;
 
 var<workgroup> sh_bitmaps: array<array<atomic<u32>, N_TILE>, N_SLICE>;
@@ -154,7 +156,7 @@ fn write_blurred_rounded_rect(color: CmdColor, info_offset: u32) {
     cmd_offset += 3u;
 }
 
-@compute @workgroup_size(256)
+@compute @workgroup_size(WG_SIZE)
 fn main(
     @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(workgroup_id) wg_id: vec3<u32>,
@@ -181,8 +183,8 @@ fn main(
     let width_in_bins = (config.width_in_tiles + N_TILE_X - 1u) / N_TILE_X;
     let bin_ix = width_in_bins * wg_id.y + wg_id.x;
     let height_in_bins = (config.height_in_tiles + N_TILE_Y - 1u) / N_TILE_Y;
-    let aligned_n_bins = (width_in_bins * height_in_bins + N_TILE - 1u) & ~(N_TILE - 1u);
-    let n_partitions = (config.n_drawobj + N_TILE - 1u) / N_TILE;
+    let aligned_n_bins = (width_in_bins * height_in_bins + N_BIN_BLOCK - 1u) & ~(N_BIN_BLOCK - 1u);
+    let n_partitions = (config.n_drawobj + PART_SIZE - 1u) / PART_SIZE;
 
     // Coordinates of the top left of this bin, in tiles.
     let bin_tile_x = N_TILE_X * wg_id.x;

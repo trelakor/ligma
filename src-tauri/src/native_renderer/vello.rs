@@ -1031,6 +1031,16 @@ impl Kept {
     }
 }
 
+/// Dev tools: layers and clips encoded, by the line that made them
+pub static LAYERS: std::sync::Mutex<Option<HashMap<u32, u64>>> = std::sync::Mutex::new(None);
+
+#[track_caller]
+fn count_layer() {
+    if std::env::var_os("LIGMA_NATIVE_VELLO_SIZES").is_some() {
+        *LAYERS.lock().unwrap().get_or_insert_with(HashMap::new).entry(std::panic::Location::caller().line()).or_default() += 1;
+    }
+}
+
 pub static SIZES: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
 pub static TIMES: [std::sync::atomic::AtomicU64; 12] = [const { std::sync::atomic::AtomicU64::new(0) }; 12];
 pub struct Timer(usize, std::time::Instant);
@@ -1379,7 +1389,9 @@ impl<'a> Encoder<'a> {
     /// A layer over `bounds`, which only bound what's in it, so are whole
     /// pixels, not an edge that's smoothed. Under a soft clip, the layer's
     /// cut by that instead, as what's in it is drawn alone
+    #[track_caller]
     fn push(&mut self, mode: BlendMode, alpha: f32, bounds: Rect) -> bool {
+        count_layer();
         let Some(device) = self.device(bounds) else { return false };
         if std::env::var_os("LIGMA_NATIVE_VELLO_NOLAYERS").is_some() {
             self.saved.push((self.soft.take(), false));
@@ -1404,7 +1416,9 @@ impl<'a> Encoder<'a> {
     /// Clipped to `device`, a path in device pixels, and any soft clip
     /// Clipped to where `shape`, in device pixels, isn't inside `device`,
     /// where there's no soft clip. False where there is
+    #[track_caller]
     fn clip_outside(&mut self, shape: &Path, device: IRect) -> bool {
+        count_layer();
         if self.soft.is_some() {
             return false;
         }
@@ -1415,7 +1429,9 @@ impl<'a> Encoder<'a> {
         true
     }
 
+    #[track_caller]
     fn clip(&mut self, device: Path) {
+        count_layer();
         let _t = timer(10);
         let saved = self.soft.take();
         let shape = match &saved {

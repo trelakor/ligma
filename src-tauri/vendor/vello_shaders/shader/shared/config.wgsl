@@ -56,9 +56,15 @@ struct Config {
 const TILE_WIDTH = 16u;
 const TILE_HEIGHT = 16u;
 // Number of tiles per bin
-const N_TILE_X = 16u;
-const N_TILE_Y = 16u;
+// Ligma: 8 by 8, so coarse has four times the workgroups, as a busy part
+// of the view is spread over more of them
+const N_TILE_X = 8u;
+const N_TILE_Y = 8u;
 const N_TILE = N_TILE_X * N_TILE_Y;
+
+// Ligma: bins' headers are laid out in blocks of this many, as binning
+// covers them
+const N_BIN_BLOCK = 256u;
 
 // Not currently supporting non-square tiles
 const TILE_SCALE = 0.0625;
