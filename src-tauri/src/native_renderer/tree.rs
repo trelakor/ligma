@@ -1460,24 +1460,7 @@ impl<'a> Drawer<'a> {
     }
 
     fn image(&mut self, paint: &rt::Paint, w: f32, h: f32) -> Option<skia_safe::Shader> {
-        let image = paint.image.as_ref().or(paint.thumbnail.as_ref())?;
-        let hash = image.hex();
-        // Adjusted images are kept apart, adjusted
-        let key = match paint.filter_color_adjust {
-            Some(adjust) => {
-                let adjust = Adjust {
-                    exposure: adjust.exposure,
-                    contrast: adjust.contrast / 0.3,
-                    saturation: adjust.vibrance,
-                    temperature: adjust.temperature,
-                    tint: adjust.tint,
-                    highlights: adjust.highlights,
-                    shadows: adjust.shadows,
-                };
-                if adjust == Adjust::default() { hash } else { format!("{hash}#{}", adjust.key()) }
-            }
-            None => hash,
-        };
+        let key = image_key(paint)?;
         let ctm = self.canvas.local_to_device_as_3x3();
         let node_scale = ctm.scale_x().hypot(ctm.skew_y());
         let Some(img) = self.images.get(&key) else {
@@ -1486,33 +1469,8 @@ impl<'a> Drawer<'a> {
             }
             return None;
         };
-        let (iw, ih) = (img.original.0 as f32, img.original.1 as f32);
-        let mode = paint.image_scale_mode.unwrap_or(rt::ImageScaleMode::Fill);
-        let (to_node, tile) = match mode {
-            rt::ImageScaleMode::Tile => {
-                let factor = paint.image_scaling_factor.filter(|f| f.is_finite() && *f > 0.0).unwrap_or(1.0);
-                (Matrix::scale((factor, factor)), TileMode::Repeat)
-            }
-            rt::ImageScaleMode::Stretch => {
-                let t = rt::to_matrix(&paint.transform.unwrap_or(rt::IDENTITY));
-                let mut m = Matrix::scale((w, h));
-                m.pre_concat(&t.invert()?);
-                m.pre_scale((1.0 / iw, 1.0 / ih), None);
-                (m, TileMode::Decal)
-            }
-            _ => {
-                // FILL covers the box, FIT fits in it, both centered, turned
-                // in quarter turns
-                let turns = ((paint.image_rotation_deg.unwrap_or(0.0) / 90.0).round() as i64).rem_euclid(4);
-                let (rw, rh) = if turns % 2 == 1 { (ih, iw) } else { (iw, ih) };
-                let s = if mode == rt::ImageScaleMode::Fit { (w / rw).min(h / rh) } else { (w / rw).max(h / rh) };
-                let mut m = Matrix::translate((w / 2.0, h / 2.0));
-                m.pre_rotate(turns as f32 * 90.0, None);
-                m.pre_scale((s, s), None);
-                m.pre_translate((-iw / 2.0, -ih / 2.0));
-                (m, TileMode::Decal)
-            }
-        };
+        let (to_node, tile) = image_layout(paint, w, h, img)?;
+        let iw = img.original.0 as f32;
         let shown = to_node.scale_x().hypot(to_node.skew_y()) * node_scale * iw * self.px;
         let kept = img.image.width() as f32;
         self.used_images.push((key.clone(), (shown * 1.42) as f64));
@@ -1776,4 +1734,58 @@ fn interpolation(paint: &rt::Paint) -> Interpolation {
         _ => HueMethod::Shorter,
     };
     out
+}
+
+/// The key of the image `paint` fills with, adjusted ones kept apart
+pub(super) fn image_key(paint: &rt::Paint) -> Option<String> {
+    let image = paint.image.as_ref().or(paint.thumbnail.as_ref())?;
+    let hash = image.hex();
+    Some(match paint.filter_color_adjust {
+        Some(adjust) => {
+            let adjust = Adjust {
+                exposure: adjust.exposure,
+                contrast: adjust.contrast / 0.3,
+                saturation: adjust.vibrance,
+                temperature: adjust.temperature,
+                tint: adjust.tint,
+                highlights: adjust.highlights,
+                shadows: adjust.shadows,
+            };
+            if adjust == Adjust::default() { hash } else { format!("{hash}#{}", adjust.key()) }
+        }
+        None => hash,
+    })
+}
+
+/// How image fill `paint` lays `img` in a `w` by `h` node: what maps the
+/// original's pixels to the node's coordinates, and how it tiles
+pub(super) fn image_layout(paint: &rt::Paint, w: f32, h: f32, img: &Img) -> Option<(Matrix, TileMode)> {
+    let (iw, ih) = (img.original.0 as f32, img.original.1 as f32);
+    let mode = paint.image_scale_mode.unwrap_or(rt::ImageScaleMode::Fill);
+    let (to_node, tile) = match mode {
+        rt::ImageScaleMode::Tile => {
+            let factor = paint.image_scaling_factor.filter(|f| f.is_finite() && *f > 0.0).unwrap_or(1.0);
+            (Matrix::scale((factor, factor)), TileMode::Repeat)
+        }
+        rt::ImageScaleMode::Stretch => {
+            let t = rt::to_matrix(&paint.transform.unwrap_or(rt::IDENTITY));
+            let mut m = Matrix::scale((w, h));
+            m.pre_concat(&t.invert()?);
+            m.pre_scale((1.0 / iw, 1.0 / ih), None);
+            (m, TileMode::Decal)
+        }
+        _ => {
+            // FILL covers the box, FIT fits in it, both centered, turned
+            // in quarter turns
+            let turns = ((paint.image_rotation_deg.unwrap_or(0.0) / 90.0).round() as i64).rem_euclid(4);
+            let (rw, rh) = if turns % 2 == 1 { (ih, iw) } else { (iw, ih) };
+            let s = if mode == rt::ImageScaleMode::Fit { (w / rw).min(h / rh) } else { (w / rw).max(h / rh) };
+            let mut m = Matrix::translate((w / 2.0, h / 2.0));
+            m.pre_rotate(turns as f32 * 90.0, None);
+            m.pre_scale((s, s), None);
+            m.pre_translate((-iw / 2.0, -ih / 2.0));
+            (m, TileMode::Decal)
+        }
+    };
+    Some((to_node, tile))
 }

@@ -73,7 +73,31 @@ pub struct Vello {
     paths: HashMap<usize, (Arc<rt::Path>, Arc<BezPath>)>,
     /// Set if wgpu reports an error, after which Vello isn't used
     broken: Arc<std::sync::atomic::AtomicBool>,
+    /// Image fills' textures Vello has, by key and mipmap level
+    pictures: HashMap<(String, u32), Held>,
+    barriers: Barriers,
+    skia: SendDevice,
 }
+
+/// An image fill's texture, Skia's, which Vello copies into its atlas
+struct Held {
+    data: ImageData,
+    /// Skia's, whose state it tracks
+    backend: skia_safe::gpu::BackendTexture,
+    resource: ID3D12Resource,
+    /// The Skia image's, so a new one for the key makes a new picture
+    id: u32,
+}
+
+/// Barriers on Skia's queue, from command allocators each used again once
+/// the GPU's past the fence value it was last sent with
+struct Barriers {
+    allocators: Vec<(windows::Win32::Graphics::Direct3D12::ID3D12CommandAllocator, u64)>,
+    list: Option<windows::Win32::Graphics::Direct3D12::ID3D12GraphicsCommandList>,
+}
+
+unsafe impl Send for Held {}
+unsafe impl Send for Barriers {}
 
 struct SendDevice(ID3D12Device);
 
@@ -140,7 +164,7 @@ impl Vello {
         }));
         let renderer = vello::Renderer::new(
             &device,
-            vello::RendererOptions { antialiasing_support: vello::AaSupport { area: false, msaa8: false, msaa16: true }, ..Default::default() },
+            vello::RendererOptions { antialiasing_support: vello::AaSupport { area: std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some(), msaa8: false, msaa16: true }, ..Default::default() },
         )
         .map_err(|error| format!("renderer: {error}"))?;
         let raw = Self::raw_device(&device)?;
@@ -161,6 +185,9 @@ impl Vello {
             pages: Vec::new(),
             paths: HashMap::new(),
             broken,
+            pictures: HashMap::new(),
+            barriers: Barriers { allocators: Vec::new(), list: None },
+            skia: SendDevice(skia.clone()),
         })
     }
 
@@ -237,10 +264,11 @@ impl Vello {
     /// Draws `scene` over `width` by `height` pixels into the texture it
     /// returns, unpremultiplied, once Skia's queue has drawn the atlas.
     /// Skia's queue waits for it before what's submitted after
-    pub fn render(&mut self, skia: &ID3D12Device, skia_queue: &ID3D12CommandQueue, scene: &vello::Scene, width: i32, height: i32, pages: usize) -> Result<Arc<Tex>, String> {
+    pub fn render(&mut self, skia: &ID3D12Device, skia_queue: &ID3D12CommandQueue, scene: &vello::Scene, width: i32, height: i32, pages: usize, pictures: &[(String, u32)]) -> Result<Arc<Tex>, String> {
         let out = Self::target(skia, &self.device, &mut self.out, width, height)?;
         self.signalled += 1;
         let value = self.signalled;
+        self.ready(skia_queue, pictures, value)?;
         unsafe { skia_queue.Signal(&self.atlas_drawn.skia, value) }.map_err(|error| format!("signal: {error}"))?;
         let out_texture = self.wrap(self.out.as_ref().ok_or("no target")?, wgpu::TextureUsages::STORAGE_BINDING);
         for index in 0..pages.min(self.pages.len()) {
@@ -263,11 +291,13 @@ impl Vello {
             base_color: AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]),
             width: width as u32,
             height: height as u32,
-            antialiasing_method: vello::AaConfig::Msaa16,
+            antialiasing_method: if std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some() { vello::AaConfig::Area } else { vello::AaConfig::Msaa16 },
         };
         let at = std::time::Instant::now();
-        self.renderer.render_to_texture(&self.device, &self.queue, scene, &view, &params).map_err(|error| format!("render: {error}"))?;
+        let dropped = vello::low_level::vello_encoding::DROPPED_IMAGES.load(std::sync::atomic::Ordering::Relaxed);
+        let rendered = self.renderer.render_to_texture(&self.device, &self.queue, scene, &view, &params).map_err(|error| format!("render: {error}"));
         self.took = at.elapsed();
+        let left_out = vello::low_level::vello_encoding::DROPPED_IMAGES.load(std::sync::atomic::Ordering::Relaxed) != dropped;
         // Signalled after all Vello submitted, on a submission of its own
         {
             let hal = unsafe { self.queue.as_hal::<Dx12>() }.ok_or("not D3D12")?;
@@ -276,7 +306,143 @@ impl Vello {
         self.queue.submit([self.device.create_command_encoder(&Default::default()).finish()]);
         let _ = self.device.poll(wgpu::PollType::Poll);
         unsafe { skia_queue.Wait(&self.view_drawn.skia, value) }.map_err(|error| format!("wait: {error}"))?;
+        rendered?;
+        // Drawn without an image its atlas had no room for
+        if left_out {
+            return Err("images past Vello's atlas".into());
+        }
         Ok(out)
+    }
+
+    /// Mipmap level `level` of `img`, image `key`, as Vello draws it, its
+    /// texture Skia's. None where Vello can't copy it, or the image has no
+    /// such level
+    pub fn picture(&mut self, key: &str, img: &Img, level: u32) -> Option<ImageData> {
+        // Dev tools: images as Skia draws them
+        if std::env::var_os("LIGMA_NATIVE_VELLO_SKIA_IMAGES").is_some() {
+            return None;
+        }
+        let id = img.image.unique_id();
+        let at = (key.to_string(), level);
+        if let Some(picture) = self.pictures.get(&at).filter(|picture| picture.id == id) {
+            return Some(picture.data.clone());
+        }
+        if let Some(old) = self.pictures.remove(&at) {
+            self.renderer.override_image(&old.data, None);
+        }
+        let (backend, origin) = skia_safe::gpu::images::get_backend_texture_from_image(&img.image, false)?;
+        let info = backend.d3d_texture_resource_info()?;
+        if level >= info.level_count.max(1) {
+            return None;
+        }
+        let (full_width, full_height) = (backend.width() as u32, backend.height() as u32);
+        let (width, height) = ((full_width >> level).max(1), (full_height >> level).max(1));
+        // As Vello's atlas takes them
+        if origin != skia_safe::gpu::SurfaceOrigin::TopLeft
+            || info.format != windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM
+            || info.sample_count > 1
+            || width.max(height) > 8192
+        {
+            return None;
+        }
+        let size = wgpu::Extent3d { width: full_width, height: full_height, depth_or_array_layers: 1 };
+        let levels = info.level_count.max(1);
+        let hal = unsafe { <Dx12 as wgpu::hal::Api>::Device::texture_from_raw(info.resource.clone(), wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureDimension::D2, size, levels, 1) };
+        let desc = wgpu::TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+        // Always in the copy source state when Vello's GPU work starts, see
+        // `ready`
+        let texture = unsafe { self.device.create_texture_from_hal::<Dx12>(hal, &desc, wgpu::TextureUses::COPY_SRC) };
+        let data = ImageData {
+            data: peniko::Blob::new(Arc::new([0u8; 0])),
+            format: peniko::ImageFormat::Rgba8,
+            alpha_type: peniko::ImageAlphaType::AlphaPremultiplied,
+            width,
+            height,
+        };
+        let base = wgpu::TexelCopyTextureInfoBase { texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All };
+        self.renderer.override_image(&data, Some(base));
+        self.pictures.insert(at, Held { data: data.clone(), backend, resource: info.resource, id });
+        Some(data)
+    }
+
+    /// Pixels pictures `keys` take in Vello's atlas, with its pages
+    pub fn atlas_area(&self, keys: &[(String, u32)], pages: usize) -> u64 {
+        let pictures: u64 = keys.iter().filter_map(|key| self.pictures.get(key)).map(|picture| (picture.data.width as u64 + 2) * (picture.data.height as u64 + 2)).sum();
+        let pages: u64 = self.pages.iter().take(pages).map(|page| page.target.tex.width as u64 * page.target.tex.height as u64).sum();
+        pictures + pages
+    }
+
+    /// Lets go of pictures of images Skia no longer has as they were
+    pub fn keep_pictures(&mut self, images: &HashMap<String, Img>) {
+        let gone: Vec<(String, u32)> =
+            self.pictures.iter().filter(|((key, _), picture)| images.get(key).is_none_or(|img| img.image.unique_id() != picture.id)).map(|(key, _)| key.clone()).collect();
+        for key in gone {
+            if let Some(picture) = self.pictures.remove(&key) {
+                self.renderer.override_image(&picture.data, None);
+            }
+        }
+    }
+
+    /// Puts the textures of pictures `keys` in the copy source state on
+    /// Skia's queue, where Vello's copies take them, and has Skia know
+    fn ready(&mut self, skia_queue: &ID3D12CommandQueue, keys: &[(String, u32)], value: u64) -> Result<(), String> {
+        use windows::Win32::Graphics::Direct3D12::*;
+        let mut barriers = Vec::new();
+        for key in keys {
+            let Some(picture) = self.pictures.get_mut(key) else { continue };
+            let Some(info) = picture.backend.d3d_texture_resource_info() else { continue };
+            if info.resource_state != D3D12_RESOURCE_STATE_COPY_SOURCE {
+                barriers.push(unsafe { super::committed::transition(&picture.resource, info.resource_state, D3D12_RESOURCE_STATE_COPY_SOURCE) });
+                picture.backend.set_d3d_resource_state(D3D12_RESOURCE_STATE_COPY_SOURCE.0);
+            }
+        }
+        if barriers.is_empty() {
+            return Ok(());
+        }
+        let done = unsafe { self.atlas_drawn.skia.GetCompletedValue() };
+        let allocator = match self.barriers.allocators.iter_mut().find(|(_, sent)| *sent <= done) {
+            Some((allocator, sent)) => {
+                unsafe { allocator.Reset() }.map_err(|error| format!("allocator: {error}"))?;
+                *sent = value;
+                allocator.clone()
+            }
+            None => {
+                let allocator: ID3D12CommandAllocator = unsafe { self.skia.0.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }.map_err(|error| format!("allocator: {error}"))?;
+                self.barriers.allocators.push((allocator.clone(), value));
+                allocator
+            }
+        };
+        let list = match &self.barriers.list {
+            Some(list) => {
+                unsafe { list.Reset(&allocator, None) }.map_err(|error| format!("list: {error}"))?;
+                list.clone()
+            }
+            None => {
+                let list: ID3D12GraphicsCommandList = unsafe { self.skia.0.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }.map_err(|error| format!("list: {error}"))?;
+                self.barriers.list = Some(list.clone());
+                list
+            }
+        };
+        unsafe {
+            list.ResourceBarrier(&barriers);
+            list.Close().map_err(|error| format!("list: {error}"))?;
+            skia_queue.ExecuteCommandLists(&[Some(list.cast::<ID3D12CommandList>().map_err(|error| error.to_string())?)]);
+        }
+        // The barriers hold no references of their own
+        for barrier in barriers {
+            let transition = std::mem::ManuallyDrop::into_inner(unsafe { barrier.Anonymous.Transition });
+            std::mem::forget(transition.pResource);
+        }
+        Ok(())
     }
 
     /// Vello's copy of `path`, made once
@@ -337,10 +503,19 @@ fn color(c: Color4f) -> AlphaColor<Srgb> {
     AlphaColor::new([c.r, c.g, c.b, c.a])
 }
 
-fn mix(mode: Option<rt::BlendMode>) -> Result<Option<Mix>, &'static str> {
+/// Source over, for a layer that starts as a copy of what's under it. Ligma's
+/// Vello shaders take this compose mode, otherwise unused, for that
+const OVER_COPY: BlendMode = BlendMode { mix: Mix::Normal, compose: Compose::SrcAtop };
+
+/// `mode` as Vello's, where Ligma's shaders take Figma's soft light for the
+/// W3C's, and compose modes otherwise unused for its linear burn and dodge
+fn mix(mode: Option<rt::BlendMode>) -> Option<BlendMode> {
     use rt::BlendMode::*;
-    Ok(Some(match mode {
-        Option::None | Some(None) | Some(PassThrough) | Some(Normal) => return Ok(Option::None),
+    let mix = match mode {
+        Option::None | Some(None) | Some(PassThrough) | Some(Normal) | Some(Unknown(_)) => return Option::None,
+        Some(LinearBurn) => return Some(BlendMode { mix: Mix::Normal, compose: Compose::Xor }),
+        Some(LinearDodge) => return Some(BlendMode { mix: Mix::Normal, compose: Compose::DestAtop }),
+        Some(SoftLight) => Mix::SoftLight,
         Some(Darken) => Mix::Darken,
         Some(Multiply) => Mix::Multiply,
         Some(ColorBurn) => Mix::ColorBurn,
@@ -355,14 +530,8 @@ fn mix(mode: Option<rt::BlendMode>) -> Result<Option<Mix>, &'static str> {
         Some(Saturation) => Mix::Saturation,
         Some(Color) => Mix::Color,
         Some(Luminosity) => Mix::Luminosity,
-        // Figma's own soft light and the linear ones, which Skia draws with
-        // blenders of ours
-        // Dev tools: drawn close to them
-        Some(SoftLight) if std::env::var_os("LIGMA_NATIVE_VELLO_INEXACT").is_some() => Mix::SoftLight,
-        Some(LinearBurn) if std::env::var_os("LIGMA_NATIVE_VELLO_INEXACT").is_some() => Mix::Multiply,
-        Some(LinearDodge) if std::env::var_os("LIGMA_NATIVE_VELLO_INEXACT").is_some() => Mix::Screen,
-        _ => return Err("blend mode"),
-    }))
+    };
+    Some(BlendMode::new(mix, Compose::SrcOver))
 }
 
 /// Places rectangles on a page of the atlas in rows
@@ -395,11 +564,39 @@ impl Shelf {
 }
 
 /// What drawing a unit asked about images, as a drawer's lists
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Asked {
     pub missing: Vec<(String, f64)>,
     pub sharper: Vec<(String, f64)>,
     pub used: Vec<(String, f64)>,
+}
+
+/// A unit encoded once for every zoom from `2^level` up to twice that,
+/// placed in a view by `Fragment::at`
+pub struct Fragment {
+    pub scene: vello::Scene,
+    pub level: i32,
+    /// The unit's corner, in units, which the scene's origin is
+    pub origin: (f32, f32),
+    pub asked: Asked,
+    pub counts: Counts,
+    /// Image fills' textures it draws, by key, mipmap level and Vello's id
+    /// for them
+    pub pictures: Vec<(String, u32, u64)>,
+}
+
+impl Fragment {
+    /// What places it in a view at `px` whose corner is at (`left`, `top`)
+    /// in device pixels
+    pub fn at(&self, px: f32, left: i32, top: i32) -> Affine {
+        let ratio = px as f64 / 2f64.powi(self.level);
+        Affine::translate((self.origin.0 as f64 * px as f64 - left as f64, self.origin.1 as f64 * px as f64 - top as f64)) * Affine::scale(ratio)
+    }
+}
+
+/// The level of fragments drawn at `px`
+pub fn level(px: f32) -> i32 {
+    px.log2().floor().clamp(-16.0, 16.0) as i32
 }
 
 /// Builds a Vello scene of units of the tree, in device pixels of the view
@@ -435,6 +632,14 @@ pub struct Encoder<'a> {
     /// The soft clip to put back as each layer's popped
     saved: Vec<Option<Path>>,
     depth: u8,
+    /// Encoding a fragment, for any view: nothing's cut by the view, and
+    /// what Skia would draw makes `per_frame` set instead
+    retained: bool,
+    /// Has something only Skia draws, at the zoom it's shown at
+    pub per_frame: bool,
+    /// Image fills' textures drawn, by key, mipmap level and Vello's id
+    /// for them
+    pub pictures: Vec<(String, u32, u64)>,
 }
 
 impl<'a> Encoder<'a> {
@@ -471,6 +676,9 @@ impl<'a> Encoder<'a> {
             skia_took: std::time::Duration::ZERO,
             kinds: Default::default(),
             depth: 0,
+            retained: false,
+            per_frame: false,
+            pictures: Vec::new(),
         }
     }
 
@@ -519,6 +727,9 @@ impl<'a> Encoder<'a> {
     fn device(&self, bounds: Rect) -> Option<IRect> {
         let device: IRect = self.m.map_rect(bounds).0.round_out();
         let device = device.with_outset((1, 1));
+        if self.retained {
+            return (!device.is_empty()).then_some(device);
+        }
         IRect::intersect(&device, &self.view)
     }
 
@@ -582,6 +793,29 @@ impl<'a> Encoder<'a> {
         }
     }
 
+    /// Unit `place`, whose corner is at `origin`, as a fragment of `level`,
+    /// or none where something in it only Skia draws
+    pub fn fragment(&mut self, place: &Place, origin: (f32, f32), level: i32) -> Option<Fragment> {
+        let scale = 2f32.powi(level);
+        let mut post = Matrix::scale((scale, scale));
+        post.pre_translate((-origin.0, -origin.1));
+        let scene = std::mem::replace(&mut self.scene, vello::Scene::new());
+        let (asked, counts, pictures) = (std::mem::take(&mut self.asked), std::mem::take(&mut self.counts), std::mem::take(&mut self.pictures));
+        self.retained = true;
+        self.per_frame = false;
+        self.place(place, &post);
+        self.retained = false;
+        let fragment = Fragment {
+            scene: std::mem::replace(&mut self.scene, scene),
+            level,
+            origin,
+            asked: std::mem::replace(&mut self.asked, asked),
+            counts: std::mem::replace(&mut self.counts, counts),
+            pictures: std::mem::replace(&mut self.pictures, pictures),
+        };
+        (!self.per_frame).then_some(fragment)
+    }
+
     /// Unit `place`, drawn with `post` after its own matrix
     pub fn place(&mut self, place: &Place, post: &Matrix) {
         self.m = *post;
@@ -613,11 +847,13 @@ impl<'a> Encoder<'a> {
         }
         let Some(node) = self.tree.node(id).cloned() else { return };
         let Some(bounds) = self.tree.info(id).bounds else { return };
-        if bounds.width().max(bounds.height()) * self.scale() < 0.5 {
+        // A fragment's shown up to twice as big as it's encoded
+        let least = if self.retained { 0.25 } else { 0.5 };
+        if bounds.width().max(bounds.height()) * self.scale() < least {
             self.counts.skipped += 1;
             return;
         }
-        if !Rect::intersects2(&self.m.map_rect(bounds).0, &Rect::from(self.view)) {
+        if !self.retained && !Rect::intersects2(&self.m.map_rect(bounds).0, &Rect::from(self.view)) {
             return;
         }
         self.depth += 1;
@@ -700,11 +936,7 @@ impl<'a> Encoder<'a> {
                     self.draw(child);
                     return;
                 }
-                let mix = match mix(node.blend_mode) {
-                    Ok(mix) => mix.unwrap_or(Mix::Normal),
-                    Err(why) => return self.fail(why),
-                };
-                if self.push(BlendMode::new(mix, Compose::SrcOver), opacity, bounds) {
+                if self.push(mix(node.blend_mode).unwrap_or_default(), opacity, bounds) {
                     self.draw(child);
                     self.pop();
                 }
@@ -795,6 +1027,11 @@ impl<'a> Encoder<'a> {
         let kind = paint.kind.unwrap_or(PaintType::Solid);
         let opacity = paint.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
         let brush: Option<(peniko::Brush, Option<Affine>)> = match kind {
+            PaintType::Image => match self.image(paint, node.paint_size.unwrap_or([1.0, 1.0]), opacity) {
+                Picture::Drawn(brush, at) => Some((peniko::Brush::Image(brush), Some(at))),
+                Picture::Nothing => return,
+                Picture::Skia => None,
+            },
             PaintType::Solid => Some((peniko::Brush::Solid(color(draw::color(tree::rgba(paint.color.unwrap_or_default()), opacity))), None)),
             PaintType::GradientLinear | PaintType::GradientRadial => gradient(paint, kind, node.paint_size.unwrap_or([1.0, 1.0])),
             _ => None,
@@ -804,18 +1041,54 @@ impl<'a> Encoder<'a> {
             let bounds = skia.bounds().with_outset((1.0, 1.0));
             return self.fall_back(paint_name(kind), tree::blends(paint.blend_mode), bounds, |drawer| drawer.paint(node, paint, skia));
         };
-        let mix = match mix(paint.blend_mode) {
-            Ok(mix) => mix,
-            Err(why) => return self.fail(why),
-        };
-        let blended = match mix {
-            Some(mix) => self.push(BlendMode::new(mix, Compose::SrcOver), 1.0, skia.bounds().with_outset((1.0, 1.0))),
+        let blended = match mix(paint.blend_mode) {
+            Some(mode) => self.push(mode, 1.0, skia.bounds().with_outset((1.0, 1.0))),
             None => false,
         };
         self.fill(fill_of(skia), affine(&self.m), &brush, brush_transform, path);
         if blended {
             self.pop();
         }
+    }
+
+    /// Image fill `paint` of a node `size` big, as `Drawer::image` draws it,
+    /// with what it asked about the image
+    fn image(&mut self, paint: &rt::Paint, size: [f32; 2], opacity: f32) -> Picture {
+        let Some(key) = tree::image_key(paint) else { return Picture::Nothing };
+        let (w, h) = (size[0].max(1e-3), size[1].max(1e-3));
+        // A fragment's shown up to twice as big as it's encoded
+        let node_scale = self.m.scale_x().hypot(self.m.skew_y()) * if self.retained { 2.0 } else { 1.0 };
+        let Some(img) = self.images.get(&key) else {
+            if !self.asked.missing.iter().any(|(missing, _)| *missing == key) {
+                self.asked.missing.push((key, (w.max(h) * node_scale * 1.42) as f64));
+            }
+            return Picture::Nothing;
+        };
+        let Some((to_node, tile)) = tree::image_layout(paint, w, h, img) else { return Picture::Nothing };
+        let (iw, ih) = (img.original.0 as f32, img.original.1 as f32);
+        let shown = to_node.scale_x().hypot(to_node.skew_y()) * node_scale * iw;
+        let kept = img.image.width() as f32;
+        self.asked.used.push((key.clone(), (shown * 1.42) as f64));
+        if kept < shown * 1.42 && iw > kept && kept < 4096.0 {
+            self.asked.sharper.push((key.clone(), (shown * 1.42) as f64));
+        }
+        // Up to 4 texels a pixel where it's shown biggest, which Figma's
+        // sampling takes as they are. More, and a mipmap level with 2 to 4
+        // of its texels a pixel there, as each of its texels is the average
+        // of those under it, so Vello's atlas holds no more than that
+        let texels = kept / shown.max(1e-6);
+        let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
+        let Some((data, level)) = (0..=level).rev().find_map(|level| self.vello.picture(&key, img, level).map(|data| (data, level))) else {
+            return Picture::Skia;
+        };
+        let mut local = to_node;
+        local.pre_scale((iw / data.width as f32, ih / data.height as f32), None);
+        // Ligma's shaders take reflect for transparent outside the image,
+        // and high quality for Figma's sampling
+        let extend = if tile == skia_safe::TileMode::Repeat { Extend::Repeat } else { Extend::Reflect };
+        self.pictures.push((key, level, data.data.id()));
+        let brush = ImageBrush { image: data, sampler: ImageSampler { x_extend: extend, y_extend: extend, quality: ImageQuality::High, alpha: opacity } };
+        Picture::Drawn(brush, affine(&local))
     }
 
     fn mask(&mut self, node: &Node, id: u32, bounds: Rect) {
@@ -829,37 +1102,35 @@ impl<'a> Encoder<'a> {
             return self.fall_back("mask kind", self.tree.info(id).blends, bounds, |drawer| drawer.draw(id));
         }
         let blends = self.tree.info(color).blends;
-        // A clip cuts what's under it once, as one, as Figma masks. What's
-        // masked mixes with what's under the mask in Figma, which in a clip
-        // of Vello's it wouldn't, so then each thing's cut on its own
-        if let Some((fill, at)) = self.tree.clip_of(alpha) {
-            if let Some(outline) = self.tree.outline(fill) {
-                let device = outline.with_transform(&Matrix::concat(&self.m, &at));
-                if blends {
-                    let was = self.soften(device);
-                    self.draw(color);
-                    self.soft = was;
-                } else {
-                    self.clip(device);
-                    self.draw(color);
-                    self.pop();
+        // A clip cuts what's under it once, as one, as Figma masks, where
+        // what's in it doesn't blend with what's under it. A background
+        // blur's is a clip whatever's in it, as Skia's, so then each thing's
+        // cut on its own
+        if !blends || op == MaskOpType::BackgroundBlur {
+            if let Some((fill, at)) = self.tree.clip_of(alpha) {
+                if let Some(outline) = self.tree.outline(fill) {
+                    let device = outline.with_transform(&Matrix::concat(&self.m, &at));
+                    if blends {
+                        let was = self.soften(device);
+                        self.draw(color);
+                        self.soft = was;
+                    } else {
+                        self.clip(device);
+                        self.draw(color);
+                        self.pop();
+                    }
+                    return;
                 }
-                return;
             }
-        }
-        if blends {
-            // Dev tools: drawn as if it didn't blend with what's under it,
-            // counted
-            if std::env::var_os("LIGMA_NATIVE_VELLO_INEXACT").is_none() {
-                return self.fail(format!("mask over blends, of {}", self.tree.census(alpha)));
-            }
-            self.inexact += 1;
         }
         // Wherever its shape is at all, which takes Skia's silhouettes
         if op == MaskOpType::BackgroundBlur {
             return self.fall_back("background blur", false, bounds, |drawer| drawer.draw(id));
         }
-        if !self.push(BlendMode::default(), 1.0, bounds) {
+        // What's masked blends with what's under the mask, as masks don't
+        // isolate it in Figma: it's drawn over a copy of that, then the copy
+        // is kept only where the mask is
+        if !self.push(if blends { OVER_COPY } else { BlendMode::default() }, 1.0, bounds) {
             return;
         }
         self.draw(color);
@@ -873,6 +1144,10 @@ impl<'a> Encoder<'a> {
     /// What Skia draws with `draw`, over `bounds` in the current space, put
     /// on the atlas at the zoom it's shown at and placed from there
     fn fall_back(&mut self, kind: &'static str, blends: bool, bounds: Rect, draw: impl FnOnce(&mut Drawer)) {
+        if self.retained {
+            self.per_frame = true;
+            return;
+        }
         // Drawn alone, it can't mix with what's under it
         if blends {
             return self.fail("blends in what Skia draws");
@@ -915,6 +1190,15 @@ impl<'a> Encoder<'a> {
         let at = Affine::translate(((device.left - x) as f64, (device.top - y) as f64));
         self.fill(Fill::NonZero, Affine::IDENTITY, &brush, Some(at), &rect);
     }
+}
+
+/// An image fill as Vello draws it, or not
+enum Picture {
+    Drawn(ImageBrush, Affine),
+    /// Nothing, as there's no image yet or it has no layout
+    Nothing,
+    /// As Skia draws it
+    Skia,
 }
 
 /// `paint`'s gradient as Vello's, and how it's placed, where Vello draws it

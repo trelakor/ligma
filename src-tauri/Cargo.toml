@@ -125,3 +125,10 @@ lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true
+
+[patch.crates-io]
+# Vello's shaders with Figma's blend modes, image sampling and layers
+# that start as a copy of what's under them, see vendor/vello_shaders. Its
+# encoding packs images afresh each frame and counts any left out
+vello_shaders = { path = "vendor/vello_shaders" }
+vello_encoding = { path = "vendor/vello_encoding" }

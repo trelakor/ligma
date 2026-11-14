@@ -433,6 +433,22 @@ fn reads_behind(scene: &Scene, unit: &Unit) -> Option<f32> {
     }
 }
 
+/// A unit as Vello draws it at a level: a fragment, nothing where it has
+/// something only Skia draws, so it's encoded for each view, or why Vello
+/// can't draw it. Made again once `stamp` isn't the unit's
+struct Encoded {
+    stamp: u64,
+    made: Result<Option<super::vello::Fragment>, String>,
+    used: Instant,
+}
+
+/// Pixels of Vello's image atlas, 8192 square at most, images and pages
+/// may take, leaving room for how they're packed
+const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
+
+/// How long fragments no view used are kept
+const FRAGMENTS_KEPT: Duration = Duration::from_secs(3);
+
 struct Recorded {
     picture: Picture,
     counts: Counts,
@@ -997,6 +1013,8 @@ pub struct Painter {
     /// Images units drew with when Vello last drew them, by unit, as
     /// pictures keep them
     vello_uses: HashMap<(usize, bool), Vec<(String, f64)>>,
+    /// Units encoded for Vello, by unit and level, see `Encoded`
+    fragments: HashMap<(usize, bool, i32), Encoded>,
     /// Images of units made for the tile or view being drawn
     rasters_made: u32,
     /// Textures to use again once the present thread has let go of them
@@ -1133,6 +1151,7 @@ impl Painter {
             vello: None,
             vello_starting,
             vello_uses: HashMap::new(),
+            fragments: HashMap::new(),
             gpu,
             kit: Kit::new(),
             scene: Scene::default(),
@@ -1629,11 +1648,32 @@ impl Painter {
         post.pre_scale((px, px), None);
         let mut asked = Vec::new();
         let (mut units, mut counts, mut inexact, mut skia_took, mut kinds) = (0, Counts::default(), 0, Duration::ZERO, String::new());
+        let level = super::vello::level(px);
+        let stamps: Vec<u64> = self
+            .units
+            .iter()
+            .map(|unit| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                self.mark(unit).hash(&mut hasher);
+                self.sharpened.get(&(unit.slot, unit.section)).hash(&mut hasher);
+                if let (Some(tree), Some(place)) = (&self.tree, &unit.place) {
+                    tree.content(place.id).hash(&mut hasher);
+                }
+                hasher.finish()
+            })
+            .collect();
+        let mut fragments = std::mem::take(&mut self.fragments);
+        // Image fills' textures the view draws, by key
+        let mut pictures: Vec<(String, u32)> = Vec::new();
+        let (mut reused, mut made, mut per_frame) = (0, 0, 0);
         let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
             None => (vello::Scene::new(), Some("not a tree".to_string()), 0, Vec::new()),
             Some(tree) => {
                 let mut encoder = super::vello::Encoder::new(tree, &self.images, &self.kit, &mut vello, &self.gpu.device, &mut self.gpu.context, w, h);
-                for unit in &self.units {
+                let now = Instant::now();
+                // Dev tools: every unit encoded for the view
+                let fresh = std::env::var_os("LIGMA_NATIVE_VELLO_FRESH").is_some();
+                for (unit, &stamp) in self.units.iter().zip(&stamps) {
                     if !Rect::intersects2(&unit.bounds, &reach) || unit.bounds.width().max(unit.bounds.height()) * px < 0.5 {
                         continue;
                     }
@@ -1641,8 +1681,61 @@ impl Painter {
                         encoder.failed = Some("not a tree".into());
                         break;
                     };
-                    encoder.place(place, &post);
-                    asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
+                    let key = (unit.slot, unit.section, level);
+                    if fresh {
+                        encoder.place(place, &post);
+                        pictures.extend(encoder.pictures.drain(..).map(|(key, level, _)| (key, level)));
+                        asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
+                        units += 1;
+                        if encoder.failed.is_some() {
+                            break;
+                        }
+                        continue;
+                    }
+                    // Kept while it's of the unit as it is, and the textures of
+                    // the images it draws are those Vello has
+                    let images = &self.images;
+                    let current = fragments.get(&key).is_some_and(|encoded| {
+                        encoded.stamp == stamp
+                            && match &encoded.made {
+                                Ok(Some(fragment)) => fragment.pictures.iter().all(|(key, level, id)| {
+                                    images.get(key).and_then(|img| encoder.vello.picture(key, img, *level)).is_some_and(|data| data.data.id() == *id)
+                                }),
+                                _ => true,
+                            }
+                    });
+                    let encoded = match fragments.get_mut(&key).filter(|_| current) {
+                        Some(encoded) => {
+                            reused += 1;
+                            encoded
+                        }
+                        None => {
+                            made += 1;
+                            let fragment = encoder.fragment(place, (unit.bounds.left, unit.bounds.top), level);
+                            let made = match encoder.failed.take() {
+                                Some(why) => Err(why),
+                                None => Ok(fragment),
+                            };
+                            fragments.insert(key, Encoded { stamp, made, used: now });
+                            fragments.get_mut(&key).unwrap()
+                        }
+                    };
+                    encoded.used = now;
+                    match &encoded.made {
+                        Ok(Some(fragment)) => {
+                            encoder.scene.append(&fragment.scene, Some(fragment.at(px, left, top)));
+                            pictures.extend(fragment.pictures.iter().map(|(key, level, _)| (key.clone(), *level)));
+                            encoder.counts += fragment.counts;
+                            asked.push(((unit.slot, unit.section), unit.bounds, fragment.asked.clone()));
+                        }
+                        Ok(None) => {
+                            per_frame += 1;
+                            encoder.place(place, &post);
+                            pictures.extend(encoder.pictures.drain(..).map(|(key, level, _)| (key, level)));
+                            asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
+                        }
+                        Err(why) => encoder.failed = Some(why.clone()),
+                    }
                     units += 1;
                     if encoder.failed.is_some() {
                         break;
@@ -1655,6 +1748,8 @@ impl Painter {
                 (std::mem::take(&mut encoder.scene), encoder.failed.take(), encoder.fell_back, encoder.take_pages())
             }
         };
+        fragments.retain(|_, encoded| encoded.used.elapsed() < FRAGMENTS_KEPT);
+        self.fragments = fragments;
         let encoded = started.elapsed();
         let used_pages = pages.len();
         for page in &mut pages {
@@ -1665,7 +1760,17 @@ impl Painter {
             self.vello = Some(vello);
             return Err(why);
         }
-        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, w, h, used_pages);
+        pictures.sort_unstable();
+        pictures.dedup();
+        // Past what Vello's atlas holds, it'd draw from where other images are
+        let area = vello.atlas_area(&pictures, used_pages);
+        if area > ATLAS_MOST {
+            self.vello = Some(vello);
+            return Err(format!("images need {}M px of Vello's atlas", area >> 20));
+        }
+        let _ = self.gpu.context.flush_and_submit();
+        let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, w, h, used_pages, &pictures);
+        vello.keep_pictures(&self.images);
         vello.prune();
         self.vello = Some(vello);
         let out = rendered.map_err(|error| {
@@ -1702,7 +1807,7 @@ impl Painter {
             self.vello_uses.insert(unit, uses);
         }
         let stats = format!(
-            "{w}x{h} units={units} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms skia={:.1}ms vello_cpu={:.1}ms vello={:.1}ms {}",
+            "{w}x{h} units={units} reused={reused} made={made} per_frame={per_frame} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms skia={:.1}ms vello_cpu={:.1}ms vello={:.1}ms {}",
             fell_back / 1000,
             encoded.as_secs_f64() * 1000.0,
             skia_took.as_secs_f64() * 1000.0,
@@ -4757,7 +4862,25 @@ impl Painter {
             };
             let at = Instant::now();
             surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
-            play(surface.canvas(), &pictures, offset, px);
+            // Each unit drawn by Skia at exactly this zoom, nothing kept
+            if v.get(15).copied().unwrap_or(0.0) > 0.0 {
+                if let Some(tree) = &self.tree {
+                    let canvas = surface.canvas();
+                    let mut post = skia_safe::Matrix::translate(offset);
+                    post.pre_scale((px, px), None);
+                    for &unit in &units {
+                        let Some(place) = &self.units[unit].place else { continue };
+                        canvas.save();
+                        canvas.concat(&post);
+                        let mut drawer = Drawer::new(tree, &self.images, &self.kit, canvas, 1.0);
+                        drawer.place(place);
+                        drop(drawer);
+                        canvas.restore();
+                    }
+                }
+            } else {
+                play(surface.canvas(), &pictures, offset, px);
+            }
             let played = at.elapsed();
             let _ = self.gpu.context.flush_and_submit_surface(&mut surface, Some(SyncCpu::Yes));
             let flushed = at.elapsed() - played;
@@ -4766,7 +4889,7 @@ impl Painter {
             if v.get(10).copied().unwrap_or(0.0) > 0.0 {
                 let image = surface.image_snapshot();
                 if let Some(png) = image.encode(Some(&mut self.gpu.context), skia_safe::EncodedImageFormat::PNG, None) {
-                    let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-probe-{px}-{skip}-{samples}-{}-{}.png", v.get(11).copied().unwrap_or(0.0), v.get(12).copied().unwrap_or(0.0))), png.as_bytes());
+                    let _ = std::fs::write(std::env::temp_dir().join(format!("ligma-probe-{px}-{skip}-{samples}-{}-{}{}.png", v.get(11).copied().unwrap_or(0.0), v.get(12).copied().unwrap_or(0.0), if v.get(15).copied().unwrap_or(0.0) > 0.0 { "-exact" } else { "" })), png.as_bytes());
                 }
             }
             let vello = match v.get(14).copied().unwrap_or(0.0) > 0.0 && self.vello_ready() {
