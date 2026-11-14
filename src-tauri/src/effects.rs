@@ -1,4 +1,4 @@
-//! Effects library (Settings > Features > Toolbar): a button in Figma
+//! Effects library (Settings > Editor > Toolbar): a button in Figma
 //! Design's toolbar, after Actions, that lists effects Ligma makes in the
 //! file, each with a panel drawn as Figma's own are, using its colors,
 //! type and controls. On by default
@@ -17,6 +17,15 @@
 //! original and its copies are kept in a group Repeater knows: select it
 //! and open Repeater to change it, and the copies are made again from the
 //! original as it is then, so they follow changes to it
+//!
+//! Disintegrate breaks the selected layer into pieces and throws them, as
+//! After Effects' Shatter does, and Bitcrush pixelates, posterizes,
+//! dithers and glitches it. Both draw an image over the original, which is
+//! kept, hidden, in a group to change them from
+//!
+//! Effects stack, and a Ligma Effects section under Figma's own Effects in
+//! the right panel lists them to edit, hide, reorder or remove. See
+//! docs/EFFECTS.md
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -285,6 +294,25 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}="panel"] [hidden] { display: none !important; }
   `;
 
+  // Closes whichever effect is open as Cancel does, so one that failed
+  // doesn't keep every effect from opening until the page reloads
+  const cancelOpen = () => {
+    if (repeating) closeRepeater(repeating, false);
+    if (disintegrating) closeDisintegrate(disintegrating, false);
+    if (crushing) closeBitcrush(crushing, false);
+  };
+  // An effect's `open`, undone if it throws. Run for a stack, the stack's
+  // made again by `restack`, which hears of it and says so itself
+  const guarded = (open) => async (figma, edit = false, run = null) => {
+    try {
+      return await open(figma, edit, run);
+    } catch (error) {
+      cancelOpen();
+      if (run) throw error;
+      figma.notify("Couldn't make the effect", { timeout: 2000 });
+    }
+  };
+
   // The effects the library lists
   const EFFECTS = [
     {
@@ -295,7 +323,7 @@ const PAGE_JS: &str = r##"(() => {
       of: (node) => repeaterOf(node),
       saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, SETTINGS) || "{}"),
       summary: (s) => (s.mode === "grid" ? `Grid · ${s.columns} × ${s.rows}` : `${s.mode === "radial" ? "Radial" : "Trail"} · ${s.copies} ${s.copies === 1 ? "copy" : "copies"}`),
-      open: (figma, edit, run) => openRepeater(figma, edit, run),
+      open: guarded((figma, edit, run) => openRepeater(figma, edit, run)),
     },
     {
       id: "disintegrate",
@@ -305,7 +333,7 @@ const PAGE_JS: &str = r##"(() => {
       of: (node) => disintegrateOf(node),
       saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE) || "{}"),
       summary: (s) => `${s.mode === "snap" ? "Snap" : "Shatter"} · ${s.pieces} pieces`,
-      open: (figma, edit, run) => openDisintegrate(figma, edit, run),
+      open: guarded((figma, edit, run) => openDisintegrate(figma, edit, run)),
     },
     {
       id: "bitcrush",
@@ -315,7 +343,7 @@ const PAGE_JS: &str = r##"(() => {
       of: (node) => bitcrushOf(node),
       saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, BITCRUSH) || "{}"),
       summary: (s) => `${s.pixelSize}pt · ${s.bitDepth}-bit`,
-      open: (figma, edit, run) => openBitcrush(figma, edit, run),
+      open: guarded((figma, edit, run) => openBitcrush(figma, edit, run)),
     },
   ];
 
@@ -936,7 +964,18 @@ const PAGE_JS: &str = r##"(() => {
     });
   };
 
+  // `quiet` when it's made for a stack, where `restack` says if it failed
   const apply = (current, quiet = false) => {
+    try {
+      placeRepeater(current, quiet);
+    } catch (error) {
+      if (repeating === current) closeRepeater(current, false);
+      if (quiet) throw error;
+      current.figma.notify("Couldn't make the copies", { timeout: 2000 });
+    }
+  };
+
+  const placeRepeater = (current, quiet) => {
     const { figma, source, settings } = current;
     for (const node of current.kept) if (!node.removed) node.remove();
     let result = current.group ?? current.wrap;
@@ -951,6 +990,8 @@ const PAGE_JS: &str = r##"(() => {
       }
       source.setSharedPluginData(PLUGIN, ROLE, "source");
       result.setSharedPluginData(PLUGIN, SETTINGS, JSON.stringify(settings));
+      // Shown as it's made, so one that was hidden is shown again
+      result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
     } else {
       // Plain copies, which Repeater forgets, out of the preview's group
@@ -986,6 +1027,10 @@ const PAGE_JS: &str = r##"(() => {
           if (!wrap.removed) wrap.remove();
         } catch {}
       }
+      // One that was hidden stays hidden
+      try {
+        if (current.group && !current.group.removed && isOff(current.group)) setOff(current.group, true);
+      } catch {}
       try {
         if (current.group && !current.group.removed) current.figma.currentPage.selection = [current.group];
         else if (!current.source.removed) current.figma.currentPage.selection = [current.source];
@@ -1881,6 +1926,18 @@ const PAGE_JS: &str = r##"(() => {
     };
   };
 
+  // Whether a picture has anything to see at 8 pixels across, as `loaded`
+  // reads it back
+  const inked = (canvas) => {
+    try {
+      const context = Object.assign(document.createElement("canvas"), { width: 8, height: 8 }).getContext("2d", { willReadFrequently: true });
+      context.drawImage(canvas, 0, 0, 8, 8);
+      return context.getImageData(0, 0, 8, 8).data.some((value, at) => at % 4 === 3 && value > 0);
+    } catch {
+      return true;
+    }
+  };
+
   // Figma shows a new image only once it's loaded, empty until then, so
   // each is loaded on a small layer out of the way before it's put in place,
   // and the old one shows until then. Read back, a loaded one isn't empty
@@ -1917,7 +1974,9 @@ const PAGE_JS: &str = r##"(() => {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     if (result.removed) return;
     const fill = { type: "IMAGE", imageHash: figma.createImage(bytes).hash, scaleMode: "FILL" };
-    await loaded(current, fill);
+    // One with nothing to see never reads back as loaded, and showing it
+    // empty meanwhile looks the same
+    if (inked(drawn.canvas)) await loaded(current, fill);
     // Closed meanwhile, as it was is kept
     if (result.removed || current.closed) return;
     const place = toParent(result.parent, bounds.x + drawn.x / k, bounds.y + drawn.y / k);
@@ -1985,6 +2044,7 @@ const PAGE_JS: &str = r##"(() => {
       kept: result ? { fills: JSON.stringify(result.fills), width: result.width, height: result.height, transform: result.relativeTransform } : null,
       levels: {},
       wasVisible: source.visible,
+      run: Boolean(run),
     };
     disintegrating = current;
     try {
@@ -2068,10 +2128,13 @@ const PAGE_JS: &str = r##"(() => {
         return;
       }
       current.placing = true;
-      do {
-        current.again = false;
-        await placeDrawn(current, renderAt(current, "live"), current.levels.live.k);
-      } while (current.again && !current.busy && disintegrating === current);
+      // One that fails is left for the next change to try again
+      try {
+        do {
+          current.again = false;
+          await placeDrawn(current, renderAt(current, "live"), current.levels.live.k);
+        } while (current.again && !current.busy && disintegrating === current);
+      } catch {}
       current.placing = false;
     }, 40);
   };
@@ -2177,7 +2240,18 @@ const PAGE_JS: &str = r##"(() => {
     });
   };
 
+  // Closed as Cancel closes it if it fails, rather than left making
   const applyDisintegrate = async (current) => {
+    try {
+      await finishDisintegrate(current);
+    } catch (error) {
+      if (disintegrating === current) closeDisintegrate(current, false);
+      if (current.run) throw error;
+      current.figma.notify("Couldn't make the effect", { timeout: 2000 });
+    }
+  };
+
+  const finishDisintegrate = async (current) => {
     const { figma, source, settings } = current;
     clearTimeout(current.timer);
     current.busy = true;
@@ -2199,6 +2273,7 @@ const PAGE_JS: &str = r##"(() => {
       }
       source.setSharedPluginData(PLUGIN, ROLE, "source");
       result.setSharedPluginData(PLUGIN, DISINTEGRATE, JSON.stringify(settings));
+      result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
     } else {
       // Only the image, the original gone
@@ -2235,6 +2310,8 @@ const PAGE_JS: &str = r##"(() => {
             result.fills = JSON.parse(current.kept.fills);
             result.visible = true;
           }
+          // One that was hidden stays hidden
+          if (!current.group.removed && isOff(current.group)) setOff(current.group, true);
         } catch {}
       } else {
         if (result && !result.removed) result.remove();
@@ -2715,6 +2792,7 @@ const PAGE_JS: &str = r##"(() => {
       kept: result ? { fills: JSON.stringify(result.fills), width: result.width, height: result.height, transform: result.relativeTransform } : null,
       levels: {},
       wasVisible: source.visible,
+      run: Boolean(run),
     };
     crushing = current;
     try {
@@ -2796,15 +2874,29 @@ const PAGE_JS: &str = r##"(() => {
         return;
       }
       current.placing = true;
-      do {
-        current.again = false;
-        await placeDrawn(current, crushAt(current, "live"), current.levels.live.k);
-      } while (current.again && !current.busy && crushing === current);
+      // One that fails is left for the next change to try again
+      try {
+        do {
+          current.again = false;
+          await placeDrawn(current, crushAt(current, "live"), current.levels.live.k);
+        } while (current.again && !current.busy && crushing === current);
+      } catch {}
       current.placing = false;
     }, 40);
   };
 
+  // Closed as Cancel closes it if it fails, rather than left making
   const applyBitcrush = async (current) => {
+    try {
+      await finishBitcrush(current);
+    } catch (error) {
+      if (crushing === current) closeBitcrush(current, false);
+      if (current.run) throw error;
+      current.figma.notify("Couldn't make the effect", { timeout: 2000 });
+    }
+  };
+
+  const finishBitcrush = async (current) => {
     const { figma, source, settings } = current;
     clearTimeout(current.timer);
     current.busy = true;
@@ -2826,6 +2918,7 @@ const PAGE_JS: &str = r##"(() => {
       }
       source.setSharedPluginData(PLUGIN, ROLE, "source");
       result.setSharedPluginData(PLUGIN, BITCRUSH, JSON.stringify(settings));
+      result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
     } else {
       // Only the image, the original gone
@@ -2862,6 +2955,8 @@ const PAGE_JS: &str = r##"(() => {
             result.fills = JSON.parse(current.kept.fills);
             result.visible = true;
           }
+          // One that was hidden stays hidden
+          if (!current.group.removed && isOff(current.group)) setOff(current.group, true);
         } catch {}
       } else {
         if (result && !result.removed) result.remove();
@@ -2928,8 +3023,9 @@ const PAGE_JS: &str = r##"(() => {
     restacking = true;
     showSection();
     const parent = outer.parent;
-    let top = base.clone();
+    let top = null;
     try {
+      top = base.clone();
       parent.insertChild(parent.children.indexOf(outer), top);
       // A copy of a layer in a group, moved out of it, is placed as if the
       // group were at the page's origin, so it's put back where it was
@@ -2952,8 +3048,10 @@ const PAGE_JS: &str = r##"(() => {
         figma.commitUndo();
       } catch {}
     } catch {
-      if (top && !top.removed && top !== outer) top.remove();
-      figma.currentPage.selection = [outer];
+      try {
+        if (top && !top.removed && top !== outer) top.remove();
+        if (!outer.removed) figma.currentPage.selection = [outer];
+      } catch {}
       figma.notify("Couldn't change the effects", { timeout: 2000 });
     }
     restacking = false;
@@ -3140,8 +3238,10 @@ const PAGE_JS: &str = r##"(() => {
     if (!state.on) {
       button()?.remove();
       closeMenu();
-      if (repeating) closeRepeater(repeating, false);
+      cancelOpen();
       document.querySelector(`[${SECTION}]`)?.remove();
+      style.remove();
+      sectionStyle.remove();
       return;
     }
     if (!style.isConnected && document.head) document.head.append(style);
