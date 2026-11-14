@@ -44,10 +44,23 @@ use vello_encoding::{
 #[derive(Clone, Default)]
 pub struct Scene {
     encoding: Encoding,
+    /// Ligma: the last solid fill, while nothing's been encoded after it
+    merge: Option<Merge>,
     #[cfg(feature = "bump_estimate")]
     estimator: vello_encoding::BumpEstimator,
 }
 static_assertions::assert_impl_all!(Scene: Send, Sync);
+
+/// Ligma: a solid fill that later solid fills of its color, style and
+/// transform join as one path, where none of them overlap, so their
+/// windings never meet. Drawn as one, each pixel's covered by each sample
+/// any of them covers, as a multisampled target draws them
+#[derive(Clone)]
+struct Merge {
+    rgba: u32,
+    lengths: [usize; 4],
+    boxes: Vec<Rect>,
+}
 
 impl Scene {
     /// Creates a new scene.
@@ -58,6 +71,7 @@ impl Scene {
     /// Removes all content from the scene.
     pub fn reset(&mut self) {
         self.encoding.reset();
+        self.merge = None;
         #[cfg(feature = "bump_estimate")]
         self.estimator.reset();
     }
@@ -79,6 +93,7 @@ impl Scene {
     ///
     /// This can be used to more easily create invalid scenes, and so should be used with care.
     pub fn encoding_mut(&mut self) -> &mut Encoding {
+        self.merge = None;
         &mut self.encoding
     }
 
@@ -306,6 +321,39 @@ impl Scene {
         shape: &impl Shape,
     ) {
         let t = Transform::from_kurbo(&transform);
+        let brush = brush.into();
+        let solid = match brush {
+            BrushRef::Solid(color) => Some(vello_encoding::DrawColor::from(color).rgba),
+            _ => None,
+        };
+        let merge = self.merge.take();
+        if let (Some(rgba), Some(mut merge)) = (solid, merge) {
+            let e = &self.encoding;
+            let bounds = shape.bounding_box();
+            if merge.rgba == rgba
+                && merge.lengths == [e.path_tags.len(), e.draw_tags.len(), e.transforms.len(), e.styles.len()]
+                && e.flags == 0
+                && e.transforms.last() == Some(&t)
+                && e.styles.last() == Some(&vello_encoding::Style::from_fill(style))
+                && e.path_tags.last() == Some(&vello_encoding::PathTag::PATH)
+                && merge.boxes.len() < 256
+                && merge.boxes.iter().all(|b| b.x1 <= bounds.x0 || bounds.x1 <= b.x0 || b.y1 <= bounds.y0 || bounds.y1 <= b.y0)
+            {
+                let e = &mut self.encoding;
+                e.path_tags.pop();
+                e.n_paths -= 1;
+                if !e.encode_shape(shape, true) {
+                    e.path_tags.push(vello_encoding::PathTag::PATH);
+                    e.n_paths += 1;
+                }
+                merge.lengths = [e.path_tags.len(), e.draw_tags.len(), e.transforms.len(), e.styles.len()];
+                merge.boxes.push(bounds);
+                self.merge = Some(merge);
+                #[cfg(feature = "bump_estimate")]
+                self.estimator.count_path(shape.path_elements(0.1), &t, None);
+                return;
+            }
+        }
         self.encoding.encode_transform(t);
         self.encoding.encode_fill_style(style);
         if self.encoding.encode_shape(shape, true) {
@@ -320,6 +368,14 @@ impl Scene {
             #[cfg(feature = "bump_estimate")]
             self.estimator
                 .count_path(shape.path_elements(0.1), &t, None);
+            if let (Some(rgba), None) = (solid, brush_transform) {
+                let e = &self.encoding;
+                self.merge = Some(Merge {
+                    rgba,
+                    lengths: [e.path_tags.len(), e.draw_tags.len(), e.transforms.len(), e.styles.len()],
+                    boxes: vec![shape.bounding_box()],
+                });
+            }
         }
     }
 
@@ -455,6 +511,7 @@ impl From<Encoding> for Scene {
         // removed at some point - see https://github.com/linebender/vello/issues/541
         Self {
             encoding,
+            merge: None,
             #[cfg(feature = "bump_estimate")]
             estimator: vello_encoding::BumpEstimator::default(),
         }

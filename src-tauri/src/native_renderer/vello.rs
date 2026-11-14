@@ -1622,6 +1622,98 @@ impl<'a> Encoder<'a> {
         true
     }
 
+    /// Paths in device pixels whose clips together cover what node `id`
+    /// does, drawn solid, or as a silhouette while casting: one solid path,
+    /// or one stroke and, where it's kept inside or outside its outline,
+    /// that or where it isn't inside `device`. None where it's more
+    fn mask_clips(&mut self, id: u32, device: IRect) -> Option<Vec<Path>> {
+        let tree = self.tree;
+        let mut m = self.m;
+        let mut id = id;
+        for _ in 0..8 {
+            let node = tree.node(id)?;
+            match node.op {
+                Op::StaticTransformBinding => {
+                    m = Matrix::concat(&m, &rt::to_matrix(&node.transform?));
+                    id = node.child?;
+                }
+                Op::Group if node.children.len() == 1 => id = node.children[0],
+                Op::Blend if self.cast.is_some() || (node.opacity.unwrap_or(1.0) >= 0.999 && !tree::blends(node.blend_mode) && tree::pass_through(node.blend_mode)) => id = node.child?,
+                Op::Fill | Op::FillStroke => break,
+                _ => return None,
+            }
+        }
+        let node = tree.node(id)?;
+        // Too small to be drawn, it covers nothing
+        let bounds = tree.info(id).bounds?;
+        let scale = m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y()));
+        if bounds.width().max(bounds.height()) * scale < if self.retained { 0.25 } else { 0.5 } {
+            return Some(vec![Path::new()]);
+        }
+        let at = Matrix::concat(&m, &rt::to_matrix(&node.transform.unwrap_or(rt::IDENTITY)));
+        // Whether paints draw their path solid, or none of it
+        let mut drawn = |paints: &[std::sync::Arc<rt::Paint>]| -> Option<bool> {
+            let mut any = false;
+            for paint in paints {
+                let kind = paint.kind.unwrap_or(PaintType::Solid);
+                let opacity = paint.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+                let solid = if self.cast.is_some() {
+                    self.silhouette(node, paint, kind, opacity)?
+                } else {
+                    if kind != PaintType::Solid || tree::blends(paint.blend_mode) {
+                        return None;
+                    }
+                    let alpha = tree::rgba(paint.color.unwrap_or_default()).a * opacity;
+                    if alpha >= 0.999 {
+                        true
+                    } else if alpha * 255.0 < 0.5 {
+                        false
+                    } else {
+                        return None;
+                    }
+                };
+                any |= solid;
+            }
+            Some(any)
+        };
+        match node.op {
+            Op::Fill => {
+                let geometry = node.geometry.as_ref()?;
+                let path = geometry.path.as_ref()?;
+                drawn(&geometry.paints)?.then(|| vec![tree.skia_path(path).with_transform(&at)])
+            }
+            Op::FillStroke if node.ext().instance_transforms.is_empty() => {
+                let mut fills = Vec::new();
+                for geometry in &node.fill_geometries {
+                    if drawn(&geometry.paints)? {
+                        fills.push(geometry.path.as_ref()?);
+                    }
+                }
+                let mut strokes = Vec::new();
+                for geometry in &node.stroke_geometries {
+                    if drawn(&geometry.paints)? {
+                        strokes.push(geometry.path.as_ref()?);
+                    }
+                }
+                match (fills.as_slice(), strokes.as_slice()) {
+                    ([fill], []) => Some(vec![tree.skia_path(fill).with_transform(&at)]),
+                    ([], [stroke]) => {
+                        let stroke = tree.skia_path(stroke).with_transform(&at);
+                        let outlines: Vec<&std::sync::Arc<rt::Path>> = node.fill_geometries.iter().filter_map(|g| g.path.as_ref()).collect();
+                        match (node.stroke_mode, outlines.as_slice()) {
+                            (Some(rt::StrokeMask::Inside), [outline]) => Some(vec![stroke, tree.skia_path(outline).with_transform(&at)]),
+                            (Some(rt::StrokeMask::Outside), [outline]) => Some(vec![stroke, outside(&tree.skia_path(outline).with_transform(&at), device)?]),
+                            (Some(rt::StrokeMask::Inside | rt::StrokeMask::Outside), [_, _, ..]) => None,
+                            _ => Some(vec![stroke]),
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Whether `paint` casts a silhouette over all its path, or none of it,
     /// or None where only Skia knows
     fn silhouette(&mut self, node: &Node, paint: &rt::Paint, kind: PaintType, opacity: f32) -> Option<bool> {
@@ -1774,6 +1866,23 @@ impl<'a> Encoder<'a> {
                     }
                     return;
                 }
+            }
+        }
+        // A mask of one solid path, or one stroke kept inside or outside its
+        // outline, is clips to those, which Vello passes over where a tile's
+        // all inside or outside them
+        if !blends && matches!(op, MaskOpType::Normal | MaskOpType::Pattern) {
+            if let Some(clips) = self.device(bounds).and_then(|device| self.mask_clips(alpha, device)) {
+                SIZES[3].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let n = clips.len();
+                for clip in clips {
+                    self.clip(clip);
+                }
+                self.draw(color);
+                for _ in 0..n {
+                    self.pop();
+                }
+                return;
             }
         }
         // What's masked blends with what's under the mask, as masks don't
