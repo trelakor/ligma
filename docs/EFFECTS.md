@@ -22,25 +22,16 @@ Repeats the selected layer, live. Its panel has a preview of the whole result up
 - **Result:** copies stacked under or over the original. With Keep editable (on by default) the original and its copies are grouped as a Repeater: select it and open Repeater to change it, and the copies are made again from the original as it is then, so they follow changes to it. Without it, the copies are plain layers.
 - **Limits:** up to 400 copies. Copies in auto layout are placed absolutely. Sections can't be repeated.
 
+## Disintegrate (built)
+
+Snaps the selected layer into dust, or shatters it like glass, live:
+
+- **How it's made:** the layer is exported as a picture (up to 2× and 4,096 pixels across, as large as Figma keeps images) and cracked into pieces: Voronoi cells around a seed jittered in each square of a grid, as large as Piece size. A front sweeps across the layer in the Direction set, ragged with smooth noise and soft over Edge softness, or out from the middle with Burst. As it passes a piece, the piece leaves: slow at first, then faster, as dust caught by the wind, blown along by up to Distance, Scatter to the sides, spun, pulled by Gravity (or lifted), shrinking, fading late so a trail of dust stays near what's left, and lightening. It's drawn in the page, each moved piece drawn by finding where each pixel it covers came from, so pieces keep their edges as they turn.
+- **Snap and Shatter:** the same engine, two looks. Snap is fine dust that fades and lightens, as in the Thanos snap; its presets are Drift, Dust and Crumble. Shatter is glass, as After Effects' Shatter breaks a layer, with larger pieces that keep their color and fall; its presets are Glass and Explode. Picking a mode starts from its first preset, keeping where the front is.
+- **Live:** the panel's preview draws at once as anything changes; the image in the file follows a moment after, at a size quick to make, and Disintegrate makes it at full size. Shuffle changes the pattern.
+- **Result:** an image of the disintegrated layer, the size of what's drawn, over the original. With Keep editable (on by default) the original is kept under it, hidden, in a Disintegrate group: select it and open Disintegrate to change it, made again from the original. Without it, only the image is left.
+
 ## Planned
-
-### Shatter: feasible
-
-Break a layer into shards that fly apart.
-
-- **Vectors and shapes:** flatten the layer (`figma.flatten`), build Voronoi cells over its bounds from seeded random points (denser near a chosen impact point), and intersect each cell with a copy of the shape (`figma.intersect`), giving real vector shards that keep the fill.
-- **Images and anything else:** export the layer (`exportAsync` PNG), and for each cell a copy of the image fill masked by the cell polygon, or each shard's pixels cut out on a canvas and placed back with `figma.createImage`.
-- **Live controls:** shard count, impact point (dragged on the canvas), spread, rotation, scatter falloff and gap. Shards move from the impact point outward, each turned a little.
-- **Cost:** boolean operations are the slow part. Previewing with simple polygon fills and doing the real cut on Apply keeps it live.
-
-### Thanos snap: feasible, as frames
-
-Dissolve a layer into dust drifting away.
-
-- Export the layer at its size, sample its pixels into particles (a few thousand, larger where it's sparse), and place them as small rectangles or a handful of images, drifting in one direction with noise, fading and shrinking, more of the layer gone toward one side.
-- Figma has no timeline, so the animation is a set of frames (the steps from whole to gone), ready for Smart Animate in a prototype or exporting as a sequence. A single frame works as a still.
-- **Live controls:** progress (scrubs the dissolve), direction, particle size, turbulence and seed.
-- **Cost:** thousands of layers are heavy. Grouping particles into a few images per step, drawn on a canvas, keeps the file light.
 
 ### Bitcrush shader: feasible, best as a native shader
 

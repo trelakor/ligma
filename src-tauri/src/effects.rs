@@ -54,6 +54,8 @@ const PAGE_JS: &str = r##"(() => {
   const ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24" data-fpl-icon-size="24"><path ${STROKE} d="M10 6.5c.55 3.9 1.6 4.95 5.5 5.5-3.9.55-4.95 1.6-5.5 5.5-.55-3.9-1.6-4.95-5.5-5.5 3.9-.55 4.95-1.6 5.5-5.5Z"/><path ${STROKE} d="M17 4.5c.24 1.6.9 2.26 2.5 2.5-1.6.24-2.26.9-2.5 2.5-.24-1.6-.9-2.26-2.5-2.5 1.6-.24 2.26-.9 2.5-2.5Z"/></svg>`;
   // Three cards, each a step on from the last
   const REPEATER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="4.5" y="4.5" width="9" height="9" rx="1.5"/><path ${STROKE} d="M16.5 7.5v7a2 2 0 0 1-2 2h-7"/><path ${STROKE} d="M19.5 10.5v7a2 2 0 0 1-2 2h-7"/></svg>`;
+  // A square breaking into flakes toward its top right
+  const DISINTEGRATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12.5 6.5h-6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-5"/><path ${STROKE} d="m15 9 1.5-1M17.5 5.5l1-1M19.5 9.5h1M14.5 4.5l.5-1M17 12l1 .5"/></svg>`;
   const CHEVRON = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m5.5 7 2.5 2.5L10.5 7"/></svg>`;
   const CLOSE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m8 8 8 8m0-8-8 8"/></svg>`;
   const CHECK = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m4.5 8.5 2.5 2.5 4.5-5.5"/></svg>`;
@@ -289,6 +291,13 @@ const PAGE_JS: &str = r##"(() => {
       icon: REPEATER_ICON,
       open: (figma) => openRepeater(figma),
     },
+    {
+      id: "disintegrate",
+      name: "Disintegrate",
+      about: "Snap it into dust, or shatter it like glass",
+      icon: DISINTEGRATE_ICON,
+      open: (figma) => openDisintegrate(figma),
+    },
   ];
 
   // ---------- The toolbar button and the library ----------
@@ -312,6 +321,10 @@ const PAGE_JS: &str = r##"(() => {
     const selected = figma.currentPage.selection;
     if (selected.length === 1 && repeaterOf(selected[0])) {
       openRepeater(figma);
+      return;
+    }
+    if (selected.length === 1 && disintegrateOf(selected[0])) {
+      openDisintegrate(figma);
       return;
     }
     menu = document.createElement("div");
@@ -435,6 +448,153 @@ const PAGE_JS: &str = r##"(() => {
     return trigger;
   };
 
+  // A labeled slider row for `key` of the settings `s`, with its value
+  // beside it, which can be typed in, or dragged left and right to change
+  // it, as Figma's fields are. `spec` is [key, label, unit, range], range
+  // giving its ends from `unit`, the layer's larger side; `limits` bound
+  // typing and dragging; `scrub` is how much a pixel's drag changes it;
+  // `fresh` says whether a change has to make things again
+  const makeSlider = ({ s, unit, rows, change, limits = {}, scrub = {}, fresh = () => false, digits = 0 }) => ([key, label, suffix, range]) => {
+    const shape = range(unit);
+    const [floor, ceiling] = limits[key] ?? [-Infinity, Infinity];
+    const round = (number) => (digits ? Math.round(number * 10 ** digits) / 10 ** digits : Math.round(number));
+    const clamp = (number) => Math.min(ceiling, Math.max(floor, round(number)));
+    const input = element("input", { type: "range", min: 0, max: 1000, step: 1 });
+    input.setAttribute("aria-label", label);
+    const value = element("input", { type: "text", className: "value", inputMode: "decimal", spellcheck: false });
+    value.setAttribute("aria-label", `${label} value`);
+    input.addEventListener("input", () => change(key, clamp(toValue(shape, Number(input.value) / 1000)), fresh(key)));
+    value.addEventListener("change", () => {
+      const number = parseFloat(value.value);
+      if (Number.isFinite(number)) change(key, clamp(number), fresh(key));
+      else row.show();
+    });
+    value.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") value.blur();
+      else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        change(key, clamp(s[key] + (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 10 : 1)), fresh(key));
+        value.select();
+      }
+    });
+    value.addEventListener("blur", () => row.show());
+    // Dragging the value scrubs it, with the pointer locked so it goes on
+    // past the screen's edge; a click without a drag types in it
+    value.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || document.activeElement === value) return;
+      event.preventDefault();
+      const start = s[key];
+      let moved = 0;
+      let scrubbing = false;
+      const rate = scrub[key] ?? 1;
+      const move = (event) => {
+        moved += event.movementX;
+        if (!scrubbing && Math.abs(moved) < 3) return;
+        if (!scrubbing) {
+          scrubbing = true;
+          value.requestPointerLock?.()?.catch?.(() => {});
+        }
+        change(key, clamp(start + moved * rate * (event.shiftKey ? 10 : 1)), fresh(key));
+      };
+      const up = () => {
+        removeEventListener("pointermove", move, true);
+        removeEventListener("pointerup", up, true);
+        if (document.pointerLockElement === value) document.exitPointerLock();
+        if (!scrubbing) {
+          value.focus();
+          value.select();
+        }
+      };
+      addEventListener("pointermove", move, true);
+      addEventListener("pointerup", up, true);
+    });
+    const row = element("label", { className: "row" }, element("span", { className: "label", textContent: label }), input, value);
+    // A click on the label doesn't put the cursor in the value
+    row.addEventListener("click", (event) => event.target === row.firstChild && event.preventDefault());
+    row.show = () => {
+      const at = toPlace(shape, s[key]);
+      input.value = String(Math.round(at * 1000));
+      // Filled from the neutral value: the middle where it goes both
+      // ways, or 100% is, and otherwise the start
+      const from = shape.min < 0 || shape.middle !== undefined ? 0.5 : 0;
+      const [left, width] = [Math.min(from, at), Math.abs(at - from)];
+      // A background's position counts from the space it leaves, so it's
+      // given as a fraction of that
+      input.style.setProperty("--from", width >= 1 ? "0%" : `${(left / (1 - width)) * 100}%`);
+      input.style.setProperty("--fill", `${width * 100}%`);
+      if (document.activeElement !== value) value.value = `${round(s[key])}${suffix}`;
+    };
+    rows.push(row);
+    return row;
+  };
+
+  // An effect's panel: its title, which drags it, with a close button, the
+  // rest given, placed over the canvas's top right, clear of the right
+  // panel
+  const makePanel = (name, onClose, ...parts) => {
+    const root = element("div");
+    root.setAttribute(ROOT, "panel");
+    root.setAttribute("role", "dialog");
+    root.setAttribute("aria-label", name);
+    const close = element("button", { type: "button", className: "icon-button", title: "Cancel" });
+    close.innerHTML = CLOSE;
+    close.addEventListener("click", onClose);
+    const title = element("div", { className: "title" }, element("span", { textContent: name }), close);
+    root.append(title, ...parts);
+    document.body.append(root);
+    const area = document.querySelector("canvas")?.getBoundingClientRect() ?? { right: innerWidth, top: 48 };
+    root.style.left = `${Math.max(8, area.right - root.offsetWidth - 16)}px`;
+    root.style.top = `${Math.max(8, area.top + 16)}px`;
+    title.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest("button")) return;
+      title.setPointerCapture(event.pointerId);
+      title.style.cursor = "grabbing";
+      const box = root.getBoundingClientRect();
+      const [dx, dy] = [event.clientX - box.left, event.clientY - box.top];
+      const move = (event) => {
+        root.style.left = `${Math.min(innerWidth - 48, Math.max(48 - box.width, event.clientX - dx))}px`;
+        root.style.top = `${Math.min(innerHeight - 40, Math.max(8, event.clientY - dy))}px`;
+      };
+      title.addEventListener("pointermove", move);
+      title.addEventListener(
+        "lostpointercapture",
+        () => {
+          title.style.cursor = "";
+          title.removeEventListener("pointermove", move);
+        },
+        { once: true },
+      );
+    });
+    return root;
+  };
+
+  // Preset chips, each setting values from `presets` [name, (unit) => values]
+  const makeChips = (presets, pick) => {
+    const chips = element("div", { className: "chips" });
+    for (const [name, values] of presets) {
+      const chip = chips.appendChild(element("button", { type: "button", className: "chip", textContent: name }));
+      chip.addEventListener("click", () => pick(values));
+    }
+    return element("section", {}, element("div", { className: "caption", textContent: "Presets" }), chips);
+  };
+
+  // A row with a label and a checkbox, and anything else given
+  const checkRow = (label, input, title, ...extra) => element("label", { className: "row check", title: title ?? "" }, element("span", { className: "label", textContent: label }), ...extra, input);
+
+  // Escape cancels and Enter applies while `active()`, unless typing
+  const panelKeys = (root, active, cancel, go) => (event) => {
+    if (!active()) return;
+    const typing = event.target.closest?.("input[type=text], textarea, [contenteditable]");
+    if (event.key === "Escape" && !typing) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      cancel();
+    } else if (event.key === "Enter" && !typing && root.contains(event.target)) {
+      event.preventDefault();
+      go();
+    }
+  };
+
   // ---------- Repeater ----------
 
   const PLUGIN = "ligma";
@@ -480,7 +640,8 @@ const PAGE_JS: &str = r##"(() => {
   ];
   // Whole pixels for distances, as Figma's fields have them
   const fit = (values) => {
-    for (const key of ["stepX", "stepY", "radius", "gapX", "gapY"]) if (key in values) values[key] = Math.round(values[key]);
+    for (const key of ["stepX", "stepY", "radius", "gapX", "gapY", "distance"]) if (key in values) values[key] = Math.round(values[key]);
+    if ("piece" in values) values.piece = Math.round(values.piece * 10) / 10;
     return values;
   };
   const EASES = {
@@ -501,7 +662,7 @@ const PAGE_JS: &str = r##"(() => {
   let repeating = null;
 
   const openRepeater = (figma) => {
-    if (repeating) return;
+    if (repeating || disintegrating) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to repeat" : "Select a layer to repeat", { timeout: 2000 });
@@ -896,100 +1057,14 @@ const PAGE_JS: &str = r##"(() => {
   const buildPanel = (current) => {
     const s = current.settings;
     const unit = Math.max(1, Math.max(current.source.width, current.source.height));
-    const root = element("div");
-    root.setAttribute(ROOT, "panel");
-    root.setAttribute("role", "dialog");
-    root.setAttribute("aria-label", "Repeater");
     const rows = [];
     const change = (key, value, fresh = false) => {
       s[key] = value;
       schedule(current, fresh);
       show();
     };
-
-    // A labeled slider, with its value beside it, which can be typed in,
-    // or dragged left and right to change it, as Figma's fields are
-    const slider = ([key, label, suffix, range]) => {
-      const shape = range(unit);
-      const [floor, ceiling] = LIMITS[key] ?? [-Infinity, Infinity];
-      const clamp = (number) => Math.min(ceiling, Math.max(floor, Math.round(number)));
-      const input = element("input", { type: "range", min: 0, max: 1000, step: 1 });
-      input.setAttribute("aria-label", label);
-      const value = element("input", { type: "text", className: "value", inputMode: "decimal", spellcheck: false });
-      value.setAttribute("aria-label", `${label} value`);
-      // Blended copies are made again when how far each blends changes
-      const fresh = () => s.blend && ["blendAmount", "copies", "columns", "rows"].includes(key);
-      input.addEventListener("input", () => change(key, clamp(toValue(shape, Number(input.value) / 1000)), fresh()));
-      const commit = () => {
-        const number = parseFloat(value.value);
-        if (Number.isFinite(number)) change(key, clamp(number), fresh());
-        else show();
-      };
-      value.addEventListener("change", commit);
-      value.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") value.blur();
-        else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-          event.preventDefault();
-          change(key, clamp(s[key] + (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 10 : 1)), fresh());
-          value.select();
-        }
-      });
-      value.addEventListener("blur", () => show());
-      // Dragging the value scrubs it, with the pointer locked so it goes on
-      // past the screen's edge; a click without a drag types in it
-      value.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0 || document.activeElement === value) return;
-        event.preventDefault();
-        const start = s[key];
-        let moved = 0;
-        let scrubbing = false;
-        const rate = SCRUB[key] ?? 1;
-        const move = (event) => {
-          moved += event.movementX;
-          if (!scrubbing && Math.abs(moved) < 3) return;
-          if (!scrubbing) {
-            scrubbing = true;
-            value.requestPointerLock?.()?.catch?.(() => {});
-          }
-          change(key, clamp(start + moved * rate * (event.shiftKey ? 10 : 1)), fresh());
-        };
-        const up = () => {
-          removeEventListener("pointermove", move, true);
-          removeEventListener("pointerup", up, true);
-          if (document.pointerLockElement === value) document.exitPointerLock();
-          if (!scrubbing) {
-            value.focus();
-            value.select();
-          }
-        };
-        addEventListener("pointermove", move, true);
-        addEventListener("pointerup", up, true);
-      });
-      const row = element("label", { className: "row" }, element("span", { className: "label", textContent: label }), input, value);
-      // A click on the label doesn't put the cursor in the value
-      row.addEventListener("click", (event) => event.target === row.firstChild && event.preventDefault());
-      row.show = () => {
-        const at = toPlace(shape, s[key]);
-        input.value = String(Math.round(at * 1000));
-        // Filled from the neutral value: the middle where it goes both
-        // ways, or 100% is, and otherwise the start
-        const from = shape.min < 0 || shape.middle !== undefined ? 0.5 : 0;
-        const [left, width] = [Math.min(from, at), Math.abs(at - from)];
-        // A background's position counts from the space it leaves, so it's
-        // given as a fraction of that
-        input.style.setProperty("--from", width >= 1 ? "0%" : `${(left / (1 - width)) * 100}%`);
-        input.style.setProperty("--fill", `${width * 100}%`);
-        if (document.activeElement !== value) value.value = `${Math.round(s[key] * 100) / 100}${suffix}`;
-      };
-      rows.push(row);
-      return row;
-    };
-
-    // Title
-    const close = element("button", { type: "button", className: "icon-button", title: "Cancel" });
-    close.innerHTML = CLOSE;
-    close.addEventListener("click", () => closeRepeater(current, false));
-    const title = element("div", { className: "title" }, element("span", { textContent: current.group ? `Repeater · ${current.source.name}` : "Repeater" }), close);
+    // Blended copies are made again when how far each blends changes
+    const slider = makeSlider({ s, unit, rows, change, limits: LIMITS, scrub: SCRUB, fresh: (key) => s.blend && ["blendAmount", "copies", "columns", "rows"].includes(key) });
 
     // Preview
     const canvas = element("canvas", { className: "preview" });
@@ -1004,16 +1079,11 @@ const PAGE_JS: &str = r##"(() => {
       .catch(() => {});
 
     // Presets, as chips
-    const chips = element("div", { className: "chips" });
-    for (const [name, values] of PRESETS) {
-      const chip = chips.appendChild(element("button", { type: "button", className: "chip", textContent: name }));
-      chip.addEventListener("click", () => {
-        Object.assign(s, { ease: "even" }, fit(values(unit)));
-        schedule(current, s.blend);
-        show();
-      });
-    }
-    const presets = element("section", {}, element("div", { className: "caption", textContent: "Presets" }), chips);
+    const presets = makeChips(PRESETS, (values) => {
+      Object.assign(s, { ease: "even" }, fit(values(unit)));
+      schedule(current, s.blend);
+      show();
+    });
 
     // How it repeats
     const mode = select(
@@ -1031,7 +1101,7 @@ const PAGE_JS: &str = r##"(() => {
     for (const name of ["trail", "radial", "grid"]) groups[name] = element("div", { className: "rows" }, ...ROWS[name].map(slider));
     const orient = element("input", { type: "checkbox" });
     orient.addEventListener("change", () => change("orient", orient.checked));
-    groups.radial.append(element("label", { className: "row check" }, element("span", { className: "label", textContent: "Turn copies with the ring" }), orient));
+    groups.radial.append(checkRow("Turn copies with the ring", orient));
     const repeat = element("section", {}, element("label", { className: "row" }, element("span", { className: "label", textContent: "Repeat as" }), mode), groups.trail, groups.radial, groups.grid);
 
     // Toward the last copy
@@ -1083,12 +1153,7 @@ const PAGE_JS: &str = r##"(() => {
       "section",
       {},
       element("div", { className: "row" }, element("span", { className: "label", textContent: "Copies go" }), order),
-      element(
-        "label",
-        { className: "row check", title: "Kept in a group Repeater can change later, the copies made again from the original as it is then" },
-        element("span", { className: "label", textContent: "Keep editable" }),
-        editable,
-      ),
+      checkRow("Keep editable", editable, "Kept in a group Repeater can change later, the copies made again from the original as it is then"),
     );
 
     const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
@@ -1107,34 +1172,7 @@ const PAGE_JS: &str = r##"(() => {
     go.addEventListener("click", () => apply(current));
     const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
 
-    root.append(title, canvas, scroll, footer);
-    document.body.append(root);
-
-    // Placed over the canvas's top right, clear of the right panel, and
-    // dragged by its title
-    const area = document.querySelector("canvas")?.getBoundingClientRect() ?? { right: innerWidth, top: 48 };
-    root.style.left = `${Math.max(8, area.right - root.offsetWidth - 16)}px`;
-    root.style.top = `${Math.max(8, area.top + 16)}px`;
-    title.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.target.closest("button")) return;
-      title.setPointerCapture(event.pointerId);
-      title.style.cursor = "grabbing";
-      const box = root.getBoundingClientRect();
-      const [dx, dy] = [event.clientX - box.left, event.clientY - box.top];
-      const move = (event) => {
-        root.style.left = `${Math.min(innerWidth - 48, Math.max(48 - box.width, event.clientX - dx))}px`;
-        root.style.top = `${Math.min(innerHeight - 40, Math.max(8, event.clientY - dy))}px`;
-      };
-      title.addEventListener("pointermove", move);
-      title.addEventListener(
-        "lostpointercapture",
-        () => {
-          title.style.cursor = "";
-          title.removeEventListener("pointermove", move);
-        },
-        { once: true },
-      );
-    });
+    const root = makePanel(current.group ? `Repeater · ${current.source.name}` : "Repeater", () => closeRepeater(current, false), canvas, scroll, footer);
 
     const show = () => {
       mode.show();
@@ -1148,7 +1186,6 @@ const PAGE_JS: &str = r##"(() => {
       picker.value = s.blendColor;
       order.show();
       editable.checked = s.editable;
-      for (const chip of chips.children) chip.setAttribute("aria-pressed", "false");
       drawPreview(current);
     };
     show();
@@ -1166,19 +1203,651 @@ const PAGE_JS: &str = r##"(() => {
       },
     };
     current.panel.update();
-    // Escape cancels, Enter applies, while the panel's open and not typing
-    current.keys = (event) => {
-      if (repeating !== current) return;
-      const typing = event.target.closest?.("input[type=text], textarea, [contenteditable]");
-      if (event.key === "Escape" && !typing) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        closeRepeater(current, false);
-      } else if (event.key === "Enter" && !typing && root.contains(event.target)) {
-        event.preventDefault();
-        apply(current);
+    current.keys = panelKeys(root, () => repeating === current, () => closeRepeater(current, false), () => apply(current));
+    addEventListener("keydown", current.keys, true);
+    go.focus();
+  };
+
+  // ---------- Disintegrate ----------
+
+  // Cracks the layer into pieces, Voronoi cells around a seed jittered in
+  // each square of a grid, and moves each once a ragged front sweeping
+  // across the layer reaches it: blown along, scattered, spun, shrunk,
+  // faded and lightened as it goes. Snap is fine dust, as the layer
+  // crumbles away; Shatter is glass, as After Effects' Shatter breaks it.
+  // It's drawn on the layer's pixels, here in the page, and put back as an
+  // image, the original kept under it, hidden
+  const DISINTEGRATE = "disintegrate";
+  const MAX_SIDE = 4096;
+
+  const DISINTEGRATE_DEFAULTS = {
+    mode: "snap",
+    progress: 45,
+    angle: 0,
+    burst: false,
+    softness: 35,
+    ragged: 55,
+    piece: 4,
+    distance: 160,
+    scatter: 45,
+    spin: 180,
+    gravity: 0,
+    fade: 85,
+    shrink: 55,
+    lighten: 35,
+    seed: 1,
+    editable: true,
+  };
+  // Each mode's own look, which picking it, or its presets, start from
+  const DISINTEGRATE_PRESETS = [
+    ["Drift", (u) => ({ mode: "snap", progress: 45, angle: 0, burst: false, softness: 35, ragged: 55, piece: Math.max(2, u / 120), distance: u * 0.9, scatter: 40, spin: 180, gravity: 0, fade: 80, shrink: 45, lighten: 30 })],
+    ["Dust", (u) => ({ mode: "snap", progress: 70, angle: -20, burst: false, softness: 70, ragged: 75, piece: Math.max(1.5, u / 220), distance: u * 1.2, scatter: 70, spin: 240, gravity: -10, fade: 95, shrink: 70, lighten: 55 })],
+    ["Crumble", (u) => ({ mode: "snap", progress: 50, angle: 90, burst: false, softness: 30, ragged: 60, piece: Math.max(2, u / 90), distance: u * 0.6, scatter: 25, spin: 120, gravity: 60, fade: 60, shrink: 30, lighten: 10 })],
+    ["Glass", (u) => ({ mode: "shatter", progress: 45, angle: 0, burst: false, softness: 25, ragged: 30, piece: Math.max(4, u / 14), distance: u * 0.7, scatter: 35, spin: 90, gravity: 25, fade: 25, shrink: 0, lighten: 0 })],
+    ["Explode", (u) => ({ mode: "shatter", progress: 55, angle: 0, burst: true, softness: 30, ragged: 20, piece: Math.max(4, u / 18), distance: u * 0.9, scatter: 30, spin: 180, gravity: 15, fade: 30, shrink: 10, lighten: 0 })],
+  ];
+  const DISINTEGRATE_ROWS = {
+    front: [
+      ["progress", "Progress", "%", () => ({ min: 0, max: 100 })],
+      ["angle", "Direction", "°", () => ({ min: -180, max: 180 })],
+      ["softness", "Edge softness", "%", () => ({ min: 0, max: 100 })],
+      ["ragged", "Raggedness", "%", () => ({ min: 0, max: 100 })],
+    ],
+    pieces: [
+      ["piece", "Piece size", "px", (u) => ({ min: 1, max: Math.max(40, Math.round(u / 4)), shape: "curve" })],
+      ["distance", "Distance", "px", (u) => ({ min: 0, max: near(u, 100, 3), shape: "curve" })],
+      ["scatter", "Scatter", "%", () => ({ min: 0, max: 100 })],
+      ["spin", "Spin", "°", () => ({ min: 0, max: 720, shape: "curve" })],
+      ["gravity", "Gravity", "%", () => ({ min: -100, max: 100 })],
+    ],
+    look: [
+      ["fade", "Fade", "%", () => ({ min: 0, max: 100 })],
+      ["shrink", "Shrink", "%", () => ({ min: 0, max: 100 })],
+      ["lighten", "Lighten", "%", () => ({ min: 0, max: 100 })],
+    ],
+  };
+  const DISINTEGRATE_LIMITS = { progress: [0, 100], softness: [0, 100], ragged: [0, 100], piece: [1, 500], distance: [0, Infinity], scatter: [0, 100], spin: [0, 3600], gravity: [-100, 100], fade: [0, 100], shrink: [0, 100], lighten: [0, 100] };
+
+  // Seeded randomness, the same for the same seed, so a result can be
+  // made again
+  const hash = (x, y, seed) => {
+    let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 2147483647);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+  // Smooth noise, 0 to 1, for a ragged front
+  const noise = (x, y, seed) => {
+    const [ix, iy] = [Math.floor(x), Math.floor(y)];
+    const [fx, fy] = [x - ix, y - iy];
+    const [u, v] = [fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)];
+    const a = hash(ix, iy, seed);
+    const b = hash(ix + 1, iy, seed);
+    const c = hash(ix, iy + 1, seed);
+    const d = hash(ix + 1, iy + 1, seed);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  };
+
+  // The pieces of a `width` by `height` picture with alpha `alpha`, cells
+  // `cell` pixels across: which piece each pixel is in, and each piece's
+  // center, box and randomness
+  const crack = (width, height, alpha, cell, seed, jitter) => {
+    const across = Math.ceil(width / cell) + 2;
+    const down = Math.ceil(height / cell) + 2;
+    const seedX = new Float32Array(across * down);
+    const seedY = new Float32Array(across * down);
+    for (let gy = 0; gy < down; gy++) {
+      for (let gx = 0; gx < across; gx++) {
+        const i = gy * across + gx;
+        seedX[i] = (gx - 1 + 0.5 + (hash(gx, gy, seed) - 0.5) * jitter) * cell;
+        seedY[i] = (gy - 1 + 0.5 + (hash(gx, gy, seed + 7) - 0.5) * jitter) * cell;
       }
+    }
+    const cellOf = new Int32Array(width * height).fill(-1);
+    for (let y = 0; y < height; y++) {
+      const cy = Math.floor(y / cell) + 1;
+      for (let x = 0; x < width; x++) {
+        if (alpha[(y * width + x) * 4 + 3] === 0) continue;
+        const cx = Math.floor(x / cell) + 1;
+        let best = -1;
+        let nearest = Infinity;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const i = (cy + dy) * across + cx + dx;
+            const ddx = seedX[i] - x;
+            const ddy = seedY[i] - y;
+            const d = ddx * ddx + ddy * ddy;
+            if (d < nearest) [nearest, best] = [d, i];
+          }
+        }
+        cellOf[y * width + x] = best;
+      }
+    }
+    // Only the cells with pixels in them, numbered from 0
+    const number = new Int32Array(across * down).fill(-1);
+    let count = 0;
+    for (let i = 0; i < cellOf.length; i++) {
+      const c = cellOf[i];
+      if (c >= 0 && number[c] < 0) number[c] = count++;
+    }
+    const piece = new Int32Array(width * height).fill(-1);
+    const sumX = new Float64Array(count);
+    const sumY = new Float64Array(count);
+    const size = new Uint32Array(count);
+    const box = new Int32Array(count * 4);
+    for (let p = 0; p < count; p++) box.set([width, height, -1, -1], p * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const c = cellOf[y * width + x];
+        if (c < 0) continue;
+        const p = number[c];
+        piece[y * width + x] = p;
+        sumX[p] += x;
+        sumY[p] += y;
+        size[p]++;
+        const b = p * 4;
+        if (x < box[b]) box[b] = x;
+        if (y < box[b + 1]) box[b + 1] = y;
+        if (x > box[b + 2]) box[b + 2] = x;
+        if (y > box[b + 3]) box[b + 3] = y;
+      }
+    }
+    const centerX = new Float32Array(count);
+    const centerY = new Float32Array(count);
+    const random = new Float32Array(count * 4);
+    for (let p = 0; p < count; p++) {
+      centerX[p] = sumX[p] / size[p];
+      centerY[p] = sumY[p] / size[p];
+      for (let k = 0; k < 4; k++) random[p * 4 + k] = hash(p, k, seed + 101);
+    }
+    return { width, height, piece, count, centerX, centerY, box, random };
+  };
+
+  // Draws the disintegrated picture: `image` ImageData, `pieces` from
+  // `crack`, `k` its pixels per layer pixel. Gives the drawn pixels, as
+  // ImageData, cropped to what's drawn, and where that sits relative to
+  // the picture's top left, in its pixels
+  const disintegrate = (image, pieces, s, k) => {
+    const { width, height, data } = image;
+    const { piece, count, centerX, centerY, box, random } = pieces;
+    const travel = s.distance * k;
+    const margin = Math.ceil(travel * (1.8 + Math.abs(s.gravity) / 100) + s.piece * k * 2 + 2);
+    const outWidth = width + margin * 2;
+    const outHeight = height + margin * 2;
+    const out = new Uint8ClampedArray(outWidth * outHeight * 4);
+    const angle = (s.angle * Math.PI) / 180;
+    const [dirX, dirY] = [Math.cos(angle), Math.sin(angle)];
+    // How far along the sweep each corner is, to put the front 0 to 1
+    const corners = [0, width * dirX, height * dirY, width * dirX + height * dirY];
+    const [low, high] = [Math.min(...corners), Math.max(...corners)];
+    const [midX, midY] = [width / 2, height / 2];
+    const reach = Math.hypot(midX, midY) || 1;
+    const soft = 0.03 + (s.softness / 100) * 0.55;
+    const rag = s.ragged / 100;
+    const scale = 40 * k + s.piece * k * 2;
+    const progress = (s.progress / 100) * (1 + soft);
+    // How far each piece has gone, 0 still in place to 1 all the way
+    const gone = new Float32Array(count);
+    for (let p = 0; p < count; p++) {
+      const [x, y] = [centerX[p], centerY[p]];
+      const along = s.burst ? Math.hypot(x - midX, y - midY) / reach : 1 - (x * dirX + y * dirY - low) / Math.max(1e-6, high - low);
+      const rough = rag * (noise(x / scale, y / scale, s.seed) * 0.7 + noise(x / (scale / 3), y / (scale / 3), s.seed + 3) * 0.3);
+      const when = along * (1 - rag * 0.6) + rough * 0.6 + (random[p * 4 + 3] - 0.5) * 0.06;
+      gone[p] = Math.min(1, Math.max(0, (progress - when) / soft));
+    }
+    // What's still in place, as it was
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const p = piece[y * width + x];
+        if (p < 0 || gone[p] > 0) continue;
+        const from = (y * width + x) * 4;
+        const to = ((y + margin) * outWidth + x + margin) * 4;
+        out[to] = data[from];
+        out[to + 1] = data[from + 1];
+        out[to + 2] = data[from + 2];
+        out[to + 3] = data[from + 3];
+      }
+    }
+    // The pieces on their way, the least gone first so the farthest are on
+    // top, each drawn by finding where each pixel it covers came from
+    const moving = [];
+    for (let p = 0; p < count; p++) if (gone[p] > 0) moving.push(p);
+    moving.sort((a, b) => gone[a] - gone[b]);
+    const fade = s.fade / 100;
+    const shrink = s.shrink / 100;
+    const lighten = s.lighten / 100;
+    const scatter = s.scatter / 100;
+    for (const p of moving) {
+      const t = gone[p];
+      // Fading late, so a trail of dust stays near what's left
+      const opacity = 1 - fade * t ** 2;
+      if (opacity <= 0.02) continue;
+      const r = p * 4;
+      let [ux, uy] = [dirX, dirY];
+      if (s.burst) {
+        const [ox, oy] = [centerX[p] - midX, centerY[p] - midY];
+        const length = Math.hypot(ox, oy) || 1;
+        [ux, uy] = [ox / length, oy / length];
+      }
+      // Slow to leave, then faster, as dust caught by the wind
+      const ease = t * t;
+      const distance = travel * ease * (0.4 + random[r] * 1.2);
+      const side = (random[r + 1] - 0.5) * 2 * scatter * distance;
+      const moveX = ux * distance - uy * side;
+      const moveY = uy * distance + ux * side + (s.gravity / 100) * travel * ease * t;
+      const turn = (((random[r + 2] - 0.5) * 2 * s.spin * t) * Math.PI) / 180;
+      const size = Math.max(0.05, 1 - shrink * t * (0.6 + random[r + 3] * 0.8));
+      const light = lighten * t;
+      const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
+      const [cx, cy] = [centerX[p], centerY[p]];
+      const [x0, y0, x1, y1] = [box[r], box[r + 1], box[r + 2], box[r + 3]];
+      // Its box where it's going
+      const half = Math.max(cx - x0, x1 - cx, cy - y0, y1 - cy) * size * 1.42 + 1;
+      const [tx, ty] = [cx + moveX + margin, cy + moveY + margin];
+      const left = Math.max(0, Math.floor(tx - half));
+      const right = Math.min(outWidth - 1, Math.ceil(tx + half));
+      const top = Math.max(0, Math.floor(ty - half));
+      const bottom = Math.min(outHeight - 1, Math.ceil(ty + half));
+      for (let oy = top; oy <= bottom; oy++) {
+        for (let ox = left; ox <= right; ox++) {
+          // Back through the turn and size to the picture
+          const [dx, dy] = [(ox - tx) / size, (oy - ty) / size];
+          const sx = Math.round(cx + dx * cos + dy * sin);
+          const sy = Math.round(cy - dx * sin + dy * cos);
+          if (sx < x0 || sx > x1 || sy < y0 || sy > y1 || piece[sy * width + sx] !== p) continue;
+          const from = (sy * width + sx) * 4;
+          const a = (data[from + 3] / 255) * opacity;
+          if (a <= 0) continue;
+          const to = (oy * outWidth + ox) * 4;
+          const under = out[to + 3] / 255;
+          const total = a + under * (1 - a);
+          for (let channel = 0; channel < 3; channel++) {
+            const color = data[from + channel] + (255 - data[from + channel]) * light;
+            out[to + channel] = (color * a + out[to + channel] * under * (1 - a)) / total;
+          }
+          out[to + 3] = total * 255;
+        }
+      }
+    }
+    // Cropped to what's drawn
+    let [cropLeft, cropTop, cropRight, cropBottom] = [outWidth, outHeight, -1, -1];
+    for (let y = 0; y < outHeight; y++) {
+      for (let x = 0; x < outWidth; x++) {
+        if (out[(y * outWidth + x) * 4 + 3] === 0) continue;
+        if (x < cropLeft) cropLeft = x;
+        if (x > cropRight) cropRight = x;
+        if (y < cropTop) cropTop = y;
+        if (y > cropBottom) cropBottom = y;
+      }
+    }
+    if (cropRight < 0) return null;
+    const cropWidth = cropRight - cropLeft + 1;
+    const cropHeight = cropBottom - cropTop + 1;
+    const cropped = new ImageData(cropWidth, cropHeight);
+    for (let y = 0; y < cropHeight; y++) {
+      const from = ((y + cropTop) * outWidth + cropLeft) * 4;
+      cropped.data.set(out.subarray(from, from + cropWidth * 4), y * cropWidth * 4);
+    }
+    return { image: cropped, x: cropLeft - margin, y: cropTop - margin };
+  };
+
+  // A picture of `bitmap` at most `most` pixels across, as ImageData, and
+  // its pixels per layer pixel given the full one's `k`
+  const scaledPixels = (bitmap, most, k) => {
+    const ratio = Math.min(1, most / Math.max(bitmap.width, bitmap.height));
+    const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(bitmap.width * ratio)), height: Math.max(1, Math.round(bitmap.height * ratio)) });
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return { image: context.getImageData(0, 0, canvas.width, canvas.height), k: k * ratio };
+  };
+
+  // Pieces made once for each picture, size and seed
+  const piecesFor = (current, level, image, cell) => {
+    const key = `${level}:${cell.toFixed(2)}:${current.settings.seed}:${current.settings.mode}`;
+    current.cracks ??= {};
+    if (current.cracks[level]?.key !== key) {
+      current.cracks[level] = { key, pieces: crack(image.width, image.height, image.data, cell, current.settings.seed, current.settings.mode === "shatter" ? 0.95 : 1) };
+    }
+    return current.cracks[level].pieces;
+  };
+
+  const renderAt = (current, level) => {
+    const { image, k } = current.levels[level];
+    const cell = Math.max(1.5, current.settings.piece * k);
+    return disintegrate(image, piecesFor(current, level, image, cell), current.settings, k);
+  };
+
+  // From the page to the coordinates of what's in `parent`: a frame's
+  // own, or for a group, which has none, those of what holds it
+  const toParent = (parent, x, y) => {
+    while (parent && (parent.type === "GROUP" || parent.type === "BOOLEAN_OPERATION")) parent = parent.parent;
+    if (!parent || parent.type === "PAGE") return { x, y, linear: [1, 0, 0, 1] };
+    const [[a, c, e], [b, d, f]] = parent.absoluteTransform;
+    const det = a * d - b * c;
+    const [ia, ib, ic, id] = [d / det, -b / det, -c / det, a / det];
+    return { x: ia * (x - e) + ic * (y - f), y: ib * (x - e) + id * (y - f), linear: [ia, ic, ib, id] };
+  };
+
+  // Puts `drawn`, from `renderAt`, on the result layer, as an image the
+  // size it covers in the file
+  const placeDrawn = async (current, drawn, k) => {
+    const { figma, result, bounds } = current;
+    if (!drawn || result.removed) {
+      if (!result.removed) result.visible = false;
+      return;
+    }
+    const canvas = Object.assign(document.createElement("canvas"), { width: drawn.image.width, height: drawn.image.height });
+    canvas.getContext("2d").putImageData(drawn.image, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if (result.removed) return;
+    const hash = figma.createImage(bytes).hash;
+    const width = drawn.image.width / k;
+    const height = drawn.image.height / k;
+    const place = toParent(result.parent, bounds.x + drawn.x / k, bounds.y + drawn.y / k);
+    result.resizeWithoutConstraints(Math.max(0.01, width), Math.max(0.01, height));
+    result.relativeTransform = [
+      [place.linear[0], place.linear[1], place.x],
+      [place.linear[2], place.linear[3], place.y],
+    ];
+    result.fills = [{ type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+    result.visible = true;
+  };
+
+  const disintegrateOf = (node) => {
+    try {
+      return node?.type === "GROUP" && node.getSharedPluginData(PLUGIN, DISINTEGRATE) ? node : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let disintegrating = null;
+
+  const openDisintegrate = async (figma) => {
+    if (repeating || disintegrating) return;
+    const selected = figma.currentPage.selection;
+    if (selected.length !== 1) {
+      figma.notify(selected.length ? "Select one layer to disintegrate" : "Select a layer to disintegrate", { timeout: 2000 });
+      return;
+    }
+    let group = disintegrateOf(selected[0]);
+    let source;
+    let result = null;
+    let settings = { ...DISINTEGRATE_DEFAULTS };
+    if (group) {
+      source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
+      result = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "result") ?? null;
+      try {
+        settings = { ...settings, ...JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE)) };
+      } catch {}
+      if (!source) {
+        group = null;
+        source = selected[0];
+      }
+    } else {
+      source = selected[0];
+    }
+    if (source.type === "SECTION" || !("exportAsync" in source)) {
+      figma.notify("Sections can't be disintegrated", { timeout: 2000 });
+      return;
+    }
+    const unit = Math.max(1, Math.max(source.width ?? 100, source.height ?? 100));
+    if (!group) Object.assign(settings, fit(DISINTEGRATE_PRESETS[0][1](unit)));
+    const current = { figma, group, source, settings, unit, result, kept: result ? { fills: JSON.stringify(result.fills), width: result.width, height: result.height, transform: result.relativeTransform } : null, levels: {}, wasVisible: source.visible };
+    disintegrating = current;
+    try {
+      figma.commitUndo();
+    } catch {}
+    // The layer as a picture, as large as an image can be in Figma
+    const visible = source.visible;
+    source.visible = true;
+    try {
+      current.bounds = source.absoluteRenderBounds ?? source.absoluteBoundingBox;
+      const most = Math.min(2, MAX_SIDE / 2 / Math.max(1, current.bounds.width, current.bounds.height));
+      const bytes = await source.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: most } });
+      current.bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    } catch {
+      source.visible = visible;
+      disintegrating = null;
+      figma.notify("Couldn't read the layer", { timeout: 2000 });
+      return;
+    }
+    if (disintegrating !== current) return;
+    const k = current.bitmap.width / current.bounds.width;
+    current.levels = {
+      preview: scaledPixels(current.bitmap, 360, k),
+      live: scaledPixels(current.bitmap, 900, k),
+      full: scaledPixels(current.bitmap, MAX_SIDE, k),
     };
+    // A new one's grouped from the start, as Repeater's are, the result
+    // over the original, which is hidden while it shows
+    const parent = source.parent;
+    if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
+      current.home = { parent, index: parent.children.indexOf(source) };
+      try {
+        current.wrap = figma.group([source], parent, current.home.index);
+        current.wrap.name = `Disintegrate · ${source.name}`;
+      } catch {
+        current.wrap = null;
+      }
+    }
+    if (!current.result) {
+      current.result = figma.createRectangle();
+      current.result.name = `${source.name} disintegrated`;
+      const holder = source.parent;
+      holder.insertChild(holder.children.indexOf(source) + 1, current.result);
+      if ("layoutMode" in holder && holder.layoutMode !== "NONE") current.result.layoutPositioning = "ABSOLUTE";
+      current.result.setSharedPluginData(PLUGIN, ROLE, "result");
+      current.result.visible = false;
+    }
+    source.visible = false;
+    figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
+    buildDisintegratePanel(current);
+    refreshDisintegrate(current);
+  };
+
+  // The panel's preview at once, and the file's a moment after the last
+  // change, at a size quick to make
+  const refreshDisintegrate = (current) => {
+    drawDisintegratePreview(current);
+    clearTimeout(current.timer);
+    current.timer = setTimeout(async () => {
+      if (disintegrating !== current) return;
+      const level = current.levels.live;
+      const drawn = renderAt(current, "live");
+      await placeDrawn(current, drawn, level.k);
+    }, 120);
+  };
+
+  const drawDisintegratePreview = (current) => {
+    const canvas = current.preview;
+    if (!canvas || !current.levels.preview) return;
+    const drawn = renderAt(current, "preview");
+    const ratio = devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+    if (!drawn) return;
+    const picture = Object.assign(document.createElement("canvas"), { width: drawn.image.width, height: drawn.image.height });
+    picture.getContext("2d").putImageData(drawn.image, 0, 0);
+    // Fitted around the layer and what flies off it
+    const { width, height } = current.levels.preview.image;
+    const [left, top] = [Math.min(0, drawn.x), Math.min(0, drawn.y)];
+    const [right, bottom] = [Math.max(width, drawn.x + drawn.image.width), Math.max(height, drawn.y + drawn.image.height)];
+    const pad = 16;
+    const fit = Math.min((box.width - pad * 2) / (right - left), (box.height - pad * 2) / (bottom - top));
+    const ox = (box.width - (right - left) * fit) / 2 - left * fit;
+    const oy = (box.height - (bottom - top) * fit) / 2 - top * fit;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(picture, ox + drawn.x * fit, oy + drawn.y * fit, drawn.image.width * fit, drawn.image.height * fit);
+  };
+
+  const applyDisintegrate = async (current) => {
+    const { figma, source, settings } = current;
+    clearTimeout(current.timer);
+    current.busy = true;
+    current.panel?.busy(true);
+    const level = current.levels.full;
+    await placeDrawn(current, renderAt(current, "full"), level.k);
+    if (disintegrating !== current) return;
+    let result = current.group ?? current.wrap;
+    if (settings.editable) {
+      if (!result || result.removed) {
+        const parent = source.parent;
+        result = figma.group([source, current.result], parent, parent.children.indexOf(source));
+        result.name = `Disintegrate · ${source.name}`;
+      }
+      source.setSharedPluginData(PLUGIN, ROLE, "source");
+      result.setSharedPluginData(PLUGIN, DISINTEGRATE, JSON.stringify(settings));
+      figma.currentPage.selection = [result];
+    } else {
+      // Only the image, the original gone
+      current.result.setSharedPluginData(PLUGIN, ROLE, "");
+      if (result && !result.removed) result.setSharedPluginData(PLUGIN, DISINTEGRATE, "");
+      const image = current.result;
+      const holder = current.wrap ?? current.group;
+      if (holder && !holder.removed) figma.ungroup(holder);
+      if (!source.removed) source.remove();
+      image.name = image.name.replace(/ disintegrated$/, "");
+      figma.currentPage.selection = [image];
+    }
+    try {
+      figma.commitUndo();
+    } catch {}
+    closeDisintegrate(current, true);
+  };
+
+  const closeDisintegrate = (current, applied) => {
+    if (disintegrating !== current) return;
+    disintegrating = null;
+    clearTimeout(current.timer);
+    if (!applied) {
+      const { figma, source, result, home, wrap } = current;
+      if (current.group) {
+        // What it was before: its image, size and place
+        try {
+          if (current.kept && !result.removed) {
+            result.resizeWithoutConstraints(current.kept.width, current.kept.height);
+            result.relativeTransform = current.kept.transform;
+            result.fills = JSON.parse(current.kept.fills);
+            result.visible = true;
+          }
+        } catch {}
+      } else {
+        if (result && !result.removed) result.remove();
+        if (!source.removed) source.visible = current.wasVisible;
+        if (wrap && home && !source.removed && !home.parent.removed) {
+          try {
+            home.parent.insertChild(Math.min(home.index, home.parent.children.length), source);
+            if (!wrap.removed) wrap.remove();
+          } catch {}
+        }
+      }
+      try {
+        if (current.group && !current.group.removed) figma.currentPage.selection = [current.group];
+        else if (!source.removed) figma.currentPage.selection = [source];
+      } catch {}
+    }
+    current.bitmap?.close?.();
+    current.root?.remove();
+    removeEventListener("keydown", current.keys, true);
+  };
+
+  const buildDisintegratePanel = (current) => {
+    const s = current.settings;
+    const rows = [];
+    const change = (key, value) => {
+      s[key] = value;
+      refreshDisintegrate(current);
+      show();
+    };
+    const slider = makeSlider({ s, unit: current.unit, rows, change, limits: DISINTEGRATE_LIMITS, scrub: { piece: 0.2 }, digits: 1 });
+    const canvas = element("canvas", { className: "preview" });
+    canvas.setAttribute("aria-hidden", "true");
+    current.preview = canvas;
+
+    const presets = makeChips(DISINTEGRATE_PRESETS, (values) => {
+      Object.assign(s, fit(values(current.unit)));
+      refreshDisintegrate(current);
+      show();
+    });
+    // Picking a mode starts from its first preset, keeping where the front is
+    const mode = segments(
+      "Mode",
+      [
+        ["snap", "Snap"],
+        ["shatter", "Shatter"],
+      ],
+      () => s.mode,
+      (value) => {
+        if (value === s.mode) return;
+        const first = DISINTEGRATE_PRESETS.find(([, values]) => values(current.unit).mode === value);
+        Object.assign(s, fit(first[1](current.unit)), { progress: s.progress, angle: s.angle });
+        refreshDisintegrate(current);
+        show();
+      },
+    );
+    const burst = element("input", { type: "checkbox" });
+    burst.addEventListener("change", () => change("burst", burst.checked));
+    const front = element(
+      "section",
+      {},
+      element("div", { className: "row" }, element("span", { className: "label", textContent: "Mode" }), mode),
+      element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.front.map(slider)),
+      checkRow("Burst from the middle", burst, "Pieces fly out from the middle, the middle going first"),
+    );
+    const pieces = element("section", {}, element("div", { className: "caption", textContent: "Pieces" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.pieces.map(slider)));
+    const look = element("section", {}, element("div", { className: "caption", textContent: "As they go" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.look.map(slider)));
+
+    const shuffle = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
+    shuffle.addEventListener("click", () => change("seed", (s.seed % 9999) + 1));
+    const editable = element("input", { type: "checkbox" });
+    editable.addEventListener("change", () => change("editable", editable.checked));
+    const result = element(
+      "section",
+      {},
+      element("div", { className: "row" }, element("span", { className: "label", textContent: "Pattern" }), shuffle),
+      checkRow("Keep editable", editable, "The original kept, hidden, in a group Disintegrate can change later"),
+    );
+    shuffle.style.gridColumn = "span 2";
+    shuffle.style.justifySelf = "start";
+
+    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => {
+      const first = DISINTEGRATE_PRESETS.find(([, values]) => values(current.unit).mode === s.mode);
+      Object.assign(s, fit(first[1](current.unit)));
+      refreshDisintegrate(current);
+      show();
+    });
+    const scroll = element("div", { className: "scroll" }, presets, front, pieces, look, result, element("div", { className: "under" }, reset));
+
+    const name = element("div", { className: "source", textContent: current.source.name });
+    const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
+    cancel.addEventListener("click", () => closeDisintegrate(current, false));
+    const go = element("button", { type: "button", className: "button primary", textContent: current.group ? "Update" : "Disintegrate" });
+    go.addEventListener("click", () => !current.busy && applyDisintegrate(current));
+    const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
+
+    const root = makePanel(current.group ? `Disintegrate · ${current.source.name}` : "Disintegrate", () => closeDisintegrate(current, false), canvas, scroll, footer);
+    const show = () => {
+      mode.show();
+      for (const row of rows) row.show();
+      burst.checked = s.burst;
+      editable.checked = s.editable;
+      drawDisintegratePreview(current);
+    };
+    show();
+    current.root = root;
+    current.panel = {
+      busy: (on) => {
+        go.disabled = on;
+        go.textContent = on ? "Making…" : current.group ? "Update" : "Disintegrate";
+      },
+    };
+    current.keys = panelKeys(root, () => disintegrating === current, () => closeDisintegrate(current, false), () => !current.busy && applyDisintegrate(current));
     addEventListener("keydown", current.keys, true);
     go.focus();
   };
