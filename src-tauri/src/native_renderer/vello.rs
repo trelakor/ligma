@@ -186,7 +186,7 @@ impl Vello {
         }));
         let renderer = vello::Renderer::new(
             &device,
-            vello::RendererOptions { antialiasing_support: vello::AaSupport { area: std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some(), msaa4: true, msaa8: false, msaa16: std::env::var_os("LIGMA_NATIVE_VELLO_MSAA16").is_some() }, ..Default::default() },
+            vello::RendererOptions { antialiasing_support: vello::AaSupport { area: std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some(), msaa4: std::env::var_os("LIGMA_NATIVE_VELLO_MSAA4").is_some(), msaa8: false, msaa16: true }, ..Default::default() },
         )
         .map_err(|error| format!("renderer: {error}"))?;
         let raw = Self::raw_device(&device)?;
@@ -327,10 +327,11 @@ impl Vello {
             height: height as u32,
             antialiasing_method: if std::env::var_os("LIGMA_NATIVE_VELLO_AREA").is_some() {
                 vello::AaConfig::Area
-            } else if std::env::var_os("LIGMA_NATIVE_VELLO_MSAA16").is_some() {
-                vello::AaConfig::Msaa16
-            } else {
+            } else if std::env::var_os("LIGMA_NATIVE_VELLO_MSAA4").is_some() {
                 vello::AaConfig::Msaa4
+            } else {
+                // 16 samples a pixel, as Figma draws
+                vello::AaConfig::Msaa16
             },
             view: kept.view,
             retain: kept.id,
