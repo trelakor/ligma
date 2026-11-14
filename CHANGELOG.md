@@ -2,6 +2,24 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.43.1 - 2026-11-13
+
+- Icons only in the image bar hides the buttons' names again.
+
+## 0.43.0 - 2026-11-13
+
+- Heal in the image bar paints out spots, blemishes, stray objects or text in an image, on your computer. Scrub evens a spot out from what's around it instead, for text or marks on smooth surfaces. `[` and `]` resize the brush.
+- Upscale in the image bar makes an image 2 or 4 times as large and sharper, on your graphics card where it can, on Windows and on Macs with Apple silicon. Pick Fast, Photo or Illustration, and compare before and after on the canvas before you apply it. Each model downloads the first time you use it.
+- Icons only in the image bar, in Settings, shows the image bar's buttons as icons with their names as tooltips.
+- Each team in Home has a page of its own, opened from Settings in the team's menu: its people and their roles, its projects, its plan and seats, its settings for AI, UI kits and libraries, and transferring or deleting it, each in a window of its own.
+- You can make a team member an admin, also on Starter and Professional teams, and change their role from the team's page or window.
+- Inviting people to a team suggests people as you type their email, and team members' emails are blurred until you click them.
+- A team's projects are listed by most recent, in a grid or a list, with larger cards. The Starred page has a larger grid too.
+- The Starred row on Home slides sideways when there are more files than fit. Swipe it, use the arrows on its edges, or hold a file near an edge while reordering.
+- Home goes back and forward with your mouse's side buttons, Alt+Left and Alt+Right (Cmd+[ and Cmd+] on a Mac) or a sideways swipe.
+- Folder colors are brighter and easier to tell apart.
+- Eight new app icons: Glacier, Chroma, Petal, Sherbet, Lullaby, Scribe, Interface and Ligmerity.
+
 ## 0.42.3 - 2026-11-13
 
 - On macOS, an empty tab preview card no longer stays in the middle of the screen, and hidden tab menus and emoji pickers no longer come back when you switch back to Ligma.

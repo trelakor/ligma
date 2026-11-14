@@ -17,6 +17,7 @@ mod figma_scheme;
 mod frame;
 mod game_mode;
 mod handoff;
+mod heal;
 mod home;
 mod lasso;
 mod layers;
@@ -44,6 +45,7 @@ mod tabs;
 mod titlebar;
 mod toolbar;
 mod updater;
+mod upscale;
 mod vectorize;
 mod view_state;
 #[cfg(windows)]

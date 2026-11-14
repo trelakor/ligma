@@ -1,7 +1,9 @@
-//! Figma tabs get no IPC, so the image bar's Remove background, Vectorize
-//! and Select object (see ai_actions.rs) hand Ligma an image or a request
-//! as a download named `ligma-background-<job>`,
-//! `ligma-vectorize-<job>@<pixel>` or `ligma-object-<job>`, which
+//! Figma tabs get no IPC, so the image bar's Remove background, Vectorize,
+//! Select object, Spot healing and Upscale (see ai_actions.rs) hand
+//! Ligma an image or a request as a download named
+//! `ligma-background-<job>`, `ligma-vectorize-<job>@<pixel>`,
+//! `ligma-object-<job>`, `ligma-heal-<job>` or
+//! `ligma-upscale-<job>`, which
 //! `on_requested` saves to a temporary file instead of asking where. Once
 //! it's saved, it's handled off the main thread and the result goes back to
 //! the page through `window.__ligmaJob.done(job, result)`, or `failed(job,
@@ -27,13 +29,17 @@ enum Kind {
     Background,
     Vectorize,
     Object,
+    Heal,
+    Upscale,
     Cancel,
 }
 
-const KINDS: [(&str, Kind); 4] = [
+const KINDS: [(&str, Kind); 6] = [
     ("ligma-background-", Kind::Background),
     ("ligma-vectorize-", Kind::Vectorize),
     ("ligma-object-", Kind::Object),
+    ("ligma-heal-", Kind::Heal),
+    ("ligma-upscale-", Kind::Upscale),
     ("ligma-cancel-", Kind::Cancel),
 ];
 
@@ -84,6 +90,7 @@ pub fn on_requested(webview: &Webview, url: &Url, destination: &mut PathBuf) -> 
     if !matches!(kind, Kind::Cancel) {
         RUNNING.lock().unwrap().insert((tab, job), Running::default());
     }
+    log::info!("Handoff: {prefix}{job} from tab {tab}");
     PENDING.lock().unwrap().push(Pending { url: url.clone(), kind, tab, job, pixel, temp: temp.clone() });
     *destination = temp;
     true
@@ -120,6 +127,8 @@ pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
             (Kind::Background, Some(bytes)) => crate::background::remove(&app, tab, job, &bytes),
             (Kind::Vectorize, Some(bytes)) => crate::vectorize::trace(&bytes, pixel.unwrap_or(100) as f64 / 100.0),
             (Kind::Object, Some(bytes)) => crate::objects::handle(&app, tab, job, &bytes),
+            (Kind::Heal, Some(bytes)) => crate::heal::heal(tab, job, &bytes),
+            (Kind::Upscale, Some(bytes)) => crate::upscale::handle(&app, tab, job, &bytes),
             (Kind::Cancel, Some(_)) => unreachable!(),
         };
         send(&app, tab, job, reply);
@@ -189,8 +198,25 @@ fn send(app: &AppHandle, tab: u32, job: u64, reply: Result<String, &str>) {
         return;
     };
     let script = match reply {
+        // A large result, like an upscaled image, goes over in parts, as
+        // one script that size takes the page long to take in
+        Ok(result) if result.len() > PART => {
+            let mut rest = result.as_str();
+            while !rest.is_empty() {
+                let mut end = PART.min(rest.len());
+                while !rest.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let _ = webview.eval(format!("window.__ligmaJob?.part({job}, {:?})", &rest[..end]));
+                rest = &rest[end..];
+            }
+            format!("window.__ligmaJob?.done({job}, null)")
+        }
         Ok(result) => format!("window.__ligmaJob?.done({job}, {result:?})"),
         Err(reason) => format!("window.__ligmaJob?.failed({job}, {reason:?})"),
     };
     let _ = webview.eval(script);
 }
+
+/// Results longer than this many bytes go to the page in parts this long
+const PART: usize = 1 << 20;

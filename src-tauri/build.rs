@@ -7,5 +7,12 @@ fn main() {
     if os == "windows" || (os == "macos" && arch == "aarch64") {
         println!("cargo:rustc-cfg=birefnet");
     }
+    // ONNX Runtime, linked in on Windows, links to DirectML, which isn't on
+    // every Windows. It's loaded only once Upscale uses the graphics card,
+    // after checking it's there (src/upscale.rs), so Ligma starts without it
+    if os == "windows" && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg=/DELAYLOAD:DirectML.dll");
+        println!("cargo:rustc-link-lib=delayimp");
+    }
     tauri_build::build()
 }

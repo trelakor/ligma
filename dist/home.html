@@ -194,13 +194,24 @@
   button.sec-h:hover b { color: var(--text); }
   .sec-h .chev { width: 12px; height: 12px; transition: transform 160ms var(--ease); }
   .sec-h b { color: var(--text2); font-weight: 550; }
-  /* Pin a team to the top, from the star that shows on its row */
+  /* A team's ⋯ (its menu, settings first) and star (pin to the top) take
+     the plan's place while the pointer or keys are on its row; a pinned
+     team keeps its star. Lit while its window is open, so nothing else on
+     the row has to stay shown */
   .team-row { position: relative; }
-  .team-star { position: absolute; top: 4px; right: 36px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: var(--hover); color: var(--text2); opacity: 0; }
-  .team-row:hover .team-star, .team-star:focus-visible { opacity: 1; }
-  .team-row:hover .tier { visibility: hidden; }
-  .team-star:hover { color: var(--text); background: var(--bg3); }
-  .team-star.on .i { fill: #ffc700; }
+  .team-more, .team-star { position: absolute; top: 4px; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--text2); opacity: 0; }
+  .team-star { right: 36px; }
+  .team-more { right: 62px; }
+  .team-star.on { opacity: 1; }
+  .team-star.on .i { fill: #ffc700; stroke: #e6a800; }
+  .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) :is(.team-more, .team-star) { opacity: 1; }
+  .team-more:hover, .team-star:hover, .team-more[aria-expanded="true"] { color: var(--text); background: var(--bg3); }
+  /* The name gives way to what shows over the plan's place */
+  .team-row:has(.team-star.on) .tier { display: none; }
+  .team-row:has(.team-star.on) .nav.team .lbl { margin-right: 24px; }
+  .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .tier { display: none; }
+  .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .nav.team .lbl { margin-right: 50px; }
+  .team-row.lit .nav.team { background: var(--sel); }
   .tm { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: #fff; font: 600 10px/1 var(--font); }
   .sfoot { flex: none; padding: 8px 0; border-top: 1px solid var(--line); }
   .sfoot .ext { margin-left: auto; }
@@ -240,6 +251,7 @@
   .kbd .new button:focus-visible { outline-color: #fff; }
 
   #filters { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 16px 8px 32px; }
+  #filters:empty { min-height: 0; padding-bottom: 0; }
   .seg { display: flex; padding: 2px; border-radius: 6px; background: var(--bg2); }
   .seg button { height: 24px; padding: 0 10px; border-radius: 4px; color: var(--text2); }
   .seg button:hover { color: var(--text); }
@@ -287,6 +299,32 @@
   .fold small { color: var(--text2); font-size: 11px; font-weight: 450; }
   .all { display: flex; align-items: center; gap: 2px; height: 24px; margin-left: 8px; padding: 0 4px 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; }
   .fold + .all, .fold + .lay { margin-left: auto; }
+  /* Starred on Home: one strip of every starred file, as many in view as
+     fit, that slides sideways: a swipe moves it and snaps to a card, the
+     arrows glide it along by all but the last card in view. A fade on a
+     side says there's more that way */
+  .home-sec .star-grid.car { position: relative; grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: calc((100% - (var(--cols) - 1) * 20px) / var(--cols)); overflow-x: auto; overflow-y: hidden; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none; margin: -8px -12px 0; padding: 16px 12px 28px; scroll-padding-inline: 12px; }
+  .home-sec .star-grid.car::-webkit-scrollbar { display: none; }
+  .home-sec .star-grid.car > .card { scroll-snap-align: start; }
+  .star-grid.car.lifting { scroll-snap-type: none; }
+  .star-car.more-l .star-grid.car { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40px); mask-image: linear-gradient(to right, transparent 0, #000 40px); }
+  .star-car.more-r .star-grid.car { -webkit-mask-image: linear-gradient(to left, transparent 0, #000 40px); mask-image: linear-gradient(to left, transparent 0, #000 40px); }
+  .star-car.more-l.more-r .star-grid.car { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 40px, #000 calc(100% - 40px), transparent 100%); }
+  .star-car .car-btn { opacity: 0; pointer-events: none; transition: opacity 160ms, transform 140ms var(--ease), background 140ms; }
+  .star-car.more-l .car-btn.prev, .star-car.more-r .car-btn.next { opacity: 1; pointer-events: auto; }
+  /* The arrows sit on the row's edges, at the middle of the previews: a
+     card is the row's width shared by its columns, its preview 16:9 */
+  .star-car { position: relative; container-type: inline-size; }
+  .car-btn { position: absolute; z-index: 3; top: calc(8px + (100cqw - (var(--cols) - 1) * 20px) / var(--cols) * 9 / 32 - 18px); display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: rgba(28, 28, 28, 0.9); color: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.1); transition: transform 140ms var(--ease), background 140ms; }
+  .car-btn.prev { left: -18px; }
+  .car-btn.next { right: -18px; }
+  .car-btn:hover { background: #000; transform: scale(1.08); }
+  .car-btn:active { transform: scale(0.96); }
+  .car-btn .i { width: 18px; height: 18px; }
+  .car-btn .flip { transform: scaleX(-1); }
+  .kbd .car-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* The Starred page: few files, so bigger cards */
+  #starred-grid, .roomy .grid { grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 32px 24px; }
   .all:hover { background: var(--hover); color: var(--text); }
   .all .i { width: 12px; height: 12px; }
   .kbd :is(.fold, .all, .ptile, .lay button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -330,9 +368,18 @@
   .row .tools { position: static; }
   .faces.inline { position: static; height: auto; padding: 0; }
   .faces.inline .face { width: 20px; height: 20px; font-size: 9px; }
+  /* A project's files as rows: bigger previews, the place column gone
+     since it's the project itself */
+  .roomy .card.row { grid-template-columns: 112px minmax(0, 2fr) minmax(0, 1.3fr) 96px; gap: 20px; height: 80px; }
+  .roomy .card.row .thumb { width: 112px; border-radius: 5px; }
+  .roomy .card.row .where { display: none; }
+  .roomy .card.row .name { font-size: 14px; }
+  @media (min-width: 1500px) { .roomy .card.row { grid-template-columns: 112px minmax(0, 560px) minmax(0, 1fr) 96px; } }
   @media (max-width: 900px) {
     .card.row { grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr) 72px; }
     .row .where { display: none; }
+    .roomy .card.row { grid-template-columns: 96px minmax(0, 1fr) minmax(0, 1fr) 72px; }
+    .roomy .card.row .thumb { width: 96px; }
   }
 
   /* Brought into view below the sticky heading, ring and all */
@@ -491,6 +538,7 @@
   .menu input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
   .menu .none { padding: 4px 8px; color: var(--text2); }
   .mi[aria-expanded="true"]:not(.on) { background: var(--hover); }
+  .mi.tall { height: 40px; }
   .mi .two { display: flex; flex: 1; flex-direction: column; min-width: 0; line-height: 16px; }
   .mi .two span, .mi .two small { overflow: hidden; text-overflow: ellipsis; }
   .mi .two small { color: var(--text2); font-size: 11px; }
@@ -667,6 +715,246 @@
   .note .rd { position: absolute; top: 10px; right: 120px; }
   .note:hover .tool, .note:focus-visible .tool, .note .tool:focus-visible { opacity: 1; }
 
+  /* Project colors, Figma's eight: the folder takes it wherever it shows */
+  .i.tint, .nav .i.tint, .nav.on .i.tint, .menu .mi .mic > svg.tint { color: var(--fc); }
+  .nav .lbl input { width: 100%; height: 22px; margin: -1px 0 -1px -4px; padding: 0 4px; border: 0; border-radius: 3px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: inherit; -webkit-user-select: text; user-select: text; }
+
+  /* A project's header holds its settings: color, name, description,
+     who has access and the rest in a menu */
+  #head .ptitle { display: flex; align-items: center; gap: 2px; min-width: 0; margin-left: -6px; }
+  .hb { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 5px; color: var(--text2); }
+  .hb:hover, .hb[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+  .hname { flex: 0 1 auto; min-width: 0; height: 28px; padding: 0 6px; overflow: hidden; border-radius: 5px; font-size: 13px; line-height: 28px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+  .hname:hover { background: var(--hover); }
+  .hname input, .hdesc input { width: 100%; height: 24px; padding: 0 6px; border: 0; border-radius: 4px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: inherit; -webkit-user-select: text; user-select: text; }
+  .hname.editing, .hdesc.editing { width: 240px; padding: 0 2px; overflow: visible; background: none; }
+  .hdesc.editing { width: 360px; }
+  #head .ptitle small { flex: none; margin: 0 6px 0 2px; color: var(--text2); font-size: 11px; }
+  .hdesc { flex: 0 1 auto; min-width: 0; max-width: 420px; height: 28px; padding: 0 6px; overflow: hidden; border-radius: 5px; color: var(--text2); font-weight: 450; line-height: 28px; text-overflow: ellipsis; white-space: nowrap; }
+  .hdesc:hover { background: var(--hover); color: var(--text); }
+  /* No description yet: the way to add one shows with the pointer or keys */
+  .hdesc.blank { color: var(--text3); opacity: 0; transition: opacity 120ms; }
+  #head:hover .hdesc.blank, .hdesc.blank:focus-visible, .hdesc.editing { opacity: 1; }
+  .access { flex: none; max-width: 240px; }
+  .access span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .access[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+
+  /* Team settings and sharing: a window like the inbox, beside what
+     opened it */
+  #win { position: fixed; z-index: 45; display: none; flex-direction: column; width: 400px; max-height: min(640px, calc(100vh - 16px)); overflow: hidden; border-radius: 13px; background: var(--menu); box-shadow: var(--shadow), 0 0 0 1px var(--menu-line); outline: none; }
+  #win.open { display: flex; animation: pop 120ms var(--ease); }
+  .wh { display: flex; flex: none; align-items: center; gap: 10px; min-height: 56px; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--menu-line); }
+  .wh .tm, .wh .fbig { width: 32px; height: 32px; border-radius: 8px; font-size: 13px; }
+  .wh .fbig { display: grid; place-items: center; flex: none; background: var(--bg2); }
+  .wh .fbig .i { width: 24px; height: 24px; margin: 0; }
+  /* The team's picture: a new one from a click or a dropped image */
+  .wh .pic { position: relative; flex: none; overflow: hidden; }
+  .wh .pic .ov { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 120ms; }
+  .wh .pic:hover .ov, .wh .pic:focus-visible .ov, .wh .pic.drop .ov, .wh .pic.busy .ov { opacity: 1; }
+  .wh .pic .ov .i { width: 16px; height: 16px; margin: 0; color: #fff; }
+  .wh .pic.busy .ov .i { animation: pulse 700ms ease-in-out infinite alternate; }
+  .wh .pic.drop { box-shadow: 0 0 0 2px var(--accent); }
+  .wt { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+  .wt h2 { display: flex; margin: 0 0 0 -6px; font-size: 13px; line-height: 20px; font-weight: 550; }
+  .wt h2 .hname { height: 24px; line-height: 24px; }
+  .wt h2 .hname.static:hover { background: none; }
+  .wt small { color: var(--text2); font-size: 11px; line-height: 16px; }
+  .wb { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 8px; }
+  .ws h3 { display: flex; align-items: center; gap: 6px; height: 36px; margin: 0; padding: 12px 8px 4px; color: var(--text2); font-size: 11px; line-height: 16px; font-weight: 550; }
+  .ws h3 a, .ws h3 button { display: flex; align-items: center; gap: 2px; margin-left: auto; padding: 2px 4px; border-radius: 4px; font-weight: 450; }
+  .ws h3 a:hover, .ws h3 button:hover { background: var(--hover); color: var(--text); }
+  .ws h3 .i { width: 12px; height: 12px; }
+  .ws h3 .fi { width: 18px; height: 18px; margin: -3px; }
+  .about { display: block; width: 100%; min-height: 32px; padding: 6px 8px; border-radius: 5px; font-size: 13px; line-height: 20px; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .about:hover { background: var(--hover); }
+  .about.blank { color: var(--text2); }
+  .about.static:hover { background: none; }
+  .wb textarea { display: block; width: 100%; min-height: 56px; padding: 6px 8px; border: 0; border-radius: 5px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: 450 13px/20px var(--font); resize: none; -webkit-user-select: text; user-select: text; }
+  .mem { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 44px; padding: 4px 8px; border-radius: 6px; }
+  .mem .av { width: 24px; height: 24px; }
+  .mem .tm { width: 24px; height: 24px; border-radius: 6px; font-size: 11px; }
+  .mem b { display: block; overflow: hidden; font-weight: 450; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+  .mem b i { color: var(--text2); font-style: normal; }
+  .mem small { display: block; overflow: hidden; color: var(--text2); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  .mem .role { color: var(--text2); white-space: nowrap; }
+  .mem .ib { margin-right: -4px; }
+  .mem .ib.more { width: 28px; justify-content: center; padding: 0; }
+  .mem.pending b { color: var(--text2); }
+  /* Removing someone asks first, in their row */
+  .mem.ask { background: var(--hover); }
+  .mem.ask b { white-space: normal; }
+  .mem.ask small { white-space: normal; }
+  .mem .acts { display: flex; align-items: center; gap: 4px; }
+  .wnote { padding: 8px; color: var(--text2); }
+  .invite { display: flex; gap: 6px; padding: 4px 0 0; }
+  .invite input { flex: 1; min-width: 0; height: 32px; padding: 0 8px; border: 0; border-radius: 5px; background: color-mix(in srgb, var(--text) 7%, var(--menu)); color: var(--text); font: inherit; font-size: 13px; outline: none; -webkit-user-select: text; user-select: text; }
+  .invite input::placeholder { color: var(--text2); }
+  .invite input:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+  .invite .ib { height: 32px; }
+  .invite .btn { height: 32px; }
+  .btn:disabled { opacity: 0.4; pointer-events: none; }
+  /* People to invite, as an address is typed: the box opens downward into
+     a list over what's under it, one field with one focus ring */
+  .invite input[aria-expanded="true"] { border-radius: 5px 5px 0 0; box-shadow: inset 1px 0 0 var(--accent), inset -1px 0 0 var(--accent), inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--menu-line); }
+  #invite-sugg { position: fixed; z-index: 46; display: none; overflow-y: auto; padding: 4px; border-radius: 0 0 8px 8px; background: color-mix(in srgb, var(--text) 7%, var(--menu)); box-shadow: inset 1px 0 0 var(--accent), inset -1px 0 0 var(--accent), inset 0 -1px 0 var(--accent), 0 12px 24px -10px rgba(0, 0, 0, 0.45); overscroll-behavior: contain; }
+  #invite-sugg.open { display: block; animation: drop 120ms var(--ease); }
+  @keyframes drop { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+  #invite-sugg .opt { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 0 8px; align-items: center; min-height: 0; padding: 5px 6px; border-radius: 5px; color: var(--text); cursor: default; }
+  #invite-sugg .av { width: 20px; height: 20px; font-size: 10px; }
+  #invite-sugg .ln { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  #invite-sugg b { flex: 1; min-width: 0; overflow: hidden; font-weight: 450; font-size: 13px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+  #invite-sugg small { display: block; overflow: hidden; color: var(--text2); font-size: 11px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+  #invite-sugg .why { flex: none; max-width: 45%; overflow: hidden; color: var(--text2); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  #invite-sugg mark { background: none; color: inherit; font-weight: 650; }
+  #invite-sugg .opt[aria-selected="true"] { background: var(--accent); color: #fff; }
+  #invite-sugg .opt[aria-selected="true"] :is(small, .why) { color: rgba(255, 255, 255, 0.8); }
+  #invite-sugg .veil > span { filter: blur(3px); }
+  .wlink { margin: 6px 0 0 -2px; }
+  .wfoot { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px; border-top: 1px solid var(--menu-line); }
+  .wfoot .ib { flex: 1; justify-content: flex-start; }
+  .wfoot .ib .x { margin-left: auto; }
+  .wsk { height: 44px; margin: 0 8px; border-radius: 6px; background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
+  .wsk + .wsk { margin-top: 4px; }
+
+  /* A team's settings page: rows of a setting and its control, the
+     consequential ones asking in place before they act */
+  .setp { max-width: 680px; }
+  .setp .sec + .sec { margin-top: 20px; }
+  .setp .sec h2 { height: 44px; }
+  .setp .srow { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 0; }
+  .setp .sec h2 + .srow, .setp .sec h2 + .seats .srow:first-child { border-top: 0; }
+  .setp .srow .st { flex: 1; min-width: 0; }
+  .setp .srow b { display: block; font-size: 13px; line-height: 20px; font-weight: 450; }
+  .setp .srow small { display: block; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .setp .srow .ctl { display: flex; flex: none; align-items: center; gap: 6px; }
+  .setp .srow .av { flex: none; width: 24px; height: 24px; }
+  .setp a.srow:hover b { text-decoration: underline; text-underline-offset: 2px; }
+  .setp .srow.ask { flex-wrap: wrap; row-gap: 8px; margin: 0 -12px; padding: 12px; border-top-color: transparent; border-radius: 8px; background: var(--hover); }
+  .setp .srow.ask + .srow { border-top-color: transparent; }
+  /* The team's page: the team on top, then panels sized to what they
+     hold. People runs down the left beside the projects, the bill, the
+     settings and the team's transfer and deletion */
+  .dash { --panel: color-mix(in srgb, var(--text) 3.5%, var(--bg)); max-width: none; padding-bottom: 64px; container-type: inline-size; }
+  .bento { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin-top: 8px; }
+  .panel { min-width: 0; padding: 14px 20px 18px; border-radius: 12px; background: var(--panel); box-shadow: inset 0 0 0 1px var(--line); }
+  .panel > .sec { margin: 0; }
+  .panel > .sec > h2 { position: static; height: auto; margin: 0 0 6px; padding: 4px 0 0; background: none; }
+  @container (min-width: 820px) {
+    .bento { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); grid-template-areas: "projects projects" "people set" "people own" "people bill"; }
+    .bento:not(.pro) { grid-template-areas: "projects projects" "people set" "people own"; }
+  }
+  @container (min-width: 1320px) {
+    .bento { grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.8fr) minmax(0, 1fr); grid-template-rows: auto auto 1fr; grid-template-areas: "people projects projects" "people bill set" "people own own"; }
+    .bento:not(.pro) { grid-template-rows: auto 1fr; grid-template-areas: "people projects projects" "people set own"; }
+  }
+  .p-people { grid-area: people; }
+  .p-projects { grid-area: projects; }
+  .p-bill { grid-area: bill; }
+  .p-set { grid-area: set; }
+  .p-own { grid-area: own; }
+  @container (max-width: 819px) {
+    .p-people, .p-projects, .p-bill, .p-set, .p-own { grid-area: auto; }
+  }
+  /* Projects as tiles: their latest files over the name, the sharing and
+     a menu */
+  .dtiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding-top: 4px; }
+  .dtile { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 6px 6px 8px; border-radius: 10px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow 140ms; }
+  .dtile:hover { box-shadow: inset 0 0 0 1px var(--text3); }
+  .dtile .dgo { display: block; border-radius: 6px; }
+  .dtile .mosaic { height: 112px; }
+  .dtile .dtn { display: flex; align-items: center; gap: 4px; min-width: 0; padding-left: 2px; }
+  .dtile .dtn .pname { flex: 1; padding: 0; }
+  .dtile .dtn .ib.more { width: 24px; height: 24px; padding: 0; justify-content: center; }
+  .dtile .dtm { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px 0 24px; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .dtile .dacc { display: flex; align-items: center; gap: 4px; min-width: 0; height: 22px; padding: 0 6px; border-radius: 4px; color: var(--text2); white-space: nowrap; }
+  .dtile .dacc:hover { background: var(--hover); color: var(--text); }
+  .dtile .dacc .fi { width: 16px; height: 16px; margin: -2px; }
+  .dtile.new { align-items: center; justify-content: center; min-height: 160px; gap: 8px; background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--text2); }
+  .dtile.new { border: 1px dashed var(--text3); box-shadow: none; }
+  .dtile.new:hover { border-color: var(--text2); color: var(--text); }
+  .dtile.new .i { width: 20px; height: 20px; }
+  .kbd :is(.dtile .dgo, .dtile.new):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* What the team pays, and the seats it pays for */
+  .amount { margin: 6px 0 0; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .amount small { margin-left: 4px; color: var(--text2); font-size: 13px; font-weight: 450; letter-spacing: 0; }
+  .renews { margin: 2px 0 0; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .seatmix { display: flex; flex-direction: column; gap: 2px; margin: 14px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); }
+  .seatmix div { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+  .seatmix span { color: var(--text2); }
+  .dhero { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 20px; align-items: start; padding: 20px 4px 16px; }
+  .dhero .tm { width: 72px; height: 72px; border-radius: 16px; font-size: 28px; }
+  .dhero .pic { position: relative; overflow: hidden; }
+  .dhero .pic .ov { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 120ms; }
+  .dhero .pic:hover .ov, .dhero .pic:focus-visible .ov, .dhero .pic.drop .ov, .dhero .pic.busy .ov { opacity: 1; }
+  .dhero .pic .ov .i { width: 20px; height: 20px; margin: 0; color: #fff; }
+  .dhero .pic.busy .ov .i { animation: pulse 700ms ease-in-out infinite alternate; }
+  .dhero .pic.drop { box-shadow: 0 0 0 2px var(--accent); }
+  .dt { min-width: 0; padding-top: 2px; }
+  .dname { display: flex; align-items: center; gap: 8px; min-width: 0; margin-left: -6px; }
+  .dname .hname { height: 32px; font-size: 18px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; }
+  .dname .hname.static:hover { background: none; }
+  .dname .hname.editing { width: min(360px, 100%); }
+  .dname .hname input { height: 30px; }
+  .dtier { flex: none; height: 20px; padding: 0 6px; border-radius: 4px; background: var(--bg2); color: var(--text2); font-size: 11px; line-height: 20px; font-weight: 550; }
+  .dhero .about { width: calc(100% + 8px); max-width: 560px; min-height: 28px; margin: 2px 0 0 -8px; padding: 4px 8px; color: var(--text2); }
+  .dhero .about:hover { color: var(--text); }
+  .dhero .about.blank { color: var(--text3); }
+  .dhero .about.static { margin-left: 0; padding: 0; }
+  .dhero .about.editing { padding: 0; }
+  .dhero .about textarea { display: block; width: 100%; min-height: 56px; padding: 4px 8px; border: 0; border-radius: 5px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: 450 13px/20px var(--font); resize: none; -webkit-user-select: text; user-select: text; }
+  .facts { margin: 6px 0 0; color: var(--text2); font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+  .dacts { display: flex; align-items: center; gap: 6px; }
+  .dacts .btn { font-weight: 450; }
+  .dacts .btn[aria-pressed="true"] .fi { color: #e6a800; }
+  .btn.sm.icon { width: 28px; padding: 0; justify-content: center; }
+  .dash .sec h2 .hact, .panel h2 .hact { display: flex; align-self: center; align-items: center; gap: 4px; height: 24px; margin-left: auto; padding: 0 8px; border-radius: 5px; color: var(--text2); font-size: 11px; font-weight: 450; }
+  .dash .sec h2 .hact:hover { background: var(--hover); color: var(--text); }
+  .dash .sec h2 .hact .i { width: 12px; height: 12px; }
+  .dinvite { padding: 0 0 8px; }
+  .dinvite .invite { padding: 0; }
+  .dnote { margin: 0 0 8px; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .dpeople .mem { margin: 0 -8px; }
+  .ib.seat .cost { margin-left: 4px; color: var(--text2); font-variant-numeric: tabular-nums; }
+  .ib.seat:hover .cost { color: inherit; }
+  .prow { padding: 6px 0; }
+  .pgo { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; margin: -4px 0 -4px -8px; padding: 4px 8px; border-radius: 6px; text-align: left; }
+  .pgo:hover { background: var(--hover); }
+  .pgo .st { min-width: 0; }
+  .pgo small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dhero.sk { grid-template-columns: 72px minmax(0, 1fr); }
+  .dhero.sk .tm { background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
+  .dhero.sk .bar { height: 12px; margin: 10px 0 0; border-radius: 3px; background: var(--bg2); animation: pulse 1.1s ease-in-out infinite alternate; }
+  .dash .wsk { margin: 12px 0 0; }
+  .tgl { position: relative; flex: none; width: 28px; height: 16px; border-radius: 8px; background: var(--bg3); box-shadow: inset 0 0 0 1px var(--line); transition: background 120ms; }
+  .tgl::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 160ms var(--ease); }
+  .tgl[aria-checked="true"] { background: var(--accent); box-shadow: none; }
+  .tgl[aria-checked="true"]::after { transform: translateX(12px); }
+  .tgl:disabled { opacity: 0.4; }
+  .btn.warn { color: #e03e1a; }
+  .sform { display: grid; gap: 10px; width: 100%; padding-top: 4px; }
+  .sform label { display: grid; gap: 4px; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .sform input, .sform textarea { height: 32px; padding: 0 8px; border: 0; border-radius: 5px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); color: var(--text); font: 450 13px/20px var(--font); outline: none; -webkit-user-select: text; user-select: text; }
+  .sform textarea { height: 64px; padding: 6px 8px; resize: none; }
+  .sform input:focus, .sform textarea:focus { box-shadow: inset 0 0 0 1px var(--accent); }
+  .fhint { color: var(--text2); }
+  .fhint.bad { color: #e03e1a; }
+  .sform .acts { display: flex; justify-content: flex-end; gap: 6px; }
+  /* Transferring or deleting the team, in a window over the page */
+  dialog.flow { width: min(500px, calc(100vw - 32px)); max-height: calc(100vh - 64px); margin: auto; padding: 0; overflow: auto; border: 0; border-radius: 13px; background: var(--menu); color: var(--text); box-shadow: var(--shadow), 0 0 0 1px var(--menu-line); }
+  dialog.flow[open] { animation: pop 140ms var(--ease); }
+  dialog.flow::backdrop { background: rgba(0, 0, 0, 0.4); }
+  .flow .fh { display: flex; align-items: flex-start; gap: 10px; padding: 16px 12px 14px 20px; border-bottom: 1px solid var(--menu-line); }
+  .flow .fh > div { flex: 1; min-width: 0; }
+  .flow .fh h2 { margin: 0; font-size: 15px; line-height: 22px; font-weight: 600; overflow-wrap: anywhere; }
+  .flow .fh p { margin: 2px 0 0; color: var(--text2); font-size: 11px; line-height: 16px; }
+  .flow .fb { gap: 14px; padding: 16px 20px 4px; }
+  .flow .fwhat { display: grid; gap: 8px; padding: 12px 14px; border-radius: 8px; background: color-mix(in srgb, var(--text) 5%, var(--menu)); }
+  .flow .fwhat div { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; font-size: 13px; line-height: 18px; }
+  .flow .fwhat b { color: var(--text2); font-weight: 450; }
+  .flow.danger .fwhat { background: color-mix(in srgb, var(--danger) 9%, var(--menu)); }
+  .flow .fhint.ok { color: var(--text); }
+  .flow .ff { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 20px 18px; }
+  .snote { padding: 10px 0 0; color: var(--text2); }
   /* Account settings: a window over the page, sections down the left */
   #acs {
     width: min(760px, calc(100vw - 32px));
@@ -848,6 +1136,7 @@
 <div id="menu" class="menu" role="menu" tabindex="-1"></div>
 <div id="submenu" class="menu sub" role="menu" tabindex="-1"></div>
 <div id="inbox" role="dialog" aria-labelledby="inbox-title" tabindex="-1"></div>
+<div id="win" role="dialog" aria-labelledby="win-title" tabindex="-1"></div>
 <div id="tip" role="tooltip"></div>
 <div id="selbar" class="float" role="toolbar" aria-label="Selected files" hidden></div>
 <div id="toast" class="float" role="status" aria-live="polite" hidden></div>
@@ -936,6 +1225,8 @@ const ICONS = {
   heart: '<path d="M8 13s-5-3-5-6.5A2.5 2.5 0 0 1 8 5a2.5 2.5 0 0 1 5 1.5C13 10 8 13 8 13z"/>',
   right: '<path d="m6.5 4.5 3.5 3.5-3.5 3.5"/>',
   list: '<path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8"/><circle cx="2.75" cy="4.5" r=".6"/><circle cx="2.75" cy="8" r=".6"/><circle cx="2.75" cy="11.5" r=".6"/>',
+  link: '<path d="M7 9a2.5 2.5 0 0 0 3.5 0l2-2A2.5 2.5 0 0 0 9 3.5l-.75.75M9 7a2.5 2.5 0 0 0-3.5 0l-2 2A2.5 2.5 0 0 0 7 12.5l.75-.75"/>',
+  camera: '<path d="M2.5 5.5a1 1 0 0 1 1-1h1.75l1-1.5h3.5l1 1.5h1.75a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/><circle cx="8" cy="8.25" r="2"/>',
 };
 const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
 // Figma's own UI icons, as its file browser and account menu draw them:
@@ -1031,6 +1322,40 @@ const LIVE = location.hostname === "www.figma.com";
 // Drafts are a folder per team, so these name a folder as Drafts
 const DRAFT_FOLDERS = new Set();
 const placeOf = (project) => (!project || DRAFT_FOLDERS.has(project) ? "Drafts" : PROJECTS[project]?.name ?? "Shared with you");
+
+// A project's own settings, by its id: { color, description, audience,
+// teamAccess }. Who in the team or organization has it is `audience`
+// (sharing_audience_control) on newer projects, `teamAccess` on older ones.
+// Figma's folder colors, in its order, as its menu draws them
+const FOLDER = {};
+const FOLDER_COLORS = [
+  ["pale_blue", "Grey", "#8e959f"],
+  ["pale_purple", "Purple", "#a259ff"],
+  ["pale_violet", "Blue", "#2e8cff"],
+  ["pale_green", "Green", "#14ae5c"],
+  ["pale_pink", "Pink", "#f2489e"],
+  ["pale_yellow", "Yellow", "#f5b800"],
+  ["pale_persimmon", "Persimmon", "#ff6b2c"],
+  ["pale_teal", "Teal", "#00b8a3"],
+];
+const folderHex = (id) => FOLDER_COLORS.find(([key]) => key === FOLDER[id]?.color)?.[2] ?? null;
+// The folder icon in the project's color, at a 16px icon's place
+const folderIcon = (id, hex = folderHex(id)) => (hex ? fig("folder", "tint").replace("<svg ", `<svg style="--fc:${hex}" `) : fig("folder"));
+for (const [id, color, description] of [["app", "pale_blue", "The desktop app: windows, menus and the sidebar"], ["web", "pale_teal", ""], ["mkt", "pale_persimmon", "Launches, posters and the deck"], ["brand", "pale_yellow", ""], ["halcyon", "pale_green", ""], ["fieldnote", "pale_purple", ""]]) FOLDER[id] = { color, description, audience: "plan_edit" };
+
+// A team's description, people and what you can change there, read from
+// Figma when its window opens: { description, members, admin }
+const TEAM_INFO = {};
+const ROLE_LEVELS = { viewer: 100, editor: 300, admin: 900, owner: 999 };
+// What Figma calls a level. A Starter team's owner is its admin, and anyone
+// without a team role has been given only some of its files
+function roleName(level, tier) {
+  if (level == null) return "Limited access";
+  if (level >= ROLE_LEVELS.owner) return tier === "Free" ? "Admin" : "Owner";
+  if (level >= ROLE_LEVELS.admin) return "Admin";
+  if (level >= ROLE_LEVELS.editor) return "Can edit";
+  return "Can view";
+}
 
 // [name, type, look] per project; null is Drafts
 const SPEC = [
@@ -1369,6 +1694,10 @@ const VIEWS = {
   // sharedBy, resourceId (the file's key)}. Also refused without __requestId
   shared: ["SharedWithYouResources", "08ca113f5a39948d884b0b1e3114c4084824b2a1aea94c5a857e5f36f6674f12", { __requestId: "ligma-shared", cursorColumn: "shared_at", fileType: null, firstPageSize: 100, orgDeletedDrafts: null, planId: null, planType: null, resourceTypes: ["file"], sharedBy: null, sharedToFilter: null, sharedToUserGroupIdFilter: null, sortOrder: "desc" }],
   // A team's trash in Figma. Refused without a __requestId of some kind
+  // A Starter or Professional team's plan and its users: PlanRecord
+  // {standaloneTeamPlanPermsEnabledAt}, PlanUserRecord {id, userId,
+  // dbBackedPermission: admin, member or guest}
+  teamMembers: (teamId) => ["StandaloneTeamMembersModalView", "42052f9b2c42d79344172a22041a9c3d1cd4561e424194436a6fda2eb2e0bc88", { firstPageSize: null, teamId }],
   teamTrash: (teamId) => ["TrashedFilesPageView", "42d3b73b9539e50b4687b882c9c9a66ef15d131025923dfe72bf93ce0fd1c93b", { __requestId: "ligma-trash-" + teamId, creatorFilter: "all", cursor: null, fileTypeFilter: "all", firstPageSize: 100, planId: teamId, planType: "team", queryParams: null, sortDirection: "DESC", sortType: "trashed_at" }],
 };
 
@@ -1737,8 +2066,10 @@ async function start() {
     const byOrg = {};
     teams.forEach((t, i) => {
       const rows = Array.isArray(folders[i]?.folder_rows) ? folders[i].folder_rows : [];
-      const projects = rows.filter((f) => !f.trashed_at && !f.deleted_at && !f.is_abandoned_drafts && !DRAFT_FOLDERS.has(f.id)).map((f) => [f.id, f.name ?? f.path]);
-      const team = { id: t.id, name: t.name, color: colorForTeam(t.id), img: t.img_url ?? null, projects };
+      const kept = rows.filter((f) => !f.trashed_at && !f.deleted_at && !f.is_abandoned_drafts && !DRAFT_FOLDERS.has(f.id));
+      for (const f of kept) FOLDER[f.id] = { color: f.color ?? null, description: f.description ?? "", audience: f.sharing_audience_control ?? null, teamAccess: f.team_access ?? null };
+      const projects = kept.map((f) => [f.id, f.name ?? f.path]);
+      const team = { id: t.id, name: t.name, color: colorForTeam(t.id), img: t.img_url ?? null, description: t.description ?? "", projects };
       if (t.org_id) {
         byOrg[t.org_id] ??= plans[plans.push({ id: t.org_id, name: orgs[t.org_id]?.name ?? "Organization", tier: "Organization", teams: [] }) - 1];
         byOrg[t.org_id].teams.push(team);
@@ -1893,7 +2224,7 @@ function rememberTrash() {
 // Shown at once next time, then brought up to date
 function saveCache() {
   const files = FILES.filter((f) => !f.trashed && (f.recent || f.starred)).map(({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread, recent, thumbUrl, bg }) => ({ key, name, type, editor, project, team, viewedAt, touchedAt, starred, unread, recent: !!recent, thumbUrl, bg }));
-  store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, email, img_url, community_profile_handle }) => ({ id, name, email, img_url, community_profile_handle })), files });
+  store.set(`cache:${Live.uid}`, { at: Date.now(), plans: PLANS, folders: FOLDER, drafts: Live.draftsByTeam, users: Live.users.map(({ id, name, email, img_url, community_profile_handle }) => ({ id, name, email, img_url, community_profile_handle })), files });
 }
 // Figma's file browser opens on the account in its `recent_user_data` cookie
 // (a JSON string of base64 JSON, `fileBrowserUserId` among the rest). Ligma's
@@ -1935,6 +2266,7 @@ function showCached() {
   Live.draftsByTeam = cache.drafts ?? {};
   for (const id of Object.values(Live.draftsByTeam)) DRAFT_FOLDERS.add(id);
   PLANS.splice(0, PLANS.length, ...cache.plans);
+  Object.assign(FOLDER, cache.folders);
   for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
   // Previews are links Figma signs for 7 days: kept for 6
   const fresh = Date.now() - cache.at < 6 * DAY;
@@ -2033,7 +2365,7 @@ const state = {
   type: "all",
   // Recents as rows with small previews, or as cards: rows on Home, cards
   // on the Recents page, until changed
-  layout: { home: store.get("layout:home", "rows"), recents: store.get("layout:recents", "grid"), shared: store.get("layout:shared", "grid"), drafts: store.get("layout:drafts", "grid") },
+  layout: { home: store.get("layout:home", "rows"), recents: store.get("layout:recents", "grid"), shared: store.get("layout:shared", "grid"), drafts: store.get("layout:drafts", "grid"), projects: store.get("layout:projects", "grid") },
   inbox: "all",
   sel: new Set(),
   anchor: null,
@@ -2055,6 +2387,7 @@ function viewName(view) {
   const team = /^[dt]:/.test(view) && teamById(view.slice(2))?.team.name;
   if (view.startsWith("d:")) return team && `Drafts · ${team}`;
   if (view.startsWith("t:")) return team && `Trash · ${team}`;
+  if (view.startsWith("s:")) return teamById(view.slice(2))?.team.name;
   return { home: "Home", recents: "Recents", starred: "Starred", shared: "Shared with you", drafts: "Drafts", trash: "Trash" }[view];
 }
 
@@ -2104,15 +2437,33 @@ const head = $("#head");
 const filters = $("#filters");
 const scroller = $("#scroll");
 const rail = $("#rail");
+// The window for a team's settings and people, or for sharing a project
+const win = $("#win");
+// ask: someone about to be removed, with what that does to their files.
+// picBusy: a new team picture on its way to Figma
+const winState = { kind: null, team: null, project: null, anchor: null, back: null, editing: null, level: null, busy: false, ask: null, picBusy: false };
+// A team's people are managed in its window or on its settings page, with
+// the same rows and controls: the window while it's open, else the page
+const pageState = { kind: "team", team: null, project: null, ask: null, level: null, picBusy: false };
+const onDash = () => dashForced || (!win.classList.contains("open") && !!settingsTeam());
+function ws() {
+  if (!onDash()) return winState;
+  if (pageState.team !== settingsTeam()) Object.assign(pageState, { team: settingsTeam(), ask: null, level: null, picBusy: false });
+  return pageState;
+}
+const peopleRoot = () => (onDash() ? scroller : win);
 
+// iconName: one of Figma's icons, or an icon's own markup
 function navRow(view, iconName, label, count, extra = "", tail = "") {
   const on = state.view === view;
   const drop = ["recents", "starred"].includes(view) ? "" : `data-drop="${view}"`;
   const n = tail || `<span class="n">${count ?? ""}</span>`;
-  return `<button class="nav ${extra}${on ? " on" : ""}" data-key="nav:${view}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${fig(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
+  return `<button class="nav ${extra}${on ? " on" : ""}" data-key="nav:${view}" data-view="${view}" ${drop} ${on ? 'aria-current="page"' : ""}>${iconName.startsWith("<") ? iconName : fig(iconName)}<span class="lbl">${esc(label)}</span>${n}</button>`;
 }
 
 function renderSide() {
+  // Not while a project is renamed in place: it redraws once that's done
+  if ($(".lbl input", side)) return;
   const live = FILES.filter((f) => !f.trashed);
   // Counts only for lists loaded whole
   const count = (pred, view) => (LIVE && view && !Live.ready.has(view) ? "" : live.filter(pred).length || "");
@@ -2138,13 +2489,15 @@ function renderSide() {
     const open = !state.collapsed.has(team.id);
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
-    let out = `<div class="team-row" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
+    const lit = (win.classList.contains("open") && winState.kind === "team" && winState.team === team.id) || state.view === `s:${team.id}`;
+    let out = `<div class="team-row${lit ? " lit" : ""}" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
+    out += `<button class="team-more" data-team-more="${team.id}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(team.name)}" title="Settings, people and more">${icon("more")}</button>`;
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${fig(isStarred ? "starOn" : "star")}</button></div>`;
     if (!open) return out;
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
     if (!LIVE || Live.ready.has("starred")) countTeam(team);
     const files = (id, view) => (LIVE && LG.count(id) !== undefined ? LG.count(id) || "" : count((f) => f.project === id, view));
-    for (const [id, name] of team.projects) out += navRow("p:" + id, "folder", name, files(id, "p:" + id), "proj");
+    for (const [id, name] of team.projects) out += navRow("p:" + id, folderIcon(id), name, files(id, "p:" + id), "proj");
     if (!LIVE || Live.draftsByTeam[team.id]) out += navRow("d:" + team.id, "file", "Drafts", files(Live.draftsByTeam[team.id], "d:" + team.id), "proj");
     out += navRow("t:" + team.id, "trash", "Trash", count((f) => f.trashed && f.team === team.id), "proj");
     return out;
@@ -2170,16 +2523,22 @@ function renderSide() {
 }
 
 function renderHead(count) {
+  // Not while the project's name or description is being edited
+  if ($("input", head)) return;
   const name = viewName(state.view);
-  const n = state.mode === "loading" || state.view === "home" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  const settings = settingsTeam() && teamById(settingsTeam());
+  const n = settings ? `${tierOf(settings.plan)} · Settings` : state.mode === "loading" || state.view === "home" ? "" : `${count} ${count === 1 ? "file" : "files"}`;
+  const project = state.view.startsWith("p:") ? PROJECTS[state.view.slice(2)] : null;
   morph(head, `<button class="menu-btn" data-act="side" aria-label="Show sidebar">${icon("side")}</button>
-    <h1><span>${esc(name)}</span><small>${n}</small></h1><span class="grow"></span>
+    ${project ? projectTitle(project, n) : `<h1><span>${esc(name)}</span><small>${n}</small></h1>`}<span class="grow"></span>${project ? projectTools(project) : ""}
     <button id="find" data-act="search" aria-label="Search">${icon("search")}<span class="lbl">Search files, projects and actions</span><kbd>${MOD}K</kbd></button>
     <div class="new"><button data-act="new" title="New Design file">${icon("plus")}New</button><button data-act="new-menu" aria-label="More kinds of file" aria-haspopup="menu">${icon("down")}</button></div>`);
 }
 
 function renderFilters() {
   let html;
+  // A team's settings page has no files to filter
+  if (settingsTeam()) return morph(filters, LIVE && Live.error ? `<div class="banner" role="alert">${esc(`Couldn't reach Figma (${Live.error})`)}<button data-act="retry">Try again</button></div>` : "");
   // A tab for each kind of file you have, in the New menu's order, and the
   // one picked even if its last file went
   const have = new Set(FILES.filter((f) => !f.trashed).map((f) => f.type));
@@ -2192,7 +2551,6 @@ function renderFilters() {
   else if (inTrash() && LIVE) html += `<span class="fnote">Every team's trash in Figma. Restore a file, or delete it for good</span>`;
   else if (inTrash()) html += `<span class="fnote">Files in the trash are deleted for good after 30 days</span>`;
   else if (state.view === "starred" && FILES.some((f) => f.starred && !f.trashed)) html += `<span class="fnote">Drag files, or press ${MAC ? "⌥←" : "Alt+Left"} and ${MAC ? "⌥→" : "Alt+Right"}, to put them in your order</span>`;
-  else if (state.view.startsWith("p:")) html += `<a class="fnote" href="https://www.figma.com/files" target="_blank" rel="noopener">Sharing and permissions in Figma${icon("ext")}</a>`;
   else if (layoutOf(state.view)) html += layoutToggle(layoutOf(state.view));
   morph(filters, html);
 }
@@ -2235,7 +2593,7 @@ function rowHtml(file) {
   return `<div class="card row" role="option" id="c-${file.id}" data-id="${file.id}" tabindex="-1" aria-selected="${state.sel.has(file.id)}" aria-labelledby="n-${file.id}" aria-describedby="d-${file.id}" draggable="true">
     <div class="thumb" data-thumb="${file.id}" aria-hidden="true"></div>
     <div class="name">${glyph(file.type)}<span class="nm" id="n-${file.id}">${esc(file.name)}</span>${badge}</div>
-    <div class="where">${esc(state.view === "shared" && placeOf(file.project) === "Shared with you" ? "" : placeOf(file.project))}</div>
+    <div class="where">${esc((state.view === "shared" && placeOf(file.project) === "Shared with you") || /^[pd]:/.test(state.view) ? "" : placeOf(file.project))}</div>
     <div class="when" id="d-${file.id}">${esc(state.view === "shared" && file.sharedAt ? sharedWhen(file) : activity(file))}</div>
     <div class="end">${facesBox(file.id, " inline")}<div class="tools"><button class="tool more" tabindex="-1" aria-label="More actions" aria-haspopup="menu">${icon("more")}</button><button class="tool star${file.starred ? " starred" : ""}" tabindex="-1" aria-label="${file.starred ? "Remove from starred" : "Star"}">${icon("star")}</button></div></div></div>`;
 }
@@ -2246,10 +2604,10 @@ const fileList = (files, label, layout) =>
 
 // Rows or cards for Recents, here and on Home
 // `where`: "home" (Home's Recents, rows unless changed), or a page with
-// cards unless changed: "recents", "shared" or "drafts" (every Drafts).
-// Each keeps its own
-const LAYOUT_LABELS = { home: "Recents", recents: "Recents", shared: "Shared with you", drafts: "Drafts" };
-const layoutOf = (view) => (view === "recents" || view === "shared" ? view : view === "drafts" || view.startsWith("d:") ? "drafts" : null);
+// cards unless changed: "recents", "shared", "drafts" (every Drafts) or
+// "projects" (every project). Each keeps its own
+const LAYOUT_LABELS = { home: "Recents", recents: "Recents", shared: "Shared with you", drafts: "Drafts", projects: "this project" };
+const layoutOf = (view) => (view === "recents" || view === "shared" ? view : view === "drafts" || view.startsWith("d:") ? "drafts" : view.startsWith("p:") ? "projects" : null);
 const layoutToggle = (where) =>
   `<div class="seg lay" role="group" aria-label="Show ${LAYOUT_LABELS[where]} as">${[["rows", "list", "List"], ["grid", "grid", "Grid"]].map(([value, iconName, label]) => `<button data-layout="${where}:${value}" aria-pressed="${state.layout[where] === value}" aria-label="${label}" title="${label}">${icon(iconName)}</button>`).join("")}</div>`;
 function setLayout(choice) {
@@ -2314,7 +2672,7 @@ function projectTile(p) {
   const cells = shots.length ? shots.map((f) => `<span class="thumb" data-thumb="${f.id}"></span>`).join("") : `<span class="none">${figmaIcon("folder", 24)}</span>`;
   return `<button class="ptile" data-go="p:${p.id}" data-project="${p.id}" aria-label="${esc(`${p.name}, ${p.team.name}`)}">
     <span class="mosaic n${shots.length}" aria-hidden="true">${cells}</span>
-    <span class="pname">${figmaIcon("folder", 16)}<b>${esc(p.name)}</b></span>
+    <span class="pname">${folderIcon(p.id)}<b>${esc(p.name)}</b></span>
     <span class="pmeta"><span>${esc(p.team.name)} · ${esc(short(p.at))}</span><span data-pcount="${p.id}">${esc(filesText(LIVE ? LG.count(p.id) : p.files.length))}</span></span></button>`;
 }
 
@@ -2323,8 +2681,10 @@ function homeLayout() {
   const [starCols, cols, projectCols] = homeCols.split(",").map(Number);
   const shown = FILES.filter((f) => !f.trashed && (state.type === "all" || f.type === state.type));
   const starredAll = starOrder(shown.filter((f) => f.starred));
-  const starred = starredAll.slice(0, starCols);
-  const taken = new Set(starred.map((f) => f.id));
+  // All of them in one sliding row: each file still shows once, so none of
+  // them shows further down
+  const starred = starredAll;
+  const taken = new Set(starredAll.map((f) => f.id));
   const pool = shown.filter((f) => (LIVE ? f.recent : true) && !taken.has(f.id)).sort((a, b) => b.at - a.at);
   // Who's in a file is a reason too: watch the latest ones
   if (LIVE && Live.ready.has("starred")) for (const f of pool.slice(0, 24)) LG.watch(f.key);
@@ -2351,8 +2711,9 @@ function homeLayout() {
   const recentsLoading = LIVE && !Live.ready.has("recents");
 
   if (open("starred")) files.push(...starred);
+  const arrow = (dir, label) => `<button class="car-btn ${dir}" data-car="${dir === "prev" ? -1 : 1}" tabindex="-1" aria-label="${label}" title="${label}">${icon("right", dir === "prev" ? "flip" : "")}</button>`;
   html += section("starred", "Starred", starredAll.length, starred.length
-    ? `<div class="grid star-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>`
+    ? `<div class="star-car" data-key="star-car" style="--cols:${starCols}"><div class="grid star-grid car" data-key="star-track" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${starred.map((f) => cardHtml(f, { reorder: true })).join("")}</div>${arrow("prev", "Earlier starred files")}${arrow("next", "More starred files")}</div>`
     : starsLoading ? waiting(starCols, "star-grid") : `<p class="hint">Press S on a file, or click the star on its preview, to keep it here</p>`, starredAll.length ? "starred" : null);
   if (recentsLoading) html += `<section class="sec home-sec" data-key="home:waiting">${waiting(cols * 2)}</section>`;
 
@@ -2372,6 +2733,27 @@ function homeLayout() {
   return { html, files, key, any: starsLoading || recentsLoading || starred.length + suggested.length + recents.length > 0 };
 }
 let homeKey = "";
+
+// Starred on Home: which sides have more, for the fades and the arrows
+function carEdges() {
+  const car = $(".star-car", scroller);
+  const track = car && $(".star-grid.car", car);
+  if (!track) return;
+  car.classList.toggle("more-l", track.scrollLeft > 2);
+  car.classList.toggle("more-r", track.scrollLeft + track.clientWidth < track.scrollWidth - 2);
+}
+// An arrow glides the row along by all but one of the cards in view, so
+// the last one seen slides over to be the first
+function slideCar(dir) {
+  const track = $(".star-grid.car", scroller);
+  const card = track?.firstElementChild;
+  if (!card) return;
+  const step = card.offsetWidth + 20;
+  const n = Math.max(1, Math.round(track.clientWidth / step) - 1);
+  track.scrollBy({ left: dir * n * step, behavior: calm() ? "auto" : "smooth" });
+}
+scroller.addEventListener("scroll", (e) => e.target.matches?.(".star-grid.car") && carEdges(), { capture: true, passive: true });
+addEventListener("resize", () => carEdges());
 
 const EMPTY = {
   home: ["home", "Nothing here yet", "Files you open, edit or get comments on show up here", "new"],
@@ -2447,7 +2829,8 @@ function patch(have, want) {
     if (have.nodeValue !== want.nodeValue) have.nodeValue = want.nodeValue;
     return;
   }
-  for (const { name } of [...have.attributes]) if (!want.hasAttribute(name)) have.removeAttribute(name);
+  // A dialog's open is the browser's to keep, set by showModal
+  for (const { name } of [...have.attributes]) if (!want.hasAttribute(name) && !(name === "open" && have.nodeName === "DIALOG")) have.removeAttribute(name);
   for (const { name, value } of want.attributes) if (have.getAttribute(name) !== value) have.setAttribute(name, value);
   // A preview already drawn stays; observeThumbs draws it again if the file's changed
   if (have.dataset.thumb && have.firstChild) return;
@@ -2509,11 +2892,14 @@ function render({ keepScroll = true } = {}) {
     lift.rerender = true;
     return;
   }
+  // Not under a team's name or description being edited on its page
+  if (settingsTeam() && $(".dash .editing", scroller)) return;
   const started = performance.now();
   const ready = LIVE && (state.view === "home" ? Live.ready.has("recents") || Live.ready.has("starred") : Live.ready.has(state.view));
   const home = state.view === "home" && state.mode !== "empty" && (!LIVE || ready) ? homeLayout() : null;
   if (home) homeKey = home.key;
-  const list = state.mode === "empty" ? [] : home ? home.files : viewFiles();
+  const settings = settingsTeam();
+  const list = state.mode === "empty" || settings ? [] : home ? home.files : viewFiles();
   order = list.map((f) => f.id);
   for (const id of state.sel) if (!order.includes(id)) state.sel.delete(id);
   renderSide();
@@ -2521,7 +2907,8 @@ function render({ keepScroll = true } = {}) {
   renderFilters();
   sections = [];
   let html = "";
-  if (state.mode === "loading") html = renderSkeleton();
+  if (settings) html = settingsPage(settings);
+  else if (state.mode === "loading") html = renderSkeleton();
   else if (LIVE && Live.signedOut) html = `<div class="empty"><div class="ic">${icon("users")}</div><h2>Sign in to Figma</h2><p>Your files show here once you're signed in</p><a class="btn primary" href="https://www.figma.com/login">Sign in</a></div>`;
   else if (LIVE && !ready && !Live.error) {
     need(state.view);
@@ -2529,8 +2916,10 @@ function render({ keepScroll = true } = {}) {
   } else if (home) html = home.any ? home.html : renderEmpty();
   else if (!list.length) html = renderEmpty();
   else if (state.view === "starred") html = `<section class="sec"><div class="grid star-grid" id="starred-grid" role="listbox" aria-multiselectable="true" aria-label="Starred, drag to reorder">${list.map(cardHtml).join("")}</div></section>`;
-  // Shared with you and Drafts: one grid, newest first, no dates over it
-  else if (state.view === "shared" || state.view === "drafts" || state.view.startsWith("d:")) html = `<section class="sec">${fileList(list, viewName(state.view), state.layout[layoutOf(state.view)])}</section>`;
+  // Shared with you, Drafts and projects: one list, newest first, no dates
+  // over it
+  // A project holds few files, so they're as big as Starred's
+  else if (state.view === "shared" || state.view === "drafts" || /^[dp]:/.test(state.view)) html = `<section class="sec${state.view.startsWith("p:") ? " roomy" : ""}">${fileList(list, viewName(state.view), state.layout[layoutOf(state.view)])}</section>`;
   else {
     for (const file of list) {
       const t = timeOf(file);
@@ -2554,6 +2943,8 @@ function render({ keepScroll = true } = {}) {
   const boxing = marquee.isConnected;
   marquee.remove();
   morph(scroller, html);
+  if (settings) openFlows();
+  if (home) carEdges();
   if (boxing) scroller.append(marquee);
   if (box) box.cards = null;
   // Otherwise the browser keeps what's in view where it is, as content
@@ -3031,7 +3422,7 @@ function toggleTeamStar(id) {
   store.set(pinsKey(), [...pinnedTeams]);
   state.collapsed.delete("sec:starred");
   toast(pin ? `Pinned ${name} to the top` : `Unpinned ${name}`, () => toggleTeamStar(id));
-  renderSide();
+  settingsTeam() === id ? render() : renderSide();
 }
 
 // Where new things go: the team in view, else the first pinned one, else
@@ -3039,7 +3430,7 @@ function toggleTeamStar(id) {
 function currentTeam() {
   const view = state.view;
   if (view.startsWith("p:")) return PROJECTS[view.slice(2)]?.team.id;
-  if (view.startsWith("d:") || view.startsWith("t:")) return view.slice(2);
+  if (/^[dts]:/.test(view)) return view.slice(2);
   return [...pinnedTeams][0] ?? FILES.filter((f) => f.recent && f.team).sort((a, b) => b.at - a.at)[0]?.team ?? PLANS[0]?.teams[0]?.id;
 }
 
@@ -3123,15 +3514,1811 @@ function rename(id) {
   input.addEventListener("blur", () => finish(true));
 }
 
-function go(view) {
+/* Projects: what Figma's folder menu and settings offer, where the project
+   shows. Its header in its view, its row in the sidebar and its tile on
+   Home, each with the same menu */
+
+const projectUrl = (id) => `https://www.figma.com/files/project/${id}`;
+const allTeams = () => PLANS.flatMap((plan) => plan.teams);
+
+function projectTitle(p, count) {
+  const desc = FOLDER[p.id]?.description ?? "";
+  const color = FOLDER_COLORS.find(([key]) => key === FOLDER[p.id]?.color)?.[1];
+  return `<h1 class="ptitle"><button class="hb" data-pact="color" aria-haspopup="menu" aria-label="Color${color ? `, ${color}` : ""}" title="Color">${folderIcon(p.id)}</button>` +
+    `<button class="hname" data-pact="rename" title="Rename">${esc(p.name)}</button><small>${count}</small>` +
+    `<button class="hdesc${desc ? "" : " blank"}" data-pact="describe" title="${desc ? esc(desc) : "Add a description"}">${esc(desc || "Add a description")}</button></h1>`;
+}
+// What everyone in the team (or organization) can do with a project:
+// edit, view or nothing, which leaves it to people invited to it
+function accessOf(id) {
+  const f = FOLDER[id] ?? {};
+  if (f.audience) return f.audience === "invite_only" ? "none" : /view/.test(f.audience) ? "view" : "edit";
+  return f.teamAccess === "team_view" ? "view" : f.teamAccess === "team_access_disabled" ? "none" : "edit";
+}
+const orgWide = (id) => /^org_/.test(FOLDER[id]?.audience ?? "");
+// Who has the project, as the team gets it: the chip that opens sharing
+function accessText(p) {
+  const who = orgWide(p.id) ? "Organization" : "Team";
+  return { edit: `${who} can edit`, view: `${who} can view`, none: "Invited people only" }[accessOf(p.id)];
+}
+function projectTools(p) {
+  const open = win.classList.contains("open") && winState.kind === "share" && winState.project === p.id;
+  return `<button class="pill access" data-pact="share" aria-haspopup="dialog" aria-expanded="${open}" title="Share ${esc(p.name)}">${fig("users")}<span>${esc(accessText(p))}</span></button>` +
+    `<button class="hb" data-pact="more" aria-haspopup="menu" aria-label="More for ${esc(p.name)}" title="More">${icon("more")}</button>`;
+}
+
+function colorItems(id) {
+  return FOLDER_COLORS.map(([key, label, hex]) => ({ label, iconHtml: folderIcon(id, hex), checked: FOLDER[id]?.color === key, act: () => setProjectColor(id, key) }));
+}
+function projectMenu(id, at, { open = false } = {}) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  const others = allTeams().filter((t) => t.id !== p.team.id);
+  showMenu([
+    ...(open ? [{ label: "Open", act: () => go("p:" + id) }, null] : []),
+    { label: "Rename", act: () => renameProject(id) },
+    { label: FOLDER[id]?.description ? "Edit description" : "Add a description", act: () => describeProject(id) },
+    { label: "Color", sub: colorItems(id) },
+    null,
+    { label: "Share…", act: () => openShare(id, at) },
+    { label: "Copy link", act: () => copyProjectLink(id) },
+    { label: "Move to team", disabled: !others.length, sub: others.map((t) => ({ label: t.name, act: () => moveProject(id, t.id) })) },
+    { label: "Transfer or send a copy", ext: true, act: () => window.open(projectUrl(id), "_blank", "noopener") },
+    null,
+    { label: "Move to trash", act: () => trashProject(id) },
+  ], at);
+}
+
+head.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-pact]");
+  const id = state.view.startsWith("p:") && state.view.slice(2);
+  if (!button || !id || !PROJECTS[id]) return;
+  const at = button.getBoundingClientRect();
+  const act = button.dataset.pact;
+  if (act === "color") showMenu(colorItems(id), at);
+  else if (act === "rename") renameProject(id);
+  else if (act === "describe") describeProject(id);
+  else if (act === "share") winState.kind === "share" && win.classList.contains("open") ? closeWin() : openShare(id, at);
+  else if (act === "more") projectMenu(id, at);
+});
+
+// Focus goes back to what was edited for the keyboard, not the pointer
+function refocus(el) {
+  if (!el || !document.documentElement.classList.contains("kbd")) return false;
+  el.focus({ preventScroll: true });
+  return true;
+}
+
+// Edits a name or description where it shows: `el` gives way to a field
+// until Enter, Escape or a click elsewhere. `wrap` makes what holds the
+// field, by default a span like `el`
+function editInPlace(el, { value, label, multiline = false, wrap }, save, after) {
+  const input = document.createElement(multiline ? "textarea" : "input");
+  input.value = value;
+  input.setAttribute("aria-label", label);
+  input.spellcheck = false;
+  if (multiline) input.rows = 3;
+  let box;
+  if (wrap) box = wrap(input);
+  else {
+    box = document.createElement("span");
+    box.className = el.className + " editing";
+    box.append(input);
+  }
+  el.replaceWith(box);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    const next = input.value.trim();
+    box.remove();
+    if (keep && next !== value.trim()) save(next);
+    after?.();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && !(multiline && e.shiftKey)) {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  for (const type of ["click", "pointerdown", "dblclick", "contextmenu"]) input.addEventListener(type, (e) => e.stopPropagation());
+  input.addEventListener("blur", () => finish(true));
+}
+
+// Renames in place: in the header when the project is open, else on its
+// row in the sidebar, else it opens to rename there
+function renameProject(id) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  const row = $(`.nav[data-view="p:${CSS.escape(id)}"]`, side);
+  if (state.view !== "p:" + id && row) {
+    return editInPlace(row, {
+      value: p.name,
+      label: "Project name",
+      wrap: (input) => {
+        const box = document.createElement("div");
+        box.className = "nav proj on";
+        box.style.setProperty("--fc", folderHex(id));
+        box.innerHTML = `${folderIcon(id)}<span class="lbl"></span>`;
+        $(".lbl", box).append(input);
+        return box;
+      },
+    }, (name) => saveProjectName(id, name), () => {
+      renderSide();
+      refocus($(`.nav[data-view="p:${CSS.escape(id)}"]`, side));
+    });
+  }
+  if (state.view !== "p:" + id) go("p:" + id);
+  const el = $(".hname", head);
+  if (el) editInPlace(el, { value: p.name, label: "Project name" }, (name) => saveProjectName(id, name), () => {
+    render();
+    refocus($(".hname", head));
+  });
+}
+function saveProjectName(id, name) {
+  const p = PROJECTS[id];
+  if (!name || !p || name === p.name) return;
+  const old = p.name;
+  const set = (to) => {
+    p.name = to;
+    const row = p.team.projects.find(([pid]) => pid === id);
+    if (row) row[1] = to;
+  };
+  const put = (to, from) => {
+    set(to);
+    render();
+    if (LIVE) send(api("/api/folders/rename", { method: "PUT", json: { folder_id: id, name: to } }), () => set(from), "rename the project");
+  };
+  put(name, old);
+  toast(`Renamed to “${name}”`, () => put(old, name));
+}
+
+function describeProject(id) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  if (state.view !== "p:" + id) go("p:" + id);
+  const el = $(".hdesc", head);
+  if (!el) return;
+  const old = FOLDER[id]?.description ?? "";
+  editInPlace(el, { value: old, label: `Description of ${p.name}` }, (text) => {
+    const put = (to, from) => setFolder(id, "description", to, from, () => api(`/api/folders/${id}/description`, { method: "PUT", json: { description: to } }), "save the description");
+    put(text, old);
+    toast(text ? "Saved the description" : "Removed the description", () => put(old, text));
+  }, () => {
+    render();
+    refocus($(".hdesc", head));
+  });
+}
+
+// One of a project's settings, here at once and then in Figma. If Figma
+// refuses it, it goes back
+function setFolder(id, field, to, from, request, what) {
+  const f = (FOLDER[id] ??= {});
+  f[field] = to;
+  render();
+  if (win.classList.contains("open")) drawWin();
+  if (LIVE) send(request(), () => (f[field] = from), what);
+}
+
+function setProjectColor(id, color) {
+  const old = FOLDER[id]?.color ?? null;
+  if (old === color) return;
+  const put = (to, from) => setFolder(id, "color", to, from, () => api(`/api/folders/${id}/color`, { method: "PUT", json: { color: to } }), "change the color");
+  put(color, old);
+  const name = FOLDER_COLORS.find(([key]) => key === color)[1];
+  toast(`Made ${PROJECTS[id].name} ${name.toLowerCase()}`, () => put(old, color));
+}
+
+function copyProjectLink(id) {
+  navigator.clipboard?.writeText(projectUrl(id)).catch(() => {});
+  toast("Copied link");
+}
+
+function moveProject(id, teamId) {
+  const p = PROJECTS[id];
+  const dest = teamById(teamId);
+  if (!p || !dest) return;
+  const source = p.team;
+  const shift = (a, b) => {
+    const i = a.projects.findIndex(([pid]) => pid === id);
+    if (i < 0) return;
+    b.projects.push(...a.projects.splice(i, 1));
+    p.team = b;
+    p.plan = teamById(b.id).plan;
+    for (const f of FILES) if (f.project === id) f.team = b.id;
+    render();
+  };
+  const put = (a, b) => {
+    shift(a, b);
+    if (LIVE) send(api("/api/folders/move", { method: "PUT", json: { folder_id: id, team_id: b.id } }), () => shift(b, a), "move the project");
+  };
+  state.collapsed.delete(teamId);
+  put(source, dest.team);
+  toast(`Moved ${p.name} to ${dest.team.name}`, () => put(dest.team, source));
+}
+
+// Into Figma's trash with its files, as Figma does, with a way back
+function trashProject(id) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  const team = p.team;
+  const at = team.projects.findIndex(([pid]) => pid === id);
+  const row = team.projects[at];
+  const files = FILES.filter((f) => f.project === id && !f.trashed);
+  const drop = () => {
+    const i = team.projects.indexOf(row);
+    if (i >= 0) team.projects.splice(i, 1);
+    delete PROJECTS[id];
+    for (const f of files) f.trashed = true;
+    if (winState.project === id) closeWin(false);
+    if (state.view === "p:" + id) go("home");
+    else render();
+  };
+  const back = () => {
+    if (!team.projects.includes(row)) team.projects.splice(Math.min(at, team.projects.length), 0, row);
+    PROJECTS[id] = p;
+    for (const f of files) f.trashed = false;
+    render();
+  };
+  drop();
+  if (LIVE) send(api(`/api/folders/trash/${id}`, { method: "PUT" }), back, "move the project to the trash");
+  toast(`Moved ${p.name} to the trash`, () => {
+    back();
+    if (LIVE) send(api(`/api/folders/restore/${id}`, { method: "PUT", json: { destination_team_id: team.id } }), drop, "restore the project");
+  });
+}
+
+/* Teams: the menu on a team, and a window with its picture, name,
+   description, people and invites. Seats, libraries, AI, transfer and
+   deleting the team stay in Figma: they bill or can't be undone */
+
+// Only an Organization's teams have roles. Starter and Professional teams
+// stand alone: everyone in them can edit, and the owner runs them
+const standalone = (plan) => plan.tier !== "Organization";
+const canAdmin = (id) => TEAM_INFO[id]?.admin ?? true;
+
+function teamMenu(id, at) {
+  const found = teamById(id);
+  if (!found) return;
+  const pinned = STARRED_TEAMS().has(id);
+  showMenu([
+    { label: "Settings", act: () => go(`s:${id}`) },
+    { label: "Invite people…", act: () => openTeamWin(id, at, "invite") },
+    { label: "Copy invite link", act: () => copyTeamLink(id) },
+    null,
+    { label: "Rename", act: () => openTeamWin(id, at, "rename") },
+    ...(canAdmin(id) ? [{ label: "Change picture…", act: () => pickTeamImage(id) }] : []),
+    { label: pinned ? "Unpin team" : "Pin to the top", act: () => toggleTeamStar(id) },
+    { label: "New project here", act: () => newProject(at instanceof DOMRect ? { x: at.left, y: at.bottom } : at, id) },
+    null,
+    { label: "Open team in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/team/${id}`, "_blank") },
+  ], at);
+}
+
+const SAMPLE_ROLES = { me: 999, sam: 900, priya: 300, ana: 100, jonas: null };
+const byPeople = (a, b) => b.me - a.me || a.pending - b.pending || (b.level ?? 0) - (a.level ?? 0) || a.name.localeCompare(b.name);
+async function loadTeamInfo(id) {
+  const { team, plan } = teamById(id) ?? {};
+  if (!team) return;
+  if (!LIVE) {
+    const own = standalone(plan);
+    const members = Object.entries(SAMPLE_ROLES).map(([pid, level]) => {
+      level = own && level !== null && level < ROLE_LEVELS.owner ? ROLE_LEVELS.editor : level;
+      return { id: pid, name: PEOPLE[pid].name, email: `${pid}@example.com`, color: PEOPLE[pid].color, level, role: level === null ? null : { id: `role-${pid}`, level }, pending: false, me: pid === "me" };
+    });
+    members.push({ id: "invite:lee", name: "lee@example.com", email: null, level: ROLE_LEVELS.editor, role: { id: "role-lee", level: ROLE_LEVELS.editor }, pending: true, me: false });
+    TEAM_INFO[id] ??= { description: team.description ?? "", admin: true, members: members.sort(byPeople) };
+    return;
+  }
+  const [meta, members, roles] = await Promise.all([api(`/api/teams/${id}`), api(`/api/teams/${id}/members`), api(`/api/roles/team/${id}`).catch(() => [])]);
+  team.name = meta.name ?? team.name;
+  team.img = meta.img_url ?? team.img;
+  team.img500 = meta.img_url_500_500 ?? team.img500 ?? null;
+  team.description = meta.description ?? "";
+  const list = (Array.isArray(members) ? members : []).filter((m) => m.id).map((m) => ({ id: m.id, name: m.name || m.email, email: m.email, img_url: m.img_url, level: m.team_role?.level ?? null, role: m.team_role ?? null, pending: false, me: m.id === Live.uid }));
+  // Invites not taken up yet: roles with an email and no one behind them
+  for (const r of Array.isArray(roles) ? roles : []) {
+    if (r.pending && !list.some((m) => m.role?.id === r.id)) list.push({ id: `invite:${r.id}`, name: r.pending_email ?? r.user?.email ?? "Someone", email: null, level: r.level, role: r, pending: true, me: false });
+  }
+  list.sort(byPeople);
+  // A Starter or Professional team keeps who's an admin on its plan's
+  // users, which only LiveGraph has: Figma refuses to set their team roles
+  // ("Cannot set team role in Standalone team"), whatever the plan's
+  // standaloneTeamPlanPermsEnabledAt says
+  let planId = null;
+  if (standalone(teamById(id).plan)) {
+    try {
+      const store = await Promise.race([LG.load(VIEWS.teamMembers(id)), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 4000))]);
+      const plan = Object.values(store.PlanRecord ?? {}).find((r) => r.planParentId === id);
+      if (plan) {
+        planId = plan.id;
+        const users = Object.values(store.PlanUserRecord ?? {}).filter((u) => u.planParentId === id);
+        for (const m of list) {
+          const u = users.find((x) => x.userId === m.id);
+          if (!u) continue;
+          m.planUser = { id: u.id, permission: u.dbBackedPermission };
+          if (m.level == null || m.level < ROLE_LEVELS.owner) m.level = u.dbBackedPermission === "admin" ? ROLE_LEVELS.admin : u.dbBackedPermission === "member" ? ROLE_LEVELS.editor : m.level;
+        }
+      }
+    } catch {}
+  }
+  TEAM_INFO[id] = { description: team.description, admin: (list.find((m) => m.me)?.level ?? 0) >= ROLE_LEVELS.admin, members: list, planId };
+}
+
+/* A team's picture: square, as Figma keeps them, at 120 and 500 px.
+   Figma can replace one but not take it away */
+
+function pickTeamImage(id) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/png,image/jpeg,image/gif,image/webp";
+  input.addEventListener("change", () => input.files[0] && setTeamImage(id, input.files[0]));
+  input.click();
+}
+async function squareJpeg(bitmap, size) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  // JPEG has no transparency: a logo's clear parts go white, not black
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, size, size);
+  ctx.imageSmoothingQuality = "high";
+  const side = Math.min(bitmap.width, bitmap.height);
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+// Figma's own upload for profile pictures, named by the image's SHA-1
+async function uploadProfileImage(bytes) {
+  const sha1 = [...new Uint8Array(await crypto.subtle.digest("SHA-1", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const res = await fetch(`/api/upnode/image?purpose=profile&sha1=${sha1}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "image/jpeg", "X-Csrf-Bypass": "yes", "X-Figma-User-ID": Live.uid },
+    body: bytes,
+  });
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {}
+  if (!res.ok || body?.error === true || !body?.meta?.url) throw new Error(body?.message || `Figma answered ${res.status}`);
+  return body.meta.url;
+}
+async function setTeamImage(id, file) {
+  const { team } = teamById(id) ?? {};
+  if (!team) return;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return toast("Couldn't read that image, try a PNG or JPEG");
+  }
+  if (Math.min(bitmap.width, bitmap.height) < 120) return toast("Pick an image at least 120 × 120 px");
+  const [small, large] = await Promise.all([squareJpeg(bitmap, 120), squareJpeg(bitmap, 500)]);
+  bitmap.close();
+  const old = { img: team.img ?? null, img500: team.img500 ?? null };
+  const show = (img, img500, busy = false) => {
+    team.img = img;
+    team.img500 = img500;
+    ws().picBusy = busy;
+    render();
+    drawWin();
+  };
+  const preview = URL.createObjectURL(new Blob([large], { type: "image/jpeg" }));
+  show(preview, null, LIVE);
+  if (!LIVE) return toast(`Changed the picture of ${team.name}`, () => show(old.img, old.img500));
+  try {
+    const [img, img500] = await Promise.all([uploadProfileImage(small), uploadProfileImage(large)]);
+    await api(`/api/teams/${id}`, { method: "PUT", json: { img_url: img, img_url_500_500: img500 } });
+    show(img, img500);
+    // With no picture before, there's none to go back to
+    toast(`Changed the picture of ${team.name}`, old.img && (() => {
+      show(old.img, old.img500);
+      send(api(`/api/teams/${id}`, { method: "PUT", json: { img_url: old.img, img_url_500_500: old.img500 ?? old.img } }), () => show(img, img500), "put the picture back");
+    }));
+  } catch (error) {
+    show(old.img, old.img500);
+    toast(`Couldn't change the picture: ${error.message}`);
+  } finally {
+    URL.revokeObjectURL(preview);
+  }
+}
+
+// A team's invite link, as Figma's Invite by link makes it: Starter and
+// Professional teams only have links that join as members (editor level)
+async function copyTeamLink(id) {
+  const { team, plan } = teamById(id) ?? {};
+  if (!team) return;
+  if (!LIVE) {
+    navigator.clipboard?.writeText(`https://www.figma.com/team_invite/redeem/sample-${id}`).catch(() => {});
+    return toast("Copied the invite link, good for 90 days");
+  }
+  const get = (level) => api("/api/team_join_link", { method: "PUT", json: { team_id: id, level } });
+  try {
+    let meta;
+    try {
+      meta = await get(standalone(plan) ? ROLE_LEVELS.editor : ROLE_LEVELS.viewer);
+    } catch (error) {
+      if (!/editor/i.test(error.message)) throw error;
+      meta = await get(ROLE_LEVELS.editor);
+    }
+    if (meta.disabled || !meta.link?.token) return toast("Invite links are off for this team in Figma");
+    navigator.clipboard?.writeText(`https://www.figma.com/team_invite/redeem/${meta.link.token}`).catch(() => {});
+    toast(`Copied the invite link${meta.link_expiration_days ? `, good for ${meta.link_expiration_days} days` : ""}`);
+  } catch (error) {
+    toast(`Couldn't get the invite link: ${error.message}`);
+  }
+}
+
+/* The window */
+
+function openTeamWin(id, at, focus = null) {
+  if (!teamById(id)) return;
+  openWin({ kind: "team", team: id, project: null }, at, focus);
+  loadTeamInfo(id).then(() => ws().team === id && drawWin(), (error) => {
+    if (ws().team !== id) return;
+    TEAM_INFO[id] = { ...TEAM_INFO[id], error: error.message };
+    drawWin();
+  });
+}
+function openShare(id, at) {
+  const p = PROJECTS[id];
+  if (!p) return;
+  openWin({ kind: "share", team: p.team.id, project: id }, at);
+  loadRoles(id).then(() => ws().project === id && drawWin(), (error) => {
+    if (ws().project !== id) return;
+    SHARED_WITH[id] = { error: error.message };
+    drawWin();
+  });
+}
+
+// Who a project's been shared with: Figma's roles on it
+const SHARED_WITH = {};
+async function loadRoles(id) {
+  if (!LIVE) {
+    SHARED_WITH[id] ??= { list: Object.entries(SAMPLE_ROLES).slice(0, 4).map(([pid, level]) => ({ name: PEOPLE[pid].name, color: PEOPLE[pid].color, id: pid, level: level ?? 300, role: { id: `role-${pid}`, level: level ?? 300 }, pending: false, me: pid === "me" })) };
+    return;
+  }
+  const roles = await api(`/api/roles/folder/${id}`);
+  SHARED_WITH[id] = {
+    list: (Array.isArray(roles) ? roles : []).map((r) => ({ id: r.user?.id ?? r.id, name: r.user?.handle ?? r.pending_email ?? "Someone", img_url: r.user?.img_url, email: null, pending: !!r.pending, level: r.level, role: r, me: r.user_id === Live.uid })).sort(byPeople),
+  };
+}
+
+function openWin(what, at, focus = null) {
+  closeMenu();
+  closeInbox(false);
+  if (pal.open) pal.close();
+  const again = win.classList.contains("open") && winState.kind === what.kind && winState.team === what.team && winState.project === what.project;
+  if (!again) winState.back = document.activeElement;
+  Object.assign(winState, what, { anchor: at, level: null, ask: null });
+  Object.assign(sugg, { items: [], q: "" });
+  win.classList.add("open");
+  drawWin();
+  renderSide();
+  renderHead(order.length);
+  if (focus === "rename") $("[data-w=rename]", peopleRoot())?.click();
+  else if (focus === "invite") $(".invite input", peopleRoot())?.focus();
+  else win.focus({ preventScroll: true });
+}
+function closeWin(restore = true) {
+  if (!win.classList.contains("open")) return;
+  reblur(win);
+  win.classList.remove("open");
+  win.innerHTML = "";
+  clearSugg();
+  const back = winState.back;
+  Object.assign(winState, { kind: null, team: null, project: null, anchor: null, back: null, ask: null });
+  renderSide();
+  renderHead(order.length);
+  if (restore && back?.isConnected) back.focus({ preventScroll: true });
+}
+// Beside a sidebar row, under a header button, or where the pointer was
+function placeWin() {
+  const at = winState.anchor;
+  const w = win.offsetWidth;
+  const h = win.offsetHeight;
+  let x, y;
+  if (at instanceof DOMRect) {
+    const inSide = at.right <= side.getBoundingClientRect().right + 1;
+    [x, y] = inSide ? [side.getBoundingClientRect().right + 8, at.top - 12] : [at.right - w, at.bottom + 6];
+  } else [x, y] = [at?.x ?? 8, at?.y ?? 8];
+  win.style.left = `${Math.max(8, Math.min(x, innerWidth - w - 8))}px`;
+  win.style.top = `${Math.max(8, Math.min(y, innerHeight - h - 8))}px`;
+}
+
+const levelName = (level) => (level >= ROLE_LEVELS.editor ? "Can edit" : "Can view");
+// control: what takes the role's place, for someone who can be managed
+function personRow(m, tier, control = null) {
+  const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
+  const role = roleName(m.level, tier);
+  const sub = m.pending ? "Invited, hasn't joined yet" : m.email;
+  // An invite's name is the address it went to, veiled like any email
+  const name = nameOrVeil(m.name);
+  return `<div class="mem${m.pending ? " pending" : ""}" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b>${name}${m.me ? " <i>(you)</i>" : ""}</b>${sub ? `<small>${m.pending ? esc(sub) : nameOrVeil(sub)}</small>` : ""}</span>${control ?? `<span class="role">${esc(role)}</span>`}</div>`;
+}
+// Asking before someone's removed, with what happens to their files
+function askRow(m) {
+  const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
+  const ask = ws().ask;
+  const team = ws().kind === "team";
+  const question = m.pending ? `Cancel the invite to ${nameOrVeil(m.name)}?` : `Remove ${nameOrVeil(m.name)} from ${esc(peopleWhere())}?`;
+  let note = m.pending ? "The link in their email stops working" : team ? "They lose access to the team's projects and files" : "They keep any access they have through the team";
+  const impact = ask.impact;
+  if (!m.pending && impact) {
+    const parts = [];
+    if (impact.files_no_owner) parts.push(`${impact.files_no_owner} ${impact.files_no_owner === 1 ? "file" : "files"} will have no owner`);
+    if (impact.files_view_only) parts.push(`${impact.files_view_only} will become view only`);
+    if (impact.drafts_to_unassigned) parts.push(`${impact.drafts_to_unassigned} ${impact.drafts_to_unassigned === 1 ? "draft moves" : "drafts move"} to the team`);
+    if (parts.length) note += `. ${parts.join(", ")}`;
+  }
+  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : m.color ?? colorForTeam(m.id)}">${face}</span><span><b id="ask-q">${question}</b><small>${esc(note)}</small></span><span class="acts"><button class="btn sm" data-w="ask-no">${m.pending ? "Keep" : "Cancel"}</button><button class="btn sm danger solid" data-w="ask-yes" aria-describedby="ask-q">${m.pending ? "Cancel invite" : "Remove"}</button></span></div>`;
+}
+// The people in the open window: a team's members, or who a project's
+// shared with
+const peopleOf = () => (ws().kind === "team" ? TEAM_INFO[ws().team]?.members : SHARED_WITH[ws().project]?.list);
+const peopleWhere = () => (ws().kind === "team" ? teamById(ws().team)?.team.name : PROJECTS[ws().project]?.name) ?? "here";
+// Roles to pick: a project's Can view or Can edit; an Organization team's
+// Can view, Can edit or Admin; a Starter or Professional team's member
+// (who edits) or Admin, as Figma's own team settings offer
+function rolesFor(m) {
+  if (m.pending) return [];
+  if (ws().kind === "share") return m.role ? [ROLE_LEVELS.viewer, ROLE_LEVELS.editor] : [];
+  const info = TEAM_INFO[ws().team];
+  if (!standalone(teamById(ws().team).plan)) return m.role ? [ROLE_LEVELS.viewer, ROLE_LEVELS.editor, ROLE_LEVELS.admin] : [];
+  return m.role || (info?.planId && m.planUser) ? [ROLE_LEVELS.editor, ROLE_LEVELS.admin] : [];
+}
+// The role, as a menu where it can change; elsewhere a ⋯ with what can be
+// done: remove, or resend and cancel an invite. Only for those who manage
+// the people here: a team's admins, a project's editors
+function memberControl(m, i, tier) {
+  const mine = peopleOf()?.find((p) => p.me)?.level ?? 0;
+  const manage = ws().kind === "team" ? TEAM_INFO[ws().team]?.admin : mine >= ROLE_LEVELS.editor;
+  if (!manage || m.me || (m.level ?? 0) >= ROLE_LEVELS.owner) return null;
+  const role = roleName(m.level, tier);
+  if (rolesFor(m).length) return `<button class="ib" data-w="person" data-i="${i}" aria-haspopup="menu" aria-label="${esc(m.name)}: ${esc(role)}">${esc(role)}${icon("down")}</button>`;
+  return `<span class="acts"><span class="role">${esc(role)}</span><button class="ib more" data-w="person" data-i="${i}" aria-haspopup="menu" aria-label="More for ${esc(m.name)}" title="More">${icon("more")}</button></span>`;
+}
+function inviteForm(label, levels) {
+  const level = ws().level ?? levels?.[0] ?? null;
+  ws().level = level;
+  return `<form class="invite" data-w="invite"><input type="text" inputmode="email" autocomplete="off" spellcheck="false" placeholder="Names or emails, comma separated" aria-label="${esc(label)}" role="combobox" aria-autocomplete="list" aria-controls="invite-sugg" aria-expanded="false">` +
+    (levels ? `<button type="button" class="ib" data-w="level" aria-haspopup="menu" aria-label="Invite as: ${levelName(level)}">${levelName(level)}${icon("down")}</button>` : "") +
+    `<button type="submit" class="btn sm primary" disabled>Invite</button></form>`;
+}
+
+/* Suggestions for the invite box, for the address being typed: people in
+   your other teams, those you've invited from here before, then Figma's
+   own contacts, the ones its share dialog suggests */
+const sugg = { q: "", items: [], active: 0, seq: 0, timer: 0, cache: new Map(), members: {}, loading: false };
+const lastAddress = (text) => text.split(/[\s,;]+/).pop() ?? "";
+// Your teams' people, fetched once the invite box is first used, for the
+// teams whose window hasn't been opened
+function loadTeamPeople() {
+  if (!LIVE || sugg.loading) return;
+  sugg.loading = true;
+  const teams = PLANS.flatMap((plan) => plan.teams).filter((team) => !TEAM_INFO[team.id]).slice(0, 20);
+  for (const team of teams) {
+    api(`/api/teams/${team.id}/members`).then((list) => {
+      sugg.members[team.id] = (Array.isArray(list) ? list : []).filter((m) => m.id && m.email).map((m) => ({ id: m.id, name: m.name || m.email, email: m.email, img_url: m.img_url }));
+      if (sugg.q) suggest();
+    }, () => {});
+  }
+}
+function rememberInvited(emails) {
+  const had = store.get("invited", []).filter((e) => !emails.includes(e));
+  store.set("invited", [...emails, ...had].slice(0, 40));
+}
+// Who's already here, or typed in already, isn't suggested again
+function notHere() {
+  const input = $(".invite input", peopleRoot());
+  // Not counting the address still being typed
+  const value = input?.value ?? "";
+  const typed = lastAddress(value) ? emailsIn(value).slice(0, -1) : emailsIn(value);
+  const ids = new Set([LIVE ? Live.uid : "me"]);
+  const emails = new Set(typed.map((e) => e.toLowerCase()));
+  for (const m of peopleOf() ?? []) {
+    ids.add(m.id);
+    if (m.email) emails.add(m.email.toLowerCase());
+    if (m.pending) emails.add(m.name.toLowerCase());
+  }
+  return (p) => !ids.has(p.id) && !emails.has(p.email.toLowerCase());
+}
+// How well someone matches: their name's start, then a word in it or
+// their address's start, then anywhere in the address
+function matchRank(p, q) {
+  const name = (p.name ?? "").toLowerCase();
+  const email = p.email.toLowerCase();
+  if (name.startsWith(q)) return 0;
+  if (name.split(/\s+/).some((w) => w.startsWith(q)) || email.startsWith(q)) return 1;
+  if (email.includes(q)) return 2;
+  return -1;
+}
+function knownPeople() {
+  const people = new Map();
+  const add = (p, why) => p.email && !people.has(p.email.toLowerCase()) && people.set(p.email.toLowerCase(), { ...p, why });
+  if (!LIVE) for (const [pid, p] of Object.entries(PEOPLE)) add({ id: pid, name: p.name, email: `${pid}@example.com`, color: p.color }, "In your teams");
+  const teams = { ...sugg.members };
+  for (const [tid, info] of Object.entries(TEAM_INFO)) teams[tid] = (info.members ?? []).filter((m) => !m.pending);
+  for (const [tid, members] of Object.entries(teams)) {
+    const name = teamById(tid)?.team.name;
+    for (const m of members) add({ id: m.id, name: m.name, email: m.email, img_url: m.img_url }, name ? `In ${name}` : "In your teams");
+  }
+  for (const user of LIVE ? Live.users : []) add({ id: user.id, name: user.name, email: user.email, img_url: user.img_url }, "Your account");
+  for (const email of store.get("invited", [])) add({ id: `invited:${email}`, name: email, email }, "Invited before");
+  return [...people.values()];
+}
+function suggest() {
+  const input = $(".invite input", peopleRoot());
+  const atEnd = input && document.activeElement === input && input.selectionEnd === input.value.length;
+  const q = atEnd ? lastAddress(input.value).toLowerCase() : "";
+  sugg.q = q;
+  clearTimeout(sugg.timer);
+  const seq = ++sugg.seq;
+  if (!q) {
+    sugg.items = [];
+    return drawSugg();
+  }
+  const fresh = notHere();
+  const local = knownPeople().filter(fresh).map((p) => [matchRank(p, q), p]).filter(([r]) => r >= 0).sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).map(([, p]) => p);
+  const show = (found) => {
+    const was = sugg.items[sugg.active]?.email;
+    const seen = new Set();
+    sugg.items = [...local, ...found.filter(fresh)].filter((p) => !seen.has(p.email.toLowerCase()) && seen.add(p.email.toLowerCase())).slice(0, 6);
+    sugg.active = Math.max(0, sugg.items.findIndex((p) => p.email === was));
+    drawSugg();
+  };
+  show(sugg.cache.get(q) ?? []);
+  if (!LIVE || sugg.cache.has(q)) return;
+  sugg.timer = setTimeout(() => {
+    api(`/api/contacts/share?query=${encodeURIComponent(q)}&limit=8`).then((list) => {
+      const found = (Array.isArray(list) ? list : []).filter((c) => c.email).map((c) => ({ id: c.id, name: c.handle || c.email, email: c.email, img_url: c.img_url, why: "Worked with in Figma" }));
+      sugg.cache.set(q, found);
+      if (seq === sugg.seq) show(found);
+    }, () => {});
+  }, 120);
+}
+// The typed part of a name or address, in bold
+function markTyped(text, q) {
+  const at = text.toLowerCase().indexOf(q);
+  if (at < 0 || !q) return esc(text);
+  return esc(text.slice(0, at)) + `<mark>${esc(text.slice(at, at + q.length))}</mark>` + esc(text.slice(at + q.length));
+}
+// Addresses in the list stay veiled, with no click to show them: a click
+// picks the person. The same stand-in each time the list is drawn
+const standIns = new Map();
+function stillVeiled(text) {
+  if (!standIns.has(text)) standIns.set(text, scramble(text));
+  return `<span class="veil"><span aria-hidden="true">${esc(standIns.get(text))}</span></span>`;
+}
+// The list lives outside the window, which would clip it, and is placed
+// under the box as if part of it
+const suggBox = Object.assign(document.createElement("div"), { id: "invite-sugg" });
+suggBox.setAttribute("role", "listbox");
+suggBox.setAttribute("aria-label", "Suggested people");
+document.body.append(suggBox);
+function drawSugg() {
+  const input = $(".invite input", peopleRoot());
+  const show = !!input && sugg.items.length > 0;
+  if (input) input.setAttribute("aria-expanded", String(show));
+  if (!show) {
+    input?.removeAttribute("aria-activedescendant");
+    suggBox.classList.remove("open");
+    suggBox.innerHTML = "";
+    return;
+  }
+  const q = sugg.q;
+  suggBox.innerHTML = sugg.items.map((p, i) => {
+    const face = p.img_url ? `<img src="${esc(p.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((p.name || "?")[0].toUpperCase());
+    const why = `<span class="why">${esc(p.why)}</span>`;
+    const lines = p.name === p.email
+      ? `<span class="ln"><b>${stillVeiled(p.email)}</b>${why}</span>`
+      : `<span class="ln"><b>${markTyped(p.name, q)}</b>${why}</span><small>${stillVeiled(p.email)}</small>`;
+    return `<div class="opt" role="option" id="sugg-${i}" data-sugg="${i}" aria-selected="${i === sugg.active}" aria-label="${esc(p.name === p.email ? "Someone invited before" : p.name)}, ${esc(p.why)}"><span class="av" style="background:${p.img_url ? "transparent" : p.color ?? colorForTeam(p.id)}">${face}</span><span>${lines}</span></div>`;
+  }).join("");
+  input.setAttribute("aria-activedescendant", `sugg-${sugg.active}`);
+  placeSugg();
+  suggBox.classList.add("open");
+}
+function placeSugg() {
+  const input = $(".invite input", peopleRoot());
+  if (!input || !suggBox.classList.contains("open") && !sugg.items.length) return;
+  const r = input.getBoundingClientRect();
+  suggBox.style.left = `${r.left}px`;
+  suggBox.style.top = `${r.bottom}px`;
+  suggBox.style.width = `${r.width}px`;
+  suggBox.style.maxHeight = `${Math.max(120, innerHeight - r.bottom - 8)}px`;
+}
+// The address being typed swapped for the one picked, ready for the next
+function pickSugg(i) {
+  const p = sugg.items[i];
+  const input = $(".invite input", peopleRoot());
+  if (!p || !input) return;
+  const typed = lastAddress(input.value);
+  input.value = `${input.value.slice(0, input.value.length - typed.length)}${p.email}, `;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  sugg.items = [];
+  sugg.q = "";
+  drawSugg();
+  inviteReady();
+}
+function clearSugg() {
+  clearTimeout(sugg.timer);
+  sugg.seq++;
+  sugg.items = [];
+  sugg.q = "";
+  drawSugg();
+}
+
+function teamWinHtml() {
+  const { team, plan } = teamById(ws().team);
+  const info = TEAM_INFO[team.id];
+  const tier = plan.teams.length === 1 ? plan.tier : plan.name;
+  const edit = !info || info.admin;
+  const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
+  const people = info?.members?.filter((m) => !m.pending).length;
+  const count = info?.members ? ` · ${people} ${people === 1 ? "person" : "people"}` : "";
+  const bg = `background:${team.img ? "transparent" : team.color}`;
+  const pic = edit
+    ? `<button class="tm pic${ws().picBusy ? " busy" : ""}" data-w="picture" style="${bg}" aria-label="Change the picture of ${esc(team.name)}" title="Change picture, or drop an image here">${face}<span class="ov">${icon("camera")}</span></button>`
+    : `<span class="tm" style="${bg}">${face}</span>`;
+  let html = `<div class="wh">${pic}<div class="wt"><h2 id="win-title">` +
+    (edit ? `<button class="hname" data-w="rename" title="Rename">${esc(team.name)}</button>` : `<span class="hname static">${esc(team.name)}</span>`) +
+    `</h2><small>${esc(tier)}${count}</small></div><button class="ib x" data-w="close" aria-label="Close" title="Close">${icon("x")}</button></div><div class="wb">`;
+  const about = info?.description ?? team.description ?? "";
+  html += `<section class="ws"><h3>About</h3>` + (edit ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : `<p class="about static${about ? "" : " blank"}">${esc(about || "No description")}</p>`) + `</section>`;
+  // Professional teams pay per seat: their seats are on the settings page
+  const seats = plan.tier === "Pro" && edit ? `<button data-w="all-settings">Seats${fig("right")}</button>` : "";
+  html += `<section class="ws"><h3>People${seats}</h3>`;
+  html += inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor]);
+  html += `<button class="ib wlink" data-w="team-link">${icon("link")}Copy invite link</button>`;
+  if (info?.error) html += `<p class="wnote" role="alert">Couldn't load the people: ${esc(info.error)}</p>`;
+  else if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div><div class="wsk"></div>`;
+  else html += `<div role="list" aria-label="People in ${esc(team.name)}">${info.members.map((m, i) => (ws().ask?.id === m.id ? askRow(m) : personRow(m, tier, memberControl(m, i, tier)))).join("")}</div>`;
+  html += `</section></div><div class="wfoot"><button class="ib" data-w="all-settings">All team settings<span class="x">${fig("right")}</span></button></div>`;
+  return html;
+}
+
+const ACCESS = [["edit", "Can edit"], ["view", "Can view"], ["none", "No access"]];
+function shareWinHtml() {
+  const p = PROJECTS[ws().project];
+  const roles = SHARED_WITH[p.id];
+  const access = ACCESS.find(([k]) => k === accessOf(p.id))[1];
+  const everyone = orgWide(p.id) ? p.plan.name : p.team.name;
+  const tm = p.team.img ? `<img src="${esc(p.team.img)}" alt="" referrerpolicy="no-referrer">` : esc(p.team.name[0]);
+  let html = `<div class="wh"><span class="fbig">${folderIcon(p.id)}</span><div class="wt"><h2 id="win-title"><span class="hname static">Share ${esc(p.name)}</span></h2><small>${esc(p.team.name)}</small></div><button class="ib x" data-w="close" aria-label="Close" title="Close">${icon("x")}</button></div><div class="wb">`;
+  html += `<section class="ws"><h3>Invite</h3>${inviteForm(`Invite people to ${p.name}`, [ROLE_LEVELS.viewer, ROLE_LEVELS.editor])}</section>`;
+  html += `<section class="ws"><h3>Who has access</h3><div role="list" aria-label="Who has access to ${esc(p.name)}">`;
+  html += `<div class="mem" role="listitem"><span class="tm" style="background:${p.team.img ? "transparent" : p.team.color}">${tm}</span><span><b>Anyone in ${esc(everyone)}</b></span>` +
+    // Starter teams' projects are open to the whole team, to edit
+    (p.plan.tier === "Free" ? `<span class="role">${access}</span>` : `<button class="ib" data-w="team-access" aria-haspopup="menu" aria-label="What ${esc(everyone)} can do: ${access}">${access}${icon("down")}</button>`) + `</div>`;
+  if (roles?.error) html += `<p class="wnote" role="alert">Couldn't load who has access: ${esc(roles.error)}</p>`;
+  else if (!roles) html += `<div class="wsk"></div><div class="wsk"></div>`;
+  else html += roles.list.map((m, i) => (ws().ask?.id === m.id ? askRow(m) : personRow(m, null, memberControl(m, i, null)))).join("");
+  html += `</div></section></div><div class="wfoot"><button class="ib" data-w="project-link">${icon("link")}Copy link</button></div>`;
+  return html;
+}
+
+function drawWin() {
+  if (!win.classList.contains("open")) {
+    if (settingsTeam()) drawDash();
+    return;
+  }
+  // Not under a name or description being edited: once it's saved
+  if ($(".editing", peopleRoot())) return;
+  if (ws().kind === "team" && !teamById(ws().team)) return closeWin(false);
+  if (ws().kind === "share" && !PROJECTS[ws().project]) return closeWin(false);
+  const was = $(".invite input", peopleRoot());
+  const typed = was?.value ?? "";
+  const focused = document.activeElement;
+  // What had focus, found again in the new contents: a person's button by
+  // their place in the list
+  const { w, i } = win.contains(focused) ? focused.dataset ?? {} : {};
+  const refocus = was && focused === was ? "emails" : w ? `[data-w="${w}"]${i ? `[data-i="${i}"]` : ""}` : null;
+  win.setAttribute("aria-label", ws().kind === "team" ? "Team settings and people" : "Share");
+  win.innerHTML = ws().kind === "team" ? teamWinHtml() : shareWinHtml();
+  const input = $(".invite input", peopleRoot());
+  if (input) {
+    input.value = typed;
+    inviteReady();
+  }
+  if (refocus === "emails") input?.focus();
+  else if (refocus) $(refocus, peopleRoot())?.focus();
+  if (refocus !== "emails") sugg.items = [];
+  placeWin();
+  drawSugg();
+}
+
+const emailsIn = (text) => text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+const isEmail = (s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+function inviteReady() {
+  const input = $(".invite input", peopleRoot());
+  const emails = emailsIn(input?.value ?? "");
+  const submit = $(".invite [type=submit]", peopleRoot());
+  if (submit) submit.disabled = !emails.length || !emails.every(isEmail);
+}
+
+function sendInvites() {
+  const input = $(".invite input", peopleRoot());
+  const emails = emailsIn(input.value);
+  if (!emails.length || !emails.every(isEmail)) return;
+  const team = ws().kind === "team";
+  const id = team ? ws().team : ws().project;
+  const { plan } = teamById(ws().team);
+  // Starter and Professional teams invite members, with no level to pick:
+  // as their links do
+  const level = team && standalone(plan) ? ROLE_LEVELS.editor : ws().level ?? ROLE_LEVELS.viewer;
+  const done = () => {
+    input.value = "";
+    rememberInvited(emails);
+    clearSugg();
+    inviteReady();
+    toast(emails.length === 1 ? `Invited ${emails[0]}` : `Invited ${emails.length} people`);
+    (team ? loadTeamInfo(id) : loadRoles(id)).then(drawWin, () => {});
+  };
+  if (!LIVE) return done();
+  const submit = $(".invite [type=submit]", peopleRoot());
+  submit.disabled = true;
+  api("/api/invites", { method: "POST", json: { emails, resource_type: team ? "team" : "folder", resource_id_or_key: id, level } })
+    .then(done, (error) => {
+      inviteReady();
+      toast(`Couldn't invite them: ${error.message}`);
+    });
+}
+
+function renameTeam(id) {
+  const { team } = teamById(id) ?? {};
+  const el = $("[data-w=rename]", peopleRoot());
+  if (!team || !el) return;
+  editInPlace(el, { value: team.name, label: "Team name" }, (name) => {
+    if (!name) return;
+    const old = team.name;
+    const put = (to, from) => {
+      team.name = to;
+      render();
+      drawWin();
+      if (LIVE) send(api(`/api/teams/${id}`, { method: "PUT", json: { name: to } }), () => {
+        team.name = from;
+        drawWin();
+      }, "rename the team");
+    };
+    put(name, old);
+    toast(`Renamed to “${name}”`, () => put(old, name));
+  }, () => {
+    drawWin();
+    refocus($("[data-w=rename]", peopleRoot())) || win.focus({ preventScroll: true });
+  });
+}
+function describeTeam(id) {
+  const { team } = teamById(id) ?? {};
+  const el = $("[data-w=about]", peopleRoot());
+  if (!team || !el) return;
+  const info = TEAM_INFO[id];
+  const old = info?.description ?? team.description ?? "";
+  editInPlace(el, { value: old, label: `Description of ${team.name}`, multiline: true }, (text) => {
+    const put = (to, from) => {
+      team.description = to;
+      if (info) info.description = to;
+      drawWin();
+      if (LIVE) send(api(`/api/teams/${id}`, { method: "PUT", json: { description: to } }), () => {
+        team.description = from;
+        if (info) info.description = from;
+        drawWin();
+      }, "save the description");
+    };
+    put(text, old);
+    toast(text ? "Saved the description" : "Removed the description", () => put(old, text));
+  }, () => {
+    drawWin();
+    refocus($("[data-w=about]", peopleRoot())) || win.focus({ preventScroll: true });
+  });
+}
+
+function teamAccessMenu(at) {
+  const id = ws().project;
+  const f = (FOLDER[id] ??= {});
+  const current = accessOf(id);
+  const scope = orgWide(id) ? "organization" : "team";
+  // In the field the project has, keeping its scope (plan, org, workspace)
+  const field = f.audience ? "audience" : "teamAccess";
+  const value = (level) => (field === "audience"
+    ? level === "none" ? "invite_only" : `${f.audience.match(/^(org|plan|workspace)_/)?.[1] ?? "plan"}_${level}`
+    : { edit: "team_edit", view: "team_view", none: "team_access_disabled" }[level]);
+  showMenu(ACCESS.map(([key, label]) => ({
+    label,
+    detail: { edit: `Everyone in the ${scope} can edit`, view: `Everyone in the ${scope} can view`, none: "Only people invited to it" }[key],
+    checked: key === current,
+    act: () => {
+      if (key === current) return;
+      const old = f[field];
+      const put = (to, from) => setFolder(id, field, to, from, () => api(`/api/folders/${id}`, { method: "PUT", json: field === "audience" ? { sharing_audience_control: to } : { team_access: to } }), "change who has access");
+      put(value(key), old);
+      toast(key === "none" ? `Only people invited can open ${PROJECTS[id].name}` : `Everyone in the ${scope} ${label.toLowerCase()}`, () => put(old, value(key)));
+    },
+  })), at);
+}
+
+/* People in a team or a project: roles in a project and in an
+   Organization's teams; removing people and invites anywhere. Nothing here
+   can be undone in Figma but a role, so removing asks first */
+
+const ROLE_DETAIL = {
+  team: { [ROLE_LEVELS.viewer]: "Opens the team's files", [ROLE_LEVELS.editor]: "Edits the team's files", [ROLE_LEVELS.admin]: "Also manages the team, its people and settings" },
+  share: { [ROLE_LEVELS.viewer]: "Opens the project's files", [ROLE_LEVELS.editor]: "Edits the project's files" },
+};
+function personMenu(i, at) {
+  const m = peopleOf()?.[i];
+  if (!m) return;
+  const levels = rolesFor(m);
+  // A member who isn't an admin edits, whatever level their role says
+  const current = m.level >= ROLE_LEVELS.admin ? ROLE_LEVELS.admin : levels.includes(m.level) ? m.level : levels[0];
+  const items = levels.map((level) => ({ label: level === ROLE_LEVELS.admin ? "Admin" : levelName(level), detail: ROLE_DETAIL[ws().kind][level], checked: current === level, act: () => setRole(m, level) }));
+  // Someone given only some of a team's files can join it, as Figma offers
+  if (ws().kind === "team" && !m.role && !m.pending && m.email && !items.length) items.push({ label: "Invite to the team", detail: "They join as a member who can edit", act: () => inviteToTeam(m) });
+  if (items.length) items.push(null);
+  if (m.pending) items.push({ label: "Send the invite again", act: () => resendInvite(m) }, { label: "Cancel invite…", act: () => askRemove(m) });
+  else items.push({ label: `Remove from ${peopleWhere()}…`, act: () => askRemove(m) });
+  showMenu(items, at);
+}
+
+// The window's resource, to know a change still belongs to what's open
+const winKey = () => `${ws().kind}:${ws().kind === "team" ? ws().team : ws().project}`;
+
+function setRole(m, level) {
+  const key = winKey();
+  if (m.level === level) return;
+  const planId = ws().kind === "team" ? TEAM_INFO[ws().team]?.planId : null;
+  // A Starter or Professional team keeps admins on its plan, not the team
+  // role
+  const request = (to) => planId && m.planUser
+    ? api(`/api/plans/${planId}/plan_users/update_permission`, { method: "PUT", json: { plan_user_ids: [m.planUser.id], permission: to >= ROLE_LEVELS.admin ? "admin" : "member" } })
+    : api(`/api/roles/${m.role.id}`, { method: "PUT", json: { ...m.role, level: to, response_version: 2 } });
+  const put = (to, from) => {
+    m.level = to;
+    if (m.role) m.role = { ...m.role, level: to };
+    drawWin();
+    if (LIVE) send(request(to), () => {
+      m.level = from;
+      if (m.role) m.role = { ...m.role, level: from };
+      if (winKey() === key) drawWin();
+    }, "change the role");
+  };
+  const old = m.level;
+  put(level, old);
+  toast(`${m.name} ${level >= ROLE_LEVELS.admin ? "is an admin now" : levelName(level).toLowerCase()}`, () => put(old, level));
+}
+
+function inviteToTeam(m) {
+  const id = ws().team;
+  const done = () => {
+    toast(`Invited ${m.name} to ${teamById(id)?.team.name ?? "the team"}`);
+    loadTeamInfo(id).then(drawWin, () => {});
+  };
+  if (!LIVE) return done();
+  api("/api/invites", { method: "POST", json: { emails: [m.email], resource_type: "team", resource_id_or_key: id, level: ROLE_LEVELS.editor } })
+    .then(done, (error) => toast(`Couldn't invite them: ${error.message}`));
+}
+
+function resendInvite(m) {
+  if (!LIVE) return toast(`Sent the invite to ${m.name} again`);
+  const team = ws().kind === "team";
+  api("/api/invites/resend", { method: "POST", json: { email: m.name, resource_type: team ? "team" : "folder", resource_id_or_key: team ? ws().team : ws().project } })
+    .then(() => toast(`Sent the invite to ${m.name} again`), (error) => toast(`Couldn't send the invite: ${error.message}`));
+}
+
+// Into the person's row: what removing them from a team does to its files
+// comes in as Figma works it out
+function askRemove(m) {
+  const key = winKey();
+  ws().ask = { id: m.id, impact: null };
+  drawWin();
+  $("[data-w=ask-no]", peopleRoot())?.focus();
+  if (!LIVE || m.pending || ws().kind !== "team") return;
+  api(`/api/teams/${ws().team}/users/removal_impact?user_ids[]=${encodeURIComponent(m.id)}`).then((impact) => {
+    if (winKey() !== key || ws().ask?.id !== m.id) return;
+    ws().ask.impact = impact;
+    drawWin();
+  }, () => {});
+}
+
+function removePerson(m) {
+  const key = winKey();
+  const list = peopleOf();
+  const where = peopleWhere();
+  if (!list) return;
+  const at = list.indexOf(m);
+  ws().ask = null;
+  list.splice(at, 1);
+  drawWin();
+  $(".invite input", peopleRoot())?.focus();
+  toast(m.pending ? `Canceled the invite to ${m.name}` : `Removed ${m.name} from ${where}`);
+  if (!LIVE) return;
+  // An invite, a project's person or an Organization team's member goes
+  // with their role; a Starter or Professional team's member, as Figma's
+  // own Members page removes them
+  const viaTeam = ws().kind === "team" && !m.pending && (standalone(teamById(ws().team).plan) || !m.role);
+  const request = viaTeam
+    ? api(`/api/teams/${ws().team}/users`, { method: "DELETE", json: { user_ids: [m.id] } })
+    : api(`/api/roles/${m.role.id}`, { method: "DELETE" });
+  send(request, () => {
+    if (!list.includes(m)) list.splice(Math.min(at, list.length), 0, m);
+    if (winKey() === key) drawWin();
+  }, m.pending ? "cancel the invite" : "remove them");
+}
+
+/* A team's settings page, in Home's main area: its plan and seats,
+   libraries, AI, and transferring or deleting it, as Figma's own team
+   settings have them. Each change that costs money or can't be undone says
+   what it does, in place, before it's made */
+
+const TEAM_SET = {};
+const settingsTeam = () => (state.view.startsWith("s:") && teamById(state.view.slice(2)) ? state.view.slice(2) : null);
+const tierOf = (plan) => (plan.teams.length === 1 ? plan.tier : plan.name);
+// Figma's seat types, as its members page names them; "" is a View seat
+const SEATS = [["expert", "Full seat"], ["developer", "Dev seat"], ["collaborator", "Collab seat"], ["", "View seat"]];
+const seatName = (key) => SEATS.find(([k]) => k === (key ?? ""))?.[1] ?? "View seat";
+const money = (cents, currency = "usd") => new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase(), minimumFractionDigits: cents % 100 ? 2 : 0 }).format(cents / 100);
+const dayOf = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+const SAMPLE_SET = {
+  meta: { ai_features_disabled: false, ai_data_sharing_enabled: true, figma_provided_libraries_disabled: false },
+  counts: { team_active_project_count: 3, active_project_active_file_count: 24, active_drafts_count: 6, team_trashed_file_count: 2 },
+  libraries: [{ library_key: "sample", library_file_key: "sample", library_name: "Ligma UI", num_components: 48, num_styles: 12, num_variables: 30 }],
+};
+async function loadTeamSettings(id) {
+  const { team, plan } = teamById(id) ?? {};
+  if (!team) return;
+  // What's open on the page stays open through a reload that ends later
+  const kept = () => ({ transfer: TEAM_SET[id]?.transfer ?? null, deleting: TEAM_SET[id]?.deleting ?? null });
+  try {
+    if (!LIVE) {
+      await loadTeamInfo(id);
+      const seats = plan.tier === "Pro"
+        ? {
+            users: TEAM_INFO[id].members.filter((m) => !m.pending).map((m, i) => ({ user_id: m.id, user: { handle: m.name, email: m.email }, active_seat_type: i < 2 ? { key: "expert" } : null })),
+            summary: { currency: "usd", monthly_subscription: { estimated_amount_due: 4000, current_period_end: new Date(Date.now() + 18 * 864e5).toISOString() }, monthly_seats: { expert: 2 }, total_upgraded_user_counts: { expert: 2 } },
+            rates: { product_prices: [["expert", 2000], ["developer", 1500], ["collaborator", 500]].map(([key, amount]) => ({ tier: "pro", billable_product_key: key, renewal_term: "month", currency: "usd", amount })) },
+          }
+        : null;
+      TEAM_SET[id] = { ...structuredClone(SAMPLE_SET), seats, ...kept() };
+    } else {
+      await loadTeamInfo(id).catch(() => {});
+      const [meta, counts, libraries] = await Promise.all([
+        api(`/api/teams/${id}`),
+        api(`/api/teams/${id}/deletion_file_count`).catch(() => null),
+        api("/api/design_systems/v2/libraries").catch(() => []),
+      ]);
+      // Seats are a Professional team's, and only its admins see them
+      let seats = null;
+      if (meta.pro_team && TEAM_INFO[id]?.admin) {
+        const [users, summary, rates] = await Promise.all([
+          api(`/api/teams/${id}/team_users`),
+          api(`/api/subscriptions/team/${id}/summary`),
+          api(`/api/pricing/rates?plan_parent_id=${id}&plan_type=team`),
+        ]);
+        seats = { users, summary, rates };
+      }
+      TEAM_SET[id] = { meta, counts, libraries: (Array.isArray(libraries) ? libraries : []).filter((l) => String(l.team_id) === id), seats, ...kept() };
+    }
+  } catch (error) {
+    TEAM_SET[id] = { error: error.message, ...kept() };
+  }
+  if (settingsTeam() === id) drawSettingsKeepingFocus();
+}
+
+// What a seat costs here: Figma's price for this plan, billed as it's billed
+function seatPrice(seats, key) {
+  if (!key) return null;
+  const sum = seats.summary;
+  const term = sum.annual_subscription && !sum.monthly_subscription ? "year" : "month";
+  const price = seats.rates.product_prices?.find((p) => p.tier === "pro" && p.billable_product_key === key && p.renewal_term === term && p.currency === (sum.currency ?? "usd"));
+  return price ? `${money(price.amount, price.currency)} a ${term}` : null;
+}
+// Paid seats of a type nobody has: given out without adding to the bill
+function spareSeats(seats, key) {
+  const sum = seats.summary;
+  return (sum.monthly_seats?.[key] ?? 0) + (sum.annual_seats?.[key] ?? 0) - (sum.total_upgraded_user_counts?.[key] ?? 0);
+}
+
+const settingRow = (title, detail, control, extra = "") => `<div class="srow"${extra}><span class="st"><b>${title}</b>${detail ? `<small>${detail}</small>` : ""}</span>${control ? `<span class="ctl">${control}</span>` : ""}</div>`;
+const toggle = (key, label, on, off) => `<button class="tgl" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-set="${key}"${off ? " disabled" : ""}></button>`;
+
+/* A team's settings page: the team at the top (picture, name,
+   description, what it holds, its link), then everything about it in
+   columns as wide as the page allows: people, projects, then the team's
+   settings. People are managed here as in the team's window, with the
+   same rows (see ws) */
+
+let dashForced = false;
+// The team's people as its page shows them, even with a window open on
+// another team
+function asDash(fn) {
+  dashForced = true;
+  try {
+    return fn();
+  } finally {
+    dashForced = false;
+  }
+}
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function dashSkeleton() {
+  const bar = (w) => `<div class="bar" style="width:${w}"></div>`;
+  return `<div class="setp dash" aria-busy="true"><div class="dhero sk"><span class="tm"></span><span>${bar("40%")}${bar("64%")}</span></div><div class="bento"><div class="panel p-people">${`<div class="wsk"></div>`.repeat(4)}</div><div class="panel p-projects"><div class="wsk"></div></div></div></div>`;
+}
+
+function settingsPage(id) {
+  const { team, plan } = teamById(id);
+  const s = TEAM_SET[id];
+  if (!s) {
+    loadTeamSettings(id);
+    return dashSkeleton();
+  }
+  if (s.error) return `<div class="empty"><div class="ic">${icon("users")}</div><h2>Couldn't load ${esc(team.name)}'s settings</h2><p>${esc(s.error)}</p><button class="btn" data-set="reload">Try again</button></div>`;
+  const info = TEAM_INFO[id];
+  const admin = info?.admin ?? !LIVE;
+  const off = !admin;
+  const tier = tierOf(plan);
+  const bill = s.seats && dashBill(s.seats);
+  let html = `<div class="setp dash">${dashHero(id, s, admin)}<div class="bento${bill ? " pro" : ""}">`;
+  html += `<div class="panel p-people">${asDash(() => dashPeople(id, info, tier, plan, s.seats))}</div>`;
+  html += `<div class="panel p-projects">${dashProjects(id, team)}</div>`;
+  if (bill) html += `<div class="panel p-bill">${bill}</div>`;
+  // The team's settings: Figma's own kits for its files, what it
+  // publishes, and Figma's AI in its files
+  const kits = !s.meta.figma_provided_libraries_disabled;
+  // Starter teams always have them: Figma takes the setting and ignores it
+  const starter = !!s.meta.starter_team;
+  const ai = !s.meta.ai_features_disabled;
+  const student = !!s.meta.student_team_at;
+  html += `<div class="panel p-set"><section class="sec" id="dash-settings" data-key="dash:settings"><h2>Team settings</h2>`;
+  html += settingRow("AI features", "Lets people use Figma's AI tools in this team's files", toggle("ai", "AI features", ai, off));
+  html += settingRow("Share content to train Figma's AI", student ? "Off for education teams" : "Lets Figma use this team's files to improve its AI models", toggle("ai-data", "Share content to train Figma's AI", !student && !!s.meta.ai_data_sharing_enabled, off || student));
+  html += settingRow("Figma's UI kits and libraries", starter ? "Starter teams always have the libraries Figma provides, like its iOS, Android and Material kits" : "Lets this team's files use the libraries Figma provides, like its iOS, Android and Material kits", toggle("kits", "Figma's UI kits and libraries", starter || kits, off || starter));
+  if (s.libraries.length) {
+    for (const l of s.libraries) {
+      const parts = [[l.num_components, "component"], [l.num_styles, "style"], [l.num_variables, "variable"]].filter(([n]) => n).map(([n, w]) => plural(n, w));
+      html += `<a class="srow" href="https://www.figma.com/design/${esc(l.library_file_key ?? l.library_key)}" target="_blank" rel="noopener"><span class="st"><b>${esc(l.library_name ?? "Library")}</b><small>Published library${parts.length ? ` · ${parts.join(", ")}` : ""}</small></span><span class="ctl">${fig("ext")}</span></a>`;
+    }
+  } else html += settingRow("No libraries published", "A library published from one of the team's files shows here");
+  html += `</section></div>`;
+  html += `<div class="panel p-own"><section class="sec" id="dash-ownership" data-key="dash:ownership"><h2>Transfer and delete</h2>${transferRow(id, s, off)}${deleteRow(id, s, plan, off)}</section></div>`;
+  return html + `</div>${transferFlow(id, s)}${deleteFlow(id, s)}</div>`;
+}
+
+// A Professional team's bill: what it comes to, when it renews, and the
+// seats behind it
+function dashBill(seats) {
+  const sum = seats.summary;
+  const sub = sum.monthly_subscription ?? sum.annual_subscription;
+  if (!sub) return "";
+  const term = sum.monthly_subscription ? "month" : "year";
+  const counts = new Map();
+  for (const u of seats.users ?? []) {
+    const key = u.active_seat_type?.key ?? "";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const mix = SEATS.filter(([key]) => counts.get(key)).map(([key, label]) => `<div><span>${counts.get(key)} ${esc(label.replace(" seat", ""))} ${counts.get(key) === 1 ? "seat" : "seats"}</span><b>${esc(seatPrice(seats, key) ? `${seatPrice(seats, key).replace(" a ", "/").replace("month", "mo").replace("year", "yr")} each` : "Free")}</b></div>`).join("");
+  return `<section class="sec" id="dash-bill" data-key="dash:bill"><h2>Billing</h2><p class="amount">${esc(money(sub.estimated_amount_due ?? 0, sum.currency))}<small>a ${term}</small></p><p class="renews">${sum.plan_canceled || sub.canceled_at ? "Ends" : "Renews"} ${esc(dayOf(sub.current_period_end))}</p>${mix ? `<div class="seatmix">${mix}</div>` : ""}</section>`;
+}
+
+// The team itself: picture, name and description, edited where they are,
+// what it holds, and what's done to the team as a whole
+function dashHero(id, s, admin) {
+  const { team, plan } = teamById(id);
+  const info = TEAM_INFO[id];
+  const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
+  const bg = `background:${team.img ? "transparent" : team.color}`;
+  const pic = admin
+    ? `<button class="tm pic${pageState.picBusy ? " busy" : ""}" data-w="picture" style="${bg}" aria-label="Change the picture of ${esc(team.name)}" title="Change picture, or drop an image here">${face}<span class="ov">${icon("camera")}</span></button>`
+    : `<span class="tm" style="${bg}">${face}</span>`;
+  const about = info?.description ?? team.description ?? "";
+  const people = info?.members?.filter((m) => !m.pending).length;
+  const invited = info?.members?.filter((m) => m.pending).length ?? 0;
+  const c = s.counts;
+  const facts = [
+    people !== undefined && (people === 1 ? "1 person" : `${people} people`),
+    invited && `${invited} invited`,
+    plural(team.projects.length, "project"),
+    c?.active_project_active_file_count !== undefined && plural(c.active_project_active_file_count, "file"),
+    c?.active_drafts_count && plural(c.active_drafts_count, "draft"),
+  ].filter(Boolean);
+  const pinned = pinnedTeams.has(id);
+  let html = `<header class="dhero" data-key="dash:hero">${pic}<div class="dt">`;
+  html += `<div class="dname">${admin ? `<button class="hname" data-w="rename" title="Rename">${esc(team.name)}</button>` : `<span class="hname static">${esc(team.name)}</span>`}<span class="dtier">${esc(tierOf(plan))}</span></div>`;
+  html += admin ? `<button class="about${about ? "" : " blank"}" data-w="about">${esc(about || "Add a description")}</button>` : about ? `<p class="about static">${esc(about)}</p>` : "";
+  html += `<p class="facts">${facts.map(esc).join(" · ")}${admin ? "" : " · Only the team's admins can change its settings"}</p></div>`;
+  html += `<div class="dacts"><button class="btn sm" data-w="team-link">${icon("link")}Copy invite link</button>` +
+    `<button class="btn sm" data-set="pin" aria-pressed="${pinned}" title="${pinned ? "Unpin from the top of the sidebar" : "Pin to the top of the sidebar"}">${fig(pinned ? "starOn" : "star")}${pinned ? "Pinned" : "Pin"}</button>` +
+    `<a class="btn sm icon" href="https://www.figma.com/files/team/${esc(id)}" target="_blank" rel="noopener" aria-label="Open this team in Figma" title="Open this team in Figma">${fig("ext")}</a></div>`;
+  return html + `</header>`;
+}
+
+// Everyone in the team, each with their role and, on a Professional team,
+// their seat, priced as Figma bills it
+function dashPeople(id, info, tier, plan, seats) {
+  const { team } = teamById(id);
+  const people = info?.members?.filter((m) => !m.pending).length;
+  let html = `<section class="sec" id="dash-people" data-key="dash:people"><h2>People${people !== undefined ? `<small>${people}</small>` : ""}</h2>`;
+  html += `<div class="dinvite">${inviteForm(`Invite people to ${team.name}`, standalone(plan) ? null : [ROLE_LEVELS.viewer, ROLE_LEVELS.editor])}</div>`;
+  if (standalone(plan)) html += `<p class="dnote">Everyone invited joins as a member who can edit. Pick Admin in someone's role to let them manage the team</p>`;
+  if (!info?.members) html += `<div class="wsk"></div><div class="wsk"></div>`;
+  else {
+    const askSeat = TEAM_SET[id]?.askSeat;
+    const rows = info.members.map((m, i) => {
+      if (ws().ask?.id === m.id) return askRow(m);
+      const u = !m.pending && seats?.users?.find((x) => String(x.user_id) === String(m.id));
+      if (u && askSeat?.user === u.user_id) return seatAskRow(seats, u, m);
+      const control = memberControl(m, i, tier);
+      const seat = u ? seatControl(seats, u, m.name) : "";
+      return personRow(m, tier, seat ? `<span class="acts">${seat}${control ?? `<span class="role">${esc(roleName(m.level, tier))}</span>`}</span>` : control);
+    });
+    html += `<div class="dpeople" role="list" aria-label="People in ${esc(team.name)}">${rows.join("")}</div>`;
+  }
+  return html + `</section>`;
+}
+
+function dashProjects(id, team) {
+  let html = `<section class="sec" id="dash-projects" data-key="dash:projects"><h2>Projects<small>${team.projects.length}</small><button class="hact" data-set="p-new">${icon("plus")}New project</button></h2><div class="dtiles">`;
+  for (const [pid] of team.projects) {
+    const p = PROJECTS[pid];
+    if (!p) continue;
+    if (!LIVE || Live.ready.has("starred")) wantProjectCount(pid);
+    const files = FILES.filter((f) => f.project === pid && !f.trashed).sort((a, b) => b.at - a.at);
+    const n = LIVE ? LG.count(pid) : files.length;
+    const shots = files.slice(0, 3);
+    const cells = shots.length ? shots.map((f) => `<span class="thumb" data-thumb="${f.id}"></span>`).join("") : `<span class="none">${figmaIcon("folder", 24)}</span>`;
+    html += `<div class="dtile" data-key="dash:p:${pid}"><button class="dgo" data-go="p:${pid}" aria-label="Open ${esc(p.name)}"><span class="mosaic n${shots.length}" aria-hidden="true">${cells}</span></button>` +
+      `<div class="dtn"><span class="pname">${folderIcon(pid)}<b>${esc(p.name)}</b></span><button class="ib more" data-set="p-more" data-project="${pid}" aria-haspopup="menu" aria-label="More for ${esc(p.name)}" title="More">${icon("more")}</button></div>` +
+      `<div class="dtm"><span data-pcount="${pid}">${esc(filesText(n))}</span><button class="dacc" data-set="p-share" data-project="${pid}" aria-haspopup="dialog" title="Share ${esc(p.name)}">${fig("users")}${esc(accessText(p))}</button></div></div>`;
+  }
+  if (!team.projects.length) html += `<button class="dtile new" data-set="p-new">${icon("plus")}New project</button>`;
+  return html + `</div></section>`;
+}
+
+// Someone's seat, as a menu of the seats and their prices
+function seatControl(seats, u, name) {
+  const key = u.active_seat_type?.key ?? "";
+  const price = seatPrice(seats, key);
+  return `<button class="ib seat" data-set="seat" data-user="${esc(u.user_id)}" aria-haspopup="menu" aria-label="${esc(name)}: ${seatName(key)}">${seatName(key)}${price ? `<span class="cost">${price.replace(" a ", "/").replace("month", "mo").replace("year", "yr")}</span>` : ""}${icon("down")}</button>`;
+}
+// A seat change asks first, in the person's row, saying what it costs
+function seatAskRow(seats, u, m) {
+  const sum = seats.summary;
+  const sub = sum.monthly_subscription ?? sum.annual_subscription;
+  const key = u.active_seat_type?.key ?? "";
+  const to = TEAM_SET[settingsTeam()].askSeat.seat;
+  const price = seatPrice(seats, to);
+  const bits = [];
+  if (to) bits.push(spareSeats(seats, to) > 0 ? `It uses a ${seatName(to)} this team already pays for` : `It adds ${price ?? "a seat"} to this team's bill`);
+  if (key && sub) bits.push(`Their ${seatName(key)} stays on the bill until the plan renews on ${dayOf(sub.current_period_end)}, for someone else to use`);
+  const face = m.img_url ? `<img src="${esc(m.img_url)}" alt="" referrerpolicy="no-referrer">` : esc((m.name || "?")[0]);
+  return `<div class="mem ask" role="listitem"><span class="av" style="background:${m.img_url ? "transparent" : colorForTeam(m.id)}">${face}</span><span><b id="seat-q">Give ${nameOrVeil(m.name)} a ${seatName(to)}?</b><small>${esc(bits.join(". "))}</small></span><span class="acts"><button class="btn sm" data-set="seat-no">Cancel</button><button class="btn sm primary" data-set="seat-yes" aria-describedby="seat-q">${to ? `${spareSeats(seats, to) > 0 ? "Give" : "Add"} ${seatName(to)}` : "Change seat"}</button></span></div>`;
+}
+
+function transferRow(id, s, off) {
+  const t = s.transfer;
+  if (t?.sent) return settingRow("Transfer requested", `Sent to ${esc(t.email)}${t.orgName ? ` at ${esc(t.orgName)}` : ""}. The team moves once they accept`, t.requestId ? `<button class="btn sm" data-set="transfer-withdraw">Withdraw</button>` : "");
+  return settingRow("Transfer to another organization", "Moves the team, its projects, files and people to an organization. An admin there accepts it", `<button class="btn sm" data-set="transfer-open"${off ? " disabled" : ""}>Transfer…</button>`);
+}
+const transferReady = (t) => !!t.orgId && isEmail(t.email ?? "") && !t.sending;
+
+// What deleting the team takes with it, as Figma counts it
+function deleteWhat(s) {
+  const c = s.counts;
+  return c ? [[c.team_active_project_count, "project"], [c.active_project_active_file_count, "file"], [c.active_drafts_count, "draft"]].filter(([n]) => n).map(([n, w]) => `${n} ${w}${n === 1 ? "" : "s"}`) : [];
+}
+function deleteRow(id, s, plan, off) {
+  const what = deleteWhat(s);
+  // A paid plan is cancelled before its team goes: billing stays Figma's
+  if (s.meta.pro_team && s.meta.subscription === "ok" && !s.seats?.summary?.plan_canceled)
+    return settingRow("Delete team", "Cancel the Professional plan before deleting this team, so it stops billing", `<a class="btn sm" href="https://www.figma.com/files/team/${esc(id)}" target="_blank" rel="noopener">Cancel plan in Figma${fig("ext")}</a>`);
+  return settingRow("Delete team", esc(`Deletes it with ${what.length ? what.join(", ") : "everything in it"}. Figma can restore it for a while`), `<button class="btn sm warn" data-set="delete-open"${off ? " disabled" : ""}>Delete…</button>`);
+}
+
+/* Transferring and deleting the team: each in a window of its own, over
+   the page, with the whole of it in view. Drawn inside the page so its
+   fields and buttons go through the page's handlers, and shown as a modal
+   once drawn (see openFlows) */
+
+const flowHead = (title, sub) => `<div class="fh"><div><h2 id="flow-title">${title}</h2>${sub ? `<p>${sub}</p>` : ""}</div><button class="ib x" data-set="flow-close" aria-label="Close" title="Close">${icon("x")}</button></div>`;
+function transferFlow(id, s) {
+  const t = s.transfer;
+  if (!t?.open || t.sent) return "";
+  const { team } = teamById(id);
+  const hint = t.error ? `<span class="fhint bad" role="alert">${esc(t.error)}</span>` : t.orgName ? `<span class="fhint ok">To ${esc(t.orgName)}</span>` : `<span class="fhint">Open any page of that organization in Figma and copy its link</span>`;
+  return `<dialog class="flow" data-key="flow:transfer" data-flow="transfer" aria-labelledby="flow-title">${flowHead(`Transfer ${esc(team.name)}`, "To another organization in Figma")}
+    <div class="fb sform">
+      <div class="fwhat"><div><b>Moves</b><span>The team, its projects and files, and its people</span></div><div><b>May stay behind</b><span>Libraries and fonts it used from elsewhere</span></div><div><b>When</b><span>Once an admin there accepts. You can withdraw the request until then</span></div></div>
+      <label>Link to the organization<input data-set-field="org" value="${esc(t.org ?? "")}" placeholder="https://www.figma.com/files/…" spellcheck="false" autocomplete="off">${hint}</label>
+      <label>An admin's email<input data-set-field="email" type="email" value="${esc(t.email ?? "")}" placeholder="admin@example.com" spellcheck="false" autocomplete="off"></label>
+      <label>Message, if any<textarea data-set-field="message">${esc(t.message ?? "")}</textarea></label>
+    </div>
+    <div class="ff"><button class="btn sm" data-set="transfer-cancel">Cancel</button><button class="btn sm primary" data-set="transfer-send"${transferReady(t) ? "" : " disabled"}>${t.sending ? "Sending…" : "Send request"}</button></div></dialog>`;
+}
+function deleteFlow(id, s) {
+  const d = s.deleting;
+  if (!d) return "";
+  const { team } = teamById(id);
+  const what = deleteWhat(s);
+  const people = TEAM_INFO[id]?.members?.filter((m) => !m.pending && !m.me).length ?? 0;
+  const ok = d.typed.trim() === team.name.trim();
+  return `<dialog class="flow danger" data-key="flow:delete" data-flow="delete" aria-labelledby="flow-title">${flowHead(`Delete ${esc(team.name)}?`, "")}
+    <div class="fb sform">
+      <div class="fwhat"><div><b>Goes with it</b><span>${esc(what.length ? what.join(", ") : "Everything in it")}</span></div><div><b>Loses access</b><span>${people ? esc(`${people === 1 ? "1 other person" : `${people} other people`} and you`) : "You"}</span></div><div><b>Comes back</b><span>Figma can restore it for a while. Undo does that right after</span></div></div>
+      <label>Type “${esc(team.name)}” to confirm<input data-set-field="typed" value="${esc(d.typed)}" spellcheck="false" autocomplete="off"></label>
+    </div>
+    <div class="ff"><button class="btn sm" data-set="delete-cancel">Cancel</button><button class="btn sm danger solid" data-set="delete-yes"${ok && !d.busy ? "" : " disabled"}>${d.busy ? "Deleting…" : "Delete team"}</button></div></dialog>`;
+}
+// Each window drawn is shown as a modal; one gone closes with it
+function openFlows() {
+  for (const d of $$("dialog.flow", scroller)) if (!d.open) d.showModal();
+}
+
+// The toggles: optimistic, with Undo, rolled back if Figma refuses
+const TEAM_FLAGS = {
+  kits: { field: "figma_provided_libraries_disabled", on: false, say: ["Figma's UI kits are on for", "Figma's UI kits are off for"], put: (id, on) => api(`/api/teams/${id}`, { method: "PUT", json: { figma_provided_libraries_disabled: !on } }) },
+  ai: { field: "ai_features_disabled", on: false, say: ["AI features are on for", "AI features are off for"], put: (id, on) => api(`/api/teams/${id}`, { method: "PUT", json: { ai_features_disabled: !on } }) },
+  "ai-data": { field: "ai_data_sharing_enabled", on: true, say: ["Figma can train its AI on", "Figma won't train its AI on"], put: (id, on) => api(`/api/teams/${id}/ai_data_sharing`, { method: "PUT", json: { enabled: on } }) },
+};
+function setTeamFlag(id, key) {
+  const flag = TEAM_FLAGS[key];
+  const s = TEAM_SET[id];
+  const name = teamById(id).team.name;
+  const isOn = () => s.meta[flag.field] === flag.on;
+  const put = (on) => {
+    s.meta[flag.field] = on ? flag.on : !flag.on;
+    render();
+    if (LIVE) send(flag.put(id, on), () => {
+      s.meta[flag.field] = on ? !flag.on : flag.on;
+    }, "change the setting");
+  };
+  const on = !isOn();
+  put(on);
+  toast(`${flag.say[on ? 0 : 1]} ${name}`, () => put(!on));
+}
+
+function seatMenu(id, userId, at) {
+  const s = TEAM_SET[id];
+  const u = s.seats.users.find((x) => x.user_id === userId);
+  if (!u) return;
+  const current = u.active_seat_type?.key ?? "";
+  showMenu(SEATS.map(([key, label]) => ({
+    label,
+    detail: key ? `${seatPrice(s.seats, key) ?? "Paid"}${spareSeats(s.seats, key) > 0 ? ", one's free to give" : ""}` : "Free",
+    checked: key === current,
+    act: () => {
+      if (key === current) return;
+      s.askSeat = { user: userId, seat: key };
+      render();
+      $("[data-set=seat-no]", scroller)?.focus();
+    },
+  })), at);
+}
+function changeSeat(id) {
+  const s = TEAM_SET[id];
+  const { user, seat } = s.askSeat;
+  const u = s.seats.users.find((x) => x.user_id === user);
+  s.askSeat = null;
+  const name = u?.user?.handle ?? "them";
+  const done = () => {
+    toast(`${name} has a ${seatName(seat)} now`);
+    loadTeamSettings(id);
+  };
+  if (!LIVE) {
+    if (u) u.active_seat_type = seat ? { key: seat } : null;
+    render();
+    return done();
+  }
+  render();
+  api(`/api/teams/${id}/team_user_batch`, { method: "PUT", json: { team_id: id, team_user_deltas: [{ user_id: user, seat_type: seat, seat_increase_authorized: true }], entry_point: "members_tab" } })
+    .then(done, (error) => toast(`Couldn't change the seat: ${error.message}`));
+}
+
+// The organization a pasted link points into: figma.com/files/<org id>/…
+async function transferOrg(id) {
+  const t = TEAM_SET[id].transfer;
+  const org = (t.org ?? "").match(/figma\.com\/files\/(\d+)(?:[/?#]|$)/)?.[1] ?? null;
+  t.orgId = null;
+  t.orgName = null;
+  t.error = t.org && !org ? "That's not a link into an organization. Open any page of it in Figma and copy its link" : null;
+  if (org) {
+    try {
+      const name = LIVE ? await api(`/api/orgs/${org}/org_name`) : "Northwind Studio";
+      if (TEAM_SET[id].transfer !== t) return;
+      t.orgId = org;
+      t.orgName = typeof name === "string" ? name : name?.name ?? null;
+    } catch {
+      t.error = "Couldn't find that organization";
+    }
+  }
+  drawSettingsKeepingFocus();
+}
+function sendTransfer(id) {
+  const t = TEAM_SET[id].transfer;
+  if (!transferReady(t)) return;
+  t.sending = true;
+  drawSettingsKeepingFocus();
+  const sent = (meta) => {
+    TEAM_SET[id].transfer = { sent: true, email: t.email, orgName: t.orgName, requestId: meta?.id ?? meta?.asset_transfer_request?.id ?? null };
+    render();
+    toast(`Sent the transfer request to ${t.email}`);
+  };
+  if (!LIVE) return sent({ id: "sample" });
+  api("/api/asset_transfer/create_request", { method: "POST", json: { transfer_type: "team", team_id: id, destination_user_email: t.email.trim(), destination_team_id: null, destination_org_id: t.orgId, message: t.message?.trim() || null, is_transfer_copy: false } })
+    .then(sent, (error) => {
+      t.sending = false;
+      t.error = error.message;
+      drawSettingsKeepingFocus();
+    });
+}
+function withdrawTransfer(id) {
+  const t = TEAM_SET[id].transfer;
+  const back = () => {
+    TEAM_SET[id].transfer = null;
+    render();
+    toast("Withdrew the transfer request");
+  };
+  if (!LIVE) return back();
+  api(`/api/asset_transfer/${t.requestId}`, { method: "DELETE" }).then(back, (error) => toast(`Couldn't withdraw it: ${error.message}`));
+}
+
+// Deleted teams can be restored for a while, so Undo restores this one
+function deleteTeam(id) {
+  const { team, plan } = teamById(id) ?? {};
+  const s = TEAM_SET[id];
+  if (!team || s.deleting?.typed.trim() !== team.name.trim()) return;
+  s.deleting.busy = true;
+  render();
+  const gone = () => {
+    plan.teams.splice(plan.teams.indexOf(team), 1);
+    if (!plan.teams.length) PLANS.splice(PLANS.indexOf(plan), 1);
+    delete TEAM_SET[id];
+    go("home");
+    toast(`Deleted ${team.name}`, () => {
+      const back = () => {
+        if (!PLANS.includes(plan)) PLANS.push(plan);
+        if (!plan.teams.includes(team)) plan.teams.push(team);
+        render();
+        toast(`Restored ${team.name}`);
+      };
+      if (!LIVE) return back();
+      api(`/api/teams/${id}/restore`, { method: "PUT" }).then(() => {
+        back();
+        boot();
+      }, (error) => toast(`Couldn't restore it: ${error.message}`));
+    });
+  };
+  if (!LIVE) return gone();
+  api(`/api/teams/${id}`, { method: "DELETE" }).then(gone, (error) => {
+    s.deleting.busy = false;
+    render();
+    toast(`Couldn't delete the team: ${error.message}`);
+  });
+}
+
+// The page drawn again for a change to its people, the suggestions with it
+function drawDash() {
+  drawSettingsKeepingFocus();
+  drawSugg();
+}
+// Redrawn as typed, with the field being typed in keeping focus and caret
+function drawSettingsKeepingFocus() {
+  const el = document.activeElement;
+  const field = el?.dataset?.setField;
+  const at = field ? [el.selectionStart, el.selectionEnd] : null;
+  render();
+  if (!field) return;
+  const again = $(`[data-set-field="${field}"]`, scroller);
+  again?.focus({ preventScroll: true });
+  if (again && at) again.setSelectionRange(...at);
+}
+
+function settingsClick(el) {
+  const id = settingsTeam();
+  const s = id && TEAM_SET[id];
+  if (!s) return;
+  const act = el.dataset.set;
+  if (act === "reload") {
+    delete TEAM_SET[id];
+    return render();
+  }
+  if (TEAM_FLAGS[act]) return setTeamFlag(id, act);
+  if (act === "pin") return toggleTeamStar(id);
+  if (act === "p-new") return newProject(el.getBoundingClientRect(), id);
+  if (act === "p-share") return openShare(el.dataset.project, el.getBoundingClientRect());
+  if (act === "p-more") return projectMenu(el.dataset.project, el.getBoundingClientRect(), { open: true });
+  if (act === "seat") return seatMenu(id, el.dataset.user, el.getBoundingClientRect());
+  if (act === "seat-yes") return changeSeat(id);
+  if (act === "seat-no") {
+    const user = s.askSeat?.user;
+    s.askSeat = null;
+    render();
+    return $(`[data-set=seat][data-user="${CSS.escape(user ?? "")}"]`, scroller)?.focus();
+  }
+  if (act === "transfer-open") {
+    s.transfer = { open: true };
+    render();
+    return $("[data-set-field=org]", scroller)?.focus();
+  }
+  if (act === "flow-close") return $(s.deleting ? "[data-set=delete-cancel]" : "[data-set=transfer-cancel]", scroller)?.click();
+  if (act === "transfer-cancel") {
+    s.transfer = null;
+    render();
+    return $("[data-set=transfer-open]", scroller)?.focus();
+  }
+  if (act === "transfer-send") return sendTransfer(id);
+  if (act === "transfer-withdraw") return withdrawTransfer(id);
+  if (act === "delete-open") {
+    s.deleting = { typed: "" };
+    render();
+    return $("[data-set-field=typed]", scroller)?.focus();
+  }
+  if (act === "delete-cancel") {
+    s.deleting = null;
+    render();
+    return $("[data-set=delete-open]", scroller)?.focus();
+  }
+  if (act === "delete-yes") return deleteTeam(id);
+}
+scroller.addEventListener("input", (e) => {
+  const field = e.target.dataset?.setField;
+  const id = settingsTeam();
+  if (!field || !id) return;
+  const s = TEAM_SET[id];
+  if (field === "typed") {
+    s.deleting.typed = e.target.value;
+    const ok = e.target.value.trim() === teamById(id).team.name.trim();
+    const yes = $("[data-set=delete-yes]", scroller);
+    if (yes) yes.disabled = !ok;
+    return;
+  }
+  s.transfer[field] = e.target.value;
+  if (field === "org") {
+    clearTimeout(s.transfer.lookup);
+    s.transfer.lookup = setTimeout(() => transferOrg(id), 300);
+  }
+  const send = $("[data-set=transfer-send]", scroller);
+  if (send) send.disabled = !transferReady(s.transfer);
+});
+// Escape on a window, from wherever in it, cancels it; so does a click on
+// the page dimmed behind it
+scroller.addEventListener("cancel", (e) => {
+  if (!e.target.matches?.("dialog.flow")) return;
+  e.preventDefault();
+  $(`[data-set=${e.target.dataset.flow}-cancel]`, e.target)?.click();
+}, true);
+scroller.addEventListener("click", (e) => {
+  if (e.target.matches?.("dialog.flow")) $(`[data-set=${e.target.dataset.flow}-cancel]`, e.target)?.click();
+});
+scroller.addEventListener("keydown", (e) => {
+  const id = settingsTeam();
+  if (!id || !e.target.closest?.(".sform")) return;
+  const s = TEAM_SET[id];
+  if (e.key === "Escape") {
+    e.preventDefault();
+    $(s.deleting ? "[data-set=delete-cancel]" : "[data-set=transfer-cancel]", scroller)?.click();
+  } else if (e.key === "Enter" && e.target.tagName === "INPUT") {
+    e.preventDefault();
+    $(s.deleting ? "[data-set=delete-yes]" : "[data-set=transfer-send]", scroller)?.click();
+  }
+}, true);
+
+// The window's handlers serve the team's settings page as well
+function onPeople(type, fn, opts) {
+  win.addEventListener(type, fn, opts);
+  scroller.addEventListener(type, (e) => e.target.closest?.(".dash") && fn(e), opts);
+}
+onPeople("click", (e) => {
+  const el = e.target.closest("[data-w]");
+  const act = el?.dataset.w;
+  if (!act || act === "invite") return;
+  const ask = () => peopleOf()?.find((m) => m.id === ws().ask?.id);
+  if (act === "picture") pickTeamImage(ws().team);
+  else if (act === "person") personMenu(Number(el.dataset.i), el.getBoundingClientRect());
+  else if (act === "ask-yes") ask() && removePerson(ask());
+  else if (act === "ask-no") {
+    const i = peopleOf()?.indexOf(ask());
+    ws().ask = null;
+    drawWin();
+    $(`[data-w=person][data-i="${i}"]`, peopleRoot())?.focus();
+  } else if (act === "all-settings") {
+    const id = ws().team;
+    closeWin(false);
+    go(`s:${id}`);
+  } else if (act === "close") closeWin();
+  else if (act === "rename") renameTeam(ws().team);
+  else if (act === "about") describeTeam(ws().team);
+  else if (act === "team-link") copyTeamLink(ws().team);
+  else if (act === "project-link") copyProjectLink(ws().project);
+  else if (act === "team-access") teamAccessMenu(el.getBoundingClientRect());
+  else if (act === "level") {
+    showMenu([ROLE_LEVELS.viewer, ROLE_LEVELS.editor].map((level) => ({ label: levelName(level), checked: (ws().level ?? ROLE_LEVELS.viewer) === level, act: () => {
+      ws().level = level;
+      drawWin();
+    } })), el.getBoundingClientRect());
+  }
+});
+onPeople("submit", (e) => {
+  e.preventDefault();
+  sendInvites();
+});
+onPeople("input", (e) => {
+  if (!e.target.matches(".invite input")) return;
+  inviteReady();
+  suggest();
+});
+onPeople("focusin", (e) => e.target.matches?.(".invite input") && loadTeamPeople());
+// Gone once the box is left, unless it's only being drawn again
+onPeople("focusout", (e) => {
+  if (!e.target.matches?.(".invite input")) return;
+  setTimeout(() => document.activeElement?.matches?.(".invite input") || clearSugg());
+});
+suggBox.addEventListener("pointerdown", (e) => {
+  const opt = e.target.closest?.("[data-sugg]");
+  if (!opt) return;
+  // The box keeps focus
+  e.preventDefault();
+  pickSugg(Number(opt.dataset.sugg));
+});
+suggBox.addEventListener("pointerdown", (e) => e.preventDefault());
+suggBox.addEventListener("pointermove", (e) => {
+  const i = Number(e.target.closest?.("[data-sugg]")?.dataset.sugg ?? -1);
+  if (i < 0 || i === sugg.active) return;
+  sugg.active = i;
+  drawSugg();
+});
+// Kept under the box as the window's contents scroll
+win.addEventListener("scroll", placeSugg, true);
+scroller.addEventListener("scroll", placeSugg, { passive: true });
+addEventListener("resize", placeSugg);
+onPeople("keydown", (e) => {
+  if (e.target.matches?.(".invite input")) {
+    const n = sugg.items.length;
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && n) {
+      e.preventDefault();
+      sugg.active = (sugg.active + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      drawSugg();
+      $(`#sugg-${sugg.active}`, suggBox)?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    if ((e.key === "Enter" || e.key === "Tab") && n && !e.shiftKey) {
+      e.preventDefault();
+      pickSugg(sugg.active);
+      return;
+    }
+    if (e.key === "Escape" && n) {
+      e.preventDefault();
+      clearSugg();
+      return;
+    }
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") setTimeout(suggest);
+  }
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  // Out of asking about a removal first, then out of the window
+  if (ws().ask) $("[data-w=ask-no]", peopleRoot())?.click();
+  else closeWin();
+});
+// An image dropped on the team's picture becomes its new one
+onPeople("dragover", (e) => {
+  const pic = e.target.closest?.("[data-w=picture]");
+  if (!pic || !e.dataTransfer?.types.includes("Files")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = "copy";
+  pic.classList.add("drop");
+});
+onPeople("dragleave", (e) => e.target.closest?.("[data-w=picture]")?.classList.remove("drop"));
+onPeople("drop", (e) => {
+  const pic = e.target.closest?.("[data-w=picture]");
+  if (!pic) return;
+  e.preventDefault();
+  e.stopPropagation();
+  pic.classList.remove("drop");
+  const file = [...(e.dataTransfer?.files ?? [])].find((f) => f.type.startsWith("image/"));
+  file ? setTeamImage(ws().team, file) : toast("Drop an image to use it as the picture");
+});
+addEventListener("pointerdown", (e) => {
+  if (!win.classList.contains("open") || win.contains(e.target) || e.target.closest?.("#toast, .menu, #invite-sugg, [data-pact=share]")) return;
+  closeWin(false);
+}, true);
+addEventListener("resize", () => win.classList.contains("open") && placeWin());
+
+function go(view, { back = false } = {}) {
   if (!viewName(view)) return;
+  if (state.view.startsWith("s:")) reblur(scroller);
+  const moved = view !== state.view;
   state.view = view;
   state.sel.clear();
   state.focus = null;
   document.body.classList.remove("side-open");
   render({ keepScroll: false });
   scroller.scrollTop = 0;
+  // A new page is a new step in the history; one gone back to already is
+  if (moved && !back) {
+    try {
+      history.pushState({ view, scroll: 0 }, "");
+    } catch {}
+  }
 }
+
+/* Back and forward through the pages, as in a browser, from the mouse's
+   side buttons, Alt+Left and Alt+Right (⌘[ and ⌘] or ⌘← and ⌘→ on a Mac),
+   a keyboard's Back and Forward keys, or a two-finger swipe sideways. Each
+   page is a step in the page's own history, with where it was scrolled to.
+   Nothing on screen: it's what the hands already do */
+try {
+  history.replaceState({ view: state.view, scroll: 0 }, "");
+} catch {}
+let scrollSave = 0;
+scroller.addEventListener("scroll", () => {
+  clearTimeout(scrollSave);
+  scrollSave = setTimeout(() => {
+    try {
+      if (history.state?.view === state.view) history.replaceState({ ...history.state, scroll: scroller.scrollTop }, "");
+    } catch {}
+  }, 200);
+}, { passive: true });
+addEventListener("popstate", (e) => {
+  const view = e.state?.view;
+  if (!view || !viewName(view)) return;
+  closeMenu();
+  closeWin(false);
+  if (pal.open) pal.close();
+  go(view, { back: true });
+  // Back where it was, once the page has drawn what it has
+  const top = e.state.scroll ?? 0;
+  scroller.scrollTop = top;
+  requestAnimationFrame(() => (scroller.scrollTop = top));
+});
+// Not while a window, a dialog or a file being dragged has the keys
+const navBusy = () => acs.open || !!$("dialog.flow[open]") || pal.open || !!lift?.live;
+const stepBack = () => !navBusy() && history.back();
+const stepForward = () => !navBusy() && history.forward();
+addEventListener("mouseup", (e) => {
+  if (e.button !== 3 && e.button !== 4) return;
+  e.preventDefault();
+  e.button === 3 ? stepBack() : stepForward();
+});
+addEventListener("keydown", (e) => {
+  // After the page's own uses of the keys: Alt+arrows move starred files
+  if (e.defaultPrevented) return;
+  if (e.key === "BrowserBack" || e.key === "BrowserForward") {
+    e.preventDefault();
+    return e.key === "BrowserBack" ? stepBack() : stepForward();
+  }
+  if (e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  const arrow = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+  const bracket = e.key === "[" ? -1 : e.key === "]" ? 1 : 0;
+  const dir = MAC
+    ? e.metaKey && !e.altKey && !e.ctrlKey && !e.shiftKey ? arrow || bracket : 0
+    : e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey ? arrow : 0;
+  if (!dir) return;
+  e.preventDefault();
+  dir < 0 ? stepBack() : stepForward();
+});
+// A swipe: sideways scrolling well past a nudge, over nothing that scrolls
+// sideways itself, one step per swipe
+let swipeNav = { dx: 0, idle: 0, done: false };
+addEventListener("wheel", (e) => {
+  if (e.defaultPrevented || e.ctrlKey || Math.abs(e.deltaX) <= Math.abs(e.deltaY) * 1.5) return;
+  for (let el = e.target; el && el !== document.body; el = el.parentElement) if (el.scrollWidth > el.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return;
+  clearTimeout(swipeNav.idle);
+  swipeNav.idle = setTimeout(() => (swipeNav = { dx: 0, idle: 0, done: false }), 260);
+  if (swipeNav.done) return;
+  swipeNav.dx += e.deltaX;
+  if (Math.abs(swipeNav.dx) < 140) return;
+  swipeNav.done = true;
+  swipeNav.dx < 0 ? stepBack() : stepForward();
+}, { passive: true });
 
 /* Inbox: comments, replies, mentions, invites and edit requests, as Figma's
    bell lists them. Reading a comment note clears it from the file's count */
@@ -3588,6 +5775,8 @@ function menuRows(items, list, prefix, checks = items.some((item) => item && "ch
 function showMenu(items, at, options = {}) {
   closeMenu();
   menuReturn = document.activeElement;
+  // The button that opened it says so while it's open
+  if (menuReturn?.matches?.('[aria-haspopup="menu"]')) menuReturn.setAttribute("aria-expanded", "true");
   menuKeys = null;
   menuItems = [];
   menu.innerHTML = menuRows(items, menuItems, "mi", options.checks);
@@ -3604,6 +5793,7 @@ function closeMenu() {
   menu.classList.remove("open");
   menu.innerHTML = "";
   menuKeys = null;
+  if (menuReturn?.matches?.('[aria-haspopup="menu"]')) menuReturn.setAttribute("aria-expanded", "false");
   if (menuReturn?.isConnected) menuReturn.focus({ preventScroll: true });
   menuReturn = null;
 }
@@ -3799,7 +5989,7 @@ function openMover(ids, at, above = false) {
         header = `<div class="mh">${esc(team)}</div>`;
       }
       const here = current.size === 1 && current.has(t.project);
-      return `${header}<button class="mi" id="mi${i}" tabindex="-1" role="option" data-i="${i}" ${here ? 'aria-disabled="true"' : ""}>${icon(t.project ? "folder" : "file")}<span style="margin-left:8px">${esc(t.label)}</span>${q && t.where ? `<span class="x">${esc(t.where)}</span>` : here ? `<span class="x">Here now</span>` : ""}</button>`;
+      return `${header}<button class="mi" id="mi${i}" tabindex="-1" role="option" data-i="${i}" ${here ? 'aria-disabled="true"' : ""}>${t.project ? folderIcon(t.project) : icon("file")}<span style="margin-left:8px">${esc(t.label)}</span>${q && t.where ? `<span class="x">${esc(t.where)}</span>` : here ? `<span class="x">Here now</span>` : ""}</button>`;
     }).join("") : `<div class="none">No project called “${esc(q)}”</div>`;
     const first = menuItems.findIndex((item) => !item.disabled);
     highlight(first);
@@ -3814,26 +6004,27 @@ function openMover(ids, at, above = false) {
   input.focus();
 }
 
-// Right-click a team for the same and more
+// Right-click a team or a project for its menu
 $("#side").addEventListener("contextmenu", (e) => {
+  const at = { x: e.clientX, y: e.clientY };
   const row = e.target.closest(".team-row");
-  if (!row) return;
-  e.preventDefault();
-  const id = $("[data-team]", row).dataset.team;
-  const pinned = STARRED_TEAMS().has(id);
-  showMenu([
-    { label: pinned ? "Unpin team" : "Pin to the top", act: () => toggleTeamStar(id) },
-    { label: "New project here", act: () => newProject({ x: e.clientX, y: e.clientY }, id) },
-    null,
-    { label: "Open team in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/team/${id}`, "_blank") },
-  ], { x: e.clientX, y: e.clientY });
+  const project = e.target.closest('.nav[data-view^="p:"]')?.dataset.view.slice(2);
+  if (row) {
+    e.preventDefault();
+    teamMenu($("[data-team]", row).dataset.team, at);
+  } else if (project && PROJECTS[project]) {
+    e.preventDefault();
+    projectMenu(project, at, { open: true });
+  }
 });
 
 $("#side").addEventListener("click", (e) => {
-  const view = e.target.closest("[data-view]");
-  if (view) return go(view.dataset.view);
+  const more = e.target.closest("[data-team-more]");
+  if (more) return teamMenu(more.dataset.teamMore, more.getBoundingClientRect());
   const star = e.target.closest("[data-star-team]");
   if (star) return toggleTeamStar(star.dataset.starTeam);
+  const view = e.target.closest("[data-view]");
+  if (view) return go(view.dataset.view);
   const fold = e.target.closest("[data-team], [data-section]");
   if (fold) {
     const id = fold.dataset.team ?? fold.dataset.section;
@@ -4883,6 +7074,30 @@ const COMMANDS = [
   { label: "Figma Community", url: "https://www.figma.com/community", icon: "grid" },
 ];
 
+// The open project's settings and each team's, after the fixed ones
+function paletteCommands() {
+  const list = [...COMMANDS];
+  const id = state.view.startsWith("p:") && state.view.slice(2);
+  const p = id && PROJECTS[id];
+  if (p) {
+    const at = () => $("[data-pact=more]", head)?.getBoundingClientRect() ?? { x: innerWidth / 2 - 200, y: 120 };
+    list.push(
+      { label: `Rename ${p.name}`, act: () => renameProject(id), icon: "folder" },
+      { label: `Share ${p.name}`, act: () => openShare(id, $("[data-pact=share]", head)?.getBoundingClientRect() ?? at()), icon: "users" },
+      { label: `Change the color of ${p.name}`, act: () => showMenu(colorItems(id), $("[data-pact=color]", head)?.getBoundingClientRect() ?? at()), icon: "folder" },
+      { label: `Describe ${p.name}`, act: () => describeProject(id), icon: "folder" },
+    );
+  }
+  for (const team of allTeams()) {
+    const at = () => $(`[data-team-more="${CSS.escape(team.id)}"]`, side)?.closest(".team-row").getBoundingClientRect() ?? { x: 248, y: 64 };
+    list.push(
+      { label: `${team.name} settings and people`, act: () => openTeamWin(team.id, at()), icon: "users" },
+      { label: `Invite people to ${team.name}`, act: () => openTeamWin(team.id, at(), "invite"), icon: "users" },
+    );
+  }
+  return list;
+}
+
 // Letters of `query` in order in `text`; more for runs, word starts and
 // whole substrings. Each word of the query has to match
 function match(query, text) {
@@ -5034,7 +7249,7 @@ function drawPalette() {
         html += `<div class="ph">Projects</div>`;
         for (const { p, m } of projects) {
           const i = items.push({ kind: "view", view: "p:" + p.id }) - 1;
-          html += row(i, icon("folder"), marked(p.name, m.hits), `<span class="pp">${esc(p.team.name)}</span>`);
+          html += row(i, folderIcon(p.id), marked(p.name, m.hits), `<span class="pp">${esc(p.team.name)}</span>`);
         }
       }
     }
@@ -5047,7 +7262,7 @@ function drawPalette() {
         html += row(i, icon("plus"), `New ${TYPES[type].noun} “${esc(query)}”`, `<span class="pp">in ${esc(placeOf(where))}</span>`);
       }
     }
-    const commands = COMMANDS.map((c) => ({ c, m: query ? match(query, c.label) : { score: 0 } })).filter((x) => x.m).slice(0, query ? 3 : 4);
+    const commands = paletteCommands().map((c) => ({ c, m: query ? match(query, c.label) : { score: 0 } })).filter((x) => x.m).sort((a, b) => b.m.score - a.m.score).slice(0, 4);
     for (const { c, m } of commands) {
       const i = items.push({ kind: "command", command: c }) - 1;
       html += row(i, icon(c.icon), marked(c.label, m.hits), c.url ? icon("ext") : "");
@@ -5186,6 +7401,8 @@ scroller.addEventListener("click", (e) => {
     liftJustEnded = false;
     return;
   }
+  const set = e.target.closest("[data-set]");
+  if (set) return set.disabled || settingsClick(set);
   const act = e.target.closest("[data-act]")?.dataset.act;
   if (act === "new") return createFile("design");
   if (act === "clear-filters") {
@@ -5199,6 +7416,8 @@ scroller.addEventListener("click", (e) => {
     store.set(LIVE ? "collapsed-live" : "collapsed", [...state.collapsed]);
     return render();
   }
+  const car = e.target.closest("[data-car]");
+  if (car) return slideCar(Number(car.dataset.car));
   const to = e.target.closest("[data-go]")?.dataset.go;
   if (to) return go(to);
   const layout = e.target.closest("[data-layout]")?.dataset.layout;
@@ -5259,7 +7478,7 @@ function edgeScroll() {
 }
 
 scroller.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0 || e.pointerType === "touch" || e.target.closest(".card, button, a, input, .empty")) return;
+  if (e.button !== 0 || e.pointerType === "touch" || e.target.closest(".card, button, a, input, textarea, .empty, .setp")) return;
   // Not on the scrollbar
   if (e.target === scroller && e.offsetX > scroller.clientWidth) return;
   // A box left over from a release the page never heard about
@@ -5336,10 +7555,7 @@ scroller.addEventListener("contextmenu", (e) => {
   const project = e.target.closest("[data-project]")?.dataset.project;
   if (project) {
     e.preventDefault();
-    return showMenu([
-      { label: "Open", act: () => go("p:" + project) },
-      { label: "Open in Figma", ext: true, act: () => window.open(`https://www.figma.com/files/project/${project}`, "_blank") },
-    ], { x: e.clientX, y: e.clientY });
+    return projectMenu(project, { x: e.clientX, y: e.clientY }, { open: true });
   }
   const card = e.target.closest(".card[data-id]");
   if (!card) return;
@@ -5501,6 +7717,7 @@ function startLift() {
   ghost.style.transform = `translate(${r.left - GHOST_PAD}px, ${r.top - GHOST_PAD}px)`;
   document.body.append(ghost);
   card.classList.add("hole");
+  grid.classList.add("lifting");
   document.body.classList.add("grabbing");
   try {
     scroller.setPointerCapture(l.pointer);
@@ -5532,6 +7749,16 @@ function stepLift(now) {
   const edge = 56;
   const dy = l.py < area.top + edge ? -(area.top + edge - l.py) / 3 : l.py > area.bottom - edge ? (l.py - area.bottom + edge) / 3 : 0;
   if (dy) scroller.scrollTop += Math.round(dy * dt);
+  // In Home's sliding row, held near either end it slides that way
+  if (l.grid.classList.contains("car")) {
+    const r = l.grid.getBoundingClientRect();
+    const reach = 72;
+    const dx = l.py > r.top - 40 && l.py < r.bottom + 40 ? (l.px < r.left + reach ? -(r.left + reach - l.px) / 4 : l.px > r.right - reach ? (l.px - r.right + reach) / 4 : 0) : 0;
+    if (dx) {
+      l.grid.scrollLeft += Math.round(Math.max(-24, Math.min(24, dx)) * dt);
+      carEdges();
+    }
+  }
   l.ghost.style.transform = `translate(${l.px - l.ox}px, ${l.py - l.oy}px) rotate(${l.ang.toFixed(2)}deg) scale(${l.scale.toFixed(4)})`;
   retarget(area);
   l.frame = requestAnimationFrame(stepLift);
@@ -5546,8 +7773,10 @@ function retarget(area) {
     l.target = over;
   }
   if (over || l.px < area.left || l.px > area.right) return;
-  const gx = l.px - area.left + scroller.scrollLeft;
-  const gy = l.py - area.top + scroller.scrollTop;
+  // The sliding row's places are in its own coordinates, scrolled or not
+  const car = l.grid.classList.contains("car") ? l.grid.getBoundingClientRect() : null;
+  const gx = car ? l.px - car.left + l.grid.scrollLeft : l.px - area.left + scroller.scrollLeft;
+  const gy = car ? l.py - car.top : l.py - area.top + scroller.scrollTop;
   let best = 0;
   let bestDistance = Infinity;
   l.slots.forEach((s, i) => {
@@ -5589,6 +7818,7 @@ function dropLift(cancel = false) {
   const finish = () => {
     l.ghost.remove();
     l.card.classList.remove("hole");
+    l.grid.classList.remove("lifting");
     lift = null;
   };
   const into = !cancel && l.target;
