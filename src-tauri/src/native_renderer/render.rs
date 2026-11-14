@@ -545,7 +545,7 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 /// mipmaps shows the same as a smaller copy, till together they pass this
 /// many bytes. Then those needed longest ago go, never any in view, down
 /// to three quarters of it, so it's seldom
-const IMAGES_BUDGET: usize = 128 << 20;
+const IMAGES_BUDGET: usize = 384 << 20;
 /// Images let go are kept this many pixels on their longest side, so
 /// there's something to show where they're drawn till they come again
 const PLACEHOLDER: i32 = 256;
@@ -1578,13 +1578,31 @@ impl Painter {
             return Some(Duration::ZERO);
         }
         // A view Vello drew is as exact as tiles, and takes less memory, so
-        // it's kept rather than tiles drawn, which close up can take seconds
+        // it's kept rather than tiles drawn, which close up can take seconds, the furthest level, all there is, which stands in where zooming
+        // out passes what Vello's drawn, so the view never waits for it
         if whole_here && self.whole.as_ref().is_some_and(|whole| whole.vello) {
-            if !self.tiles.is_empty() {
-                for (_, tile) in std::mem::take(&mut self.tiles) {
+            let furthest = levels.first().map(|(_, pk)| pk.to_bits());
+            let gone: Vec<TileKey> = self.tiles.keys().filter(|key| Some(key.px) != furthest).copied().collect();
+            for key in &gone {
+                if let Some(tile) = self.tiles.remove(key) {
                     self.drop_tile(tile);
                 }
+            }
+            self.dirty |= !gone.is_empty();
+            let missing = pyramid.iter().copied().find(|key| Some(key.px) == furthest && !self.tiles.get(key).is_some_and(|tile| !tile.stale));
+            if let Some(key) = missing {
+                // Drawn once the view's been still a while, as a tile of it
+                // takes tens of milliseconds no frame can be drawn in
+                let still = VELLO_STILL.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
+                if !still.is_zero() {
+                    return Some(still);
+                }
+                if let Some(tile) = self.draw_tile(key, false, false) {
+                    self.put_tile(key, tile);
+                    self.drew = true;
+                }
                 self.dirty = true;
+                return Some(Duration::ZERO);
             }
             self.update_reason(&view, px, width, height);
             return None;
@@ -3040,9 +3058,6 @@ impl Painter {
     /// only make again, as an edit's first draw would wait on that
     fn trim(&mut self) {
         self.fit_images();
-        if let Some(vello) = self.vello.as_mut() {
-            vello.trim();
-        }
         // The whole view before this one only stands in while zooming, and
         // what's shown lets go of textures dropped here once it's done
         if self.last_whole.is_some() {
@@ -3062,6 +3077,9 @@ impl Painter {
     /// supersampled, which Skia would otherwise keep for reuse
     fn release(&mut self) {
         self.fit_images();
+        if let Some(vello) = self.vello.as_mut() {
+            vello.trim();
+        }
         self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE) || Arc::strong_count(tex) > 1);
         // Surfaces drawn on are made again when next needed
         self.live = None;

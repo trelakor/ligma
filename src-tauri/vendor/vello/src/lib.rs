@@ -875,9 +875,15 @@ impl Renderer {
         })
     }
 }
-/// Ligma: the most each buffer's taken lately, which decays
+/// Ligma: the most each buffer's taken lately, and when, which is
+/// forgotten after `PEAK_KEPT`
 #[cfg(feature = "wgpu")]
-static TAKEN: [std::sync::atomic::AtomicU32; 7] = [const { std::sync::atomic::AtomicU32::new(0) }; 7];
+static TAKEN: std::sync::Mutex<[(u32, Option<std::time::Instant>); 7]> = std::sync::Mutex::new([(0, None); 7]);
+
+/// Ligma: how long buffers keep room for the most they took, so zooming
+/// back out doesn't run out
+#[cfg(feature = "wgpu")]
+const PEAK_KEPT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Ligma: sizes the buffers coarse allocates from to what renders take,
 /// with room to spare, and what ran out where this one did
@@ -890,9 +896,12 @@ fn fit(bump: &BumpAllocators) -> Option<String> {
     let had = room.map(|room| room.load(Relaxed));
     let names = ["binning", "ptcl", "tile", "seg_counts", "segments", "blend", "lines"];
     let mut short = (bump.failed != 0).then(|| format!("failed={:#x}", bump.failed));
-    for ((((room, took), have), taken), name) in room.into_iter().zip(took).zip(had).zip(&TAKEN).zip(names) {
-        let most = took.max(taken.load(Relaxed).saturating_sub(taken.load(Relaxed) / 64));
-        taken.store(most, Relaxed);
+    let mut taken = TAKEN.lock().unwrap();
+    for ((((room, took), have), taken), name) in room.into_iter().zip(took).zip(had).zip(taken.iter_mut()).zip(names) {
+        if took >= taken.0 || taken.1.is_none_or(|at| at.elapsed() > PEAK_KEPT) {
+            *taken = (took, Some(std::time::Instant::now()));
+        }
+        let most = taken.0;
         // A quarter more than it's taken lately, in powers of two so the
         // pool's buffers are used again, and never so little that zooming
         // out from close up runs out
@@ -906,9 +915,10 @@ fn fit(bump: &BumpAllocators) -> Option<String> {
     }
     if bump.failed != 0 {
         // What's past the first that ran out, in the order the GPU fills
-        // them, never took all it would, so grows as much as that did
+        // them, never took all it would, so grows as much as that did, or
+        // twice as much
         let stage = [1, 4, 2, 3, 5, 4, 0];
-        let (first, grow) = took.iter().zip(had).zip(stage).filter(|((took, have), _)| **took > *have).fold((usize::MAX, 1.25f64), |(first, grow), ((took, have), stage)| {
+        let (first, grow) = took.iter().zip(had).zip(stage).filter(|((took, have), _)| **took > *have).fold((usize::MAX, 2.0f64), |(first, grow), ((took, have), stage)| {
             (first.min(stage), grow.max(*took as f64 / have.max(1) as f64 * 1.25))
         });
         let first = if first == usize::MAX { 0 } else { first };
