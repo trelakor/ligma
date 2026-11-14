@@ -1801,8 +1801,14 @@ impl Painter {
             let (w, h) = (area.width() * grow, area.height() * grow);
             let (x, y) = (center.x + (self.velocity.0 * lag) as f32, center.y + (self.velocity.1 * lag) as f32);
             if next != level { over(next, Rect::from_xywh(x - w / 2.0, y - h / 2.0, w, h)) } else { Vec::new() }
+        } else if self.moved.elapsed() < Duration::from_millis(150) {
+            // Where a pan's headed
+            let lag = 0.25;
+            let (dx, dy) = ((self.velocity.0 * lag) as f32, (self.velocity.1 * lag) as f32);
+            over(level, Rect::from_xywh(area.left + dx, area.top + dy, area.width(), area.height())).into_iter().filter(|key| !here.contains(key)).collect()
         } else {
-            Vec::new()
+            // And around the view once it's still, for a pan to find
+            Self::tiles_over(ox, oy, width, height, level.to_bits(), 1).into_iter().filter(|key| !here.contains(key)).collect()
         };
         let far: Vec<TileKey> = pyramid.iter().copied().filter(|key| Some(key.px) == furthest).collect();
         for key in here.iter().chain(&ahead).chain(&far) {
@@ -1810,7 +1816,9 @@ impl Painter {
                 tile.used = frame;
             }
         }
-        let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale);
+        // Once it's still, only exact tiles will do, as one drawn while it
+        // zoomed can be of the same level
+        let ready = |tiles: &HashMap<TileKey, Tile>, key: &TileKey| tiles.get(key).is_some_and(|tile| !tile.stale && (zooming || tile.exact || Some(key.px) == furthest));
         let missing: Vec<TileKey> = here.iter().copied().filter(|key| !ready(&self.tiles, key)).collect();
         if missing.is_empty() {
             // All of the view's there, so what stood in for it goes
@@ -1835,7 +1843,7 @@ impl Painter {
         // drawn before it gets there is never shown scaled up
         let todo = match zooming {
             true => [(ahead_missing, false), (missing, false), (far_missing, false)],
-            false => [(missing, !zooming), (ahead_missing, false), (far_missing, false)],
+            false => [(missing, true), (ahead_missing, true), (far_missing, false)],
         };
         for (keys, exact) in todo {
             if keys.is_empty() {
