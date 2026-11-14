@@ -111,8 +111,8 @@ fn main(
             y1 = i32(ceil(bbox.w * SY));
         }
     }
-    let width_in_bins = i32((config.width_in_tiles + N_BIN_BLOCK_X - 1u) / N_BIN_BLOCK_X);
-    let height_in_bins = i32((config.height_in_tiles + N_BIN_BLOCK_Y - 1u) / N_BIN_BLOCK_Y);
+    let width_in_bins = i32((config.width_in_tiles + N_TILE_X - 1u) / N_TILE_X);
+    let height_in_bins = i32((config.height_in_tiles + N_TILE_Y - 1u) / N_TILE_Y);
     let n_bins = u32(width_in_bins * height_in_bins);
     let aligned_n_bins = (n_bins + N_BIN_BLOCK - 1u) & ~(N_BIN_BLOCK - 1u);
 
