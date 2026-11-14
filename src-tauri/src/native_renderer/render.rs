@@ -451,7 +451,7 @@ const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 const VELLO_STILL: Duration = Duration::from_secs(1);
 
 /// Tiles a side Vello draws at most at once
-const VELLO_BLOCK: i32 = 2;
+const VELLO_BLOCK: i32 = 1;
 /// Tiles kept drawn by Vello, 1 MB each, past those the view needs
 const VELLO_TILES: usize = 64;
 
@@ -2312,7 +2312,7 @@ impl Painter {
             self.vello_uses.insert(unit, uses);
         }
         let stats = format!(
-            "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} {}",
+            "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} atlas={}k {}",
             paths,
             clips,
             super::vello::SIZES.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(),
@@ -2326,6 +2326,7 @@ impl Painter {
             self.vello.as_ref().map_or(0.0, |vello| vello.took.as_secs_f64() * 1000.0),
             self.vello.as_ref().map_or(0.0, |vello| vello.took_blurs.as_secs_f64() * 1000.0),
             vello_took.as_secs_f64() * 1000.0,
+            area >> 10,
             kinds.replace('"', "")
         );
         Ok((tex, counts, stats, rough))

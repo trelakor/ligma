@@ -345,7 +345,9 @@ impl Pool {
     /// Gives back slots, and a heap left empty unless it's the only one
     /// with room
     fn give(&mut self, index: usize, first: usize, count: usize) {
-        PLACED.lock().unwrap().remove(&(self as *const Pool as usize, index, first));
+        if super::gpu_census::on() {
+            PLACED.lock().unwrap().remove(&(self as *const Pool as usize, index, first));
+        }
         let Some(Some(slab)) = self.slabs.get_mut(index) else {
             return;
         };
@@ -395,6 +397,9 @@ pub fn trim() {
         if !full.is_empty() {
             kept.push(format!("{}MB slabs {full:?}", pool.kind.slab >> 20));
         }
+    }
+    if !super::gpu_census::on() {
+        return;
     }
     let mut by: std::collections::HashMap<String, (u64, usize)> = std::collections::HashMap::new();
     for (what, bytes) in PLACED.lock().unwrap().values() {
@@ -605,7 +610,7 @@ unsafe fn placed(
     let count = info.SizeInBytes.div_ceil(slot) as usize;
     let (slab, first, heap) = pool.lock().unwrap().take(&this.device, count)?;
     // Dev tools: what each slot's taken for
-    if std::env::var_os("LIGMA_NATIVE_CENSUS").is_some() {
+    if super::gpu_census::on() {
         let what = format!("{} {}x{}{}", super::gpu_census::current(), desc.Width, desc.Height, if targets { " target" } else { "" });
         let at = &*pool.lock().unwrap() as *const Pool as usize;
         PLACED.lock().unwrap().insert((at, slab, first), (what, count as u64 * slot));

@@ -171,9 +171,10 @@ impl Vello {
                 & (wgpu::Features::CLEAR_TEXTURE
                     | if std::env::var_os("LIGMA_NATIVE_VELLO_TIMES").is_some() { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() }),
             required_limits: adapter.limits(),
-            // Smaller blocks of GPU memory, rather than ones far bigger than
-            // what's in them
-            memory_hints: wgpu::MemoryHints::MemoryUsage,
+            // Small blocks of GPU memory, rather than ones far bigger than
+            // what's in them, and memory of its own for anything bigger,
+            // given back the moment it's let go
+            memory_hints: wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (4 << 20)..(4 << 20) },
             ..Default::default()
         }))
         .map_err(|error| format!("device: {error}"))?;

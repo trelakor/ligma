@@ -83,7 +83,8 @@ unsafe extern "system" fn pipeline(this: *mut c_void, desc: *const c_void, riid:
 }
 
 pub fn on() -> bool {
-    super::dev() && std::env::var("LIGMA_NATIVE_CENSUS").is_ok_and(|value| value == "1")
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| super::dev() && std::env::var("LIGMA_NATIVE_CENSUS").is_ok_and(|value| value == "1"))
 }
 
 unsafe fn patch(vtable: *const c_void, offset: usize, with: usize) -> usize {
