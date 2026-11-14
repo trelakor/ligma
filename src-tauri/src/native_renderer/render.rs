@@ -462,10 +462,10 @@ const ENCODE_SETTLED: Duration = Duration::from_millis(30);
 /// Whether `encoded` is of the unit as it is, `stamp`, with the textures of
 /// the images it draws those Vello has. One Vello can't draw is only of
 /// use at its own level, to fall back to Skia
-fn usable(encoded: &Encoded, stamp: u64, own: bool, images: &HashMap<String, Img>, vello: &mut super::vello::Vello) -> bool {
+fn usable(encoded: &Encoded, stamp: u64, own: bool, images: &HashMap<String, Img>) -> bool {
     encoded.stamp == stamp
         && match &encoded.made {
-            Ok(fragment) => fragment.pictures.iter().all(|(key, level, id)| images.get(key).and_then(|img| vello.picture(key, img, *level)).is_some_and(|data| data.data.id() == *id)),
+            Ok(fragment) => fragment.pictures.iter().all(|(key, _, id)| images.get(key).is_some_and(|img| img.image.unique_id() as u64 == *id)),
             Err(_) => own,
         }
 }
@@ -1046,6 +1046,8 @@ pub struct Painter {
     /// Draws the whole view, with LIGMA_NATIVE_VELLO set (see vello.rs),
     /// once it's started
     vello: Option<super::vello::Vello>,
+    /// Vello's copies of the tree's paths
+    vello_paths: super::vello::Paths,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
     /// Images units drew with when Vello last drew them, by unit, as
     /// pictures keep them
@@ -1189,6 +1191,7 @@ impl Painter {
         let vello_starting = std::env::var_os("LIGMA_NATIVE_VELLO").filter(|value| value != "0").map(|_| super::vello::start(&gpu.device));
         Self {
             vello: None,
+            vello_paths: Default::default(),
             vello_starting,
             vello_uses: HashMap::new(),
             fragments: HashMap::new(),
@@ -1701,9 +1704,10 @@ impl Painter {
             (left, top, step((area.right * px).ceil() as i32 - left), step((area.bottom * px).ceil() as i32 - top))
         };
         let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
-        let margin = self.reach(view_area, px);
-        let reach = view_area.with_outset((margin as f32 / px, margin as f32 / px));
-        let (w, h) = (width + margin * 2, height + margin * 2);
+        // Blurs draw what's behind them in scenes of their own, so none is
+        // drawn around the view for them, as Skia's need
+        let (margin, reach) = (0, view_area);
+        let (w, h) = (width, height);
         let budget = if SETTLE.saturating_sub(self.zoom.1.elapsed()).is_zero() { ENCODE_SETTLED } else { ENCODE_ZOOMING };
         // Drawn while the GPU draws the last, which is checked after
         match self.vello_view_once(ox - margin, oy - margin, w, h, px, reach, Some(budget)) {
@@ -1739,9 +1743,10 @@ impl Painter {
         let Some(vello) = self.vello.as_mut() else { return };
         let short = vello.check(last.renders);
         let waited = vello.waited;
+        let stages = std::mem::take(&mut vello.stages);
         match short {
             Ok(None) => {
-                trace(|| format!("  whole vello px={:.3} {} checked={:.1}ms {:.1}ms", last.layer.px, last.stats, waited.as_secs_f64() * 1000.0, last.started.elapsed().as_secs_f64() * 1000.0));
+                trace(|| format!("  whole vello px={:.3} {} checked={:.1}ms {:.1}ms gpu:{stages}", last.layer.px, last.stats, waited.as_secs_f64() * 1000.0, last.started.elapsed().as_secs_f64() * 1000.0));
                 self.whole_took = last.started.elapsed();
                 self.hand_whole(last.layer, last.fence, last.at, last.rough, true);
             }
@@ -1824,7 +1829,7 @@ impl Painter {
         let mut fragments = std::mem::take(&mut self.fragments);
         // Image fills' textures the view draws, by key
         let mut pictures: Vec<(String, u32)> = Vec::new();
-        let (mut reused, mut made) = (0, 0);
+        let (mut reused, mut made_count) = (0, 0);
         let (mut encoding, mut rough) = (Duration::ZERO, false);
         // Blurs, drawn and put in place for the view
         let mut plan = super::vello::Plan::new(w);
@@ -1832,20 +1837,116 @@ impl Painter {
         let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
             None => (vello::Scene::new(), Some("not a tree".to_string()), 0, Vec::new()),
             Some(tree) => {
-                let mut encoder = super::vello::Encoder::new(tree, &self.images, &self.kit, &mut vello, &self.gpu.device, &mut self.gpu.context, w, h);
                 let now = Instant::now();
                 // Dev tools: every unit encoded for the view
                 let fresh = std::env::var_os("LIGMA_NATIVE_VELLO_FRESH").is_some();
-                for (unit, &stamp) in self.units.iter().zip(&stamps) {
+                let (images, units_all) = (&self.images, &self.units);
+                // The units in view, by index, with the fragment each draws,
+                // where there's one of use yet
+                let mut shown: Vec<(usize, Option<(usize, bool, i32)>)> = Vec::new();
+                // Those to encode, by where they're shown, with what stands
+                // in past the time to encode: one of a level near, more
+                // detailed first, or else one a level coarser, which has less
+                // to it, and whether that's encoded already
+                let mut jobs: Vec<(usize, Option<(usize, bool, i32)>, bool)> = Vec::new();
+                let mut whole_tree = true;
+                for (index, (unit, &stamp)) in units_all.iter().zip(&stamps).enumerate() {
                     if !Rect::intersects2(&unit.bounds, &reach) || unit.bounds.width().max(unit.bounds.height()) * px < 0.5 {
                         continue;
                     }
-                    let Some(place) = &unit.place else {
-                        encoder.failed = Some("not a tree".into());
+                    if unit.place.is_none() {
+                        whole_tree = false;
                         break;
-                    };
+                    }
                     let key = (unit.slot, unit.section, level);
-                    if fresh {
+                    if !fresh && fragments.get(&key).is_some_and(|encoded| usable(encoded, stamp, true, images)) {
+                        shown.push((index, Some(key)));
+                        continue;
+                    }
+                    if !fresh {
+                        let near = budget.and_then(|_| {
+                            [level + 1, level + 2, level + 3, level - 1, level - 2]
+                                .into_iter()
+                                .map(|other| (unit.slot, unit.section, other))
+                                .find(|other| fragments.get(other).is_some_and(|encoded| usable(encoded, stamp, false, images)))
+                        });
+                        let short = fragments.get(&(unit.slot, unit.section, level - 1)).is_some_and(|encoded| usable(encoded, stamp, true, images));
+                        jobs.push((shown.len(), near, short));
+                    }
+                    shown.push((index, None));
+                }
+                let drawable: HashMap<String, super::vello::Drawable> = if jobs.is_empty() && !fresh {
+                    HashMap::new()
+                } else {
+                    images.iter().filter_map(|(key, img)| super::vello::Vello::drawable(img).map(|drawable| (key.clone(), drawable))).collect()
+                };
+                // Encoded by threads at once, each taking the next unit until
+                // there are none
+                let (paths, begun, next) = (&self.vello_paths, Instant::now(), std::sync::atomic::AtomicUsize::new(0));
+                let threads = std::env::var("LIGMA_NATIVE_VELLO_THREADS").ok().and_then(|n| n.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, 8)).min(jobs.len());
+                type Done = Vec<(usize, (usize, bool, i32), bool, Option<Result<super::vello::Fragment, String>>)>;
+                let worked: Vec<(Done, i64, usize)> = std::thread::scope(|scope| {
+                    let (jobs, shown, drawable, next) = (&jobs, &shown, &drawable, &next);
+                    let workers: Vec<_> = (0..threads)
+                        .map(|_| {
+                            scope.spawn(move || {
+                                let mut encoder = super::vello::Encoder::worker(tree, images, paths, drawable, w, h);
+                                let mut done = Vec::new();
+                                while let Some(&(at, near, short)) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                                    let unit = &units_all[shown[at].0];
+                                    let Some(place) = &unit.place else { continue };
+                                    let over = budget.is_some_and(|budget| begun.elapsed() >= budget);
+                                    let key = match (over, near) {
+                                        (false, _) => (unit.slot, unit.section, level),
+                                        (true, Some(near)) => near,
+                                        (true, None) => (unit.slot, unit.section, level - 1),
+                                    };
+                                    let made = (!over || (near.is_none() && !short)).then(|| {
+                                        let fragment = encoder.fragment(place, (unit.bounds.left, unit.bounds.top), key.2);
+                                        match encoder.failed.take() {
+                                            Some(why) => Err(why),
+                                            None => Ok(fragment),
+                                        }
+                                    });
+                                    done.push((at, key, over, made));
+                                }
+                                (done, encoder.fell_back, encoder.inexact)
+                            })
+                        })
+                        .collect();
+                    workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| (Vec::new(), 0, 0))).collect()
+                });
+                encoding = begun.elapsed();
+                let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
+                if !whole_tree {
+                    encoder.failed = Some("not a tree".into());
+                }
+                reused += shown.len() - jobs.len();
+                for (done, fell_back, inexact) in worked {
+                    encoder.fell_back += fell_back;
+                    encoder.inexact += inexact;
+                    for (at, key, was_rough, made) in done {
+                        rough |= was_rough;
+                        match made {
+                            Some(made) => {
+                                made_count += 1;
+                                fragments.insert(key, Encoded { stamp: stamps[shown[at].0], made, used: now });
+                            }
+                            None => reused += 1,
+                        }
+                        shown[at].1 = Some(key);
+                    }
+                }
+                for &(index, key) in &shown {
+                    if encoder.failed.is_some() {
+                        break;
+                    }
+                    let unit = &units_all[index];
+                    let Some(place) = &unit.place else { break };
+                    let Some(key) = key else {
+                        if !fresh {
+                            continue;
+                        }
                         encoder.place(place, &post);
                         let (mut effects, mut scene) = (std::mem::take(&mut encoder.effects), std::mem::take(&mut encoder.scene));
                         if let Err(why) = encoder.put(&mut plan, &mut effects, scene.encoding_mut(), vello::kurbo::Affine::IDENTITY, whole, 0) {
@@ -1856,52 +1957,9 @@ impl Painter {
                         pictures.extend(encoder.drawn.drain(..));
                         asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
                         units += 1;
-                        if encoder.failed.is_some() {
-                            break;
-                        }
                         continue;
-                    }
-                    // Kept while it's of the unit as it is
-                    let current = fragments.get(&key).is_some_and(|encoded| usable(encoded, stamp, true, &self.images, encoder.vello));
-                    // Past the time to encode, one of a level near stands
-                    // in, more detailed first, for the view to be drawn
-                    // again exactly once there's time
-                    let near = match (current, budget) {
-                        (false, Some(budget)) if encoding >= budget => [level + 1, level + 2, level + 3, level - 1, level - 2]
-                            .into_iter()
-                            .map(|other| (unit.slot, unit.section, other))
-                            .find(|other| fragments.get(other).is_some_and(|encoded| usable(encoded, stamp, false, &self.images, encoder.vello))),
-                        _ => None,
                     };
-                    // With none, one a level coarser, which has less to it,
-                    // is encoded to stand in
-                    let short = !current && near.is_none() && budget.is_some_and(|budget| encoding >= budget);
-                    let level = if short { level - 1 } else { level };
-                    let key = match (near, short) {
-                        (Some(near), _) => near,
-                        (None, true) => (unit.slot, unit.section, level),
-                        (None, false) => key,
-                    };
-                    rough |= near.is_some() || short;
-                    let current = current || (short && fragments.get(&key).is_some_and(|encoded| usable(encoded, stamp, true, &self.images, encoder.vello)));
-                    let encoded = match fragments.get_mut(&key).filter(|_| current || near.is_some()) {
-                        Some(encoded) => {
-                            reused += 1;
-                            encoded
-                        }
-                        None => {
-                            made += 1;
-                            let timer = Instant::now();
-                            let fragment = encoder.fragment(place, (unit.bounds.left, unit.bounds.top), level);
-                            encoding += timer.elapsed();
-                            let made = match encoder.failed.take() {
-                                Some(why) => Err(why),
-                                None => Ok(fragment),
-                            };
-                            fragments.insert(key, Encoded { stamp, made, used: now });
-                            fragments.get_mut(&key).unwrap()
-                        }
-                    };
+                    let Some(encoded) = fragments.get_mut(&key) else { continue };
                     encoded.used = now;
                     match &mut encoded.made {
                         Ok(fragment) => {
@@ -1928,9 +1986,6 @@ impl Painter {
                         Err(why) => encoder.failed = Some(why.clone()),
                     }
                     units += 1;
-                    if encoder.failed.is_some() {
-                        break;
-                    }
                 }
                 counts += encoder.counts;
                 inexact = encoder.inexact;
@@ -1942,11 +1997,18 @@ impl Painter {
         fragments.retain(|_, encoded| encoded.used.elapsed() < FRAGMENTS_KEPT);
         self.fragments = fragments;
         let encoded = started.elapsed();
+        let mut steps = Vec::new();
+        let mut step = Instant::now();
+        let mut lap = |steps: &mut Vec<f64>| {
+            steps.push((step.elapsed().as_secs_f64() * 10000.0).round() / 10.0);
+            step = Instant::now();
+        };
         let used_pages = pages.len();
         for page in &mut pages {
             self.gpu.flush(page);
         }
         drop(pages);
+        lap(&mut steps);
         if let Some(why) = failed {
             self.vello = Some(vello);
             return Err(why);
@@ -1959,7 +2021,9 @@ impl Painter {
             self.vello = Some(vello);
             return Err(format!("images need {}M px of Vello's atlas", area >> 20));
         }
+        lap(&mut steps);
         let _ = self.gpu.context.flush_and_submit();
+        lap(&mut steps);
         // Dev tools: Skia's GPU work for the view done first, to time apart
         let skia_gpu = std::env::var_os("LIGMA_NATIVE_VELLO_SYNC").map(|_| {
             let at = Instant::now();
@@ -1974,10 +2038,12 @@ impl Painter {
             (size(&e.path_tags[..]) + size(&e.path_data[..]) + size(&e.draw_tags[..]) + size(&e.draw_data[..]) + size(&e.transforms[..]) + size(&e.styles[..])) as f64 / 1048576.0
         };
         let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, w, h, used_pages, &pictures, &plan);
+        lap(&mut steps);
         drop(plan);
         vello.spare = scene;
         vello.keep_pictures(&self.images);
-        vello.prune();
+        self.vello_paths.prune();
+        lap(&mut steps);
         self.vello = Some(vello);
         let out = rendered.map_err(|error| {
             log::warn!("native renderer: Vello: {error}");
@@ -2013,7 +2079,7 @@ impl Painter {
             self.vello_uses.insert(unit, uses);
         }
         let stats = format!(
-            "{w}x{h} units={units} reused={reused} made={made} rough={rough} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms {}",
+            "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} {}",
             paths,
             clips,
             super::vello::SIZES.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(),

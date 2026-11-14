@@ -9,7 +9,7 @@
 //! root. `Tree::units` splits the scene into the units tiles are drawn from,
 //! `Drawer` draws a node and what's under it
 
-use std::cell::RefCell;
+use std::sync::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -292,15 +292,15 @@ pub struct Tree {
     schema: &'static Schema,
     pub root: Option<u32>,
     pub header: Option<Header>,
-    info: RefCell<IdMap<u32, Info>>,
+    info: RwLock<IdMap<u32, Info>>,
     /// A hash of what each node draws, with all under it, by which units
     /// are known: Figma sends a node again under another id, unchanged, and
     /// an id again for another node
     contents: IdMap<u32, u64>,
     /// Skia's copy of each path, by the path's address, kept with it
-    paths: RefCell<HashMap<usize, (Arc<rt::Path>, Path)>>,
+    paths: Mutex<HashMap<usize, (Arc<rt::Path>, Path)>>,
     /// Pattern tiles: by source, tiling and zoom level
-    patterns: RefCell<HashMap<(u32, u64, i32), (Picture, Vec<String>)>>,
+    patterns: Mutex<HashMap<(u32, u64, i32), (Picture, Vec<String>)>>,
     /// Figma's noise octaves, see `scene::Begin`
     pub octaves: Vec<f32>,
 }
@@ -312,10 +312,10 @@ impl Tree {
             schema,
             root: None,
             header: None,
-            info: RefCell::default(),
+            info: RwLock::default(),
             contents: IdMap::default(),
-            paths: RefCell::default(),
-            patterns: RefCell::default(),
+            paths: Mutex::default(),
+            patterns: Mutex::default(),
             octaves: Vec::new(),
         }
     }
@@ -334,7 +334,7 @@ impl Tree {
             self.root = None;
             return Err(format!("root {} isn't there", header.root));
         }
-        let mut info = self.info.borrow_mut();
+        let mut info = self.info.write().unwrap();
         if header.mode == 0 {
             info.clear();
         } else {
@@ -345,11 +345,11 @@ impl Tree {
         drop(info);
         self.renew(&applied, previous.as_ref(), &header.released);
         if header.mode == 0 || !header.released.is_empty() {
-            self.paths.borrow_mut().retain(|_, (path, _)| Arc::strong_count(path) > 1);
-            self.patterns.borrow_mut().clear();
+            self.paths.lock().unwrap().retain(|_, (path, _)| Arc::strong_count(path) > 1);
+            self.patterns.lock().unwrap().clear();
         } else if !applied.new_nodes.is_empty() {
             // A pattern's source can change
-            self.patterns.borrow_mut().clear();
+            self.patterns.lock().unwrap().clear();
         }
         self.root = Some(header.root);
         self.header = Some(header.clone());
@@ -469,8 +469,8 @@ impl Tree {
     /// Pattern tiles drawn without image `key`, or all of them
     pub fn forget_patterns(&self, key: Option<&str>) {
         match key {
-            Some(key) => self.patterns.borrow_mut().retain(|_, (_, missing)| !missing.iter().any(|missing| missing == key)),
-            None => self.patterns.borrow_mut().clear(),
+            Some(key) => self.patterns.lock().unwrap().retain(|_, (_, missing)| !missing.iter().any(|missing| missing == key)),
+            None => self.patterns.lock().unwrap().clear(),
         }
     }
 
@@ -479,7 +479,7 @@ impl Tree {
     }
 
     fn info_at(&self, id: u32, depth: u8) -> Info {
-        if let Some(info) = self.info.borrow().get(&id) {
+        if let Some(info) = self.info.read().unwrap().get(&id) {
             return *info;
         }
         let none = Info { bounds: None, count: 1, blends: false, custom: false, approximate: None };
@@ -600,18 +600,18 @@ impl Tree {
                 info.bounds = None;
             }
         }
-        self.info.borrow_mut().insert(id, info);
+        self.info.write().unwrap().insert(id, info);
         info
     }
 
     /// Skia's copy of `path`, made once
     pub fn skia_path(&self, path: &Arc<rt::Path>) -> Path {
         let key = Arc::as_ptr(path) as usize;
-        if let Some((_, skia)) = self.paths.borrow().get(&key) {
+        if let Some((_, skia)) = self.paths.lock().unwrap().get(&key) {
             return skia.clone();
         }
         let skia = path.to_skia();
-        self.paths.borrow_mut().insert(key, (path.clone(), skia.clone()));
+        self.paths.lock().unwrap().insert(key, (path.clone(), skia.clone()));
         skia
     }
 
@@ -1495,7 +1495,7 @@ impl<'a> Drawer<'a> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (format!("{tile_type:?}"), spacing[0].to_bits(), spacing[1].to_bits(), frame.left.to_bits(), frame.top.to_bits()).hash(&mut hasher);
         let key = (source, hasher.finish(), level);
-        let cached = self.tree.patterns.borrow().get(&key).cloned();
+        let cached = self.tree.patterns.lock().unwrap().get(&key).cloned();
         let picture = match cached {
             Some((picture, missing)) => {
                 for hash in missing {
@@ -1524,7 +1524,7 @@ impl<'a> Drawer<'a> {
                 self.counts += inner.counts;
                 drop(inner);
                 let picture = recorder.finish_recording_as_picture(Some(&tile))?;
-                self.tree.patterns.borrow_mut().insert(key, (picture.clone(), missing));
+                self.tree.patterns.lock().unwrap().insert(key, (picture.clone(), missing));
                 picture
             }
         };

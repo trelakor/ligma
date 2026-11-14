@@ -81,7 +81,7 @@ pub struct Vello {
     out: Option<Target>,
     pages: Vec<Page>,
     /// Vello's copies of paths, by the path they're of
-    paths: HashMap<usize, (Arc<rt::Path>, Arc<BezPath>)>,
+
     /// Set if wgpu reports an error, after which Vello isn't used
     broken: Arc<std::sync::atomic::AtomicBool>,
     /// Image fills' textures Vello has, by key and mipmap level
@@ -206,7 +206,7 @@ impl Vello {
             renders: 0,
             out: None,
             pages: Vec::new(),
-            paths: HashMap::new(),
+
             broken,
             pictures: HashMap::new(),
             barriers: Barriers { allocators: Vec::new(), list: None },
@@ -587,21 +587,51 @@ impl Vello {
         Ok(())
     }
 
-    /// Vello's copy of `path`, made once
-    pub fn path(&mut self, tree: &Tree, path: &Arc<rt::Path>) -> Arc<BezPath> {
+    /// What Vello takes of `img`'s texture, where it can draw it: its
+    /// mipmap levels and size
+    pub fn drawable(img: &Img) -> Option<Drawable> {
+        if std::env::var_os("LIGMA_NATIVE_VELLO_SKIA_IMAGES").is_some() {
+            return None;
+        }
+        let (backend, origin) = skia_safe::gpu::images::get_backend_texture_from_image(&img.image, false)?;
+        let info = backend.d3d_texture_resource_info()?;
+        if origin != skia_safe::gpu::SurfaceOrigin::TopLeft || info.format != windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM || info.sample_count > 1 {
+            return None;
+        }
+        Some(Drawable { id: img.image.unique_id(), levels: info.level_count.max(1), width: backend.width() as u32, height: backend.height() as u32 })
+    }
+}
+
+/// Vello's copies of the tree's paths, made once, shared by the threads
+/// encoding units
+#[derive(Default)]
+pub struct Paths(std::sync::Mutex<HashMap<usize, (Arc<rt::Path>, Arc<BezPath>)>>);
+
+impl Paths {
+    /// Vello's copy of `path`
+    pub fn path(&self, tree: &Tree, path: &Arc<rt::Path>) -> Arc<BezPath> {
         let key = Arc::as_ptr(path) as usize;
-        if let Some((_, made)) = self.paths.get(&key) {
+        if let Some((_, made)) = self.0.lock().unwrap().get(&key) {
             return made.clone();
         }
         let made = Arc::new(bez(&tree.skia_path(path)));
-        self.paths.insert(key, (path.clone(), made.clone()));
+        self.0.lock().unwrap().insert(key, (path.clone(), made.clone()));
         made
     }
 
     /// Lets go of copies of paths the tree no longer has
-    pub fn prune(&mut self) {
-        self.paths.retain(|_, (path, _)| Arc::strong_count(path) > 1);
+    pub fn prune(&self) {
+        self.0.lock().unwrap().retain(|_, (path, _)| Arc::strong_count(path) > 1);
     }
+}
+
+/// An image's texture as Vello can take it (see `Vello::drawable`)
+#[derive(Clone, Copy)]
+pub struct Drawable {
+    id: u32,
+    levels: u32,
+    width: u32,
+    height: u32,
 }
 
 /// Skia's `path` as Vello's
@@ -1131,11 +1161,16 @@ const BLACK: Color4f = Color4f::new(0.0, 0.0, 0.0, 1.0);
 pub struct Encoder<'a> {
     pub tree: &'a Tree,
     pub images: &'a HashMap<String, Img>,
-    pub kit: &'a Kit,
-    pub vello: &'a mut Vello,
+    /// What only a view's drawn with, which threads encoding units don't
+    /// have
+    kit: Option<&'a Kit>,
+    pub vello: Option<&'a mut Vello>,
     pub scene: vello::Scene,
-    skia: &'a ID3D12Device,
-    context: &'a mut skia_safe::gpu::DirectContext,
+    skia: Option<&'a ID3D12Device>,
+    context: Option<&'a mut skia_safe::gpu::DirectContext>,
+    paths: &'a Paths,
+    /// The images Vello can draw, by key
+    drawable: &'a HashMap<String, Drawable>,
     /// Skia's surfaces over the pages of the atlas used
     pages: Vec<skia_safe::Surface>,
     shelf: Shelf,
@@ -1179,28 +1214,41 @@ pub struct Encoder<'a> {
 
 impl<'a> Encoder<'a> {
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tree: &'a Tree,
         images: &'a HashMap<String, Img>,
         kit: &'a Kit,
         vello: &'a mut Vello,
+        paths: &'a Paths,
+        drawable: &'a HashMap<String, Drawable>,
         skia: &'a ID3D12Device,
         context: &'a mut skia_safe::gpu::DirectContext,
         width: i32,
         height: i32,
     ) -> Self {
+        let scene = {
+            let mut scene = std::mem::take(&mut vello.spare);
+            scene.reset();
+            scene
+        };
+        let mut encoder = Self::worker(tree, images, paths, drawable, width, height);
+        (encoder.scene, encoder.kit, encoder.vello, encoder.skia, encoder.context) = (scene, Some(kit), Some(vello), Some(skia), Some(context));
+        encoder
+    }
+
+    /// One for a thread encoding units, which can't draw views
+    pub fn worker(tree: &'a Tree, images: &'a HashMap<String, Img>, paths: &'a Paths, drawable: &'a HashMap<String, Drawable>, width: i32, height: i32) -> Self {
         Self {
             tree,
             images,
-            kit,
-            scene: {
-                let mut scene = std::mem::take(&mut vello.spare);
-                scene.reset();
-                scene
-            },
-            vello,
-            skia,
-            context,
+            kit: None,
+            scene: vello::Scene::new(),
+            vello: None,
+            skia: None,
+            context: None,
+            paths,
+            drawable,
             pages: Vec::new(),
             shelf: Shelf { width: 0, height: 0, x: 0, y: 0, row: 0 },
             view: IRect::from_wh(width, height),
@@ -1238,9 +1286,10 @@ impl<'a> Encoder<'a> {
             if self.pages.len() >= PAGES {
                 return None;
             }
-            let tex = self.vello.page(self.skia, self.pages.len(), self.view.width(), self.view.height()).map_err(|error| log::warn!("native renderer: Vello's atlas: {error}")).ok()?;
+            let (Some(vello), Some(skia)) = (self.vello.as_deref_mut(), self.skia) else { return None };
+            let tex = vello.page(skia, self.pages.len(), self.view.width(), self.view.height()).map_err(|error| log::warn!("native renderer: Vello's atlas: {error}")).ok()?;
             let mut surface = skia_safe::gpu::surfaces::wrap_backend_texture(
-                self.context,
+                self.context.as_deref_mut()?,
                 &tex.backend(),
                 skia_safe::gpu::SurfaceOrigin::TopLeft,
                 1,
@@ -1493,7 +1542,7 @@ impl<'a> Encoder<'a> {
                 self.counts.native += 1;
                 let Some(geometry) = &node.geometry else { return };
                 let Some(path) = &geometry.path else { return };
-                let (skia, bez) = (self.tree.skia_path(path), self.vello.path(self.tree, path));
+                let (skia, bez) = (self.tree.skia_path(path), self.paths.path(self.tree, path));
                 self.with(Some(&node.transform.unwrap_or(rt::IDENTITY)), |this| {
                     for paint in &geometry.paints {
                         this.paint(node, paint, &skia, &bez);
@@ -1618,7 +1667,7 @@ impl<'a> Encoder<'a> {
     fn fill_stroke(&mut self, node: &Node) {
         for geometry in &node.fill_geometries {
             let Some(path) = &geometry.path else { continue };
-            let (skia, bez) = (self.tree.skia_path(path), self.vello.path(self.tree, path));
+            let (skia, bez) = (self.tree.skia_path(path), self.paths.path(self.tree, path));
             for paint in &geometry.paints {
                 self.paint(node, paint, &skia, &bez);
             }
@@ -1637,7 +1686,7 @@ impl<'a> Encoder<'a> {
         let strokes = |this: &mut Self| {
             for geometry in &node.stroke_geometries {
                 let Some(path) = &geometry.path else { continue };
-                let (skia, bez) = (this.tree.skia_path(path), this.vello.path(this.tree, path));
+                let (skia, bez) = (this.tree.skia_path(path), this.paths.path(this.tree, path));
                 for paint in &geometry.paints {
                     this.paint(node, paint, &skia, &bez);
                 }
@@ -1964,16 +2013,20 @@ impl<'a> Encoder<'a> {
         // of those under it, so Vello's atlas holds no more than that
         let texels = kept / shown.max(1e-6);
         let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
-        let Some((data, level)) = (0..=level).rev().find_map(|level| self.vello.picture(&key, img, level).map(|data| (data, level))) else {
+        let drawable = self.drawable.get(&key).filter(|drawable| drawable.id == img.image.unique_id());
+        let fits = |level: u32| drawable.is_some_and(|d| level < d.levels && (d.width >> level).max(d.height >> level).max(1) <= 8192);
+        let Some(level) = (0..=level).rev().find(|&level| fits(level)) else {
             return Picture::Skia;
         };
+        // Each view puts in the texture of the level it draws (see `put`)
+        let data = nothing();
         let mut local = to_node;
         local.pre_scale((iw, ih), None);
         let width = shown / if self.retained { 2.0 } else { 1.0 };
         // Ligma's shaders take reflect for transparent outside the image,
         // and high quality for Figma's sampling
         let extend = if tile == skia_safe::TileMode::Repeat { Extend::Repeat } else { Extend::Reflect };
-        self.pictures.push((key.clone(), level, data.data.id()));
+        self.pictures.push((key.clone(), level, img.image.unique_id() as u64));
         let brush = ImageBrush { image: data, sampler: ImageSampler { x_extend: extend, y_extend: extend, quality: ImageQuality::High, alpha: opacity } };
         Picture::Drawn(brush, affine(&local), key, width)
     }
@@ -2303,7 +2356,8 @@ impl<'a> Encoder<'a> {
                     // As `image` picks it, for how wide it's shown here
                     let texels = img.image.width() as f32 / (*width * scale as f32).max(1e-6);
                     let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
-                    let Some((data, level)) = (0..=level).rev().find_map(|level| self.vello.picture(key, img, level).map(|data| (data, level))) else {
+                    let vello = self.vello.as_deref_mut().ok_or("no Vello")?;
+                    let Some((data, level)) = (0..=level).rev().find_map(|level| vello.picture(key, img, level).map(|data| (data, level))) else {
                         return Err("image Vello can't draw".into());
                     };
                     self.drawn.push((key.clone(), level));
@@ -2322,7 +2376,7 @@ impl<'a> Encoder<'a> {
                     let entry = self.kinds.entry(name).or_default();
                     entry.0 += 1;
                     entry.1 += width as i64 * height as i64;
-                    let (tree, images, kit) = (self.tree, self.images, self.kit);
+                    let (tree, images, kit) = (self.tree, self.images, self.kit.ok_or("no Kit")?);
                     let canvas = self.pages[page].canvas();
                     canvas.save();
                     canvas.clip_rect(Rect::from_xywh(x as f32, y as f32, width as f32, height as f32), None, false);
