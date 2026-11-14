@@ -967,6 +967,7 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
     const count = current.clones.length;
     closeRepeater(current, true);
+    if (current.group && settings.editable) restackAbove(figma, current.group);
     if (!quiet) figma.notify(`${count} ${count === 1 ? "copy" : "copies"} made`, { timeout: 1500 });
   };
 
@@ -1283,6 +1284,9 @@ const PAGE_JS: &str = r##"(() => {
   // hidden
   const DISINTEGRATE = "disintegrate";
   const MAX_SIDE = 4096;
+  // The quick picture, and the one put in the file while it's changed, at
+  // most this many pixels across
+  const QUICK = 720;
 
   // A force, as AE's Force 1 and Force 2: where it is on the layer, in
   // percent, how far in front of it (Depth) and how large a sphere
@@ -1837,6 +1841,35 @@ const PAGE_JS: &str = r##"(() => {
 
   // Puts `drawn`, from `renderAt`, on the result layer, as an image the
   // size it covers in the file
+  // Reads `node` as a picture without changing what shows. Figma reads a
+  // hidden layer, or one in a hidden group, as empty, so one that's hidden,
+  // as the original under an effect is, is read from a copy at the bottom
+  // of the page, out of the way, removed after
+  const AWAY = 200000;
+  const pictureReader = (figma, node) => {
+    let shown = true;
+    for (let at = node; at && at.type !== "PAGE"; at = at.parent) if (!at.visible) shown = false;
+    let from = node;
+    if (!shown) {
+      from = node.clone();
+      figma.currentPage.insertChild(0, from);
+      const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+      from.relativeTransform = [
+        [a, c, e + AWAY],
+        [b, d, f],
+      ];
+      from.visible = true;
+    }
+    const box = from.absoluteRenderBounds ?? from.absoluteBoundingBox;
+    return {
+      bounds: { x: box.x - (from === node ? 0 : AWAY), y: box.y, width: box.width, height: box.height },
+      read: async (scale) => createImageBitmap(new Blob([await from.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale } })], { type: "image/png" })),
+      done: () => {
+        if (from !== node && !from.removed) from.remove();
+      },
+    };
+  };
+
   const placeDrawn = async (current, drawn, k) => {
     const { figma, result, bounds } = current;
     if (!drawn || result.removed) return;
@@ -1911,27 +1944,37 @@ const PAGE_JS: &str = r##"(() => {
     try {
       figma.commitUndo();
     } catch {}
-    // The layer as a picture, as large as an image can be in Figma
-    const visible = source.visible;
-    source.visible = true;
+    // The layer as a picture: a small one first, quick to read, for the
+    // panel's preview and the file while it's changed, so the panel shows
+    // at once, then one as large as an image can be in Figma, for applying.
+    const reader = pictureReader(figma, source);
+    const { read } = reader;
     try {
-      current.bounds = source.absoluteRenderBounds ?? source.absoluteBoundingBox;
-      const most = Math.min(2, MAX_SIDE / 2 / Math.max(1, current.bounds.width, current.bounds.height));
-      const bytes = await source.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: most } });
-      current.bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      current.bounds = reader.bounds;
+      const side = Math.max(1, current.bounds.width, current.bounds.height);
+      const quick = await read(Math.min(2, QUICK / side));
+      if (disintegrating !== current) return reader.done();
+      const k = quick.width / current.bounds.width;
+      current.levels = { preview: scaledPicture(quick, 360, k), live: scaledPicture(quick, QUICK, k) };
+      quick.close?.();
+      if (!run) {
+        buildDisintegratePanel(current);
+        refreshDisintegrate(current);
+      }
+      current.bitmap = await read(Math.min(2, MAX_SIDE / 2 / side));
+      reader.done();
     } catch {
-      source.visible = visible;
-      disintegrating = null;
-      figma.notify("Couldn't read the layer", { timeout: 2000 });
+      reader.done();
+      if (disintegrating === current) {
+        current.root?.remove();
+        removeEventListener("keydown", current.keys, true);
+        disintegrating = null;
+        figma.notify("Couldn't read the layer", { timeout: 2000 });
+      }
       return;
     }
     if (disintegrating !== current) return;
-    const k = current.bitmap.width / current.bounds.width;
-    current.levels = {
-      preview: scaledPicture(current.bitmap, 360, k),
-      live: scaledPicture(current.bitmap, 900, k),
-      full: scaledPicture(current.bitmap, MAX_SIDE, k),
-    };
+    current.levels.full = scaledPicture(current.bitmap, MAX_SIDE, current.bitmap.width / current.bounds.width);
     // A new one's grouped from the start, as Repeater's are, the result
     // over the original, which is hidden while it shows
     const parent = source.parent;
@@ -1955,20 +1998,37 @@ const PAGE_JS: &str = r##"(() => {
     }
     source.visible = false;
     figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
+    current.ready = true;
     if (run) return applyDisintegrate(current);
-    buildDisintegratePanel(current);
     refreshDisintegrate(current);
   };
 
   // The panel's preview at once, and the file's a moment after the last
   // change, at a size quick to make
   const refreshDisintegrate = (current) => {
-    drawDisintegratePreview(current);
+    if (!current.drawing) {
+      current.drawing = true;
+      requestAnimationFrame(() => {
+        current.drawing = false;
+        if (disintegrating === current) drawDisintegratePreview(current);
+      });
+    }
+    if (!current.ready) return;
     clearTimeout(current.timer);
     current.timer = setTimeout(async () => {
-      if (disintegrating !== current) return;
-      await placeDrawn(current, renderAt(current, "live"), current.levels.live.k);
-    }, 120);
+      // Once it's being applied, only the full one goes in the file
+      if (disintegrating !== current || current.busy) return;
+      if (current.placing) {
+        current.again = true;
+        return;
+      }
+      current.placing = true;
+      do {
+        current.again = false;
+        await placeDrawn(current, renderAt(current, "live"), current.levels.live.k);
+      } while (current.again && !current.busy && disintegrating === current);
+      current.placing = false;
+    }, 40);
   };
 
   // Where the preview put the picture last, to place the forces' handles
@@ -2077,6 +2137,12 @@ const PAGE_JS: &str = r##"(() => {
     clearTimeout(current.timer);
     current.busy = true;
     current.panel?.busy(true);
+    // Until the full picture's read, and one being put in the file is in
+    while (!current.ready || current.placing) {
+      await new Promise((resolve) => setTimeout(resolve, 16));
+      if (!current.ready && (disintegrating !== current && crushing !== current)) return;
+    }
+    current.again = false;
     await placeDrawn(current, renderAt(current, "full"), current.levels.full.k);
     if (disintegrating !== current) return;
     let result = current.group ?? current.wrap;
@@ -2104,6 +2170,7 @@ const PAGE_JS: &str = r##"(() => {
       figma.commitUndo();
     } catch {}
     closeDisintegrate(current, true);
+    if (current.group && settings.editable) restackAbove(figma, current.group);
   };
 
   const closeDisintegrate = (current, applied) => {
@@ -2606,27 +2673,37 @@ const PAGE_JS: &str = r##"(() => {
     try {
       figma.commitUndo();
     } catch {}
-    // The layer as a picture, as large as an image can be in Figma
-    const visible = source.visible;
-    source.visible = true;
+    // The layer as a picture: a small one first, quick to read, for the
+    // panel's preview and the file while it's changed, so the panel shows
+    // at once, then one as large as an image can be in Figma, for applying.
+    const reader = pictureReader(figma, source);
+    const { read } = reader;
     try {
-      current.bounds = source.absoluteRenderBounds ?? source.absoluteBoundingBox;
-      const most = Math.min(2, MAX_SIDE / 2 / Math.max(1, current.bounds.width, current.bounds.height));
-      const bytes = await source.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: most } });
-      current.bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      current.bounds = reader.bounds;
+      const side = Math.max(1, current.bounds.width, current.bounds.height);
+      const quick = await read(Math.min(2, QUICK / side));
+      if (crushing !== current) return reader.done();
+      const k = quick.width / current.bounds.width;
+      current.levels = { preview: scaledPicture(quick, 360, k), live: scaledPicture(quick, QUICK, k) };
+      quick.close?.();
+      if (!run) {
+        buildBitcrushPanel(current);
+        refreshBitcrush(current);
+      }
+      current.bitmap = await read(Math.min(2, MAX_SIDE / 2 / side));
+      reader.done();
     } catch {
-      source.visible = visible;
-      crushing = null;
-      figma.notify("Couldn't read the layer", { timeout: 2000 });
+      reader.done();
+      if (crushing === current) {
+        current.root?.remove();
+        removeEventListener("keydown", current.keys, true);
+        crushing = null;
+        figma.notify("Couldn't read the layer", { timeout: 2000 });
+      }
       return;
     }
     if (crushing !== current) return;
-    const k = current.bitmap.width / current.bounds.width;
-    current.levels = {
-      preview: scaledPicture(current.bitmap, 360, k),
-      live: scaledPicture(current.bitmap, 900, k),
-      full: scaledPicture(current.bitmap, MAX_SIDE, k),
-    };
+    current.levels.full = scaledPicture(current.bitmap, MAX_SIDE, current.bitmap.width / current.bounds.width);
     // Grouped from the start, as Disintegrate's are
     const parent = source.parent;
     if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
@@ -2649,19 +2726,36 @@ const PAGE_JS: &str = r##"(() => {
     }
     source.visible = false;
     figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
+    current.ready = true;
     if (run) return applyBitcrush(current);
-    buildBitcrushPanel(current);
     refreshBitcrush(current);
   };
 
   // The panel's preview at once, and the file's a moment after
   const refreshBitcrush = (current) => {
-    drawBitcrushPreview(current);
+    if (!current.drawing) {
+      current.drawing = true;
+      requestAnimationFrame(() => {
+        current.drawing = false;
+        if (crushing === current) drawBitcrushPreview(current);
+      });
+    }
+    if (!current.ready) return;
     clearTimeout(current.timer);
     current.timer = setTimeout(async () => {
-      if (crushing !== current) return;
-      await placeDrawn(current, crushAt(current, "live"), current.levels.live.k);
-    }, 120);
+      // Once it's being applied, only the full one goes in the file
+      if (crushing !== current || current.busy) return;
+      if (current.placing) {
+        current.again = true;
+        return;
+      }
+      current.placing = true;
+      do {
+        current.again = false;
+        await placeDrawn(current, crushAt(current, "live"), current.levels.live.k);
+      } while (current.again && !current.busy && crushing === current);
+      current.placing = false;
+    }, 40);
   };
 
   const applyBitcrush = async (current) => {
@@ -2669,6 +2763,12 @@ const PAGE_JS: &str = r##"(() => {
     clearTimeout(current.timer);
     current.busy = true;
     current.panel?.busy(true);
+    // Until the full picture's read, and one being put in the file is in
+    while (!current.ready || current.placing) {
+      await new Promise((resolve) => setTimeout(resolve, 16));
+      if (!current.ready && (disintegrating !== current && crushing !== current)) return;
+    }
+    current.again = false;
     await placeDrawn(current, crushAt(current, "full"), current.levels.full.k);
     if (crushing !== current) return;
     let result = current.group ?? current.wrap;
@@ -2696,6 +2796,7 @@ const PAGE_JS: &str = r##"(() => {
       figma.commitUndo();
     } catch {}
     closeBitcrush(current, true);
+    if (current.group && settings.editable) restackAbove(figma, current.group);
   };
 
   const closeBitcrush = (current, applied) => {
@@ -2809,6 +2910,25 @@ const PAGE_JS: &str = r##"(() => {
     showSection();
   };
 
+  // Each effect in `stack` with its saved settings, as `restack` takes them
+  const layersOf = (stack) =>
+    stack.map((group) => {
+      const effect = effectOf(group);
+      let settings = {};
+      try {
+        settings = effect.saved(group);
+      } catch {}
+      return { group, effect, settings, off: isOff(group) };
+    });
+
+  // Once an effect under others is changed, those above are made again
+  // from it, as they were made from what it was before
+  const restackAbove = (figma, group) => {
+    const stack = stackOf(group);
+    const at = stack.indexOf(group);
+    if (at > 0) restack(figma, stack[0], group, layersOf(stack.slice(0, at)));
+  };
+
   const icon24 = (d, rule = "") => `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" ${rule} d="${d}"/></svg>`;
   const REMOVE = icon24("M18 11.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1 0-1h11a.5.5 0 0 1 .5.5", 'fill-rule="evenodd"');
   const ADD = icon24("M12 6a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 12 6", 'fill-rule="evenodd"');
@@ -2865,14 +2985,7 @@ const PAGE_JS: &str = r##"(() => {
       return;
     }
     if (!sectionStyle.isConnected) document.head.append(sectionStyle);
-    const layers = stack.map((group) => {
-      const effect = effectOf(group);
-      let settings = {};
-      try {
-        settings = effect.saved(group);
-      } catch {}
-      return { group, effect, settings, off: isOff(group) };
-    });
+    const layers = layersOf(stack);
     const key = layers.map(({ group, settings, off }) => group.id + off + JSON.stringify(settings)).join("|") + restacking;
     if (section && section.previousElementSibling === anchor && key === sectionKey) return;
     sectionKey = key;
