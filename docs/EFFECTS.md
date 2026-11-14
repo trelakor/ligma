@@ -40,5 +40,3 @@ Breaks the selected layer into pieces and throws them, live, as After Effects' S
 Pixelates, posterizes, dithers and glitches the selected layer: Figma's "Bitcrush lab" shader effect (its `main.ts` and `features.json`), its WGSL ported line for line to run on the layer's picture in the page, as the plugin API can't make Figma's shader effects. Every control is the shader's, with its ranges and defaults: Pixel size and aspect, Color bit depth, Color mode (RGB or Grayscale), Dither pattern (Off, Ordered Bayer or Noise), strength and scale, Glitch block size, displacement and amount, RGB split distance and angle, Noise, Contrast, Saturation, Mix, and a random seed (Shuffle). Sizes are in points, as the shader's are, so the look holds however large the picture. Presets are Bitcrush lab (the shader's defaults), Game Boy, 8-bit, Glitch and Dither. The result is an image the layer's size over the original, kept, hidden, in an editable Bitcrush group, as Disintegrate's is.
 
 Selecting a layer inside any effect's group, its original, a copy or its result, and clicking Effects opens that group to change, rather than making another effect inside it.
-
-## Planned
