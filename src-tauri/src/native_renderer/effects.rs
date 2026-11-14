@@ -142,8 +142,9 @@ pub fn spawn(jobs: Receiver<Job>, messages: Sender<Msg>, adapter: Option<String>
 }
 
 fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch, kept: Kept) {
-    // Code that couldn't be had, not asked for again
-    let mut missing: HashMap<String, String> = HashMap::new();
+    // Code that couldn't be had, and when: not asked for again for a while,
+    // as a tab that didn't answer may have crashed and loaded again since
+    let mut missing: HashMap<String, (String, Instant)> = HashMap::new();
     while let Ok(first) = jobs.recv() {
         // Only the latest for each node, when several came meanwhile
         let mut latest: Vec<Job> = vec![first];
@@ -174,17 +175,17 @@ fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch,
     }
 }
 
-fn one(host: &mut Host, fetch: &Fetch, missing: &mut HashMap<String, String>, kept: &Kept, job: Run) -> Result<Img, String> {
+fn one(host: &mut Host, fetch: &Fetch, missing: &mut HashMap<String, (String, Instant)>, kept: &Kept, job: Run) -> Result<Img, String> {
     for (id, _) in &job.chain {
         if host.has(id) {
             continue;
         }
-        if let Some(error) = missing.get(id) {
+        if let Some((error, _)) = missing.get(id).filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(10)) {
             return Err(error.clone());
         }
         let start = Instant::now();
         let code = fetch(id).inspect_err(|error| {
-            missing.insert(id.clone(), error.clone());
+            missing.insert(id.clone(), (error.clone(), Instant::now()));
         })?;
         host.load(id, &code)?;
         trace(|| format!("effect {id} loaded {:.0}ms", start.elapsed().as_secs_f64() * 1000.0));
