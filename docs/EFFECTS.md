@@ -24,12 +24,16 @@ Repeats the selected layer, live. Its panel has a preview of the whole result up
 
 ## Disintegrate (built)
 
-Snaps the selected layer into dust, or shatters it like glass, live:
+Breaks the selected layer into pieces and moves them, live, as After Effects' Shatter does, with Snap for the Thanos-snap dust look:
 
-- **How it's made:** the layer is exported as a picture (up to 2× and 4,096 pixels across, as large as Figma keeps images) and cracked into pieces: Voronoi cells around a seed jittered in each square of a grid, as large as Piece size. A front sweeps across the layer in the Direction set, ragged with smooth noise and soft over Edge softness, or out from the middle with Burst. As it passes a piece, the piece leaves: slow at first, then faster, as dust caught by the wind, blown along by up to Distance, Scatter to the sides, spun, pulled by Gravity (or lifted), shrinking, fading late so a trail of dust stays near what's left, and lightening. It's drawn in the page, each moved piece drawn by finding where each pixel it covers came from, so pieces keep their edges as they turn.
-- **Snap and Shatter:** the same engine, two looks. Snap is fine dust that fades and lightens, as in the Thanos snap; its presets are Drift, Dust and Crumble. Shatter is glass, as After Effects' Shatter breaks a layer, with larger pieces that keep their color and fall; its presets are Glass and Explode. Picking a mode starts from its first preset, keeping where the front is.
-- **Live:** the panel's preview draws at once as anything changes; the image in the file follows a moment after, at a size quick to make, and Disintegrate makes it at full size. Shuffle changes the pattern.
-- **Result:** an image of the disintegrated layer, the size of what's drawn, over the original. With Keep editable (on by default) the original is kept under it, hidden, in a Disintegrate group: select it and open Disintegrate to change it, made again from the original. Without it, only the image is left.
+- **Shape:** Pattern (Glass, Squares, Bricks or Triangles) and how many Pieces, about. Glass is Voronoi cells around a seed jittered in each square of a grid, each cut by the lines halfway to the seeds around it, so every piece is a polygon with straight edges. Shuffle changes the pattern.
+- **Forces:** one or two, as AE's Force 1 and Force 2, each with a Position, a Radius and a Strength. Only the pieces within a force's radius break, so the damage can stay close to the subject. Each force shows in the preview as a dot and a dashed ring: drag the dot to move it, or the ring to change its radius.
+- **Time:** how far along it is, 0 whole to 100.
+- **Shatter's physics:** pieces are thrown out from each force, harder near its middle, by its strength; Rotation speed turns them, Randomness varies each one's direction and speed, Viscosity slows them, and Gravity pulls them in its direction.
+- **Snap's dust:** a ragged front, Raggedness and Edge softness, spreads out from each force as Time goes, as far as its radius; the pieces it passes leave, slow at first then faster, with the wind (Wind direction), as far as the force's strength takes them, scattering, shrinking, fading late so a trail stays near what's left, and lightening.
+- **Drawing:** the layer is exported as a picture (up to 2× and 4,096 pixels across); the moving pieces are cut out of it and each drawn where it goes with the canvas, turned and sized about its center and clipped to its polygon, so edges stay smooth and sharp. The preview draws at once; the image in the file follows a moment after, and Disintegrate makes it at full size.
+- **Presets:** Drift and Dust (Snap); Glass, Crack, Explode and Tiles (Shatter). Picking a mode starts from its first preset, keeping the forces.
+- **Result:** an image of what's drawn, over the original. With Keep editable (on by default) the original is kept under it, hidden, in a Disintegrate group: select it and open Disintegrate to change it, made again from the original. Without it, only the image is left.
 
 ## Planned
 

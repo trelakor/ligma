@@ -300,6 +300,16 @@ const PAGE_JS: &str = r##"(() => {
     },
   ];
 
+  // The wheel over a panel or menu is the panel's: Figma's listeners,
+  // which pan and zoom the canvas, don't hear it
+  addEventListener(
+    "wheel",
+    (event) => {
+      if (event.target instanceof Element && event.target.closest(`[${ROOT}]`)) event.stopImmediatePropagation();
+    },
+    { capture: true, passive: true },
+  );
+
   // ---------- The toolbar button and the library ----------
 
   let menu = null;
@@ -542,6 +552,18 @@ const PAGE_JS: &str = r##"(() => {
     const title = element("div", { className: "title" }, element("span", { textContent: name }), close);
     root.append(title, ...parts);
     document.body.append(root);
+    // The wheel scrolls the panel, rather than reaching Figma, which
+    // would pan or zoom the canvas
+    root.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const scroll = event.target.closest?.(".scroll") ?? root.querySelector(".scroll");
+        if (scroll) scroll.scrollTop += event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      },
+      { passive: false },
+    );
     const area = document.querySelector("canvas")?.getBoundingClientRect() ?? { right: innerWidth, top: 48 };
     root.style.left = `${Math.max(8, area.right - root.offsetWidth - 16)}px`;
     root.style.top = `${Math.max(8, area.top + 16)}px`;
@@ -1210,66 +1232,121 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Disintegrate ----------
 
-  // Cracks the layer into pieces, Voronoi cells around a seed jittered in
-  // each square of a grid, and moves each once a ragged front sweeping
-  // across the layer reaches it: blown along, scattered, spun, shrunk,
-  // faded and lightened as it goes. Snap is fine dust, as the layer
-  // crumbles away; Shatter is glass, as After Effects' Shatter breaks it.
-  // It's drawn on the layer's pixels, here in the page, and put back as an
-  // image, the original kept under it, hidden
+  // Breaks the layer into pieces, as After Effects' Shatter does, and
+  // moves them: Shatter as AE does, the pieces within each force's radius
+  // thrown out from it by its strength, turning, slowed by viscosity and
+  // pulled by gravity, the rest left whole; Snap as dust, a ragged front
+  // spreading out from each force as far as its radius, the pieces it
+  // passes blown off with the wind, shrinking, fading and lightening.
+  // Pieces are polygons, cut from the layer's picture with smooth, straight
+  // edges, drawn here in the page and put back as an image, the original
+  // kept under it, hidden
   const DISINTEGRATE = "disintegrate";
   const MAX_SIDE = 4096;
 
+  const force = (x, y, radius, strength, on = true) => ({ x, y, radius, strength, on });
   const DISINTEGRATE_DEFAULTS = {
     mode: "snap",
-    progress: 45,
-    angle: 0,
-    burst: false,
-    softness: 35,
-    ragged: 55,
-    piece: 4,
-    distance: 160,
-    scatter: 45,
-    spin: 180,
-    gravity: 0,
-    fade: 85,
-    shrink: 55,
-    lighten: 35,
+    pattern: "glass",
+    pieces: 1500,
     seed: 1,
+    force1: force(85, 50, 70, 40),
+    force2: force(20, 30, 30, 30, false),
+    time: 50,
+    // Shatter's physics
+    rotation: 90,
+    randomness: 30,
+    viscosity: 20,
+    gravity: 0,
+    gravityDirection: 90,
+    // Snap's wind
+    wind: 0,
+    scatter: 40,
+    ragged: 55,
+    softness: 35,
+    fade: 80,
+    shrink: 45,
+    lighten: 30,
     editable: true,
   };
-  // Each mode's own look, which picking it, or its presets, start from
   const DISINTEGRATE_PRESETS = [
-    ["Drift", (u) => ({ mode: "snap", progress: 45, angle: 0, burst: false, softness: 35, ragged: 55, piece: Math.max(2, u / 120), distance: u * 0.9, scatter: 40, spin: 180, gravity: 0, fade: 80, shrink: 45, lighten: 30 })],
-    ["Dust", (u) => ({ mode: "snap", progress: 70, angle: -20, burst: false, softness: 70, ragged: 75, piece: Math.max(1.5, u / 220), distance: u * 1.2, scatter: 70, spin: 240, gravity: -10, fade: 95, shrink: 70, lighten: 55 })],
-    ["Crumble", (u) => ({ mode: "snap", progress: 50, angle: 90, burst: false, softness: 30, ragged: 60, piece: Math.max(2, u / 90), distance: u * 0.6, scatter: 25, spin: 120, gravity: 60, fade: 60, shrink: 30, lighten: 10 })],
-    ["Glass", (u) => ({ mode: "shatter", progress: 45, angle: 0, burst: false, softness: 25, ragged: 30, piece: Math.max(4, u / 14), distance: u * 0.7, scatter: 35, spin: 90, gravity: 25, fade: 25, shrink: 0, lighten: 0 })],
-    ["Explode", (u) => ({ mode: "shatter", progress: 55, angle: 0, burst: true, softness: 30, ragged: 20, piece: Math.max(4, u / 18), distance: u * 0.9, scatter: 30, spin: 180, gravity: 15, fade: 30, shrink: 10, lighten: 0 })],
+    ["Drift", () => ({ mode: "snap", pattern: "glass", pieces: 2500, force1: force(90, 50, 80, 45), force2: force(20, 30, 30, 30, false), time: 50, wind: 0, scatter: 40, ragged: 55, softness: 35, fade: 80, shrink: 45, lighten: 30 })],
+    ["Dust", () => ({ mode: "snap", pattern: "glass", pieces: 5000, force1: force(80, 30, 90, 70), force2: force(30, 80, 40, 40), time: 60, wind: -20, scatter: 70, ragged: 75, softness: 60, fade: 92, shrink: 65, lighten: 55 })],
+    ["Glass", () => ({ mode: "shatter", pattern: "glass", pieces: 160, force1: force(50, 50, 45, 35), force2: force(20, 30, 30, 30, false), time: 50, rotation: 90, randomness: 30, viscosity: 20, gravity: 20, gravityDirection: 90 })],
+    ["Crack", () => ({ mode: "shatter", pattern: "glass", pieces: 220, force1: force(60, 45, 35, 8), force2: force(30, 60, 20, 6, false), time: 40, rotation: 25, randomness: 50, viscosity: 60, gravity: 10, gravityDirection: 90 })],
+    ["Explode", () => ({ mode: "shatter", pattern: "glass", pieces: 300, force1: force(50, 50, 100, 80), force2: force(20, 30, 30, 30, false), time: 55, rotation: 180, randomness: 40, viscosity: 10, gravity: 25, gravityDirection: 90 })],
+    ["Tiles", () => ({ mode: "shatter", pattern: "squares", pieces: 120, force1: force(85, 50, 60, 30), force2: force(20, 30, 30, 30, false), time: 50, rotation: 60, randomness: 25, viscosity: 30, gravity: 40, gravityDirection: 90 })],
+  ];
+  const PATTERNS = [
+    ["glass", "Glass"],
+    ["squares", "Squares"],
+    ["bricks", "Bricks"],
+    ["triangles", "Triangles"],
+  ];
+  // Rows, each [key, label, unit, range]; a force's keys are "force1.x"
+  // and so on
+  const forceRows = (n) => [
+    [`force${n}.x`, "Position X", "%", () => ({ min: 0, max: 100 })],
+    [`force${n}.y`, "Position Y", "%", () => ({ min: 0, max: 100 })],
+    [`force${n}.radius`, "Radius", "%", () => ({ min: 0, max: 150, shape: "curve" })],
+    [`force${n}.strength`, "Strength", "%", () => ({ min: 0, max: 100, shape: "curve" })],
   ];
   const DISINTEGRATE_ROWS = {
-    front: [
-      ["progress", "Progress", "%", () => ({ min: 0, max: 100 })],
-      ["angle", "Direction", "°", () => ({ min: -180, max: 180 })],
-      ["softness", "Edge softness", "%", () => ({ min: 0, max: 100 })],
-      ["ragged", "Raggedness", "%", () => ({ min: 0, max: 100 })],
+    shape: [["pieces", "Pieces", "", () => ({ min: 10, max: 6000, shape: "curve" })]],
+    time: [["time", "Time", "%", () => ({ min: 0, max: 100 })]],
+    physics: [
+      ["rotation", "Rotation speed", "°", () => ({ min: 0, max: 720, shape: "curve" })],
+      ["randomness", "Randomness", "%", () => ({ min: 0, max: 100 })],
+      ["viscosity", "Viscosity", "%", () => ({ min: 0, max: 100 })],
+      ["gravity", "Gravity", "%", () => ({ min: 0, max: 100, shape: "curve" })],
+      ["gravityDirection", "Gravity direction", "°", () => ({ min: -180, max: 180 })],
     ],
-    pieces: [
-      ["piece", "Piece size", "px", (u) => ({ min: 1, max: Math.max(40, Math.round(u / 4)), shape: "curve" })],
-      ["distance", "Distance", "px", (u) => ({ min: 0, max: near(u, 100, 3), shape: "curve" })],
+    wind: [
+      ["wind", "Wind direction", "°", () => ({ min: -180, max: 180 })],
       ["scatter", "Scatter", "%", () => ({ min: 0, max: 100 })],
-      ["spin", "Spin", "°", () => ({ min: 0, max: 720, shape: "curve" })],
-      ["gravity", "Gravity", "%", () => ({ min: -100, max: 100 })],
-    ],
-    look: [
+      ["ragged", "Raggedness", "%", () => ({ min: 0, max: 100 })],
+      ["softness", "Edge softness", "%", () => ({ min: 0, max: 100 })],
       ["fade", "Fade", "%", () => ({ min: 0, max: 100 })],
       ["shrink", "Shrink", "%", () => ({ min: 0, max: 100 })],
       ["lighten", "Lighten", "%", () => ({ min: 0, max: 100 })],
     ],
   };
-  const DISINTEGRATE_LIMITS = { progress: [0, 100], softness: [0, 100], ragged: [0, 100], piece: [1, 500], distance: [0, Infinity], scatter: [0, 100], spin: [0, 3600], gravity: [-100, 100], fade: [0, 100], shrink: [0, 100], lighten: [0, 100] };
+  const DISINTEGRATE_LIMITS = {
+    pieces: [2, 20000],
+    time: [0, 100],
+    rotation: [0, 3600],
+    randomness: [0, 100],
+    viscosity: [0, 100],
+    gravity: [0, 400],
+    scatter: [0, 100],
+    ragged: [0, 100],
+    softness: [0, 100],
+    fade: [0, 100],
+    shrink: [0, 100],
+    lighten: [0, 100],
+    "force1.x": [-100, 200],
+    "force1.y": [-100, 200],
+    "force1.radius": [0, 400],
+    "force1.strength": [0, 400],
+    "force2.x": [-100, 200],
+    "force2.y": [-100, 200],
+    "force2.radius": [0, 400],
+    "force2.strength": [0, 400],
+  };
+  // The settings with a force's fields readable as "force1.x" and so on,
+  // for the shared slider rows
+  const flat = (s) =>
+    new Proxy(s, {
+      get: (target, key) => (typeof key === "string" && key.includes(".") ? target[key.split(".")[0]][key.split(".")[1]] : target[key]),
+      set: (target, key, value) => {
+        if (typeof key === "string" && key.includes(".")) target[key.split(".")[0]][key.split(".")[1]] = value;
+        else target[key] = value;
+        return true;
+      },
+    });
 
-  // Seeded randomness, the same for the same seed, so a result can be
-  // made again
+  // Seeded randomness, the same for the same seed, so a result can be made
+  // again
   const hash = (x, y, seed) => {
     let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 2147483647);
     h = Math.imul(h ^ (h >>> 13), 1274126177);
@@ -1287,233 +1364,283 @@ const PAGE_JS: &str = r##"(() => {
     return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
   };
 
-  // The pieces of a `width` by `height` picture with alpha `alpha`, cells
-  // `cell` pixels across: which piece each pixel is in, and each piece's
-  // center, box and randomness
-  const crack = (width, height, alpha, cell, seed, jitter) => {
-    const across = Math.ceil(width / cell) + 2;
-    const down = Math.ceil(height / cell) + 2;
-    const seedX = new Float32Array(across * down);
-    const seedY = new Float32Array(across * down);
-    for (let gy = 0; gy < down; gy++) {
-      for (let gx = 0; gx < across; gx++) {
-        const i = gy * across + gx;
-        seedX[i] = (gx - 1 + 0.5 + (hash(gx, gy, seed) - 0.5) * jitter) * cell;
-        seedY[i] = (gy - 1 + 0.5 + (hash(gx, gy, seed + 7) - 0.5) * jitter) * cell;
+  // `polygon` cut to the side of the line through `point` facing away
+  // from `normal`, as a convex polygon's clipped by a half-plane
+  const clipPolygon = (polygon, point, normal) => {
+    const out = [];
+    const side = ([x, y]) => (x - point[0]) * normal[0] + (y - point[1]) * normal[1];
+    for (let i = 0; i < polygon.length; i++) {
+      const a = polygon[i];
+      const b = polygon[(i + 1) % polygon.length];
+      const [sa, sb] = [side(a), side(b)];
+      if (sa <= 0) out.push(a);
+      if (sa <= 0 !== sb <= 0) {
+        const t = sa / (sa - sb);
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
       }
     }
-    const cellOf = new Int32Array(width * height).fill(-1);
-    for (let y = 0; y < height; y++) {
-      const cy = Math.floor(y / cell) + 1;
-      for (let x = 0; x < width; x++) {
-        if (alpha[(y * width + x) * 4 + 3] === 0) continue;
-        const cx = Math.floor(x / cell) + 1;
-        let best = -1;
-        let nearest = Infinity;
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            const i = (cy + dy) * across + cx + dx;
-            const ddx = seedX[i] - x;
-            const ddy = seedY[i] - y;
-            const d = ddx * ddx + ddy * ddy;
-            if (d < nearest) [nearest, best] = [d, i];
-          }
-        }
-        cellOf[y * width + x] = best;
-      }
-    }
-    // Only the cells with pixels in them, numbered from 0
-    const number = new Int32Array(across * down).fill(-1);
-    let count = 0;
-    for (let i = 0; i < cellOf.length; i++) {
-      const c = cellOf[i];
-      if (c >= 0 && number[c] < 0) number[c] = count++;
-    }
-    const piece = new Int32Array(width * height).fill(-1);
-    const sumX = new Float64Array(count);
-    const sumY = new Float64Array(count);
-    const size = new Uint32Array(count);
-    const box = new Int32Array(count * 4);
-    for (let p = 0; p < count; p++) box.set([width, height, -1, -1], p * 4);
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const c = cellOf[y * width + x];
-        if (c < 0) continue;
-        const p = number[c];
-        piece[y * width + x] = p;
-        sumX[p] += x;
-        sumY[p] += y;
-        size[p]++;
-        const b = p * 4;
-        if (x < box[b]) box[b] = x;
-        if (y < box[b + 1]) box[b + 1] = y;
-        if (x > box[b + 2]) box[b + 2] = x;
-        if (y > box[b + 3]) box[b + 3] = y;
-      }
-    }
-    const centerX = new Float32Array(count);
-    const centerY = new Float32Array(count);
-    const random = new Float32Array(count * 4);
-    for (let p = 0; p < count; p++) {
-      centerX[p] = sumX[p] / size[p];
-      centerY[p] = sumY[p] / size[p];
-      for (let k = 0; k < 4; k++) random[p * 4 + k] = hash(p, k, seed + 101);
-    }
-    return { width, height, piece, count, centerX, centerY, box, random };
+    return out;
   };
 
-  // Draws the disintegrated picture: `image` ImageData, `pieces` from
-  // `crack`, `k` its pixels per layer pixel. Gives the drawn pixels, as
-  // ImageData, cropped to what's drawn, and where that sits relative to
-  // the picture's top left, in its pixels
-  const disintegrate = (image, pieces, s, k) => {
-    const { width, height, data } = image;
-    const { piece, count, centerX, centerY, box, random } = pieces;
-    const travel = s.distance * k;
-    const margin = Math.ceil(travel * (1.8 + Math.abs(s.gravity) / 100) + s.piece * k * 2 + 2);
-    const outWidth = width + margin * 2;
-    const outHeight = height + margin * 2;
-    const out = new Uint8ClampedArray(outWidth * outHeight * 4);
-    const angle = (s.angle * Math.PI) / 180;
-    const [dirX, dirY] = [Math.cos(angle), Math.sin(angle)];
-    // How far along the sweep each corner is, to put the front 0 to 1
-    const corners = [0, width * dirX, height * dirY, width * dirX + height * dirY];
-    const [low, high] = [Math.min(...corners), Math.max(...corners)];
-    const [midX, midY] = [width / 2, height / 2];
-    const reach = Math.hypot(midX, midY) || 1;
-    const soft = 0.03 + (s.softness / 100) * 0.55;
-    const rag = s.ragged / 100;
-    const scale = 40 * k + s.piece * k * 2;
-    const progress = (s.progress / 100) * (1 + soft);
-    // How far each piece has gone, 0 still in place to 1 all the way
-    const gone = new Float32Array(count);
-    for (let p = 0; p < count; p++) {
-      const [x, y] = [centerX[p], centerY[p]];
-      const along = s.burst ? Math.hypot(x - midX, y - midY) / reach : 1 - (x * dirX + y * dirY - low) / Math.max(1e-6, high - low);
-      const rough = rag * (noise(x / scale, y / scale, s.seed) * 0.7 + noise(x / (scale / 3), y / (scale / 3), s.seed + 3) * 0.3);
-      const when = along * (1 - rag * 0.6) + rough * 0.6 + (random[p * 4 + 3] - 0.5) * 0.06;
-      gone[p] = Math.min(1, Math.max(0, (progress - when) / soft));
-    }
-    // What's still in place, as it was
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const p = piece[y * width + x];
-        if (p < 0 || gone[p] > 0) continue;
-        const from = (y * width + x) * 4;
-        const to = ((y + margin) * outWidth + x + margin) * 4;
-        out[to] = data[from];
-        out[to + 1] = data[from + 1];
-        out[to + 2] = data[from + 2];
-        out[to + 3] = data[from + 3];
+  // The pieces of a `width` by `height` picture in `pattern`, about
+  // `count` of them: polygons, each with its center and randomness
+  const cutPieces = (width, height, pattern, count, seed) => {
+    const cell = Math.max(2, Math.sqrt((width * height) / Math.max(1, count)));
+    const pieces = [];
+    const add = (polygon) => {
+      // Inside the picture
+      for (const [point, normal] of [
+        [[0, 0], [-1, 0]],
+        [[0, 0], [0, -1]],
+        [[width, 0], [1, 0]],
+        [[0, height], [0, 1]],
+      ])
+        polygon = clipPolygon(polygon, point, normal);
+      if (polygon.length < 3) return;
+      let [cx, cy, area] = [0, 0, 0];
+      for (let i = 0; i < polygon.length; i++) {
+        const [a, b] = [polygon[i], polygon[(i + 1) % polygon.length]];
+        const cross = a[0] * b[1] - b[0] * a[1];
+        area += cross;
+        cx += (a[0] + b[0]) * cross;
+        cy += (a[1] + b[1]) * cross;
       }
-    }
-    // The pieces on their way, the least gone first so the farthest are on
-    // top, each drawn by finding where each pixel it covers came from
-    const moving = [];
-    for (let p = 0; p < count; p++) if (gone[p] > 0) moving.push(p);
-    moving.sort((a, b) => gone[a] - gone[b]);
-    const fade = s.fade / 100;
-    const shrink = s.shrink / 100;
-    const lighten = s.lighten / 100;
-    const scatter = s.scatter / 100;
-    for (const p of moving) {
-      const t = gone[p];
-      // Fading late, so a trail of dust stays near what's left
-      const opacity = 1 - fade * t ** 2;
-      if (opacity <= 0.02) continue;
-      const r = p * 4;
-      let [ux, uy] = [dirX, dirY];
-      if (s.burst) {
-        const [ox, oy] = [centerX[p] - midX, centerY[p] - midY];
-        const length = Math.hypot(ox, oy) || 1;
-        [ux, uy] = [ox / length, oy / length];
-      }
-      // Slow to leave, then faster, as dust caught by the wind
-      const ease = t * t;
-      const distance = travel * ease * (0.4 + random[r] * 1.2);
-      const side = (random[r + 1] - 0.5) * 2 * scatter * distance;
-      const moveX = ux * distance - uy * side;
-      const moveY = uy * distance + ux * side + (s.gravity / 100) * travel * ease * t;
-      const turn = (((random[r + 2] - 0.5) * 2 * s.spin * t) * Math.PI) / 180;
-      const size = Math.max(0.05, 1 - shrink * t * (0.6 + random[r + 3] * 0.8));
-      const light = lighten * t;
-      const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
-      const [cx, cy] = [centerX[p], centerY[p]];
-      const [x0, y0, x1, y1] = [box[r], box[r + 1], box[r + 2], box[r + 3]];
-      // Its box where it's going
-      const half = Math.max(cx - x0, x1 - cx, cy - y0, y1 - cy) * size * 1.42 + 1;
-      const [tx, ty] = [cx + moveX + margin, cy + moveY + margin];
-      const left = Math.max(0, Math.floor(tx - half));
-      const right = Math.min(outWidth - 1, Math.ceil(tx + half));
-      const top = Math.max(0, Math.floor(ty - half));
-      const bottom = Math.min(outHeight - 1, Math.ceil(ty + half));
-      for (let oy = top; oy <= bottom; oy++) {
-        for (let ox = left; ox <= right; ox++) {
-          // Back through the turn and size to the picture
-          const [dx, dy] = [(ox - tx) / size, (oy - ty) / size];
-          const sx = Math.round(cx + dx * cos + dy * sin);
-          const sy = Math.round(cy - dx * sin + dy * cos);
-          if (sx < x0 || sx > x1 || sy < y0 || sy > y1 || piece[sy * width + sx] !== p) continue;
-          const from = (sy * width + sx) * 4;
-          const a = (data[from + 3] / 255) * opacity;
-          if (a <= 0) continue;
-          const to = (oy * outWidth + ox) * 4;
-          const under = out[to + 3] / 255;
-          const total = a + under * (1 - a);
-          for (let channel = 0; channel < 3; channel++) {
-            const color = data[from + channel] + (255 - data[from + channel]) * light;
-            out[to + channel] = (color * a + out[to + channel] * under * (1 - a)) / total;
+      if (Math.abs(area) < 1e-6) return;
+      const i = pieces.length;
+      pieces.push({ polygon, x: cx / (3 * area), y: cy / (3 * area), random: [0, 1, 2, 3].map((k) => hash(i, k, seed + 101)) });
+    };
+    const across = Math.ceil(width / cell);
+    const down = Math.ceil(height / cell);
+    if (pattern === "squares" || pattern === "triangles") {
+      for (let gy = 0; gy < down; gy++) {
+        for (let gx = 0; gx < across; gx++) {
+          const [x0, y0, x1, y1] = [gx * cell, gy * cell, (gx + 1) * cell, (gy + 1) * cell];
+          if (pattern === "squares") add([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+          else if (hash(gx, gy, seed) < 0.5) {
+            add([[x0, y0], [x1, y0], [x1, y1]]);
+            add([[x0, y0], [x1, y1], [x0, y1]]);
+          } else {
+            add([[x0, y0], [x1, y0], [x0, y1]]);
+            add([[x1, y0], [x1, y1], [x0, y1]]);
           }
-          out[to + 3] = total * 255;
+        }
+      }
+    } else if (pattern === "bricks") {
+      const [w, h] = [cell * 1.6, cell * 0.65];
+      for (let row = 0; row * h < height; row++) {
+        const shift = row % 2 ? w / 2 : 0;
+        for (let x = -shift; x < width; x += w) add([[x, row * h], [x + w, row * h], [x + w, (row + 1) * h], [x, (row + 1) * h]]);
+      }
+    } else {
+      // Glass: Voronoi cells around a seed jittered in each square of a
+      // grid, each cut by the lines halfway to the seeds around it
+      const gw = across + 4;
+      const gh = down + 4;
+      const seedAt = (gx, gy) => [(gx - 2 + 0.5 + (hash(gx, gy, seed) - 0.5) * 0.9) * cell, (gy - 2 + 0.5 + (hash(gx, gy, seed + 7) - 0.5) * 0.9) * cell];
+      for (let gy = 2; gy < gh - 2; gy++) {
+        for (let gx = 2; gx < gw - 2; gx++) {
+          const [sx, sy] = seedAt(gx, gy);
+          let polygon = [
+            [sx - cell * 2, sy - cell * 2],
+            [sx + cell * 2, sy - cell * 2],
+            [sx + cell * 2, sy + cell * 2],
+            [sx - cell * 2, sy + cell * 2],
+          ];
+          for (let dy = -2; dy <= 2; dy++) {
+            for (let dx = -2; dx <= 2; dx++) {
+              if (!dx && !dy) continue;
+              const [ox, oy] = seedAt(gx + dx, gy + dy);
+              polygon = clipPolygon(polygon, [(sx + ox) / 2, (sy + oy) / 2], [ox - sx, oy - sy]);
+              if (polygon.length < 3) break;
+            }
+          }
+          if (polygon.length >= 3) add(polygon);
         }
       }
     }
-    // Cropped to what's drawn
-    let [cropLeft, cropTop, cropRight, cropBottom] = [outWidth, outHeight, -1, -1];
-    for (let y = 0; y < outHeight; y++) {
-      for (let x = 0; x < outWidth; x++) {
-        if (out[(y * outWidth + x) * 4 + 3] === 0) continue;
-        if (x < cropLeft) cropLeft = x;
-        if (x > cropRight) cropRight = x;
-        if (y < cropTop) cropTop = y;
-        if (y > cropBottom) cropBottom = y;
-      }
-    }
-    if (cropRight < 0) return null;
-    const cropWidth = cropRight - cropLeft + 1;
-    const cropHeight = cropBottom - cropTop + 1;
-    const cropped = new ImageData(cropWidth, cropHeight);
-    for (let y = 0; y < cropHeight; y++) {
-      const from = ((y + cropTop) * outWidth + cropLeft) * 4;
-      cropped.data.set(out.subarray(from, from + cropWidth * 4), y * cropWidth * 4);
-    }
-    return { image: cropped, x: cropLeft - margin, y: cropTop - margin };
+    return pieces;
   };
 
-  // A picture of `bitmap` at most `most` pixels across, as ImageData, and
+  // Where each piece goes at the settings' time: its move, turn (radians),
+  // size and opacity, or null where it stays whole. `size` is the layer's
+  // larger side, in the picture's pixels
+  const simulate = (pieces, s, width, height, size) => {
+    const forces = [s.force1, s.force2]
+      .filter((f) => f.on && f.radius > 0)
+      .map((f) => ({ x: (f.x / 100) * width, y: (f.y / 100) * height, radius: (f.radius / 100) * size, strength: f.strength / 100 }));
+    const time = s.time / 100;
+    const moves = new Array(pieces.length).fill(null);
+    if (!forces.length || time <= 0) return moves;
+    if (s.mode === "shatter") {
+      // Thrown out from each force, more near its middle, then slowed by
+      // viscosity and pulled by gravity, as AE's Shatter
+      const viscosity = (s.viscosity / 100) * 4;
+      const travel = viscosity > 0 ? (1 - Math.exp(-viscosity * time)) / viscosity : time;
+      const fall = ((s.gravity / 100) * size * 1.5 * time * time) / 2;
+      const ga = (s.gravityDirection * Math.PI) / 180;
+      const randomness = s.randomness / 100;
+      pieces.forEach((piece, i) => {
+        let [vx, vy, hit] = [0, 0, 0];
+        for (const f of forces) {
+          const [dx, dy] = [piece.x - f.x, piece.y - f.y];
+          const d = Math.hypot(dx, dy);
+          if (d >= f.radius) continue;
+          const push = f.strength * (1 - d / f.radius);
+          const [ux, uy] = d > 1e-6 ? [dx / d, dy / d] : [Math.cos(piece.random[0] * 6.283), Math.sin(piece.random[0] * 6.283)];
+          vx += ux * push;
+          vy += uy * push;
+          hit = Math.max(hit, push);
+        }
+        if (!hit) return;
+        const [r0, r1, r2] = piece.random;
+        // Randomness turns and speeds each piece a little differently
+        const turn = (r0 - 0.5) * 2 * randomness * 1.2;
+        const speed = (1 + (r1 - 0.5) * 2 * randomness) * size * 1.5;
+        const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
+        const [mx, my] = [(vx * cos - vy * sin) * speed * travel, (vx * sin + vy * cos) * speed * travel];
+        moves[i] = {
+          x: mx + Math.cos(ga) * fall,
+          y: my + Math.sin(ga) * fall,
+          turn: (((r2 - 0.5) * 2 * s.rotation * time * Math.min(1, hit * 2 + 0.3)) * Math.PI) / 180,
+          scale: 1,
+          opacity: 1,
+          light: 0,
+        };
+      });
+    } else {
+      // Dust: a ragged front spreads out from each force as time goes, as
+      // far as its radius; what it passes is blown off with the wind
+      const wa = (s.wind * Math.PI) / 180;
+      const [wx, wy] = [Math.cos(wa), Math.sin(wa)];
+      const soft = 0.03 + (s.softness / 100) * 0.6;
+      const rag = s.ragged / 100;
+      const scale = size / 8;
+      pieces.forEach((piece, i) => {
+        let life = 0;
+        let strength = 0;
+        for (const f of forces) {
+          const reach = Math.hypot(piece.x - f.x, piece.y - f.y) / f.radius;
+          if (reach >= 1) continue;
+          const rough = rag * (noise(piece.x / scale, piece.y / scale, s.seed) * 0.7 + noise((piece.x * 3) / scale, (piece.y * 3) / scale, s.seed + 3) * 0.3);
+          const when = reach * (1 - rag * 0.6) + rough * 0.6 + (piece.random[3] - 0.5) * 0.06;
+          const gone = Math.min(1, Math.max(0, (time * (1 + soft) - when) / soft));
+          if (gone > life) [life, strength] = [gone, f.strength];
+        }
+        if (life <= 0) return;
+        const [r0, r1, r2] = piece.random;
+        // Slow to leave, then faster
+        const distance = strength * size * 1.5 * life * life * (0.4 + r0 * 1.2);
+        const side = (r1 - 0.5) * 2 * (s.scatter / 100) * distance;
+        moves[i] = {
+          x: wx * distance - wy * side,
+          y: wy * distance + wx * side,
+          turn: (r2 - 0.5) * 2 * Math.PI * life,
+          scale: Math.max(0.05, 1 - (s.shrink / 100) * life * (0.6 + piece.random[3] * 0.8)),
+          opacity: 1 - (s.fade / 100) * life * life,
+          light: (s.lighten / 100) * life,
+        };
+      });
+    }
+    return moves;
+  };
+
+  // Draws the broken layer from `picture`, a canvas of it, `k` its pixels
+  // per layer pixel. Gives a canvas cropped to what's drawn, and where it
+  // sits relative to the picture's top left, in its pixels
+  const drawBroken = (picture, pieces, s, k) => {
+    const { width, height } = picture;
+    const moves = simulate(pieces, s, width, height, Math.max(width, height));
+    // The bounds of everything drawn
+    let [left, top, right, bottom] = [0, 0, width, height];
+    const corners = [];
+    pieces.forEach((piece, i) => {
+      const move = moves[i];
+      if (!move || move.opacity <= 0.02) return;
+      const [cos, sin] = [Math.cos(move.turn), Math.sin(move.turn)];
+      for (const [px, py] of piece.polygon) {
+        const [dx, dy] = [(px - piece.x) * move.scale, (py - piece.y) * move.scale];
+        const x = piece.x + move.x + dx * cos - dy * sin;
+        const y = piece.y + move.y + dx * sin + dy * cos;
+        if (x < left) left = x;
+        if (x > right) right = x;
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+      }
+      corners.push(i);
+    });
+    [left, top, right, bottom] = [Math.floor(left) - 1, Math.floor(top) - 1, Math.ceil(right) + 1, Math.ceil(bottom) + 1];
+    const canvas = Object.assign(document.createElement("canvas"), { width: right - left, height: bottom - top });
+    const context = canvas.getContext("2d");
+    const path = (polygon) => {
+      context.beginPath();
+      polygon.forEach(([x, y], j) => (j ? context.lineTo(x, y) : context.moveTo(x, y)));
+      context.closePath();
+    };
+    // The picture, with the moving pieces cut out of it
+    context.drawImage(picture, -left, -top);
+    context.globalCompositeOperation = "destination-out";
+    context.setTransform(1, 0, 0, 1, -left, -top);
+    context.beginPath();
+    pieces.forEach((piece, i) => {
+      if (!moves[i]) return;
+      piece.polygon.forEach(([x, y], j) => (j ? context.lineTo(x, y) : context.moveTo(x, y)));
+      context.closePath();
+    });
+    context.fill();
+    context.globalCompositeOperation = "source-over";
+    // Each moving piece, those gone least first, so the farthest are on top
+    corners.sort((a, b) => Math.hypot(moves[a].x, moves[a].y) - Math.hypot(moves[b].x, moves[b].y));
+    for (const i of corners) {
+      const piece = pieces[i];
+      const move = moves[i];
+      const [cos, sin] = [Math.cos(move.turn), Math.sin(move.turn)];
+      context.save();
+      // To where it's going, turned and sized about its center
+      context.setTransform(1, 0, 0, 1, -left, -top);
+      context.translate(piece.x + move.x, piece.y + move.y);
+      context.transform(cos * move.scale, sin * move.scale, -sin * move.scale, cos * move.scale, 0, 0);
+      context.translate(-piece.x, -piece.y);
+      path(piece.polygon);
+      context.clip();
+      context.globalAlpha = move.opacity;
+      let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+      for (const [x, y] of piece.polygon) [x0, y0, x1, y1] = [Math.min(x0, x), Math.min(y0, y), Math.max(x1, x), Math.max(y1, y)];
+      [x0, y0] = [Math.max(0, Math.floor(x0)), Math.max(0, Math.floor(y0))];
+      [x1, y1] = [Math.min(width, Math.ceil(x1)), Math.min(height, Math.ceil(y1))];
+      if (x1 > x0 && y1 > y0) context.drawImage(picture, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+      if (move.light > 0) {
+        context.globalCompositeOperation = "source-atop";
+        context.globalAlpha = move.light * move.opacity;
+        context.fillStyle = "#fff";
+        context.fill();
+      }
+      context.restore();
+    }
+    return { canvas, x: left, y: top };
+  };
+
+  // A picture of `bitmap` at most `most` pixels across, as a canvas, and
   // its pixels per layer pixel given the full one's `k`
-  const scaledPixels = (bitmap, most, k) => {
+  const scaledPicture = (bitmap, most, k) => {
     const ratio = Math.min(1, most / Math.max(bitmap.width, bitmap.height));
     const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(bitmap.width * ratio)), height: Math.max(1, Math.round(bitmap.height * ratio)) });
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    return { image: context.getImageData(0, 0, canvas.width, canvas.height), k: k * ratio };
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return { picture: canvas, k: k * ratio };
   };
 
-  // Pieces made once for each picture, size and seed
-  const piecesFor = (current, level, image, cell) => {
-    const key = `${level}:${cell.toFixed(2)}:${current.settings.seed}:${current.settings.mode}`;
-    current.cracks ??= {};
-    if (current.cracks[level]?.key !== key) {
-      current.cracks[level] = { key, pieces: crack(image.width, image.height, image.data, cell, current.settings.seed, current.settings.mode === "shatter" ? 0.95 : 1) };
-    }
-    return current.cracks[level].pieces;
+  // Pieces cut once for each picture, pattern, count and seed
+  const piecesFor = (current, level) => {
+    const s = current.settings;
+    const { picture } = current.levels[level];
+    const key = `${s.pattern}:${s.pieces}:${s.seed}`;
+    current.cuts ??= {};
+    if (current.cuts[level]?.key !== key) current.cuts[level] = { key, pieces: cutPieces(picture.width, picture.height, s.pattern, s.pieces, s.seed) };
+    return current.cuts[level].pieces;
   };
 
   const renderAt = (current, level) => {
-    const { image, k } = current.levels[level];
-    const cell = Math.max(1.5, current.settings.piece * k);
-    return disintegrate(image, piecesFor(current, level, image, cell), current.settings, k);
+    const { picture, k } = current.levels[level];
+    return drawBroken(picture, piecesFor(current, level), current.settings, k);
   };
 
   // From the page to the coordinates of what's in `parent`: a frame's
@@ -1531,20 +1658,13 @@ const PAGE_JS: &str = r##"(() => {
   // size it covers in the file
   const placeDrawn = async (current, drawn, k) => {
     const { figma, result, bounds } = current;
-    if (!drawn || result.removed) {
-      if (!result.removed) result.visible = false;
-      return;
-    }
-    const canvas = Object.assign(document.createElement("canvas"), { width: drawn.image.width, height: drawn.image.height });
-    canvas.getContext("2d").putImageData(drawn.image, 0, 0);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!drawn || result.removed) return;
+    const blob = await new Promise((resolve) => drawn.canvas.toBlob(resolve, "image/png"));
     const bytes = new Uint8Array(await blob.arrayBuffer());
     if (result.removed) return;
     const hash = figma.createImage(bytes).hash;
-    const width = drawn.image.width / k;
-    const height = drawn.image.height / k;
     const place = toParent(result.parent, bounds.x + drawn.x / k, bounds.y + drawn.y / k);
-    result.resizeWithoutConstraints(Math.max(0.01, width), Math.max(0.01, height));
+    result.resizeWithoutConstraints(Math.max(0.01, drawn.canvas.width / k), Math.max(0.01, drawn.canvas.height / k));
     result.relativeTransform = [
       [place.linear[0], place.linear[1], place.x],
       [place.linear[2], place.linear[3], place.y],
@@ -1573,12 +1693,14 @@ const PAGE_JS: &str = r##"(() => {
     let group = disintegrateOf(selected[0]);
     let source;
     let result = null;
-    let settings = { ...DISINTEGRATE_DEFAULTS };
+    const settings = structuredClone(DISINTEGRATE_DEFAULTS);
     if (group) {
       source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
       result = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "result") ?? null;
       try {
-        settings = { ...settings, ...JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE)) };
+        const saved = JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE));
+        // Settings from before forces, which aren't kept
+        if (saved.force1) Object.assign(settings, saved);
       } catch {}
       if (!source) {
         group = null;
@@ -1591,9 +1713,18 @@ const PAGE_JS: &str = r##"(() => {
       figma.notify("Sections can't be disintegrated", { timeout: 2000 });
       return;
     }
-    const unit = Math.max(1, Math.max(source.width ?? 100, source.height ?? 100));
-    if (!group) Object.assign(settings, fit(DISINTEGRATE_PRESETS[0][1](unit)));
-    const current = { figma, group, source, settings, unit, result, kept: result ? { fills: JSON.stringify(result.fills), width: result.width, height: result.height, transform: result.relativeTransform } : null, levels: {}, wasVisible: source.visible };
+    if (!group) Object.assign(settings, structuredClone(DISINTEGRATE_PRESETS[0][1]()));
+    const current = {
+      figma,
+      group,
+      source,
+      settings,
+      unit: Math.max(1, Math.max(source.width ?? 100, source.height ?? 100)),
+      result,
+      kept: result ? { fills: JSON.stringify(result.fills), width: result.width, height: result.height, transform: result.relativeTransform } : null,
+      levels: {},
+      wasVisible: source.visible,
+    };
     disintegrating = current;
     try {
       figma.commitUndo();
@@ -1615,9 +1746,9 @@ const PAGE_JS: &str = r##"(() => {
     if (disintegrating !== current) return;
     const k = current.bitmap.width / current.bounds.width;
     current.levels = {
-      preview: scaledPixels(current.bitmap, 360, k),
-      live: scaledPixels(current.bitmap, 900, k),
-      full: scaledPixels(current.bitmap, MAX_SIDE, k),
+      preview: scaledPicture(current.bitmap, 360, k),
+      live: scaledPicture(current.bitmap, 900, k),
+      full: scaledPicture(current.bitmap, MAX_SIDE, k),
     };
     // A new one's grouped from the start, as Repeater's are, the result
     // over the original, which is hidden while it shows
@@ -1653,12 +1784,11 @@ const PAGE_JS: &str = r##"(() => {
     clearTimeout(current.timer);
     current.timer = setTimeout(async () => {
       if (disintegrating !== current) return;
-      const level = current.levels.live;
-      const drawn = renderAt(current, "live");
-      await placeDrawn(current, drawn, level.k);
+      await placeDrawn(current, renderAt(current, "live"), current.levels.live.k);
     }, 120);
   };
 
+  // Where the preview put the picture last, to place the forces' handles
   const drawDisintegratePreview = (current) => {
     const canvas = current.preview;
     if (!canvas || !current.levels.preview) return;
@@ -1670,19 +1800,89 @@ const PAGE_JS: &str = r##"(() => {
     const context = canvas.getContext("2d");
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, box.width, box.height);
-    if (!drawn) return;
-    const picture = Object.assign(document.createElement("canvas"), { width: drawn.image.width, height: drawn.image.height });
-    picture.getContext("2d").putImageData(drawn.image, 0, 0);
-    // Fitted around the layer and what flies off it
-    const { width, height } = current.levels.preview.image;
-    const [left, top] = [Math.min(0, drawn.x), Math.min(0, drawn.y)];
-    const [right, bottom] = [Math.max(width, drawn.x + drawn.image.width), Math.max(height, drawn.y + drawn.image.height)];
-    const pad = 16;
-    const fit = Math.min((box.width - pad * 2) / (right - left), (box.height - pad * 2) / (bottom - top));
-    const ox = (box.width - (right - left) * fit) / 2 - left * fit;
-    const oy = (box.height - (bottom - top) * fit) / 2 - top * fit;
+    const { width, height } = current.levels.preview.picture;
+    // The layer framed with room around it for what flies off, the same
+    // however far that goes, so the view holds still while dragging
+    const room = Math.max(width, height) * 0.35;
+    const [left, top, right, bottom] = [-room, -room, width + room, height + room];
+    const fit = Math.min((box.width - 8) / (right - left), (box.height - 8) / (bottom - top));
+    current.view = { fit, ox: (box.width - (right - left) * fit) / 2 - left * fit, oy: (box.height - (bottom - top) * fit) / 2 - top * fit, width, height };
+    const { ox, oy } = current.view;
     context.imageSmoothingQuality = "high";
-    context.drawImage(picture, ox + drawn.x * fit, oy + drawn.y * fit, drawn.image.width * fit, drawn.image.height * fit);
+    context.drawImage(drawn.canvas, ox + drawn.x * fit, oy + drawn.y * fit, drawn.canvas.width * fit, drawn.canvas.height * fit);
+    // The forces: a dot to drag, and a ring for its radius
+    const s = current.settings;
+    const size = Math.max(width, height);
+    [s.force1, s.force2].forEach((f, n) => {
+      if (!f.on) return;
+      const x = ox + (f.x / 100) * width * fit;
+      const y = oy + (f.y / 100) * height * fit;
+      const r = (f.radius / 100) * size * fit;
+      context.strokeStyle = "rgba(13, 153, 255, 0.9)";
+      context.fillStyle = "#fff";
+      context.lineWidth = 1;
+      context.setLineDash([4, 3]);
+      context.beginPath();
+      context.arc(x, y, Math.max(2, r), 0, Math.PI * 2);
+      context.stroke();
+      context.setLineDash([]);
+      context.beginPath();
+      context.arc(x, y, 5, 0, Math.PI * 2);
+      context.fill();
+      context.stroke();
+      context.fillStyle = "rgba(13, 153, 255, 1)";
+      context.font = "600 9px Inter, sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(String(n + 1), x, y + 0.5);
+    });
+  };
+
+  // Dragging a force's dot moves it, and its ring resizes it
+  const dragForces = (current, canvas, change) => {
+    const hit = (event) => {
+      const v = current.view;
+      if (!v) return null;
+      const box = canvas.getBoundingClientRect();
+      const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+      const size = Math.max(v.width, v.height);
+      for (const n of [2, 1]) {
+        const f = current.settings[`force${n}`];
+        if (!f.on) continue;
+        const x = v.ox + (f.x / 100) * v.width * v.fit;
+        const y = v.oy + (f.y / 100) * v.height * v.fit;
+        const r = (f.radius / 100) * size * v.fit;
+        const d = Math.hypot(px - x, py - y);
+        if (d <= 8) return { n, what: "move", px, py, x, y };
+        if (Math.abs(d - r) <= 6) return { n, what: "size", px, py, x, y };
+      }
+      return null;
+    };
+    canvas.addEventListener("pointermove", (event) => {
+      if (canvas.hasPointerCapture(event.pointerId)) return;
+      const at = hit(event);
+      canvas.style.cursor = at ? (at.what === "move" ? "move" : "ew-resize") : "";
+    });
+    canvas.addEventListener("pointerdown", (event) => {
+      const at = hit(event);
+      if (!at || event.button !== 0) return;
+      event.preventDefault();
+      canvas.setPointerCapture(event.pointerId);
+      const v = current.view;
+      const size = Math.max(v.width, v.height);
+      const move = (event) => {
+        const box = canvas.getBoundingClientRect();
+        const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+        if (at.what === "move") {
+          change(`force${at.n}.x`, Math.round(((px - v.ox) / (v.width * v.fit)) * 100));
+          change(`force${at.n}.y`, Math.round(((py - v.oy) / (v.height * v.fit)) * 100));
+        } else {
+          change(`force${at.n}.radius`, Math.round((Math.hypot(px - at.x, py - at.y) / (size * v.fit)) * 100));
+        }
+      };
+      canvas.addEventListener("pointermove", move);
+      canvas.addEventListener("lostpointercapture", () => canvas.removeEventListener("pointermove", move), { once: true });
+    });
   };
 
   const applyDisintegrate = async (current) => {
@@ -1690,8 +1890,7 @@ const PAGE_JS: &str = r##"(() => {
     clearTimeout(current.timer);
     current.busy = true;
     current.panel?.busy(true);
-    const level = current.levels.full;
-    await placeDrawn(current, renderAt(current, "full"), level.k);
+    await placeDrawn(current, renderAt(current, "full"), current.levels.full.k);
     if (disintegrating !== current) return;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
@@ -1752,29 +1951,37 @@ const PAGE_JS: &str = r##"(() => {
       } catch {}
     }
     current.bitmap?.close?.();
+    current.panel?.close();
     current.root?.remove();
     removeEventListener("keydown", current.keys, true);
   };
 
   const buildDisintegratePanel = (current) => {
     const s = current.settings;
+    const view = flat(s);
     const rows = [];
     const change = (key, value) => {
-      s[key] = value;
+      view[key] = value;
       refreshDisintegrate(current);
       show();
     };
-    const slider = makeSlider({ s, unit: current.unit, rows, change, limits: DISINTEGRATE_LIMITS, scrub: { piece: 0.2 }, digits: 1 });
+    const slider = makeSlider({ s: view, unit: current.unit, rows, change, limits: DISINTEGRATE_LIMITS, scrub: { pieces: 5 } });
     const canvas = element("canvas", { className: "preview" });
-    canvas.setAttribute("aria-hidden", "true");
+    canvas.setAttribute("aria-label", "Preview: drag a force's dot to move it, or its ring to change its radius");
     current.preview = canvas;
-
-    const presets = makeChips(DISINTEGRATE_PRESETS, (values) => {
-      Object.assign(s, fit(values(current.unit)));
+    dragForces(current, canvas, (key, value) => {
+      view[key] = Math.min(DISINTEGRATE_LIMITS[key][1], Math.max(DISINTEGRATE_LIMITS[key][0], value));
       refreshDisintegrate(current);
       show();
     });
-    // Picking a mode starts from its first preset, keeping where the front is
+
+    const pick = (values) => {
+      Object.assign(s, structuredClone(values()));
+      refreshDisintegrate(current);
+      show();
+    };
+    const presets = makeChips(DISINTEGRATE_PRESETS, pick);
+    // Picking a mode starts from its first preset, keeping the forces
     const mode = segments(
       "Mode",
       [
@@ -1784,45 +1991,45 @@ const PAGE_JS: &str = r##"(() => {
       () => s.mode,
       (value) => {
         if (value === s.mode) return;
-        const first = DISINTEGRATE_PRESETS.find(([, values]) => values(current.unit).mode === value);
-        Object.assign(s, fit(first[1](current.unit)), { progress: s.progress, angle: s.angle });
+        const [force1, force2] = [s.force1, s.force2];
+        const first = DISINTEGRATE_PRESETS.find(([, values]) => values().mode === value);
+        Object.assign(s, structuredClone(first[1]()), { force1, force2 });
         refreshDisintegrate(current);
         show();
       },
     );
-    const burst = element("input", { type: "checkbox" });
-    burst.addEventListener("change", () => change("burst", burst.checked));
-    const front = element(
+    const pattern = select("Pattern", PATTERNS, () => s.pattern, (value) => change("pattern", value));
+    const shuffle = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
+    shuffle.addEventListener("click", () => change("seed", (s.seed % 9999) + 1));
+    shuffle.style.gridColumn = "span 2";
+    shuffle.style.justifySelf = "start";
+    const shape = element(
       "section",
       {},
       element("div", { className: "row" }, element("span", { className: "label", textContent: "Mode" }), mode),
-      element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.front.map(slider)),
-      checkRow("Burst from the middle", burst, "Pieces fly out from the middle, the middle going first"),
+      element("label", { className: "row" }, element("span", { className: "label", textContent: "Pattern" }), pattern),
+      element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.shape.map(slider)),
+      element("div", { className: "row" }, element("span", { className: "label", textContent: "Variation" }), shuffle),
     );
-    const pieces = element("section", {}, element("div", { className: "caption", textContent: "Pieces" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.pieces.map(slider)));
-    const look = element("section", {}, element("div", { className: "caption", textContent: "As they go" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.look.map(slider)));
-
-    const shuffle = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
-    shuffle.addEventListener("click", () => change("seed", (s.seed % 9999) + 1));
-    const editable = element("input", { type: "checkbox" });
-    editable.addEventListener("change", () => change("editable", editable.checked));
-    const result = element(
-      "section",
-      {},
-      element("div", { className: "row" }, element("span", { className: "label", textContent: "Pattern" }), shuffle),
-      checkRow("Keep editable", editable, "The original kept, hidden, in a group Disintegrate can change later"),
-    );
-    shuffle.style.gridColumn = "span 2";
-    shuffle.style.justifySelf = "start";
-
-    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
-    reset.addEventListener("click", () => {
-      const first = DISINTEGRATE_PRESETS.find(([, values]) => values(current.unit).mode === s.mode);
-      Object.assign(s, fit(first[1](current.unit)));
+    const force1 = element("section", {}, element("div", { className: "caption", textContent: "Force 1" }), element("div", { className: "rows" }, ...forceRows(1).map(slider)));
+    const second = element("input", { type: "checkbox" });
+    second.addEventListener("change", () => {
+      s.force2.on = second.checked;
       refreshDisintegrate(current);
       show();
     });
-    const scroll = element("div", { className: "scroll" }, presets, front, pieces, look, result, element("div", { className: "under" }, reset));
+    const force2Rows = element("div", { className: "rows" }, ...forceRows(2).map(slider));
+    const force2 = element("section", {}, checkRow("Force 2", second), force2Rows);
+    const time = element("section", {}, element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.time.map(slider)));
+    const physics = element("section", {}, element("div", { className: "caption", textContent: "Physics" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.physics.map(slider)));
+    const wind = element("section", {}, element("div", { className: "caption", textContent: "Dust" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.wind.map(slider)));
+    const editable = element("input", { type: "checkbox" });
+    editable.addEventListener("change", () => change("editable", editable.checked));
+    const result = element("section", {}, checkRow("Keep editable", editable, "The original kept, hidden, in a group Disintegrate can change later"));
+
+    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => pick(DISINTEGRATE_PRESETS.find(([, values]) => values().mode === s.mode)[1]));
+    const scroll = element("div", { className: "scroll" }, presets, shape, time, force1, force2, physics, wind, result, element("div", { className: "under" }, reset));
 
     const name = element("div", { className: "source", textContent: current.source.name });
     const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
@@ -1834,8 +2041,12 @@ const PAGE_JS: &str = r##"(() => {
     const root = makePanel(current.group ? `Disintegrate · ${current.source.name}` : "Disintegrate", () => closeDisintegrate(current, false), canvas, scroll, footer);
     const show = () => {
       mode.show();
+      pattern.show();
       for (const row of rows) row.show();
-      burst.checked = s.burst;
+      second.checked = s.force2.on;
+      force2Rows.hidden = !s.force2.on;
+      physics.hidden = s.mode !== "shatter";
+      wind.hidden = s.mode !== "snap";
       editable.checked = s.editable;
       drawDisintegratePreview(current);
     };
@@ -1846,6 +2057,7 @@ const PAGE_JS: &str = r##"(() => {
         go.disabled = on;
         go.textContent = on ? "Making…" : current.group ? "Update" : "Disintegrate";
       },
+      close: () => pattern.close(),
     };
     current.keys = panelKeys(root, () => disintegrating === current, () => closeDisintegrate(current, false), () => !current.busy && applyDisintegrate(current));
     addEventListener("keydown", current.keys, true);
