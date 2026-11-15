@@ -583,7 +583,7 @@ fn eval(webview: &Webview, script: &str, timeout: Duration) -> Option<String> {
     receive.recv_timeout(timeout).ok()
 }
 
-fn eval_value(webview: &Webview, script: &str) -> Option<Value> {
+pub(super) fn eval_value(webview: &Webview, script: &str) -> Option<Value> {
     serde_json::from_str(&eval(webview, script, Duration::from_secs(30))?).ok()
 }
 

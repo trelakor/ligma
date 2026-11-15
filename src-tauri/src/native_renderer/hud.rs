@@ -114,14 +114,22 @@ fn run(app: AppHandle) {
         let active = usize::from(!ligma);
         let sample = memory.as_ref().map(GpuMemory::sample);
         tab = crate::tabs::active_file(&app).filter(|file| file.editor == "design").map(|file| file.webview);
+        // Figma's renderer draws in the browser's GPU process with the rest
+        // of the page, so it's what the page counts it made (see gpu_count.js)
+        let figma = if ligma { None } else { tab.as_ref().and_then(|tab| super::run::eval_value(tab, "window.__ligmaGpuBytes ?? null")).and_then(|value| value.as_f64()) };
         let model = {
             let mut records = RECORDS.lock().unwrap();
             let record = records[active].get_or_insert_with(Record::default);
             if let Some(sample) = &sample {
                 let (own, page) = (sample.ligma as f32 / 1e6, sample.webview as f32 / 1e6);
-                // Figma's renderer draws in the browser's GPU process with
-                // the rest of the page, so the two can't be told apart
-                record.memory.push_back(if ligma { (own, page) } else { (-1.0, page) });
+                record.memory.push_back(match figma {
+                    _ if ligma => (own, page),
+                    Some(figma) => {
+                        let figma = (figma as f32 / 1e6).clamp(0.0, page);
+                        (figma, page - figma)
+                    }
+                    None => (-1.0, page),
+                });
                 if record.memory.len() > SAMPLES {
                     record.memory.pop_front();
                 }

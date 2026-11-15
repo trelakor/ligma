@@ -124,6 +124,9 @@ pub fn mark(what: impl FnOnce() -> String) {
 /// take over Figma's canvas renderer in it (see page_hook.js)
 pub const PAGE_HOOK_JS: &str = include_str!("native_renderer/page_hook.js");
 
+/// Counts what Figma's own renderer holds in GPU memory, for the stats
+pub const GPU_COUNT_JS: &str = include_str!("native_renderer/gpu_count.js");
+
 /// Whether Figma tabs opened now are made ready for the renderer to take
 /// over their canvas. Tabs opened before it was turned on are reloaded
 pub fn hooks_tabs(app: &AppHandle) -> bool {

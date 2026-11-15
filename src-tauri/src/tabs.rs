@@ -866,6 +866,10 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     }
     // Figma's canvas drawn by Ligma, under a transparent page
     #[cfg(windows)]
+    if crate::settings::current(app).experimental {
+        builder = builder.initialization_script(crate::native_renderer::GPU_COUNT_JS);
+    }
+    #[cfg(windows)]
     if crate::native_renderer::hooks_tabs(app) {
         builder = builder.initialization_script(crate::native_renderer::PAGE_HOOK_JS).transparent(true);
     }

@@ -243,7 +243,8 @@
     frameGraph(ctx, frames, record);
     y = frames.y + frames.h + 18;
 
-    // Figma's renderer is shown with its page, see hud.rs
+    // Figma's renderer is counted in its page (see gpu_count.js), or till
+    // it's loaded with it, shown with the page
     const [renderer, page] = record.memory.at(-1) ?? [0, 0];
     text(ctx, PAD + 8, y, [["GPU memory ", MUTED], [mb(Math.max(renderer, 0) + page), ink]]);
     y += 16;
