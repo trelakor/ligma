@@ -297,8 +297,10 @@ pub struct Tree {
     /// are known: Figma sends a node again under another id, unchanged, and
     /// an id again for another node
     contents: IdMap<u32, u64>,
-    /// Skia's copy of each path, by the path's address, kept with it
-    paths: Mutex<HashMap<usize, (Arc<rt::Path>, Path)>>,
+    /// Skia's copy of each path, by the path's address. The path is held
+    /// weakly, which still keeps its address from being reused: held
+    /// strongly, this and Vello's copies kept each other's paths forever
+    paths: Mutex<HashMap<usize, (std::sync::Weak<rt::Path>, Path)>>,
     /// Pattern tiles: by source, tiling and zoom level
     patterns: Mutex<HashMap<(u32, u64, i32), (Picture, Vec<String>)>>,
     /// Figma's noise octaves, see `scene::Begin`
@@ -345,7 +347,7 @@ impl Tree {
         drop(info);
         self.renew(&applied, previous.as_ref(), &header.released);
         if header.mode == 0 || !header.released.is_empty() {
-            self.paths.lock().unwrap().retain(|_, (path, _)| Arc::strong_count(path) > 1);
+            self.paths.lock().unwrap().retain(|_, (path, _)| path.strong_count() > 0);
             self.patterns.lock().unwrap().clear();
         } else if !applied.new_nodes.is_empty() {
             // A pattern's source can change
@@ -611,7 +613,7 @@ impl Tree {
             return skia.clone();
         }
         let skia = path.to_skia();
-        self.paths.lock().unwrap().insert(key, (path.clone(), skia.clone()));
+        self.paths.lock().unwrap().insert(key, (Arc::downgrade(path), skia.clone()));
         skia
     }
 

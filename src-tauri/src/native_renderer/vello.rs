@@ -639,9 +639,9 @@ impl Vello {
 }
 
 /// Vello's copies of the tree's paths, made once, shared by the threads
-/// encoding units
+/// encoding units. Held weakly, as Skia's are (see `Tree`)
 #[derive(Default)]
-pub struct Paths(std::sync::Mutex<HashMap<usize, (Arc<rt::Path>, Arc<BezPath>)>>);
+pub struct Paths(std::sync::Mutex<HashMap<usize, (std::sync::Weak<rt::Path>, Arc<BezPath>)>>);
 
 impl Paths {
     /// Vello's copy of `path`
@@ -651,13 +651,13 @@ impl Paths {
             return made.clone();
         }
         let made = Arc::new(bez(&tree.skia_path(path)));
-        self.0.lock().unwrap().insert(key, (path.clone(), made.clone()));
+        self.0.lock().unwrap().insert(key, (Arc::downgrade(path), made.clone()));
         made
     }
 
     /// Lets go of copies of paths the tree no longer has
     pub fn prune(&self) {
-        self.0.lock().unwrap().retain(|_, (path, _)| Arc::strong_count(path) > 1);
+        self.0.lock().unwrap().retain(|_, (path, _)| path.strong_count() > 0);
     }
 }
 
