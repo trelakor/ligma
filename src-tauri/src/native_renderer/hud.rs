@@ -22,8 +22,9 @@ const SAMPLES: usize = 240;
 /// How often everything is handed to the panel, memory sampled with it
 const TICK: Duration = Duration::from_millis(250);
 /// How often frames Ligma's renderer presented since are, for the panel's
-/// graphs to move with them
-const FRAME_TICK: Duration = Duration::from_millis(8);
+/// graphs to move with them, as often as the panel's drawn. Each is a
+/// script run on the page's main thread, which Figma's frames need
+const FRAME_TICK: Duration = Duration::from_millis(33);
 /// Gaps between frames longer than this are the view at rest, not a slow
 /// frame
 const IDLE_MS: f32 = 250.0;

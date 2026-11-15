@@ -26,8 +26,11 @@
   const BIG = '600 15px "Segoe UI", system-ui, sans-serif';
   const BOLD = '600 12px "Segoe UI", system-ui, sans-serif';
   const TAG = '600 10px "Segoe UI", system-ui, sans-serif';
+  // Drawn at most this often. Each draw takes the page's main thread, which
+  // Figma's frames need, so more often slows the very frames it times
+  const PAINT_MS = 33;
 
-  const state = { measuring: false, drew: false, last: null, intervals: [], raf: 0, restore: [], host: null, canvas: null, model: null, painting: 0 };
+  const state = { measuring: false, drew: false, last: null, intervals: [], raf: 0, restore: [], host: null, canvas: null, model: null, painting: 0, painted: 0, figma: null, at: null, styles: {} };
 
   // Figma draws on the page with WebGL or WebGPU, or in its render worker,
   // which answers each frame it's sent
@@ -80,15 +83,45 @@
     if (record.frames.length > FRAMES) record.frames.splice(0, record.frames.length - FRAMES);
   };
 
-  // Drawn again at most once a frame of the browser's, as frames come in
+  // Drawn again as frames come in, in a frame of the browser's, at most
+  // every `PAINT_MS`
   const paint = () => {
     if (state.painting) return;
-    state.painting = requestAnimationFrame(() => {
-      state.painting = 0;
-      try {
-        if (state.model) draw(state.model);
-      } catch {}
-    });
+    const wait = Math.max(0, state.painted + PAINT_MS - performance.now());
+    state.painting = setTimeout(() => {
+      requestAnimationFrame(() => {
+        state.painting = 0;
+        state.painted = performance.now();
+        try {
+          if (state.model) draw(state.model);
+        } catch {}
+      });
+    }, wait);
+  };
+
+  // Where Figma's canvas is, measured again only when it or the window
+  // changes size, as measuring has the browser lay out the page when
+  // anything's changed since, which Figma then waits on each frame
+  const measure = (figma) => {
+    if (state.figma !== figma) {
+      state.observer?.disconnect();
+      state.figma = figma;
+      state.at = null;
+      state.observer = new ResizeObserver(() => (state.at = null));
+      state.observer.observe(figma);
+    }
+    return (state.at ??= figma.getBoundingClientRect());
+  };
+  const resized = () => (state.at = null);
+  addEventListener("resize", resized);
+  state.restore.push(() => removeEventListener("resize", resized));
+
+  // Styles set only when they change, as each set has the page laid out again
+  const style = (element, name, value) => {
+    const key = `${element === state.canvas ? "c" : "h"}.${name}`;
+    if (state.styles[key] === value) return;
+    state.styles[key] = value;
+    element.style[name] = value;
   };
 
   const text = (ctx, x, y, parts) => {
@@ -315,7 +348,7 @@
     const before = was && (was.frames.length || was.memory.length) ? { renderer: other, record: was } : null;
     // Not till Figma's canvas is up, and out of reach of Figma looking for
     // it, in a shadow root
-    const figma = document.querySelector(".gpu-view-content canvas");
+    const figma = state.figma?.isConnected ? state.figma : document.querySelector(".gpu-view-content canvas");
     if (!figma) return;
     if (!state.host?.isConnected) {
       if (!state.host) {
@@ -328,11 +361,11 @@
       document.documentElement.appendChild(state.host);
     }
     const canvas = state.canvas;
-    const host = figma.getBoundingClientRect();
+    const host = measure(figma);
     const dpr = window.devicePixelRatio || 1;
-    canvas.style.left = `${host.left + 8}px`;
-    canvas.style.top = `${host.top + 8}px`;
-    canvas.style.width = `${WIDTH}px`;
+    style(canvas, "left", `${host.left + 8}px`);
+    style(canvas, "top", `${host.top + 8}px`);
+    style(canvas, "width", `${WIDTH}px`);
     if (canvas.width !== Math.round(WIDTH * dpr) || canvas.height !== Math.round(HEIGHT * dpr)) {
       canvas.width = Math.round(WIDTH * dpr);
       canvas.height = Math.round(HEIGHT * dpr);
@@ -345,7 +378,7 @@
     ctx.globalAlpha = 0;
     const height = panel(ctx, active, before);
     ctx.restore();
-    canvas.style.height = `${HEIGHT}px`;
+    style(canvas, "height", `${HEIGHT}px`);
     ctx.fillStyle = SURFACE;
     ctx.beginPath();
     ctx.roundRect(0, 0, WIDTH, height, 8);
@@ -375,6 +408,8 @@
     },
     remove() {
       state.measuring = false;
+      clearTimeout(state.painting);
+      state.observer?.disconnect();
       for (const restore of state.restore.reverse()) restore();
       state.host?.remove();
       delete window.__ligmaStats;
