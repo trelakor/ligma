@@ -38,7 +38,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
 };
 
-use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, EFFECT, RENDER, RENDER_LIMIT};
+use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, EFFECT, RENDER};
 use super::effects::{Job, Kept, Run};
 use super::present::{checker_paint, cover, grid_paint, view_at, Device, Fence, Hub, Layer, LayerKind, Patterns, Snapshot, Tex, CHECKER, GRID_COLOR, GRID_LINES};
 use super::scene::{Kind, Prepared, Scene};
@@ -4909,23 +4909,26 @@ impl Painter {
         let (Some(owner_node), Some(node)) = (self.scene.node(owner_slot), self.scene.node(slot)) else {
             return;
         };
-        // Drawn before, and not changed since: another size of it
-        if self.kept.lock().unwrap().has(key) {
+        let (w, h) = (node.size.0 as f32, node.size.1 as f32);
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        // At the scale it's shown at, `width` pixels across
+        let scale = super::draw::effect_scale(width as f32 / w, w.max(h));
+        // Drawn before as sharp, and not changed since: another size of it
+        if self.kept.lock().unwrap().scale(key).is_some_and(|kept| kept >= scale * 0.999) {
             let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
             return;
         }
         let chain = owner_node.shaders();
-        let (w, h) = (node.size.0 as f32, node.size.1 as f32);
         let transform = node.transform;
         let unit = transform.scale_x().hypot(transform.skew_y()).max(transform.skew_x().hypot(transform.scale_y()));
         let Some(inverse) = transform.invert() else {
             return;
         };
-        if chain.is_empty() || w <= 0.0 || h <= 0.0 || unit <= 0.0 {
+        if chain.is_empty() || unit <= 0.0 {
             return;
         }
-        // A pixel a unit, unless that's more than a GPU texture takes
-        let scale = (RENDER_LIMIT as f32 / w.max(h)).min(1.0);
         let (pw, ph) = ((w * scale).ceil().max(1.0) as i32, (h * scale).ceil().max(1.0) as i32);
         // Its own memory, given back as soon as it's read
         let Some(mut surface) = self.gpu.own_surface(pw, ph, 1) else {
@@ -4957,6 +4960,7 @@ impl Painter {
         }
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| format!("effect input {key} {pw}x{ph} vram={vram}"));
+        self.kept.lock().unwrap().run(key, scale);
         let _ = self.effects.send(Job::Run(Run { key: key.to_string(), node: id, chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width }));
     }
 
@@ -4967,18 +4971,22 @@ impl Painter {
         let Some(tree) = &self.tree else {
             return;
         };
-        if self.kept.lock().unwrap().has(key) {
-            let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
-            return;
-        }
         let Some(effect) = tree.custom_effect(id) else {
             return;
         };
+        // At the scale it's shown at, `width` pixels its longest side, as
+        // the drawer asks for it with a little to spare
+        let area = effect.area;
+        let longest = area.width().max(area.height());
+        let scale = super::draw::effect_scale(width as f32 / 1.42 / longest.max(1e-6), longest);
+        // Drawn before as sharp, and not changed since: another size of it
+        if self.kept.lock().unwrap().scale(key).is_some_and(|kept| kept >= scale * 0.999) {
+            let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
+            return;
+        }
         let Some(inverse) = effect.to.invert() else {
             return;
         };
-        let area = effect.area;
-        let scale = (RENDER_LIMIT as f32 / area.width().max(area.height())).min(1.0);
         let (pw, ph) = ((area.width() * scale).ceil().max(1.0) as i32, (area.height() * scale).ceil().max(1.0) as i32);
         let Some(mut surface) = self.gpu.own_surface(pw, ph, 1) else {
             return;
@@ -5008,6 +5016,7 @@ impl Painter {
             return;
         }
         trace(|| format!("effect input {key} {pw}x{ph}"));
+        self.kept.lock().unwrap().run(key, scale);
         let run = Run { key: key.to_string(), node: effect.node, chain: effect.chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width };
         let _ = self.effects.send(Job::Run(run));
     }

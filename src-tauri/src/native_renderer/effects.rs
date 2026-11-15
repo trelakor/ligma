@@ -34,6 +34,8 @@ impl Job {
 #[derive(Default)]
 pub struct Results {
     kept: HashMap<String, Full>,
+    /// Scales runs not done yet are at
+    running: HashMap<String, f32>,
     bytes: usize,
     clock: u64,
 }
@@ -53,8 +55,19 @@ struct Full {
 const KEPT_BUDGET: usize = 48 << 20;
 
 impl Results {
-    pub fn has(&self, key: &str) -> bool {
-        self.kept.contains_key(key)
+    /// The scale what's kept of `key` ran at, or one running will
+    pub fn scale(&self, key: &str) -> Option<f32> {
+        let kept = self.kept.get(key).map(|full| full.scale);
+        let running = self.running.get(key).copied();
+        match (kept, running) {
+            (Some(kept), Some(running)) => Some(kept.max(running)),
+            (kept, running) => kept.or(running),
+        }
+    }
+
+    /// A run of `key` at `scale` sent
+    pub fn run(&mut self, key: &str, scale: f32) {
+        self.running.insert(key.to_string(), scale);
     }
 
     /// Drops what's kept for keys `keep` says no to
@@ -158,10 +171,14 @@ fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch,
         }
         for job in latest {
             let key = job.key().to_string();
+            let ran = matches!(job, Job::Run(_));
             let done = match job {
                 Job::Run(run) => one(&mut host, &fetch, &mut missing, &kept, run),
                 Job::Resize { key, width } => resize(&kept, &key, width),
             };
+            if ran {
+                kept.lock().unwrap().running.remove(&key);
+            }
             match done {
                 Ok(img) => {
                     let _ = messages.send(Msg::Image(key, img, None));

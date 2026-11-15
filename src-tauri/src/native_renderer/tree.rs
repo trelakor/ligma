@@ -1175,13 +1175,21 @@ impl<'a> Drawer<'a> {
         };
         self.canvas.save();
         self.canvas.concat(&effect.to);
-        let shown = (effect.area.width().max(effect.area.height()) * self.device_scale() * 1.42) as f64;
+        let longest = effect.area.width().max(effect.area.height());
+        let shown = (longest * self.device_scale() * 1.42) as f64;
         let drawn = match self.images.get(&effect.key) {
             Some(img) => {
                 if img.stale {
                     self.missing_images.push((effect.key.clone(), shown));
                 } else {
                     self.used_images.push((effect.key.clone(), shown));
+                    // Had again where it shows bigger than it's kept, or
+                    // run again where sharper than it ran
+                    let (full, kept) = (img.original.0.max(img.original.1) as f64, img.image.width().max(img.image.height()) as f64);
+                    let ran = img.area.map_or(1.0, |area| img.original.0 as f32 / area.width().max(1e-6));
+                    if (kept < shown && full > kept) || ran < draw::effect_scale(self.device_scale(), longest) * 0.999 {
+                        self.sharper_images.push((effect.key.clone(), shown));
+                    }
                 }
                 img.area.is_some_and(|area| {
                     let scale = img.image.width() as f32 / area.width().max(1e-6);
