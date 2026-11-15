@@ -1431,6 +1431,14 @@ impl Painter {
     }
 
     pub fn run(mut self, messages: Receiver<Msg>) {
+        super::present::drawing();
+        self.serve(messages);
+        let _ = self.gpu.context.flush_submit_and_sync_cpu();
+        drop(self);
+        super::present::done();
+    }
+
+    fn serve(&mut self, messages: Receiver<Msg>) {
         super::profile::register();
         // How long until there's more to draw, if there is
         let mut next: Option<Duration> = Some(Duration::ZERO);

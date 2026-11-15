@@ -91,6 +91,21 @@ pub fn buried() -> Vec<ID3D12Resource> {
     std::mem::take(&mut GRAVES.lock().unwrap().0)
 }
 
+/// The render and present threads running
+static DRAWING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn drawing() {
+    DRAWING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// One of them ending, its GPU done with all it asked: the last frees the
+/// textures let go of, as no thread's left to
+pub fn done() {
+    if DRAWING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+        drop(buried());
+    }
+}
+
 impl Drop for Tex {
     fn drop(&mut self) {
         let resource = unsafe { std::mem::ManuallyDrop::take(&mut self.resource) };
@@ -755,6 +770,7 @@ impl Screen {
     }
 
     pub fn run(mut self, hub: Arc<Hub>) {
+        drawing();
         // The snapshot frames are composed of: the latest the GPU has drawn
         let mut current: Option<Arc<Snapshot>> = None;
         // The last snapshot shown whole: while the latest has holes, the
@@ -877,6 +893,10 @@ impl Screen {
             shown = Some(now);
             complete = Some(snapshot);
         }
+        drop((current, complete));
+        let _ = self.context.flush_submit_and_sync_cpu();
+        drop(self);
+        done();
     }
 
     /// Moves the layer to `at` in the window, or hides it
