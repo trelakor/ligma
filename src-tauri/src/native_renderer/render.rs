@@ -853,6 +853,8 @@ struct Tile {
     draft: bool,
     /// Drawn by Vello, not Skia
     vello: bool,
+    /// When it was drawn, see `Layer::drawn`
+    drawn: u64,
 }
 
 impl Drop for Gpu {
@@ -1936,7 +1938,7 @@ impl Painter {
             Ok((tex, counts, stats, rough)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -1967,7 +1969,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 let at = (ox, oy, px.to_bits());
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2028,7 +2030,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 self.kept_drawn = self.scene_kept.as_ref().map(|kept| (kept.id, at));
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole }, fence, at, renders, started, stats, rough: false });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2300,7 +2302,7 @@ impl Painter {
             surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
             drop(surface);
             let tile_image = self.finish(&backend, false).ok_or_else(|| fail("submit".into()))?;
-            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, exact, draft: false, vello: true });
+            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, exact, draft: false, vello: true, drawn: 0 });
         }
         self.drew = true;
         super::stats().lock().unwrap().vello_tiles_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -2887,7 +2889,7 @@ impl Painter {
                 }
             )
         });
-        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole }, fence, at, false, false);
+        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, false, false);
         self.whole_took = started.elapsed();
         stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
         self.drew = true;
@@ -2900,9 +2902,10 @@ impl Painter {
 
     /// Makes `layer`, which the GPU draws till `fence` passes, the whole
     /// view of `at`
-    fn hand_whole(&mut self, layer: Layer, fence: u64, at: (i32, i32, u32), rough: bool, vello: bool) {
+    fn hand_whole(&mut self, mut layer: Layer, fence: u64, at: (i32, i32, u32), rough: bool, vello: bool) {
         self.serial += 1;
         let serial = self.serial;
+        layer.drawn = serial;
         let mut older = None;
         let old = match self.whole.as_mut() {
             Some(whole) => {
@@ -3175,6 +3178,7 @@ impl Painter {
         if let Some(whole) = self.whole.as_mut() {
             whole.fence = fence;
             whole.serial = serial;
+            whole.layer.drawn = serial;
             whole.stale |= image.is_none();
             if !in_place {
                 replaced = Some(std::mem::replace(&mut whole.layer.tex, target));
@@ -3283,7 +3287,9 @@ impl Painter {
         }
     }
 
-    fn put_tile(&mut self, key: TileKey, tile: Tile) {
+    fn put_tile(&mut self, key: TileKey, mut tile: Tile) {
+        self.serial += 1;
+        tile.drawn = self.serial;
         if let Some(old) = self.tiles.insert(key, tile) {
             self.drop_tile(old);
         }
@@ -3360,6 +3366,7 @@ impl Painter {
             phase: (0.0, 0.0),
             px: key.px(),
             counts: tile.counts,
+            drawn: tile.drawn,
             kind: if tile.stale {
                 LayerKind::Stale
             } else if tile.draft {
@@ -4024,7 +4031,11 @@ impl Painter {
             if key.starts_with(RENDER) || key.starts_with(EFFECT) || img.stale {
                 continue;
             }
-            let asked = width as f64 * super::vello::ASKED;
+            // Nor smaller than units near the view need at this zoom: views
+            // drawn since may be only coarse tiles around it, which show it
+            // small, while it's in view bigger, and it'd be had again and
+            // again at each size
+            let asked = (width as f64 * super::vello::ASKED).max(need.get(&key).copied().unwrap_or(0.0));
             let kept = img.image.width().max(img.image.height()) as f64;
             let fits = fitted(img.original, asked) as f64;
             if kept > fits * 2.0 && self.asked.get(&key) != Some(&asked) {
@@ -5304,7 +5315,7 @@ impl Painter {
         if margin == 0 {
             self.scratch.push((margin, if msaa { 0 } else { ss }, scratch));
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, vello: false })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, vello: false, drawn: 0 })
     }
 
     fn background(&self) -> Color4f {

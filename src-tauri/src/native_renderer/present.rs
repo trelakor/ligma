@@ -221,6 +221,8 @@ pub struct Layer {
     pub px: f32,
     pub counts: Counts,
     pub kind: LayerKind,
+    /// When it was drawn, later ones higher (see `Painter::serial`)
+    pub drawn: u64,
 }
 
 /// What the render thread has drawn, every layer of it up to date as of
@@ -438,7 +440,10 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
             (if i >= behind { rank + 1000.0 } else { rank }, i)
         })
         .collect();
-    ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Of those ranked the same, the one drawn last first: a tile out of date
+    // since before the whole view was drawn would show it as it was before
+    // whatever came since, an image that came showing and going again
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then(layers[b.1].drawn.cmp(&layers[a.1].drawn)));
     let mut left = skia_safe::Region::new();
     left.set_rect(skia_safe::IRect::from_wh(size.0 as i32, size.1 as i32));
     if let Some(content) = content {
