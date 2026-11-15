@@ -35,10 +35,10 @@ const PANEL_JS: &str = include_str!("stats_panel.js");
 struct Record {
     /// Since the frame before, in ms, or none after the view was at rest
     frames: VecDeque<Option<f32>>,
-    /// The renderer, the page, and Ligma's process besides, in MB. Figma's
-    /// renderer is in its page, so it's what the page takes above what it
-    /// took while Ligma's renderer drew, or below 0 before it ever did
-    memory: VecDeque<(f32, f32, f32)>,
+    /// The renderer and the page, in MB. Figma's renderer is in its page,
+    /// so it's what the page takes above what it took while Ligma's
+    /// renderer drew, or below 0 before it ever did
+    memory: VecDeque<(f32, f32)>,
     /// Ligma's renderer's draw times and counts
     numbers: Option<Value>,
     #[serde(skip)]
@@ -123,11 +123,11 @@ fn run(app: AppHandle) {
                 let (own, page) = (sample.ligma as f32 / 1e6, sample.webview as f32 / 1e6);
                 record.memory.push_back(if ligma {
                     page_alone = Some(page);
-                    (own, page, 0.0)
+                    (own, page)
                 } else {
                     match page_alone {
-                        Some(alone) => (page - alone.min(page), alone.min(page), own),
-                        None => (-1.0, page, own),
+                        Some(alone) => (page - alone.min(page), alone.min(page)),
+                        None => (-1.0, page),
                     }
                 });
                 if record.memory.len() > SAMPLES {

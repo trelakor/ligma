@@ -212,8 +212,8 @@
 
     // Figma's renderer is in its page, so it's worked out from the page
     // with and without it (see hud.rs), till then shown with the page
-    const [renderer, page, besides] = record.memory.at(-1) ?? [0, 0, 0];
-    text(ctx, PAD + 8, y, [["GPU memory ", MUTED], [mb(Math.max(renderer, 0) + page + besides), ink]]);
+    const [renderer, page] = record.memory.at(-1) ?? [0, 0];
+    text(ctx, PAD + 8, y, [["GPU memory ", MUTED], [mb(Math.max(renderer, 0) + page), ink]]);
     y += 16;
     let at = PAD + 8;
     const legend =
@@ -226,11 +226,6 @@
     for (const [label, value, color] of legend) {
       dot(ctx, at, y, color);
       at += 16 + text(ctx, at + 10, y, [[label, MUTED], [mb(value), ink]]);
-    }
-    // What Ligma's renderer keeps once switched off
-    if (besides >= 1) {
-      y += 16;
-      text(ctx, PAD + 8, y, [["Ligma, renderer off ", MUTED], [mb(besides), ink]]);
     }
     y += 8;
     const memory = { x: PAD + 8, y, w: inner - 8 - GUTTER, h: inUse ? 40 : 32 };
