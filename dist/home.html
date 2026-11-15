@@ -212,6 +212,16 @@
   .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .tier { display: none; }
   .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .nav.team .lbl { margin-right: 50px; }
   .team-row.lit .nav.team { background: var(--sel); }
+  /* A team being dragged to another place in its list (startTeamLift):
+     folded to its row, an outlined gap where it'll land, and the row
+     itself hanging from the pointer */
+  .team-list { position: relative; }
+  .team-block.hole > :not(.team-row) { display: none; }
+  .team-block.hole > .team-row > * { visibility: hidden; }
+  .team-block.hole > .team-row::after { content: ""; position: absolute; inset: 1px 8px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .team-row.lifted { position: fixed; left: 0; top: 0; z-index: 70; border-radius: 7px; background: var(--bg); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24), 0 3px 10px rgba(0, 0, 0, 0.16), 0 0 0 1px var(--line); pointer-events: none; will-change: transform; }
+  .team-row.lifted .nav.team { background: none; }
+  .team-row.lifted :is(.team-more, .team-star:not(.on)) { display: none; }
   .tm { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: #fff; font: 600 10px/1 var(--font); }
   .sfoot { flex: none; padding: 8px 0; border-top: 1px solid var(--line); }
   .sfoot .ext { margin-left: auto; }
@@ -2498,6 +2508,11 @@ function navRow(view, iconName, label, count, extra = "", tail = "") {
 function renderSide() {
   // Not while a project is renamed in place: it redraws once that's done
   if ($(".lbl input", side)) return;
+  // Nor under a team being dragged: once it's down
+  if (teamLift?.live) {
+    teamLift.rerender = true;
+    return;
+  }
   const live = FILES.filter((f) => !f.trashed);
   // Counts only for lists loaded whole
   const count = (pred, view) => (LIVE && view && !Live.ready.has(view) ? "" : live.filter(pred).length || "");
@@ -2524,29 +2539,30 @@ function renderSide() {
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
     const lit = (win.classList.contains("open") && winState.kind === "team" && winState.team === team.id) || state.view === `s:${team.id}`;
-    let out = `<div class="team-row${lit ? " lit" : ""}" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
+    let out = `<div class="team-block" data-key="tb:${team.id}" data-team-block="${team.id}"><div class="team-row${lit ? " lit" : ""}" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
     out += `<button class="team-more" data-team-more="${team.id}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(team.name)}" title="Settings, people and more">${icon("more")}</button>`;
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${fig(isStarred ? "starOn" : "star")}</button></div>`;
-    if (!open) return out;
+    if (!open) return out + "</div>";
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
     if (!LIVE || Live.ready.has("starred")) countTeam(team);
     const files = (id, view) => (LIVE && LG.count(id) !== undefined ? LG.count(id) || "" : count((f) => f.project === id, view));
     for (const [id, name] of team.projects) out += navRow("p:" + id, folderIcon(id), name, files(id, "p:" + id), "proj");
     if (!LIVE || Live.draftsByTeam[team.id]) out += navRow("d:" + team.id, "file", "Drafts", files(Live.draftsByTeam[team.id], "d:" + team.id), "proj");
     out += navRow("t:" + team.id, "trash", "Trash", count((f) => f.trashed && f.team === team.id), "proj");
-    return out;
+    return out + "</div>";
   };
   const section = (id, title, rows, tier = "") => {
     if (!rows) return "";
     const open = !state.collapsed.has(id);
-    return `<button class="plan sec-h" data-section="${esc(id)}" aria-expanded="${open}">${fig("down", "chev")}<b>${esc(title)}</b>${tier ? esc(tier) : ""}</button>${open ? rows : ""}`;
+    return `<button class="plan sec-h" data-section="${esc(id)}" aria-expanded="${open}">${fig("down", "chev")}<b>${esc(title)}</b>${tier ? esc(tier) : ""}</button>${open ? `<div class="team-list" data-key="tl:${esc(id)}">${rows}</div>` : ""}`;
   };
   const teamsOf = (plans) => plans.flatMap((p) => p.teams.map((t) => [t, p]));
   const all = teamsOf(PLANS);
-  const pinned = [...starred].map((id) => all.find(([t]) => t.id === id)).filter(Boolean);
+  // Each list in the order its teams were dragged into (teamOrder)
+  const pinned = teamOrder([...starred].map((id) => all.find(([t]) => t.id === id)).filter(Boolean), ([t]) => t.id);
   html += section("sec:starred", "Pinned teams", pinned.map(([t, p]) => teamRow(t, p.teams.length === 1 ? p.tier : p.name)).join(""));
-  html += section("sec:teams", "Teams", all.filter(([t, p]) => p.teams.length === 1 && !starred.has(t.id)).map(([t, p]) => teamRow(t, p.tier)).join(""));
-  for (const plan of PLANS.filter((p) => p.teams.length > 1)) html += section("sec:org:" + plan.id, plan.name, plan.teams.filter((t) => !starred.has(t.id)).map((t) => teamRow(t)).join(""), plan.tier);
+  html += section("sec:teams", "Teams", teamOrder(all.filter(([t, p]) => p.teams.length === 1 && !starred.has(t.id)), ([t]) => t.id).map(([t, p]) => teamRow(t, p.tier)).join(""));
+  for (const plan of PLANS.filter((p) => p.teams.length > 1)) html += section("sec:org:" + plan.id, plan.name, teamOrder(plan.teams.filter((t) => !starred.has(t.id)), (t) => t.id).map((t) => teamRow(t)).join(""), plan.tier);
   html += `</div><div class="sfoot">`;
   html += navRow("trash", "trash", "Trash", FILES.filter((f) => f.trashed).length || "");
   html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${fig("grid")}<span class="lbl">Figma's file browser</span>${fig("ext", "ext")}</a>`;
@@ -6091,6 +6107,8 @@ $("#side").addEventListener("contextmenu", (e) => {
 });
 
 $("#side").addEventListener("click", (e) => {
+  // The click that ends dragging a team doesn't fold it
+  if (teamLiftJustEnded) return;
   const more = e.target.closest("[data-team-more]");
   if (more) return teamMenu(more.dataset.teamMore, more.getBoundingClientRect());
   const star = e.target.closest("[data-star-team]");
@@ -7987,6 +8005,174 @@ function commitStarOrder(grid) {
   order = [...shown, ...order.filter((id) => !shown.includes(id))];
   previousOrder = order;
 }
+/* Teams in the sidebar: hold one and drag it up or down its list, Pinned
+   teams, Teams or an organization's, as a starred file moves. It folds to
+   its row, hangs from the pointer and leans as it goes, the teams around it
+   make room, and it drops into its place with a small bounce. Figma keeps
+   no order: Ligma keeps it, per account, and new teams go last */
+
+const teamOrderKey = () => `team-order:${LIVE ? Live.uid : "sample"}`;
+function teamOrder(list, idOf) {
+  const rank = new Map(store.get(teamOrderKey(), []).map((id, i) => [id, i]));
+  return list.map((item, i) => [item, i]).sort(([a, i], [b, j]) => (rank.get(idOf(a)) ?? Infinity) - (rank.get(idOf(b)) ?? Infinity) || i - j).map(([item]) => item);
+}
+
+let teamLift = null;
+let teamLiftJustEnded = false;
+
+side.addEventListener("pointerdown", (e) => {
+  if (teamLift?.live || e.button !== 0 || e.pointerType === "touch" || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const row = e.target.closest(".team-list > .team-block > .team-row");
+  if (!row || e.target.closest(".team-more, .team-star")) return;
+  const block = row.parentElement;
+  if (block.parentElement.children.length < 2) return;
+  teamLift = { id: block.dataset.teamBlock, pointer: e.pointerId, sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY, live: false };
+});
+side.addEventListener("pointermove", (e) => {
+  const l = teamLift;
+  if (!l || e.pointerId !== l.pointer || l.dropping) return;
+  l.px = e.clientX;
+  l.py = e.clientY;
+  if (!l.live && Math.hypot(e.clientX - l.sx, e.clientY - l.sy) > 4) startTeamLift();
+});
+side.addEventListener("pointerup", (e) => {
+  const l = teamLift;
+  if (!l || e.pointerId !== l.pointer || l.dropping) return;
+  if (l.live) dropTeamLift();
+  else teamLift = null;
+});
+side.addEventListener("pointercancel", (e) => {
+  const l = teamLift;
+  if (!l || e.pointerId !== l.pointer || l.dropping) return;
+  if (l.live) dropTeamLift(true);
+  else teamLift = null;
+});
+// Escape, or leaving the window, puts it back where it was
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !teamLift?.live || teamLift.dropping) return;
+  e.preventDefault();
+  e.stopPropagation();
+  dropTeamLift(true);
+}, true);
+addEventListener("blur", () => teamLift?.live && !teamLift.dropping && dropTeamLift(true));
+
+// Changes the list with `change`, and the teams in it glide from where they
+// were to where that puts them, with a little give
+function glideTeams(list, change, skip) {
+  const others = [...list.children].filter((el) => el !== skip);
+  const was = new Map(others.map((el) => [el, el.getBoundingClientRect().top]));
+  change();
+  for (const el of others) el.getAnimations().forEach((a) => a.cancel());
+  for (const el of others) {
+    const dy = was.get(el) - el.getBoundingClientRect().top;
+    if (Math.abs(dy) < 0.5) continue;
+    el.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: calm() ? 1 : 300, easing: "cubic-bezier(0.2, 0.9, 0.3, 1.12)" });
+  }
+}
+
+function startTeamLift() {
+  const l = teamLift;
+  // The sidebar may have been drawn again since the press
+  const block = $(`.team-list > [data-team-block="${CSS.escape(l.id)}"]`, side);
+  if (!block) return void (teamLift = null);
+  const list = block.parentElement;
+  const row = $(".team-row", block);
+  const r = row.getBoundingClientRect();
+  closeMenu();
+  tip.style.display = "none";
+  const ghost = row.cloneNode(true);
+  for (const el of [ghost, ...ghost.querySelectorAll("[id], [data-key]")]) {
+    el.removeAttribute("id");
+    el.removeAttribute("data-key");
+  }
+  ghost.className = "team-row lifted";
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.style.width = `${r.width}px`;
+  const ox = l.sx - r.left;
+  const oy = l.sy - r.top;
+  ghost.style.transformOrigin = `${ox}px ${oy}px`;
+  ghost.style.transform = `translate(${r.left}px, ${r.top}px)`;
+  document.body.append(ghost);
+  // Folded to its row while it's carried: the teams below close up
+  glideTeams(list, () => block.classList.add("hole"), block);
+  document.body.classList.add("grabbing");
+  try {
+    side.setPointerCapture(l.pointer);
+  } catch {}
+  Object.assign(l, { live: true, list, block, ghost, ox, oy, left: r.left, w: r.width, h: r.height, tree: $(".tree", side), next: block.nextElementSibling, lastY: l.py, lastT: performance.now(), vy: 0, ang: 0, angV: 0, scale: 1 });
+  l.frame = requestAnimationFrame(stepTeamLift);
+}
+
+// Each frame: follow the pointer, lean, scroll near an edge, make room
+function stepTeamLift(now) {
+  const l = teamLift;
+  if (!l?.live || l.dropping) return;
+  const dt = Math.min(3, Math.max(0.25, (now - l.lastT) / 16.67));
+  l.lastT = now;
+  l.vy += ((l.py - l.lastY) / dt - l.vy) * 0.12;
+  l.lastY = l.py;
+  // Up and down its list, giving a little sideways. Held off its middle,
+  // the far end trails behind as it moves, and a spring brings it level
+  const lever = (l.w / 2 - l.ox) / (l.w / 2);
+  const lean = calm() ? 0 : Math.max(-4, Math.min(4, -l.vy * 0.2 * lever));
+  l.angV += ((lean - l.ang) * 0.06 - l.angV * 0.2) * dt;
+  l.ang += l.angV * dt;
+  l.scale += ((calm() ? 1 : 1.03) - l.scale) * Math.min(1, 0.22 * dt);
+  const area = l.tree.getBoundingClientRect();
+  const edge = 40;
+  const dy = l.py < area.top + edge ? -(area.top + edge - l.py) / 3 : l.py > area.bottom - edge ? (l.py - area.bottom + edge) / 3 : 0;
+  if (dy) l.tree.scrollTop += Math.round(Math.max(-16, Math.min(16, dy)) * dt);
+  const x = l.left + (l.px - l.sx) * 0.12;
+  l.ghost.style.transform = `translate(${x}px, ${l.py - l.oy}px) rotate(${l.ang.toFixed(2)}deg) scale(${l.scale.toFixed(4)})`;
+  // Its place: past every team whose middle it's below, measured as if
+  // it weren't there, so it doesn't flip back and forth at a boundary
+  const top = l.list.getBoundingClientRect().top;
+  const mid = l.py - l.oy + l.h / 2 - top;
+  const gap = l.block.offsetHeight;
+  let index = 0;
+  let after = false;
+  for (const el of l.list.children) {
+    if (el === l.block) {
+      after = true;
+      continue;
+    }
+    if (el.offsetTop - (after ? gap : 0) + el.offsetHeight / 2 < mid) index++;
+  }
+  const others = [...l.list.children].filter((el) => el !== l.block);
+  if ((others[index] ?? null) !== l.block.nextElementSibling) glideTeams(l.list, () => l.list.insertBefore(l.block, others[index] ?? null), l.block);
+  l.frame = requestAnimationFrame(stepTeamLift);
+}
+
+function dropTeamLift(cancel = false) {
+  const l = teamLift;
+  cancelAnimationFrame(l.frame);
+  l.dropping = true;
+  teamLiftJustEnded = true;
+  setTimeout(() => (teamLiftJustEnded = false));
+  document.body.classList.remove("grabbing");
+  try {
+    side.releasePointerCapture(l.pointer);
+  } catch {}
+  if (cancel) glideTeams(l.list, () => l.list.insertBefore(l.block, l.next), l.block);
+  const row = $(".team-row", l.block);
+  const r = row.getBoundingClientRect();
+  // Down into its place, quickening as it falls
+  const fall = l.ghost.animate([{ transform: l.ghost.style.transform }, { transform: `translate(${r.left}px, ${r.top}px) rotate(0deg) scale(1)` }], { duration: calm() ? 1 : 180, easing: "cubic-bezier(0.55, 0, 0.85, 0.5)", fill: "forwards" });
+  fall.onfinish = () => {
+    l.ghost.remove();
+    // Open again, the teams below making way for what it holds
+    glideTeams(l.list, () => l.block.classList.remove("hole"), l.block);
+    teamLift = null;
+    if (!calm()) row.animate([{ transform: "scale(1.02, 0.92)" }, { transform: "scale(0.995, 1.02)", offset: 0.45 }, { transform: "none" }], { duration: 300, easing: "ease-out" });
+    if (!cancel) {
+      // Every team in the sidebar as it shows now, then the rest
+      const shown = $$("[data-team-block]", side).map((el) => el.dataset.teamBlock);
+      store.set(teamOrderKey(), [...shown, ...store.get(teamOrderKey(), []).filter((id) => !shown.includes(id))]);
+    }
+    if (l.rerender) renderSide();
+  };
+}
+
 side.addEventListener("dragover", (e) => {
   const target = e.target.closest("[data-drop]");
   if (!target || !e.dataTransfer.types.includes("application/x-ligma-files")) return;
