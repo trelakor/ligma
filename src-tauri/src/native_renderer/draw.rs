@@ -488,26 +488,6 @@ pub const EFFECT: &str = "fx:";
 /// Largest side a node is rendered at by Figma, in pixels
 pub const RENDER_LIMIT: u32 = 4096;
 
-/// How far the scale custom effects ran at may be from the zoom of a tile
-/// at exactly the view's, as a share, for it to show them pixel for pixel
-pub const EFFECT_EXACT: f32 = 0.002;
-
-/// The scale custom effects over a node `longest` units across run at for
-/// tiles of other zooms than the view's, to show at `want` pixels a unit:
-/// the power of two at or past that, so zooming in runs them again only
-/// each time it doubles, and no more than a texture as big as Figma
-/// renders a node at. Levels further out than the view are powers of two
-/// below its zoom, so they show the run at the view's
-pub fn effect_scale(want: f32, longest: f32) -> f32 {
-    let up = (want.max(1e-4).log2() - 0.01).ceil().exp2();
-    up.min(RENDER_LIMIT as f32 / longest.max(1.0))
-}
-
-/// The width, in units, an image with an area covers
-fn area_width(img: &Img) -> f32 {
-    img.area.map_or(1.0, |area| area.width()).max(1e-6)
-}
-
 /// How deep pattern fills may nest, patterns in patterns
 const PATTERN_DEPTH: u8 = 3;
 
@@ -766,12 +746,9 @@ impl<'a> Encoder<'a> {
                     let (fw, fh) = img.original;
                     let longest = fw.max(fh);
                     let fits = longest >> super::run::halvings(longest, longest as f64 * width * 1.25 / fw.max(1) as f64);
-                    // Run again where it shows sharper than it ran
-                    let ran = fw as f32 / area_width(img);
-                    let short = ran < effect_scale(px, target.size.0.max(target.size.1) as f32) * 0.999;
                     if img.stale {
                         self.missing_images.push((key, width));
-                    } else if (img.image.width().max(img.image.height()) as u32) < fits || short {
+                    } else if (img.image.width().max(img.image.height()) as u32) < fits {
                         self.sharper_images.push((key, width));
                     }
                     images.push((target, img));

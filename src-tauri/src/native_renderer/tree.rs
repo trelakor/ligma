@@ -875,12 +875,6 @@ pub struct Drawer<'a> {
     pub missing_images: Vec<(String, f64)>,
     pub sharper_images: Vec<(String, f64)>,
     pub used_images: Vec<(String, f64)>,
-    /// Drawing a tile of exactly the view's zoom, which wants custom effects
-    /// run at exactly it, as Figma runs them at the scale they show at and
-    /// they often work in whole pixels, like dithering
-    pub exact_renders: bool,
-    /// Custom effects not run at exactly this zoom, and how wide they'd be
-    pub exact_images: Vec<(String, f64)>,
     pub approximate_reason: Option<String>,
     pub aa: bool,
     pub draft: bool,
@@ -907,8 +901,6 @@ impl<'a> Drawer<'a> {
             missing_images: Vec::new(),
             sharper_images: Vec::new(),
             used_images: Vec::new(),
-            exact_renders: false,
-            exact_images: Vec::new(),
             approximate_reason: None,
             aa: true,
             draft: false,
@@ -1174,44 +1166,34 @@ impl<'a> Drawer<'a> {
     }
 
     /// Draws custom effect node `id` as its effects drew it, run by the
-    /// effect host on the node's content, if that's here. Tiles of exactly
-    /// the view's zoom want them run at it and show them pixel for pixel,
-    /// as Figma does, others the run nearest, and what they draw covers the
-    /// box they ran over
+    /// effect host on the node's content, if that's here. As on Figma's
+    /// canvas, they run once, at a pixel a unit whatever the zoom, and what
+    /// they draw covers the box they ran over
     fn custom_effect(&mut self, id: u32) -> bool {
         let Some(effect) = self.tree.custom_effect(id) else {
             return false;
         };
         self.canvas.save();
         self.canvas.concat(&effect.to);
-        let longest = effect.area.width().max(effect.area.height());
-        let device = self.device_scale();
-        let exact = self.exact_renders && longest * device <= draw::RENDER_LIMIT as f32;
-        let shown = (longest * device * if exact { 1.0 } else { 1.42 }) as f64;
+        let shown = (effect.area.width().max(effect.area.height()) * self.device_scale() * 1.42) as f64;
         let drawn = match self.images.get(&effect.key) {
             Some(img) => {
+                // Kept about as big as it shows, in steps of halves of what
+                // the effects drew, as the effects thread sizes it
+                let (fw, fh) = img.original;
+                let longest = fw.max(fh);
+                let fits = longest >> super::run::halvings(longest, longest as f64 * shown * 1.25 / fw.max(1) as f64);
                 if img.stale {
                     self.missing_images.push((effect.key.clone(), shown));
                 } else {
                     self.used_images.push((effect.key.clone(), shown));
-                    // Had again where it shows bigger than it's kept, or
-                    // run again where sharper than it ran, or for a tile of
-                    // the view's zoom, at exactly it
-                    let (full, kept) = (img.original.0.max(img.original.1) as f64, img.image.width().max(img.image.height()) as f64);
-                    let ran = img.area.map_or(1.0, |area| img.original.0 as f32 / area.width().max(1e-6));
-                    if exact {
-                        if (ran / device - 1.0).abs() > draw::EFFECT_EXACT || kept < full {
-                            self.exact_images.push((effect.key.clone(), shown));
-                        }
-                    } else if (kept < shown && full > kept) || ran < draw::effect_scale(device, longest) * 0.999 {
+                    if (img.image.width().max(img.image.height()) as u32) < fits {
                         self.sharper_images.push((effect.key.clone(), shown));
                     }
                 }
                 img.area.is_some_and(|area| {
                     let scale = img.image.width() as f32 / area.width().max(1e-6);
-                    let sampling = if (scale / device - 1.0).abs() <= draw::EFFECT_EXACT {
-                        SamplingOptions::new(FilterMode::Nearest, MipmapMode::None)
-                    } else if scale > device * 1.5 {
+                    let sampling = if scale > self.device_scale() * 1.5 {
                         draw::sampled(&img.image, FilterMode::Linear, MipmapMode::Linear)
                     } else {
                         SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
