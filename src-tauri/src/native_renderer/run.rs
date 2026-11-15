@@ -387,6 +387,9 @@ pub fn stop(app: &AppHandle) {
         ctx.hub.stop.store(true, Ordering::Relaxed);
         ctx.hub.poke();
         let _ = ctx.messages.send(Msg::Quit);
+        // What was shown last lets go of its GPU memory now, not once
+        // every thread holding the hub is done
+        *ctx.hub.snapshot.lock().unwrap() = None;
     }
     if let Some(window) = app.get_window(WINDOW) {
         let _ = window.destroy();
@@ -510,8 +513,28 @@ fn open(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    let events = ctx.clone();
-    host.on_window_event(move |event| match event {
+    // Held weakly, as the window keeps its handlers after the renderer stops
+    let weak = Arc::downgrade(&ctx);
+    host.on_window_event(move |event| {
+        let Some(events) = weak.upgrade() else { return };
+        window_event(&events, event);
+    });
+
+    spawn("native-view", ctx.clone(), poll_view);
+    spawn("native-frames", ctx.clone(), take_frames);
+    spawn("native-memory", ctx.clone(), sample_memory);
+    // Images come from the page in parallel, each decoded on its own thread
+    for _ in 0..6 {
+        let requests = requests.clone();
+        spawn("native-fetch", ctx.clone(), move |ctx| fetch(ctx, requests));
+    }
+    sync(ctx);
+    Ok(())
+}
+
+/// The renderer following the window it draws in
+fn window_event(events: &Arc<Ctx>, event: &WindowEvent) {
+    match event {
         WindowEvent::Resized(size) if events.app.get_window(WINDOW).is_some() => {
             *events.hub.size.lock().unwrap() = (size.width, size.height);
             events.hub.poke();
@@ -527,23 +550,12 @@ fn open(app: &AppHandle) -> Result<(), String> {
             events.hub.poke();
             let _ = events.messages.send(Msg::Quit);
             let mut current = CTX.lock().unwrap();
-            if current.as_ref().is_some_and(|current| Arc::ptr_eq(current, &events)) {
+            if current.as_ref().is_some_and(|current| Arc::ptr_eq(current, events)) {
                 *current = None;
             }
         }
         _ => {}
-    });
-
-    spawn("native-view", ctx.clone(), poll_view);
-    spawn("native-frames", ctx.clone(), take_frames);
-    spawn("native-memory", ctx.clone(), sample_memory);
-    // Images come from the page in parallel, each decoded on its own thread
-    for _ in 0..6 {
-        let requests = requests.clone();
-        spawn("native-fetch", ctx.clone(), move |ctx| fetch(ctx, requests));
     }
-    sync(ctx);
-    Ok(())
 }
 
 /// `LIGMA_NATIVE_WINDOW=1` draws in a window of its own, beside Figma's
@@ -783,6 +795,25 @@ fn take_over(ctx: &Ctx, webview: &Webview) {
         // Figma's threaded renderer isn't running in it yet, or its frames
         // aren't as expected, so Figma's renderer keeps drawing
         _ => {}
+    }
+}
+
+/// Loads every Figma tab again as the renderer's switched, so nothing of
+/// the other renderer is left in it, with Ligma's hook in it or not
+pub fn reload_tabs(app: &AppHandle, on: bool) {
+    for webview in app.webviews().into_values() {
+        if !webview.url().is_ok_and(|url| url.host_str() == Some("www.figma.com")) {
+            continue;
+        }
+        if on {
+            let _ = webview.eval("sessionStorage.removeItem('ligmaNativeOff')");
+            crate::webview2::hook_and_reload(&webview, super::PAGE_HOOK_JS);
+        } else {
+            let _ = webview.eval("sessionStorage.setItem('ligmaNativeOff', '1'); location.reload()");
+        }
+    }
+    if !on {
+        crate::tabs::paint_page_backgrounds(app);
     }
 }
 

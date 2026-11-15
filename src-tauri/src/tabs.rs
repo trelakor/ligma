@@ -2705,6 +2705,12 @@ fn repaint_page_backgrounds(app: &AppHandle) {
     if crate::native_renderer::hooks_tabs(app) {
         return;
     }
+    paint_page_backgrounds(app);
+}
+
+/// `page_background` for every tab, as the theme changes or Ligma's
+/// renderer, which they're see-through for, is turned off
+pub fn paint_page_backgrounds(app: &AppHandle) {
     let tabs: Vec<(u32, &'static str)> =
         app.state::<Tabs>().inner().0.lock().unwrap().tabs.iter().map(|tab| (tab.id, tab.kind)).collect();
     for (id, kind) in tabs {

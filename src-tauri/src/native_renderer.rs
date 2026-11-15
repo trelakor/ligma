@@ -154,6 +154,8 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     } else {
         stop(app);
     }
+    #[cfg(windows)]
+    run::reload_tabs(app, on);
 }
 
 #[cfg(windows)]

@@ -14,6 +14,11 @@
 // Figma renders as it always has
 (() => {
   if (window.__ligmaHook || location.hostname !== "www.figma.com" || window.top !== window) return;
+  // Ligma's renderer was turned off since the tab opened (see `reload_tabs`
+  // in run.rs)
+  try {
+    if (sessionStorage.getItem("ligmaNativeOff")) return;
+  } catch {}
 
   const hook = (window.__ligmaHook = {
     // Ligma draws frames, Figma's worker gets none
