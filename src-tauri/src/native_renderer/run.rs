@@ -466,6 +466,12 @@ fn open(app: &AppHandle) -> Result<(), String> {
         .name("native-render".into())
         .spawn(move || match render_device.and_then(|device| Gpu::new(&device, size.width, size.height)) {
             Ok(mut gpu) => {
+                // Behind the browser's threads, which Figma's frames wait on.
+                // The present thread, which shows frames, stays as it is
+                unsafe {
+                    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+                }
                 gpu.watch(wake, hub.clone());
                 let _ = started.send(Ok(gpu.adapter.clone()));
                 Painter::new(gpu, asks, jobs, kept, hub).run(receive);

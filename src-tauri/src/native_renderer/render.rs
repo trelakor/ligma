@@ -2529,6 +2529,14 @@ impl Painter {
                     let workers: Vec<_> = (0..threads)
                         .map(|_| {
                             scope.spawn(move || {
+                                // Behind every other thread, the browser's
+                                // above all, whose frames Figma's wait on: at
+                                // the same priority they halved Figma's frame
+                                // rate as new things came into view
+                                unsafe {
+                                    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
+                                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+                                }
                                 let mut encoder = super::vello::Encoder::worker(tree, images, paths, drawable, w, h);
                                 encoder.px = Some(px);
                                 let mut done = Vec::new();
