@@ -3819,9 +3819,12 @@ impl Painter {
         trace(|| format!("trimmed to {} MB in Skia's cache, {} MB used", self.gpu.context.resource_cache_usage().resource_bytes >> 20, self.gpu.used() >> 20));
     }
 
-    /// Images may take less while the process is past its budget
+    /// Images take as much past the process's budget as within it: fewer
+    /// has those that come back into view as it moves had again, over and
+    /// over, and all that drew them drawn again each time, which takes
+    /// more of the GPU, and its memory, than keeping them
     fn images_budget(&self) -> usize {
-        if self.pressed { IMAGES_BUDGET / 2 } else { IMAGES_BUDGET }
+        IMAGES_BUDGET
     }
 
     /// Holds the process's GPU memory to what it takes at rest and a little
