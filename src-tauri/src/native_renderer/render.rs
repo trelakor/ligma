@@ -1492,6 +1492,13 @@ impl Painter {
         }
     }
 
+    /// The view's area in units and its zoom
+    fn view_area(&self) -> Option<(Rect, f32)> {
+        let view = self.view.as_ref()?;
+        let (px, _, width, height) = view.drawn(self.gpu.size);
+        Some((Rect::from_xywh(view.x as f32, view.y as f32, width as f32 / px, height as f32 / px), px))
+    }
+
     /// The tiles of `px` (as bits) over the window's `width` by `height`
     /// pixels at (`ox`, `oy`), and `ring` tiles around, nearest the middle
     /// first
@@ -2253,13 +2260,32 @@ impl Painter {
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
             super::committed::tidy();
         }
-        let extra = self.tiles.len().saturating_sub(if self.pressed { 0 } else { VELLO_TILES });
+        // Past the budget, all but what's shown sharp goes, and of that no
+        // more than `VELLO_TILES` allow
+        let in_view = self.view_area();
+        // In view and within an octave of the zoom, so shown sharp
+        let shown = |key: &TileKey| in_view.is_some_and(|(area, px)| (key.px() / px).log2().abs() <= 1.0 && Rect::intersects2(&key.area(), &area));
+        let extra = self.tiles.len().saturating_sub(VELLO_TILES);
+        let out_of_view = if self.pressed { self.tiles.keys().filter(|key| Some(key.px) != furthest && !keep.contains(key) && !shown(key)).count() } else { 0 };
+        let extra = extra.max(out_of_view);
         if extra == 0 {
             return;
         }
-        let mut old: Vec<(u64, TileKey)> = self.tiles.iter().filter(|(key, _)| Some(key.px) != furthest && !keep.contains(key)).map(|(key, tile)| (tile.used, *key)).collect();
-        old.sort_unstable_by_key(|(used, _)| *used);
-        for (_, key) in old.into_iter().take(extra) {
+        // Those out of view first, longest unused first, then those in it
+        // furthest from the zoom, as what's under one in view is a level far
+        // blurrier, where the view was sharp a moment before
+        let px = in_view.map_or(1.0, |(_, px)| px);
+        let mut old: Vec<(bool, u64, TileKey)> = self
+            .tiles
+            .iter()
+            .filter(|(key, _)| Some(key.px) != furthest && !keep.contains(key))
+            .map(|(key, tile)| {
+                let near = shown(key);
+                (near, if near { u64::MAX - ((key.px() / px).log2().abs() * 1000.0) as u64 } else { tile.used }, *key)
+            })
+            .collect();
+        old.sort_unstable_by_key(|(near, rank, _)| (*near, *rank));
+        for (_, _, key) in old.into_iter().take(extra) {
             if let Some(tile) = self.tiles.remove(&key) {
                 self.drop_tile(tile);
             }
