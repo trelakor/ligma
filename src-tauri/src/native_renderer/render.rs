@@ -1492,6 +1492,16 @@ impl Painter {
         }
     }
 
+    /// The tiles frames of the view show now, as the present thread
+    /// composes them
+    fn shown_tiles(&self) -> std::collections::HashSet<TileKey> {
+        let Some(view) = self.view.as_ref() else { return std::collections::HashSet::new() };
+        // `layers` lists the tiles first, in the order `tiles` iterates
+        let keys: Vec<TileKey> = self.tiles.keys().copied().collect();
+        let (pieces, _) = cover(&self.layers(true), self.content(), view, self.gpu.size);
+        pieces.iter().filter(|piece| piece.layer < keys.len()).map(|piece| keys[piece.layer]).collect()
+    }
+
     /// The view's area in units and its zoom
     fn view_area(&self) -> Option<(Rect, f32)> {
         let view = self.view.as_ref()?;
@@ -2260,20 +2270,21 @@ impl Painter {
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
             super::committed::tidy();
         }
-        // Past the budget, all but what's shown sharp goes, and of that no
-        // more than `VELLO_TILES` allow
+        // Past the budget, all but what's shown goes, and of that no more
+        // than `VELLO_TILES` allow
         let in_view = self.view_area();
-        // In view and within an octave of the zoom, so shown sharp
-        let shown = |key: &TileKey| in_view.is_some_and(|(area, px)| (key.px() / px).log2().abs() <= 1.0 && Rect::intersects2(&key.area(), &area));
+        // What frames show now, however far from the zoom, as what's under
+        // it is a level far blurrier, where the view was clear a moment before
+        let shown_tiles = self.shown_tiles();
+        let shown = |key: &TileKey| shown_tiles.contains(key);
         let extra = self.tiles.len().saturating_sub(VELLO_TILES);
         let out_of_view = if self.pressed { self.tiles.keys().filter(|key| Some(key.px) != furthest && !keep.contains(key) && !shown(key)).count() } else { 0 };
         let extra = extra.max(out_of_view);
         if extra == 0 {
             return;
         }
-        // Those out of view first, longest unused first, then those in it
-        // furthest from the zoom, as what's under one in view is a level far
-        // blurrier, where the view was sharp a moment before
+        // Those not shown first, longest unused first, then those shown
+        // furthest from the zoom
         let px = in_view.map_or(1.0, |(_, px)| px);
         let mut old: Vec<(bool, u64, TileKey)> = self
             .tiles
