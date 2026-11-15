@@ -124,7 +124,7 @@ pub struct Settings {
     /// and with it, show Copy and Paste in the bar Figma shows above the
     /// toolbar for a selected image
     pub adjustments_bar: bool,
-    /// Vibrance and Hue/Saturation under the image picker's sliders
+    /// Photoshop's adjustments under the image picker's sliders
     pub color_adjustments: bool,
     /// In free (Starter) projects, hide the AI actions from that bar:
     /// Select area, Remove background, Edit with prompt and More
