@@ -1,6 +1,7 @@
-//! Ligma adjustments (Settings > Images > Adjustments): Vibrance, Hue and
+//! Ligma adjustments (Settings > Images > Adjustments): Vibrance and
 //! Hue/Saturation for image fills and strokes, which Figma's picker doesn't
-//! have, in a Ligma tab beside its own seven sliders. On by default
+//! have, in a section of their own under its seven sliders, marked as
+//! Ligma's, that opens and closes. On by default
 //!
 //! Figma can't run code on an image as it draws it, so the image is made
 //! again with them, on the GPU, and put in the paint in place of the
@@ -13,7 +14,8 @@
 //! always applied to the original, never to an image already adjusted
 //!
 //! While a slider moves, a smaller image is made, quick to make and load;
-//! the full size one follows a moment after it stops. Each new image is
+//! the full size one follows once it's let go, and is given up on if the
+//! slider moves again before it's in. Each new image is
 //! loaded off the canvas before it's swapped in, so the fill never shows
 //! empty. The hidden original is put below once the picker closes, as
 //! adding a paint while it's open would move the picker to another one
@@ -61,7 +63,8 @@ const PAGE_JS: &str = r##"(() => {
   // ---------- Settings ----------
 
   // Hue/Saturation's ranges, as Photoshop's: each a sixth of the wheel,
-  // fully within 15º of its hue and fading out to 45º
+  // fully within 15º of its hue and fading out to 45º. All, Photoshop's
+  // Master, changes every color, and keeps its values at the top level
   const RANGES = [
     ["reds", "Reds", 0],
     ["yellows", "Yellows", 60],
@@ -70,7 +73,7 @@ const PAGE_JS: &str = r##"(() => {
     ["blues", "Blues", 240],
     ["magentas", "Magentas", 300],
   ];
-  const blank = () => ({ vibrance: 0, hue: 0, ...Object.fromEntries(RANGES.map(([id]) => [id, { hue: 0, saturation: 0, lightness: 0 }])) });
+  const blank = () => ({ vibrance: 0, hue: 0, saturation: 0, lightness: 0, ...Object.fromEntries(RANGES.map(([id]) => [id, { hue: 0, saturation: 0, lightness: 0 }])) });
   // Any shape saved or copied, as one with every value
   const normal = (s) => {
     const out = blank();
@@ -78,6 +81,8 @@ const PAGE_JS: &str = r##"(() => {
     const number = (value, limit) => (Number.isFinite(value) ? Math.max(-limit, Math.min(limit, Math.round(value))) : 0);
     out.vibrance = number(s.vibrance, 100);
     out.hue = number(s.hue, 180);
+    out.saturation = number(s.saturation, 100);
+    out.lightness = number(s.lightness, 100);
     for (const [id] of RANGES) {
       out[id].hue = number(s[id]?.hue, 180);
       out[id].saturation = number(s[id]?.saturation, 100);
@@ -85,7 +90,8 @@ const PAGE_JS: &str = r##"(() => {
     }
     return out;
   };
-  const isBlank = (s) => !s.vibrance && !s.hue && RANGES.every(([id]) => !s[id].hue && !s[id].saturation && !s[id].lightness);
+  const changed = (values) => !!(values.hue || values.saturation || values.lightness);
+  const isBlank = (s) => !s.vibrance && !changed(s) && RANGES.every(([id]) => !changed(s[id]));
 
   // What each adjusted image on a layer was made from, `{ [hash]: {
   // original, settings } }`
@@ -108,6 +114,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   // A paint's settings, blank for one Ligma didn't adjust
   const settingsOf = (node, paint) => normal(image(paint) ? madeOn(node)[paint.imageHash]?.settings : null);
+  const originalOf = (node, hash) => madeOn(node)[hash]?.original ?? hash;
 
   // ---------- Making the image ----------
 
@@ -117,7 +124,7 @@ const PAGE_JS: &str = r##"(() => {
   const FRAGMENT = `
     precision highp float;
     uniform sampler2D image;
-    uniform float hue;
+    uniform vec3 master;
     uniform float vibrance;
     uniform vec3 ranges[6];
     varying vec2 uv;
@@ -144,6 +151,8 @@ const PAGE_JS: &str = r##"(() => {
       float p = 2.0 * c.z - q;
       return vec3(channel(p, q, c.x + 1.0 / 3.0), channel(p, q, c.x), channel(p, q, c.x - 1.0 / 3.0));
     }
+    float saturate(float s, float by) { return by < 0.0 ? s * (1.0 + by) : 1.0 - pow(1.0 - s, 1.0 + 2.0 * by); }
+    float lighten(float l, float by) { return by < 0.0 ? l * (1.0 + by) : l + (1.0 - l) * by; }
     void main() {
       vec4 pixel = texture2D(image, uv);
       vec3 c = toHsl(pixel.rgb);
@@ -156,9 +165,9 @@ const PAGE_JS: &str = r##"(() => {
       }
       // Skin's hues, oranges, kept from Vibrance's boost
       float skin = clamp(1.0 - abs(c.x * 360.0 - 25.0) / 30.0, 0.0, 1.0) * smoothstep(0.08, 0.25, c.y);
-      c.x = fract(c.x + hue + shift.x);
-      c.y = shift.y < 0.0 ? c.y * (1.0 + shift.y) : 1.0 - pow(1.0 - c.y, 1.0 + 2.0 * shift.y);
-      c.z = shift.z < 0.0 ? c.z * (1.0 + shift.z) : c.z + (1.0 - c.z) * shift.z;
+      c.x = fract(c.x + master.x + shift.x);
+      c.y = saturate(saturate(c.y, shift.y), master.y);
+      c.z = lighten(lighten(c.z, shift.z), master.z);
       // The less colorful a color, the more Vibrance changes it
       c.y = vibrance < 0.0 ? c.y * (1.0 + vibrance * (1.0 - 0.5 * c.y)) : c.y * (1.0 + vibrance * 2.0 * (1.0 - c.y) * (1.0 - c.y) * (1.0 - 0.7 * skin));
       c.y = clamp(c.y, 0.0, 1.0);
@@ -198,43 +207,73 @@ const PAGE_JS: &str = r##"(() => {
       [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
     ])
       gl.texParameteri(gl.TEXTURE_2D, key, value);
-    gl.uniforms = Object.fromEntries(["hue", "vibrance", "ranges"].map((name) => [name, gl.getUniformLocation(program, name)]));
+    gl.uniforms = Object.fromEntries(["master", "vibrance", "ranges"].map((name) => [name, gl.getUniformLocation(program, name)]));
     gl.drawn = null;
     return gl;
   };
 
-  // Each original as pictures to make from, full size and small, the last
-  // few kept
-  const PREVIEW = 1024;
+  // Whether a picture has no see-through pixels, so its previews can be
+  // JPEGs, far quicker to make than PNGs
+  const opaque = (picture) => {
+    try {
+      const canvas = Object.assign(document.createElement("canvas"), { width: picture.width, height: picture.height });
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(picture, 0, 0);
+      const { data } = context.getImageData(0, 0, picture.width, picture.height);
+      for (let i = 3; i < data.length; i += 4) if (data[i] < 255) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Each original as pictures to make from, the last few kept: a small one
+  // for previews, decoded first, and the full size one when it's needed
+  const PREVIEW = 512;
   const sources = new Map();
   const sourceOf = (figma, hash) => {
     if (!sources.has(hash)) {
       const made = (async () => {
-        const bytes = await figma.getImageByHash(hash).getBytesAsync();
+        const picture = figma.getImageByHash(hash);
+        const bytes = await picture.getBytesAsync();
         const blob = new Blob([bytes]);
         const options = { premultiplyAlpha: "none", colorSpaceConversion: "none" };
-        const full = await createImageBitmap(blob, options);
-        const scale = Math.min(1, PREVIEW / Math.max(full.width, full.height));
-        const small = scale < 1 ? await createImageBitmap(blob, { ...options, resizeWidth: Math.round(full.width * scale), resizeHeight: Math.round(full.height * scale), resizeQuality: "high" }) : full;
+        let full = null;
+        let size = null;
+        try {
+          size = await picture.getSizeAsync();
+        } catch {}
+        if (!size?.width) size = full = await createImageBitmap(blob, options);
+        const scale = Math.min(1, PREVIEW / Math.max(size.width, size.height));
+        const small =
+          scale < 1
+            ? await createImageBitmap(blob, { ...options, resizeWidth: Math.max(1, Math.round(size.width * scale)), resizeHeight: Math.max(1, Math.round(size.height * scale)), resizeQuality: "medium" })
+            : (full ??= await createImageBitmap(blob, options));
         // JPEGs stay JPEGs, quicker to make and as small as they were
         const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
-        return { full, small, jpeg };
+        return { blob, options, small, full: full && Promise.resolve(full), jpeg, opaque: jpeg || opaque(small) };
       })();
       made.catch(() => sources.delete(hash));
       sources.set(hash, made);
       while (sources.size > 4) {
         const [oldest, picture] = sources.entries().next().value;
         sources.delete(oldest);
-        picture.then(({ full, small }) => (full.close(), small.close())).catch(() => {});
+        picture
+          .then(async (source) => {
+            source.small.close();
+            (await source.full)?.close();
+          })
+          .catch(() => {});
       }
     }
     return sources.get(hash);
   };
 
-  // The original `hash` with `s`, as image bytes, full size or small
+  // The original `hash` with `s`, as image bytes, full size or small. Drawn
+  // and read back with nothing awaited between, so two can be under way
   const make = async (figma, hash, s, full) => {
     const source = await sourceOf(figma, hash);
-    const picture = full ? source.full : source.small;
+    const picture = full ? await (source.full ??= createImageBitmap(source.blob, source.options)) : source.small;
     const gl = gpu();
     if (!gl) throw new Error("no WebGL");
     gl.canvas.width = picture.width;
@@ -244,11 +283,13 @@ const PAGE_JS: &str = r##"(() => {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
       gl.drawn = picture;
     }
-    gl.uniform1f(gl.uniforms.hue, s.hue / 360);
+    gl.uniform3f(gl.uniforms.master, s.hue / 360, s.saturation / 100, s.lightness / 100);
     gl.uniform1f(gl.uniforms.vibrance, s.vibrance / 100);
     gl.uniform3fv(gl.uniforms.ranges, RANGES.flatMap(([id]) => [s[id].hue / 360, s[id].saturation / 100, s[id].lightness / 100]));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    const blob = await new Promise((resolve) => gl.canvas.toBlob(resolve, source.jpeg ? "image/jpeg" : "image/png", 0.95));
+    const jpeg = full ? source.jpeg : source.opaque;
+    const blob = await new Promise((resolve) => gl.canvas.toBlob(resolve, jpeg ? "image/jpeg" : "image/png", full ? 0.95 : 0.9));
+    if (!blob) throw new Error("not made");
     return new Uint8Array(await blob.arrayBuffer());
   };
 
@@ -288,20 +329,25 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
-  // Puts `s` on the paint `index` of `list` that showed `was`: made from
-  // its original, or the original back with none. False if the paint's
-  // changed since
-  const put = async (figma, node, list, index, was, s, full) => {
-    const made = madeOn(node);
-    const original = made[was]?.original ?? was;
+  // Puts `s` on the paint `index` of `list` showing `target.hash`: made
+  // from its original, or the original back with none. False if the paint
+  // changed meanwhile, or once `stale`, and then nothing's changed
+  const put = async (figma, target, list, index, s, full, stale = () => false) => {
+    const { node } = target;
+    const original = originalOf(node, target.hash);
     let hash = original;
     if (!isBlank(s)) {
-      hash = figma.createImage(await make(figma, original, s, full)).hash;
+      const bytes = await make(figma, original, s, full);
+      if (stale()) return false;
+      hash = figma.createImage(bytes).hash;
       await loaded(figma, hash);
+      if (stale()) return false;
     }
     const paints = paintsOf(node, list);
+    const was = target.hash;
     if (node.removed || paints[index]?.imageHash !== was) return false;
     node[list] = paints.map((paint, i) => (i === index ? { ...paint, imageHash: hash } : paint));
+    target.hash = hash;
     const now = madeOn(node);
     delete now[was];
     if (hash !== original) now[hash] = { original, settings: s };
@@ -362,70 +408,107 @@ const PAGE_JS: &str = r##"(() => {
     if (!has(at.list) && has(other)) at.list = other;
     return has(at.list) ? at : null;
   };
+  const key = (figma, at) => `${figma.currentPage.selection.map((node) => node.id).join()}:${at.list}:${at.index}`;
+  const targetsOf = (figma, at) => figma.currentPage.selection.filter((node) => image(paintsOf(node, at.list)[at.index])).map((node) => ({ node, hash: paintsOf(node, at.list)[at.index].imageHash }));
 
   // The edit under way: the paint whose picker is open in each selected
-  // layer, and the settings the sliders show
-  let editing = null;
+  // layer, and the settings the sliders show. `version` counts changes,
+  // `fullVersion` the last one in at full size
   const begin = () => {
     const figma = api();
     const at = openPaint();
     if (!figma || !at) return null;
-    const targets = figma.currentPage.selection.filter((node) => image(paintsOf(node, at.list)[at.index])).map((node) => ({ node, hash: paintsOf(node, at.list)[at.index].imageHash }));
+    const targets = targetsOf(figma, at);
     if (!targets.length) return null;
-    return { figma, ...at, targets, settings: settingsOf(targets[0].node, paintsOf(targets[0].node, at.list)[at.index]), key: key(figma, at) };
+    const settings = settingsOf(targets[0].node, paintsOf(targets[0].node, at.list)[at.index]);
+    return { figma, ...at, targets, settings, version: 0, fullVersion: 0 };
   };
-  const key = (figma, at) => `${figma.currentPage.selection.map((node) => node.id).join()}:${at.list}:${at.index}`;
 
-  // Moving: small images, one at a time, the latest settings next; then,
-  // once it's still, the full size ones
+  // Two lanes: small images while the sliders move, one at a time, always
+  // of the latest settings; and full size ones, once a slider's let go or a
+  // moment after a key, given up on as soon as the settings move again
   const change = (edit) => {
-    edit.want = edit.want === "full" ? "full" : "small";
-    clearTimeout(edit.idle);
-    edit.idle = setTimeout(() => {
-      edit.want = "full";
-      run(edit);
-    }, 350);
+    edit.version++;
+    edit.want = true;
+    later(edit, edit.holding ? null : 250);
     run(edit);
   };
+  const later = (edit, delay) => {
+    clearTimeout(edit.idle);
+    if (delay !== null) edit.idle = setTimeout(() => runFull(edit), delay);
+  };
+  const start = (edit) => {
+    if (edit.started) return;
+    edit.started = true;
+    try {
+      edit.figma.commitUndo();
+    } catch {}
+  };
+  const fail = (edit) => {
+    if (edit.failed) return;
+    edit.failed = true;
+    edit.figma.notify("Couldn't adjust the image", { timeout: 2000 });
+  };
   const run = async (edit) => {
-    if (edit.running) return;
+    if (edit.running || edit.failed) return;
     edit.running = true;
-    if (!edit.started) {
-      edit.started = true;
-      try {
-        edit.figma.commitUndo();
-      } catch {}
-    }
-    while (edit.want) {
-      const full = edit.want === "full";
-      edit.want = null;
+    busy(edit);
+    start(edit);
+    while (edit.want && !edit.failed) {
+      edit.want = false;
+      const version = edit.version;
       const s = structuredClone(edit.settings);
       for (const target of edit.targets) {
         try {
-          const hash = await put(edit.figma, target.node, edit.list, edit.index, target.hash, s, full);
-          if (hash) target.hash = hash;
+          await put(edit.figma, target, edit.list, edit.index, s, false, () => edit.fullVersion >= version);
         } catch {
-          edit.figma.notify("Couldn't adjust the image", { timeout: 2000 });
-          edit.want = null;
+          fail(edit);
           break;
         }
       }
-      edit.full = full;
     }
     edit.running = false;
+    busy(edit);
     if (edit.ended) finish(edit);
+  };
+  const runFull = async (edit) => {
+    if (edit.holding || edit.failed || edit.fullVersion === edit.version) return;
+    if (edit.fullRunning) {
+      edit.again = true;
+      return;
+    }
+    edit.fullRunning = true;
+    busy(edit);
+    start(edit);
+    const version = edit.version;
+    const stale = () => edit.version !== version;
+    const s = structuredClone(edit.settings);
+    for (const target of edit.targets) {
+      try {
+        await put(edit.figma, target, edit.list, edit.index, s, true, stale);
+      } catch {
+        fail(edit);
+      }
+      if (stale() || edit.failed) break;
+    }
+    if (!stale() && !edit.failed) edit.fullVersion = version;
+    edit.fullRunning = false;
+    busy(edit);
+    if (edit.ended) finish(edit);
+    else if (edit.again) {
+      edit.again = false;
+      runFull(edit);
+    }
   };
   // Once the picker's closed: full size images in, the originals kept below
   // and one undo step for it all
   const finish = (edit) => {
     edit.ended = true;
+    edit.holding = false;
     clearTimeout(edit.idle);
-    if (edit.running) return;
-    if (edit.started && !edit.full) {
-      edit.want = "full";
-      return run(edit);
-    }
-    if (!edit.started) return;
+    if (!edit.started || edit.running || edit.fullRunning || edit.settled) return;
+    if (!edit.failed && edit.fullVersion !== edit.version) return runFull(edit);
+    edit.settled = true;
     for (const { node } of edit.targets) settle(node);
     try {
       edit.figma.commitUndo();
@@ -433,20 +516,20 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // Pasted or reset from adjustments.rs, with the picker closed: straight
-  // to full size, the original kept below. `at` is `{ list, index }`
+  // to full size, the original kept below
   const apply = async (node, list, index, settings) => {
     const figma = api();
     const paint = paintsOf(node, list)[index];
     if (!figma || !image(paint)) return;
     const s = normal(settings);
     if (isBlank(s) && !madeOn(node)[paint.imageHash]) return;
-    await put(figma, node, list, index, paint.imageHash, s, true);
+    await put(figma, { node, hash: paint.imageHash }, list, index, s, true);
     if (!openPaint()) settle(node);
     else pending.add(node);
   };
   const pending = new Set();
 
-  // ---------- The Ligma tab in the image picker ----------
+  // ---------- The section under Figma's sliders ----------
 
   const PICKER = '[data-testid="paint-picker-v2-modal"]';
   const LABEL = '[class*="image_settings_modal--colorAdjustLabel"]';
@@ -459,13 +542,14 @@ const PAGE_JS: &str = r##"(() => {
     }
     return null;
   };
+  const ours = (node) => !!node.closest("[data-ligma-color]");
   // Figma's seven sliders, as adjustments.rs finds them
   const figmaSliders = (picker) => {
     const label = [...picker.querySelectorAll(LABEL)].find(visible);
     const box = label && around(label, (node) => node.querySelectorAll(LABEL).length >= 7);
     if (box) return box;
     for (const slider of picker.querySelectorAll(SLIDER)) {
-      if (!slider.closest("[data-ligma-color]") && visible(slider)) {
+      if (!ours(slider) && visible(slider)) {
         const box = around(slider, (node) => node.querySelectorAll(SLIDER).length >= 7);
         if (box) return box;
       }
@@ -473,48 +557,83 @@ const PAGE_JS: &str = r##"(() => {
     const walker = document.createTreeWalker(picker, NodeFilter.SHOW_TEXT);
     for (let text = walker.nextNode(); text; text = walker.nextNode()) {
       const label = text.parentElement;
-      if (text.data.trim() !== LABELS[0] || !label || !visible(label)) continue;
+      if (text.data.trim() !== LABELS[0] || !label || !visible(label) || ours(label)) continue;
       const box = around(label, (node) => node.textContent.includes(LABELS[1]));
       if (box) return box;
     }
     return null;
   };
+  // Where Figma's first label and its slider sit, so ours line up with
+  // them: `{ left, column, right }` in pixels, or null if unsure
+  const measure = (box, section) => {
+    const label = [...box.querySelectorAll(LABEL)].find(visible);
+    if (!label) return null;
+    const row = label.getBoundingClientRect();
+    const middle = row.top + row.height / 2;
+    let track = [...box.querySelectorAll(SLIDER)].find((slider) => {
+      const rect = slider.getBoundingClientRect();
+      return rect.top <= middle && rect.bottom >= middle;
+    });
+    while (track && track !== box && track.getBoundingClientRect().width < 60) track = track.parentElement;
+    if (!track || track === box) return null;
+    const own = section.getBoundingClientRect();
+    const rect = track.getBoundingClientRect();
+    const sizes = { left: row.left - own.left, column: rect.left - row.left, right: own.right - rect.right };
+    const fits = sizes.left >= 0 && sizes.left <= 32 && sizes.column >= 48 && sizes.column <= 120 && sizes.right >= 0 && sizes.right <= 32;
+    return fits ? sizes : null;
+  };
 
   const style = document.createElement("style");
   style.textContent = `
-    [data-ligma-color] { font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; line-height: 16px; letter-spacing: 0.005em; color: var(--color-text); -webkit-font-smoothing: antialiased; }
-    [data-ligma-color="tabs"] { display: flex; align-items: center; gap: 2px; padding: 0 16px 8px; }
-    [data-ligma-color="tabs"] button { height: 24px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--color-text-secondary); font: inherit; font-weight: 450; }
-    [data-ligma-color="tabs"] button:hover { color: var(--color-text); }
-    [data-ligma-color="tabs"] button[aria-selected="true"] { background: var(--color-bg-secondary); color: var(--color-text); font-weight: 550; }
-    [data-ligma-color="tabs"] .reset { margin-left: auto; font-weight: 450; }
-    [data-ligma-color="pane"] { padding: 0 16px 8px; }
-    [data-ligma-color] .row { display: grid; grid-template-columns: 88px 1fr; align-items: center; height: 32px; }
-    [data-ligma-color] .label { color: var(--color-text-secondary); white-space: nowrap; }
-    [data-ligma-color] .caption { display: flex; align-items: center; height: 32px; margin-top: 4px; font-weight: 550; }
-    [data-ligma-color] .track { position: relative; height: 16px; border-radius: 8px; background: var(--color-bg-secondary); box-shadow: inset 0 0 0 1px var(--color-border); cursor: default; touch-action: none; outline: 0; }
-    [data-ligma-color] .track .fill { position: absolute; top: 0; bottom: 0; background: var(--color-bg-brand, #0d99ff); }
+    [data-ligma-color] { position: relative; --left: 16px; --column: 88px; --right: 16px; margin-top: 8px; border-top: 1px solid var(--color-border); font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; line-height: 16px; letter-spacing: 0.005em; color: var(--color-text); -webkit-font-smoothing: antialiased; cursor: default; user-select: none; }
+    [data-ligma-color] button { font: inherit; color: inherit; cursor: default; }
+    [data-ligma-color] :focus-visible { outline: 1px solid var(--color-border-selected, #0d99ff); outline-offset: -1px; }
+    [data-ligma-color] .head { display: flex; align-items: center; gap: 4px; height: 40px; padding: 0 var(--right) 0 calc(var(--left) - 4px); }
+    [data-ligma-color] .toggle { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; height: 24px; padding: 0 4px 0 0; border: 0; border-radius: 5px; background: none; font-weight: 550; text-align: left; }
+    [data-ligma-color] .toggle span { flex: none; white-space: nowrap; }
+    [data-ligma-color] .toggle .title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    [data-ligma-color] .toggle svg { flex: none; color: var(--color-icon-secondary); transition: transform 160ms cubic-bezier(0.2, 0, 0, 1); }
+    [data-ligma-color] .toggle:hover svg { color: var(--color-icon); }
+    [data-ligma-color] .toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+    [data-ligma-color] .tag { margin-left: 4px; padding: 0 4px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--color-border); color: var(--color-text-secondary); font-weight: 450; }
+    [data-ligma-color]::before { content: ""; position: absolute; top: -1px; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--color-bg-brand, #0d99ff), transparent) no-repeat; background-size: 40% 100%; opacity: 0; transition: opacity 120ms; animation: ligma-color-busy 900ms linear infinite paused; }
+    [data-ligma-color].busy::before { opacity: 1; transition-delay: 160ms; animation-play-state: running; }
+    @keyframes ligma-color-busy { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+    @media (prefers-reduced-motion: reduce) { [data-ligma-color]::before { animation: none; background: var(--color-bg-brand, #0d99ff); } [data-ligma-color] .toggle svg { transition: none; } }
+    [data-ligma-color] .reset { flex: none; height: 24px; margin-right: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: none; color: var(--color-text-secondary); }
+    [data-ligma-color] .reset:hover { background: var(--color-bg-hover); color: var(--color-text); }
+    [data-ligma-color] .body { padding: 0 var(--right) 8px var(--left); }
+    [data-ligma-color] .row { display: grid; grid-template-columns: var(--column) 1fr; align-items: center; height: 32px; }
+    [data-ligma-color] .label { color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    [data-ligma-color] .caption { display: flex; align-items: center; justify-content: space-between; height: 32px; margin-top: 4px; }
+    [data-ligma-color] .caption b { font-weight: 550; }
+    [data-ligma-color] .caption span { color: var(--color-text-secondary); }
+    [data-ligma-color] .track { position: relative; height: 16px; border-radius: 8px; background: var(--color-bg-secondary); box-shadow: inset 0 0 0 1px var(--color-border); touch-action: none; outline: 0; }
+    [data-ligma-color] .track .fill { position: absolute; top: 0; bottom: 0; border-radius: 8px; background: var(--color-bg-brand, #0d99ff); }
     [data-ligma-color] .track .middle { position: absolute; top: 6px; left: calc(50% - 2px); width: 4px; height: 4px; border-radius: 2px; background: var(--color-icon-tertiary, #ffffff66); }
     [data-ligma-color] .track.changed .middle { background: var(--color-text-onbrand, #fff); }
     [data-ligma-color] .track .knob { position: absolute; top: 0; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.2), 0 1px 3px rgb(0 0 0 / 0.3); }
     [data-ligma-color] .track.changed .knob { box-shadow: inset 0 0 0 3px var(--color-bg-brand, #0d99ff), 0 1px 3px rgb(0 0 0 / 0.3); }
+    [data-ligma-color] .track:focus-visible { outline: 0; }
     [data-ligma-color] .track:focus-visible .knob { outline: 1px solid var(--color-border-selected, #0d99ff); outline-offset: 1px; }
-    [data-ligma-color] .swatches { display: flex; justify-content: space-between; height: 32px; align-items: center; margin: 0 -6px; }
-    [data-ligma-color] .swatch { position: relative; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; display: grid; place-items: center; }
-    [data-ligma-color] .swatch:hover { background: var(--color-bg-hover); }
-    [data-ligma-color] .swatch[aria-checked="true"] { box-shadow: inset 0 0 0 1px var(--color-border-selected, #0d99ff); }
-    [data-ligma-color] .swatch span { width: 12px; height: 12px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); }
-    [data-ligma-color] .swatch.changed::after { content: ""; position: absolute; top: 2px; right: 2px; width: 4px; height: 4px; border-radius: 2px; background: var(--color-bg-brand, #0d99ff); }
-    [data-ligma-color] :focus-visible { outline: 1px solid var(--color-border-selected, #0d99ff); outline-offset: -1px; }`;
+    [data-ligma-color] .ranges { display: flex; justify-content: space-between; align-items: center; height: 32px; margin: 0 -4px; }
+    [data-ligma-color] .range { position: relative; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; }
+    [data-ligma-color] .range:hover { background: var(--color-bg-hover); }
+    [data-ligma-color] .range[aria-checked="true"] { box-shadow: inset 0 0 0 1px var(--color-border-selected, #0d99ff); }
+    [data-ligma-color] .range span { width: 12px; height: 12px; border-radius: 6px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); }
+    [data-ligma-color] .range.changed::after { content: ""; position: absolute; top: 2px; right: 2px; width: 4px; height: 4px; border-radius: 2px; background: var(--color-bg-brand, #0d99ff); }
+    [data-ligma-color] .note { margin: 4px 0 0; color: var(--color-text-secondary); }`;
 
   const element = (tag, props = {}, ...children) => {
     const node = Object.assign(document.createElement(tag), props);
     node.append(...children);
     return node;
   };
+  const CHEVRON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.5 5L9.5 8L6.5 11" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   // A slider as Figma's in the picker: centered at 0, filled from the
-  // middle, double-click to reset. `change(value, done)`
+  // middle with round ends, double-click to reset. `change(value, done)`,
+  // `done` once it's let go
   const slider = (label, limit, get, change) => {
     const track = element("div", { className: "track", tabIndex: 0 });
     track.setAttribute("role", "slider");
@@ -537,10 +656,14 @@ const PAGE_JS: &str = r##"(() => {
       change(valueAt(event.clientX), false);
       const move = (event) => change(valueAt(event.clientX), false);
       track.addEventListener("pointermove", move);
-      track.addEventListener("lostpointercapture", () => {
-        track.removeEventListener("pointermove", move);
-        change(get(), true);
-      }, { once: true });
+      track.addEventListener(
+        "lostpointercapture",
+        () => {
+          track.removeEventListener("pointermove", move);
+          change(get(), true);
+        },
+        { once: true },
+      );
     });
     track.addEventListener("dblclick", () => change(0, true));
     track.addEventListener("keydown", (event) => {
@@ -556,133 +679,168 @@ const PAGE_JS: &str = r##"(() => {
       const value = get();
       const place = (value / limit + 1) / 2;
       knob.style.left = `calc(8px + (100% - 16px) * ${place})`;
+      // Out to the knob's middle and round around the track's, as Figma's
       const [from, to] = [Math.min(place, 0.5), Math.max(place, 0.5)];
-      fill.style.left = `calc(8px + (100% - 16px) * ${from})`;
-      fill.style.width = `calc((100% - 16px) * ${to - from})`;
+      fill.hidden = value === 0;
+      fill.style.left = `calc((100% - 16px) * ${from})`;
+      fill.style.width = `calc((100% - 16px) * ${to - from} + 16px)`;
       track.classList.toggle("changed", value !== 0);
       track.setAttribute("aria-valuenow", String(value));
     };
     return row;
   };
 
-  // Which tab shows, kept for every picker
-  const TAB = "ligma-color-tab";
-  let tab = "figma";
-  try {
-    tab = localStorage.getItem(TAB) === "ligma" ? "ligma" : "figma";
-  } catch {}
-  let range = "reds";
+  // Whether the section's open, and the color range shown, kept for every
+  // picker
+  const OPEN = "ligma-color-open";
+  const stored = (name) => {
+    try {
+      return localStorage.getItem(name);
+    } catch {
+      return null;
+    }
+  };
+  let range = "all";
 
-  // The tabs above the sliders and the Ligma ones, made once each time a
-  // picker opens on an image
+  // Made each time a picker opens on an image
   let ui = null;
-  const build = () => {
-    const tabs = element("div");
-    tabs.dataset.ligmaColor = "tabs";
-    tabs.setAttribute("role", "tablist");
-    const tabButton = (id, text) => {
-      const button = tabs.appendChild(element("button", { type: "button", textContent: text }));
-      button.setAttribute("role", "tab");
-      button.dataset.tab = id;
-      button.addEventListener("click", () => {
-        tab = id;
-        try {
-          localStorage.setItem(TAB, id);
-        } catch {}
-        decorate();
-      });
-    };
-    tabButton("figma", "Figma");
-    tabButton("ligma", "Ligma");
-    const reset = tabs.appendChild(element("button", { type: "button", className: "reset", textContent: "Reset" }));
-    reset.addEventListener("click", () => {
-      ui.edit ??= begin();
-      if (!ui.edit) return;
-      ui.edit.settings = blank();
-      change(ui.edit);
-      show();
-    });
+  const busy = (edit) => {
+    if (ui?.edit === edit) ui.section.classList.toggle("busy", !!(edit.running || edit.fullRunning));
+  };
+  const build = (shown) => {
+    const section = element("div");
+    section.dataset.ligmaColor = "section";
+    const id = `ligma-color-${Date.now()}`;
 
-    const pane = element("div");
-    pane.dataset.ligmaColor = "pane";
-    pane.setAttribute("role", "tabpanel");
+    const toggle = element("button", { type: "button", className: "toggle", title: "Ligma's own adjustments, not Figma's" });
+    toggle.setAttribute("aria-controls", id);
+    toggle.insertAdjacentHTML("afterbegin", CHEVRON);
+    toggle.append(element("span", { className: "title", textContent: "Vibrance and hue" }), element("span", { className: "tag", textContent: "Ligma" }));
+    const reset = element("button", { type: "button", className: "reset", textContent: "Reset" });
+    const head = element("div", { className: "head" }, toggle, reset);
+
+    const body = element("div", { className: "body", id });
+    body.setAttribute("role", "group");
+    body.setAttribute("aria-label", "Vibrance and hue");
+    section.append(head, body);
+
+    const settings = () => ui.edit?.settings ?? ui.shown;
+    // A value's place in the settings: a range's are in its own, All's at
+    // the top level
+    const path = (name) => (name === "vibrance" || range === "all" ? [name] : [range, name]);
+    const read = (s, [a, b]) => (b ? s[a][b] : s[a]);
     const rows = [];
-    const set = (path, value, done) => {
-      const edit = ui.edit ?? (ui.edit = begin());
-      if (!edit) return;
-      const [a, b] = path;
-      const before = b ? edit.settings[a][b] : edit.settings[a];
-      if (before === value && !done) return;
-      if (b) edit.settings[a][b] = value;
-      else edit.settings[a] = value;
-      if (before !== value) change(edit);
-      show();
-    };
-    const get = (a, b) => {
-      const s = ui.edit?.settings ?? ui.shown;
-      return b ? s[a][b] : s[a];
-    };
-    // `a` a key, or for a range's sliders, the range shown
-    const add = (label, limit, a, b) => {
-      const path = () => (b ? [a(), b] : [a]);
-      const row = slider(label, limit, () => get(...path()), (value, done) => set(path(), value, done));
+    const add = (label, limit, name) => {
+      const row = slider(label, limit, () => read(settings(), path(name)), (value, done) => set(path(name), value, done));
       rows.push(row);
       return row;
     };
-    const current = () => range;
-    const swatches = element("div", { className: "swatches" });
-    swatches.setAttribute("role", "radiogroup");
-    swatches.setAttribute("aria-label", "Color range");
-    for (const [id, name, hue] of RANGES) {
-      const swatch = swatches.appendChild(element("button", { type: "button", className: "swatch", title: name }, element("span")));
-      swatch.firstChild.style.background = `hsl(${hue} 85% 55%)`;
-      swatch.setAttribute("role", "radio");
-      swatch.setAttribute("aria-label", name);
-      swatch.dataset.range = id;
-      swatch.addEventListener("click", () => {
-        range = id;
-        show();
+    const set = ([a, b], value, done) => {
+      const edit = ui.edit ?? (ui.edit = begin());
+      if (!edit) return;
+      edit.holding = !done;
+      if (read(edit.settings, [a, b]) !== value) {
+        if (b) edit.settings[a][b] = value;
+        else edit.settings[a] = value;
+        change(edit);
+      } else if (done) later(edit, 150);
+      show();
+    };
+
+    const caption = element("span");
+    const ranges = element("div", { className: "ranges" });
+    ranges.setAttribute("role", "radiogroup");
+    ranges.setAttribute("aria-label", "Colors");
+    const choices = [["all", "All colors", null], ...RANGES];
+    const pick = (id, focus) => {
+      range = id;
+      show();
+      if (focus) ranges.querySelector(`[data-range="${id}"]`).focus();
+    };
+    for (const [id, name, hue] of choices) {
+      const button = ranges.appendChild(element("button", { type: "button", className: "range", title: name }, element("span")));
+      button.firstChild.style.background = hue === null ? "conic-gradient(from 90deg, #f33, #fd3, #3d5, #3de, #36f, #e3e, #f33)" : `hsl(${hue} 85% 55%)`;
+      button.setAttribute("role", "radio");
+      button.setAttribute("aria-label", name);
+      button.dataset.range = id;
+      button.addEventListener("click", () => pick(id));
+      button.addEventListener("keydown", (event) => {
+        const by = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+        if (by === undefined) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const at = choices.findIndex(([choice]) => choice === range);
+        pick(choices[(at + by + choices.length) % choices.length][0], true);
       });
     }
-    const caption = element("div", { className: "caption" });
-    pane.append(
+    body.append(
       add("Vibrance", 100, "vibrance"),
+      element("div", { className: "caption" }, element("b", { textContent: "Hue/Saturation" }), caption),
+      ranges,
       add("Hue", 180, "hue"),
-      caption,
-      swatches,
-      add("Hue", 180, current, "hue"),
-      add("Saturation", 100, current, "saturation"),
-      add("Lightness", 100, current, "lightness"),
+      add("Saturation", 100, "saturation"),
+      add("Lightness", 100, "lightness"),
+      element("p", { className: "note", textContent: "Made by Ligma as a new image, with the original kept hidden below it" }),
     );
+
+    reset.addEventListener("click", () => {
+      const edit = ui.edit ?? (ui.edit = begin());
+      if (!edit) return;
+      edit.holding = false;
+      edit.settings = blank();
+      change(edit);
+      show();
+    });
+    toggle.addEventListener("click", () => {
+      ui.open = !ui.open;
+      try {
+        localStorage.setItem(OPEN, ui.open ? "1" : "0");
+      } catch {}
+      show();
+      if (ui.open) warm();
+    });
+
     const show = () => {
-      for (const button of tabs.querySelectorAll("[data-tab]")) button.setAttribute("aria-selected", String(button.dataset.tab === tab));
-      const s = ui.edit?.settings ?? ui.shown;
-      reset.hidden = tab !== "ligma" || isBlank(s);
-      caption.textContent = `Hue/Saturation · ${RANGES.find(([id]) => id === range)[1]}`;
-      for (const swatch of swatches.children) {
-        const id = swatch.dataset.range;
-        swatch.setAttribute("aria-checked", String(id === range));
-        swatch.classList.toggle("changed", !!(s[id].hue || s[id].saturation || s[id].lightness));
+      const s = settings();
+      const blankNow = isBlank(s);
+      toggle.setAttribute("aria-expanded", String(ui.open));
+      body.hidden = !ui.open;
+      reset.hidden = blankNow;
+      caption.textContent = choices.find(([id]) => id === range)[1];
+      for (const button of ranges.children) {
+        const id = button.dataset.range;
+        button.setAttribute("aria-checked", String(id === range));
+        button.tabIndex = id === range ? 0 : -1;
+        button.classList.toggle("changed", changed(id === "all" ? s : s[id]));
       }
       for (const row of rows) row.show();
     };
-    return { tabs, pane, show, edit: null, shown: blank() };
+    return { section, show, edit: null, shown, open: stored(OPEN) === "1" || !isBlank(shown) };
+  };
+
+  // The original decoded and the GPU set up ahead of the first change
+  const warm = () => {
+    const figma = api();
+    const at = openPaint();
+    const target = figma && at && targetsOf(figma, at)[0];
+    if (!target) return;
+    setTimeout(() => {
+      gpu();
+      sourceOf(figma, originalOf(target.node, target.hash)).catch(() => {});
+    });
   };
 
   const decorate = () => {
     const picker = document.querySelector(PICKER);
     const figma = state.on && api();
     const onImage = !!figma && !!picker?.querySelector('fieldset[value="IMAGE"]');
-    // Figma's, once hidden for the Ligma tab, can't be found by what shows
     const box = !onImage ? null : ui?.box?.isConnected && picker.contains(ui.box) ? ui.box : figmaSliders(picker);
     const at = box ? openPaint() : null;
     const nowKey = at ? key(figma, at) : null;
     // The picker closed, or moved to another paint or layer
     if (ui && (!at || ui.key !== nowKey)) {
       if (ui.edit) finish(ui.edit);
-      ui.tabs.remove();
-      ui.pane.remove();
-      if (ui.box) ui.box.style.display = "";
+      ui.section.remove();
       ui = null;
     }
     if (!at) {
@@ -694,21 +852,18 @@ const PAGE_JS: &str = r##"(() => {
     }
     if (!style.isConnected) document.head.append(style);
     if (!ui) {
-      ui = build();
+      const target = targetsOf(figma, at)[0];
+      ui = build(target ? settingsOf(target.node, paintsOf(target.node, at.list)[at.index]) : blank());
       ui.key = nowKey;
-      const node = figma.currentPage.selection.find((node) => image(paintsOf(node, at.list)[at.index]));
-      ui.shown = node ? settingsOf(node, paintsOf(node, at.list)[at.index]) : blank();
+      if (ui.open) warm();
     }
-    ui.box = box;
-    if (box.previousElementSibling !== ui.tabs) box.before(ui.tabs);
-    if (box.nextElementSibling !== ui.pane) box.after(ui.pane);
-    const ligma = tab === "ligma";
-    if (ligma && box.style.display !== "none") {
-      // As tall as Figma's, so the picker doesn't jump
-      ui.pane.style.minHeight = `${box.offsetHeight}px`;
-      box.style.display = "none";
-    } else if (!ligma && box.style.display === "none") box.style.display = "";
-    ui.pane.hidden = !ligma;
+    const moved = box.nextElementSibling !== ui.section;
+    if (moved) box.after(ui.section);
+    if (moved || ui.box !== box) {
+      ui.box = box;
+      const sizes = measure(box, ui.section);
+      for (const name of ["left", "column", "right"]) ui.section.style.setProperty(`--${name}`, sizes ? `${sizes[name]}px` : "");
+    }
     ui.show();
   };
 
