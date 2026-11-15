@@ -3530,6 +3530,17 @@ impl Painter {
 
     /// Image `key` came: what waited for it is drawn again
     fn image_came(&mut self, key: String, img: Img) {
+        // Sizes asked for one after another come in any order: only the
+        // last asked for is kept, or one asked for before could follow it
+        if !key.starts_with(RENDER) && !key.starts_with(EFFECT) {
+            if let Some(&width) = self.asked.get(&key) {
+                let side = img.image.width().max(img.image.height()) as u32;
+                if side != super::run::fitted(img.original, width) && self.images.contains_key(&key) {
+                    trace(|| format!("image {key} {side} came after a size asked for since"));
+                    return;
+                }
+            }
+        }
         self.image_came_at = Instant::now();
         self.failed.remove(&key);
         // Asked for twice, by pictures wanting it at sizes that came
@@ -3721,10 +3732,7 @@ impl Painter {
     /// nowhere near the view go
     fn fit_images(&mut self, soon: bool) {
         // As run.rs sizes images it fetches
-        let fitted = |(w, h): (u32, u32), width: f64| {
-            let side = (w.max(h) as f64 * (width.max(1.0) * 1.25 / w.max(1) as f64)).ceil();
-            w.max(h) >> super::run::halvings(w.max(h), side)
-        };
+        let fitted = super::run::fitted;
         // Pictures of other zooms are quick to record again, and hold on to
         // images at the size those zooms took
         let px = self.zoom.0;

@@ -1217,6 +1217,13 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     Ok(Img { image, original, area: None, stale: false })
 }
 
+/// The longest side an image `original` big is kept at to show `width`
+/// pixels wide, as `fetch_image` keeps it
+pub(super) fn fitted((w, h): (u32, u32), width: f64) -> u32 {
+    let side = (w.max(h) as f64 * (width.max(1.0) * 1.25 / w.max(1) as f64)).ceil();
+    w.max(h) >> halvings(w.max(h), side)
+}
+
 /// Smallest an image is kept at. Drawn with mipmaps, a copy halved down to
 /// it samples as the GPU's own smaller copies of a bigger one would, and
 /// far out hundreds of images show at a few pixels each
