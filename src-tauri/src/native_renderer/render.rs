@@ -38,7 +38,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
 };
 
-use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, EFFECT, RENDER};
+use super::draw::{blends_through, blurs_behind, Counts, Encoder, Img, Kit, EFFECT, RENDER, RENDER_LIMIT};
 use super::effects::{Job, Kept, Run};
 use super::present::{checker_paint, cover, grid_paint, view_at, Device, Fence, Hub, Layer, LayerKind, Patterns, Snapshot, Tex, CHECKER, GRID_COLOR, GRID_LINES};
 use super::scene::{Kind, Prepared, Scene};
@@ -1272,7 +1272,7 @@ pub struct Painter {
     kept: Kept,
     /// Effects waiting on images the node draws, and those images, each
     /// run again once one of its own comes
-    effects_waiting: Vec<(String, f64, Vec<String>)>,
+    effects_waiting: Vec<(String, f64, Vec<String>, bool)>,
     /// Where units were drawn without images or effects not here yet, or
     /// with them at another size, by image: drawn again once they come,
     /// though the pictures that drew them may have gone by then
@@ -2558,6 +2558,7 @@ impl Painter {
                 });
                 encoding = begun.elapsed();
                 let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
+                encoder.exact = budget.is_none() && px == self.zoom.0;
                 if !whole_tree {
                     encoder.failed = Some("not a tree".into());
                 }
@@ -2705,10 +2706,11 @@ impl Painter {
         // kind the present thread shows
         let tex = if !copy { out } else { self.vello_copy(&out, tw, th)? };
         for (unit, bounds, asked) in asked {
-            let super::vello::Asked { missing, sharper, used } = asked;
-            let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).map(|(key, _)| key.clone()).collect();
+            let super::vello::Asked { missing, sharper, used, exact } = asked;
+            let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).chain(&exact).map(|(key, _)| key.clone()).collect();
             let images: Vec<(String, f64)> = missing.iter().chain(&sharper).cloned().collect();
             self.ask(&images);
+            self.ask_exact(&exact);
             let waiting: Vec<String> = missing.into_iter().map(|(key, _)| key).collect();
             self.wait_for(&waiting, bounds);
             self.drew_with(drew, unit);
@@ -3711,11 +3713,15 @@ impl Painter {
         if self.effects_waiting.is_empty() {
             return;
         }
-        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.effects_waiting).into_iter().partition(|(_, _, on)| on.iter().any(|image| image == key));
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.effects_waiting).into_iter().partition(|(_, _, on, _)| on.iter().any(|image| image == key));
         self.effects_waiting = waiting;
-        for (effect, width, _) in ready {
+        for (effect, width, _, exact) in ready {
             self.asked.remove(&effect);
-            self.ask(&[(effect, width)]);
+            if exact {
+                self.ask_exact(&[(effect, width)]);
+            } else {
+                self.ask(&[(effect, width)]);
+            }
         }
     }
 
@@ -4465,23 +4471,27 @@ impl Painter {
                 let mut recorder = PictureRecorder::new();
                 let canvas = recorder.begin_recording(bounds.with_outset((1.0, 1.0)), true);
                 let mut drawer = Drawer::new(tree, &self.images, &self.kit, canvas, level_px(level));
+                drawer.exact_renders = level >= EXACT_LEVEL && (level_px(level) / self.zoom.0 - 1.0).abs() <= super::draw::EFFECT_EXACT;
                 drawer.draft = is_draft(level);
                 drawer.tint = self.tint;
                 drawer.aa = aa;
                 drawer.place(place);
                 let (counts, reason) = (drawer.counts, drawer.approximate_reason.take());
-                let drew: Vec<String> = drawer.used_images.iter().chain(&drawer.missing_images).chain(&drawer.sharper_images).map(|(key, _)| key.clone()).collect();
+                let drew: Vec<String> = drawer.used_images.iter().chain(&drawer.missing_images).chain(&drawer.sharper_images).chain(&drawer.exact_images).map(|(key, _)| key.clone()).collect();
                 if drawer.draft {
                     drawer.missing_images.clear();
                     drawer.sharper_images.clear();
+                    drawer.exact_images.clear();
                 }
                 let waiting = drawer.missing_images.len();
                 let images: Vec<(String, f64)> = drawer.missing_images.drain(..).chain(drawer.sharper_images.drain(..)).collect();
+                let exact = std::mem::take(&mut drawer.exact_images);
                 let mut uses = std::mem::take(&mut drawer.used_images);
-                uses.extend(images.iter().cloned());
+                uses.extend(images.iter().chain(&exact).cloned());
                 drop(drawer);
                 let picture = recorder.finish_recording_as_picture(None)?;
                 self.ask(&images);
+                self.ask_exact(&exact);
                 let missing: Vec<String> = images.into_iter().map(|(key, _)| key).collect();
                 self.wait_for(&missing, bounds);
                 self.drew_with(drew, (slot, section));
@@ -4899,9 +4909,15 @@ impl Painter {
                 continue;
             }
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
-            if (width / asked - 1.0).abs() > EXACT_TOLERANCE as f64 {
+            // Custom effects run here, not in Figma, at exactly the zoom
+            let tolerance = if key.starts_with(EFFECT) { super::draw::EFFECT_EXACT } else { EXACT_TOLERANCE };
+            if (width / asked - 1.0).abs() > tolerance as f64 {
                 self.asked.insert(key.clone(), *width);
-                self.request(key, *width);
+                if key.starts_with(EFFECT) {
+                    self.effect(key, *width, true);
+                } else {
+                    self.request(key, *width);
+                }
             }
         }
     }
@@ -4923,7 +4939,7 @@ impl Painter {
     /// node's effects for it
     fn request(&mut self, key: &str, width: f64) {
         if key.starts_with(EFFECT) {
-            self.effect(key, width);
+            self.effect(key, width, false);
         } else {
             self.requests.send(Request { key: key.to_string(), width });
         }
@@ -4933,13 +4949,13 @@ impl Painter {
     /// does: at a pixel a unit, on the node as drawn without them over its
     /// box in its own space, or for a group, on the child after `>` as drawn
     /// over its box. If that draws images not here yet, it waits for them
-    fn effect(&mut self, key: &str, width: f64) {
+    fn effect(&mut self, key: &str, width: f64, exact: bool) {
         let _purpose = super::gpu_census::purpose("effect input");
         let Some(name) = key.strip_prefix(EFFECT) else {
             return;
         };
         if let Some((id, _)) = tree_effect_of(key) {
-            return self.tree_effect(key, id, width);
+            return self.tree_effect(key, id, width, exact);
         }
         let (owner, child) = match name.split_once('>') {
             Some((owner, child)) => (owner, Some(child)),
@@ -4962,10 +4978,8 @@ impl Painter {
             return;
         }
         // At the scale it's shown at, `width` pixels across
-        let scale = super::draw::effect_scale(width as f32 / w, w.max(h));
-        // Drawn before as sharp, and not changed since: another size of it
-        if self.kept.lock().unwrap().scale(key).is_some_and(|kept| kept >= scale * 0.999) {
-            let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
+        let scale = if exact { (width as f32 / w).min(RENDER_LIMIT as f32 / w.max(h)) } else { super::draw::effect_scale(width as f32 / w, w.max(h)) };
+        if Self::effect_ready(&self.kept, &self.effects, key, width, scale, exact) {
             return;
         }
         let chain = owner_node.shaders();
@@ -4996,8 +5010,8 @@ impl Painter {
             // Asked for still: run again once one of those images comes,
             // not each time what draws it is recorded or another image comes
             let on: Vec<String> = images.iter().map(|(image, _)| image.clone()).collect();
-            self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
-            self.effects_waiting.push((key.to_string(), width, on));
+            self.effects_waiting.retain(|(waiting, _, _, _)| waiting != key);
+            self.effects_waiting.push((key.to_string(), width, on, exact));
             self.ask(&images);
             return;
         }
@@ -5012,24 +5026,37 @@ impl Painter {
         let _ = self.effects.send(Job::Run(Run { key: key.to_string(), node: id, chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width }));
     }
 
+    /// Whether what node `key`'s effects drew at `scale`, or exactly at it,
+    /// is had: kept, then shown `width` pixels across, or on its way
+    fn effect_ready(kept: &Kept, effects: &Sender<Job>, key: &str, width: f64, scale: f32, exact: bool) -> bool {
+        let fits = |ran: f32| if exact { (ran / scale - 1.0).abs() <= super::draw::EFFECT_EXACT } else { ran >= scale * 0.999 };
+        let (kept, running) = kept.lock().unwrap().scales(key);
+        if running.is_some_and(fits) {
+            return true;
+        }
+        if kept.is_some_and(fits) {
+            let _ = effects.send(Job::Resize { key: key.to_string(), width });
+            return true;
+        }
+        false
+    }
+
     /// Runs the custom effects of render tree node `id`, as Figma's canvas
     /// does: at a pixel a unit, on the node's content as drawn over the box
     /// they cover, in the node's own space
-    fn tree_effect(&mut self, key: &str, id: u32, width: f64) {
+    fn tree_effect(&mut self, key: &str, id: u32, width: f64, exact: bool) {
         let Some(tree) = &self.tree else {
             return;
         };
         let Some(effect) = tree.custom_effect(id) else {
             return;
         };
-        // At the scale it's shown at, `width` pixels its longest side, as
-        // the drawer asks for it with a little to spare
+        // At the scale it's shown at, `width` pixels its longest side, for
+        // a tile of the view's zoom exactly, otherwise with a little to spare
         let area = effect.area;
-        let longest = area.width().max(area.height());
-        let scale = super::draw::effect_scale(width as f32 / 1.42 / longest.max(1e-6), longest);
-        // Drawn before as sharp, and not changed since: another size of it
-        if self.kept.lock().unwrap().scale(key).is_some_and(|kept| kept >= scale * 0.999) {
-            let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
+        let longest = area.width().max(area.height()).max(1e-6);
+        let scale = if exact { (width as f32 / longest).min(RENDER_LIMIT as f32 / longest) } else { super::draw::effect_scale(width as f32 / 1.42 / longest, longest) };
+        if Self::effect_ready(&self.kept, &self.effects, key, width, scale, exact) {
             return;
         }
         let Some(inverse) = effect.to.invert() else {
@@ -5053,8 +5080,8 @@ impl Painter {
             // Asked for still: run again once one of those images comes,
             // not each time what draws it is recorded or another image comes
             let on: Vec<String> = images.iter().map(|(image, _)| image.clone()).collect();
-            self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
-            self.effects_waiting.push((key.to_string(), width, on));
+            self.effects_waiting.retain(|(waiting, _, _, _)| waiting != key);
+            self.effects_waiting.push((key.to_string(), width, on, exact));
             self.ask(&images);
             return;
         }

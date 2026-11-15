@@ -777,6 +777,8 @@ pub struct Asked {
     pub missing: Vec<(String, f64)>,
     pub sharper: Vec<(String, f64)>,
     pub used: Vec<(String, f64)>,
+    /// Custom effects wanted run at exactly the view's zoom
+    pub exact: Vec<(String, f64)>,
 }
 
 /// A unit encoded once for every zoom from `2^level` up to twice that,
@@ -1298,6 +1300,8 @@ pub struct Encoder<'a> {
     /// The view's pixels a unit, which images fragments draw are asked for
     /// as shown at, not as big as the fragment's ever shown
     pub px: Option<f32>,
+    /// Drawing at exactly the view's zoom, see `Drawer::exact_renders`
+    pub exact: bool,
     /// How much bigger than encoded the fragment being encoded shows
     shows: f32,
     /// Image fills' textures drawn, by key, mipmap level and Vello's id
@@ -1365,6 +1369,7 @@ impl<'a> Encoder<'a> {
             depth: 0,
             retained: false,
             px: None,
+            exact: false,
             shows: 2.0,
             pictures: Vec::new(),
             drawn: Vec::new(),
@@ -2552,6 +2557,7 @@ impl<'a> Encoder<'a> {
                     canvas.concat(m);
                     let at = std::time::Instant::now();
                     let mut drawer = Drawer::new(tree, images, kit, canvas, 1.0);
+                    drawer.exact_renders = self.exact;
                     if let Some(cast) = cast {
                         drawer.casting(Some(*cast));
                     }
@@ -2565,6 +2571,7 @@ impl<'a> Encoder<'a> {
                         missing: std::mem::take(&mut drawer.missing_images),
                         sharper: std::mem::take(&mut drawer.sharper_images),
                         used: std::mem::take(&mut drawer.used_images),
+                        exact: std::mem::take(&mut drawer.exact_images),
                     };
                     drop(drawer);
                     canvas.restore();
@@ -2572,6 +2579,7 @@ impl<'a> Encoder<'a> {
                     self.asked.missing.append(&mut asked.missing);
                     self.asked.sharper.append(&mut asked.sharper);
                     self.asked.used.append(&mut asked.used);
+                    self.asked.exact.append(&mut asked.exact);
                     let image = slot_image(width, height);
                     Plan::patch(encoding, effect, image.clone(), t.inverse() * Affine::translate((left as f64, top as f64)));
                     plan.skia.push((image, page, x, y));

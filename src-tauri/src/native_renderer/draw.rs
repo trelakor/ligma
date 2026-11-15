@@ -488,14 +488,18 @@ pub const EFFECT: &str = "fx:";
 /// Largest side a node is rendered at by Figma, in pixels
 pub const RENDER_LIMIT: u32 = 4096;
 
-/// The scale custom effects over a node `longest` units across run at, for
-/// it to show at `want` pixels a unit. Figma runs them at the scale they
-/// show at, which it hands them, so here the power of two at or past that,
-/// that zooming in runs them again only each time it doubles. At least a
-/// pixel a unit, which zooming out shrinks, and no more than a texture as
-/// big as Figma renders a node at
+/// How far the scale custom effects ran at may be from the zoom of a tile
+/// at exactly the view's, as a share, for it to show them pixel for pixel
+pub const EFFECT_EXACT: f32 = 0.002;
+
+/// The scale custom effects over a node `longest` units across run at for
+/// tiles of other zooms than the view's, to show at `want` pixels a unit:
+/// the power of two at or past that, so zooming in runs them again only
+/// each time it doubles, and no more than a texture as big as Figma
+/// renders a node at. Levels further out than the view are powers of two
+/// below its zoom, so they show the run at the view's
 pub fn effect_scale(want: f32, longest: f32) -> f32 {
-    let up = (want.max(1.0).log2() - 0.01).ceil().exp2();
+    let up = (want.max(1e-4).log2() - 0.01).ceil().exp2();
     up.min(RENDER_LIMIT as f32 / longest.max(1.0))
 }
 

@@ -55,14 +55,9 @@ struct Full {
 const KEPT_BUDGET: usize = 48 << 20;
 
 impl Results {
-    /// The scale what's kept of `key` ran at, or one running will
-    pub fn scale(&self, key: &str) -> Option<f32> {
-        let kept = self.kept.get(key).map(|full| full.scale);
-        let running = self.running.get(key).copied();
-        match (kept, running) {
-            (Some(kept), Some(running)) => Some(kept.max(running)),
-            (kept, running) => kept.or(running),
-        }
+    /// The scale what's kept of `key` ran at, and one running will
+    pub fn scales(&self, key: &str) -> (Option<f32>, Option<f32>) {
+        (self.kept.get(key).map(|full| full.scale), self.running.get(key).copied())
     }
 
     /// A run of `key` at `scale` sent
