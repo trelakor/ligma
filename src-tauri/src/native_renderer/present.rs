@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use skia_safe::gpu::d3d::{BackendContext, TextureResourceInfo};
 use skia_safe::gpu::{self, BackendRenderTarget, BackendTexture, DirectContext, Protected, SurfaceOrigin, SyncCpu};
-use skia_safe::{AlphaType, Color4f, ColorType, Data, FilterMode, Image, MipmapMode, Paint, Rect, SamplingOptions, Surface};
+use skia_safe::{AlphaType, Color4f, ColorType, Data, FilterMode, Image, Matrix, MipmapMode, Paint, Rect, SamplingOptions, Surface, TileMode};
 use windows::core::Interface;
 use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::Graphics::Direct3D12::{
@@ -436,12 +436,7 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
         let at = skia_safe::IRect::from_ltrb(at.left.floor() as i32 - 1, at.top.floor() as i32 - 1, at.right.ceil() as i32 + 1, at.bottom.ceil() as i32 + 1);
         left.op_rect(at, skia_safe::region::RegionOp::Intersect);
     }
-    let mut pieces = Vec::new();
-    for (_, i) in ranked {
-        if left.is_empty() {
-            break;
-        }
-        let layer = &layers[i];
+    let place = |layer: &Layer| {
         let same = layer.px == px;
         let unstretched = sx == 1.0 && sy == 1.0;
         let square = (same && unstretched && at_phase(layer)) || (preview && layer.px == drawn && unstretched);
@@ -465,14 +460,27 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
                 edge(layer.y + layer.tex.height, ly, oy, sy),
             )
         };
-        let covers = dest.round();
-        let mut clip = skia_safe::Region::new();
-        clip.set_rect(covers);
-        if !clip.op_region(&left, skia_safe::region::RegionOp::Intersect) {
-            continue;
+        (dest, square)
+    };
+    let mut pieces = Vec::new();
+    // Each pixel goes to the first layer over its center, then any left,
+    // as where layers of other zooms or phases meet, to the first over any
+    // of it, which `paint` fills with its edge
+    for outward in [false, true] {
+        for &(_, i) in &ranked {
+            if left.is_empty() {
+                break;
+            }
+            let (dest, square) = place(&layers[i]);
+            let covers = if outward { skia_safe::IRect::from_ltrb(dest.left.floor() as i32, dest.top.floor() as i32, dest.right.ceil() as i32, dest.bottom.ceil() as i32) } else { dest.round() };
+            let mut clip = skia_safe::Region::new();
+            clip.set_rect(covers);
+            if !clip.op_region(&left, skia_safe::region::RegionOp::Intersect) {
+                continue;
+            }
+            left.op_rect(covers, skia_safe::region::RegionOp::Difference);
+            pieces.push(Piece { layer: i, dest, clip, square });
         }
-        left.op_rect(covers, skia_safe::region::RegionOp::Difference);
-        pieces.push(Piece { layer: i, dest, clip, square });
     }
     (pieces, !left.is_empty())
 }
@@ -527,17 +535,24 @@ impl Patterns {
                 continue;
             };
             let layer = &snapshot.layers[piece.layer];
-            if layer.px == drawn && !matches!(layer.kind, LayerKind::Draft | LayerKind::Stale) {
+            // A layer can be in two pieces
+            let first = !pieces.iter().take_while(|other| !std::ptr::eq(*other, piece)).any(|other| other.layer == piece.layer);
+            if first && layer.px == drawn && !matches!(layer.kind, LayerKind::Draft | LayerKind::Stale) {
                 counts += layer.counts;
             }
-            // Rect by rect, each a scissor, as a region's clip would take a
-            // stencil, which Skia makes for the window's buffers unlike them
+            // Every pixel of its clip filled, rect by rect, the image's edge
+            // carried on past it, as a pixel whose center is on the edge of
+            // where it's drawn is left out of it, and showed through a
+            // column of the background between tiles
             let filter = if piece.square { FilterMode::Nearest } else { FilterMode::Linear };
+            let to_dest = Matrix::rect_2_rect(Rect::from_wh(image.width() as f32, image.height() as f32), piece.dest, None).unwrap_or_default();
+            let Some(shader) = image.to_shader((TileMode::Clamp, TileMode::Clamp), SamplingOptions::new(filter, MipmapMode::None), &to_dest) else {
+                continue;
+            };
+            let mut paint = Paint::default();
+            paint.set_shader(shader);
             for rect in skia_safe::region::Iterator::new(&piece.clip) {
-                canvas.save();
-                canvas.clip_irect(rect, skia_safe::ClipOp::Intersect);
-                canvas.draw_image_rect_with_sampling_options(image, None, piece.dest, SamplingOptions::new(filter, MipmapMode::None), &Paint::default());
-                canvas.restore();
+                canvas.draw_irect(rect, &paint);
             }
         }
         if view.grid {
