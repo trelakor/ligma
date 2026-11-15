@@ -608,9 +608,15 @@
   }
   #pal[open] { display: flex; flex-direction: column; animation: pop 140ms var(--ease); }
   #pal::backdrop { background: rgba(0, 0, 0, 0.24); }
-  /* A new tab's search: over the page, which waits behind it out of focus */
-  .launch #pal::backdrop { background: color-mix(in srgb, var(--bg) 55%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
-  .launch #pal[open] { animation: none; }
+  /* The launcher (launcher.rs): search alone, over an image of the tab
+     under it, softly blurred */
+  .launcher body > :not(#pal, #launch-bg) { display: none !important; }
+  #launch-bg { position: fixed; inset: 0; background: var(--canvas) center / 100% 100% no-repeat; transition: filter 180ms var(--ease), transform 180ms var(--ease); }
+  .launcher.shown #launch-bg { filter: blur(6px) brightness(0.92); transform: scale(1.02); }
+  .launcher #pal::backdrop { background: transparent; }
+  .launcher #pal[open] { animation: none; opacity: 0; transform: translateY(-8px) scale(0.98); transition: opacity 140ms var(--ease), transform 180ms var(--ease); }
+  .launcher.shown #pal[open] { opacity: 1; transform: none; }
+  .launcher.instant :is(#launch-bg, #pal[open]) { transition: none !important; }
   .pf { display: flex; flex: none; align-items: center; gap: 8px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--line); }
   .pf > .i { color: var(--text2); }
   .chips { display: contents; }
@@ -1954,6 +1960,8 @@ function upsertFile(key, fields) {
   let file = byId(key);
   if (!file) file = addFile({ id: key, key, name: "Untitled", type: "design", look: "components", project: null, at: 0, kind: "edit", by: null, unread: 0, starred: false, trashed: false, live: true });
   for (const [k, v] of Object.entries(fields)) if (v !== undefined) file[k] = v;
+  // Figma sends a null name for some files: one that throws search off
+  if (typeof file.name !== "string") file.name = "Untitled";
   // Where it sits in time: when you last opened it, or when it changed,
   // whichever is later
   const viewed = file.viewedAt ?? 0;
@@ -2358,19 +2366,21 @@ function activity(file) {
 /* State */
 
 // Ligma passes the page to open on as the URL's fragment (new_home.rs),
-// then `tab` in a tab of its own rather than Home, and `search` to start
-// with search for a new tab to pick what it opens
+// then `tab` in a tab of its own rather than Home, or `launcher` for the
+// search over the current tab that a new tab starts as (launcher.rs)
 const hashParts = () => location.hash.slice(1).split("&");
 const IN_TAB = hashParts().includes("tab");
+const LAUNCHER = hashParts().includes("launcher");
+if (LAUNCHER) document.documentElement.classList.add("launcher");
 const START_VIEWS = ["home", "recents", "starred", "shared", "drafts"];
 function startView() {
   const view = hashParts()[0];
   return START_VIEWS.includes(view) ? view : "home";
 }
 // A reload, or going back to the page, comes back where it was: its
-// history entry keeps that. Projects and teams wait for their names
-let returnTo = typeof history.state?.view === "string" ? history.state.view : null;
-const LAUNCH = hashParts().includes("search") && !returnTo;
+// history entry keeps that, or a tab opened on a project or team names it.
+// Projects and teams wait for their names
+let returnTo = typeof history.state?.view === "string" ? history.state.view : !START_VIEWS.includes(hashParts()[0]) && hashParts()[0] ? decodeURIComponent(hashParts()[0]) : null;
 function takeReturn() {
   if (!returnTo || !viewName(returnTo)) return;
   state.view = returnTo;
@@ -2930,8 +2940,8 @@ function render({ keepScroll = true } = {}) {
   renderSide();
   renderHead(list.length);
   renderFilters();
-  // What a new tab's search shows before anything is typed, once it's loaded
-  if (launching && pal.open && !palInput.value && !chips.length) drawPalette();
+  // What the launcher shows before anything is typed, once it's loaded
+  if (LAUNCHER && pal.open && !palInput.value && !chips.length) drawPalette();
   sections = [];
   let html = "";
   if (settings) html = settingsPage(settings);
@@ -7157,13 +7167,14 @@ function paletteCommands() {
       { label: `Invite people to ${team.name}`, act: () => openTeamWin(team.id, at(), "invite"), icon: "users" },
     );
   }
-  return list;
+  // The launcher has no page for the rest to happen on
+  return LAUNCHER ? list.filter((c) => c.view || c.url) : list;
 }
 
 // Letters of `query` in order in `text`; more for runs, word starts and
 // whole substrings. Each word of the query has to match
 function match(query, text) {
-  const lower = text.toLowerCase();
+  const lower = String(text ?? "").toLowerCase();
   let total = 0;
   const hits = new Set();
   for (const word of query.toLowerCase().split(/\s+/).filter(Boolean)) {
@@ -7207,29 +7218,59 @@ function openPalette() {
   drawPalette();
 }
 pal.addEventListener("pointerdown", (e) => {
-  if (e.target === pal) pal.close();
+  if (e.target === pal) LAUNCHER ? dismissLauncher() : pal.close();
 });
-// A new tab that starts with search (new_home.rs): search floats over an
-// empty page until something is picked. Closed without, the tab closes too
-let launching = false;
-function openLauncher() {
-  launching = true;
-  document.documentElement.classList.add("launch");
-  document.title = "New tab";
-  openPalette();
-}
-function endLaunch() {
-  if (!launching) return false;
-  launching = false;
-  document.documentElement.classList.remove("launch");
-  document.title = "Home";
-  return true;
-}
-pal.addEventListener("close", () => {
-  if (launching) {
-    endLaunch();
-    return signal("close");
+// As the launcher (launcher.rs) search is all there is: Ligma shows it
+// over the current tab for a new tab and calls this. What's picked opens
+// in a new tab, and closing it hides the launcher
+// `image` is of the tab under it, or null. It shows as the tab does until
+// Ligma shows the window, then blurs as the search comes in
+window.__ligmaLaunch = (image) => {
+  clearTimeout(dismissTimer);
+  document.documentElement.classList.add("instant");
+  document.documentElement.classList.remove("shown");
+  let bg = $("#launch-bg");
+  if (!bg) {
+    bg = document.createElement("div");
+    bg.id = "launch-bg";
+    document.body.prepend(bg);
   }
+  bg.style.backgroundImage = image ? `url("${image}")` : "none";
+  palIndex = 0;
+  openPalette();
+  requestAnimationFrame(() => palInput.focus());
+};
+window.__ligmaShown = () => {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    document.documentElement.classList.remove("instant");
+    document.documentElement.classList.add("shown");
+  }));
+  palInput.focus();
+};
+// Escape or a click beside the search: the same, backwards, then hidden
+let dismissTimer = 0;
+function dismissLauncher() {
+  document.documentElement.classList.remove("shown");
+  clearTimeout(dismissTimer);
+  dismissTimer = setTimeout(() => pal.open && pal.close(), 180);
+}
+if (LAUNCHER) pal.addEventListener("cancel", (e) => {
+  e.preventDefault();
+  dismissLauncher();
+});
+// Keys that land elsewhere in it still go to the search
+if (LAUNCHER) addEventListener("keydown", (e) => {
+  if (e.target !== palInput && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) palInput.focus();
+}, true);
+// Ligma's New Tab on Home opens its search there (tabs.rs)
+window.__ligmaSearch = () => {
+  if (!pal.open) openPalette();
+  palInput.focus();
+};
+// A page or project picked opens in a new tab of Ligma's home page
+const openView = (view) => (LAUNCHER ? signal("tab", { view }) : go(view));
+pal.addEventListener("close", () => {
+  if (LAUNCHER) return signal("close");
   if (document.activeElement && document.activeElement !== document.body && !pal.contains(document.activeElement)) return;
   const card = state.focus && cardEl(state.focus);
   card?.focus({ preventScroll: true });
@@ -7379,16 +7420,15 @@ function activate(item, background = false) {
     drawPalette();
     return;
   }
-  endLaunch();
   pal.close();
   if (item.kind === "file") {
     state.focus = item.id;
     openFiles([item.id], background);
-  } else if (item.kind === "view") go(item.view);
+  } else if (item.kind === "view") openView(item.view);
   else if (item.kind === "create") createFile(item.type, item.name, item.project);
   else if (item.kind === "command") {
     const { command } = item;
-    if (command.view) go(command.view);
+    if (command.view) openView(command.view);
     else if (command.url) window.open(command.url, "_blank", "noopener");
     else command.act();
   }
@@ -8019,7 +8059,10 @@ else {
   seedNotes();
   render({ keepScroll: false });
 }
-if (LAUNCH) openLauncher();
+if (LAUNCHER) {
+  window.__ligmaLaunch(null);
+  window.__ligmaShown();
+}
 if (state.mode === "loading") setTimeout(() => {
   state.mode = null;
   render({ keepScroll: false });

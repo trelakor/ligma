@@ -559,11 +559,9 @@ pub fn restore(app: &AppHandle, settings: &crate::settings::Settings) -> tauri::
             // where it was in Figma's file browser
             let url = match url {
                 Some(url) if home && (crate::new_home::is_url(&url) || crate::new_home::is_url(&crate::new_home::home_url())) => Some(crate::new_home::home_url()),
-                // A new tab still on Ligma's home page comes back to it
-                // without its search, or to Figma's file browser
-                Some(url) if !home && crate::new_home::is_url(&url) => {
-                    Some(crate::new_home::new_tab_url(false).unwrap_or_else(|| HOME_URL.parse().unwrap()))
-                }
+                // A tab still on Ligma's home page comes back to it, or to
+                // Figma's file browser
+                Some(url) if !home && crate::new_home::is_url(&url) && crate::new_home::new_tab_url(None).is_none() => Some(HOME_URL.parse().unwrap()),
                 url => url,
             };
             let Some(url) = url.or_else(|| home.then(crate::new_home::home_url)) else {
@@ -2311,10 +2309,55 @@ pub fn cycle(app: &AppHandle, offset: isize) -> tauri::Result<()> {
     select(app, id)
 }
 
-/// Opens a new tab: Ligma's home page while it's on, which may start with
-/// its search (see new_home.rs), else Figma's file browser
+/// Opens a new tab: Ligma's home page while it's on, else Figma's file
+/// browser. Or shows the launcher over the current tab, to pick what the
+/// new tab opens (see launcher.rs)
 pub fn new_tab(app: &AppHandle) -> tauri::Result<()> {
-    open(app, crate::new_home::new_tab_url(true).unwrap_or_else(|| HOME_URL.parse().unwrap()))
+    if crate::new_home::launcher_on() {
+        // On Home, its own search does, as Ctrl+K opens it, if its page is
+        // Ligma's
+        let active = app.state::<Tabs>().inner().0.lock().unwrap().active();
+        if let Some(webview) = scriptable(app, active).filter(|_| active == HOME_ID) {
+            let app = app.clone();
+            return webview.eval_with_callback("window.__ligmaSearch ? (window.__ligmaSearch(), true) : false", move |answer| {
+                if answer.trim() != "true" {
+                    log::info!("New tab: Home's search isn't there ({answer}), showing the launcher");
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        let _ = crate::launcher::show(&app);
+                    });
+                }
+            });
+        }
+        return crate::launcher::show(app);
+    }
+    open(app, crate::new_home::new_tab_url(None).unwrap_or_else(|| HOME_URL.parse().unwrap()))
+}
+
+/// An image of the focused window's active tab as a `data:` URL, for the
+/// launcher to show behind it. `done` may not be called if there's none
+pub fn snapshot_active(app: &AppHandle, done: impl FnOnce(Option<String>) + Send + 'static) {
+    let active = app.state::<Tabs>().inner().0.lock().unwrap().active();
+    let Some(webview) = scriptable(app, active) else {
+        return done(None);
+    };
+    #[cfg(target_os = "macos")]
+    crate::wkwebview::snapshot(&webview, done);
+    #[cfg(windows)]
+    crate::webview2::capture(&webview, move |url| done(Some(url)));
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = webview;
+        done(None);
+    }
+}
+
+/// Gives the focused window's active tab the keys again
+pub fn refocus(app: &AppHandle) {
+    let active = app.state::<Tabs>().inner().0.lock().unwrap().active();
+    if let Some(webview) = app.get_webview(&label(active)) {
+        let _ = webview.set_focus();
+    }
 }
 
 /// Whether tab `id` was last known on a page `test` accepts. From its

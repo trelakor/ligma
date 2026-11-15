@@ -21,6 +21,7 @@ mod handoff;
 mod heal;
 mod home;
 mod lasso;
+mod launcher;
 mod layers;
 mod loading_logo;
 mod mcp_bridge;
@@ -352,6 +353,7 @@ fn main() {
                     tabs::close_other_windows(&handle);
                     tab_menu::close(&handle);
                     preview::close(&handle);
+                    launcher::close(&handle);
                     emoji_picker::close(&handle);
                     split::close(&handle);
                     prompt::close_all(&handle);
