@@ -980,7 +980,7 @@ impl Host {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("ligma effects"),
             required_features: features,
-            required_limits: wgpu::Limits::default(),
+            required_limits: wgpu::Limits { max_non_sampler_bindings: super::vello::BINDINGS, ..Default::default() },
             // Small blocks: by default it sets aside hundreds of MB up front
             memory_hints: wgpu::MemoryHints::Manual { suballocated_device_memory_block_size: (1 << 20)..(16 << 20) },
             ..Default::default()

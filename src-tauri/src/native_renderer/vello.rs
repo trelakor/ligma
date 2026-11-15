@@ -56,6 +56,9 @@ struct Page {
     used: std::time::Instant,
 }
 
+/// What shaders may bind at once, see `Vello::new`
+pub const BINDINGS: u32 = 1 << 16;
+
 pub struct Vello {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -170,7 +173,10 @@ impl Vello {
             required_features: adapter.features()
                 & (wgpu::Features::CLEAR_TEXTURE
                     | if std::env::var_os("LIGMA_NATIVE_VELLO_TIMES").is_some() { wgpu::Features::TIMESTAMP_QUERY } else { wgpu::Features::empty() }),
-            required_limits: adapter.limits(),
+            // Its table of what shaders bind, kept in GPU memory, is as big
+            // as this says, 32 MB at the most there could be, where a render
+            // takes a few hundred
+            required_limits: wgpu::Limits { max_non_sampler_bindings: BINDINGS, ..adapter.limits() },
             // Small blocks of GPU memory, rather than ones far bigger than
             // what's in them, and memory of its own for anything bigger,
             // given back the moment it's let go
