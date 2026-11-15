@@ -13,12 +13,16 @@
 //! made image's hash, so the sliders open where they were left and are
 //! always applied to the original, never to an image already adjusted
 //!
-//! While a slider moves, a smaller image is made, quick to make and load;
-//! the full size one follows once it's let go, and is given up on if the
-//! slider moves again before it's in. Each new image is
-//! loaded off the canvas before it's swapped in, so the fill never shows
-//! empty. The hidden original is put below once the picker closes, as
-//! adding a paint while it's open would move the picker to another one
+//! While a slider moves, only the picker's thumbnail changes: a preview,
+//! drawn over it from a small copy of the original. The layer gets the
+//! full size image once the slider's let go, given up on if it moves again
+//! before it's in. Both are made in a worker, with WebGL on an
+//! OffscreenCanvas, so the page's thread stays free for Figma and the
+//! sliders; where the worker can't start, the page makes them. Each new
+//! image is loaded on a tiny layer before it's swapped in, so the fill
+//! never shows empty. The hidden original is put below once the picker
+//! closes, as adding a paint while it's open would move the picker to
+//! another one
 //!
 //! Copy and paste adjustments (adjustments.rs) carry these too, through
 //! `window.__ligmaColor`
@@ -118,67 +122,70 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Making the image ----------
 
-  // The picture's top row at the canvas's top, which WebGL counts from the
-  // bottom. ImageBitmaps aren't flipped by UNPACK_FLIP_Y_WEBGL
-  const VERTEX = `attribute vec2 p; varying vec2 uv; void main() { uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5); gl_Position = vec4(p, 0.0, 1.0); }`;
-  const FRAGMENT = `
-    precision highp float;
-    uniform sampler2D image;
-    uniform vec3 master;
-    uniform float vibrance;
-    uniform vec3 ranges[6];
-    varying vec2 uv;
-    vec3 toHsl(vec3 c) {
-      float hi = max(c.r, max(c.g, c.b));
-      float lo = min(c.r, min(c.g, c.b));
-      float l = (hi + lo) * 0.5;
-      float d = hi - lo;
-      if (d < 1e-5) return vec3(0.0, 0.0, l);
-      float s = l > 0.5 ? d / (2.0 - hi - lo) : d / (hi + lo);
-      float h = hi == c.r ? (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0) : hi == c.g ? (c.b - c.r) / d + 2.0 : (c.r - c.g) / d + 4.0;
-      return vec3(h / 6.0, s, l);
-    }
-    float channel(float p, float q, float t) {
-      t = fract(t);
-      if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
-      if (t < 0.5) return q;
-      if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
-      return p;
-    }
-    vec3 toRgb(vec3 c) {
-      if (c.y <= 0.0) return vec3(c.z);
-      float q = c.z < 0.5 ? c.z * (1.0 + c.y) : c.z + c.y - c.z * c.y;
-      float p = 2.0 * c.z - q;
-      return vec3(channel(p, q, c.x + 1.0 / 3.0), channel(p, q, c.x), channel(p, q, c.x - 1.0 / 3.0));
-    }
-    float saturate(float s, float by) { return by < 0.0 ? s * (1.0 + by) : 1.0 - pow(1.0 - s, 1.0 + 2.0 * by); }
-    float lighten(float l, float by) { return by < 0.0 ? l * (1.0 + by) : l + (1.0 - l) * by; }
-    void main() {
-      vec4 pixel = texture2D(image, uv);
-      vec3 c = toHsl(pixel.rgb);
-      // Grays have no hue, so no range takes them
-      float colorful = smoothstep(0.0, 0.06, c.y * (1.0 - abs(2.0 * c.z - 1.0)));
-      vec3 shift = vec3(0.0);
-      for (int i = 0; i < 6; i++) {
-        float away = abs(fract(c.x - float(i) / 6.0 + 0.5) - 0.5) * 360.0;
-        shift += ranges[i] * clamp((45.0 - away) / 30.0, 0.0, 1.0) * colorful;
+  // `renderer`, `prepare`, `encode` and `core` use nothing outside them, so
+  // a worker runs them as they are. The worker makes every picture, off
+  // the page's thread, so Figma and the sliders keep up; where workers or
+  // their WebGL can't start, the page makes them with the same code
+
+  // WebGL drawing a picture with the settings' uniforms on `canvas`. The
+  // picture's top row at the canvas's top, which WebGL counts from the
+  // bottom; ImageBitmaps aren't flipped by UNPACK_FLIP_Y_WEBGL
+  const renderer = (canvas) => {
+    const gl = canvas.getContext("webgl", { premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: false });
+    if (!gl) throw new Error("no WebGL");
+    const VERTEX = `attribute vec2 p; varying vec2 uv; void main() { uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5); gl_Position = vec4(p, 0.0, 1.0); }`;
+    const FRAGMENT = `
+      precision highp float;
+      uniform sampler2D image;
+      uniform vec3 master;
+      uniform float vibrance;
+      uniform vec3 ranges[6];
+      varying vec2 uv;
+      vec3 toHsl(vec3 c) {
+        float hi = max(c.r, max(c.g, c.b));
+        float lo = min(c.r, min(c.g, c.b));
+        float l = (hi + lo) * 0.5;
+        float d = hi - lo;
+        if (d < 1e-5) return vec3(0.0, 0.0, l);
+        float s = l > 0.5 ? d / (2.0 - hi - lo) : d / (hi + lo);
+        float h = hi == c.r ? (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0) : hi == c.g ? (c.b - c.r) / d + 2.0 : (c.r - c.g) / d + 4.0;
+        return vec3(h / 6.0, s, l);
       }
-      // Skin's hues, oranges, kept from Vibrance's boost
-      float skin = clamp(1.0 - abs(c.x * 360.0 - 25.0) / 30.0, 0.0, 1.0) * smoothstep(0.08, 0.25, c.y);
-      c.x = fract(c.x + master.x + shift.x);
-      c.y = saturate(saturate(c.y, shift.y), master.y);
-      c.z = lighten(lighten(c.z, shift.z), master.z);
-      // The less colorful a color, the more Vibrance changes it
-      c.y = vibrance < 0.0 ? c.y * (1.0 + vibrance * (1.0 - 0.5 * c.y)) : c.y * (1.0 + vibrance * 2.0 * (1.0 - c.y) * (1.0 - c.y) * (1.0 - 0.7 * skin));
-      c.y = clamp(c.y, 0.0, 1.0);
-      gl_FragColor = vec4(toRgb(c), pixel.a);
-    }`;
-  let gl = null;
-  const gpu = () => {
-    if (gl && !gl.isContextLost()) return gl;
-    const canvas = document.createElement("canvas");
-    gl = canvas.getContext("webgl", { premultipliedAlpha: false, preserveDrawingBuffer: true, antialias: false });
-    if (!gl) return null;
+      float channel(float p, float q, float t) {
+        t = fract(t);
+        if (t < 1.0 / 6.0) return p + (q - p) * 6.0 * t;
+        if (t < 0.5) return q;
+        if (t < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - t) * 6.0;
+        return p;
+      }
+      vec3 toRgb(vec3 c) {
+        if (c.y <= 0.0) return vec3(c.z);
+        float q = c.z < 0.5 ? c.z * (1.0 + c.y) : c.z + c.y - c.z * c.y;
+        float p = 2.0 * c.z - q;
+        return vec3(channel(p, q, c.x + 1.0 / 3.0), channel(p, q, c.x), channel(p, q, c.x - 1.0 / 3.0));
+      }
+      float saturate(float s, float by) { return by < 0.0 ? s * (1.0 + by) : 1.0 - pow(1.0 - s, 1.0 + 2.0 * by); }
+      float lighten(float l, float by) { return by < 0.0 ? l * (1.0 + by) : l + (1.0 - l) * by; }
+      void main() {
+        vec4 pixel = texture2D(image, uv);
+        vec3 c = toHsl(pixel.rgb);
+        // Grays have no hue, so no range takes them
+        float colorful = smoothstep(0.0, 0.06, c.y * (1.0 - abs(2.0 * c.z - 1.0)));
+        vec3 shift = vec3(0.0);
+        for (int i = 0; i < 6; i++) {
+          float away = abs(fract(c.x - float(i) / 6.0 + 0.5) - 0.5) * 360.0;
+          shift += ranges[i] * clamp((45.0 - away) / 30.0, 0.0, 1.0) * colorful;
+        }
+        // Skin's hues, oranges, kept from Vibrance's boost
+        float skin = clamp(1.0 - abs(c.x * 360.0 - 25.0) / 30.0, 0.0, 1.0) * smoothstep(0.08, 0.25, c.y);
+        c.x = fract(c.x + master.x + shift.x);
+        c.y = saturate(saturate(c.y, shift.y), master.y);
+        c.z = lighten(lighten(c.z, shift.z), master.z);
+        // The less colorful a color, the more Vibrance changes it
+        c.y = vibrance < 0.0 ? c.y * (1.0 + vibrance * (1.0 - 0.5 * c.y)) : c.y * (1.0 + vibrance * 2.0 * (1.0 - c.y) * (1.0 - c.y) * (1.0 - 0.7 * skin));
+        c.y = clamp(c.y, 0.0, 1.0);
+        gl_FragColor = vec4(toRgb(c), pixel.a);
+      }`;
     const shader = (type, source) => {
       const made = gl.createShader(type);
       gl.shaderSource(made, source);
@@ -189,10 +196,7 @@ const PAGE_JS: &str = r##"(() => {
     gl.attachShader(program, shader(gl.VERTEX_SHADER, VERTEX));
     gl.attachShader(program, shader(gl.FRAGMENT_SHADER, FRAGMENT));
     gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      gl = null;
-      return null;
-    }
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error("no shader");
     gl.useProgram(program);
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -207,91 +211,234 @@ const PAGE_JS: &str = r##"(() => {
       [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
     ])
       gl.texParameteri(gl.TEXTURE_2D, key, value);
-    gl.uniforms = Object.fromEntries(["master", "vibrance", "ranges"].map((name) => [name, gl.getUniformLocation(program, name)]));
-    gl.drawn = null;
-    return gl;
+    const uniform = Object.fromEntries(["master", "vibrance", "ranges"].map((name) => [name, gl.getUniformLocation(program, name)]));
+    let drawn = null;
+    return {
+      draw: (picture, u) => {
+        if (gl.isContextLost()) throw new Error("WebGL lost");
+        if (canvas.width !== picture.width || canvas.height !== picture.height) Object.assign(canvas, { width: picture.width, height: picture.height });
+        gl.viewport(0, 0, picture.width, picture.height);
+        if (drawn !== picture) {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
+          drawn = picture;
+        }
+        gl.uniform3fv(uniform.master, u.master);
+        gl.uniform1f(uniform.vibrance, u.vibrance);
+        gl.uniform3fv(uniform.ranges, u.ranges);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        return canvas;
+      },
+    };
   };
 
-  // Whether a picture has no see-through pixels, so its previews can be
-  // JPEGs, far quicker to make than PNGs
-  const opaque = (picture) => {
-    try {
-      const canvas = Object.assign(document.createElement("canvas"), { width: picture.width, height: picture.height });
-      const context = canvas.getContext("2d", { willReadFrequently: true });
-      context.drawImage(picture, 0, 0);
-      const { data } = context.getImageData(0, 0, picture.width, picture.height);
-      for (let i = 3; i < data.length; i += 4) if (data[i] < 255) return false;
-      return true;
-    } catch {
-      return false;
+  // An original's bytes as pictures to make from: a small one for the
+  // picker's preview, decoded first, and the full size one when it's
+  // needed. `size` is its size, if known, so the small one decodes alone.
+  // Opaque ones' previews can be JPEGs, far quicker to make than PNGs
+  const prepare = async (bytes, size, side) => {
+    const blob = new Blob([bytes]);
+    const options = { premultiplyAlpha: "none", colorSpaceConversion: "none" };
+    let full = size ? null : await createImageBitmap(blob, options);
+    const { width, height } = size ?? full;
+    const scale = Math.min(1, side / Math.max(width, height));
+    const small =
+      scale < 1
+        ? await createImageBitmap(blob, { ...options, resizeWidth: Math.max(1, Math.round(width * scale)), resizeHeight: Math.max(1, Math.round(height * scale)), resizeQuality: "medium" })
+        : (full ??= await createImageBitmap(blob, options));
+    // JPEGs stay JPEGs, quicker to make and as small as they were
+    const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+    let opaque = jpeg;
+    if (!jpeg) {
+      try {
+        const canvas = typeof OffscreenCanvas === "function" ? new OffscreenCanvas(small.width, small.height) : Object.assign(document.createElement("canvas"), { width: small.width, height: small.height });
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        context.drawImage(small, 0, 0);
+        const { data } = context.getImageData(0, 0, small.width, small.height);
+        opaque = true;
+        for (let i = 3; i < data.length; i += 4) {
+          if (data[i] < 255) {
+            opaque = false;
+            break;
+          }
+        }
+      } catch {}
     }
+    let loading = full && Promise.resolve(full);
+    return {
+      small,
+      jpeg,
+      opaque,
+      full: () => (loading ??= createImageBitmap(blob, options)),
+      close: () => {
+        small.close();
+        loading?.then((picture) => picture.close()).catch(() => {});
+      },
+    };
   };
 
-  // Each original as pictures to make from, the last few kept: a small one
-  // for previews, decoded first, and the full size one when it's needed
-  const PREVIEW = 384;
-  const sources = new Map();
-  const sourceOf = (figma, hash) => {
-    if (!sources.has(hash)) {
+  const encode = (canvas, jpeg, quality) => {
+    const type = jpeg ? "image/jpeg" : "image/png";
+    if (canvas.convertToBlob) return canvas.convertToBlob({ type, quality });
+    return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("not made"))), type, quality));
+  };
+
+  // The originals, the last few kept, and what's made from them: `draw`
+  // the small one for the preview, as an ImageBitmap where the canvas can
+  // give one, and `make` the full size one as image bytes. Each draws and
+  // reads back with nothing awaited between, so one can't spoil another
+  const core = (makeCanvas, side) => {
+    const sources = new Map();
+    let gpu = null;
+    const sourceOf = async (hash) => {
+      const source = await sources.get(hash);
+      if (!source) throw new Error("not loaded");
+      return source;
+    };
+    const drawn = (picture, u) => {
+      try {
+        gpu ??= renderer(makeCanvas());
+        return gpu.draw(picture, u);
+      } catch (error) {
+        gpu = null;
+        throw error;
+      }
+    };
+    return {
+      load: async (hash, bytes, size) => {
+        if (!sources.has(hash)) {
+          const made = prepare(bytes, size, side);
+          made.catch(() => sources.delete(hash));
+          sources.set(hash, made);
+          while (sources.size > 4) {
+            const [oldest, picture] = sources.entries().next().value;
+            sources.delete(oldest);
+            picture.then((source) => source.close()).catch(() => {});
+          }
+        }
+        await sources.get(hash);
+      },
+      draw: async (hash, u) => {
+        const canvas = drawn((await sourceOf(hash)).small, u);
+        return canvas.transferToImageBitmap ? canvas.transferToImageBitmap() : canvas;
+      },
+      make: async (hash, u) => {
+        const source = await sourceOf(hash);
+        const canvas = drawn(await source.full(), u);
+        const blob = await encode(canvas, source.jpeg, 0.95);
+        return new Uint8Array(await blob.arrayBuffer());
+      },
+    };
+  };
+
+  const PREVIEW = 416;
+  const WORKER = [
+    `const renderer = ${renderer};`,
+    `const prepare = ${prepare};`,
+    `const encode = ${encode};`,
+    `const core = ${core};`,
+    `const engine = core(() => new OffscreenCanvas(1, 1), ${PREVIEW});`,
+    `onmessage = async ({ data: { id, type, hash, bytes, size, u } }) => {`,
+    `  try {`,
+    `    if (type === "load") postMessage({ id, out: await engine.load(hash, bytes, size) });`,
+    `    else if (type === "draw") { const out = await engine.draw(hash, u); postMessage({ id, out }, [out]); }`,
+    `    else if (type === "make") { const out = await engine.make(hash, u); postMessage({ id, out }, [out.buffer]); }`,
+    `  } catch (error) {`,
+    `    postMessage({ id, error: String(error) });`,
+    `  }`,
+    `};`,
+    `let ready = false;`,
+    `try { ready = !!new OffscreenCanvas(1, 1).getContext("webgl"); } catch {}`,
+    `postMessage({ ready });`,
+  ].join("\n");
+
+  // The worker once it's said it's ready, or null where it can't start,
+  // then or later, and the page makes the pictures itself
+  let worker = null;
+  let jobId = 0;
+  const jobs = new Map();
+  const startWorker = () =>
+    (worker ??= new Promise((resolve) => {
+      let started = null;
+      const stop = () => {
+        started?.terminate();
+        for (const job of jobs.values()) job.reject(new Error("no worker"));
+        jobs.clear();
+        loads.clear();
+        worker = Promise.resolve(null);
+        resolve(null);
+      };
+      try {
+        started = new Worker(URL.createObjectURL(new Blob([WORKER], { type: "text/javascript" })));
+        const late = setTimeout(stop, 3000);
+        started.onmessage = ({ data }) => {
+          if ("ready" in data) {
+            clearTimeout(late);
+            return data.ready ? resolve(started) : stop();
+          }
+          const job = jobs.get(data.id);
+          jobs.delete(data.id);
+          if (data.error) job?.reject(new Error(data.error));
+          else job?.resolve(data.out);
+        };
+        started.onerror = (event) => {
+          event.preventDefault();
+          stop();
+        };
+      } catch {
+        stop();
+      }
+    }));
+  // Given up on after `limit` ms, so an edit can never hang on one
+  const call = (target, message, transfer, limit) =>
+    new Promise((resolve, reject) => {
+      const id = ++jobId;
+      const late = setTimeout(() => {
+        jobs.delete(id);
+        reject(new Error("too slow"));
+      }, limit);
+      const done = (then) => (value) => {
+        clearTimeout(late);
+        then(value);
+      };
+      jobs.set(id, { resolve: done(resolve), reject: done(reject) });
+      target.postMessage({ id, ...message }, transfer);
+    });
+  let local = null;
+  const engine = async () => {
+    const started = await startWorker();
+    if (!started) return (local ??= core(() => document.createElement("canvas"), PREVIEW));
+    return {
+      load: (hash, bytes, size) => call(started, { type: "load", hash, bytes, size }, [bytes.buffer], 20000),
+      draw: (hash, u) => call(started, { type: "draw", hash, u }, [], 5000),
+      make: (hash, u) => call(started, { type: "make", hash, u }, [], 60000),
+    };
+  };
+  // An original sent to the engine, once, the last few as it keeps them.
+  // One no paint shows any more may have to come from Figma's servers
+  // first, so it's given a while, but not forever
+  const loads = new Map();
+  const within = (promise, limit) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error("too slow")), limit))]);
+  const ready = (figma, hash) => {
+    if (!loads.has(hash)) {
       const made = (async () => {
         const picture = figma.getImageByHash(hash);
-        const bytes = await picture.getBytesAsync();
-        const blob = new Blob([bytes]);
-        const options = { premultiplyAlpha: "none", colorSpaceConversion: "none" };
-        let full = null;
-        let size = null;
-        try {
-          size = await picture.getSizeAsync();
-        } catch {}
-        if (!size?.width) size = full = await createImageBitmap(blob, options);
-        const scale = Math.min(1, PREVIEW / Math.max(size.width, size.height));
-        const small =
-          scale < 1
-            ? await createImageBitmap(blob, { ...options, resizeWidth: Math.max(1, Math.round(size.width * scale)), resizeHeight: Math.max(1, Math.round(size.height * scale)), resizeQuality: "medium" })
-            : (full ??= await createImageBitmap(blob, options));
-        // JPEGs stay JPEGs, quicker to make and as small as they were
-        const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
-        return { blob, options, small, full: full && Promise.resolve(full), jpeg, opaque: jpeg || opaque(small) };
+        if (!picture) throw new Error("no image");
+        const [bytes, size] = await within(Promise.all([picture.getBytesAsync(), picture.getSizeAsync().catch(() => null)]), 30000);
+        const using = await engine();
+        await using.load(hash, bytes.slice(), size?.width ? { width: size.width, height: size.height } : null);
+        return using;
       })();
-      made.catch(() => sources.delete(hash));
-      sources.set(hash, made);
-      while (sources.size > 4) {
-        const [oldest, picture] = sources.entries().next().value;
-        sources.delete(oldest);
-        picture
-          .then(async (source) => {
-            source.small.close();
-            (await source.full)?.close();
-          })
-          .catch(() => {});
-      }
+      made.catch(() => loads.delete(hash));
+      loads.set(hash, made);
+      while (loads.size > 4) loads.delete(loads.keys().next().value);
     }
-    return sources.get(hash);
+    return loads.get(hash);
   };
-
-  // The original `hash` with `s`, as image bytes, full size or small. Drawn
-  // and read back with nothing awaited between, so two can be under way
-  const make = async (figma, hash, s, full) => {
-    const source = await sourceOf(figma, hash);
-    const picture = full ? await (source.full ??= createImageBitmap(source.blob, source.options)) : source.small;
-    const gl = gpu();
-    if (!gl) throw new Error("no WebGL");
-    gl.canvas.width = picture.width;
-    gl.canvas.height = picture.height;
-    gl.viewport(0, 0, picture.width, picture.height);
-    if (gl.drawn !== picture) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
-      gl.drawn = picture;
-    }
-    gl.uniform3f(gl.uniforms.master, s.hue / 360, s.saturation / 100, s.lightness / 100);
-    gl.uniform1f(gl.uniforms.vibrance, s.vibrance / 100);
-    gl.uniform3fv(gl.uniforms.ranges, RANGES.flatMap(([id]) => [s[id].hue / 360, s[id].saturation / 100, s[id].lightness / 100]));
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    const jpeg = full ? source.jpeg : source.opaque;
-    const blob = await new Promise((resolve) => gl.canvas.toBlob(resolve, jpeg ? "image/jpeg" : "image/png", full ? 0.95 : 0.9));
-    if (!blob) throw new Error("not made");
-    return new Uint8Array(await blob.arrayBuffer());
-  };
+  const uniformsOf = (s) => ({
+    master: [s.hue / 360, s.saturation / 100, s.lightness / 100],
+    vibrance: s.vibrance / 100,
+    ranges: RANGES.flatMap(([id]) => [s[id].hue / 360, s[id].saturation / 100, s[id].lightness / 100]),
+  });
 
   // A new image draws nothing in the file until Figma's loaded it, so it's
   // put on a tiny layer first, until that draws something. The layer sits
@@ -352,12 +499,13 @@ const PAGE_JS: &str = r##"(() => {
   // from its original, or the original back with none. False if the paint
   // changed meanwhile, or once `stale`, and then nothing's changed.
   // `loader` loads the new image, made for it if not given
-  const put = async (figma, target, list, index, s, full, stale = () => false, loader = null) => {
+  const put = async (figma, target, list, index, s, stale = () => false, loader = null) => {
     const { node } = target;
     const original = originalOf(node, target.hash);
     let hash = original;
     if (!isBlank(s)) {
-      const bytes = await make(figma, original, s, full);
+      const using = await ready(figma, original);
+      const bytes = await using.make(original, uniformsOf(s));
       if (stale()) return false;
       hash = figma.createImage(bytes).hash;
       const own = loader ?? makeLoader(figma, node);
@@ -437,119 +585,113 @@ const PAGE_JS: &str = r##"(() => {
   const targetsOf = (figma, at) => figma.currentPage.selection.filter((node) => image(paintsOf(node, at.list)[at.index])).map((node) => ({ node, hash: paintsOf(node, at.list)[at.index].imageHash }));
 
   // The edit under way: the paint whose picker is open in each selected
-  // layer, and the settings the sliders show. `version` counts changes,
-  // `fullVersion` the last one in at full size
+  // layer, its original, and the settings the sliders show. `version`
+  // counts changes, `fullVersion` the last one put in the file
   const begin = () => {
     const figma = api();
     const at = openPaint();
     if (!figma || !at) return null;
-    const targets = targetsOf(figma, at);
+    const targets = targetsOf(figma, at).map((target) => ({ ...target, original: originalOf(target.node, target.hash) }));
     if (!targets.length) return null;
     const settings = settingsOf(targets[0].node, paintsOf(targets[0].node, at.list)[at.index]);
     dropStrayLoaders(figma);
-    return { figma, ...at, targets, settings, version: 0, fullVersion: 0, loaders: {} };
-  };
-  // Each lane's own loader, so one never sees the other's image
-  const loaderOf = (edit, lane) => {
-    const loader = edit.loaders[lane];
-    if (loader && !loader.removed) return loader;
-    return (edit.loaders[lane] = makeLoader(edit.figma, edit.targets[0].node));
+    return { figma, ...at, targets, settings, version: 0, fullVersion: 0, loader: null };
   };
 
-  // Two lanes: small images while the sliders move, one at a time, always
-  // of the latest settings; and full size ones, once a slider's let go or a
-  // moment after a key, given up on as soon as the settings move again
+  // While the sliders move only the picker's preview changes, drawn by the
+  // worker from a small copy of the original. The file gets the full size
+  // image once a slider's let go, or a moment after a key, given up on if
+  // the settings move again before it's in
   const change = (edit) => {
     edit.version++;
-    edit.want = true;
+    edit.failed = false;
     later(edit, edit.holding ? null : 250);
-    run(edit);
+    preview(edit);
   };
   const later = (edit, delay) => {
     clearTimeout(edit.idle);
-    if (delay !== null) edit.idle = setTimeout(() => runFull(edit), delay);
-  };
-  const start = (edit) => {
-    if (edit.started) return;
-    edit.started = true;
-    try {
-      edit.figma.commitUndo();
-    } catch {}
+    if (delay !== null) edit.idle = setTimeout(() => commit(edit), delay);
   };
   const fail = (edit) => {
     if (edit.failed) return;
     edit.failed = true;
     edit.figma.notify("Couldn't adjust the image", { timeout: 2000 });
   };
-  // Previews are paced, a frame and at least `PACE` ms apart, so Figma's
-  // work on each leaves room to draw the slider as it moves
-  const PACE = 90;
-  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
-  const run = async (edit) => {
-    if (edit.running || edit.failed) return;
-    edit.running = true;
-    busy(edit);
-    start(edit);
-    while (edit.want && !edit.failed) {
-      await frame();
-      const wait = (edit.paced ?? 0) + PACE - performance.now();
-      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-      edit.paced = performance.now();
-      edit.want = false;
-      const version = edit.version;
-      const s = structuredClone(edit.settings);
-      for (const target of edit.targets) {
-        try {
-          await put(edit.figma, target, edit.list, edit.index, s, false, () => edit.fullVersion >= version, loaderOf(edit, "small"));
-        } catch {
-          fail(edit);
-          break;
-        }
-      }
+  // The latest settings, one picture at a time
+  const preview = async (edit) => {
+    if (edit.previewing) {
+      edit.redraw = true;
+      return;
     }
-    edit.running = false;
+    edit.previewing = true;
     busy(edit);
-    if (edit.ended) finish(edit);
+    try {
+      do {
+        edit.redraw = false;
+        const { original } = edit.targets[0];
+        const using = await ready(edit.figma, original);
+        const picture = await using.draw(original, uniformsOf(edit.settings));
+        if (ui?.edit === edit && !edit.ended) ui.picture(picture);
+        else picture.close?.();
+      } while (edit.redraw && !edit.ended);
+    } catch {
+      // The file still gets them, which says so if it can't
+      ui?.edit === edit && ui.picture(null);
+    }
+    edit.previewing = false;
+    busy(edit);
   };
-  const runFull = async (edit) => {
+  const commit = async (edit) => {
     if (edit.holding || edit.failed || edit.fullVersion === edit.version) return;
-    if (edit.fullRunning) {
+    if (edit.committing) {
       edit.again = true;
       return;
     }
-    edit.fullRunning = true;
+    edit.committing = true;
     busy(edit);
-    start(edit);
+    if (!edit.started) {
+      edit.started = true;
+      try {
+        edit.figma.commitUndo();
+      } catch {}
+    }
     const version = edit.version;
     const stale = () => edit.version !== version;
     const s = structuredClone(edit.settings);
+    if (!edit.loader || edit.loader.removed) edit.loader = makeLoader(edit.figma, edit.targets[0].node);
     for (const target of edit.targets) {
       try {
-        await put(edit.figma, target, edit.list, edit.index, s, true, stale, loaderOf(edit, "full"));
+        await put(edit.figma, target, edit.list, edit.index, s, stale, edit.loader);
       } catch {
         fail(edit);
       }
       if (stale() || edit.failed) break;
     }
-    if (!stale() && !edit.failed) edit.fullVersion = version;
-    edit.fullRunning = false;
+    if (!stale() && !edit.failed) {
+      edit.fullVersion = version;
+      edit.landed = performance.now();
+      edit.landedSrc = ui?.edit === edit ? ui.thumbnail()?.src : null;
+      setTimeout(() => ui?.edit === edit && ui.show(), 1600);
+    }
+    edit.committing = false;
     busy(edit);
     if (edit.ended) finish(edit);
     else if (edit.again) {
       edit.again = false;
-      runFull(edit);
+      commit(edit);
     }
   };
-  // Once the picker's closed: full size images in, the originals kept below
-  // and one undo step for it all
+  // Once the picker's closed: the last settings in, the originals kept
+  // below and one undo step for it all
   const finish = (edit) => {
     edit.ended = true;
     edit.holding = false;
     clearTimeout(edit.idle);
-    if (!edit.started || edit.running || edit.fullRunning || edit.settled) return;
-    if (!edit.failed && edit.fullVersion !== edit.version) return runFull(edit);
+    if (edit.committing || edit.settled) return;
+    if (!edit.failed && edit.fullVersion !== edit.version) return commit(edit);
     edit.settled = true;
-    for (const loader of Object.values(edit.loaders)) dropLoader(loader);
+    if (edit.loader) dropLoader(edit.loader);
+    if (!edit.started) return;
     for (const { node } of edit.targets) settle(node);
     try {
       edit.figma.commitUndo();
@@ -564,7 +706,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!figma || !image(paint)) return;
     const s = normal(settings);
     if (isBlank(s) && !madeOn(node)[paint.imageHash]) return;
-    await put(figma, { node, hash: paint.imageHash }, list, index, s, true);
+    await put(figma, { node, hash: paint.imageHash }, list, index, s);
     if (!openPaint()) settle(node);
     else pending.add(node);
   };
@@ -626,7 +768,8 @@ const PAGE_JS: &str = r##"(() => {
 
   const style = document.createElement("style");
   style.textContent = `
-    [data-ligma-color] { position: relative; --left: 16px; --column: 88px; --right: 16px; margin-top: 8px; border-top: 1px solid var(--color-border); font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; line-height: 16px; letter-spacing: 0.005em; color: var(--color-text); -webkit-font-smoothing: antialiased; cursor: default; user-select: none; }
+    [data-ligma-color="section"] { position: relative; --left: 16px; --column: 88px; --right: 16px; margin-top: 8px; border-top: 1px solid var(--color-border); font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; line-height: 16px; letter-spacing: 0.005em; color: var(--color-text); -webkit-font-smoothing: antialiased; cursor: default; user-select: none; }
+    [data-ligma-color="preview"] { position: absolute; pointer-events: none; object-fit: contain; }
     [data-ligma-color] button { font: inherit; color: inherit; cursor: default; }
     [data-ligma-color] :focus-visible { outline: 1px solid var(--color-border-selected, #0d99ff); outline-offset: -1px; }
     [data-ligma-color] .head { display: flex; align-items: center; gap: 4px; height: 40px; padding: 0 var(--right) 0 calc(var(--left) - 4px); }
@@ -637,10 +780,10 @@ const PAGE_JS: &str = r##"(() => {
     [data-ligma-color] .toggle:hover svg { color: var(--color-icon); }
     [data-ligma-color] .toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
     [data-ligma-color] .tag { margin-left: 4px; padding: 0 4px; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--color-border); color: var(--color-text-secondary); font-weight: 450; }
-    [data-ligma-color]::before { content: ""; position: absolute; top: -1px; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--color-bg-brand, #0d99ff), transparent) no-repeat; background-size: 40% 100%; opacity: 0; transition: opacity 120ms; animation: ligma-color-busy 900ms linear infinite paused; }
-    [data-ligma-color].busy::before { opacity: 1; transition-delay: 160ms; animation-play-state: running; }
+    [data-ligma-color="section"]::before { content: ""; position: absolute; top: -1px; left: 0; right: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--color-bg-brand, #0d99ff), transparent) no-repeat; background-size: 40% 100%; opacity: 0; transition: opacity 120ms; animation: ligma-color-busy 900ms linear infinite paused; }
+    [data-ligma-color="section"].busy::before { opacity: 1; transition-delay: 160ms; animation-play-state: running; }
     @keyframes ligma-color-busy { from { background-position: -70% 0; } to { background-position: 170% 0; } }
-    @media (prefers-reduced-motion: reduce) { [data-ligma-color]::before { animation: none; background: var(--color-bg-brand, #0d99ff); } [data-ligma-color] .toggle svg { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { [data-ligma-color="section"]::before { animation: none; background: var(--color-bg-brand, #0d99ff); } [data-ligma-color] .toggle svg { transition: none; } }
     [data-ligma-color] .reset { flex: none; height: 24px; margin-right: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: none; color: var(--color-text-secondary); }
     [data-ligma-color] .reset:hover { background: var(--color-bg-hover); color: var(--color-text); }
     [data-ligma-color] .body { padding: 0 var(--right) 8px var(--left); }
@@ -755,7 +898,7 @@ const PAGE_JS: &str = r##"(() => {
   // Made each time a picker opens on an image
   let ui = null;
   const busy = (edit) => {
-    if (ui?.edit === edit) ui.section.classList.toggle("busy", !!(edit.running || edit.fullRunning));
+    if (ui?.edit === edit) ui.section.classList.toggle("busy", !!(edit.committing || edit.previewing));
   };
   const build = (shown) => {
     const section = element("div");
@@ -768,6 +911,39 @@ const PAGE_JS: &str = r##"(() => {
     toggle.append(element("span", { className: "title", textContent: "Vibrance and hue" }), element("span", { className: "tag", textContent: "Ligma" }));
     const reset = element("button", { type: "button", className: "reset", textContent: "Reset" });
     const head = element("div", { className: "head" }, toggle, reset);
+
+    // Over the picker's thumbnail, the preview until the file has it
+    const overlay = element("canvas");
+    overlay.dataset.ligmaColor = "preview";
+    overlay.hidden = true;
+    const thumbnail = () => section.closest(PICKER)?.querySelector('img[class*="imagePreview"]') ?? null;
+    const picture = (bitmap) => {
+      if (!bitmap) {
+        ui.drawn = false;
+        return place();
+      }
+      if (overlay.width !== bitmap.width || overlay.height !== bitmap.height) Object.assign(overlay, { width: bitmap.width, height: bitmap.height });
+      const context = overlay.getContext("2d");
+      context.clearRect(0, 0, overlay.width, overlay.height);
+      context.drawImage(bitmap, 0, 0);
+      bitmap.close?.();
+      ui.drawn = true;
+      place();
+    };
+    // Where the thumbnail is, and whether the preview's still needed: until
+    // the file has the settings and Figma's drawn its thumbnail again, or
+    // a moment after
+    const place = () => {
+      const img = thumbnail();
+      const edit = ui.edit;
+      const waiting = !!edit && !edit.failed && (edit.version !== edit.fullVersion || edit.committing || (edit.landedSrc !== undefined && img?.src === edit.landedSrc && performance.now() < edit.landed + 1500));
+      overlay.hidden = !img || !ui.drawn || !waiting;
+      if (overlay.hidden) return;
+      if (overlay.previousElementSibling !== img) img.after(overlay);
+      const holder = img.parentElement;
+      if (getComputedStyle(holder).position === "static") holder.style.position = "relative";
+      Object.assign(overlay.style, { left: `${img.offsetLeft}px`, top: `${img.offsetTop}px`, width: `${img.offsetWidth}px`, height: `${img.offsetHeight}px` });
+    };
 
     const body = element("div", { className: "body", id });
     body.setAttribute("role", "group");
@@ -863,20 +1039,19 @@ const PAGE_JS: &str = r##"(() => {
         button.classList.toggle("changed", changed(id === "all" ? s : s[id]));
       }
       for (const row of rows) row.show();
+      place();
     };
-    return { section, show, edit: null, shown, open: stored(OPEN) === "1" || !isBlank(shown) };
+    return { section, overlay, show, picture, thumbnail, edit: null, shown, open: stored(OPEN) === "1" || !isBlank(shown) };
   };
 
-  // The original decoded and the GPU set up ahead of the first change
+  // The worker started and the original sent to it ahead of the first
+  // change
   const warm = () => {
     const figma = api();
     const at = openPaint();
     const target = figma && at && targetsOf(figma, at)[0];
     if (!target) return;
-    setTimeout(() => {
-      gpu();
-      sourceOf(figma, originalOf(target.node, target.hash)).catch(() => {});
-    });
+    setTimeout(() => ready(figma, originalOf(target.node, target.hash)).catch(() => {}));
   };
 
   const decorate = () => {
@@ -890,6 +1065,7 @@ const PAGE_JS: &str = r##"(() => {
     if (ui && (!at || ui.key !== nowKey)) {
       if (ui.edit) finish(ui.edit);
       ui.section.remove();
+      ui.overlay.remove();
       ui = null;
     }
     if (!at) {
@@ -974,7 +1150,7 @@ const PAGE_JS: &str = r##"(() => {
         decorate();
       } catch {}
     });
-  }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+  }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "src"] });
 
   window.__ligmaColor = {
     // For adjustments.rs: what a paint has, and putting it on another
