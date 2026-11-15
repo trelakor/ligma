@@ -622,6 +622,8 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 /// many bytes. Then those needed longest ago go, never any in view, down
 /// to three quarters of it, so it's seldom
 const IMAGES_BUDGET: usize = 128 << 20;
+/// How often images past the budget are let go while the view moves
+const FIT_SOON: Duration = Duration::from_millis(250);
 /// Images let go are kept this many pixels on their longest side, so
 /// there's something to show where they're drawn till they come again
 const PLACEHOLDER: i32 = 256;
@@ -1453,7 +1455,12 @@ impl Painter {
                 // not only once it stops
                 if self.zoom.1.elapsed() >= SETTLE && self.fitted.elapsed() > Duration::from_secs(1) {
                     self.fitted = Instant::now();
-                    self.fit_images();
+                    self.fit_images(false);
+                } else if self.fitted.elapsed() > FIT_SOON && self.images.values().map(Img::bytes).sum::<usize>() > IMAGES_BUDGET {
+                    // Past the budget as more come into view, those it's
+                    // left behind go at once, zooming too, not a second on
+                    self.fitted = Instant::now();
+                    self.fit_images(true);
                 }
             } else if !self.released && self.drawn.elapsed() > IDLE {
                 // Layers and scratch from drawing tiles stay with the GPU
@@ -3653,7 +3660,7 @@ impl Painter {
     /// Gives back the layers drawing took, keeping what the next draw would
     /// only make again, as an edit's first draw would wait on that
     fn trim(&mut self) {
-        self.fit_images();
+        self.fit_images(false);
         // The whole view before this one only stands in while zooming, and
         // what's shown lets go of textures dropped here once it's done
         if self.last_whole.is_some() {
@@ -3676,7 +3683,7 @@ impl Painter {
     /// Gives back the GPU memory an offscreen render took, whole views drawn
     /// supersampled, which Skia would otherwise keep for reuse
     fn release(&mut self) {
-        self.fit_images();
+        self.fit_images(false);
         if let Some(vello) = self.vello.as_mut() {
             vello.trim();
         }
@@ -3692,8 +3699,9 @@ impl Painter {
 
     /// Keeps images within `IMAGES_BUDGET`. An image is never made smaller
     /// while it's needed, as that draws again all that uses it, blurrier
-    /// till it's had bigger again, so it'd flicker
-    fn fit_images(&mut self) {
+    /// till it's had bigger again, so it'd flicker. `soon`, only those
+    /// nowhere near the view go
+    fn fit_images(&mut self, soon: bool) {
         // As run.rs sizes images it fetches
         let fitted = |(w, h): (u32, u32), width: f64| {
             let side = (w.max(h) as f64 * (width.max(1.0) * 1.25 / w.max(1) as f64)).ceil();
@@ -3766,14 +3774,14 @@ impl Painter {
             self.wanted.insert(key.clone(), now);
         }
         let mut total: usize = self.images.values().map(Img::bytes).sum();
-        trace(|| format!("images {} MB, {} near the view, {} in it", total >> 20, need.len(), in_view.len()));
+        trace(|| format!("images {} MB, {} near the view, {} in it{}", total >> 20, need.len(), in_view.len(), if soon { ", soon" } else { "" }));
         if total > IMAGES_BUDGET {
             // Those not in view, needed longest ago (or never) first, and of
             // those the biggest
             let mut aside: Vec<(Option<Instant>, usize, String)> = self
                 .images
                 .iter()
-                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && (key.starts_with(EFFECT) || img.image.width().max(img.image.height()) > PLACEHOLDER))
+                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !(soon && need.contains_key(key.as_str())) && (key.starts_with(EFFECT) || img.image.width().max(img.image.height()) > PLACEHOLDER))
                 .map(|(key, img)| (self.wanted.get(key).copied(), img.bytes(), key.clone()))
                 .collect();
             aside.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
@@ -3790,7 +3798,7 @@ impl Painter {
         // Those in view alone past it, as far out with many images each
         // zoomed in on before: each more than twice what it's drawn at is
         // had again at that, the same on screen
-        if total > IMAGES_BUDGET {
+        if !soon && total > IMAGES_BUDGET {
             let mut smaller: Vec<(usize, String, f64)> = self
                 .images
                 .iter()
