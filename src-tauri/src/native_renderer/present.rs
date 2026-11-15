@@ -382,52 +382,6 @@ pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u
     cover_over(layers, layers.len(), content, view, size)
 }
 
-/// As `cover`, all of the view at one level: its own zoom where that covers
-/// all of it, or else the finest level that does, scaled, as levels mixed
-/// show squares sharp and blurred side by side, which zooming flickers
-/// through. With `own`, as once its own zoom has covered all of the view,
-/// what's drawn of that shows over the level standing in, as where a pan
-/// reaches past it. Levels mix only where none covers all of the view.
-/// And whether its own zoom covers all of it
-pub fn cover_level(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u32), own: bool) -> (Vec<Piece>, bool, bool) {
-    let (drawn, ..) = view.drawn(size);
-    let only = |keep: &dyn Fn(f32) -> bool| {
-        let index: Vec<usize> = (0..layers.len()).filter(|&i| keep(layers[i].px)).collect();
-        let picked: Vec<Layer> = index.iter().map(|&i| layers[i].clone()).collect();
-        let (mut pieces, holes) = cover(&picked, content, view, size);
-        for piece in &mut pieces {
-            piece.layer = index[piece.layer];
-        }
-        (pieces, holes)
-    };
-    let (pieces, holes) = only(&|px| px == drawn);
-    if !holes {
-        return (pieces, false, true);
-    }
-    // One coarser is scaled up, blurring it, so one as much finer comes first
-    let distance = |at: f32| {
-        let octaves = (at / drawn).log2();
-        if octaves < 0.0 { -octaves * 2.0 } else { octaves }
-    };
-    let mut levels: Vec<u32> = layers.iter().map(|layer| layer.px.to_bits()).filter(|&px| px != drawn.to_bits()).collect();
-    levels.sort_unstable();
-    levels.dedup();
-    levels.sort_by(|a, b| distance(f32::from_bits(*a)).total_cmp(&distance(f32::from_bits(*b))));
-    for level in levels {
-        let level = f32::from_bits(level);
-        let (pieces, holes) = only(&|px| px == level);
-        if holes {
-            continue;
-        }
-        if own {
-            return (only(&|px| px == drawn || px == level).0, false, false);
-        }
-        return (pieces, false, false);
-    }
-    let (pieces, holes) = cover(layers, content, view, size);
-    (pieces, holes, false)
-}
-
 /// As `cover`, with the layers from `behind` on used only where those
 /// before them leave holes
 fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
@@ -810,8 +764,6 @@ impl Screen {
         // What's shown: the snapshot, the view, what's over it and the size
         let mut shown: Option<(u64, View, Option<u32>, (u32, u32))> = None;
         let mut seen = 0;
-        // The zoom, as bits, whose own layers last covered all of the view
-        let mut covered: Option<u32> = None;
         // Whether the swap chain has room for a frame already waited for
         let mut room = false;
         while !hub.stop.load(Ordering::Relaxed) {
@@ -855,11 +807,7 @@ impl Screen {
             // All of the view or nothing: what's shown stays till the
             // render thread has drawn what the view needs. Its whole view
             // is drawn for the view itself, so it's what there is
-            let zoom = view.drawn(self.size).0.to_bits();
-            let (pieces, holes, own) = cover_level(&snapshot.layers, snapshot.content, &view, self.size, covered == Some(zoom));
-            if own {
-                covered = Some(zoom);
-            }
+            let (pieces, holes) = cover(&snapshot.layers, snapshot.content, &view, self.size);
             if holes && snapshot.whole_at != Some(view_at(&view, self.size)) {
                 stats().lock().unwrap().holes(true);
                 // Its holes filled from the last snapshot shown whole, as
@@ -1016,14 +964,9 @@ impl Screen {
         self.images.retain(|key, _| kept.contains(key));
         let px = view.px(size.0);
         super::render::trace(|| {
-            let mut levels: Vec<u32> = pieces.iter().map(|piece| snapshot.layers[piece.layer].px.to_bits()).collect();
-            levels.sort_unstable();
-            levels.dedup();
-            let levels: Vec<String> = levels.into_iter().map(|px| format!("{:.4}", f32::from_bits(px))).collect();
             format!(
-                "present seq={seq} at={presented:.2} px={px:.3} layers={} levels={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={}",
+                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={}",
                 pieces.len(),
-                levels.join(","),
                 encoded.as_secs_f64() * 1000.0,
                 rendered.as_secs_f64() * 1000.0,
                 (view.x * px as f64).round(),

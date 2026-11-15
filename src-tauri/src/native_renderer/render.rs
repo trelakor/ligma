@@ -500,16 +500,6 @@ fn level_up(px: f32) -> f32 {
     2f32.powf(px.max(1e-6).log2().ceil())
 }
 
-/// A power of two at or below `px`
-fn level_down(px: f32) -> f32 {
-    2f32.powf(px.max(1e-6).log2().floor())
-}
-
-/// Levels further out drawn at rest over what each would show of the view
-/// zoomed out to it, each a power of two further out than the last (see
-/// `Painter::fill_vello`)
-const LADDER: usize = 2;
-
 /// How long fragments no view used are kept
 const FRAGMENTS_KEPT: Duration = Duration::from_secs(3);
 
@@ -1218,8 +1208,6 @@ pub struct Painter {
     verified: u64,
     /// The zooms of the levels further out the view has now
     pyramid: Vec<u32>,
-    /// The tiles of the levels further out drawn at rest, see `fill_vello`
-    ladder: Vec<TileKey>,
     /// When a frame was last drawn, and whether memory was given back since
     drawn: Instant,
     released: bool,
@@ -1372,7 +1360,6 @@ impl Painter {
             verifying: false,
             verified: 0,
             pyramid: Vec::new(),
-            ladder: Vec::new(),
             drawn: Instant::now(),
             released: true,
             freed: true,
@@ -2099,36 +2086,11 @@ impl Painter {
             let (dx, dy) = ((self.velocity.0 * lag) as f32, (self.velocity.1 * lag) as f32);
             over(level, Rect::from_xywh(area.left + dx, area.top + dy, area.width(), area.height())).into_iter().filter(|key| !here.contains(key)).collect()
         } else {
-            // Around the view once it's still, the nearest level further out
-            // drawn at rest stands in for a pan, till its tiles are drawn
-            Vec::new()
+            // And around the view once it's still, for a pan to find
+            Self::tiles_over(ox, oy, width, height, level.to_bits(), 1).into_iter().filter(|key| !here.contains(key)).collect()
         };
         let far: Vec<TileKey> = pyramid.iter().copied().filter(|key| Some(key.px) == furthest).collect();
-        // Frames show no level till it covers all of the view, so a zoom out
-        // shows the finest that does, scaled, all of the view alike. The
-        // levels past the view by more than half an octave are drawn at
-        // rest, over what each would show, so one's there as it starts
-        let ladder: Vec<TileKey> = match self.content() {
-            None => Vec::new(),
-            Some(content) => {
-                let center = area.center();
-                let mut keys = Vec::new();
-                let mut step = level_down(px / std::f32::consts::SQRT_2);
-                for _ in 0..LADDER {
-                    if furthest.is_some_and(|furthest| step <= f32::from_bits(furthest)) {
-                        break;
-                    }
-                    let (w, h) = (area.width() * px / step, area.height() * px / step);
-                    let mut reach = Rect::from_xywh(center.x - w / 2.0, center.y - h / 2.0, w, h);
-                    if reach.intersect(content) {
-                        keys.extend(over(step, reach));
-                    }
-                    step /= 2.0;
-                }
-                keys
-            }
-        };
-        for key in here.iter().chain(&ahead).chain(&far).chain(&ladder) {
+        for key in here.iter().chain(&ahead).chain(&far) {
             if let Some(tile) = self.tiles.get_mut(key) {
                 tile.used = frame;
             }
@@ -2151,20 +2113,7 @@ impl Painter {
                 self.dirty = true;
             }
         }
-        // And the level frames show, the finest that covers all of the view,
-        // till a finer one does, so zooming in never leaves only one far out
-        let shown = self.covering(area, px, &over);
-        // The levels drawn further out at rest stay while the zoom changes,
-        // for it to come back out to
-        if !zooming {
-            self.ladder = ladder.clone();
-        }
-        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).chain(&ladder).chain(&shown).chain(&self.ladder).copied().collect();
-        let still = VELLO_STILL.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
-        let ladder_missing: Vec<TileKey> = match zooming || !still.is_zero() {
-            true => Vec::new(),
-            false => ladder.iter().copied().filter(|key| !self.tiles.get(key).is_some_and(|tile| !tile.stale)).collect(),
-        };
+        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).copied().collect();
         let ahead_missing: Vec<TileKey> = ahead.iter().copied().filter(|key| !ready(&self.tiles, key)).collect();
         // The furthest level changes as the zoom goes out, past which the
         // one there is stands in till it's still
@@ -2178,8 +2127,8 @@ impl Painter {
         // While the zoom changes, the level it's headed to first, which
         // drawn before it gets there is never shown scaled up
         let todo = match zooming {
-            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true), (Vec::new(), false, true)],
-            false => [(missing, true, false), (ahead_missing, true, true), (far_missing, false, true), (ladder_missing, false, true)],
+            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true)],
+            false => [(missing, true, false), (ahead_missing, true, true), (far_missing, false, true)],
         };
         // While the view moves, tiles it doesn't show yet take the GPU at
         // most half the time, as the browser drawing Figma's frames shares
@@ -2206,38 +2155,9 @@ impl Painter {
         if far.iter().any(|key| !ready(&self.tiles, key)) {
             return Some(IMAGES_QUIET.saturating_sub(self.image_came_at.elapsed()).max(VELLO_STILL.saturating_sub(self.moved.elapsed())).max(Duration::from_millis(1)));
         }
-        if !still.is_zero() && ladder.iter().any(|key| !self.tiles.get(key).is_some_and(|tile| !tile.stale)) {
-            return Some(still);
-        }
         let view = self.view.clone()?;
         self.update_reason(&view, px, width, height);
         None
-    }
-
-    /// The tiles of the level nearest `px` that has all of `area` where
-    /// there's anything, as frames show it, finer ones first, as one coarser
-    /// is scaled up, blurring it
-    fn covering(&self, area: Rect, px: f32, over: &dyn Fn(f32, Rect) -> Vec<TileKey>) -> Vec<TileKey> {
-        let Some(content) = self.content() else { return Vec::new() };
-        let mut area = area;
-        if !area.intersect(content) {
-            return Vec::new();
-        }
-        let distance = |at: f32| {
-            let octaves = (at / px).log2();
-            if octaves < 0.0 { -octaves * 2.0 } else { octaves }
-        };
-        let mut levels: Vec<u32> = self.tiles.keys().map(|key| key.px).collect();
-        levels.sort_unstable();
-        levels.dedup();
-        levels.sort_by(|a, b| distance(f32::from_bits(*a)).total_cmp(&distance(f32::from_bits(*b))));
-        for level in levels {
-            let keys = over(f32::from_bits(level), area);
-            if keys.iter().all(|key| self.tiles.contains_key(key)) {
-                return keys;
-            }
-        }
-        Vec::new()
     }
 
     /// Draws the first of `keys` and those near it with Vello, or Skia where
