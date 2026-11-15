@@ -1208,6 +1208,9 @@ pub struct Painter {
     verified: u64,
     /// The zooms of the levels further out the view has now
     pyramid: Vec<u32>,
+    /// Vello's tiles of the levels between the view and the furthest, as
+    /// of the view at rest last
+    between: Vec<TileKey>,
     /// When a frame was last drawn, and whether memory was given back since
     drawn: Instant,
     released: bool,
@@ -1360,6 +1363,7 @@ impl Painter {
             verifying: false,
             verified: 0,
             pyramid: Vec::new(),
+            between: Vec::new(),
             drawn: Instant::now(),
             released: true,
             freed: true,
@@ -2103,11 +2107,42 @@ impl Painter {
             let (dx, dy) = ((self.velocity.0 * lag) as f32, (self.velocity.1 * lag) as f32);
             over(level, Rect::from_xywh(area.left + dx, area.top + dy, area.width(), area.height())).into_iter().filter(|key| !here.contains(key)).collect()
         } else {
-            // And around the view once it's still, for a pan to find
-            Self::tiles_over(ox, oy, width, height, level.to_bits(), 1).into_iter().filter(|key| !here.contains(key)).collect()
+            Vec::new()
         };
         let far: Vec<TileKey> = pyramid.iter().copied().filter(|key| Some(key.px) == furthest).collect();
-        for key in here.iter().chain(&ahead).chain(&far) {
+        // Once it's still, the levels between the view and the furthest,
+        // each a power of two further out, over what the view shows zoomed
+        // out to it, but what the one before covers. Zooming out then finds
+        // a level at most an octave off wherever it goes, not the furthest,
+        // many further. They take the room tiles around the view and of
+        // places left took, the nearest first, as many as `VELLO_TILES` has
+        if !zooming {
+            let mut found = Vec::new();
+            let content = self.content();
+            let mut inner = area;
+            let mut next = (px.log2() - 1e-4).floor().exp2();
+            let room = VELLO_TILES.saturating_sub(here.len() + far.len());
+            while furthest.is_none_or(|furthest| next > f32::from_bits(furthest)) {
+                let (w, h) = (area.width() * px / next, area.height() * px / next);
+                let center = area.center();
+                let outer = Rect::from_xywh(center.x - w / 2.0, center.y - h / 2.0, w, h);
+                let mut reach = outer;
+                if !content.is_some_and(|content| reach.intersect(content)) {
+                    break;
+                }
+                let inside = |tile: Rect| tile.left >= inner.left && tile.top >= inner.top && tile.right <= inner.right && tile.bottom <= inner.bottom;
+                let tiles: Vec<TileKey> = over(next, reach).into_iter().filter(|key| !inside(key.area())).collect();
+                if found.len() + tiles.len() > room {
+                    break;
+                }
+                found.extend(tiles);
+                inner = outer;
+                next /= 2.0;
+            }
+            self.between = found;
+        }
+        let levels = self.between.clone();
+        for key in here.iter().chain(&ahead).chain(&far).chain(&levels) {
             if let Some(tile) = self.tiles.get_mut(key) {
                 tile.used = frame;
             }
@@ -2130,8 +2165,10 @@ impl Painter {
                 self.dirty = true;
             }
         }
-        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).copied().collect();
+        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).chain(&levels).copied().collect();
         let ahead_missing: Vec<TileKey> = ahead.iter().copied().filter(|key| !ready(&self.tiles, key)).collect();
+        let between_missing: Vec<TileKey> = if zooming || self.moved.elapsed() < PAN_STILL { Vec::new() } else { levels.iter().copied().filter(|key| !ready(&self.tiles, key)).collect() };
+        let between_waits = !zooming && levels.iter().any(|key| !ready(&self.tiles, key));
         // The furthest level changes as the zoom goes out, past which the
         // one there is stands in till it's still
         let far_missing: Vec<TileKey> = match zooming && self.tiles.keys().any(|key| key.px <= far.first().map_or(0, |key| key.px)) {
@@ -2141,11 +2178,18 @@ impl Painter {
             // and stands in only while the zoom goes out
             false => far.iter().copied().filter(|key| !ready(&self.tiles, key) && (!self.tiles.contains_key(key) || (self.image_came_at.elapsed() >= IMAGES_QUIET && self.moved.elapsed() >= VELLO_STILL))).collect(),
         };
+        // The furthest drawn while the zoom changed is drawn again exactly
+        // once it's been still a while, as is one out of date, as units of
+        // other levels standing in for its own can look wrong
+        let far_rough: Vec<TileKey> = match zooming || self.image_came_at.elapsed() < IMAGES_QUIET || self.moved.elapsed() < VELLO_STILL {
+            true => Vec::new(),
+            false => far.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.exact)).collect(),
+        };
         // While the zoom changes, the level it's headed to first, which
         // drawn before it gets there is never shown scaled up
         let todo = match zooming {
-            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true)],
-            false => [(missing, true, false), (ahead_missing, true, true), (far_missing, false, true)],
+            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true), (Vec::new(), false, true), (Vec::new(), false, true)],
+            false => [(missing, true, false), (ahead_missing, true, true), (far_missing, false, true), (between_missing, true, true), (far_rough, true, true)],
         };
         // While the view moves, tiles it doesn't show yet take the GPU at
         // most half the time, as the browser drawing Figma's frames shares
@@ -2168,8 +2212,12 @@ impl Painter {
         if zooming {
             return Some(SETTLE.saturating_sub(self.zoom.1.elapsed()));
         }
+        if between_waits {
+            return Some(PAN_STILL.saturating_sub(self.moved.elapsed()).max(Duration::from_millis(1)));
+        }
         // Back once images stop coming in, for those waiting on that
-        if far.iter().any(|key| !ready(&self.tiles, key)) {
+        let rough = far.iter().any(|key| self.tiles.get(key).is_some_and(|tile| !tile.exact));
+        if far.iter().any(|key| !ready(&self.tiles, key)) || rough {
             return Some(IMAGES_QUIET.saturating_sub(self.image_came_at.elapsed()).max(VELLO_STILL.saturating_sub(self.moved.elapsed())).max(Duration::from_millis(1)));
         }
         let view = self.view.clone()?;
