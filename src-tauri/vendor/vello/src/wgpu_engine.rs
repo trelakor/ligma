@@ -941,11 +941,12 @@ impl WgpuEngine {
                 let kind = (buf.label, gpu_buf.usage());
                 let bufs = self.pool.bufs.entry(kind).or_default();
                 bufs.push((gpu_buf, recordings));
-                // Two of a kind at most, the biggest, as a render takes some
-                // kinds twice
-                if bufs.len() > 2 {
+                // The biggest of a kind alone: a render takes each kind once,
+                // and a smaller one is left over from before it took more,
+                // which the biggest serves as well
+                if bufs.len() > 1 {
                     bufs.sort_by_key(|(buf, _)| std::cmp::Reverse(buf.size()));
-                    for (buf, _) in bufs.drain(2..) {
+                    for (buf, _) in bufs.drain(1..) {
                         buf.destroy();
                     }
                 }
