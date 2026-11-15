@@ -42,11 +42,16 @@
     return null;
   };
 
-  // Figma's packager of custom effects' code, found once among its modules
-  // by what it does
-  let packager;
+  // Figma's packager of custom effects' code, found among its modules by
+  // what it does. Figma loads it some time after the file opens, so till
+  // it's found it's looked for again, now and then
+  let packager = null;
+  let packagerSought = -Infinity;
   const effectPackager = () => {
-    if (packager === undefined) packager = exportWith("_tryS3ArtifactFallback", "ensurePackaged");
+    if (!packager && performance.now() - packagerSought > 1000) {
+      packagerSought = performance.now();
+      packager = exportWith("_tryS3ArtifactFallback", "ensurePackaged");
+    }
     return packager;
   };
 
