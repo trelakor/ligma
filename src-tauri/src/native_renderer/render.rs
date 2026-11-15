@@ -1218,6 +1218,8 @@ pub struct Painter {
     verified: u64,
     /// The zooms of the levels further out the view has now
     pyramid: Vec<u32>,
+    /// The tiles of the levels further out drawn at rest, see `fill_vello`
+    ladder: Vec<TileKey>,
     /// When a frame was last drawn, and whether memory was given back since
     drawn: Instant,
     released: bool,
@@ -1370,6 +1372,7 @@ impl Painter {
             verifying: false,
             verified: 0,
             pyramid: Vec::new(),
+            ladder: Vec::new(),
             drawn: Instant::now(),
             released: true,
             freed: true,
@@ -2096,8 +2099,9 @@ impl Painter {
             let (dx, dy) = ((self.velocity.0 * lag) as f32, (self.velocity.1 * lag) as f32);
             over(level, Rect::from_xywh(area.left + dx, area.top + dy, area.width(), area.height())).into_iter().filter(|key| !here.contains(key)).collect()
         } else {
-            // And around the view once it's still, for a pan to find
-            Self::tiles_over(ox, oy, width, height, level.to_bits(), 1).into_iter().filter(|key| !here.contains(key)).collect()
+            // Around the view once it's still, the nearest level further out
+            // drawn at rest stands in for a pan, till its tiles are drawn
+            Vec::new()
         };
         let far: Vec<TileKey> = pyramid.iter().copied().filter(|key| Some(key.px) == furthest).collect();
         // Frames show no level till it covers all of the view, so a zoom out
@@ -2150,7 +2154,12 @@ impl Painter {
         // And the level frames show, the finest that covers all of the view,
         // till a finer one does, so zooming in never leaves only one far out
         let shown = self.covering(area, px, &over);
-        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).chain(&ladder).chain(&shown).copied().collect();
+        // The levels drawn further out at rest stay while the zoom changes,
+        // for it to come back out to
+        if !zooming {
+            self.ladder = ladder.clone();
+        }
+        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).chain(&ladder).chain(&shown).chain(&self.ladder).copied().collect();
         let still = VELLO_STILL.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
         let ladder_missing: Vec<TileKey> = match zooming || !still.is_zero() {
             true => Vec::new(),

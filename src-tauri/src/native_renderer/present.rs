@@ -382,18 +382,13 @@ pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u
     cover_over(layers, layers.len(), content, view, size)
 }
 
-/// Most a level standing in for the view's own zoom is scaled up by
-const MOST_SCALED: f32 = 4.0;
-
 /// As `cover`, all of the view at one level: its own zoom where that covers
 /// all of it, or else the finest level that does, scaled, as levels mixed
 /// show squares sharp and blurred side by side, which zooming flickers
 /// through. With `own`, as once its own zoom has covered all of the view,
 /// what's drawn of that shows over the level standing in, as where a pan
-/// reaches past it. Levels mix only where none covers all of the view
-/// scaled up by `MOST_SCALED` at most, as one scaled further is a smear,
-/// as zooming in faster than levels are drawn. And whether its own zoom
-/// covers all of it
+/// reaches past it. Levels mix only where none covers all of the view.
+/// And whether its own zoom covers all of it
 pub fn cover_level(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u32), own: bool) -> (Vec<Piece>, bool, bool) {
     let (drawn, ..) = view.drawn(size);
     let only = |keep: &dyn Fn(f32) -> bool| {
@@ -420,9 +415,6 @@ pub fn cover_level(layers: &[Layer], content: Option<Rect>, view: &View, size: (
     levels.sort_by(|a, b| distance(f32::from_bits(*a)).total_cmp(&distance(f32::from_bits(*b))));
     for level in levels {
         let level = f32::from_bits(level);
-        if drawn / level > MOST_SCALED {
-            continue;
-        }
         let (pieces, holes) = only(&|px| px == level);
         if holes {
             continue;
