@@ -2239,6 +2239,7 @@ impl Painter {
             self.cleaned = Instant::now();
             self.gpu.context.perform_deferred_cleanup(UNUSED, Some(skia_safe::gpu::PurgeResourceOptions::ScratchResourcesOnly));
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
+            super::committed::tidy();
         }
         let extra = self.tiles.len().saturating_sub(VELLO_TILES);
         if extra == 0 {
@@ -2583,6 +2584,9 @@ impl Painter {
         };
         // A scene kept is drawn into a target of the view's size
         let (kept, tw, th) = kept.unwrap_or((super::vello::Kept::NOT, w, h));
+        // Tiles further out than the coarse level take several times what
+        // the view does, all there is drawn small
+        let kept = super::vello::Kept { one_off: px < coarse(self.zoom.0), ..kept };
         let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, tw, th, used_pages, &pictures, &plan, kept);
         for (key, width) in widths {
             let widest = self.vello_shown.entry(key).or_insert(0.0);

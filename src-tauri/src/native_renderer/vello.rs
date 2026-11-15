@@ -336,6 +336,7 @@ impl Vello {
             view: kept.view,
             retain: kept.id,
             reuse: kept.again,
+            one_off: kept.one_off,
         };
         let at = std::time::Instant::now();
         let dropped = vello::low_level::vello_encoding::DROPPED_IMAGES.load(std::sync::atomic::Ordering::Relaxed);
@@ -446,7 +447,7 @@ impl Vello {
                 self.renderer.override_image(&blur.image, Some(base));
             }
             let view = texture.create_view(&Default::default());
-            let params = vello::RenderParams { base_color: AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]), width, height, antialiasing_method, view: IDENTITY, retain: 0, reuse: false };
+            let params = vello::RenderParams { base_color: AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]), width, height, antialiasing_method, view: IDENTITY, retain: 0, reuse: false, one_off: false };
             self.renderer.render_to_texture(&self.device, &self.queue, &depth.scene, &view, &params).map_err(|error| format!("blur's source: {error}"))?;
             self.sync("sources");
             let blurrer = self.blurrer.get_or_insert_with(|| Blurrer::new(&self.device));
@@ -1020,15 +1021,18 @@ pub struct Kept {
     pub again: bool,
     /// Where the scene's put in the target
     pub view: [f32; 6],
+    /// Takes far more of Vello's buffers than the view, see
+    /// `vello::RenderParams::one_off`
+    pub one_off: bool,
 }
 
 impl Kept {
     /// Neither kept nor drawn again
-    pub const NOT: Kept = Kept { id: 0, again: false, view: IDENTITY };
+    pub const NOT: Kept = Kept { id: 0, again: false, view: IDENTITY, one_off: false };
 
     /// Kept as `id`, its corner put at (`x`, `y`) in the target
     pub fn at(id: u64, again: bool, x: f32, y: f32) -> Kept {
-        Kept { id, again, view: [1.0, 0.0, 0.0, 1.0, x, y] }
+        Kept { id, again, view: [1.0, 0.0, 0.0, 1.0, x, y], one_off: false }
     }
 }
 

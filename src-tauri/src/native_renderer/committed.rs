@@ -61,14 +61,20 @@ struct Kind {
 const TINY_TEXTURES: usize = 0;
 const TEXTURES: usize = 1;
 const TARGETS: usize = 2;
-const BIG_TARGETS: usize = 3;
-const UPLOADS: usize = 4;
+const MID_TARGETS: usize = 3;
+const BIG_TARGETS: usize = 4;
+const UPLOADS: usize = 5;
 
-static KINDS_PLACED: [Kind; 5] = [
+/// How long a heap left empty is kept for what's made next
+const EMPTY_KEPT: std::time::Duration = std::time::Duration::from_secs(1);
+
+// Small targets get small heaps, as one that lasts keeps its whole heap
+static KINDS_PLACED: [Kind; 6] = [
     Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, slab: 4 << 20, slot: 4 << 10, largest: 64 << 10 },
     Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, slab: 8 << 20, slot: 64 << 10, largest: 1 << 20 },
+    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 4 << 20, slot: 64 << 10, largest: 1 << 20 },
     Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 16 << 20, slot: 64 << 10, largest: 4 << 20 },
-    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 64 << 20, slot: 1 << 20, largest: 32 << 20 },
+    Kind { heap: D3D12_HEAP_TYPE_DEFAULT, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, slab: 32 << 20, slot: 1 << 20, largest: 32 << 20 },
     Kind { heap: D3D12_HEAP_TYPE_UPLOAD, flags: D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, slab: 4 << 20, slot: 64 << 10, largest: 1 << 20 },
 ];
 
@@ -86,7 +92,7 @@ struct Allocator {
     refs: AtomicI32,
     device: ID3D12Device,
     zeroed_only: bool,
-    pools: [Arc<Mutex<Pool>>; 5],
+    pools: [Arc<Mutex<Pool>>; 6],
     /// None if it couldn't be set up, and render targets get memory of
     /// their own, which starts cleared
     clears: Option<Mutex<Clears>>,
@@ -294,14 +300,19 @@ struct Slab {
     heap: ID3D12Heap,
     used: Vec<bool>,
     in_use: usize,
+    /// When it was last left empty
+    emptied: std::time::Instant,
 }
 
 impl Pool {
     /// `count` slots in a row, in a heap made if none has room
     fn take(&mut self, device: &ID3D12Device, count: usize) -> Option<(usize, usize, ID3D12Heap)> {
         let slots = self.slots();
-        for (index, slab) in self.slabs.iter_mut().enumerate() {
-            let Some(slab) = slab else { continue };
+        // The fullest first, so those with little in them empty and go
+        let mut order: Vec<usize> = (0..self.slabs.len()).filter(|index| self.slabs[*index].is_some()).collect();
+        order.sort_by_key(|index| std::cmp::Reverse(self.slabs[*index].as_ref().map_or(0, |slab| slab.in_use)));
+        for index in order {
+            let Some(slab) = &mut self.slabs[index] else { continue };
             if slots - slab.in_use < count {
                 continue;
             }
@@ -328,7 +339,7 @@ impl Pool {
         let heap = heap?;
         let mut used = vec![false; slots];
         used[..count].fill(true);
-        let slab = Slab { heap: heap.clone(), used, in_use: count };
+        let slab = Slab { heap: heap.clone(), used, in_use: count, emptied: std::time::Instant::now() };
         let index = match self.slabs.iter().position(Option::is_none) {
             Some(index) => {
                 self.slabs[index] = Some(slab);
@@ -354,6 +365,7 @@ impl Pool {
         slab.used[first..first + count].fill(false);
         slab.in_use -= count;
         if slab.in_use == 0 {
+            slab.emptied = std::time::Instant::now();
             let slots = self.slots();
             let others_have_room = self.slabs.iter().enumerate().any(|(other, slab)| other != index && slab.as_ref().is_some_and(|slab| slab.in_use < slots));
             if others_have_room {
@@ -366,10 +378,10 @@ impl Pool {
         (self.kind.slab / self.kind.slot) as usize
     }
 
-    /// Frees the heaps left empty
-    fn trim(&mut self) {
+    /// Frees the heaps left empty, or left empty for `kept`
+    fn trim(&mut self, kept: std::time::Duration) {
         for slab in &mut self.slabs {
-            if slab.as_ref().is_some_and(|slab| slab.in_use == 0) {
+            if slab.as_ref().is_some_and(|slab| slab.in_use == 0 && slab.emptied.elapsed() >= kept) {
                 *slab = None;
             }
         }
@@ -383,6 +395,14 @@ static PLACED: std::sync::LazyLock<Mutex<std::collections::HashMap<(usize, usize
 /// The pools of the allocators made, to trim
 static POOLS: Mutex<Vec<std::sync::Weak<Mutex<Pool>>>> = Mutex::new(Vec::new());
 
+/// Frees heaps left empty for a while
+pub fn tidy() {
+    let pools: Vec<_> = POOLS.lock().unwrap().iter().filter_map(std::sync::Weak::upgrade).collect();
+    for pool in pools {
+        pool.lock().unwrap().trim(EMPTY_KEPT);
+    }
+}
+
 /// Frees heaps nothing is placed in, kept meanwhile for what's made next
 pub fn trim() {
     let mut pools = POOLS.lock().unwrap();
@@ -390,7 +410,7 @@ pub fn trim() {
     let mut kept = Vec::new();
     for pool in pools.iter().filter_map(std::sync::Weak::upgrade) {
         let mut pool = pool.lock().unwrap();
-        pool.trim();
+        pool.trim(std::time::Duration::ZERO);
         // Dev tools: each kind's heaps, and how full each is
         let slots = pool.slots();
         let full: Vec<String> = pool.slabs.iter().flatten().map(|slab| format!("{}/{slots}", slab.in_use)).collect();
@@ -429,7 +449,7 @@ pub fn allocator(device: &ID3D12Device, queue: &ID3D12CommandQueue) -> MemoryAll
         let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS7::default();
         unsafe { device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &mut options as *mut _ as *mut c_void, std::mem::size_of_val(&options) as u32) }.is_err()
     };
-    let pools: [Arc<Mutex<Pool>>; 5] = std::array::from_fn(|kind| Arc::new(Mutex::new(Pool { kind: &KINDS_PLACED[kind], not_zeroed: !zeroed_only, slabs: Vec::new() })));
+    let pools: [Arc<Mutex<Pool>>; 6] = std::array::from_fn(|kind| Arc::new(Mutex::new(Pool { kind: &KINDS_PLACED[kind], not_zeroed: !zeroed_only, slabs: Vec::new() })));
     POOLS.lock().unwrap().extend(pools.iter().map(Arc::downgrade));
     let clears = Clears::new(device, queue).map_err(|error| log::warn!("native renderer: clears: {error}")).ok().map(Mutex::new);
     let allocator = Box::into_raw(Box::new(Allocator { vtable: &VTABLE, refs: AtomicI32::new(1), device: device.clone(), zeroed_only, pools, clears }));
@@ -586,7 +606,13 @@ unsafe fn placed(
         return None;
     } else if targets {
         let size = this.device.GetResourceAllocationInfo(0, &[desc]).SizeInBytes;
-        if size > KINDS_PLACED[TARGETS].largest { BIG_TARGETS } else { TARGETS }
+        if size > KINDS_PLACED[MID_TARGETS].largest {
+            BIG_TARGETS
+        } else if size > KINDS_PLACED[TARGETS].largest {
+            MID_TARGETS
+        } else {
+            TARGETS
+        }
     } else {
         // Placed at 4 KiB if it's small enough to be, which takes it being
         // 64 KiB at most, so only those that could be are asked about

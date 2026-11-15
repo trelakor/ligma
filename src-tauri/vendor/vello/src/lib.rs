@@ -366,7 +366,7 @@ pub struct Renderer {
     pub profile_result: Option<Vec<wgpu_profiler::GpuTimerQueryResult>>,
     /// Ligma: renders' allocation counts being read back, and whether
     /// they've mapped
-    pending: Vec<(wgpu::Buffer, std::sync::Arc<std::sync::Mutex<Option<bool>>>, Option<wgpu::SubmissionIndex>)>,
+    pending: Vec<(wgpu::Buffer, std::sync::Arc<std::sync::Mutex<Option<bool>>>, Option<wgpu::SubmissionIndex>, bool)>,
     /// Ligma: how long the last render took to record and to run, in ms
     pub timing: (f64, f64),
 }
@@ -400,6 +400,9 @@ pub struct RenderParams {
     /// Ligma: kept on the GPU as this, where not 0, to be drawn again with
     /// `reuse`
     pub retain: u64,
+    /// Ligma: sized from room of its own, so a render taking far more
+    /// than others leaves theirs as it is, see `vello_encoding::ONE_OFF`
+    pub one_off: bool,
     /// Ligma: the scene kept as `retain` drawn again where `view` puts it,
     /// the scene passed being left alone
     pub reuse: bool,
@@ -526,6 +529,7 @@ impl Renderer {
             return Err(Error::NotRetained);
         }
         let mut render = Render::new();
+        vello_encoding::ENCODING_ONE_OFF.store(params.one_off, std::sync::atomic::Ordering::Relaxed);
         let mut recording = render.render_encoding_coarse(
             scene.encoding(),
             &mut self.resolver,
@@ -535,6 +539,7 @@ impl Renderer {
             params,
             true,
         );
+        vello_encoding::ENCODING_ONE_OFF.store(false, std::sync::atomic::Ordering::Relaxed);
         let target = render.out_image();
         let bump_buf = render.bump_buf();
         render.record_fine(&self.shaders, &mut recording);
@@ -563,7 +568,7 @@ impl Renderer {
             buf.slice(..).map_async(wgpu::MapMode::Read, move |result| {
                 *done.lock().unwrap() = Some(result.is_ok());
             });
-            self.pending.push((buf, mapped, self.engine.submitted.clone()));
+            self.pending.push((buf, mapped, self.engine.submitted.clone(), params.one_off));
         }
         self.engine.free_download(bump_buf);
         self.timing = (recorded.as_secs_f64() * 1000.0, (at.elapsed() - recorded).as_secs_f64() * 1000.0);
@@ -595,7 +600,7 @@ impl Renderer {
         let submission_index = self.pending[renders - 1].2.clone();
         let _ = device.poll(wgpu::PollType::Wait { submission_index, timeout: None });
         let mut short = None;
-        for (buf, mapped, _) in self.pending.drain(..renders).collect::<Vec<_>>() {
+        for (buf, mapped, _, one_off) in self.pending.drain(..renders).collect::<Vec<_>>() {
             if *mapped.lock().unwrap() != Some(true) {
                 return Err(Error::OutOfRoom);
             }
@@ -604,7 +609,7 @@ impl Renderer {
                 bytemuck::pod_read_unaligned(&view)
             };
             buf.unmap();
-            if let Some(why) = fit(&bump) {
+            if let Some(why) = fit(&bump, one_off) {
                 short = Some(why);
             }
         }
@@ -906,6 +911,9 @@ impl Renderer {
 /// forgotten after `PEAK_KEPT`
 #[cfg(feature = "wgpu")]
 static TAKEN: std::sync::Mutex<[(u32, Option<std::time::Instant>); 7]> = std::sync::Mutex::new([(0, None); 7]);
+/// Ligma: the same of one-off renders
+#[cfg(feature = "wgpu")]
+static TAKEN_ONE_OFF: std::sync::Mutex<[(u32, Option<std::time::Instant>); 7]> = std::sync::Mutex::new([(0, None); 7]);
 
 /// Ligma: how long buffers keep room for the most they took, so zooming
 /// back out doesn't run out
@@ -925,16 +933,15 @@ fn size_class(x: u32) -> u32 {
 /// Ligma: dev tools, what the last render checked took of each buffer
 pub static LAST_TOOK: std::sync::Mutex<[u32; 7]> = std::sync::Mutex::new([0; 7]);
 
-fn fit(bump: &BumpAllocators) -> Option<String> {
+fn fit(bump: &BumpAllocators, one_off: bool) -> Option<String> {
     use std::sync::atomic::Ordering::Relaxed;
-    use vello_encoding::CAPACITY as C;
-    let room = C.all();
+    let room = if one_off { vello_encoding::ONE_OFF.all() } else { vello_encoding::CAPACITY.all() };
     let took = [bump.binning, bump.ptcl, bump.tile, bump.seg_counts, bump.segments, bump.blend, bump.lines];
     *LAST_TOOK.lock().unwrap() = took;
     let had = room.map(|room| room.load(Relaxed));
     let names = ["binning", "ptcl", "tile", "seg_counts", "segments", "blend", "lines"];
     let mut short = (bump.failed != 0).then(|| format!("failed={:#x}", bump.failed));
-    let mut taken = TAKEN.lock().unwrap();
+    let mut taken = if one_off { TAKEN_ONE_OFF.lock().unwrap() } else { TAKEN.lock().unwrap() };
     for ((((room, took), have), taken), name) in room.into_iter().zip(took).zip(had).zip(taken.iter_mut()).zip(names) {
         if took >= taken.0 || taken.1.is_none_or(|at| at.elapsed() > PEAK_KEPT) {
             *taken = (took, Some(std::time::Instant::now()));

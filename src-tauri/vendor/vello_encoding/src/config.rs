@@ -194,6 +194,21 @@ pub static CAPACITY: Capacity = Capacity {
     lines: AtomicU32::new(1 << 21),
 };
 
+/// Ligma: the room renders set apart as one-offs take, as tiles far out
+/// that take far more than the view, so it never grows to what they take
+pub static ONE_OFF: Capacity = Capacity {
+    binning: AtomicU32::new(1 << 18),
+    ptcl: AtomicU32::new(1 << 23),
+    tile: AtomicU32::new(1 << 21),
+    seg_counts: AtomicU32::new(1 << 21),
+    segments: AtomicU32::new(1 << 21),
+    blend: AtomicU32::new(1 << 20),
+    lines: AtomicU32::new(1 << 21),
+};
+
+/// Ligma: whether the render being encoded is a one-off, see `ONE_OFF`
+pub static ENCODING_ONE_OFF: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 impl Capacity {
     /// In the order of `PER_TAGS`
     pub fn all(&self) -> [&AtomicU32; 7] {
@@ -218,13 +233,14 @@ impl RenderConfig {
             WorkgroupCounts::new(layout, width_in_tiles, height_in_tiles, n_path_tags);
         let mut buffer_sizes = BufferSizes::new(layout, &workgroup_counts);
         let room = |at: &AtomicU32| at.load(Ordering::Relaxed);
-        buffer_sizes.bin_data = BufferSize::new(layout.bin_data_start + room(&CAPACITY.binning));
-        buffer_sizes.ptcl = BufferSize::new(ptcl_start(width, height) + room(&CAPACITY.ptcl));
-        buffer_sizes.tiles = BufferSize::new(room(&CAPACITY.tile));
-        buffer_sizes.seg_counts = BufferSize::new(room(&CAPACITY.seg_counts));
-        buffer_sizes.segments = BufferSize::new(room(&CAPACITY.segments));
-        buffer_sizes.blend_spill = BufferSize::new(room(&CAPACITY.blend));
-        buffer_sizes.lines = BufferSize::new(room(&CAPACITY.lines));
+        let capacity = if ENCODING_ONE_OFF.load(Ordering::Relaxed) { &ONE_OFF } else { &CAPACITY };
+        buffer_sizes.bin_data = BufferSize::new(layout.bin_data_start + room(&capacity.binning));
+        buffer_sizes.ptcl = BufferSize::new(ptcl_start(width, height) + room(&capacity.ptcl));
+        buffer_sizes.tiles = BufferSize::new(room(&capacity.tile));
+        buffer_sizes.seg_counts = BufferSize::new(room(&capacity.seg_counts));
+        buffer_sizes.segments = BufferSize::new(room(&capacity.segments));
+        buffer_sizes.blend_spill = BufferSize::new(room(&capacity.blend));
+        buffer_sizes.lines = BufferSize::new(room(&capacity.lines));
         Self {
             gpu: ConfigUniform {
                 width_in_tiles,
