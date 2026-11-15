@@ -33,7 +33,9 @@
 //! Copy and paste adjustments (adjustments.rs) carry these too, through
 //! `window.__ligmaColor`
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::AppHandle;
@@ -42,7 +44,8 @@ use crate::settings::Settings;
 
 /// Runs in Figma tabs (color_adjustments.js). `__LIGMA_COLOR__` is `{ on,
 /// rev }`: the setting when the tab was made. A page loaded later in the
-/// same tab may find a newer one in `localStorage`; the higher `rev` wins
+/// same tab may find a newer one in `localStorage`; the higher `rev` wins.
+/// `__LIGMA_LUTS__` names Photoshop's 3D LUTs, if it's installed
 const PAGE_JS: &str = include_str!("color_adjustments.js");
 
 /// The setting,
@@ -68,7 +71,66 @@ pub fn init(settings: &Settings) {
 
 /// `PAGE_JS`, for a new Figma tab
 pub fn page_js() -> String {
-    PAGE_JS.replace("__LIGMA_COLOR__", &state())
+    let luts = serde_json::to_string(&photoshop_luts().1).unwrap_or_else(|_| "[]".into());
+    PAGE_JS.replace("__LIGMA_COLOR__", &state()).replace("__LIGMA_LUTS__", &luts)
+}
+
+/// Photoshop's 3D LUTs, as Color Lookup lists them: the newest Photoshop's
+/// `Presets/3DLUTs` folder and its .cube, .3dl and .look files, sorted as
+/// Photoshop sorts them. Read where they are, never copied into Ligma, so
+/// only someone with Photoshop has them
+fn photoshop_luts() -> &'static (Option<PathBuf>, Vec<String>) {
+    static LUTS: OnceLock<(Option<PathBuf>, Vec<String>)> = OnceLock::new();
+    LUTS.get_or_init(|| {
+        let roots: Vec<PathBuf> = if cfg!(target_os = "macos") {
+            vec![PathBuf::from("/Applications")]
+        } else {
+            [std::env::var_os("ProgramW6432"), std::env::var_os("ProgramFiles")].into_iter().flatten().map(|root| PathBuf::from(root).join("Adobe")).collect()
+        };
+        let mut folders: Vec<PathBuf> = roots
+            .iter()
+            .filter_map(|root| std::fs::read_dir(root).ok())
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("Adobe Photoshop"))
+            .map(|entry| entry.path().join("Presets").join("3DLUTs"))
+            .filter(|folder| folder.is_dir())
+            .collect();
+        folders.sort();
+        let Some(folder) = folders.pop() else {
+            return (None, Vec::new());
+        };
+        let mut names: Vec<String> = std::fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().is_file())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| {
+                let lower = name.to_lowercase();
+                lower.ends_with(".cube") || lower.ends_with(".3dl") || lower.ends_with(".look")
+            })
+            .collect();
+        names.sort_by_key(|name| name.to_lowercase());
+        (Some(folder), names)
+    })
+}
+
+/// The text of Photoshop's 3D LUT named by `bytes`, for a tab that picked
+/// it (see handoff.rs). Only one listed by `photoshop_luts`
+pub fn photoshop_lut(bytes: &[u8]) -> Result<String, &'static str> {
+    let (Some(folder), names) = photoshop_luts() else {
+        return Err("missing");
+    };
+    let name = std::str::from_utf8(bytes).map_err(|_| "failed")?;
+    if !names.iter().any(|each| each == name) {
+        return Err("missing");
+    }
+    let bytes = std::fs::read(folder.join(name)).map_err(|_| "failed")?;
+    if bytes.len() > 8 << 20 {
+        return Err("failed");
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Sends a changed setting to every loaded tab

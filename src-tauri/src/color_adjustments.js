@@ -32,8 +32,8 @@
   // What can be added, in the order the menu and the list show them, with
   // Photoshop's and Camera Raw's settings. Groups are split by a line in
   // the menu. The image is always made in one order, whatever the list's:
-  // Presence and Sharpen, Levels and Curves, then color, then Invert and
-  // Vignette last
+  // Presence and Sharpen, Levels and Curves, then color, Gradient Map,
+  // then Invert and Vignette last
   const CATALOG = [
     { id: "levels", name: "Levels", group: 0 },
     { id: "curves", name: "Curves", group: 0 },
@@ -49,6 +49,7 @@
     { id: "selective", name: "Selective Color", group: 2 },
     { id: "vignette", name: "Vignette", group: 3 },
     { id: "invert", name: "Invert", group: 3 },
+    { id: "gradient", name: "Gradient Map", group: 3 },
   ];
   const NAMES = Object.fromEntries(CATALOG.map(({ id, name }) => [id, name]));
 
@@ -118,6 +119,7 @@
       selective: () => ({ ...Object.fromEntries(SELECTIVE.map(([range]) => [range, [0, 0, 0, 0]])), relative: true }),
       vignette: () => ({ amount: -25, midpoint: 50, roundness: 0, feather: 50, highlights: 0, style: "highlight" }),
       invert: () => ({}),
+      gradient: () => ({ preset: "blackWhite", stops: GRADIENTS[0][2].map(([at, color]) => [at, color]), reverse: false, dither: false, method: "perceptual" }),
     })[id]();
 
   // Any shape saved or copied, as one Ligma can use: the template's keys
@@ -127,6 +129,15 @@
     if (typeof template === "boolean") return typeof value === "boolean" ? value : template;
     if (typeof template === "string") return typeof value === "string" && value.length <= 60000 ? value : template;
     if (Array.isArray(template)) {
+      if (Array.isArray(template[0]) && typeof template[0][1] === "string") {
+        // Gradient stops, at 0 to 100, sorted, 2 to 12 of them
+        const stops = (Array.isArray(value) ? value : [])
+          .filter((stop) => Array.isArray(stop) && Number.isFinite(stop[0]) && /^#[\da-f]{6}$/i.test(stop[1]))
+          .map(([at, color]) => [clamp(Math.round(at), 0, 100), color.toLowerCase()])
+          .sort((a, b) => a[0] - b[0])
+          .slice(0, 12);
+        return stops.length >= 2 ? stops : template;
+      }
       if (Array.isArray(template[0])) {
         // Curve points, sorted, in 0 to 255, 2 to 16 of them
         const points = (Array.isArray(value) ? value : [])
@@ -247,7 +258,7 @@
       precision highp float;
       varying vec2 uv;
       varying vec2 fuv;
-      uniform sampler2D src, blur1, blur3, blur5, dark5, tone, lut;
+      uniform sampler2D src, blur1, blur3, blur5, dark5, tone, lut, grad;
       uniform vec2 texel;
       uniform float spatial;
       uniform vec4 sharp;
@@ -271,6 +282,7 @@
       uniform float bw[6];
       uniform vec4 bwFlags;
       uniform vec2 lutInfo;
+      uniform vec2 gradFlags;
       uniform float invert;
       uniform vec4 vig;
       uniform vec4 vig2;
@@ -443,6 +455,13 @@
           c = bwFlags.y > 0.5 ? toRgb(vec3(bwFlags.z, bwFlags.w, gray)) : vec3(gray);
         }
         if (lutInfo.x > 0.0) c = mix(c, lookup(c), lutInfo.x);
+        // Gradient Map: lightness to the gradient's color, dithered so its
+        // steps don't band
+        if (gradFlags.x > 0.5) {
+          float t = clamp(lum(c), 0.0, 1.0);
+          c = texture2D(grad, vec2(t * (255.0 / 256.0) + 0.5 / 256.0, 0.5)).rgb;
+          if (gradFlags.y > 0.5) c += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+        }
         if (invert > 0.5) c = 1.0 - c;
         // Vignette, as Camera Raw's: Midpoint where it starts, Feather how
         // softly, Roundness from a rectangle to a circle
@@ -507,6 +526,7 @@
     const source = texture();
     const tone = texture();
     const lut = texture();
+    const gradient = texture();
     const none = texture();
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
     // Targets to draw into, by name, kept while their size stays
@@ -545,6 +565,7 @@
     let drawn = null;
     let toneKey = null;
     let lutKey = null;
+    let gradientKey = null;
     return {
       draw: (picture, u) => {
         if (gl.isContextLost()) throw new Error("WebGL lost");
@@ -602,6 +623,13 @@
           lutKey = u.lut.key;
         }
         gl.uniform1i(final.at("lut"), 6);
+        gl.activeTexture(gl.TEXTURE7);
+        gl.bindTexture(gl.TEXTURE_2D, u.grad ? gradient : none);
+        if (u.grad && u.gradKey !== gradientKey) {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, u.grad);
+          gradientKey = u.gradKey;
+        }
+        gl.uniform1i(final.at("grad"), 7);
         const set = (kind, name, value) => gl[`uniform${kind}`](final.at(name), value);
         set("2fv", "texel", [1 / width, 1 / height]);
         set("1f", "spatial", spatial ? 1 : 0);
@@ -629,6 +657,7 @@
         set("1fv", "bw", u.bw);
         set("4fv", "bwFlags", u.bwFlags);
         set("2fv", "lutInfo", u.lut ? [u.lut.intensity, u.lut.size] : [0, 2]);
+        set("2fv", "gradFlags", u.gradFlags);
         set("1f", "invert", u.invert);
         set("4fv", "vig", u.vig);
         set("4fv", "vig2", [u.vig2[0], u.vig2[1], width / height, u.vig2[2]]);
@@ -954,27 +983,72 @@
     return out;
   };
 
-  // Color Lookup's own looks, made as lookup tables 17 across
+  // Color Lookup's own looks, Ligma's takes on Photoshop's, made as lookup
+  // tables 17 across. Photoshop's own come from where it's installed
   const LUT_SIZE = 17;
+  const luma = ([r, g, b]) => 0.299 * r + 0.587 * g + 0.114 * b;
+  const contrasted = (c, k) => c.map((v) => {
+    const x = clamp(v, 0, 1);
+    return v + (x * x * (3 - 2 * x) - v) * k;
+  });
+  const saturated = (c, k) => {
+    const l = luma(c);
+    return c.map((v) => l + (v - l) * k);
+  };
+  // Shadows and highlights tinted, each by its own color
+  const toned = (c, shadows, highlights) => {
+    const l = clamp(luma(c), 0, 1);
+    return c.map((v, i) => v + shadows[i] * (1 - l) ** 2 + highlights[i] * l * l);
+  };
+  const lifted = (c, black, white = 1) => c.map((v) => black + v * (white - black));
+  const scaled = (c, by, plus = [0, 0, 0]) => c.map((v, i) => v * by[i] + plus[i]);
+  // Where one channel leads the others, 0 to 1
+  const leads = (c, i) => clamp((c[i] - Math.max(...c.filter((_, j) => j !== i))) * 3, 0, 1);
   const LOOKS = [
-    ["warm", "Warm film", (r, g, b) => {
-      const l = 0.299 * r + 0.587 * g + 0.114 * b;
-      const lift = (v) => 0.06 + v * 0.92;
-      return [lift(r * 1.06 + 0.02), lift(g * 1.01 + 0.01), lift(b * 0.88 + l * 0.04)];
+    ["bleach", "Bleach bypass", (c) => contrasted(saturated(c, 0.4), 1)],
+    ["candlelight", "Candlelight", (c) => contrasted(toned(scaled(c, [1, 0.8, 0.55], [0.03, 0.01, 0]), [0.04, 0.01, -0.02], [0.02, 0, -0.04]), 0.15)],
+    ["coolMatte", "Cool matte", (c) => scaled(c, [0.84, 0.85, 0.86], [0.08, 0.09, 0.12])],
+    ["crispWarm", "Crisp warm", (c) => saturated(toned(contrasted(c, 0.45), [0, 0, 0.02], [0.05, 0.02, -0.04]), 1.12)],
+    ["crispWinter", "Crisp winter", (c) => saturated(toned(contrasted(c, 0.4), [-0.02, 0, 0.04], [-0.03, 0, 0.05]), 0.9)],
+    ["dropBlues", "Drop blues", (c) => {
+      const blue = leads(c, 2);
+      const l = luma(c);
+      return contrasted([c[0], c[1] + (l - c[1]) * blue * 0.3, c[2] + (l - c[2]) * blue * 0.75], 0.15);
     }],
-    ["tealOrange", "Teal and orange", (r, g, b) => {
-      const l = 0.299 * r + 0.587 * g + 0.114 * b;
-      const shadow = 1 - l;
-      return [r + l * 0.08 - shadow * 0.06, g + l * 0.02 + shadow * 0.03, b - l * 0.08 + shadow * 0.09];
+    ["edgyAmber", "Edgy amber", (c) => contrasted(scaled(saturated(c, 0.6), [1.08, 0.98, 0.72], [0.04, 0.02, 0]), 0.55)],
+    ["fallColors", "Fall colors", (c) => {
+      const green = leads(c, 1);
+      return contrasted(saturated([c[0] + green * (c[1] - c[0]) * 0.9, c[1] - green * (c[1] - c[2]) * 0.15, c[2] * (1 - green * 0.3)], 1.15), 0.2);
     }],
-    ["bleach", "Bleach bypass", (r, g, b) => {
-      const l = 0.299 * r + 0.587 * g + 0.114 * b;
-      const s = (v) => v * v * (3 - 2 * v);
-      return [s(r * 0.4 + l * 0.6), s(g * 0.4 + l * 0.6), s(b * 0.4 + l * 0.6)];
+    ["filmPrint", "Film print", (c) => saturated(toned(contrasted(c, 0.55), [-0.03, 0.01, 0.03], [0.04, 0.02, -0.03]), 1.08)],
+    ["filmPrintSoft", "Film print, soft", (c) => toned(lifted(contrasted(c, 0.25), 0.03, 0.97), [-0.02, 0.01, 0.02], [0.03, 0.015, -0.02])],
+    ["filmStock", "Film stock 50", (c) => saturated(toned(lifted(contrasted(c, 0.2), 0.05, 0.96), [-0.01, 0.02, 0], [0.03, 0.02, -0.02]), 0.92)],
+    ["foggyNight", "Foggy night", (c) => toned(lifted(saturated(c, 0.55), 0.12, 0.82), [-0.02, 0.01, 0.06], [-0.02, 0, 0.03])],
+    ["futuristicBleak", "Futuristic bleak", (c) => toned(contrasted(saturated(c, 0.35), 0.6), [-0.03, 0.02, 0.04], [-0.02, 0.02, 0.03])],
+    ["horrorBlue", "Horror blue", (c) => contrasted(scaled(saturated(c, 0.4), [0.75, 0.92, 1.05], [0, 0.02, 0.08]), 0.5)],
+    ["lateSunset", "Late sunset", (c) => contrasted(saturated(toned(scaled(c, [1.08, 0.95, 0.82], [0.04, 0.02, 0.03]), [0.03, -0.01, 0.05], [0.06, 0.03, -0.05]), 1.1), 0.2)],
+    ["moonlight", "Moonlight", (c) => contrasted(scaled(saturated(c, 0.35), [0.63, 0.74, 0.88], [0, 0.02, 0.05]), 0.2)],
+    ["nightFromDay", "Night from day", (c) => contrasted(scaled(saturated(c, 0.5), [0.45, 0.55, 0.8], [0, 0.01, 0.04]), 0.35)],
+    ["softWarming", "Soft warming", (c) => toned(scaled(c, [1.03, 1, 0.94], [0.01, 0.005, 0]), [0.01, 0, -0.01], [0.02, 0.01, -0.02])],
+    ["tealOrange", "Teal and orange", (c) => {
+      const l = luma(c);
+      return [c[0] + l * 0.08 - (1 - l) * 0.06, c[1] + l * 0.02 + (1 - l) * 0.03, c[2] - l * 0.08 + (1 - l) * 0.09];
     }],
-    ["coolMatte", "Cool matte", (r, g, b) => [0.08 + r * 0.84, 0.09 + g * 0.85, 0.12 + b * 0.86]],
-    ["file", "Load .cube file…", null],
+    ["tealOrangeContrast", "Teal and orange, contrast", (c) => {
+      const l = luma(c);
+      return contrasted([c[0] + l * 0.1 - (1 - l) * 0.08, c[1] + l * 0.02 + (1 - l) * 0.04, c[2] - l * 0.1 + (1 - l) * 0.12], 0.45);
+    }],
+    ["tensionGreen", "Tension green", (c) => contrasted(scaled(saturated(c, 0.6), [0.9, 1.04, 0.85], [0, 0.03, 0]), 0.45)],
+    ["threeStrip", "Three-strip", (c) => saturated(contrasted([c[0] * 1.15 - (c[1] + c[2]) * 0.075, c[1] * 1.15 - (c[0] + c[2]) * 0.075, c[2] * 1.15 - (c[0] + c[1]) * 0.075], 0.25), 1.15)],
+    ["twoStrip", "Two-strip", (c) => {
+      const cyan = (c[1] + c[2]) / 2;
+      return contrasted([c[0], cyan * 0.95 + c[0] * 0.05, cyan], 0.3);
+    }],
+    ["warm", "Warm film", (c) => lifted(scaled(c, [1.06, 1.01, 0.88], [0.02, 0.01, luma(c) * 0.04]), 0.06, 0.98)],
   ];
+  // Photoshop's tables, by file name, read from its folder when picked
+  const PHOTOSHOP_LUTS = __LIGMA_LUTS__;
+
   const packed = (size, at) => {
     const data = new Uint8Array(size * size * size * 4);
     for (let b = 0; b < size; b++)
@@ -1002,14 +1076,17 @@
         } catch {}
       } else {
         const look = LOOKS.find(([id]) => id === item.lut)?.[2];
-        if (look) data = packed(LUT_SIZE, (r, g, b) => look(r / (LUT_SIZE - 1), g / (LUT_SIZE - 1), b / (LUT_SIZE - 1)));
+        if (look) data = packed(LUT_SIZE, (r, g, b) => look([r / (LUT_SIZE - 1), g / (LUT_SIZE - 1), b / (LUT_SIZE - 1)]));
       }
       tables.set(key, data && { key, size: LUT_SIZE, data });
     }
     return tables.get(key);
   };
-  // A .cube file's 3D table, made 17 across, as base64 to keep. Null if
-  // it isn't one
+
+  // 3D LUT files, each as `{ size, read(r, g, b) }`, its color at a point of
+  // its grid, 0 to 1. Null if it isn't one. .cube lists red fastest, .3dl
+  // blue fastest in whole numbers, and Photoshop's .look keeps a table as
+  // hex floats
   const fromCube = (text) => {
     let size = 0;
     let min = [0, 0, 0];
@@ -1025,8 +1102,48 @@
       else if (/^[-\d.]/.test(words[0]) && words.length >= 3) values.push(words.slice(0, 3).map(Number));
     }
     if (!(size >= 2 && size <= 128) || values.length !== size ** 3) return null;
-    const read = (r, g, b) => values[(b * size + g) * size + r];
-    // Trilinear, from the file's size to 17
+    return { size, read: (r, g, b) => values[(b * size + g) * size + r].map((v, i) => (v - min[i]) / (max[i] - min[i] || 1)) };
+  };
+  const from3dl = (text) => {
+    const rows = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const numbers = line.split(/\s+/).map(Number);
+      if (numbers.every(Number.isFinite)) rows.push(numbers);
+    }
+    const at = rows.findIndex((numbers) => numbers.length > 3);
+    if (at < 0) return null;
+    const size = rows[at].length;
+    const values = rows.slice(at + 1).filter((numbers) => numbers.length >= 3);
+    if (!(size >= 2 && size <= 128) || values.length < size ** 3) return null;
+    let top = 0;
+    for (const value of values) top = Math.max(top, value[0], value[1], value[2]);
+    const depth = top <= 1023 ? 1023 : top <= 4095 ? 4095 : 65535;
+    return { size, read: (r, g, b) => values[(r * size + g) * size + b].slice(0, 3).map((v) => v / depth) };
+  };
+  const fromLook = (text) => {
+    const size = Number(/<size>\s*"?(\d+)"?\s*<\/size>/.exec(text)?.[1]);
+    const digits = /<data>\s*"?([\da-fA-F\s]+)"?\s*<\/data>/.exec(text)?.[1].replace(/\s+/g, "");
+    if (!(size >= 2 && size <= 64) || !digits || digits.length < size ** 3 * 24) return null;
+    const bytes = new Uint8Array(size ** 3 * 12);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(digits.slice(i * 2, i * 2 + 2), 16);
+    const view = new DataView(bytes.buffer);
+    return {
+      size,
+      read: (r, g, b) => {
+        const i = ((b * size + g) * size + r) * 12;
+        return [view.getFloat32(i, true), view.getFloat32(i + 4, true), view.getFloat32(i + 8, true)];
+      },
+    };
+  };
+  const readTable = (name, text) => {
+    const lower = name.toLowerCase();
+    return lower.endsWith(".3dl") ? from3dl(text) : lower.endsWith(".look") ? fromLook(text) : fromCube(text);
+  };
+  // A table made 17 across, trilinear, as base64 to keep on the layer:
+  // red, green and blue bytes, red fastest
+  const keepTable = ({ size, read }) => {
     const sample = (r, g, b) => {
       const at = [r, g, b].map((v) => (v * (size - 1)) / (LUT_SIZE - 1));
       const lo = at.map(Math.floor);
@@ -1036,8 +1153,9 @@
       for (let corner = 0; corner < 8; corner++) {
         const pick = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
         const weight = pick.reduce((product, high, i) => product * (high ? t[i] : 1 - t[i]), 1);
+        if (!weight) continue;
         const value = read(pick[0] ? hi[0] : lo[0], pick[1] ? hi[1] : lo[1], pick[2] ? hi[2] : lo[2]);
-        for (let i = 0; i < 3; i++) out[i] += weight * ((value[i] - min[i]) / (max[i] - min[i] || 1));
+        for (let i = 0; i < 3; i++) out[i] += weight * value[i];
       }
       return out;
     };
@@ -1047,11 +1165,81 @@
         for (let r = 0; r < LUT_SIZE; r++) {
           const out = sample(r, g, b);
           const i = ((b * LUT_SIZE + g) * LUT_SIZE + r) * 3;
-          for (let c = 0; c < 3; c++) bytes[i + c] = Math.round(clamp(out[c], 0, 1) * 255);
+          for (let c = 0; c < 3; c++) bytes[i + c] = Math.round(clamp(Number.isFinite(out[c]) ? out[c] : 0, 0, 1) * 255);
         }
-    let text64 = "";
-    for (let i = 0; i < bytes.length; i += 8192) text64 += String.fromCharCode(...bytes.subarray(i, i + 8192));
-    return btoa(text64);
+    let text = "";
+    for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    return btoa(text);
+  };
+
+  // Gradient Map's gradients: Photoshop's classic presets and a few
+  // duotones, stops at 0 to 100
+  const GRADIENTS = [
+    ["blackWhite", "Black, White", [[0, "#000000"], [100, "#ffffff"]]],
+    ["violetOrange", "Violet, Orange", [[0, "#290a59"], [100, "#ff7c00"]]],
+    ["blueRedYellow", "Blue, Red, Yellow", [[0, "#0a00b2"], [50, "#ff0000"], [100, "#fffc00"]]],
+    ["blueYellowBlue", "Blue, Yellow, Blue", [[0, "#0a00b2"], [50, "#fffc00"], [100, "#0a00b2"]]],
+    ["orangeYellowOrange", "Orange, Yellow, Orange", [[0, "#ff6e02"], [50, "#ffff00"], [100, "#ff6d00"]]],
+    ["violetGreenOrange", "Violet, Green, Orange", [[0, "#6f1580"], [50, "#00a14b"], [100, "#ff8c00"]]],
+    ["yellowVioletOrangeBlue", "Yellow, Violet, Orange, Blue", [[0, "#f9e000"], [33, "#6e0ea8"], [66, "#ff7a00"], [100, "#0066ff"]]],
+    ["copper", "Copper", [[0, "#97461a"], [30, "#fbd8c5"], [83, "#6c2e16"], [100, "#efdacd"]]],
+    ["chrome", "Chrome", [[0, "#29343e"], [48, "#e8eef3"], [52, "#6e5b46"], [76, "#c6a986"], [100, "#ffffff"]]],
+    ["spectrum", "Spectrum", [[0, "#ff0000"], [17, "#ffff00"], [33, "#00ff00"], [50, "#00ffff"], [67, "#0000ff"], [83, "#ff00ff"], [100, "#ff0000"]]],
+    ["sepia", "Sepia", [[0, "#1d1209"], [55, "#8f6a43"], [100, "#f3e3c3"]]],
+    ["cyanotype", "Cyanotype", [[0, "#071a35"], [55, "#2f6fa3"], [100, "#eaf3fa"]]],
+    ["infrared", "Infrared", [[0, "#000000"], [35, "#7a0c55"], [70, "#ff6b35"], [100, "#fff6d5"]]],
+    ["purplePeach", "Purple, Peach", [[0, "#2d0b4e"], [100, "#ffb38a"]]],
+    ["tealCream", "Teal, Cream", [[0, "#0f3b3a"], [100, "#f6ecd6"]]],
+    ["midnightGold", "Midnight, Gold", [[0, "#0b1026"], [100, "#ffd36b"]]],
+  ];
+  const METHODS = [
+    ["perceptual", "Perceptual"],
+    ["linear", "Linear"],
+    ["classic", "Classic"],
+  ];
+  const toLinear = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  const toSrgb = (v) => (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055);
+  const toOklab = (c) => {
+    const [r, g, b] = c.map(toLinear);
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+  };
+  const fromOklab = ([L, a, b]) => {
+    const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+    const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+    const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s].map((v) => toSrgb(clamp(v, 0, 1)));
+  };
+  // The gradient's color at `at`, 0 to 100, mixed as `method` says:
+  // Perceptual in Oklab, Linear in linear light, Classic as the colors are
+  const colorAt = (stops, at, method) => {
+    let i = stops.findIndex(([position]) => position >= at);
+    if (i < 0) return hex(stops[stops.length - 1][1]);
+    if (i === 0) return hex(stops[0][1]);
+    const [[from, a], [to, b]] = [stops[i - 1], stops[i]];
+    const t = to > from ? (at - from) / (to - from) : 1;
+    const [ca, cb] = [hex(a), hex(b)];
+    const mixed = (x, y) => x.map((v, j) => v + (y[j] - v) * t);
+    if (method === "classic") return mixed(ca, cb);
+    if (method === "linear") return mixed(ca.map(toLinear), cb.map(toLinear)).map(toSrgb);
+    return fromOklab(mixed(toOklab(ca), toOklab(cb)));
+  };
+  // Lightness to color, 256 steps
+  const gradientOf = (item) => {
+    const out = new Uint8Array(1024);
+    for (let x = 0; x < 256; x++) {
+      const at = ((item.reverse ? 255 - x : x) / 255) * 100;
+      const color = colorAt(item.stops, at, item.method);
+      for (let c = 0; c < 3; c++) out[x * 4 + c] = Math.round(clamp(color[c], 0, 1) * 255);
+      out[x * 4 + 3] = 255;
+    }
+    return out;
+  };
+  const gradientCss = (stops, method = "perceptual", reverse = false) => {
+    const space = { perceptual: "in oklab ", linear: "in srgb-linear ", classic: "" }[method] ?? "";
+    return `linear-gradient(${space}${reverse ? 270 : 90}deg, ${stops.map(([at, color]) => `${color} ${at}%`).join(", ")})`;
   };
 
   const hex = (color) => {
@@ -1072,6 +1260,7 @@
     const mono = on("mono");
     const lookup = on("lookup");
     const vignette = on("vignette");
+    const map = on("gradient");
     const tone = toneOf(s.items);
     const lut = lookup ? tableOf(lookup) : null;
     const filter = photo && (photo.filter === "custom" ? photo.color : FILTERS.find(([id]) => id === photo.filter)?.[2]);
@@ -1095,6 +1284,9 @@
       bw: mono ? ["reds", "yellows", "greens", "cyans", "blues", "magentas"].map((range) => mono[range] / 100) : [0, 0, 0, 0, 0, 0],
       bwFlags: mono ? [1, mono.tint ? 1 : 0, (((mono.hue % 360) + 360) % 360) / 360, clamp(mono.saturation, 0, 100) / 100] : [0, 0, 0, 0],
       lut: lut && { ...lut, intensity: clamp(lookup.intensity, 0, 100) / 100 },
+      grad: map ? gradientOf(map) : null,
+      gradKey: map && JSON.stringify([map.stops, map.reverse, map.method]),
+      gradFlags: [map ? 1 : 0, map?.dither ? 1 : 0],
       invert: s.items.invert?.on ? 1 : 0,
       vig: vignette ? [clamp(vignette.amount, -100, 100) / 100, vignette.midpoint / 100, vignette.roundness / 100, vignette.feather / 100] : [0, 0.5, 0, 0.5],
       vig2: [vignette ? vignette.highlights / 100 : 0, vignette ? STYLES.findIndex(([id]) => id === vignette.style) : 0, vignette ? 1 : 0],
@@ -1750,7 +1942,15 @@
     ${S} input[type="color"] { width: 100%; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; }
     ${S}[data-ligma-color="menu"] { position: fixed; z-index: 2147483000; min-width: 200px; max-height: 70vh; overflow: auto; padding: 8px; box-sizing: border-box; border-radius: 13px; background: var(--color-bg-menu, #1e1e1e); color: var(--color-text-menu, #fff); box-shadow: var(--elevation-400-menu-panel, 0 5px 17px rgb(0 0 0 / 0.2), 0 2px 7px rgb(0 0 0 / 0.15)); outline: 0; }
     ${S} .mi { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border-radius: 5px; white-space: nowrap; }
-    ${S} .mi[data-on="true"] { background: var(--color-bg-menu-selected, #0d99ff); color: var(--color-text-menu-selected, #fff); }
+    ${S} .mi[data-on="true"] { background: var(--color-bg-menu-selected, #0d99ff); color: var(--color-text-menu, #fff); }
+    ${S} .mh { display: flex; align-items: center; height: 24px; padding: 0 8px 0 32px; color: var(--color-text-menu-secondary, #ffffffb3); white-space: nowrap; }
+    ${S} .swatch.ramp { width: 24px; height: 10px; border-radius: 3px; }
+    ${S} .gbar { position: relative; height: 24px; margin: 8px 0 0; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--color-border); touch-action: none; }
+    ${S} .gstops { position: relative; height: 18px; margin: 2px 0 4px; touch-action: none; }
+    ${S} .gstop { position: absolute; top: 5px; width: 12px; height: 12px; margin-left: -6px; box-sizing: border-box; border: 2px solid var(--color-bg); border-radius: 3px; box-shadow: 0 0 0 1px var(--color-border-strong, var(--color-icon-tertiary, #999)); }
+    ${S} .gstop::before { content: ""; position: absolute; left: 50%; top: -9px; margin-left: -3px; border: 3px solid transparent; border-bottom: 3px solid var(--color-border-strong, var(--color-icon-tertiary, #999)); }
+    ${S} .gstop.on { box-shadow: 0 0 0 1.5px var(--color-border-selected, #0d99ff); }
+    ${S} .gstop.on::before { border-bottom-color: var(--color-border-selected, #0d99ff); }
     ${S} .mi[aria-disabled="true"] { color: var(--color-text-menu-tertiary, #ffffff59); }
     ${S} .mi .hint { color: var(--color-text-menu-secondary, #ffffffb3); }
     ${S} .mi[data-on="true"] .hint { color: inherit; }
@@ -1958,7 +2158,12 @@
         holder.append(element("div", { className: "sep" }));
         continue;
       }
-      const row = holder.appendChild(element("div", { className: "mi" }, entry.checked ? svg(ICONS.check) : entry.color ? element("span", { className: "swatch", style: `background: ${entry.color}` }) : element("span"), element("span", { textContent: entry.label }), entry.hint ? element("span", { className: "hint", textContent: entry.hint }) : null));
+      if (entry.heading) {
+        holder.append(element("div", { className: "mh", textContent: entry.heading }));
+        continue;
+      }
+      const mark = entry.checked ? svg(ICONS.check) : entry.color ? element("span", { className: `swatch${entry.color.includes("gradient") ? " ramp" : ""}`, style: `background: ${entry.color}` }) : element("span");
+      const row = holder.appendChild(element("div", { className: "mi" }, mark, element("span", { textContent: entry.label }), entry.hint ? element("span", { className: "hint", textContent: entry.hint }) : null));
       row.setAttribute("role", "menuitem");
       if (entry.disabled) row.setAttribute("aria-disabled", "true");
       else {
@@ -2352,35 +2557,182 @@
     },
 
     lookup: (c) => {
-      const file = element("input", { type: "file", accept: ".cube" });
+      const file = element("input", { type: "file", accept: ".cube,.3dl,.look" });
       file.hidden = true;
+      let opening = "";
+      // A table file's, made 17 across and kept on the layer
+      const keep = (name, text) => {
+        let data = null;
+        try {
+          const table = readTable(name, text);
+          data = table && keepTable(table);
+        } catch {}
+        if (!data) return api()?.notify(`Couldn't read ${name} as a 3D LUT`, { timeout: 3000 });
+        c.update((item) => Object.assign(item, { lut: "file", name, size: LUT_SIZE, data }), true);
+      };
       file.addEventListener("change", async () => {
         const chosen = file.files?.[0];
         file.value = "";
-        if (!chosen) return;
-        const data = fromCube(await chosen.text().catch(() => ""));
-        if (!data) return api()?.notify("Couldn't read that .cube file, it needs a 3D table", { timeout: 3000 });
-        c.update((item) => Object.assign(item, { lut: "file", name: chosen.name.replace(/\.cube$/i, ""), size: LUT_SIZE, data }), true);
+        if (chosen) keep(chosen.name, await chosen.text().catch(() => ""));
       });
-      const looks = () => [...LOOKS.filter(([id]) => id !== "file").map(([id, name]) => [id, name]), ...(c.item().data ? [["file", c.item().name || "Loaded table"]] : []), ["load", "Load .cube file…"]];
-      const field = element("div");
-      const pickLook = (id) => {
-        if (id === "load") return file.click();
-        c.update((item) => (item.lut = id), true);
-      };
-      const intensity = c.slider("Intensity", { min: 0, max: 100, def: 100 }, "intensity");
-      let current = null;
-      const show = () => {
-        const options = looks();
-        const signature = JSON.stringify(options);
-        if (current?.signature !== signature) {
-          current = select("Look", options, () => c.item().lut, pickLook);
-          current.signature = signature;
-          field.replaceChildren(current);
+      // Photoshop's, asked of Ligma by name (see handoff.rs)
+      const fromPhotoshop = async (name) => {
+        opening = name;
+        c.refresh();
+        try {
+          const text = await window.__ligmaHandOff?.("lut", new TextEncoder().encode(name), null, "", null, 20000);
+          if (typeof text !== "string") throw new Error("none");
+          keep(name, text);
+        } catch {
+          api()?.notify(`Couldn't open ${name} from Photoshop`, { timeout: 3000 });
         }
-        current.show();
+        opening = "";
+        c.refresh();
+      };
+      const text = element("span");
+      const field = element("button", { type: "button", className: "select" }, text, svg(ICONS.down));
+      field.setAttribute("aria-label", "Look");
+      field.setAttribute("aria-haspopup", "menu");
+      // As Photoshop's: Load 3D LUT first, then the looks, Ligma's and,
+      // where it's installed, Photoshop's own
+      field.addEventListener("click", () => {
+        const item = c.item();
+        const ours = LOOKS.map(([id, name]) => [id, name]).sort((a, b) => a[1].localeCompare(b[1]));
+        const loaded = item.lut === "file" && item.data && !PHOTOSHOP_LUTS.includes(item.name);
+        openMenu(
+          field,
+          [
+            { id: "load", label: "Load 3D LUT…" },
+            ...(loaded ? [{ id: "file", label: item.name || "Loaded table", checked: true }] : []),
+            "-",
+            { heading: "Ligma" },
+            ...ours.map(([id, name]) => ({ id, label: name, checked: item.lut === id })),
+            ...(PHOTOSHOP_LUTS.length ? ["-", { heading: "Photoshop" }, ...PHOTOSHOP_LUTS.map((name) => ({ id: `photoshop:${name}`, label: name, checked: item.lut === "file" && item.name === name }))] : []),
+          ],
+          (id) => {
+            if (id === "load") file.click();
+            else if (id.startsWith("photoshop:")) fromPhotoshop(id.slice("photoshop:".length));
+            else c.update((each) => (each.lut = id), true);
+          },
+        );
+      });
+      const intensity = c.slider("Intensity", { min: 0, max: 100, def: 100 }, "intensity");
+      const show = () => {
+        const item = c.item();
+        text.textContent = opening ? `Opening ${opening}…` : item.lut === "file" ? item.name || "Loaded table" : (LOOKS.find(([id]) => id === item.lut)?.[1] ?? "");
       };
       return { nodes: [field, file, intensity], parts: [intensity], show };
+    },
+
+    gradient: (c) => {
+      let picked = 0;
+      const presetDot = element("span", { className: "swatch ramp" });
+      const presetText = element("span");
+      const preset = element("button", { type: "button", className: "select" }, presetDot, presetText, svg(ICONS.down));
+      preset.setAttribute("aria-label", "Gradient");
+      preset.setAttribute("aria-haspopup", "menu");
+      preset.addEventListener("click", () => {
+        const item = c.item();
+        openMenu(
+          preset,
+          GRADIENTS.map(([id, name, stops]) => ({ id, label: name, color: gradientCss(stops), checked: item.preset === id })),
+          (id) => {
+            const stops = GRADIENTS.find(([each]) => each === id)[2];
+            picked = 0;
+            c.update((each) => Object.assign(each, { preset: id, stops: stops.map(([at, color]) => [at, color]) }), true);
+          },
+        );
+      });
+      // The gradient, pressed to add a stop there, and its stops below it,
+      // dragged along or off to take one away
+      const bar = element("div", { className: "gbar" });
+      const marks = element("div", { className: "gstops" });
+      const at = (event) => {
+        const box = marks.getBoundingClientRect();
+        return clamp(Math.round(((event.clientX - box.left) / box.width) * 100), 0, 100);
+      };
+      const slide = (event) => {
+        let gone = false;
+        const step = (event) => {
+          const box = marks.getBoundingClientRect();
+          gone = c.item().stops.length > 2 && (event.clientY > box.bottom + 24 || event.clientY < box.top - 48);
+          c.update((item) => {
+            const stop = item.stops[picked];
+            if (!stop) return;
+            stop[0] = at(event);
+            item.stops.sort((a, b) => a[0] - b[0]);
+            picked = item.stops.indexOf(stop);
+            item.preset = "custom";
+          }, false);
+          marks.style.opacity = gone ? "0.5" : "";
+        };
+        drag(event, step, () => {
+          marks.style.opacity = "";
+          c.update((item) => {
+            if (!gone || item.stops.length <= 2) return;
+            item.stops.splice(picked, 1);
+            picked = Math.max(0, picked - 1);
+            item.preset = "custom";
+          }, true);
+        });
+      };
+      marks.press = (event) => {
+        const x = at(event);
+        let [nearest, best] = [-1, 4];
+        c.item().stops.forEach(([position], i) => {
+          if (Math.abs(position - x) <= best) [nearest, best] = [i, Math.abs(position - x)];
+        });
+        if (nearest < 0) return;
+        picked = nearest;
+        c.refresh();
+        slide(event);
+      };
+      bar.press = (event) => {
+        const item = c.item();
+        if (item.stops.length >= 12) return;
+        const x = at(event);
+        const value = `#${colorAt(item.stops, x, item.method).map((v) => Math.round(clamp(v, 0, 1) * 255).toString(16).padStart(2, "0")).join("")}`;
+        c.update((each) => {
+          const stop = [x, value];
+          each.stops.push(stop);
+          each.stops.sort((a, b) => a[0] - b[0]);
+          picked = each.stops.indexOf(stop);
+          each.preset = "custom";
+        }, false);
+        slide(event);
+      };
+      const color = element("input", { type: "color" });
+      color.setAttribute("aria-label", "Stop color");
+      color.addEventListener("input", () =>
+        c.update((item) => {
+          if (!item.stops[picked]) return;
+          item.stops[picked][1] = color.value;
+          item.preset = "custom";
+        }, true),
+      );
+      const where = element("i");
+      const stopRow = element("div", { className: "row" }, element("span", { className: "label" }, "Stop", where), color);
+      const method = segmented("Method", METHODS, () => c.item().method, (id) => c.update((item) => (item.method = id), true));
+      const reverse = c.check("Reverse", "reverse");
+      const dither = c.check("Dither", "dither");
+      const show = () => {
+        const item = c.item();
+        picked = clamp(picked, 0, item.stops.length - 1);
+        const css = gradientCss(item.stops, item.method);
+        bar.style.background = css;
+        presetDot.style.background = css;
+        presetText.textContent = GRADIENTS.find(([id]) => id === item.preset)?.[1] ?? "Custom";
+        marks.replaceChildren(
+          ...item.stops.map(([position, value], i) => {
+            const mark = element("div", { className: `gstop${i === picked ? " on" : ""}` });
+            Object.assign(mark.style, { left: `${position}%`, background: value });
+            return mark;
+          }),
+        );
+        color.value = item.stops[picked][1];
+        where.textContent = `${item.stops[picked][0]}%`;
+      };
+      return { nodes: [preset, bar, marks, stopRow, method, reverse, dither], parts: [method, reverse, dither], show };
     },
 
     selective: (c) => {
@@ -2569,24 +2921,37 @@
         editor = null;
       }
       if (expanded && !editor) editor = editorFor(expanded);
+      let at = 0;
       ids.forEach((id) => {
         let row = rows.get(id);
         if (!row) {
           const flat = !EDITORS[id];
           const name = element("button", { type: "button", className: `name${flat ? " flat" : ""}` }, flat ? null : svg(ICONS.chevron), element("span", { textContent: NAMES[id] }));
           if (!flat) name.addEventListener("click", () => ((expanded = expanded === id ? null : id), render()));
+          // On the press, not the click, so it answers at once and isn't
+          // lost when Figma redraws under the pointer. Keys still click
+          const pressed = (button, act) => {
+            button.press = () => ((button.pressed = performance.now()), act());
+            button.addEventListener("click", (event) => {
+              if (event.detail && performance.now() - (button.pressed ?? -Infinity) < 1000) return;
+              act();
+            });
+          };
           const eye = element("button", { type: "button", className: "icon" });
-          eye.addEventListener("click", () => changeList((items) => (items[id].on = !items[id].on)));
+          pressed(eye, () => changeList((items) => (items[id].on = !items[id].on)));
           const remove = element("button", { type: "button", className: "icon", title: `Remove ${NAMES[id]}` }, svg(ICONS.minus));
           remove.setAttribute("aria-label", `Remove ${NAMES[id]}`);
-          remove.addEventListener("click", () => changeList((items) => delete items[id]));
+          pressed(remove, () => changeList((items) => delete items[id]));
           row = element("div", { className: "item" }, name, eye, remove);
           row.setAttribute("role", "listitem");
           row.parts = { name, eye, flat };
           rows.set(id, row);
         }
-        list.append(row);
-        if (id === expanded && editor) list.append(editor);
+        // Moved only when out of place, as moving one under a press loses it
+        for (const node of id === expanded && editor ? [row, editor] : [row]) {
+          if (list.children[at] !== node) list.insertBefore(node, list.children[at] ?? null);
+          at++;
+        }
       });
       show();
     };
@@ -2597,9 +2962,14 @@
         row.classList.toggle("off", !on);
         const { name, eye, flat } = row.parts;
         if (!flat) name.setAttribute("aria-expanded", String(id === expanded));
-        eye.replaceChildren(svg(on ? ICONS.eye : ICONS.hidden));
-        eye.title = on ? `Hide ${NAMES[id]}` : `Show ${NAMES[id]}`;
-        eye.setAttribute("aria-label", eye.title);
+        // Only when it changes: this runs as Figma redraws, and a press
+        // whose icon was swapped under it before it's let go isn't a click
+        if (row.on !== on) {
+          row.on = on;
+          eye.replaceChildren(svg(on ? ICONS.eye : ICONS.hidden));
+          eye.title = on ? `Hide ${NAMES[id]}` : `Show ${NAMES[id]}`;
+          eye.setAttribute("aria-label", eye.title);
+        }
       }
       note.hidden = !added(s);
       editor?.show();
