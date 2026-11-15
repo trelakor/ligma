@@ -918,7 +918,7 @@ static TAKEN_ONE_OFF: std::sync::Mutex<[(u32, Option<std::time::Instant>); 7]> =
 /// Ligma: how long buffers keep room for the most they took, so zooming
 /// back out doesn't run out
 #[cfg(feature = "wgpu")]
-const PEAK_KEPT: std::time::Duration = std::time::Duration::from_secs(10);
+const PEAK_KEPT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Ligma: sizes the buffers coarse allocates from to what renders take,
 /// with room to spare, and what ran out where this one did
@@ -959,16 +959,15 @@ fn fit(bump: &BumpAllocators, one_off: bool) -> Option<String> {
     }
     if bump.failed != 0 {
         // What's past the first that ran out, in the order the GPU fills
-        // them, never took all it would, so grows as much as that did, or
-        // twice as much
+        // them, never took all it would, so grows as much as that did
         let stage = [1, 4, 2, 3, 5, 4, 0];
-        let (first, grow) = took.iter().zip(had).zip(stage).filter(|((took, have), _)| **took > *have).fold((usize::MAX, 2.0f64), |(first, grow), ((took, have), stage)| {
+        let (first, grow) = took.iter().zip(had).zip(stage).filter(|((took, have), _)| **took > *have).fold((usize::MAX, 1.25f64), |(first, grow), ((took, have), stage)| {
             (first.min(stage), grow.max(*took as f64 / have.max(1) as f64 * 1.25))
         });
         let first = if first == usize::MAX { 0 } else { first };
         for ((room, (took, have)), stage) in room.into_iter().zip(took.into_iter().zip(had)).zip(stage) {
             if stage > first && took <= have {
-                let want = ((have as f64 * grow.min(8.0)) as u32).checked_next_power_of_two().unwrap_or(1 << 27).min(1 << 27);
+                let want = size_class((have as f64 * grow.min(8.0)).min((1u32 << 27) as f64) as u32).min(1 << 27);
                 room.store(want.max(room.load(Relaxed)), Relaxed);
             }
         }
