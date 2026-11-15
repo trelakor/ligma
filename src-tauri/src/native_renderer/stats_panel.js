@@ -8,7 +8,7 @@
   const SCALE_MS = 20;
   const WIDTH = 300;
   // Room for the panel at its tallest
-  const HEIGHT = 640;
+  const HEIGHT = 680;
   const PAD = 10;
   const GUTTER = 44;
   const SURFACE = "#1a1a19";
@@ -21,6 +21,7 @@
   const CRITICAL = "#d03b3b";
   const LIGMA = "#3987e5";
   const FIGMA = "#d95926";
+  const PAGE = "#898781";
   const FONT = '11px "Segoe UI", system-ui, sans-serif';
   const BIG = '600 15px "Segoe UI", system-ui, sans-serif';
   const BOLD = '600 12px "Segoe UI", system-ui, sans-serif';
@@ -176,22 +177,16 @@
 
     y += 14;
     const name = text(ctx, PAD + 8, y, [[NAMES[column.renderer], ink, BOLD], [ligma ? " (experimental)" : "", MUTED]]);
-    // In use: filled in the renderer's color. Before: outlined
-    const tag = inUse ? "In use" : "Before";
-    ctx.font = TAG;
-    const tagWidth = ctx.measureText(tag).width + 12;
-    const tagX = PAD + 8 + name + 8;
-    ctx.beginPath();
-    ctx.roundRect(tagX + 0.5, y - 11.5, tagWidth, 15, 7.5);
     if (inUse) {
+      ctx.font = TAG;
+      const tagWidth = ctx.measureText("In use").width + 12;
+      const tagX = PAD + 8 + name + 8;
+      ctx.beginPath();
+      ctx.roundRect(tagX + 0.5, y - 11.5, tagWidth, 15, 7.5);
       ctx.fillStyle = COLORS[column.renderer];
       ctx.fill();
-    } else {
-      ctx.strokeStyle = MUTED;
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      text(ctx, tagX + 6.5, y, [["In use", "#ffffff", TAG]]);
     }
-    text(ctx, tagX + 6.5, y, [[tag, inUse ? "#ffffff" : SECONDARY, TAG]]);
 
     y += 22;
     const s = summary(record);
@@ -215,21 +210,31 @@
     frameGraph(ctx, frames, record);
     y = frames.y + frames.h + 18;
 
-    const [own, page] = record.memory.at(-1) ?? [0, 0];
-    text(ctx, PAD + 8, y, [["GPU memory ", MUTED], [mb(own + page), ink]]);
+    // Figma's renderer is in its page, so it's worked out from the page
+    // with and without it (see hud.rs), till then shown with the page
+    const [renderer, page, besides] = record.memory.at(-1) ?? [0, 0, 0];
+    text(ctx, PAD + 8, y, [["GPU memory ", MUTED], [mb(Math.max(renderer, 0) + page + besides), ink]]);
     y += 16;
-    // Figma's own renderer is in its page
     let at = PAD + 8;
-    for (const [label, value, color] of [
-      [ligma ? "Renderer " : "Ligma app ", own, LIGMA],
-      [ligma ? "Figma page " : "Figma renderer and page ", page, FIGMA],
-    ]) {
+    const legend =
+      renderer < 0
+        ? [["Renderer and page ", page, PAGE]]
+        : [
+            [ligma ? "Renderer " : "Renderer, estimated ", renderer, COLORS[column.renderer]],
+            ["Page ", page, PAGE],
+          ];
+    for (const [label, value, color] of legend) {
       dot(ctx, at, y, color);
       at += 16 + text(ctx, at + 10, y, [[label, MUTED], [mb(value), ink]]);
     }
+    // What Ligma's renderer keeps once switched off
+    if (besides >= 1) {
+      y += 16;
+      text(ctx, PAD + 8, y, [["Ligma, renderer off ", MUTED], [mb(besides), ink]]);
+    }
     y += 8;
     const memory = { x: PAD + 8, y, w: inner - 8 - GUTTER, h: inUse ? 40 : 32 };
-    memoryGraph(ctx, memory, record, top);
+    memoryGraph(ctx, memory, record, top, COLORS[column.renderer]);
     y = memory.y + memory.h;
 
     const numbers = ligma && inUse ? record.numbers : null;
@@ -265,17 +270,23 @@
   }
 
   // Ligma's process and Figma's page over the last minute in use
-  function memoryGraph(ctx, graph, record, top) {
+  function memoryGraph(ctx, graph, record, top, color) {
     guide(ctx, graph, 400, top, "400 MB");
     const step = graph.w / (SAMPLES - 1);
     const start = SAMPLES - record.memory.length;
     ctx.lineWidth = 1.5;
-    for (const [pick, color] of [[1, FIGMA], [0, LIGMA]]) {
-      ctx.strokeStyle = color;
+    for (const [pick, stroke] of [[1, PAGE], [0, color]]) {
+      ctx.strokeStyle = stroke;
       ctx.beginPath();
+      let drawing = false;
       record.memory.forEach((sample, i) => {
+        if (sample[pick] < 0) {
+          drawing = false;
+          return;
+        }
         const point = [graph.x + (start + i) * step, graph.y + graph.h - Math.min(sample[pick] / top, 1) * graph.h];
-        i ? ctx.lineTo(...point) : ctx.moveTo(...point);
+        drawing ? ctx.lineTo(...point) : ctx.moveTo(...point);
+        drawing = true;
       });
       ctx.stroke();
     }
@@ -286,7 +297,7 @@
   // the same scales. Gives the height it took
   function panel(ctx, active, before) {
     const columns = [active, before].filter(Boolean);
-    const top = columns.reduce((top, column) => column.record.memory.reduce((top, [a, b]) => Math.max(top, a, b), top), 500) * 1.1;
+    const top = columns.reduce((top, column) => column.record.memory.reduce((top, [renderer, page]) => Math.max(top, renderer, page), top), 500) * 1.1;
     let y = PAD + 11;
     text(ctx, PAD, y, [["Active Renderer: ", MUTED], [NAMES[active.renderer], INK], [active.renderer === "ligma" ? " (experimental)" : "", MUTED]]);
     y += 6;
