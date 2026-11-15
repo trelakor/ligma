@@ -1176,14 +1176,24 @@ impl<'a> Drawer<'a> {
         self.canvas.save();
         self.canvas.concat(&effect.to);
         let shown = (effect.area.width().max(effect.area.height()) * self.device_scale() * 1.42) as f64;
-        let drawn = match self.images.get(&effect.key) {
+        // Till its effects have run, what they drew for it before Figma sent
+        // it again as another node, if they did
+        let own = self.images.get(&effect.key);
+        let stand_in_key = super::render::stand_in(&effect.node);
+        let stand_in = if own.is_none() { self.images.get(&stand_in_key) } else { None };
+        if stand_in.is_some() {
+            self.missing_images.push((effect.key.clone(), shown));
+            self.used_images.push((stand_in_key, shown));
+        }
+        let drawn = match own.or(stand_in) {
             Some(img) => {
                 // Kept about as big as it shows, in steps of halves of what
                 // the effects drew, as the effects thread sizes it
                 let (fw, fh) = img.original;
                 let longest = fw.max(fh);
                 let fits = longest >> super::run::halvings(longest, longest as f64 * shown * 1.25 / fw.max(1) as f64);
-                if img.stale {
+                if stand_in.is_some() {
+                } else if img.stale {
                     self.missing_images.push((effect.key.clone(), shown));
                 } else {
                     self.used_images.push((effect.key.clone(), shown));

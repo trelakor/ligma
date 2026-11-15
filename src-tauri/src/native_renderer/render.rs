@@ -342,6 +342,12 @@ fn half_octave(px: f32) -> f32 {
 
 /// The node and content the custom effects image `key` is of, for one of
 /// the tree's (see `Tree::custom_effect`)
+/// Where what a node's effects drew is kept once Figma sends the node again
+/// as another, by Figma's id of it, shown till they've run on the new one
+pub(super) fn stand_in(node: &str) -> String {
+    format!("{EFFECT}g{node}")
+}
+
 fn tree_effect_of(key: &str) -> Option<(u32, u64)> {
     let (id, content) = key.strip_prefix(EFFECT)?.strip_prefix('t')?.split_once('.')?;
     Some((id.parse().ok()?, content.parse().ok()?))
@@ -1275,6 +1281,9 @@ pub struct Painter {
     /// Effects waiting on images the node draws, and those images, each
     /// run again once one of its own comes
     effects_waiting: Vec<(String, f64, Vec<String>)>,
+    /// Figma's id of the node each effect asked for is of, which stays the
+    /// same as its render tree id changes (see `stand_in`)
+    effect_nodes: HashMap<String, String>,
     /// Where units were drawn without images or effects not here yet, or
     /// with them at another size, by image: drawn again once they come,
     /// though the pictures that drew them may have gone by then
@@ -1405,6 +1414,7 @@ impl Painter {
             requests,
             effects,
             effects_waiting: Vec::new(),
+            effect_nodes: HashMap::new(),
             waiting_areas: HashMap::new(),
             image_units: HashMap::new(),
             versions: HashMap::new(),
@@ -3667,6 +3677,7 @@ impl Painter {
         }
         self.image_came_at = Instant::now();
         self.failed.remove(&key);
+
         // Asked for twice, by pictures wanting it at sizes that came
         // to the same: what's drawn with it is right as it is
         let same = self.images.get(&key).is_some_and(|kept| {
@@ -3720,6 +3731,11 @@ impl Painter {
         }
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
+        // What a node's effects drew stands in for them once Figma sends it
+        // again as another, which it can before they come
+        if let Some(node) = self.effect_nodes.get(&key) {
+            self.images.insert(stand_in(node), Img { stale: true, ..img.clone() });
+        }
         self.images.insert(key.clone(), img);
         self.drop_tiles(&areas);
         self.wake_effects(&key);
@@ -3767,9 +3783,43 @@ impl Painter {
         self.hub.tree_failures.store(0, std::sync::atomic::Ordering::Relaxed);
         self.seq = frame.header.seq;
         let applied_ms = start.elapsed().as_secs_f64() * 1000.0;
-        // What custom effects of nodes gone drew goes with them
+        // What custom effects of nodes gone drew goes with them. That of
+        // nodes that changed, as they do over and over as a file loads, is
+        // kept for what they are now, shown till their effects have run
+        // again, rather than the node without them meanwhile
         let gone = |key: &str| tree_effect_of(key).is_some_and(|(id, content)| tree.node(id).is_none() || tree.content(id) != content);
-        self.images.retain(|key, _| !gone(key));
+        let changed: Vec<(String, Option<String>)> = self
+            .images
+            .keys()
+            .filter_map(|key| {
+                let (id, content) = tree_effect_of(key)?;
+                if tree.node(id).is_none() {
+                    return Some((key.clone(), None));
+                }
+                let now = tree.content(id);
+                (now != content).then(|| (key.clone(), Some(format!("{EFFECT}t{id}.{now}"))))
+            })
+            .collect();
+        // Nodes Figma sends again as others, as it does as a file loads,
+        // show what their effects drew before till they've run again too
+        for (key, now) in changed {
+            let Some(mut img) = self.images.remove(&key) else { continue };
+            self.asked.remove(&key);
+            img.stale = true;
+            let node = self.effect_nodes.remove(&key);
+            match (now, node) {
+                (Some(now), node) => {
+                    if let Some(node) = node {
+                        self.effect_nodes.insert(now.clone(), node);
+                    }
+                    self.images.entry(now).or_insert(img);
+                }
+                (None, Some(node)) => {
+                    self.images.insert(stand_in(&node), img);
+                }
+                (None, None) => {}
+            }
+        }
         self.kept.lock().unwrap().retain(|key| !gone(key));
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
@@ -5045,13 +5095,14 @@ impl Painter {
         let Some(tree) = &self.tree else {
             return;
         };
+        let Some(effect) = tree.custom_effect(id) else {
+            return;
+        };
+        self.effect_nodes.insert(key.to_string(), effect.node.clone());
         if self.kept.lock().unwrap().has(key) {
             let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
             return;
         }
-        let Some(effect) = tree.custom_effect(id) else {
-            return;
-        };
         let Some(inverse) = effect.to.invert() else {
             return;
         };
