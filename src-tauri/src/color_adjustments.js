@@ -2878,13 +2878,18 @@
           const target = figma && at && targetsOf(figma, at)[0];
           if (!target) return null;
           const hash = originalOf(target.node, target.hash);
-          ready(figma, hash)
-            .then((info) => {
-              ui.histograms.set(hash, info.histogram);
-              show();
-            })
-            .catch(() => {});
-          return ui.histograms.get(hash) ?? null;
+          // Asked for once: `show` asks again, so an answer that showed it
+          // every time would never stop
+          if (!ui.histograms.has(hash)) {
+            ui.histograms.set(hash, null);
+            ready(figma, hash)
+              .then((info) => {
+                ui.histograms.set(hash, info.histogram);
+                show();
+              })
+              .catch(() => ui.histograms.delete(hash));
+          }
+          return ui.histograms.get(hash);
         },
         // `path` a key, a [key, key] pair, or a function giving one
         slider: (label, o, path) => {
