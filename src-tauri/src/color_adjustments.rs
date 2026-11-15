@@ -7,8 +7,10 @@
 //! Photoshop's Adjustments menu: Levels and Curves; Presence (Texture,
 //! Clarity, Dehaze) and Sharpen; Vibrance, Hue/Saturation, Color Balance,
 //! Black & White, Photo Filter, Channel Mixer, Color Lookup and Selective
-//! Color; Vignette and Invert. Each can be hidden or removed, and one at a
-//! time shows its controls. The image is always made in that same order
+//! Color; Vignette and Invert. Each can be hidden, removed or dragged to
+//! another place, and one at a time shows its controls. As in Photoshop's
+//! Layers, the image is made from the bottom of the list up. Each slider's
+//! value is a field, typed in or dragged across as Figma's
 //!
 //! Figma can't run code on an image as it draws it, so the image is made
 //! again with them, on the GPU, and put in the paint in place of the
@@ -30,7 +32,9 @@
 //! original is put below once the picker closes, as adding a paint while
 //! it's open would move the picker to another one
 //!
-//! Copy and paste adjustments (adjustments.rs) carry these too, through
+//! Cmd+C and Cmd+V (Ctrl+C and Ctrl+V) copy the rows picked and paste them
+//! onto another image, as Ligma's own type in the clipboard. Copy and paste
+//! adjustments (adjustments.rs) carry these too, through
 //! `window.__ligmaColor`
 
 use std::path::PathBuf;

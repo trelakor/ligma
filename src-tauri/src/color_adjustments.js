@@ -31,9 +31,7 @@
 
   // What can be added, in the order the menu and the list show them, with
   // Photoshop's and Camera Raw's settings. Groups are split by a line in
-  // the menu. The image is always made in one order, whatever the list's:
-  // Presence and Sharpen, Levels and Curves, then color, Gradient Map,
-  // then Invert and Vignette last
+  // the menu
   const CATALOG = [
     { id: "levels", name: "Levels", group: 0 },
     { id: "curves", name: "Curves", group: 0 },
@@ -52,6 +50,9 @@
     { id: "gradient", name: "Gradient Map", group: 3 },
   ];
   const NAMES = Object.fromEntries(CATALOG.map(({ id, name }) => [id, name]));
+  // The order images were made in before the list could be reordered, for
+  // settings saved without one, so they come out as they did
+  const LEGACY = ["presence", "sharpen", "levels", "curves", "balance", "selective", "mixer", "hsl", "vibrance", "photo", "mono", "lookup", "gradient", "invert", "vignette"];
 
   // Hue/Saturation's ranges, as Photoshop's: each a sixth of the wheel,
   // fully within 15º of its hue and fading out to 45º
@@ -154,10 +155,18 @@
     for (const [key, item] of Object.entries(template)) out[key] = like(item, value?.[key]);
     return out;
   };
-  // Settings: `{ v: 2, items: { [id]: { on, ...values } } }`, an item for
-  // each adjustment added. Ligma's first ones, Vibrance and Hue/Saturation
-  // at the top level, come in as those two
+  // Settings: `{ v: 2, items: { [id]: { on, ...values } }, order }`, an
+  // item for each adjustment added and the order they're applied in, the
+  // list's from the bottom up. Ligma's first ones, Vibrance and
+  // Hue/Saturation at the top level, come in as those two
   const normal = (s) => {
+    const made = itemsOf(s);
+    const given = Array.isArray(s?.order) ? s.order.filter((id) => typeof id === "string" && made[id]) : [];
+    const order = [...new Set(given)];
+    for (const id of LEGACY) if (made[id] && !order.includes(id)) order.push(id);
+    return { v: 2, items: made, order };
+  };
+  const itemsOf = (s) => {
     const items = {};
     if (s && typeof s === "object" && s.v === 2 && s.items && typeof s.items === "object") {
       for (const { id } of CATALOG) {
@@ -173,9 +182,16 @@
       const shifts = [hue.master, ...RANGES.map(([range]) => hue[range])];
       if (shifts.some((values) => values.hue || values.saturation || values.lightness)) items.hsl = { on: true, ...like(fresh("hsl"), hue) };
     }
-    return { v: 2, items };
+    return items;
   };
-  const blank = () => ({ v: 2, items: {} });
+  const blank = () => ({ v: 2, items: {}, order: [] });
+  // `s` with those `copied` in place of its own, or added, on top
+  const withPasted = (s, copied) => ({
+    v: 2,
+    items: { ...s.items, ...structuredClone(copied.items) },
+    order: [...orderOf(s).filter((id) => !copied.order.includes(id)), ...copied.order],
+  });
+  const orderOf = (s) => (Array.isArray(s.order) ? s.order.filter((id) => s.items[id]) : LEGACY.filter((id) => s.items[id]));
   // Whether an item changes nothing as it is
   const identity = (id, item) => {
     if (!item.on) return true;
@@ -254,17 +270,15 @@
     const BLUR = `${HEAD} void main() { vec4 c = texture2D(tex, fuv) * 0.227027; c += (texture2D(tex, fuv + texel * 1.384615) + texture2D(tex, fuv - texel * 1.384615)) * 0.316216; c += (texture2D(tex, fuv + texel * 3.230769) + texture2D(tex, fuv - texel * 3.230769)) * 0.07027; gl_FragColor = c; }`;
     // Haze's dark channel, from the blurred picture
     const DARK = `${HEAD} void main() { vec3 c = texture2D(tex, fuv).rgb; gl_FragColor = vec4(vec3(min(c.r, min(c.g, c.b))), 1.0); }`;
-    const FINAL = `
+    const FINAL_HEAD = `
       precision highp float;
       varying vec2 uv;
       varying vec2 fuv;
       uniform sampler2D src, blur1, blur3, blur5, dark5, tone, lut, grad;
       uniform vec2 texel;
-      uniform float spatial;
       uniform vec4 sharp;
       uniform vec3 presence;
       uniform vec3 air;
-      uniform float toneOn;
       uniform vec3 cbS, cbM, cbH;
       uniform vec2 cb;
       uniform vec4 sel[9];
@@ -272,7 +286,6 @@
       uniform mat3 mixer;
       uniform vec3 mixC;
       uniform vec2 mixFlags;
-      uniform float hslOn;
       uniform vec3 master;
       uniform vec3 ranges[6];
       uniform vec4 colorize;
@@ -293,7 +306,9 @@
         float l = (hi + lo) * 0.5;
         float d = hi - lo;
         if (d < 1e-5) return vec3(0.0, 0.0, l);
-        float s = l > 0.5 ? d / (2.0 - hi - lo) : d / (hi + lo);
+        // Rounding can take a pure color's a hair past 1, and pow() of
+        // less than 0 is NaN, which comes out as gray specks
+        float s = min(l > 0.5 ? d / (2.0 - hi - lo) : d / (hi + lo), 1.0);
         float h = hi == c.r ? (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0) : hi == c.g ? (c.b - c.r) / d + 2.0 : (c.r - c.g) / d + 4.0;
         return vec3(h / 6.0, s, l);
       }
@@ -310,7 +325,7 @@
         float p = 2.0 * c.z - q;
         return vec3(channel(p, q, c.x + 1.0 / 3.0), channel(p, q, c.x), channel(p, q, c.x - 1.0 / 3.0));
       }
-      float saturate(float s, float by) { return by < 0.0 ? s * (1.0 + by) : 1.0 - pow(1.0 - s, 1.0 + 2.0 * by); }
+      float saturate(float s, float by) { return by < 0.0 ? s * (1.0 + by) : 1.0 - pow(max(1.0 - s, 0.0), 1.0 + 2.0 * by); }
       float lighten(float l, float by) { return by < 0.0 ? l * (1.0 + by) : l + (1.0 - l) * by; }
       float selective(float v, float a, float k) {
         float m = selFlags.y > 0.5 ? 1.0 - v : 1.0;
@@ -326,164 +341,165 @@
         vec3 d = texture2D(lut, vec2((z1 * n + at.x) / (n * n), at.y)).rgb;
         return mix(a, d, b - z0);
       }
+      `;
+    // Each adjustment's step, changing the color `c`. The image is made
+    // with the steps in the list's order, one shader for each order
+    const BLOCKS = {
+      // Dehaze, as the dark channel prior: haze lifts the darkest channel
+      // toward the air's color, so taking it away divides it out. Texture,
+      // the middle sized detail; Clarity, the large, in the midtones
+      presence: `
+        if (presence.z > 0.0) {
+          float dark = texture2D(dark5, fuv).r;
+          float t = max(1.0 - 0.95 * presence.z * dark / max(max(air.r, max(air.g, air.b)), 0.05), 0.12);
+          c = (c - air) / t + air;
+        } else if (presence.z < 0.0) {
+          c = mix(c, air, -presence.z * 0.6);
+        }
+        if (presence.x != 0.0) c += presence.x * 2.0 * (lum(mix(c, texture2D(blur1, fuv).rgb, 0.5)) - lum(texture2D(blur3, fuv).rgb));
+        if (presence.y != 0.0) {
+          float l = lum(c);
+          c += presence.y * 1.4 * (l - lum(texture2D(blur5, fuv).rgb)) * (1.0 - pow(abs(2.0 * l - 1.0), 2.0));
+        }`,
+      // Sharpen: the picture less its blur, the detail, added back to its
+      // lightness. Detail lets more of the finest through, Masking keeps
+      // it to edges
+      sharpen: `
+        vec2 r = texel * sharp.y;
+        vec3 near = texture2D(src, uv + vec2(r.x, 0.0)).rgb + texture2D(src, uv - vec2(r.x, 0.0)).rgb + texture2D(src, uv + vec2(0.0, r.y)).rgb + texture2D(src, uv - vec2(0.0, r.y)).rgb;
+        vec3 far = texture2D(src, uv + r).rgb + texture2D(src, uv - r).rgb + texture2D(src, uv + vec2(r.x, -r.y)).rgb + texture2D(src, uv + vec2(-r.x, r.y)).rgb;
+        vec3 blurred = (pixel.rgb * 4.0 + near * 2.0 + far) / 16.0;
+        float detail = lum(pixel.rgb - blurred);
+        float limit = mix(0.03, 0.4, sharp.z);
+        float edge = length(near - pixel.rgb * 4.0);
+        float mask = sharp.w > 0.0 ? smoothstep(sharp.w * 0.25, sharp.w * 0.25 + 0.05, edge) : 1.0;
+        c += sharp.x * clamp(detail, -limit, limit) * mask;`,
+      // Levels and Curves, a curve for each channel, the tone texture's
+      // first row and its second
+      levels: `
+        vec3 at = c * (255.0 / 256.0) + 0.5 / 256.0;
+        c = vec3(texture2D(tone, vec2(at.r, 0.25)).r, texture2D(tone, vec2(at.g, 0.25)).g, texture2D(tone, vec2(at.b, 0.25)).b);`,
+      curves: `
+        vec3 at = c * (255.0 / 256.0) + 0.5 / 256.0;
+        c = vec3(texture2D(tone, vec2(at.r, 0.75)).r, texture2D(tone, vec2(at.g, 0.75)).g, texture2D(tone, vec2(at.b, 0.75)).b);`,
+      // Color Balance, as GIMP's: shadows, midtones and highlights by
+      // lightness, each moved toward red, green or blue or away
+      balance: `
+        float l0 = toHsl(c).z;
+        float ws = clamp((l0 - 0.333) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
+        float wm = clamp((l0 - 0.333) / 0.25 + 0.5, 0.0, 1.0) * clamp((l0 + 0.333 - 1.0) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
+        float wh = clamp((l0 + 0.333 - 1.0) / 0.25 + 0.5, 0.0, 1.0) * 0.7;
+        vec3 n = clamp(c + cbS * ws + cbM * wm + cbH * wh, 0.0, 1.0);
+        if (cb.y > 0.5) {
+          vec3 h = toHsl(n);
+          h.z = l0;
+          n = toRgb(h);
+        }
+        c = n;`,
+      // Selective Color: each color's share of a pixel, from how far its
+      // channels are apart, takes that color's cyan, magenta, yellow and
+      // black
+      selective: `
+        float hi = max(c.r, max(c.g, c.b));
+        float lo = min(c.r, min(c.g, c.b));
+        float mid = c.r + c.g + c.b - hi - lo;
+        float w[9];
+        w[0] = hi == c.r ? hi - mid : 0.0;
+        w[1] = lo == c.b ? mid - lo : 0.0;
+        w[2] = hi == c.g ? hi - mid : 0.0;
+        w[3] = lo == c.r ? mid - lo : 0.0;
+        w[4] = hi == c.b ? hi - mid : 0.0;
+        w[5] = lo == c.g ? mid - lo : 0.0;
+        w[6] = lo > 0.5 ? (lo - 0.5) * 2.0 : 0.0;
+        w[7] = clamp(1.0 - (abs(hi - 0.5) + abs(lo - 0.5)), 0.0, 1.0);
+        w[8] = hi < 0.5 ? (0.5 - hi) * 2.0 : 0.0;
+        vec3 d = vec3(0.0);
+        for (int i = 0; i < 9; i++) {
+          vec4 a = sel[i];
+          d += w[i] * vec3(selective(c.r, a.x, a.w), selective(c.g, a.y, a.w), selective(c.b, a.z, a.w));
+        }
+        c = c + d;`,
+      mixer: `
+        vec3 o = mixer * c + mixC;
+        c = mixFlags.y > 0.5 ? vec3(o.r) : o;`,
+      // Hue/Saturation, as before, or Colorize, a color by lightness
+      hsl: `
+        vec3 h = toHsl(c);
+        if (colorize.x > 0.5) {
+          h = vec3(colorize.y, colorize.z, lighten(h.z, colorize.w));
+        } else {
+          float colorful = smoothstep(0.0, 0.06, h.y * (1.0 - abs(2.0 * h.z - 1.0)));
+          vec3 shift = vec3(0.0);
+          for (int i = 0; i < 6; i++) {
+            float away = abs(fract(h.x - float(i) / 6.0 + 0.5) - 0.5) * 360.0;
+            shift += ranges[i] * clamp((45.0 - away) / 30.0, 0.0, 1.0) * colorful;
+          }
+          h.x = fract(h.x + master.x + shift.x);
+          h.y = saturate(saturate(h.y, shift.y), master.y);
+          h.z = lighten(lighten(h.z, shift.z), master.z);
+        }
+        c = toRgb(h);`,
+      // Vibrance: the less colorful a color, the more it changes, and
+      // skin's hues, oranges, less
+      vibrance: `
+        vec3 h = toHsl(c);
+        float skin = clamp(1.0 - abs(h.x * 360.0 - 25.0) / 30.0, 0.0, 1.0) * smoothstep(0.08, 0.25, h.y);
+        h.y = vib.y < 0.0 ? h.y * (1.0 + vib.y * (1.0 - 0.5 * h.y)) : h.y * (1.0 + vib.y * 2.0 * (1.0 - h.y) * (1.0 - h.y) * (1.0 - 0.7 * skin));
+        h.y = saturate(clamp(h.y, 0.0, 1.0), vib.z);
+        c = toRgb(h);`,
+      photo: `
+        float l0 = lum(c);
+        vec3 n = mix(c, c * photo.rgb, photo.a);
+        if (photoFlags.y > 0.5) n *= l0 / max(lum(n), 1e-4);
+        c = n;`,
+      // Black & White, as Photoshop's: the gray from the color's main
+      // channel and the pair with the next, each by its slider
+      mono: `
+        float hi = max(c.r, max(c.g, c.b));
+        float lo = min(c.r, min(c.g, c.b));
+        float mid = c.r + c.g + c.b - hi - lo;
+        float primary = hi == c.r ? bw[0] : hi == c.g ? bw[2] : bw[4];
+        float secondary = lo == c.b ? bw[1] : lo == c.r ? bw[3] : bw[5];
+        float gray = clamp(lo + (hi - mid) * primary + (mid - lo) * secondary, 0.0, 1.0);
+        c = bwFlags.y > 0.5 ? toRgb(vec3(bwFlags.z, bwFlags.w, gray)) : vec3(gray);`,
+      lookup: `
+        c = mix(c, lookup(c), lutInfo.x);`,
+      // Gradient Map: lightness to the gradient's color, dithered so its
+      // steps don't band
+      gradient: `
+        float t = clamp(lum(c), 0.0, 1.0);
+        c = texture2D(grad, vec2(t * (255.0 / 256.0) + 0.5 / 256.0, 0.5)).rgb;
+        if (gradFlags.y > 0.5) c += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;`,
+      invert: `
+        c = 1.0 - c;`,
+      // Vignette, as Camera Raw's: Midpoint where it starts, Feather how
+      // softly, Roundness from a rectangle to a circle
+      vignette: `
+        vec2 d = (uv - 0.5) * 2.0;
+        float aspect = vig2.z;
+        vec2 circle = d * vec2(aspect, 1.0) / max(aspect, 1.0);
+        vec2 q = abs(mix(d, circle, max(vig.z, 0.0)));
+        float power = 2.0 + max(-vig.z, 0.0) * 6.0;
+        float dist = pow(pow(q.x, power) + pow(q.y, power), 1.0 / power);
+        float start = mix(0.25, 1.35, vig.y);
+        float soft = mix(0.04, 1.2, vig.w);
+        float mask = smoothstep(start - soft * 0.5, start + soft * 0.5, dist) * abs(vig.x);
+        if (vig2.y > 1.5) {
+          c = mix(c, vec3(vig.x < 0.0 ? 0.0 : 1.0), mask);
+        } else if (vig.x < 0.0) {
+          float keep = vig2.y < 0.5 ? vig2.x * smoothstep(0.55, 1.0, lum(c)) : 0.0;
+          c *= 1.0 - mask * (1.0 - keep);
+        } else {
+          c = 1.0 - (1.0 - c) * (1.0 - mask);
+        }`,
+    };
+    // Each step in a block of its own, so their names don't meet, and the
+    // color kept in range after each
+    const finalOf = (order) => `${FINAL_HEAD}
       void main() {
         vec4 pixel = texture2D(src, uv);
         vec3 c = pixel.rgb;
-        if (spatial > 0.5) {
-          // Dehaze, as the dark channel prior: haze lifts the darkest
-          // channel toward the air's color, so taking it away divides it out
-          if (presence.z > 0.0) {
-            float dark = texture2D(dark5, fuv).r;
-            float t = max(1.0 - 0.95 * presence.z * dark / max(max(air.r, max(air.g, air.b)), 0.05), 0.12);
-            c = (c - air) / t + air;
-          } else if (presence.z < 0.0) {
-            c = mix(c, air, -presence.z * 0.6);
-          }
-          // Texture, the middle sized detail; Clarity, the large, in the
-          // midtones
-          if (presence.x != 0.0) c += presence.x * 2.0 * (lum(mix(c, texture2D(blur1, fuv).rgb, 0.5)) - lum(texture2D(blur3, fuv).rgb));
-          if (presence.y != 0.0) {
-            float l = lum(c);
-            c += presence.y * 1.4 * (l - lum(texture2D(blur5, fuv).rgb)) * (1.0 - pow(abs(2.0 * l - 1.0), 2.0));
-          }
-        }
-        // Sharpen: the picture less its blur, the detail, added back to
-        // its lightness. Detail lets more of the finest through, Masking
-        // keeps it to edges
-        if (sharp.x > 0.0) {
-          vec2 r = texel * sharp.y;
-          vec3 near = texture2D(src, uv + vec2(r.x, 0.0)).rgb + texture2D(src, uv - vec2(r.x, 0.0)).rgb + texture2D(src, uv + vec2(0.0, r.y)).rgb + texture2D(src, uv - vec2(0.0, r.y)).rgb;
-          vec3 far = texture2D(src, uv + r).rgb + texture2D(src, uv - r).rgb + texture2D(src, uv + vec2(r.x, -r.y)).rgb + texture2D(src, uv + vec2(-r.x, r.y)).rgb;
-          vec3 blurred = (pixel.rgb * 4.0 + near * 2.0 + far) / 16.0;
-          float detail = lum(pixel.rgb - blurred);
-          float limit = mix(0.03, 0.4, sharp.z);
-          float edge = length(near - pixel.rgb * 4.0);
-          float mask = sharp.w > 0.0 ? smoothstep(sharp.w * 0.25, sharp.w * 0.25 + 0.05, edge) : 1.0;
-          c += sharp.x * clamp(detail, -limit, limit) * mask;
-        }
-        c = clamp(c, 0.0, 1.0);
-        // Levels and Curves, one curve for each channel
-        if (toneOn > 0.5) {
-          vec3 at = c * (255.0 / 256.0) + 0.5 / 256.0;
-          c = vec3(texture2D(tone, vec2(at.r, 0.5)).r, texture2D(tone, vec2(at.g, 0.5)).g, texture2D(tone, vec2(at.b, 0.5)).b);
-        }
-        // Color Balance, as GIMP's: shadows, midtones and highlights by
-        // lightness, each moved toward red, green or blue or away
-        if (cb.x > 0.5) {
-          float l0 = toHsl(c).z;
-          float ws = clamp((l0 - 0.333) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
-          float wm = clamp((l0 - 0.333) / 0.25 + 0.5, 0.0, 1.0) * clamp((l0 + 0.333 - 1.0) / -0.25 + 0.5, 0.0, 1.0) * 0.7;
-          float wh = clamp((l0 + 0.333 - 1.0) / 0.25 + 0.5, 0.0, 1.0) * 0.7;
-          vec3 n = clamp(c + cbS * ws + cbM * wm + cbH * wh, 0.0, 1.0);
-          if (cb.y > 0.5) {
-            vec3 h = toHsl(n);
-            h.z = l0;
-            n = toRgb(h);
-          }
-          c = n;
-        }
-        // Selective Color: each color's share of a pixel, from how far its
-        // channels are apart, takes that color's cyan, magenta, yellow and
-        // black
-        if (selFlags.x > 0.5) {
-          float hi = max(c.r, max(c.g, c.b));
-          float lo = min(c.r, min(c.g, c.b));
-          float mid = c.r + c.g + c.b - hi - lo;
-          float w[9];
-          w[0] = hi == c.r ? hi - mid : 0.0;
-          w[1] = lo == c.b ? mid - lo : 0.0;
-          w[2] = hi == c.g ? hi - mid : 0.0;
-          w[3] = lo == c.r ? mid - lo : 0.0;
-          w[4] = hi == c.b ? hi - mid : 0.0;
-          w[5] = lo == c.g ? mid - lo : 0.0;
-          w[6] = lo > 0.5 ? (lo - 0.5) * 2.0 : 0.0;
-          w[7] = clamp(1.0 - (abs(hi - 0.5) + abs(lo - 0.5)), 0.0, 1.0);
-          w[8] = hi < 0.5 ? (0.5 - hi) * 2.0 : 0.0;
-          vec3 d = vec3(0.0);
-          for (int i = 0; i < 9; i++) {
-            vec4 a = sel[i];
-            d += w[i] * vec3(selective(c.r, a.x, a.w), selective(c.g, a.y, a.w), selective(c.b, a.z, a.w));
-          }
-          c = clamp(c + d, 0.0, 1.0);
-        }
-        if (mixFlags.x > 0.5) {
-          vec3 o = mixer * c + mixC;
-          c = clamp(mixFlags.y > 0.5 ? vec3(o.r) : o, 0.0, 1.0);
-        }
-        // Hue/Saturation, as before, or Colorize, a color by lightness
-        if (hslOn > 0.5) {
-          vec3 h = toHsl(c);
-          if (colorize.x > 0.5) {
-            h = vec3(colorize.y, colorize.z, lighten(h.z, colorize.w));
-          } else {
-            float colorful = smoothstep(0.0, 0.06, h.y * (1.0 - abs(2.0 * h.z - 1.0)));
-            vec3 shift = vec3(0.0);
-            for (int i = 0; i < 6; i++) {
-              float away = abs(fract(h.x - float(i) / 6.0 + 0.5) - 0.5) * 360.0;
-              shift += ranges[i] * clamp((45.0 - away) / 30.0, 0.0, 1.0) * colorful;
-            }
-            h.x = fract(h.x + master.x + shift.x);
-            h.y = saturate(saturate(h.y, shift.y), master.y);
-            h.z = lighten(lighten(h.z, shift.z), master.z);
-          }
-          c = toRgb(h);
-        }
-        // Vibrance: the less colorful a color, the more it changes, and
-        // skin's hues, oranges, less
-        if (vib.x > 0.5) {
-          vec3 h = toHsl(c);
-          float skin = clamp(1.0 - abs(h.x * 360.0 - 25.0) / 30.0, 0.0, 1.0) * smoothstep(0.08, 0.25, h.y);
-          h.y = vib.y < 0.0 ? h.y * (1.0 + vib.y * (1.0 - 0.5 * h.y)) : h.y * (1.0 + vib.y * 2.0 * (1.0 - h.y) * (1.0 - h.y) * (1.0 - 0.7 * skin));
-          h.y = clamp(saturate(clamp(h.y, 0.0, 1.0), vib.z), 0.0, 1.0);
-          c = toRgb(h);
-        }
-        if (photoFlags.x > 0.5) {
-          float l0 = lum(c);
-          vec3 n = mix(c, c * photo.rgb, photo.a);
-          if (photoFlags.y > 0.5) n *= l0 / max(lum(n), 1e-4);
-          c = clamp(n, 0.0, 1.0);
-        }
-        // Black & White, as Photoshop's: the gray from the color's main
-        // channel and the pair with the next, each by its slider
-        if (bwFlags.x > 0.5) {
-          float hi = max(c.r, max(c.g, c.b));
-          float lo = min(c.r, min(c.g, c.b));
-          float mid = c.r + c.g + c.b - hi - lo;
-          float primary = hi == c.r ? bw[0] : hi == c.g ? bw[2] : bw[4];
-          float secondary = lo == c.b ? bw[1] : lo == c.r ? bw[3] : bw[5];
-          float gray = clamp(lo + (hi - mid) * primary + (mid - lo) * secondary, 0.0, 1.0);
-          c = bwFlags.y > 0.5 ? toRgb(vec3(bwFlags.z, bwFlags.w, gray)) : vec3(gray);
-        }
-        if (lutInfo.x > 0.0) c = mix(c, lookup(c), lutInfo.x);
-        // Gradient Map: lightness to the gradient's color, dithered so its
-        // steps don't band
-        if (gradFlags.x > 0.5) {
-          float t = clamp(lum(c), 0.0, 1.0);
-          c = texture2D(grad, vec2(t * (255.0 / 256.0) + 0.5 / 256.0, 0.5)).rgb;
-          if (gradFlags.y > 0.5) c += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
-        }
-        if (invert > 0.5) c = 1.0 - c;
-        // Vignette, as Camera Raw's: Midpoint where it starts, Feather how
-        // softly, Roundness from a rectangle to a circle
-        if (vig2.w > 0.5) {
-          vec2 d = (uv - 0.5) * 2.0;
-          float aspect = vig2.z;
-          vec2 circle = d * vec2(aspect, 1.0) / max(aspect, 1.0);
-          vec2 q = abs(mix(d, circle, max(vig.z, 0.0)));
-          float power = 2.0 + max(-vig.z, 0.0) * 6.0;
-          float dist = pow(pow(q.x, power) + pow(q.y, power), 1.0 / power);
-          float start = mix(0.25, 1.35, vig.y);
-          float soft = mix(0.04, 1.2, vig.w);
-          float mask = smoothstep(start - soft * 0.5, start + soft * 0.5, dist) * abs(vig.x);
-          if (vig2.y > 1.5) {
-            c = mix(c, vec3(vig.x < 0.0 ? 0.0 : 1.0), mask);
-          } else if (vig.x < 0.0) {
-            float keep = vig2.y < 0.5 ? vig2.x * smoothstep(0.55, 1.0, lum(c)) : 0.0;
-            c *= 1.0 - mask * (1.0 - keep);
-          } else {
-            c = 1.0 - (1.0 - c) * (1.0 - mask);
-          }
-        }
+        ${order.map((id) => `{${BLOCKS[id]}\n        }\n        c = clamp(c, 0.0, 1.0);`).join("\n        ")}
         gl_FragColor = vec4(clamp(c, 0.0, 1.0), pixel.a);
       }`;
     const compile = (fragment) => {
@@ -506,7 +522,25 @@
       };
       return program;
     };
-    const programs = { downSource: compile(DOWN(false)), down: compile(DOWN(true)), blur: compile(BLUR), dark: compile(DARK), final: compile(FINAL) };
+    const programs = { downSource: compile(DOWN(false)), down: compile(DOWN(true)), blur: compile(BLUR), dark: compile(DARK), };
+    // The last few orders' shaders
+    const finals = new Map();
+    const finalFor = (order) => {
+      const key = order.join();
+      let made = finals.get(key);
+      if (made) {
+        finals.delete(key);
+      } else {
+        made = compile(finalOf(order));
+        while (finals.size >= 6) {
+          const [oldest, program] = finals.entries().next().value;
+          finals.delete(oldest);
+          gl.deleteProgram(program);
+        }
+      }
+      finals.set(key, made);
+      return made;
+    };
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
@@ -576,7 +610,7 @@
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture);
           drawn = picture;
         }
-        const spatial = u.presence.some((value) => value !== 0);
+        const spatial = u.order.includes("presence");
         const levels = [source, null, null, null, null, null];
         if (spatial) {
           let from = { texture: source, width, height };
@@ -593,7 +627,7 @@
           pass(programs.dark, dark, levels.blur5.texture, 0, 0);
           levels.dark5 = blurred("dark", dark);
         }
-        const final = programs.final;
+        const final = finalFor(u.order);
         gl.useProgram(final);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         if (canvas.width !== width || canvas.height !== height) Object.assign(canvas, { width, height });
@@ -611,7 +645,7 @@
         gl.activeTexture(gl.TEXTURE5);
         gl.bindTexture(gl.TEXTURE_2D, u.tone ? tone : none);
         if (u.tone && u.toneKey !== toneKey) {
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, u.tone);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, u.tone);
           toneKey = u.toneKey;
         }
         gl.uniform1i(final.at("tone"), 5);
@@ -632,12 +666,10 @@
         gl.uniform1i(final.at("grad"), 7);
         const set = (kind, name, value) => gl[`uniform${kind}`](final.at(name), value);
         set("2fv", "texel", [1 / width, 1 / height]);
-        set("1f", "spatial", spatial ? 1 : 0);
         // Sharpen's radius is in the full size picture's pixels
         set("4fv", "sharp", [u.sharp[0], Math.max(0.35, u.sharp[1] * u.scale), u.sharp[2], u.sharp[3]]);
         set("3fv", "presence", u.presence);
         set("3fv", "air", u.air);
-        set("1f", "toneOn", u.tone ? 1 : 0);
         set("3fv", "cbS", u.cb.s);
         set("3fv", "cbM", u.cb.m);
         set("3fv", "cbH", u.cb.h);
@@ -647,7 +679,6 @@
         gl.uniformMatrix3fv(final.at("mixer"), false, u.mixer.m);
         set("3fv", "mixC", u.mixer.c);
         set("2fv", "mixFlags", u.mixer.flags);
-        set("1f", "hslOn", u.hsl.on);
         set("3fv", "master", u.hsl.master);
         set("3fv", "ranges", u.hsl.ranges);
         set("4fv", "colorize", u.hsl.colorize);
@@ -960,26 +991,21 @@
     const v = clamp((x - black) / Math.max(1, white - black), 0, 1) ** (1 / clamp(gamma, 0.1, 9.99));
     return outBlack + v * (outWhite - outBlack);
   };
-  // Levels then Curves, each channel's own then the composite's, as one
-  // curve for each channel
+  // Levels in the first row and Curves in the second, each channel's own
+  // then the composite's, as one curve for each channel
   const toneOf = (items) => {
-    const lv = items.levels?.on ? items.levels : null;
-    const cv = items.curves?.on ? items.curves : null;
-    if ((!lv || identity("levels", lv)) && (!cv || identity("curves", cv))) return null;
+    const lv = items.levels?.on && !identity("levels", items.levels) ? items.levels : null;
+    const cv = items.curves?.on && !identity("curves", items.curves) ? items.curves : null;
+    if (!lv && !cv) return null;
     const curves = cv && Object.fromEntries(["rgb", "red", "green", "blue"].map((name) => [name, spline(cv[name])]));
-    const out = new Uint8Array(1024);
+    const out = new Uint8Array(2048);
     ["red", "green", "blue"].forEach((name, c) => {
       for (let x = 0; x < 256; x++) {
-        let v = x;
-        if (lv) v = leveled(lv.rgb, leveled(lv[name], v));
-        if (curves) {
-          v = curves[name][Math.round(clamp(v, 0, 255))];
-          v = curves.rgb[Math.round(clamp(v, 0, 255))];
-        }
-        out[x * 4 + c] = Math.round(clamp(v, 0, 255));
+        out[x * 4 + c] = Math.round(clamp(lv ? leveled(lv.rgb, leveled(lv[name], x)) : x, 0, 255));
+        out[1024 + x * 4 + c] = Math.round(clamp(curves ? curves.rgb[Math.round(clamp(curves[name][x], 0, 255))] : x, 0, 255));
       }
     });
-    for (let x = 0; x < 256; x++) out[x * 4 + 3] = 255;
+    for (let x = 0; x < 512; x++) out[x * 4 + 3] = 255;
     return out;
   };
 
@@ -1266,6 +1292,7 @@
     const filter = photo && (photo.filter === "custom" ? photo.color : FILTERS.find(([id]) => id === photo.filter)?.[2]);
     const shift = (values) => [values.hue / 360, values.saturation / 100, values.lightness / 100];
     return {
+      order: orderOf(s).filter((id) => (id === "invert" ? !!s.items.invert?.on : !!on(id))),
       presence: presence ? [presence.texture / 100, presence.clarity / 100, presence.dehaze / 100] : [0, 0, 0],
       sharp: sharpen ? [(sharpen.amount / 100) * 2.5, clamp(sharpen.radius, 0.5, 3), sharpen.detail / 100, sharpen.masking / 100] : [0, 1, 0, 0],
       tone,
@@ -1792,6 +1819,16 @@
     } catch {}
   };
 
+  // Given up for what the image has now, as when someone else changed it;
+  // what it made gets its original below once the picker's closed
+  const abandon = (edit) => {
+    edit.ended = edit.settled = true;
+    clearTimeout(edit.idle);
+    edit.overlay?.hide();
+    for (const loader of Object.values(edit.loaders)) dropLoader(loader);
+    if (edit.started) for (const { node } of edit.targets) pending.add(node);
+  };
+
   // Pasted or reset from adjustments.rs, with the picker closed: straight
   // to full size, the original kept below
   const apply = async (node, list, index, settings) => {
@@ -1887,15 +1924,27 @@
     ${S} .name[aria-expanded="true"] svg { transform: rotate(90deg); }
     ${S} .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     ${S} .name.flat { padding-left: 16px; }
+    ${S} [role="list"] { position: relative; }
+    ${S} .item { border-radius: 5px; }
+    ${S} .item.picked { background: var(--color-bg-selected, #0d99ff26); }
+    ${S} .item.lifted { position: relative; z-index: 1; background: var(--color-bg); box-shadow: var(--elevation-200-canvas, 0 2px 8px rgb(0 0 0 / 0.25)); }
+    ${S} .drop { position: absolute; left: var(--left); right: var(--right); height: 2px; border-radius: 1px; background: var(--color-border-selected, #0d99ff); pointer-events: none; }
     ${S} .item.off .name span { color: var(--color-text-tertiary, var(--color-text-secondary)); }
     ${S} .item .icon { color: var(--color-icon-secondary); }
     ${S} .item .icon:hover { color: var(--color-icon); }
     ${S} .editor { padding: 0 var(--right) 8px var(--left); }
-    ${S} .row { display: grid; grid-template-columns: var(--column) 1fr; align-items: center; height: 32px; }
-    ${S} .row.pair { grid-template-columns: 52px 1fr 48px; }
-    ${S} .row.pair .end { text-align: right; color: var(--color-text-secondary); }
+    ${S} .row { display: grid; grid-template-columns: var(--column) 1fr 36px; column-gap: 4px; align-items: center; height: 32px; }
+    ${S} .row:not(:has(.value)) { grid-template-columns: var(--column) 1fr; column-gap: 0; }
+    ${S} .row.pair { grid-template-columns: 48px 1fr 40px 36px; }
+    ${S} .row.pair .end { color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; }
     ${S} .label { display: flex; gap: 6px; min-width: 0; color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; }
     ${S} .label i { font-style: normal; color: var(--color-text); font-variant-numeric: tabular-nums; }
+    ${S} .label.scrub { align-self: stretch; align-items: center; cursor: ew-resize; }
+    ${S} .value { width: 100%; height: 24px; box-sizing: border-box; padding: 0 4px; border: 0; border-radius: 5px; outline: 0; background: none; box-shadow: inset 0 0 0 1px transparent; color: var(--color-text-secondary); font: inherit; font-variant-numeric: tabular-nums; text-align: right; cursor: ew-resize; }
+    ${S} .value.changed { color: var(--color-text); }
+    ${S} .value:hover { box-shadow: inset 0 0 0 1px var(--color-border); }
+    ${S} .value:focus { box-shadow: inset 0 0 0 1px var(--color-border-selected, #0d99ff); color: var(--color-text); cursor: text; }
+    html[data-ligma-scrub], html[data-ligma-scrub] * { cursor: ew-resize !important; }
     ${S} .track { position: relative; height: 16px; border-radius: 8px; background: var(--color-bg-secondary); box-shadow: inset 0 0 0 1px var(--color-border); touch-action: none; outline: 0; }
     ${S} .track .fill { position: absolute; top: 0; bottom: 0; border-radius: 8px; background: var(--color-bg-brand, #0d99ff); }
     ${S} .track .middle { position: absolute; top: 6px; width: 4px; height: 4px; margin-left: -2px; border-radius: 2px; background: var(--color-icon-tertiary, #ffffff66); }
@@ -2001,8 +2050,8 @@
 
   // A slider as Figma's in the picker: filled from `origin`, 0 or its
   // least, with round ends, snapping to it near it unless Alt (Option) is
-  // held, double-click for its default. Its value shows by its label once
-  // it's moved. `set(value, done)`, `done` once it's let go
+  // held, double-click for its default, and its value in a field beside
+  // it. `set(value, done)`, `done` once it's let go
   const SNAP = 6;
   const slider = (label, o, get, set) => {
     const { min, max, step = 1, right = null, gradient = null } = o;
@@ -2051,9 +2100,63 @@
       set(value !== origin && Math.sign(next - origin) === -Math.sign(value - origin) ? origin : next, true);
       return true;
     };
-    const shown = element("i");
-    const name = element("span", { className: "label" }, label, shown);
-    const row = right ? element("div", { className: "row pair" }, element("span", { className: "label" }, label), track, element("span", { className: "end", textContent: right })) : element("div", { className: "row" }, name, track);
+    // The value, by the track as Figma's fields: dragged across, or its
+    // label, to change it, or clicked to type one
+    const text = (value) => `${min < 0 && value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+    const field = element("input", { type: "text", className: "value", spellcheck: false, autocomplete: "off" });
+    field.setAttribute("aria-label", right ? `${label} to ${right}` : label);
+    field.inputMode = "decimal";
+    const typed = () => {
+      const value = Number.parseFloat(field.value.replace(/^\+/, ""));
+      if (Number.isFinite(value)) set(clamp(round(value), min, max), true);
+      else field.value = text(get());
+    };
+    field.addEventListener("change", typed);
+    field.key = (event) => {
+      if (event.key === "Enter") {
+        typed();
+        field.blur();
+        return true;
+      }
+      if (event.key === "Escape") {
+        field.value = text(get());
+        field.blur();
+        return true;
+      }
+      const by = { ArrowUp: 1, ArrowDown: -1 }[event.key];
+      if (by === undefined) return false;
+      set(clamp(round(get() + by * step * (event.shiftKey ? 10 : 1)), min, max), true);
+      field.select();
+      return true;
+    };
+    const scrub = (event, focusAfter) => {
+      if (event.button !== 0) return;
+      const [x, from] = [event.clientX, get()];
+      let moved = false;
+      drag(
+        event,
+        (event) => {
+          const dx = event.clientX - x;
+          if (!moved && Math.abs(dx) < 3) return;
+          moved = true;
+          document.documentElement.dataset.ligmaScrub = "";
+          set(clamp(round(from + dx * step * (event.shiftKey ? 10 : 1)), min, max), false);
+        },
+        () => {
+          delete document.documentElement.dataset.ligmaScrub;
+          if (moved) set(get(), true);
+          else if (focusAfter) {
+            field.focus({ preventScroll: true });
+            field.select();
+          }
+        },
+      );
+    };
+    // A press in a field already typed in places the caret
+    field.press = (event) => document.activeElement !== field && scrub(event, true);
+    const name = element("span", { className: "label scrub" }, label);
+    name.press = (event) => scrub(event, false);
+    const row = right ? element("div", { className: "row pair" }, name, track, element("span", { className: "end", textContent: right }), field) : element("div", { className: "row" }, name, track, field);
     row.show = () => {
       const value = get();
       const origin = originOf();
@@ -2070,7 +2173,8 @@
       }
       track.classList.toggle("changed", value !== origin);
       track.setAttribute("aria-valuenow", String(value));
-      shown.textContent = value === def || right ? "" : `${min < 0 && value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+      if (document.activeElement !== field) field.value = text(value);
+      field.classList.toggle("changed", value !== def);
     };
     return row;
   };
@@ -2844,20 +2948,36 @@
       else if (done) later(edit, 150);
       show();
     };
+    // `fn(settings)` changes the list
     const changeList = (fn) => {
       const edit = ui.edit ?? (ui.edit = begin());
       if (!edit) return;
-      fn(edit.settings.items);
+      fn(edit.settings);
+      edit.settings.order = orderOf(edit.settings);
       edit.holding = false;
       change(edit);
       render();
     };
+    // A new one goes on top, applied last, as in Photoshop's Layers
     add.addEventListener("click", () =>
       openMenu(add, MENU(), (id) => {
         expanded = id;
-        changeList((items) => (items[id] = { on: true, ...fresh(id) }));
+        changeList((s) => {
+          s.items[id] = { on: true, ...fresh(id) };
+          s.order = [...orderOf(s).filter((each) => each !== id), id];
+        });
       }),
     );
+    // Pasted, `{ items, order }`: each replaces its own or is added, on top
+    // in the order it was copied in
+    const pasteItems = (copied) =>
+      changeList((s) => {
+        Object.assign(s, withPasted(s, copied));
+        picked.clear();
+        for (const id of copied.order) picked.add(id);
+      });
+    // Rows picked, for Copy: a press picks one, Shift adds or takes one away
+    const picked = new Set();
 
     // Each item's row, and its editor while it's the one expanded
     const rows = new Map();
@@ -2918,7 +3038,8 @@
     };
     const render = () => {
       const s = settings();
-      const ids = CATALOG.map(({ id }) => id).filter((id) => s.items[id]);
+      const ids = [...orderOf(s)].reverse();
+      for (const id of picked) if (!s.items[id]) picked.delete(id);
       if (expanded && !ids.includes(expanded)) expanded = null;
       for (const [id, row] of rows) if (!ids.includes(id)) (row.remove(), rows.delete(id));
       if (editor && editor.id !== expanded) {
@@ -2932,7 +3053,25 @@
         if (!row) {
           const flat = !EDITORS[id];
           const name = element("button", { type: "button", className: `name${flat ? " flat" : ""}` }, flat ? null : svg(ICONS.chevron), element("span", { textContent: NAMES[id] }));
-          if (!flat) name.addEventListener("click", () => ((expanded = expanded === id ? null : id), render()));
+          name.press = (event) => lift(event, id, name);
+          name.addEventListener("click", (event) => {
+            if (performance.now() - (name.dropped ?? -Infinity) < 400 || event.shiftKey || flat) return;
+            expanded = expanded === id ? null : id;
+            render();
+          });
+          // Alt+Up and Alt+Down move it in the list
+          name.key = (event) => {
+            const by = event.altKey ? { ArrowUp: -1, ArrowDown: 1 }[event.key] : undefined;
+            if (by === undefined) return false;
+            const shown = [...orderOf(settings())].reverse();
+            const at = shown.indexOf(id);
+            if (at + by < 0 || at + by >= shown.length) return true;
+            shown.splice(at, 1);
+            shown.splice(at + by, 0, id);
+            changeList((s) => (s.order = shown.reverse()));
+            name.focus({ preventScroll: true });
+            return true;
+          };
           // On the press, not the click, so it answers at once and isn't
           // lost when Figma redraws under the pointer. Keys still click
           const pressed = (button, act) => {
@@ -2943,10 +3082,10 @@
             });
           };
           const eye = element("button", { type: "button", className: "icon" });
-          pressed(eye, () => changeList((items) => (items[id].on = !items[id].on)));
+          pressed(eye, () => changeList((s) => (s.items[id].on = !s.items[id].on)));
           const remove = element("button", { type: "button", className: "icon", title: `Remove ${NAMES[id]}` }, svg(ICONS.minus));
           remove.setAttribute("aria-label", `Remove ${NAMES[id]}`);
-          pressed(remove, () => changeList((items) => delete items[id]));
+          pressed(remove, () => changeList((s) => delete s.items[id]));
           row = element("div", { className: "item" }, name, eye, remove);
           row.setAttribute("role", "listitem");
           row.parts = { name, eye, flat };
@@ -2960,11 +3099,64 @@
       });
       show();
     };
+    // A press on a row's name picks it, and dragging it up or down moves it
+    // in the list, a line showing where it'll go
+    const line = element("div", { className: "drop", hidden: true });
+    list.append(line);
+    const lift = (event, id, handle) => {
+      if (event.button !== 0) return;
+      handle.focus({ preventScroll: true });
+      if (!event.shiftKey) picked.clear();
+      if (event.shiftKey && picked.has(id)) picked.delete(id);
+      else picked.add(id);
+      show();
+      const row = rows.get(id);
+      const y = event.clientY;
+      let moving = false;
+      let to = null;
+      drag(
+        event,
+        (event) => {
+          const dy = event.clientY - y;
+          if (!moving && Math.abs(dy) < 4) return;
+          moving = true;
+          row.classList.add("lifted");
+          row.style.transform = `translateY(${dy}px)`;
+          const others = [...orderOf(settings())].reverse().filter((each) => each !== id);
+          let at = others.findIndex((each) => {
+            const box = rows.get(each).getBoundingClientRect();
+            return event.clientY < box.top + box.height / 2;
+          });
+          if (at < 0) at = others.length;
+          to = { others, at };
+          const below = rows.get(others[at]);
+          const above = others[at - 1] && (others[at - 1] === expanded && editor ? editor : rows.get(others[at - 1]));
+          const edge = below ? below.getBoundingClientRect().top : above ? above.getBoundingClientRect().bottom : row.getBoundingClientRect().top;
+          line.style.top = `${edge - list.getBoundingClientRect().top - 1}px`;
+          line.hidden = false;
+          if (line !== list.lastElementChild) list.append(line);
+        },
+        () => {
+          row.classList.remove("lifted");
+          row.style.transform = "";
+          line.hidden = true;
+          if (!moving || !to) return;
+          handle.dropped = performance.now();
+          const shown = [...to.others];
+          shown.splice(to.at, 0, id);
+          const order = shown.reverse();
+          if (order.join() !== orderOf(settings()).join()) changeList((s) => (s.order = order));
+          // Moving it took its focus, which Copy needs
+          handle.focus({ preventScroll: true });
+        },
+      );
+    };
     const show = () => {
       const s = settings();
       for (const [id, row] of rows) {
         const on = s.items[id]?.on !== false;
         row.classList.toggle("off", !on);
+        row.classList.toggle("picked", picked.has(id));
         const { name, eye, flat } = row.parts;
         if (!flat) name.setAttribute("aria-expanded", String(id === expanded));
         // Only when it changes: this runs as Figma redraws, and a press
@@ -2980,7 +3172,7 @@
       editor?.show();
       place();
     };
-    return { section, overlay, render, show, picture, thumbnail, settings, histograms: new Map(), edit: null, shown };
+    return { section, overlay, render, show, picture, thumbnail, settings, pasteItems, picked, histograms: new Map(), edit: null, shown };
   };
 
   // The worker started and the original sent to it ahead of the first
@@ -3020,8 +3212,23 @@
       const target = targetsOf(figma, at)[0];
       ui = build(target ? settingsOf(target.node, paintsOf(target.node, at.list)[at.index]) : blank());
       ui.key = nowKey;
+      ui.hash = target?.hash;
       ui.render();
       warm();
+    } else {
+      // The image changed under the open picker, by someone else in the
+      // file or by undo: the section shows what it has now, as anyone
+      // with Ligma sees what was left on it
+      const target = targetsOf(figma, at)[0];
+      const edit = ui.edit && !ui.edit.ended ? ui.edit : null;
+      const busy = edit && (edit.holding || edit.committing || edit.living || dragging);
+      if (target && target.hash !== (edit ? edit.targets[0].hash : ui.hash) && !busy) {
+        if (edit) abandon(edit);
+        ui.edit = null;
+        ui.hash = target.hash;
+        ui.shown = settingsOf(target.node, paintsOf(target.node, at.list)[at.index]);
+        ui.render();
+      }
     }
     const moved = box.nextElementSibling !== ui.section;
     if (moved) box.after(ui.section);
@@ -3094,7 +3301,99 @@
       const target = menu?.holder.contains(event.target) ? menu.holder : event.target;
       const handled = target.key?.(event);
       if (handled) event.preventDefault();
-      if (handled || event.key.startsWith("Arrow")) only(event);
+      // Typing in a value, and Copy and Paste here, aren't Figma's: the
+      // browser's own copy and paste follow, which Ligma takes below
+      const mod = /Mac/.test(navigator.platform) ? event.metaKey : event.ctrlKey;
+      const clipboard = mod && ["c", "v", "x"].includes(event.key.toLowerCase());
+      if (handled || event.key.startsWith("Arrow") || event.target instanceof HTMLInputElement || clipboard) only(event);
+    },
+    true,
+  );
+
+  // Copy with the section focused copies the rows picked, or the one whose
+  // controls are focused, or all of them. Paste puts them on the image
+  // whose picker is open, or on the top image of each selected layer.
+  // They go through the clipboard as Ligma's own type, so they carry to
+  // every tab, and as text naming them
+  const CLIP = "application/x-ligma-adjustments";
+  const typing = (node) => (node instanceof HTMLInputElement && !["range", "checkbox", "radio", "button", "color", "file"].includes(node.type)) || node instanceof HTMLTextAreaElement || !!node?.isContentEditable;
+  addEventListener(
+    "copy",
+    (event) => {
+      const focus = document.activeElement;
+      if (!state.on || !ui || !ui.section.contains(focus) || typing(focus)) return;
+      const s = ui.settings();
+      let ids = orderOf(s).filter((id) => ui.picked.has(id));
+      if (!ids.length) {
+        const own = focus.closest(".editor")?.id;
+        ids = own && s.items[own] ? [own] : orderOf(s);
+      }
+      if (!ids.length) return;
+      const copied = { v: 2, items: Object.fromEntries(ids.map((id) => [id, s.items[id]])), order: ids };
+      event.clipboardData.setData(CLIP, JSON.stringify(copied));
+      event.clipboardData.setData("text/plain", `Ligma adjustments: ${ids.map((id) => NAMES[id]).join(", ")}`);
+      event.preventDefault();
+      only(event);
+      api()?.notify(ids.length === 1 ? `Copied ${NAMES[ids[0]]}` : `Copied ${ids.length} adjustments`, { timeout: 1500 });
+    },
+    true,
+  );
+  addEventListener(
+    "paste",
+    (event) => {
+      const figma = state.on && api();
+      const raw = figma && event.clipboardData?.getData(CLIP);
+      if (!raw) return;
+      // Into a field shown, as Figma's width, it's text
+      const focus = document.activeElement;
+      if (typing(focus) && (ui?.section.contains(focus) || focus.getBoundingClientRect().width > 4)) return;
+      let copied;
+      try {
+        copied = normal(JSON.parse(raw));
+      } catch {
+        return;
+      }
+      if (!copied.order.length) return;
+      if (ui) {
+        event.preventDefault();
+        only(event);
+        ui.pasteItems(copied);
+        return;
+      }
+      // Each selected layer's top image fill shown, or its stroke's
+      const targets = [];
+      for (const node of figma.currentPage.selection) {
+        for (const list of ["fills", "strokes"]) {
+          const paints = paintsOf(node, list);
+          const index = paints.findLastIndex((paint) => image(paint) && paint.visible !== false);
+          if (index >= 0) {
+            targets.push({ node, list, index });
+            break;
+          }
+        }
+      }
+      // Nothing to paste them on: Figma pastes the text
+      if (!targets.length) return;
+      event.preventDefault();
+      only(event);
+      (async () => {
+        try {
+          figma.commitUndo();
+        } catch {}
+        let done = 0;
+        for (const { node, list, index } of targets) {
+          try {
+            const paint = paintsOf(node, list)[index];
+            await apply(node, list, index, withPasted(settingsOf(node, paint), copied));
+            done++;
+          } catch {}
+        }
+        try {
+          figma.commitUndo();
+        } catch {}
+        const what = copied.order.length === 1 ? NAMES[copied.order[0]] : "Adjustments";
+        figma.notify(done ? `${what} pasted to ${done === 1 ? "1 image" : `${done} images`}` : "Couldn't adjust the image", { timeout: 2000 });
+      })();
     },
     true,
   );
