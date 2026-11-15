@@ -1149,9 +1149,9 @@ pub struct Painter {
     /// When an image last came in
     image_came_at: Instant,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
-    /// Images units drew with when Vello last drew them, by unit, as
-    /// pictures keep them
-    vello_uses: HashMap<(usize, bool), Vec<(String, f64)>>,
+    /// Images units drew with when Vello last drew them, and at what
+    /// pixels a unit, by unit, as pictures keep them
+    vello_uses: HashMap<(usize, bool), (f32, Vec<(String, f64)>)>,
     /// Units encoded for Vello, by unit and level, see `Encoded`
     fragments: HashMap<(usize, bool, i32), Encoded>,
     /// Images of units made for the tile or view being drawn
@@ -2595,7 +2595,7 @@ impl Painter {
             self.drew_with(drew, unit);
             let mut uses = used;
             uses.extend(images);
-            self.vello_uses.insert(unit, uses);
+            self.vello_uses.insert(unit, (px, uses));
         }
         let stats = format!(
             "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} atlas={}k {}",
@@ -3730,19 +3730,37 @@ impl Painter {
             area.with_outset((area.width(), area.height()))
         });
         let seen: Option<Rect> = self.view.as_ref().map(|view| Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32));
-        // Units near the view, and whether they're in it
-        let near_units: HashMap<(usize, bool), bool> = self
+        // Where tiles at this zoom are drawn as the view moves: a tile
+        // around it, and where it's headed. Further out, only coarse tiles
+        let fine: Option<Rect> = self.view.as_ref().map(|view| {
+            let margin = TILE as f64 / px.max(1e-6) as f64;
+            let moving = self.moved.elapsed() < Duration::from_millis(150);
+            let (vx, vy) = if moving { (self.velocity.0 * LOOKAHEAD * 2.0, self.velocity.1 * LOOKAHEAD * 2.0) } else { (0.0, 0.0) };
+            let grow = if moving { (2f64.powf((self.widening * LOOKAHEAD * 2.0).clamp(0.0, 2.0)) - 1.0) / 2.0 } else { 0.0 };
+            let (gx, gy) = (view.w * grow + margin, view.h * grow + margin);
+            Rect::from_ltrb((view.x - gx + vx.min(0.0)) as f32, (view.y - gy + vy.min(0.0)) as f32, (view.x + view.w + gx + vx.max(0.0)) as f32, (view.y + view.h + gy + vy.max(0.0)) as f32)
+        });
+        // Units near the view, whether they're in it, and whether tiles of
+        // this zoom draw them
+        let near_units: HashMap<(usize, bool), (bool, bool)> = self
             .units
             .iter()
             .filter(|unit| near.is_none_or(|near| Rect::intersects2(&unit.bounds, &near)))
-            .map(|unit| ((unit.slot, unit.section), seen.is_none_or(|seen| Rect::intersects2(&unit.bounds, &seen))))
+            .map(|unit| {
+                let shown = seen.is_none_or(|seen| Rect::intersects2(&unit.bounds, &seen));
+                ((unit.slot, unit.section), (shown, shown || fine.is_none_or(|fine| Rect::intersects2(&unit.bounds, &fine))))
+            })
             .collect();
         // What pictures of this zoom draw them at, those of the zooms either
         // side kept for a while would keep them twice as big
         let mut need: HashMap<String, f64> = HashMap::new();
         let mut in_view: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Of those, what tiles of this zoom draw, and the most coarse tiles
+        // draw the others at
+        let mut fine_use: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut coarse_need: HashMap<String, f64> = HashMap::new();
         for (&(slot, section, level, _), recorded) in &self.pictures {
-            let Some(&shown) = near_units.get(&(slot, section)) else {
+            let Some(&(shown, close)) = near_units.get(&(slot, section)) else {
                 continue;
             };
             let this_zoom = level == current || level == exact;
@@ -3754,18 +3772,34 @@ impl Painter {
                 if shown {
                     in_view.insert(key.clone());
                 }
+                // Those of this zoom further out are recorded again, at
+                // what's had then, if the view comes back
+                if close && (this_zoom || is_draft(level)) {
+                    fine_use.insert(key.clone());
+                } else if !this_zoom && !is_draft(level) {
+                    let entry = coarse_need.entry(key.clone()).or_insert(0.0);
+                    *entry = entry.max(*width);
+                }
             }
         }
         // And what Vello drew them with
-        for (unit, uses) in &self.vello_uses {
-            let Some(&shown) = near_units.get(unit) else {
+        let coarse_px = coarse(px.max(1e-6));
+        for (unit, (drawn_px, uses)) in &self.vello_uses {
+            let Some(&(shown, close)) = near_units.get(unit) else {
                 continue;
             };
             for (key, width) in uses {
+                // At this zoom, whichever level last drew it
                 let entry = need.entry(key.clone()).or_insert(0.0);
-                *entry = entry.max(*width);
+                *entry = entry.max(width * (px / drawn_px.max(1e-6)) as f64);
                 if shown {
                     in_view.insert(key.clone());
+                }
+                if close {
+                    fine_use.insert(key.clone());
+                } else {
+                    let entry = coarse_need.entry(key.clone()).or_insert(0.0);
+                    *entry = entry.max(width * (coarse_px / drawn_px.max(1e-6)).min(1.0) as f64);
                 }
             }
         }
@@ -3795,10 +3829,36 @@ impl Painter {
             }
             self.forget_images(&gone);
         }
+        // Moving, those only coarse tiles draw are had again at the size
+        // they draw them, swapped in once here, so nothing shows blurrier
+        if soon && total > IMAGES_BUDGET {
+            let mut smaller: Vec<(usize, String, f64)> = self
+                .images
+                .iter()
+                .filter(|(key, _)| !key.starts_with(RENDER) && !key.starts_with(EFFECT) && !in_view.contains(key.as_str()) && !fine_use.contains(key.as_str()))
+                .filter_map(|(key, img)| {
+                    let width = *coarse_need.get(key.as_str()).filter(|width| **width > 0.0)?;
+                    let kept = img.image.width().max(img.image.height()) as f64;
+                    let fits = fitted(img.original, width) as f64;
+                    (kept > fits).then(|| ((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize, key.clone(), width))
+                })
+                .collect();
+            smaller.sort_by(|a, b| b.0.cmp(&a.0));
+            for (saving, key, width) in smaller {
+                if total <= IMAGES_BUDGET * 3 / 4 {
+                    break;
+                }
+                total = total.saturating_sub(saving);
+                if self.asked.get(&key) != Some(&width) {
+                    self.asked.insert(key.clone(), width);
+                    self.request(&key, width);
+                }
+            }
+        }
         // Those in view alone past it, as far out with many images each
         // zoomed in on before: each more than twice what it's drawn at is
         // had again at that, the same on screen
-        if !soon && total > IMAGES_BUDGET {
+        if total > IMAGES_BUDGET {
             let mut smaller: Vec<(usize, String, f64)> = self
                 .images
                 .iter()
