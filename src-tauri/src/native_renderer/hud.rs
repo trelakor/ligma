@@ -90,9 +90,6 @@ fn run(app: AppHandle) {
     let mut ticked: Option<Instant> = None;
     // Ligma's frames the panel has
     let mut sent = 0;
-    // Figma's page while Ligma's renderer draws: the page without Figma
-    // drawing its canvas
-    let mut page_alone: Option<f32> = None;
     while super::show_stats() {
         let ligma = super::ON.load(Ordering::Relaxed);
         if ticked.is_some_and(|at| at.elapsed() < TICK) {
@@ -122,15 +119,9 @@ fn run(app: AppHandle) {
             let record = records[active].get_or_insert_with(Record::default);
             if let Some(sample) = &sample {
                 let (own, page) = (sample.ligma as f32 / 1e6, sample.webview as f32 / 1e6);
-                record.memory.push_back(if ligma {
-                    page_alone = Some(page);
-                    (own, page)
-                } else {
-                    match page_alone {
-                        Some(alone) => (page - alone.min(page), alone.min(page)),
-                        None => (-1.0, page),
-                    }
-                });
+                // Figma's renderer draws in the browser's GPU process with
+                // the rest of the page, so the two can't be told apart
+                record.memory.push_back(if ligma { (own, page) } else { (-1.0, page) });
                 if record.memory.len() > SAMPLES {
                     record.memory.pop_front();
                 }

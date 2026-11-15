@@ -243,8 +243,7 @@
     frameGraph(ctx, frames, record);
     y = frames.y + frames.h + 18;
 
-    // Figma's renderer is in its page, so it's worked out from the page
-    // with and without it (see hud.rs), till then shown with the page
+    // Figma's renderer is shown with its page, see hud.rs
     const [renderer, page] = record.memory.at(-1) ?? [0, 0];
     text(ctx, PAD + 8, y, [["GPU memory ", MUTED], [mb(Math.max(renderer, 0) + page), ink]]);
     y += 16;
@@ -253,7 +252,7 @@
       renderer < 0
         ? [["Renderer and page ", page, PAGE]]
         : [
-            [ligma ? "Renderer " : "Renderer, estimated ", renderer, COLORS[column.renderer]],
+            ["Renderer ", renderer, COLORS[column.renderer]],
             ["Page ", page, PAGE],
           ];
     for (const [label, value, color] of legend) {
