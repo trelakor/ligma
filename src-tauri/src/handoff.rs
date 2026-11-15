@@ -3,7 +3,8 @@
 //! Ligma an image or a request as a download named
 //! `ligma-background-<job>`, `ligma-vectorize-<job>@<pixel>`,
 //! `ligma-object-<job>`, `ligma-heal-<job>` or
-//! `ligma-upscale-<job>`, which
+//! `ligma-upscale-<job>`, or asks for one of Photoshop's 3D LUTs by name
+//! as `ligma-lut-<job>` (see color_adjustments.rs), which
 //! `on_requested` saves to a temporary file instead of asking where. Once
 //! it's saved, it's handled off the main thread and the result goes back to
 //! the page through `window.__ligmaJob.done(job, result)`, or `failed(job,
@@ -31,15 +32,17 @@ enum Kind {
     Object,
     Heal,
     Upscale,
+    Lut,
     Cancel,
 }
 
-const KINDS: [(&str, Kind); 6] = [
+const KINDS: [(&str, Kind); 7] = [
     ("ligma-background-", Kind::Background),
     ("ligma-vectorize-", Kind::Vectorize),
     ("ligma-object-", Kind::Object),
     ("ligma-heal-", Kind::Heal),
     ("ligma-upscale-", Kind::Upscale),
+    ("ligma-lut-", Kind::Lut),
     ("ligma-cancel-", Kind::Cancel),
 ];
 
@@ -129,6 +132,7 @@ pub fn on_finished(webview: &Webview, url: &Url, success: bool) -> bool {
             (Kind::Object, Some(bytes)) => crate::objects::handle(&app, tab, job, &bytes),
             (Kind::Heal, Some(bytes)) => crate::heal::heal(tab, job, &bytes),
             (Kind::Upscale, Some(bytes)) => crate::upscale::handle(&app, tab, job, &bytes),
+            (Kind::Lut, Some(bytes)) => crate::color_adjustments::photoshop_lut(&bytes),
             (Kind::Cancel, Some(_)) => unreachable!(),
         };
         send(&app, tab, job, reply);

@@ -7,6 +7,7 @@ mod app_icon;
 mod appearance;
 mod auth;
 mod background;
+mod color_adjustments;
 mod copy_code;
 mod discord_ipc;
 mod downloads;
@@ -329,6 +330,7 @@ fn main() {
             new_home::init(&settings);
             toolbar::init(&settings);
             adjustments::init(&settings);
+            color_adjustments::init(&settings);
             ai_actions::init(&settings);
             copy_code::init(&settings);
             lasso::init(&settings);

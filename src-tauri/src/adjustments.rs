@@ -1,9 +1,10 @@
 //! Image adjustments (Settings > Images): copies the seven
 //! sliders of an image fill or stroke (Exposure, Contrast, Saturation,
-//! Temperature, Tint, Highlights and Shadows) and pastes them onto the
-//! images of the selected layers, leaving the images themselves
-//! alone. Figma's Copy/Paste Properties brings the whole fill, image and
-//! all. Video fills have no sliders
+//! Temperature, Tint, Highlights and Shadows), and Ligma's own
+//! (color_adjustments.rs), and pastes them onto the images of the
+//! selected layers. Figma's sliders leave the images alone, Ligma's make
+//! them again from their originals. Figma's Copy/Paste Properties brings
+//! the whole fill, image and all. Video fills have no sliders
 //!
 //! With the image picker open, Cmd+Shift+C (Ctrl+Shift+C) copies its
 //! adjustments, unless a text field has focus: Figma's Copy as PNG does
@@ -119,7 +120,9 @@ const PAGE_JS: &str = r##"(() => {
         fills.findLast((paint) => adjustable(paint) && paint.visible !== false) ??
         fills.findLast(adjustable);
       if (!paint) continue;
-      keep({ filters: Object.fromEntries(FILTERS.map((key) => [key, paint.filters?.[key] ?? 0])), armed: true });
+      // With Ligma's own (color_adjustments.rs), while they're on
+      const ligma = window.__ligmaColor?.settingsOf(node, paint) ?? undefined;
+      keep({ filters: Object.fromEntries(FILTERS.map((key) => [key, paint.filters?.[key] ?? 0])), ligma, armed: true });
       notify(figma, "Adjustments copied");
       return true;
     }
@@ -129,8 +132,9 @@ const PAGE_JS: &str = r##"(() => {
   // Sets `filters` on one image of each selected layer, as one undo step:
   // the paint `at`, `{ list, index }`, whose picker is open or row is
   // highlighted or was clicked, or else, and in layers without it, the
-  // layer's topmost image fill shown
-  const adjust = (filters, done, at) => {
+  // layer's topmost image fill shown. With `ligma`, Ligma's own too, which
+  // makes the image again
+  const adjust = async (filters, done, at, ligma) => {
     const figma = api();
     if (!figma) return;
     let images = 0;
@@ -147,6 +151,7 @@ const PAGE_JS: &str = r##"(() => {
       }
       try {
         node[list] = paintsOf(node, list).map((paint, i) => (i === index ? { ...paint, filters: { ...filters } } : paint));
+        if (ligma !== undefined) await window.__ligmaColor?.apply(node, list, index, ligma);
         images++;
       } catch {
         skipped++;
@@ -162,10 +167,10 @@ const PAGE_JS: &str = r##"(() => {
     notify(figma, `${done} ${plural(images)}${skipped ? `, ${skipped} skipped` : ""}`);
   };
   const paste = (at) => {
-    const filters = copied()?.filters;
-    if (filters) adjust(filters, "Adjustments pasted to", at);
+    const value = copied();
+    if (value?.filters) adjust(value.filters, "Adjustments pasted to", at, value.ligma);
   };
-  const reset = (at) => adjust(Object.fromEntries(FILTERS.map((key) => [key, 0])), "Adjustments reset on", at);
+  const reset = (at) => adjust(Object.fromEntries(FILTERS.map((key) => [key, 0])), "Adjustments reset on", at, null);
 
   const visible = (node) => node.getClientRects().length > 0;
   // The nearest box around `start` that `holds`, short of the whole page

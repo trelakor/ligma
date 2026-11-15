@@ -124,6 +124,8 @@ pub struct Settings {
     /// and with it, show Copy and Paste in the bar Figma shows above the
     /// toolbar for a selected image
     pub adjustments_bar: bool,
+    /// Photoshop's adjustments under the image picker's sliders
+    pub color_adjustments: bool,
     /// In free (Starter) projects, hide the AI actions from that bar:
     /// Select area, Remove background, Edit with prompt and More
     pub hide_free_ai_actions: bool,
@@ -214,6 +216,7 @@ impl Default for Settings {
             show_dev_mode: true,
             adjustments_clipboard: true,
             adjustments_bar: true,
+            color_adjustments: true,
             hide_free_ai_actions: true,
             local_remove_background: true,
             use_background_model: false,
@@ -487,6 +490,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::new_home::apply_settings(app, &settings);
     crate::toolbar::apply_settings(app, &settings);
     crate::adjustments::apply_settings(app, &settings);
+    crate::color_adjustments::apply_settings(app, &settings);
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
     crate::lasso::apply_settings(app, &settings);

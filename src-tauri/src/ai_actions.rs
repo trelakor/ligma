@@ -170,6 +170,8 @@ const PAGE_JS: &str = r##"(() => {
     done: (job, result) => jobs.get(job)?.done(result),
     failed: (job, reason) => jobs.get(job)?.failed(reason),
   };
+  // For Color Lookup (color_adjustments.rs), to ask for Photoshop's tables
+  window.__ligmaHandOff = handOff;
 
   // Figma's canvas, the largest
   const mainCanvas = () =>
