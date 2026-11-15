@@ -1940,7 +1940,7 @@
     ${S} .note { margin: 4px 0 0; padding: 0 var(--right) 8px var(--left); color: var(--color-text-secondary); }
     ${S} .file { height: 24px; display: flex; align-items: center; color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     ${S} input[type="color"] { width: 100%; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; }
-    ${S}[data-ligma-color="menu"] { position: fixed; z-index: 2147483000; min-width: 200px; max-height: 70vh; overflow: auto; padding: 8px; box-sizing: border-box; border-radius: 13px; background: var(--color-bg-menu, #1e1e1e); color: var(--color-text-menu, #fff); box-shadow: var(--elevation-400-menu-panel, 0 5px 17px rgb(0 0 0 / 0.2), 0 2px 7px rgb(0 0 0 / 0.15)); outline: 0; }
+    ${S}[data-ligma-color="menu"] { position: fixed; z-index: 2147483000; min-width: 200px; max-height: 70vh; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #b3b3b380 transparent; padding: 8px; box-sizing: border-box; border-radius: 13px; background: var(--color-bg-menu, #1e1e1e); color: var(--color-text-menu, #fff); box-shadow: var(--elevation-400-menu-panel, 0 5px 17px rgb(0 0 0 / 0.2), 0 2px 7px rgb(0 0 0 / 0.15)); outline: 0; }
     ${S} .mi { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 8px; height: 24px; padding: 0 8px; border-radius: 5px; white-space: nowrap; }
     ${S} .mi[data-on="true"] { background: var(--color-bg-menu-selected, #0d99ff); color: var(--color-text-menu, #fff); }
     ${S} .mh { display: flex; align-items: center; height: 24px; padding: 0 8px 0 32px; color: var(--color-text-menu-secondary, #ffffffb3); white-space: nowrap; }
@@ -3051,6 +3051,14 @@
       only(event);
     },
     true,
+  );
+  // Figma cancels wheels it doesn't own, so a long menu wouldn't scroll
+  addEventListener(
+    "wheel",
+    (event) => {
+      if (event.target instanceof Element && event.target.closest('[data-ligma-color="menu"]')) only(event);
+    },
+    { capture: true, passive: true },
   );
   for (const type of ["mousedown", "mouseup", "pointerup", "pointercancel"]) {
     addEventListener(
