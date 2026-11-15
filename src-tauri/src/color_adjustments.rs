@@ -643,9 +643,13 @@ const PAGE_JS: &str = r##"(() => {
     const fill = track.appendChild(element("div", { className: "fill" }));
     track.appendChild(element("div", { className: "middle" }));
     const knob = track.appendChild(element("div", { className: "knob" }));
-    const valueAt = (x) => {
+    // Within `SNAP` pixels of the middle it's 0, unless Alt (Option) is held
+    const SNAP = 6;
+    const valueAt = (event) => {
       const box = track.getBoundingClientRect();
-      const place = Math.min(1, Math.max(0, (x - box.left - 8) / (box.width - 16)));
+      const middle = box.left + box.width / 2;
+      if (!event.altKey && Math.abs(event.clientX - middle) <= SNAP) return 0;
+      const place = Math.min(1, Math.max(0, (event.clientX - box.left - 8) / (box.width - 16)));
       return Math.round((place * 2 - 1) * limit);
     };
     track.addEventListener("pointerdown", (event) => {
@@ -653,8 +657,8 @@ const PAGE_JS: &str = r##"(() => {
       event.preventDefault();
       track.focus();
       track.setPointerCapture(event.pointerId);
-      change(valueAt(event.clientX), false);
-      const move = (event) => change(valueAt(event.clientX), false);
+      change(valueAt(event), false);
+      const move = (event) => change(valueAt(event), false);
       track.addEventListener("pointermove", move);
       track.addEventListener(
         "lostpointercapture",
@@ -672,7 +676,10 @@ const PAGE_JS: &str = r##"(() => {
       if (by === undefined) return;
       event.preventDefault();
       event.stopPropagation();
-      change(Math.max(-limit, Math.min(limit, get() + by)), true);
+      // A step across the middle stops at 0 first
+      const value = get();
+      const next = Math.max(-limit, Math.min(limit, value + by));
+      change(value && Math.sign(next) === -Math.sign(value) ? 0 : next, true);
     });
     const row = element("div", { className: "row" }, element("span", { className: "label", textContent: label }), track);
     row.show = () => {
