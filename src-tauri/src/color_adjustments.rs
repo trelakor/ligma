@@ -229,7 +229,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // Each original as pictures to make from, the last few kept: a small one
   // for previews, decoded first, and the full size one when it's needed
-  const PREVIEW = 512;
+  const PREVIEW = 384;
   const sources = new Map();
   const sourceOf = (figma, hash) => {
     if (!sources.has(hash)) {
@@ -294,45 +294,65 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // A new image draws nothing in the file until Figma's loaded it, so it's
-  // put on a small layer off the canvas first, until that draws something.
-  // The layer goes again in the same undo step, so undo never brings it back
-  const loaded = async (figma, hash) => {
-    let loader = null;
+  // put on a tiny layer first, until that draws something. The layer sits
+  // at the bottom of the page inside the image's own bounds, so the canvas
+  // doesn't grow and its scrollbars stay put, and it's kept for the whole
+  // edit rather than made for each image. It goes again in the same undo
+  // step, so undo never brings it back
+  const LOADER = "loader";
+  const loaders = new Set();
+  const makeLoader = (figma, node) => {
+    const loader = figma.createRectangle();
+    loaders.add(loader);
+    loader.name = "Ligma loading";
+    loader.setSharedPluginData(PLUGIN, LOADER, "1");
+    figma.currentPage.insertChild(0, loader);
+    loader.resizeWithoutConstraints(2, 2);
+    const box = node.absoluteBoundingBox;
+    loader.x = box ? box.x + box.width / 2 - 1 : 0;
+    loader.y = box ? box.y + box.height / 2 - 1 : 0;
+    return loader;
+  };
+  const dropLoader = (loader) => {
+    loaders.delete(loader);
     try {
-      loader = figma.createRectangle();
-      loader.name = "Ligma loading";
-      figma.currentPage.insertChild(0, loader);
-      loader.resizeWithoutConstraints(8, 8);
-      loader.x = -200000;
-      loader.y = -200000;
+      if (!loader.removed) loader.remove();
+    } catch {}
+  };
+  // Any left by an edit that never finished, as when a tab closed mid-way
+  const dropStrayLoaders = (figma) => {
+    try {
+      for (const child of figma.currentPage.children.slice(0, 8)) {
+        if (!loaders.has(child) && child.getSharedPluginData(PLUGIN, LOADER)) child.remove();
+      }
+    } catch {}
+  };
+  const loaded = async (loader, hash) => {
+    try {
       loader.fills = [{ type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
-      const canvas = Object.assign(document.createElement("canvas"), { width: 8, height: 8 });
+      const canvas = Object.assign(document.createElement("canvas"), { width: 2, height: 2 });
       const context = canvas.getContext("2d", { willReadFrequently: true });
       const until = performance.now() + 2000;
       // A hidden tab doesn't draw, so exporting may wait as long as it is
       const late = new Promise((resolve) => setTimeout(resolve, 2000, null));
       while (performance.now() < until && !loader.removed) {
-        const bytes = await Promise.race([loader.exportAsync({ format: "PNG", constraint: { type: "WIDTH", value: 8 } }), late]);
+        const bytes = await Promise.race([loader.exportAsync({ format: "PNG", constraint: { type: "WIDTH", value: 2 } }), late]);
         if (!bytes) return;
         const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-        context.clearRect(0, 0, 8, 8);
-        context.drawImage(bitmap, 0, 0, 8, 8);
+        context.clearRect(0, 0, 2, 2);
+        context.drawImage(bitmap, 0, 0, 2, 2);
         bitmap.close();
-        const { data } = context.getImageData(0, 0, 8, 8);
+        const { data } = context.getImageData(0, 0, 2, 2);
         for (let i = 3; i < data.length; i += 4) if (data[i]) return;
       }
-    } catch {
-    } finally {
-      try {
-        if (loader && !loader.removed) loader.remove();
-      } catch {}
-    }
+    } catch {}
   };
 
   // Puts `s` on the paint `index` of `list` showing `target.hash`: made
   // from its original, or the original back with none. False if the paint
-  // changed meanwhile, or once `stale`, and then nothing's changed
-  const put = async (figma, target, list, index, s, full, stale = () => false) => {
+  // changed meanwhile, or once `stale`, and then nothing's changed.
+  // `loader` loads the new image, made for it if not given
+  const put = async (figma, target, list, index, s, full, stale = () => false, loader = null) => {
     const { node } = target;
     const original = originalOf(node, target.hash);
     let hash = original;
@@ -340,7 +360,12 @@ const PAGE_JS: &str = r##"(() => {
       const bytes = await make(figma, original, s, full);
       if (stale()) return false;
       hash = figma.createImage(bytes).hash;
-      await loaded(figma, hash);
+      const own = loader ?? makeLoader(figma, node);
+      try {
+        await loaded(own, hash);
+      } finally {
+        if (!loader) dropLoader(own);
+      }
       if (stale()) return false;
     }
     const paints = paintsOf(node, list);
@@ -421,7 +446,14 @@ const PAGE_JS: &str = r##"(() => {
     const targets = targetsOf(figma, at);
     if (!targets.length) return null;
     const settings = settingsOf(targets[0].node, paintsOf(targets[0].node, at.list)[at.index]);
-    return { figma, ...at, targets, settings, version: 0, fullVersion: 0 };
+    dropStrayLoaders(figma);
+    return { figma, ...at, targets, settings, version: 0, fullVersion: 0, loaders: {} };
+  };
+  // Each lane's own loader, so one never sees the other's image
+  const loaderOf = (edit, lane) => {
+    const loader = edit.loaders[lane];
+    if (loader && !loader.removed) return loader;
+    return (edit.loaders[lane] = makeLoader(edit.figma, edit.targets[0].node));
   };
 
   // Two lanes: small images while the sliders move, one at a time, always
@@ -449,18 +481,26 @@ const PAGE_JS: &str = r##"(() => {
     edit.failed = true;
     edit.figma.notify("Couldn't adjust the image", { timeout: 2000 });
   };
+  // Previews are paced, a frame and at least `PACE` ms apart, so Figma's
+  // work on each leaves room to draw the slider as it moves
+  const PACE = 90;
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
   const run = async (edit) => {
     if (edit.running || edit.failed) return;
     edit.running = true;
     busy(edit);
     start(edit);
     while (edit.want && !edit.failed) {
+      await frame();
+      const wait = (edit.paced ?? 0) + PACE - performance.now();
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      edit.paced = performance.now();
       edit.want = false;
       const version = edit.version;
       const s = structuredClone(edit.settings);
       for (const target of edit.targets) {
         try {
-          await put(edit.figma, target, edit.list, edit.index, s, false, () => edit.fullVersion >= version);
+          await put(edit.figma, target, edit.list, edit.index, s, false, () => edit.fullVersion >= version, loaderOf(edit, "small"));
         } catch {
           fail(edit);
           break;
@@ -485,7 +525,7 @@ const PAGE_JS: &str = r##"(() => {
     const s = structuredClone(edit.settings);
     for (const target of edit.targets) {
       try {
-        await put(edit.figma, target, edit.list, edit.index, s, true, stale);
+        await put(edit.figma, target, edit.list, edit.index, s, true, stale, loaderOf(edit, "full"));
       } catch {
         fail(edit);
       }
@@ -509,6 +549,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!edit.started || edit.running || edit.fullRunning || edit.settled) return;
     if (!edit.failed && edit.fullVersion !== edit.version) return runFull(edit);
     edit.settled = true;
+    for (const loader of Object.values(edit.loaders)) dropLoader(loader);
     for (const { node } of edit.targets) settle(node);
     try {
       edit.figma.commitUndo();
@@ -652,35 +693,37 @@ const PAGE_JS: &str = r##"(() => {
       const place = Math.min(1, Math.max(0, (event.clientX - box.left - 8) / (box.width - 16)));
       return Math.round((place * 2 - 1) * limit);
     };
-    track.addEventListener("pointerdown", (event) => {
+    // Called by the router below, ahead of Figma
+    track.press = (event) => {
       if (event.button !== 0) return;
       event.preventDefault();
-      track.focus();
-      track.setPointerCapture(event.pointerId);
+      track.focus({ preventScroll: true });
+      try {
+        track.setPointerCapture(event.pointerId);
+      } catch {}
       change(valueAt(event), false);
-      const move = (event) => change(valueAt(event), false);
-      track.addEventListener("pointermove", move);
-      track.addEventListener(
-        "lostpointercapture",
-        () => {
-          track.removeEventListener("pointermove", move);
+      const drag = {
+        move: (event) => change(valueAt(event), false),
+        end: () => {
+          if (dragging !== drag) return;
+          dragging = null;
           change(get(), true);
         },
-        { once: true },
-      );
-    });
+      };
+      dragging = drag;
+      track.addEventListener("lostpointercapture", drag.end, { once: true });
+    };
     track.addEventListener("dblclick", () => change(0, true));
-    track.addEventListener("keydown", (event) => {
+    track.key = (event) => {
       const step = event.shiftKey ? 10 : 1;
       const by = { ArrowRight: step, ArrowUp: step, ArrowLeft: -step, ArrowDown: -step }[event.key];
       if (by === undefined) return;
       event.preventDefault();
-      event.stopPropagation();
       // A step across the middle stops at 0 first
       const value = get();
       const next = Math.max(-limit, Math.min(limit, value + by));
       change(value && Math.sign(next) === -Math.sign(value) ? 0 : next, true);
-    });
+    };
     const row = element("div", { className: "row" }, element("span", { className: "label", textContent: label }), track);
     row.show = () => {
       const value = get();
@@ -771,14 +814,13 @@ const PAGE_JS: &str = r##"(() => {
       button.setAttribute("aria-label", name);
       button.dataset.range = id;
       button.addEventListener("click", () => pick(id));
-      button.addEventListener("keydown", (event) => {
+      button.key = (event) => {
         const by = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
         if (by === undefined) return;
         event.preventDefault();
-        event.stopPropagation();
         const at = choices.findIndex(([choice]) => choice === range);
         pick(choices[(at + by + choices.length) % choices.length][0], true);
-      });
+      };
     }
     body.append(
       add("Vibrance", 100, "vibrance"),
@@ -873,6 +915,54 @@ const PAGE_JS: &str = r##"(() => {
     }
     ui.show();
   };
+
+  // Presses in the section, its arrow keys and a slider's moves go to it
+  // alone, ahead of Figma, which would otherwise drag its picker by them,
+  // nudge the selection with the keys, or do its own work for every move.
+  // Registered before Figma's page code, so first
+  let dragging = null;
+  const inside = (event) => event.target instanceof Element && !!event.target.closest("[data-ligma-color]");
+  const only = (event) => event.stopImmediatePropagation();
+  addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!inside(event)) return;
+      event.target.closest(".track")?.press(event);
+      only(event);
+    },
+    true,
+  );
+  for (const type of ["mousedown", "mouseup", "pointerup", "pointercancel"]) {
+    addEventListener(
+      type,
+      (event) => {
+        if (!dragging && !inside(event)) return;
+        if (type === "pointerup" || type === "pointercancel") dragging?.end();
+        only(event);
+      },
+      true,
+    );
+  }
+  for (const type of ["pointermove", "mousemove"]) {
+    addEventListener(
+      type,
+      (event) => {
+        if (!dragging) return;
+        if (type === "pointermove") dragging.move(event);
+        only(event);
+      },
+      true,
+    );
+  }
+  addEventListener(
+    "keydown",
+    (event) => {
+      if (!inside(event) || !event.key.startsWith("Arrow")) return;
+      event.target.key?.(event);
+      only(event);
+    },
+    true,
+  );
 
   let queued = false;
   new MutationObserver((records) => {
