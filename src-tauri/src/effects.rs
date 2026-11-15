@@ -20,8 +20,12 @@
 //!
 //! Disintegrate breaks the selected layer into pieces and throws them, as
 //! After Effects' Shatter does, and Bitcrush pixelates, posterizes,
-//! dithers and glitches it. Both draw an image over the original, which is
-//! kept, hidden, in a group to change them from
+//! dithers and glitches it. Dither, Halftone and Modulate are Dither Boy's
+//! kinds of dithers, Gradient Map maps its tones to a gradient, Chromatic
+//! Aberration and Fisheye are a lens's, and Shadow and Reflection are
+//! worked out from a cutout's own shape, with no generated pixels. Each
+//! draws an image over the original, which is kept, hidden, in a group to
+//! change them from
 //!
 //! Effects stack, and a Ligma Effects section under Figma's own Effects in
 //! the right panel lists them to edit, hide, reorder or remove. See
@@ -300,6 +304,7 @@ const PAGE_JS: &str = r##"(() => {
     if (repeating) closeRepeater(repeating, false);
     if (disintegrating) closeDisintegrate(disintegrating, false);
     if (crushing) closeBitcrush(crushing, false);
+    if (filtering) closeFilter(filtering, false);
   };
   // An effect's `open`, undone if it throws. Run for a stack, the stack's
   // made again by `restack`, which hears of it and says so itself
@@ -359,7 +364,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // A layer's name without the effects' names an effect group starts with,
   // so stacked effects are named after the original rather than each other
-  const plainName = (name) => name.replace(/^(?:(?:Repeater|Disintegrate|Bitcrush) · )+/, "");
+  const plainName = (name) => name.replace(new RegExp(`^(?:(?:${EFFECTS.map((effect) => effect.name).join("|")}) · )+`), "");
 
   // ---------- The toolbar button and the library ----------
 
@@ -419,7 +424,7 @@ const PAGE_JS: &str = r##"(() => {
     document.body.append(menu);
     const box = anchor.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, box.left + box.width / 2 - menu.offsetWidth / 2))}px`;
-    menu.style.top = from ? `${Math.min(innerHeight - menu.offsetHeight - 8, box.bottom + 4)}px` : `${box.top - menu.offsetHeight - 12}px`;
+    menu.style.top = `${Math.max(8, from ? Math.min(innerHeight - menu.offsetHeight - 8, box.bottom + 4) : box.top - menu.offsetHeight - 12)}px`;
     if (from) menu.style.left = `${Math.max(8, box.right - menu.offsetWidth)}px`;
     anchor.setAttribute("aria-expanded", "true");
     addEventListener("pointerdown", outsideMenu, true);
@@ -762,7 +767,7 @@ const PAGE_JS: &str = r##"(() => {
   let repeating = null;
 
   const openRepeater = (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing) return;
+    if (repeating || disintegrating || crushing || filtering) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to repeat" : "Select a layer to repeat", { timeout: 2000 });
@@ -2070,7 +2075,7 @@ const PAGE_JS: &str = r##"(() => {
   let disintegrating = null;
 
   const openDisintegrate = async (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing) return;
+    if (repeating || disintegrating || crushing || filtering) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to disintegrate" : "Select a layer to disintegrate", { timeout: 2000 });
@@ -2928,7 +2933,7 @@ const PAGE_JS: &str = r##"(() => {
   let crushing = null;
 
   const openBitcrush = async (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing) return;
+    if (repeating || disintegrating || crushing || filtering) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to bitcrush" : "Select a layer to bitcrush", { timeout: 2000 });
@@ -3161,6 +3166,1794 @@ const PAGE_JS: &str = r##"(() => {
 
 
 
+  // ---------- Picture effects ----------
+
+  // Effects that make a new picture from the layer's, as Bitcrush does:
+  // Dither, Halftone, Modulate, Gradient Map, Chromatic Aberration,
+  // Fisheye, Shadow and Reflection. Each gives its settings, panel and a
+  // pixel function; opening, the live picture in the file, applying,
+  // cancelling and stacking are shared. A pixel function takes the
+  // picture as ImageData, the settings and the picture's pixels a point,
+  // and gives back an ImageData and where its top left sits from the
+  // picture's, as Shadow and Reflection draw past the layer. For the
+  // file's pictures it runs in a worker, so it uses nothing of the page's
+  // but the helpers in `PIXEL_HELPERS`. Nothing's generated: every result
+  // is worked out from the layer's own pixels
+  const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+  // Straight 0 to 255 to premultiplied 0 to 1, four floats a pixel
+  const premultiplied = (image) => {
+    const { data } = image;
+    const f = new Float32Array(data.length);
+    for (let i = 0; i < data.length; i += 4) {
+      const a = data[i + 3] / 255;
+      f[i] = (data[i] / 255) * a;
+      f[i + 1] = (data[i + 1] / 255) * a;
+      f[i + 2] = (data[i + 2] / 255) * a;
+      f[i + 3] = a;
+    }
+    return f;
+  };
+  const toImage = (f, W, H) => {
+    const out = new ImageData(W, H);
+    const o = out.data;
+    for (let i = 0; i < W * H * 4; i += 4) {
+      const a = f[i + 3];
+      if (a <= 0.0005) continue;
+      const alpha = a > 1 ? 1 : a;
+      o[i] = Math.round(Math.min(1, f[i] / a) * 255);
+      o[i + 1] = Math.round(Math.min(1, f[i + 1] / a) * 255);
+      o[i + 2] = Math.round(Math.min(1, f[i + 2] / a) * 255);
+      o[i + 3] = Math.round(alpha * 255);
+    }
+    return out;
+  };
+  // Bilinear, premultiplied, at `x`, `y` in pixels, nothing outside
+  const sampleAt = (f, W, H, x, y, into) => {
+    x -= 0.5;
+    y -= 0.5;
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = x - x0;
+    const ty = y - y0;
+    into[0] = into[1] = into[2] = into[3] = 0;
+    for (let j = 0; j < 2; j++) {
+      const yy = y0 + j;
+      if (yy < 0 || yy >= H) continue;
+      const wy = j ? ty : 1 - ty;
+      for (let i = 0; i < 2; i++) {
+        const xx = x0 + i;
+        if (xx < 0 || xx >= W) continue;
+        const w = wy * (i ? tx : 1 - tx);
+        if (!w) continue;
+        const at = (yy * W + xx) * 4;
+        into[0] += f[at] * w;
+        into[1] += f[at + 1] * w;
+        into[2] += f[at + 2] * w;
+        into[3] += f[at + 3] * w;
+      }
+    }
+    return into;
+  };
+  // The same for one float a pixel
+  const channelAt = (c, W, H, x, y) => {
+    x -= 0.5;
+    y -= 0.5;
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const tx = x - x0;
+    const ty = y - y0;
+    let v = 0;
+    for (let j = 0; j < 2; j++) {
+      const yy = y0 + j;
+      if (yy < 0 || yy >= H) continue;
+      const wy = j ? ty : 1 - ty;
+      for (let i = 0; i < 2; i++) {
+        const xx = x0 + i;
+        if (xx < 0 || xx >= W) continue;
+        v += c[yy * W + xx] * wy * (i ? tx : 1 - tx);
+      }
+    }
+    return v;
+  };
+  // A box blur of radius `r` along rows or columns, nothing past the edges
+  const boxPass = (src, dst, W, H, r, horizontal) => {
+    const [n, m, step, stride] = horizontal ? [W, H, 1, W] : [H, W, W, 1];
+    const norm = 1 / (2 * r + 1);
+    for (let j = 0; j < m; j++) {
+      const base = j * stride;
+      let sum = 0;
+      for (let i = 0; i <= Math.min(r, n - 1); i++) sum += src[base + i * step];
+      for (let i = 0; i < n; i++) {
+        dst[base + i * step] = sum * norm;
+        const add = i + r + 1;
+        const sub = i - r;
+        if (add < n) sum += src[base + add * step];
+        if (sub >= 0) sum -= src[base + sub * step];
+      }
+    }
+  };
+  // About a Gaussian of `sigma` pixels: three box blurs each way
+  const blurChannel = (c, W, H, sigma) => {
+    const out = Float32Array.from(c);
+    if (!(sigma > 0.3)) return out;
+    const r = Math.max(1, Math.round((Math.sqrt(4 * sigma * sigma + 1) - 1) / 2));
+    const tmp = new Float32Array(c.length);
+    for (let pass = 0; pass < 3; pass++) {
+      boxPass(out, tmp, W, H, r, true);
+      boxPass(tmp, out, W, H, r, false);
+    }
+    return out;
+  };
+  const hexRgb = (hex) => {
+    const n = parseInt(String(hex).replace("#", "").padEnd(6, "0").slice(0, 6), 16) || 0;
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  };
+  const lumaOf = (r, g, b) => r * 0.2126 + g * 0.7152 + b * 0.0722;
+  const hash2 = (x, y, seed) => {
+    let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 1442695041)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  };
+  // The picture averaged in square cells of `cell` pixels, premultiplied
+  const cellGrid = (f, W, H, cell) => {
+    const size = Math.max(1, cell);
+    const gw = Math.max(1, Math.ceil(W / size));
+    const gh = Math.max(1, Math.ceil(H / size));
+    const g = new Float32Array(gw * gh * 4);
+    const n = new Float32Array(gw * gh);
+    for (let y = 0; y < H; y++) {
+      const gy = Math.min(gh - 1, Math.floor(y / size));
+      for (let x = 0; x < W; x++) {
+        const to = gy * gw + Math.min(gw - 1, Math.floor(x / size));
+        const at = (y * W + x) * 4;
+        g[to * 4] += f[at];
+        g[to * 4 + 1] += f[at + 1];
+        g[to * 4 + 2] += f[at + 2];
+        g[to * 4 + 3] += f[at + 3];
+        n[to]++;
+      }
+    }
+    for (let i = 0; i < gw * gh; i++) if (n[i]) for (let c = 0; c < 4; c++) g[i * 4 + c] /= n[i];
+    return { g, gw, gh, size };
+  };
+  // The cells' average at `x`, `y` in the picture's pixels, smoothly
+  const gridAt = (grid, x, y, into) => {
+    const gx = Math.min(grid.gw - 0.5, Math.max(0.5, x / grid.size));
+    const gy = Math.min(grid.gh - 0.5, Math.max(0.5, y / grid.size));
+    return sampleAt(grid.g, grid.gw, grid.gh, gx, gy, into);
+  };
+  // The first and last rows of what's solid, half opaque or more, where a
+  // cutout stands on its ground
+  const solidRows = (f, W, H) => {
+    let top = -1;
+    let bottom = -1;
+    for (let y = 0; y < H && top < 0; y++) for (let x = 0; x < W; x++) if (f[(y * W + x) * 4 + 3] > 0.5) { top = y; break; }
+    for (let y = H - 1; y >= 0 && bottom < 0; y--) for (let x = 0; x < W; x++) if (f[(y * W + x) * 4 + 3] > 0.5) { bottom = y + 1; break; }
+    return top < 0 ? { top: 0, bottom: H } : { top, bottom };
+  };
+  const PIXEL_HELPERS = { clamp01, premultiplied, toImage, sampleAt, channelAt, boxPass, blurChannel, hexRgb, lumaOf, hash2, cellGrid, gridAt, solidRows };
+
+  style.textContent += `
+    [${ROOT}="menu"] { max-height: calc(100vh - 16px); overflow-y: auto; }
+    [${ROOT}="panel"] .gradient { position: relative; height: 24px; margin: 4px 6px 14px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--color-bordertranslucent, #0000001a); cursor: copy; }
+    [${ROOT}="panel"] .gradient .stop { position: absolute; top: 100%; width: 12px; height: 12px; margin: -6px 0 0 -6px; padding: 0; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3); cursor: ew-resize; }
+    [${ROOT}="panel"] .gradient .stop[aria-selected="true"] { box-shadow: 0 0 0 2px var(--color-border-selected, #0d99ff); }
+    [${ROOT}="panel"] .row.stop-row { grid-template-columns: 16px 1fr 52px 24px; }
+    [${ROOT}="panel"] .row.stop-row .hex { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; text-transform: uppercase; }
+  `;
+
+  let filtering = null;
+  let filterJob = 0;
+  const filterOf = (spec, node) => {
+    try {
+      return node?.type === "GROUP" && node.getSharedPluginData(PLUGIN, spec.id) ? node : null;
+    } catch {
+      return null;
+    }
+  };
+  const pictureEffect = (spec) =>
+    EFFECTS.push({
+      id: spec.id,
+      name: spec.name,
+      about: spec.about,
+      icon: spec.icon,
+      of: (node) => filterOf(spec, node),
+      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, spec.id) || "{}"),
+      summary: (s) => spec.summary({ ...structuredClone(spec.defaults), ...s }),
+      open: guarded((figma, edit, run) => openFilter(spec, figma, edit, run)),
+    });
+
+  // The open effect's worker, once it's said it's loaded, or null where
+  // one can't start, and the page runs it instead
+  const filterWorker = (current) =>
+    (current.worker ??= new Promise((resolve) => {
+      let ready = false;
+      let worker = null;
+      current.jobs = new Map();
+      const fail = () => {
+        if (ready) return;
+        ready = true;
+        worker?.terminate();
+        resolve(null);
+      };
+      try {
+        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `onmessage = ({ data: { id, image, s, k } }) => {`, `  try {`, `    const made = process(image, s, k);`, `    postMessage({ id, out: made.image, x: made.x, y: made.y }, [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
+        const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+        worker = new Worker(url);
+        worker.onmessage = ({ data }) => {
+          if (data.ready) {
+            ready = true;
+            URL.revokeObjectURL(url);
+            return resolve(worker);
+          }
+          const job = current.jobs.get(data.id);
+          current.jobs.delete(data.id);
+          if (data.error) job?.reject(new Error(data.error));
+          else job?.resolve({ image: data.out, x: data.x, y: data.y });
+        };
+        worker.onerror = (event) => {
+          event.preventDefault();
+          for (const job of current.jobs.values()) job.reject(new Error("Worker failed"));
+          current.jobs.clear();
+          fail();
+        };
+        setTimeout(fail, 2000);
+      } catch {
+        fail();
+      }
+    }));
+  const stopFilterWorker = (current) => {
+    current.worker?.then((worker) => worker?.terminate());
+    for (const job of current.jobs?.values() ?? []) job.reject(new Error("Worker stopped"));
+    current.jobs?.clear();
+  };
+
+  // What a pixel function made, as `drawBroken` gives its own: a canvas,
+  // made smaller if it's past what an image can be in Figma, and where it
+  // sits from the picture's top left, in the picture's pixels
+  const drawnFrom = ({ image, x, y }) => {
+    let canvas = Object.assign(document.createElement("canvas"), { width: image.width, height: image.height });
+    canvas.getContext("2d").putImageData(image, 0, 0);
+    const side = Math.max(image.width, image.height);
+    if (side > MAX_SIDE) {
+      const ratio = MAX_SIDE / side;
+      const small = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(image.width * ratio)), height: Math.max(1, Math.round(image.height * ratio)) });
+      small.getContext("2d").drawImage(canvas, 0, 0, small.width, small.height);
+      canvas = small;
+    }
+    return { canvas, x, y, width: image.width, height: image.height };
+  };
+
+  // The picture for `level` made apart from the page
+  const filterAt = async (current, level) => {
+    const entry = current.levels[level];
+    const image = crushedPixels(entry);
+    const s = structuredClone(current.settings);
+    const worker = await filterWorker(current);
+    if (current.closed) return null;
+    let made = null;
+    if (worker) {
+      try {
+        made = await new Promise((resolve, reject) => {
+          const id = ++filterJob;
+          current.jobs.set(id, { resolve, reject });
+          worker.postMessage({ id, image, s, k: entry.k });
+        });
+      } catch {}
+    }
+    if (current.closed) return null;
+    if (!made) {
+      await new Promise((resolve) => setTimeout(resolve));
+      made = current.spec.process(image, s, entry.k);
+    }
+    return drawnFrom(made);
+  };
+
+  const drawFilterPreview = (current) => {
+    const canvas = current.preview;
+    if (!canvas || !current.levels.preview) return;
+    const entry = current.levels.preview;
+    let drawn;
+    try {
+      drawn = drawnFrom(current.spec.process(crushedPixels(entry), current.settings, entry.k));
+    } catch {
+      return;
+    }
+    const ratio = devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+    const fit = Math.min((box.width - 24) / drawn.width, (box.height - 24) / drawn.height);
+    context.imageSmoothingEnabled = !current.spec.sharp || fit < 1;
+    context.drawImage(drawn.canvas, (box.width - drawn.width * fit) / 2, (box.height - drawn.height * fit) / 2, drawn.width * fit, drawn.height * fit);
+  };
+
+  const buildFilterPanel = (current) => {
+    const { spec } = current;
+    const s = current.settings;
+    const rows = [];
+    const shows = [];
+    const closes = [];
+    const change = (key, value) => {
+      s[key] = value;
+      refreshFilter(current);
+      show();
+    };
+    const slider = makeSlider({ s, unit: current.unit, rows, change, limits: spec.limits ?? {} });
+    const labelled = (text, control) => element("div", { className: "row" }, element("span", { className: "label", textContent: text }), control);
+    const ui = {
+      s,
+      unit: current.unit,
+      change,
+      element,
+      section: (caption, ...parts) => element("section", {}, ...(caption ? [element("div", { className: "caption", textContent: caption })] : []), ...parts.filter(Boolean)),
+      sliders: (list) => element("div", { className: "rows" }, ...list.map(slider)),
+      segments: (key, label, options) => {
+        const control = segments(label, options, () => s[key], (value) => change(key, value));
+        shows.push(() => control.show());
+        return labelled(label, control);
+      },
+      select: (key, label, options) => {
+        const control = select(label, options, () => s[key], (value) => change(key, value));
+        shows.push(() => control.show());
+        closes.push(() => control.close());
+        return labelled(label, control);
+      },
+      check: (key, label, title = "") => {
+        const input = element("input", { type: "checkbox" });
+        input.addEventListener("change", () => change(key, input.checked));
+        shows.push(() => (input.checked = Boolean(s[key])));
+        return checkRow(label, input, title);
+      },
+      swatch: (get, set, title) => {
+        const picker = element("input", { type: "color", className: "hidden-picker" });
+        picker.addEventListener("input", () => set(picker.value));
+        const swatch = element("button", { type: "button", className: "swatch", title });
+        swatch.addEventListener("click", (event) => {
+          event.preventDefault();
+          picker.click();
+        });
+        const paint = () => {
+          swatch.style.background = get();
+          picker.value = get();
+        };
+        shows.push(paint);
+        return [swatch, picker, paint];
+      },
+      color: (key, label) => {
+        const [swatch, picker] = ui.swatch(() => s[key], (value) => change(key, value), label);
+        return element("label", { className: "row check" }, element("span", { className: "label", textContent: label }), swatch, picker);
+      },
+      shuffle: (key, label = "Random seed") => {
+        const button = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
+        button.addEventListener("click", () => change(key, Math.floor(Math.random() * 65536)));
+        button.style.gridColumn = "span 2";
+        button.style.justifySelf = "start";
+        return labelled(label, button);
+      },
+      // Shown only while `test()` holds
+      when: (node, test) => {
+        shows.push(() => (node.hidden = !test()));
+        return node;
+      },
+      onShow: (fn) => shows.push(fn),
+    };
+    const canvas = element("canvas", { className: "preview" });
+    canvas.setAttribute("aria-hidden", "true");
+    current.preview = canvas;
+    const pick = (values) => {
+      Object.assign(s, structuredClone(spec.defaults), values(current.unit), { editable: s.editable });
+      refreshFilter(current);
+      show();
+    };
+    const presets = spec.presets?.length ? makeChips(spec.presets, pick) : null;
+    const sections = spec.panel(ui);
+    const editable = element("input", { type: "checkbox" });
+    editable.addEventListener("change", () => change("editable", editable.checked));
+    const result = element("section", {}, checkRow("Keep editable", editable, `The original kept, hidden, in a group ${spec.name} can change later`));
+    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => pick(() => ({})));
+    const scroll = element("div", { className: "scroll" }, ...[presets, ...sections].filter(Boolean), result, element("div", { className: "under" }, reset));
+    const name = element("div", { className: "source", textContent: current.source.name });
+    const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
+    cancel.addEventListener("click", () => closeFilter(current, false));
+    const label = current.group ? "Update" : spec.verb;
+    const go = element("button", { type: "button", className: "button primary", textContent: label });
+    go.addEventListener("click", () => !current.busy && applyFilter(current));
+    const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
+    const root = makePanel(current.group ? `${spec.name} · ${plainName(current.source.name)}` : spec.name, () => closeFilter(current, false), canvas, scroll, footer);
+    const show = () => {
+      for (const fn of shows) fn();
+      for (const row of rows) row.show();
+      editable.checked = s.editable;
+      drawFilterPreview(current);
+    };
+    show();
+    current.root = root;
+    current.panel = {
+      busy: (on) => {
+        go.disabled = on;
+        go.textContent = on ? "Making…" : label;
+      },
+      close: () => closes.forEach((fn) => fn()),
+    };
+    current.keys = panelKeys(root, () => filtering === current, () => closeFilter(current, false), () => !current.busy && applyFilter(current));
+    addEventListener("keydown", current.keys, true);
+    go.focus();
+  };
+
+  const openFilter = async (spec, figma, edit = false, run = null) => {
+    if (repeating || disintegrating || crushing || filtering) return;
+    const selected = figma.currentPage.selection;
+    if (selected.length !== 1) {
+      figma.notify(selected.length ? `Select one layer for ${spec.name}` : `Select a layer for ${spec.name}`, { timeout: 2000 });
+      return;
+    }
+    let group = edit ? filterOf(spec, selected[0]) : null;
+    let source;
+    let result = null;
+    const settings = structuredClone(spec.defaults);
+    if (group) {
+      source = sourceOf(group);
+      result = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "result") ?? null;
+      try {
+        Object.assign(settings, JSON.parse(group.getSharedPluginData(PLUGIN, spec.id)));
+      } catch {}
+      if (!source) {
+        group = null;
+        source = selected[0];
+      }
+    } else {
+      source = selected[0];
+    }
+    if (source.type === "SECTION" || !("exportAsync" in source)) {
+      figma.notify("Sections can't take effects", { timeout: 2000 });
+      return;
+    }
+    if (run) Object.assign(settings, structuredClone(run), { editable: true });
+
+    const current = {
+      spec,
+      figma,
+      group,
+      source,
+      settings,
+      unit: Math.max(1, Math.max(source.width ?? 100, source.height ?? 100)),
+      result,
+      kept: result ? { fills: JSON.stringify(result.fills), width: result.width, height: result.height, transform: result.relativeTransform } : null,
+      levels: {},
+      wasVisible: source.visible,
+      run: Boolean(run),
+    };
+    filtering = current;
+    try {
+      figma.commitUndo();
+    } catch {}
+    // A small picture first, for the panel and the file while it's
+    // changed, then the full one, for applying, as Bitcrush reads them
+    const reader = pictureReader(figma, source);
+    try {
+      current.bounds = reader.bounds;
+      const side = Math.max(1, current.bounds.width, current.bounds.height);
+      const quick = await reader.read(Math.min(2, QUICK / side));
+      if (filtering !== current) return reader.done();
+      const k = quick.width / current.bounds.width;
+      current.levels = { preview: scaledPicture(quick, 360, k), live: scaledPicture(quick, QUICK, k) };
+      quick.close?.();
+      if (!run) {
+        buildFilterPanel(current);
+        refreshFilter(current);
+      }
+      current.bitmap = await reader.read(Math.min(2, MAX_SIDE / 2 / side));
+      reader.done();
+    } catch {
+      reader.done();
+      if (filtering === current) {
+        current.root?.remove();
+        removeEventListener("keydown", current.keys, true);
+        stopFilterWorker(current);
+        filtering = null;
+        figma.notify("Couldn't read the layer", { timeout: 2000 });
+      }
+      return;
+    }
+    if (filtering !== current) return;
+    current.levels.full = scaledPicture(current.bitmap, MAX_SIDE, current.bitmap.width / current.bounds.width);
+    const parent = source.parent;
+    if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
+      current.home = { parent, index: parent.children.indexOf(source) };
+      try {
+        current.wrap = figma.group([source], parent, current.home.index);
+        current.wrap.name = `${spec.name} · ${plainName(source.name)}`;
+      } catch {
+        current.wrap = null;
+      }
+    }
+    if (!current.result) {
+      current.result = figma.createRectangle();
+      current.result.name = `${source.name} (${spec.name})`;
+      const holder = source.parent;
+      holder.insertChild(holder.children.indexOf(source) + 1, current.result);
+      if ("layoutMode" in holder && holder.layoutMode !== "NONE") current.result.layoutPositioning = "ABSOLUTE";
+      current.result.setSharedPluginData(PLUGIN, ROLE, "result");
+      current.result.visible = false;
+    }
+    figma.currentPage.selection = [current.wrap ?? current.group ?? current.result];
+    current.ready = true;
+    if (run) return applyFilter(current);
+    refreshFilter(current);
+  };
+
+  // The panel's preview at once, and the file's a moment after
+  const refreshFilter = (current) => {
+    if (!current.drawing) {
+      current.drawing = true;
+      requestAnimationFrame(() => {
+        current.drawing = false;
+        if (filtering === current) drawFilterPreview(current);
+      });
+    }
+    if (!current.ready) return;
+    clearTimeout(current.timer);
+    current.timer = setTimeout(async () => {
+      if (filtering !== current || current.busy) return;
+      if (current.placing) {
+        current.again = true;
+        return;
+      }
+      current.placing = true;
+      try {
+        do {
+          current.again = false;
+          await placeDrawn(current, await filterAt(current, "live"), current.levels.live.k);
+        } while (current.again && !current.busy && filtering === current);
+      } catch {}
+      current.placing = false;
+    }, 40);
+  };
+
+  // Closed as Cancel closes it if it fails, rather than left making
+  const applyFilter = async (current) => {
+    try {
+      await finishFilter(current);
+    } catch (error) {
+      if (filtering === current) closeFilter(current, false);
+      if (current.run) throw error;
+      current.figma.notify("Couldn't make the effect", { timeout: 2000 });
+    }
+  };
+
+  const finishFilter = async (current) => {
+    const { figma, source, settings, spec } = current;
+    clearTimeout(current.timer);
+    current.busy = true;
+    current.panel?.busy(true);
+    while (!current.ready || current.placing) {
+      await new Promise((resolve) => setTimeout(resolve, 16));
+      if (filtering !== current) return;
+    }
+    current.again = false;
+    await placeDrawn(current, await filterAt(current, "full"), current.levels.full.k);
+    if (filtering !== current) return;
+    let result = current.group ?? current.wrap;
+    if (settings.editable) {
+      if (!result || result.removed) {
+        const parent = source.parent;
+        result = figma.group([source, current.result], parent, parent.children.indexOf(source));
+        result.name = `${spec.name} · ${plainName(source.name)}`;
+      }
+      source.setSharedPluginData(PLUGIN, ROLE, "source");
+      result.setSharedPluginData(PLUGIN, spec.id, JSON.stringify(settings));
+      result.setSharedPluginData(PLUGIN, OFF, "");
+      figma.currentPage.selection = [result];
+    } else {
+      current.result.setSharedPluginData(PLUGIN, ROLE, "");
+      if (result && !result.removed) result.setSharedPluginData(PLUGIN, spec.id, "");
+      const image = current.result;
+      const holder = current.wrap ?? current.group;
+      if (holder && !holder.removed) figma.ungroup(holder);
+      if (!source.removed) source.remove();
+      image.name = image.name.replace(` (${spec.name})`, "");
+      figma.currentPage.selection = [image];
+    }
+    try {
+      figma.commitUndo();
+    } catch {}
+    closeFilter(current, true);
+    if (current.group && settings.editable) restackAbove(figma, current.group);
+  };
+
+  const closeFilter = (current, applied) => {
+    if (filtering !== current) return;
+    filtering = null;
+    clearTimeout(current.timer);
+    current.closed = true;
+    stopFilterWorker(current);
+    if (current.loader && !current.loader.removed) current.loader.remove();
+    if (!applied) {
+      const { figma, source, result, home, wrap } = current;
+      if (current.group) {
+        try {
+          if (current.kept && !result.removed) {
+            result.resizeWithoutConstraints(current.kept.width, current.kept.height);
+            result.relativeTransform = current.kept.transform;
+            result.fills = JSON.parse(current.kept.fills);
+            result.visible = true;
+          }
+          if (!current.group.removed && isOff(current.group)) setOff(current.group, true);
+        } catch {}
+      } else {
+        if (result && !result.removed) result.remove();
+        if (!source.removed) source.visible = current.wasVisible;
+        if (wrap && home && !source.removed && !home.parent.removed) {
+          try {
+            home.parent.insertChild(Math.min(home.index, home.parent.children.length), source);
+            if (!wrap.removed) wrap.remove();
+          } catch {}
+        }
+      }
+      try {
+        if (current.group && !current.group.removed) figma.currentPage.selection = [current.group];
+        else if (!source.removed) figma.currentPage.selection = [source];
+      } catch {}
+    }
+    current.bitmap?.close?.();
+    current.panel?.close();
+    current.root?.remove();
+    removeEventListener("keydown", current.keys, true);
+  };
+
+  // Sizes in points scale with the layer, `u` its larger side
+  const upTo = (u, times, least) => Math.max(least, Math.round(u * times));
+
+  // ---------- Dither ----------
+
+  // Dither Boy's families of dithers: error diffusion (Floyd–Steinberg,
+  // Atkinson, Jarvis–Judice–Ninke, Stucki, Burkes and Sierra's three),
+  // ordered (Bayer 2, 4 and 8, clustered dots) and threshold and random,
+  // on cells of the layer's picture, in a palette
+  const DITHER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="4.5" y="4.5" width="15" height="15" rx="1.5"/><path ${STROKE} d="M12 4.5v15M12 4.5h3.75v3.75H12zM15.75 8.25h3.75V12h-3.75zM12 12h3.75v3.75H12zM15.75 15.75h3.75v3.75h-3.75z"/></svg>`;
+  const DITHER_ALGORITHMS = [
+    ["floyd", "Floyd–Steinberg"],
+    ["atkinson", "Atkinson"],
+    ["jarvis", "Jarvis–Judice–Ninke"],
+    ["stucki", "Stucki"],
+    ["burkes", "Burkes"],
+    ["sierra", "Sierra"],
+    ["sierra2", "Two-row Sierra"],
+    ["sierraLite", "Sierra Lite"],
+    ["bayer2", "Bayer 2×2"],
+    ["bayer4", "Bayer 4×4"],
+    ["bayer8", "Bayer 8×8"],
+    ["cluster", "Clustered dots"],
+    ["random", "Random"],
+    ["threshold", "Threshold"],
+  ];
+  const DITHER_PALETTES = [
+    ["mono", "Black and white"],
+    ["duo", "Two colors"],
+    ["gray", "Grays"],
+    ["green", "Handheld green"],
+    ["sepia", "Sepia"],
+    ["cga", "Cyan and magenta"],
+    ["color", "Posterized color"],
+  ];
+  pictureEffect({
+    id: "dither",
+    name: "Dither",
+    about: "Error diffusion, Bayer and more, in a palette",
+    icon: DITHER_ICON,
+    verb: "Dither",
+    sharp: true,
+    defaults: { algorithm: "floyd", palette: "mono", levels: 4, pixelSize: 2, strength: 100, serpentine: true, brightness: 0, contrast: 100, gamma: 1, ink: "#1a1a2e", paper: "#f4efe1", seed: 7, editable: true },
+    presets: [
+      ["Classic", () => ({})],
+      ["Atkinson", () => ({ algorithm: "atkinson", pixelSize: 1.5, contrast: 115 })],
+      ["Bayer", () => ({ algorithm: "bayer4", pixelSize: 3 })],
+      ["Handheld", () => ({ algorithm: "bayer4", palette: "green", pixelSize: 3, contrast: 110 })],
+      ["Newsprint", () => ({ algorithm: "cluster", palette: "duo", pixelSize: 1.5, ink: "#222222", paper: "#ece6d6" })],
+      ["Retro color", () => ({ algorithm: "floyd", palette: "color", levels: 3, pixelSize: 3 })],
+      ["CGA", () => ({ algorithm: "bayer8", palette: "cga", pixelSize: 3 })],
+    ],
+    limits: { pixelSize: [0.25, 400], levels: [2, 16], strength: [0, 200], brightness: [-100, 100], contrast: [0, 400], gamma: [0.1, 5] },
+    summary: (s) => `${DITHER_ALGORITHMS.find(([value]) => value === s.algorithm)?.[1] ?? "Dither"} · ${s.pixelSize}pt`,
+    panel: (ui) => {
+      const { s } = ui;
+      const diffusing = () => !/^(bayer|cluster|random|threshold)/.test(s.algorithm);
+      const levelled = () => s.palette === "gray" || s.palette === "color";
+      return [
+        ui.section(
+          "Dither",
+          ui.select("algorithm", "Algorithm", DITHER_ALGORITHMS),
+          ui.sliders([
+            ["pixelSize", "Pixel size", "pt", (u) => ({ min: 0.5, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
+            ["strength", "Strength", "%", () => ({ min: 0, max: 200, middle: 100 })],
+          ]),
+          ui.when(ui.check("serpentine", "Serpentine", "Each row the other way from the last, which breaks up the diffusion's worms"), diffusing),
+          ui.when(ui.shuffle("seed"), () => s.algorithm === "random"),
+        ),
+        ui.section(
+          "Palette",
+          ui.select("palette", "Colors", DITHER_PALETTES),
+          ui.when(ui.sliders([["levels", "Levels", "", () => ({ min: 2, max: 16 })]]), levelled),
+          ui.when(element("div", {}, ui.color("ink", "Ink"), ui.color("paper", "Paper")), () => s.palette === "duo"),
+        ),
+        ui.section(
+          "Tone",
+          ui.sliders([
+            ["brightness", "Brightness", "", () => ({ min: -100, max: 100 })],
+            ["contrast", "Contrast", "%", () => ({ min: 0, max: 300, middle: 100 })],
+            ["gamma", "Gamma", "", () => ({ min: 0.2, max: 3, middle: 1, digits: 2 })],
+          ]),
+        ),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const cell = Math.max(1, s.pixelSize * k);
+      const { g, gw, gh } = cellGrid(f, W, H, cell);
+      const n = gw * gh;
+      const hex = (list) => list.map(hexRgb);
+      const ramps = { mono: hex(["#000000", "#ffffff"]), duo: hex([s.ink, s.paper]), green: hex(["#0f380f", "#306230", "#8bac0f", "#9bbc0f"]), sepia: hex(["#2b1d0e", "#6b4a2b", "#b08d57", "#f1e3c6"]) };
+      const levels = Math.max(2, Math.min(16, Math.round(s.levels)));
+      ramps.gray = Array.from({ length: levels }, (_, i) => [i / (levels - 1), i / (levels - 1), i / (levels - 1)]);
+      const ramp = ramps[s.palette];
+      const colors = s.palette === "cga" ? hex(["#000000", "#55ffff", "#ff55ff", "#ffffff"]) : null;
+      const channels = ramp ? 1 : 3;
+      // Toned values, luma for a ramp of colors, or red, green and blue
+      const v = new Float32Array(n * channels);
+      const solid = new Uint8Array(n);
+      const [bright, contrast, gamma] = [s.brightness / 100, s.contrast / 100, 1 / Math.max(0.05, s.gamma)];
+      const tone = (x) => Math.max(0, (x - 0.5) * contrast + 0.5 + bright) ** gamma;
+      for (let i = 0; i < n; i++) {
+        const a = g[i * 4 + 3];
+        solid[i] = a >= 0.5 ? 1 : 0;
+        const [r, gg, b] = a > 0 ? [g[i * 4] / a, g[i * 4 + 1] / a, g[i * 4 + 2] / a] : [0, 0, 0];
+        if (ramp) v[i] = tone(lumaOf(r, gg, b));
+        else [v[i * 3], v[i * 3 + 1], v[i * 3 + 2]] = [tone(r), tone(gg), tone(b)];
+      }
+      const steps = ramp ? ramp.length - 1 : colors ? 1 : levels - 1;
+      // Quantizes the cell's value, `bias` from the dither added, into
+      // `into` the color, giving the error left
+      const err = new Float32Array(3);
+      const pickColor = (i, bias, into) => {
+        if (ramp) {
+          const x = v[i] + bias;
+          const at = Math.max(0, Math.min(steps, Math.round(x * steps)));
+          err[0] = v[i] - at / steps;
+          const c = ramp[at];
+          into[0] = c[0];
+          into[1] = c[1];
+          into[2] = c[2];
+          return;
+        }
+        if (colors) {
+          let best = 0;
+          let least = Infinity;
+          for (let c = 0; c < colors.length; c++) {
+            const [dr, dg, db] = [v[i * 3] + bias - colors[c][0], v[i * 3 + 1] + bias - colors[c][1], v[i * 3 + 2] + bias - colors[c][2]];
+            const d = dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11;
+            if (d < least) [least, best] = [d, c];
+          }
+          for (let c = 0; c < 3; c++) {
+            into[c] = colors[best][c];
+            err[c] = v[i * 3 + c] - into[c];
+          }
+          return;
+        }
+        for (let c = 0; c < 3; c++) {
+          const at = Math.max(0, Math.min(steps, Math.round((v[i * 3 + c] + bias) * steps)));
+          into[c] = at / steps;
+          err[c] = v[i * 3 + c] - into[c];
+        }
+      };
+      const out = new Float32Array(n * 3);
+      const color = new Float32Array(3);
+      const strength = s.strength / 100;
+      const KERNELS = {
+        floyd: [16, [1, 0, 7], [-1, 1, 3], [0, 1, 5], [1, 1, 1]],
+        atkinson: [8, [1, 0, 1], [2, 0, 1], [-1, 1, 1], [0, 1, 1], [1, 1, 1], [0, 2, 1]],
+        jarvis: [48, [1, 0, 7], [2, 0, 5], [-2, 1, 3], [-1, 1, 5], [0, 1, 7], [1, 1, 5], [2, 1, 3], [-2, 2, 1], [-1, 2, 3], [0, 2, 5], [1, 2, 3], [2, 2, 1]],
+        stucki: [42, [1, 0, 8], [2, 0, 4], [-2, 1, 2], [-1, 1, 4], [0, 1, 8], [1, 1, 4], [2, 1, 2], [-2, 2, 1], [-1, 2, 2], [0, 2, 4], [1, 2, 2], [2, 2, 1]],
+        burkes: [32, [1, 0, 8], [2, 0, 4], [-2, 1, 2], [-1, 1, 4], [0, 1, 8], [1, 1, 4], [2, 1, 2]],
+        sierra: [32, [1, 0, 5], [2, 0, 3], [-2, 1, 2], [-1, 1, 4], [0, 1, 5], [1, 1, 4], [2, 1, 2], [-1, 2, 2], [0, 2, 3], [1, 2, 2]],
+        sierra2: [16, [1, 0, 4], [2, 0, 3], [-2, 1, 1], [-1, 1, 2], [0, 1, 3], [1, 1, 2], [2, 1, 1]],
+        sierraLite: [4, [1, 0, 2], [-1, 1, 1], [0, 1, 1]],
+      };
+      const kernel = KERNELS[s.algorithm];
+      if (kernel) {
+        const [divisor, ...taps] = kernel;
+        for (let y = 0; y < gh; y++) {
+          const back = s.serpentine && y % 2 === 1;
+          for (let j = 0; j < gw; j++) {
+            const x = back ? gw - 1 - j : j;
+            const i = y * gw + x;
+            if (!solid[i]) continue;
+            pickColor(i, 0, color);
+            out.set(color, i * 3);
+            for (const [dx, dy, w] of taps) {
+              const [tx, ty] = [x + (back ? -dx : dx), y + dy];
+              if (tx < 0 || tx >= gw || ty >= gh) continue;
+              const t = ty * gw + tx;
+              const share = (w / divisor) * strength;
+              for (let c = 0; c < channels; c++) v[t * channels + c] += err[c] * share;
+            }
+          }
+        }
+      } else {
+        // An ordered matrix, its thresholds 0 to 1
+        const bayer = (size) => {
+          let m = [0];
+          let side = 1;
+          while (side < size) {
+            const next = new Array(4 * side * side);
+            for (let y = 0; y < side; y++)
+              for (let x = 0; x < side; x++) {
+                const at = m[y * side + x] * 4;
+                next[y * 2 * side + x] = at;
+                next[y * 2 * side + x + side] = at + 2;
+                next[(y + side) * 2 * side + x] = at + 3;
+                next[(y + side) * 2 * side + x + side] = at + 1;
+              }
+            m = next;
+            side *= 2;
+          }
+          return { m: m.map((value) => (value + 0.5) / (side * side)), side };
+        };
+        const matrix = s.algorithm === "bayer2" ? bayer(2) : s.algorithm === "bayer8" ? bayer(8) : s.algorithm === "cluster" ? { m: [12, 5, 6, 13, 4, 0, 1, 7, 11, 3, 2, 8, 15, 10, 9, 14].map((value) => (value + 0.5) / 16), side: 4 } : bayer(4);
+        const spread = (strength / steps) * (colors ? 1.5 : 1);
+        for (let y = 0; y < gh; y++)
+          for (let x = 0; x < gw; x++) {
+            const i = y * gw + x;
+            if (!solid[i]) continue;
+            let bias = 0;
+            if (s.algorithm === "random") bias = (hash2(x, y, s.seed) - 0.5) * spread;
+            else if (s.algorithm !== "threshold") bias = (matrix.m[(y % matrix.side) * matrix.side + (x % matrix.side)] - 0.5) * spread;
+            pickColor(i, bias, color);
+            out.set(color, i * 3);
+          }
+      }
+      const result = new ImageData(W, H);
+      const o = result.data;
+      for (let y = 0; y < H; y++) {
+        const gy = Math.min(gh - 1, Math.floor(y / cell));
+        for (let x = 0; x < W; x++) {
+          const i = gy * gw + Math.min(gw - 1, Math.floor(x / cell));
+          if (!solid[i]) continue;
+          const at = (y * W + x) * 4;
+          o[at] = Math.round(out[i * 3] * 255);
+          o[at + 1] = Math.round(out[i * 3 + 1] * 255);
+          o[at + 2] = Math.round(out[i * 3 + 2] * 255);
+          o[at + 3] = 255;
+        }
+      }
+      return { image: result, x: 0, y: 0 };
+    },
+  });
+
+  // ---------- Halftone ----------
+
+  // A print screen: dots, lines, squares, diamonds or crosses on a grid
+  // turned to an angle, each as large as the layer's dark there, in one
+  // ink or in four, cyan, magenta, yellow and black, each on its own angle
+  const HALFTONE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="7.5" cy="7.5" r="3"/><circle ${STROKE} cx="16.5" cy="7.5" r="2"/><circle ${STROKE} cx="7.5" cy="16.5" r="2"/><circle ${STROKE} cx="16.5" cy="16.5" r="1"/></svg>`;
+  // How much of a cell `fu`, `fv` from its middle (−0.5 to 0.5) is inked
+  // for `value` of it, its edge `e` pixels soft in a cell `c` across
+  const halftoneCoverage = (shape, fu, fv, value, c, e) => {
+    if (value <= 0.002) return 0;
+    if (value >= 0.998) return 1;
+    let d;
+    let r;
+    const [au, av] = [Math.abs(fu), Math.abs(fv)];
+    if (shape === "line") [d, r] = [av, value / 2];
+    else if (shape === "square") [d, r] = [Math.max(au, av), Math.sqrt(value) / 2];
+    else if (shape === "diamond") [d, r] = [au + av, value <= 0.5 ? Math.sqrt(value / 2) : 1 - Math.sqrt((1 - value) / 2)];
+    else if (shape === "cross") [d, r] = [Math.min(au, av), (1 - Math.sqrt(1 - value)) / 2];
+    else [d, r] = [Math.hypot(fu, fv), Math.min(0.7072, Math.sqrt(value / Math.PI))];
+    const cover = clamp01(((r - d) * c) / e + 0.5);
+    return cover * clamp01((r * c * 2) / e);
+  };
+  PIXEL_HELPERS.halftoneCoverage = halftoneCoverage;
+  const HALFTONE_SHAPES = [
+    ["dot", "Dots"],
+    ["line", "Lines"],
+    ["square", "Squares"],
+    ["diamond", "Diamonds"],
+    ["cross", "Crosses"],
+  ];
+  pictureEffect({
+    id: "halftone",
+    name: "Halftone",
+    about: "Print it in dots, lines or four inks",
+    icon: HALFTONE_ICON,
+    verb: "Halftone",
+    defaults: { mode: "mono", shape: "dot", cell: 6, angle: 45, size: 100, softness: 30, brightness: 0, contrast: 100, ink: "#111111", paper: "#ffffff", showPaper: true, editable: true },
+    presets: [
+      ["Dots", () => ({})],
+      ["Comic", () => ({ mode: "cmyk", cell: 5, angle: 15, contrast: 120 })],
+      ["Lines", () => ({ shape: "line", cell: 4, angle: 30 })],
+      ["Newspaper", () => ({ cell: 3, angle: 45, ink: "#222222", paper: "#efe9db", contrast: 110 })],
+      ["Pop", () => ({ cell: 12, angle: 0, ink: "#e4002b", paper: "#ffe14d", contrast: 130 })],
+      ["Crosses", () => ({ shape: "cross", cell: 8, angle: 0 })],
+    ],
+    limits: { cell: [1, 1000], angle: [-360, 360], size: [0, 400], softness: [0, 100], brightness: [-100, 100], contrast: [0, 400] },
+    summary: (s) => `${s.mode === "cmyk" ? "CMYK" : HALFTONE_SHAPES.find(([value]) => value === s.shape)?.[1]} · ${s.cell}pt`,
+    panel: (ui) => [
+      ui.section(
+        "Screen",
+        ui.segments("mode", "Inks", [
+          ["mono", "One ink"],
+          ["cmyk", "CMYK", "Cyan, magenta, yellow and black, each on its own angle"],
+        ]),
+        ui.select("shape", "Shape", HALFTONE_SHAPES),
+        ui.sliders([
+          ["cell", "Cell size", "pt", (u) => ({ min: 1, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })],
+          ["angle", "Angle", "°", () => ({ min: -90, max: 90 })],
+          ["size", "Dot size", "%", () => ({ min: 0, max: 200, middle: 100 })],
+          ["softness", "Softness", "%", () => ({ min: 0, max: 100 })],
+        ]),
+      ),
+      ui.section("Colors", ui.when(ui.color("ink", "Ink"), () => ui.s.mode === "mono"), ui.color("paper", "Paper"), ui.check("showPaper", "Show paper", "Paper under the ink, or only the ink, the rest left clear")),
+      ui.section(
+        "Tone",
+        ui.sliders([
+          ["brightness", "Brightness", "", () => ({ min: -100, max: 100 })],
+          ["contrast", "Contrast", "%", () => ({ min: 0, max: 300, middle: 100 })],
+        ]),
+      ),
+    ],
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const cell = Math.max(1.5, s.cell * k);
+      const grid = cellGrid(f, W, H, Math.max(1, cell / 2));
+      const [ink, paper] = [hexRgb(s.ink), hexRgb(s.paper)];
+      const [bright, contrast, gain] = [s.brightness / 100, s.contrast / 100, s.size / 100];
+      const tone = (v) => clamp01((v - 0.5) * contrast + 0.5 + bright);
+      const cmyk = s.mode === "cmyk";
+      const screens = (cmyk ? [15, 75, 0, 45] : [0]).map((turn) => {
+        const a = ((s.angle + turn) * Math.PI) / 180;
+        return [Math.cos(a), Math.sin(a)];
+      });
+      const e = Math.max(0.6, (s.softness / 100) * cell * 0.5);
+      const out = new Float32Array(W * H * 4);
+      const at4 = new Float32Array(4);
+      const cover = new Float32Array(4);
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const at = (y * W + x) * 4;
+          const srcA = f[at + 3];
+          if (srcA <= 0) continue;
+          const [px, py] = [x + 0.5, y + 0.5];
+          for (let j = 0; j < screens.length; j++) {
+            const [cos, sin] = screens[j];
+            const u = (px * cos + py * sin) / cell;
+            const v = (-px * sin + py * cos) / cell;
+            const [cu, cv] = [Math.floor(u) + 0.5, Math.floor(v) + 0.5];
+            gridAt(grid, (cu * cos - cv * sin) * cell, (cu * sin + cv * cos) * cell, at4);
+            const a = at4[3];
+            let value = 0;
+            if (a > 0.001) {
+              const [r, g, b] = [tone(at4[0] / a), tone(at4[1] / a), tone(at4[2] / a)];
+              if (!cmyk) value = 1 - lumaOf(r, g, b);
+              else {
+                const black = 1 - Math.max(r, g, b);
+                const rest = 1 - black;
+                value = j === 3 ? black : rest < 0.0001 ? 0 : (1 - [r, g, b][j] - black) / rest;
+              }
+            }
+            cover[j] = halftoneCoverage(s.shape, u - cu, v - cv, clamp01(value * gain), cell, e);
+          }
+          let [r, g, b, alpha] = [0, 0, 0, srcA];
+          if (!cmyk) {
+            const c = cover[0];
+            if (s.showPaper) [r, g, b] = [paper[0] + (ink[0] - paper[0]) * c, paper[1] + (ink[1] - paper[1]) * c, paper[2] + (ink[2] - paper[2]) * c];
+            else [r, g, b, alpha] = [ink[0], ink[1], ink[2], srcA * c];
+          } else {
+            const black = 1 - cover[3];
+            const [cr, cg, cb] = [(1 - cover[0]) * black, (1 - cover[1]) * black, (1 - cover[2]) * black];
+            if (s.showPaper) [r, g, b] = [paper[0] * cr, paper[1] * cg, paper[2] * cb];
+            else {
+              // The inks over white, with what of white shows taken out
+              const union = 1 - (1 - cover[0]) * (1 - cover[1]) * (1 - cover[2]) * black;
+              const clear = 1 - union;
+              [r, g, b] = union > 0.001 ? [clamp01((cr - clear) / union), clamp01((cg - clear) / union), clamp01((cb - clear) / union)] : [0, 0, 0];
+              alpha = srcA * union;
+            }
+          }
+          out[at] = r * alpha;
+          out[at + 1] = g * alpha;
+          out[at + 2] = b * alpha;
+          out[at + 3] = alpha;
+        }
+      return { image: toImage(out, W, H), x: 0, y: 0 };
+    },
+  });
+
+  // ---------- Modulate ----------
+
+  // Dither Boy's modulation dithers: the layer drawn in lines that thicken
+  // where it's dark, waves that swing wider there, or rings
+  const MODULATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 7.5c1.25 0 1.25-1 2.5-1s1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1M4.5 12c1.25 0 1.25-2 2.5-2s1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2M4.5 17.5c1.25 0 1.25-3 2.5-3s1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3"/></svg>`;
+  pictureEffect({
+    id: "modulate",
+    name: "Modulate",
+    about: "Draw it in lines, waves or rings",
+    icon: MODULATE_ICON,
+    verb: "Modulate",
+    defaults: { mode: "lines", spacing: 5, angle: 0, weight: 90, amplitude: 60, frequency: 0.5, centerX: 50, centerY: 50, softness: 30, brightness: 0, contrast: 100, ink: "#111111", paper: "#ffffff", showPaper: true, editable: true },
+    presets: [
+      ["Lines", () => ({})],
+      ["Engraving", () => ({ spacing: 3, angle: 30, weight: 100, contrast: 120 })],
+      ["Waves", () => ({ mode: "waves", spacing: 6, amplitude: 70, frequency: 0.6, weight: 70 })],
+      ["Signal", () => ({ mode: "waves", spacing: 4, amplitude: 90, frequency: 1.4, weight: 50, ink: "#39ff7a", paper: "#06140b" })],
+      ["Rings", () => ({ mode: "rings", spacing: 5 })],
+    ],
+    limits: { spacing: [1, 1000], angle: [-360, 360], weight: [1, 200], amplitude: [0, 400], frequency: [0.02, 20], centerX: [-200, 300], centerY: [-200, 300], softness: [0, 100], brightness: [-100, 100], contrast: [0, 400] },
+    summary: (s) => `${s.mode === "waves" ? "Waves" : s.mode === "rings" ? "Rings" : "Lines"} · ${s.spacing}pt`,
+    panel: (ui) => {
+      const { s } = ui;
+      return [
+        ui.section(
+          "Lines",
+          ui.segments("mode", "Draw as", [
+            ["lines", "Lines"],
+            ["waves", "Waves"],
+            ["rings", "Rings"],
+          ]),
+          ui.sliders([
+            ["spacing", "Spacing", "pt", (u) => ({ min: 1, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })],
+            ["weight", "Weight", "%", () => ({ min: 5, max: 150, middle: 90 })],
+            ["softness", "Softness", "%", () => ({ min: 0, max: 100 })],
+          ]),
+          ui.when(ui.sliders([["angle", "Angle", "°", () => ({ min: -90, max: 90 })]]), () => s.mode !== "rings"),
+          ui.when(
+            ui.sliders([
+              ["amplitude", "Amplitude", "%", () => ({ min: 0, max: 200 })],
+              ["frequency", "Frequency", "", () => ({ min: 0.05, max: 4, shape: "curve", digits: 2 })],
+            ]),
+            () => s.mode === "waves",
+          ),
+          ui.when(
+            ui.sliders([
+              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
+              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
+            ]),
+            () => s.mode === "rings",
+          ),
+        ),
+        ui.section("Colors", ui.color("ink", "Ink"), ui.color("paper", "Paper"), ui.check("showPaper", "Show paper", "Paper under the lines, or only the lines, the rest left clear")),
+        ui.section(
+          "Tone",
+          ui.sliders([
+            ["brightness", "Brightness", "", () => ({ min: -100, max: 100 })],
+            ["contrast", "Contrast", "%", () => ({ min: 0, max: 300, middle: 100 })],
+          ]),
+        ),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const spacing = Math.max(1.5, s.spacing * k);
+      const grid = cellGrid(f, W, H, Math.max(1, spacing / 2));
+      const [ink, paper] = [hexRgb(s.ink), hexRgb(s.paper)];
+      const [bright, contrast, weight] = [s.brightness / 100, s.contrast / 100, s.weight / 100];
+      const tone = (v) => clamp01((v - 0.5) * contrast + 0.5 + bright);
+      const turn = (s.angle * Math.PI) / 180;
+      const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
+      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const e = Math.max(0.6, (s.softness / 100) * spacing * 0.5);
+      const [amp, freq] = [s.amplitude / 100, s.frequency];
+      const out = new Float32Array(W * H * 4);
+      const at4 = new Float32Array(4);
+      const line = (d, half) => (half <= 0 ? 0 : clamp01(((half - d) * spacing) / e + 0.5) * clamp01((half * spacing * 4) / e));
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const at = (y * W + x) * 4;
+          const srcA = f[at + 3];
+          if (srcA <= 0) continue;
+          const [px, py] = [x + 0.5, y + 0.5];
+          gridAt(grid, px, py, at4);
+          const a = at4[3];
+          const dark = a > 0.001 ? 1 - lumaOf(tone(at4[0] / a), tone(at4[1] / a), tone(at4[2] / a)) : 0;
+          let c = 0;
+          if (s.mode === "rings") {
+            const r = Math.hypot(px - cx, py - cy) / spacing;
+            c = line(Math.abs(r - Math.round(r)), (dark * weight) / 2);
+          } else {
+            const u = (px * cos + py * sin) / spacing;
+            const v = (-px * sin + py * cos) / spacing;
+            if (s.mode === "lines") c = line(Math.abs(v - Math.round(v)), (dark * weight) / 2);
+            else {
+              const phase = 2 * Math.PI * u * freq;
+              const swing = amp * dark * 0.5;
+              const offset = swing * Math.sin(phase);
+              const slope = swing * 2 * Math.PI * freq * Math.cos(phase);
+              const half = (weight * (0.2 + 0.8 * dark) * 0.25) / Math.sqrt(1 + slope * slope);
+              for (let i = Math.round(v) - 1; i <= Math.round(v) + 1; i++) c = Math.max(c, line(Math.abs(v - i - offset), half));
+            }
+          }
+          let [r, g, b, alpha] = [ink[0], ink[1], ink[2], srcA * c];
+          if (s.showPaper) [r, g, b, alpha] = [paper[0] + (ink[0] - paper[0]) * c, paper[1] + (ink[1] - paper[1]) * c, paper[2] + (ink[2] - paper[2]) * c, srcA];
+          out[at] = r * alpha;
+          out[at + 1] = g * alpha;
+          out[at + 2] = b * alpha;
+          out[at + 3] = alpha;
+        }
+      return { image: toImage(out, W, H), x: 0, y: 0 };
+    },
+  });
+
+  // ---------- Gradient Map ----------
+
+  // Each pixel's brightness looked up along a gradient, its stops set on
+  // a bar: dragged along it, a click on the bar adding one
+  const GRADIENT_MAP_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="4.5" y="6.5" width="15" height="8" rx="1.5"/><path ${STROKE} d="M8.5 6.5v8M12 6.5v8M15.5 6.5v8M6.5 17.5l1.5 2h-3zM17.5 17.5l1.5 2h-3z"/></svg>`;
+  const stop = (at, color) => ({ at, color });
+  const GRADIENTS = {
+    noir: [stop(0, "#000000"), stop(100, "#ffffff")],
+    sepia: [stop(0, "#1e130a"), stop(55, "#8a6239"), stop(100, "#f6e7c8")],
+    cyanotype: [stop(0, "#04203f"), stop(60, "#2c6ea3"), stop(100, "#e8f1f8")],
+    sunset: [stop(0, "#2a0845"), stop(40, "#c4325d"), stop(75, "#f79c42"), stop(100, "#fff1c1")],
+    infrared: [stop(0, "#000000"), stop(30, "#3d0a6b"), stop(55, "#e3215b"), stop(80, "#ffb000"), stop(100, "#ffffff")],
+    teal: [stop(0, "#0b2a33"), stop(50, "#3d8a8f"), stop(100, "#ffb27a")],
+    gold: [stop(0, "#140b00"), stop(50, "#9a6b12"), stop(100, "#fff3bd")],
+  };
+  // The gradient's color at `t`, 0 to 1, stops sorted
+  const gradientAt = (stops, t) => {
+    if (t <= stops[0][0]) return stops[0][1];
+    for (let i = 1; i < stops.length; i++) {
+      const [at, color] = stops[i];
+      if (t <= at) {
+        const [from, before] = stops[i - 1];
+        const m = at - from > 0 ? (t - from) / (at - from) : 1;
+        return [before[0] + (color[0] - before[0]) * m, before[1] + (color[1] - before[1]) * m, before[2] + (color[2] - before[2]) * m];
+      }
+    }
+    return stops[stops.length - 1][1];
+  };
+  PIXEL_HELPERS.gradientAt = gradientAt;
+  const sortedStops = (stops) => [...stops].sort((a, b) => a.at - b.at).map(({ at, color }) => [Math.min(1, Math.max(0, at / 100)), hexRgb(color)]);
+  const rgbHex = (rgb) => `#${rgb.map((v) => Math.round(clamp01(v) * 255).toString(16).padStart(2, "0")).join("")}`;
+  // The bar and a row a stop, its color, where it is and −
+  const gradientEditor = (ui) => {
+    const { s, change } = ui;
+    const bar = element("div", { className: "gradient" });
+    bar.setAttribute("aria-label", "Gradient");
+    const list = element("div", { className: "rows" });
+    let selected = 0;
+    let shape = "";
+    const changed = () => change("stops", s.stops);
+    const paintBar = () => {
+      const css = [...s.stops].sort((a, b) => a.at - b.at).map(({ at, color }) => `${color} ${at}%`);
+      bar.style.background = `linear-gradient(90deg, ${css.join(", ")})`;
+      [...bar.children].forEach((handle, i) => {
+        handle.style.left = `${s.stops[i].at}%`;
+        handle.style.background = s.stops[i].color;
+        handle.setAttribute("aria-selected", String(i === selected));
+      });
+    };
+    const build = () => {
+      shape = String(s.stops.length);
+      bar.replaceChildren();
+      list.replaceChildren();
+      s.stops.forEach((entry, i) => {
+        const handle = bar.appendChild(element("button", { type: "button", className: "stop", title: "Drag to move the stop" }));
+        handle.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          selected = i;
+          handle.setPointerCapture(event.pointerId);
+          const box = bar.getBoundingClientRect();
+          const move = (event) => {
+            entry.at = Math.round(clamp01((event.clientX - box.left) / box.width) * 100);
+            changed();
+          };
+          handle.addEventListener("pointermove", move);
+          handle.addEventListener("lostpointercapture", () => handle.removeEventListener("pointermove", move), { once: true });
+          paintBar();
+        });
+        const [swatch, picker] = ui.swatch(
+          () => entry.color,
+          (value) => {
+            entry.color = value;
+            changed();
+          },
+          "Stop color",
+        );
+        const hex = element("span", { className: "hex" });
+        const at = element("input", { type: "text", className: "value", inputMode: "decimal", spellcheck: false });
+        at.setAttribute("aria-label", "Stop position");
+        at.addEventListener("change", () => {
+          const number = parseFloat(at.value);
+          if (Number.isFinite(number)) entry.at = Math.min(100, Math.max(0, Math.round(number)));
+          changed();
+        });
+        at.addEventListener("keydown", (event) => event.key === "Enter" && at.blur());
+        const remove = element("button", { type: "button", className: "icon-button", title: "Remove stop", innerHTML: REMOVE, disabled: s.stops.length <= 2 });
+        remove.addEventListener("click", () => {
+          s.stops.splice(i, 1);
+          selected = 0;
+          changed();
+        });
+        const row = list.appendChild(element("div", { className: "row stop-row" }, swatch, picker, hex, at, remove));
+        row.show = () => {
+          hex.textContent = entry.color.replace("#", "");
+          if (document.activeElement !== at) at.value = `${entry.at}%`;
+        };
+      });
+    };
+    // A click on the bar adds a stop there, its color the gradient's
+    bar.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target !== bar) return;
+      const box = bar.getBoundingClientRect();
+      const t = clamp01((event.clientX - box.left) / box.width);
+      s.stops.push(stop(Math.round(t * 100), rgbHex(gradientAt(sortedStops(s.stops), t))));
+      selected = s.stops.length - 1;
+      changed();
+    });
+    ui.onShow(() => {
+      if (shape !== String(s.stops.length)) build();
+      for (const row of list.children) row.show();
+      paintBar();
+    });
+    return [bar, list];
+  };
+  pictureEffect({
+    id: "gradientMap",
+    name: "Gradient Map",
+    about: "Map its tones to a gradient",
+    icon: GRADIENT_MAP_ICON,
+    verb: "Map",
+    defaults: { stops: GRADIENTS.sunset, reverse: false, steps: 0, mix: 100, editable: true },
+    presets: [
+      ["Sunset", () => ({ stops: structuredClone(GRADIENTS.sunset) })],
+      ["Noir", () => ({ stops: structuredClone(GRADIENTS.noir) })],
+      ["Sepia", () => ({ stops: structuredClone(GRADIENTS.sepia) })],
+      ["Cyanotype", () => ({ stops: structuredClone(GRADIENTS.cyanotype) })],
+      ["Infrared", () => ({ stops: structuredClone(GRADIENTS.infrared) })],
+      ["Teal and orange", () => ({ stops: structuredClone(GRADIENTS.teal) })],
+      ["Gold", () => ({ stops: structuredClone(GRADIENTS.gold) })],
+    ],
+    limits: { steps: [0, 64], mix: [0, 100] },
+    summary: (s) => `${s.stops.length} stops${s.steps > 1 ? ` · ${s.steps} steps` : ""}`,
+    panel: (ui) => [
+      ui.section("Gradient", ...gradientEditor(ui), ui.check("reverse", "Reverse", "Dark tones to the gradient's end, light to its start")),
+      ui.section(
+        "Mapping",
+        ui.sliders([
+          ["steps", "Steps", "", () => ({ min: 0, max: 16 })],
+          ["mix", "Mix", "%", () => ({ min: 0, max: 100 })],
+        ]),
+      ),
+    ],
+    process: (image, s) => {
+      const { width: W, height: H, data } = image;
+      const stops = [...s.stops].sort((a, b) => a.at - b.at).map(({ at, color }) => [Math.min(1, Math.max(0, at / 100)), hexRgb(color)]);
+      const steps = Math.round(s.steps);
+      const lut = new Float32Array(256 * 3);
+      for (let i = 0; i < 256; i++) {
+        let t = i / 255;
+        if (s.reverse) t = 1 - t;
+        if (steps > 1) t = Math.min(steps - 1, Math.floor(t * steps)) / (steps - 1);
+        lut.set(gradientAt(stops, t), i * 3);
+      }
+      const mix = s.mix / 100;
+      const out = new ImageData(W, H);
+      const o = out.data;
+      for (let at = 0; at < data.length; at += 4) {
+        if (!data[at + 3]) continue;
+        const l = Math.min(255, Math.max(0, Math.round(lumaOf(data[at], data[at + 1], data[at + 2])))) * 3;
+        o[at] = Math.round(data[at] + (lut[l] * 255 - data[at]) * mix);
+        o[at + 1] = Math.round(data[at + 1] + (lut[l + 1] * 255 - data[at + 1]) * mix);
+        o[at + 2] = Math.round(data[at + 2] + (lut[l + 2] * 255 - data[at + 2]) * mix);
+        o[at + 3] = data[at + 3];
+      }
+      return { image: out, x: 0, y: 0 };
+    },
+  });
+
+  // ---------- Chromatic Aberration ----------
+
+  // A lens's color fringes: red, green and blue drawn apart, out from a
+  // center, more toward the edges, as a lens does, or all one way
+  const CHROMATIC_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="10" cy="12" r="5.5"/><circle ${STROKE} cx="14" cy="12" r="5.5"/></svg>`;
+  const FRINGES = [
+    ["rb", "Red and blue"],
+    ["rc", "Red and cyan"],
+    ["gm", "Green and magenta"],
+    ["spectrum", "Spectrum"],
+  ];
+  pictureEffect({
+    id: "chromatic",
+    name: "Chromatic Aberration",
+    about: "Split its colors as a lens does",
+    icon: CHROMATIC_ICON,
+    verb: "Split",
+    defaults: { mode: "lens", fringe: "rb", amount: 4, angle: 0, centerX: 50, centerY: 50, falloff: 1.5, editable: true },
+    presets: [
+      ["Lens", () => ({})],
+      ["Subtle", () => ({ amount: 1.5 })],
+      ["Strong", (u) => ({ amount: upTo(u, 0.03, 8), falloff: 1 })],
+      ["Shift", () => ({ mode: "shift", amount: 3, fringe: "rc" })],
+      ["Spectrum", (u) => ({ fringe: "spectrum", amount: upTo(u, 0.025, 6) })],
+    ],
+    limits: { amount: [0, 2000], angle: [-360, 360], centerX: [-200, 300], centerY: [-200, 300], falloff: [0.2, 6] },
+    summary: (s) => `${s.mode === "shift" ? "Shift" : "Lens"} · ${s.amount}pt`,
+    panel: (ui) => {
+      const { s } = ui;
+      return [
+        ui.section(
+          "Aberration",
+          ui.segments("mode", "Split", [
+            ["lens", "From a center", "Out from a center, more toward the edges, as a lens"],
+            ["shift", "One way"],
+          ]),
+          ui.select("fringe", "Colors", FRINGES),
+          ui.sliders([["amount", "Amount", "pt", (u) => ({ min: 0, max: upTo(u, 0.08, 20), shape: "curve", digits: 1 })]]),
+          ui.when(ui.sliders([["angle", "Angle", "°", () => ({ min: -180, max: 180 })]]), () => s.mode === "shift"),
+          ui.when(
+            ui.sliders([
+              ["falloff", "Falloff", "", () => ({ min: 0.2, max: 4, middle: 1, digits: 2 })],
+              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
+              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
+            ]),
+            () => s.mode === "lens",
+          ),
+        ),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const amount = s.amount * k;
+      const pad = Math.ceil(amount) + 2;
+      const [OW, OH] = [W + pad * 2, H + pad * 2];
+      // Each sample a way along the split, -1 to 1, and how much of red,
+      // green and blue it gives
+      let samples = {
+        rb: [[1, [1, 0, 0]], [0, [0, 1, 0]], [-1, [0, 0, 1]]],
+        rc: [[1, [1, 0, 0]], [-1, [0, 1, 1]]],
+        gm: [[1, [0, 1, 0]], [-1, [1, 0, 1]]],
+      }[s.fringe];
+      if (!samples) {
+        const n = 9;
+        samples = Array.from({ length: n }, (_, i) => {
+          const hue = (i / (n - 1)) * 4;
+          const rgb = [clamp01(Math.abs(hue - 3) - 1), clamp01(2 - Math.abs(hue - 2)), clamp01(2 - Math.abs(hue - 4))];
+          return [1 - (2 * i) / (n - 1), rgb];
+        });
+        const sums = [0, 1, 2].map((c) => samples.reduce((sum, [, w]) => sum + w[c], 0));
+        samples = samples.map(([t, w]) => [t, w.map((v, c) => v / (sums[c] || 1))]);
+      }
+      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const R = Math.max(1, Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy)));
+      const turn = (s.angle * Math.PI) / 180;
+      const [sx, sy] = [Math.cos(turn) * amount, Math.sin(turn) * amount];
+      const out = new Float32Array(OW * OH * 4);
+      const p = new Float32Array(4);
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++) {
+          const [X, Y] = [x + 0.5 - pad, y + 0.5 - pad];
+          let [vx, vy] = [sx, sy];
+          if (s.mode !== "shift") {
+            const [rx, ry] = [(X - cx) / R, (Y - cy) / R];
+            const r = Math.hypot(rx, ry);
+            const m = r > 0 ? (amount * r ** s.falloff) / r : 0;
+            [vx, vy] = [rx * m, ry * m];
+          }
+          let [cr, cg, cb, ar, ag, ab] = [0, 0, 0, 0, 0, 0];
+          for (const [t, w] of samples) {
+            sampleAt(f, W, H, X - t * vx, Y - t * vy, p);
+            cr += w[0] * p[0];
+            cg += w[1] * p[1];
+            cb += w[2] * p[2];
+            ar += w[0] * p[3];
+            ag += w[1] * p[3];
+            ab += w[2] * p[3];
+          }
+          const at = (y * OW + x) * 4;
+          out[at] = cr;
+          out[at + 1] = cg;
+          out[at + 2] = cb;
+          out[at + 3] = Math.max(ar, ag, ab);
+        }
+      return { image: toImage(out, OW, OH), x: -pad, y: -pad };
+    },
+  });
+
+  // ---------- Fisheye ----------
+
+  // A fisheye lens's bulge, or a pinch, within a circle around a center,
+  // its edge left where it is, and the circle cut out as a lens's picture
+  const FISHEYE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="7.5"/><path ${STROKE} d="M12 4.5c-2.5 2-2.5 13 0 15M12 4.5c2.5 2 2.5 13 0 15M4.5 12c2-2.5 13-2.5 15 0M4.5 12c2 2.5 13 2.5 15 0"/></svg>`;
+  pictureEffect({
+    id: "fisheye",
+    name: "Fisheye",
+    about: "Bulge or pinch it as a lens",
+    icon: FISHEYE_ICON,
+    verb: "Warp",
+    defaults: { strength: 60, radius: 100, zoom: 100, centerX: 50, centerY: 50, circle: false, editable: true },
+    presets: [
+      ["Fisheye", () => ({})],
+      ["Lens circle", () => ({ strength: 80, circle: true })],
+      ["Bulge", () => ({ strength: 45, radius: 55 })],
+      ["Pinch", () => ({ strength: -60, radius: 70 })],
+      ["Peephole", () => ({ strength: 95, circle: true, zoom: 115 })],
+    ],
+    limits: { strength: [-100, 100], radius: [1, 1000], zoom: [10, 1000], centerX: [-200, 300], centerY: [-200, 300] },
+    summary: (s) => `${s.strength < 0 ? "Pinch" : "Bulge"} · ${Math.abs(s.strength)}%`,
+    panel: (ui) => [
+      ui.section(
+        "Lens",
+        ui.sliders([
+          ["strength", "Strength", "%", () => ({ min: -100, max: 100 })],
+          ["radius", "Radius", "%", () => ({ min: 5, max: 200, middle: 100 })],
+          ["zoom", "Zoom", "%", () => ({ min: 25, max: 400, middle: 100 })],
+          ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
+          ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
+        ]),
+        ui.check("circle", "Lens circle", "Only what's in the lens's circle, the rest left clear"),
+      ),
+    ],
+    process: (image, s) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const R = Math.max(1, ((s.radius / 100) * Math.max(W, H)) / 2);
+      const zoom = Math.max(0.05, s.zoom / 100);
+      // As a fisheye maps angles to a flat picture: tan for a bulge, its
+      // inverse for a pinch, the circle's edge kept where it is
+      const theta = (Math.abs(s.strength) / 100) * 1.45;
+      const map = (r) => (theta < 0.001 ? r : s.strength > 0 ? Math.tan(r * theta) / Math.tan(theta) : Math.atan(r * Math.tan(theta)) / theta);
+      const out = new Float32Array(W * H * 4);
+      const p = new Float32Array(4);
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const [dx, dy] = [(x + 0.5 - cx) / R, (y + 0.5 - cy) / R];
+          const r = Math.hypot(dx, dy);
+          if (s.circle && r > 1) continue;
+          const m = r > 0 && r < 1 ? map(r) / r : 1;
+          sampleAt(f, W, H, cx + (dx * m * R) / zoom, cy + (dy * m * R) / zoom, p);
+          // The circle's edge a pixel soft
+          const edge = s.circle ? clamp01((1 - r) * R + 0.5) : 1;
+          out.set([p[0] * edge, p[1] * edge, p[2] * edge, p[3] * edge], (y * W + x) * 4);
+        }
+      return { image: toImage(out, W, H), x: 0, y: 0 };
+    },
+  });
+
+  // ---------- Shadow ----------
+
+  // A shadow worked out from a cutout's own shape, for a figure or object
+  // standing on the ground at the picture's lowest solid row. Cast lays
+  // its silhouette down on the ground away from the light: each point as
+  // far from its footing as it's high, times Length, toward Direction,
+  // foreshortened by the ground's Perspective, spreading wider with
+  // Spread as a near light's does, sharp where it touches and softer and
+  // fainter toward its end, with a contact shadow under the footing. Drop
+  // is a flat drop shadow. The original's drawn over it
+  const SHADOW_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="6.5" y="4.5" width="5" height="12" rx="2.5"/><path ${STROKE} stroke-dasharray="1.5 1.5" d="M11.5 16.5l6.5-3.5M7 16.5l7.5 3h4l-.5-6.5"/></svg>`;
+  pictureEffect({
+    id: "shadow",
+    name: "Shadow",
+    about: "Cast a shadow from a cutout's shape",
+    icon: SHADOW_ICON,
+    verb: "Add shadow",
+    defaults: { mode: "cast", direction: 60, length: 90, perspective: 45, spread: 10, softNear: 1, softFar: 8, opacity: 60, fade: 35, contact: 60, contactSize: 4, ground: 0, distance: 8, angle: 90, blur: 12, color: "#000000", only: false, editable: true },
+    presets: [
+      ["Afternoon", () => ({})],
+      ["Noon", () => ({ length: 30, direction: 40, perspective: 40, softFar: 6, opacity: 60 })],
+      ["Evening", () => ({ direction: 75, length: 180, perspective: 40, spread: 20, softFar: 20, opacity: 50, fade: 10 })],
+      ["Backlit", () => ({ direction: 180, length: 60, perspective: 45, softFar: 10 })],
+      ["Studio", () => ({ direction: -35, length: 60, perspective: 40, softNear: 2, softFar: 22, opacity: 40, fade: 0, contact: 80 })],
+      ["Floor", () => ({ length: 0, contact: 85, contactSize: 7 })],
+      ["Drop", () => ({ mode: "drop" })],
+    ],
+    limits: { direction: [-360, 360], length: [0, 1000], perspective: [1, 100], spread: [-90, 400], softNear: [0, 1000], softFar: [0, 1000], opacity: [0, 100], fade: [0, 100], contact: [0, 100], contactSize: [0, 1000], ground: [-1000, 1000], distance: [0, 4000], angle: [-360, 360], blur: [0, 1000] },
+    summary: (s) => (s.mode === "drop" ? `Drop · ${s.blur}pt blur` : `Cast · ${s.direction}° · ${s.length}%`),
+    panel: (ui) => {
+      const { s } = ui;
+      const cast = () => s.mode === "cast";
+      return [
+        ui.section(
+          "Shadow",
+          ui.segments("mode", "Shadow", [
+            ["cast", "Cast", "Laid down on the ground, away from the light"],
+            ["drop", "Drop"],
+          ]),
+          ui.when(
+            ui.sliders([
+              ["direction", "Direction", "°", () => ({ min: -180, max: 180 })],
+              ["length", "Length", "%", () => ({ min: 0, max: 300, middle: 100 })],
+              ["perspective", "Perspective", "%", () => ({ min: 1, max: 100 })],
+              ["spread", "Spread", "%", () => ({ min: -50, max: 100 })],
+            ]),
+            cast,
+          ),
+          ui.when(
+            ui.sliders([
+              ["distance", "Distance", "pt", (u) => ({ min: 0, max: upTo(u, 0.25, 40), shape: "curve" })],
+              ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+              ["blur", "Blur", "pt", (u) => ({ min: 0, max: upTo(u, 0.25, 40), shape: "curve" })],
+            ]),
+            () => !cast(),
+          ),
+        ),
+        ui.when(
+          ui.section(
+            "Softness",
+            ui.sliders([
+              ["softNear", "At contact", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
+              ["softFar", "At the end", "pt", (u) => ({ min: 0, max: upTo(u, 0.3, 40), shape: "curve" })],
+              ["fade", "End opacity", "%", () => ({ min: 0, max: 100 })],
+            ]),
+          ),
+          cast,
+        ),
+        ui.when(
+          ui.section(
+            "Contact",
+            ui.sliders([
+              ["contact", "Darkness", "%", () => ({ min: 0, max: 100 })],
+              ["contactSize", "Size", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
+              ["ground", "Ground", "pt", (u) => ({ min: -upTo(u, 0.1, 16), max: upTo(u, 0.1, 16), digits: 1 })],
+            ]),
+          ),
+          cast,
+        ),
+        ui.section("Look", ui.sliders([["opacity", "Opacity", "%", () => ({ min: 0, max: 100 })]]), ui.color("color", "Color"), ui.check("only", "Shadow only", "Only the shadow, without the layer over it")),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const alpha = new Float32Array(W * H);
+      for (let i = 0; i < W * H; i++) alpha[i] = f[i * 4 + 3];
+      const { top, bottom } = solidRows(f, W, H);
+      const ground = bottom - s.ground * k;
+      const tall = Math.max(1, ground - top);
+      const cx = W / 2;
+      const cast = s.mode !== "drop";
+      const turn = (s.direction * Math.PI) / 180;
+      const length = s.length / 100;
+      const dx = Math.sin(turn) * length;
+      let dy = -Math.cos(turn) * length * (s.perspective / 100);
+      if (Math.abs(dy) < 0.004) dy = dy < 0 ? -0.004 : 0.004;
+      const spread = s.spread / 100;
+      const dropAngle = (s.angle * Math.PI) / 180;
+      const [ox, oy] = [Math.cos(dropAngle) * s.distance * k, Math.sin(dropAngle) * s.distance * k];
+      const [near, far] = cast ? [s.softNear * k, s.softFar * k] : [s.blur * k, s.blur * k];
+      const band = Math.max(1, s.contactSize * k);
+      // Where the shadow can reach, and room for its blur
+      let [x0, y0, x1, y1] = [0, 0, W, H];
+      const reach = (x, y) => {
+        x0 = Math.min(x0, x);
+        y0 = Math.min(y0, y);
+        x1 = Math.max(x1, x);
+        y1 = Math.max(y1, y);
+      };
+      if (cast) {
+        for (const y of [top, ground])
+          for (const x of [0, W]) {
+            const h = ground - y;
+            reach(cx + (x - cx) * Math.max(0.05, 1 + (spread * h) / tall) + h * dx, ground + h * dy);
+          }
+        reach(0, ground + band * 2);
+        reach(W, ground + band * 2);
+      } else {
+        reach(ox, oy);
+        reach(W + ox, H + oy);
+      }
+      const margin = Math.ceil(3 * Math.max(near, far, cast ? band : 0)) + 2;
+      [x0, y0, x1, y1] = [Math.floor(x0) - margin, Math.floor(y0) - margin, Math.ceil(x1) + margin, Math.ceil(y1) + margin];
+      const [OW, OH] = [x1 - x0, y1 - y0];
+      // The shadow's soft, so it's worked out smaller and drawn up
+      const q = Math.min(1, 1600 / Math.max(OW, OH));
+      const [MW, MH] = [Math.max(1, Math.ceil(OW * q)), Math.max(1, Math.ceil(OH * q))];
+      const mask = new Float32Array(MW * MH);
+      const heights = new Float32Array(MW * MH);
+      const fade = s.fade / 100;
+      for (let v = 0; v < MH; v++)
+        for (let u = 0; u < MW; u++) {
+          const i = v * MW + u;
+          const [X, Y] = [x0 + (u + 0.5) / q, y0 + (v + 0.5) / q];
+          if (!cast) {
+            mask[i] = channelAt(alpha, W, H, X - ox, Y - oy);
+            continue;
+          }
+          const h = (Y - ground) / dy;
+          if (h < 0) continue;
+          const t = Math.min(1, h / tall);
+          heights[i] = t;
+          const widen = 1 + spread * (h / tall);
+          if (widen <= 0.05) continue;
+          mask[i] = channelAt(alpha, W, H, cx + (X - h * dx - cx) / widen, ground - h) * (1 - (1 - fade) * t);
+        }
+      // Sharper near the footing, softer toward the end: blurred at a few
+      // softnesses, each pixel between the two nearest its own
+      let shadow;
+      if (!cast || Math.abs(far - near) < 0.5) shadow = blurChannel(mask, MW, MH, near * q);
+      else {
+        const levels = [0, 1, 2, 3].map((j) => blurChannel(mask, MW, MH, (near + ((far - near) * j) / 3) * q));
+        shadow = new Float32Array(MW * MH);
+        for (let i = 0; i < MW * MH; i++) {
+          const at = heights[i] * 3;
+          const j = Math.min(2, Math.floor(at));
+          const m = at - j;
+          shadow[i] = levels[j][i] * (1 - m) + levels[j + 1][i] * m;
+        }
+      }
+      const opacity = s.opacity / 100;
+      for (let i = 0; i < MW * MH; i++) shadow[i] = clamp01(shadow[i] * opacity);
+      // Where it touches the ground: the footing's own outline, squashed
+      // flat and blurred
+      if (cast && s.contact > 0) {
+        const foot = new Float32Array(W);
+        const from = Math.max(0, Math.floor(ground - band));
+        for (let y = from; y < Math.min(H, Math.ceil(ground)); y++) for (let x = 0; x < W; x++) foot[x] = Math.max(foot[x], alpha[y * W + x]);
+        const contact = new Float32Array(MW * MH);
+        for (let v = 0; v < MH; v++) {
+          const Y = y0 + (v + 0.5) / q;
+          const fall = Math.exp(-(((Y - ground) / (band * 0.5)) ** 2));
+          if (fall < 0.002) continue;
+          for (let u = 0; u < MW; u++) contact[v * MW + u] = channelAt(foot, W, 1, x0 + (u + 0.5) / q, 0.5) * fall;
+        }
+        const soft = blurChannel(contact, MW, MH, band * 0.6 * q);
+        const amount = s.contact / 100;
+        for (let i = 0; i < MW * MH; i++) shadow[i] = 1 - (1 - shadow[i]) * (1 - clamp01(soft[i] * amount * 1.4));
+      }
+      const color = hexRgb(s.color);
+      const out = new Float32Array(OW * OH * 4);
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++) {
+          const at = (y * OW + x) * 4;
+          const a = q === 1 ? shadow[y * MW + x] : channelAt(shadow, MW, MH, (x + 0.5) * q, (y + 0.5) * q);
+          let [r, g, b, al] = [color[0] * a, color[1] * a, color[2] * a, a];
+          const [sx, sy] = [x + x0, y + y0];
+          if (!s.only && sx >= 0 && sy >= 0 && sx < W && sy < H) {
+            const from = (sy * W + sx) * 4;
+            const keep = 1 - f[from + 3];
+            [r, g, b, al] = [f[from] + r * keep, f[from + 1] + g * keep, f[from + 2] + b * keep, f[from + 3] + al * keep];
+          }
+          out[at] = r;
+          out[at + 1] = g;
+          out[at + 2] = b;
+          out[at + 3] = al;
+        }
+      return { image: toImage(out, OW, OH), x: x0, y: y0 };
+    },
+  });
+
+  // ---------- Reflection ----------
+
+  // A floor's reflection of a cutout, worked out from its own picture:
+  // mirrored at its lowest solid row, fading and blurring as it goes from
+  // the footing, foreshortened by Squash, slanted by Skew for a floor seen
+  // at an angle, rippled for water and tinted the floor's color. The
+  // original's drawn over it
+  const REFLECTION_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="7.5" y="3.5" width="9" height="8" rx="1.5"/><path ${STROKE} d="M4.5 13.5h15"/><path ${STROKE} stroke-dasharray="1.5 1.5" d="M7.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg>`;
+  pictureEffect({
+    id: "reflection",
+    name: "Reflection",
+    about: "Reflect a cutout on a glossy floor",
+    icon: REFLECTION_ICON,
+    verb: "Add reflection",
+    defaults: { gap: 0, length: 45, opacity: 40, blur: 4, squash: 100, skew: 0, ripple: 0, wavelength: 12, tint: "#ffffff", tintAmount: 0, only: false, editable: true },
+    presets: [
+      ["Glossy", () => ({})],
+      ["Mirror", () => ({ length: 100, opacity: 65, blur: 0 })],
+      ["Satin", () => ({ length: 35, opacity: 30, blur: 12 })],
+      ["Water", () => ({ length: 70, opacity: 45, blur: 2, ripple: 3, wavelength: 10, tint: "#1d4e89", tintAmount: 35 })],
+      ["Angled", () => ({ squash: 60, skew: 25, length: 55 })],
+    ],
+    limits: { gap: [-1000, 1000], length: [1, 400], opacity: [0, 100], blur: [0, 1000], squash: [5, 400], skew: [-400, 400], ripple: [0, 1000], wavelength: [1, 4000], tintAmount: [0, 100] },
+    summary: (s) => `${s.length}% · ${s.opacity}%`,
+    panel: (ui) => [
+      ui.section(
+        "Reflection",
+        ui.sliders([
+          ["length", "Length", "%", () => ({ min: 1, max: 100 })],
+          ["opacity", "Opacity", "%", () => ({ min: 0, max: 100 })],
+          ["blur", "Blur", "pt", (u) => ({ min: 0, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })],
+          ["gap", "Gap", "pt", (u) => ({ min: -upTo(u, 0.1, 16), max: upTo(u, 0.1, 16), digits: 1 })],
+        ]),
+      ),
+      ui.section(
+        "Floor",
+        ui.sliders([
+          ["squash", "Squash", "%", () => ({ min: 10, max: 200, middle: 100 })],
+          ["skew", "Skew", "%", () => ({ min: -100, max: 100 })],
+          ["ripple", "Ripple", "pt", (u) => ({ min: 0, max: upTo(u, 0.05, 8), shape: "curve", digits: 1 })],
+          ["wavelength", "Wavelength", "pt", (u) => ({ min: 2, max: upTo(u, 0.2, 32), shape: "curve" })],
+          ["tintAmount", "Tint", "%", () => ({ min: 0, max: 100 })],
+        ]),
+        ui.color("tint", "Tint color"),
+        ui.check("only", "Reflection only", "Only the reflection, without the layer over it"),
+      ),
+    ],
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const { top, bottom } = solidRows(f, W, H);
+      const tall = Math.max(1, bottom - top);
+      const gap = s.gap * k;
+      const reach = Math.max(1, (tall * s.length) / 100);
+      const squash = Math.max(0.05, s.squash / 100);
+      const skew = s.skew / 100;
+      const [ripple, wave] = [s.ripple * k, Math.max(1, s.wavelength * k)];
+      const blur = s.blur * k;
+      const margin = Math.ceil(3 * blur + ripple) + 2;
+      const start = bottom + gap;
+      const x0 = Math.floor(Math.min(0, reach * skew)) - margin;
+      const x1 = Math.ceil(Math.max(W, W + reach * skew)) + margin;
+      const y0 = Math.min(0, Math.floor(start) - margin);
+      const y1 = Math.max(H, Math.ceil(start + reach * squash) + margin);
+      const [OW, OH] = [x1 - x0, y1 - y0];
+      const q = blur > 0.5 ? Math.min(1, 1200 / Math.max(OW, OH)) : 1;
+      const [MW, MH] = [Math.max(1, Math.ceil(OW * q)), Math.max(1, Math.ceil(OH * q))];
+      const tint = hexRgb(s.tint);
+      const [tintAmount, opacity] = [s.tintAmount / 100, s.opacity / 100];
+      const mirror = new Float32Array(MW * MH * 4);
+      const heights = new Float32Array(MW * MH);
+      const p = new Float32Array(4);
+      for (let v = 0; v < MH; v++)
+        for (let u = 0; u < MW; u++) {
+          const [X, Y] = [x0 + (u + 0.5) / q, y0 + (v + 0.5) / q];
+          const h = (Y - start) / squash;
+          if (h < 0 || h > reach) continue;
+          const t = h / reach;
+          heights[v * MW + u] = t;
+          const sway = ripple ? ripple * Math.min(1, t * 4) * Math.sin((2 * Math.PI * (Y - start)) / wave) : 0;
+          sampleAt(f, W, H, X - h * skew + sway, bottom - h, p);
+          const fade = opacity * (1 - t * t * (3 - 2 * t));
+          const at = (v * MW + u) * 4;
+          mirror[at] = (p[0] + (tint[0] * p[3] - p[0]) * tintAmount) * fade;
+          mirror[at + 1] = (p[1] + (tint[1] * p[3] - p[1]) * tintAmount) * fade;
+          mirror[at + 2] = (p[2] + (tint[2] * p[3] - p[2]) * tintAmount) * fade;
+          mirror[at + 3] = p[3] * fade;
+        }
+      // Blurrier the farther from the footing, as a glossy floor's are,
+      // a channel at a time
+      let reflected = mirror;
+      if (blur > 0.5) {
+        reflected = new Float32Array(MW * MH * 4);
+        const channel = new Float32Array(MW * MH);
+        for (let c = 0; c < 4; c++) {
+          for (let i = 0; i < MW * MH; i++) channel[i] = mirror[i * 4 + c];
+          const levels = [0, 0.5, 1].map((m) => blurChannel(channel, MW, MH, blur * m * q));
+          for (let i = 0; i < MW * MH; i++) {
+            const at = heights[i] * 2;
+            const j = Math.min(1, Math.floor(at));
+            const m = at - j;
+            reflected[i * 4 + c] = levels[j][i] * (1 - m) + levels[j + 1][i] * m;
+          }
+        }
+      }
+      const out = new Float32Array(OW * OH * 4);
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++) {
+          const at = (y * OW + x) * 4;
+          if (q === 1) p.set(reflected.subarray(at, at + 4));
+          else sampleAt(reflected, MW, MH, (x + 0.5) * q, (y + 0.5) * q, p);
+          const [sx, sy] = [x + x0, y + y0];
+          if (!s.only && sx >= 0 && sy >= 0 && sx < W && sy < H) {
+            const from = (sy * W + sx) * 4;
+            const keep = 1 - f[from + 3];
+            for (let c = 0; c < 4; c++) p[c] = f[from + c] + p[c] * keep;
+          }
+          out.set(p, at);
+        }
+      return { image: toImage(out, OW, OH), x: x0, y: y0 };
+    },
+  });
+
   // ---------- Ligma effects in the right panel ----------
 
   // Under Figma's own Effects, drawn as they are but apart from them, the
@@ -3199,7 +4992,7 @@ const PAGE_JS: &str = r##"(() => {
   // the old stack shows until the new one's made
   let restacking = false;
   const restack = async (figma, outer, base, layers) => {
-    if (restacking || repeating || disintegrating || crushing) return;
+    if (restacking || repeating || disintegrating || crushing || filtering) return;
     restacking = true;
     showSection();
     const parent = outer.parent;
