@@ -622,6 +622,8 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 /// many bytes. Then those needed longest ago go, never any in view, down
 /// to three quarters of it, so it's seldom
 const IMAGES_BUDGET: usize = 128 << 20;
+/// How long Skia keeps what it could use again but hasn't while drawing
+const UNUSED: Duration = Duration::from_millis(250);
 /// How often images past the budget are let go while the view moves
 const FIT_SOON: Duration = Duration::from_millis(250);
 /// Images let go are kept this many pixels on their longest side, so
@@ -1152,6 +1154,9 @@ pub struct Painter {
     /// Images units drew with when Vello last drew them, and at what
     /// pixels a unit, by unit, as pictures keep them
     vello_uses: HashMap<(usize, bool), (f32, Vec<(String, f64)>)>,
+    /// How wide Vello showed each image it drew since images were last
+    /// fitted, the widest
+    vello_shown: HashMap<String, f32>,
     /// Units encoded for Vello, by unit and level, see `Encoded`
     fragments: HashMap<(usize, bool, i32), Encoded>,
     /// Images of units made for the tile or view being drawn
@@ -1300,6 +1305,7 @@ impl Painter {
             image_came_at: Instant::now(),
             vello_starting,
             vello_uses: HashMap::new(),
+            vello_shown: HashMap::new(),
             fragments: HashMap::new(),
             gpu,
             kit: Kit::new(),
@@ -2225,9 +2231,13 @@ impl Painter {
     fn evict_vello(&mut self, keep: &[TileKey], furthest: Option<u32>) {
         // What Skia makes drawing what Vello can't, often textures of a
         // pixel or two, each taking 64 KiB though Skia counts it as a few
-        // bytes, so its cache's budget never lets them go
-        if self.cleaned.elapsed() > Duration::from_millis(500) {
+        // bytes, so its cache's budget never lets them go. And images let
+        // go, and what they were uploaded through, which Skia keeps to use
+        // again though few are ever the same size, so moving the view
+        // would pile them up
+        if self.cleaned.elapsed() > UNUSED {
             self.cleaned = Instant::now();
+            self.gpu.context.perform_deferred_cleanup(UNUSED, Some(skia_safe::gpu::PurgeResourceOptions::ScratchResourcesOnly));
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
         }
         let extra = self.tiles.len().saturating_sub(VELLO_TILES);
@@ -2359,6 +2369,7 @@ impl Painter {
         let mut fragments = std::mem::take(&mut self.fragments);
         // Image fills' textures the view draws, by key
         let mut pictures: Vec<(String, u32)> = Vec::new();
+        let mut widths: Vec<(String, f32)> = Vec::new();
         let (mut reused, mut made_count) = (0, 0);
         let (mut encoding, mut rough) = (Duration::ZERO, false);
         // Blurs, drawn and put in place for the view
@@ -2421,6 +2432,7 @@ impl Painter {
                         .map(|_| {
                             scope.spawn(move || {
                                 let mut encoder = super::vello::Encoder::worker(tree, images, paths, drawable, w, h);
+                                encoder.px = Some(px);
                                 let mut done = Vec::new();
                                 while let Some(&(at, near, short)) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
                                     let unit = &units_all[shown[at].0];
@@ -2485,6 +2497,7 @@ impl Painter {
                         encoder.scene = scene;
                         encoder.pictures.clear();
                         pictures.extend(encoder.drawn.drain(..));
+                        widths.extend(encoder.shown.drain(..));
                         asked.push(((unit.slot, unit.section), unit.bounds, std::mem::take(&mut encoder.asked)));
                         units += 1;
                         continue;
@@ -2505,6 +2518,7 @@ impl Painter {
                             encoder.scene.append(&fragment.scene, Some(at));
                             append_took += timer.elapsed();
                             pictures.extend(encoder.drawn.drain(..));
+                            widths.extend(encoder.shown.drain(..));
                             encoder.counts += fragment.counts;
                             let mut unit_asked = fragment.asked.clone();
                             let mut drawn = std::mem::take(&mut encoder.asked);
@@ -2570,6 +2584,10 @@ impl Painter {
         // A scene kept is drawn into a target of the view's size
         let (kept, tw, th) = kept.unwrap_or((super::vello::Kept::NOT, w, h));
         let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, tw, th, used_pages, &pictures, &plan, kept);
+        for (key, width) in widths {
+            let widest = self.vello_shown.entry(key).or_insert(0.0);
+            *widest = widest.max(width);
+        }
         lap(&mut steps);
         drop(plan);
         vello.spare = scene;
@@ -3828,6 +3846,25 @@ impl Painter {
                 gone.push(key);
             }
             self.forget_images(&gone);
+        }
+        // Those Vello drew far bigger than it showed them are had again at
+        // what it showed them at, with a step to spare for zooming in, and
+        // swapped in once here. Vello draws from a mipmap level of them as
+        // big, so they look the same
+        let shown = std::mem::take(&mut self.vello_shown);
+        for (key, width) in shown {
+            let Some(img) = self.images.get(&key) else { continue };
+            if key.starts_with(RENDER) || key.starts_with(EFFECT) || img.stale {
+                continue;
+            }
+            let asked = width as f64 * super::vello::ASKED;
+            let kept = img.image.width().max(img.image.height()) as f64;
+            let fits = fitted(img.original, asked) as f64;
+            if kept > fits * 2.0 && self.asked.get(&key) != Some(&asked) {
+                total = total.saturating_sub((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize);
+                self.asked.insert(key.clone(), asked);
+                self.request(&key, asked);
+            }
         }
         // Moving, those only coarse tiles draw are had again at the size
         // they draw them, swapped in once here, so nothing shows blurrier

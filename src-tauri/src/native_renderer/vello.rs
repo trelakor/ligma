@@ -1264,6 +1264,8 @@ pub struct Encoder<'a> {
     pub asked: Asked,
     /// Images views have drawn, at the levels they drew them
     pub drawn: Vec<(String, u32)>,
+    /// And how wide they showed, in device pixels
+    pub shown: Vec<(String, f32)>,
     /// Why the view can't be drawn this way, if it can't
     pub failed: Option<String>,
     /// Pixels Skia drew into the atlas
@@ -1283,6 +1285,11 @@ pub struct Encoder<'a> {
     depth: u8,
     /// Encoding a fragment, for any view: nothing's cut by the view
     retained: bool,
+    /// The view's pixels a unit, which images fragments draw are asked for
+    /// as shown at, not as big as the fragment's ever shown
+    pub px: Option<f32>,
+    /// How much bigger than encoded the fragment being encoded shows
+    shows: f32,
     /// Image fills' textures drawn, by key, mipmap level and Vello's id
     /// for them
     pub pictures: Vec<(String, u32, u64)>,
@@ -1347,8 +1354,11 @@ impl<'a> Encoder<'a> {
             kinds: Default::default(),
             depth: 0,
             retained: false,
+            px: None,
+            shows: 2.0,
             pictures: Vec::new(),
             drawn: Vec::new(),
+            shown: Vec::new(),
             cast: None,
             alpha_only: false,
             effects: Vec::new(),
@@ -1542,6 +1552,7 @@ impl<'a> Encoder<'a> {
     /// Unit `place`, whose corner is at `origin`, as a fragment of `level`
     pub fn fragment(&mut self, place: &Place, origin: (f32, f32), level: i32) -> Fragment {
         let scale = 2f32.powi(level);
+        self.shows = self.px.map_or(2.0, |px| (px / scale).clamp(1.0, 2.0));
         let mut post = Matrix::scale((scale, scale));
         post.pre_translate((-origin.0, -origin.1));
         let scene = std::mem::replace(&mut self.scene, vello::Scene::new());
@@ -2128,11 +2139,14 @@ impl<'a> Encoder<'a> {
         let _t = timer(9);
         let Some(key) = tree::image_key(paint) else { return Picture::Nothing };
         let (w, h) = (size[0].max(1e-3), size[1].max(1e-3));
-        // A fragment's shown up to twice as big as it's encoded
-        let node_scale = self.m.scale_x().hypot(self.m.skew_y()) * if self.retained { 2.0 } else { 1.0 };
+        // A fragment's shown up to twice as big as it's encoded, asked
+        // for as it shows now, and for bigger as it's drawn bigger (see
+        // `Kind::Image`)
+        let shows = if self.retained { self.shows } else { 1.0 };
+        let node_scale = self.m.scale_x().hypot(self.m.skew_y()) * shows;
         let Some(img) = self.images.get(&key) else {
             if !self.asked.missing.iter().any(|(missing, _)| *missing == key) {
-                self.asked.missing.push((key, (w.max(h) * node_scale * 1.42) as f64));
+                self.asked.missing.push((key, (w.max(h) * node_scale * ASKED as f32) as f64));
             }
             return Picture::Nothing;
         };
@@ -2140,9 +2154,9 @@ impl<'a> Encoder<'a> {
         let (iw, ih) = (img.original.0 as f32, img.original.1 as f32);
         let shown = to_node.scale_x().hypot(to_node.skew_y()) * node_scale * iw;
         let kept = img.image.width() as f32;
-        self.asked.used.push((key.clone(), (shown * 1.42) as f64));
-        if kept < shown * 1.42 && iw > kept && kept < 4096.0 {
-            self.asked.sharper.push((key.clone(), (shown * 1.42) as f64));
+        self.asked.used.push((key.clone(), (shown * ASKED as f32) as f64));
+        if kept < shown * ASKED as f32 && iw > kept && kept < 4096.0 {
+            self.asked.sharper.push((key.clone(), (shown * ASKED as f32) as f64));
         }
         // Up to 4 texels a pixel where it's shown biggest, which Figma's
         // sampling takes as they are. More, and a mipmap level with 2 to 4
@@ -2159,7 +2173,7 @@ impl<'a> Encoder<'a> {
         let data = nothing();
         let mut local = to_node;
         local.pre_scale((iw, ih), None);
-        let width = shown / if self.retained { 2.0 } else { 1.0 };
+        let width = shown / shows;
         // Ligma's shaders take reflect for transparent outside the image,
         // and high quality for Figma's sampling
         let extend = if tile == skia_safe::TileMode::Repeat { Extend::Repeat } else { Extend::Reflect };
@@ -2492,12 +2506,18 @@ impl<'a> Encoder<'a> {
                     let Some(img) = self.images.get(key.as_str()) else { return Err("image gone".into()) };
                     // As `image` picks it, for how wide it's shown here
                     let texels = img.image.width() as f32 / (*width * scale as f32).max(1e-6);
+                    // A fragment drawn bigger than when it was encoded
+                    let wants = *width * scale as f32 * ASKED as f32;
+                    if (img.image.width() as f32) < wants && (img.original.0 as f32) > img.image.width() as f32 && img.image.width() < 4096 && !self.asked.sharper.iter().any(|(sharper, _)| sharper == key) {
+                        self.asked.sharper.push((key.clone(), wants as f64));
+                    }
                     let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
                     let vello = self.vello.as_deref_mut().ok_or("no Vello")?;
                     let Some((data, level)) = (0..=level).rev().find_map(|level| vello.picture(key, img, level).map(|data| (data, level))) else {
                         return Err("image Vello can't draw".into());
                     };
                     self.drawn.push((key.clone(), level));
+                    self.shown.push((key.clone(), *width * scale as f32));
                     Plan::patch_image(encoding, effect, data);
                 }
                 Kind::Skia { name, m, cast, draw } => {
@@ -2551,6 +2571,10 @@ impl<'a> Encoder<'a> {
         Ok(())
     }
 }
+
+/// How much wider than it shows an image is asked for: as wide as the
+/// mipmap level Figma's sampling draws from (see `Encoder::image`)
+pub const ASKED: f64 = 1.42;
 
 /// An image fill as Vello draws it, or not
 enum Picture {
