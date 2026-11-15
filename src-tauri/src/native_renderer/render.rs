@@ -622,6 +622,11 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 /// many bytes. Then those needed longest ago go, never any in view, down
 /// to three quarters of it, so it's seldom
 const IMAGES_BUDGET: usize = 128 << 20;
+
+/// What the process's GPU memory may grow to past where it is at rest,
+/// before what's kept only in case it's needed again is let go and no more
+/// is kept, so moving the view takes about what resting does
+const HEADROOM: u64 = 48 << 20;
 /// How long Skia keeps what it could use again but hasn't while drawing
 const UNUSED: Duration = Duration::from_millis(250);
 /// How often images past the budget are let go while the view moves
@@ -1194,6 +1199,10 @@ pub struct Painter {
     backdrops: Vec<(Rect, f32)>,
     config: Config,
     cleaned: Instant,
+    /// The GPU memory the process may take, once it's been at rest
+    budget: Option<u64>,
+    /// Past `budget`, so nothing's kept that isn't needed
+    pressed: bool,
     /// Dev tools: see `verify_tile`
     verifying: bool,
     verified: u64,
@@ -1346,6 +1355,8 @@ impl Painter {
             backdrops: Vec::new(),
             config: config(),
             cleaned: Instant::now(),
+            budget: None,
+            pressed: false,
             verifying: false,
             verified: 0,
             pyramid: Vec::new(),
@@ -1462,7 +1473,7 @@ impl Painter {
                 if self.zoom.1.elapsed() >= SETTLE && self.fitted.elapsed() > Duration::from_secs(1) {
                     self.fitted = Instant::now();
                     self.fit_images(false);
-                } else if self.fitted.elapsed() > FIT_SOON && self.images.values().map(Img::bytes).sum::<usize>() > IMAGES_BUDGET {
+                } else if self.fitted.elapsed() > FIT_SOON && self.images.values().map(Img::bytes).sum::<usize>() > self.images_budget() {
                     // Past the budget as more come into view, those it's
                     // left behind go at once, zooming too, not a second on
                     self.fitted = Instant::now();
@@ -1557,6 +1568,7 @@ impl Painter {
     /// more to draw, if there is
     fn fill(&mut self) -> Option<Duration> {
         self.check();
+        self.govern();
         let view = self.view.clone()?;
         let (px, preview, width, height) = view.drawn(self.gpu.size);
         if !px.is_finite() || px <= 0.0 {
@@ -2241,7 +2253,7 @@ impl Painter {
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
             super::committed::tidy();
         }
-        let extra = self.tiles.len().saturating_sub(VELLO_TILES);
+        let extra = self.tiles.len().saturating_sub(if self.pressed { 0 } else { VELLO_TILES });
         if extra == 0 {
             return;
         }
@@ -3710,7 +3722,45 @@ impl Painter {
         self.gpu.context.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::AllResources);
         super::committed::trim();
         self.update_memory();
+        self.budget = Some(self.gpu.used() + HEADROOM);
         trace(|| format!("trimmed to {} MB in Skia's cache, {} MB used", self.gpu.context.resource_cache_usage().resource_bytes >> 20, self.gpu.used() >> 20));
+    }
+
+    /// Images may take less while the process is past its budget
+    fn images_budget(&self) -> usize {
+        if self.pressed { IMAGES_BUDGET / 2 } else { IMAGES_BUDGET }
+    }
+
+    /// Holds the process's GPU memory to what it takes at rest and a little
+    /// more: past that, what's kept only in case it's needed again goes,
+    /// Skia's spares, textures kept to use again, tiles out of view and
+    /// images far from it, and none of it's kept till it's back under
+    fn govern(&mut self) {
+        let Some(budget) = self.budget else { return };
+        let was = self.pressed;
+        // At rest it takes what it takes, and the budget's set again once
+        // it's let go of what moving took; letting go of what's in use
+        // then would only have it made again, over and over
+        let moving = self.moved.elapsed() < VELLO_STILL || !SETTLE.saturating_sub(self.zoom.1.elapsed()).is_zero();
+        self.pressed = moving && self.gpu.used() > budget;
+        if !self.pressed {
+            return;
+        }
+        if !was {
+            trace(|| format!("past the GPU budget of {} MB", budget >> 20));
+        }
+        self.spare.retain(|tex| Arc::strong_count(tex) > 1);
+        if self.cleaned.elapsed() > Duration::from_millis(100) {
+            self.cleaned = Instant::now();
+            let _ = self.gpu.context.flush_and_submit();
+            self.gpu.context.purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::ScratchResourcesOnly);
+            self.gpu.context.perform_deferred_cleanup(UNUSED, None);
+            super::committed::tidy();
+        }
+        if self.fitted.elapsed() > FIT_SOON && self.images.values().map(Img::bytes).sum::<usize>() > self.images_budget() {
+            self.fitted = Instant::now();
+            self.fit_images(true);
+        }
     }
 
     /// Gives back the GPU memory an offscreen render took, whole views drawn
@@ -3735,6 +3785,7 @@ impl Painter {
     /// till it's had bigger again, so it'd flicker. `soon`, only those
     /// nowhere near the view go
     fn fit_images(&mut self, soon: bool) {
+        let budget = self.images_budget();
         // As run.rs sizes images it fetches
         let fitted = super::run::fitted;
         // Pictures of other zooms are quick to record again, and hold on to
@@ -3839,19 +3890,19 @@ impl Painter {
         }
         let mut total: usize = self.images.values().map(Img::bytes).sum();
         trace(|| format!("images {} MB, {} near the view, {} in it{}", total >> 20, need.len(), in_view.len(), if soon { ", soon" } else { "" }));
-        if total > IMAGES_BUDGET {
+        if total > budget {
             // Those not in view, needed longest ago (or never) first, and of
             // those the biggest
             let mut aside: Vec<(Option<Instant>, usize, String)> = self
                 .images
                 .iter()
-                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !(soon && need.contains_key(key.as_str())) && (key.starts_with(EFFECT) || img.image.width().max(img.image.height()) > PLACEHOLDER))
+                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !(soon && need.contains_key(key.as_str())) && img.image.width().max(img.image.height()) > PLACEHOLDER)
                 .map(|(key, img)| (self.wanted.get(key).copied(), img.bytes(), key.clone()))
                 .collect();
             aside.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
             let mut gone = Vec::new();
             for (_, _, key) in aside {
-                if total <= IMAGES_BUDGET * 3 / 4 {
+                if total <= budget * 3 / 4 {
                     break;
                 }
                 total = self.shrink(&key, total);
@@ -3880,7 +3931,7 @@ impl Painter {
         }
         // Moving, those only coarse tiles draw are had again at the size
         // they draw them, swapped in once here, so nothing shows blurrier
-        if soon && total > IMAGES_BUDGET {
+        if soon && total > budget {
             let mut smaller: Vec<(usize, String, f64)> = self
                 .images
                 .iter()
@@ -3894,7 +3945,7 @@ impl Painter {
                 .collect();
             smaller.sort_by(|a, b| b.0.cmp(&a.0));
             for (saving, key, width) in smaller {
-                if total <= IMAGES_BUDGET * 3 / 4 {
+                if total <= budget * 3 / 4 {
                     break;
                 }
                 total = total.saturating_sub(saving);
@@ -3907,7 +3958,7 @@ impl Painter {
         // Those in view alone past it, as far out with many images each
         // zoomed in on before: each more than twice what it's drawn at is
         // had again at that, the same on screen
-        if total > IMAGES_BUDGET {
+        if total > budget {
             let mut smaller: Vec<(usize, String, f64)> = self
                 .images
                 .iter()
@@ -3921,7 +3972,7 @@ impl Painter {
                 .collect();
             smaller.sort_by(|a, b| b.0.cmp(&a.0));
             for (saving, key, width) in smaller {
-                if total <= IMAGES_BUDGET * 3 / 4 {
+                if total <= budget * 3 / 4 {
                     break;
                 }
                 total = total.saturating_sub(saving);
