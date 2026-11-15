@@ -842,6 +842,8 @@ struct Tile {
     /// A draft, to show behind the view's tiles while they're drawn. One
     /// the view itself needs is drawn again in full
     draft: bool,
+    /// Drawn by Vello, not Skia
+    vello: bool,
 }
 
 impl Drop for Gpu {
@@ -1111,6 +1113,9 @@ pub struct Painter {
     /// Images that couldn't be had, and when
     failed: HashMap<String, Instant>,
     tiles: HashMap<TileKey, Tile>,
+    /// Tiles drawn again for not matching the whole view, and how often,
+    /// see `verify_tiles`
+    mismatched: HashMap<TileKey, u32>,
     /// Where tiles are drawn before they're kept, by the margin around the
     /// tile and how many samples a pixel takes along each side
     scratch: Vec<(i32, i32, Surface)>,
@@ -1307,6 +1312,7 @@ impl Painter {
             wanted: HashMap::new(),
             failed: HashMap::new(),
             tiles: HashMap::new(),
+            mismatched: HashMap::new(),
             scratch: Vec::new(),
             pending: None,
             made: 0,
@@ -2196,7 +2202,7 @@ impl Painter {
             surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
             drop(surface);
             let tile_image = self.finish(&backend, false).ok_or_else(|| fail("submit".into()))?;
-            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, exact, draft: false });
+            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, exact, draft: false, vello: true });
         }
         self.drew = true;
         super::stats().lock().unwrap().vello_tiles_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -2249,6 +2255,10 @@ impl Painter {
                 self.whole_took = last.started.elapsed();
                 stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
                 self.hand_whole(last.layer, last.fence, last.at, last.rough, true);
+                // At rest alone, as it waits for the GPU
+                if !last.rough && self.moved.elapsed() >= PAN_STILL {
+                    self.verify_tiles();
+                }
             }
             // Never shown, and drawn again with the room it needs where
             // it's still wanted
@@ -2776,6 +2786,104 @@ impl Painter {
         if let Some(old) = old {
             self.retire(old.tex);
         }
+    }
+
+    /// Tiles of the whole view's zoom under it, compared with it: drawn
+    /// afresh at rest, it's what they should show. One that came out
+    /// otherwise, as where its images went missing unnoticed, would show
+    /// that each time the view moves, so is drawn again, and traced with
+    /// how it was drawn
+    fn verify_tiles(&mut self) {
+        // Compared at half size, each pixel the average of 4, block by
+        // block, so the fraction of a pixel the whole view's drawn at
+        // makes no difference
+        const BLOCK: usize = 16;
+        const DIFFERENT: u32 = 24;
+        let Some(whole) = self.whole.as_ref().filter(|whole| !whole.stale && whole.patch.is_empty() && !whole.rough) else {
+            return;
+        };
+        let (tex, wx, wy, pxb) = (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px.to_bits());
+        let (w, h) = (tex.width / 2, tex.height / 2);
+        let under = |key: &TileKey| key.x * TILE < wx + tex.width && (key.x + 1) * TILE > wx && key.y * TILE < wy + tex.height && (key.y + 1) * TILE > wy;
+        let keys: Vec<TileKey> = self.tiles.iter().filter(|(key, tile)| key.px == pxb && !tile.stale && !tile.draft && under(key)).map(|(key, _)| *key).collect();
+        if keys.is_empty() || w < BLOCK as i32 || h < BLOCK as i32 {
+            return;
+        }
+        let started = Instant::now();
+        let Some(whole_image) = gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None) else {
+            return;
+        };
+        let Some(mut surface) = self.gpu.own_surface(w, h, 1) else {
+            return;
+        };
+        let info = ImageInfo::new((w, h), ColorType::RGBA8888, AlphaType::Premul, None);
+        let sampling = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+        let mut paint = Paint::default();
+        paint.set_blend_mode(skia_safe::BlendMode::Src);
+        let read = |surface: &mut Surface| {
+            let mut pixels = vec![0u8; (w * h * 4) as usize];
+            surface.read_pixels(&info, &mut pixels, (w * 4) as usize, (0, 0)).then_some(pixels)
+        };
+        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        surface.canvas().draw_image_rect_with_sampling_options(&whole_image, None, Rect::from_wh(w as f32, h as f32), sampling, &paint);
+        let Some(expected) = read(&mut surface) else { return };
+        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+        for key in &keys {
+            let at = Rect::from_xywh((key.x * TILE - wx) as f32 / 2.0, (key.y * TILE - wy) as f32 / 2.0, (TILE / 2) as f32, (TILE / 2) as f32);
+            surface.canvas().draw_image_rect_with_sampling_options(&self.tiles[key].image, None, at, sampling, &paint);
+        }
+        let Some(drawn) = read(&mut surface) else { return };
+        let (w, h) = (w as usize, h as usize);
+        let mut redraw = Vec::new();
+        for key in keys {
+            // Blocks wholly inside both the tile and the view
+            let (left, top) = ((key.x * TILE - wx) / 2, (key.y * TILE - wy) / 2);
+            let (x0, y0) = (left.max(0) as usize, top.max(0) as usize);
+            let (x1, y1) = (((left + TILE / 2) as usize).min(w), ((top + TILE / 2) as usize).min(h));
+            let mut worst = (0, 0, 0);
+            for by in (y0..y1.saturating_sub(BLOCK - 1)).step_by(BLOCK) {
+                for bx in (x0..x1.saturating_sub(BLOCK - 1)).step_by(BLOCK) {
+                    let mut sum = 0u32;
+                    for y in by..by + BLOCK {
+                        let row = (y * w + bx) * 4;
+                        for i in row..row + BLOCK * 4 {
+                            sum += expected[i].abs_diff(drawn[i]) as u32;
+                        }
+                    }
+                    let mean = sum / (BLOCK * BLOCK * 4) as u32;
+                    if mean > worst.0 {
+                        worst = (mean, bx * 2, by * 2);
+                    }
+                }
+            }
+            if worst.0 > DIFFERENT {
+                redraw.push((key, worst));
+            }
+        }
+        for (key, (mean, x, y)) in redraw {
+            let times = self.mismatched.entry(key).or_default();
+            *times += 1;
+            let times = *times;
+            let Some(tile) = self.tiles.get_mut(&key) else { continue };
+            trace(|| {
+                format!(
+                    "  tile {},{} px={:.4} differs from the whole view by {mean} at {x},{y} of it, drawn by {} exact={}, {}",
+                    key.x,
+                    key.y,
+                    key.px(),
+                    if tile.vello { "Vello" } else { "Skia" },
+                    tile.exact,
+                    if times > 2 { "left as it is, as drawing it again didn't help" } else { "drawn again" }
+                )
+            });
+            // Drawn again twice and still otherwise, it's how the two draw
+            // differently, not what was missing, so is left
+            if times <= 2 {
+                tile.stale = true;
+                self.dirty = true;
+            }
+        }
+        trace(|| format!("  verified tiles {:.1}ms", started.elapsed().as_secs_f64() * 1000.0));
     }
 
     fn retire_whole(&mut self, whole: Whole) {
@@ -4924,7 +5032,7 @@ impl Painter {
         if margin == 0 {
             self.scratch.push((margin, if msaa { 0 } else { ss }, scratch));
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, vello: false })
     }
 
     fn background(&self) -> Color4f {
