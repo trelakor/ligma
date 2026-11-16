@@ -2136,9 +2136,12 @@ const PAGE_JS: &str = r##"(() => {
   };
   // Smooth noise, 0 to 1, for a ragged wipe
   const noise = (x, y, seed) => {
-    const [ix, iy] = [Math.floor(x), Math.floor(y)];
-    const [fx, fy] = [x - ix, y - iy];
-    const [u, v] = [fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)];
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const u = fx * fx * (3 - 2 * fx);
+    const v = fy * fy * (3 - 2 * fy);
     const a = hash(ix, iy, seed);
     const b = hash(ix + 1, iy, seed);
     const c = hash(ix, iy + 1, seed);
@@ -2154,7 +2157,8 @@ const PAGE_JS: &str = r##"(() => {
     for (let i = 0; i < polygon.length; i++) {
       const a = polygon[i];
       const b = polygon[(i + 1) % polygon.length];
-      const [sa, sb] = [side(a), side(b)];
+      const sa = side(a);
+      const sb = side(b);
       if (sa <= 0) out.push(a);
       if (sa <= 0 !== sb <= 0) {
         const t = sa / (sa - sb);
@@ -2182,9 +2186,12 @@ const PAGE_JS: &str = r##"(() => {
       ])
         polygon = clipPolygon(polygon, point, normal);
       if (polygon.length < 3) return;
-      let [cx, cy, area] = [0, 0, 0];
+      let cx = 0;
+      let cy = 0;
+      let area = 0;
       for (let i = 0; i < polygon.length; i++) {
-        const [a, b] = [polygon[i], polygon[(i + 1) % polygon.length]];
+        const a = polygon[i];
+        const b = polygon[(i + 1) % polygon.length];
         const cross = a[0] * b[1] - b[0] * a[1];
         area += cross;
         cx += (a[0] + b[0]) * cross;
@@ -2199,7 +2206,10 @@ const PAGE_JS: &str = r##"(() => {
     if (pattern === "squares" || pattern === "triangles") {
       for (let gy = 0; gy < down; gy++) {
         for (let gx = 0; gx < across; gx++) {
-          const [x0, y0, x1, y1] = [gx * cell, gy * cell, (gx + 1) * cell, (gy + 1) * cell];
+          const x0 = gx * cell;
+          const y0 = gy * cell;
+          const x1 = (gx + 1) * cell;
+          const y1 = (gy + 1) * cell;
           if (pattern === "squares") add([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
           else if ((gx + gy) % 2) {
             add([[x0, y0], [x1, y0], [x1, y1]]);
@@ -2219,10 +2229,12 @@ const PAGE_JS: &str = r##"(() => {
       }
     } else if (pattern === "hexagons") {
       const r = cell / Math.sqrt(1.5 * Math.sqrt(3));
-      const [dx, dy] = [Math.sqrt(3) * r, 1.5 * r];
+      const dx = Math.sqrt(3) * r;
+      const dy = 1.5 * r;
       for (let row = 0; row * dy - r < height; row++) {
         for (let column = 0; column * dx - dx < width; column++) {
-          const [cx, cy] = [column * dx + (row % 2 ? dx / 2 : 0), row * dy];
+          const cx = column * dx + (row % 2 ? dx / 2 : 0);
+          const cy = row * dy;
           add([0, 1, 2, 3, 4, 5].map((k) => [cx + r * Math.cos(((60 * k - 30) * Math.PI) / 180), cy + r * Math.sin(((60 * k - 30) * Math.PI) / 180)]));
         }
       }
@@ -2251,7 +2263,8 @@ const PAGE_JS: &str = r##"(() => {
           parts[0] = last;
           let i = 0;
           for (;;) {
-            const [l, r] = [i * 2 + 1, i * 2 + 2];
+            const l = i * 2 + 1;
+            const r = i * 2 + 2;
             let big = i;
             if (l < parts.length && parts[l].area > parts[big].area) big = l;
             if (r < parts.length && parts[r].area > parts[big].area) big = r;
@@ -2267,8 +2280,12 @@ const PAGE_JS: &str = r##"(() => {
       while (parts.length < target && n < target * 4) {
         n++;
         const part = pop();
-        let [mx, my] = [0, 0];
-        for (const [x, y] of part.polygon) [mx, my] = [mx + x / part.polygon.length, my + y / part.polygon.length];
+        let mx = 0;
+        let my = 0;
+        for (const [x, y] of part.polygon) {
+          mx = mx + x / part.polygon.length;
+          my = my + y / part.polygon.length;
+        }
         const spread = Math.sqrt(part.area) * 0.35;
         const point = [mx + (hash(n, 1, seed) - 0.5) * spread, my + (hash(n, 2, seed) - 0.5) * spread];
         const angle = hash(n, 3, seed) * Math.PI;
@@ -2278,7 +2295,8 @@ const PAGE_JS: &str = r##"(() => {
           if (polygon.length < 3) continue;
           let area = 0;
           for (let i = 0; i < polygon.length; i++) {
-            const [a, b] = [polygon[i], polygon[(i + 1) % polygon.length]];
+            const a = polygon[i];
+            const b = polygon[(i + 1) % polygon.length];
             area += a[0] * b[1] - b[0] * a[1];
           }
           push({ polygon, area: Math.abs(area) / 2 });
@@ -2315,8 +2333,12 @@ const PAGE_JS: &str = r##"(() => {
           for (let c = 0; c < cuts; c++) {
             const at = parts.length - 1 - Math.floor(hash(gx, gy, seed + 17 + c) * parts.length * 0.99);
             const part = parts.splice(at, 1)[0];
-            let [mx, my] = [0, 0];
-            for (const [x, y] of part) [mx, my] = [mx + x / part.length, my + y / part.length];
+            let mx = 0;
+            let my = 0;
+            for (const [x, y] of part) {
+              mx = mx + x / part.length;
+              my = my + y / part.length;
+            }
             const shift = (hash(gx, gy, seed + 19 + c) - 0.5) * cell * 0.5;
             const angle = hash(gx, gy, seed + 23 + c) * Math.PI;
             const normal = [Math.cos(angle), Math.sin(angle)];
@@ -2352,19 +2374,25 @@ const PAGE_JS: &str = r##"(() => {
     const unit = size * 0.1;
     const drag = s.viscosity * 4;
     const ga = (s.gravityDirection * Math.PI) / 180;
-    const [gx, gy] = [Math.cos(ga) * s.gravity * unit, Math.sin(ga) * s.gravity * unit];
+    const gx = Math.cos(ga) * s.gravity * unit;
+    const gy = Math.sin(ga) * s.gravity * unit;
     const focal = size * 2.2;
-    const [cx, cy] = [width / 2, height / 2];
+    const cx = width / 2;
+    const cy = height / 2;
     const snap = s.mode === "snap";
     const soft = 0.03 + (s.softness / 100) * 0.6;
     const rag = s.ragged / 100;
     const scale = size / 8;
     pieces.forEach((piece, i) => {
       // The velocity the forces give it, and how far into each it is
-      let [vx, vy, vz] = [0, 0, 0];
+      let vx = 0;
+      let vy = 0;
+      let vz = 0;
       let within = 1;
       for (const f of forces) {
-        const [dx, dy, dz] = [piece.x - f.x, piece.y - f.y, -f.z];
+        const dx = piece.x - f.x;
+        const dy = piece.y - f.y;
+        const dz = -f.z;
         const d = Math.hypot(dx, dy, dz);
         if (d >= f.radius) continue;
         const power = f.strength * unit * (1 - d / f.radius);
@@ -2390,7 +2418,9 @@ const PAGE_JS: &str = r##"(() => {
       const speed = (1 + (r0 - 0.5) * 2 * random) / (1 + ((r1 - 0.5) * 2 * s.mass) / 100);
       const turn = (r2 - 0.5) * 2 * random * 1.5;
       const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
-      let [ux, uy, uz] = [(vx * cos - vy * sin) * speed, (vx * sin + vy * cos) * speed, vz * speed];
+      let ux = (vx * cos - vy * sin) * speed;
+      let uy = (vx * sin + vy * cos) * speed;
+      let uz = vz * speed;
       // And a velocity of its own in any direction, as AE's Randomness
       // gives, in 3D, so with enough of it some pieces go against the
       // force and gravity, back over what's still whole or toward the
@@ -2407,11 +2437,14 @@ const PAGE_JS: &str = r##"(() => {
       // Moved by its speed, slowed by viscosity, and by gravity
       const travel = drag > 0 ? (1 - Math.exp(-drag * t)) / drag : t;
       const fall = (t * t) / 2;
-      const [mx, my, mz] = [ux * travel + gx * fall, uy * travel + gy * fall, uz * travel];
+      const mx = ux * travel + gx * fall;
+      const my = uy * travel + gy * fall;
+      const mz = uz * travel;
       // Seen from the camera: nearer is larger, and farther from the middle
       if (focal - mz <= focal * 0.05) return;
       const depth = focal / (focal - mz);
-      const [px, py] = [cx + (piece.x + mx - cx) * depth, cy + (piece.y + my - cy) * depth];
+      const px = cx + (piece.x + mx - cx) * depth;
+      const py = cy + (piece.y + my - cy) * depth;
       // Tumbling about a random axis: as it turns, it thins along it
       const spin = (r3 - 0.5) * 2 * Math.PI * 2 * s.rotation * t * (0.5 + r4);
       const tilt = s.tumble === "free" ? Math.PI * 2 * s.rotation * t * (0.5 + r5) : 0;
@@ -2422,9 +2455,11 @@ const PAGE_JS: &str = r##"(() => {
       // R(roll) · R(axis) · diag(1, flat) · R(-axis), sized by depth and shrink
       const life = snap ? Math.min(1, t / Math.max(0.2, s.spread * 0.5)) : 0;
       const size2 = depth * (snap ? Math.max(0.05, 1 - (s.shrink / 100) * life) : 1);
-      const [ca, sa] = [Math.cos(axis), Math.sin(axis)];
+      const ca = Math.cos(axis);
+      const sa = Math.sin(axis);
       const m = [ca * ca + flat * sa * sa, ca * sa - flat * ca * sa, ca * sa - flat * sa * ca, sa * sa + flat * ca * ca];
-      const [cr, sr] = [Math.cos(roll), Math.sin(roll)];
+      const cr = Math.cos(roll);
+      const sr = Math.sin(roll);
       const a = (cr * m[0] - sr * m[2]) * size2;
       const b = (sr * m[0] + cr * m[2]) * size2;
       const c = (cr * m[1] - sr * m[3]) * size2;
@@ -2451,14 +2486,18 @@ const PAGE_JS: &str = r##"(() => {
     const { width, height } = picture;
     const moves = simulate(pieces, s, width, height, Math.max(width, height));
     // The bounds of everything drawn
-    let [left, top, right, bottom] = [0, 0, width, height];
+    let left = 0;
+    let top = 0;
+    let right = width;
+    let bottom = height;
     const drawn = [];
     pieces.forEach((piece, i) => {
       const move = moves[i];
       if (!move || move.opacity <= 0.02) return;
       const [a, b, c, d, e, f] = move.matrix;
       for (const [x, y] of piece.polygon) {
-        const [px, py] = [a * x + c * y + e, b * x + d * y + f];
+        const px = a * x + c * y + e;
+        const py = b * x + d * y + f;
         if (px < left) left = px;
         if (px > right) right = px;
         if (py < top) top = py;
@@ -2468,8 +2507,10 @@ const PAGE_JS: &str = r##"(() => {
     });
     // Kept to a sensible size, as pieces flying past the camera can be huge
     const most = Math.max(width, height) * 1.5;
-    [left, top] = [Math.max(-most, Math.floor(left) - 1), Math.max(-most, Math.floor(top) - 1)];
-    [right, bottom] = [Math.min(width + most, Math.ceil(right) + 1), Math.min(height + most, Math.ceil(bottom) + 1)];
+    left = Math.max(-most, Math.floor(left) - 1);
+    top = Math.max(-most, Math.floor(top) - 1);
+    right = Math.min(width + most, Math.ceil(right) + 1);
+    bottom = Math.min(height + most, Math.ceil(bottom) + 1);
     // Drawn no larger than Figma keeps an image, smaller if need be
     const shrink = Math.min(1, MAX_SIDE / Math.max(right - left, bottom - top));
     const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round((right - left) * shrink)), height: Math.max(1, Math.round((bottom - top) * shrink)) });
@@ -2494,8 +2535,10 @@ const PAGE_JS: &str = r##"(() => {
       // with the square of their number, so they're filled in batches on
       // a mask over the picture, adding up. As pieces don't overlap, the
       // sum along the edges they share is what one path would give
-      const [ox, oy] = [-left * shrink, -top * shrink];
-      const [ix, iy] = [Math.floor(ox), Math.floor(oy)];
+      const ox = -left * shrink;
+      const oy = -top * shrink;
+      const ix = Math.floor(ox);
+      const iy = Math.floor(oy);
       const mask = Object.assign(document.createElement("canvas"), { width: Math.ceil(width * shrink) + 1, height: Math.ceil(height * shrink) + 1 });
       const ink = mask.getContext("2d");
       ink.setTransform(shrink, 0, 0, shrink, ox - ix, oy - iy);
@@ -2523,10 +2566,20 @@ const PAGE_JS: &str = r##"(() => {
       context.closePath();
       context.clip();
       context.globalAlpha = move.opacity;
-      let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
-      for (const [x, y] of piece.polygon) [x0, y0, x1, y1] = [Math.min(x0, x), Math.min(y0, y), Math.max(x1, x), Math.max(y1, y)];
-      [x0, y0] = [Math.max(0, Math.floor(x0)), Math.max(0, Math.floor(y0))];
-      [x1, y1] = [Math.min(width, Math.ceil(x1)), Math.min(height, Math.ceil(y1))];
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const [x, y] of piece.polygon) {
+        x0 = Math.min(x0, x);
+        y0 = Math.min(y0, y);
+        x1 = Math.max(x1, x);
+        y1 = Math.max(y1, y);
+      }
+      x0 = Math.max(0, Math.floor(x0));
+      y0 = Math.max(0, Math.floor(y0));
+      x1 = Math.min(width, Math.ceil(x1));
+      y1 = Math.min(height, Math.ceil(y1));
       if (x1 > x0 && y1 > y0) context.drawImage(picture, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
       if (move.light > 0) {
         context.globalCompositeOperation = "source-atop";
@@ -2605,7 +2658,10 @@ const PAGE_JS: &str = r##"(() => {
     if (!parent || parent.type === "PAGE") return { x, y, linear: [1, 0, 0, 1] };
     const [[a, c, e], [b, d, f]] = parent.absoluteTransform;
     const det = a * d - b * c;
-    const [ia, ib, ic, id] = [d / det, -b / det, -c / det, a / det];
+    const ia = d / det;
+    const ib = -b / det;
+    const ic = -c / det;
+    const id = a / det;
     return { x: ia * (x - e) + ic * (y - f), y: ib * (x - e) + id * (y - f), linear: [ia, ic, ib, id] };
   };
 
@@ -2894,7 +2950,10 @@ const PAGE_JS: &str = r##"(() => {
     // The layer framed with room around it for what flies off, the same
     // however far that goes, so the view holds still while dragging
     const room = Math.max(width, height) * 0.35;
-    const [left, top, right, bottom] = [-room, -room, width + room, height + room];
+    const left = -room;
+    const top = -room;
+    const right = width + room;
+    const bottom = height + room;
     const fit = Math.min((box.width - 8) / (right - left), (box.height - 8) / (bottom - top));
     current.view = { fit, ox: (box.width - (right - left) * fit) / 2 - left * fit, oy: (box.height - (bottom - top) * fit) / 2 - top * fit, width, height };
     const { ox, oy } = current.view;
@@ -2935,7 +2994,8 @@ const PAGE_JS: &str = r##"(() => {
       const v = current.view;
       if (!v) return null;
       const box = canvas.getBoundingClientRect();
-      const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+      const px = event.clientX - box.left;
+      const py = event.clientY - box.top;
       const size = Math.max(v.width, v.height);
       for (const n of [2, 1]) {
         const f = current.settings[`force${n}`];
@@ -2963,7 +3023,8 @@ const PAGE_JS: &str = r##"(() => {
       const size = Math.max(v.width, v.height);
       const move = (event) => {
         const box = canvas.getBoundingClientRect();
-        const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+        const px = event.clientX - box.left;
+        const py = event.clientY - box.top;
         if (at.what === "move") {
           change(`force${at.n}.x`, Math.round(((px - v.ox) / (v.width * v.fit)) * 100));
           change(`force${at.n}.y`, Math.round(((py - v.oy) / (v.height * v.fit)) * 100));
@@ -3299,7 +3360,8 @@ const PAGE_JS: &str = r##"(() => {
     const H = image.height;
     const out = new ImageData(W, Math.max(1, to - from));
     const o = out.data;
-    const [dw, dh] = [W / k, H / k];
+    const dw = W / k;
+    const dh = H / k;
     // A pixel, premultiplied, 0 to 1, nearest to where `ux`, `uy` falls,
     // or nothing outside the picture with `zero`
     const sample = (ux, uy, zero, into) => {
@@ -3317,11 +3379,15 @@ const PAGE_JS: &str = r##"(() => {
       into[3] = a;
       return into;
     };
-    const [center, red, blue] = [new Float32Array(4), new Float32Array(4), new Float32Array(4)];
+    const center = new Float32Array(4);
+    const red = new Float32Array(4);
+    const blue = new Float32Array(4);
     const block = Math.max(s.glitchBlockSize, 1);
-    const [cw, ch] = [Math.max(s.pixelSize * s.pixelAspect, 1), Math.max(s.pixelSize, 1)];
+    const cw = Math.max(s.pixelSize * s.pixelAspect, 1);
+    const ch = Math.max(s.pixelSize, 1);
     const angle = s.splitAngle * 0.01745329252;
-    const [sx, sy] = [(Math.cos(angle) * s.splitDistance) / dw, (Math.sin(angle) * s.splitDistance) / dh];
+    const sx = (Math.cos(angle) * s.splitDistance) / dw;
+    const sy = (Math.sin(angle) * s.splitDistance) / dh;
     const levels = 2 ** Math.min(8, Math.max(1, Math.round(s.bitDepth))) - 1;
     const ditherScale = Math.max(s.ditherScale, 1);
     const seed = s.randomSeed;
@@ -3331,12 +3397,15 @@ const PAGE_JS: &str = r##"(() => {
         const put = ((y - from) * W + x) * 4;
         const px = (x + 0.5) / k;
         const py = (y + 0.5) / k;
-        const [bx, by] = [Math.floor(px / block), Math.floor(py / block)];
+        const bx = Math.floor(px / block);
+        const by = Math.floor(py / block);
         const enabled = seededHash(bx, by, seed) < s.glitchAmount ? 1 : 0;
         const dx = enabled ? (seededHash(bx + 19, by + 7, seed) * 2 - 1) * s.glitchDisplacement : 0;
         const dy = enabled ? (seededHash(bx + 3, by + 29, seed) * 2 - 1) * 0.2 * s.glitchDisplacement : 0;
-        const [qx, qy] = [px + dx, py + dy];
-        const [ox, oy] = [Math.floor(qx / cw) * cw, Math.floor(qy / ch) * ch];
+        const qx = px + dx;
+        const qy = py + dy;
+        const ox = Math.floor(qx / cw) * cw;
+        const oy = Math.floor(qy / ch) * ch;
         const ux = (ox + Math.min(cw, Math.max(dw - ox, 0)) * 0.5) / dw;
         const uy = (oy + Math.min(ch, Math.max(dh - oy, 0)) * 0.5) / dh;
         sample(ux, uy, true, center);
@@ -3456,7 +3525,8 @@ const PAGE_JS: &str = r##"(() => {
         const band = Math.ceil(H / workers.length);
         const parts = await Promise.all(
           workers.map((worker, i) => {
-            const [from, to] = [i * band, Math.min(H, (i + 1) * band)];
+            const from = i * band;
+            const to = Math.min(H, (i + 1) * band);
             return from < to ? inWorker(worker, { image, s, k, from, to }).then((part) => [from, part]) : null;
           }),
         );
@@ -3879,7 +3949,8 @@ const PAGE_JS: &str = r##"(() => {
     }
     return out;
   };
-  // Bilinear, premultiplied, at `x`, `y` in pixels, nothing outside
+  // Bilinear, premultiplied, at `x`, `y` in pixels, nothing outside.
+  // `into` is a Float32Array, rounded to as each corner's added
   const sampleAt = (f, W, H, x, y, into) => {
     x -= 0.5;
     y -= 0.5;
@@ -3887,6 +3958,22 @@ const PAGE_JS: &str = r##"(() => {
     const y0 = Math.floor(y);
     const tx = x - x0;
     const ty = y - y0;
+    // All four corners inside, as most are: the same sums as below,
+    // without its checks
+    if (x0 >= 0 && y0 >= 0 && x0 < W - 1 && y0 < H - 1) {
+      const a = (y0 * W + x0) * 4;
+      const b = a + W * 4;
+      const w00 = (1 - ty) * (1 - tx);
+      const w01 = (1 - ty) * tx;
+      const w10 = ty * (1 - tx);
+      const w11 = ty * tx;
+      const fr = Math.fround;
+      into[0] = fr(fr(fr(fr(f[a] * w00) + f[a + 4] * w01) + f[b] * w10) + f[b + 4] * w11);
+      into[1] = fr(fr(fr(fr(f[a + 1] * w00) + f[a + 5] * w01) + f[b + 1] * w10) + f[b + 5] * w11);
+      into[2] = fr(fr(fr(fr(f[a + 2] * w00) + f[a + 6] * w01) + f[b + 2] * w10) + f[b + 6] * w11);
+      into[3] = fr(fr(fr(fr(f[a + 3] * w00) + f[a + 7] * w01) + f[b + 3] * w10) + f[b + 7] * w11);
+      return into;
+    }
     into[0] = into[1] = into[2] = into[3] = 0;
     for (let j = 0; j < 2; j++) {
       const yy = y0 + j;
@@ -3927,10 +4014,32 @@ const PAGE_JS: &str = r##"(() => {
     }
     return v;
   };
-  // A box blur of radius `r` along rows or columns, nothing past the edges
+  // A box blur of radius `r` along rows or columns, nothing past the edges.
+  // Down columns, every column's sum is kept at once, a row at a time, so
+  // memory's read in order, the same sums as one column at a time
   const boxPass = (src, dst, W, H, r, horizontal) => {
-    const [n, m, step, stride] = horizontal ? [W, H, 1, W] : [H, W, W, 1];
     const norm = 1 / (2 * r + 1);
+    if (!horizontal) {
+      const sums = new Float64Array(W);
+      for (let i = 0; i <= Math.min(r, H - 1); i++) for (let x = 0; x < W; x++) sums[x] += src[i * W + x];
+      for (let i = 0; i < H; i++) {
+        const row = i * W;
+        const add = (i + r + 1) * W;
+        const sub = (i - r) * W;
+        const adding = i + r + 1 < H;
+        const subbing = i - r >= 0;
+        for (let x = 0; x < W; x++) {
+          dst[row + x] = sums[x] * norm;
+          if (adding) sums[x] += src[add + x];
+          if (subbing) sums[x] -= src[sub + x];
+        }
+      }
+      return;
+    }
+    const n = W;
+    const m = H;
+    const step = 1;
+    const stride = W;
     for (let j = 0; j < m; j++) {
       const base = j * stride;
       let sum = 0;
@@ -3949,10 +4058,25 @@ const PAGE_JS: &str = r##"(() => {
     const out = Float32Array.from(c);
     if (!(sigma > 0.3)) return out;
     const r = Math.max(1, Math.round((Math.sqrt(4 * sigma * sigma + 1) - 1) / 2));
-    const tmp = new Float32Array(c.length);
+    // Only the rows with something in them, and as far again as the three
+    // blurs reach: past that it's nothing before and after, as a cutout's
+    // shadow or glow mostly is
+    const empty = (y) => {
+      for (let i = y * W, end = i + W; i < end; i++) if (out[i] !== 0) return false;
+      return true;
+    };
+    let top = 0;
+    while (top < H && empty(top)) top++;
+    if (top === H) return out;
+    let bottom = H - 1;
+    while (empty(bottom)) bottom--;
+    const from = Math.max(0, top - 3 * r - 1);
+    const rows = Math.min(H, bottom + 3 * r + 2) - from;
+    const band = out.subarray(from * W, (from + rows) * W);
+    const tmp = new Float32Array(band.length);
     for (let pass = 0; pass < 3; pass++) {
-      boxPass(out, tmp, W, H, r, true);
-      boxPass(tmp, out, W, H, r, false);
+      boxPass(band, tmp, W, rows, r, true);
+      boxPass(tmp, band, W, rows, r, false);
     }
     return out;
   };
@@ -4172,7 +4296,8 @@ const PAGE_JS: &str = r##"(() => {
     const hit = (event) => {
       if (!current.view) return null;
       const box = canvas.getBoundingClientRect();
-      const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+      const px = event.clientX - box.left;
+      const py = event.clientY - box.top;
       for (const handle of shownHandles(current).reverse()) {
         const { x, y, r } = handlePlace(current, handle);
         const d = Math.hypot(px - x, py - y);
@@ -4195,7 +4320,8 @@ const PAGE_JS: &str = r##"(() => {
       const v = current.view;
       const move = (event) => {
         const box = canvas.getBoundingClientRect();
-        const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+        const px = event.clientX - box.left;
+        const py = event.clientY - box.top;
         if (at.what === "move") {
           change(at.handle.x, Math.round(((px - v.ox) / (v.width * v.fit)) * 100));
           change(at.handle.y, Math.round(((py - v.oy) / (v.height * v.fit)) * 100));
@@ -4240,14 +4366,16 @@ const PAGE_JS: &str = r##"(() => {
     const ratio = devicePixelRatio || 1;
     const box = canvas.getBoundingClientRect();
     // Resized only when its box is, as a resize starts it over
-    const [cw, ch] = [Math.round(box.width * ratio), Math.round(box.height * ratio)];
+    const cw = Math.round(box.width * ratio);
+    const ch = Math.round(box.height * ratio);
     if (canvas.width !== cw || canvas.height !== ch) [canvas.width, canvas.height] = [cw, ch];
     const context = canvas.getContext("2d");
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, box.width, box.height);
     const fit = Math.min((box.width - 24) / drawn.width, (box.height - 24) / drawn.height);
     context.imageSmoothingEnabled = !current.spec.sharp || fit < 1;
-    const [left, top] = [(box.width - drawn.width * fit) / 2, (box.height - drawn.height * fit) / 2];
+    const left = (box.width - drawn.width * fit) / 2;
+    const top = (box.height - drawn.height * fit) / 2;
     context.drawImage(drawn.canvas, left, top, drawn.width * fit, drawn.height * fit);
     // Where the picture's top left landed, for handles and brushes
     const { width, height } = crushedPixels(entry);
@@ -4994,7 +5122,11 @@ const PAGE_JS: &str = r##"(() => {
         solid[i] = a >= 0.5 ? 1 : 0;
         const [r, gg, b] = a > 0 ? [g[i * 4] / a, g[i * 4 + 1] / a, g[i * 4 + 2] / a] : [0, 0, 0];
         if (ramp) v[i] = tone(lumaOf(r, gg, b));
-        else [v[i * 3], v[i * 3 + 1], v[i * 3 + 2]] = [tone(r), tone(gg), tone(b)];
+        else {
+          v[i * 3] = tone(r);
+          v[i * 3 + 1] = tone(gg);
+          v[i * 3 + 2] = tone(b);
+        }
       }
       const steps = ramp ? ramp.length - 1 : colors ? 1 : levels - 1;
       // Quantizes the cell's value, `bias` from the dither added, into
@@ -5015,9 +5147,14 @@ const PAGE_JS: &str = r##"(() => {
           let best = 0;
           let least = Infinity;
           for (let c = 0; c < colors.length; c++) {
-            const [dr, dg, db] = [v[i * 3] + bias - colors[c][0], v[i * 3 + 1] + bias - colors[c][1], v[i * 3 + 2] + bias - colors[c][2]];
+            const dr = v[i * 3] + bias - colors[c][0];
+            const dg = v[i * 3 + 1] + bias - colors[c][1];
+            const db = v[i * 3 + 2] + bias - colors[c][2];
             const d = dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11;
-            if (d < least) [least, best] = [d, c];
+            if (d < least) {
+              least = d;
+              best = c;
+            }
           }
           for (let c = 0; c < 3; c++) {
             into[c] = colors[best][c];
@@ -5056,7 +5193,8 @@ const PAGE_JS: &str = r##"(() => {
             pickColor(i, 0, color);
             out.set(color, i * 3);
             for (const [dx, dy, w] of taps) {
-              const [tx, ty] = [x + (back ? -dx : dx), y + dy];
+              const tx = x + (back ? -dx : dx);
+              const ty = y + dy;
               if (tx < 0 || tx >= gw || ty >= gh) continue;
               const t = ty * gw + tx;
               const share = (w / divisor) * strength;
@@ -5128,12 +5266,28 @@ const PAGE_JS: &str = r##"(() => {
     if (value >= 0.998) return 1;
     let d;
     let r;
-    const [au, av] = [Math.abs(fu), Math.abs(fv)];
-    if (shape === "line") [d, r] = [av, value / 2];
-    else if (shape === "square") [d, r] = [Math.max(au, av), Math.sqrt(value) / 2];
-    else if (shape === "diamond") [d, r] = [au + av, value <= 0.5 ? Math.sqrt(value / 2) : 1 - Math.sqrt((1 - value) / 2)];
-    else if (shape === "cross") [d, r] = [Math.min(au, av), (1 - Math.sqrt(1 - value)) / 2];
-    else [d, r] = [Math.hypot(fu, fv), Math.min(0.7072, Math.sqrt(value / Math.PI))];
+    const au = Math.abs(fu);
+    const av = Math.abs(fv);
+    if (shape === "line") {
+      d = av;
+      r = value / 2;
+    }
+    else if (shape === "square") {
+      d = Math.max(au, av);
+      r = Math.sqrt(value) / 2;
+    }
+    else if (shape === "diamond") {
+      d = au + av;
+      r = value <= 0.5 ? Math.sqrt(value / 2) : 1 - Math.sqrt((1 - value) / 2);
+    }
+    else if (shape === "cross") {
+      d = Math.min(au, av);
+      r = (1 - Math.sqrt(1 - value)) / 2;
+    }
+    else {
+      d = Math.hypot(fu, fv);
+      r = Math.min(0.7072, Math.sqrt(value / Math.PI));
+    }
     const cover = clamp01(((r - d) * c) / e + 0.5);
     return cover * clamp01((r * c * 2) / e);
   };
@@ -5209,17 +5363,21 @@ const PAGE_JS: &str = r##"(() => {
           const at = (y * W + x) * 4;
           const srcA = f[at + 3];
           if (srcA <= 0) continue;
-          const [px, py] = [x + 0.5, y + 0.5];
+          const px = x + 0.5;
+          const py = y + 0.5;
           for (let j = 0; j < screens.length; j++) {
             const [cos, sin] = screens[j];
             const u = (px * cos + py * sin) / cell;
             const v = (-px * sin + py * cos) / cell;
-            const [cu, cv] = [Math.floor(u) + 0.5, Math.floor(v) + 0.5];
+            const cu = Math.floor(u) + 0.5;
+            const cv = Math.floor(v) + 0.5;
             gridAt(grid, (cu * cos - cv * sin) * cell, (cu * sin + cv * cos) * cell, at4);
             const a = at4[3];
             let value = 0;
             if (a > 0.001) {
-              const [r, g, b] = [tone(at4[0] / a), tone(at4[1] / a), tone(at4[2] / a)];
+              const r = tone(at4[0] / a);
+              const g = tone(at4[1] / a);
+              const b = tone(at4[2] / a);
               if (!cmyk) value = 1 - lumaOf(r, g, b);
               else {
                 const black = 1 - Math.max(r, g, b);
@@ -5229,15 +5387,33 @@ const PAGE_JS: &str = r##"(() => {
             }
             cover[j] = halftoneCoverage(s.shape, u - cu, v - cv, clamp01(value * gain), cell, e);
           }
-          let [r, g, b, alpha] = [0, 0, 0, srcA];
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          let alpha = srcA;
           if (!cmyk) {
             const c = cover[0];
-            if (s.showPaper) [r, g, b] = [paper[0] + (ink[0] - paper[0]) * c, paper[1] + (ink[1] - paper[1]) * c, paper[2] + (ink[2] - paper[2]) * c];
-            else [r, g, b, alpha] = [ink[0], ink[1], ink[2], srcA * c];
+            if (s.showPaper) {
+              r = paper[0] + (ink[0] - paper[0]) * c;
+              g = paper[1] + (ink[1] - paper[1]) * c;
+              b = paper[2] + (ink[2] - paper[2]) * c;
+            }
+            else {
+              r = ink[0];
+              g = ink[1];
+              b = ink[2];
+              alpha = srcA * c;
+            }
           } else {
             const black = 1 - cover[3];
-            const [cr, cg, cb] = [(1 - cover[0]) * black, (1 - cover[1]) * black, (1 - cover[2]) * black];
-            if (s.showPaper) [r, g, b] = [paper[0] * cr, paper[1] * cg, paper[2] * cb];
+            const cr = (1 - cover[0]) * black;
+            const cg = (1 - cover[1]) * black;
+            const cb = (1 - cover[2]) * black;
+            if (s.showPaper) {
+              r = paper[0] * cr;
+              g = paper[1] * cg;
+              b = paper[2] * cb;
+            }
             else {
               // The inks over white, with what of white shows taken out
               const union = 1 - (1 - cover[0]) * (1 - cover[1]) * (1 - cover[2]) * black;
@@ -5322,9 +5498,11 @@ const PAGE_JS: &str = r##"(() => {
       const tone = (v) => clamp01((v - 0.5) * contrast + 0.5 + bright);
       const turn = (s.angle * Math.PI) / 180;
       const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
-      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const cx = (W * s.centerX) / 100;
+      const cy = (H * s.centerY) / 100;
       const e = Math.max(0.6, (s.softness / 100) * spacing * 0.5);
-      const [amp, freq] = [s.amplitude / 100, s.frequency];
+      const amp = s.amplitude / 100;
+      const freq = s.frequency;
       const out = new Float32Array(W * H * 4);
       const at4 = new Float32Array(4);
       const line = (d, half) => (half <= 0 ? 0 : clamp01(((half - d) * spacing) / e + 0.5) * clamp01((half * spacing * 4) / e));
@@ -5333,7 +5511,8 @@ const PAGE_JS: &str = r##"(() => {
           const at = (y * W + x) * 4;
           const srcA = f[at + 3];
           if (srcA <= 0) continue;
-          const [px, py] = [x + 0.5, y + 0.5];
+          const px = x + 0.5;
+          const py = y + 0.5;
           gridAt(grid, px, py, at4);
           const a = at4[3];
           const dark = a > 0.001 ? 1 - lumaOf(tone(at4[0] / a), tone(at4[1] / a), tone(at4[2] / a)) : 0;
@@ -5354,8 +5533,16 @@ const PAGE_JS: &str = r##"(() => {
               for (let i = Math.round(v) - 1; i <= Math.round(v) + 1; i++) c = Math.max(c, line(Math.abs(v - i - offset), half));
             }
           }
-          let [r, g, b, alpha] = [ink[0], ink[1], ink[2], srcA * c];
-          if (s.showPaper) [r, g, b, alpha] = [paper[0] + (ink[0] - paper[0]) * c, paper[1] + (ink[1] - paper[1]) * c, paper[2] + (ink[2] - paper[2]) * c, srcA];
+          let r = ink[0];
+          let g = ink[1];
+          let b = ink[2];
+          let alpha = srcA * c;
+          if (s.showPaper) {
+            r = paper[0] + (ink[0] - paper[0]) * c;
+            g = paper[1] + (ink[1] - paper[1]) * c;
+            b = paper[2] + (ink[2] - paper[2]) * c;
+            alpha = srcA;
+          }
           out[at] = r * alpha;
           out[at + 1] = g * alpha;
           out[at + 2] = b * alpha;
@@ -5420,7 +5607,8 @@ const PAGE_JS: &str = r##"(() => {
       const f = premultiplied(image);
       const amount = s.amount * k;
       const pad = Math.ceil(amount) + 2;
-      const [OW, OH] = [W + pad * 2, H + pad * 2];
+      const OW = W + pad * 2;
+      const OH = H + pad * 2;
       // Each sample a way along the split, -1 to 1, and how much of red,
       // green and blue it gives
       let samples = {
@@ -5438,31 +5626,49 @@ const PAGE_JS: &str = r##"(() => {
         const sums = [0, 1, 2].map((c) => samples.reduce((sum, [, w]) => sum + w[c], 0));
         samples = samples.map(([t, w]) => [t, w.map((v, c) => v / (sums[c] || 1))]);
       }
-      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const cx = (W * s.centerX) / 100;
+      const cy = (H * s.centerY) / 100;
       const R = Math.max(1, Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy)));
       const turn = (s.angle * Math.PI) / 180;
-      const [sx, sy] = [Math.cos(turn) * amount, Math.sin(turn) * amount];
+      const sx = Math.cos(turn) * amount;
+      const sy = Math.sin(turn) * amount;
       const out = new Float32Array(OW * OH * 4);
       const p = new Float32Array(4);
+      // The samples as flat lists, read by index in the pixel loop
+      const n = samples.length;
+      const ts = samples.map(([t]) => t);
+      const [w0, w1, w2] = [0, 1, 2].map((c) => samples.map(([, w]) => w[c]));
+      const lens = s.mode !== "shift";
+      const falloff = s.falloff;
       for (let y = 0; y < OH; y++)
         for (let x = 0; x < OW; x++) {
-          const [X, Y] = [x + 0.5 - pad, y + 0.5 - pad];
-          let [vx, vy] = [sx, sy];
-          if (s.mode !== "shift") {
-            const [rx, ry] = [(X - cx) / R, (Y - cy) / R];
+          const X = x + 0.5 - pad;
+          const Y = y + 0.5 - pad;
+          let vx = sx;
+          let vy = sy;
+          if (lens) {
+            const rx = (X - cx) / R;
+            const ry = (Y - cy) / R;
             const r = Math.hypot(rx, ry);
-            const m = r > 0 ? (amount * r ** s.falloff) / r : 0;
-            [vx, vy] = [rx * m, ry * m];
+            const m = r > 0 ? (amount * r ** falloff) / r : 0;
+            vx = rx * m;
+            vy = ry * m;
           }
-          let [cr, cg, cb, ar, ag, ab] = [0, 0, 0, 0, 0, 0];
-          for (const [t, w] of samples) {
+          let cr = 0;
+          let cg = 0;
+          let cb = 0;
+          let ar = 0;
+          let ag = 0;
+          let ab = 0;
+          for (let i = 0; i < n; i++) {
+            const t = ts[i];
             sampleAt(f, W, H, X - t * vx, Y - t * vy, p);
-            cr += w[0] * p[0];
-            cg += w[1] * p[1];
-            cb += w[2] * p[2];
-            ar += w[0] * p[3];
-            ag += w[1] * p[3];
-            ab += w[2] * p[3];
+            cr += w0[i] * p[0];
+            cg += w1[i] * p[1];
+            cb += w2[i] * p[2];
+            ar += w0[i] * p[3];
+            ag += w1[i] * p[3];
+            ab += w2[i] * p[3];
           }
           const at = (y * OW + x) * 4;
           out[at] = cr;
@@ -5511,7 +5717,8 @@ const PAGE_JS: &str = r##"(() => {
     process: (image, s) => {
       const { width: W, height: H } = image;
       const f = premultiplied(image);
-      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const cx = (W * s.centerX) / 100;
+      const cy = (H * s.centerY) / 100;
       const R = Math.max(1, ((s.radius / 100) * Math.max(W, H)) / 2);
       const zoom = Math.max(0.05, s.zoom / 100);
       // As a fisheye maps angles to a flat picture: tan for a bulge, its
@@ -5522,14 +5729,19 @@ const PAGE_JS: &str = r##"(() => {
       const p = new Float32Array(4);
       for (let y = 0; y < H; y++)
         for (let x = 0; x < W; x++) {
-          const [dx, dy] = [(x + 0.5 - cx) / R, (y + 0.5 - cy) / R];
+          const dx = (x + 0.5 - cx) / R;
+          const dy = (y + 0.5 - cy) / R;
           const r = Math.hypot(dx, dy);
           if (s.circle && r > 1) continue;
           const m = r > 0 && r < 1 ? map(r) / r : 1;
           sampleAt(f, W, H, cx + (dx * m * R) / zoom, cy + (dy * m * R) / zoom, p);
           // The circle's edge a pixel soft
           const edge = s.circle ? clamp01((1 - r) * R + 0.5) : 1;
-          out.set([p[0] * edge, p[1] * edge, p[2] * edge, p[3] * edge], (y * W + x) * 4);
+          const at = (y * W + x) * 4;
+          out[at] = p[0] * edge;
+          out[at + 1] = p[1] * edge;
+          out[at + 2] = p[2] * edge;
+          out[at + 3] = p[3] * edge;
         }
       return { image: toImage(out, W, H), x: 0, y: 0 };
     },
@@ -5605,7 +5817,8 @@ const PAGE_JS: &str = r##"(() => {
         if (event.button !== 0) return;
         event.preventDefault();
         name.setPointerCapture(event.pointerId);
-        const [from, start] = [event.clientX, s[key]];
+        const from = event.clientX;
+        const start = s[key];
         const move = (event) => set(start + (event.clientX - from) / per);
         name.addEventListener("pointermove", move);
         name.addEventListener("lostpointercapture", () => name.removeEventListener("pointermove", move), { once: true });
@@ -5733,11 +5946,14 @@ const PAGE_JS: &str = r##"(() => {
       const sample = opaque ? edgeAt : sampleAt;
       const amp = s.amplitude * k;
       const pad = s.mode === "wave" && !opaque ? Math.ceil(amp) + 1 : 0;
-      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
-      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const OW = W + 2 * pad;
+      const OH = H + 2 * pad;
+      const cx = (W * s.centerX) / 100;
+      const cy = (H * s.centerY) / 100;
       const R = Math.max(1, ((s.radius / 100) * Math.max(W, H)) / 2);
       const wave = Math.max(1, s.wavelength * k);
-      const [ax, ay] = [Math.cos((s.angle * Math.PI) / 180), Math.sin((s.angle * Math.PI) / 180)];
+      const ax = Math.cos((s.angle * Math.PI) / 180);
+      const ay = Math.sin((s.angle * Math.PI) / 180);
       const twirl = (s.twirl * Math.PI) / 180;
       const pinch = s.pinch / 100;
       const power = pinch >= 0 ? 1 - 0.7 * pinch : 1 - 1.5 * pinch;
@@ -5765,15 +5981,32 @@ const PAGE_JS: &str = r##"(() => {
         field = resume ? kept.field : new Float32Array(W * H * 2);
         const [fromStroke, fromPoint] = resume && kept.done.length ? [kept.done.length - 1, kept.done.at(-1).count] : [0, 0];
         globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field, done: s.strokes.map((stroke) => ({ tool: stroke.tool, size: stroke.size, strength: stroke.strength, count: stroke.points.length, x: stroke.points[0][0], y: stroke.points[0][1] })) };
+        // `into` is a Float32Array, rounded to as each corner's added
         const fieldAt = (x, y, into) => {
           x -= 0.5;
           y -= 0.5;
-          const [x0, y0] = [Math.floor(x), Math.floor(y)];
-          const [tx, ty] = [x - x0, y - y0];
+          const x0 = Math.floor(x);
+          const y0 = Math.floor(y);
+          const tx = x - x0;
+          const ty = y - y0;
+          // All four corners inside, as most are: the same sums as below
+          if (x0 >= 0 && y0 >= 0 && x0 < W - 1 && y0 < H - 1) {
+            const a = (y0 * W + x0) * 2;
+            const b = a + W * 2;
+            const fr = Math.fround;
+            const w00 = (1 - tx) * (1 - ty);
+            const w01 = tx * (1 - ty);
+            const w10 = (1 - tx) * ty;
+            const w11 = tx * ty;
+            into[0] = fr(fr(fr(fr(field[a] * w00) + field[a + 2] * w01) + field[b] * w10) + field[b + 2] * w11);
+            into[1] = fr(fr(fr(fr(field[a + 1] * w00) + field[a + 3] * w01) + field[b + 1] * w10) + field[b + 3] * w11);
+            return into;
+          }
           into[0] = into[1] = 0;
           for (let j = 0; j < 2; j++)
             for (let i = 0; i < 2; i++) {
-              const [xx, yy] = [x0 + i, y0 + j];
+              const xx = x0 + i;
+              const yy = y0 + j;
               if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
               const w = (i ? tx : 1 - tx) * (j ? ty : 1 - ty);
               into[0] += field[(yy * W + xx) * 2] * w;
@@ -5787,17 +6020,25 @@ const PAGE_JS: &str = r##"(() => {
           const start = n === fromStroke ? fromPoint : 0;
           const r = Math.max(1, (stroke.size * k) / 2);
           const strength = stroke.strength / 100;
+          // The tool as a number, rather than its name read every pixel
+          const tool = { push: 0, twirl: 1, untwirl: 1, restore: 2 }[stroke.tool] ?? 3;
+          const turnBy = (stroke.tool === "twirl" ? -1 : 1) * strength * 0.08;
+          const scaleBy = (stroke.tool === "pinch" ? 1 : -1) * strength * 0.05;
           const dab = (cx, cy, mx, my) => {
-            const [x0, x1] = [Math.max(0, Math.floor(cx - r)), Math.min(W - 1, Math.ceil(cx + r))];
-            const [y0, y1] = [Math.max(0, Math.floor(cy - r)), Math.min(H - 1, Math.ceil(cy + r))];
+            const x0 = Math.max(0, Math.floor(cx - r));
+            const x1 = Math.min(W - 1, Math.ceil(cx + r));
+            const y0 = Math.max(0, Math.floor(cy - r));
+            const y1 = Math.min(H - 1, Math.ceil(cy + r));
             if (x1 < x0 || y1 < y0) return;
             dirty = dirty ? [Math.min(dirty[0], x0), Math.min(dirty[1], y0), Math.max(dirty[2], x1), Math.max(dirty[3], y1)] : [x0, y0, x1, y1];
             const bw = x1 - x0 + 1;
             const next = new Float32Array(bw * (y1 - y0 + 1) * 2);
             for (let y = y0; y <= y1; y++)
               for (let x = x0; x <= x1; x++) {
-                const [X, Y] = [x + 0.5, y + 0.5];
-                const [dx, dy] = [X - cx, Y - cy];
+                const X = x + 0.5;
+                const Y = y + 0.5;
+                const dx = X - cx;
+                const dy = Y - cy;
                 const t = (dx * dx + dy * dy) / (r * r);
                 const at = ((y - y0) * bw + x - x0) * 2;
                 const here = (y * W + x) * 2;
@@ -5807,21 +6048,27 @@ const PAGE_JS: &str = r##"(() => {
                   continue;
                 }
                 const w = (1 - t) * (1 - t);
-                if (stroke.tool === "restore") {
+                if (tool === 2) {
                   const ease = 1 - w * strength * 0.3;
                   next[at] = field[here] * ease;
                   next[at + 1] = field[here + 1] * ease;
                   continue;
                 }
-                let [px, py] = [X, Y];
-                if (stroke.tool === "push") [px, py] = [X - mx * w * strength, Y - my * w * strength];
-                else if (stroke.tool === "twirl" || stroke.tool === "untwirl") {
-                  const turn = (stroke.tool === "twirl" ? -1 : 1) * strength * 0.08 * w;
-                  const [c, n] = [Math.cos(turn), Math.sin(turn)];
-                  [px, py] = [cx + dx * c - dy * n, cy + dx * n + dy * c];
+                let px;
+                let py;
+                if (tool === 0) {
+                  px = X - mx * w * strength;
+                  py = Y - my * w * strength;
+                } else if (tool === 1) {
+                  const turn = turnBy * w;
+                  const c = Math.cos(turn);
+                  const n = Math.sin(turn);
+                  px = cx + dx * c - dy * n;
+                  py = cy + dx * n + dy * c;
                 } else {
-                  const scale = 1 + (stroke.tool === "pinch" ? 1 : -1) * strength * 0.05 * w;
-                  [px, py] = [cx + dx * scale, cy + dy * scale];
+                  const scale = 1 + scaleBy * w;
+                  px = cx + dx * scale;
+                  py = cy + dy * scale;
                 }
                 fieldAt(px, py, old);
                 next[at] = old[0] + px - X;
@@ -5846,42 +6093,52 @@ const PAGE_JS: &str = r##"(() => {
       if (!s.strokes?.length) globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field: null, done: [] };
       const p = new Float32Array(4);
       // The output pixel at `x`, `y`, premultiplied, into `p`
+      // The warp as a number, rather than its name read every pixel
+      const warp = { wave: 0, none: 1, twirl: 2, pinch: 3, ripple: 4 }[s.mode] ?? 5;
       const pixelAt = (x, y) => {
-          let [X, Y] = [x - pad + 0.5, y - pad + 0.5];
-          if (field && X > 0 && Y > 0 && X < W && Y < H) {
-            const at = (Math.floor(Y) * W + Math.floor(X)) * 2;
-            X += field[at];
-            Y += field[at + 1];
+        let X = x - pad + 0.5;
+        let Y = y - pad + 0.5;
+        if (field && X > 0 && Y > 0 && X < W && Y < H) {
+          const at = (Math.floor(Y) * W + Math.floor(X)) * 2;
+          X += field[at];
+          Y += field[at + 1];
+        }
+        if (warp === 0) {
+          // Moved across the waves by a sine along them
+          const shift = amp * Math.sin((2 * Math.PI * (X * ax + Y * ay)) / wave);
+          X += ay * shift;
+          Y -= ax * shift;
+        } else if (warp !== 1) {
+          const dx = X - cx;
+          const dy = Y - cy;
+          const r = Math.hypot(dx, dy);
+          if (r > 0 && r < R) {
+            // Strongest at the center, nothing at the radius
+            const t = r / R;
+            const fall = (1 - t) * (1 - t);
+            let reach = r;
+            let turn = 0;
+            if (warp === 2) turn = twirl * fall;
+            else if (warp === 3) reach = R * t ** power;
+            else if (warp === 4) reach = r + amp * Math.sin((2 * Math.PI * r) / wave) * fall;
+            else turn = (amp / r) * Math.sin((2 * Math.PI * r) / wave) * fall;
+            const angle = Math.atan2(dy, dx) + turn;
+            X = cx + Math.cos(angle) * reach;
+            Y = cy + Math.sin(angle) * reach;
           }
-          if (s.mode === "wave") {
-            // Moved across the waves by a sine along them
-            const shift = amp * Math.sin((2 * Math.PI * (X * ax + Y * ay)) / wave);
-            X += ay * shift;
-            Y -= ax * shift;
-          } else if (s.mode !== "none") {
-            const [dx, dy] = [X - cx, Y - cy];
-            const r = Math.hypot(dx, dy);
-            if (r > 0 && r < R) {
-              // Strongest at the center, nothing at the radius
-              const t = r / R;
-              const fall = (1 - t) * (1 - t);
-              let [reach, turn] = [r, 0];
-              if (s.mode === "twirl") turn = twirl * fall;
-              else if (s.mode === "pinch") reach = R * t ** power;
-              else if (s.mode === "ripple") reach = r + amp * Math.sin((2 * Math.PI * r) / wave) * fall;
-              else turn = (amp / r) * Math.sin((2 * Math.PI * r) / wave) * fall;
-              const angle = Math.atan2(dy, dx) + turn;
-              [X, Y] = [cx + Math.cos(angle) * reach, cy + Math.sin(angle) * reach];
-            }
-          }
-          return sample(f, W, H, X, Y, p);
+        }
+        return sample(f, W, H, X, Y, p);
       };
       // A dab changes only the pixels it covers, so only those are made
       // again, the rest left as the last call made them
       if (patch && resume) {
         if (!dirty) return { image: new ImageData(1, 1), x: -pad, y: -pad, patch: true, empty: true, px: 0, py: 0 };
-        const [rx0, ry0, rx1, ry1] = [Math.max(0, dirty[0] + pad), Math.max(0, dirty[1] + pad), Math.min(OW - 1, dirty[2] + pad), Math.min(OH - 1, dirty[3] + pad)];
-        const [RW, RH] = [rx1 - rx0 + 1, ry1 - ry0 + 1];
+        const rx0 = Math.max(0, dirty[0] + pad);
+        const ry0 = Math.max(0, dirty[1] + pad);
+        const rx1 = Math.min(OW - 1, dirty[2] + pad);
+        const ry1 = Math.min(OH - 1, dirty[3] + pad);
+        const RW = rx1 - rx0 + 1;
+        const RH = ry1 - ry0 + 1;
         const part = new Float32Array(RW * RH * 4);
         for (let y = ry0; y <= ry1; y++) for (let x = rx0; x <= rx1; x++) part.set(pixelAt(x, y), ((y - ry0) * RW + x - rx0) * 4);
         return { image: toImage(part, RW, RH), x: -pad, y: -pad, patch: true, px: rx0, py: ry0 };
@@ -5913,7 +6170,8 @@ const PAGE_JS: &str = r##"(() => {
       const n = valueNoise(x, y, seed + o * 131) * 2 - 1;
       v += (turbulent ? 1 - 2 * Math.abs(n) : n) * amp;
       total += amp;
-      [x, y] = [x * 2.03 + 11.7, y * 2.03 + 5.3];
+      x = x * 2.03 + 11.7;
+      y = y * 2.03 + 5.3;
       amp *= 0.5;
     }
     return v / total;
@@ -5923,13 +6181,21 @@ const PAGE_JS: &str = r##"(() => {
     if (map === "cells") {
       // Each cell, around a point jittered in its square, pushes all of
       // itself one way, as a glass block does
-      const [gx, gy] = [Math.floor(x), Math.floor(y)];
-      let [best, bx, by] = [Infinity, 0, 0];
+      const gx = Math.floor(x);
+      const gy = Math.floor(y);
+      let best = Infinity;
+      let bx = 0;
+      let by = 0;
       for (let j = -1; j <= 1; j++)
         for (let i = -1; i <= 1; i++) {
-          const [cx, cy] = [gx + i, gy + j];
+          const cx = gx + i;
+          const cy = gy + j;
           const d = (cx + hash2(cx, cy, seed) - x) ** 2 + (cy + hash2(cx, cy, seed + 3) - y) ** 2;
-          if (d < best) [best, bx, by] = [d, cx, cy];
+          if (d < best) {
+            best = d;
+            bx = cx;
+            by = cy;
+          }
         }
       into[0] = hash2(bx, by, seed + 7) * 2 - 1;
       into[1] = hash2(bx, by, seed + 11) * 2 - 1;
@@ -5953,7 +6219,8 @@ const PAGE_JS: &str = r##"(() => {
   const mapFrom = async (file) => {
     const bitmap = await createImageBitmap(file);
     const ratio = Math.min(1, MAP_SIDE / Math.max(bitmap.width, bitmap.height));
-    const [w, h] = [Math.max(1, Math.round(bitmap.width * ratio)), Math.max(1, Math.round(bitmap.height * ratio))];
+    const w = Math.max(1, Math.round(bitmap.width * ratio));
+    const h = Math.max(1, Math.round(bitmap.height * ratio));
     const canvas = Object.assign(document.createElement("canvas"), { width: w, height: h });
     const context = canvas.getContext("2d");
     // See-through parts as middle gray, which moves nothing
@@ -6102,19 +6369,26 @@ const PAGE_JS: &str = r##"(() => {
       const amount = s.amount * k;
       const split = s.split / 100;
       const pad = opaque ? 0 : Math.ceil(amount * (1 + split) * 1.6) + 1;
-      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
-      const [ux, uy] = [Math.cos((s.angle * Math.PI) / 180), Math.sin((s.angle * Math.PI) / 180)];
+      const OW = W + 2 * pad;
+      const OH = H + 2 * pad;
+      const ux = Math.cos((s.angle * Math.PI) / 180);
+      const uy = Math.sin((s.angle * Math.PI) / 180);
       // A picture for a map: its own tones, transparency a middle gray that
       // moves nothing, or the chosen image's, blurred by Smoothing, and
       // where in it each of the layer's pixels falls
       let grays = null;
-      let [mw, mh, perX, perY, tiled] = [W, H, 1, 1, false];
+      let mw = W;
+      let mh = H;
+      let perX = 1;
+      let perY = 1;
+      let tiled = false;
       if (s.map === "self") {
         grays = new Float32Array(W * H);
         for (let i = 0; i < W * H; i++) grays[i] = lumaOf(f[i * 4], f[i * 4 + 1], f[i * 4 + 2]) + (1 - f[i * 4 + 3]) * 0.5;
       } else if (s.map === "image" && s.image) {
         grays = mapGrays(s.image);
-        [mw, mh] = [s.image.w, s.image.h];
+        mw = s.image.w;
+        mh = s.image.h;
         tiled = s.fit === "tile";
         const across = tiled ? Math.max(1, s.tile * k) : W;
         perX = mw / across;
@@ -6122,8 +6396,12 @@ const PAGE_JS: &str = r##"(() => {
       }
       if (grays) grays = blurChannel(grays, mw, mh, s.smooth * k * perX);
       const grayAt = (X, Y) => {
-        let [u, v] = [X * perX, Y * perY];
-        if (tiled) [u, v] = [((u % mw) + mw) % mw, ((v % mh) + mh) % mh];
+        let u = X * perX;
+        let v = Y * perY;
+        if (tiled) {
+          u = ((u % mw) + mw) % mw;
+          v = ((v % mh) + mh) % mh;
+        }
         u = Math.min(mw - 0.5, Math.max(0.5, u));
         v = Math.min(mh - 0.5, Math.max(0.5, v));
         return channelAt(grays, mw, mh, u, v);
@@ -6133,22 +6411,28 @@ const PAGE_JS: &str = r##"(() => {
       const reach = Math.max(2, 4 * s.smooth * k);
       const size = Math.max(1, s.scale * k);
       const st = s.stretch / 100;
-      const [sx, sy] = [size * (1 + Math.max(0, st) * 3), size * (1 + Math.max(0, -st) * 3)];
+      const sx = size * (1 + Math.max(0, st) * 3);
+      const sy = size * (1 + Math.max(0, -st) * 3);
       const [octaves, seed] = [Math.round(s.detail), s.seed | 0];
       const push = new Float32Array(2);
       const out = new Float32Array(OW * OH * 4);
-      const [p, red, blue] = [new Float32Array(4), new Float32Array(4), new Float32Array(4)];
+      const p = new Float32Array(4);
+      const red = new Float32Array(4);
+      const blue = new Float32Array(4);
       for (let y = 0; y < OH; y++)
         for (let x = 0; x < OW; x++) {
-          const [X, Y] = [x - pad + 0.5, y - pad + 0.5];
-          let [dx, dy] = [0, 0];
+          const X = x - pad + 0.5;
+          const Y = y - pad + 0.5;
+          let dx = 0;
+          let dy = 0;
           if (grays) {
             if (s.how === "slope") {
               dx = ((grayAt(X + 1, Y) - grayAt(X - 1, Y)) / 2) * amount * reach;
               dy = ((grayAt(X, Y + 1) - grayAt(X, Y - 1)) / 2) * amount * reach;
             } else {
               const m = (grayAt(X, Y) - 0.5) * 2 * amount;
-              [dx, dy] = [m * ux, m * uy];
+              dx = m * ux;
+              dy = m * uy;
             }
           } else if (s.map !== "image") {
             // The pattern turned by Angle, in points so it holds at any size
@@ -6235,37 +6519,47 @@ const PAGE_JS: &str = r##"(() => {
           : s.mode === "zoom"
             ? Math.ceil(Math.min(Math.max(W, H), (Math.max(W, H) / 2) * (zoom / (1 - zoom)))) + 1
             : Math.ceil((Math.hypot(W, H) / 2 - Math.min(W, H) / 2) * Math.min(1, Math.abs(s.spin) / 45)) + 1;
-      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      const OW = W + 2 * pad;
+      const OH = H + 2 * pad;
       let from = new Float32Array(OW * OH * 4);
       for (let y = 0; y < H; y++) from.set(f.subarray(y * W * 4, (y + 1) * W * 4), ((y + pad) * OW + pad) * 4);
-      const [cx, cy] = [pad + (W * s.centerX) / 100, pad + (H * s.centerY) / 100];
-      const [vx, vy] = [Math.cos((s.angle * Math.PI) / 180) * length, Math.sin((s.angle * Math.PI) / 180) * length];
-      // How far along the path, `t` of it, a pixel at `X`, `Y` takes from
-      const along = (X, Y, t, into) => {
-        if (s.mode === "linear") return sample(from, OW, OH, X + vx * t, Y + vy * t, into);
-        const [dx, dy] = [X - cx, Y - cy];
-        if (s.mode === "zoom") return sample(from, OW, OH, cx + dx * (1 - zoom * t), cy + dy * (1 - zoom * t), into);
-        const [c, n] = [Math.cos(spin * t), Math.sin(spin * t)];
-        return sample(from, OW, OH, cx + dx * c - dy * n, cy + dx * n + dy * c, into);
-      };
+      const cx = pad + (W * s.centerX) / 100;
+      const cy = pad + (H * s.centerY) / 100;
+      const vx = Math.cos((s.angle * Math.PI) / 180) * length;
+      const vy = Math.sin((s.angle * Math.PI) / 180) * length;
+      const mode = s.mode === "linear" ? 0 : s.mode === "zoom" ? 1 : 2;
       // The longest the path gets, in pixels, to skip passes too fine to see
       const reach = s.mode === "linear" ? length : s.mode === "zoom" ? (zoom * Math.hypot(OW, OH)) / 2 : (Math.abs(spin) * Math.hypot(OW, OH)) / 2;
       const TAPS = 8;
       const p = new Float32Array(4);
       for (let pass = 0, span = 1; pass < 3 && (reach * span) / (TAPS - 1) >= 0.25 && reach >= 0.5; pass++, span /= TAPS - 1) {
         const to = new Float32Array(OW * OH * 4);
-        for (let y = 0; y < OH; y++)
-          for (let x = 0; x < OW; x++) {
-            const at = (y * OW + x) * 4;
-            for (let j = 0; j < TAPS; j++) {
-              const t = (s.trail ? j / (TAPS - 1) : j / (TAPS - 1) - 0.5) * span;
-              along(x + 0.5, y + 0.5, t, p);
+        // A tap at a time over every pixel, which adds each pixel's taps in
+        // the same order, with what's the same for the whole tap worked out
+        // once: how far it moves, its scale or its turn
+        for (let j = 0; j < TAPS; j++) {
+          const t = (s.trail ? j / (TAPS - 1) : j / (TAPS - 1) - 0.5) * span;
+          const ox = vx * t;
+          const oy = vy * t;
+          const scale = 1 - zoom * t;
+          const c = Math.cos(spin * t);
+          const n = Math.sin(spin * t);
+          for (let y = 0; y < OH; y++) {
+            const Y = y + 0.5;
+            const dy = Y - cy;
+            for (let x = 0; x < OW; x++) {
+              const X = x + 0.5;
+              if (mode === 0) sample(from, OW, OH, X + ox, Y + oy, p);
+              else if (mode === 1) sample(from, OW, OH, cx + (X - cx) * scale, cy + dy * scale, p);
+              else sample(from, OW, OH, cx + (X - cx) * c - dy * n, cy + (X - cx) * n + dy * c, p);
+              const at = (y * OW + x) * 4;
               to[at] += p[0] / TAPS;
               to[at + 1] += p[1] / TAPS;
               to[at + 2] += p[2] / TAPS;
               to[at + 3] += p[3] / TAPS;
             }
           }
+        }
         from = to;
       }
       return { image: toImage(from, OW, OH), x: -pad, y: -pad };
@@ -6325,11 +6619,13 @@ const PAGE_JS: &str = r##"(() => {
       const f = premultiplied(image);
       const r = Math.max(0.5, s.radius * k);
       const pad = isOpaque(f) ? 0 : Math.ceil(3 * r) + 1;
-      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      const OW = W + 2 * pad;
+      const OH = H + 2 * pad;
       // Worked out smaller, as it's blurred anyway, but never so small its
       // finest blur's lost
       const q = Math.min(1, Math.max(700 / Math.max(OW, OH), 4 / r));
-      const [MW, MH] = [Math.max(1, Math.ceil(OW * q)), Math.max(1, Math.ceil(OH * q))];
+      const MW = Math.max(1, Math.ceil(OW * q));
+      const MH = Math.max(1, Math.ceil(OH * q));
       const [th, knee, tint] = [s.threshold / 100, Math.max(0.001, s.softness / 100), s.tint / 100];
       const color = hexRgb(s.color);
       const light = [0, 1, 2].map(() => new Float32Array(MW * MH));
@@ -6363,10 +6659,13 @@ const PAGE_JS: &str = r##"(() => {
       for (let y = 0; y < OH; y++)
         for (let x = 0; x < OW; x++) {
           sampleAt(glow, MW, MH, (x + 0.5) * q, (y + 0.5) * q, p);
-          const [gr, gg, gb] = [p[0] * intensity, p[1] * intensity, p[2] * intensity];
+          const gr = p[0] * intensity;
+          const gg = p[1] * intensity;
+          const gb = p[2] * intensity;
           const ga = Math.min(1, Math.max(gr, gg, gb));
           const at = (y * OW + x) * 4;
-          const [sx, sy] = [x - pad, y - pad];
+          const sx = x - pad;
+          const sy = y - pad;
           if (!s.only && sx >= 0 && sy >= 0 && sx < W && sy < H) {
             const from = (sy * W + sx) * 4;
             const a = f[from + 3];
@@ -6485,11 +6784,15 @@ const PAGE_JS: &str = r##"(() => {
       if (Math.abs(dy) < 0.004) dy = dy < 0 ? -0.004 : 0.004;
       const spread = s.spread / 100;
       const dropAngle = (s.angle * Math.PI) / 180;
-      const [ox, oy] = [Math.cos(dropAngle) * s.distance * k, Math.sin(dropAngle) * s.distance * k];
+      const ox = Math.cos(dropAngle) * s.distance * k;
+      const oy = Math.sin(dropAngle) * s.distance * k;
       const [near, far] = cast ? [s.softNear * k, s.softFar * k] : [s.blur * k, s.blur * k];
       const band = Math.max(1, s.contactSize * k);
       // Where the shadow can reach, and room for its blur
-      let [x0, y0, x1, y1] = [0, 0, W, H];
+      let x0 = 0;
+      let y0 = 0;
+      let x1 = W;
+      let y1 = H;
       const reach = (x, y) => {
         x0 = Math.min(x0, x);
         y0 = Math.min(y0, y);
@@ -6509,18 +6812,24 @@ const PAGE_JS: &str = r##"(() => {
         reach(W + ox, H + oy);
       }
       const margin = Math.ceil(3 * Math.max(near, far, cast ? band : 0)) + 2;
-      [x0, y0, x1, y1] = [Math.floor(x0) - margin, Math.floor(y0) - margin, Math.ceil(x1) + margin, Math.ceil(y1) + margin];
-      const [OW, OH] = [x1 - x0, y1 - y0];
+      x0 = Math.floor(x0) - margin;
+      y0 = Math.floor(y0) - margin;
+      x1 = Math.ceil(x1) + margin;
+      y1 = Math.ceil(y1) + margin;
+      const OW = x1 - x0;
+      const OH = y1 - y0;
       // The shadow's soft, so it's worked out smaller and drawn up
       const q = Math.min(1, 1600 / Math.max(OW, OH));
-      const [MW, MH] = [Math.max(1, Math.ceil(OW * q)), Math.max(1, Math.ceil(OH * q))];
+      const MW = Math.max(1, Math.ceil(OW * q));
+      const MH = Math.max(1, Math.ceil(OH * q));
       const mask = new Float32Array(MW * MH);
       const heights = new Float32Array(MW * MH);
       const fade = s.fade / 100;
       for (let v = 0; v < MH; v++)
         for (let u = 0; u < MW; u++) {
           const i = v * MW + u;
-          const [X, Y] = [x0 + (u + 0.5) / q, y0 + (v + 0.5) / q];
+          const X = x0 + (u + 0.5) / q;
+          const Y = y0 + (v + 0.5) / q;
           if (!cast) {
             mask[i] = channelAt(alpha, W, H, X - ox, Y - oy);
             continue;
@@ -6572,12 +6881,19 @@ const PAGE_JS: &str = r##"(() => {
         for (let x = 0; x < OW; x++) {
           const at = (y * OW + x) * 4;
           const a = q === 1 ? shadow[y * MW + x] : channelAt(shadow, MW, MH, (x + 0.5) * q, (y + 0.5) * q);
-          let [r, g, b, al] = [color[0] * a, color[1] * a, color[2] * a, a];
-          const [sx, sy] = [x + x0, y + y0];
+          let r = color[0] * a;
+          let g = color[1] * a;
+          let b = color[2] * a;
+          let al = a;
+          const sx = x + x0;
+          const sy = y + y0;
           if (!s.only && sx >= 0 && sy >= 0 && sx < W && sy < H) {
             const from = (sy * W + sx) * 4;
             const keep = 1 - f[from + 3];
-            [r, g, b, al] = [f[from] + r * keep, f[from + 1] + g * keep, f[from + 2] + b * keep, f[from + 3] + al * keep];
+            r = f[from] + r * keep;
+            g = f[from + 1] + g * keep;
+            b = f[from + 2] + b * keep;
+            al = f[from + 3] + al * keep;
           }
           out[at] = r;
           out[at + 1] = g;
@@ -6623,7 +6939,9 @@ const PAGE_JS: &str = r##"(() => {
     for (let o = 0; o < 4; o++) {
       v += (valueNoise(x, y, seed + o * 101) - 0.5) * amp;
       total += amp;
-      [x, y] = [x * 1.9 + y * 0.35 + 17.3, y * 1.9 - x * 0.35 + 9.1];
+      const turned = x * 1.9 + y * 0.35 + 17.3;
+      y = y * 1.9 - x * 0.35 + 9.1;
+      x = turned;
       amp *= 0.5;
     }
     return v / total;
@@ -6727,14 +7045,18 @@ const PAGE_JS: &str = r##"(() => {
       // The surface's a pool around the footing, as wide as the cutout and
       // more, as deep as the reflection goes
       const surface = s.surfaceOpacity / 100;
-      let [left, right] = [W, 0];
+      let left = W;
+      let right = 0;
       for (let y = 0; y < H; y++)
         for (let x = 0; x < W; x++)
           if (f[(y * W + x) * 4 + 3] > 0.5) {
             left = Math.min(left, x);
             right = Math.max(right, x + 1);
           }
-      if (left >= right) [left, right] = [0, W];
+      if (left >= right) {
+        left = 0;
+        right = W;
+      }
       const cx = (left + right) / 2 + (depth / squash / 2) * skew;
       const rx = (right - left) * 1.1 + depth * 0.6;
       const ry = depth + 3 * streak;
@@ -6742,9 +7064,11 @@ const PAGE_JS: &str = r##"(() => {
       const x1 = Math.ceil(Math.max(W, W + reach * skew, surface > 0 ? cx + rx : 0)) + margin;
       const y0 = Math.min(0, Math.floor(start) - margin);
       const y1 = Math.max(H, Math.ceil(start + depth + 3 * streak) + margin);
-      const [OW, OH] = [x1 - x0, y1 - y0];
+      const OW = x1 - x0;
+      const OH = y1 - y0;
       const q = blur > 0.5 || streak > 0.5 || water ? Math.min(1, 1200 / Math.max(OW, OH)) : 1;
-      const [MW, MH] = [Math.max(1, Math.ceil(OW * q)), Math.max(1, Math.ceil(OH * q))];
+      const MW = Math.max(1, Math.ceil(OW * q));
+      const MH = Math.max(1, Math.ceil(OH * q));
       const tint = hexRgb(s.tint);
       const [tintAmount, opacity, fresnel] = [s.tintAmount / 100, s.opacity / 100, s.fresnel / 100];
       const fadeFrom = 1 - s.fade / 100;
@@ -6753,7 +7077,8 @@ const PAGE_JS: &str = r##"(() => {
       // it, wider than deep, as water seen at a low angle is
       const size = Math.max(2, s.waveSize * k);
       const d0 = depth * (0.08 + (1 - s.perspective / 100) * 3);
-      const [WIDE, DEEP] = [2.2, 0.45];
+      const WIDE = 2.2;
+      const DEEP = 0.45;
       const scaleAt = (d) => (d + d0) / (depth + d0);
       const field = water ? new Float32Array(MW * MH) : null;
       if (water)
@@ -6766,16 +7091,21 @@ const PAGE_JS: &str = r##"(() => {
       // The waves' slopes, and how steep they usually are, so Height is
       // about how far they move the reflection
       const slopes = water ? new Float32Array(MW * MH * 2) : null;
-      let [rms, rmsX] = [1, 1];
+      let rms = 1;
+      let rmsX = 1;
       if (water) {
-        let [sum, sumX, n] = [0, 0, 0];
+        let sum = 0;
+        let sumX = 0;
+        let n = 0;
         for (let v = 0; v < MH; v++) {
           const d = y0 + (v + 0.5) / q - start;
           if (d < 0) continue;
           const scale = scaleAt(d);
-          const [up, down] = [Math.max(0, v - 1), Math.min(MH - 1, v + 1)];
+          const up = Math.max(0, v - 1);
+          const down = Math.min(MH - 1, v + 1);
           for (let u = 0; u < MW; u++) {
-            const [left, right] = [Math.max(0, u - 1), Math.min(MW - 1, u + 1)];
+            const left = Math.max(0, u - 1);
+            const right = Math.min(MW - 1, u + 1);
             const sx = ((field[v * MW + right] - field[v * MW + left]) * q * size * WIDE * scale) / Math.max(1, right - left);
             const sy = ((field[down * MW + u] - field[up * MW + u]) * q * size * DEEP * scale) / Math.max(1, down - up);
             slopes[(v * MW + u) * 2] = sx;
@@ -6808,9 +7138,13 @@ const PAGE_JS: &str = r##"(() => {
           const i = v * MW + u;
           along[i] = t;
           const X = x0 + (u + 0.5) / q;
-          let [dx, dy, keep, glint] = [0, 0, 1, 0];
+          let dx = 0;
+          let dy = 0;
+          let keep = 1;
+          let glint = 0;
           if (water) {
-            const [sx, sy] = [slopes[i * 2], slopes[i * 2 + 1]];
+            const sx = slopes[i * 2];
+            const sy = slopes[i * 2 + 1];
             dx = (waves * scale * sx * 0.6) / rmsX;
             dy = (waves * scale * sy) / rms;
             const steep = Math.abs(sy) / rms;
@@ -6852,11 +7186,12 @@ const PAGE_JS: &str = r##"(() => {
         for (let c = 0; c < 4; c++) {
           for (let i = 0; i < MW * MH; i++) channel[i] = reflected[i * 4 + c];
           const levels = [0, 0.5, 1].map((m) => spread(channel, amount * m * q, vertical));
+          const [l0, l1, l2] = levels;
           for (let i = 0; i < MW * MH; i++) {
             const at = along[i] * 2;
             const j = Math.min(1, Math.floor(at));
             const m = at - j;
-            next[i * 4 + c] = levels[j][i] * (1 - m) + levels[j + 1][i] * m;
+            next[i * 4 + c] = j ? l1[i] * (1 - m) + l2[i] * m : l0[i] * (1 - m) + l1[i] * m;
           }
         }
         reflected = next;
@@ -6868,20 +7203,28 @@ const PAGE_JS: &str = r##"(() => {
         const d = y + y0 + 0.5 - start;
         for (let x = 0; x < OW; x++) {
           const at = (y * OW + x) * 4;
-          if (q === 1) p.set(reflected.subarray(at, at + 4));
-          else sampleAt(reflected, MW, MH, (x + 0.5) * q, (y + 0.5) * q, p);
+          if (q === 1) {
+            p[0] = reflected[at];
+            p[1] = reflected[at + 1];
+            p[2] = reflected[at + 2];
+            p[3] = reflected[at + 3];
+          } else sampleAt(reflected, MW, MH, (x + 0.5) * q, (y + 0.5) * q, p);
           if (surface > 0 && d >= 0) {
             const a = surface * (1 - smooth(0.55, 1, Math.sqrt(Math.hypot(((x + x0 + 0.5 - cx) / rx) ** 2, (d / ry) ** 2)))) * (1 - p[3]);
             for (let c = 0; c < 3; c++) p[c] += tint[c] * a;
             p[3] += a;
           }
-          const [sx, sy] = [x + x0, y + y0];
+          const sx = x + x0;
+          const sy = y + y0;
           if (!s.only && sx >= 0 && sy >= 0 && sx < W && sy < H) {
             const from = (sy * W + sx) * 4;
             const keep = 1 - f[from + 3];
             for (let c = 0; c < 4; c++) p[c] = f[from + c] + p[c] * keep;
           }
-          out.set(p, at);
+          out[at] = p[0];
+          out[at + 1] = p[1];
+          out[at + 2] = p[2];
+          out[at + 3] = p[3];
         }
       }
       return { image: toImage(out, OW, OH), x: x0, y: y0 };
@@ -6939,12 +7282,14 @@ const PAGE_JS: &str = r##"(() => {
       const soft = s.softness * k;
       const halo = s.halo / 100;
       const pad = halo > 0 && !isOpaque(f) ? Math.ceil(3 * (width + soft)) + 1 : 0;
-      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      const OW = W + 2 * pad;
+      const OH = H + 2 * pad;
       const alpha = new Float32Array(W * H);
       for (let i = 0; i < W * H; i++) alpha[i] = f[i * 4 + 3];
       const near = blurChannel(alpha, W, H, Math.max(0.5, width * 0.5));
       // Toward the light: 0° from above, turning clockwise
-      const [lx, ly] = [Math.sin((s.direction * Math.PI) / 180), -Math.cos((s.direction * Math.PI) / 180)];
+      const lx = Math.sin((s.direction * Math.PI) / 180);
+      const ly = -Math.cos((s.direction * Math.PI) / 180);
       // How lit each pixel is, in the padded picture, for the halo
       let rim = new Float32Array(OW * OH);
       for (let y = 0; y < H; y++)
@@ -6962,7 +7307,8 @@ const PAGE_JS: &str = r##"(() => {
       for (let y = 0; y < OH; y++)
         for (let x = 0; x < OW; x++) {
           const i = y * OW + x;
-          const [sx, sy] = [x - pad, y - pad];
+          const sx = x - pad;
+          const sy = y - pad;
           const inside = sx >= 0 && sy >= 0 && sx < W && sy < H;
           const from = (sy * W + sx) * 4;
           const a = inside ? f[from + 3] : 0;
