@@ -511,9 +511,6 @@ const PAN_STILL: Duration = Duration::from_millis(300);
 /// How long images Vello drew over the view count as in it
 const IN_VIEW: Duration = Duration::from_secs(2);
 
-/// How long an image Vello drew counts as wanted at the size it drew it
-const WANTED: Duration = Duration::from_secs(3);
-
 /// How long a node's effects running holds up its next run
 const EFFECT_PATIENCE: Duration = Duration::from_secs(5);
 
@@ -1203,10 +1200,6 @@ pub struct Painter {
     /// drawn again as they were don't say what they use otherwise, and
     /// what the view shows would be let go and had again over and over
     vello_in_view: HashMap<String, (f32, Instant)>,
-    /// The widest any Vello draw showed each image at lately, which images
-    /// made smaller to save memory aren't made smaller than: a tile drawn
-    /// since would only ask for it back, over and over
-    vello_wanted: HashMap<String, (f32, Instant)>,
     /// Units encoded for Vello, by unit and level, see `Encoded`
     fragments: HashMap<(usize, bool, i32), Encoded>,
     /// Images of units made for the tile or view being drawn
@@ -1379,7 +1372,6 @@ impl Painter {
             vello_uses: HashMap::new(),
             vello_shown: HashMap::new(),
             vello_in_view: HashMap::new(),
-            vello_wanted: HashMap::new(),
             fragments: HashMap::new(),
             gpu,
             kit: Kit::new(),
@@ -2815,9 +2807,6 @@ impl Painter {
         let over_view = near_zoom && self.view.as_ref().is_some_and(|view| Rect::intersects2(&reach, &Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32)));
         let now = Instant::now();
         for (key, width) in widths {
-            let (widest, at) = self.vello_wanted.entry(key.clone()).or_insert((0.0, now));
-            *widest = if at.elapsed() < WANTED { widest.max(width) } else { width };
-            *at = now;
             if over_view {
                 let (widest, at) = self.vello_in_view.entry(key.clone()).or_insert((0.0, now));
                 *widest = if at.elapsed() < IN_VIEW { widest.max(width) } else { width };
@@ -4339,9 +4328,6 @@ impl Painter {
                 self.request(&key, asked);
             }
         }
-        self.vello_wanted.retain(|_, (_, at)| at.elapsed() < WANTED);
-        let wanted: HashMap<String, f64> = self.vello_wanted.iter().map(|(key, (width, _))| (key.clone(), *width as f64 * super::vello::ASKED)).collect();
-        let wanted = |key: &str| wanted.get(key).copied().unwrap_or(0.0);
         // Moving, those only coarse tiles draw are had again at the size
         // they draw them, swapped in once here, so nothing shows blurrier
         if soon && total > budget {
@@ -4350,7 +4336,7 @@ impl Painter {
                 .iter()
                 .filter(|(key, _)| !key.starts_with(RENDER) && !key.starts_with(EFFECT) && !in_view.contains(key.as_str()) && !fine_use.contains(key.as_str()))
                 .filter_map(|(key, img)| {
-                    let width = coarse_need.get(key.as_str()).filter(|width| **width > 0.0)?.max(wanted(key));
+                    let width = *coarse_need.get(key.as_str()).filter(|width| **width > 0.0)?;
                     let kept = img.image.width().max(img.image.height()) as f64;
                     let fits = fitted(img.original, width) as f64;
                     (kept > fits).then(|| ((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize, key.clone(), width))
@@ -4377,7 +4363,7 @@ impl Painter {
                 .iter()
                 .filter(|(key, _)| !key.starts_with(RENDER) && !key.starts_with(EFFECT))
                 .filter_map(|(key, img)| {
-                    let width = need.get(key.as_str()).filter(|width| **width > 0.0)?.max(wanted(key));
+                    let width = *need.get(key.as_str()).filter(|width| **width > 0.0)?;
                     let kept = img.image.width().max(img.image.height()) as f64;
                     let fits = fitted(img.original, width) as f64;
                     (kept > fits * 2.0).then(|| ((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize, key.clone(), width))
