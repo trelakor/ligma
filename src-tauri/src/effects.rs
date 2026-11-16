@@ -10748,6 +10748,8 @@ const PAGE_JS: &str = r##"(() => {
       } else for (const node of made) if (node.parent !== result) result.appendChild(node);
       source.setSharedPluginData(PLUGIN, ROLE, "source");
       result.setSharedPluginData(PLUGIN, spec.id, JSON.stringify(settings));
+      // What the original was when it was made, for following it
+      if (spec.follows) result.setSharedPluginData(PLUGIN, FOLLOW, String(shapeSignature(source)));
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
     } else {
@@ -12715,6 +12717,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     if (stackOf(group).indexOf(group) > 0) restackAbove(figma, group);
   };
+  const FOLLOW = "follow-made-from";
   let following = [];
   let followFound = 0;
   const followed = new Map();
@@ -12742,13 +12745,32 @@ const PAGE_JS: &str = r##"(() => {
         const source = sourceOf(group);
         if (!source) continue;
         const sig = shapeSignature(source);
-        const known = followed.get(group.id);
-        if (!known) followed.set(group.id, { sig, changed: 0 });
-        else if (known.sig !== sig) Object.assign(known, { sig, changed: now });
+        let known = followed.get(group.id);
+        if (!known) followed.set(group.id, (known = { sig, changed: 0, built: null, base: sig }));
+        // What it was made from, kept on the group, so undo takes it back
+        // with what was made
+        const made = group.getSharedPluginData(PLUGIN, FOLLOW) || String(known.base);
+        if (made === String(sig)) {
+          known.sig = sig;
+          known.changed = 0;
+          continue;
+        }
+        // Its last making undone while the original's as it was then: the
+        // change it followed is undone too, so one undo takes back both
+        if (known.built === sig) {
+          known.built = null;
+          try {
+            figma.triggerUndo();
+          } catch {}
+          continue;
+        }
+        if (known.sig !== sig) Object.assign(known, { sig, changed: now });
         // Once it's stopped changing for a moment
         else if (known.changed && now - known.changed > 450) {
           known.changed = 0;
           refreshVector(figma, group, effect, settings);
+          group.setSharedPluginData(PLUGIN, FOLLOW, String(sig));
+          known.built = sig;
         }
       }
     } catch {}
