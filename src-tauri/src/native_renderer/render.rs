@@ -1622,6 +1622,9 @@ impl Painter {
     fn fill(&mut self) -> Option<Duration> {
         self.check();
         self.govern();
+        // Till the file's first frame comes there's nothing to draw, not
+        // even its background, and Figma's own canvas shows meanwhile
+        self.tree.as_ref()?;
         let view = self.view.clone()?;
         let (px, preview, width, height) = view.drawn(self.gpu.size);
         if !px.is_finite() || px <= 0.0 {
