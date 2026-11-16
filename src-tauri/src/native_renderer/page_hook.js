@@ -245,17 +245,14 @@
   // ran them, and its long tasks, so time a frame took to come can be put
   // down to input coming late or the page being busy
   const pageLog = { moves: 0, first: 0, last: 0, ran: 0, long: [] };
-  addEventListener(
-    "pointermove",
-    (event) => {
-      const now = performance.now();
-      if (!pageLog.moves) pageLog.first = event.timeStamp;
-      pageLog.moves++;
-      pageLog.last = event.timeStamp;
-      pageLog.ran = Math.max(pageLog.ran, now - event.timeStamp);
-    },
-    { capture: true, passive: true },
-  );
+  const moved = (event) => {
+    const now = performance.now();
+    if (!pageLog.moves) pageLog.first = event.timeStamp;
+    pageLog.moves++;
+    pageLog.last = event.timeStamp;
+    pageLog.ran = Math.max(pageLog.ran, now - event.timeStamp);
+  };
+  for (const type of ["pointermove", "wheel"]) addEventListener(type, moved, { capture: true, passive: true });
   try {
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
@@ -269,7 +266,8 @@
   } catch {}
   function pageSince() {
     const now = performance.now();
-    const log = { frame: Math.round(now - (document.timeline?.currentTime ?? now)), moves: pageLog.moves, first: Math.round(now - pageLog.first), last: Math.round(now - pageLog.last), ran: Math.round(pageLog.ran), long: pageLog.long };
+    const tenths = (ms) => Math.round(ms * 10) / 10;
+    const log = { frame: tenths(now - (document.timeline?.currentTime ?? now)), moves: pageLog.moves, first: tenths(now - pageLog.first), last: tenths(now - pageLog.last), ran: Math.round(pageLog.ran), long: pageLog.long };
     pageLog.moves = 0;
     pageLog.ran = 0;
     pageLog.long = [];

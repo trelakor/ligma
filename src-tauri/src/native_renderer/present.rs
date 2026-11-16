@@ -314,14 +314,14 @@ impl Hub {
     }
 
     /// Frame `seq` of the render tree: its view, what Figma draws over the
-    /// canvas in it, and whether it `edits` the scene
-    pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool) {
+    /// canvas in it, whether it `edits` the scene, and how long it took
+    pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool, made: Option<Made>) {
         let mut frames = self.frames.lock().unwrap();
         // Lost track: those before go
         if frames.back().is_some_and(|last| last.seq >= seq) {
             frames.clear();
         }
-        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits });
+        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, made });
         while frames.len() > 256 {
             frames.pop_front();
         }
@@ -335,10 +335,10 @@ impl Hub {
     /// what Figma draws over it go with the scene as it is in the snapshot.
     /// None while the next is an edit not drawn yet, to show nothing new
     /// till it is
-    fn pick(&self, seq: u64) -> Option<(View, Overlay, u64)> {
+    fn pick(&self, seq: u64) -> Option<(View, Overlay, u64, Option<Made>)> {
         let mut frames = self.frames.lock().unwrap();
         if frames.is_empty() {
-            return self.view.lock().unwrap().clone().map(|view| (view, None, seq));
+            return self.view.lock().unwrap().clone().map(|view| (view, None, seq, None));
         }
         let mut take = None;
         for (i, frame) in frames.iter().enumerate() {
@@ -349,7 +349,7 @@ impl Hub {
         }
         frames.drain(..take?);
         let frame = frames.front()?;
-        Some((frame.view.clone(), frame.overlay.clone(), frame.seq))
+        Some((frame.view.clone(), frame.overlay.clone(), frame.seq, frame.made))
     }
 
     /// Waits until poked after `seen`, or `timeout`, and returns the count
@@ -365,6 +365,16 @@ struct FrameView {
     view: View,
     overlay: Overlay,
     edits: bool,
+    made: Option<Made>,
+}
+
+/// How long Figma took to make a frame: when it handed it over, in ms since
+/// the epoch, and how long before that what it answers came, the input or
+/// else the start of the page's frame
+#[derive(Clone, Copy)]
+pub struct Made {
+    pub at: f64,
+    pub figma: f32,
 }
 
 /// The pixel `at`, in device pixels, is in, and how far into it, which is
@@ -642,6 +652,10 @@ pub struct Screen {
     reading: std::collections::VecDeque<(u64, Vec<Arc<Tex>>)>,
     /// The textures the last frame showed
     shown: std::collections::HashSet<usize>,
+    /// How long the frame of Figma's to show took to make, and the last
+    /// frame of Figma's shown, for Show stats
+    made: Option<(u64, Made)>,
+    timed: u64,
 }
 
 impl Screen {
@@ -713,6 +727,8 @@ impl Screen {
             fence,
             frames: 0,
             reading: std::collections::VecDeque::new(),
+            made: None,
+            timed: 0,
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -818,12 +834,13 @@ impl Screen {
                 current = Some(latest);
             }
             let picked = current.as_ref().and_then(|snapshot| hub.pick(snapshot.seq).map(|picked| (snapshot.clone(), picked)));
-            let Some((snapshot, (view, overlay, seq))) = picked else {
+            let Some((snapshot, (view, overlay, seq, made))) = picked else {
                 // The render thread pokes once there's more, and the GPU
                 // has drawn it
                 seen = hub.wait(seen, Duration::from_millis(100));
                 continue;
             };
+            self.made = made.map(|made| (seq, made));
             let size = match &self.layer {
                 Some(_) => view.canvas(),
                 None => *hub.size.lock().unwrap(),
@@ -1026,7 +1043,12 @@ impl Screen {
                 snapshot.seq
             )
         });
-        super::hud::presented(Instant::now());
+        // Once a frame of Figma's, not again as what's drawn under it gets
+        // sharper
+        if let Some((seq, made)) = self.made.filter(|(seq, _)| *seq != self.timed) {
+            self.timed = seq;
+            super::hud::presented(made.figma, (presented - made.at).max(0.0) as f32);
+        }
         let mut stats = stats().lock().unwrap();
         stats.holes(false);
         stats.record_frame(encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, counts.native, counts.approximate, counts.skipped, view.zoom, snapshot.pending);

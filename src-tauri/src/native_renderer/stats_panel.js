@@ -2,8 +2,9 @@
   // Settings' Show stats, in the Figma tab (see hud.rs): times the frames
   // Figma's own renderer draws, and draws what Ligma hands it each tick,
   // the renderer in use above the one used before
-  const IDLE_MS = 250;
   const FRAMES = 200;
+  const ANSWERS_MS = 250;
+  const PAGE_FRAME_MS = 50;
   const SAMPLES = 240;
   const SCALE_MS = 20;
   const WIDTH = 300;
@@ -30,7 +31,10 @@
   // Figma's frames need, so more often slows the very frames it times
   const PAINT_MS = 33;
 
-  const state = { measuring: false, drew: false, last: null, intervals: [], raf: 0, restore: [], host: null, canvas: null, model: null, painting: 0, painted: 0, figma: null, at: null, styles: {} };
+  // A frame's time is from the input it answers, or else the start of the
+  // browser's frame it's drawn in, to its last drawing: how long Figma took
+  // to make it, not how long it waited for input
+  const state = { measuring: false, input: null, frame: null, from: 0, made: null, timed: [], raf: 0, restore: [], host: null, canvas: null, model: null, painting: 0, painted: 0, figma: null, at: null, styles: {} };
 
   // Figma draws on the page with WebGL or WebGPU, or in its render worker,
   // which answers each frame it's sent
@@ -43,7 +47,39 @@
     };
     state.restore.push(() => (proto[name] = original));
   };
-  const drew = () => (state.drew = true);
+  const drew = () => {
+    if (!state.measuring) return;
+    const now = performance.now();
+    const frame = document.timeline?.currentTime ?? now;
+    if (state.frame !== frame) {
+      done();
+      state.frame = frame;
+      // As Ligma's renderer times Figma's part (see run.rs): not from input
+      // long before, nor from a frame of the browser's it's drawn outside
+      state.from = state.input != null && now - state.input <= ANSWERS_MS ? state.input : now - frame <= PAGE_FRAME_MS ? frame : now;
+      state.input = null;
+    }
+    state.made = now - state.from;
+  };
+  const input = (event) => {
+    if (state.measuring) state.input = event.timeStamp;
+  };
+  for (const type of ["pointermove", "wheel"]) {
+    addEventListener(type, input, { capture: true, passive: true });
+    state.restore.push(() => removeEventListener(type, input, { capture: true }));
+  }
+  // The frame drawn last, timed
+  const done = () => {
+    if (state.made == null) return;
+    const ms = state.made;
+    state.made = null;
+    state.timed.push(ms);
+    const record = state.model?.records[1];
+    if (record) {
+      push(record, [[ms, 0]]);
+      paint();
+    }
+  };
   for (const proto of [window.WebGLRenderingContext?.prototype, window.WebGL2RenderingContext?.prototype]) {
     for (const name of ["drawArrays", "drawElements", "drawArraysInstanced", "drawElementsInstanced"]) wrap(proto, name, drew);
   }
@@ -54,27 +90,17 @@
     if (args[0]?.method !== "sendCanvasFrameToRenderWorker" || heard.has(port)) return;
     heard.add(port);
     port.addEventListener("message", (event) => {
-      if (state.measuring && event.data?.result?.frameApplied) state.drew = true;
+      if (event.data?.result?.frameApplied) drew();
     });
   });
 
-  // A frame of the browser's in which Figma drew
+  // A frame of the browser's: Figma's drawing in the one before is done
   const loop = (now) => {
     if (!state.measuring) {
       state.raf = 0;
       return;
     }
-    if (state.drew) {
-      state.drew = false;
-      const interval = state.last != null && now - state.last < IDLE_MS ? now - state.last : null;
-      state.last = now;
-      state.intervals.push(interval);
-      const record = state.model?.records[1];
-      if (record) {
-        push(record, [interval]);
-        paint();
-      }
-    }
+    if (state.frame != null && state.frame !== now) done();
     state.raf = requestAnimationFrame(loop);
   };
 
@@ -163,14 +189,12 @@
   const NAMES = { ligma: "Ligma", figma: "Figma" };
   const COLORS = { ligma: LIGMA, figma: FIGMA };
 
-  // Over the frames in the graph, the view moving
-  const summary = (record) => {
-    const frames = record.frames.filter((ms) => ms != null);
-    if (!frames.length) return null;
-    const sorted = [...frames].sort((a, b) => a - b);
+  // Over the frames in the graph
+  const summary = (times) => {
+    if (!times.length) return null;
+    const sorted = [...times].sort((a, b) => a - b);
     const at = (p) => sorted[Math.round((sorted.length - 1) * p)];
-    const mean = frames.reduce((a, b) => a + b, 0) / frames.length;
-    return { fps: 1000 / mean, p50: at(0.5), p95: at(0.95), max: at(1) };
+    return { p50: at(0.5), p95: at(0.95), max: at(1) };
   };
 
   const dot = (ctx, x, y, color) => {
@@ -180,22 +204,34 @@
     ctx.fill();
   };
 
-  // A bar a frame, its time since the one before
-  function frameGraph(ctx, graph, record) {
+  // A bar a frame, how long it took, colored by how it does against a
+  // screen's refresh, or all in `color`
+  function frameGraph(ctx, graph, times, color) {
     // Labelled where there's room between the two
     const room = graph.h >= 56;
-    guide(ctx, graph, 1000 / 120, SCALE_MS, room ? "120 fps" : "");
-    guide(ctx, graph, 1000 / 200, SCALE_MS, room ? "200 fps" : "");
+    guide(ctx, graph, 1000 / 60, SCALE_MS, graph.h >= 32 ? "16.7 ms" : "");
+    guide(ctx, graph, 1000 / 120, SCALE_MS, room ? "8.3 ms" : "");
     const step = graph.w / FRAMES;
-    const start = FRAMES - record.frames.length;
-    record.frames.forEach((ms, i) => {
-      if (ms == null) return;
-      const h = Math.min(ms / SCALE_MS, 1) * graph.h;
-      ctx.fillStyle = ms <= 1000 / 120 + 0.5 ? GOOD : ms <= 1000 / 60 + 0.5 ? WARNING : CRITICAL;
+    const start = FRAMES - times.length;
+    times.forEach((ms, i) => {
+      const h = Math.max(Math.min(ms / SCALE_MS, 1) * graph.h, 0.5);
+      ctx.fillStyle = color ?? (ms <= 1000 / 120 + 0.5 ? GOOD : ms <= 1000 / 60 + 0.5 ? WARNING : CRITICAL);
       ctx.fillRect(graph.x + (start + i) * step, graph.y + graph.h - h, Math.max(step - 0.5, 0.5), h);
     });
     line(ctx, graph.x, graph.y + graph.h + 0.5, graph.x + graph.w, GRID);
   }
+
+  // A line of frame times: the typical big or not, then p95 and worst
+  const timesLine = (ctx, y, right, s, ink, label, big) => {
+    const parts = big ? [[s.p50.toFixed(1), ink, BIG], [" ms a frame", SECONDARY]] : [[label, SECONDARY], [s.p50.toFixed(1), ink], [" ms a frame", MUTED]];
+    text(ctx, PAD + 8, y, parts);
+    textRight(ctx, right, y, [
+      ["p95 ", MUTED],
+      [s.p95.toFixed(1), ink],
+      ["  worst ", MUTED],
+      [`${s.max.toFixed(1)} ms`, ink],
+    ]);
+  };
 
   // One renderer's section: its stripe and name, its numbers, and graphs of
   // its frames and GPU memory. Gives where it ends
@@ -222,26 +258,33 @@
     }
 
     y += 22;
-    const s = summary(record);
+    // Ligma's renderer's time, from Figma's app handing it a frame to
+    // showing it, or Figma's renderer's, from input to drawn
+    const own = record.frames.map(([figma, renderer]) => (ligma ? renderer : figma));
+    const s = summary(own);
     if (s) {
-      const width = text(ctx, PAD + 8, y, [[`${Math.round(s.fps)}`, ink, BIG]]);
-      text(ctx, PAD + 8 + width + 4, y, [["fps", SECONDARY]]);
-      textRight(ctx, PAD + inner, y, [
-        ["typical ", MUTED],
-        [s.p50.toFixed(1), ink],
-        ["  p95 ", MUTED],
-        [s.p95.toFixed(1), ink],
-        ["  worst ", MUTED],
-        [`${s.max.toFixed(1)} ms`, ink],
-      ]);
+      timesLine(ctx, y, PAD + inner, s, ink, "", true);
     } else {
       text(ctx, PAD + 8, y, [["No frames yet", ink, BIG], ["  move the view to time them", MUTED]]);
     }
 
     y += 8;
     const frames = { x: PAD + 8, y, w: inner - 8 - GUTTER, h: inUse ? 60 : 40 };
-    frameGraph(ctx, frames, record);
+    frameGraph(ctx, frames, own);
     y = frames.y + frames.h + 18;
+
+    // Before Ligma's renderer has a frame: how long Figma's app took to
+    // make it from the input it answers, small and apart, as it's not
+    // the renderer's doing
+    const app = ligma ? record.frames.map(([figma]) => figma) : [];
+    const a = summary(app);
+    if (a) {
+      timesLine(ctx, y, PAD + inner, a, ink, "Figma's app ", false);
+      y += 6;
+      const graph = { x: PAD + 8, y, w: inner - 8 - GUTTER, h: inUse ? 24 : 18 };
+      frameGraph(ctx, graph, app, PAGE);
+      y = graph.y + graph.h + 18;
+    }
 
     // Figma's renderer is counted in its page (see gpu_count.js), or till
     // it's loaded with it, shown with the page
@@ -392,13 +435,13 @@
     tick(model) {
       state.measuring = model.active === "figma";
       if (state.measuring && !state.raf) state.raf = requestAnimationFrame(loop);
-      if (!state.measuring) state.intervals = [];
-      const out = state.intervals;
-      state.intervals = [];
+      if (!state.measuring) state.timed = [];
+      const out = state.timed;
+      state.timed = [];
       if (model.records) {
         state.model = model;
         // Figma's frames timed here and not yet in Ligma's records
-        if (model.records[1]) push(model.records[1], out);
+        if (model.records[1]) push(model.records[1], out.map((ms) => [ms, 0]));
       } else if (state.model?.active === model.active) {
         const record = state.model.records[model.active === "ligma" ? 0 : 1];
         if (record) push(record, model.frames);

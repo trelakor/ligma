@@ -301,7 +301,22 @@ fn take_frames(ctx: Arc<Ctx>) {
             }
             follow_canvas(&ctx, &view);
             let drawn = overlay.as_mut().and_then(|overlay| overlay.decode(frame.ui()));
-            ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits());
+            // Figma's part: from the input it answers, or from the start of
+            // the page's frame it was made in. Input from long before isn't
+            // what it answers, and one made outside a page's frame, as
+            // something loaded, has no start to time it from
+            let made = frame.header.page.as_ref().map(|page| {
+                let since = |key: &str| page[key].as_f64().unwrap_or(0.0);
+                let figma = if since("moves") > 0.0 && since("last") <= ANSWERS_MS {
+                    since("last")
+                } else if since("frame") <= PAGE_FRAME_MS {
+                    since("frame")
+                } else {
+                    0.0
+                };
+                super::present::Made { at: frame.header.at, figma: figma.max(0.0) as f32 }
+            });
+            ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits(), made);
             super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2} page={}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at, frame.header.page.as_ref().map_or_else(String::new, |page| page.to_string())));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
@@ -367,6 +382,12 @@ static CTX: Mutex<Option<Arc<Ctx>>> = Mutex::new(None);
 fn set_status(status: impl Into<String>) {
     stats().lock().unwrap().status = status.into();
 }
+
+/// For Show stats: input longer ago than this isn't what a frame of Figma's
+/// answers, and a frame made this long after the page's frame started was
+/// made outside it
+const ANSWERS_MS: f64 = 250.0;
+const PAGE_FRAME_MS: f64 = 50.0;
 
 pub fn start(app: &AppHandle) {
     #[cfg(windows)]
