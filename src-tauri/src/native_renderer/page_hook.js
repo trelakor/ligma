@@ -122,6 +122,48 @@
     });
   }
 
+  // As a file opens, Figma sends the rest of its scene in batches about a
+  // second apart. At times the batches stop with nodes in view never sent,
+  // as on 2026-11-16 with 2,749 of them, images and all, till their bounds
+  // were asked for 60 s later. So once the batches stop, the bounds of what's
+  // in and near the view are asked for, a few milliseconds at a time
+  const SETTLED = 2000;
+  const OPENING = 60000;
+  let opened = -Infinity;
+  let settling = 0;
+  function loading(f) {
+    const now = performance.now();
+    if (f.updateMode === 0) opened = now;
+    if (now - opened > OPENING || f.renderTreeForest.length < 16384) return;
+    clearTimeout(settling);
+    settling = setTimeout(askBounds, SETTLED);
+  }
+  async function askBounds() {
+    const figma = window.figma;
+    const view = figma?.viewport?.bounds;
+    if (!view || !figma.currentPage) return;
+    const pad = Math.max(view.width, view.height) / 2;
+    const area = { x: view.x - pad, y: view.y - pad, right: view.x + view.width + pad, bottom: view.y + view.height + pad };
+    const near = (box) => box && box.x < area.right && box.x + box.width > area.x && box.y < area.bottom && box.y + box.height > area.y;
+    const started = performance.now();
+    let slice = started;
+    let nodes = 0;
+    const left = [...figma.currentPage.children];
+    while (left.length) {
+      if (performance.now() - slice > 4) {
+        await new Promise((resolve) => setTimeout(resolve));
+        slice = performance.now();
+      }
+      const node = left.pop();
+      nodes++;
+      try {
+        const rendered = node.absoluteRenderBounds;
+        if ((near(rendered) || near(node.absoluteBoundingBox)) && "children" in node) left.push(...node.children);
+      } catch {}
+    }
+    hook.boundsAsked = { nodes, ms: Math.round(performance.now() - started) };
+  }
+
   // Media Figma hands its worker with a frame, let go of, as Ligma gets its
   // own
   function release(params) {
@@ -143,6 +185,7 @@
       return false;
     }
     hook.frames++;
+    if (!hook.toWorker) loading(f);
     if (!hook.panels?.dragging && (f.updateMode === 0 || f.renderTreeForest.length > 16 || f.releasedNodeIds?.length)) hook.playback++;
     if (hook.pushTo) {
       try {
