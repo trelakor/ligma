@@ -11465,11 +11465,19 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Depth ----------
 
+  // A copy of a layer beside it, where it is. Figma puts a copy of a layer
+  // in a group on the page, as if the group were at the page's origin
+  const cloneInPlace = (node) => {
+    const copy = node.clone();
+    if (copy.parent !== node.parent) node.parent.appendChild(copy);
+    copy.relativeTransform = node.relativeTransform;
+    return copy;
+  };
   // The layer's outlines for depth: a shape with a stroke as one outline,
   // its fill and stroke together, from the outside of the stroke, in the
   // stroke's colour, so its depth follows its outline. Figma joins them:
-  // a copy's stroke outlined and joined to its fill, flattened, read, and
-  // the copies taken away
+  // vectors of its fill and stroke outlines, joined, flattened, read, and
+  // taken away
   const silhouettes = (current) => {
     const { figma, source } = current;
     const base = invert(source.absoluteTransform);
@@ -11486,20 +11494,20 @@ const PAGE_JS: &str = r##"(() => {
       done.add(item.leaf);
       const made = [];
       try {
-        const copy = item.leaf.clone();
-        made.push(copy);
-        copy.visible = true;
-        const outline = copy.outlineStroke();
-        if (outline) made.push(outline);
-        copy.strokes = [];
-        const parts = [outline].filter(Boolean);
-        if (own.some((one) => !one.stroke)) {
-          copy.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
-          parts.push(copy);
-        }
-        const joined = figma.flatten([parts.length > 1 ? figma.union(parts, figma.currentPage) : parts[0]], figma.currentPage);
+        // Its fill and stroke outlines, already read, as vectors placed by
+        // the layer, joined and flattened by Figma where they are
+        const black = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
+        const parts = own.map((one) => vectorAt(current, one.paths, one.winding, black)).filter(Boolean);
+        made.push(...parts);
+        const home = source.parent;
+        const joined = figma.flatten([parts.length > 1 ? figma.union(parts, home) : parts[0]], home);
         made.push(joined);
-        const m = multiply(base, joined.absoluteTransform);
+        // Placed from its container's transform, as a layer in a group
+        // keeps its place in the group's frame
+        let container = joined.parent;
+        while (container && (container.type === "GROUP" || container.type === "BOOLEAN_OPERATION")) container = container.parent;
+        const placed = container && container.type !== "PAGE" ? multiply(container.absoluteTransform, joined.relativeTransform) : joined.relativeTransform;
+        const m = multiply(base, placed);
         for (const g of joined.fillGeometry) {
           const paths = transformPaths(parsePath(g.data), m);
           if (paths.length) out.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: strokes[0].paints, opacity: strokes[0].opacity, leaf: item.leaf });
@@ -12143,7 +12151,7 @@ const PAGE_JS: &str = r##"(() => {
         return node;
       };
       const shape = () => {
-        const node = template.clone();
+        const node = cloneInPlace(template);
         node.visible = true;
         return node;
       };
@@ -12582,6 +12590,7 @@ const PAGE_JS: &str = r##"(() => {
         const local = multiply(toLocal, piece.absoluteTransform);
         for (let k = 0; k < n; k++) {
           const node = k === 0 ? piece : piece.clone();
+          if (node.parent !== parent) parent.appendChild(node);
           node.relativeTransform = relativeFor(parent, multiply(current.base, multiply(segmentTransform(cx, cy, k, step, start, s.mirror), local)));
           entries.push({ node });
         }
