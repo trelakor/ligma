@@ -18,8 +18,8 @@ use serde::Deserialize;
 use skia_safe::canvas::{SaveLayerFlags, SaveLayerRec};
 use skia_safe::gradient::{shaders as gradients, Colors, Gradient, Interpolation};
 use skia_safe::{
-    color_filters, image_filters, BlendMode, Canvas, ClipOp, Color4f, ColorChannel, Data, FilterMode, Matrix, MipmapMode, Paint, Path, Picture,
-    PictureRecorder, Point, Rect, SamplingOptions, TileMode,
+    color_filters, image_filters, BlendMode, Canvas, ClipOp, Color4f, ColorChannel, Data, FilterMode, Matrix, Paint, Path, Picture,
+    PictureRecorder, Point, Rect, TileMode,
 };
 
 use super::adjust::Adjust;
@@ -1209,14 +1209,14 @@ impl<'a> Drawer<'a> {
                     }
                 }
                 img.area.is_some_and(|area| {
-                    let scale = img.image.width() as f32 / area.width().max(1e-6);
-                    let sampling = if scale > self.device_scale() * 1.5 {
-                        draw::sampled(&img.image, FilterMode::Linear, MipmapMode::Linear)
-                    } else {
-                        SamplingOptions::new(FilterMode::Linear, MipmapMode::None)
-                    };
                     let at = Rect::from_xywh(effect.area.left, effect.area.top, area.width(), area.height());
-                    self.canvas.draw_image_rect_with_sampling_options(&img.image, None, at, sampling, &Paint::default());
+                    let ctm = self.canvas.local_to_device_as_3x3();
+                    let Some(shader) = draw::effect_shader(self.kit, &img.image, at, &ctm, self.px, self.aa) else {
+                        return false;
+                    };
+                    let mut paint = Paint::default();
+                    paint.set_shader(shader);
+                    self.canvas.draw_rect(at, &paint);
                     super::emit::fill_rect(self.canvas, &at, Color4f::new(0.5, 0.5, 0.5, 1.0));
                     true
                 })

@@ -1574,6 +1574,36 @@ pub(super) fn image_shader(kit: &Kit, img: &Img, to_node: Matrix, tile: TileMode
     Some(if cast { shader.with_color_filter(silhouette()) } else { shader })
 }
 
+/// What a node's custom effects drew, `image` covering `at`, drawn by `ctm`
+/// at `px` pixels a unit. Figma's canvas averages 4 by 4 smoothed samples
+/// over each pixel of it, with no mipmaps, so the pixel-wide patterns
+/// effects draw blend rather than beat into coarser ones. Exact tiles
+/// already take that many samples a pixel
+pub(super) fn effect_shader(kit: &Kit, image: &Image, at: Rect, ctm: &Matrix, px: f32, aa: bool) -> Option<Shader> {
+    let (iw, ih) = (image.width() as f32, image.height() as f32);
+    let mut local = Matrix::translate((at.left, at.top));
+    local.pre_scale((at.width() / iw, at.height() / ih), None);
+    let mut to_device = *ctm;
+    to_device.post_scale((px, px), None);
+    to_device.pre_concat(&local);
+    let device = to_device.scale_x().hypot(to_device.skew_y()).max(to_device.skew_x().hypot(to_device.scale_y()));
+    let linear = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+    // Past 4 texels a pixel, 16 samples would shimmer, as they do in Figma
+    if device < 0.25 {
+        return image.to_shader((TileMode::Clamp, TileMode::Clamp), sampled(image, FilterMode::Linear, MipmapMode::Linear), &local);
+    }
+    if aa {
+        if let (Some(effect), Some(back)) = (&kit.boxed, to_device.invert()) {
+            let child = image.to_shader((TileMode::Clamp, TileMode::Clamp), linear, None)?;
+            // Column major
+            let footprint = [back.scale_x(), back.skew_y(), back.skew_x(), back.scale_y()];
+            let uniforms: Vec<u8> = footprint.iter().flat_map(|v| v.to_le_bytes()).collect();
+            return effect.make_shader(Data::new_copy(&uniforms), &[child.into()], Some(&local));
+        }
+    }
+    image.to_shader((TileMode::Clamp, TileMode::Clamp), linear, &local)
+}
+
 /// A gradient fill as a shader in the node's own coordinates. Figma's
 /// `gradientTransform` maps the node's box, as 0 to 1 both ways, to the
 /// gradient's space, where a linear gradient runs from (0, 0.5) to (1, 0.5)
