@@ -2273,16 +2273,18 @@ impl Painter {
             true => Vec::new(),
             false => far.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.exact)).collect(),
         };
-        // While the zoom changes, the level it's headed to first, which
-        // drawn before it gets there is never shown scaled up
-        let todo = match zooming {
-            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true), (Vec::new(), false, true), (Vec::new(), false, true)],
-            false => [(missing, true, false), (ahead_missing, true, true), (far_missing, false, true), (between_missing, true, true), (far_rough, true, true)],
-        };
         // While the view moves, tiles it doesn't show yet take the GPU at
         // most half the time, as the browser drawing Figma's frames shares
         // it, and Figma sends none while it waits
         let moving = self.moved.elapsed() < VELLO_STILL;
+        // While the zoom changes, the level it's headed to first, which
+        // drawn before it gets there is never shown scaled up. The furthest
+        // is drawn exactly at once when it's still, as standing in saves
+        // it little there, where the GPU's time is most of it
+        let todo = match zooming {
+            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true), (Vec::new(), false, true), (Vec::new(), false, true)],
+            false => [(missing, true, false), (ahead_missing, true, true), (far_missing, !moving, true), (between_missing, true, true), (far_rough, true, true)],
+        };
         for (keys, exact, later) in todo {
             if keys.is_empty() {
                 continue;
@@ -2336,7 +2338,7 @@ impl Painter {
 
     /// Draws the tiles of `keys` in the block of `VELLO_BLOCK` tiles a side
     /// the first is in with Vello, at once, all of a level
-    fn vello_tiles(&mut self, keys: &[TileKey], exact: bool) -> Result<(), (TileKey, String)> {
+    fn vello_tiles(&mut self, keys: &[TileKey], mut exact: bool) -> Result<(), (TileKey, String)> {
         let first = keys[0];
         let _purpose = super::gpu_census::purpose("drawing tiles");
         let started = Instant::now();
@@ -2357,11 +2359,14 @@ impl Painter {
             // can take tens of milliseconds to encode, which the next level
             // doesn't wait for. Tiles once it's still are exact
             let budget = (!exact).then_some(Duration::ZERO);
-            let (out, counts, stats, _) = self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, false, None).map_err(fail)?;
+            let (out, counts, stats, rough) = self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, false, None).map_err(fail)?;
             let vello = self.vello.as_mut().ok_or_else(|| fail("no Vello".into()))?;
             match vello.check(usize::MAX).map_err(fail)? {
                 Some(why) => trace(|| format!("  vello ran out of room, drawing again: {why}")),
                 None => {
+                    // With nothing standing in, it's as drawing them exactly
+                    // would be, which then isn't done again
+                    exact |= !rough;
                     drawn = Some((out, counts, stats, std::mem::take(&mut vello.stages)));
                     break;
                 }
