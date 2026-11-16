@@ -137,6 +137,9 @@ const PAGE_JS: &str = r##"(() => {
       min-height: 0;
       padding: 4px 8px 8px;
       overflow-y: auto;
+      /* Room kept for the scrollbar, so the tiles are the size they were
+         measured at when it shows */
+      scrollbar-gutter: stable;
       scrollbar-width: thin;
       scrollbar-color: #ffffff33 transparent;
     }
@@ -312,6 +315,10 @@ const PAGE_JS: &str = r##"(() => {
     }
     [${ROOT}="panel"] .select:hover, [${ROOT}="panel"] .select[aria-expanded="true"] { border-color: var(--color-border); }
     [${ROOT}="panel"] .segments { display: flex; padding: 2px; gap: 2px; border-radius: 5px; background: var(--color-bg-secondary); }
+    [${ROOT}="panel"] .row > .segments { grid-column: 2 / -1; }
+    /* Segments too many or too long for beside a label, across the row */
+    [${ROOT}="panel"] .row.wide { grid-template-columns: 1fr; }
+    [${ROOT}="panel"] .row.wide > .segments { grid-column: 1 / -1; }
     [${ROOT}="panel"] .segments button {
       flex: 1;
       height: 20px;
@@ -560,6 +567,9 @@ const PAGE_JS: &str = r##"(() => {
     };
     addEventListener("keydown", menuKeys, true);
     document.body.append(menu);
+    // Three rows of tiles, the rest scrolled to
+    const fourth = tiles[COLUMNS * 3]?.tile;
+    if (fourth) body.style.maxHeight = `${Math.floor(fourth.getBoundingClientRect().top - body.getBoundingClientRect().top) - 2}px`;
     const box = anchor.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, box.left + box.width / 2 - menu.offsetWidth / 2))}px`;
     menu.style.top = `${Math.max(8, from ? Math.min(innerHeight - menu.offsetHeight - 8, box.bottom + 4) : box.top - menu.offsetHeight - 12)}px`;
@@ -3865,6 +3875,81 @@ const PAGE_JS: &str = r##"(() => {
     return drawnFrom(made);
   };
 
+  // A spec's `handles` are centers dragged on the preview, as Disintegrate's
+  // forces are: `x` and `y` name the settings they move, in percent of the
+  // picture, `radius` one whose ring resizes it, in percent of half its
+  // longer side, and `when` when it shows
+  const shownHandles = (current) => (current.spec.handles ?? []).filter((handle) => !handle.when || handle.when(current.settings));
+  const handlePlace = (current, handle) => {
+    const v = current.view;
+    const s = current.settings;
+    return {
+      x: v.ox + (s[handle.x] / 100) * v.width * v.fit,
+      y: v.oy + (s[handle.y] / 100) * v.height * v.fit,
+      r: handle.radius ? (s[handle.radius] / 100) * (Math.max(v.width, v.height) / 2) * v.fit : 0,
+    };
+  };
+  const drawHandles = (current, context) => {
+    for (const handle of shownHandles(current)) {
+      const { x, y, r } = handlePlace(current, handle);
+      context.strokeStyle = "rgba(13, 153, 255, 0.9)";
+      context.fillStyle = "#fff";
+      context.lineWidth = 1;
+      if (r) {
+        context.setLineDash([4, 3]);
+        context.beginPath();
+        context.arc(x, y, Math.max(2, r), 0, Math.PI * 2);
+        context.stroke();
+        context.setLineDash([]);
+      }
+      context.beginPath();
+      context.arc(x, y, 5, 0, Math.PI * 2);
+      context.fill();
+      context.stroke();
+    }
+  };
+  // Dragging a handle's dot moves it, and its ring resizes it. Anything
+  // else on the preview is left to the effect, as Liquify's brushes are
+  const dragHandles = (current, canvas, change) => {
+    const hit = (event) => {
+      if (!current.view) return null;
+      const box = canvas.getBoundingClientRect();
+      const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+      for (const handle of shownHandles(current).reverse()) {
+        const { x, y, r } = handlePlace(current, handle);
+        const d = Math.hypot(px - x, py - y);
+        if (d <= 8) return { handle, what: "move", x, y };
+        if (r && Math.abs(d - r) <= 6) return { handle, what: "size", x, y };
+      }
+      return null;
+    };
+    canvas.addEventListener("pointermove", (event) => {
+      if (canvas.hasPointerCapture(event.pointerId)) return;
+      const at = hit(event);
+      canvas.style.cursor = at ? (at.what === "move" ? "move" : "ew-resize") : (current.cursor ?? "");
+    });
+    canvas.addEventListener("pointerdown", (event) => {
+      const at = hit(event);
+      if (!at || event.button !== 0) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      canvas.setPointerCapture(event.pointerId);
+      const v = current.view;
+      const move = (event) => {
+        const box = canvas.getBoundingClientRect();
+        const [px, py] = [event.clientX - box.left, event.clientY - box.top];
+        if (at.what === "move") {
+          change(at.handle.x, Math.round(((px - v.ox) / (v.width * v.fit)) * 100));
+          change(at.handle.y, Math.round(((py - v.oy) / (v.height * v.fit)) * 100));
+        } else {
+          change(at.handle.radius, Math.max(1, Math.round((Math.hypot(px - at.x, py - at.y) / ((Math.max(v.width, v.height) / 2) * v.fit)) * 100)));
+        }
+      };
+      canvas.addEventListener("pointermove", move);
+      canvas.addEventListener("lostpointercapture", () => canvas.removeEventListener("pointermove", move), { once: true });
+    });
+  };
+
   const drawFilterPreview = (current) => {
     const canvas = current.preview;
     if (!canvas || !current.levels.preview) return;
@@ -3884,7 +3969,12 @@ const PAGE_JS: &str = r##"(() => {
     context.clearRect(0, 0, box.width, box.height);
     const fit = Math.min((box.width - 24) / drawn.width, (box.height - 24) / drawn.height);
     context.imageSmoothingEnabled = !current.spec.sharp || fit < 1;
-    context.drawImage(drawn.canvas, (box.width - drawn.width * fit) / 2, (box.height - drawn.height * fit) / 2, drawn.width * fit, drawn.height * fit);
+    const [left, top] = [(box.width - drawn.width * fit) / 2, (box.height - drawn.height * fit) / 2];
+    context.drawImage(drawn.canvas, left, top, drawn.width * fit, drawn.height * fit);
+    // Where the picture's top left landed, for handles and brushes
+    const { width, height } = crushedPixels(entry);
+    current.view = { fit, ox: left - drawn.x * fit, oy: top - drawn.y * fit, width, height, k: entry.k };
+    drawHandles(current, context);
   };
 
   const buildFilterPanel = (current) => {
@@ -3907,10 +3997,10 @@ const PAGE_JS: &str = r##"(() => {
       element,
       section: (caption, ...parts) => element("section", {}, ...(caption ? [element("div", { className: "caption", textContent: caption })] : []), ...parts.filter(Boolean)),
       sliders: (list) => element("div", { className: "rows" }, ...list.map(slider)),
-      segments: (key, label, options) => {
+      segments: (key, label, options, wide = false) => {
         const control = segments(label, options, () => s[key], (value) => change(key, value));
         shows.push(() => control.show());
-        return labelled(label, control);
+        return wide ? element("div", { className: "row wide" }, control) : labelled(label, control);
       },
       select: (key, label, options) => {
         const control = select(label, options, () => s[key], (value) => change(key, value));
@@ -3955,12 +4045,25 @@ const PAGE_JS: &str = r##"(() => {
         shows.push(() => (node.hidden = !test()));
         return node;
       },
+      onShow: (fn) => shows.push(fn),
+      // The preview, where the picture is on it, and its pointer when
+      // it's not over a handle
+      view: () => current.view,
+      cursor: (value) => {
+        current.cursor = value;
+        if (!ui.canvas.style.cursor || ui.canvas.style.cursor.startsWith("url") || ui.canvas.style.cursor === "crosshair") ui.canvas.style.cursor = value;
+      },
     };
     const canvas = element("canvas", { className: "preview" });
     canvas.setAttribute("aria-hidden", "true");
     current.preview = canvas;
-    const pick = (values) => {
-      Object.assign(s, structuredClone(spec.defaults), values(current.unit), { editable: s.editable });
+    ui.canvas = canvas;
+    dragHandles(current, canvas, change);
+    // A preset or Reset keeps what's drawn by hand, as Liquify's strokes,
+    // and only Reset clears it
+    const pick = (values, clear = false) => {
+      const kept = clear ? {} : Object.fromEntries((spec.keep ?? []).map((key) => [key, s[key]]));
+      Object.assign(s, structuredClone(spec.defaults), values(current.unit), { editable: s.editable }, kept);
       refreshFilter(current);
       show();
     };
@@ -3970,7 +4073,7 @@ const PAGE_JS: &str = r##"(() => {
     editable.addEventListener("change", () => change("editable", editable.checked));
     const result = element("section", {}, checkRow("Keep editable", editable, `The original kept, hidden, in a group ${spec.name} can change later`));
     const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
-    reset.addEventListener("click", () => pick(() => ({})));
+    reset.addEventListener("click", () => pick(() => ({}), true));
     const scroll = element("div", { className: "scroll" }, ...[presets, ...sections].filter(Boolean), result, element("div", { className: "under" }, reset));
     const name = element("div", { className: "source", textContent: current.source.name });
     const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
@@ -4598,6 +4701,7 @@ const PAGE_JS: &str = r##"(() => {
   const MODULATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 7.5c1.25 0 1.25-1 2.5-1s1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1M4.5 12c1.25 0 1.25-2 2.5-2s1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2M4.5 17.5c1.25 0 1.25-3 2.5-3s1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3"/></svg>`;
   pictureEffect({
     id: "modulate",
+    handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode === "rings" }],
     thumb: { sample: "sunset", settings: { mode: "waves", spacing: 9 } },
     name: "Modulate",
     about: "Draw it in lines, waves or rings",
@@ -4635,13 +4739,6 @@ const PAGE_JS: &str = r##"(() => {
               ["frequency", "Frequency", "", () => ({ min: 0.05, max: 4, shape: "curve", digits: 2 })],
             ]),
             () => s.mode === "waves",
-          ),
-          ui.when(
-            ui.sliders([
-              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
-              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
-            ]),
-            () => s.mode === "rings",
           ),
         ),
         ui.section("Colors", ui.color("ink", "Ink"), ui.color("paper", "Paper"), ui.check("showPaper", "Show paper", "Paper under the lines, or only the lines, the rest left clear")),
@@ -4720,6 +4817,7 @@ const PAGE_JS: &str = r##"(() => {
   ];
   pictureEffect({
     id: "chromatic",
+    handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode === "lens" }],
     thumb: { sample: "rings", settings: { amount: 10 } },
     name: "Chromatic Aberration",
     about: "Split its colors as a lens does",
@@ -4750,8 +4848,6 @@ const PAGE_JS: &str = r##"(() => {
           ui.when(
             ui.sliders([
               ["falloff", "Falloff", "", () => ({ min: 0.2, max: 4, middle: 1, digits: 2 })],
-              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
-              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
             ]),
             () => s.mode === "lens",
           ),
@@ -4824,6 +4920,7 @@ const PAGE_JS: &str = r##"(() => {
   const FISHEYE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="7.5"/><path ${STROKE} d="M12 4.5c-2.5 2-2.5 13 0 15M12 4.5c2.5 2 2.5 13 0 15M4.5 12c2-2.5 13-2.5 15 0M4.5 12c2 2.5 13 2.5 15 0"/></svg>`;
   pictureEffect({
     id: "fisheye",
+    handles: [{ x: "centerX", y: "centerY", radius: "radius" }],
     thumb: { sample: "checks", settings: { strength: 80 } },
     name: "Fisheye",
     about: "Bulge or pinch it as a lens",
@@ -4846,8 +4943,6 @@ const PAGE_JS: &str = r##"(() => {
           ["strength", "Strength", "%", () => ({ min: -100, max: 100 })],
           ["radius", "Radius", "%", () => ({ min: 5, max: 200, middle: 100 })],
           ["zoom", "Zoom", "%", () => ({ min: 25, max: 400, middle: 100 })],
-          ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
-          ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
         ]),
         ui.check("circle", "Lens circle", "Only what's in the lens's circle, the rest left clear"),
       ),
@@ -4885,23 +4980,105 @@ const PAGE_JS: &str = r##"(() => {
   // Pinch squeezes it in or puffs it out, Ripple sends rings out from the
   // center as on a pond, Zigzag twists those rings back and forth, all
   // within a radius, and Wave moves it across waves running one way. A
-  // photo keeps its bounds, its edges repeated; a cutout grows to fit
+  // photo keeps its bounds, its edges repeated; a cutout grows to fit.
+  // Over any of them, brushes painted on the preview push, twirl, pinch,
+  // bloat or restore it, as Liquify's do, each stroke kept in the settings
+  // as points across the picture, so it's the same at any size
   const LIQUIFY_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12 12.5a1 1 0 1 1 1-1.5 2.5 2.5 0 0 1-2.5 3.5A3.5 3.5 0 0 1 7 11a5 5 0 0 1 5-5 6 6 0 0 1 6 6 7 7 0 0 1-7 7"/></svg>`;
   const LIQUIFY_MODES = [
+    ["none", "None, brushes only"],
     ["twirl", "Twirl"],
     ["pinch", "Pinch"],
     ["ripple", "Ripple"],
     ["zigzag", "Zigzag"],
     ["wave", "Wave"],
   ];
+  const BRUSH_TOOLS = [
+    ["push", "Push", "Drag to push it along"],
+    ["twirl", "Twirl", "Hold or drag to twirl it clockwise, with Alt the other way"],
+    ["pinch", "Pinch", "Hold or drag to pull it in, with Alt to puff it out"],
+    ["bloat", "Bloat", "Hold or drag to puff it out, with Alt to pull it in"],
+    ["restore", "Restore", "Brush it back as it was"],
+  ];
+  // The brush's outline, as the pointer over the preview
+  const brushCursor = (diameter) => {
+    const d = Math.max(8, Math.min(126, Math.round(diameter)));
+    const c = d / 2 + 1;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${d + 2}" height="${d + 2}"><circle cx="${c}" cy="${c}" r="${d / 2}" fill="none" stroke="black" stroke-opacity="0.5" stroke-width="2"/><circle cx="${c}" cy="${c}" r="${d / 2}" fill="none" stroke="white"/></svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${c} ${c}, crosshair`;
+  };
+  // The brushes' controls, and painting on the preview: each stroke a
+  // tool, size and strength and the points it went through, a little apart.
+  // Twirl, Pinch, Bloat and Restore keep working while held still
+  const liquifyBrushes = (ui) => {
+    const { s, canvas } = ui;
+    const toPicture = (event) => {
+      const v = ui.view();
+      const box = canvas.getBoundingClientRect();
+      return [Math.round(((event.clientX - box.left - v.ox) / (v.width * v.fit)) * 10000) / 10000, Math.round(((event.clientY - box.top - v.oy) / (v.height * v.fit)) * 10000) / 10000];
+    };
+    canvas.addEventListener("pointerdown", (event) => {
+      const v = ui.view();
+      if (event.button !== 0 || !v) return;
+      event.preventDefault();
+      canvas.setPointerCapture(event.pointerId);
+      let tool = s.brushTool;
+      if (event.altKey) tool = { twirl: "untwirl", pinch: "bloat", bloat: "pinch" }[tool] ?? tool;
+      const stroke = { tool, size: s.brushSize, strength: s.brushStrength, points: [toPicture(event)] };
+      ui.change("strokes", [...s.strokes, stroke]);
+      const add = (point) => {
+        stroke.points.push(point);
+        ui.change("strokes", s.strokes);
+      };
+      let last = [event.clientX, event.clientY];
+      const move = (event) => {
+        const spacing = Math.max(2, s.brushSize * v.k * v.fit * 0.15);
+        if (Math.hypot(event.clientX - last[0], event.clientY - last[1]) < spacing) return;
+        last = [event.clientX, event.clientY];
+        add(toPicture(event));
+      };
+      const hold = tool === "push" ? null : setInterval(() => add(stroke.points.at(-1)), 60);
+      canvas.addEventListener("pointermove", move);
+      canvas.addEventListener(
+        "lostpointercapture",
+        () => {
+          canvas.removeEventListener("pointermove", move);
+          clearInterval(hold);
+        },
+        { once: true },
+      );
+    });
+    const undo = element("button", { type: "button", className: "chip", textContent: "Undo stroke" });
+    undo.addEventListener("click", () => ui.change("strokes", s.strokes.slice(0, -1)));
+    const clear = element("button", { type: "button", className: "chip", textContent: "Clear" });
+    clear.addEventListener("click", () => ui.change("strokes", []));
+    const buttons = element("div", { className: "row" }, element("span", { className: "label", textContent: "Paint on the preview" }), element("div", { className: "chips" }, undo, clear));
+    buttons.style.gridTemplateColumns = "1fr auto";
+    ui.onShow(() => {
+      undo.disabled = clear.disabled = !s.strokes.length;
+      const v = ui.view();
+      ui.cursor(v ? brushCursor(s.brushSize * v.k * v.fit) : "crosshair");
+    });
+    return ui.section(
+      "Brushes",
+      ui.segments("brushTool", "Tool", BRUSH_TOOLS, true),
+      ui.sliders([
+        ["brushSize", "Size", "pt", (u) => ({ min: 1, max: upTo(u, 0.5, 64), shape: "curve" })],
+        ["brushStrength", "Strength", "%", () => ({ min: 1, max: 100 })],
+      ]),
+      buttons,
+    );
+  };
   pictureEffect({
     id: "liquify",
+    handles: [{ x: "centerX", y: "centerY", radius: "radius", when: (s) => s.mode !== "wave" && s.mode !== "none" }],
+    keep: ["strokes", "brushTool", "brushSize", "brushStrength"],
     thumb: { sample: "checks", settings: { twirl: 240 } },
     name: "Liquify",
-    about: "Twirl, pinch, ripple or wave it",
+    about: "Twirl, pinch, ripple or wave it, or brush it around",
     icon: LIQUIFY_ICON,
     verb: "Warp",
-    defaults: { mode: "twirl", twirl: 180, pinch: 50, amplitude: 6, wavelength: 24, angle: 0, radius: 100, centerX: 50, centerY: 50, editable: true },
+    defaults: { mode: "twirl", twirl: 180, pinch: 50, amplitude: 6, wavelength: 24, angle: 0, radius: 100, centerX: 50, centerY: 50, strokes: [], brushTool: "push", brushSize: 40, brushStrength: 50, editable: true },
     presets: [
       ["Twirl", () => ({})],
       ["Whirlpool", () => ({ twirl: 540, radius: 80 })],
@@ -4910,16 +5087,14 @@ const PAGE_JS: &str = r##"(() => {
       ["Pond", () => ({ mode: "ripple", amplitude: 4, wavelength: 16 })],
       ["Zigzag", () => ({ mode: "zigzag", amplitude: 10, wavelength: 20 })],
       ["Wave", () => ({ mode: "wave", amplitude: 8, wavelength: 60 })],
+      ["Brushes only", () => ({ mode: "none" })],
     ],
-    limits: { twirl: [-3600, 3600], pinch: [-100, 100], amplitude: [0, 1000], wavelength: [1, 4000], angle: [-360, 360], radius: [1, 1000], centerX: [-200, 300], centerY: [-200, 300] },
-    summary: (s) =>
-      ({
-        twirl: `Twirl · ${s.twirl}°`,
-        pinch: `${s.pinch < 0 ? "Puff" : "Pinch"} · ${Math.abs(s.pinch)}%`,
-        ripple: `Ripple · ${s.amplitude}pt`,
-        zigzag: `Zigzag · ${s.amplitude}pt`,
-        wave: `Wave · ${s.amplitude}pt`,
-      })[s.mode] ?? "",
+    limits: { twirl: [-3600, 3600], pinch: [-100, 100], amplitude: [0, 1000], wavelength: [1, 4000], angle: [-360, 360], radius: [1, 1000], brushSize: [1, 4000], brushStrength: [1, 100] },
+    summary: (s) => {
+      const warp = { twirl: `Twirl · ${s.twirl}°`, pinch: `${s.pinch < 0 ? "Puff" : "Pinch"} · ${Math.abs(s.pinch)}%`, ripple: `Ripple · ${s.amplitude}pt`, zigzag: `Zigzag · ${s.amplitude}pt`, wave: `Wave · ${s.amplitude}pt` }[s.mode];
+      const strokes = s.strokes?.length ? `${s.strokes.length} ${s.strokes.length === 1 ? "stroke" : "strokes"}` : "";
+      return [warp, strokes].filter(Boolean).join(" · ") || "Nothing yet";
+    },
     panel: (ui) => {
       const { s } = ui;
       const waving = () => ["ripple", "zigzag", "wave"].includes(s.mode);
@@ -4937,26 +5112,17 @@ const PAGE_JS: &str = r##"(() => {
             waving,
           ),
           ui.when(ui.sliders([["angle", "Angle", "°", () => ({ min: -180, max: 180 })]]), () => s.mode === "wave"),
+          ui.when(ui.sliders([["radius", "Radius", "%", () => ({ min: 5, max: 200, middle: 100 })]]), () => s.mode !== "wave" && s.mode !== "none"),
         ),
-        ui.when(
-          ui.section(
-            "Area",
-            ui.sliders([
-              ["radius", "Radius", "%", () => ({ min: 5, max: 200, middle: 100 })],
-              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
-              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
-            ]),
-          ),
-          () => s.mode !== "wave",
-        ),
+        liquifyBrushes(ui),
       ];
     },
     process: (image, s, k) => {
       const { width: W, height: H } = image;
       const f = premultiplied(image);
-      const amp = s.amplitude * k;
       const opaque = isOpaque(f);
       const sample = opaque ? edgeAt : sampleAt;
+      const amp = s.amplitude * k;
       const pad = s.mode === "wave" && !opaque ? Math.ceil(amp) + 1 : 0;
       const [OW, OH] = [W + 2 * pad, H + 2 * pad];
       const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
@@ -4966,17 +5132,103 @@ const PAGE_JS: &str = r##"(() => {
       const twirl = (s.twirl * Math.PI) / 180;
       const pinch = s.pinch / 100;
       const power = pinch >= 0 ? 1 - 0.7 * pinch : 1 - 1.5 * pinch;
+      // The brushes: where each pixel takes from, as an offset, worked out a
+      // dab at a time from the last. A dab's pixel takes what the pixel it
+      // moved from took: pushed, twirled, pulled in or out, or eased back
+      let field = null;
+      if (s.strokes?.length) {
+        field = new Float32Array(W * H * 2);
+        const fieldAt = (x, y, into) => {
+          x -= 0.5;
+          y -= 0.5;
+          const [x0, y0] = [Math.floor(x), Math.floor(y)];
+          const [tx, ty] = [x - x0, y - y0];
+          into[0] = into[1] = 0;
+          for (let j = 0; j < 2; j++)
+            for (let i = 0; i < 2; i++) {
+              const [xx, yy] = [x0 + i, y0 + j];
+              if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+              const w = (i ? tx : 1 - tx) * (j ? ty : 1 - ty);
+              into[0] += field[(yy * W + xx) * 2] * w;
+              into[1] += field[(yy * W + xx) * 2 + 1] * w;
+            }
+          return into;
+        };
+        const old = new Float32Array(2);
+        for (const stroke of s.strokes) {
+          const r = Math.max(1, (stroke.size * k) / 2);
+          const strength = stroke.strength / 100;
+          const dab = (cx, cy, mx, my) => {
+            const [x0, x1] = [Math.max(0, Math.floor(cx - r)), Math.min(W - 1, Math.ceil(cx + r))];
+            const [y0, y1] = [Math.max(0, Math.floor(cy - r)), Math.min(H - 1, Math.ceil(cy + r))];
+            if (x1 < x0 || y1 < y0) return;
+            const bw = x1 - x0 + 1;
+            const next = new Float32Array(bw * (y1 - y0 + 1) * 2);
+            for (let y = y0; y <= y1; y++)
+              for (let x = x0; x <= x1; x++) {
+                const [X, Y] = [x + 0.5, y + 0.5];
+                const [dx, dy] = [X - cx, Y - cy];
+                const t = (dx * dx + dy * dy) / (r * r);
+                const at = ((y - y0) * bw + x - x0) * 2;
+                const here = (y * W + x) * 2;
+                if (t >= 1) {
+                  next[at] = field[here];
+                  next[at + 1] = field[here + 1];
+                  continue;
+                }
+                const w = (1 - t) * (1 - t);
+                if (stroke.tool === "restore") {
+                  const ease = 1 - w * strength * 0.3;
+                  next[at] = field[here] * ease;
+                  next[at + 1] = field[here + 1] * ease;
+                  continue;
+                }
+                let [px, py] = [X, Y];
+                if (stroke.tool === "push") [px, py] = [X - mx * w * strength, Y - my * w * strength];
+                else if (stroke.tool === "twirl" || stroke.tool === "untwirl") {
+                  const turn = (stroke.tool === "twirl" ? -1 : 1) * strength * 0.08 * w;
+                  const [c, n] = [Math.cos(turn), Math.sin(turn)];
+                  [px, py] = [cx + dx * c - dy * n, cy + dx * n + dy * c];
+                } else {
+                  const scale = 1 + (stroke.tool === "pinch" ? 1 : -1) * strength * 0.05 * w;
+                  [px, py] = [cx + dx * scale, cy + dy * scale];
+                }
+                fieldAt(px, py, old);
+                next[at] = old[0] + px - X;
+                next[at + 1] = old[1] + py - Y;
+              }
+            for (let y = y0; y <= y1; y++) field.set(next.subarray((y - y0) * bw * 2, (y - y0 + 1) * bw * 2), (y * W + x0) * 2);
+          };
+          const points = stroke.points.map(([u, v]) => [u * W, v * H]);
+          if (stroke.tool !== "push") dab(points[0][0], points[0][1], 0, 0);
+          for (let i = 1; i < points.length; i++) {
+            const [[ax0, ay0], [bx, by]] = [points[i - 1], points[i]];
+            const length = Math.hypot(bx - ax0, by - ay0);
+            if (!length) {
+              if (stroke.tool !== "push") dab(bx, by, 0, 0);
+              continue;
+            }
+            const steps = Math.ceil(length / (r * 0.2));
+            for (let j = 1; j <= steps; j++) dab(ax0 + ((bx - ax0) * j) / steps, ay0 + ((by - ay0) * j) / steps, (bx - ax0) / steps, (by - ay0) / steps);
+          }
+        }
+      }
       const out = new Float32Array(OW * OH * 4);
       const p = new Float32Array(4);
       for (let y = 0; y < OH; y++)
         for (let x = 0; x < OW; x++) {
           let [X, Y] = [x - pad + 0.5, y - pad + 0.5];
+          if (field && X > 0 && Y > 0 && X < W && Y < H) {
+            const at = (Math.floor(Y) * W + Math.floor(X)) * 2;
+            X += field[at];
+            Y += field[at + 1];
+          }
           if (s.mode === "wave") {
             // Moved across the waves by a sine along them
             const shift = amp * Math.sin((2 * Math.PI * (X * ax + Y * ay)) / wave);
             X += ay * shift;
             Y -= ax * shift;
-          } else {
+          } else if (s.mode !== "none") {
             const [dx, dy] = [X - cx, Y - cy];
             const r = Math.hypot(dx, dy);
             if (r > 0 && r < R) {
@@ -5001,10 +5253,13 @@ const PAGE_JS: &str = r##"(() => {
   // ---------- Displace ----------
 
   // Each pixel taken from a little way off, as far and which way a map
-  // says: smooth noise, rougher turbulence, or the layer's own brightness,
-  // which pushes light parts one way and dark the other. Split moves red
-  // and blue more and less than green, for a prism's fringes. A photo
-  // keeps its bounds, its edges repeated; a cutout grows to fit
+  // says. The map's a pattern, turned and stretched as wanted: smooth
+  // noise, turbulence's sharper ridges, cells like glass blocks, marble's
+  // veins or waves; or a picture, the layer's own tones or an image of
+  // your own, whose light parts push one way and dark the other, or whose
+  // slopes bend it as glass would. Split moves red and blue more and less
+  // than green, for a prism's fringes. A photo keeps its bounds, its edges
+  // repeated; a cutout grows to fit
   const DISPLACE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 8c2.5-2 5 2 7.5 0s5-2 7.5 0M4.5 12c2.5-2 5 2 7.5 0s5-2 7.5 0M4.5 16c2.5-2 5 2 7.5 0s5-2 7.5 0"/></svg>`;
   // Smooth noise in octaves, about −1 to 1, folded into turbulence's
   // ridges with `turbulent`
@@ -5021,35 +5276,146 @@ const PAGE_JS: &str = r##"(() => {
     }
     return v / total;
   };
-  Object.assign(PIXEL_HELPERS, { noiseAt });
+  // A pattern's push at `x`, `y`, in its own units, about −1 to 1 each way
+  const patternAt = (map, x, y, seed, octaves, into) => {
+    if (map === "cells") {
+      // Each cell, around a point jittered in its square, pushes all of
+      // itself one way, as a glass block does
+      const [gx, gy] = [Math.floor(x), Math.floor(y)];
+      let [best, bx, by] = [Infinity, 0, 0];
+      for (let j = -1; j <= 1; j++)
+        for (let i = -1; i <= 1; i++) {
+          const [cx, cy] = [gx + i, gy + j];
+          const d = (cx + hash2(cx, cy, seed) - x) ** 2 + (cy + hash2(cx, cy, seed + 3) - y) ** 2;
+          if (d < best) [best, bx, by] = [d, cx, cy];
+        }
+      into[0] = hash2(bx, by, seed + 7) * 2 - 1;
+      into[1] = hash2(bx, by, seed + 11) * 2 - 1;
+    } else if (map === "marble") {
+      const t = 2 * Math.PI * (x * 0.5 + noiseAt(x, y, seed, octaves, false) * 2);
+      into[0] = Math.sin(t);
+      into[1] = Math.cos(t) * 0.5;
+    } else if (map === "waves") {
+      into[0] = Math.sin(2 * Math.PI * (y + noiseAt(x, y, seed, octaves, false) * 0.4));
+      into[1] = Math.sin(2 * Math.PI * (x + noiseAt(x, y, seed + 977, octaves, false) * 0.4)) * 0.6;
+    } else {
+      const turbulent = map === "turbulence";
+      into[0] = noiseAt(x, y, seed, octaves, turbulent) * 1.6;
+      into[1] = noiseAt(x, y, seed + 977, octaves, turbulent) * 1.6;
+    }
+    return into;
+  };
+  // An image's grays as a map: at most this many pixels across, kept in
+  // the settings as base64, a byte a pixel
+  const MAP_SIDE = 160;
+  const mapFrom = async (file) => {
+    const bitmap = await createImageBitmap(file);
+    const ratio = Math.min(1, MAP_SIDE / Math.max(bitmap.width, bitmap.height));
+    const [w, h] = [Math.max(1, Math.round(bitmap.width * ratio)), Math.max(1, Math.round(bitmap.height * ratio))];
+    const canvas = Object.assign(document.createElement("canvas"), { width: w, height: h });
+    const context = canvas.getContext("2d");
+    // See-through parts as middle gray, which moves nothing
+    context.fillStyle = "#808080";
+    context.fillRect(0, 0, w, h);
+    context.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    const { data } = context.getImageData(0, 0, w, h);
+    let bytes = "";
+    for (let i = 0; i < w * h; i++) bytes += String.fromCharCode(Math.round(lumaOf(data[i * 4], data[i * 4 + 1], data[i * 4 + 2])));
+    return { name: file.name, w, h, data: btoa(bytes) };
+  };
+  const mapGrays = (map) => {
+    const bytes = atob(map.data);
+    const grays = new Float32Array(map.w * map.h);
+    for (let i = 0; i < grays.length; i++) grays[i] = bytes.charCodeAt(i) / 255;
+    return grays;
+  };
+  Object.assign(PIXEL_HELPERS, { noiseAt, patternAt, mapGrays });
+  const DISPLACE_MAPS = [
+    ["noise", "Noise"],
+    ["turbulence", "Turbulence"],
+    ["cells", "Cells"],
+    ["marble", "Marble"],
+    ["waves", "Waves"],
+    ["self", "Its own tones"],
+    ["image", "An image"],
+  ];
+  // Choosing the image a map's made from, and a small look at it
+  const mapPicker = (ui) => {
+    const { s } = ui;
+    const input = element("input", { type: "file", accept: "image/*", hidden: true });
+    const choose = element("button", { type: "button", className: "chip", textContent: "Choose image…" });
+    choose.addEventListener("click", () => input.click());
+    const look = element("canvas", { width: 32, height: 32 });
+    Object.assign(look.style, { width: "16px", height: "16px", borderRadius: "3px", boxShadow: "inset 0 0 0 1px var(--color-bordertranslucent, #0000001a)" });
+    const name = element("span", { className: "label" });
+    Object.assign(name.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      input.value = "";
+      if (!file) return;
+      try {
+        ui.change("image", await mapFrom(file));
+      } catch {
+        name.textContent = "Couldn't read that image";
+      }
+    });
+    let shown = null;
+    ui.onShow(() => {
+      if (shown === s.image) return;
+      shown = s.image;
+      name.textContent = s.image?.name ?? "No image yet";
+      const context = look.getContext("2d");
+      context.clearRect(0, 0, 32, 32);
+      if (!s.image) return;
+      const grays = mapGrays(s.image);
+      const small = new ImageData(s.image.w, s.image.h);
+      grays.forEach((g, i) => small.data.set([g * 255, g * 255, g * 255, 255], i * 4));
+      const full = Object.assign(document.createElement("canvas"), { width: s.image.w, height: s.image.h });
+      full.getContext("2d").putImageData(small, 0, 0);
+      context.drawImage(full, 0, 0, 32, 32);
+    });
+    const row = element("div", { className: "row" }, look, name, choose, input);
+    row.style.gridTemplateColumns = "16px 1fr auto";
+    return row;
+  };
   pictureEffect({
     id: "displace",
+    keep: ["image"],
     thumb: { sample: "stripes", settings: { amount: 9, scale: 36, detail: 3 } },
     name: "Displace",
-    about: "Push its pixels around with noise or its own tones",
+    about: "Push its pixels around with a pattern or an image",
     icon: DISPLACE_ICON,
     verb: "Displace",
-    defaults: { map: "noise", amount: 8, scale: 40, detail: 2, stretch: 0, axis: "both", angle: 0, smooth: 4, split: 0, seed: 1, editable: true },
+    defaults: { map: "noise", amount: 8, scale: 40, detail: 2, stretch: 0, angle: 0, axis: "both", how: "push", smooth: 4, fit: "stretch", tile: 64, image: null, split: 0, seed: 1, editable: true },
     presets: [
       ["Wobble", () => ({})],
       ["Heat haze", () => ({ amount: 3, scale: 12, detail: 3, stretch: -70, axis: "x" })],
       ["Turbulence", () => ({ map: "turbulence", amount: 14, scale: 60, detail: 5 })],
+      ["Glass blocks", () => ({ map: "cells", amount: 10, scale: 36 })],
+      ["Marble", () => ({ map: "marble", amount: 10, scale: 80, detail: 4 })],
+      ["Rippled glass", () => ({ map: "waves", amount: 5, scale: 24, detail: 2, stretch: 60 })],
       ["Smear", () => ({ map: "self", amount: 12, smooth: 6 })],
       ["Prism", () => ({ amount: 6, scale: 30, detail: 3, split: 60 })],
     ],
-    limits: { amount: [0, 1000], scale: [1, 4000], detail: [1, 6], stretch: [-100, 100], angle: [-360, 360], smooth: [0, 1000], split: [0, 100] },
-    summary: (s) => `${{ noise: "Noise", turbulence: "Turbulence", self: "Its tones" }[s.map] ?? ""} · ${s.amount}pt`,
+    limits: { amount: [0, 1000], scale: [1, 4000], detail: [1, 6], stretch: [-100, 100], angle: [-360, 360], smooth: [0, 1000], tile: [1, 4000], split: [0, 100] },
+    summary: (s) => `${(DISPLACE_MAPS.find(([key]) => key === s.map) ?? ["", ""])[1]} · ${s.amount}pt`,
     panel: (ui) => {
       const { s } = ui;
-      const noisy = () => s.map !== "self";
+      const pattern = () => s.map !== "self" && s.map !== "image";
       return [
         ui.section(
           "Map",
-          ui.segments("map", "Map", [
-            ["noise", "Noise"],
-            ["turbulence", "Turbulence", "Noise folded into sharp ridges"],
-            ["self", "Its tones", "Light parts pushed one way, dark the other"],
-          ]),
+          ui.select("map", "Map", DISPLACE_MAPS),
+          ui.when(mapPicker(ui), () => s.map === "image"),
+          ui.when(
+            ui.segments("fit", "Fit", [
+              ["stretch", "Stretch", "One image stretched over the layer"],
+              ["tile", "Tile", "Repeated across the layer"],
+            ]),
+            () => s.map === "image",
+          ),
+          ui.when(ui.sliders([["tile", "Tile size", "pt", (u) => ({ min: 4, max: upTo(u, 1, 200), shape: "curve" })]]), () => s.map === "image" && s.fit === "tile"),
           ui.sliders([["amount", "Amount", "pt", (u) => ({ min: 0, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })]]),
           ui.when(
             ui.sliders([
@@ -5057,24 +5423,31 @@ const PAGE_JS: &str = r##"(() => {
               ["detail", "Detail", "", () => ({ min: 1, max: 6 })],
               ["stretch", "Stretch", "%", () => ({ min: -100, max: 100 })],
             ]),
-            noisy,
+            pattern,
           ),
           ui.when(
-            ui.segments("axis", "Moves", [
-              ["both", "Both ways"],
-              ["x", "Across"],
-              ["y", "Up and down"],
+            ui.segments("how", "Moves by", [
+              ["push", "Its tones", "Light parts pushed one way along Angle, dark the other"],
+              ["slope", "Its slopes", "Bent where it goes from light to dark, as glass bends what's behind it"],
             ]),
-            noisy,
+            () => !pattern(),
           ),
-          ui.when(ui.shuffle("seed", "Noise"), noisy),
+          ui.when(ui.sliders([["angle", "Angle", "°", () => ({ min: -180, max: 180 })]]), () => pattern() || s.how === "push"),
+          ui.when(ui.sliders([["smooth", "Smoothing", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })]]), () => !pattern()),
           ui.when(
-            ui.sliders([
-              ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
-              ["smooth", "Smoothing", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
-            ]),
-            () => !noisy(),
+            ui.segments(
+              "axis",
+              "Moves",
+              [
+                ["both", "Both ways"],
+                ["x", "Across"],
+                ["y", "Up and down"],
+              ],
+              true,
+            ),
+            pattern,
           ),
+          ui.when(ui.shuffle("seed", "Pattern"), pattern),
         ),
         ui.section("Color", ui.sliders([["split", "Split", "%", () => ({ min: 0, max: 100 })]])),
       ];
@@ -5082,38 +5455,64 @@ const PAGE_JS: &str = r##"(() => {
     process: (image, s, k) => {
       const { width: W, height: H } = image;
       const f = premultiplied(image);
-      const amount = s.amount * k;
-      const split = s.split / 100;
       const opaque = isOpaque(f);
       const sample = opaque ? edgeAt : sampleAt;
-      const pad = opaque ? 0 : Math.ceil(amount * (1 + split) * 1.2) + 1;
+      const amount = s.amount * k;
+      const split = s.split / 100;
+      const pad = opaque ? 0 : Math.ceil(amount * (1 + split) * 1.6) + 1;
       const [OW, OH] = [W + 2 * pad, H + 2 * pad];
-      const self = s.map === "self";
-      // Its tones, transparency a middle gray that moves nothing
-      let tones = null;
-      if (self) {
-        tones = new Float32Array(W * H);
-        for (let i = 0; i < W * H; i++) tones[i] = lumaOf(f[i * 4], f[i * 4 + 1], f[i * 4 + 2]) + (1 - f[i * 4 + 3]) * 0.5;
-        tones = blurChannel(tones, W, H, s.smooth * k);
-      }
       const [ux, uy] = [Math.cos((s.angle * Math.PI) / 180), Math.sin((s.angle * Math.PI) / 180)];
+      // A picture for a map: its own tones, transparency a middle gray that
+      // moves nothing, or the chosen image's, blurred by Smoothing, and
+      // where in it each of the layer's pixels falls
+      let grays = null;
+      let [mw, mh, perX, perY, tiled] = [W, H, 1, 1, false];
+      if (s.map === "self") {
+        grays = new Float32Array(W * H);
+        for (let i = 0; i < W * H; i++) grays[i] = lumaOf(f[i * 4], f[i * 4 + 1], f[i * 4 + 2]) + (1 - f[i * 4 + 3]) * 0.5;
+      } else if (s.map === "image" && s.image) {
+        grays = mapGrays(s.image);
+        [mw, mh] = [s.image.w, s.image.h];
+        tiled = s.fit === "tile";
+        const across = tiled ? Math.max(1, s.tile * k) : W;
+        perX = mw / across;
+        perY = tiled ? perX : mh / H;
+      }
+      if (grays) grays = blurChannel(grays, mw, mh, s.smooth * k * perX);
+      const grayAt = (X, Y) => {
+        let [u, v] = [X * perX, Y * perY];
+        if (tiled) [u, v] = [((u % mw) + mw) % mw, ((v % mh) + mh) % mh];
+        u = Math.min(mw - 0.5, Math.max(0.5, u));
+        v = Math.min(mh - 0.5, Math.max(0.5, v));
+        return channelAt(grays, mw, mh, u, v);
+      };
+      // Slopes are steeper the less smoothed, so they're evened out to move
+      // about Amount
+      const reach = Math.max(2, 4 * s.smooth * k);
       const size = Math.max(1, s.scale * k);
       const st = s.stretch / 100;
       const [sx, sy] = [size * (1 + Math.max(0, st) * 3), size * (1 + Math.max(0, -st) * 3)];
-      const [octaves, turbulent, seed] = [Math.round(s.detail), s.map === "turbulence", s.seed | 0];
+      const [octaves, seed] = [Math.round(s.detail), s.seed | 0];
+      const push = new Float32Array(2);
       const out = new Float32Array(OW * OH * 4);
       const [p, red, blue] = [new Float32Array(4), new Float32Array(4), new Float32Array(4)];
       for (let y = 0; y < OH; y++)
         for (let x = 0; x < OW; x++) {
           const [X, Y] = [x - pad + 0.5, y - pad + 0.5];
           let [dx, dy] = [0, 0];
-          if (self) {
-            const m = (channelAt(tones, W, H, Math.min(W - 0.5, Math.max(0.5, X)), Math.min(H - 0.5, Math.max(0.5, Y))) - 0.5) * 2 * amount;
-            [dx, dy] = [m * ux, m * uy];
-          } else {
-            // In points, so the look holds at any size
-            if (s.axis !== "y") dx = noiseAt(X / sx, Y / sy, seed, octaves, turbulent) * amount * 1.6;
-            if (s.axis !== "x") dy = noiseAt(X / sx, Y / sy, seed + 977, octaves, turbulent) * amount * 1.6;
+          if (grays) {
+            if (s.how === "slope") {
+              dx = ((grayAt(X + 1, Y) - grayAt(X - 1, Y)) / 2) * amount * reach;
+              dy = ((grayAt(X, Y + 1) - grayAt(X, Y - 1)) / 2) * amount * reach;
+            } else {
+              const m = (grayAt(X, Y) - 0.5) * 2 * amount;
+              [dx, dy] = [m * ux, m * uy];
+            }
+          } else if (s.map !== "image") {
+            // The pattern turned by Angle, in points so it holds at any size
+            patternAt(s.map, (X * ux + Y * uy) / sx, (Y * ux - X * uy) / sy, seed, octaves, push);
+            if (s.axis !== "y") dx = (push[0] * ux - push[1] * uy) * amount;
+            if (s.axis !== "x") dy = (push[0] * uy + push[1] * ux) * amount;
           }
           const at = (y * OW + x) * 4;
           sample(f, W, H, X + dx, Y + dy, p);
@@ -5140,6 +5539,7 @@ const PAGE_JS: &str = r##"(() => {
   const MOTION_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="15" cy="12" r="4.5"/><path ${STROKE} d="M4.5 9.5h4M3.5 12h5M4.5 14.5h4"/></svg>`;
   pictureEffect({
     id: "motionBlur",
+    handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode !== "linear" }],
     thumb: { sample: "lights", settings: { distance: 26, angle: 0, trail: true } },
     name: "Motion Blur",
     about: "Smear it along a line, out from a point or around it",
@@ -5175,16 +5575,6 @@ const PAGE_JS: &str = r##"(() => {
           ui.when(ui.sliders([["zoom", "Amount", "%", () => ({ min: 0, max: 80 })]]), () => s.mode === "zoom"),
           ui.when(ui.sliders([["spin", "Angle", "°", () => ({ min: -90, max: 90 })]]), () => s.mode === "spin"),
           ui.check("trail", "Trail", "Smeared one way only, behind its motion"),
-        ),
-        ui.when(
-          ui.section(
-            "Center",
-            ui.sliders([
-              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
-              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
-            ]),
-          ),
-          () => s.mode !== "linear",
         ),
       ];
     },
