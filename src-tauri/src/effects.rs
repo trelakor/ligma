@@ -4295,11 +4295,36 @@ const PAGE_JS: &str = r##"(() => {
     return { canvas, x, y, width: image.width, height: image.height, bytes };
   };
 
+  // The picture an effect's made from for `level`. An effect with detail
+  // finer than that level's pixels, as a dither's cells or a screen's
+  // stripes, says how many pixels a point it needs (`detail`), and gets a
+  // picture that large, from the full one and no larger than it, so the
+  // preview and the file look as applying will. One or two are kept
+  const DETAIL_MOST = 2048;
+  const workingLevel = (current, level) => {
+    const entry = current.levels[level];
+    const need = level === "full" ? 0 : (current.spec.detail?.(current.settings) ?? 0);
+    if (!(need > entry.k * 1.05)) return { key: level, entry };
+    const source = current.levels.full ?? current.levels.live;
+    const side = Math.max(source.picture.width, source.picture.height) / source.k;
+    const k = Math.min(source.k, need, DETAIL_MOST / side);
+    if (!(k > entry.k * 1.05)) return { key: level, entry };
+    // The same picture whichever level asked, the preview's or the file's
+    const key = `@${k.toFixed(3)}`;
+    current.working ??= new Map();
+    if (!current.working.has(key)) {
+      while (current.working.size >= 2) current.working.delete(current.working.keys().next().value);
+      current.working.set(key, scaledPicture(source.picture, Math.round(Math.max(source.picture.width, source.picture.height) * (k / source.k)), source.k));
+    }
+    return { key, entry: current.working.get(key) };
+  };
+
   // The picture for `level` made apart from the page, by the worker for
   // `slot`, encoded as a PNG with `png`. With `patch`, an effect that can
-  // gives only the part that changed, as it is, with where it goes
+  // gives only the part that changed, as it is, with where it goes. What's
+  // made says its pixels a point, `k`, and the picture it was made from
   const filterAt = async (current, level, png = false, slot = "live", patch = false) => {
-    const entry = current.levels[level];
+    const { key, entry } = workingLevel(current, level);
     const image = crushedPixels(entry);
     const s = structuredClone(current.settings);
     const worker = await filterWorker(current, slot);
@@ -4312,8 +4337,8 @@ const PAGE_JS: &str = r##"(() => {
         made = await new Promise((resolve, reject) => {
           const id = ++filterJob;
           current.jobs.set(id, { resolve, reject });
-          worker.postMessage({ id, level, image: sent.has(level) ? null : image, s, k: entry.k, png, patch });
-          sent.add(level);
+          worker.postMessage({ id, level: key, image: sent.has(key) ? null : image, s, k: entry.k, png, patch });
+          sent.add(key);
         });
       } catch {}
     }
@@ -4322,7 +4347,8 @@ const PAGE_JS: &str = r##"(() => {
       await new Promise((resolve) => setTimeout(resolve));
       made = current.spec.process(image, s, entry.k, patch);
     }
-    return made.patch ? made : drawnFrom(made);
+    const drawn = made.patch ? made : drawnFrom(made);
+    return Object.assign(drawn, { k: entry.k, picture: { width: image.width, height: image.height } });
   };
 
   // A spec's `handles` are centers dragged on the preview, as Disintegrate's
@@ -4430,7 +4456,6 @@ const PAGE_JS: &str = r##"(() => {
     const canvas = current.preview;
     const drawn = current.previewDrawn;
     if (!canvas || !drawn) return;
-    const entry = current.levels.preview;
     const ratio = devicePixelRatio || 1;
     const box = canvas.getBoundingClientRect();
     // Resized only when its box is, as a resize starts it over
@@ -4445,9 +4470,9 @@ const PAGE_JS: &str = r##"(() => {
     const left = (box.width - drawn.width * fit) / 2;
     const top = (box.height - drawn.height * fit) / 2;
     context.drawImage(drawn.canvas, left, top, drawn.width * fit, drawn.height * fit);
-    // Where the picture's top left landed, for handles and brushes
-    const { width, height } = crushedPixels(entry);
-    current.view = { fit, ox: left - drawn.x * fit, oy: top - drawn.y * fit, width, height, k: entry.k };
+    // Where the picture's top left landed, for handles
+    const { width, height } = drawn.picture;
+    current.view = { fit, ox: left - drawn.x * fit, oy: top - drawn.y * fit, width, height, k: drawn.k };
     drawHandles(current, context);
   };
 
@@ -4669,7 +4694,10 @@ const PAGE_JS: &str = r##"(() => {
       while (current.placing && filtering === current) await new Promise((resolve) => setTimeout(resolve, 16));
       current.placing = true;
       try {
-        if (filtering === current) await placeDrawn(current, await filterAt(current, "live", true), current.levels.live.k);
+        if (filtering === current) {
+          const drawn = await filterAt(current, "live", true);
+          await placeDrawn(current, drawn, drawn?.k);
+        }
       } catch {}
       current.placing = false;
       gone();
@@ -4761,7 +4789,6 @@ const PAGE_JS: &str = r##"(() => {
           if (drawn?.patch) {
             if (!drawn.empty && current.painting === paint) paint.drawn.canvas.getContext("2d").putImageData(drawn.image, drawn.px, drawn.py);
           } else if (drawn && current.painting === paint) {
-            drawn.k = current.levels[level].k;
             paint.level = level;
             Object.assign(drawn.canvas.style, { position: "absolute", pointerEvents: "none" });
             paint.drawn?.canvas.remove();
@@ -4976,7 +5003,8 @@ const PAGE_JS: &str = r##"(() => {
         do {
           current.again = false;
           const started = performance.now();
-          await placeDrawn(current, await filterAt(current, "live", true), current.levels.live.k);
+          const drawn = await filterAt(current, "live", true);
+          await placeDrawn(current, drawn, drawn?.k);
           if (current.again) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 250 - (performance.now() - started))));
         } while (current.again && !current.busy && filtering === current && !current.stroking);
       } catch {}
@@ -5118,6 +5146,8 @@ const PAGE_JS: &str = r##"(() => {
   ];
   pictureEffect({
     id: "dither",
+    // Cells at least three pixels across, so the pattern is the one applied
+    detail: (s) => 3 / Math.max(0.1, s.pixelSize),
     thumb: { sample: "sunset", settings: { palette: "duo", pixelSize: 2.5 } },
     name: "Dither",
     about: "Error diffusion, Bayer and more, in a palette",
@@ -5369,6 +5399,8 @@ const PAGE_JS: &str = r##"(() => {
   ];
   pictureEffect({
     id: "halftone",
+    // Cells at least eight pixels across, so dots keep their shape
+    detail: (s) => 8 / Math.max(0.1, s.cell),
     thumb: { sample: "sunset", settings: { mode: "cmyk", cell: 6 } },
     name: "Halftone",
     about: "Print it in dots, lines or four inks",
@@ -5506,6 +5538,8 @@ const PAGE_JS: &str = r##"(() => {
   const MODULATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 7.5c1.25 0 1.25-1 2.5-1s1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1M4.5 12c1.25 0 1.25-2 2.5-2s1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2M4.5 17.5c1.25 0 1.25-3 2.5-3s1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3"/></svg>`;
   pictureEffect({
     id: "modulate",
+    // Lines at least six pixels apart
+    detail: (s) => 6 / Math.max(0.1, s.spacing),
     handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode === "rings" }],
     thumb: { sample: "sunset", settings: { mode: "waves", spacing: 9 } },
     name: "Modulate",
@@ -7403,6 +7437,8 @@ const PAGE_JS: &str = r##"(() => {
   const GLITTER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 9.5 9 5.5l5 1.5 1 4.5-4 3-4.5-1.5zM11 14.5l4-3 3.5 2.5-1 4-4.5 1zM14 7l4.5-1 1 4-4.5 1.5"/></svg>`;
   pictureEffect({
     id: "glitter",
+    // Flakes at least four pixels across
+    detail: (s) => 4 / Math.max(0.1, s.size),
     thumb: { sample: "badge", settings: { size: 4 } },
     name: "Glitter",
     about: "Turn it into sparkling glitter",
@@ -7618,12 +7654,6 @@ const PAGE_JS: &str = r##"(() => {
     ["linen", "Linen"],
     ["wrinkle", "Wrinkled vinyl"],
   ];
-  const PEEL_CORNERS = [
-    ["tl", "Top left"],
-    ["tr", "Top right"],
-    ["bl", "Bottom left"],
-    ["br", "Bottom right"],
-  ];
   // Seamless value noise, a tile 256 across, from `hash2`, octaves each
   // twice as fine. Cached in the worker, as every sticker uses the same
   const noiseTile = (seed, octaves) => {
@@ -7742,6 +7772,8 @@ const PAGE_JS: &str = r##"(() => {
   Object.assign(PIXEL_HELPERS, { noiseTile, tileAt, distanceField, fillPolygon });
   pictureEffect({
     id: "sticker",
+    // Where the peel lifts from, dragged anywhere round the sticker
+    handles: [{ x: "peelX", y: "peelY", when: (s) => s.peel }],
     thumb: { sample: "badge", backdrop: "slate", fit: true, settings: { border: 7, gloss: 18, peel: true, peelSize: 34, shadowBlur: 10, shadowY: 5 } },
     name: "Sticker",
     about: "Make it a die-cut, kiss-cut or holographic sticker",
@@ -7752,7 +7784,7 @@ const PAGE_JS: &str = r##"(() => {
       border: 16, borderColor: "#ffffff", borderOpacity: 100, keyline: 0, keylineColor: "#101828", keylineOpacity: 100,
       cornerRadius: 40, points: 14, depth: 20, rotate: 0, square: true,
       foil: 0, pattern: "pastel", coverage: "behind", pastel: 35, crinkle: 60, foilAngle: 35, foilScale: 45, foilHue: 0, sparkle: 12,
-      peel: false, corner: "tr", peelSize: 38, curl: 88, backColor: "#ffffff", backOpacity: 100, peelShadow: 38, peelBlur: 14,
+      peel: false, peelX: 88, peelY: 10, peelSize: 38, curl: 88, backColor: "#ffffff", backOpacity: 100, peelShadow: 38, peelBlur: 14,
       texture: "none", textureAmount: 32, grain: 70, bevel: 0, gloss: 14,
       shadow: true, shadowBlur: 18, shadowY: 8, shadowColor: "#000000", shadowOpacity: 30,
       editable: true,
@@ -7830,13 +7862,12 @@ const PAGE_JS: &str = r##"(() => {
           ),
         ),
         ui.section(
-          "Peeled corner",
-          ui.check("peel", "Peel a corner"),
+          "Peel · drag where it lifts from",
+          ui.check("peel", "Peel it"),
           ui.when(
             element(
               "div",
               {},
-              ui.select("corner", "Corner", PEEL_CORNERS),
               ui.sliders([
                 ["peelSize", "Size", "%", () => ({ min: 5, max: 60 })],
                 ["curl", "Curl", "%", () => ({ min: 0, max: 100 })],
@@ -8388,9 +8419,23 @@ const PAGE_JS: &str = r##"(() => {
       // the sheet's back
       let flap = null;
       let lift = null;
+      let height = null;
       if (s.peel) {
-        const dirs = { tr: [0.7071, -0.7071], tl: [-0.7071, -0.7071], br: [0.7071, 0.7071], bl: [-0.7071, 0.7071] };
-        const [ux, uy] = dirs[s.corner] ?? dirs.tr;
+        // Toward the point dragged, from the sticker's middle
+        let [cx0, cy0, cx1, cy1] = [W, H, 0, 0];
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++)
+            if (sdf[y * W + x] < 0) {
+              if (x < cx0) cx0 = x;
+              if (x > cx1) cx1 = x;
+              if (y < cy0) cy0 = y;
+              if (y > cy1) cy1 = y;
+            }
+        const tx = pad + (s.peelX / 100) * W0 - (cx0 + cx1 + 1) / 2;
+        const ty = pad + (s.peelY / 100) * H0 - (cy0 + cy1 + 1) / 2;
+        const reach = Math.hypot(tx, ty) || 1;
+        const ux = reach > 0.5 ? tx / reach : 0.7071;
+        const uy = reach > 0.5 ? ty / reach : -0.7071;
         let [most, least] = [-Infinity, Infinity];
         for (let y = 0; y < H; y++)
           for (let x = 0; x < W; x++) {
@@ -8409,6 +8454,7 @@ const PAGE_JS: &str = r##"(() => {
           const light = [-0.35, -0.45, 0.82];
           flap = new Float32Array(n * 4);
           lift = new Float32Array(n);
+          height = new Float32Array(n);
           const at = (phi, x, y, proj, into) => {
             if (phi < 0 || phi > phiMax) return false;
             const along = proj - (fold + R * phi);
@@ -8485,7 +8531,9 @@ const PAGE_JS: &str = r##"(() => {
               flap[i * 4 + 1] = clamp01(g);
               flap[i * 4 + 2] = clamp01(b);
               flap[i * 4 + 3] = clamp01(a * seam);
-              lift[i] = clamp01(a * seam * clamp01(rise / 2));
+              // How much of the sheet's here and how high, for its shadow
+              lift[i] = clamp01(a * seam);
+              height[i] = rise * R;
             }
           // The body's cut with a hard edge just past where the flap's whole,
           // so the two never leave a see-through seam
@@ -8535,9 +8583,26 @@ const PAGE_JS: &str = r##"(() => {
       }
       over2(body);
       if (flap) {
+        // The flap's shadow, cast by a light from the top left: each point of
+        // the sheet lands as far down and right as it's lifted, so it meets
+        // the flap at the fold and falls farther toward the tip
         if (s.peelShadow > 0) {
-          const blur = Math.max(1, s.peelBlur * k);
-          under(lift, blur, blur * 0.8 * 0.42, blur * 0.8 * 0.55, s.peelShadow / 100);
+          const cast = new Float32Array(n);
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) {
+              const i = y * W + x;
+              const a = lift[i];
+              if (!a) continue;
+              const sx = Math.floor(x + 0.55 * height[i]);
+              const sy = Math.floor(y + 0.7 * height[i]);
+              for (let j = 0; j < 2; j++)
+                for (let m = 0; m < 2; m++) {
+                  const tx = sx + m;
+                  const ty = sy + j;
+                  if (tx >= 0 && ty >= 0 && tx < W && ty < H && cast[ty * W + tx] < a) cast[ty * W + tx] = a;
+                }
+            }
+          under(cast, Math.max(1, s.peelBlur * k), 0, 0, s.peelShadow / 100);
         }
         over2(flap);
       }
@@ -8551,22 +8616,27 @@ const PAGE_JS: &str = r##"(() => {
   // pixels Pitch apart, each three stripes of red, green and blue with dark
   // gaps between, lit as bright as the artwork's colour there; a camera
   // looks at that screen tilted, turned and rolled in 3D, from as close as
-  // Zoom says, toward the point dragged on the preview. What's as far from
-  // the camera as that point is sharp, and nearer and farther blurs as a
-  // lens's depth of field does, so the stripes show only where it's in
-  // focus and moiré where they're finer than the camera's pixels. A glow
+  // Zoom says, toward Look at. What's as far from the camera as the
+  // focus, the point dragged on the preview, is sharp, and nearer and
+  // farther blurs as a lens's depth of field does, so the stripes show
+  // only where it's in focus and moiré where they're finer than the
+  // camera's pixels. A glow
   // round bright parts, colour fringes toward the edges, a vignette and
   // grain finish it
   const SCREEN_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 6.5 18 5v11.5L5.5 15z"/><path ${STROKE} d="M9 18.5h6M12 16.2v2.3"/><path ${STROKE} stroke-dasharray="1 1.5" d="M8 9h1m2 0h1m2 0h1M8 11.5h1m2 0h1m2 0h1"/></svg>`;
   pictureEffect({
     id: "screen",
-    handles: [{ x: "centerX", y: "centerY" }],
+    // Each stripe of a pixel at least two pixels across, so the grid
+    // and its moiré are the ones applied
+    detail: (s) => 6 / Math.max(0.1, s.pitch),
+    // The focus, where it's sharp, in the picture as the camera sees it
+    handles: [{ x: "focusX", y: "focusY" }],
     thumb: { sample: "ui", settings: { pitch: 2.4, tiltX: 30, tiltY: -24, zoom: 190, focus: 40 } },
     name: "Screen",
     about: "Film it off a monitor, in 3D with depth of field",
     icon: SCREEN_ICON,
     verb: "Make screen",
-    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
+    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focusX: 50, focusY: 50, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
     presets: [
       ["Angled", () => ({})],
       ["Close up", () => ({ zoom: 320, tiltX: 18, tiltY: -28, pitch: 2.5, aperture: 75 })],
@@ -8575,7 +8645,7 @@ const PAGE_JS: &str = r##"(() => {
       ["Desk", () => ({ tiltX: 42, tiltY: 0, roll: -6, zoom: 170, aperture: 70 })],
       ["Flat grid", () => ({ tiltX: 0, tiltY: 0, zoom: 100, aperture: 0, vignette: 0, fringe: 0, glow: 15, grain: 0 })],
     ],
-    limits: { pitch: [0.5, 1000], gaps: [0, 100], tiltX: [-89, 89], tiltY: [-89, 89], roll: [-360, 360], zoom: [10, 2000], centerX: [-200, 300], centerY: [-200, 300], focus: [0, 100], aperture: [0, 100], glow: [0, 100], fringe: [0, 100], vignette: [0, 100], grain: [0, 100], exposure: [10, 300] },
+    limits: { pitch: [0.5, 1000], gaps: [0, 100], tiltX: [-89, 89], tiltY: [-89, 89], roll: [-360, 360], zoom: [10, 2000], centerX: [-200, 300], centerY: [-200, 300], focusX: [-200, 300], focusY: [-200, 300], focus: [0, 100], aperture: [0, 100], glow: [0, 100], fringe: [0, 100], vignette: [0, 100], grain: [0, 100], exposure: [10, 300] },
     summary: (s) => `${s.tiltX}° · ${s.tiltY}° · ${s.zoom}%`,
     panel: (ui) => [
       ui.section(
@@ -8585,10 +8655,12 @@ const PAGE_JS: &str = r##"(() => {
           ["tiltY", "Turn", "°", () => ({ min: -75, max: 75 })],
           ["roll", "Roll", "°", () => ({ min: -180, max: 180 })],
           ["zoom", "Zoom", "%", () => ({ min: 25, max: 800, middle: 100, shape: "curve" })],
+          ["centerX", "Look at x", "%", () => ({ min: 0, max: 100 })],
+          ["centerY", "Look at y", "%", () => ({ min: 0, max: 100 })],
         ]),
       ),
       ui.section(
-        "Focus",
+        "Focus · drag on the preview",
         ui.sliders([
           ["aperture", "Depth of field", "%", () => ({ min: 0, max: 100 })],
           ["focus", "Focus spread", "%", () => ({ min: 0, max: 100 })],
@@ -8697,7 +8769,10 @@ const PAGE_JS: &str = r##"(() => {
           depth[y * W + x] = t;
         }
       // Depth of field: blurred more the farther a pixel's distance is from
-      // the target's, as a lens's circle of confusion grows
+      // the focus's, as a lens's circle of confusion grows. The focus is
+      // the screen where the camera sees it at the point dragged
+      const focused = project((W * s.focusX) / 100, (H * s.focusY) / 100);
+      const sharpAt = focused ? focused[2] : distance;
       const blurMax = (s.aperture / 100) * Math.max(W, H) * 0.012;
       const spread = 0.02 + (s.focus / 100) * 0.3;
       const levels = [0, 0.33, 0.66, 1];
@@ -8710,7 +8785,7 @@ const PAGE_JS: &str = r##"(() => {
       const out = new Float32Array(W * H * 4);
       for (let i = 0; i < W * H; i++) {
         const t = depth[i];
-        const away = t > 0 ? Math.abs(t - distance) / distance : 0;
+        const away = t > 0 ? Math.abs(t - sharpAt) / sharpAt : 0;
         const at = clamp01((away - spread * 0.3) / spread) * 3;
         const j = Math.min(2, Math.floor(at));
         const m = at - j;
@@ -8770,7 +8845,7 @@ const PAGE_JS: &str = r##"(() => {
   // after each change, reused where they can be
   const FILL = "shapeFill";
   const FILL_ROLE_COPY = "fill-copy";
-  const FILL_DEFAULTS = { seeds: [], fit: "inside", margin: 0, gap: 2, density: 70, most: 300, size: 100, variation: 45, angle: 0, spin: 180, seed: 1, editable: true };
+  const FILL_DEFAULTS = { seeds: [], fit: "inside", margin: 0, gap: 2, density: 70, most: 300, size: 100, variation: 45, angle: 0, spin: 180, seed: 1, showShape: false, editable: true };
   const FILL_PRESETS = [
     ["Packed", () => ({})],
     ["Poured", () => ({ fit: "loose", gap: 1, density: 85, variation: 60 })],
@@ -8820,6 +8895,15 @@ const PAGE_JS: &str = r##"(() => {
     const spots = [];
     for (let i = 0; i < n; i++) if (inside[i] && (loose || depth[i] >= margin + 0.5)) spots.push(i);
     if (!spots.length || !seeds.length) return [];
+    // Copies sized to the shape, whatever size the layers are: about as
+    // thick as the shape mostly is, as a letter's strokes are, and no more
+    // than a sixth of it across. Size is a share of that
+    const sample = [];
+    for (let i = 0; i < spots.length; i += 7) sample.push(depth[spots[i]]);
+    sample.sort((a, b) => a - b);
+    const thick = 2 * (sample[Math.floor(sample.length * 0.9)] ?? 1);
+    const base = Math.max(3, Math.min(thick * 0.85, Math.min(mw, mh) / 6));
+    const fitScale = seeds.map((seed) => base / Math.max(1, Math.max(seed.w, seed.h) * (g / seed.g)));
     const weights = seeds.map((seed) => Math.max(0, seed.weight));
     const total = weights.reduce((a, b) => a + b, 0) || 1;
     const random = (i, j) => hash2(i, j, s.seed | 0);
@@ -8832,9 +8916,9 @@ const PAGE_JS: &str = r##"(() => {
       while (which < seeds.length - 1 && pick >= weights[which]) pick -= weights[which++];
       // In steps of a sixteenth and 8°, which can't be seen, so outlines
       // are shared between candidates
-      const scale = Math.max(1 / 16, Math.round((s.size / 100) * (1 + (s.variation / 100) * 0.9 * (random(i, 2) * 2 - 1)) * 16) / 16);
+      const rel = Math.max(1 / 16, Math.round((s.size / 100) * (1 + (s.variation / 100) * 0.9 * (random(i, 2) * 2 - 1)) * 16) / 16);
       const turn = Math.round((s.angle + s.spin * (random(i, 3) * 2 - 1)) / 8) * 8;
-      candidates.push({ which, scale, turn, reach: scale * seeds[which].size, i });
+      candidates.push({ which, rel, scale: rel * fitScale[which], turn, reach: rel, i });
     }
     candidates.sort((a, b) => b.reach - a.reach);
     const occupied = new Uint8Array(n);
@@ -8881,10 +8965,10 @@ const PAGE_JS: &str = r##"(() => {
     // Outlines kept by layer, size and turn, a little rounded, as many
     // candidates share them
     const outlines = new Map();
-    const outline = (which, scale, turn) => {
-      const key = `${which}|${Math.round(scale * 16)}|${Math.round(turn / 8)}`;
+    const outline = (which, rel, turn) => {
+      const key = `${which}|${Math.round(rel * 16)}|${Math.round(turn / 8)}`;
       let found = outlines.get(key);
-      if (!found) outlines.set(key, (found = footprint(seeds[which], Math.round(scale * 16) / 16, Math.round(turn / 8) * 8)));
+      if (!found) outlines.set(key, (found = footprint(seeds[which], (Math.max(1, Math.round(rel * 16)) / 16) * fitScale[which], Math.round(turn / 8) * 8)));
       return found;
     };
     // Places still free, picked from as it fills, so tries don't keep
@@ -8907,8 +8991,8 @@ const PAGE_JS: &str = r##"(() => {
       // The gap grows what's kept clear round it, or with a negative gap
       // lets copies overlap
       const grow = (2 * s.gap * g) / Math.max(1, size);
-      const test = outline(cand.which, cand.scale * Math.max(0.2, 1 + Math.min(0, grow)), cand.turn);
-      const stamp = grow > 0 ? outline(cand.which, cand.scale * (1 + grow), cand.turn) : test;
+      const test = outline(cand.which, cand.rel * Math.max(0.2, 1 + Math.min(0, grow)), cand.turn);
+      const stamp = grow > 0 ? outline(cand.which, cand.rel * (1 + grow), cand.turn) : test;
       if (!test.length) continue;
       for (let attempt = 0; attempt < 24; attempt++) {
         const spot = free[Math.floor(random(cand.i, 10 + attempt) * free.length)];
@@ -8954,40 +9038,95 @@ const PAGE_JS: &str = r##"(() => {
     }
     return placed;
   };
-  // The copies in the file, made again from where `packFill` put them:
-  // reused while they're the same layer, a copy of the seed sized and
-  // turned about its own middle onto each spot
-  const placeFills = (current) => {
-    const { figma, shape, seeds, placed } = current;
+  // While it's changed, the fill shows in the file as one picture over the
+  // shape, drawn from the layers' own pictures, so nothing but that one
+  // image is made however many copies there are. Applying makes the
+  // copies as real layers, a few at a time between frames, so Figma keeps
+  // up
+  const FILL_PICTURE_MOST = 1600;
+  const drawFill = (current) => {
+    const { shape, seeds, placed, settings } = current;
+    const k = Math.min(2, FILL_PICTURE_MOST / Math.max(1, shape.box.width, shape.box.height));
+    const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(shape.box.width * k)), height: Math.max(1, Math.round(shape.box.height * k)) });
+    const context = canvas.getContext("2d");
+    if (settings.showShape) context.drawImage(shape.bitmap, 0, 0, canvas.width, canvas.height);
+    for (const spot of placed) {
+      const seed = seeds[spot.which];
+      if (!seed) continue;
+      // The seed's picture is its render bounds; the spot's in the
+      // shape's picture, `g` pixels a point
+      const across = seed.box.width * spot.scale * k;
+      const down = seed.box.height * spot.scale * k;
+      context.save();
+      context.translate((spot.x / shape.g) * k, (spot.y / shape.g) * k);
+      context.rotate((spot.turn * Math.PI) / 180);
+      context.drawImage(seed.look, -across / 2, -down / 2, across, down);
+      context.restore();
+    }
+    return { canvas, x: 0, y: 0, width: canvas.width, height: canvas.height, k };
+  };
+  // The picture put in the file, at most a few times a second while
+  // something's dragged, as each is a new image
+  const showFill = async (current) => {
+    if (current.placing) {
+      current.again = true;
+      return;
+    }
+    current.placing = true;
+    try {
+      do {
+        current.again = false;
+        const started = performance.now();
+        const drawn = drawFill(current);
+        await placeDrawn(current, drawn, drawn.k);
+        if (current.again) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 250 - (performance.now() - started))));
+      } while (current.again && filling === current && !current.busy);
+    } catch {}
+    current.placing = false;
+  };
+  // Seeds as packing reads them: their layer, outline, size in points, and
+  // their visual middle in their own coordinates, and a larger picture of
+  // them for showing the fill
+  const readSeed = async (node, weight) => {
+    const read = await readAlpha(node, 64);
+    const look = await readAlpha(node, 256);
+    const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+    const mx = read.box.x + read.box.width / 2 - e;
+    const my = read.box.y + read.box.height / 2 - f;
+    const det = a * d - b * c || 1;
+    return { node, weight, alpha: read.alpha, w: read.w, h: read.h, g: read.g, box: read.box, size: Math.max(read.box.width, read.box.height), bitmap: read.bitmap, look: look.bitmap, middle: [(d * mx - c * my) / det, (-b * mx + a * my) / det] };
+  };
+  // Packed again a moment after a change, then shown in the panel at once
+  // and in the file a little after
+  const refill = (current) => {
+    clearTimeout(current.timer);
+    current.timer = setTimeout(() => {
+      if (filling !== current || !current.shape) return;
+      current.placed = packFill(current.shape, current.seeds, current.settings);
+      current.panel?.show();
+      showFill(current);
+    }, 50);
+  };
+  // The copies as real layers: a copy of each seed sized and turned about
+  // its own middle onto its spot, the largest at the back, a few at a time
+  const makeCopies = async (current) => {
+    const { shape, seeds, placed } = current;
     const parent = current.container.parent;
     const flowing = "layoutMode" in parent && parent.layoutMode !== "NONE";
-    while (current.copies.length > placed.length) {
-      const old = current.copies.pop();
-      if (!old.node.removed) old.node.remove();
-    }
-    placed.forEach((spot, i) => {
+    const copies = [];
+    let index = parent.children.indexOf(current.container);
+    for (let at = 0; at < placed.length; at++) {
+      const spot = placed[at];
       const seed = seeds[spot.which];
-      let copy = current.copies[i];
-      if (copy && (copy.which !== spot.which || copy.node.removed)) {
-        if (!copy.node.removed) copy.node.remove();
-        copy = null;
-      }
-      if (!copy) {
-        const node = seed.node.clone();
-        node.setSharedPluginData(PLUGIN, ROLE, FILL_ROLE_COPY);
-        parent.appendChild(node);
-        if (flowing && "layoutPositioning" in node) node.layoutPositioning = "ABSOLUTE";
-        copy = { node, which: spot.which, scale: 1 };
-        current.copies[i] = copy;
-      }
-      const ratio = spot.scale / copy.scale;
-      if (Math.abs(ratio - 1) > 1e-6 && "rescale" in copy.node) {
+      const node = seed.node.clone();
+      node.setSharedPluginData(PLUGIN, ROLE, FILL_ROLE_COPY);
+      parent.insertChild(++index, node);
+      if (flowing && "layoutPositioning" in node) node.layoutPositioning = "ABSOLUTE";
+      if ("rescale" in node && Math.abs(spot.scale - 1) > 1e-6) {
         try {
-          copy.node.rescale(ratio);
-          copy.scale = spot.scale;
+          node.rescale(spot.scale);
         } catch {}
       }
-      // The seed's turn, then the copy's on top, its visual middle on the spot
       const [[a, c], [b, d]] = seed.node.absoluteTransform;
       const r = (spot.turn * Math.PI) / 180;
       const cos = Math.cos(r);
@@ -8996,48 +9135,34 @@ const PAGE_JS: &str = r##"(() => {
       const m1 = cos * c - sin * d;
       const m2 = sin * a + cos * b;
       const m3 = sin * c + cos * d;
-      const lx = seed.middle[0] * copy.scale;
-      const ly = seed.middle[1] * copy.scale;
+      const lx = seed.middle[0] * spot.scale;
+      const ly = seed.middle[1] * spot.scale;
       const px = shape.box.x + spot.x / shape.g;
       const py = shape.box.y + spot.y / shape.g;
       try {
-        copy.node.relativeTransform = relativeFor(parent, [
+        node.relativeTransform = relativeFor(parent, [
           [m0, m1, px - (m0 * lx + m1 * ly)],
           [m2, m3, py - (m2 * lx + m3 * ly)],
         ]);
-        copy.node.visible = true;
       } catch {}
-    });
-    // Above the shape, the largest at the back
-    const index = parent.children.indexOf(current.container);
-    for (let i = current.copies.length - 1; i >= 0; i--) parent.insertChild(index + 1, current.copies[i].node);
-  };
-  // Seeds as packing reads them: their layer, outline, size in points, and
-  // their visual middle in their own coordinates
-  const readSeed = async (node, weight) => {
-    const read = await readAlpha(node, 64);
-    const [[a, c, e], [b, d, f]] = node.absoluteTransform;
-    const mx = read.box.x + read.box.width / 2 - e;
-    const my = read.box.y + read.box.height / 2 - f;
-    const det = a * d - b * c || 1;
-    return { node, weight, alpha: read.alpha, w: read.w, h: read.h, g: read.g, size: Math.max(read.box.width, read.box.height), bitmap: read.bitmap, middle: [(d * mx - c * my) / det, (-b * mx + a * my) / det] };
-  };
-  const refill = (current) => {
-    clearTimeout(current.timer);
-    current.timer = setTimeout(() => {
-      if (filling !== current || !current.shape) return;
-      current.placed = packFill(current.shape, current.seeds, current.settings);
-      try {
-        placeFills(current);
-      } catch {}
-      current.panel?.show();
-    }, 60);
+      copies.push(node);
+      // A frame's break every so often, so Figma draws and takes input
+      if (at % 24 === 23) {
+        current.panel?.progress(at + 1, placed.length);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        if (filling !== current) {
+          for (const copy of copies) if (!copy.removed) copy.remove();
+          return null;
+        }
+      }
+    }
+    return copies;
   };
   const openFill = async (figma, edit = false, run = null) => {
     if (repeating || disintegrating || crushing || filtering || filling) return;
     const selected = figma.currentPage.selection;
     if (!selected.length) {
-      figma.notify("Select a shape to fill, and the layers to fill it with", { timeout: 2500 });
+      figma.notify("Select a shape or text to fill, and the layers to fill it with", { timeout: 2500 });
       return;
     }
     let group = edit ? fillOf(selected[0]) : null;
@@ -9068,28 +9193,36 @@ const PAGE_JS: &str = r##"(() => {
       return;
     }
     const known = new Map(seedNodes.map((node) => [node.id, 1]));
-    for (const seed of settings.seeds) known.set(seed.id, seed.weight);
+    for (const seed of settings.seeds) if (!known.has(seed.id)) known.set(seed.id, seed.weight);
     settings.seeds = [...known].map(([id, weight]) => ({ id, weight }));
-    const current = { figma, group, container, settings, seeds: [], copies: [], placed: [], kept: group ? group.children.filter((child) => child !== container) : [], wasVisible: container.visible };
+    const current = { figma, group, container, source: container, settings, seeds: [], placed: [], kept: group ? group.children.filter((child) => child !== container) : [], wasVisible: container.visible };
     filling = current;
     try {
       figma.commitUndo();
     } catch {}
-    for (const node of current.kept) node.visible = false;
     try {
+      // Read with the shape shown, as hidden layers export nothing
+      const hidden = !container.visible;
+      if (hidden) container.visible = true;
       current.shape = await readAlpha(container, 480);
-      current.seeds = (await Promise.all(settings.seeds.map(async ({ id, weight }) => {
-        const node = await figma.getNodeByIdAsync(id);
-        return node && !node.removed && "clone" in node ? readSeed(node, weight) : null;
-      }))).filter(Boolean);
+      if (hidden && !run) container.visible = false;
+      current.bounds = current.shape.box;
+      current.seeds = (
+        await Promise.all(
+          settings.seeds.map(async ({ id, weight }) => {
+            const node = await figma.getNodeByIdAsync(id);
+            return node && !node.removed && "clone" in node && node !== container ? readSeed(node, weight) : null;
+          }),
+        )
+      ).filter(Boolean);
       settings.seeds = current.seeds.map((seed) => ({ id: seed.node.id, weight: seed.weight }));
     } catch {
       filling = null;
-      for (const node of current.kept) if (!node.removed) node.visible = true;
       if (run) throw new Error("Couldn't read the layers");
       figma.notify("Couldn't read the layers", { timeout: 2000 });
       return;
     }
+    for (const node of current.kept) node.visible = false;
     // Grouped from the start, as Repeater's preview is
     const parent = container.parent;
     if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
@@ -9102,25 +9235,38 @@ const PAGE_JS: &str = r##"(() => {
         current.wrap = null;
       }
     }
+    // The picture of the fill, over the shape, while it's changed
+    current.result = figma.createRectangle();
+    current.result.name = "Shape Fill preview";
+    container.parent.insertChild(container.parent.children.indexOf(container) + 1, current.result);
+    if ("layoutMode" in container.parent && container.parent.layoutMode !== "NONE") current.result.layoutPositioning = "ABSOLUTE";
+    current.result.visible = false;
     current.placed = packFill(current.shape, current.seeds, settings);
-    placeFills(current);
     if (run) return applyFill(current, true);
     buildFillPanel(current);
+    showFill(current);
   };
-  const applyFill = (current, quiet = false) => {
+  const applyFill = async (current, quiet = false) => {
     try {
-      finishFill(current, quiet);
+      await finishFill(current, quiet);
     } catch (error) {
       if (filling === current) closeFill(current, false);
       if (quiet) throw error;
       current.figma.notify("Couldn't fill the shape", { timeout: 2000 });
     }
   };
-  const finishFill = (current, quiet) => {
+  const finishFill = async (current, quiet) => {
     const { figma, container, settings } = current;
+    if (current.busy) return;
+    current.busy = true;
     clearTimeout(current.timer);
+    current.panel?.progress(0, current.placed.length);
+    while (current.placing) await new Promise((resolve) => setTimeout(resolve, 16));
+    const nodes = await makeCopies(current);
+    if (!nodes || filling !== current) return;
     for (const node of current.kept) if (!node.removed) node.remove();
-    const nodes = current.copies.map((copy) => copy.node);
+    if (current.result && !current.result.removed) current.result.remove();
+    container.visible = settings.showShape ? current.wasVisible : false;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
       const parent = container.parent;
@@ -9152,11 +9298,14 @@ const PAGE_JS: &str = r##"(() => {
   const closeFill = (current, applied) => {
     if (filling !== current) return;
     filling = null;
+    current.closed = true;
     clearTimeout(current.timer);
+    if (current.loader && !current.loader.removed) current.loader.remove();
     if (!applied) {
-      for (const copy of current.copies) if (!copy.node.removed) copy.node.remove();
-      for (const node of current.kept) if (!node.removed) node.visible = true;
       const { home, wrap, container } = current;
+      if (current.result && !current.result.removed) current.result.remove();
+      for (const node of current.kept) if (!node.removed) node.visible = true;
+      if (!container.removed) container.visible = current.wasVisible;
       if (wrap && home && !container.removed && !home.parent.removed) {
         try {
           home.parent.insertChild(Math.min(home.index, home.parent.children.length), container);
@@ -9169,7 +9318,10 @@ const PAGE_JS: &str = r##"(() => {
         else if (!container.removed) current.figma.currentPage.selection = [container];
       } catch {}
     }
-    for (const seed of current.seeds) seed.bitmap?.close?.();
+    for (const seed of current.seeds) {
+      seed.bitmap?.close?.();
+      seed.look?.close?.();
+    }
     current.shape?.bitmap?.close?.();
     current.panel?.close();
     current.root?.remove();
@@ -9231,7 +9383,7 @@ const PAGE_JS: &str = r##"(() => {
     const add = element("button", { type: "button", className: "chip", textContent: "Add selected" });
     add.addEventListener("click", async () => {
       const ids = new Set(current.seeds.map((seed) => seed.node.id));
-      const own = new Set([current.container.id, current.wrap?.id, current.group?.id, ...current.copies.map((copy) => copy.node.id)]);
+      const own = new Set([current.container.id, current.wrap?.id, current.group?.id, current.result?.id]);
       const fresh = current.figma.currentPage.selection.filter((node) => !ids.has(node.id) && !own.has(node.id) && "clone" in node);
       if (!fresh.length) return current.figma.notify("Select layers to fill with first", { timeout: 2000 });
       try {
@@ -9326,9 +9478,11 @@ const PAGE_JS: &str = r##"(() => {
     shuffle.style.gridColumn = "span 2";
     shuffle.style.justifySelf = "start";
     sizing.append(shuffleRow);
+    const showing = element("input", { type: "checkbox" });
+    showing.addEventListener("change", () => change("showShape", showing.checked));
     const editable = element("input", { type: "checkbox" });
     editable.addEventListener("change", () => change("editable", editable.checked));
-    const result = element("section", {}, checkRow("Keep editable", editable, "The shape kept in a group Shape Fill can change later, the copies made again then"));
+    const result = element("section", {}, checkRow("Show the shape", showing, "The shape under the copies, or only the copies"), checkRow("Keep editable", editable, "The shape kept in a group Shape Fill can change later, the copies made again then"));
     const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
     reset.addEventListener("click", () => {
       Object.assign(s, structuredClone(FILL_DEFAULTS), { seeds: s.seeds, editable: s.editable });
@@ -9349,14 +9503,25 @@ const PAGE_JS: &str = r##"(() => {
       fitting.show();
       for (const row of rows) row.show();
       editable.checked = s.editable;
+      showing.checked = s.showShape;
       const count = current.placed.length;
-      go.textContent = current.group ? "Update" : `Place ${count} ${count === 1 ? "copy" : "copies"}`;
-      go.disabled = !count;
+      if (!current.busy) {
+        go.textContent = current.group ? `Update ${count} ${count === 1 ? "copy" : "copies"}` : `Place ${count} ${count === 1 ? "copy" : "copies"}`;
+        go.disabled = !count;
+      }
       drawFillPreview(current);
     };
     show();
     current.root = root;
-    current.panel = { show, close: () => {} };
+    current.panel = {
+      show,
+      close: () => {},
+      // How far placing the copies has got
+      progress: (done, all) => {
+        go.disabled = true;
+        go.textContent = `Placing ${done} of ${all}…`;
+      },
+    };
     current.keys = panelKeys(root, () => filling === current, () => closeFill(current, false), () => applyFill(current));
     addEventListener("keydown", current.keys, true);
     go.focus();
