@@ -4055,7 +4055,7 @@ const PAGE_JS: &str = r##"(() => {
         resolve(null);
       };
       try {
-        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `const pictures = {};`, `onmessage = async ({ data: { id, level, image, s, k, png } }) => {`, `  try {`, `    if (image) pictures[level] = image;`, `    const made = process(pictures[level], s, k);`, `    let bytes = null;`, `    if (png && typeof OffscreenCanvas !== "undefined") {`, `      try {`, `        const canvas = new OffscreenCanvas(made.image.width, made.image.height);`, `        canvas.getContext("2d").putImageData(made.image, 0, 0);`, `        bytes = await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();`, `      } catch {}`, `    }`, `    postMessage({ id, out: made.image, x: made.x, y: made.y, bytes }, bytes ? [made.image.data.buffer, bytes] : [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
+        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `const pictures = {};`, `onmessage = async ({ data: { id, level, image, s, k, png, patch } }) => {`, `  try {`, `    if (image) pictures[level] = image;`, `    const made = process(pictures[level], s, k, patch);`, `    let bytes = null;`, `    if (png && typeof OffscreenCanvas !== "undefined") {`, `      try {`, `        const canvas = new OffscreenCanvas(made.image.width, made.image.height);`, `        canvas.getContext("2d").putImageData(made.image, 0, 0);`, `        bytes = await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();`, `      } catch {}`, `    }`, `    postMessage({ id, out: made.image, x: made.x, y: made.y, bytes, patch: made.patch, empty: made.empty, px: made.px, py: made.py }, bytes ? [made.image.data.buffer, bytes] : [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
         const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
         worker = new Worker(url);
         worker.onmessage = ({ data }) => {
@@ -4067,7 +4067,7 @@ const PAGE_JS: &str = r##"(() => {
           const job = current.jobs.get(data.id);
           current.jobs.delete(data.id);
           if (data.error) job?.reject(new Error(data.error));
-          else job?.resolve({ image: data.out, x: data.x, y: data.y, bytes: data.bytes });
+          else job?.resolve({ image: data.out, x: data.x, y: data.y, bytes: data.bytes, patch: data.patch, empty: data.empty, px: data.px, py: data.py });
         };
         worker.onerror = (event) => {
           event.preventDefault();
@@ -4104,8 +4104,9 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // The picture for `level` made apart from the page, by the worker for
-  // `slot`, encoded as a PNG with `png`
-  const filterAt = async (current, level, png = false, slot = "live") => {
+  // `slot`, encoded as a PNG with `png`. With `patch`, an effect that can
+  // gives only the part that changed, as it is, with where it goes
+  const filterAt = async (current, level, png = false, slot = "live", patch = false) => {
     const entry = current.levels[level];
     const image = crushedPixels(entry);
     const s = structuredClone(current.settings);
@@ -4119,7 +4120,7 @@ const PAGE_JS: &str = r##"(() => {
         made = await new Promise((resolve, reject) => {
           const id = ++filterJob;
           current.jobs.set(id, { resolve, reject });
-          worker.postMessage({ id, level, image: sent.has(level) ? null : image, s, k: entry.k, png });
+          worker.postMessage({ id, level, image: sent.has(level) ? null : image, s, k: entry.k, png, patch });
           sent.add(level);
         });
       } catch {}
@@ -4127,9 +4128,9 @@ const PAGE_JS: &str = r##"(() => {
     if (current.closed) return null;
     if (!made) {
       await new Promise((resolve) => setTimeout(resolve));
-      made = current.spec.process(image, s, entry.k);
+      made = current.spec.process(image, s, entry.k, patch);
     }
-    return drawnFrom(made);
+    return made.patch ? made : drawnFrom(made);
   };
 
   // A spec's `handles` are centers dragged on the preview, as Disintegrate's
@@ -4445,9 +4446,11 @@ const PAGE_JS: &str = r##"(() => {
     paint.bar.remove();
     document.documentElement.removeAttribute(PAINTING);
     current.panel?.show();
+    for (const type of ["pointermove", "wheel", "keydown"]) removeEventListener(type, paint.poke, { capture: true });
     const gone = () => {
       paint.gone = true;
       cancelAnimationFrame(paint.frame);
+      clearTimeout(paint.wait);
       paint.sheet.remove();
     };
     const still = () => {
@@ -4535,8 +4538,14 @@ const PAGE_JS: &str = r##"(() => {
           }
         }
       }
-      paint.frame = requestAnimationFrame(place);
+      // Every frame while the pointer, wheel or keys are busy, as the view
+      // may pan or zoom, and a few times a second otherwise
+      if (performance.now() - paint.input < 400 || current.stroking) paint.frame = requestAnimationFrame(place);
+      else paint.wait = setTimeout(() => (paint.frame = requestAnimationFrame(place)), 150);
     };
+    paint.input = performance.now();
+    paint.poke = () => (paint.input = performance.now());
+    for (const type of ["pointermove", "wheel", "keydown"]) addEventListener(type, paint.poke, { capture: true, passive: true });
     paint.render = async () => {
       if (paint.busy) {
         paint.again = true;
@@ -4551,9 +4560,13 @@ const PAGE_JS: &str = r##"(() => {
           const shown = current.bounds.width * (paint.view?.zoom ?? 1) * (devicePixelRatio || 1);
           const level = shown <= current.levels.preview.picture.width * 1.25 ? "preview" : "live";
           const started = performance.now();
-          const drawn = await filterAt(current, level, false, "paint");
-          if (drawn) drawn.k = current.levels[level].k;
-          if (drawn && current.painting === paint) {
+          const whole = paint.drawn && paint.level === level && paint.drawn.canvas.width === paint.drawn.width;
+          const drawn = await filterAt(current, level, false, "paint", whole);
+          if (drawn?.patch) {
+            if (!drawn.empty && current.painting === paint) paint.drawn.canvas.getContext("2d").putImageData(drawn.image, drawn.px, drawn.py);
+          } else if (drawn && current.painting === paint) {
+            drawn.k = current.levels[level].k;
+            paint.level = level;
             Object.assign(drawn.canvas.style, { position: "absolute", pointerEvents: "none" });
             paint.drawn?.canvas.remove();
             sheet.append(drawn.canvas);
@@ -5707,10 +5720,16 @@ const PAGE_JS: &str = r##"(() => {
         liquifyBrushes(ui),
       ];
     },
-    process: (image, s, k) => {
+    // With `patch`, while painting, only the part the newest dabs touched,
+    // and where it goes, when the rest is as the last call made it
+    process: (image, s, k, patch = false) => {
       const { width: W, height: H } = image;
-      const f = premultiplied(image);
-      const opaque = isOpaque(f);
+      // Kept from the last call in this worker, for this picture: the
+      // picture as floats, and the brushes' field
+      const kept = globalThis.ligmaLiquifyField;
+      const known = kept?.image === image && kept.k === k;
+      const f = known ? kept.f : premultiplied(image);
+      const opaque = known ? kept.opaque : isOpaque(f);
       const sample = opaque ? edgeAt : sampleAt;
       const amp = s.amplitude * k;
       const pad = s.mode === "wave" && !opaque ? Math.ceil(amp) + 1 : 0;
@@ -5726,21 +5745,26 @@ const PAGE_JS: &str = r##"(() => {
       // dab at a time from the last. A dab's pixel takes what the pixel it
       // moved from took: pushed, twirled, pulled in or out, or eased back
       let field = null;
+      let resume = false;
+      let dirty = null;
+      // Everything but the strokes and the brush, which change nothing
+      // till painted with
+      const look = JSON.stringify({ ...s, strokes: 0, brushTool: 0, brushSize: 0, brushStrength: 0, editable: 0 });
       if (s.strokes?.length) {
         // Kept from the last call in this worker, for this picture, when
         // all that's changed is more points or strokes, as while painting:
         // only the new dabs are worked out. Anything else, as Undo, starts
         // over
-        const key = `${W}x${H}x${k}`;
-        const kept = globalThis.ligmaLiquifyField;
         const same = (stroke, was) => stroke.tool === was.tool && stroke.size === was.size && stroke.strength === was.strength && stroke.points[0][0] === was.x && stroke.points[0][1] === was.y;
-        const resume =
-          kept?.key === key &&
+        resume =
+          known &&
+          kept.field &&
+          kept.look === look &&
           kept.done.length <= s.strokes.length &&
           kept.done.every((was, i) => same(s.strokes[i], was) && (i === kept.done.length - 1 ? s.strokes[i].points.length >= was.count : s.strokes[i].points.length === was.count));
         field = resume ? kept.field : new Float32Array(W * H * 2);
         const [fromStroke, fromPoint] = resume && kept.done.length ? [kept.done.length - 1, kept.done.at(-1).count] : [0, 0];
-        globalThis.ligmaLiquifyField = { key, field, done: s.strokes.map((stroke) => ({ tool: stroke.tool, size: stroke.size, strength: stroke.strength, count: stroke.points.length, x: stroke.points[0][0], y: stroke.points[0][1] })) };
+        globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field, done: s.strokes.map((stroke) => ({ tool: stroke.tool, size: stroke.size, strength: stroke.strength, count: stroke.points.length, x: stroke.points[0][0], y: stroke.points[0][1] })) };
         const fieldAt = (x, y, into) => {
           x -= 0.5;
           y -= 0.5;
@@ -5767,6 +5791,7 @@ const PAGE_JS: &str = r##"(() => {
             const [x0, x1] = [Math.max(0, Math.floor(cx - r)), Math.min(W - 1, Math.ceil(cx + r))];
             const [y0, y1] = [Math.max(0, Math.floor(cy - r)), Math.min(H - 1, Math.ceil(cy + r))];
             if (x1 < x0 || y1 < y0) return;
+            dirty = dirty ? [Math.min(dirty[0], x0), Math.min(dirty[1], y0), Math.max(dirty[2], x1), Math.max(dirty[3], y1)] : [x0, y0, x1, y1];
             const bw = x1 - x0 + 1;
             const next = new Float32Array(bw * (y1 - y0 + 1) * 2);
             for (let y = y0; y <= y1; y++)
@@ -5818,10 +5843,10 @@ const PAGE_JS: &str = r##"(() => {
           }
         }
       }
-      const out = new Float32Array(OW * OH * 4);
+      if (!s.strokes?.length) globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field: null, done: [] };
       const p = new Float32Array(4);
-      for (let y = 0; y < OH; y++)
-        for (let x = 0; x < OW; x++) {
+      // The output pixel at `x`, `y`, premultiplied, into `p`
+      const pixelAt = (x, y) => {
           let [X, Y] = [x - pad + 0.5, y - pad + 0.5];
           if (field && X > 0 && Y > 0 && X < W && Y < H) {
             const at = (Math.floor(Y) * W + Math.floor(X)) * 2;
@@ -5849,8 +5874,20 @@ const PAGE_JS: &str = r##"(() => {
               [X, Y] = [cx + Math.cos(angle) * reach, cy + Math.sin(angle) * reach];
             }
           }
-          out.set(sample(f, W, H, X, Y, p), (y * OW + x) * 4);
-        }
+          return sample(f, W, H, X, Y, p);
+      };
+      // A dab changes only the pixels it covers, so only those are made
+      // again, the rest left as the last call made them
+      if (patch && resume) {
+        if (!dirty) return { image: new ImageData(1, 1), x: -pad, y: -pad, patch: true, empty: true, px: 0, py: 0 };
+        const [rx0, ry0, rx1, ry1] = [Math.max(0, dirty[0] + pad), Math.max(0, dirty[1] + pad), Math.min(OW - 1, dirty[2] + pad), Math.min(OH - 1, dirty[3] + pad)];
+        const [RW, RH] = [rx1 - rx0 + 1, ry1 - ry0 + 1];
+        const part = new Float32Array(RW * RH * 4);
+        for (let y = ry0; y <= ry1; y++) for (let x = rx0; x <= rx1; x++) part.set(pixelAt(x, y), ((y - ry0) * RW + x - rx0) * 4);
+        return { image: toImage(part, RW, RH), x: -pad, y: -pad, patch: true, px: rx0, py: ry0 };
+      }
+      const out = new Float32Array(OW * OH * 4);
+      for (let y = 0; y < OH; y++) for (let x = 0; x < OW; x++) out.set(pixelAt(x, y), (y * OW + x) * 4);
       return { image: toImage(out, OW, OH), x: -pad, y: -pad };
     },
   });
