@@ -10343,20 +10343,29 @@ const PAGE_JS: &str = r##"(() => {
       const m = multiply(base, node.absoluteTransform);
       const own = items.length;
       if ("fillGeometry" in node) {
+        // A vector whose regions are filled each its own way has mixed
+        // fills: its fill geometry is one outline per region, in the
+        // regions' order, each taking its region's fills. Text with mixed
+        // fills takes its first character's
         let fills = node.fills;
+        let regions = null;
         if (fills === window.figma.mixed) {
           try {
-            fills = node.getRangeFills(0, 1);
+            if (node.type === "VECTOR") {
+              regions = node.vectorNetwork.regions;
+              fills = regions.find((region) => region.fills?.length)?.fills ?? [];
+            } else fills = node.getRangeFills(0, 1);
           } catch {
             fills = [];
           }
         }
+        node.fillGeometry.forEach((g, i) => {
+          const own = visiblePaints(regions && regions.length === node.fillGeometry.length ? (regions[i].fills ?? fills) : fills);
+          if (!own.length) return;
+          const paths = transformPaths(parsePath(g.data), m);
+          if (paths.length) items.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: own, opacity: o, leaf: node });
+        });
         fills = visiblePaints(fills);
-        if (fills.length)
-          for (const g of node.fillGeometry) {
-            const paths = transformPaths(parsePath(g.data), m);
-            if (paths.length) items.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: fills, opacity: o, leaf: node });
-          }
         const strokes = visiblePaints(node.strokes);
         if (strokes.length && "strokeGeometry" in node)
           for (const g of node.strokeGeometry) {
@@ -13207,11 +13216,26 @@ const PAGE_JS: &str = r##"(() => {
       const s = current.settings;
       const k = s.amount / 100;
       const n = Math.max(1, Math.round(s.points));
-      return current.items.map((item) => ({
-        paths: closedPaths(item.paths).map((sp) => {
-          // About the middle of each outline, as Illustrator's is about each
-          // object's, a letter's counter about its own
-          const [cx, cy] = centreOf(flatten([sp], 2)[0].points);
+      // About the middle of each outline, as Illustrator's is about each
+      // object's, but an outline inside another, as a letter's counter or
+      // a fill inside its outline, about the one round it, so they stay
+      // together
+      const closed = current.items.map((item) => closedPaths(item.paths));
+      const all = closed.flat().map((sp) => {
+        const b = pathsBounds([sp]);
+        return { sp, b, area: (b.x1 - b.x0) * (b.y1 - b.y0), centre: centreOf(flatten([sp], 2)[0].points) };
+      });
+      const middleOf = (sp) => {
+        const own = all.find((one) => one.sp === sp);
+        const room = 1;
+        let best = own;
+        for (const one of all)
+          if (one.area > best.area && one.b.x0 <= own.b.x0 + room && one.b.y0 <= own.b.y0 + room && one.b.x1 >= own.b.x1 - room && one.b.y1 >= own.b.y1 - room) best = one;
+        return best.centre;
+      };
+      return current.items.map((item, which) => ({
+        paths: closed[which].map((sp) => {
+          const [cx, cy] = middleOf(sp);
           const push = (x, y) => [x + (x - cx) * k, y + (y - cy) * k];
           const segs = [];
           let [x, y] = [sp.x, sp.y];
