@@ -3978,7 +3978,7 @@ const PAGE_JS: &str = r##"(() => {
   // never waits on it: while one's being made, changes wait, then only
   // the newest settings are made
   const renderPreview = async (current) => {
-    if (!current.levels.preview) return;
+    if (!current.levels.preview || current.stroking) return;
     if (current.previewing) {
       current.previewAgain = true;
       return;
@@ -4197,21 +4197,52 @@ const PAGE_JS: &str = r##"(() => {
   // The wheel and Space reach Figma, to zoom and pan between strokes, [
   // and ] resize the brush, and Escape or Done stops painting
   const figmaCanvas = () => [...document.querySelectorAll("canvas")].find((canvas) => !canvas.closest(`[${ROOT}]`) && canvas.width > 100)?.getBoundingClientRect();
-  const stopPainting = (current, refresh = true) => {
+  // With `keep`, the sheet stays till what it gives back is called, as
+  // applying keeps it till the full picture's in
+  const stopPainting = (current, refresh = true, keep = false) => {
     const paint = current.painting;
-    if (!paint) return;
+    if (!paint) return () => {};
     current.painting = null;
     current.stroking = false;
-    cancelAnimationFrame(paint.frame);
     clearTimeout(paint.pass);
     clearInterval(paint.hold);
     removeEventListener("keydown", paint.keys, true);
     removeEventListener("keyup", paint.keyup, true);
-    paint.sheet.remove();
     paint.bar.remove();
     document.documentElement.removeAttribute(PAINTING);
     current.panel?.show();
-    if (refresh && filtering === current) refreshFilter(current);
+    const gone = () => {
+      paint.gone = true;
+      cancelAnimationFrame(paint.frame);
+      paint.sheet.remove();
+    };
+    const still = () => {
+      paint.sheet.style.pointerEvents = "none";
+      for (const child of [...paint.sheet.children]) if (child !== paint.drawn?.canvas) child.remove();
+    };
+    if (keep && paint.hidden) {
+      still();
+      return gone;
+    }
+    if (!refresh || filtering !== current || !paint.hidden) {
+      gone();
+      if (refresh && filtering === current) refreshFilter(current);
+      return () => {};
+    }
+    // The sheet stays, taking no pointer, till the file's picture of what
+    // was painted is in, so the layer never blinks out
+    still();
+    (async () => {
+      while (current.placing && filtering === current) await new Promise((resolve) => setTimeout(resolve, 16));
+      current.placing = true;
+      try {
+        if (filtering === current) await placeDrawn(current, await filterAt(current, "live", true), current.levels.live.k);
+      } catch {}
+      current.placing = false;
+      gone();
+      if (filtering === current) refreshFilter(current);
+    })();
+    return () => {};
   };
   // `stroke(point)` starts a stroke where the pointer went down and gives
   // back what to call with each point after; `spacing` is how far apart,
@@ -4242,7 +4273,7 @@ const PAGE_JS: &str = r##"(() => {
     // Kept over the canvas, the layer where Figma shows it, as it pans
     // and zooms
     const place = () => {
-      if (current.painting !== paint) return;
+      if (paint.gone) return;
       const area = figmaCanvas();
       let view = null;
       try {
@@ -4288,6 +4319,17 @@ const PAGE_JS: &str = r##"(() => {
             sheet.append(drawn.canvas);
             paint.drawn = drawn;
             paint.key = "";
+            // The layer in the file hidden under the sheet once it shows
+            // the layer itself, so what was before never shows through
+            // where painting's moved it away. Painting done, the file's
+            // picture shows it again
+            if (!paint.hidden) {
+              paint.hidden = true;
+              try {
+                if (!current.result.removed) current.result.visible = false;
+                if (!current.source.removed) current.source.visible = false;
+              } catch {}
+            }
           }
         } while (paint.again && current.painting === paint);
       } catch {}
@@ -4305,10 +4347,6 @@ const PAGE_JS: &str = r##"(() => {
       event.preventDefault();
       sheet.setPointerCapture(event.pointerId);
       current.stroking = true;
-      // The sheet shows the layer while it's painted
-      try {
-        if (!current.result.removed) current.result.visible = false;
-      } catch {}
       const add = stroke(toPicture(event), event);
       paint.render();
       let last = [event.clientX, event.clientY];
@@ -4473,7 +4511,7 @@ const PAGE_JS: &str = r##"(() => {
   // as each is a new image in the file, and not mid-stroke while painting
   const refreshFilter = (current) => {
     renderPreview(current);
-    if (!current.ready || current.stroking) return;
+    if (!current.ready || current.stroking || current.painting) return;
     if (current.placing) {
       current.again = true;
       return;
@@ -4508,7 +4546,8 @@ const PAGE_JS: &str = r##"(() => {
 
   const finishFilter = async (current) => {
     const { figma, source, settings, spec } = current;
-    stopPainting(current, false);
+    // The sheet painted on stays till the full picture's in, or it's closed
+    current.unpaint = stopPainting(current, false, true);
     clearTimeout(current.timer);
     current.busy = true;
     current.panel?.busy(true);
@@ -4518,6 +4557,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     current.again = false;
     await placeDrawn(current, await filterAt(current, "full", true), current.levels.full.k);
+    current.unpaint();
     if (filtering !== current) return;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
@@ -4548,6 +4588,7 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const closeFilter = (current, applied) => {
+    current.unpaint?.();
     if (filtering !== current) return;
     stopPainting(current, false);
     filtering = null;
@@ -5443,7 +5484,20 @@ const PAGE_JS: &str = r##"(() => {
       // moved from took: pushed, twirled, pulled in or out, or eased back
       let field = null;
       if (s.strokes?.length) {
-        field = new Float32Array(W * H * 2);
+        // Kept from the last call in this worker, for this picture, when
+        // all that's changed is more points or strokes, as while painting:
+        // only the new dabs are worked out. Anything else, as Undo, starts
+        // over
+        const key = `${W}x${H}x${k}`;
+        const kept = globalThis.ligmaLiquifyField;
+        const same = (stroke, was) => stroke.tool === was.tool && stroke.size === was.size && stroke.strength === was.strength && stroke.points[0][0] === was.x && stroke.points[0][1] === was.y;
+        const resume =
+          kept?.key === key &&
+          kept.done.length <= s.strokes.length &&
+          kept.done.every((was, i) => same(s.strokes[i], was) && (i === kept.done.length - 1 ? s.strokes[i].points.length >= was.count : s.strokes[i].points.length === was.count));
+        field = resume ? kept.field : new Float32Array(W * H * 2);
+        const [fromStroke, fromPoint] = resume && kept.done.length ? [kept.done.length - 1, kept.done.at(-1).count] : [0, 0];
+        globalThis.ligmaLiquifyField = { key, field, done: s.strokes.map((stroke) => ({ tool: stroke.tool, size: stroke.size, strength: stroke.strength, count: stroke.points.length, x: stroke.points[0][0], y: stroke.points[0][1] })) };
         const fieldAt = (x, y, into) => {
           x -= 0.5;
           y -= 0.5;
@@ -5461,7 +5515,9 @@ const PAGE_JS: &str = r##"(() => {
           return into;
         };
         const old = new Float32Array(2);
-        for (const stroke of s.strokes) {
+        for (let n = fromStroke; n < s.strokes.length; n++) {
+          const stroke = s.strokes[n];
+          const start = n === fromStroke ? fromPoint : 0;
           const r = Math.max(1, (stroke.size * k) / 2);
           const strength = stroke.strength / 100;
           const dab = (cx, cy, mx, my) => {
@@ -5506,8 +5562,8 @@ const PAGE_JS: &str = r##"(() => {
             for (let y = y0; y <= y1; y++) field.set(next.subarray((y - y0) * bw * 2, (y - y0 + 1) * bw * 2), (y * W + x0) * 2);
           };
           const points = stroke.points.map(([u, v]) => [u * W, v * H]);
-          if (stroke.tool !== "push") dab(points[0][0], points[0][1], 0, 0);
-          for (let i = 1; i < points.length; i++) {
+          if (stroke.tool !== "push" && !start) dab(points[0][0], points[0][1], 0, 0);
+          for (let i = Math.max(1, start); i < points.length; i++) {
             const [[ax0, ay0], [bx, by]] = [points[i - 1], points[i]];
             const length = Math.hypot(bx - ax0, by - ay0);
             if (!length) {
