@@ -477,7 +477,9 @@ const PAGE_JS: &str = r##"(() => {
     const index = imageIndex(node);
     if (index < 0) return Promise.resolve(null);
     const paint = fillsOf(node)[index];
-    const fresh = target && target.id === node.id && target.hash === paint.imageHash && target.w === node.width && target.h === node.height;
+    // Figma keeps sizes as 32-bit floats, so they come back a little off
+    const same = (a, b) => Math.abs(a - b) <= Math.max(1e-3, Math.abs(b) * 1e-6);
+    const fresh = target && target.id === node.id && target.hash === paint.imageHash && same(target.w, node.width) && same(target.h, node.height);
     if (fresh) {
       Object.assign(target, { node, index, paint, M: matrix(node.absoluteTransform) });
       return Promise.resolve(target);
@@ -647,7 +649,7 @@ const PAGE_JS: &str = r##"(() => {
         const image = figma.createImage(bytes);
         if (!t.node) {
           t.node = createLayer(figma, t, image.hash);
-          Object.assign(t, { id: t.node.id, index: 0, paint: t.node.fills[0], M: matrix(t.node.absoluteTransform), place: null });
+          Object.assign(t, { id: t.node.id, index: 0, paint: t.node.fills[0], M: matrix(t.node.absoluteTransform), w: t.node.width, h: t.node.height, place: null });
           if (select) figma.currentPage.selection = [t.node];
         } else {
           if (t.node.removed) return;
@@ -1160,6 +1162,15 @@ const PAGE_JS: &str = r##"(() => {
     const node = rasterNode();
     // A new layer still on its way to Figma takes more strokes meanwhile
     if (!node && target && !target.node && target.place) return { tool, points: [], ready: Promise.resolve(target) };
+    // With nothing selected and no frame under the pointer, the raster layer
+    // under it on the page, as layers made there are as large as the screen
+    if (!node && !selected() && !containerAt(figma, page)) {
+      const under = [...figma.currentPage.children].reverse().find((each) => isRaster(each) && each.visible && !each.locked && contains(each, page));
+      if (under) {
+        figma.currentPage.selection = [under];
+        return { tool, points: [], ready: read(under) };
+      }
+    }
     if (!node && (tool === "brush" || tool === "pencil")) {
       // Painting with no layer to paint on adds one
       const t = blank(placement(figma, page));
