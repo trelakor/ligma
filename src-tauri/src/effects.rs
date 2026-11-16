@@ -682,7 +682,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     const grid = body.appendChild(element("div", { className: "grid" }));
     const empty = body.appendChild(element("div", { className: "empty", hidden: true }));
-    const tiles = EFFECTS.map((effect) => {
+    const tiles = EFFECTS.filter((effect) => !effect.hidden).map((effect) => {
       const canvas = element("canvas", { width: THUMB, height: THUMB });
       canvas.setAttribute("aria-hidden", "true");
       const cell = grid.appendChild(element("div", { className: "cell" }));
@@ -710,7 +710,7 @@ const PAGE_JS: &str = r##"(() => {
     // The tiles in the tab chosen that match what's typed
     const filter = () => {
       const words = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      const inTab = (effect) => (tab === "all" ? true : tab === "favorites" ? favorites.has(effect.id) : (effect.kind ?? "raster") === tab);
+      const inTab = (effect) => (tab === "all" ? true : tab === "favorites" ? favorites.has(effect.id) : effect.kind === "both" || (effect.kind ?? "raster") === tab);
       for (const { effect, cell, text } of tiles) cell.hidden = !inTab(effect) || !words.every((word) => text.includes(word));
       for (const { id, button } of tabs) {
         button.setAttribute("aria-selected", String(id === tab));
@@ -4417,10 +4417,11 @@ const PAGE_JS: &str = r##"(() => {
       return null;
     }
   };
-  const pictureEffect = (spec) =>
-    EFFECTS.push({
+  const pictureEffect = (spec) => {
+    const effect = {
       id: spec.id,
       name: spec.name,
+      hidden: spec.hidden,
       about: spec.about,
       icon: spec.icon,
       of: (node) => filterOf(spec, node),
@@ -4428,7 +4429,10 @@ const PAGE_JS: &str = r##"(() => {
       summary: (s) => spec.summary({ ...structuredClone(spec.defaults), ...s }),
       open: guarded((figma, edit, run) => openFilter(spec, figma, edit, run)),
       thumb: () => pictureThumb(spec),
-    });
+    };
+    EFFECTS.push(effect);
+    return effect;
+  };
 
   // The open effect's workers, once each has said it's loaded, or null
   // where one can't start, and the page runs it instead: one for the
@@ -10346,13 +10350,13 @@ const PAGE_JS: &str = r##"(() => {
         if (fills.length)
           for (const g of node.fillGeometry) {
             const paths = transformPaths(parsePath(g.data), m);
-            if (paths.length) items.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: fills, opacity: o });
+            if (paths.length) items.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: fills, opacity: o, leaf: node });
           }
         const strokes = visiblePaints(node.strokes);
         if (strokes.length && "strokeGeometry" in node)
           for (const g of node.strokeGeometry) {
             const paths = transformPaths(parsePath(g.data), m);
-            if (paths.length) items.push({ paths, winding: "NONZERO", paints: strokes, opacity: o });
+            if (paths.length) items.push({ paths, winding: "NONZERO", paints: strokes, opacity: o, leaf: node, stroke: true });
           }
       }
       if ("children" in node && node.type !== "BOOLEAN_OPERATION") for (const child of node.children) walk(child, o, false);
@@ -11044,6 +11048,8 @@ const PAGE_JS: &str = r##"(() => {
       id: spec.id,
       name: spec.name,
       kind: "vector",
+      hidden: spec.hidden,
+      spec,
       about: spec.about,
       icon: spec.icon,
       of: (node) => vectorOf(spec, node),
@@ -11459,6 +11465,53 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Depth ----------
 
+  // The layer's outlines for depth: a shape with a stroke as one outline,
+  // its fill and stroke together, from the outside of the stroke, in the
+  // stroke's colour, so its depth follows its outline. Figma joins them:
+  // a copy's stroke outlined and joined to its fill, flattened, read, and
+  // the copies taken away
+  const silhouettes = (current) => {
+    const { figma, source } = current;
+    const base = invert(source.absoluteTransform);
+    const out = [];
+    const done = new Set();
+    for (const item of current.items) {
+      if (!item.leaf || done.has(item.leaf)) continue;
+      const own = current.items.filter((one) => one.leaf === item.leaf);
+      const strokes = own.filter((one) => one.stroke);
+      if (!strokes.length) {
+        out.push(...own);
+        continue;
+      }
+      done.add(item.leaf);
+      const made = [];
+      try {
+        const copy = item.leaf.clone();
+        made.push(copy);
+        copy.visible = true;
+        const outline = copy.outlineStroke();
+        if (outline) made.push(outline);
+        copy.strokes = [];
+        const parts = [outline].filter(Boolean);
+        if (own.some((one) => !one.stroke)) {
+          copy.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
+          parts.push(copy);
+        }
+        const joined = figma.flatten([parts.length > 1 ? figma.union(parts, figma.currentPage) : parts[0]], figma.currentPage);
+        made.push(joined);
+        const m = multiply(base, joined.absoluteTransform);
+        for (const g of joined.fillGeometry) {
+          const paths = transformPaths(parsePath(g.data), m);
+          if (paths.length) out.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: strokes[0].paints, opacity: strokes[0].opacity, leaf: item.leaf });
+        }
+      } catch {
+        out.push(...own);
+      }
+      for (const node of made) if (!node.removed) node.remove();
+    }
+    return out;
+  };
+
   // Gives the layer depth behind it, as Illustrator's 3D Extrude seen
   // front on, from the layer's own curves, so the sides meet its edges
   // exactly. Only the sides facing the way it goes back show, the rest
@@ -11473,13 +11526,14 @@ const PAGE_JS: &str = r##"(() => {
   const extrudeEffect = vectorEffect({
     id: "extrude",
     name: "Extrude 3D",
+    follows: true,
     about: "Give a shape or text depth with shaded sides",
     icon: EXTRUDE_ICON,
     place: "below",
     verb: "Extrude",
     ask: "Select a shape or text to extrude",
     start: (u) => ({ depth: Math.max(2, Math.round(u * 0.12)) }),
-    defaults: { angle: 45, depth: 20, light: -135, shade: 60, colors: "own", color: "#3b6fe0", editable: true },
+    defaults: { angle: 45, depth: 20, light: -135, shade: 60, colors: "own", color: "#3b6fe0", follow: true, editable: true },
     limits: { depth: [0, 100000], angle: [-180, 180], light: [-180, 180], shade: [0, 100] },
     presets: [
       ["Down right", (u) => ({ angle: 45, depth: Math.max(2, Math.round(u * 0.12)) })],
@@ -11488,6 +11542,9 @@ const PAGE_JS: &str = r##"(() => {
       ["Up left", (u) => ({ angle: -135, depth: Math.max(2, Math.round(u * 0.12)), light: 45 })],
     ],
     summary: (s) => `${s.depth}px · ${s.angle}°`,
+    read: (current) => {
+      current.solid = silhouettes(current);
+    },
     make: (current) => {
       const s = current.settings;
       if (s.depth <= 0) return [];
@@ -11510,7 +11567,7 @@ const PAGE_JS: &str = r##"(() => {
         const ty = 3 * (u * u * (g[1] - y0) + 2 * u * t * (g[3] - g[1]) + t * t * (g[5] - g[3]));
         return Math.hypot(tx, ty) > 1e-9 ? [tx, ty] : [g[4] - x0, g[5] - y0];
       };
-      current.items.forEach((item) => {
+      current.solid.forEach((item) => {
         const evenOdd = item.winding === "EVENODD";
         const base = s.colors === "own" ? paintColor(item.paints) : hexRgb(s.color);
         const color = (k) => {
@@ -11595,6 +11652,7 @@ const PAGE_JS: &str = r##"(() => {
         ]),
         ui.when(ui.color("color", "Color"), () => ui.s.colors === "color"),
       ),
+      ui.section("", ui.check("follow", "Update with the original", "Made again when the original's shape, outline, text or font changes")),
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
@@ -11693,6 +11751,9 @@ const PAGE_JS: &str = r##"(() => {
         for (let k = 0; k < cuts.length - 1; k++) {
           const piece = cubicPart(x, y, g, cuts[k], cuts[k + 1]);
           const [sx, sy] = k === 0 ? [x, y] : cubicAt(x, y, g, cuts[k]);
+          // A piece too small to see makes no side of its own, its end
+          // joined to the next by the sweep's lines
+          if (segLength(sx, sy, piece) < 0.01) continue;
           // Its outward side at its middle, against the sweep
           const tm = (cuts[k] + cuts[k + 1]) / 2;
           const u = 1 - tm;
@@ -11753,13 +11814,14 @@ const PAGE_JS: &str = r##"(() => {
   const longShadowEffect = vectorEffect({
     id: "longShadow",
     name: "Long Shadow",
+    follows: true,
     about: "Cast a long flat shadow at an angle",
     icon: SHADOW_LONG_ICON,
     place: "below",
     verb: "Add shadow",
     ask: "Select a shape or text to cast a shadow",
     start: (u) => ({ length: Math.max(4, Math.round(u * 1.2)) }),
-    defaults: { angle: 45, length: 120, color: "#000000", opacity: 30, fade: 100, editable: true },
+    defaults: { angle: 45, length: 120, color: "#000000", opacity: 30, fade: 100, follow: true, editable: true },
     limits: { length: [0, 100000], angle: [-180, 180], opacity: [0, 100], fade: [0, 100] },
     presets: [
       ["Classic", (u) => ({ angle: 45, length: Math.max(4, Math.round(u * 1.2)), opacity: 30, fade: 100 })],
@@ -11767,13 +11829,16 @@ const PAGE_JS: &str = r##"(() => {
       ["Down", (u) => ({ angle: 90, length: Math.max(4, Math.round(u * 0.8)), opacity: 28, fade: 100 })],
     ],
     summary: (s) => `${s.length}px · ${s.angle}°`,
+    read: (current) => {
+      current.solid = silhouettes(current);
+    },
     make: (current) => {
       const s = current.settings;
       if (s.length <= 0) return [];
       const [ax, ay] = turnOf(s.angle);
       const dx = ax * s.length;
       const dy = ay * s.length;
-      const paths = current.items.flatMap((item) => sweepPaths(item.paths, dx, dy, item.winding === "EVENODD"));
+      const paths = current.solid.flatMap((item) => sweepPaths(item.paths, dx, dy, item.winding === "EVENODD"));
       if (!paths.length) return [];
       // How far along the angle it starts and ends, for the fade
       let [low, high] = [Infinity, -Infinity];
@@ -11810,6 +11875,7 @@ const PAGE_JS: &str = r##"(() => {
           ["fade", "Fade", "%", () => ({ min: 0, max: 100 })],
         ]),
       ),
+      ui.section("", ui.check("follow", "Update with the original", "Made again when the original's shape, outline, text or font changes")),
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
@@ -12107,43 +12173,56 @@ const PAGE_JS: &str = r##"(() => {
       // Outermost at the back
       return entries.reverse();
     },
-    // The same rings in the preview, drawn as wide strokes cut by narrower
-    // ones and by the shape
+    // The same rings in the preview, from the same grown shapes as the
+    // file's, each cut from the next on a canvas of its own
     preview: (current) => {
       const s = current.settings;
-      const shape = new Path2D(pathData(current.items.flatMap((item) => item.paths)));
       const b = itemsBounds(current.items);
       const reach = s.side === "inside" ? 0 : s.gap + s.rings * (s.width + s.gap);
+      const key = JSON.stringify([s.side, s.rings, s.width, s.gap]);
+      if (current.ringKey !== key) {
+        current.ringKey = key;
+        const size = Math.max(1, current.unit);
+        const tol = Math.max(0.05, Math.min(0.4, size / 1500));
+        const pad = reach + 10;
+        const grown = (r) => (r <= 0 ? null : new Path2D(pathData(s.side === "inside" ? outsideGrown(current.outline, r, tol, s.gap + s.rings * (s.width + s.gap) + 10) : offsetRegion(current.outline, r, tol))));
+        current.ringPaths = [];
+        for (let i = 0; i < s.rings; i++) {
+          const from = s.gap + i * (s.width + s.gap);
+          current.ringPaths.push({ far: grown(from + s.width), near: grown(from) });
+        }
+        current.ringPad = pad;
+      }
+      const shape = new Path2D(pathData(current.outline));
       return [
         {
           under: s.side !== "inside",
           over: s.side === "inside",
           bounds: { x0: b.x0 - reach, y0: b.y0 - reach, x1: b.x1 + reach, y1: b.y1 + reach },
-          draw: (context, fit) => {
+          draw: (context) => {
             const canvas = context.canvas;
             const off = (current.ringCanvas ??= document.createElement("canvas"));
             [off.width, off.height] = [canvas.width, canvas.height];
             const g = off.getContext("2d");
-            const join = "round";
-            for (let i = s.rings - 1; i >= 0; i--) {
-              const near = s.gap + i * (s.width + s.gap);
-              const far = near + s.width;
+            current.ringPaths.forEach(({ far, near }, i) => {
               g.setTransform(1, 0, 0, 1, 0, 0);
+              g.globalCompositeOperation = "source-over";
               g.clearRect(0, 0, off.width, off.height);
               g.setTransform(context.getTransform());
-              g.lineJoin = join;
-              g.globalCompositeOperation = "source-over";
-              g.strokeStyle = "#000";
-              g.lineWidth = far * 2;
-              g.stroke(shape);
-              if (near > 0) {
-                g.globalCompositeOperation = "destination-out";
-                g.lineWidth = near * 2;
-                g.stroke(shape);
-              }
-              g.globalCompositeOperation = s.side === "inside" ? "destination-in" : "destination-out";
               g.fillStyle = "#000";
-              g.fill(shape);
+              if (s.side === "inside") {
+                g.fill(far, "nonzero");
+                g.globalCompositeOperation = "destination-in";
+                g.fill(shape, "nonzero");
+                if (near) {
+                  g.globalCompositeOperation = "destination-out";
+                  g.fill(near, "nonzero");
+                }
+              } else {
+                g.fill(far, "nonzero");
+                g.globalCompositeOperation = "destination-out";
+                g.fill(near ?? shape, "nonzero");
+              }
               g.globalCompositeOperation = "source-in";
               g.setTransform(1, 0, 0, 1, 0, 0);
               g.fillStyle = s.alternate && i % 2 ? s.color2 : s.color;
@@ -12152,7 +12231,7 @@ const PAGE_JS: &str = r##"(() => {
               context.setTransform(1, 0, 0, 1, 0, 0);
               context.drawImage(off, 0, 0);
               context.restore();
-            }
+            });
           },
         },
       ];
@@ -12199,6 +12278,472 @@ const PAGE_JS: &str = r##"(() => {
       return tile;
     },
   });
+
+  // ---------- Effects for pictures and vectors alike ----------
+
+  // One tile for an effect made two ways: on vector layers it moves their
+  // points and paths, so the result stays vector, and on anything with a
+  // picture in it, it moves pixels. Each way is an effect of its own,
+  // hidden from the library, so a layer made either way edits as that one
+  const vectorish = (nodes) => {
+    let ok = true;
+    const check = (node) => {
+      if (!ok) return;
+      if (node.type === "SLICE" || node.type === "SECTION") ok = false;
+      for (const key of ["fills", "strokes"]) {
+        const paints = node[key];
+        if (Array.isArray(paints) && paints.some((paint) => paint.visible !== false && (paint.type === "IMAGE" || paint.type === "VIDEO"))) ok = false;
+      }
+      if (ok && "children" in node) node.children.forEach(check);
+    };
+    nodes.forEach(check);
+    return ok;
+  };
+  const bothEffect = ({ id, name, about, icon, raster, vector, thumb }) =>
+    EFFECTS.push({
+      id,
+      name,
+      about,
+      icon,
+      kind: "both",
+      of: () => null,
+      saved: () => ({}),
+      summary: () => "",
+      open: (figma, edit, run) => {
+        const selected = figma.currentPage.selection;
+        return (selected.length && vectorish(selected) ? vector : raster).open(figma, edit, run);
+      },
+      thumb,
+    });
+  // A transform about (`cx`, `cy`), as Figma's
+  const about = (cx, cy, [a, c, b, d]) => [
+    [a, c, cx - a * cx - c * cy],
+    [b, d, cy - b * cx - d * cy],
+  ];
+  const turnAbout = (cx, cy, angle) => about(cx, cy, [Math.cos(angle), -Math.sin(angle), Math.sin(angle), Math.cos(angle)]);
+  const mirrorAbout = (cx, cy, angle) => about(cx, cy, [Math.cos(2 * angle), Math.sin(2 * angle), Math.sin(2 * angle), -Math.cos(2 * angle)]);
+  // A vector of `paths` in the layer's coordinates, placed as the layer
+  const vectorAt = (current, paths, winding, paints) => {
+    const b = pathsBounds(paths);
+    if (!Number.isFinite(b.x0)) return null;
+    const parent = current.source.parent;
+    const node = current.figma.createVector();
+    parent.appendChild(node);
+    if ("layoutMode" in parent && parent.layoutMode !== "NONE") node.layoutPositioning = "ABSOLUTE";
+    node.relativeTransform = relativeFor(parent, multiply(current.base, moved(b.x0, b.y0)));
+    node.vectorPaths = [{ windingRule: winding ?? "NONZERO", data: pathData(paths, -b.x0, -b.y0) }];
+    node.fills = paints;
+    node.strokes = [];
+    return node;
+  };
+
+  // ---------- Polar Coordinates ----------
+
+  // Photoshop's Polar Coordinates: the layer wrapped round a circle, its
+  // left to right going round and its top to bottom going out, with a hole
+  // in the middle if asked, or a circle unrolled the other way
+  const POLAR_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="7.5"/><circle ${STROKE} cx="12" cy="12" r="3.5"/><path ${STROKE} d="M12 4.5v4M19.5 12h-4M12 19.5v-4M4.5 12h4"/></svg>`;
+  const POLAR_ABOUT = "Wrap it round a circle, or unroll a circle";
+  const POLAR_PRESETS = [
+    ["Disc", () => ({ mode: "toPolar", hole: 0 })],
+    ["Ring", () => ({ mode: "toPolar", hole: 45 })],
+    ["Inside out", () => ({ mode: "toPolar", hole: 20, flip: true })],
+    ["Unroll", () => ({ mode: "toRect", hole: 0 })],
+  ];
+  const polarSummary = (s) => (s.mode === "toRect" ? "To rectangular" : `To polar${s.hole ? ` · ${s.hole}% hole` : ""}`);
+  const polarPanel = (round) => (ui) => [
+    ui.section(
+      "",
+      ui.segments("mode", "Mode", [
+        ["toPolar", "To polar", "Left to right goes round, top to bottom goes out"],
+        ["toRect", "To rectangular", "A circle unrolled into a band"],
+      ]),
+      ui.sliders([
+        ["turn", "Turn", "°", () => ({ min: -180, max: 180 })],
+        ["hole", "Hole", "%", () => ({ min: 0, max: 90 })],
+      ]),
+      ui.check("flip", "Inside out", "The top on the outside rather than in the middle"),
+      round ? ui.check("round", "Circle", "A circle, or an oval as wide and tall as the layer") : null,
+    ),
+  ];
+  const polarVector = vectorEffect({
+    id: "polarVector",
+    hidden: true,
+    name: "Polar Coordinates",
+    about: POLAR_ABOUT,
+    icon: POLAR_ICON,
+    place: "replace",
+    verb: "Apply",
+    ask: "Select a layer to wrap round a circle",
+    defaults: { mode: "toPolar", turn: 0, hole: 0, flip: false, round: true, editable: true },
+    limits: { turn: [-360, 360], hole: [0, 95] },
+    presets: POLAR_PRESETS,
+    summary: polarSummary,
+    read: (current) => {
+      current.box = itemsBounds(current.items);
+    },
+    make: (current) => {
+      const s = current.settings;
+      const { x0, y0, x1, y1 } = current.box;
+      const w = Math.max(1e-3, x1 - x0);
+      const h = Math.max(1e-3, y1 - y0);
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      const rx = s.round ? Math.max(w, h) / 2 : w / 2;
+      const ry = s.round ? Math.max(w, h) / 2 : h / 2;
+      const hole = Math.min(0.95, s.hole / 100);
+      const turn = (s.turn * Math.PI) / 180;
+      const f =
+        s.mode === "toRect"
+          ? (x, y) => {
+              const dx = (x - cx) / rx;
+              const dy = (y - cy) / ry;
+              const u = ((((Math.atan2(dy, dx) + Math.PI / 2 - turn) / (2 * Math.PI)) % 1) + 1) % 1;
+              let v = (Math.hypot(dx, dy) - hole) / (1 - hole);
+              if (s.flip) v = 1 - v;
+              return [x0 + u * w, y0 + v * h];
+            }
+          : (x, y) => {
+              const u = (x - x0) / w;
+              let v = (y - y0) / h;
+              if (s.flip) v = 1 - v;
+              const r = hole + (1 - hole) * v;
+              const a = u * 2 * Math.PI - Math.PI / 2 + turn;
+              return [cx + r * rx * Math.cos(a), cy + r * ry * Math.sin(a)];
+            };
+      const size = Math.max(w, h);
+      return current.items.map((item) => ({ paths: bendPaths(item.paths, f, Math.max(0.05, size / 2000), size), winding: item.winding, paints: item.paints, opacity: item.opacity, name: "Polar Coordinates" }));
+    },
+    panel: polarPanel(true),
+    thumb: () => null,
+  });
+  const polarSpec = {
+    id: "polarPicture",
+    hidden: true,
+    name: "Polar Coordinates",
+    about: POLAR_ABOUT,
+    icon: POLAR_ICON,
+    verb: "Apply",
+    thumb: { sample: "contours", backdrop: "stage", settings: { hole: 18 } },
+    defaults: { mode: "toPolar", turn: 0, hole: 0, flip: false, editable: true },
+    limits: { turn: [-360, 360], hole: [0, 95] },
+    presets: POLAR_PRESETS,
+    summary: polarSummary,
+    panel: polarPanel(false),
+    process: (image, s) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const out = new Float32Array(W * H * 4);
+      const p = new Float32Array(4);
+      const cx = W / 2;
+      const cy = H / 2;
+      const hole = Math.min(0.95, s.hole / 100);
+      const turn = (s.turn * Math.PI) / 180;
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          let sx;
+          let sy;
+          if (s.mode === "toRect") {
+            const u = (x + 0.5) / W;
+            let v = (y + 0.5) / H;
+            if (s.flip) v = 1 - v;
+            const r = hole + (1 - hole) * v;
+            const a = u * 2 * Math.PI - Math.PI / 2 + turn;
+            sx = cx + r * cx * Math.cos(a);
+            sy = cy + r * cy * Math.sin(a);
+          } else {
+            const dx = (x + 0.5 - cx) / cx;
+            const dy = (y + 0.5 - cy) / cy;
+            let v = (Math.hypot(dx, dy) - hole) / (1 - hole);
+            if (v < 0 || v > 1) continue;
+            if (s.flip) v = 1 - v;
+            const u = ((((Math.atan2(dy, dx) + Math.PI / 2 - turn) / (2 * Math.PI)) % 1) + 1) % 1;
+            sx = u * W;
+            sy = v * H;
+          }
+          sampleAt(f, W, H, sx, sy, p);
+          const at = (y * W + x) * 4;
+          out[at] = p[0];
+          out[at + 1] = p[1];
+          out[at + 2] = p[2];
+          out[at + 3] = p[3];
+        }
+      return { image: toImage(out, W, H), x: 0, y: 0 };
+    },
+  };
+  const polarPicture = pictureEffect(polarSpec);
+  bothEffect({ id: "polar", name: "Polar Coordinates", about: POLAR_ABOUT, icon: POLAR_ICON, raster: polarPicture, vector: polarVector, thumb: () => pictureThumb(polarSpec) });
+
+  // ---------- Kaleidoscope ----------
+
+  // A slice of the layer from a centre, turned round it as many times as
+  // there are segments, every other one mirrored, as a kaleidoscope's
+  // mirrors show it. On vectors the slice is cut by Figma and each segment
+  // is a turned or mirrored copy of it
+  const KALEIDO_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12 4.5v15M5.5 8.25l13 7.5M5.5 15.75l13-7.5"/><path ${STROKE} d="m12 7.5 1.5 3-1.5 1.5-1.5-1.5z"/></svg>`;
+  const KALEIDO_ABOUT = "Mirror a slice of it round a centre";
+  const KALEIDO_PRESETS = [
+    ["Six", () => ({ segments: 6 })],
+    ["Eight", () => ({ segments: 8 })],
+    ["Twelve", () => ({ segments: 12 })],
+    ["Turned", () => ({ segments: 6, mirror: false })],
+  ];
+  const kaleidoSummary = (s) => `${s.segments} segments${s.mirror ? "" : " · turned"}`;
+  const kaleidoPanel = (centre) => (ui) => [
+    ui.section(
+      "",
+      ui.sliders([
+        ["segments", "Segments", "", () => ({ min: 2, max: 24 })],
+        ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+        ...(centre
+          ? [
+              ["centerX", "Centre across", "%", () => ({ min: 0, max: 100 })],
+              ["centerY", "Centre down", "%", () => ({ min: 0, max: 100 })],
+            ]
+          : [["zoom", "Zoom", "%", () => ({ min: 25, max: 400, middle: 100 })]]),
+      ]),
+      ui.check("mirror", "Mirror every other", "Every other segment mirrored, or each turned only"),
+    ),
+  ];
+  // A segment's transform about the centre: turned into place, every other
+  // one mirrored across the slice's first edge first
+  const segmentTransform = (cx, cy, k, step, start, mirror) =>
+    mirror && k % 2 ? multiply(turnAbout(cx, cy, (k + 1) * step), mirrorAbout(cx, cy, start)) : turnAbout(cx, cy, k * step);
+  const kaleidoVector = vectorEffect({
+    id: "kaleidoVector",
+    hidden: true,
+    name: "Kaleidoscope",
+    about: KALEIDO_ABOUT,
+    icon: KALEIDO_ICON,
+    place: "replace",
+    verb: "Apply",
+    ask: "Select a layer for the kaleidoscope",
+    inFile: true,
+    wait: 80,
+    defaults: { segments: 6, angle: 0, centerX: 50, centerY: 50, mirror: true, editable: true },
+    limits: { segments: [2, 48], angle: [-360, 360], centerX: [-100, 200], centerY: [-100, 200] },
+    presets: KALEIDO_PRESETS,
+    summary: kaleidoSummary,
+    read: (current) => {
+      current.box = itemsBounds(current.items);
+    },
+    // The centre, the slice's angle and its wedge, far enough out to take in
+    // all of the layer
+    slice: (current) => {
+      const s = current.settings;
+      const { x0, y0, x1, y1 } = current.box;
+      const cx = x0 + ((x1 - x0) * s.centerX) / 100;
+      const cy = y0 + ((y1 - y0) * s.centerY) / 100;
+      const R = 2 * Math.max(...[x0, x1].flatMap((x) => [y0, y1].map((y) => Math.hypot(x - cx, y - cy)))) + 1;
+      const n = Math.max(2, Math.round(s.segments));
+      const step = (2 * Math.PI) / n;
+      const start = (s.angle * Math.PI) / 180;
+      // A hair wider either way, so neighbouring segments overlap rather
+      // than meet edge to edge, where a seam would show
+      const over = 0.004;
+      const points = [cx, cy];
+      const steps = Math.max(2, Math.ceil(step / 0.2));
+      for (let i = 0; i <= steps; i++) {
+        const a = start - over + ((step + 2 * over) * i) / steps;
+        points.push(cx + R * Math.cos(a), cy + R * Math.sin(a));
+      }
+      return { cx, cy, n, step, start, wedge: polygonPaths(points), reach: R / 2 };
+    },
+    make: (current) => {
+      const s = current.settings;
+      const { figma } = current;
+      const parent = current.source.parent;
+      const { cx, cy, n, step, start, wedge } = current.spec.slice(current);
+      const entries = [];
+      const toLocal = invert(current.base);
+      for (const item of current.items) {
+        let piece = null;
+        const temp = [];
+        try {
+          const shape = vectorAt(current, item.paths, item.winding, [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }]);
+          const cut = vectorAt(current, [wedge], "NONZERO", [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }]);
+          temp.push(shape, cut);
+          const both = figma.intersect([shape, cut], parent);
+          temp.push(both);
+          piece = figma.flatten([both], parent);
+        } catch {
+          piece = null;
+        }
+        // What's left of the cut, as when the slice misses this outline
+        for (const node of temp) if (node && !node.removed && node !== piece) node.remove();
+        if (!piece || piece.removed || !piece.vectorPaths.length) {
+          piece?.remove();
+          continue;
+        }
+        piece.fills = item.paints;
+        piece.strokes = [];
+        piece.opacity = item.opacity;
+        piece.name = "Segment";
+        const local = multiply(toLocal, piece.absoluteTransform);
+        for (let k = 0; k < n; k++) {
+          const node = k === 0 ? piece : piece.clone();
+          node.relativeTransform = relativeFor(parent, multiply(current.base, multiply(segmentTransform(cx, cy, k, step, start, s.mirror), local)));
+          entries.push({ node });
+        }
+      }
+      return entries;
+    },
+    // Each segment in the preview, the layer drawn turned or mirrored and
+    // kept to its wedge
+    preview: (current) => {
+      const s = current.settings;
+      const { cx, cy, n, step, start, wedge, reach } = current.spec.slice(current);
+      const r = Math.min(reach, Math.max(...current.items.flatMap((item) => flatten(item.paths, 4).flatMap(({ points }) => points.map((v, i) => (i % 2 ? 0 : Math.hypot(v - cx, points[i + 1] - cy)))))));
+      const wedgePath = new Path2D(pathData([wedge]));
+      const shapes = current.items.map((item) => ({ path: new Path2D(pathData(item.paths)), fill: paintCss(item.paints, item.opacity), rule: item.winding === "EVENODD" ? "evenodd" : "nonzero" }));
+      return [
+        {
+          bounds: { x0: cx - r, y0: cy - r, x1: cx + r, y1: cy + r },
+          draw: (context) => {
+            for (let k = 0; k < n; k++) {
+              const [[a, c, e], [b, d, f]] = segmentTransform(cx, cy, k, step, start, s.mirror);
+              context.save();
+              context.transform(a, b, c, d, e, f);
+              context.clip(wedgePath);
+              for (const shape of shapes) {
+                context.fillStyle = shape.fill;
+                context.fill(shape.path, shape.rule);
+              }
+              context.restore();
+            }
+          },
+        },
+      ];
+    },
+    panel: kaleidoPanel(true),
+    thumb: () => null,
+  });
+  const kaleidoSpec = {
+    id: "kaleidoPicture",
+    hidden: true,
+    name: "Kaleidoscope",
+    about: KALEIDO_ABOUT,
+    icon: KALEIDO_ICON,
+    verb: "Apply",
+    handles: [{ x: "centerX", y: "centerY" }],
+    thumb: { sample: "bands", settings: { segments: 8, angle: 12, centerX: 36, centerY: 50 } },
+    defaults: { segments: 6, angle: 0, centerX: 50, centerY: 50, zoom: 100, mirror: true, editable: true },
+    limits: { segments: [2, 48], angle: [-360, 360], centerX: [-200, 300], centerY: [-200, 300], zoom: [10, 1000] },
+    presets: KALEIDO_PRESETS,
+    summary: kaleidoSummary,
+    panel: kaleidoPanel(false),
+    process: (image, s) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const out = new Float32Array(W * H * 4);
+      const p = new Float32Array(4);
+      const cx = (W * s.centerX) / 100;
+      const cy = (H * s.centerY) / 100;
+      const n = Math.max(2, Math.round(s.segments));
+      const step = (2 * Math.PI) / n;
+      const start = (s.angle * Math.PI) / 180;
+      const zoom = Math.max(0.05, s.zoom / 100);
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const dx = x + 0.5 - cx;
+          const dy = y + 0.5 - cy;
+          const r = Math.hypot(dx, dy) / zoom;
+          const a = Math.atan2(dy, dx) - start;
+          const k = Math.floor(a / step);
+          let t = a - k * step;
+          if (s.mirror && ((k % 2) + 2) % 2 === 1) t = step - t;
+          sampleAt(f, W, H, cx + r * Math.cos(t + start), cy + r * Math.sin(t + start), p);
+          const at = (y * W + x) * 4;
+          out[at] = p[0];
+          out[at + 1] = p[1];
+          out[at + 2] = p[2];
+          out[at + 3] = p[3];
+        }
+      return { image: toImage(out, W, H), x: 0, y: 0 };
+    },
+  };
+  const kaleidoPicture = pictureEffect(kaleidoSpec);
+  bothEffect({ id: "kaleidoscope", name: "Kaleidoscope", about: KALEIDO_ABOUT, icon: KALEIDO_ICON, raster: kaleidoPicture, vector: kaleidoVector, thumb: () => pictureThumb(kaleidoSpec) });
+
+  // ---------- Following the original ----------
+
+  // Extrude 3D and Long Shadow with Update with the original are made
+  // again, where they are, a moment after their original's shape, outline,
+  // text or font changes, without touching the original, so typing in it
+  // goes on. Their groups on the page are found every few seconds, and
+  // each original's look checked as a hash of its outlines and paints
+  const shapeSignature = (root) => {
+    let h = 5381;
+    const add = (text) => {
+      for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+    };
+    const base = invert(root.absoluteTransform);
+    const walk = (node, top) => {
+      if (!top && node.visible === false) return;
+      add(node.type);
+      if ("fillGeometry" in node) for (const g of node.fillGeometry) add(g.data);
+      if ("strokeGeometry" in node) for (const g of node.strokeGeometry) add(g.data);
+      for (const key of ["fills", "strokes"]) if (key in node) add(node[key] === window.figma.mixed ? "mixed" : JSON.stringify(node[key]));
+      add(JSON.stringify(multiply(base, node.absoluteTransform).flat().map((v) => Math.round(v * 1000))));
+      if ("children" in node && node.type !== "BOOLEAN_OPERATION") for (const child of node.children) walk(child, false);
+    };
+    walk(root, true);
+    return h;
+  };
+  const refreshVector = (figma, group, effect, settings) => {
+    const { spec } = effect;
+    const source = sourceOf(group);
+    if (!source) return;
+    const current = { spec, figma, group, source, settings, kept: [], made: [], meta: new WeakMap(), seeds: [], base: source.absoluteTransform, unit: Math.max(1, source.width ?? 100, source.height ?? 100), wasVisible: true };
+    try {
+      current.items = shapesOf(source);
+      spec.read?.(current);
+      const old = group.children.filter((child) => child !== source);
+      syncMade(current, spec.make(current) ?? []);
+      for (const node of old) if (!node.removed) node.remove();
+    } finally {
+      spec.close?.(current);
+    }
+    if (stackOf(group).indexOf(group) > 0) restackAbove(figma, group);
+  };
+  let following = [];
+  let followFound = 0;
+  const followed = new Map();
+  setInterval(() => {
+    try {
+      const figma = api();
+      if (!state.on || !figma || document.visibilityState !== "visible") return;
+      if (repeating || disintegrating || crushing || filtering || filling || vectoring || restacking) return;
+      const now = performance.now();
+      if (now - followFound > 4000) {
+        followFound = now;
+        const keys = EFFECTS.filter((effect) => effect.spec?.follows).map((effect) => effect.id);
+        try {
+          following = figma.currentPage.findAllWithCriteria({ types: ["GROUP"], sharedPluginData: { namespace: PLUGIN, keys } });
+        } catch {
+          following = [];
+        }
+      }
+      for (const group of following) {
+        if (group.removed) continue;
+        const effect = effectOf(group);
+        if (!effect?.spec?.follows) continue;
+        const settings = { ...structuredClone(effect.spec.defaults), ...effect.saved(group) };
+        if (!settings.follow || isOff(group)) continue;
+        const source = sourceOf(group);
+        if (!source) continue;
+        const sig = shapeSignature(source);
+        const known = followed.get(group.id);
+        if (!known) followed.set(group.id, { sig, changed: 0 });
+        else if (known.sig !== sig) Object.assign(known, { sig, changed: now });
+        // Once it's stopped changing for a moment
+        else if (known.changed && now - known.changed > 450) {
+          known.changed = 0;
+          refreshVector(figma, group, effect, settings);
+        }
+      }
+    } catch {}
+  }, 300);
 
   // ---------- Ligma effects in the right panel ----------
 
