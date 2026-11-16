@@ -8897,12 +8897,12 @@ const PAGE_JS: &str = r##"(() => {
     if (!spots.length || !seeds.length) return [];
     // Copies sized to the shape, whatever size the layers are: about as
     // thick as the shape mostly is, as a letter's strokes are, and no more
-    // than a sixth of it across. Size is a share of that
+    // than a tenth of it across. Size is a share of that
     const sample = [];
     for (let i = 0; i < spots.length; i += 7) sample.push(depth[spots[i]]);
     sample.sort((a, b) => a - b);
     const thick = 2 * (sample[Math.floor(sample.length * 0.9)] ?? 1);
-    const base = Math.max(3, Math.min(thick * 0.85, Math.min(mw, mh) / 6));
+    const base = Math.max(3, Math.min(thick * 0.85, Math.min(mw, mh) / 10));
     const fitScale = seeds.map((seed) => base / Math.max(1, Math.max(seed.w, seed.h) * (g / seed.g)));
     const weights = seeds.map((seed) => Math.max(0, seed.weight));
     const total = weights.reduce((a, b) => a + b, 0) || 1;
