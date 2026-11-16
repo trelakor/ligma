@@ -4154,19 +4154,35 @@ impl Painter {
         if total > budget {
             // Those not in view, needed longest ago (or never) first, and of
             // those the biggest
-            let mut aside: Vec<(Option<Instant>, usize, String)> = self
+            let can_go = |key: &String, img: &Img| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !((soon || key.starts_with(EFFECT)) && need.contains_key(key.as_str())) && img.image.width().max(img.image.height()) > PLACEHOLDER;
+            // What custom effects drew is kept under more than one key: a
+            // texture kept under keys still in use stays as it is, and one
+            // let go is let go under each, or making it smaller under one
+            // would save nothing
+            let in_use: std::collections::HashSet<u32> = self.images.iter().filter(|(key, img)| !can_go(key, img)).map(|(_, img)| img.image.unique_id()).collect();
+            let mut seen = std::collections::HashSet::new();
+            let mut aside: Vec<(Option<Instant>, usize, String, u32)> = self
                 .images
                 .iter()
-                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !((soon || key.starts_with(EFFECT)) && need.contains_key(key.as_str())) && img.image.width().max(img.image.height()) > PLACEHOLDER)
-                .map(|(key, img)| (self.wanted.get(key).copied(), img.bytes(), key.clone()))
+                .filter(|(key, img)| can_go(key, img) && !in_use.contains(&img.image.unique_id()) && seen.insert(img.image.unique_id()))
+                .map(|(key, img)| (self.wanted.get(key).copied(), img.bytes(), key.clone(), img.image.unique_id()))
                 .collect();
             aside.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
             let mut gone = Vec::new();
-            for (_, _, key) in aside {
+            for (_, _, key, id) in aside {
                 if total <= budget * 3 / 4 {
                     break;
                 }
                 total = self.shrink(&key, total);
+                // The same small copy under its other keys
+                if let Some(small) = self.images.get(&key).cloned() {
+                    for (other, img) in self.images.iter_mut().filter(|(other, img)| **other != key && img.image.unique_id() == id) {
+                        total = total.saturating_sub(img.bytes()) + small.bytes();
+                        *img = Img { stale: img.stale, ..small.clone() };
+                        self.asked.remove(other.as_str());
+                        gone.push(other.clone());
+                    }
+                }
                 gone.push(key);
             }
             self.forget_images(&gone);
