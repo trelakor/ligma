@@ -8655,25 +8655,44 @@ const PAGE_JS: &str = r##"(() => {
       over2(body);
       if (flap) {
         // The flap's shadow, cast by a light from the top left: each point of
-        // the sheet lands as far down and right as it's lifted, so it meets
-        // the flap at the fold and falls farther toward the tip
+        // the sheet lands as far down and right as it's lifted. Where it
+        // still touches, by the fold, it casts nothing, so the shadow grows
+        // under the raised curl, darker and softer the higher it is, and
+        // never draws a line along the fold
         if (s.peelShadow > 0) {
-          const cast = new Float32Array(n);
-          for (let y = 0; y < H; y++)
-            for (let x = 0; x < W; x++) {
-              const i = y * W + x;
-              const a = lift[i];
-              if (!a) continue;
-              const sx = Math.floor(x + 0.55 * height[i]);
-              const sy = Math.floor(y + 0.7 * height[i]);
-              for (let j = 0; j < 2; j++)
-                for (let m = 0; m < 2; m++) {
-                  const tx = sx + m;
-                  const ty = sy + j;
-                  if (tx >= 0 && ty >= 0 && tx < W && ty < H && cast[ty * W + tx] < a) cast[ty * W + tx] = a;
-                }
-            }
-          under(cast, Math.max(1, s.peelBlur * k), 0, 0, s.peelShadow / 100);
+          let top = 0;
+          for (let i = 0; i < n; i++) if (lift[i] && height[i] > top) top = height[i];
+          if (top > 0) {
+            const low = new Float32Array(n);
+            const high = new Float32Array(n);
+            for (let y = 0; y < H; y++)
+              for (let x = 0; x < W; x++) {
+                const i = y * W + x;
+                if (!lift[i]) continue;
+                const t = height[i] / top;
+                const rise = clamp01((t - 0.12) / 0.48);
+                const a = lift[i] * rise * rise * (3 - 2 * rise);
+                if (a <= 0) continue;
+                const aLow = a * (1 - t);
+                const aHigh = a * t;
+                const sx = Math.floor(x + 0.55 * height[i]);
+                const sy = Math.floor(y + 0.7 * height[i]);
+                for (let j = 0; j < 2; j++)
+                  for (let m = 0; m < 2; m++) {
+                    const tx = sx + m;
+                    const ty = sy + j;
+                    if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+                    const d = ty * W + tx;
+                    if (low[d] < aLow) low[d] = aLow;
+                    if (high[d] < aHigh) high[d] = aHigh;
+                  }
+              }
+            const blur = Math.max(1, s.peelBlur * k);
+            const sharp = blurChannel(low, W, H, blur * 0.3);
+            const soft = blurChannel(high, W, H, blur * 0.7);
+            for (let i = 0; i < n; i++) low[i] = Math.min(1, sharp[i] + soft[i]);
+            under(low, 0, 0, 0, s.peelShadow / 100);
+          }
         }
         over2(flap);
       }
