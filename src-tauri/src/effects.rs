@@ -11503,9 +11503,104 @@ const PAGE_JS: &str = r##"(() => {
     },
   });
 
-  // A flat shadow cast far from the layer at an angle, as one vector: the
-  // outline swept along the angle, every side and both ends, run one way
-  // round so they make one shape, fading toward its end
+  // A subpath run the other way
+  const reversed = (sp) => {
+    const segs = [];
+    let end = [sp.x, sp.y];
+    const starts = [end];
+    for (const g of sp.segs) starts.push([g[4], g[5]]);
+    for (let i = sp.segs.length - 1; i >= 0; i--) {
+      const g = sp.segs[i];
+      const [x, y] = starts[i];
+      segs.push([g[2], g[3], g[0], g[1], x, y]);
+    }
+    const [x, y] = starts[starts.length - 1];
+    return { x, y, closed: sp.closed, segs };
+  };
+  // Every subpath closed, each that's closed by a jump given a line back
+  const closedPaths = (paths) =>
+    paths.map((sp) => {
+      const last = sp.segs[sp.segs.length - 1];
+      if (!last || Math.hypot(last[4] - sp.x, last[5] - sp.y) < 1e-6) return { ...sp, closed: true };
+      return { ...sp, closed: true, segs: [...sp.segs, lineSeg(last[4], last[5], sp.x, sp.y)] };
+    });
+  // The outline swept along (`dx`, `dy`) as one outline per subpath, its
+  // curves kept: the convolution of the outline with the sweep, whose
+  // nonzero winding is exactly where the outline passes. Each curve's cut
+  // where it turns to or from the sweep's direction; the parts facing
+  // away stay, those facing it move to the far end, and a line along the
+  // sweep joins them. Outlines run so their outside is on the right, as
+  // Figma's are with holes the other way, so holes stay where nothing
+  // passes over them
+  const sweepPaths = (paths, dx, dy, evenOdd) => {
+    const area = (sp) => signedArea(flatten([sp], 4)[0].points);
+    let all = closedPaths(paths);
+    if (evenOdd) all = all.map((sp) => (area(sp) < 0 ? reversed(sp) : sp));
+    else {
+      const largest = all.reduce((best, sp) => (Math.abs(area(sp)) > Math.abs(best) ? area(sp) : best), 0);
+      if (largest < 0) all = all.map(reversed);
+    }
+    const cross = (ax, ay) => ax * dy - ay * dx;
+    return all.map((sp) => {
+      // Pieces of curve, each facing one way
+      const pieces = [];
+      let [x, y] = [sp.x, sp.y];
+      for (const g of sp.segs) {
+        const a = cross(g[0] - x, g[1] - y);
+        const b = cross(g[2] - g[0], g[3] - g[1]);
+        const c = cross(g[4] - g[2], g[5] - g[3]);
+        const qa = a - 2 * b + c;
+        const qb = 2 * (b - a);
+        const roots = [];
+        if (Math.abs(qa) < 1e-9) {
+          if (Math.abs(qb) > 1e-9) roots.push(-a / qb);
+        } else {
+          const disc = qb * qb - 4 * qa * a;
+          if (disc >= 0) {
+            const r = Math.sqrt(disc);
+            roots.push((-qb - r) / (2 * qa), (-qb + r) / (2 * qa));
+          }
+        }
+        const cuts = [0, ...roots.filter((t) => t > 1e-4 && t < 1 - 1e-4).sort((p, q) => p - q), 1];
+        for (let k = 0; k < cuts.length - 1; k++) {
+          const piece = cubicPart(x, y, g, cuts[k], cuts[k + 1]);
+          const [sx, sy] = k === 0 ? [x, y] : cubicAt(x, y, g, cuts[k]);
+          // Its outward side at its middle, against the sweep
+          const tm = (cuts[k] + cuts[k + 1]) / 2;
+          const u = 1 - tm;
+          const tx = 3 * (u * u * (g[0] - x) + 2 * u * tm * (g[2] - g[0]) + tm * tm * (g[4] - g[2]));
+          const ty = 3 * (u * u * (g[1] - y) + 2 * u * tm * (g[3] - g[1]) + tm * tm * (g[5] - g[3]));
+          const facing = ty * dx - tx * dy;
+          pieces.push({ sx, sy, seg: piece, front: facing > 1e-9 });
+        }
+        [x, y] = [g[4], g[5]];
+      }
+      if (!pieces.length) return sp;
+      const out = { x: 0, y: 0, closed: true, segs: [] };
+      const first = pieces[0];
+      let off = first.front ? 1 : 0;
+      [out.x, out.y] = [first.sx + dx * off, first.sy + dy * off];
+      let [px, py] = [out.x, out.y];
+      for (const piece of pieces) {
+        const want = piece.front ? 1 : 0;
+        if (want !== off) {
+          const [nx, ny] = [piece.sx + dx * want, piece.sy + dy * want];
+          out.segs.push(lineSeg(px, py, nx, ny));
+          off = want;
+        }
+        const g = piece.seg;
+        const [ox, oy] = [dx * off, dy * off];
+        out.segs.push([g[0] + ox, g[1] + oy, g[2] + ox, g[3] + oy, g[4] + ox, g[5] + oy]);
+        [px, py] = [g[4] + ox, g[5] + oy];
+      }
+      if (Math.hypot(px - out.x, py - out.y) > 1e-6) out.segs.push(lineSeg(px, py, out.x, out.y));
+      return out;
+    });
+  };
+
+  // A flat shadow cast far from the layer at an angle, as one vector with
+  // an outline per outline of the layer, the layer's curves kept, fading
+  // toward its end
   const SHADOW_LONG_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 5.5h7v7h-7z"/><path ${STROKE} d="m12.5 5.5 7 7v7h-7l-7-7"/></svg>`;
   const longShadowEffect = vectorEffect({
     id: "longShadow",
@@ -11524,39 +11619,22 @@ const PAGE_JS: &str = r##"(() => {
       ["Down", (u) => ({ angle: 90, length: Math.max(4, Math.round(u * 0.8)), opacity: 28, fade: 100 })],
     ],
     summary: (s) => `${s.length}px · ${s.angle}°`,
-    read: (current) => {
-      current.edges = edgesOf(current);
-    },
     make: (current) => {
       const s = current.settings;
       if (s.length <= 0) return [];
       const [ax, ay] = turnOf(s.angle);
       const dx = ax * s.length;
       const dy = ay * s.length;
-      const paths = [];
-      let [low, high] = [Infinity, -Infinity];
-      for (const lines of current.edges)
-        for (const line of lines) {
-          const p = line.points;
-          const n = p.length / 2;
-          const front = [];
-          const back = [];
-          for (let i = 0; i < n; i++) {
-            front.push(p[i * 2], p[i * 2 + 1]);
-            back.push(p[i * 2] + dx, p[i * 2 + 1] + dy);
-            const t = p[i * 2] * ax + p[i * 2 + 1] * ay;
-            low = Math.min(low, t);
-            high = Math.max(high, t + s.length);
-          }
-          paths.push(polygonPaths(clockwise(front)), polygonPaths(clockwise(back)));
-          for (let i = 0; i < n; i++) {
-            const j = (i + 1) % n;
-            const [x0, y0, x1, y1] = [p[i * 2], p[i * 2 + 1], p[j * 2], p[j * 2 + 1]];
-            if (Math.abs((x1 - x0) * ay - (y1 - y0) * ax) < 1e-6) continue;
-            paths.push(polygonPaths(clockwise([x0, y0, x1, y1, x1 + dx, y1 + dy, x0 + dx, y0 + dy])));
-          }
-        }
+      const paths = current.items.flatMap((item) => sweepPaths(item.paths, dx, dy, item.winding === "EVENODD"));
       if (!paths.length) return [];
+      // How far along the angle it starts and ends, for the fade
+      let [low, high] = [Infinity, -Infinity];
+      for (const { points } of flatten(paths, 4))
+        for (let i = 0; i < points.length; i += 2) {
+          const t = points[i] * ax + points[i + 1] * ay;
+          low = Math.min(low, t);
+          high = Math.max(high, t);
+        }
       const [r, g, b] = hexRgb(s.color);
       let paints = [{ type: "SOLID", color: { r, g, b } }];
       if (s.fade > 0) {
