@@ -866,13 +866,14 @@ impl Screen {
                 });
                 if let Some((merged, pieces)) = merged {
                     hub.shown_seq.store(seq, Ordering::Relaxed);
+                    PATH.store(1, Ordering::Relaxed);
                     self.frame(&merged, &pieces, &view, overlay.as_ref(), seq);
                     room = false;
                     shown = Some(now);
                     continue;
                 }
                 let before = complete.clone().filter(|before| before.serial != snapshot.serial).and_then(|before| {
-                    let (pieces, holes) = cover(&before.layers, before.content, &view, self.size);
+                    let (pieces, holes) = cover_over(&before.layers, before.layers.len(), before.content, &view, self.size, &self.shown);
                     let then = (before.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
                     (!holes && shown.as_ref() != Some(&then)).then_some((before, pieces, then))
                 });
@@ -898,12 +899,14 @@ impl Screen {
                     continue;
                 };
                 hub.shown_seq.store(seq, Ordering::Relaxed);
+                PATH.store(2, Ordering::Relaxed);
                 self.frame(&before, &pieces, &view, overlay.as_ref(), seq);
                 room = false;
                 shown = Some(then);
                 continue;
             }
             hub.shown_seq.store(seq, Ordering::Relaxed);
+            PATH.store(0, Ordering::Relaxed);
             self.frame(&snapshot, &pieces, &view, overlay.as_ref(), seq);
             room = false;
             shown = Some(now);
@@ -966,6 +969,7 @@ impl Screen {
         let (surface, _) = &mut self.buffers[index];
         let canvas = surface.canvas();
         let counts = self.patterns.paint(canvas, snapshot, &images, pieces, view, size);
+        record(&mut self.context, &self.patterns, snapshot, &images, pieces, view, size, seq);
         if let Some(overlay) = overlay {
             let (sx, sy) = view.stretch(size);
             canvas.save();
@@ -1016,6 +1020,47 @@ impl Screen {
         let mut stats = stats().lock().unwrap();
         stats.holes(false);
         stats.record_frame(encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, counts.native, counts.approximate, counts.skipped, view.zoom, snapshot.pending);
+    }
+}
+
+/// How the frame being shown was put together, for `record`: the latest
+/// snapshot, it merged with the last whole one, or the last whole one
+static PATH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Dev tools: with LIGMA_NATIVE_RECORD set to a folder, each frame shown is
+/// saved there a quarter the size, as raw RGBA named by its order, snapshot
+/// and time, for finding flicker too quick to see in captures
+#[allow(clippy::too_many_arguments)]
+fn record(context: &mut DirectContext, patterns: &Patterns, snapshot: &Snapshot, images: &[Option<Image>], pieces: &[Piece], view: &View, size: (u32, u32), seq: u64) {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    static FRAME: AtomicU64 = AtomicU64::new(0);
+    let Some(dir) = DIR.get_or_init(|| std::env::var_os("LIGMA_NATIVE_RECORD").filter(|_| super::dev()).map(std::path::PathBuf::from)) else {
+        return;
+    };
+    let (w, h) = (size.0.div_ceil(4), size.1.div_ceil(4));
+    let info = skia_safe::ImageInfo::new((w as i32, h as i32), ColorType::RGBA8888, AlphaType::Premul, None);
+    let Some(mut small) = gpu::surfaces::render_target(context, gpu::Budgeted::No, &info, 1, SurfaceOrigin::TopLeft, None, false, None) else {
+        return;
+    };
+    small.canvas().scale((0.25, 0.25));
+    patterns.paint(small.canvas(), snapshot, images, pieces, view, size);
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    if small.canvas().read_pixels(&info, &mut pixels, (w * 4) as usize, (0, 0)) {
+        let n = FRAME.fetch_add(1, Ordering::Relaxed);
+        let _ = std::fs::create_dir_all(dir);
+        let path = ["new", "merged", "held"][PATH.load(Ordering::Relaxed) as usize % 3];
+        super::render::trace(|| {
+            let pieces: Vec<String> = pieces
+                .iter()
+                .map(|piece| {
+                    let layer = &snapshot.layers[piece.layer];
+                    let b = piece.clip.bounds();
+                    format!("{:?}@{:.4}#{} {}x{}+{}+{}", layer.kind, layer.px, layer.drawn, b.width(), b.height(), b.left, b.top)
+                })
+                .collect();
+            format!("recorded {n} {path} serial={} pieces={}", snapshot.serial, pieces.join(" "))
+        });
+        let _ = std::fs::write(dir.join(format!("{n:05}_{seq}_{:.0}_{w}x{h}_{path}_s{}_l{}_p{}.rgba", super::render::since_epoch_ms(), snapshot.serial, snapshot.layers.len(), pieces.len())), pixels);
     }
 }
 
