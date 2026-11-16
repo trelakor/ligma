@@ -12,10 +12,11 @@
 /// `window.__ligmaModules`:
 ///
 /// - `patch(patches)` wraps, from now on, the first module whose source
-///   `patch.match(source)` accepts, for each patch. `patch.getter(value,
-///   React)` replaces each of its exports, read as the module's getters
-///   are; `patch.loaded(exports, React)` sees them once it has run. `React`
-///   is what the module imports, or null. `patch.source(source)` instead
+///   `patch.match(source)` accepts, for each patch. Patches that accept
+///   the same module all apply, the later around the earlier.
+///   `patch.getter(value, React)` replaces each of its exports, read as
+///   the module's getters are; `patch.loaded(exports, React)` sees them
+///   once it has run. `React` is what the module imports, or null. `patch.source(source)` instead
 ///   rewrites the module's code before it runs, for what isn't exported;
 ///   if it throws or the code doesn't parse, the module runs as it was
 /// - `arrived(match)` says whether a module `match` accepts has already
@@ -99,10 +100,16 @@ pub const PAGE_JS: &str = r##"(() => {
       const factory = modules[id];
       if (typeof factory !== "function") continue;
       const source = Function.prototype.toString.call(factory);
-      const patch = patches.find((patch) => !patch.done && patch.match(source));
-      if (!patch) continue;
-      patch.done = true;
-      modules[id] = patch.source ? rewrite(factory, patch, source) : wrapFactory(factory, patch, source);
+      const matched = patches.filter((patch) => !patch.done && patch.match(source));
+      if (!matched.length) continue;
+      // Several features can patch one module: rewrites first, then each
+      // wrap around the last, so a later patch sees an earlier one's exports
+      let next = factory;
+      for (const patch of [...matched.filter((patch) => patch.source), ...matched.filter((patch) => !patch.source)]) {
+        patch.done = true;
+        next = patch.source ? rewrite(next, patch, Function.prototype.toString.call(next)) : wrapFactory(next, patch, source);
+      }
+      modules[id] = next;
       if (!patches.some((patch) => !patch.done)) return;
     }
   };

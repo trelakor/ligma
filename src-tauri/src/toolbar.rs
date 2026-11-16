@@ -19,10 +19,10 @@
 //! switch's order, or the next if Figma doesn't take it. Only then: Figma
 //! puts some accounts in a mode on its own, and would put them back
 //!
-//! Right-clicking the switch opens a menu of the four modes (see
-//! tab_menu.rs), checked when shown. `PAGE_JS` asks for it by loading
-//! `SIGNAL_HOST`, which `on_signal` handles, and picking one turns it on
-//! or off as in Settings
+//! Right-clicking the switch opens a menu of the four modes and Ligma's
+//! Raster mode (see tab_menu.rs and raster.rs), checked when shown.
+//! `PAGE_JS` asks for it by loading `SIGNAL_HOST`, which `on_signal`
+//! handles, and picking one turns it on or off as in Settings
 //!
 //! Figma's shortcuts and the Actions menu still switch to hidden modes:
 //! they're handled where Ligma can't reach
@@ -299,8 +299,9 @@ pub fn page_js() -> String {
 /// Origin of the links `PAGE_JS` opens to ask for the menu
 pub const SIGNAL_HOST: &str = "toolbar.ligma.invalid";
 
-/// The menu's items, in the switch's order: their actions and text
-const MODES: [(&str, &str); 4] = [("draw", "Draw"), ("design", "Design"), ("motion", "Motion"), ("dev", "Dev Mode")];
+/// The menu's items, in the switch's order: their actions and text. Raster
+/// is Ligma's own (see raster.rs)
+const MODES: [(&str, &str); 5] = [("draw", "Draw"), ("design", "Design"), ("raster", "Raster"), ("motion", "Motion"), ("dev", "Dev Mode")];
 
 /// The setting that shows mode `action` (see `MODES`)
 fn shows<'a>(settings: &'a mut Settings, action: &str) -> Option<&'a mut bool> {
@@ -309,6 +310,7 @@ fn shows<'a>(settings: &'a mut Settings, action: &str) -> Option<&'a mut bool> {
         "design" => Some(&mut settings.show_design_mode),
         "motion" => Some(&mut settings.show_motion_mode),
         "dev" => Some(&mut settings.show_dev_mode),
+        "raster" => Some(&mut settings.show_raster_mode),
         _ => None,
     }
 }

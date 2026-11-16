@@ -808,13 +808,14 @@
     <div class="page-title">Editor</div>
     <section>
       <h2>Toolbar</h2>
-      <div class="row stack" data-keywords="mode switch dev mode">
+      <div class="row stack" data-keywords="mode switch dev mode raster photoshop paint pixels brush">
         <span class="label">Modes to switch between
           <div class="hint">In the toolbar's switch, also changed by right-clicking it. Hiding one reloads open files.</div>
         </span>
         <div class="chips" role="group" aria-label="Modes to switch between">
           <label class="chip"><input type="checkbox" id="mode-draw"><span class="box"></span>Draw</label>
           <label class="chip"><input type="checkbox" id="mode-design"><span class="box"></span>Design</label>
+          <label class="chip"><input type="checkbox" id="mode-raster"><span class="box"></span>Raster</label>
           <label class="chip"><input type="checkbox" id="mode-motion"><span class="box"></span>Motion</label>
           <label class="chip"><input type="checkbox" id="mode-dev"><span class="box"></span>Dev Mode</label>
         </div>
@@ -1261,6 +1262,7 @@
   const modeFields = {
     "mode-draw": "showDrawMode",
     "mode-design": "showDesignMode",
+    "mode-raster": "showRasterMode",
     "mode-motion": "showMotionMode",
     "mode-dev": "showDevMode",
   };

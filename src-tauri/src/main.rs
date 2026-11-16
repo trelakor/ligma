@@ -37,6 +37,7 @@ mod preview;
 #[cfg(target_os = "macos")]
 mod pressure;
 mod prompt;
+mod raster;
 mod report;
 mod settings;
 mod split;
@@ -332,6 +333,7 @@ fn main() {
             ai_actions::init(&settings);
             copy_code::init(&settings);
             lasso::init(&settings);
+            raster::init(&settings);
             game_mode::init(&settings);
             notifications::init(&settings);
             mcp_bridge::init(&settings);

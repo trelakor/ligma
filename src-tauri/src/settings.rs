@@ -116,8 +116,10 @@ pub struct Settings {
     pub show_design_mode: bool,
     /// Motion,
     pub show_motion_mode: bool,
-    /// and Dev Mode
+    /// Dev Mode,
     pub show_dev_mode: bool,
+    /// and Ligma's own Raster mode, after Design (see raster.rs)
+    pub show_raster_mode: bool,
     /// Copy and paste the adjustments of image fills, with Cmd+Shift+C in
     /// the image picker and Cmd+Shift+V, or from the picker's menu
     pub adjustments_clipboard: bool,
@@ -212,6 +214,7 @@ impl Default for Settings {
             show_design_mode: true,
             show_motion_mode: true,
             show_dev_mode: true,
+            show_raster_mode: true,
             adjustments_clipboard: true,
             adjustments_bar: true,
             hide_free_ai_actions: true,
@@ -490,6 +493,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
     crate::lasso::apply_settings(app, &settings);
+    crate::raster::apply_settings(app, &settings);
     crate::mcp_bridge::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
