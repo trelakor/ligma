@@ -73,6 +73,8 @@ const PAGE_JS: &str = r##"(() => {
   // A circle stepped into pixels
   const BITCRUSH_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M9.5 4.5h5v2h2v2h2v7h-2v2h-2v2h-5v-2h-2v-2h-2v-7h2v-2h2z"/><path ${STROKE} d="M10.5 10.5h2v2h-2z"/></svg>`;
   const CHEVRON = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m5.5 7 2.5 2.5L10.5 7"/></svg>`;
+  // A star, an outline until it's filled for a favourite
+  const STAR = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path stroke="currentColor" stroke-linejoin="round" d="M8 2.85l1.5 3.69 3.97.28-3.04 2.57.95 3.86L8 11.15l-3.38 2.1.95-3.86-3.04-2.57 3.97-.28Z"/></svg>`;
   const CLOSE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m8 8 8 8m0-8-8 8"/></svg>`;
   const SEARCH = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="11" cy="11" r="4.5"/><path ${STROKE} d="m14.5 14.5 3.5 3.5"/></svg>`;
   const CHECK = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m4.5 8.5 2.5 2.5 4.5-5.5"/></svg>`;
@@ -106,6 +108,23 @@ const PAGE_JS: &str = r##"(() => {
       overflow: hidden;
     }
     [${ROOT}="menu"] .top { flex: none; padding: 8px 8px 4px; }
+    /* Categories under the search, as Figma's Resources tabs are: plain
+       labels, the chosen one on a light pill */
+    [${ROOT}="menu"] .tabs { display: flex; gap: 2px; margin-top: 8px; }
+    [${ROOT}="menu"] .tab {
+      height: 24px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 5px;
+      background: none;
+      color: var(--color-text-menu-secondary, #ffffffb2);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: default;
+    }
+    [${ROOT}="menu"] .tab:hover { color: var(--color-text-menu, #fff); }
+    [${ROOT}="menu"] .tab[aria-selected="true"] { background: var(--color-bg-menu-hover, #ffffff1a); color: var(--color-text-menu, #fff); }
+    [${ROOT}="menu"] .tab:focus-visible { outline: 2px solid var(--color-border-selected, #0d99ff); outline-offset: -2px; }
     [${ROOT}="menu"] .search {
       display: flex;
       align-items: center;
@@ -165,7 +184,10 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}="menu"] .item .about { color: var(--color-text-menu-secondary, #ffffffb2); }
     [${ROOT}="menu"] .item:hover .about, [${ROOT}="menu"] .item:focus-visible .about { color: inherit; }
     [${ROOT}="menu"] .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+    [${ROOT}="menu"] .cell { position: relative; min-width: 0; }
+    [${ROOT}="menu"] .cell[hidden] { display: none; }
     [${ROOT}="menu"] .tile {
+      width: 100%;
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -177,7 +199,6 @@ const PAGE_JS: &str = r##"(() => {
       text-align: center;
       cursor: default;
     }
-    [${ROOT}="menu"] .tile[hidden] { display: none; }
     [${ROOT}="menu"] .tile:hover { background: var(--color-bg-menu-hover, #ffffff14); }
     [${ROOT}="menu"] .tile:focus-visible { outline: 2px solid var(--color-border-selected, #0d99ff); outline-offset: -2px; }
     [${ROOT}="menu"] .tile .picture {
@@ -192,9 +213,33 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}="menu"] .tile canvas { display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1); }
     [${ROOT}="menu"] .tile canvas.drawn { opacity: 1; }
     [${ROOT}="menu"] .tile .name { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 14px; overflow-wrap: anywhere; }
+    /* A star over the picture's top right, shown on hover and kept on a
+       favourite */
+    [${ROOT}="menu"] .star {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: 0;
+      border-radius: 5px;
+      background: #1e1e1ed9;
+      color: var(--color-text-menu, #fff);
+      opacity: 0;
+      cursor: default;
+      transition: opacity 120ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    [${ROOT}="menu"] .cell:hover .star, [${ROOT}="menu"] .cell:focus-within .star, [${ROOT}="menu"] .star[aria-pressed="true"] { opacity: 1; }
+    [${ROOT}="menu"] .star:hover { background: #2c2c2c; }
+    [${ROOT}="menu"] .star:focus-visible { outline: 2px solid var(--color-border-selected, #0d99ff); outline-offset: 0; }
+    [${ROOT}="menu"] .star[aria-pressed="true"] svg path { fill: currentColor; }
     [${ROOT}="menu"] .empty { padding: 24px 8px; text-align: center; color: var(--color-text-menu-secondary, #ffffffb2); }
+    [${ROOT}="menu"] .empty .hint { display: block; margin-top: 4px; }
     @media (prefers-reduced-motion: reduce) {
-      [${ROOT}="menu"] .tile canvas { transition: none; }
+      [${ROOT}="menu"] .tile canvas, [${ROOT}="menu"] .star { transition: none; }
     }
     /* An effect's panel: a preview up top, then labeled sliders, in
        Figma's colors and type */
@@ -494,6 +539,7 @@ const PAGE_JS: &str = r##"(() => {
     {
       id: "repeater",
       name: "Repeater",
+      kind: "vector",
       about: "Repeat a layer in a trail, ring or grid",
       icon: REPEATER_ICON,
       of: (node) => repeaterOf(node),
@@ -557,6 +603,28 @@ const PAGE_JS: &str = r##"(() => {
     if (menu && !menu.contains(event.target) && !button()?.contains(event.target)) closeMenu();
   };
   const COLUMNS = 4;
+  // The library's tabs, the one chosen last kept, and the favourites, in
+  // this browser's storage, shared by its Figma tabs
+  const TABS = [
+    ["all", "All"],
+    ["raster", "Raster"],
+    ["vector", "Vector"],
+    ["favorites", "Favorites"],
+  ];
+  const TAB_KEY = "ligma-effects-tab";
+  const FAVORITES_KEY = "ligma-effects-favorites";
+  const stored = (key, fallback) => {
+    try {
+      return JSON.parse(localStorage.getItem(key)) ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  const store = (key, value) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  };
   const openMenu = (from = null) => {
     const figma = api();
     const anchor = from ?? button();
@@ -579,12 +647,25 @@ const PAGE_JS: &str = r##"(() => {
     menu.setAttribute(ROOT, "menu");
     menu.setAttribute("role", "dialog");
     menu.setAttribute("aria-label", "Effects");
-    // Tabs for categories go under the search, in `top`, once there are
-    // enough effects to sort
     const top = menu.appendChild(element("div", { className: "top" }));
     const search = top.appendChild(element("label", { className: "search", innerHTML: SEARCH }));
     const input = search.appendChild(element("input", { type: "search", placeholder: "Search effects", spellcheck: false, autocomplete: "off" }));
     input.setAttribute("aria-label", "Search effects");
+    const tabList = top.appendChild(element("div", { className: "tabs" }));
+    tabList.setAttribute("role", "tablist");
+    tabList.setAttribute("aria-label", "Effect types");
+    let tab = TABS.some(([id]) => id === stored(TAB_KEY, "all")) ? stored(TAB_KEY, "all") : "all";
+    const favorites = new Set(stored(FAVORITES_KEY, []));
+    const tabs = TABS.map(([id, label]) => {
+      const button = tabList.appendChild(element("button", { type: "button", className: "tab", textContent: label }));
+      button.setAttribute("role", "tab");
+      button.addEventListener("click", () => {
+        tab = id;
+        store(TAB_KEY, id);
+        filter();
+      });
+      return { id, button };
+    });
     const body = menu.appendChild(element("div", { className: "body" }));
     const pick = (run) => () => {
       closeMenu();
@@ -598,28 +679,75 @@ const PAGE_JS: &str = r##"(() => {
       editing.append(element("div", { className: "heading", textContent: "This layer" }), item, element("div", { className: "separator" }), element("div", { className: "heading", textContent: "Add an effect on top" }));
     }
     const grid = body.appendChild(element("div", { className: "grid" }));
-    const empty = body.appendChild(element("div", { className: "empty", textContent: "No effects match", hidden: true }));
+    const empty = body.appendChild(element("div", { className: "empty", hidden: true }));
     const tiles = EFFECTS.map((effect) => {
       const canvas = element("canvas", { width: THUMB, height: THUMB });
       canvas.setAttribute("aria-hidden", "true");
-      const tile = grid.appendChild(element("button", { type: "button", className: "tile", title: effect.about }, element("span", { className: "picture" }, canvas), element("span", { className: "name", textContent: effect.name })));
+      const cell = grid.appendChild(element("div", { className: "cell" }));
+      const tile = cell.appendChild(element("button", { type: "button", className: "tile", title: effect.about }, element("span", { className: "picture" }, canvas), element("span", { className: "name", textContent: effect.name })));
       tile.addEventListener("click", pick(() => effect.open(figma, false)));
-      return { effect, tile, canvas, text: `${effect.name} ${effect.about}`.toLowerCase() };
+      const star = cell.appendChild(element("button", { type: "button", className: "star", innerHTML: STAR }));
+      const marked = () => {
+        const on = favorites.has(effect.id);
+        star.setAttribute("aria-pressed", String(on));
+        star.setAttribute("aria-label", `${on ? "Remove" : "Add"} ${effect.name} ${on ? "from" : "to"} favorites`);
+        star.title = on ? "Remove from favorites" : "Add to favorites";
+      };
+      marked();
+      star.addEventListener("click", () => {
+        if (favorites.has(effect.id)) favorites.delete(effect.id);
+        else favorites.add(effect.id);
+        store(FAVORITES_KEY, [...favorites]);
+        marked();
+        if (tab === "favorites") filter();
+      });
+      return { effect, cell, tile, canvas, text: `${effect.name} ${effect.about}`.toLowerCase() };
     });
-    const shown = () => tiles.filter(({ tile }) => !tile.hidden).map(({ tile }) => tile);
+    const shown = () => tiles.filter(({ cell }) => !cell.hidden).map(({ tile }) => tile);
     const editItem = () => (editing && !editing.hidden ? editing.querySelector(".item") : null);
-    input.addEventListener("input", () => {
+    // The tiles in the tab chosen that match what's typed
+    const filter = () => {
       const words = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      for (const { tile, text } of tiles) tile.hidden = !words.every((word) => text.includes(word));
+      const inTab = (effect) => (tab === "all" ? true : tab === "favorites" ? favorites.has(effect.id) : (effect.kind ?? "raster") === tab);
+      for (const { effect, cell, text } of tiles) cell.hidden = !inTab(effect) || !words.every((word) => text.includes(word));
+      for (const { id, button } of tabs) {
+        button.setAttribute("aria-selected", String(id === tab));
+        button.tabIndex = id === tab ? 0 : -1;
+      }
       if (editing) editing.hidden = words.length > 0;
-      empty.hidden = shown().length > 0;
-    });
+      const none = shown().length === 0;
+      empty.hidden = !none;
+      if (none)
+        empty.replaceChildren(
+          ...(tab === "favorites" && !words.length
+            ? [element("span", { textContent: "No favorites yet" }), element("span", { className: "hint", textContent: "Hover an effect and click its star" })]
+            : [element("span", { textContent: "No effects match" })]),
+        );
+    };
+    input.addEventListener("input", filter);
     // Arrows move through the tiles a row of four at a time, up from the
     // first row to the search, and typing anywhere searches
     menu.addEventListener("keydown", (event) => {
       // Figma's shortcuts don't hear keys typed here
       event.stopPropagation();
       const list = shown();
+      const onTab = tabs.findIndex(({ button }) => button === event.target);
+      if (onTab >= 0) {
+        const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+        if (step) {
+          event.preventDefault();
+          const next = tabs[(onTab + step + tabs.length) % tabs.length].button;
+          next.focus();
+          next.click();
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          (editItem() ?? list[0])?.focus();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          input.focus();
+        }
+        return;
+      }
       if (event.target === input) {
         if (event.key === "ArrowDown") {
           event.preventDefault();
@@ -658,8 +786,9 @@ const PAGE_JS: &str = r##"(() => {
     };
     addEventListener("keydown", menuKeys, true);
     document.body.append(menu);
-    // Three rows of tiles, the rest scrolled to
-    const fourth = tiles[COLUMNS * 3]?.tile;
+    // Three rows of tiles, the rest scrolled to, measured with every tile
+    // shown, then the tab chosen last
+    const fourth = tiles[COLUMNS * 3]?.cell;
     if (fourth) body.style.maxHeight = `${Math.floor(fourth.getBoundingClientRect().top - body.getBoundingClientRect().top) - 2}px`;
     const box = anchor.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, box.left + box.width / 2 - menu.offsetWidth / 2))}px`;
@@ -667,6 +796,7 @@ const PAGE_JS: &str = r##"(() => {
     if (from) menu.style.left = `${Math.max(8, box.right - menu.offsetWidth)}px`;
     // Held at its first height, so searching doesn't move it
     menu.style.height = `${menu.offsetHeight}px`;
+    filter();
     anchor.setAttribute("aria-expanded", "true");
     addEventListener("pointerdown", outsideMenu, true);
     input.focus();
@@ -9885,6 +10015,7 @@ const PAGE_JS: &str = r##"(() => {
   EFFECTS.push({
     id: FILL,
     name: "Shape Fill",
+    kind: "vector",
     about: "Fill a shape with copies of other layers",
     icon: FILL_ICON,
     of: (node) => fillOf(node),
