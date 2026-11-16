@@ -25,6 +25,9 @@ const TICK: Duration = Duration::from_millis(250);
 /// graphs to move with them, as often as the panel's drawn. Each is a
 /// script run on the page's main thread, which Figma's frames need
 const FRAME_TICK: Duration = Duration::from_millis(33);
+/// Gaps between frames longer than this are the view at rest, left out of
+/// the frame rate
+const IDLE_MS: f32 = 250.0;
 
 const PANEL_JS: &str = include_str!("stats_panel.js");
 
@@ -34,8 +37,11 @@ struct Record {
     /// How long each frame took to make, in ms: Figma's part, from the
     /// input it answers or the start of the page's frame to handing it over,
     /// and the renderer's, from then till it's on screen. Waiting for input
-    /// isn't in it, so input that comes late doesn't make frames look slow
-    frames: VecDeque<(f32, f32)>,
+    /// isn't in it, so input that comes late doesn't make frames look slow.
+    /// Then since the frame before, for the frame rate, or none after rest
+    frames: VecDeque<(f32, f32, Option<f32>)>,
+    #[serde(skip)]
+    last: Option<Instant>,
     /// The renderer and the page, in MB. Figma's renderer is in its page,
     /// so it's what the page takes above what it took while Ligma's
     /// renderer drew, or below 0 before it ever did
@@ -48,7 +54,7 @@ struct Record {
 }
 
 impl Record {
-    fn frame(&mut self, made: (f32, f32)) {
+    fn frame(&mut self, made: (f32, f32, Option<f32>)) {
         self.total += 1;
         self.frames.push_back(made);
         if self.frames.len() > FRAMES {
@@ -67,7 +73,11 @@ pub fn presented(figma: f32, ligma: f32) {
     if !super::show_stats() {
         return;
     }
-    RECORDS.lock().unwrap()[0].get_or_insert_with(Record::default).frame((figma, ligma));
+    let mut records = RECORDS.lock().unwrap();
+    let record = records[0].get_or_insert_with(Record::default);
+    let now = Instant::now();
+    let since = record.last.replace(now).map(|last| (now - last).as_secs_f32() * 1000.0).filter(|ms| *ms < IDLE_MS);
+    record.frame((figma, ligma, since));
 }
 
 /// Shows the panel while Show stats is on, from when it's turned on
@@ -89,7 +99,7 @@ fn run(app: AppHandle) {
         let ligma = super::ON.load(Ordering::Relaxed);
         if ticked.is_some_and(|at| at.elapsed() < TICK) {
             // Only the frames presented since
-            let frames: Vec<(f32, f32)> = {
+            let frames: Vec<(f32, f32, Option<f32>)> = {
                 let records = RECORDS.lock().unwrap();
                 let record = records[0].as_ref().filter(|_| ligma);
                 let new = record.map_or(0, |record| (record.total - sent).min(record.frames.len() as u64) as usize);
@@ -155,8 +165,8 @@ fn run(app: AppHandle) {
                     let mut records = RECORDS.lock().unwrap();
                     let record = records[1].get_or_insert_with(Record::default);
                     for frame in frames {
-                        if let Some(ms) = frame.as_f64() {
-                            record.frame((ms as f32, 0.0));
+                        if let Some(ms) = frame[0].as_f64() {
+                            record.frame((ms as f32, 0.0, frame[1].as_f64().map(|since| since as f32)));
                         }
                     }
                 }

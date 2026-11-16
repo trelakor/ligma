@@ -4,6 +4,7 @@
   // the renderer in use above the one used before
   const FRAMES = 200;
   const ANSWERS_MS = 250;
+  const IDLE_MS = 250;
   const PAGE_FRAME_MS = 50;
   const SAMPLES = 240;
   const SCALE_MS = 20;
@@ -34,7 +35,7 @@
   // A frame's time is from the input it answers, or else the start of the
   // browser's frame it's drawn in, to its last drawing: how long Figma took
   // to make it, not how long it waited for input
-  const state = { measuring: false, input: null, frame: null, from: 0, made: null, timed: [], raf: 0, restore: [], host: null, canvas: null, model: null, painting: 0, painted: 0, figma: null, at: null, styles: {} };
+  const state = { measuring: false, input: null, frame: null, from: 0, made: null, done: null, timed: [], raf: 0, restore: [], host: null, canvas: null, model: null, painting: 0, painted: 0, figma: null, at: null, styles: {} };
 
   // Figma draws on the page with WebGL or WebGPU, or in its render worker,
   // which answers each frame it's sent
@@ -73,10 +74,14 @@
     if (state.made == null) return;
     const ms = state.made;
     state.made = null;
-    state.timed.push(ms);
+    // Since the frame before, for the frame rate
+    const now = performance.now();
+    const since = state.done != null && now - state.done < IDLE_MS ? now - state.done : null;
+    state.done = now;
+    state.timed.push([ms, since]);
     const record = state.model?.records[1];
     if (record) {
-      push(record, [[ms, 0]]);
+      push(record, [[ms, 0, since]]);
       paint();
     }
   };
@@ -222,8 +227,9 @@
   }
 
   // A line of frame times: the typical big or not, then p95 and worst
-  const timesLine = (ctx, y, right, s, ink, label, big) => {
-    const parts = big ? [[s.p50.toFixed(1), ink, BIG], [" ms a frame", SECONDARY]] : [[label, SECONDARY], [s.p50.toFixed(1), ink], [" ms a frame", MUTED]];
+  const timesLine = (ctx, y, right, s, ink, label, big, fps) => {
+    const rate = fps ? [[`${Math.round(fps)}`, ink, BIG], [" fps  ", SECONDARY]] : [];
+    const parts = big ? [...rate, [s.p50.toFixed(1), ink, BOLD], [" ms a frame", SECONDARY]] : [[label, SECONDARY], [s.p50.toFixed(1), ink], [" ms a frame", MUTED]];
     text(ctx, PAD + 8, y, parts);
     textRight(ctx, right, y, [
       ["p95 ", MUTED],
@@ -262,8 +268,11 @@
     // showing it, or Figma's renderer's, from input to drawn
     const own = record.frames.map(([figma, renderer]) => (ligma ? renderer : figma));
     const s = summary(own);
+    // New frames a second while the view's not at rest
+    const since = record.frames.map(([, , since]) => since).filter((ms) => ms != null);
+    const fps = since.length ? 1000 / (since.reduce((a, b) => a + b, 0) / since.length) : null;
     if (s) {
-      timesLine(ctx, y, PAD + inner, s, ink, "", true);
+      timesLine(ctx, y, PAD + inner, s, ink, "", true, fps);
     } else {
       text(ctx, PAD + 8, y, [["No frames yet", ink, BIG], ["  move the view to time them", MUTED]]);
     }
@@ -441,7 +450,7 @@
       if (model.records) {
         state.model = model;
         // Figma's frames timed here and not yet in Ligma's records
-        if (model.records[1]) push(model.records[1], out.map((ms) => [ms, 0]));
+        if (model.records[1]) push(model.records[1], out.map(([ms, since]) => [ms, 0, since]));
       } else if (state.model?.active === model.active) {
         const record = state.model.records[model.active === "ligma" ? 0 : 1];
         if (record) push(record, model.frames);
