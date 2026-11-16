@@ -24,7 +24,8 @@
 //! kinds of dithers, Chromatic Aberration and Fisheye are a lens's,
 //! Liquify, Displace, Motion Blur and Glow warp, smear or light it, and
 //! Shadow, Reflection and Rim Light are worked out from a cutout's own
-//! shape, with no generated pixels. Each draws an image over the original, which is kept,
+//! shape, Glitter, Sticker and Screen remake its surface, and Shape Fill
+//! packs a shape with copies of other layers, with no generated pixels. Each draws an image over the original, which is kept,
 //! hidden, in a group to change them from
 //!
 //! Effects stack, and a Ligma Effects section under Figma's own Effects in
@@ -474,6 +475,7 @@ const PAGE_JS: &str = r##"(() => {
     if (disintegrating) closeDisintegrate(disintegrating, false);
     if (crushing) closeBitcrush(crushing, false);
     if (filtering) closeFilter(filtering, false);
+    if (filling) closeFill(filling, false);
   };
   // An effect's `open`, undone if it throws. Run for a stack, the stack's
   // made again by `restack`, which hears of it and says so itself
@@ -819,6 +821,51 @@ const PAGE_JS: &str = r##"(() => {
         g.fill();
       }
     },
+    // A badge cut out of nothing: a pink star over a green disc, with a
+    // light band across them, colours and edges for glitter and stickers
+    badge: (g) => {
+      g.fillStyle = "#1f9d63";
+      g.beginPath();
+      g.arc(70, 88, 44, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = "#ff8fc8";
+      g.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 ? 18 : 40;
+        const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+        g.lineTo(104 + Math.cos(a) * r, 64 + Math.sin(a) * r);
+      }
+      g.fill();
+      g.fillStyle = "#f6efe2";
+      g.fillRect(38, 92, 68, 12);
+    },
+    // A search page: a field with a blue button over lines of text
+    ui: (g) => {
+      g.fillStyle = "#f4f6f9";
+      g.fillRect(0, 0, THUMB, THUMB);
+      g.fillStyle = "#ffffff";
+      g.strokeStyle = "#c9d1dc";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.roundRect(14, 40, 132, 30, 15);
+      g.fill();
+      g.stroke();
+      g.fillStyle = "#1f6feb";
+      g.beginPath();
+      g.roundRect(106, 44, 36, 22, 11);
+      g.fill();
+      g.fillStyle = "#3a3f47";
+      g.font = "bold 14px sans-serif";
+      g.fillText("search", 26, 60);
+      g.fillStyle = "#9aa4b2";
+      for (const [y, w] of [
+        [88, 110],
+        [102, 96],
+        [116, 120],
+        [130, 70],
+      ])
+        g.fillRect(16, y, w, 6);
+    },
     pawnOnNight: (g) => pawn(g, 80, 126),
     pawnOnFloor: (g) => pawn(g, 54, 118),
     pawnOnWater: (g) => pawn(g, 80, 100),
@@ -829,6 +876,10 @@ const PAGE_JS: &str = r##"(() => {
         [0, "#ebe6dd"],
         [1, "#cdc5b8"],
       ]);
+      g.fillRect(0, 0, THUMB, THUMB);
+    },
+    slate: (g) => {
+      g.fillStyle = "#2a2d36";
       g.fillRect(0, 0, THUMB, THUMB);
     },
     night: (g) => {
@@ -861,7 +912,24 @@ const PAGE_JS: &str = r##"(() => {
     rg.putImageData(done.image, 0, 0);
     const [tile, tg] = canvas2d();
     BACKDROPS[backdrop]?.(tg);
-    tg.drawImage(result, done.x, done.y);
+    // One that grows past its picture, as a sticker does, what shows of it
+    // fitted to the tile
+    if (spec.thumb.fit) {
+      const { data, width, height } = done.image;
+      let [x0, y0, x1, y1] = [width, height, 0, 0];
+      for (let y = 0; y < height; y++)
+        for (let x = 0; x < width; x++)
+          if (data[(y * width + x) * 4 + 3] > 24) {
+            x0 = Math.min(x0, x);
+            y0 = Math.min(y0, y);
+            x1 = Math.max(x1, x + 1);
+            y1 = Math.max(y1, y + 1);
+          }
+      if (x1 > x0 && y1 > y0) {
+        const scale = (THUMB - 16) / Math.max(x1 - x0, y1 - y0);
+        tg.drawImage(result, x0, y0, x1 - x0, y1 - y0, (THUMB - (x1 - x0) * scale) / 2, (THUMB - (y1 - y0) * scale) / 2, (x1 - x0) * scale, (y1 - y0) * scale);
+      }
+    } else tg.drawImage(result, done.x, done.y);
     return tile;
   };
   const bitcrushThumb = () => {
@@ -1426,7 +1494,7 @@ const PAGE_JS: &str = r##"(() => {
   let repeating = null;
 
   const openRepeater = (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering) return;
+    if (repeating || disintegrating || crushing || filtering || filling) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to repeat" : "Select a layer to repeat", { timeout: 2000 });
@@ -2795,7 +2863,7 @@ const PAGE_JS: &str = r##"(() => {
   let disintegrating = null;
 
   const openDisintegrate = async (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering) return;
+    if (repeating || disintegrating || crushing || filtering || filling) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to disintegrate" : "Select a layer to disintegrate", { timeout: 2000 });
@@ -3672,7 +3740,7 @@ const PAGE_JS: &str = r##"(() => {
   let crushing = null;
 
   const openBitcrush = async (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering) return;
+    if (repeating || disintegrating || crushing || filtering || filling) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to bitcrush" : "Select a layer to bitcrush", { timeout: 2000 });
@@ -4788,7 +4856,7 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const openFilter = async (spec, figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering) return;
+    if (repeating || disintegrating || crushing || filtering || filling) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? `Select one layer for ${spec.name}` : `Select a layer for ${spec.name}`, { timeout: 2000 });
@@ -7323,6 +7391,2021 @@ const PAGE_JS: &str = r##"(() => {
     },
   });
 
+  // ---------- Glitter ----------
+
+  // The layer as glitter: its picture cut into facets, cells around
+  // jittered points, each a flake tilted its own way. A flake's lit as
+  // much as it faces the light, so neighbors catch it together as real
+  // glitter does, and the ones facing it squarely flash near white. Their
+  // edges darken where flakes meet, each shifts the color a little, and
+  // Twinkle puts four-point glints on the brightest. Its shape and
+  // transparency are kept
+  const GLITTER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 9.5 9 5.5l5 1.5 1 4.5-4 3-4.5-1.5zM11 14.5l4-3 3.5 2.5-1 4-4.5 1zM14 7l4.5-1 1 4-4.5 1.5"/></svg>`;
+  pictureEffect({
+    id: "glitter",
+    thumb: { sample: "badge", settings: { size: 4 } },
+    name: "Glitter",
+    about: "Turn it into sparkling glitter",
+    icon: GLITTER_ICON,
+    verb: "Add glitter",
+    defaults: { size: 6, depth: 55, sparkle: 30, shine: 80, light: -45, hue: 10, edges: 35, twinkle: 0, twinkleSize: 14, mix: 100, seed: 1, editable: true },
+    presets: [
+      ["Glitter", () => ({})],
+      ["Fine", () => ({ size: 3, depth: 45, sparkle: 35 })],
+      ["Chunky", () => ({ size: 12, depth: 65, edges: 50, sparkle: 25 })],
+      ["Disco", () => ({ size: 8, depth: 70, sparkle: 45, shine: 100, twinkle: 25, twinkleSize: 18 })],
+      ["Holo", () => ({ size: 5, hue: 90, sparkle: 35 })],
+      ["Subtle", () => ({ size: 5, depth: 25, sparkle: 15, shine: 50, edges: 15, mix: 70 })],
+    ],
+    limits: { size: [0.5, 1000], depth: [0, 100], sparkle: [0, 100], shine: [0, 100], light: [-360, 360], hue: [0, 180], edges: [0, 100], twinkle: [0, 100], twinkleSize: [1, 1000], mix: [0, 100] },
+    summary: (s) => `${s.size}pt flakes · ${s.sparkle}%`,
+    panel: (ui) => {
+      const { s } = ui;
+      return [
+        ui.section(
+          "Flakes",
+          ui.sliders([
+            ["size", "Size", "pt", (u) => ({ min: 1, max: upTo(u, 0.08, 24), shape: "curve", digits: 1 })],
+            ["depth", "Depth", "%", () => ({ min: 0, max: 100 })],
+            ["edges", "Edges", "%", () => ({ min: 0, max: 100 })],
+            ["hue", "Color shift", "°", () => ({ min: 0, max: 180 })],
+          ]),
+          ui.shuffle("seed", "Flakes"),
+        ),
+        ui.section(
+          "Light",
+          ui.sliders([
+            ["light", "Direction", "°", () => ({ min: -180, max: 180 })],
+            ["sparkle", "Sparkle", "%", () => ({ min: 0, max: 100 })],
+            ["shine", "Shine", "%", () => ({ min: 0, max: 100 })],
+            ["twinkle", "Twinkle", "%", () => ({ min: 0, max: 100 })],
+          ]),
+          ui.when(ui.sliders([["twinkleSize", "Twinkle size", "pt", (u) => ({ min: 2, max: upTo(u, 0.15, 48), shape: "curve" })]]), () => s.twinkle > 0),
+          ui.sliders([["mix", "Mix", "%", () => ({ min: 0, max: 100 })]]),
+        ),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const size = Math.max(1, s.size * k);
+      const seed = s.seed | 0;
+      const depth = s.depth / 100;
+      const sparkle = s.sparkle / 100;
+      const shine = s.shine / 100;
+      const edges = s.edges / 100;
+      const mix = s.mix / 100;
+      const hueRange = (s.hue * Math.PI) / 180;
+      const lx = Math.cos((s.light * Math.PI) / 180);
+      const ly = Math.sin((s.light * Math.PI) / 180);
+      // How squarely a flake must face the light to flash: the narrower the
+      // less Sparkle
+      const flash = 1 - 0.25 * sparkle;
+      const out = new Float32Array(W * H * 4);
+      // How much each pixel flashes, to bloom past its flake
+      const flashes = new Float32Array(W * H);
+      // The flakes that flash brightest, for twinkles
+      const bright = new Map();
+      for (let y = 0; y < H; y++) {
+        const gy = (y + 0.5) / size;
+        const cy0 = Math.floor(gy);
+        for (let x = 0; x < W; x++) {
+          const at = (y * W + x) * 4;
+          const a = f[at + 3];
+          if (a <= 0.001) continue;
+          // The nearest point of the jittered grid, and the second, for
+          // where flakes meet
+          const gx = (x + 0.5) / size;
+          const cx0 = Math.floor(gx);
+          let d1 = Infinity;
+          let d2 = Infinity;
+          let bx = 0;
+          let by = 0;
+          for (let j = -1; j <= 1; j++)
+            for (let i = -1; i <= 1; i++) {
+              const cx = cx0 + i;
+              const cy = cy0 + j;
+              const dx = cx + 0.15 + 0.7 * hash2(cx, cy, seed) - gx;
+              const dy = cy + 0.15 + 0.7 * hash2(cx, cy, seed + 1) - gy;
+              const d = dx * dx + dy * dy;
+              if (d < d1) {
+                d2 = d1;
+                d1 = d;
+                bx = cx;
+                by = cy;
+              } else if (d < d2) d2 = d;
+            }
+          // The flake's tilt, which way it faces, and how much that's
+          // toward the light
+          const nx = hash2(bx, by, seed + 2) * 2 - 1;
+          const ny = hash2(bx, by, seed + 3) * 2 - 1;
+          // A flake's a tilted plane, so light runs across it too
+          const ox = gx - (bx + 0.15 + 0.7 * hash2(bx, by, seed));
+          const oy = gy - (by + 0.15 + 0.7 * hash2(bx, by, seed + 1));
+          const facing = (nx * lx + ny * ly) / Math.SQRT2 + (ox * nx + oy * ny) * 0.35;
+          let shade = 1 + depth * facing;
+          const spec = clamp01((facing / 0.71 - flash) / (1 - flash + 0.0001));
+          const glint = shine * spec * spec;
+          if (edges > 0) {
+            const gap = Math.sqrt(d2) - Math.sqrt(d1);
+            shade *= 1 - edges * 0.6 * (1 - clamp01(gap / 0.12));
+          }
+          let r = f[at] / a;
+          let g = f[at + 1] / a;
+          let b = f[at + 2] / a;
+          // A turn of hue in YIQ, a little each way per flake
+          if (hueRange > 0) {
+            const turn = (hash2(bx, by, seed + 4) * 2 - 1) * hueRange;
+            const yy = 0.299 * r + 0.587 * g + 0.114 * b;
+            const ii = 0.596 * r - 0.274 * g - 0.322 * b;
+            const qq = 0.211 * r - 0.523 * g + 0.312 * b;
+            const c = Math.cos(turn);
+            const n = Math.sin(turn);
+            const i2 = ii * c - qq * n;
+            const q2 = ii * n + qq * c;
+            r = yy + 0.956 * i2 + 0.621 * q2;
+            g = yy - 0.272 * i2 - 0.647 * q2;
+            b = yy - 1.106 * i2 + 1.703 * q2;
+          }
+          r = clamp01(r * shade);
+          g = clamp01(g * shade);
+          b = clamp01(b * shade);
+          r += (1 - r) * glint;
+          g += (1 - g) * glint;
+          b += (1 - b) * glint;
+          if (spec > 0.85) bright.set(bx * 65536 + by, [bx, by]);
+          flashes[y * W + x] = glint * a;
+          out[at] = (f[at] / a + (r - f[at] / a) * mix) * a;
+          out[at + 1] = (f[at + 1] / a + (g - f[at + 1] / a) * mix) * a;
+          out[at + 2] = (f[at + 2] / a + (b - f[at + 2] / a) * mix) * a;
+          out[at + 3] = a;
+        }
+      }
+      // The flashes bloom a little past their flakes, as bright glints do in
+      // a camera, inside the glitter's shape
+      if (shine > 0) {
+        const bloom = blurChannel(flashes, W, H, size * 0.6);
+        for (let i = 0; i < W * H; i++) {
+          const a = out[i * 4 + 3];
+          if (a <= 0.001) continue;
+          const light = Math.min(1, bloom[i] * 0.9 * mix);
+          for (let c = 0; c < 3; c++) out[i * 4 + c] += (a - out[i * 4 + c]) * light;
+        }
+      }
+      // Twinkles: four-point glints on some of the brightest flakes, light
+      // added over the glitter, inside its shape
+      if (s.twinkle > 0 && bright.size) {
+        const arm = Math.max(2, s.twinkleSize * k) / 2;
+        const thin = Math.max(0.6, arm * 0.06);
+        for (const [fx, fy] of bright.values()) {
+          if (hash2(fx, fy, seed + 5) > (s.twinkle / 100) * 0.6) continue;
+          const cx = (fx + 0.15 + 0.7 * hash2(fx, fy, seed)) * size;
+          const cy = (fy + 0.15 + 0.7 * hash2(fx, fy, seed + 1)) * size;
+          const reach = arm * (0.6 + 0.6 * hash2(fx, fy, seed + 6));
+          for (let y = Math.max(0, Math.floor(cy - reach)); y < Math.min(H, Math.ceil(cy + reach)); y++)
+            for (let x = Math.max(0, Math.floor(cx - reach)); x < Math.min(W, Math.ceil(cx + reach)); x++) {
+              const at = (y * W + x) * 4;
+              const a = out[at + 3];
+              if (a <= 0.001) continue;
+              const dx = Math.abs(x + 0.5 - cx);
+              const dy = Math.abs(y + 0.5 - cy);
+              // Two thin arms tapering out, and a soft core
+              const ray = Math.max(Math.exp(-((dy / thin) ** 2)) * (1 - dx / reach), Math.exp(-((dx / thin) ** 2)) * (1 - dy / reach));
+              const core = Math.exp(-(dx * dx + dy * dy) / (thin * thin * 9));
+              const light = clamp01(Math.max(0, ray) + core) * shine;
+              for (let c = 0; c < 3; c++) out[at + c] += (a - out[at + c]) * light;
+            }
+        }
+      }
+      return { image: toImage(out, W, H), x: 0, y: 0 };
+    },
+  });
+
+  // ---------- Sticker ----------
+
+  // The layer made into a vinyl sticker. Its shape is a signed distance
+  // field, negative inside: the artwork's outline grown by the border, or a
+  // rounded rectangle, oval, scalloped edge, starburst or polygon around it,
+  // from which the border, a keyline on its rim, a bevel and the foil's
+  // reach all follow. Hologram foil is a spectrum ordered by brightness, as
+  // diffraction's is, laid in soft blotches and shifted by a fine crinkled
+  // relief, as embossed film is, as the sticker's material under the
+  // artwork or over all of it. A peeled corner wraps the sheet round a
+  // cylinder from the fold, showing its backing once it's past upright,
+  // with a shadow as far below it as it's lifted. Material grain, a bevel,
+  // gloss and a drop shadow finish it
+  const STICKER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M18.5 12.5v-6a2 2 0 0 0-2-2h-10a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h6"/><path ${STROKE} d="M12.5 19.5c0-3.9 2.6-6.5 6-7-.3 3.7-2.4 6.3-6 7Z"/></svg>`;
+  const STICKER_SHAPES = [
+    ["contour", "Follow outline"],
+    ["rrect", "Rounded rectangle"],
+    ["ellipse", "Circle or oval"],
+    ["wavy", "Scalloped"],
+    ["burst", "Starburst"],
+    ["polygon", "Polygon"],
+  ];
+  const FOIL_PATTERNS = [
+    ["pastel", "Pastel clouds"],
+    ["crumple", "Crumpled foil"],
+    ["wave", "Iridescent swirl"],
+    ["linear", "Line foil"],
+    ["prism", "Prism shards"],
+  ];
+  const STICKER_TEXTURES = [
+    ["none", "Smooth"],
+    ["paper", "Paper"],
+    ["matte", "Matte vinyl"],
+    ["kraft", "Kraft"],
+    ["linen", "Linen"],
+    ["wrinkle", "Wrinkled vinyl"],
+  ];
+  const PEEL_CORNERS = [
+    ["tl", "Top left"],
+    ["tr", "Top right"],
+    ["bl", "Bottom left"],
+    ["br", "Bottom right"],
+  ];
+  // Seamless value noise, a tile 256 across, from `hash2`, octaves each
+  // twice as fine. Cached in the worker, as every sticker uses the same
+  const noiseTile = (seed, octaves) => {
+    const key = `${seed}:${octaves}`;
+    const cache = (globalThis.ligmaNoiseTiles ??= {});
+    if (cache[key]) return cache[key];
+    const N = 256;
+    const out = new Float32Array(N * N);
+    let amp = 1;
+    let total = 0;
+    for (let o = 0; o < octaves; o++) {
+      const cells = 4 << o;
+      const step = N / cells;
+      for (let y = 0; y < N; y++) {
+        const fy = y / step;
+        const y0 = fy | 0;
+        const y1 = (y0 + 1) % cells;
+        let ty = fy - y0;
+        ty = ty * ty * (3 - 2 * ty);
+        for (let x = 0; x < N; x++) {
+          const fx = x / step;
+          const x0 = fx | 0;
+          const x1 = (x0 + 1) % cells;
+          let tx = fx - x0;
+          tx = tx * tx * (3 - 2 * tx);
+          const a = hash2(x0, y0, seed + o * 7919);
+          const b = hash2(x1, y0, seed + o * 7919);
+          const c = hash2(x0, y1, seed + o * 7919);
+          const d = hash2(x1, y1, seed + o * 7919);
+          const top = a + (b - a) * tx;
+          out[y * N + x] += (top + (c + (d - c) * tx - top) * ty) * amp;
+        }
+      }
+      total += amp;
+      amp *= 0.5;
+    }
+    for (let i = 0; i < out.length; i++) out[i] /= total;
+    return (cache[key] = out);
+  };
+  // A tile's value at `u`, `v`, wrapping
+  const tileAt = (tile, u, v) => {
+    let x = u % 256;
+    if (x < 0) x += 256;
+    let y = v % 256;
+    if (y < 0) y += 256;
+    const x0 = x | 0;
+    const y0 = y | 0;
+    const x1 = x0 === 255 ? 0 : x0 + 1;
+    const y1 = y0 === 255 ? 0 : y0 + 1;
+    const tx = x - x0;
+    const ty = y - y0;
+    const top = tile[y0 * 256 + x0] + (tile[y0 * 256 + x1] - tile[y0 * 256 + x0]) * tx;
+    return top + (tile[y1 * 256 + x0] + (tile[y1 * 256 + x1] - tile[y1 * 256 + x0]) * tx - top) * ty;
+  };
+  // Each pixel's distance to the nearest set one in `mask`, 0 on them:
+  // Felzenszwalb and Huttenlocher's exact transform, down columns then
+  // along rows
+  const distanceField = (mask, W, H) => {
+    const INF = 1e20;
+    const d = new Float64Array(W * H);
+    for (let i = 0; i < W * H; i++) d[i] = mask[i] ? 0 : INF;
+    const n = Math.max(W, H);
+    const f = new Float64Array(n);
+    const z = new Float64Array(n + 1);
+    const v = new Int32Array(n);
+    const pass = (start, step, len) => {
+      for (let q = 0; q < len; q++) f[q] = d[start + q * step];
+      let k = 0;
+      v[0] = 0;
+      z[0] = -INF;
+      z[1] = INF;
+      for (let q = 1; q < len; q++) {
+        let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+        while (s <= z[k]) {
+          k--;
+          s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+        }
+        k++;
+        v[k] = q;
+        z[k] = s;
+        z[k + 1] = INF;
+      }
+      k = 0;
+      for (let q = 0; q < len; q++) {
+        while (z[k + 1] < q) k++;
+        d[start + q * step] = (q - v[k]) * (q - v[k]) + f[v[k]];
+      }
+    };
+    for (let x = 0; x < W; x++) pass(x, W, H);
+    for (let y = 0; y < H; y++) pass(y * W, 1, W);
+    const out = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) out[i] = Math.sqrt(d[i]);
+    return out;
+  };
+  // A closed polygon filled, pixel centers inside it set, by crossings
+  const fillPolygon = (points, W, H) => {
+    const mask = new Uint8Array(W * H);
+    const n = points.length / 2;
+    const xs = [];
+    for (let y = 0; y < H; y++) {
+      const cy = y + 0.5;
+      xs.length = 0;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const [xi, yi, xj, yj] = [points[i * 2], points[i * 2 + 1], points[j * 2], points[j * 2 + 1]];
+        if (yi > cy !== yj > cy) xs.push(xi + ((cy - yi) / (yj - yi)) * (xj - xi));
+      }
+      xs.sort((a, b) => a - b);
+      for (let i = 0; i + 1 < xs.length; i += 2) {
+        const from = Math.max(0, Math.ceil(xs[i] - 0.5));
+        const to = Math.min(W - 1, Math.floor(xs[i + 1] - 0.5));
+        for (let x = from; x <= to; x++) mask[y * W + x] = 1;
+      }
+    }
+    return mask;
+  };
+  Object.assign(PIXEL_HELPERS, { noiseTile, tileAt, distanceField, fillPolygon });
+  pictureEffect({
+    id: "sticker",
+    thumb: { sample: "badge", backdrop: "slate", fit: true, settings: { border: 7, gloss: 18, peel: true, peelSize: 34, shadowBlur: 10, shadowY: 5 } },
+    name: "Sticker",
+    about: "Make it a die-cut, kiss-cut or holographic sticker",
+    icon: STICKER_ICON,
+    verb: "Make sticker",
+    defaults: {
+      shape: "contour", smoothing: 2, fillHoles: true, removeBg: false, bgTolerance: 28,
+      border: 16, borderColor: "#ffffff", borderOpacity: 100, keyline: 0, keylineColor: "#101828", keylineOpacity: 100,
+      cornerRadius: 40, points: 14, depth: 20, rotate: 0, square: true,
+      foil: 0, pattern: "pastel", coverage: "behind", pastel: 35, crinkle: 60, foilAngle: 35, foilScale: 45, foilHue: 0, sparkle: 12,
+      peel: false, corner: "tr", peelSize: 38, curl: 88, backColor: "#ffffff", backOpacity: 100, peelShadow: 38, peelBlur: 14,
+      texture: "none", textureAmount: 32, grain: 70, bevel: 0, gloss: 14,
+      shadow: true, shadowBlur: 18, shadowY: 8, shadowColor: "#000000", shadowOpacity: 30,
+      editable: true,
+    },
+    presets: [
+      ["Die cut", () => ({})],
+      ["Normal", () => ({ shape: "rrect", border: 26, square: false, cornerRadius: 40, gloss: 10, shadowBlur: 20, shadowY: 10, shadowOpacity: 28 })],
+      ["Hologram", () => ({ borderColor: "#f4f6fa", gloss: 22, foil: 100, crinkle: 60, sparkle: 12, shadowBlur: 22, shadowY: 10, shadowOpacity: 34 })],
+      ["Peeling", () => ({ peel: true })],
+      ["Starburst", () => ({ shape: "burst", border: 18, depth: 18 })],
+      ["Paper", () => ({ texture: "paper", textureAmount: 40, gloss: 0 })],
+    ],
+    limits: {
+      smoothing: [0, 12], bgTolerance: [4, 120], border: [0, 400], borderOpacity: [0, 100], keyline: [0, 400], keylineOpacity: [0, 100], cornerRadius: [0, 400], points: [3, 32], depth: [0, 80], rotate: [-360, 360],
+      foil: [0, 100], pastel: [0, 100], crinkle: [0, 100], foilAngle: [0, 180], foilScale: [8, 150], foilHue: [0, 360], sparkle: [0, 100],
+      peelSize: [5, 60], curl: [0, 100], backOpacity: [0, 100], peelShadow: [0, 100], peelBlur: [0, 200],
+      textureAmount: [0, 100], grain: [16, 800], bevel: [0, 100], gloss: [0, 100], shadowBlur: [0, 200], shadowY: [-200, 200], shadowOpacity: [0, 100],
+    },
+    summary: (s) => [`${(STICKER_SHAPES.find(([key]) => key === s.shape) ?? ["", ""])[1]} · ${s.border}pt`, s.foil > 0 ? "foil" : "", s.peel ? "peeled" : ""].filter(Boolean).join(" · "),
+    panel: (ui) => {
+      const { s } = ui;
+      const geo = () => s.shape !== "contour";
+      const radial = () => ["wavy", "burst", "polygon"].includes(s.shape);
+      const foil = () => s.foil > 0;
+      const angled = () => foil() && ["wave", "linear", "prism"].includes(s.pattern);
+      return [
+        ui.section(
+          "Shape and border",
+          ui.select("shape", "Shape", STICKER_SHAPES),
+          ui.when(ui.check("square", "Even sides", "As wide as it's tall, rather than the artwork's own proportions"), geo),
+          ui.when(ui.sliders([["points", "Points", "", () => ({ min: 3, max: 32 })]]), radial),
+          ui.when(ui.sliders([["depth", "Depth", "%", () => ({ min: 0, max: 80 })]]), () => s.shape === "wavy" || s.shape === "burst"),
+          ui.when(ui.sliders([["rotate", "Rotate", "°", () => ({ min: 0, max: 359 })]]), radial),
+          ui.when(ui.sliders([["cornerRadius", "Corners", "pt", (u) => ({ min: 0, max: upTo(u, 0.3, 200), shape: "curve" })]]), () => s.shape === "rrect"),
+          ui.sliders([
+            ["border", "Border", "pt", (u) => ({ min: 0, max: upTo(u, 0.2, 200), shape: "curve" })],
+            ["borderOpacity", "Opacity", "%", () => ({ min: 0, max: 100 })],
+          ]),
+          ui.color("borderColor", "Border color"),
+          ui.sliders([["keyline", "Keyline", "pt", (u) => ({ min: 0, max: upTo(u, 0.2, 200), shape: "curve" })]]),
+          ui.when(element("div", {}, ui.color("keylineColor", "Keyline color"), ui.sliders([["keylineOpacity", "Opacity", "%", () => ({ min: 0, max: 100 })]])), () => s.keyline > 0),
+        ),
+        ui.section(
+          "Cutout",
+          ui.when(ui.sliders([["smoothing", "Smoothing", "pt", () => ({ min: 0, max: 12, digits: 1 })]]), () => !geo()),
+          ui.when(ui.check("fillHoles", "Fill holes", "Gaps inside the outline are filled with border"), () => !geo()),
+          ui.check("removeBg", "Remove background", "Takes away the color around the artwork, from its edges in"),
+          ui.when(ui.sliders([["bgTolerance", "Tolerance", "", () => ({ min: 4, max: 120 })]]), () => s.removeBg),
+        ),
+        ui.section(
+          "Hologram",
+          ui.sliders([["foil", "Foil", "%", () => ({ min: 0, max: 100 })]]),
+          ui.when(
+            element(
+              "div",
+              {},
+              ui.select("pattern", "Pattern", FOIL_PATTERNS),
+              ui.select("coverage", "On", [
+                ["behind", "Foil material"],
+                ["full", "Whole sticker"],
+                ["art", "Artwork only"],
+              ]),
+              ui.sliders([
+                ["pastel", "Pastel", "%", () => ({ min: 0, max: 100 })],
+                ["crinkle", "Crinkle", "%", () => ({ min: 0, max: 100 })],
+              ]),
+              ui.when(ui.sliders([["foilAngle", "Angle", "°", () => ({ min: 0, max: 180 })]]), angled),
+              ui.sliders([
+                ["foilScale", "Scale", "%", () => ({ min: 8, max: 150 })],
+                ["foilHue", "Hue", "°", () => ({ min: 0, max: 360 })],
+                ["sparkle", "Sparkle", "%", () => ({ min: 0, max: 100 })],
+              ]),
+            ),
+            foil,
+          ),
+        ),
+        ui.section(
+          "Peeled corner",
+          ui.check("peel", "Peel a corner"),
+          ui.when(
+            element(
+              "div",
+              {},
+              ui.select("corner", "Corner", PEEL_CORNERS),
+              ui.sliders([
+                ["peelSize", "Size", "%", () => ({ min: 5, max: 60 })],
+                ["curl", "Curl", "%", () => ({ min: 0, max: 100 })],
+                ["backOpacity", "Back opacity", "%", () => ({ min: 0, max: 100 })],
+              ]),
+              ui.color("backColor", "Back color"),
+              ui.sliders([
+                ["peelShadow", "Shadow", "%", () => ({ min: 0, max: 100 })],
+                ["peelBlur", "Shadow blur", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 60), shape: "curve" })],
+              ]),
+            ),
+            () => s.peel,
+          ),
+        ),
+        ui.section(
+          "Material and finish",
+          ui.select("texture", "Material", STICKER_TEXTURES),
+          ui.when(
+            ui.sliders([
+              ["textureAmount", "Amount", "%", () => ({ min: 0, max: 100 })],
+              ["grain", "Grain", "pt", () => ({ min: 16, max: 800, shape: "curve" })],
+            ]),
+            () => s.texture !== "none",
+          ),
+          ui.sliders([
+            ["bevel", "Bevel", "%", () => ({ min: 0, max: 100 })],
+            ["gloss", "Gloss", "%", () => ({ min: 0, max: 100 })],
+          ]),
+        ),
+        ui.section(
+          "Drop shadow",
+          ui.check("shadow", "Drop shadow"),
+          ui.when(
+            element(
+              "div",
+              {},
+              ui.sliders([
+                ["shadowBlur", "Blur", "pt", (u) => ({ min: 0, max: upTo(u, 0.15, 80), shape: "curve" })],
+                ["shadowY", "Offset", "pt", (u) => ({ min: -upTo(u, 0.1, 40), max: upTo(u, 0.1, 60) })],
+                ["shadowOpacity", "Opacity", "%", () => ({ min: 0, max: 100 })],
+              ]),
+              ui.color("shadowColor", "Color"),
+            ),
+            () => s.shadow,
+          ),
+        ),
+      ];
+    },
+    process: (image, s, k) => {
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const gauss = (x) => (x <= -4 || x >= 4 ? 0 : Math.exp(-x * x));
+      const radial = s.shape === "wavy" || s.shape === "burst" || s.shape === "polygon";
+      const border = s.border * k;
+      // The artwork's solid extent, for how far a shape grows past it
+      const { width: W0, height: H0, data: src } = image;
+      let [ax0, ay0, ax1, ay1] = [W0, H0, -1, -1];
+      for (let y = 0; y < H0; y++)
+        for (let x = 0; x < W0; x++)
+          if (src[(y * W0 + x) * 4 + 3] > 16) {
+            if (x < ax0) ax0 = x;
+            if (x > ax1) ax1 = x;
+            if (y < ay0) ay0 = y;
+            if (y > ay1) ay1 = y;
+          }
+      if (ax1 < 0) [ax0, ay0, ax1, ay1] = [0, 0, W0 - 1, H0 - 1];
+      const long = Math.max(ax1 - ax0, ay1 - ay0) + 1;
+      const short = Math.min(ax1 - ax0, ay1 - ay0) + 1;
+      let growth = 0;
+      if (s.shape !== "contour") {
+        if (s.square) growth += (long - short) / 2;
+        if (radial) growth += s.shape === "polygon" ? (long / 2 + border) * (1 / Math.cos(Math.PI / Math.max(3, Math.round(s.points))) - 1) : (long / 2 + border) * (s.depth / 100);
+      }
+      const shadowReach = s.shadow ? (s.shadowBlur + Math.abs(s.shadowY)) * k : 0;
+      const peelReach = s.peel && s.peelShadow > 0 ? s.peelBlur * 1.5 * k : 0;
+      const pad = Math.ceil(border + s.keyline * k + shadowReach + peelReach + growth + 4 * k);
+      const W = W0 + pad * 2;
+      const H = H0 + pad * 2;
+      const n = W * H;
+      // The artwork, straight colour, in the padded picture
+      const data = new Uint8ClampedArray(n * 4);
+      for (let y = 0; y < H0; y++) data.set(src.subarray(y * W0 * 4, (y + 1) * W0 * 4), ((y + pad) * W + pad) * 4);
+      const [rx0, ry0, rx1, ry1] = [pad, pad, pad + W0 - 1, pad + H0 - 1];
+      // Background taken away from the artwork's edges in, its rim softened
+      if (s.removeBg) {
+        let [kr, kg, kb, count] = [0, 0, 0, 0];
+        for (const [x, y] of [
+          [rx0, ry0],
+          [rx1, ry0],
+          [rx0, ry1],
+          [rx1, ry1],
+        ]) {
+          const p = (y * W + x) * 4;
+          if (data[p + 3] < 8) continue;
+          kr += data[p];
+          kg += data[p + 1];
+          kb += data[p + 2];
+          count++;
+        }
+        if (count) {
+          [kr, kg, kb] = [kr / count, kg / count, kb / count];
+          const tol = s.bgTolerance * s.bgTolerance * 3;
+          const far = (i) => {
+            const p = i * 4;
+            if (data[p + 3] < 8) return 0;
+            return (data[p] - kr) ** 2 + (data[p + 1] - kg) ** 2 + (data[p + 2] - kb) ** 2;
+          };
+          const gone = new Uint8Array(n);
+          const stack = [];
+          const push = (x, y) => {
+            const i = y * W + x;
+            if (!gone[i] && far(i) <= tol) {
+              gone[i] = 1;
+              stack.push(i);
+            }
+          };
+          for (let x = rx0; x <= rx1; x++) {
+            push(x, ry0);
+            push(x, ry1);
+          }
+          for (let y = ry0; y <= ry1; y++) {
+            push(rx0, y);
+            push(rx1, y);
+          }
+          while (stack.length) {
+            const i = stack.pop();
+            const x = i % W;
+            const y = (i / W) | 0;
+            if (x > rx0) push(x - 1, y);
+            if (x < rx1) push(x + 1, y);
+            if (y > ry0) push(x, y - 1);
+            if (y < ry1) push(x, y + 1);
+          }
+          for (let y = ry0; y <= ry1; y++)
+            for (let x = rx0; x <= rx1; x++) {
+              const i = y * W + x;
+              if (gone[i]) {
+                data[i * 4 + 3] = 0;
+                continue;
+              }
+              const touching = (x > rx0 && gone[i - 1]) || (x < rx1 && gone[i + 1]) || (y > ry0 && gone[i - W]) || (y < ry1 && gone[i + W]);
+              if (touching) data[i * 4 + 3] *= clamp01((far(i) - tol) / (tol * 1.4));
+            }
+        }
+      }
+      // The shape, as distance to its edge: negative inside
+      const sdf = new Float32Array(n);
+      const alpha = new Float32Array(n);
+      for (let i = 0; i < n; i++) alpha[i] = data[i * 4 + 3] / 255;
+      let [bx0, by0, bx1, by1] = [W, H, -1, -1];
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++)
+          if (alpha[y * W + x] > 16 / 255) {
+            if (x < bx0) bx0 = x;
+            if (x > bx1) bx1 = x;
+            if (y < by0) by0 = y;
+            if (y > by1) by1 = y;
+          }
+      if (bx1 < 0) [bx0, by0, bx1, by1] = [0, 0, W - 1, H - 1];
+      const signed = (mask) => {
+        const outside = distanceField(mask, W, H);
+        const flipped = new Uint8Array(n);
+        for (let i = 0; i < n; i++) flipped[i] = mask[i] ? 0 : 1;
+        const inside = distanceField(flipped, W, H);
+        for (let i = 0; i < n; i++) sdf[i] = mask[i] ? -inside[i] : outside[i];
+      };
+      if (s.shape === "contour") {
+        const soft = s.smoothing > 0 ? blurChannel(alpha, W, H, s.smoothing * k * 0.6) : alpha;
+        const mask = new Uint8Array(n);
+        for (let i = 0; i < n; i++) mask[i] = soft[i] >= 0.5 ? 1 : 0;
+        if (s.fillHoles) {
+          // What the outside can't reach is a hole
+          const seen = new Uint8Array(n);
+          const stack = [];
+          const push = (i) => {
+            if (!mask[i] && !seen[i]) {
+              seen[i] = 1;
+              stack.push(i);
+            }
+          };
+          for (let x = 0; x < W; x++) {
+            push(x);
+            push((H - 1) * W + x);
+          }
+          for (let y = 0; y < H; y++) {
+            push(y * W);
+            push(y * W + W - 1);
+          }
+          while (stack.length) {
+            const i = stack.pop();
+            const x = i % W;
+            if (x > 0) push(i - 1);
+            if (x < W - 1) push(i + 1);
+            if (i >= W) push(i - W);
+            if (i < n - W) push(i + W);
+          }
+          for (let i = 0; i < n; i++) if (!mask[i] && !seen[i]) mask[i] = 1;
+        }
+        signed(mask);
+        for (let i = 0; i < n; i++) sdf[i] -= border;
+      } else {
+        const cx = (bx0 + bx1 + 1) / 2;
+        const cy = (by0 + by1 + 1) / 2;
+        let hw = (bx1 - bx0 + 1) / 2 + border;
+        let hh = (by1 - by0 + 1) / 2 + border;
+        if (s.square) hw = hh = Math.max(hw, hh);
+        if (s.shape === "ellipse") {
+          const scale = Math.min(hw, hh);
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) {
+              const dx = (x + 0.5 - cx) / Math.max(1, hw);
+              const dy = (y + 0.5 - cy) / Math.max(1, hh);
+              sdf[y * W + x] = (Math.sqrt(dx * dx + dy * dy) - 1) * scale;
+            }
+        } else if (radial) {
+          // Around the art and border, never dipping into them
+          const points = Math.max(3, Math.round(s.points));
+          const depth = s.depth / 100;
+          const start = (s.rotate * Math.PI) / 180 - Math.PI / 2;
+          const path = [];
+          const vertex = (angle, radius) => path.push(cx + Math.cos(angle) * hw * radius, cy + Math.sin(angle) * hh * radius);
+          if (s.shape === "polygon") for (let i = 0; i < points; i++) vertex(start + (i / points) * Math.PI * 2, 1 / Math.cos(Math.PI / points));
+          else if (s.shape === "burst") for (let i = 0; i < points * 2; i++) vertex(start + (i / (points * 2)) * Math.PI * 2, i % 2 === 0 ? 1 + depth : 1);
+          else {
+            const steps = Math.max(360, points * 32);
+            for (let i = 0; i < steps; i++) {
+              const phi = (i / steps) * Math.PI * 2;
+              vertex(start + phi, 1 + depth * (0.5 + 0.5 * Math.cos(points * phi)));
+            }
+          }
+          signed(fillPolygon(path, W, H));
+        } else {
+          const r = Math.min(Math.max(0, s.cornerRadius * k), Math.min(hw, hh));
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) {
+              const qx = Math.abs(x + 0.5 - cx) - hw + r;
+              const qy = Math.abs(y + 0.5 - cy) - hh + r;
+              const mx = Math.max(qx, 0);
+              const my = Math.max(qy, 0);
+              sdf[y * W + x] = Math.sqrt(mx * mx + my * my) + Math.min(Math.max(qx, qy), 0) - r;
+            }
+        }
+      }
+      // Foil: a spectrum in brightness order, as diffraction's runs, from
+      // violet through blue, cyan, green, yellow and red back to magenta,
+      // faded toward silver by Pastel
+      const foilOn = s.foil > 0;
+      const foilAmount = s.foil / 100;
+      const pastel = s.pastel / 100;
+      const anchors = [
+        [0.42, 0.24, 0.94],
+        [0.18, 0.42, 1],
+        [0.09, 0.84, 0.91],
+        [0.27, 0.88, 0.54],
+        [0.78, 0.91, 0.29],
+        [1, 0.88, 0.29],
+        [1, 0.6, 0.24],
+        [1, 0.3, 0.37],
+        [0.94, 0.3, 0.78],
+      ];
+      const fielded = s.pattern === "pastel" || s.pattern === "crumple";
+      let spectrum = null;
+      if (foilOn) {
+        spectrum = new Float32Array(1024 * 3);
+        const shift = fielded ? 0 : s.foilHue / 360;
+        for (let i = 0; i < 1024; i++) {
+          let p = (i / 1024 + shift) % 1;
+          if (p < 0) p += 1;
+          const fp = p * anchors.length;
+          const a = fp | 0;
+          const b = (a + 1) % anchors.length;
+          const t0 = fp - a;
+          const t = t0 * t0 * (3 - 2 * t0);
+          for (let c = 0; c < 3; c++) {
+            const v = anchors[a][c] + (anchors[b][c] - anchors[a][c]) * t;
+            spectrum[i * 3 + c] = v + (1 - v) * pastel * 0.8;
+          }
+        }
+      }
+      // The film's colour and brightness in soft blotches, on a coarse grid
+      // that's smooth enough to interpolate
+      let field = null;
+      if (foilOn && fielded) {
+        const wpt = W / k;
+        const hpt = H / k;
+        const cell = Math.max(1.5, Math.max(wpt, hpt) / 300);
+        const gw = Math.max(2, Math.ceil(wpt / cell) + 1);
+        const gh = Math.max(2, Math.ceil(hpt / cell) + 1);
+        const tile = noiseTile(40503, 2);
+        const nz = (x, y) => tileAt(tile, x * 256, y * 256);
+        const stretch = (v) => clamp01((v - 0.5) * 2.3 + 0.5);
+        const period = Math.max(16, (s.foilScale / 100) * Math.max(wpt, hpt) * 4);
+        const hueBase = s.foilHue / 360;
+        const range = lerp(0.8, 0.52, pastel);
+        const phase = new Float32Array(gw * gh);
+        const light = new Float32Array(gw * gh);
+        for (let j = 0; j < gh; j++) {
+          const ny = (j * cell) / period;
+          for (let i = 0; i < gw; i++) {
+            const nx = (i * cell) / period;
+            // Warped, so bands become blotches
+            const wu = nx + 0.38 * (nz(nx * 0.55 + 3.1, ny * 0.55 + 7.7) - 0.5);
+            const wv = ny + 0.38 * (nz(nx * 0.55 + 11.3, ny * 0.55 + 2.2) - 0.5);
+            const at = j * gw + i;
+            if (s.pattern === "crumple") {
+              const ridge = 1 - Math.abs(nz(wu * 1.3 + 0.7, wv * 1.3 + 4.2) * 2 - 1);
+              light[at] = 0.62 + (ridge * ridge - 0.4) * range * 1.6;
+              phase[at] = hueBase + wu * 0.55 + 0.45 * nz(wu * 0.8, wv * 0.8);
+            } else {
+              phase[at] = hueBase + (stretch(nz(wu, wv)) - 0.5);
+              light[at] = 0.9 + (stretch(nz(wu * 1.6 + 5.5, wv * 1.6 + 1.5)) - 0.5) * range;
+            }
+          }
+        }
+        field = { gw, gh, cell, phase, light };
+      }
+      const gridAt = (arr, gw, gh, fx, fy) => {
+        const x = Math.min(gw - 1.0001, Math.max(0, fx));
+        const y = Math.min(gh - 1.0001, Math.max(0, fy));
+        const x0 = x | 0;
+        const y0 = y | 0;
+        const tx = x - x0;
+        const ty = y - y0;
+        const r0 = y0 * gw + x0;
+        const top = arr[r0] + (arr[r0 + 1] - arr[r0]) * tx;
+        return top + (arr[r0 + gw] + (arr[r0 + gw + 1] - arr[r0 + gw]) * tx - top) * ty;
+      };
+      // The film's fine crinkle, a fixed size whatever the scale: noise
+      // folded about its middle, so it creases rather than rolls
+      let crinkle = null;
+      if (foilOn && s.crinkle > 0) {
+        const tile = noiseTile(7717, 3);
+        crinkle = new Float32Array(n);
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const a = Math.abs(tileAt(tile, (x / k) * (256 / 30), (y / k) * (256 / 30)) * 2 - 1);
+            const b = Math.abs(tileAt(tile, (x / k) * (256 / 11) + 53, (y / k) * (256 / 11) + 17) * 2 - 1);
+            crinkle[y * W + x] = a * 0.62 + b * 0.38;
+          }
+      }
+      // Material grain, its size in points, its grid wandered so it doesn't
+      // read as tiles
+      let grain = null;
+      const texAmount = s.texture !== "none" ? s.textureAmount / 100 : 0;
+      if (texAmount > 0) {
+        const kind = s.texture;
+        const tile = noiseTile({ paper: 1013, matte: 2027, kraft: 3041, linen: 4057, wrinkle: 5077 }[kind] ?? 1013, 4);
+        const warp = noiseTile(6151, 2);
+        const period = Math.max(8, s.grain);
+        const contrast = { paper: 2.4, matte: 2.6, kraft: 3, linen: 1.8, wrinkle: 1.5 }[kind] ?? 2;
+        const step = 256 / (period * 4);
+        const swing = period * 0.45;
+        const f = 256 / period;
+        const weave = Math.max(1.5, period / 16);
+        grain = new Float32Array(n);
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const px = x / k;
+            const py = y / k;
+            const lx = px + (tileAt(warp, px * step, py * step) - 0.5) * swing;
+            const ly = py + (tileAt(warp, px * step + 91, py * step + 37) - 0.5) * swing;
+            const vx = lx * f;
+            const vy = ly * f;
+            let v;
+            if (kind === "paper") v = tileAt(tile, vx * 0.75, vy * 0.75) * 0.55 + tileAt(tile, vx * 3.4 + 37, vy * 3.4 + 91) * 0.3 + tileAt(tile, vx * 9 + 11, vy * 9 + 63) * 0.15;
+            else if (kind === "matte") v = tileAt(tile, vx * 6.5, vy * 6.5) * 0.45 + tileAt(tile, vx * 16 + 21, vy * 16 + 5) * 0.55;
+            else if (kind === "kraft") v = tileAt(tile, vx * 0.5, vy * 2.2) * 0.5 + tileAt(tile, vx * 2.6 + 13, vy * 7 + 47) * 0.3 + tileAt(tile, vx * 8 + 5, vy * 8 + 9) * 0.2;
+            else if (kind === "wrinkle") {
+              const ridged = 1 - Math.abs((tileAt(tile, vx * 0.12, vy * 0.12) * 0.7 + tileAt(tile, vx * 0.3 + 17, vy * 0.3 + 41) * 0.3) * 2 - 1);
+              v = ridged * ridged * 0.82 + tileAt(tile, vx * 1.1 + 5, vy * 1.1 + 9) * 0.18;
+            } else v = (0.5 + 0.11 * (Math.sin((lx / weave) * Math.PI * 2) + Math.sin((ly / weave) * Math.PI * 2))) * 0.65 + tileAt(tile, vx * 4, vy * 4) * 0.35;
+            grain[y * W + x] = clamp01((v - 0.5) * contrast + 0.5);
+          }
+      }
+      // The body: border, keyline, foil, the artwork over them, then grain,
+      // bevel and gloss, straight colour 0 to 1 and coverage
+      const bc = hexRgb(s.borderColor);
+      const kc = hexRgb(s.keylineColor);
+      const borderA = s.borderOpacity / 100;
+      const keylineA = s.keylineOpacity / 100;
+      const keyline = s.keyline * k;
+      const bevel = s.bevel / 100;
+      const bevelW = Math.max(2 * k, Math.min(Math.max(s.border, 6), 18) * k);
+      const gloss = s.gloss / 100;
+      const maxDim = Math.max(W, H) / k;
+      const period = Math.max(8, (s.foilScale / 100) * maxDim);
+      const ca = Math.cos((s.foilAngle * Math.PI) / 180);
+      const sa = Math.sin((s.foilAngle * Math.PI) / 180);
+      const gstep = Math.max(1, Math.round(k));
+      const crinklePhase = (s.crinkle / 100) * 0.0022;
+      const crinkleShade = (s.crinkle / 100) * 0.34;
+      const behind = foilOn && s.coverage === "behind";
+      const over = foilOn && !behind;
+      const texBump = texAmount * 7;
+      const blend = (base, foil, amount) => {
+        const hard = foil < 0.5 ? 2 * base * foil : 1 - 2 * (1 - base) * (1 - foil);
+        return base + (hard * 0.72 + (base + foil - base * foil) * 0.28 - base) * amount;
+      };
+      const body = new Float32Array(n * 4);
+      for (let y = 0; y < H; y++) {
+        const topGloss = (1 - y / H) ** 2.2 * 0.5;
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          const d = sdf[i];
+          const cov = clamp01(0.5 - d);
+          const artA = alpha[i];
+          if (cov <= 0 && artA <= 0) continue;
+          let fr = 0;
+          let fg = 0;
+          let fb = 0;
+          if (foilOn) {
+            let phase;
+            let bright;
+            if (field) {
+              phase = gridAt(field.phase, field.gw, field.gh, x / k / field.cell, y / k / field.cell);
+              bright = gridAt(field.light, field.gw, field.gh, x / k / field.cell, y / k / field.cell);
+            } else {
+              const nx = x / k;
+              const ny = y / k;
+              const u = (nx * ca + ny * sa) / period;
+              const v = (-nx * sa + ny * ca) / period;
+              if (s.pattern === "linear") {
+                phase = u;
+                bright = 0.9 + 0.18 * Math.sin(((nx * ca + ny * sa) / 6) * Math.PI * 2);
+              } else if (s.pattern === "prism") {
+                phase = Math.floor(u * 2 + 0.6 * Math.sin(v * 0.9 * Math.PI * 2)) * 0.21 + 0.15 * u;
+                bright = 1;
+              } else {
+                phase = u + 0.22 * Math.sin(v * 0.7 * Math.PI * 2) + 0.12 * Math.sin((u * 2.3 + v * 1.7) * Math.PI * 2);
+                bright = 1;
+              }
+            }
+            // The relief tilts the grating: the colour shifts and it catches
+            // the light, one field driving both
+            if (crinkle) {
+              const gx = crinkle[x + gstep < W ? i + gstep : i] - crinkle[x - gstep >= 0 ? i - gstep : i];
+              const gy = crinkle[y + gstep < H ? i + gstep * W : i] - crinkle[y - gstep >= 0 ? i - gstep * W : i];
+              const tilt = gx * 0.7071 + gy * 0.7071;
+              phase += tilt * crinklePhase;
+              bright *= 1 - tilt * crinkleShade;
+            }
+            let idx = phase % 1;
+            if (idx < 0) idx += 1;
+            const li = ((idx * 1023) | 0) * 3;
+            // Past full brightness it blows out to silver
+            const extra = Math.max(0, bright - 1);
+            const mul = Math.min(1, bright);
+            fr = clamp01(spectrum[li] * mul + extra);
+            fg = clamp01(spectrum[li + 1] * mul + extra);
+            fb = clamp01(spectrum[li + 2] * mul + extra);
+          }
+          let br = bc[0];
+          let bg = bc[1];
+          let bb = bc[2];
+          let baseA = borderA;
+          if (behind) {
+            br = lerp(br, fr, foilAmount);
+            bg = lerp(bg, fg, foilAmount);
+            bb = lerp(bb, fb, foilAmount);
+          }
+          if (keyline > 0) {
+            const t = clamp01(d + keyline + 0.5);
+            br = lerp(br, kc[0], t);
+            bg = lerp(bg, kc[1], t);
+            bb = lerp(bb, kc[2], t);
+            baseA = lerp(baseA, keylineA, t);
+          }
+          const covA = cov * baseA;
+          const outA = artA + covA * (1 - artA);
+          if (outA <= 0) continue;
+          const wb = (covA * (1 - artA)) / outA;
+          const wa = artA / outA;
+          const p = i * 4;
+          let R = (data[p] / 255) * wa + br * wb;
+          let G = (data[p + 1] / 255) * wa + bg * wb;
+          let B = (data[p + 2] / 255) * wa + bb * wb;
+          if (over) {
+            const amount = foilAmount * (s.coverage === "art" ? artA : 1);
+            R = blend(R, fr, amount);
+            G = blend(G, fg, amount);
+            B = blend(B, fb, amount);
+          }
+          if (grain) {
+            const gx = grain[x + gstep < W ? i + gstep : i] - grain[x - gstep >= 0 ? i - gstep : i];
+            const gy = grain[y + gstep < H ? i + gstep * W : i] - grain[y - gstep >= 0 ? i - gstep * W : i];
+            const nx = -gx * texBump;
+            const ny = -gy * texBump;
+            const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+            const diffuse = (nx * -0.45 + ny * -0.55 + 0.7) * inv;
+            const lit = Math.max(0, diffuse) ** 8;
+            const shade = (1 + (diffuse - 0.7) * 1.25) * (1 + (grain[i] - 0.5) * texAmount * 0.35);
+            R = R * shade + lit * texAmount * 0.5;
+            G = G * shade + lit * texAmount * 0.5;
+            B = B * shade + lit * texAmount * 0.5;
+          }
+          // A bevel along the edge, lit from the top left
+          if (bevel > 0 && d < 0 && -d < bevelW) {
+            const gx = sdf[x < W - 1 ? i + 1 : i] - sdf[x > 0 ? i - 1 : i];
+            const gy = sdf[y < H - 1 ? i + W : i] - sdf[y > 0 ? i - W : i];
+            const len = Math.sqrt(gx * gx + gy * gy) || 1;
+            const lambert = -((gx / len) * 0.7071 + (gy / len) * 0.7071);
+            const t = 1 + d / bevelW;
+            const f = 1 + bevel * lambert * t * t * 0.55;
+            R *= f;
+            G *= f;
+            B *= f;
+          }
+          // Laminate: brighter toward the top, and one diagonal streak
+          if (gloss > 0) {
+            const su = ((x / k) * 0.64 + (y / k) * 0.77) / (maxDim * 0.95);
+            const g = (topGloss + gauss((su - 0.3) * 5.5) * 0.9) * gloss;
+            R += (1 - R) * g;
+            G += (1 - G) * g;
+            B += (1 - B) * g;
+          }
+          body[p] = clamp01(R);
+          body[p + 1] = clamp01(G);
+          body[p + 2] = clamp01(B);
+          body[p + 3] = clamp01(outA);
+        }
+      }
+      // Sparkles over foil, light added where the sticker is
+      if (foilOn && s.sparkle > 0) {
+        const amount = s.sparkle / 100;
+        const count = Math.round(amount * 110);
+        const line = Math.max(1, 0.6 * k);
+        for (let m = 0; m < count; m++) {
+          const x = hash2(m, 1, 24301) * W;
+          const y = hash2(m, 2, 24301) * H;
+          if (sdf[(y | 0) * W + (x | 0)] > -4 * k) continue;
+          const r = (2 + hash2(m, 3, 24301) * 5) * k * (0.6 + amount);
+          const reach = r * 2.2;
+          for (let py = Math.max(0, Math.floor(y - reach)); py < Math.min(H, Math.ceil(y + reach)); py++)
+            for (let px = Math.max(0, Math.floor(x - reach)); px < Math.min(W, Math.ceil(x + reach)); px++) {
+              const p = (py * W + px) * 4;
+              if (!body[p + 3]) continue;
+              const dx = px + 0.5 - x;
+              const dy = py + 0.5 - y;
+              const dist = Math.hypot(dx, dy) / r;
+              let v = dist < 0.35 ? 0.95 - (0.7 * dist) / 0.35 : dist < 1 ? 0.25 * (1 - (dist - 0.35) / 0.65) : 0;
+              if ((Math.abs(dy) < line / 2 && Math.abs(dx) < reach) || (Math.abs(dx) < line / 2 && Math.abs(dy) < reach)) v = 1 - (1 - v) * 0.55;
+              for (let c = 0; c < 3; c++) body[p + c] += (1 - body[p + c]) * v;
+            }
+        }
+      }
+      // A peeled corner: the sheet past a fold wraps round a cylinder lying
+      // on it. A point a way along the sheet sits at an angle round it, so
+      // the lift foreshortens by itself; where two points land on one spot
+      // the one further round is higher and shows, and past upright that's
+      // the sheet's back
+      let flap = null;
+      let lift = null;
+      if (s.peel) {
+        const dirs = { tr: [0.7071, -0.7071], tl: [-0.7071, -0.7071], br: [0.7071, 0.7071], bl: [-0.7071, 0.7071] };
+        const [ux, uy] = dirs[s.corner] ?? dirs.tr;
+        let [most, least] = [-Infinity, Infinity];
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            if (sdf[y * W + x] >= 0) continue;
+            const proj = x * ux + y * uy;
+            if (proj > most) most = proj;
+            if (proj < least) least = proj;
+          }
+        if (most > least) {
+          const T = Math.max(2, (most - least) * (s.peelSize / 100));
+          const fold = most - T;
+          const phiMax = lerp(0.4, 1.05, s.curl / 100) * Math.PI;
+          const R = T / phiMax;
+          const back = hexRgb(s.backColor);
+          const backA = s.backOpacity / 100;
+          const light = [-0.35, -0.45, 0.82];
+          flap = new Float32Array(n * 4);
+          lift = new Float32Array(n);
+          const at = (phi, x, y, proj, into) => {
+            if (phi < 0 || phi > phiMax) return false;
+            const along = proj - (fold + R * phi);
+            const sx = x - along * ux;
+            const sy = y - along * uy;
+            const x0 = Math.floor(sx);
+            const y0 = Math.floor(sy);
+            if (x0 < 0 || y0 < 0 || x0 + 1 >= W || y0 + 1 >= H) return false;
+            const fx = sx - x0;
+            const fy = sy - y0;
+            const p00 = (y0 * W + x0) * 4;
+            const p01 = p00 + W * 4;
+            const pick = (c) => {
+              const top = body[p00 + c] + (body[p00 + 4 + c] - body[p00 + c]) * fx;
+              return top + (body[p01 + c] + (body[p01 + 4 + c] - body[p01 + c]) * fx - top) * fy;
+            };
+            const a = pick(3);
+            if (a <= 0.004) return false;
+            // The cylinder's normal, flipped once the back faces up
+            const showsBack = phi > Math.PI / 2;
+            const sign = showsBack ? 1 : -1;
+            const nu = Math.sin(phi) * sign;
+            const nz = -Math.cos(phi) * sign;
+            const lambert = Math.max(0, ux * nu * light[0] + uy * nu * light[1] + nz * light[2]);
+            const shade = 0.62 + 0.46 * lambert;
+            // The cut edge catches the light where it stands upright
+            const spec = lambert ** 22 * 0.5 + gauss((phi - Math.PI / 2) * 3.4) * 0.2;
+            if (showsBack) {
+              into[0] = back[0] * shade + spec;
+              into[1] = back[1] * shade + spec;
+              into[2] = back[2] * shade + spec;
+              into[3] = a * backA;
+            } else {
+              into[0] = pick(0) * shade + spec;
+              into[1] = pick(1) * shade + spec;
+              into[2] = pick(2) * shade + spec;
+              into[3] = a;
+            }
+            return true;
+          };
+          const far = new Float32Array(4);
+          const near = new Float32Array(4);
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) {
+              const proj = x * ux + y * uy;
+              const q = proj - fold;
+              if (q < -0.5 || q > R) continue;
+              const seam = clamp01(q + 0.5);
+              const asinq = Math.asin(clamp01(q / R));
+              const phiFar = Math.PI - asinq;
+              const hasFar = at(phiFar, x, y, proj, far);
+              const hasNear = at(asinq, x, y, proj, near);
+              if (!hasFar && !hasNear) continue;
+              let r;
+              let g;
+              let b;
+              let a;
+              let rise;
+              if (hasFar && hasNear) {
+                a = far[3] + near[3] * (1 - far[3]);
+                const wf = far[3] / a;
+                const wn = (near[3] * (1 - far[3])) / a;
+                r = far[0] * wf + near[0] * wn;
+                g = far[1] * wf + near[1] * wn;
+                b = far[2] * wf + near[2] * wn;
+                rise = (1 - Math.cos(phiFar)) * wf + (1 - Math.cos(asinq)) * wn;
+              } else {
+                const only = hasFar ? far : near;
+                [r, g, b, a] = only;
+                rise = 1 - Math.cos(hasFar ? phiFar : asinq);
+              }
+              const i = y * W + x;
+              flap[i * 4] = clamp01(r);
+              flap[i * 4 + 1] = clamp01(g);
+              flap[i * 4 + 2] = clamp01(b);
+              flap[i * 4 + 3] = clamp01(a * seam);
+              lift[i] = clamp01(a * seam * clamp01(rise / 2));
+            }
+          // The body's cut with a hard edge just past where the flap's whole,
+          // so the two never leave a see-through seam
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) if (x * ux + y * uy - fold >= 0.5) body[(y * W + x) * 4 + 3] = 0;
+        }
+      }
+      // All of it together, premultiplied: the drop shadow, the body, the
+      // flap's shadow, then the flap
+      const out = new Float32Array(n * 4);
+      const shadowColor = hexRgb(s.shadowColor);
+      const under = (mask, blur, dx, dy, opacity) => {
+        const blurred = blurChannel(mask, W, H, blur / 2);
+        for (let y = 0; y < H; y++) {
+          const sy = Math.round(y - dy);
+          if (sy < 0 || sy >= H) continue;
+          for (let x = 0; x < W; x++) {
+            const sx = Math.round(x - dx);
+            if (sx < 0 || sx >= W) continue;
+            const a = blurred[sy * W + sx] * opacity;
+            if (a <= 0) continue;
+            const p = (y * W + x) * 4;
+            const keep = 1 - a;
+            out[p] = out[p] * keep + shadowColor[0] * a;
+            out[p + 1] = out[p + 1] * keep + shadowColor[1] * a;
+            out[p + 2] = out[p + 2] * keep + shadowColor[2] * a;
+            out[p + 3] = out[p + 3] * keep + a;
+          }
+        }
+      };
+      const over2 = (layer) => {
+        for (let i = 0; i < n; i++) {
+          const a = layer[i * 4 + 3];
+          if (a <= 0) continue;
+          const p = i * 4;
+          const keep = 1 - a;
+          out[p] = out[p] * keep + layer[p] * a;
+          out[p + 1] = out[p + 1] * keep + layer[p + 1] * a;
+          out[p + 2] = out[p + 2] * keep + layer[p + 2] * a;
+          out[p + 3] = out[p + 3] * keep + a;
+        }
+      };
+      if (s.shadow && s.shadowOpacity > 0) {
+        const mask = new Float32Array(n);
+        for (let i = 0; i < n; i++) mask[i] = body[i * 4 + 3];
+        under(mask, s.shadowBlur * k, 0, s.shadowY * k, s.shadowOpacity / 100);
+      }
+      over2(body);
+      if (flap) {
+        if (s.peelShadow > 0) {
+          const blur = Math.max(1, s.peelBlur * k);
+          under(lift, blur, blur * 0.8 * 0.42, blur * 0.8 * 0.55, s.peelShadow / 100);
+        }
+        over2(flap);
+      }
+      return { image: toImage(out, W, H), x: -pad, y: -pad };
+    },
+  });
+
+  // ---------- Screen ----------
+
+  // The layer as it looks filmed off a monitor. It's shown on a screen of
+  // pixels Pitch apart, each three stripes of red, green and blue with dark
+  // gaps between, lit as bright as the artwork's colour there; a camera
+  // looks at that screen tilted, turned and rolled in 3D, from as close as
+  // Zoom says, toward the point dragged on the preview. What's as far from
+  // the camera as that point is sharp, and nearer and farther blurs as a
+  // lens's depth of field does, so the stripes show only where it's in
+  // focus and moiré where they're finer than the camera's pixels. A glow
+  // round bright parts, colour fringes toward the edges, a vignette and
+  // grain finish it
+  const SCREEN_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 6.5 18 5v11.5L5.5 15z"/><path ${STROKE} d="M9 18.5h6M12 16.2v2.3"/><path ${STROKE} stroke-dasharray="1 1.5" d="M8 9h1m2 0h1m2 0h1M8 11.5h1m2 0h1m2 0h1"/></svg>`;
+  pictureEffect({
+    id: "screen",
+    handles: [{ x: "centerX", y: "centerY" }],
+    thumb: { sample: "ui", settings: { pitch: 2.4, tiltX: 30, tiltY: -24, zoom: 190, focus: 40 } },
+    name: "Screen",
+    about: "Film it off a monitor, in 3D with depth of field",
+    icon: SCREEN_ICON,
+    verb: "Make screen",
+    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
+    presets: [
+      ["Angled", () => ({})],
+      ["Close up", () => ({ zoom: 320, tiltX: 18, tiltY: -28, pitch: 2.5, aperture: 75 })],
+      ["Head on", () => ({ tiltX: 0, tiltY: 0, zoom: 115, aperture: 15, vignette: 25 })],
+      ["Documentary", () => ({ tiltX: 8, tiltY: 34, zoom: 230, aperture: 80, glow: 45, grain: 18 })],
+      ["Desk", () => ({ tiltX: 42, tiltY: 0, roll: -6, zoom: 170, aperture: 70 })],
+      ["Flat grid", () => ({ tiltX: 0, tiltY: 0, zoom: 100, aperture: 0, vignette: 0, fringe: 0, glow: 15, grain: 0 })],
+    ],
+    limits: { pitch: [0.5, 1000], gaps: [0, 100], tiltX: [-89, 89], tiltY: [-89, 89], roll: [-360, 360], zoom: [10, 2000], centerX: [-200, 300], centerY: [-200, 300], focus: [0, 100], aperture: [0, 100], glow: [0, 100], fringe: [0, 100], vignette: [0, 100], grain: [0, 100], exposure: [10, 300] },
+    summary: (s) => `${s.tiltX}° · ${s.tiltY}° · ${s.zoom}%`,
+    panel: (ui) => [
+      ui.section(
+        "Camera",
+        ui.sliders([
+          ["tiltX", "Tilt", "°", () => ({ min: -75, max: 75 })],
+          ["tiltY", "Turn", "°", () => ({ min: -75, max: 75 })],
+          ["roll", "Roll", "°", () => ({ min: -180, max: 180 })],
+          ["zoom", "Zoom", "%", () => ({ min: 25, max: 800, middle: 100, shape: "curve" })],
+        ]),
+      ),
+      ui.section(
+        "Focus",
+        ui.sliders([
+          ["aperture", "Depth of field", "%", () => ({ min: 0, max: 100 })],
+          ["focus", "Focus spread", "%", () => ({ min: 0, max: 100 })],
+        ]),
+      ),
+      ui.section(
+        "Pixels",
+        ui.sliders([
+          ["pitch", "Pixel size", "pt", (u) => ({ min: 0.5, max: upTo(u, 0.03, 12), shape: "curve", digits: 1 })],
+          ["gaps", "Gaps", "%", () => ({ min: 0, max: 100 })],
+          ["exposure", "Exposure", "%", () => ({ min: 25, max: 250, middle: 100 })],
+        ]),
+      ),
+      ui.section(
+        "Lens",
+        ui.sliders([
+          ["glow", "Glow", "%", () => ({ min: 0, max: 100 })],
+          ["fringe", "Fringe", "%", () => ({ min: 0, max: 100 })],
+          ["vignette", "Vignette", "%", () => ({ min: 0, max: 100 })],
+          ["grain", "Grain", "%", () => ({ min: 0, max: 100 })],
+        ]),
+      ),
+    ],
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const rad = Math.PI / 180;
+      // The screen, the layer's own size, centred on the origin and facing
+      // the camera, then tilted about its width, turned about its height
+      // and rolled; the camera's as far back as fills the picture with it
+      // head on at 100%, then closer by Zoom, looking at the point dragged
+      const [ax, ay, az] = [s.tiltX * rad, s.tiltY * rad, s.roll * rad];
+      const rot = (v) => {
+        let [x, y, z] = v;
+        [y, z] = [y * Math.cos(ax) - z * Math.sin(ax), y * Math.sin(ax) + z * Math.cos(ax)];
+        [x, z] = [x * Math.cos(ay) + z * Math.sin(ay), -x * Math.sin(ay) + z * Math.cos(ay)];
+        [x, y] = [x * Math.cos(az) - y * Math.sin(az), x * Math.sin(az) + y * Math.cos(az)];
+        return [x, y, z];
+      };
+      const eu = rot([1, 0, 0]);
+      const ev = rot([0, 1, 0]);
+      const nrm = rot([0, 0, 1]);
+      const focal = Math.max(W, H) * 1.6;
+      const distance = focal / Math.max(0.1, s.zoom / 100);
+      // Where on the screen the camera looks, rotated with it
+      const tu = ((s.centerX - 50) / 100) * W;
+      const tv = ((s.centerY - 50) / 100) * H;
+      const target = [eu[0] * tu + ev[0] * tv, eu[1] * tu + ev[1] * tv, eu[2] * tu + ev[2] * tv];
+      // The screen's centre in camera space, so the target sits ahead
+      const C = [-target[0], -target[1], distance - target[2]];
+      const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const nC = dot(nrm, C);
+      const pitch = Math.max(0.5, s.pitch * k);
+      const gap = s.gaps / 100;
+      const exposure = s.exposure / 100;
+      // The camera's view of the screen, sharp: stripes and gaps, and each
+      // pixel's distance, for the focus
+      const sharp = new Float32Array(W * H * 4);
+      const depth = new Float32Array(W * H);
+      const p = new Float32Array(4);
+      const project = (x, y) => {
+        const d0 = (x - W / 2) / focal * distance;
+        const d1 = (y - H / 2) / focal * distance;
+        const d = [d0 / distance, d1 / distance, 1];
+        const den = dot(nrm, d);
+        if (Math.abs(den) < 1e-6) return null;
+        const t = nC / den;
+        if (t <= 0) return null;
+        const P = [d[0] * t - C[0], d[1] * t - C[1], d[2] * t - C[2]];
+        return [dot(P, eu) + W / 2, dot(P, ev) + H / 2, t];
+      };
+      // A stripe's light across a pixel cell, filtered by how much of the
+      // cell one picture pixel covers, so fine stripes average out rather
+      // than flicker
+      const stripe = (u, from, to, width) => {
+        const soft = Math.max(0.02, width);
+        const a = clamp01((u - from) / soft + 0.5);
+        const b = clamp01((u - to) / soft + 0.5);
+        return a - b;
+      };
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const here = project(x + 0.5, y + 0.5);
+          if (!here) continue;
+          const [u, v, t] = here;
+          if (u < 0 || v < 0 || u >= W || v >= H) continue;
+          // How far one picture pixel reaches across the screen here, in
+          // screen pixels, from the next one over
+          const next = project(x + 1.5, y + 0.5);
+          const reach = next ? Math.hypot(next[0] - u, next[1] - v) / pitch : 1;
+          // The screen pixel's colour, all of it lit as one
+          const cu = Math.floor(u / pitch);
+          const cv = Math.floor(v / pitch);
+          edgeAt(f, W, H, (cu + 0.5) * pitch, (cv + 0.5) * pitch, p);
+          const fu = u / pitch - cu;
+          const fv = v / pitch - cv;
+          const soft = reach * 1.2;
+          // Dark gaps round each pixel, the stripes inside
+          const rows = stripe(fv, gap * 0.18, 1 - gap * 0.18, soft);
+          const lit = 3 * (1 - gap * 0.35) * exposure;
+          const at = (y * W + x) * 4;
+          sharp[at] = p[0] * stripe(fu, gap * 0.12, 1 / 3 - gap * 0.06, soft) * rows * lit;
+          sharp[at + 1] = p[1] * stripe(fu, 1 / 3 + gap * 0.06, 2 / 3 - gap * 0.06, soft) * rows * lit;
+          sharp[at + 2] = p[2] * stripe(fu, 2 / 3 + gap * 0.06, 1 - gap * 0.12, soft) * rows * lit;
+          sharp[at + 3] = p[3];
+          depth[y * W + x] = t;
+        }
+      // Depth of field: blurred more the farther a pixel's distance is from
+      // the target's, as a lens's circle of confusion grows
+      const blurMax = (s.aperture / 100) * Math.max(W, H) * 0.012;
+      const spread = 0.02 + (s.focus / 100) * 0.3;
+      const levels = [0, 0.33, 0.66, 1];
+      const layers = [];
+      for (let c = 0; c < 4; c++) {
+        const channel = new Float32Array(W * H);
+        for (let i = 0; i < W * H; i++) channel[i] = sharp[i * 4 + c];
+        layers.push(levels.map((m) => (blurMax * m > 0.3 ? blurChannel(channel, W, H, blurMax * m) : channel)));
+      }
+      const out = new Float32Array(W * H * 4);
+      for (let i = 0; i < W * H; i++) {
+        const t = depth[i];
+        const away = t > 0 ? Math.abs(t - distance) / distance : 0;
+        const at = clamp01((away - spread * 0.3) / spread) * 3;
+        const j = Math.min(2, Math.floor(at));
+        const m = at - j;
+        for (let c = 0; c < 4; c++) out[i * 4 + c] = layers[c][j][i] * (1 - m) + layers[c][j + 1][i] * m;
+      }
+      // Glow round bright parts, as light scatters in a lens
+      if (s.glow > 0) {
+        const glowing = [0, 1, 2].map((c) => {
+          const channel = new Float32Array(W * H);
+          for (let i = 0; i < W * H; i++) channel[i] = Math.max(0, out[i * 4 + c] - 0.55);
+          return blurChannel(channel, W, H, Math.max(W, H) * 0.02);
+        });
+        for (let i = 0; i < W * H; i++) for (let c = 0; c < 3; c++) out[i * 4 + c] += glowing[c][i] * (s.glow / 100) * 1.5;
+      }
+      // Colour fringes toward the edges, a vignette and grain
+      const fringe = (s.fringe / 100) * Math.max(W, H) * 0.004;
+      const vignette = s.vignette / 100;
+      const grain = s.grain / 100;
+      const final = new Float32Array(W * H * 4);
+      const q = new Float32Array(4);
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const at = (y * W + x) * 4;
+          const dx = (x + 0.5 - W / 2) / (W / 2);
+          const dy = (y + 0.5 - H / 2) / (H / 2);
+          const r2 = dx * dx + dy * dy;
+          let [r, g, b, a] = [out[at], out[at + 1], out[at + 2], out[at + 3]];
+          if (fringe > 0) {
+            edgeAt(out, W, H, x + 0.5 + dx * fringe, y + 0.5 + dy * fringe, q);
+            r = q[0];
+            edgeAt(out, W, H, x + 0.5 - dx * fringe, y + 0.5 - dy * fringe, q);
+            b = q[2];
+          }
+          const dim = 1 - vignette * 0.6 * Math.min(1, r2 * 0.5);
+          const noise = grain ? (hash2(x, y, 5) - 0.5) * grain * 0.12 : 0;
+          final[at] = Math.min(a, Math.max(0, r * dim + noise * a));
+          final[at + 1] = Math.min(a, Math.max(0, g * dim + noise * a));
+          final[at + 2] = Math.min(a, Math.max(0, b * dim + noise * a));
+          final[at + 3] = a;
+        }
+      return { image: toImage(final, W, H), x: 0, y: 0 };
+    },
+  });
+
+  // ---------- Shape Fill ----------
+
+  // A shape filled with copies of other layers, as real layers: select the
+  // shape and the layers to fill it with, the largest selected being the
+  // shape. Each is read as a picture once, the shape as its inside and how
+  // deep each point is, the others as their outlines, so copies pack by
+  // their real outlines rather than boxes. Copies are tried largest first,
+  // each a few places at random, and kept where they overlap nothing:
+  // Inside wholly within the shape, Loose with only their middle and most
+  // of themselves in it, so they spill over its edge as if poured in. How
+  // often each layer's used, how large and how turned, and how much each
+  // of those varies, are the panel's. The copies are made again a moment
+  // after each change, reused where they can be
+  const FILL = "shapeFill";
+  const FILL_ROLE_COPY = "fill-copy";
+  const FILL_DEFAULTS = { seeds: [], fit: "inside", margin: 0, gap: 2, density: 70, most: 300, size: 100, variation: 45, angle: 0, spin: 180, seed: 1, editable: true };
+  const FILL_PRESETS = [
+    ["Packed", () => ({})],
+    ["Poured", () => ({ fit: "loose", gap: 1, density: 85, variation: 60 })],
+    ["Even", () => ({ variation: 0, spin: 0, gap: 4 })],
+    ["Scattered", () => ({ gap: 10, density: 45, variation: 70 })],
+    ["Tight", () => ({ gap: 0, density: 100, variation: 80, most: 600 })],
+  ];
+  const FILL_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12 4.5c3 0 7.5 2.4 7.5 7.5S15 19.5 12 19.5 4.5 17.1 4.5 12 9 4.5 12 4.5Z"/><path ${STROKE} d="m9 8.5.5 1h1l-.8.7.3 1-1-.6-1 .6.3-1-.8-.7h1zM14.5 9.5h2v2h-2zM13 14.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/></svg>`;
+  let filling = null;
+  const fillOf = (node) => {
+    try {
+      return node?.type === "GROUP" && node.getSharedPluginData(PLUGIN, FILL) ? node : null;
+    } catch {
+      return null;
+    }
+  };
+  // A layer as a picture no more than `most` pixels across, its alpha, its
+  // size and how many pixels a point, and where it is
+  const readAlpha = async (node, most) => {
+    const box = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+    const scale = Math.min(4, most / Math.max(1, box.width, box.height));
+    const bitmap = await createImageBitmap(new Blob([await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale } })], { type: "image/png" }));
+    const canvas = Object.assign(document.createElement("canvas"), { width: bitmap.width, height: bitmap.height });
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0);
+    const { data } = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    const alpha = new Float32Array(bitmap.width * bitmap.height);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3] / 255;
+    return { alpha, w: bitmap.width, h: bitmap.height, g: bitmap.width / Math.max(1, box.width), box, bitmap };
+  };
+  // Where each copy goes, in the shape's picture: a seed's index, its
+  // centre, size and turn. Pure, so a seed and settings always give the
+  // same fill
+  const packFill = (shape, seeds, s) => {
+    const { alpha, w: mw, h: mh, g } = shape;
+    const n = mw * mh;
+    const inside = new Uint8Array(n);
+    const outside = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      inside[i] = alpha[i] >= 0.5 ? 1 : 0;
+      outside[i] = 1 - inside[i];
+    }
+    // How deep each point is inside, in the picture's pixels
+    const depth = distanceField(outside, mw, mh);
+    const margin = Math.max(0, s.margin) * g;
+    const loose = s.fit === "loose";
+    const spots = [];
+    for (let i = 0; i < n; i++) if (inside[i] && (loose || depth[i] >= margin + 0.5)) spots.push(i);
+    if (!spots.length || !seeds.length) return [];
+    const weights = seeds.map((seed) => Math.max(0, seed.weight));
+    const total = weights.reduce((a, b) => a + b, 0) || 1;
+    const random = (i, j) => hash2(i, j, s.seed | 0);
+    // Candidates, largest first, so small ones fill the gaps the large leave
+    const count = Math.round(200 + (s.density / 100) * 5800);
+    const candidates = [];
+    for (let i = 0; i < count; i++) {
+      let pick = random(i, 1) * total;
+      let which = 0;
+      while (which < seeds.length - 1 && pick >= weights[which]) pick -= weights[which++];
+      // In steps of a sixteenth and 8°, which can't be seen, so outlines
+      // are shared between candidates
+      const scale = Math.max(1 / 16, Math.round((s.size / 100) * (1 + (s.variation / 100) * 0.9 * (random(i, 2) * 2 - 1)) * 16) / 16);
+      const turn = Math.round((s.angle + s.spin * (random(i, 3) * 2 - 1)) / 8) * 8;
+      candidates.push({ which, scale, turn, reach: scale * seeds[which].size, i });
+    }
+    candidates.sort((a, b) => b.reach - a.reach);
+    const occupied = new Uint8Array(n);
+    // A seed's outline turned and sized, as offsets in the shape's picture,
+    // stepped across each row rather than worked out for every pixel
+    const footprint = (seed, scale, turn) => {
+      const f = (g / seed.g) * scale;
+      const c = Math.cos((turn * Math.PI) / 180) / f;
+      const sn = Math.sin((turn * Math.PI) / 180) / f;
+      const R = Math.ceil(0.5 * Math.hypot(seed.w, seed.h) * f) + 1;
+      const found = new Int16Array((2 * R + 1) * (2 * R + 1) * 2);
+      let count = 0;
+      for (let dy = -R; dy <= R; dy++) {
+        let u = -c * R + sn * dy + seed.w / 2;
+        let v = sn * R + c * dy + seed.h / 2;
+        for (let dx = -R; dx <= R; dx++, u += c, v -= sn) {
+          if (u < 0 || v < 0 || u >= seed.w || v >= seed.h) continue;
+          if (seed.alpha[(v | 0) * seed.w + (u | 0)] >= 0.5) {
+            found[count++] = dx;
+            found[count++] = dy;
+          }
+        }
+      }
+      const offsets = found.slice(0, count);
+      // In a shuffled order, so a try that overlaps finds out in a few
+      // pixels rather than after scanning rows of free ones
+      let state = 2463534242;
+      for (let i = count / 2 - 1; i > 0; i--) {
+        state ^= state << 13;
+        state ^= state >>> 17;
+        state ^= state << 5;
+        const j = (state >>> 0) % (i + 1);
+        const x = offsets[i * 2];
+        const y = offsets[i * 2 + 1];
+        offsets[i * 2] = offsets[j * 2];
+        offsets[i * 2 + 1] = offsets[j * 2 + 1];
+        offsets[j * 2] = x;
+        offsets[j * 2 + 1] = y;
+      }
+      return offsets;
+    };
+    const placed = [];
+    const most = Math.max(1, Math.round(s.most));
+    // Outlines kept by layer, size and turn, a little rounded, as many
+    // candidates share them
+    const outlines = new Map();
+    const outline = (which, scale, turn) => {
+      const key = `${which}|${Math.round(scale * 16)}|${Math.round(turn / 8)}`;
+      let found = outlines.get(key);
+      if (!found) outlines.set(key, (found = footprint(seeds[which], Math.round(scale * 16) / 16, Math.round(turn / 8) * 8)));
+      return found;
+    };
+    // Places still free, picked from as it fills, so tries don't keep
+    // landing where there's already a copy
+    let free = spots;
+    let since = 0;
+    let misses = 0;
+    let below = Infinity;
+    for (const cand of candidates) {
+      if (placed.length >= most || !free.length) break;
+      // Once a size keeps finding no room, on to smaller ones
+      if (cand.reach > below) continue;
+      if (++misses > 60) {
+        below = cand.reach * 0.92;
+        misses = 0;
+      }
+      const seed = seeds[cand.which];
+      const size = Math.max(seed.w, seed.h) * (g / seed.g) * cand.scale;
+      if (size < 1.5) continue;
+      // The gap grows what's kept clear round it, or with a negative gap
+      // lets copies overlap
+      const grow = (2 * s.gap * g) / Math.max(1, size);
+      const test = outline(cand.which, cand.scale * Math.max(0.2, 1 + Math.min(0, grow)), cand.turn);
+      const stamp = grow > 0 ? outline(cand.which, cand.scale * (1 + grow), cand.turn) : test;
+      if (!test.length) continue;
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const spot = free[Math.floor(random(cand.i, 10 + attempt) * free.length)];
+        const cx = spot % mw;
+        const cy = (spot / mw) | 0;
+        let ok = true;
+        let within = 0;
+        for (let o = 0; o < test.length; o += 2) {
+          const x = cx + test[o];
+          const y = cy + test[o + 1];
+          if (x < 0 || y < 0 || x >= mw || y >= mh) {
+            if (!loose) {
+              ok = false;
+              break;
+            }
+            continue;
+          }
+          const at = y * mw + x;
+          if (occupied[at]) {
+            ok = false;
+            break;
+          }
+          if (inside[at] && depth[at] >= margin) within++;
+          else if (!loose) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok || (loose && within < (test.length / 2) * 0.6)) continue;
+        for (let o = 0; o < stamp.length; o += 2) {
+          const x = cx + stamp[o];
+          const y = cy + stamp[o + 1];
+          if (x >= 0 && y >= 0 && x < mw && y < mh) occupied[y * mw + x] = 1;
+        }
+        placed.push({ which: cand.which, x: cx + 0.5, y: cy + 0.5, scale: cand.scale, turn: cand.turn });
+        misses = 0;
+        if (++since >= 8) {
+          since = 0;
+          free = free.filter((i) => !occupied[i]);
+        }
+        break;
+      }
+    }
+    return placed;
+  };
+  // The copies in the file, made again from where `packFill` put them:
+  // reused while they're the same layer, a copy of the seed sized and
+  // turned about its own middle onto each spot
+  const placeFills = (current) => {
+    const { figma, shape, seeds, placed } = current;
+    const parent = current.container.parent;
+    const flowing = "layoutMode" in parent && parent.layoutMode !== "NONE";
+    while (current.copies.length > placed.length) {
+      const old = current.copies.pop();
+      if (!old.node.removed) old.node.remove();
+    }
+    placed.forEach((spot, i) => {
+      const seed = seeds[spot.which];
+      let copy = current.copies[i];
+      if (copy && (copy.which !== spot.which || copy.node.removed)) {
+        if (!copy.node.removed) copy.node.remove();
+        copy = null;
+      }
+      if (!copy) {
+        const node = seed.node.clone();
+        node.setSharedPluginData(PLUGIN, ROLE, FILL_ROLE_COPY);
+        parent.appendChild(node);
+        if (flowing && "layoutPositioning" in node) node.layoutPositioning = "ABSOLUTE";
+        copy = { node, which: spot.which, scale: 1 };
+        current.copies[i] = copy;
+      }
+      const ratio = spot.scale / copy.scale;
+      if (Math.abs(ratio - 1) > 1e-6 && "rescale" in copy.node) {
+        try {
+          copy.node.rescale(ratio);
+          copy.scale = spot.scale;
+        } catch {}
+      }
+      // The seed's turn, then the copy's on top, its visual middle on the spot
+      const [[a, c], [b, d]] = seed.node.absoluteTransform;
+      const r = (spot.turn * Math.PI) / 180;
+      const cos = Math.cos(r);
+      const sin = Math.sin(r);
+      const m0 = cos * a - sin * b;
+      const m1 = cos * c - sin * d;
+      const m2 = sin * a + cos * b;
+      const m3 = sin * c + cos * d;
+      const lx = seed.middle[0] * copy.scale;
+      const ly = seed.middle[1] * copy.scale;
+      const px = shape.box.x + spot.x / shape.g;
+      const py = shape.box.y + spot.y / shape.g;
+      try {
+        copy.node.relativeTransform = relativeFor(parent, [
+          [m0, m1, px - (m0 * lx + m1 * ly)],
+          [m2, m3, py - (m2 * lx + m3 * ly)],
+        ]);
+        copy.node.visible = true;
+      } catch {}
+    });
+    // Above the shape, the largest at the back
+    const index = parent.children.indexOf(current.container);
+    for (let i = current.copies.length - 1; i >= 0; i--) parent.insertChild(index + 1, current.copies[i].node);
+  };
+  // Seeds as packing reads them: their layer, outline, size in points, and
+  // their visual middle in their own coordinates
+  const readSeed = async (node, weight) => {
+    const read = await readAlpha(node, 64);
+    const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+    const mx = read.box.x + read.box.width / 2 - e;
+    const my = read.box.y + read.box.height / 2 - f;
+    const det = a * d - b * c || 1;
+    return { node, weight, alpha: read.alpha, w: read.w, h: read.h, g: read.g, size: Math.max(read.box.width, read.box.height), bitmap: read.bitmap, middle: [(d * mx - c * my) / det, (-b * mx + a * my) / det] };
+  };
+  const refill = (current) => {
+    clearTimeout(current.timer);
+    current.timer = setTimeout(() => {
+      if (filling !== current || !current.shape) return;
+      current.placed = packFill(current.shape, current.seeds, current.settings);
+      try {
+        placeFills(current);
+      } catch {}
+      current.panel?.show();
+    }, 60);
+  };
+  const openFill = async (figma, edit = false, run = null) => {
+    if (repeating || disintegrating || crushing || filtering || filling) return;
+    const selected = figma.currentPage.selection;
+    if (!selected.length) {
+      figma.notify("Select a shape to fill, and the layers to fill it with", { timeout: 2500 });
+      return;
+    }
+    let group = edit ? fillOf(selected[0]) : null;
+    const settings = structuredClone(FILL_DEFAULTS);
+    let container;
+    let seedNodes = [];
+    if (group) {
+      container = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
+      try {
+        Object.assign(settings, JSON.parse(group.getSharedPluginData(PLUGIN, FILL)));
+      } catch {}
+      if (!container) {
+        group = null;
+        container = selected[0];
+      }
+    } else {
+      // The largest selected is the shape, the rest fill it
+      const area = (node) => {
+        const box = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+        return box ? box.width * box.height : 0;
+      };
+      container = [...selected].sort((a, b) => area(b) - area(a))[0];
+      seedNodes = selected.filter((node) => node !== container);
+    }
+    if (run) Object.assign(settings, structuredClone(run), { editable: true });
+    if (container.type === "SECTION" || !("exportAsync" in container)) {
+      figma.notify("Sections can't be filled", { timeout: 2000 });
+      return;
+    }
+    const known = new Map(seedNodes.map((node) => [node.id, 1]));
+    for (const seed of settings.seeds) known.set(seed.id, seed.weight);
+    settings.seeds = [...known].map(([id, weight]) => ({ id, weight }));
+    const current = { figma, group, container, settings, seeds: [], copies: [], placed: [], kept: group ? group.children.filter((child) => child !== container) : [], wasVisible: container.visible };
+    filling = current;
+    try {
+      figma.commitUndo();
+    } catch {}
+    for (const node of current.kept) node.visible = false;
+    try {
+      current.shape = await readAlpha(container, 480);
+      current.seeds = (await Promise.all(settings.seeds.map(async ({ id, weight }) => {
+        const node = await figma.getNodeByIdAsync(id);
+        return node && !node.removed && "clone" in node ? readSeed(node, weight) : null;
+      }))).filter(Boolean);
+      settings.seeds = current.seeds.map((seed) => ({ id: seed.node.id, weight: seed.weight }));
+    } catch {
+      filling = null;
+      for (const node of current.kept) if (!node.removed) node.visible = true;
+      if (run) throw new Error("Couldn't read the layers");
+      figma.notify("Couldn't read the layers", { timeout: 2000 });
+      return;
+    }
+    // Grouped from the start, as Repeater's preview is
+    const parent = container.parent;
+    if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
+      current.home = { parent, index: parent.children.indexOf(container) };
+      try {
+        current.wrap = figma.group([container], parent, current.home.index);
+        current.wrap.name = `Shape Fill · ${plainName(container.name)}`;
+        figma.currentPage.selection = [current.wrap];
+      } catch {
+        current.wrap = null;
+      }
+    }
+    current.placed = packFill(current.shape, current.seeds, settings);
+    placeFills(current);
+    if (run) return applyFill(current, true);
+    buildFillPanel(current);
+  };
+  const applyFill = (current, quiet = false) => {
+    try {
+      finishFill(current, quiet);
+    } catch (error) {
+      if (filling === current) closeFill(current, false);
+      if (quiet) throw error;
+      current.figma.notify("Couldn't fill the shape", { timeout: 2000 });
+    }
+  };
+  const finishFill = (current, quiet) => {
+    const { figma, container, settings } = current;
+    clearTimeout(current.timer);
+    for (const node of current.kept) if (!node.removed) node.remove();
+    const nodes = current.copies.map((copy) => copy.node);
+    let result = current.group ?? current.wrap;
+    if (settings.editable) {
+      const parent = container.parent;
+      if (!result || result.removed) {
+        result = figma.group([container, ...nodes], parent, parent.children.indexOf(container));
+        result.name = `Shape Fill · ${plainName(container.name)}`;
+      } else for (const node of nodes) if (node.parent !== result) result.appendChild(node);
+      container.setSharedPluginData(PLUGIN, ROLE, "source");
+      result.setSharedPluginData(PLUGIN, FILL, JSON.stringify(settings));
+      result.setSharedPluginData(PLUGIN, OFF, "");
+      figma.currentPage.selection = [result];
+    } else {
+      for (const node of nodes) node.setSharedPluginData(PLUGIN, ROLE, "");
+      if (result && !result.removed) {
+        result.setSharedPluginData(PLUGIN, FILL, "");
+        container.setSharedPluginData(PLUGIN, ROLE, "");
+      }
+      if (current.wrap && !current.wrap.removed) figma.ungroup(current.wrap);
+      figma.currentPage.selection = nodes.length ? nodes : [container];
+    }
+    try {
+      figma.commitUndo();
+    } catch {}
+    const count = nodes.length;
+    closeFill(current, true);
+    if (current.group && settings.editable) restackAbove(figma, current.group);
+    if (!quiet) figma.notify(`${count} ${count === 1 ? "copy" : "copies"} placed`, { timeout: 1500 });
+  };
+  const closeFill = (current, applied) => {
+    if (filling !== current) return;
+    filling = null;
+    clearTimeout(current.timer);
+    if (!applied) {
+      for (const copy of current.copies) if (!copy.node.removed) copy.node.remove();
+      for (const node of current.kept) if (!node.removed) node.visible = true;
+      const { home, wrap, container } = current;
+      if (wrap && home && !container.removed && !home.parent.removed) {
+        try {
+          home.parent.insertChild(Math.min(home.index, home.parent.children.length), container);
+          if (!wrap.removed) wrap.remove();
+        } catch {}
+      }
+      try {
+        if (current.group && !current.group.removed && isOff(current.group)) setOff(current.group, true);
+        if (current.group && !current.group.removed) current.figma.currentPage.selection = [current.group];
+        else if (!container.removed) current.figma.currentPage.selection = [container];
+      } catch {}
+    }
+    for (const seed of current.seeds) seed.bitmap?.close?.();
+    current.shape?.bitmap?.close?.();
+    current.panel?.close();
+    current.root?.remove();
+    removeEventListener("keydown", current.keys, true);
+  };
+  // The shape with where each copy goes, drawn with the layers themselves
+  const drawFillPreview = (current) => {
+    const canvas = current.preview;
+    if (!canvas || !current.shape) return;
+    const ratio = devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    const [cw, ch] = [Math.round(box.width * ratio), Math.round(box.height * ratio)];
+    if (canvas.width !== cw || canvas.height !== ch) [canvas.width, canvas.height] = [cw, ch];
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+    const { w, h, bitmap, g } = current.shape;
+    const fit = Math.min((box.width - 24) / w, (box.height - 24) / h);
+    const [ox, oy] = [(box.width - w * fit) / 2, (box.height - h * fit) / 2];
+    context.globalAlpha = 0.25;
+    context.drawImage(bitmap, ox, oy, w * fit, h * fit);
+    context.globalAlpha = 1;
+    for (const spot of current.placed) {
+      const seed = current.seeds[spot.which];
+      if (!seed) continue;
+      // The seed's picture is `size` points across, the shape's `g` pixels a point
+      const across = (seed.w / seed.g) * g * spot.scale * fit;
+      const down = (seed.h / seed.g) * g * spot.scale * fit;
+      context.save();
+      context.translate(ox + spot.x * fit, oy + spot.y * fit);
+      context.rotate((spot.turn * Math.PI) / 180);
+      context.drawImage(seed.bitmap, -across / 2, -down / 2, across, down);
+      context.restore();
+    }
+  };
+  const buildFillPanel = (current) => {
+    const s = current.settings;
+    const unit = Math.max(1, current.shape.box.width, current.shape.box.height);
+    const rows = [];
+    const change = (key, value) => {
+      s[key] = value;
+      refill(current);
+      show();
+    };
+    const slider = makeSlider({ s, unit, rows, change, limits: { margin: [0, 10000], gap: [-1000, 1000], density: [1, 100], most: [1, 2000], size: [1, 2000], variation: [0, 100], angle: [-360, 360], spin: [0, 180] } });
+    const canvas = element("canvas", { className: "preview" });
+    canvas.setAttribute("aria-hidden", "true");
+    current.preview = canvas;
+    const presets = makeChips(FILL_PRESETS, (values) => {
+      Object.assign(s, structuredClone(FILL_DEFAULTS), values(), { seeds: s.seeds, editable: s.editable });
+      refill(current);
+      show();
+    });
+    // The layers it's filled with: each with how often it's used, and a
+    // way to add what's selected
+    const list = element("div", { className: "rows" });
+    const hint = element("div", { className: "row" }, element("span", { className: "label", textContent: "Select layers on the canvas, then add them" }));
+    hint.style.gridTemplateColumns = "1fr";
+    const add = element("button", { type: "button", className: "chip", textContent: "Add selected" });
+    add.addEventListener("click", async () => {
+      const ids = new Set(current.seeds.map((seed) => seed.node.id));
+      const own = new Set([current.container.id, current.wrap?.id, current.group?.id, ...current.copies.map((copy) => copy.node.id)]);
+      const fresh = current.figma.currentPage.selection.filter((node) => !ids.has(node.id) && !own.has(node.id) && "clone" in node);
+      if (!fresh.length) return current.figma.notify("Select layers to fill with first", { timeout: 2000 });
+      try {
+        current.seeds.push(...(await Promise.all(fresh.map((node) => readSeed(node, 1)))));
+      } catch {
+        return current.figma.notify("Couldn't read those layers", { timeout: 2000 });
+      }
+      s.seeds = current.seeds.map((seed) => ({ id: seed.node.id, weight: seed.weight }));
+      shape = "";
+      refill(current);
+      show();
+    });
+    const adding = element("div", { className: "row" }, element("span", { className: "label", textContent: "Fill with" }), element("div", { className: "chips" }, add));
+    adding.style.gridTemplateColumns = "1fr auto";
+    let shape = "";
+    const buildList = () => {
+      shape = current.seeds.map((seed) => seed.node.id).join();
+      list.replaceChildren();
+      current.seeds.forEach((seed, i) => {
+        const look = element("canvas", { width: 32, height: 32 });
+        Object.assign(look.style, { width: "16px", height: "16px" });
+        const context = look.getContext("2d");
+        const fit = Math.min(32 / seed.bitmap.width, 32 / seed.bitmap.height);
+        context.drawImage(seed.bitmap, (32 - seed.bitmap.width * fit) / 2, (32 - seed.bitmap.height * fit) / 2, seed.bitmap.width * fit, seed.bitmap.height * fit);
+        const name = element("span", { className: "label", textContent: seed.node.name });
+        Object.assign(name.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+        const often = element("input", { type: "range", min: 0, max: 100, value: String(Math.round(seed.weight * 50)) });
+        often.setAttribute("aria-label", `How often ${seed.node.name} is used`);
+        often.title = "How often it's used";
+        often.style.width = "72px";
+        often.addEventListener("input", () => {
+          seed.weight = Number(often.value) / 50;
+          s.seeds = current.seeds.map((one) => ({ id: one.node.id, weight: one.weight }));
+          refill(current);
+        });
+        const remove = element("button", { type: "button", className: "icon-button", title: "Remove", innerHTML: REMOVE });
+        remove.addEventListener("click", () => {
+          current.seeds.splice(i, 1);
+          s.seeds = current.seeds.map((one) => ({ id: one.node.id, weight: one.weight }));
+          shape = "";
+          refill(current);
+          show();
+        });
+        const row = list.appendChild(element("div", { className: "row" }, look, name, often, remove));
+        row.style.gridTemplateColumns = "16px 1fr 72px 24px";
+      });
+    };
+    const shapes = element("section", {}, element("div", { className: "caption", textContent: "Shapes" }), list, hint, adding);
+    const fitting = segments(
+      "Fit",
+      [
+        ["inside", "Inside", "Each copy wholly inside the shape"],
+        ["loose", "Loose", "Copies can cross the edge, as if poured in"],
+      ],
+      () => s.fit,
+      (value) => change("fit", value),
+    );
+    const placing = element(
+      "section",
+      {},
+      element("div", { className: "caption", textContent: "Fit" }),
+      element("div", { className: "row" }, element("span", { className: "label", textContent: "Fit" }), fitting),
+      element(
+        "div",
+        { className: "rows" },
+        ...[
+          ["margin", "Margin", "px", (u) => ({ min: 0, max: Math.max(10, Math.round(u * 0.1)), shape: "curve" })],
+          ["gap", "Gap", "px", (u) => ({ min: -Math.max(5, Math.round(u * 0.03)), max: Math.max(10, Math.round(u * 0.08)) })],
+          ["density", "Density", "%", () => ({ min: 1, max: 100 })],
+          ["most", "Most copies", "", () => ({ min: 1, max: 1000, shape: "curve" })],
+        ].map(slider),
+      ),
+    );
+    const sizing = element(
+      "section",
+      {},
+      element("div", { className: "caption", textContent: "Size and turn" }),
+      element(
+        "div",
+        { className: "rows" },
+        ...[
+          ["size", "Size", "%", () => ({ min: 5, max: 400, middle: 100 })],
+          ["variation", "Size varies", "%", () => ({ min: 0, max: 100 })],
+          ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+          ["spin", "Angle varies", "°", () => ({ min: 0, max: 180 })],
+        ].map(slider),
+      ),
+    );
+    const shuffle = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
+    shuffle.addEventListener("click", () => change("seed", Math.floor(Math.random() * 65536)));
+    const shuffleRow = element("div", { className: "row" }, element("span", { className: "label", textContent: "Layout" }), shuffle);
+    shuffle.style.gridColumn = "span 2";
+    shuffle.style.justifySelf = "start";
+    sizing.append(shuffleRow);
+    const editable = element("input", { type: "checkbox" });
+    editable.addEventListener("change", () => change("editable", editable.checked));
+    const result = element("section", {}, checkRow("Keep editable", editable, "The shape kept in a group Shape Fill can change later, the copies made again then"));
+    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => {
+      Object.assign(s, structuredClone(FILL_DEFAULTS), { seeds: s.seeds, editable: s.editable });
+      refill(current);
+      show();
+    });
+    const scroll = element("div", { className: "scroll" }, presets, shapes, placing, sizing, result, element("div", { className: "under" }, reset));
+    const name = element("div", { className: "source", textContent: current.container.name });
+    const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
+    cancel.addEventListener("click", () => closeFill(current, false));
+    const go = element("button", { type: "button", className: "button primary" });
+    go.addEventListener("click", () => applyFill(current));
+    const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
+    const root = makePanel(current.group ? `Shape Fill · ${plainName(current.container.name)}` : "Shape Fill", () => closeFill(current, false), canvas, scroll, footer);
+    const show = () => {
+      if (shape !== current.seeds.map((seed) => seed.node.id).join()) buildList();
+      hint.hidden = current.seeds.length > 0;
+      fitting.show();
+      for (const row of rows) row.show();
+      editable.checked = s.editable;
+      const count = current.placed.length;
+      go.textContent = current.group ? "Update" : `Place ${count} ${count === 1 ? "copy" : "copies"}`;
+      go.disabled = !count;
+      drawFillPreview(current);
+    };
+    show();
+    current.root = root;
+    current.panel = { show, close: () => {} };
+    current.keys = panelKeys(root, () => filling === current, () => closeFill(current, false), () => applyFill(current));
+    addEventListener("keydown", current.keys, true);
+    go.focus();
+  };
+  // Its tile: stars packed into a heart
+  const fillThumb = () => {
+    const [tile, g] = canvas2d();
+    g.fillStyle = "#fbf3f8";
+    g.fillRect(0, 0, THUMB, THUMB);
+    const star = (x, y, r, turn, color) => {
+      g.fillStyle = color;
+      g.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = turn + (i / 10) * Math.PI * 2 - Math.PI / 2;
+        const d = i % 2 ? r * 0.45 : r;
+        g.lineTo(x + Math.cos(a) * d, y + Math.sin(a) * d);
+      }
+      g.fill();
+    };
+    // A heart, as the shape the stars are packed into
+    const heart = (x, y) => {
+      const u = (x - 80) / 52;
+      const v = (76 - y) / 52;
+      return (u * u + v * v - 1) ** 3 - u * u * v * v * v < 0;
+    };
+    const placed = [];
+    for (let i = 0; i < 2400 && placed.length < 90; i++) {
+      const x = 14 + hash2(i, 1, 9) * 132;
+      const y = 14 + hash2(i, 2, 9) * 132;
+      const r = 14 - (i / 2400) * 10;
+      if (!heart(x, y) || !heart(x + r * 0.6, y) || !heart(x - r * 0.6, y) || !heart(x, y + r * 0.6) || !heart(x, y - r * 0.6)) continue;
+      if (placed.some(([px, py, pr]) => Math.hypot(px - x, py - y) < (pr + r) * 0.62)) continue;
+      placed.push([x, y, r]);
+      star(x, y, r, hash2(i, 3, 9) * 3, hash2(i, 4, 9) > 0.3 ? "#f28ad6" : "#2a1f2d");
+    }
+    return tile;
+  };
+  EFFECTS.push({
+    id: FILL,
+    name: "Shape Fill",
+    about: "Fill a shape with copies of other layers",
+    icon: FILL_ICON,
+    of: (node) => fillOf(node),
+    saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, FILL) || "{}"),
+    summary: (s) => `${(s.seeds ?? []).length} ${(s.seeds ?? []).length === 1 ? "layer" : "layers"} · ${s.fit === "loose" ? "Loose" : "Inside"}`,
+    open: guarded((figma, edit, run) => openFill(figma, edit, run)),
+    thumb: () => fillThumb(),
+  });
+
   // ---------- Ligma effects in the right panel ----------
 
   // Under Figma's own Effects, drawn as they are but apart from them, the
@@ -7361,7 +9444,7 @@ const PAGE_JS: &str = r##"(() => {
   // the old stack shows until the new one's made
   let restacking = false;
   const restack = async (figma, outer, base, layers) => {
-    if (restacking || repeating || disintegrating || crushing || filtering) return;
+    if (restacking || repeating || disintegrating || crushing || filtering || filling) return;
     restacking = true;
     showSection();
     const parent = outer.parent;
