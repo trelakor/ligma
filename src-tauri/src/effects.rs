@@ -2852,6 +2852,44 @@ const PAGE_JS: &str = r##"(() => {
     if (!current.source.removed) current.source.visible = false;
   };
 
+  // The layer as a picture for an effect: a small one first, quick to
+  // read, for the panel and the file while it's changed, so the panel
+  // shows at once (`opened`), then one as large as an image can be in
+  // Figma, for applying. Made again for a stack, the picture the effect
+  // under it just made is used as it is, or the full one alone is read, as
+  // there's no panel. False if the effect closed meanwhile
+  const readPictures = async (current, figma, source, run, alive, opened) => {
+    if (run && handedOn && handedOn.node === source && !source.removed) {
+      const { canvas, bounds } = handedOn;
+      current.bounds = bounds;
+      current.bitmap = canvas;
+      const k = canvas.width / bounds.width;
+      current.levels = { preview: scaledPicture(canvas, 360, k), live: scaledPicture(canvas, QUICK, k) };
+      return true;
+    }
+    const reader = pictureReader(figma, source);
+    try {
+      current.bounds = reader.bounds;
+      const side = Math.max(1, current.bounds.width, current.bounds.height);
+      if (!run) {
+        const quick = await reader.read(Math.min(2, QUICK / side));
+        if (!alive()) return false;
+        const k = quick.width / current.bounds.width;
+        current.levels = { preview: scaledPicture(quick, 360, k), live: scaledPicture(quick, QUICK, k) };
+        quick.close?.();
+        opened();
+      }
+      current.bitmap = await reader.read(Math.min(2, MAX_SIDE / 2 / side));
+      if (run) {
+        const k = current.bitmap.width / current.bounds.width;
+        current.levels = { preview: scaledPicture(current.bitmap, 360, k), live: scaledPicture(current.bitmap, QUICK, k) };
+      }
+      return alive();
+    } finally {
+      reader.done();
+    }
+  };
+
   const disintegrateOf = (node) => {
     try {
       return node?.type === "GROUP" && node.getSharedPluginData(PLUGIN, DISINTEGRATE) ? node : null;
@@ -2910,27 +2948,17 @@ const PAGE_JS: &str = r##"(() => {
     try {
       figma.commitUndo();
     } catch {}
-    // The layer as a picture: a small one first, quick to read, for the
-    // panel's preview and the file while it's changed, so the panel shows
-    // at once, then one as large as an image can be in Figma, for applying.
-    const reader = pictureReader(figma, source);
-    const { read } = reader;
     try {
-      current.bounds = reader.bounds;
-      const side = Math.max(1, current.bounds.width, current.bounds.height);
-      const quick = await read(Math.min(2, QUICK / side));
-      if (disintegrating !== current) return reader.done();
-      const k = quick.width / current.bounds.width;
-      current.levels = { preview: scaledPicture(quick, 360, k), live: scaledPicture(quick, QUICK, k) };
-      quick.close?.();
-      if (!run) {
+      const read = await readPictures(current, figma, source, run, () => disintegrating === current, () => {
         buildDisintegratePanel(current);
         refreshDisintegrate(current);
+      });
+      if (!read) return;
+    } catch (error) {
+      if (run) {
+        if (disintegrating === current) disintegrating = null;
+        throw error;
       }
-      current.bitmap = await read(Math.min(2, MAX_SIDE / 2 / side));
-      reader.done();
-    } catch {
-      reader.done();
       if (disintegrating === current) {
         current.root?.remove();
         removeEventListener("keydown", current.keys, true);
@@ -3130,7 +3158,8 @@ const PAGE_JS: &str = r##"(() => {
       if (!current.ready && (disintegrating !== current && crushing !== current)) return;
     }
     current.again = false;
-    await placeDrawn(current, await renderFully(current), current.levels.full.k);
+    const made = await renderFully(current);
+    await placeDrawn(current, made, current.levels.full.k);
     if (disintegrating !== current) return;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
@@ -3143,6 +3172,11 @@ const PAGE_JS: &str = r##"(() => {
       result.setSharedPluginData(PLUGIN, DISINTEGRATE, JSON.stringify(settings));
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
+      // For the next effect up a stack being made again
+      if (current.run && made) {
+        const k = current.levels.full.k;
+        handedOn = { node: result, canvas: made.canvas, bounds: { x: current.bounds.x + made.x / k, y: current.bounds.y + made.y / k, width: made.width / k, height: made.height / k } };
+      }
     } else {
       // Only the image, the original gone
       current.result.setSharedPluginData(PLUGIN, ROLE, "");
@@ -3786,27 +3820,17 @@ const PAGE_JS: &str = r##"(() => {
     try {
       figma.commitUndo();
     } catch {}
-    // The layer as a picture: a small one first, quick to read, for the
-    // panel's preview and the file while it's changed, so the panel shows
-    // at once, then one as large as an image can be in Figma, for applying.
-    const reader = pictureReader(figma, source);
-    const { read } = reader;
     try {
-      current.bounds = reader.bounds;
-      const side = Math.max(1, current.bounds.width, current.bounds.height);
-      const quick = await read(Math.min(2, QUICK / side));
-      if (crushing !== current) return reader.done();
-      const k = quick.width / current.bounds.width;
-      current.levels = { preview: scaledPicture(quick, 360, k), live: scaledPicture(quick, QUICK, k) };
-      quick.close?.();
-      if (!run) {
+      const read = await readPictures(current, figma, source, run, () => crushing === current, () => {
         buildBitcrushPanel(current);
         refreshBitcrush(current);
+      });
+      if (!read) return;
+    } catch (error) {
+      if (run) {
+        if (crushing === current) crushing = null;
+        throw error;
       }
-      current.bitmap = await read(Math.min(2, MAX_SIDE / 2 / side));
-      reader.done();
-    } catch {
-      reader.done();
       if (crushing === current) {
         current.root?.remove();
         removeEventListener("keydown", current.keys, true);
@@ -3898,7 +3922,8 @@ const PAGE_JS: &str = r##"(() => {
       if (!current.ready && (disintegrating !== current && crushing !== current)) return;
     }
     current.again = false;
-    await placeDrawn(current, await crushAt(current, "full"), current.levels.full.k);
+    const made = await crushAt(current, "full");
+    await placeDrawn(current, made, current.levels.full.k);
     if (crushing !== current) return;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
@@ -3911,6 +3936,11 @@ const PAGE_JS: &str = r##"(() => {
       result.setSharedPluginData(PLUGIN, BITCRUSH, JSON.stringify(settings));
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
+      // For the next effect up a stack being made again
+      if (current.run && made) {
+        const k = current.levels.full.k;
+        handedOn = { node: result, canvas: made.canvas, bounds: { x: current.bounds.x + made.x / k, y: current.bounds.y + made.y / k, width: made.width / k, height: made.height / k } };
+      }
     } else {
       // Only the image, the original gone
       current.result.setSharedPluginData(PLUGIN, ROLE, "");
@@ -4209,6 +4239,9 @@ const PAGE_JS: &str = r##"(() => {
   `;
 
   let filtering = null;
+  // While a stack's made again: the picture the last effect made and where
+  // it sits, and the group it's in, for the next effect up to start from
+  let handedOn = null;
   let filterJob = 0;
   const filterOf = (spec, node) => {
     try {
@@ -4235,47 +4268,73 @@ const PAGE_JS: &str = r##"(() => {
   // panel's preview, one for the file and one for painting, so a small
   // picture never waits behind a large one. A picture for the file's
   // encoded as a PNG there too, rather than in the page
-  const filterWorker = (current, slot = "live") =>
-    ((current.workers ??= {})[slot] ??= new Promise((resolve) => {
-      let ready = false;
-      let worker = null;
-      current.jobs ??= new Map();
-      const fail = () => {
-        if (ready) return;
-        ready = true;
-        worker?.terminate();
-        resolve(null);
-      };
-      try {
-        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `const pictures = {};`, `onmessage = async ({ data: { id, level, image, s, k, png, patch } }) => {`, `  try {`, `    if (image) pictures[level] = image;`, `    const made = process(pictures[level], s, k, patch);`, `    let bytes = null;`, `    if (png && typeof OffscreenCanvas !== "undefined") {`, `      try {`, `        const canvas = new OffscreenCanvas(made.image.width, made.image.height);`, `        canvas.getContext("2d").putImageData(made.image, 0, 0);`, `        bytes = await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();`, `      } catch {}`, `    }`, `    postMessage({ id, out: made.image, x: made.x, y: made.y, bytes, patch: made.patch, empty: made.empty, px: made.px, py: made.py }, bytes ? [made.image.data.buffer, bytes] : [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
-        const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-        worker = new Worker(url);
-        worker.onmessage = ({ data }) => {
-          if (data.ready) {
-            ready = true;
-            URL.revokeObjectURL(url);
-            return resolve(worker);
-          }
-          const job = current.jobs.get(data.id);
-          current.jobs.delete(data.id);
-          if (data.error) job?.reject(new Error(data.error));
-          else job?.resolve({ image: data.out, x: data.x, y: data.y, bytes: data.bytes, patch: data.patch, empty: data.empty, px: data.px, py: data.py });
+  // Workers kept for each effect and slot between uses, as starting one
+  // takes a moment, and a stack made again uses one effect after another:
+  // the pictures they keep are let go when an effect closes, and a worker
+  // not used for a minute is stopped
+  const filterPool = new Map();
+  const filterWorker = (current, slot = "live") => {
+    const { spec } = current;
+    const key = `${spec.id}:${slot}`;
+    let entry = filterPool.get(key);
+    if (!entry) {
+      entry = { jobs: new Map() };
+      entry.worker = new Promise((resolve) => {
+        let ready = false;
+        let worker = null;
+        const fail = () => {
+          if (ready) return;
+          ready = true;
+          worker?.terminate();
+          filterPool.delete(key);
+          resolve(null);
         };
-        worker.onerror = (event) => {
-          event.preventDefault();
-          for (const job of current.jobs.values()) job.reject(new Error("Worker failed"));
-          current.jobs.clear();
+        try {
+          const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${spec.process};`, `const pictures = {};`, `onmessage = async ({ data: { id, level, image, s, k, png, patch, clear } }) => {`, `  if (clear) {`, `    for (const key in pictures) delete pictures[key];`, `    return;`, `  }`, `  try {`, `    if (image) pictures[level] = image;`, `    const made = process(pictures[level], s, k, patch);`, `    let bytes = null;`, `    if (png && typeof OffscreenCanvas !== "undefined") {`, `      try {`, `        const canvas = new OffscreenCanvas(made.image.width, made.image.height);`, `        canvas.getContext("2d").putImageData(made.image, 0, 0);`, `        bytes = await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();`, `      } catch {}`, `    }`, `    postMessage({ id, out: made.image, x: made.x, y: made.y, bytes, patch: made.patch, empty: made.empty, px: made.px, py: made.py }, bytes ? [made.image.data.buffer, bytes] : [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
+          const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+          worker = new Worker(url);
+          worker.onmessage = ({ data }) => {
+            if (data.ready) {
+              ready = true;
+              URL.revokeObjectURL(url);
+              return resolve(worker);
+            }
+            const job = entry.jobs.get(data.id);
+            entry.jobs.delete(data.id);
+            if (data.error) job?.reject(new Error(data.error));
+            else job?.resolve({ image: data.out, x: data.x, y: data.y, bytes: data.bytes, patch: data.patch, empty: data.empty, px: data.px, py: data.py });
+          };
+          worker.onerror = (event) => {
+            event.preventDefault();
+            for (const job of entry.jobs.values()) job.reject(new Error("Worker failed"));
+            entry.jobs.clear();
+            fail();
+          };
+          setTimeout(fail, 2000);
+        } catch {
           fail();
-        };
-        setTimeout(fail, 2000);
-      } catch {
-        fail();
-      }
-    }));
+        }
+      });
+      filterPool.set(key, entry);
+    }
+    clearTimeout(entry.idle);
+    (current.pooled ??= new Set()).add(entry);
+    return entry.worker;
+  };
   const stopFilterWorker = (current) => {
-    for (const worker of Object.values(current.workers ?? {})) worker.then((worker) => worker?.terminate());
-    for (const job of current.jobs?.values() ?? []) job.reject(new Error("Worker stopped"));
-    current.jobs?.clear();
+    for (const entry of current.pooled ?? []) {
+      for (const [id, job] of entry.jobs)
+        if (job.owner === current) {
+          job.reject(new Error("Worker stopped"));
+          entry.jobs.delete(id);
+        }
+      entry.worker.then((worker) => worker?.postMessage({ clear: true }));
+      clearTimeout(entry.idle);
+      entry.idle = setTimeout(() => {
+        for (const [key, one] of filterPool) if (one === entry) filterPool.delete(key);
+        entry.worker.then((worker) => worker?.terminate());
+      }, 60000);
+    }
   };
 
   // What a pixel function made, as `drawBroken` gives its own: a canvas,
@@ -4339,7 +4398,9 @@ const PAGE_JS: &str = r##"(() => {
       try {
         made = await new Promise((resolve, reject) => {
           const id = ++filterJob;
-          current.jobs.set(id, { resolve, reject });
+          const jobs = filterPool.get(`${current.spec.id}:${slot}`)?.jobs;
+          if (!jobs) return reject(new Error("No worker"));
+          jobs.set(id, { resolve, reject, owner: current });
           worker.postMessage({ id, level: key, image: sent.has(key) ? null : image, s, k: entry.k, png, patch });
           sent.add(key);
         });
@@ -4940,32 +5001,21 @@ const PAGE_JS: &str = r##"(() => {
     try {
       figma.commitUndo();
     } catch {}
-    // A small picture first, for the panel and the file while it's
-    // changed, then the full one, for applying, as Bitcrush reads them
-    const reader = pictureReader(figma, source);
     try {
-      current.bounds = reader.bounds;
-      const side = Math.max(1, current.bounds.width, current.bounds.height);
-      const quick = await reader.read(Math.min(2, QUICK / side));
-      if (filtering !== current) return reader.done();
-      const k = quick.width / current.bounds.width;
-      current.levels = { preview: scaledPicture(quick, 360, k), live: scaledPicture(quick, QUICK, k) };
-      quick.close?.();
-      if (!run) {
+      const read = await readPictures(current, figma, source, run, () => filtering === current, () => {
         buildFilterPanel(current);
         refreshFilter(current);
-      }
-      current.bitmap = await reader.read(Math.min(2, MAX_SIDE / 2 / side));
-      reader.done();
-    } catch {
-      reader.done();
+      });
+      if (!read) return;
+    } catch (error) {
       if (filtering === current) {
         current.root?.remove();
         removeEventListener("keydown", current.keys, true);
         stopFilterWorker(current);
         filtering = null;
-        figma.notify("Couldn't read the layer", { timeout: 2000 });
+        if (!run) figma.notify("Couldn't read the layer", { timeout: 2000 });
       }
+      if (run) throw error;
       return;
     }
     if (filtering !== current) return;
@@ -5050,7 +5100,8 @@ const PAGE_JS: &str = r##"(() => {
       if (filtering !== current) return;
     }
     current.again = false;
-    await placeDrawn(current, await filterAt(current, "full", true), current.levels.full.k);
+    const made = await filterAt(current, "full", true);
+    await placeDrawn(current, made, current.levels.full.k);
     current.unpaint();
     if (filtering !== current) return;
     let result = current.group ?? current.wrap;
@@ -5064,6 +5115,11 @@ const PAGE_JS: &str = r##"(() => {
       result.setSharedPluginData(PLUGIN, spec.id, JSON.stringify(settings));
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
+      // For the next effect up a stack being made again
+      if (current.run && made) {
+        const k = current.levels.full.k;
+        handedOn = { node: result, canvas: made.canvas, bounds: { x: current.bounds.x + made.x / k, y: current.bounds.y + made.y / k, width: made.width / k, height: made.height / k } };
+      }
     } else {
       current.result.setSharedPluginData(PLUGIN, ROLE, "");
       if (result && !result.removed) result.setSharedPluginData(PLUGIN, spec.id, "");
@@ -9907,6 +9963,7 @@ const PAGE_JS: &str = r##"(() => {
       figma.notify("Couldn't change the effects", { timeout: 2000 });
     }
     restacking = false;
+    handedOn = null;
     sectionKey = "";
     showSection();
   };
