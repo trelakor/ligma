@@ -381,7 +381,9 @@
 
   // What's behind Figma's canvas made transparent, but for a backing of the
   // page's own background everywhere else, so the tab shows Ligma's layer
-  // only where the canvas is
+  // only where the canvas is. The backing is four strips of plain color
+  // around the canvas, which Chrome keeps no pixels for. One layer the size
+  // of the window with the canvas cut out of it took 30 MB of video memory
   const STYLE = "ligma-native-under";
   let watcher = null;
   const hole = () => {
@@ -390,17 +392,22 @@
     if (!canvas || !style) return;
     const r = canvas.getBoundingClientRect();
     const [w, h] = [innerWidth, innerHeight];
+    const strip = (selector, left, top, width, height) => `
+      ${selector} {
+        content: ""; position: fixed; z-index: -1; pointer-events: none;
+        background: var(--color-bg, #2c2c2c);
+        left: ${left}px; top: ${top}px; width: ${Math.max(0, width)}px; height: ${Math.max(0, height)}px;
+      }`;
     // Over the panels' color appearance.rs gives them (its `SEAM`)
     style.textContent = `
       html > body:has(.gpu-view-content), html .gpu-view-content, html .gpu-view-content > canvas {
         background-color: transparent !important; background-image: none !important;
       }
       html .gpu-view-content > canvas { opacity: 0 !important; }
-      body::before {
-        content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
-        background: var(--color-bg, #2c2c2c);
-        clip-path: path(evenodd, "M0 0H${w}V${h}H0Z M${r.left} ${r.top}H${r.right}V${r.bottom}H${r.left}Z");
-      }`;
+      ${strip("html::before", 0, 0, w, r.top)}
+      ${strip("html::after", 0, r.bottom, w, h - r.bottom)}
+      ${strip("body::before", 0, r.top, r.left, r.height)}
+      ${strip("body::after", r.right, r.top, w - r.right, r.height)}`;
   };
   const under = (on) => {
     document.getElementById(STYLE)?.remove();
