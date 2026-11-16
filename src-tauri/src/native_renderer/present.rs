@@ -459,7 +459,10 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
     let place = |layer: &Layer| {
         let same = layer.px == px;
         let unstretched = sx == 1.0 && sy == 1.0;
-        let square = (same && unstretched && at_phase(layer)) || (preview && layer.px == drawn && unstretched);
+        // A preview's pixels stay squares however the browser stretches its
+        // canvas, which at a display scale like 120% is by a pixel or two
+        // and would otherwise blur them all
+        let square = (same && unstretched && at_phase(layer)) || (preview && layer.px == drawn);
         let dest = if same && square {
             Rect::from_xywh((layer.x - fx) as f32, (layer.y - fy) as f32, layer.tex.width as f32, layer.tex.height as f32)
         } else {
