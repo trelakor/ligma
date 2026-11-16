@@ -481,6 +481,11 @@ impl Timeline {
                 }
             }
         }
+        // Figma makes a frame for each input it handles, then sends those it
+        // made together: one moment, of which the latest is what's shown
+        if self.frames.back().is_some_and(|last| frame.at - last.at < 0.5) {
+            self.frames.pop_back();
+        }
         let at = frame.at;
         self.frames.push_back(frame);
         while self.frames.len() > 2 && self.frames.front().is_some_and(|first| at - first.at > 250.0) {
