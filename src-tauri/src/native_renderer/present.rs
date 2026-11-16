@@ -448,7 +448,8 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
                 // showed first: another, older or never shown, would show
                 // the view other than it just was for a frame
                 (LayerKind::Stale, _) => (if shown.contains(&(Arc::as_ptr(&layer.tex) as usize)) { 1.3 } else { 1.6 }) + distance(layer.px),
-                (LayerKind::Old, _) => 4.0 + distance(layer.px),
+                // Under all up to date, however coarse
+                (LayerKind::Old, _) => 100.0 + distance(layer.px),
                 _ => 2.0 + distance(layer.px),
             };
             (if i >= behind { rank + 1000.0 } else { rank }, i)
