@@ -2,6 +2,8 @@
 
 The Effects button in Figma Design's toolbar, after Actions, lists effects Ligma makes right in the file (`src-tauri/src/effects.rs`). This is how they're built.
 
+The library opens with a search field, which matches effects' names and descriptions, then a grid of tiles, four to a row, each a picture of its effect over its name. Arrow keys move through the tiles and typing anywhere searches. The pictures are made by the effects themselves, the first time the library opens, on samples drawn to show each best: a sunset for the dithers and Bitcrush, rings for Chromatic Aberration, checks for Fisheye and a pawn on a floor or on water for Shadow and Reflection. A picture effect's `thumb` names its sample, backdrop and settings. Room's left under the search for category tabs.
+
 ## How effects work
 
 - **No plugins.** Ligma's page script runs in Figma's page, where Figma's console plugin API, `window.figma`, works on the open file. Effects call it directly, so there's no plugin window, no plugin sandbox, no network and no paywall. The API exists only in files that can be edited, so the button only shows there.

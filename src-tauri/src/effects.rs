@@ -72,6 +72,7 @@ const PAGE_JS: &str = r##"(() => {
   const BITCRUSH_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M9.5 4.5h5v2h2v2h2v7h-2v2h-2v2h-5v-2h-2v-2h-2v-7h2v-2h2z"/><path ${STROKE} d="M10.5 10.5h2v2h-2z"/></svg>`;
   const CHEVRON = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m5.5 7 2.5 2.5L10.5 7"/></svg>`;
   const CLOSE = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m8 8 8 8m0-8-8 8"/></svg>`;
+  const SEARCH = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="11" cy="11" r="4.5"/><path ${STROKE} d="m14.5 14.5 3.5 3.5"/></svg>`;
   const CHECK = `<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path ${STROKE} d="m4.5 8.5 2.5 2.5 4.5-5.5"/></svg>`;
 
   const style = document.createElement("style");
@@ -87,19 +88,59 @@ const PAGE_JS: &str = r##"(() => {
     }
     [${ROOT}] * { box-sizing: border-box; }
     [${ROOT}] button { font: inherit; color: inherit; }
-    /* The library, as Figma's menus are */
+    /* The library: a search field, then every effect as a tile, a
+       picture of it at work over its name, in Figma's menu colors */
     [${ROOT}="menu"] {
       position: fixed;
       z-index: 9;
-      width: 240px;
-      padding: 8px;
+      width: 368px;
+      max-height: calc(100vh - 16px);
+      display: flex;
+      flex-direction: column;
       border-radius: var(--radius-large, 13px);
       background: var(--color-bg-menu, #1e1e1e);
       color: var(--color-text-menu, #fff);
       box-shadow: var(--elevation-500);
+      overflow: hidden;
+    }
+    [${ROOT}="menu"] .top { flex: none; padding: 8px 8px 4px; }
+    [${ROOT}="menu"] .search {
+      display: flex;
+      align-items: center;
+      height: 32px;
+      padding: 0 8px 0 3px;
+      border: 1px solid var(--color-border-menu, #383838);
+      border-radius: 8px;
+      color: var(--color-text-menu-secondary, #ffffffb2);
+    }
+    [${ROOT}="menu"] .search:focus-within { border-color: var(--color-border-selected, #0d99ff); }
+    [${ROOT}="menu"] .search svg { flex: none; }
+    [${ROOT}="menu"] .search svg [stroke] { stroke: currentColor; }
+    [${ROOT}="menu"] .search input {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      padding: 0 0 0 2px;
+      border: 0;
+      background: none;
+      outline: 0;
+      font: inherit;
+      font-size: 13px;
+      color: var(--color-text-menu, #fff);
+      caret-color: var(--color-border-selected, #0d99ff);
+    }
+    [${ROOT}="menu"] .search input::placeholder { color: var(--color-text-menu-secondary, #ffffffb2); }
+    [${ROOT}="menu"] .search input::-webkit-search-cancel-button { display: none; }
+    [${ROOT}="menu"] .body {
+      flex: 1;
+      min-height: 0;
+      padding: 4px 8px 8px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #ffffff33 transparent;
     }
     [${ROOT}="menu"] .separator { height: 1px; margin: 8px -8px; background: var(--color-border-menu, #383838); }
-    [${ROOT}="menu"] .heading { padding: 0 8px; height: 24px; display: flex; align-items: center; color: var(--color-text-menu-secondary, #ffffffb2); }
+    [${ROOT}="menu"] .heading { padding: 0 4px; height: 24px; display: flex; align-items: center; color: var(--color-text-menu-secondary, #ffffffb2); }
     [${ROOT}="menu"] .item {
       display: grid;
       grid-template-columns: 24px 1fr;
@@ -117,7 +158,39 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}="menu"] .item svg [stroke] { stroke: currentColor; }
     [${ROOT}="menu"] .item .name { font-weight: 500; }
     [${ROOT}="menu"] .item .about { color: var(--color-text-menu-secondary, #ffffffb2); }
-    [${ROOT}="menu"] .item:hover .about { color: inherit; }
+    [${ROOT}="menu"] .item:hover .about, [${ROOT}="menu"] .item:focus-visible .about { color: inherit; }
+    [${ROOT}="menu"] .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+    [${ROOT}="menu"] .tile {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      padding: 4px 4px 6px;
+      border: 0;
+      border-radius: 8px;
+      background: none;
+      text-align: center;
+      cursor: default;
+    }
+    [${ROOT}="menu"] .tile[hidden] { display: none; }
+    [${ROOT}="menu"] .tile:hover { background: var(--color-bg-menu-hover, #ffffff14); }
+    [${ROOT}="menu"] .tile:focus-visible { outline: 2px solid var(--color-border-selected, #0d99ff); outline-offset: -2px; }
+    [${ROOT}="menu"] .tile .picture {
+      position: relative;
+      display: block;
+      aspect-ratio: 1;
+      border-radius: 6px;
+      background: #ffffff0f;
+      overflow: hidden;
+    }
+    [${ROOT}="menu"] .tile .picture::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px #ffffff1a; pointer-events: none; }
+    [${ROOT}="menu"] .tile canvas { display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+    [${ROOT}="menu"] .tile canvas.drawn { opacity: 1; }
+    [${ROOT}="menu"] .tile .name { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 14px; overflow-wrap: anywhere; }
+    [${ROOT}="menu"] .empty { padding: 24px 8px; text-align: center; color: var(--color-text-menu-secondary, #ffffffb2); }
+    @media (prefers-reduced-motion: reduce) {
+      [${ROOT}="menu"] .tile canvas { transition: none; }
+    }
     /* An effect's panel: a preview up top, then labeled sliders, in
        Figma's colors and type */
     [${ROOT}="panel"] {
@@ -328,6 +401,7 @@ const PAGE_JS: &str = r##"(() => {
       saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, SETTINGS) || "{}"),
       summary: (s) => (s.mode === "grid" ? `Grid · ${s.columns} × ${s.rows}` : `${s.mode === "radial" ? "Radial" : "Trail"} · ${s.copies} ${s.copies === 1 ? "copy" : "copies"}`),
       open: guarded((figma, edit, run) => openRepeater(figma, edit, run)),
+      thumb: () => repeaterThumb(),
     },
     {
       id: "disintegrate",
@@ -338,6 +412,7 @@ const PAGE_JS: &str = r##"(() => {
       saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE) || "{}"),
       summary: (s) => `${s.mode === "snap" ? "Snap" : "Shatter"} · ${s.pieces} pieces`,
       open: guarded((figma, edit, run) => openDisintegrate(figma, edit, run)),
+      thumb: () => disintegrateThumb(),
     },
     {
       id: "bitcrush",
@@ -348,6 +423,7 @@ const PAGE_JS: &str = r##"(() => {
       saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, BITCRUSH) || "{}"),
       summary: (s) => `${s.pixelSize}pt · ${s.bitDepth}-bit`,
       open: guarded((figma, edit, run) => openBitcrush(figma, edit, run)),
+      thumb: () => bitcrushThumb(),
     },
   ];
 
@@ -369,15 +445,19 @@ const PAGE_JS: &str = r##"(() => {
 
   let menu = null;
   const button = () => document.querySelector(`[${BUTTON}]`);
+  let menuKeys = null;
   const closeMenu = () => {
     menu?.remove();
     menu = null;
     button()?.setAttribute("aria-expanded", "false");
     removeEventListener("pointerdown", outsideMenu, true);
+    if (menuKeys) removeEventListener("keydown", menuKeys, true);
+    menuKeys = null;
   };
   const outsideMenu = (event) => {
     if (menu && !menu.contains(event.target) && !button()?.contains(event.target)) closeMenu();
   };
+  const COLUMNS = 4;
   const openMenu = (from = null) => {
     const figma = api();
     const anchor = from ?? button();
@@ -398,36 +478,323 @@ const PAGE_JS: &str = r##"(() => {
     const applied = figma.currentPage.selection.length === 1 ? EFFECTS.find((effect) => effect.of(only)) : null;
     menu = document.createElement("div");
     menu.setAttribute(ROOT, "menu");
-    menu.setAttribute("role", "menu");
+    menu.setAttribute("role", "dialog");
     menu.setAttribute("aria-label", "Effects");
-    menu.innerHTML = "";
-    const item = (icon, name, about, run) => {
-      const button = menu.appendChild(document.createElement("button"));
-      button.type = "button";
-      button.className = "item";
-      button.setAttribute("role", "menuitem");
-      button.innerHTML = `${icon}<span class="name">${name}</span><span class="about">${about}</span>`;
-      button.addEventListener("click", () => {
-        closeMenu();
-        run();
-      });
+    // Tabs for categories go under the search, in `top`, once there are
+    // enough effects to sort
+    const top = menu.appendChild(element("div", { className: "top" }));
+    const search = top.appendChild(element("label", { className: "search", innerHTML: SEARCH }));
+    const input = search.appendChild(element("input", { type: "search", placeholder: "Search effects", spellcheck: false, autocomplete: "off" }));
+    input.setAttribute("aria-label", "Search effects");
+    const body = menu.appendChild(element("div", { className: "body" }));
+    const pick = (run) => () => {
+      closeMenu();
+      run();
     };
+    let editing = null;
     if (applied) {
-      menu.insertAdjacentHTML("beforeend", `<div class="heading">This layer</div>`);
-      item(applied.icon, `Edit ${applied.name}`, "Change the effect already applied", () => applied.open(figma, true));
-      menu.insertAdjacentHTML("beforeend", `<div class="separator"></div><div class="heading">Add an effect on top</div>`);
-    } else {
-      menu.insertAdjacentHTML("beforeend", `<div class="heading">Effects</div>`);
+      editing = body.appendChild(element("div"));
+      const item = element("button", { type: "button", className: "item", innerHTML: `${applied.icon}<span class="name">Edit ${applied.name}</span><span class="about">Change the effect already applied</span>` });
+      item.addEventListener("click", pick(() => applied.open(figma, true)));
+      editing.append(element("div", { className: "heading", textContent: "This layer" }), item, element("div", { className: "separator" }), element("div", { className: "heading", textContent: "Add an effect on top" }));
     }
-    for (const effect of EFFECTS) item(effect.icon, effect.name, effect.about, () => effect.open(figma, false));
+    const grid = body.appendChild(element("div", { className: "grid" }));
+    const empty = body.appendChild(element("div", { className: "empty", textContent: "No effects match", hidden: true }));
+    const tiles = EFFECTS.map((effect) => {
+      const canvas = element("canvas", { width: THUMB, height: THUMB });
+      canvas.setAttribute("aria-hidden", "true");
+      const tile = grid.appendChild(element("button", { type: "button", className: "tile", title: effect.about }, element("span", { className: "picture" }, canvas), element("span", { className: "name", textContent: effect.name })));
+      tile.addEventListener("click", pick(() => effect.open(figma, false)));
+      return { effect, tile, canvas, text: `${effect.name} ${effect.about}`.toLowerCase() };
+    });
+    const shown = () => tiles.filter(({ tile }) => !tile.hidden).map(({ tile }) => tile);
+    const editItem = () => (editing && !editing.hidden ? editing.querySelector(".item") : null);
+    input.addEventListener("input", () => {
+      const words = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      for (const { tile, text } of tiles) tile.hidden = !words.every((word) => text.includes(word));
+      if (editing) editing.hidden = words.length > 0;
+      empty.hidden = shown().length > 0;
+    });
+    // Arrows move through the tiles a row of four at a time, up from the
+    // first row to the search, and typing anywhere searches
+    menu.addEventListener("keydown", (event) => {
+      // Figma's shortcuts don't hear keys typed here
+      event.stopPropagation();
+      const list = shown();
+      if (event.target === input) {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          (editItem() ?? list[0])?.focus();
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          list[0]?.click();
+        }
+        return;
+      }
+      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey && event.key !== " ") {
+        input.focus();
+        return;
+      }
+      if (event.target === editItem()) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          (event.key === "ArrowDown" ? list[0] : input)?.focus();
+        }
+        return;
+      }
+      const at = list.indexOf(event.target);
+      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -COLUMNS, ArrowDown: COLUMNS }[event.key];
+      if (at < 0 || !step) return;
+      event.preventDefault();
+      const next = at + step;
+      if (next >= 0) list[Math.min(list.length - 1, next)].focus();
+      else if (step === -COLUMNS) (editItem() ?? input).focus();
+    });
+    menuKeys = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeMenu();
+      anchor.focus();
+    };
+    addEventListener("keydown", menuKeys, true);
     document.body.append(menu);
     const box = anchor.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(innerWidth - menu.offsetWidth - 8, box.left + box.width / 2 - menu.offsetWidth / 2))}px`;
     menu.style.top = `${Math.max(8, from ? Math.min(innerHeight - menu.offsetHeight - 8, box.bottom + 4) : box.top - menu.offsetHeight - 12)}px`;
     if (from) menu.style.left = `${Math.max(8, box.right - menu.offsetWidth)}px`;
+    // Held at its first height, so searching doesn't move it
+    menu.style.height = `${menu.offsetHeight}px`;
     anchor.setAttribute("aria-expanded", "true");
     addEventListener("pointerdown", outsideMenu, true);
-    menu.querySelector(".item")?.focus();
+    input.focus();
+    drawThumbs(tiles);
+  };
+
+  // ---------- The library's pictures ----------
+
+  // Each tile shows its effect at work on a picture drawn here, one that
+  // shows it best: a sunset's tones for the dithers and Bitcrush, rings
+  // for Chromatic Aberration, checks for Fisheye and a pawn on a floor or
+  // on water for Shadow and Reflection. A picture effect's `thumb` names
+  // its sample, backdrop and settings. Each is made once, the first time
+  // the library opens, one a frame so the library's up at once
+  const THUMB = 160;
+  const thumbs = new Map();
+  const canvas2d = (width = THUMB, height = THUMB) => {
+    const canvas = Object.assign(document.createElement("canvas"), { width, height });
+    return [canvas, canvas.getContext("2d", { willReadFrequently: true })];
+  };
+  const linear = (g, x0, y0, x1, y1, stops) => {
+    const gradient = g.createLinearGradient(x0, y0, x1, y1);
+    for (const [at, color] of stops) gradient.addColorStop(at, color);
+    return gradient;
+  };
+  // A chess pawn standing at `cx`, `base`, lit from the left
+  const pawn = (g, cx, base) => {
+    g.save();
+    g.translate(cx, base);
+    g.fillStyle = linear(g, -26, 0, 26, 0, [
+      [0, "#ffcf7a"],
+      [0.45, "#f28a3c"],
+      [1, "#b8401f"],
+    ]);
+    g.beginPath();
+    g.moveTo(-26, 0);
+    g.lineTo(26, 0);
+    g.lineTo(26, -7);
+    g.quadraticCurveTo(25, -13, 16, -14);
+    g.quadraticCurveTo(8, -30, 8, -50);
+    g.lineTo(13, -52);
+    g.quadraticCurveTo(14, -56, 10, -57);
+    g.lineTo(-10, -57);
+    g.quadraticCurveTo(-14, -56, -13, -52);
+    g.lineTo(-8, -50);
+    g.quadraticCurveTo(-8, -30, -16, -14);
+    g.quadraticCurveTo(-25, -13, -26, -7);
+    g.closePath();
+    g.fill();
+    const head = g.createRadialGradient(-5, -75, 2, 0, -70, 15);
+    head.addColorStop(0, "#ffe0a3");
+    head.addColorStop(0.5, "#f28a3c");
+    head.addColorStop(1, "#b8401f");
+    g.fillStyle = head;
+    g.beginPath();
+    g.arc(0, -70, 14, 0, Math.PI * 2);
+    g.fill();
+    g.restore();
+  };
+  const SAMPLES = {
+    // A sun over hills at dusk: every tone, from the sky's dark to the
+    // sun's light
+    sunset: (g) => {
+      g.fillStyle = linear(g, 0, 0, 0, THUMB, [
+        [0, "#1b1f4b"],
+        [0.55, "#d1497a"],
+        [1, "#ffb36b"],
+      ]);
+      g.fillRect(0, 0, THUMB, THUMB);
+      const sun = g.createRadialGradient(94, 58, 2, 104, 70, 32);
+      sun.addColorStop(0, "#fff6d8");
+      sun.addColorStop(0.5, "#ffc46b");
+      sun.addColorStop(1, "#e2615a");
+      g.fillStyle = sun;
+      g.beginPath();
+      g.arc(104, 70, 30, 0, Math.PI * 2);
+      g.fill();
+      for (const [color, y0, a, b, y1] of [
+        ["#6a2d6e", 104, 84, 118, 96],
+        ["#2a1640", 132, 112, 140, 124],
+      ]) {
+        g.fillStyle = color;
+        g.beginPath();
+        g.moveTo(0, y0);
+        g.bezierCurveTo(40, a, 100, b, THUMB, y1);
+        g.lineTo(THUMB, THUMB);
+        g.lineTo(0, THUMB);
+        g.fill();
+      }
+    },
+    // Light rings on black, where colors split at every edge
+    rings: (g) => {
+      g.fillStyle = "#101014";
+      g.fillRect(0, 0, THUMB, THUMB);
+      g.strokeStyle = g.fillStyle = "#ffffff";
+      for (const [r, width] of [
+        [52, 12],
+        [27, 8],
+      ]) {
+        g.lineWidth = width;
+        g.beginPath();
+        g.arc(80, 80, r, 0, Math.PI * 2);
+        g.stroke();
+      }
+      g.beginPath();
+      g.arc(80, 80, 7, 0, Math.PI * 2);
+      g.fill();
+    },
+    // Checks, which show a lens's bulge best
+    checks: (g) => {
+      for (let j = 0; j < 8; j++)
+        for (let i = 0; i < 8; i++) {
+          g.fillStyle = (i + j) % 2 ? "#1e2233" : `hsl(${190 + (i + j) * 12} 75% 62%)`;
+          g.fillRect(i * 20, j * 20, 20, 20);
+        }
+    },
+    pawnOnFloor: (g) => pawn(g, 54, 118),
+    pawnOnWater: (g) => pawn(g, 80, 100),
+  };
+  const BACKDROPS = {
+    floor: (g) => {
+      g.fillStyle = linear(g, 0, 0, 0, THUMB, [
+        [0, "#ebe6dd"],
+        [1, "#cdc5b8"],
+      ]);
+      g.fillRect(0, 0, THUMB, THUMB);
+    },
+    // Dusk over water, its edge at the pawn's foot
+    water: (g) => {
+      g.fillStyle = linear(g, 0, 0, 0, 100, [
+        [0, "#f3dcc0"],
+        [1, "#e9a983"],
+      ]);
+      g.fillRect(0, 0, THUMB, 100);
+      g.fillStyle = linear(g, 0, 100, 0, THUMB, [
+        [0, "#3a6b88"],
+        [1, "#16324a"],
+      ]);
+      g.fillRect(0, 100, THUMB, THUMB - 100);
+    },
+  };
+  const pictureThumb = (spec) => {
+    const { sample, backdrop, settings = {} } = spec.thumb;
+    const [, g] = canvas2d();
+    SAMPLES[sample](g);
+    const done = spec.process(g.getImageData(0, 0, THUMB, THUMB), { ...structuredClone(spec.defaults), ...settings }, 1);
+    const [result, rg] = canvas2d(done.image.width, done.image.height);
+    rg.putImageData(done.image, 0, 0);
+    const [tile, tg] = canvas2d();
+    BACKDROPS[backdrop]?.(tg);
+    tg.drawImage(result, done.x, done.y);
+    return tile;
+  };
+  const bitcrushThumb = () => {
+    const [tile, g] = canvas2d();
+    SAMPLES.sunset(g);
+    g.putImageData(crushRows(g.getImageData(0, 0, THUMB, THUMB), { ...BITCRUSH_DEFAULTS, pixelSize: 7 }, 1, 0, THUMB), 0, 0);
+    return tile;
+  };
+  // A card stepped along a curve, turning and shrinking as it goes
+  const repeaterThumb = () => {
+    const [tile, g] = canvas2d();
+    g.fillStyle = linear(g, 0, 0, 0, THUMB, [
+      [0, "#eeebfa"],
+      [1, "#dad4f2"],
+    ]);
+    g.fillRect(0, 0, THUMB, THUMB);
+    for (let i = 0; i < 6; i++) {
+      const t = i / 5;
+      const size = 44 - 16 * t;
+      g.save();
+      g.translate(36 + 88 * t, 46 + 70 * t - 30 * Math.sin(Math.PI * t));
+      g.rotate((i * 16 * Math.PI) / 180);
+      g.globalAlpha = 0.3 + 0.7 * t;
+      g.fillStyle = "#6457f0";
+      g.strokeStyle = "#ffffff";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.roundRect(-size / 2, -size / 2, size, size, size * 0.2);
+      g.fill();
+      g.stroke();
+      g.restore();
+    }
+    return tile;
+  };
+  // A square whose right side has broken into flakes, blown up and away
+  const disintegrateThumb = () => {
+    const [tile, g] = canvas2d();
+    g.fillStyle = "#15171d";
+    g.fillRect(0, 0, THUMB, THUMB);
+    const [x0, y0, cell, n] = [24, 46, 4, 17];
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < n; i++) {
+        const [u, v] = [i / (n - 1), j / (n - 1)];
+        const [r, r2] = [hash2(i, j, 5), hash2(i, j, 9)];
+        g.fillStyle = `hsl(${18 + 30 * v - 10 * u} 90% ${60 - 10 * v}%)`;
+        if (u + (r - 0.5) * 0.5 <= 0.55) {
+          g.globalAlpha = 1;
+          g.fillRect(x0 + i * cell, y0 + j * cell, cell, cell);
+          continue;
+        }
+        const t = clamp01(((u - 0.3) / 0.7) * (0.4 + r2 * 0.9));
+        const size = cell * (1 - 0.5 * t);
+        g.globalAlpha = 1 - 0.75 * t;
+        g.fillRect(x0 + i * cell + 6 + 72 * t + r * 8, y0 + j * cell - 36 * t * (0.5 + r) + (r2 - 0.5) * 8, size, size);
+      }
+    return tile;
+  };
+  const drawThumbs = (tiles) => {
+    const paint = ({ canvas }, picture) => {
+      canvas.getContext("2d").drawImage(picture, 0, 0, THUMB, THUMB);
+      canvas.classList.add("drawn");
+    };
+    const waiting = [];
+    for (const entry of tiles) {
+      const picture = thumbs.get(entry.effect.id);
+      if (picture) paint(entry, picture);
+      else if (entry.effect.thumb) waiting.push(entry);
+    }
+    const next = () => {
+      const entry = waiting.shift();
+      if (!entry || !entry.canvas.isConnected) return;
+      try {
+        const picture = entry.effect.thumb();
+        thumbs.set(entry.effect.id, picture);
+        paint(entry, picture);
+      } catch {}
+      requestAnimationFrame(next);
+    };
+    requestAnimationFrame(next);
   };
 
   // Keeps the button after Actions, as Figma draws its toolbar again
@@ -444,7 +811,7 @@ const PAGE_JS: &str = r##"(() => {
       made.type = "button";
       made.setAttribute(BUTTON, "");
       made.setAttribute("aria-label", "Effects");
-      made.setAttribute("aria-haspopup", "menu");
+      made.setAttribute("aria-haspopup", "dialog");
       made.setAttribute("aria-expanded", "false");
       Object.assign(made.dataset, { tooltip: "Effects", tooltipType: "text", tooltipShowAbove: "true" });
       made.innerHTML = ICON;
@@ -3333,7 +3700,6 @@ const PAGE_JS: &str = r##"(() => {
   const PIXEL_HELPERS = { clamp01, premultiplied, toImage, sampleAt, channelAt, boxPass, blurChannel, hexRgb, lumaOf, hash2, cellGrid, gridAt, solidRows };
 
   style.textContent += `
-    [${ROOT}="menu"] { max-height: calc(100vh - 16px); overflow-y: auto; }
   `;
 
   let filtering = null;
@@ -3355,6 +3721,7 @@ const PAGE_JS: &str = r##"(() => {
       saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, spec.id) || "{}"),
       summary: (s) => spec.summary({ ...structuredClone(spec.defaults), ...s }),
       open: guarded((figma, edit, run) => openFilter(spec, figma, edit, run)),
+      thumb: () => pictureThumb(spec),
     });
 
   // The open effect's worker, once it's said it's loaded, or null where
@@ -3836,6 +4203,7 @@ const PAGE_JS: &str = r##"(() => {
   ];
   pictureEffect({
     id: "dither",
+    thumb: { sample: "sunset", settings: { palette: "duo", pixelSize: 2.5 } },
     name: "Dither",
     about: "Error diffusion, Bayer and more, in a palette",
     icon: DITHER_ICON,
@@ -4060,6 +4428,7 @@ const PAGE_JS: &str = r##"(() => {
   ];
   pictureEffect({
     id: "halftone",
+    thumb: { sample: "sunset", settings: { mode: "cmyk", cell: 6 } },
     name: "Halftone",
     about: "Print it in dots, lines or four inks",
     icon: HALFTONE_ICON,
@@ -4174,6 +4543,7 @@ const PAGE_JS: &str = r##"(() => {
   const MODULATE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 7.5c1.25 0 1.25-1 2.5-1s1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1 1.25-1 2.5-1 1.25 1 2.5 1M4.5 12c1.25 0 1.25-2 2.5-2s1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2 1.25-2 2.5-2 1.25 2 2.5 2M4.5 17.5c1.25 0 1.25-3 2.5-3s1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3 1.25-3 2.5-3 1.25 3 2.5 3"/></svg>`;
   pictureEffect({
     id: "modulate",
+    thumb: { sample: "sunset", settings: { mode: "waves", spacing: 9 } },
     name: "Modulate",
     about: "Draw it in lines, waves or rings",
     icon: MODULATE_ICON,
@@ -4295,6 +4665,7 @@ const PAGE_JS: &str = r##"(() => {
   ];
   pictureEffect({
     id: "chromatic",
+    thumb: { sample: "rings", settings: { amount: 10 } },
     name: "Chromatic Aberration",
     about: "Split its colors as a lens does",
     icon: CHROMATIC_ICON,
@@ -4398,6 +4769,7 @@ const PAGE_JS: &str = r##"(() => {
   const FISHEYE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="7.5"/><path ${STROKE} d="M12 4.5c-2.5 2-2.5 13 0 15M12 4.5c2.5 2 2.5 13 0 15M4.5 12c2-2.5 13-2.5 15 0M4.5 12c2 2.5 13 2.5 15 0"/></svg>`;
   pictureEffect({
     id: "fisheye",
+    thumb: { sample: "checks", settings: { strength: 80 } },
     name: "Fisheye",
     about: "Bulge or pinch it as a lens",
     icon: FISHEYE_ICON,
@@ -4465,6 +4837,7 @@ const PAGE_JS: &str = r##"(() => {
   const SHADOW_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="6.5" y="4.5" width="5" height="12" rx="2.5"/><path ${STROKE} stroke-dasharray="1.5 1.5" d="M11.5 16.5l6.5-3.5M7 16.5l7.5 3h4l-.5-6.5"/></svg>`;
   pictureEffect({
     id: "shadow",
+    thumb: { sample: "pawnOnFloor", backdrop: "floor", settings: { direction: 65, length: 120, perspective: 60, softFar: 6, opacity: 75, fade: 25 } },
     name: "Shadow",
     about: "Cast a shadow from a cutout's shape",
     icon: SHADOW_ICON,
@@ -4697,6 +5070,7 @@ const PAGE_JS: &str = r##"(() => {
   Object.assign(PIXEL_HELPERS, { valueNoise, wavesAt });
   pictureEffect({
     id: "reflection",
+    thumb: { sample: "pawnOnWater", backdrop: "water", settings: { surface: "water", length: 100, opacity: 80, fade: 25, fresnel: 35, blur: 0.5, streak: 3, waves: 3, waveSize: 14, chop: 35, sparkle: 15, tint: "#24506b", tintAmount: 25 } },
     name: "Reflection",
     about: "Reflect a cutout on a floor or water",
     icon: REFLECTION_ICON,
