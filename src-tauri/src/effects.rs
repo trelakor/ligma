@@ -10330,13 +10330,18 @@ const PAGE_JS: &str = r##"(() => {
   // filled outline, with its strokes. Text's fill geometry is its glyphs'
   // outlines. Hidden layers are left out, the layer itself aside
   const visiblePaints = (paints) => (Array.isArray(paints) ? paints.filter((paint) => paint.visible !== false && (paint.opacity ?? 1) > 0) : []);
-  const shapesOf = (root) => {
+  // With `shadows`, a layer's hard drop shadows too, under it, as outlines
+  // of its own shape moved by their offset on the page and grown by their
+  // spread, in their colour, so what's made with depth reaches as far as
+  // they do
+  const shapesOf = (root, shadows = false) => {
     const base = invert(root.absoluteTransform);
     const items = [];
     const walk = (node, opacity, top) => {
       if (!top && node.visible === false) return;
       const o = opacity * (node.opacity ?? 1);
       const m = multiply(base, node.absoluteTransform);
+      const own = items.length;
       if ("fillGeometry" in node) {
         let fills = node.fills;
         if (fills === window.figma.mixed) {
@@ -10358,6 +10363,21 @@ const PAGE_JS: &str = r##"(() => {
             const paths = transformPaths(parsePath(g.data), m);
             if (paths.length) items.push({ paths, winding: "NONZERO", paints: strokes, opacity: o, leaf: node, stroke: true });
           }
+      }
+      if (shadows && items.length > own && Array.isArray(node.effects)) {
+        const mine = items.slice(own);
+        const cast = [];
+        for (const effect of node.effects) {
+          if (effect.type !== "DROP_SHADOW" || effect.visible === false || (effect.radius ?? 0) > 2) continue;
+          const { x = 0, y = 0 } = effect.offset ?? {};
+          const at = multiply(base, multiply(moved(x, y), node.absoluteTransform));
+          const local = multiply(at, invert(m));
+          let paths = mine.flatMap((item) => transformPaths(item.paths, local));
+          if (effect.spread > 0) paths = offsetRegion(paths, effect.spread, 0.1);
+          const { r, g, b, a = 1 } = effect.color;
+          cast.push({ paths, winding: "NONZERO", paints: [{ type: "SOLID", color: { r, g, b }, opacity: a }], opacity: o, leaf: node, shadow: true });
+        }
+        items.splice(own, 0, ...cast);
       }
       if ("children" in node && node.type !== "BOOLEAN_OPERATION") for (const child of node.children) walk(child, o, false);
     };
@@ -10644,7 +10664,7 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
     try {
       current.base = source.absoluteTransform;
-      current.items = spec.seeds ? [] : shapesOf(source);
+      current.items = spec.seeds ? [] : shapesOf(source, spec.shadows);
       if (spec.seeds) {
         current.track = flatten(trackOf(source), 0.75).filter((line) => line.points.length >= 4).map(measured);
         current.seeds = (
@@ -11598,6 +11618,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "extrude",
     name: "Extrude 3D",
     follows: true,
+    shadows: true,
     orbit: "angle",
     about: "Give a shape or text depth with shaded sides",
     icon: EXTRUDE_ICON,
@@ -11605,7 +11626,7 @@ const PAGE_JS: &str = r##"(() => {
     verb: "Extrude",
     ask: "Select a shape or text to extrude",
     start: (u) => ({ depth: Math.max(2, Math.round(u * 0.12)) }),
-    defaults: { angle: 45, depth: 20, light: -135, shade: 60, layers: "each", colors: "own", color: "#3b6fe0", follow: true, editable: true },
+    defaults: { angle: 45, depth: 20, light: -135, shade: 60, layers: "each", shadows: true, colors: "own", color: "#3b6fe0", follow: true, editable: true },
     limits: { depth: [0, 100000], angle: [-180, 180], light: [-180, 180], shade: [0, 100] },
     presets: [
       ["Down right", (u) => ({ angle: 45, depth: Math.max(2, Math.round(u * 0.12)) })],
@@ -11619,10 +11640,15 @@ const PAGE_JS: &str = r##"(() => {
       if (s.depth <= 0) return [];
       // Each layer with depth of its own, stacked, or the whole as one,
       // each worked out once
+      // With or without the layers' drop shadows, each worked out once
+      const key = s.shadows ? "with" : "without";
+      const cache = (current.depthOf ??= {});
+      const items = s.shadows ? current.items : current.items.filter((item) => !item.shadow);
+      const view = { ...current, items };
       const groups =
         s.layers === "whole"
-          ? [{ outline: (current.whole ??= outlineOfAll(current)), items: current.items }]
-          : (current.each ??= outlinesOfEach(current));
+          ? (cache[`whole-${key}`] ??= [{ outline: outlineOfAll(view), items }])
+          : (cache[`each-${key}`] ??= outlinesOfEach(view));
       const [ax, ay] = turnOf(s.angle);
       const dx = ax * s.depth;
       const dy = ay * s.depth;
@@ -11646,8 +11672,8 @@ const PAGE_JS: &str = r##"(() => {
       const single = hexRgb(s.color);
       const tone = ([r, g, b], k) => ({ r: Math.min(1, Math.max(0, r * k)), g: Math.min(1, Math.max(0, g * k)), b: Math.min(1, Math.max(0, b * k)) });
       const same = (a, b, e) => Math.abs(a.r - b.r) < e && Math.abs(a.g - b.g) < e && Math.abs(a.b - b.b) < e;
-      for (const group of groups) {
       const sides = [];
+      groups.forEach((group, layer) => {
       for (const item of group.outline) {
         const evenOdd = item.winding === "EVENODD";
         for (const { pieces } of facingPieces(item.paths, dx, dy, evenOdd))
@@ -11687,10 +11713,13 @@ const PAGE_JS: &str = r##"(() => {
               if (!same(mix, samples[i].rgb, 0.008)) stops.push(samples[i]);
             }
             stops.push(samples[12]);
-            sides.push({ side, from: [x0, y0], to: [x0 - ay * (c1 - c0), y0 + ax * (c1 - c0)], flat, rgb: samples[6].rgb, stops: stops.map((one) => ({ position: Math.min(1, Math.max(0, (one.c - c0) / (c1 - c0))), color: { ...one.rgb, a: 1 } })), key: mx * ax + my * ay });
+            sides.push({ layer, order: sides.length, side, from: [x0, y0], to: [x0 - ay * (c1 - c0), y0 + ax * (c1 - c0)], flat, rgb: samples[6].rgb, stops: stops.map((one) => ({ position: Math.min(1, Math.max(0, (one.c - c0) / (c1 - c0))), color: { ...one.rgb, a: 1 } })), key: mx * ax + my * ay });
           }
       }
-      sides.sort((a, b) => a.key - b.key);
+      });
+      // Each layer's sides over those of the layers under it, as the
+      // layers are stacked, and back to front within each
+      sides.sort((a, b) => a.layer - b.layer || a.key - b.key || a.order - b.order);
       let run = null;
       for (const one of sides) {
         if (one.flat) {
@@ -11707,7 +11736,6 @@ const PAGE_JS: &str = r##"(() => {
           out.push({ paths: [one.side], winding: "NONZERO", paints: [linearPaint([one.side], one.from, one.to, one.stops)], opacity: 1, name: "Side", seam: true });
         }
       }
-      }
       return out;
     },
     panel: (ui) => [
@@ -11721,6 +11749,7 @@ const PAGE_JS: &str = r##"(() => {
           ["each", "Each layer", "Every layer with depth of its own, stacked, so an outline and what's inside it each show theirs"],
           ["whole", "Whole", "The whole of it as one solid"],
         ]),
+        ui.check("shadows", "Drop shadows", "Hard drop shadows count as part of their layer, so depth starts at their edge"),
       ),
       ui.section(
         "Light",
@@ -12780,7 +12809,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!source) return;
     const current = { spec, figma, group, source, settings, kept: [], made: [], meta: new WeakMap(), seeds: [], base: source.absoluteTransform, unit: Math.max(1, source.width ?? 100, source.height ?? 100), wasVisible: true };
     try {
-      current.items = shapesOf(source);
+      current.items = shapesOf(source, spec.shadows);
       spec.read?.(current);
       const old = group.children.filter((child) => child !== source);
       syncMade(current, spec.make(current) ?? []);
