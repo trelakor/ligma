@@ -42,6 +42,9 @@ pub struct Decoder {
     /// Commands and icons seen that aren't drawn yet, logged once each
     skipped: std::collections::HashSet<String>,
     failed: bool,
+    /// The last frame's commands and its overlay: Figma sends the same again
+    /// in frames where only what's under it changed, which is shown as is
+    last: Option<(Vec<u8>, Picture)>,
 }
 
 impl Decoder {
@@ -60,13 +63,16 @@ impl Decoder {
                 _ => None,
             });
         }
-        Some(Decoder { schema, messages, names, sections: None, skipped: Default::default(), failed: false })
+        Some(Decoder { schema, messages, names, sections: None, skipped: Default::default(), failed: false, last: None })
     }
 
     /// The overlay of a frame, from its `uiCommands`
     pub fn decode(&mut self, bytes: &[u8]) -> Overlay {
         if bytes.is_empty() {
             return None;
+        }
+        if let Some((_, picture)) = self.last.as_ref().filter(|(last, _)| last == bytes) {
+            return Some(picture.clone());
         }
         let mut recorder = PictureRecorder::new();
         let canvas = recorder.begin_recording(Rect::from_xywh(-1e5, -1e5, 2e5, 2e5), false);
@@ -77,7 +83,9 @@ impl Decoder {
                 log::warn!("native renderer: Figma's overlay couldn't be read: {error}");
             }
         }
-        recorder.finish_recording_as_picture(None)
+        let picture = recorder.finish_recording_as_picture(None)?;
+        self.last = Some((bytes.to_vec(), picture.clone()));
+        Some(picture)
     }
 
     fn draw(&mut self, bytes: &[u8], canvas: &Canvas) -> Result<(), String> {

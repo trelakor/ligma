@@ -3543,7 +3543,7 @@ impl Painter {
         let whole_at = self.whole.as_ref().filter(|whole| !whole.stale && whole.patch.is_empty()).map(|whole| whole.at);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         for layer in &layers {
-            (Arc::as_ptr(&layer.tex) as usize, layer.x, layer.y, layer.px.to_bits(), layer.kind).hash(&mut hasher);
+            (Arc::as_ptr(&layer.tex) as usize, layer.x, layer.y, layer.px.to_bits(), layer.kind, layer.drawn).hash(&mut hasher);
         }
         self.whole.as_ref().map(|whole| whole.serial).hash(&mut hasher);
         (whole_at, background.as_array().map(f32::to_bits), transparent, dark).hash(&mut hasher);
@@ -3556,8 +3556,12 @@ impl Painter {
             Some((last, _, value)) if last == signature => value,
             _ => self.gpu.signal(),
         };
+        // Only what's drawn tells snapshots apart, so one that's the same
+        // as of a later frame isn't shown again
+        if self.published.is_none_or(|(last, _, _)| last != signature) {
+            self.serial += 1;
+        }
         self.published = Some((signature, self.seq, value));
-        self.serial += 1;
         let snapshot = Snapshot {
             seq: self.seq,
             fence: self.gpu.shared_fence.clone(),

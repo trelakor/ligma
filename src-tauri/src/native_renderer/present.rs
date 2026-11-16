@@ -814,7 +814,7 @@ impl Screen {
                 room = true;
             }
             let latest = hub.snapshot.lock().unwrap().clone();
-            if let Some(latest) = latest.filter(|latest| current.as_ref().is_none_or(|current| current.serial != latest.serial) && latest.drawn()) {
+            if let Some(latest) = latest.filter(|latest| current.as_ref().is_none_or(|current| (current.serial, current.seq) != (latest.serial, latest.seq)) && latest.drawn()) {
                 current = Some(latest);
             }
             let picked = current.as_ref().and_then(|snapshot| hub.pick(snapshot.seq).map(|picked| (snapshot.clone(), picked)));
