@@ -208,6 +208,9 @@ pub enum LayerKind {
     /// to anything up to date but much blurrier, which would show the
     /// view go soft and sharp again
     Stale,
+    /// A tile out of date since before it was last in view: the page as it
+    /// was some while ago, shown only where nothing up to date is
+    Old,
 }
 
 /// Something drawn at `px` device pixels a unit, its top left corner at
@@ -445,6 +448,7 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
                 // showed first: another, older or never shown, would show
                 // the view other than it just was for a frame
                 (LayerKind::Stale, _) => (if shown.contains(&(Arc::as_ptr(&layer.tex) as usize)) { 1.3 } else { 1.6 }) + distance(layer.px),
+                (LayerKind::Old, _) => 4.0 + distance(layer.px),
                 _ => 2.0 + distance(layer.px),
             };
             (if i >= behind { rank + 1000.0 } else { rank }, i)
@@ -570,7 +574,7 @@ impl Patterns {
             let layer = &snapshot.layers[piece.layer];
             // A layer can be in two pieces
             let first = !pieces.iter().take_while(|other| !std::ptr::eq(*other, piece)).any(|other| other.layer == piece.layer);
-            if first && layer.px == drawn && !matches!(layer.kind, LayerKind::Draft | LayerKind::Stale) {
+            if first && layer.px == drawn && !matches!(layer.kind, LayerKind::Draft | LayerKind::Stale | LayerKind::Old) {
                 counts += layer.counts;
             }
             // Every pixel of its clip filled, rect by rect, the image's edge

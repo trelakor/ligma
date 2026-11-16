@@ -869,6 +869,11 @@ struct Tile {
     counts: Counts,
     /// Out of date, shown until it's drawn again
     stale: bool,
+    /// Out of date while in view and in it since, so what it shows is what
+    /// was just there. One out of date off the view shows the page as it
+    /// was some time before, as without images that came since, so it's
+    /// shown only where nothing up to date is, as one a pan comes to
+    seen: bool,
     /// Drawn at full quality, sampled as Figma samples, rather than quickly
     /// to fill the view while it moves
     exact: bool,
@@ -1700,6 +1705,13 @@ impl Painter {
                 tile.used = frame;
             }
         }
+        let view_area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
+        for (key, tile) in &mut self.tiles {
+            if tile.seen && !Rect::intersects2(&view_area, &key.area()) {
+                tile.seen = false;
+                self.dirty = true;
+            }
+        }
         self.at = (ox, oy, pxb);
         // The view Vello drew here last is shown rather than drawn again
         if self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb)) {
@@ -2368,7 +2380,7 @@ impl Painter {
             surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
             drop(surface);
             let tile_image = self.finish(&backend, false).ok_or_else(|| fail("submit".into()))?;
-            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, exact, draft: false, vello: true, drawn: 0 });
+            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, seen: false, exact, draft: false, vello: true, drawn: 0 });
         }
         self.drew = true;
         super::stats().lock().unwrap().vello_tiles_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -3481,8 +3493,10 @@ impl Painter {
             px: key.px(),
             counts: tile.counts,
             drawn: tile.drawn,
-            kind: if tile.stale {
+            kind: if tile.stale && tile.seen {
                 LayerKind::Stale
+            } else if tile.stale {
+                LayerKind::Old
             } else if tile.draft {
                 LayerKind::Draft
             } else {
@@ -4556,8 +4570,10 @@ impl Painter {
             })
             .copied()
             .collect();
+        let view = self.view_area().map(|(view, _)| view);
         for key in stale {
             if let Some(tile) = self.tiles.get_mut(&key) {
+                tile.seen = (tile.seen || !tile.stale) && view.is_some_and(|view| Rect::intersects2(&view, &key.area()));
                 tile.stale = true;
             }
         }
@@ -5570,7 +5586,7 @@ impl Painter {
         if margin == 0 {
             self.scratch.push((margin, if msaa { 0 } else { ss }, scratch));
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, exact, draft, vello: false, drawn: 0 })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, seen: false, exact, draft, vello: false, drawn: 0 })
     }
 
     fn background(&self) -> Color4f {
