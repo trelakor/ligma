@@ -4307,7 +4307,10 @@ const PAGE_JS: &str = r##"(() => {
     if (!(need > entry.k * 1.05)) return { key: level, entry };
     const source = current.levels.full ?? current.levels.live;
     const side = Math.max(source.picture.width, source.picture.height) / source.k;
-    const k = Math.min(source.k, need, DETAIL_MOST / side);
+    // The panel's preview no larger than twice its own, so dragging stays
+    // quick; the file's picture and applying get all the detail
+    const most = level === "preview" ? Math.max(entry.k, (entry.k * 2)) : DETAIL_MOST / side;
+    const k = Math.min(source.k, need, most);
     if (!(k > entry.k * 1.05)) return { key: level, entry };
     // The same picture whichever level asked, the preview's or the file's
     const key = `@${k.toFixed(3)}`;
@@ -5002,7 +5005,11 @@ const PAGE_JS: &str = r##"(() => {
       current.again = true;
       return;
     }
-    if (current.timer) return;
+    // One made large for its detail waits till changes settle, as making it
+    // takes a while, and the panel's preview shows them meanwhile
+    const settle = current.spec.detail ? workingLevel(current, "live").key !== "live" : false;
+    if (settle) clearTimeout(current.timer);
+    else if (current.timer) return;
     current.timer = setTimeout(async () => {
       current.timer = null;
       if (filtering !== current || current.busy || current.stroking) return;
@@ -5017,7 +5024,7 @@ const PAGE_JS: &str = r##"(() => {
         } while (current.again && !current.busy && filtering === current && !current.stroking);
       } catch {}
       current.placing = false;
-    }, 80);
+    }, settle ? 350 : 80);
   };
 
   // Closed as Cancel closes it if it fails, rather than left making
@@ -8647,7 +8654,7 @@ const PAGE_JS: &str = r##"(() => {
     about: "Film it off a monitor, in 3D with depth of field",
     icon: SCREEN_ICON,
     verb: "Make screen",
-    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focusX: 62, focusY: 62, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
+    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focusX: 62, focusY: 62, tint: "#ffffff", tintAmount: 0, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
     presets: [
       ["Angled", () => ({})],
       ["Close up", () => ({ zoom: 320, tiltX: 18, tiltY: -28, pitch: 2.5, aperture: 75 })],
@@ -8656,7 +8663,7 @@ const PAGE_JS: &str = r##"(() => {
       ["Desk", () => ({ tiltX: 42, tiltY: 0, roll: -6, zoom: 170, aperture: 70 })],
       ["Flat grid", () => ({ tiltX: 0, tiltY: 0, zoom: 100, aperture: 0, vignette: 0, fringe: 0, glow: 15, grain: 0 })],
     ],
-    limits: { pitch: [0.5, 1000], gaps: [0, 100], tiltX: [-89, 89], tiltY: [-89, 89], roll: [-360, 360], zoom: [10, 2000], centerX: [-200, 300], centerY: [-200, 300], focusX: [-200, 300], focusY: [-200, 300], focus: [0, 100], aperture: [0, 100], glow: [0, 100], fringe: [0, 100], vignette: [0, 100], grain: [0, 100], exposure: [10, 300] },
+    limits: { pitch: [0.5, 1000], gaps: [0, 100], tiltX: [-89, 89], tiltY: [-89, 89], roll: [-360, 360], zoom: [10, 2000], centerX: [-200, 300], centerY: [-200, 300], focusX: [-200, 300], focusY: [-200, 300], tintAmount: [0, 100], focus: [0, 100], aperture: [0, 100], glow: [0, 100], fringe: [0, 100], vignette: [0, 100], grain: [0, 100], exposure: [10, 300] },
     summary: (s) => `${s.tiltX}° · ${s.tiltY}° · ${s.zoom}%`,
     panel: (ui) => [
       ui.section(
@@ -8681,7 +8688,9 @@ const PAGE_JS: &str = r##"(() => {
           ["pitch", "Pixel size", "pt", (u) => ({ min: 0.5, max: upTo(u, 0.03, 12), shape: "curve", digits: 1 })],
           ["gaps", "Gaps", "%", () => ({ min: 0, max: 100 })],
           ["exposure", "Exposure", "%", () => ({ min: 25, max: 250, middle: 100 })],
+          ["tintAmount", "Tint", "%", () => ({ min: 0, max: 100 })],
         ]),
+        ui.color("tint", "Tint color"),
       ),
       ui.section(
         "Lens",
@@ -8725,40 +8734,57 @@ const PAGE_JS: &str = r##"(() => {
       const pitch = Math.max(0.5, s.pitch * k);
       const gap = s.gaps / 100;
       const exposure = s.exposure / 100;
+      // The screen's white, toward Tint by its amount
+      const tintColor = hexRgb(s.tint);
+      const tint = tintColor.map((c) => 1 + (c - 1) * (s.tintAmount / 100));
       // The camera's view of the screen, sharp: stripes and gaps, and each
       // pixel's distance, for the focus
       const sharp = new Float32Array(W * H * 4);
       const depth = new Float32Array(W * H);
       const p = new Float32Array(4);
-      const project = (x, y) => {
-        const d0 = (x - W / 2) / focal * distance;
-        const d1 = (y - H / 2) / focal * distance;
-        const d = [d0 / distance, d1 / distance, 1];
-        const den = dot(nrm, d);
+      // Where a picture pixel's ray meets the screen, into `into`: its place
+      // on the screen and its distance, without making anything per pixel
+      const into = new Float64Array(3);
+      const project = (x, y, out = into) => {
+        const dx = (x - W / 2) / focal;
+        const dy = (y - H / 2) / focal;
+        const den = nrm[0] * dx + nrm[1] * dy + nrm[2];
         if (Math.abs(den) < 1e-6) return null;
         const t = nC / den;
         if (t <= 0) return null;
-        const P = [d[0] * t - C[0], d[1] * t - C[1], d[2] * t - C[2]];
-        return [dot(P, eu) + W / 2, dot(P, ev) + H / 2, t];
+        const px = dx * t - C[0];
+        const py = dy * t - C[1];
+        const pz = t - C[2];
+        out[0] = px * eu[0] + py * eu[1] + pz * eu[2] + W / 2;
+        out[1] = px * ev[0] + py * ev[1] + pz * ev[2] + H / 2;
+        out[2] = t;
+        return out;
       };
+      const beside = new Float64Array(3);
+      const white = [0, 0, 0];
+      let shown = 0;
+      const stripes = new Float32Array(W * H * 3);
       // A stripe's light across a pixel cell, filtered by how much of the
       // cell one picture pixel covers, so fine stripes average out rather
       // than flicker
+      // How much of a picture pixel's footprint, `width` of a cell wide round
+      // `u`, a stripe covers, exactly, cells repeating either side: red,
+      // green and blue get the same share, so white stays white
+      const band = (u, from, to, half) => Math.max(0, Math.min(to, u + half) - Math.max(from, u - half));
       const stripe = (u, from, to, width) => {
-        const soft = Math.max(0.02, width);
-        const a = clamp01((u - from) / soft + 0.5);
-        const b = clamp01((u - to) / soft + 0.5);
-        return a - b;
+        const half = Math.max(0.01, width) / 2;
+        return Math.min(1, (band(u, from, to, half) + band(u + 1, from, to, half) + band(u - 1, from, to, half)) / (2 * half));
       };
       for (let y = 0; y < H; y++)
         for (let x = 0; x < W; x++) {
-          const here = project(x + 0.5, y + 0.5);
-          if (!here) continue;
-          const [u, v, t] = here;
+          if (!project(x + 0.5, y + 0.5)) continue;
+          const u = into[0];
+          const v = into[1];
+          const t = into[2];
           if (u < 0 || v < 0 || u >= W || v >= H) continue;
           // How far one picture pixel reaches across the screen here, in
           // screen pixels, from the next one over
-          const next = project(x + 1.5, y + 0.5);
+          const next = project(x + 1.5, y + 0.5, beside);
           const reach = next ? Math.hypot(next[0] - u, next[1] - v) / pitch : 1;
           // The screen pixel's colour, all of it lit as one
           const cu = Math.floor(u / pitch);
@@ -8769,11 +8795,24 @@ const PAGE_JS: &str = r##"(() => {
           const soft = reach * 1.2;
           // Dark gaps round each pixel, the stripes inside
           const rows = stripe(fv, gap * 0.18, 1 - gap * 0.18, soft);
-          const lit = 3 * (1 - gap * 0.35) * exposure;
+          const lit = 1;
           const at = (y * W + x) * 4;
-          sharp[at] = p[0] * stripe(fu, gap * 0.12, 1 / 3 - gap * 0.06, soft) * rows * lit;
-          sharp[at + 1] = p[1] * stripe(fu, 1 / 3 + gap * 0.06, 2 / 3 - gap * 0.06, soft) * rows * lit;
-          sharp[at + 2] = p[2] * stripe(fu, 2 / 3 + gap * 0.06, 1 - gap * 0.12, soft) * rows * lit;
+          // Three stripes the same width
+          const edge = gap * 0.06;
+          const sr = stripe(fu, edge, 1 / 3 - edge, soft) * rows * lit;
+          const sg = stripe(fu, 1 / 3 + edge, 2 / 3 - edge, soft) * rows * lit;
+          const sb = stripe(fu, 2 / 3 + edge, 1 - edge, soft) * rows * lit;
+          sharp[at] = p[0] * sr * tint[0];
+          sharp[at + 1] = p[1] * sg * tint[1];
+          sharp[at + 2] = p[2] * sb * tint[2];
+          // What white would show here
+          white[0] += sr;
+          white[1] += sg;
+          white[2] += sb;
+          shown++;
+          stripes[(y * W + x) * 3] = sr;
+          stripes[(y * W + x) * 3 + 1] = sg;
+          stripes[(y * W + x) * 3 + 2] = sb;
           sharp[at + 3] = p[3];
           depth[y * W + x] = t;
         }
@@ -8782,22 +8821,68 @@ const PAGE_JS: &str = r##"(() => {
       // the screen where the camera sees it at the point dragged
       const focused = project((W * s.focusX) / 100, (H * s.focusY) / 100);
       const sharpAt = focused ? focused[2] : distance;
+      if (!(sharpAt > 0)) return { image: toImage(sharp, W, H), x: 0, y: 0 };
       const blurMax = (s.aperture / 100) * Math.max(W, H) * 0.012;
       const spread = 0.02 + (s.focus / 100) * 0.3;
       const levels = [0, 0.33, 0.66, 1];
+      // A strong blur, worked out `by` times smaller and scaled back up, as
+      // what it keeps is broad anyway
+      const blurSmall = (channel, sigma, by) => {
+        if (by <= 1 || sigma < by * 1.5) return blurChannel(channel, W, H, sigma);
+        const [sw, sh] = [Math.ceil(W / by), Math.ceil(H / by)];
+        const small = new Float32Array(sw * sh);
+        for (let y = 0; y < H; y++) {
+          const row = ((y / by) | 0) * sw;
+          for (let x = 0; x < W; x++) small[row + ((x / by) | 0)] += channel[y * W + x] / (by * by);
+        }
+        const blurred = blurChannel(small, sw, sh, sigma / by);
+        // Back up, bilinear, where each column and row falls worked out once
+        const cell = (n, size) => {
+          const at = new Int32Array(n);
+          const t = new Float32Array(n);
+          for (let i = 0; i < n; i++) {
+            const v = Math.min(size - 1, Math.max(0, (i + 0.5) / by - 0.5));
+            at[i] = Math.min(size - 2, Math.floor(v));
+            t[i] = size > 1 ? v - at[i] : 0;
+            if (size === 1) at[i] = 0;
+          }
+          return [at, t];
+        };
+        const [xs, txs] = cell(W, sw);
+        const [ys, tys] = cell(H, sh);
+        const next = sw > 1 ? 1 : 0;
+        const below = sh > 1 ? sw : 0;
+        const out = new Float32Array(W * H);
+        for (let y = 0; y < H; y++) {
+          const row = ys[y] * sw;
+          const ty = tys[y];
+          for (let x = 0; x < W; x++) {
+            const i = row + xs[x];
+            const tx = txs[x];
+            const top = blurred[i] + (blurred[i + next] - blurred[i]) * tx;
+            const bottom = blurred[i + below] + (blurred[i + below + next] - blurred[i + below]) * tx;
+            out[y * W + x] = top + (bottom - top) * ty;
+          }
+        }
+        return out;
+      };
       const layers = [];
       for (let c = 0; c < 4; c++) {
         const channel = new Float32Array(W * H);
         for (let i = 0; i < W * H; i++) channel[i] = sharp[i * 4 + c];
-        layers.push(levels.map((m) => (blurMax * m > 0.3 ? blurChannel(channel, W, H, blurMax * m) : channel)));
+        // The light blur full size, so the grid near the focus stays crisp
+        layers.push(levels.map((m, j) => (blurMax * m > 0.3 ? blurSmall(channel, blurMax * m, j >= 2 ? 2 : 1) : channel)));
       }
       const out = new Float32Array(W * H * 4);
+      const crisp = new Float32Array(W * H);
       for (let i = 0; i < W * H; i++) {
         const t = depth[i];
         const away = t > 0 ? Math.abs(t - sharpAt) / sharpAt : 0;
         const at = clamp01((away - spread * 0.3) / spread) * 3;
         const j = Math.min(2, Math.floor(at));
         const m = at - j;
+        // How sharp it is, for balancing white only where stripes show
+        crisp[i] = blurMax * (at / 3) > 0.6 ? Math.max(0, 1 - (blurMax * (at / 3) - 0.6)) : 1;
         for (let c = 0; c < 4; c++) out[i * 4 + c] = layers[c][j][i] * (1 - m) + layers[c][j + 1][i] * m;
       }
       // Glow round bright parts, as light scatters in a lens
@@ -8805,7 +8890,7 @@ const PAGE_JS: &str = r##"(() => {
         const glowing = [0, 1, 2].map((c) => {
           const channel = new Float32Array(W * H);
           for (let i = 0; i < W * H; i++) channel[i] = Math.max(0, out[i * 4 + c] - 0.55);
-          return blurChannel(channel, W, H, Math.max(W, H) * 0.02);
+          return blurSmall(channel, Math.max(W, H) * 0.02, 4);
         });
         for (let i = 0; i < W * H; i++) for (let c = 0; c < 3; c++) out[i * 4 + c] += glowing[c][i] * (s.glow / 100) * 1.5;
       }
@@ -8813,6 +8898,27 @@ const PAGE_JS: &str = r##"(() => {
       const fringe = (s.fringe / 100) * Math.max(W, H) * 0.004;
       const vignette = s.vignette / 100;
       const grain = s.grain / 100;
+      // How bright white comes out on this screen, on average, so it can
+      // be exposed to look white whatever the gaps and stripes
+      const whiteLevel = shown ? white.reduce((a, b) => a + b, 0) / (3 * shown) : 1;
+      const gain = (0.85 / Math.max(0.05, whiteLevel)) * (s.exposure / 100);
+      // And balanced, as a camera balances white: white shown through the
+      // same exposure and roll off, each colour then scaled to their
+      // average, so where stripes are about a pixel wide no colour wins
+      // Only where it's sharp: blurred, the stripes average out themselves
+      const shownWhite = [0, 0, 0];
+      for (let i = 0; i < W * H; i++) {
+        const r0 = stripes[i * 3] * gain;
+        const g0 = stripes[i * 3 + 1] * gain;
+        const b0 = stripes[i * 3 + 2] * gain;
+        if (!(r0 || g0 || b0) || !crisp[i]) continue;
+        const spill = Math.max(0, Math.max(r0, g0, b0) - 1) * 0.5;
+        shownWhite[0] += Math.min(1, r0 + spill) * crisp[i];
+        shownWhite[1] += Math.min(1, g0 + spill) * crisp[i];
+        shownWhite[2] += Math.min(1, b0 + spill) * crisp[i];
+      }
+      const mean = (shownWhite[0] + shownWhite[1] + shownWhite[2]) / 3;
+      const balance = shownWhite.map((v) => (v > 0 ? mean / v : 1));
       const final = new Float32Array(W * H * 4);
       const q = new Float32Array(4);
       for (let y = 0; y < H; y++)
@@ -8822,19 +8928,43 @@ const PAGE_JS: &str = r##"(() => {
           const dy = (y + 0.5 - H / 2) / (H / 2);
           const r2 = dx * dx + dy * dy;
           let [r, g, b, a] = [out[at], out[at + 1], out[at + 2], out[at + 3]];
-          if (fringe > 0) {
-            edgeAt(out, W, H, x + 0.5 + dx * fringe, y + 0.5 + dy * fringe, q);
-            r = q[0];
-            edgeAt(out, W, H, x + 0.5 - dx * fringe, y + 0.5 - dy * fringe, q);
-            b = q[2];
-          }
           const dim = 1 - vignette * 0.6 * Math.min(1, r2 * 0.5);
           const noise = grain ? (hash2(x, y, 5) - 0.5) * grain * 0.12 : 0;
-          final[at] = Math.min(a, Math.max(0, r * dim + noise * a));
-          final[at + 1] = Math.min(a, Math.max(0, g * dim + noise * a));
-          final[at + 2] = Math.min(a, Math.max(0, b * dim + noise * a));
+          // Exposed as a camera exposes a screen, and what's brighter than
+          // white rolls off toward white, as a blown out highlight does,
+          // rather than each colour clipping on its own
+          r = r * dim * gain;
+          g = g * dim * gain;
+          b = b * dim * gain;
+          const peak = Math.max(r, g, b);
+          if (peak > a && a > 0) {
+            const spill = (peak - a) * 0.5;
+            r = Math.min(a, r + spill);
+            g = Math.min(a, g + spill);
+            b = Math.min(a, b + spill);
+          }
+          const sharpness = crisp[y * W + x];
+          final[at] = Math.min(a, Math.max(0, r * (1 + (balance[0] - 1) * sharpness) + noise * a));
+          final[at + 1] = Math.min(a, Math.max(0, g * (1 + (balance[1] - 1) * sharpness) + noise * a));
+          final[at + 2] = Math.min(a, Math.max(0, b * (1 + (balance[2] - 1) * sharpness) + noise * a));
           final[at + 3] = a;
         }
+      // Colour fringes toward the edges last, red out and blue in, over
+      // what's shown, so they move colour without changing its balance
+      if (fringe > 0) {
+        const fringed = Float32Array.from(final);
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const at = (y * W + x) * 4;
+            const dx = (x + 0.5 - W / 2) / (W / 2);
+            const dy = (y + 0.5 - H / 2) / (H / 2);
+            edgeAt(final, W, H, x + 0.5 + dx * fringe, y + 0.5 + dy * fringe, q);
+            fringed[at] = Math.min(final[at + 3], q[0]);
+            edgeAt(final, W, H, x + 0.5 - dx * fringe, y + 0.5 - dy * fringe, q);
+            fringed[at + 2] = Math.min(final[at + 3], q[2]);
+          }
+        return { image: toImage(fringed, W, H), x: 0, y: 0 };
+      }
       return { image: toImage(final, W, H), x: 0, y: 0 };
     },
   });
@@ -8854,7 +8984,7 @@ const PAGE_JS: &str = r##"(() => {
   // after each change, reused where they can be
   const FILL = "shapeFill";
   const FILL_ROLE_COPY = "fill-copy";
-  const FILL_DEFAULTS = { seeds: [], fit: "inside", margin: 0, gap: 2, density: 70, most: 300, size: 100, variation: 45, angle: 0, spin: 180, seed: 1, showShape: false, editable: true };
+  const FILL_DEFAULTS = { seeds: [], fit: "inside", margin: 0, gap: 2, density: 70, most: 300, size: 100, variation: 45, angle: 0, spin: 180, seed: 1, showShape: false, colorMode: "original", palette: ["#3b6fe0", "#1fae9b", "#f2b13a", "#e8505b"], saturation: 70, lightness: 55, editable: true };
   const FILL_PRESETS = [
     ["Packed", () => ({})],
     ["Poured", () => ({ fit: "loose", gap: 1, density: 85, variation: 60 })],
@@ -9053,15 +9183,81 @@ const PAGE_JS: &str = r##"(() => {
   // copies as real layers, a few at a time between frames, so Figma keeps
   // up
   const FILL_PICTURE_MOST = 1600;
-  const drawFill = (current) => {
-    const { shape, seeds, placed, settings } = current;
-    const k = Math.min(2, FILL_PICTURE_MOST / Math.max(1, shape.box.width, shape.box.height));
-    const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(shape.box.width * k)), height: Math.max(1, Math.round(shape.box.height * k)) });
-    const context = canvas.getContext("2d");
-    if (settings.showShape) context.drawImage(shape.bitmap, 0, 0, canvas.width, canvas.height);
+  // How far the shape and every copy reach, in points from the shape's
+  // top left, so a copy past the shape's box, as past a text box's, shows
+  const fillExtent = (current) => {
+    const { shape, seeds, placed } = current;
+    let [x0, y0, x1, y1] = [0, 0, shape.box.width, shape.box.height];
     for (const spot of placed) {
       const seed = seeds[spot.which];
       if (!seed) continue;
+      const r = 0.5 * Math.hypot(seed.box.width, seed.box.height) * spot.scale;
+      const cx = spot.x / shape.g;
+      const cy = spot.y / shape.g;
+      x0 = Math.min(x0, cx - r);
+      y0 = Math.min(y0, cy - r);
+      x1 = Math.max(x1, cx + r);
+      y1 = Math.max(y1, cy + r);
+    }
+    return { x0, y0, x1, y1 };
+  };
+  // A copy's colour: its own, one of the palette's, or a random hue at the
+  // saturation and lightness set, each picked by the seed
+  const hslHex = (h, sat, light) => {
+    const a = sat * Math.min(light, 1 - light);
+    const f = (n) => {
+      const k = (n + h / 30) % 12;
+      return light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    };
+    return "#" + [f(0), f(8), f(4)].map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("");
+  };
+  const fillColor = (s, i) => {
+    if (s.colorMode === "palette" && s.palette.length) return s.palette[Math.floor(hash2(i, 91, s.seed | 0) * s.palette.length)];
+    if (s.colorMode === "random") return hslHex(hash2(i, 92, s.seed | 0) * 360, s.saturation / 100, s.lightness / 100);
+    return null;
+  };
+  // A seed's picture in one colour, kept per colour
+  const tinted = (seed, color) => {
+    if (!color) return seed.look;
+    seed.tints ??= new Map();
+    let canvas = seed.tints.get(color);
+    if (!canvas) {
+      canvas = Object.assign(document.createElement("canvas"), { width: seed.look.width, height: seed.look.height });
+      const context = canvas.getContext("2d");
+      context.drawImage(seed.look, 0, 0);
+      context.globalCompositeOperation = "source-in";
+      context.fillStyle = color;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      seed.tints.set(color, canvas);
+    }
+    return canvas;
+  };
+  // A copy's solid fills set to one colour, or its strokes where it has no
+  // solid fill, and the same for what's in it
+  const recolor = (node, hex) => {
+    const [r, g, b] = hexRgb(hex);
+    const paint = (one) => {
+      try {
+        const solid = (list) => Array.isArray(list) && list.some((p) => p.type === "SOLID");
+        const set = (list) => list.map((p) => (p.type === "SOLID" ? { ...p, color: { r, g, b } } : p));
+        if ("fills" in one && solid(one.fills)) one.fills = set(one.fills);
+        else if ("strokes" in one && solid(one.strokes)) one.strokes = set(one.strokes);
+      } catch {}
+    };
+    paint(node);
+    if ("findAll" in node) for (const child of node.findAll(() => true)) paint(child);
+  };
+  const drawFill = (current) => {
+    const { shape, seeds, placed, settings } = current;
+    const reach = fillExtent(current);
+    const k = Math.min(2, FILL_PICTURE_MOST / Math.max(1, reach.x1 - reach.x0, reach.y1 - reach.y0));
+    const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round((reach.x1 - reach.x0) * k)), height: Math.max(1, Math.round((reach.y1 - reach.y0) * k)) });
+    const context = canvas.getContext("2d");
+    context.translate(-reach.x0 * k, -reach.y0 * k);
+    if (settings.showShape) context.drawImage(shape.bitmap, 0, 0, shape.box.width * k, shape.box.height * k);
+    placed.forEach((spot, i) => {
+      const seed = seeds[spot.which];
+      if (!seed) return;
       // The seed's picture is its render bounds; the spot's in the
       // shape's picture, `g` pixels a point
       const across = seed.box.width * spot.scale * k;
@@ -9069,10 +9265,10 @@ const PAGE_JS: &str = r##"(() => {
       context.save();
       context.translate((spot.x / shape.g) * k, (spot.y / shape.g) * k);
       context.rotate((spot.turn * Math.PI) / 180);
-      context.drawImage(seed.look, -across / 2, -down / 2, across, down);
+      context.drawImage(tinted(seed, fillColor(settings, i)), -across / 2, -down / 2, across, down);
       context.restore();
-    }
-    return { canvas, x: 0, y: 0, width: canvas.width, height: canvas.height, k };
+    });
+    return { canvas, x: reach.x0 * k, y: reach.y0 * k, width: canvas.width, height: canvas.height, k };
   };
   // The picture put in the file, at most a few times a second while
   // something's dragged, as each is a new image
@@ -9129,6 +9325,8 @@ const PAGE_JS: &str = r##"(() => {
       const seed = seeds[spot.which];
       const node = seed.node.clone();
       node.setSharedPluginData(PLUGIN, ROLE, FILL_ROLE_COPY);
+      const color = fillColor(current.settings, at);
+      if (color) recolor(node, color);
       parent.insertChild(++index, node);
       if (flowing && "layoutPositioning" in node) node.layoutPositioning = "ABSOLUTE";
       if ("rescale" in node && Math.abs(spot.scale - 1) > 1e-6) {
@@ -9348,23 +9546,28 @@ const PAGE_JS: &str = r##"(() => {
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, box.width, box.height);
     const { w, h, bitmap, g } = current.shape;
-    const fit = Math.min((box.width - 24) / w, (box.height - 24) / h);
-    const [ox, oy] = [(box.width - w * fit) / 2, (box.height - h * fit) / 2];
-    context.globalAlpha = 0.25;
+    // The shape and every copy, however far past it they reach
+    const reach = fillExtent(current);
+    const rw = (reach.x1 - reach.x0) * g;
+    const rh = (reach.y1 - reach.y0) * g;
+    const fit = Math.min((box.width - 24) / rw, (box.height - 24) / rh);
+    const ox = (box.width - rw * fit) / 2 - reach.x0 * g * fit;
+    const oy = (box.height - rh * fit) / 2 - reach.y0 * g * fit;
+    context.globalAlpha = current.settings.showShape ? 1 : 0.25;
     context.drawImage(bitmap, ox, oy, w * fit, h * fit);
     context.globalAlpha = 1;
-    for (const spot of current.placed) {
+    current.placed.forEach((spot, i) => {
       const seed = current.seeds[spot.which];
-      if (!seed) continue;
-      // The seed's picture is `size` points across, the shape's `g` pixels a point
-      const across = (seed.w / seed.g) * g * spot.scale * fit;
-      const down = (seed.h / seed.g) * g * spot.scale * fit;
+      if (!seed) return;
+      // The seed's picture is its render bounds, the shape's `g` pixels a point
+      const across = seed.box.width * g * spot.scale * fit;
+      const down = seed.box.height * g * spot.scale * fit;
       context.save();
       context.translate(ox + spot.x * fit, oy + spot.y * fit);
       context.rotate((spot.turn * Math.PI) / 180);
-      context.drawImage(seed.bitmap, -across / 2, -down / 2, across, down);
+      context.drawImage(tinted(seed, fillColor(current.settings, i)), -across / 2, -down / 2, across, down);
       context.restore();
-    }
+    });
   };
   const buildFillPanel = (current) => {
     const s = current.settings;
@@ -9375,12 +9578,12 @@ const PAGE_JS: &str = r##"(() => {
       refill(current);
       show();
     };
-    const slider = makeSlider({ s, unit, rows, change, limits: { margin: [0, 10000], gap: [-1000, 1000], density: [1, 100], most: [1, 2000], size: [1, 2000], variation: [0, 100], angle: [-360, 360], spin: [0, 180] } });
+    const slider = makeSlider({ s, unit, rows, change, limits: { saturation: [0, 100], lightness: [0, 100], margin: [0, 10000], gap: [-1000, 1000], density: [1, 100], most: [1, 2000], size: [1, 2000], variation: [0, 100], angle: [-360, 360], spin: [0, 180] } });
     const canvas = element("canvas", { className: "preview" });
     canvas.setAttribute("aria-hidden", "true");
     current.preview = canvas;
     const presets = makeChips(FILL_PRESETS, (values) => {
-      Object.assign(s, structuredClone(FILL_DEFAULTS), values(), { seeds: s.seeds, editable: s.editable });
+      Object.assign(s, structuredClone(FILL_DEFAULTS), values(), { seeds: s.seeds, editable: s.editable, colorMode: s.colorMode, palette: s.palette });
       refill(current);
       show();
     });
@@ -9481,6 +9684,67 @@ const PAGE_JS: &str = r##"(() => {
         ].map(slider),
       ),
     );
+    // Colours: the layers' own, picked from a palette of your own, or
+    // random hues at a saturation and lightness
+    const coloring = segments(
+      "Colors",
+      [
+        ["original", "Their own"],
+        ["palette", "Palette", "Each copy one of the palette's colours"],
+        ["random", "Random", "Each copy a random hue"],
+      ],
+      () => s.colorMode,
+      (value) => change("colorMode", value),
+    );
+    const swatches = element("div", { className: "chips" });
+    let paletteShape = "";
+    const buildPalette = () => {
+      paletteShape = s.palette.join();
+      swatches.replaceChildren();
+      s.palette.forEach((color, i) => {
+        const { swatch, paint } = colorSwatch(
+          () => s.palette[i],
+          (value) => {
+            s.palette[i] = value;
+            paletteShape = s.palette.join();
+            paint();
+            refill(current);
+            drawFillPreview(current);
+          },
+          `Palette colour ${i + 1}`,
+        );
+        paint();
+        swatch.style.width = swatch.style.height = "20px";
+        const remove = element("button", { type: "button", className: "icon-button", title: "Remove colour", innerHTML: REMOVE });
+        remove.disabled = s.palette.length <= 1;
+        remove.addEventListener("click", () => {
+          s.palette.splice(i, 1);
+          refill(current);
+          show();
+        });
+        const pair = element("span", {}, swatch, remove);
+        Object.assign(pair.style, { display: "inline-flex", alignItems: "center" });
+        swatches.append(pair);
+      });
+      const more = element("button", { type: "button", className: "icon-button", title: "Add a colour", innerHTML: ADD });
+      more.addEventListener("click", () => {
+        s.palette.push(hslHex(Math.random() * 360, 0.65, 0.55));
+        refill(current);
+        show();
+      });
+      swatches.append(more);
+    };
+    const paletteRow = element("div", { className: "row" }, swatches);
+    paletteRow.style.gridTemplateColumns = "1fr";
+    const randomRows = element(
+      "div",
+      { className: "rows" },
+      ...[
+        ["saturation", "Saturation", "%", () => ({ min: 0, max: 100 })],
+        ["lightness", "Lightness", "%", () => ({ min: 0, max: 100 })],
+      ].map(slider),
+    );
+    const colors = element("section", {}, element("div", { className: "caption", textContent: "Colors" }), element("div", { className: "row wide" }, coloring), paletteRow, randomRows);
     const shuffle = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
     shuffle.addEventListener("click", () => change("seed", Math.floor(Math.random() * 65536)));
     const shuffleRow = element("div", { className: "row" }, element("span", { className: "label", textContent: "Layout" }), shuffle);
@@ -9498,7 +9762,7 @@ const PAGE_JS: &str = r##"(() => {
       refill(current);
       show();
     });
-    const scroll = element("div", { className: "scroll" }, presets, shapes, placing, sizing, result, element("div", { className: "under" }, reset));
+    const scroll = element("div", { className: "scroll" }, presets, shapes, placing, sizing, colors, result, element("div", { className: "under" }, reset));
     const name = element("div", { className: "source", textContent: current.container.name });
     const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
     cancel.addEventListener("click", () => closeFill(current, false));
@@ -9510,6 +9774,10 @@ const PAGE_JS: &str = r##"(() => {
       if (shape !== current.seeds.map((seed) => seed.node.id).join()) buildList();
       hint.hidden = current.seeds.length > 0;
       fitting.show();
+      coloring.show();
+      if (paletteShape !== s.palette.join()) buildPalette();
+      paletteRow.hidden = s.colorMode !== "palette";
+      randomRows.hidden = s.colorMode !== "random";
       for (const row of rows) row.show();
       editable.checked = s.editable;
       showing.checked = s.showShape;
