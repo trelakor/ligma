@@ -10664,7 +10664,7 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
     try {
       current.base = source.absoluteTransform;
-      current.items = spec.seeds ? [] : shapesOf(source, spec.shadows);
+      current.items = spec.seeds && !spec.ownShape ? [] : shapesOf(source, spec.shadows);
       if (spec.seeds) {
         current.track = flatten(trackOf(source), 0.75).filter((line) => line.points.length >= 4).map(measured);
         current.seeds = (
@@ -10863,6 +10863,8 @@ const PAGE_JS: &str = r##"(() => {
     const fit = Math.min((box.width - pad * 2) / Math.max(1, x1 - x0), (box.height - pad * 2) / Math.max(1, y1 - y0));
     const ox = box.width / 2 - ((x0 + x1) / 2) * fit;
     const oy = box.height / 2 - ((y0 + y1) / 2) * fit;
+    // Where the layer is on the preview, for dragging on it
+    current.view = { ox, oy, fit };
     context.save();
     context.translate(ox, oy);
     context.scale(fit, fit);
@@ -11029,6 +11031,40 @@ const PAGE_JS: &str = r##"(() => {
     // Dragging round the preview turns the way it goes back, as if seen
     // from where the pointer is: it goes away from the pointer, past the
     // middle
+    // Dragging what an effect offers on its preview, as Envelope's points
+    if (spec.grab) {
+      canvas.style.touchAction = "none";
+      const local = (event) => {
+        const box = canvas.getBoundingClientRect();
+        const { ox, oy, fit } = current.view ?? { ox: 0, oy: 0, fit: 1 };
+        return [(event.clientX - box.left - ox) / fit, (event.clientY - box.top - oy) / fit, fit];
+      };
+      let held = null;
+      canvas.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        const [x, y, fit] = local(event);
+        held = spec.grab(current, x, y, fit);
+        if (!held) return;
+        current.dragging = held.index;
+        canvas.setPointerCapture(event.pointerId);
+      });
+      canvas.addEventListener("pointermove", (event) => {
+        const [x, y, fit] = local(event);
+        if (held && canvas.hasPointerCapture(event.pointerId)) {
+          change("mesh", held.move(x, y));
+          return;
+        }
+        canvas.style.cursor = spec.grab(current, x, y, fit) ? "grab" : "default";
+      });
+      const drop = (event) => {
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        held = null;
+        current.dragging = null;
+        show();
+      };
+      canvas.addEventListener("pointerup", drop);
+      canvas.addEventListener("pointercancel", drop);
+    }
     if (spec.orbit) {
       canvas.style.cursor = "grab";
       canvas.style.touchAction = "none";
@@ -12842,6 +12878,718 @@ const PAGE_JS: &str = r##"(() => {
   };
   const kaleidoPicture = pictureEffect(kaleidoSpec);
   bothEffect({ id: "kaleidoscope", name: "Kaleidoscope", about: KALEIDO_ABOUT, icon: KALEIDO_ICON, raster: kaleidoPicture, vector: kaleidoVector, thumb: () => pictureThumb(kaleidoSpec) });
+
+  // ---------- Reshaping ----------
+
+  // A closed outline as points evenly spaced along it, `n` of them, run
+  // one way round
+  const evenPoints = (sp, n) => {
+    const line = measured(flatten([{ ...sp, closed: true }], 0.75)[0]);
+    const out = [];
+    for (let i = 0; i < n; i++) out.push(...line.point((line.length * i) / n));
+    return clockwise(out);
+  };
+  // Points through a smooth closed curve, each piece as Catmull-Rom's
+  const smoothThrough = (points, closed = true) => {
+    const n = points.length / 2;
+    const p = (i) => {
+      const k = closed ? ((i % n) + n) % n : Math.min(n - 1, Math.max(0, i));
+      return [points[k * 2], points[k * 2 + 1]];
+    };
+    const segs = [];
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      const [a, b, c, d] = [p(i - 1), p(i), p(i + 1), p(i + 2)];
+      segs.push([b[0] + (c[0] - a[0]) / 6, b[1] + (c[1] - a[1]) / 6, c[0] - (d[0] - b[0]) / 6, c[1] - (d[1] - b[1]) / 6, c[0], c[1]]);
+    }
+    return { x: points[0], y: points[1], closed, segs };
+  };
+  const centreOf = (points) => {
+    let [x, y] = [0, 0];
+    for (let i = 0; i < points.length; i += 2) {
+      x += points[i];
+      y += points[i + 1];
+    }
+    return [(x * 2) / points.length, (y * 2) / points.length];
+  };
+
+  // ---------- Blend ----------
+
+  // From one shape to another, as Illustrator's Blend: both outlines as as
+  // many points evenly round them, lined up so each point meets the one
+  // nearest it on the other, then Smooth sweeps one into the other as one
+  // shape, every point's path between them, filled with a gradient from
+  // one's colour to the other's, or Steps makes the shapes between, each
+  // its own layer, coloured in turn. The first layer selected is the one
+  // it starts from, the other where it ends
+  const BLEND_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="7" cy="16" r="2.5"/><rect ${STROKE} x="14.5" y="5.5" width="5" height="5" rx="1"/><path ${STROKE} d="M9 14.5 14.5 10M8.5 18 18 10.5" stroke-dasharray="1.2 1.6"/></svg>`;
+  const outerOf = (items) => {
+    let best = null;
+    let most = -1;
+    for (const item of items)
+      for (const sp of closedPaths(item.paths)) {
+        const area = Math.abs(signedArea(flatten([sp], 2)[0].points));
+        if (area > most) [best, most] = [sp, area];
+      }
+    return best;
+  };
+  const blendEffect = vectorEffect({
+    id: "blend",
+    name: "Blend",
+    ownShape: true,
+    about: "Morph one shape into another, its colour with it",
+    icon: BLEND_ICON,
+    place: "below",
+    verb: "Blend",
+    seeds: true,
+    seedsCaption: "Blends into",
+    seedsLabel: "The shape it ends at",
+    ask: "Select two shapes to blend between",
+    defaults: { seeds: [], mode: "smooth", steps: 6, colors: true, ease: 50, editable: true },
+    limits: { steps: [1, 200], ease: [0, 100] },
+    presets: [
+      ["Smooth", () => ({ mode: "smooth" })],
+      ["Steps", () => ({ mode: "steps", steps: 6 })],
+      ["Many steps", () => ({ mode: "steps", steps: 18 })],
+    ],
+    summary: (s) => (s.mode === "steps" ? `${s.steps} steps` : "Smooth"),
+    // The path a brush follows isn't used: the selected layers are the ends
+    read: (current) => {
+      current.track = [];
+    },
+    make: (current) => {
+      const s = current.settings;
+      const seed = current.seeds[0];
+      if (!seed) return [];
+      // The end shape in the start's coordinates
+      const toHere = multiply(invert(current.base), seed.node.absoluteTransform);
+      const endItems = seed.items.map((item) => ({ ...item, paths: transformPaths(item.paths, toHere) }));
+      const [a, b] = [outerOf(current.items), outerOf(endItems)];
+      if (!a || !b) return [];
+      // As many points as hold the longer outline's shape, a point every few
+      // of its length
+      const reach = Math.max(measured(flatten([a], 1)[0]).length, measured(flatten([b], 1)[0]).length);
+      const n = Math.min(160, Math.max(48, Math.round(reach / 5)));
+      const A = evenPoints(a, n);
+      let B = evenPoints(b, n);
+      // Lined up: the turn of the end's points that sits nearest the start's,
+      // each about its own middle
+      const [ca, cb] = [centreOf(A), centreOf(B)];
+      let shift = 0;
+      let least = Infinity;
+      for (let k = 0; k < n; k++) {
+        let sum = 0;
+        for (let i = 0; i < n; i += 3) {
+          const j = (i + k) % n;
+          sum += (A[i * 2] - ca[0] - (B[j * 2] - cb[0])) ** 2 + (A[i * 2 + 1] - ca[1] - (B[j * 2 + 1] - cb[1])) ** 2;
+        }
+        if (sum < least) [least, shift] = [sum, k];
+      }
+      B = Array.from({ length: n * 2 }, (_, i) => B[(((i >> 1) + shift) % n) * 2 + (i & 1)]);
+      const colorA = paintColor(current.items[current.items.length - 1]?.paints);
+      const colorB = s.colors ? paintColor(endItems[endItems.length - 1]?.paints) : colorA;
+      const mix = (t) => colorA.map((c, i) => c + (colorB[i] - c) * t);
+      const rgb = ([r, g, bl]) => ({ r, g, b: bl });
+      if (s.mode === "steps") {
+        // Each shape between, through its points, its colour in turn, eased
+        // toward the middle as Ease says
+        const out = [];
+        const count = Math.max(1, Math.round(s.steps));
+        for (let k = 1; k <= count; k++) {
+          const t = k / (count + 1);
+          const pts = A.map((v, i) => v + (B[i] - v) * t);
+          out.push({ paths: [smoothThrough(pts)], winding: "NONZERO", paints: [{ type: "SOLID", color: rgb(mix(t)) }], opacity: 1, name: `Step ${k}` });
+        }
+        return out;
+      }
+      // Smooth: every point's path from one to the other, with both ends, as
+      // one shape, its sides each run one way round so nonzero winding makes
+      // them one; a side whose ends cross is two triangles
+      const paths = [polygonPaths(A), polygonPaths(B)];
+      const cross = (p, q, r, t) => {
+        const d = (q[0] - p[0]) * (t[1] - r[1]) - (q[1] - p[1]) * (t[0] - r[0]);
+        if (Math.abs(d) < 1e-9) return null;
+        const u = ((r[0] - p[0]) * (t[1] - r[1]) - (r[1] - p[1]) * (t[0] - r[0])) / d;
+        const v = ((r[0] - p[0]) * (q[1] - p[1]) - (r[1] - p[1]) * (q[0] - p[0])) / d;
+        return u > 0 && u < 1 && v > 0 && v < 1 ? [p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u] : null;
+      };
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const [a0, a1, b0, b1] = [[A[i * 2], A[i * 2 + 1]], [A[j * 2], A[j * 2 + 1]], [B[i * 2], B[i * 2 + 1]], [B[j * 2], B[j * 2 + 1]]];
+        // The quad a0 a1 b1 b0 is twisted when its two edges along the
+        // morph cross
+        const x = cross(a0, b0, a1, b1);
+        if (x) {
+          paths.push(polygonPaths(clockwise([...a0, ...a1, ...x])), polygonPaths(clockwise([...b0, ...b1, ...x])));
+        } else paths.push(polygonPaths(clockwise([...a0, ...a1, ...b1, ...b0])));
+      }
+      const far = Math.hypot(cb[0] - ca[0], cb[1] - ca[1]);
+      const paints =
+        far < 1 || !s.colors
+          ? [{ type: "SOLID", color: rgb(mix(s.colors ? 0.5 : 0)) }]
+          : [
+              linearPaint(paths, ca, cb, [
+                { position: 0, color: { ...rgb(colorA), a: 1 } },
+                { position: 0.5 + (s.ease - 50) / 200, color: { ...rgb(mix(0.5)), a: 1 } },
+                { position: 1, color: { ...rgb(colorB), a: 1 } },
+              ]),
+            ];
+      return [{ paths, winding: "NONZERO", paints, opacity: 1, name: "Blend" }];
+    },
+    panel: (ui) => [
+      ui.seeds(),
+      ui.section(
+        "",
+        ui.segments("mode", "Blend", [
+          ["smooth", "Smooth", "One shape from one to the other, its colour a gradient"],
+          ["steps", "Steps", "Shapes between them, each its own layer"],
+        ]),
+        ui.when(ui.sliders([["steps", "Steps", "", () => ({ min: 1, max: 40 })]]), () => ui.s.mode === "steps"),
+        ui.when(ui.sliders([["ease", "Colour middle", "%", () => ({ min: 0, max: 100 })]]), () => ui.s.mode === "smooth"),
+        ui.check("colors", "Blend colours", "From one shape's colour to the other's, or the first's throughout"),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      stage(g);
+      // A coral circle swept into a blue rounded square, one shape, one
+      // gradient
+      const circle = [];
+      for (let i = 0; i < 64; i++) circle.push(48 + Math.cos((i / 64) * Math.PI * 2) * 22, 110 + Math.sin((i / 64) * Math.PI * 2) * 22);
+      const square = evenPoints({ x: 92, y: 30, closed: true, segs: [lineSeg(92, 30, 132, 30), lineSeg(132, 30, 132, 70), lineSeg(132, 70, 92, 70), lineSeg(92, 70, 92, 30)] }, 64);
+      const A = clockwise(circle);
+      let best = 0;
+      let least = Infinity;
+      for (let k = 0; k < 64; k++) {
+        let sum = 0;
+        for (let i = 0; i < 64; i++) sum += (A[i * 2] - 48 - (square[((i + k) % 64) * 2] - 112)) ** 2 + (A[i * 2 + 1] - 110 - (square[((i + k) % 64) * 2 + 1] - 50)) ** 2;
+        if (sum < least) [least, best] = [sum, k];
+      }
+      const B = Array.from({ length: 128 }, (_, i) => square[(((i >> 1) + best) % 64) * 2 + (i & 1)]);
+      const path = new Path2D();
+      for (const pts of [A, B]) path.addPath(new Path2D(pathData([polygonPaths(pts)])));
+      for (let i = 0; i < 64; i++) {
+        const j = (i + 1) % 64;
+        path.addPath(new Path2D(pathData([polygonPaths(clockwise([A[i * 2], A[i * 2 + 1], A[j * 2], A[j * 2 + 1], B[j * 2], B[j * 2 + 1], B[i * 2], B[i * 2 + 1]]))])));
+      }
+      g.fillStyle = linear(g, 48, 110, 112, 50, [
+        [0, INK.coral],
+        [1, INK.blue],
+      ]);
+      g.globalAlpha = 0.85;
+      g.fill(path, "nonzero");
+      g.globalAlpha = 1;
+      // The two ends over it, as the blend sits under them
+      g.fillStyle = INK.coral;
+      g.beginPath();
+      g.arc(48, 110, 22, 0, Math.PI * 2);
+      g.fill();
+      g.fillStyle = INK.blue;
+      g.beginPath();
+      g.roundRect(92, 30, 40, 40, 4);
+      g.fill();
+      g.strokeStyle = STAGE;
+      g.lineWidth = 2;
+      g.stroke();
+      return tile;
+    },
+  });
+
+  // ---------- Roughen ----------
+
+  // Illustrator's Roughen: points set evenly along each outline, as many as
+  // Detail says per hundred points, each moved at random across the
+  // outline by up to Size, joined smoothly or as corners. The same seed
+  // always roughens the same way
+  const ROUGHEN_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m12 4.5 1.6 2.3 2.7-.9.3 2.8 2.7 1-1.4 2.4 1.6 2.3-2.6 1.1.1 2.8-2.8-.4-1.2 2.6-2-2-2.4 1.5-.8-2.7-2.8-.1.8-2.7-2.3-1.6 2.1-1.9-.9-2.7 2.8-.3.6-2.8 2.6 1.1z"/></svg>`;
+  vectorEffect({
+    id: "roughen",
+    name: "Roughen",
+    about: "Make its edges jagged or hand drawn",
+    icon: ROUGHEN_ICON,
+    place: "replace",
+    verb: "Roughen",
+    ask: "Select a shape or text to roughen",
+    start: (u) => ({ size: Math.max(1, Math.round(u * 0.02)) }),
+    defaults: { size: 4, detail: 12, smooth: true, seed: 1, editable: true },
+    limits: { size: [0, 10000], detail: [1, 200] },
+    presets: [
+      ["Hand drawn", (u) => ({ size: Math.max(1, Math.round(u * 0.008)), detail: 8, smooth: true })],
+      ["Rough", (u) => ({ size: Math.max(1, Math.round(u * 0.02)), detail: 14, smooth: true })],
+      ["Jagged", (u) => ({ size: Math.max(1, Math.round(u * 0.03)), detail: 18, smooth: false })],
+      ["Torn", (u) => ({ size: Math.max(1, Math.round(u * 0.012)), detail: 40, smooth: false })],
+    ],
+    summary: (s) => `${s.size}px · ${s.smooth ? "Smooth" : "Corners"}`,
+    make: (current) => {
+      const s = current.settings;
+      let k = 0;
+      return current.items.map((item) => ({
+        paths: flatten(closedPaths(item.paths), 0.75).map((line) => {
+          const m = measured(line);
+          const count = Math.max(6, Math.round((m.length * s.detail) / 100));
+          const pts = [];
+          for (let i = 0; i < count; i++, k++) {
+            const d = (m.length * i) / count;
+            const [x, y] = m.point(d);
+            const [ux, uy] = m.direction(d, 1);
+            const across = s.size * (hash2(k, 1, s.seed | 0) * 2 - 1);
+            const along = s.size * 0.4 * (hash2(k, 2, s.seed | 0) * 2 - 1);
+            pts.push(x + uy * across + ux * along, y - ux * across + uy * along);
+          }
+          return s.smooth ? smoothThrough(pts) : polygonPaths(pts);
+        }),
+        winding: item.winding,
+        paints: item.paints,
+        opacity: item.opacity,
+        name: "Roughen",
+      }));
+    },
+    panel: (ui) => [
+      ui.section(
+        "",
+        ui.sliders([
+          ["size", "Size", "px", (u) => ({ min: 0, max: Math.max(10, Math.round(u * 0.1)), shape: "curve" })],
+          ["detail", "Detail", "/100px", () => ({ min: 1, max: 60, shape: "curve" })],
+        ]),
+        ui.segments("smooth", "Points", [
+          [true, "Smooth"],
+          [false, "Corner"],
+        ]),
+        ui.shuffle("seed"),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      stage(g);
+      // A disc roughened, mint
+      const pts = [];
+      for (let i = 0; i < 40; i++) {
+        const a = (i / 40) * Math.PI * 2;
+        const r = 48 + (hash2(i, 1, 3) * 2 - 1) * 9;
+        pts.push(80 + Math.cos(a) * r, 80 + Math.sin(a) * r);
+      }
+      g.fillStyle = INK.mint;
+      g.fill(new Path2D(pathData([smoothThrough(pts)])));
+      g.strokeStyle = "rgba(246, 242, 234, 0.35)";
+      g.setLineDash([3, 4]);
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.arc(80, 80, 48, 0, Math.PI * 2);
+      g.stroke();
+      return tile;
+    },
+  });
+
+  // ---------- Pucker & Bloat ----------
+
+  // Illustrator's Pucker & Bloat: each curve's handles pushed out from the
+  // middle of the layer, bloating it into rounded lobes, or pulled in,
+  // puckering it into spikes, its points where they are. Points adds
+  // points along each curve first, for more lobes or spikes
+  const PUCKER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12 3.5c.6 4.6 3.9 7.9 8.5 8.5-4.6.6-7.9 3.9-8.5 8.5-.6-4.6-3.9-7.9-8.5-8.5 4.6-.6 7.9-3.9 8.5-8.5Z"/></svg>`;
+  vectorEffect({
+    id: "puckerBloat",
+    name: "Pucker & Bloat",
+    about: "Pinch its edges into spikes or puff them into lobes",
+    icon: PUCKER_ICON,
+    place: "replace",
+    verb: "Apply",
+    ask: "Select a shape or text to pucker or bloat",
+    defaults: { amount: -50, points: 1, editable: true },
+    limits: { amount: [-200, 200], points: [1, 24] },
+    presets: [
+      ["Pucker", () => ({ amount: -60, points: 1 })],
+      ["Bloat", () => ({ amount: 60, points: 1 })],
+      ["Flower", () => ({ amount: 80, points: 3 })],
+      ["Spiky", () => ({ amount: -80, points: 3 })],
+    ],
+    summary: (s) => `${s.amount < 0 ? "Pucker" : "Bloat"} · ${Math.abs(s.amount)}%`,
+    make: (current) => {
+      const s = current.settings;
+      const k = s.amount / 100;
+      const n = Math.max(1, Math.round(s.points));
+      return current.items.map((item) => ({
+        paths: closedPaths(item.paths).map((sp) => {
+          // About the middle of each outline, as Illustrator's is about each
+          // object's, a letter's counter about its own
+          const [cx, cy] = centreOf(flatten([sp], 2)[0].points);
+          const push = (x, y) => [x + (x - cx) * k, y + (y - cy) * k];
+          const segs = [];
+          let [x, y] = [sp.x, sp.y];
+          for (const g of sp.segs) {
+            for (let i = 0; i < n; i++) {
+              const p = cubicPart(x, y, g, i / n, (i + 1) / n);
+              segs.push([...push(p[0], p[1]), ...push(p[2], p[3]), p[4], p[5]]);
+            }
+            [x, y] = [g[4], g[5]];
+          }
+          return { x: sp.x, y: sp.y, closed: sp.closed, segs };
+        }),
+        winding: item.winding,
+        paints: item.paints,
+        opacity: item.opacity,
+        name: "Pucker & Bloat",
+      }));
+    },
+    panel: (ui) => [
+      ui.section(
+        "",
+        ui.sliders([
+          ["amount", "Pucker or bloat", "%", () => ({ min: -100, max: 100 })],
+          ["points", "Points per curve", "", () => ({ min: 1, max: 8 })],
+        ]),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      stage(g);
+      // A square puckered into a star, pink, beside one bloated, blue
+      const shape = (cx, cy, r, k) => {
+        const corners = [
+          [cx - r, cy - r],
+          [cx + r, cy - r],
+          [cx + r, cy + r],
+          [cx - r, cy + r],
+        ];
+        const path = new Path2D();
+        path.moveTo(...corners[0]);
+        for (let i = 0; i < 4; i++) {
+          const [p, q] = [corners[i], corners[(i + 1) % 4]];
+          const c1 = [p[0] + (q[0] - p[0]) / 3, p[1] + (q[1] - p[1]) / 3];
+          const c2 = [p[0] + ((q[0] - p[0]) * 2) / 3, p[1] + ((q[1] - p[1]) * 2) / 3];
+          const f = (c) => [c[0] + (c[0] - cx) * k, c[1] + (c[1] - cy) * k];
+          path.bezierCurveTo(...f(c1), ...f(c2), ...q);
+        }
+        return path;
+      };
+      g.fillStyle = INK.pink;
+      g.fill(shape(50, 60, 30, -0.9));
+      g.fillStyle = INK.blue;
+      g.fill(shape(108, 102, 20, 1.6));
+      return tile;
+    },
+  });
+
+  // ---------- Round Corners ----------
+
+  // Every corner rounded to Radius: where an outline turns sharply, the two
+  // curves either side are cut back as far as a circle of that radius
+  // would touch them and joined by a curve that follows the circle, as
+  // round corners are drawn. Corners that turn less than Only sharper than
+  // are left
+  const ROUND_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 19.5v-7a7 7 0 0 1 7-7h7"/><path ${STROKE} d="M5.5 5.5h2M5.5 5.5v2" stroke-opacity=".5"/></svg>`;
+  // The point `d` along a curve from its start, or from its end, as `t`
+  const tAtLength = (x0, y0, g, d, fromEnd) => {
+    const steps = 48;
+    let [px, py] = cubicAt(x0, y0, g, fromEnd ? 1 : 0);
+    let sum = 0;
+    for (let i = 1; i <= steps; i++) {
+      const t = fromEnd ? 1 - i / steps : i / steps;
+      const [qx, qy] = cubicAt(x0, y0, g, t);
+      const l = Math.hypot(qx - px, qy - py);
+      if (sum + l >= d) {
+        const f = l > 0 ? (d - sum) / l : 0;
+        return fromEnd ? 1 - (i - 1 + f) / steps : (i - 1 + f) / steps;
+      }
+      sum += l;
+      [px, py] = [qx, qy];
+    }
+    return fromEnd ? 0 : 1;
+  };
+  vectorEffect({
+    id: "roundCorners",
+    name: "Round Corners",
+    about: "Round every sharp corner of a shape",
+    icon: ROUND_ICON,
+    place: "replace",
+    verb: "Round",
+    ask: "Select a shape or text to round",
+    start: (u) => ({ radius: Math.max(1, Math.round(u * 0.06)) }),
+    defaults: { radius: 12, sharper: 15, editable: true },
+    limits: { radius: [0, 100000], sharper: [0, 179] },
+    presets: [
+      ["Soft", (u) => ({ radius: Math.max(1, Math.round(u * 0.03)) })],
+      ["Round", (u) => ({ radius: Math.max(1, Math.round(u * 0.08)) })],
+      ["Pill", (u) => ({ radius: Math.max(1, Math.round(u * 0.5)) })],
+    ],
+    summary: (s) => `${s.radius}px`,
+    make: (current) => {
+      const s = current.settings;
+      const limit = (s.sharper * Math.PI) / 180;
+      const tangent = (x0, y0, g, end) => {
+        const pairs = end
+          ? [
+              [g[4] - g[2], g[5] - g[3]],
+              [g[4] - g[0], g[5] - g[1]],
+              [g[4] - x0, g[5] - y0],
+            ]
+          : [
+              [g[0] - x0, g[1] - y0],
+              [g[2] - x0, g[3] - y0],
+              [g[4] - x0, g[5] - y0],
+            ];
+        const [x, y] = pairs.find(([a, b]) => Math.hypot(a, b) > 1e-9) ?? [1, 0];
+        const l = Math.hypot(x, y);
+        return [x / l, y / l];
+      };
+      const round = (sp) => {
+        const list = [];
+        let [x, y] = [sp.x, sp.y];
+        for (const g of sp.segs) {
+          if (Math.hypot(g[4] - x, g[5] - y) > 1e-6 || Math.hypot(g[0] - x, g[1] - y) > 1e-6) list.push({ x0: x, y0: y, g, length: segLength(x, y, g), start: 0, end: 0 });
+          [x, y] = [g[4], g[5]];
+        }
+        const n = list.length;
+        if (n < 2 || s.radius <= 0) return sp;
+        // Each corner's turn, and how far back each side is cut for it
+        const corners = [];
+        for (let i = 0; i < n; i++) {
+          if (!sp.closed && i === n - 1) break;
+          const [a, b] = [list[i], list[(i + 1) % n]];
+          const [ix, iy] = tangent(a.x0, a.y0, a.g, true);
+          const [ox, oy] = tangent(b.x0, b.y0, b.g, false);
+          const turn = Math.atan2(ix * oy - iy * ox, ix * ox + iy * oy);
+          if (Math.abs(turn) < limit || Math.abs(turn) > Math.PI - 1e-3) {
+            corners.push(null);
+            continue;
+          }
+          const cut = Math.min(s.radius * Math.tan(Math.abs(turn) / 2), a.length * 0.5, b.length * 0.5);
+          a.end = cut;
+          b.start = cut;
+          corners.push({ turn, cut, ix, iy, ox, oy });
+        }
+        const out = { x: 0, y: 0, closed: sp.closed, segs: [] };
+        list.forEach((one, i) => {
+          const t0 = one.start ? tAtLength(one.x0, one.y0, one.g, one.start, false) : 0;
+          const t1 = one.end ? tAtLength(one.x0, one.y0, one.g, one.end, true) : 1;
+          const piece = cubicPart(one.x0, one.y0, one.g, t0, Math.max(t0 + 1e-4, t1));
+          const [sx, sy] = t0 > 0 ? cubicAt(one.x0, one.y0, one.g, t0) : [one.x0, one.y0];
+          if (i === 0) [out.x, out.y] = [sx, sy];
+          out.segs.push(piece);
+          const corner = corners[i];
+          if (!corner) return;
+          // The curve round the corner, its handles along both sides, as
+          // long as a circle's
+          const next = list[(i + 1) % n];
+          const tn = tAtLength(next.x0, next.y0, next.g, corner.cut, false);
+          const [ex, ey] = cubicAt(next.x0, next.y0, next.g, tn);
+          const r = corner.cut / Math.tan(Math.abs(corner.turn) / 2);
+          const h = (4 / 3) * Math.tan(Math.abs(corner.turn) / 4) * r;
+          out.segs.push([piece[4] + corner.ix * h, piece[5] + corner.iy * h, ex - corner.ox * h, ey - corner.oy * h, ex, ey]);
+        });
+        return out;
+      };
+      return current.items.map((item) => ({ paths: item.paths.map(round), winding: item.winding, paints: item.paints, opacity: item.opacity, name: "Round Corners" }));
+    },
+    panel: (ui) => [
+      ui.section(
+        "",
+        ui.sliders([
+          ["radius", "Radius", "px", (u) => ({ min: 0, max: Math.max(20, Math.round(u * 0.5)), shape: "curve" })],
+          ["sharper", "Only sharper than", "°", () => ({ min: 0, max: 120 })],
+        ]),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      stage(g);
+      // A star with sharp points, faint, and the same rounded, amber
+      const sharp = starPath(80, 84, 66, 28);
+      g.strokeStyle = "rgba(246, 242, 234, 0.3)";
+      g.lineWidth = 1.5;
+      g.setLineDash([3, 4]);
+      g.stroke(sharp);
+      g.setLineDash([]);
+      g.save();
+      g.lineJoin = "round";
+      g.lineWidth = 16;
+      g.strokeStyle = INK.amber;
+      g.fillStyle = INK.amber;
+      g.stroke(starPath(80, 84, 50, 22));
+      g.fill(starPath(80, 84, 50, 22));
+      g.restore();
+      return tile;
+    },
+  });
+
+  // ---------- Envelope ----------
+
+  // A grid of points over the layer, dragged on the preview, bending it as
+  // the grid bends: each point of its outlines moved as the grid around it
+  // is, smoothly between the grid's points, each curve bent whole
+  const ENVELOPE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 7c5-2.5 10-2.5 15 0v10c-5 2.5-10 2.5-15 0z"/><path ${STROKE} d="M12 5.2v13.6M4.5 12c5-1.5 10-1.5 15 0" stroke-opacity=".55"/><circle cx="4.5" cy="7" r="1.25" fill="currentColor"/><circle cx="19.5" cy="7" r="1.25" fill="currentColor"/><circle cx="4.5" cy="17" r="1.25" fill="currentColor"/><circle cx="19.5" cy="17" r="1.25" fill="currentColor"/></svg>`;
+  // A grid's points moved, each [across, down] as a share of the layer, as
+  // a preset makes them
+  const meshOf = (cols, rows, f) => {
+    const out = [];
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) out.push(f(i / (cols - 1), j / (rows - 1)));
+    return out;
+  };
+  // How far the grid moves a point at `u`, `v`, 0 to 1 over the layer, by
+  // Catmull-Rom across the grid's points both ways, so it bends smoothly
+  const meshAt = (s, u, v) => {
+    const { cols, rows, mesh } = s;
+    const gx = Math.min(cols - 1, Math.max(0, u * (cols - 1)));
+    const gy = Math.min(rows - 1, Math.max(0, v * (rows - 1)));
+    const i = Math.min(cols - 2, Math.floor(gx));
+    const j = Math.min(rows - 2, Math.floor(gy));
+    const [fx, fy] = [gx - i, gy - j];
+    const at = (a, b) => mesh[Math.min(rows - 1, Math.max(0, b)) * cols + Math.min(cols - 1, Math.max(0, a))] ?? [0, 0];
+    const cr = (p0, p1, p2, p3, t) => 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
+    const out = [0, 0];
+    for (const k of [0, 1]) {
+      const rowsAt = [-1, 0, 1, 2].map((dj) => cr(at(i - 1, j + dj)[k], at(i, j + dj)[k], at(i + 1, j + dj)[k], at(i + 2, j + dj)[k], fx));
+      out[k] = cr(...rowsAt, fy);
+    }
+    return out;
+  };
+  vectorEffect({
+    id: "envelope",
+    name: "Envelope",
+    about: "Bend it by dragging a grid of points",
+    icon: ENVELOPE_ICON,
+    place: "replace",
+    verb: "Apply",
+    ask: "Select a shape or text to bend",
+    defaults: { cols: 3, rows: 3, mesh: meshOf(3, 3, () => [0, 0]), editable: true },
+    limits: { cols: [2, 6], rows: [2, 6] },
+    keep: [],
+    presets: [
+      ["Flat", () => ({ cols: 3, rows: 3, mesh: meshOf(3, 3, () => [0, 0]) })],
+      ["Arch", () => ({ cols: 3, rows: 3, mesh: meshOf(3, 3, (u) => [0, -0.25 * Math.sin(Math.PI * u)]) })],
+      ["Bulge", () => ({ cols: 3, rows: 3, mesh: meshOf(3, 3, (u, v) => [(u - 0.5) * 0.3 * Math.sin(Math.PI * v), (v - 0.5) * 0.3 * Math.sin(Math.PI * u)]) })],
+      ["Wave", () => ({ cols: 5, rows: 2, mesh: meshOf(5, 2, (u) => [0, 0.15 * Math.sin(u * Math.PI * 2)]) })],
+      ["Perspective", () => ({ cols: 2, rows: 2, mesh: meshOf(2, 2, (u, v) => [(u - 0.5) * -0.35 * (1 - v), 0]) })],
+    ],
+    summary: (s) => `${s.cols} × ${s.rows}`,
+    read: (current) => {
+      current.box = itemsBounds(current.items);
+    },
+    make: (current) => {
+      const s = current.settings;
+      if (!Array.isArray(s.mesh) || s.mesh.length !== s.cols * s.rows) s.mesh = meshOf(s.cols, s.rows, () => [0, 0]);
+      const { x0, y0, x1, y1 } = current.box;
+      const w = Math.max(1e-3, x1 - x0);
+      const h = Math.max(1e-3, y1 - y0);
+      const f = (x, y) => {
+        const [dx, dy] = meshAt(s, (x - x0) / w, (y - y0) / h);
+        return [x + dx * w, y + dy * h];
+      };
+      const size = Math.max(w, h);
+      return current.items.map((item) => ({ paths: bendPaths(item.paths, f, Math.max(0.05, size / 2000), size), winding: item.winding, paints: item.paints, opacity: item.opacity, name: "Envelope" }));
+    },
+    // The grid on the preview, bent as it bends the layer, its points to
+    // drag
+    preview: (current) => {
+      const s = current.settings;
+      const { x0, y0, x1, y1 } = current.box;
+      const [w, h] = [x1 - x0, y1 - y0];
+      const point = (u, v) => {
+        const [dx, dy] = meshAt(s, u, v);
+        return [x0 + (u + dx) * w, y0 + (v + dy) * h];
+      };
+      return [
+        {
+          over: true,
+          bounds: current.box,
+          draw: (context, fit) => {
+            context.save();
+            context.lineWidth = 1 / fit;
+            context.strokeStyle = "rgba(13, 153, 255, 0.85)";
+            for (const across of [true, false]) {
+              const lines = across ? s.rows : s.cols;
+              for (let k = 0; k < lines; k++) {
+                context.beginPath();
+                for (let t = 0; t <= 1.0001; t += 1 / 32) context.lineTo(...(across ? point(t, k / (lines - 1)) : point(k / (lines - 1), t)));
+                context.stroke();
+              }
+            }
+            for (let j = 0; j < s.rows; j++)
+              for (let i = 0; i < s.cols; i++) {
+                const [x, y] = point(i / (s.cols - 1), j / (s.rows - 1));
+                context.beginPath();
+                context.arc(x, y, 4.5 / fit, 0, Math.PI * 2);
+                context.fillStyle = current.dragging === j * s.cols + i ? "#0d99ff" : "#ffffff";
+                context.fill();
+                context.strokeStyle = "#0d99ff";
+                context.stroke();
+              }
+            context.restore();
+          },
+        },
+      ];
+    },
+    // Dragging a grid point on the preview
+    grab: (current, x, y, fit) => {
+      const s = current.settings;
+      const { x0, y0, x1, y1 } = current.box;
+      const [w, h] = [x1 - x0, y1 - y0];
+      let best = -1;
+      let near = 10 / fit;
+      for (let j = 0; j < s.rows; j++)
+        for (let i = 0; i < s.cols; i++) {
+          const [u, v] = [i / (s.cols - 1), j / (s.rows - 1)];
+          const [dx, dy] = s.mesh[j * s.cols + i] ?? [0, 0];
+          const d = Math.hypot(x0 + (u + dx) * w - x, y0 + (v + dy) * h - y);
+          if (d < near) [best, near] = [j * s.cols + i, d];
+        }
+      if (best < 0) return null;
+      const [u, v] = [(best % s.cols) / (s.cols - 1), Math.floor(best / s.cols) / (s.rows - 1)];
+      return {
+        index: best,
+        move: (px, py) => {
+          const mesh = s.mesh.map((one) => [...one]);
+          mesh[best] = [(px - x0) / w - u, (py - y0) / h - v];
+          return mesh;
+        },
+      };
+    },
+    panel: (ui) => [
+      ui.section(
+        "",
+        ui.sliders([
+          ["cols", "Columns", "", () => ({ min: 2, max: 6 })],
+          ["rows", "Rows", "", () => ({ min: 2, max: 6 })],
+        ]),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      stage(g);
+      // A violet card bent by a grid, the grid over it with its points
+      const s = { cols: 3, rows: 3, mesh: meshOf(3, 3, (u, v) => [(u - 0.5) * 0.25 * Math.sin(Math.PI * v), -0.22 * Math.sin(Math.PI * u) * (1 - v * 0.4)]) };
+      const [x0, y0, w, h] = [30, 44, 100, 76];
+      const point = (u, v) => {
+        const [dx, dy] = meshAt(s, u, v);
+        return [x0 + (u + dx) * w, y0 + (v + dy) * h];
+      };
+      const card = new Path2D();
+      for (let t = 0; t <= 1; t += 1 / 24) card.lineTo(...point(t, 0));
+      for (let t = 0; t <= 1; t += 1 / 24) card.lineTo(...point(1, t));
+      for (let t = 1; t >= 0; t -= 1 / 24) card.lineTo(...point(t, 1));
+      for (let t = 1; t >= 0; t -= 1 / 24) card.lineTo(...point(0, t));
+      g.fillStyle = INK.violet;
+      g.fill(card);
+      g.strokeStyle = "rgba(246, 242, 234, 0.55)";
+      g.lineWidth = 1.25;
+      for (const k of [0.5]) {
+        g.beginPath();
+        for (let t = 0; t <= 1.001; t += 1 / 24) g.lineTo(...point(t, k));
+        g.stroke();
+        g.beginPath();
+        for (let t = 0; t <= 1.001; t += 1 / 24) g.lineTo(...point(k, t));
+        g.stroke();
+      }
+      for (let j = 0; j < 3; j++)
+        for (let i = 0; i < 3; i++) {
+          const [x, y] = point(i / 2, j / 2);
+          g.beginPath();
+          g.arc(x, y, 4, 0, Math.PI * 2);
+          g.fillStyle = INK.paper;
+          g.fill();
+        }
+      return tile;
+    },
+  });
 
   // ---------- Following the original ----------
 
