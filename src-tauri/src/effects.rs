@@ -8654,7 +8654,7 @@ const PAGE_JS: &str = r##"(() => {
     about: "Film it off a monitor, in 3D with depth of field",
     icon: SCREEN_ICON,
     verb: "Make screen",
-    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focusX: 62, focusY: 62, tint: "#ffffff", tintAmount: 0, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
+    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focusX: 62, focusY: 62, look: "natural", tint: "#b8ffb0", grid: 55, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 100, editable: true },
     presets: [
       ["Angled", () => ({})],
       ["Close up", () => ({ zoom: 320, tiltX: 18, tiltY: -28, pitch: 2.5, aperture: 75 })],
@@ -8663,7 +8663,7 @@ const PAGE_JS: &str = r##"(() => {
       ["Desk", () => ({ tiltX: 42, tiltY: 0, roll: -6, zoom: 170, aperture: 70 })],
       ["Flat grid", () => ({ tiltX: 0, tiltY: 0, zoom: 100, aperture: 0, vignette: 0, fringe: 0, glow: 15, grain: 0 })],
     ],
-    limits: { pitch: [0.5, 1000], gaps: [0, 100], tiltX: [-89, 89], tiltY: [-89, 89], roll: [-360, 360], zoom: [10, 2000], centerX: [-200, 300], centerY: [-200, 300], focusX: [-200, 300], focusY: [-200, 300], tintAmount: [0, 100], focus: [0, 100], aperture: [0, 100], glow: [0, 100], fringe: [0, 100], vignette: [0, 100], grain: [0, 100], exposure: [10, 300] },
+    limits: { pitch: [0.5, 1000], gaps: [0, 100], tiltX: [-89, 89], tiltY: [-89, 89], roll: [-360, 360], zoom: [10, 2000], centerX: [-200, 300], centerY: [-200, 300], focusX: [-200, 300], focusY: [-200, 300], grid: [0, 100], focus: [0, 100], aperture: [0, 100], glow: [0, 100], fringe: [0, 100], vignette: [0, 100], grain: [0, 100], exposure: [10, 300] },
     summary: (s) => `${s.tiltX}° · ${s.tiltY}° · ${s.zoom}%`,
     panel: (ui) => [
       ui.section(
@@ -8686,11 +8686,15 @@ const PAGE_JS: &str = r##"(() => {
         "Pixels",
         ui.sliders([
           ["pitch", "Pixel size", "pt", (u) => ({ min: 0.5, max: upTo(u, 0.03, 12), shape: "curve", digits: 1 })],
+          ["grid", "Grid", "%", () => ({ min: 0, max: 100 })],
           ["gaps", "Gaps", "%", () => ({ min: 0, max: 100 })],
           ["exposure", "Exposure", "%", () => ({ min: 25, max: 250, middle: 100 })],
-          ["tintAmount", "Tint", "%", () => ({ min: 0, max: 100 })],
         ]),
-        ui.color("tint", "Tint color"),
+        ui.segments("look", "Look", [
+          ["natural", "Natural", "Its own colours"],
+          ["tint", "Tint", "Its colours toward a tint, green to start, as a camera's off white"],
+        ]),
+        ui.when(ui.color("tint", "Tint"), () => ui.s.look === "tint"),
       ),
       ui.section(
         "Lens",
@@ -8734,9 +8738,9 @@ const PAGE_JS: &str = r##"(() => {
       const pitch = Math.max(0.5, s.pitch * k);
       const gap = s.gaps / 100;
       const exposure = s.exposure / 100;
-      // The screen's white, toward Tint by its amount
-      const tintColor = hexRgb(s.tint);
-      const tint = tintColor.map((c) => 1 + (c - 1) * (s.tintAmount / 100));
+      const gridStrength = s.grid / 100;
+      // Tinted, its colours times the tint, or its own
+      const tint = s.look === "tint" ? hexRgb(s.tint) : [1, 1, 1];
       // The camera's view of the screen, sharp: stripes and gaps, and each
       // pixel's distance, for the focus
       const sharp = new Float32Array(W * H * 4);
@@ -8761,9 +8765,7 @@ const PAGE_JS: &str = r##"(() => {
         return out;
       };
       const beside = new Float64Array(3);
-      const white = [0, 0, 0];
-      let shown = 0;
-      const stripes = new Float32Array(W * H * 3);
+
       // A stripe's light across a pixel cell, filtered by how much of the
       // cell one picture pixel covers, so fine stripes average out rather
       // than flicker
@@ -8795,24 +8797,23 @@ const PAGE_JS: &str = r##"(() => {
           const soft = reach * 1.2;
           // Dark gaps round each pixel, the stripes inside
           const rows = stripe(fv, gap * 0.18, 1 - gap * 0.18, soft);
-          const lit = 1;
+          // How much of a pixel's light its stripes carry, the rest spread
+          // across it, and each stripe as much brighter as the gaps and the
+          // other stripes leave dark, so the pixel's as bright as the
+          // artwork there on average, and as the exposure says: strong
+          // enough to see, not so strong bright colours clip to white
+          const cover = (1 / 3 - 2 * gap * 0.06) * (1 - 2 * gap * 0.18);
+          const lit = exposure * (gridStrength / cover);
+          const flat = exposure * (1 - gridStrength);
           const at = (y * W + x) * 4;
           // Three stripes the same width
           const edge = gap * 0.06;
           const sr = stripe(fu, edge, 1 / 3 - edge, soft) * rows * lit;
           const sg = stripe(fu, 1 / 3 + edge, 2 / 3 - edge, soft) * rows * lit;
           const sb = stripe(fu, 2 / 3 + edge, 1 - edge, soft) * rows * lit;
-          sharp[at] = p[0] * sr * tint[0];
-          sharp[at + 1] = p[1] * sg * tint[1];
-          sharp[at + 2] = p[2] * sb * tint[2];
-          // What white would show here
-          white[0] += sr;
-          white[1] += sg;
-          white[2] += sb;
-          shown++;
-          stripes[(y * W + x) * 3] = sr;
-          stripes[(y * W + x) * 3 + 1] = sg;
-          stripes[(y * W + x) * 3 + 2] = sb;
+          sharp[at] = p[0] * (flat * rows + sr) * tint[0];
+          sharp[at + 1] = p[1] * (flat * rows + sg) * tint[1];
+          sharp[at + 2] = p[2] * (flat * rows + sb) * tint[2];
           sharp[at + 3] = p[3];
           depth[y * W + x] = t;
         }
@@ -8874,15 +8875,12 @@ const PAGE_JS: &str = r##"(() => {
         layers.push(levels.map((m, j) => (blurMax * m > 0.3 ? blurSmall(channel, blurMax * m, j >= 2 ? 2 : 1) : channel)));
       }
       const out = new Float32Array(W * H * 4);
-      const crisp = new Float32Array(W * H);
       for (let i = 0; i < W * H; i++) {
         const t = depth[i];
         const away = t > 0 ? Math.abs(t - sharpAt) / sharpAt : 0;
         const at = clamp01((away - spread * 0.3) / spread) * 3;
         const j = Math.min(2, Math.floor(at));
         const m = at - j;
-        // How sharp it is, for balancing white only where stripes show
-        crisp[i] = blurMax * (at / 3) > 0.6 ? Math.max(0, 1 - (blurMax * (at / 3) - 0.6)) : 1;
         for (let c = 0; c < 4; c++) out[i * 4 + c] = layers[c][j][i] * (1 - m) + layers[c][j + 1][i] * m;
       }
       // Glow round bright parts, as light scatters in a lens
@@ -8898,27 +8896,6 @@ const PAGE_JS: &str = r##"(() => {
       const fringe = (s.fringe / 100) * Math.max(W, H) * 0.004;
       const vignette = s.vignette / 100;
       const grain = s.grain / 100;
-      // How bright white comes out on this screen, on average, so it can
-      // be exposed to look white whatever the gaps and stripes
-      const whiteLevel = shown ? white.reduce((a, b) => a + b, 0) / (3 * shown) : 1;
-      const gain = (0.85 / Math.max(0.05, whiteLevel)) * (s.exposure / 100);
-      // And balanced, as a camera balances white: white shown through the
-      // same exposure and roll off, each colour then scaled to their
-      // average, so where stripes are about a pixel wide no colour wins
-      // Only where it's sharp: blurred, the stripes average out themselves
-      const shownWhite = [0, 0, 0];
-      for (let i = 0; i < W * H; i++) {
-        const r0 = stripes[i * 3] * gain;
-        const g0 = stripes[i * 3 + 1] * gain;
-        const b0 = stripes[i * 3 + 2] * gain;
-        if (!(r0 || g0 || b0) || !crisp[i]) continue;
-        const spill = Math.max(0, Math.max(r0, g0, b0) - 1) * 0.5;
-        shownWhite[0] += Math.min(1, r0 + spill) * crisp[i];
-        shownWhite[1] += Math.min(1, g0 + spill) * crisp[i];
-        shownWhite[2] += Math.min(1, b0 + spill) * crisp[i];
-      }
-      const mean = (shownWhite[0] + shownWhite[1] + shownWhite[2]) / 3;
-      const balance = shownWhite.map((v) => (v > 0 ? mean / v : 1));
       const final = new Float32Array(W * H * 4);
       const q = new Float32Array(4);
       for (let y = 0; y < H; y++)
@@ -8930,27 +8907,13 @@ const PAGE_JS: &str = r##"(() => {
           let [r, g, b, a] = [out[at], out[at + 1], out[at + 2], out[at + 3]];
           const dim = 1 - vignette * 0.6 * Math.min(1, r2 * 0.5);
           const noise = grain ? (hash2(x, y, 5) - 0.5) * grain * 0.12 : 0;
-          // Exposed as a camera exposes a screen, and what's brighter than
-          // white rolls off toward white, as a blown out highlight does,
-          // rather than each colour clipping on its own
-          r = r * dim * gain;
-          g = g * dim * gain;
-          b = b * dim * gain;
-          const peak = Math.max(r, g, b);
-          if (peak > a && a > 0) {
-            const spill = (peak - a) * 0.5;
-            r = Math.min(a, r + spill);
-            g = Math.min(a, g + spill);
-            b = Math.min(a, b + spill);
-          }
-          const sharpness = crisp[y * W + x];
-          final[at] = Math.min(a, Math.max(0, r * (1 + (balance[0] - 1) * sharpness) + noise * a));
-          final[at + 1] = Math.min(a, Math.max(0, g * (1 + (balance[1] - 1) * sharpness) + noise * a));
-          final[at + 2] = Math.min(a, Math.max(0, b * (1 + (balance[2] - 1) * sharpness) + noise * a));
+          final[at] = Math.min(a, Math.max(0, r * dim + noise * a));
+          final[at + 1] = Math.min(a, Math.max(0, g * dim + noise * a));
+          final[at + 2] = Math.min(a, Math.max(0, b * dim + noise * a));
           final[at + 3] = a;
         }
       // Colour fringes toward the edges last, red out and blue in, over
-      // what's shown, so they move colour without changing its balance
+      // what's shown
       if (fringe > 0) {
         const fringed = Float32Array.from(final);
         for (let y = 0; y < H; y++)
