@@ -1871,6 +1871,9 @@ impl Painter {
                     self.drop_tile(tile);
                 }
             }
+            if !gone.is_empty() {
+                trace(|| format!("  tiles dropped as Vello drew the whole view: {}", gone.len()));
+            }
             self.dirty |= !gone.is_empty();
             let missing = pyramid.iter().copied().find(|key| Some(key.px) == furthest && !self.tiles.get(key).is_some_and(|tile| !tile.stale));
             if let Some(key) = missing {
@@ -2264,9 +2267,17 @@ impl Painter {
                 self.dirty = true;
             }
         }
-        let keep: Vec<TileKey> = here.iter().chain(&ahead).chain(&far).chain(&levels).copied().collect();
-        let ahead_missing: Vec<TileKey> = ahead.iter().copied().filter(|key| !ready(&self.tiles, key)).collect();
-        let between_missing: Vec<TileKey> = if zooming || self.moved.elapsed() < PAN_STILL { Vec::new() } else { levels.iter().copied().filter(|key| !ready(&self.tiles, key)).collect() };
+        // What the view needs, and what's drawn ahead of where the zoom's
+        // headed and for levels between, which goes first when there's no
+        // room, after what's not needed
+        let keep: Vec<TileKey> = here.iter().chain(&far).copied().collect();
+        let spare: Vec<TileKey> = ahead.iter().chain(&levels).copied().collect();
+        // Tiles frames show stay till what's drawn for the view covers them,
+        // so what's ahead waits while there's no room, rather than drawn to
+        // go again
+        let full = self.tiles.len() >= VELLO_TILES;
+        let ahead_missing: Vec<TileKey> = if full { Vec::new() } else { ahead.iter().copied().filter(|key| !ready(&self.tiles, key)).collect() };
+        let between_missing: Vec<TileKey> = if full || zooming || self.moved.elapsed() < PAN_STILL { Vec::new() } else { levels.iter().copied().filter(|key| !ready(&self.tiles, key)).collect() };
         let between_waits = !zooming && levels.iter().any(|key| !ready(&self.tiles, key));
         // The furthest level changes as the zoom goes out, past which the
         // one there is stands in till it's still
@@ -2302,14 +2313,14 @@ impl Painter {
             }
             let started = Instant::now();
             self.vello_or_skia(&keys, exact);
-            self.evict_vello(&keep, furthest);
+            self.evict_vello(&keep, &spare, furthest);
             if later && moving {
                 return Some(started.elapsed());
             }
             self.dirty = true;
             return Some(Duration::ZERO);
         }
-        self.evict_vello(&keep, furthest);
+        self.evict_vello(&keep, &spare, furthest);
         if zooming {
             return Some(SETTLE.saturating_sub(self.zoom.1.elapsed()));
         }
@@ -2411,9 +2422,10 @@ impl Painter {
         Ok(())
     }
 
-    /// Tiles past `VELLO_TILES` go, those shown longest ago first, never
-    /// those of `keep` or the furthest level
-    fn evict_vello(&mut self, keep: &[TileKey], furthest: Option<u32>) {
+    /// Tiles past `VELLO_TILES` go, those shown longest ago first and those
+    /// of `later` after, never those frames show, those of `keep` or the
+    /// furthest level
+    fn evict_vello(&mut self, keep: &[TileKey], later: &[TileKey], furthest: Option<u32>) {
         // What Skia makes drawing what Vello can't, often textures of a
         // pixel or two, each taking 64 KiB though Skia counts it as a few
         // bytes, so its cache's budget never lets them go. And images let
@@ -2426,32 +2438,23 @@ impl Painter {
             self.gpu.context.perform_deferred_cleanup(Duration::from_secs(1), None);
             super::committed::tidy();
         }
-        // Past the budget, all but what's shown goes, and of that no more
-        // than `VELLO_TILES` allow
-        let in_view = self.view_area();
-        // What frames show now, however far from the zoom, as what's under
-        // it is a level far blurrier, where the view was clear a moment before
+        // Past the budget, what's not shown goes. What frames show now
+        // stays, however far from the zoom, till what's drawn for the view
+        // covers it, as what's under it is a level far blurrier and the
+        // view would go soft where it was clear a moment before. Over the
+        // budget by at most that while a level's drawn
         let shown_tiles = self.shown_tiles();
         let shown = |key: &TileKey| shown_tiles.contains(key);
         let extra = self.tiles.len().saturating_sub(VELLO_TILES);
-        let out_of_view = if self.pressed { self.tiles.keys().filter(|key| Some(key.px) != furthest && !keep.contains(key) && !shown(key)).count() } else { 0 };
+        let out_of_view = if self.pressed { self.tiles.keys().filter(|key| Some(key.px) != furthest && !keep.contains(key) && !later.contains(key) && !shown(key)).count() } else { 0 };
         let extra = extra.max(out_of_view);
         if extra == 0 {
             return;
         }
-        // Those not shown first, longest unused first, then those shown
-        // furthest from the zoom
-        let px = in_view.map_or(1.0, |(_, px)| px);
-        let mut old: Vec<(bool, u64, TileKey)> = self
-            .tiles
-            .iter()
-            .filter(|(key, _)| Some(key.px) != furthest && !keep.contains(key))
-            .map(|(key, tile)| {
-                let near = shown(key);
-                (near, if near { u64::MAX - ((key.px() / px).log2().abs() * 1000.0) as u64 } else { tile.used }, *key)
-            })
-            .collect();
-        old.sort_unstable_by_key(|(near, rank, _)| (*near, *rank));
+        // Longest unused first, then those ahead
+        let mut old: Vec<(bool, u64, TileKey)> = self.tiles.iter().filter(|(key, _)| Some(key.px) != furthest && !keep.contains(key) && !shown(key)).map(|(key, tile)| (later.contains(key), tile.used, *key)).collect();
+        old.sort_unstable_by_key(|(ahead, used, _)| (*ahead, *used));
+        trace(|| format!("  tiles evicted: {} of {}, {} shown kept", extra.min(old.len()), self.tiles.len(), shown_tiles.len()));
         for (_, _, key) in old.into_iter().take(extra) {
             if let Some(tile) = self.tiles.remove(&key) {
                 self.drop_tile(tile);

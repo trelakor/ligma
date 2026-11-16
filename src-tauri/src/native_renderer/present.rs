@@ -1032,15 +1032,35 @@ impl Screen {
         self.images.retain(|key, _| kept.contains(key));
         let px = view.px(size.0);
         super::render::trace(|| {
+            // How much of the view's from layers drawn coarser than it, and
+            // how coarse the coarsest
+            let area = (size.0 * size.1).max(1) as f32;
+            let coarse: f32 = pieces.iter().filter(|piece| snapshot.layers[piece.layer].px < px * 0.99).flat_map(|piece| skia_safe::region::Iterator::new(&piece.clip).map(|rect| (rect.width() * rect.height()) as f32).collect::<Vec<_>>()).sum();
+            // Which layers it's from, by how sharp and how much of the view
+            let mut used: Vec<(f32, LayerKind, f32)> = Vec::new();
+            for piece in pieces {
+                let layer = &snapshot.layers[piece.layer];
+                let shown: f32 = skia_safe::region::Iterator::new(&piece.clip).map(|rect| (rect.width() * rect.height()) as f32).sum();
+                match used.iter_mut().find(|(px, kind, _)| *px == layer.px && *kind == layer.kind) {
+                    Some(entry) => entry.2 += shown,
+                    None => used.push((layer.px, layer.kind, shown)),
+                }
+            }
+            let used: Vec<String> = used.iter().filter(|(_, _, shown)| *shown > 0.0).map(|(layer_px, kind, shown)| format!("{:.2}{kind:?}{:.0}%", layer_px / px, shown / area * 100.0)).collect();
+            let coarsest = pieces.iter().filter(|piece| !piece.clip.is_empty()).map(|piece| snapshot.layers[piece.layer].px / px).fold(1.0f32, f32::min);
             format!(
-                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={}",
+                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={} coarse={:.2} coarsest={coarsest:.2} serial={} path={} used={}",
                 pieces.len(),
                 encoded.as_secs_f64() * 1000.0,
                 rendered.as_secs_f64() * 1000.0,
                 (view.x * px as f64).round(),
                 (view.y * px as f64).round(),
                 self.layer.as_ref().and_then(|layer| layer.at),
-                snapshot.seq
+                snapshot.seq,
+                (coarse / area).min(1.0),
+                snapshot.serial,
+                PATH.load(Ordering::Relaxed),
+                used.join(",")
             )
         });
         // Once a frame of Figma's, not again as what's drawn under it gets
