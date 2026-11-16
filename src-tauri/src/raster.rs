@@ -685,9 +685,10 @@ const PAGE_JS: &str = r##"(() => {
   // work for Figma to read and draw again, and Ligma's canvas shows the
   // layer meanwhile. A new layer goes at once, so there's one to paint on
   const COMMIT_AFTER = 450;
-  // How long Ligma's canvas stays once Figma has the change, as Figma
-  // draws a new image roughly first and sharp a moment later
-  const HOLD = 1400;
+  // How long Ligma's canvas stays once Figma has the change: Figma reads
+  // a new image, fades it in and draws it roughly before it's sharp, the
+  // longer the larger it is
+  const holdFor = (t) => 2200 + 1800 * Math.min(1, (t.W * t.H) / (LARGEST * LARGEST));
   const schedule = (t, { reveal = false } = {}) => {
     t.unsaved = true;
     if (reveal) t.reveals = (t.reveals ?? 0) + 1;
@@ -706,7 +707,7 @@ const PAGE_JS: &str = r##"(() => {
     const fresh = !t.node && !t.creating;
     if (fresh) t.creating = true;
     return commit(t, t.base, { reveals, select: fresh }).then(() => {
-      t.holdUntil = performance.now() + HOLD;
+      t.holdUntil = performance.now() + holdFor(t);
       if (fresh && t.node) target = t;
     });
   };
@@ -792,7 +793,7 @@ const PAGE_JS: &str = r##"(() => {
   const show = (t, canvas = t.live) => {
     if (!overlay()) return;
     if (ui.live.firstChild !== canvas) ui.live.replaceChildren(canvas);
-    ui.live.classList.remove("fading");
+    appear();
     let opacity = 1;
     let clip = null;
     try {
@@ -807,6 +808,15 @@ const PAGE_JS: &str = r##"(() => {
     canvas.style.opacity = opacity;
     showing = { t, canvas, clip, fading: 0 };
     place();
+  };
+  // Shown at once, never faded in: a fade out stopped partway would
+  // otherwise come back dim
+  const appear = () => {
+    if (!ui.live.classList.contains("fading")) return;
+    ui.live.style.transition = "none";
+    ui.live.classList.remove("fading");
+    void ui.live.offsetWidth;
+    ui.live.style.transition = "";
   };
   const hideNow = () => {
     ui.live?.replaceChildren();
@@ -833,12 +843,12 @@ const PAGE_JS: &str = r##"(() => {
       if (needed(showing)) {
         if (showing.fading) {
           showing.fading = 0;
-          ui.live.classList.remove("fading");
+          appear();
         }
       } else if (!showing.fading) {
         showing.fading = now;
         ui.live.classList.add("fading");
-      } else if (now - showing.fading > 200) hideNow();
+      } else if (now - showing.fading > 320) hideNow();
     }
     if (showing) {
       const { t, canvas, clip } = showing;
@@ -3025,7 +3035,7 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-picker] .recent button:hover { box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15), 0 0 0 1px var(--color-bg), 0 0 0 2px var(--color-icon-secondary); }
 
     [${ATTR}-overlay] { position: absolute; overflow: hidden; pointer-events: none; }
-    [${ATTR}-overlay] .live { position: absolute; inset: 0; transition: opacity 0.16s ease-out; }
+    [${ATTR}-overlay] .live { position: absolute; inset: 0; transition: opacity 0.3s ease-in-out; }
     [${ATTR}-overlay] .live.fading { opacity: 0; }
     [${ATTR}-overlay] .live canvas { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; background: transparent !important; pointer-events: none !important; }
     [${ATTR}-overlay], [${ATTR}-overlay] * { pointer-events: none !important; }
