@@ -10231,6 +10231,60 @@ const PAGE_JS: &str = r##"(() => {
       if (sp.closed && points.length > 2 && Math.hypot(points[0] - x, points[1] - y) < 1e-6) points.length -= 2;
       return { points, closed: sp.closed };
     });
+  // Paths through a bend `f`, as few curves as hold it: each curve's ends
+  // bent, its handles turned and stretched as the bend turns and stretches
+  // what's there, and cut in two only where the bent curve strays more than
+  // `tol` from where its points should go. Straight runs a bend leaves
+  // straight stay one curve, however long
+  const bendPaths = (paths, f, tol = 0.1, scale = 100) => {
+    const eps = Math.max(1e-4, scale * 1e-4);
+    // Where a handle goes: the bend's own stretch at its curve's end, by
+    // differences either side
+    const handle = (px, py, vx, vy, fx, fy) => {
+      const length = Math.hypot(vx, vy);
+      if (length < 1e-9) return [fx, fy];
+      const [ux, uy] = [vx / length, vy / length];
+      const [ax, ay] = f(px + ux * eps, py + uy * eps);
+      const [bx, by] = f(px - ux * eps, py - uy * eps);
+      return [fx + ((ax - bx) / (2 * eps)) * length, fy + ((ay - by) / (2 * eps)) * length];
+    };
+    return paths.map((sp) => {
+      const [sx, sy] = f(sp.x, sp.y);
+      const out = { x: sx, y: sy, closed: sp.closed, segs: [] };
+      const segs = [...sp.segs];
+      const last = segs[segs.length - 1];
+      // A closing line bends too
+      if (sp.closed && last && Math.hypot(last[4] - sp.x, last[5] - sp.y) > 1e-6) segs.push(lineSeg(last[4], last[5], sp.x, sp.y));
+      const emit = (x0, y0, g, depth, from) => {
+        const [ax, ay] = from;
+        const to = f(g[4], g[5]);
+        const c1 = handle(x0, y0, g[0] - x0, g[1] - y0, ax, ay);
+        const c2 = handle(g[4], g[5], g[2] - g[4], g[3] - g[5], to[0], to[1]);
+        const seg = [c1[0], c1[1], c2[0], c2[1], to[0], to[1]];
+        if (depth < 8) {
+          for (const t of [0.25, 0.5, 0.75]) {
+            const [ex, ey] = f(...cubicAt(x0, y0, g, t));
+            const [qx, qy] = cubicAt(ax, ay, seg, t);
+            if (Math.hypot(ex - qx, ey - qy) > tol) {
+              const left = cubicPart(x0, y0, g, 0, 0.5);
+              const right = cubicPart(x0, y0, g, 0.5, 1);
+              const middle = emit(x0, y0, left, depth + 1, from);
+              return emit(left[4], left[5], right, depth + 1, middle);
+            }
+          }
+        }
+        out.segs.push(seg);
+        return to;
+      };
+      let [x, y] = [sp.x, sp.y];
+      let at = [sx, sy];
+      for (const g of segs) {
+        at = emit(x, y, g, 0, at);
+        [x, y] = [g[4], g[5]];
+      }
+      return out;
+    });
+  };
   const pathsBounds = (paths) => {
     let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
     for (const { points } of flatten(paths, 2))
@@ -10397,7 +10451,7 @@ const PAGE_JS: &str = r##"(() => {
           node = entry.node;
           meta.set(node, { kind: "fixed" });
         } else if (entry.clone !== undefined) {
-          node = clones.get(entry.clone)?.pop();
+          node = clones.get(entry.clone)?.shift();
           if (!node) {
             node = current.seeds[entry.clone].node.clone();
             node.visible = true;
@@ -10414,7 +10468,7 @@ const PAGE_JS: &str = r##"(() => {
         } else {
           const b = pathsBounds(entry.paths);
           if (!Number.isFinite(b.x0)) continue;
-          node = vectors.pop();
+          node = vectors.shift();
           if (!node) {
             node = figma.createVector();
             node.strokes = [];
@@ -10440,6 +10494,17 @@ const PAGE_JS: &str = r##"(() => {
             node.fills = entry.paints;
             kind.paints = paints;
           }
+          // A hair of outline in its own paint, where pieces meet edge to
+          // edge, so no seam shows between them
+          const seam = entry.seam ? paints : "";
+          if (kind.seam !== seam) {
+            node.strokes = entry.seam ? entry.paints : [];
+            if (entry.seam) {
+              node.strokeWeight = 0.6;
+              node.strokeJoin = "ROUND";
+            }
+            kind.seam = seam;
+          }
           node.opacity = Math.min(1, Math.max(0, entry.opacity ?? 1));
           if (entry.name && node.name !== entry.name) node.name = entry.name;
           node.relativeTransform = relativeFor(parent, multiply(current.base, moved(b.x0 + kind.shift[0], b.y0 + kind.shift[1])));
@@ -10453,18 +10518,27 @@ const PAGE_JS: &str = r##"(() => {
     }
     for (const node of vectors) node.remove();
     for (const list of clones.values()) for (const node of list) node.remove();
+    // In order, bottom first, under the original or where it is. Layers are
+    // reused in the order they were, so when only some are added after
+    // the rest, only those are moved
+    const before = current.made;
     current.made = made;
-    // In order, bottom first, under the original or where it is
-    const key = made.map((node) => node.id).join();
-    if (key !== current.order || made.some((node) => node.parent !== parent)) {
-      current.order = key;
-      if (current.spec.place === "below" && !current.spec.above?.(current.settings)) for (const node of made) parent.insertChild(parent.children.indexOf(source), node);
-      else made.forEach((node, i) => parent.insertChild(parent.children.indexOf(source) + 1 + i, node));
+    const below = current.spec.place === "below" && !current.spec.above?.(current.settings);
+    const kept = current.placedBelow === below && before.slice(0, made.length).every((node, i) => node === made[i]);
+    const fresh = kept ? made.slice(before.length) : made;
+    current.placedBelow = below;
+    if (!fresh.length) return;
+    if (below) for (const node of fresh) parent.insertChild(parent.children.indexOf(source), node);
+    else {
+      const after = kept && before.length ? before[before.length - 1] : source;
+      let at = parent.children.indexOf(after) + 1;
+      for (const node of fresh) parent.insertChild(at++, node);
     }
   };
 
-  const buildVector = (current) => {
-    if (vectoring !== current || current.source.removed) return;
+  // What's made, worked out from the settings, for the panel and the file
+  const entriesOf = (current) => {
+    if (current.entriesAt === current.version && current.entries) return current.entries;
     let entries = [];
     try {
       entries = current.spec.make(current) ?? [];
@@ -10472,21 +10546,43 @@ const PAGE_JS: &str = r##"(() => {
       entries = [];
     }
     current.entries = entries;
-    syncMade(current, entries);
+    current.entriesAt = current.version;
+    return entries;
+  };
+  const buildVector = (current) => {
+    if (vectoring !== current || current.source.removed) return;
+    const started = performance.now();
+    syncMade(current, entriesOf(current));
+    // How long the file took, so the next change waits as long again
+    current.cost = performance.now() - started;
     current.panel?.show();
   };
-  // Made again on the next frame, or a little later for an effect whose
-  // making is slower, however many changes come meanwhile
+  // A change shows in the panel on the next frame, and in the file once it
+  // has caught up with the last, so dragging never queues more than Figma
+  // can draw. An effect whose making itself makes layers, as Outline
+  // Stack's rings, shows in the panel from its own preview
   const scheduleVector = (current) => {
+    current.version = (current.version ?? 0) + 1;
+    if (!current.spec.inFile && !current.previewing) {
+      current.previewing = true;
+      requestAnimationFrame(() => {
+        current.previewing = false;
+        if (vectoring !== current) return;
+        entriesOf(current);
+        drawVectorPreview(current);
+      });
+    }
     if (current.queued) return;
     current.queued = true;
-    const wait = Math.max(0, (current.spec.wait ?? 0) - (performance.now() - (current.last ?? 0)));
+    const since = performance.now() - (current.last ?? 0);
+    const wait = Math.max(0, Math.max(current.spec.wait ?? 0, (current.cost ?? 0) * 1.5) - since);
     setTimeout(
       () =>
         requestAnimationFrame(() => {
           current.queued = false;
           current.last = performance.now();
           buildVector(current);
+          current.last = performance.now();
         }),
       wait,
     );
@@ -10632,7 +10728,7 @@ const PAGE_JS: &str = r##"(() => {
     const { figma, source, settings, spec } = current;
     if (current.busy) return;
     current.busy = true;
-    if (current.queued || !current.entries) {
+    if (current.queued || current.entriesAt !== current.version || !current.made.length) {
       current.queued = false;
       buildVector(current);
     }
@@ -10713,7 +10809,7 @@ const PAGE_JS: &str = r##"(() => {
     const toLocal = invert(current.base);
     const shapes = [];
     for (const entry of current.entries ?? []) {
-      if (entry.paths) shapes.push({ paths: entry.paths, winding: entry.winding, fill: paintCss(entry.paints, entry.opacity ?? 1) });
+      if (entry.paths) shapes.push({ paths: entry.paths, seam: entry.seam, winding: entry.winding, fill: paintCss(entry.paints, entry.opacity ?? 1), gradient: entry.paints?.[0]?.type === "GRADIENT_LINEAR" ? entry.paints[0] : null, opacity: entry.opacity ?? 1 });
       else if (entry.clone !== undefined) {
         const seed = current.seeds[entry.clone];
         if (!seed) continue;
@@ -10747,8 +10843,15 @@ const PAGE_JS: &str = r##"(() => {
     context.translate(ox, oy);
     context.scale(fit, fit);
     const paint = (shape) => {
-      context.fillStyle = shape.fill;
-      context.fill(new Path2D(pathData(shape.paths)), shape.winding === "EVENODD" ? "evenodd" : "nonzero");
+      context.fillStyle = shape.gradient ? gradientFor(context, shape) : shape.fill;
+      const path = new Path2D(pathData(shape.paths));
+      context.fill(path, shape.winding === "EVENODD" ? "evenodd" : "nonzero");
+      if (shape.seam) {
+        context.strokeStyle = context.fillStyle;
+        context.lineWidth = 0.6;
+        context.lineJoin = "round";
+        context.stroke(path);
+      }
     };
     if (track && current.settings.showPath) {
       context.strokeStyle = "rgba(255, 255, 255, 0.35)";
@@ -10767,6 +10870,20 @@ const PAGE_JS: &str = r##"(() => {
     context.restore();
   };
 
+  // A linear gradient as Figma places it in the paths' box, for the preview
+  const gradientFor = (context, shape) => {
+    const box = pathsBounds(shape.paths);
+    const w = box.x1 - box.x0;
+    const h = box.y1 - box.y0;
+    const [[a, c, e], [b, d, f]] = invert(shape.gradient.gradientTransform);
+    const at = (u, v) => [box.x0 + (a * u + c * v + e) * w, box.y0 + (b * u + d * v + f) * h];
+    const gradient = context.createLinearGradient(...at(0, 0.5), ...at(1, 0.5));
+    for (const stop of shape.gradient.gradientStops) {
+      const { r, g, b: blue, a: alpha = 1 } = stop.color;
+      gradient.addColorStop(stop.position, `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(blue * 255)}, ${alpha * shape.opacity})`);
+    }
+    return gradient;
+  };
   const buildVectorPanel = (current) => {
     const { spec } = current;
     const s = current.settings;
@@ -10945,8 +11062,8 @@ const PAGE_JS: &str = r##"(() => {
   // ---------- Warp ----------
 
   // Bends the layer's outlines as Illustrator's Warp does: each point moved
-  // by where it is in the layer's box, the outlines cut first into short
-  // curves so the bend follows them. Horizontal bends across, Vertical
+  // by where it is in the layer's box, each curve bent whole and cut only
+  // where it has to be to follow the bend (see `bendPaths`). Horizontal bends across, Vertical
   // the same turned a quarter. Distortion then tapers it, as if seen at an
   // angle
   const WARP_STYLES = [
@@ -11044,10 +11161,7 @@ const PAGE_JS: &str = r##"(() => {
     ],
     summary: (s) => `${WARP_STYLES.find(([id]) => id === s.style)?.[1] ?? "Arc"} · ${s.bend}%`,
     read: (current) => {
-      const b = itemsBounds(current.items);
-      current.box = b;
-      const step = Math.max(0.5, Math.max(b.x1 - b.x0, b.y1 - b.y0) / 48);
-      current.fine = current.items.map((item) => ({ ...item, paths: subdivide(item.paths, step) }));
+      current.box = itemsBounds(current.items);
     },
     make: (current) => {
       const s = current.settings;
@@ -11072,7 +11186,8 @@ const PAGE_JS: &str = r##"(() => {
         const nx = x * (1 + dy * 0.5 * (y / H));
         return [cx + nx, cy + ny];
       };
-      return current.fine.map((item) => ({ paths: mapPaths(item.paths, bend), winding: item.winding, paints: item.paints, opacity: item.opacity, name: "Warp" }));
+      const size = Math.max(x1 - x0, y1 - y0);
+      return current.items.map((item) => ({ paths: bendPaths(item.paths, bend, Math.max(0.05, size / 2000), size), winding: item.winding, paints: item.paints, opacity: item.opacity, name: "Warp" }));
     },
     panel: (ui) => [
       ui.section(
@@ -11263,20 +11378,12 @@ const PAGE_JS: &str = r##"(() => {
       ["As drawn", () => ({ fit: "exact", spacing: 0 })],
     ],
     summary: (s) => `${(s.seeds ?? []).length} ${(s.seeds ?? []).length === 1 ? "tile" : "tiles"} · ${s.fit === "stretch" ? "Stretched" : "As drawn"}`,
-    read: (current) => {
-      // Each tile cut into short curves, so it bends smoothly
-      for (const seed of current.seeds) {
-        if (seed.fine) continue;
-        const step = Math.max(0.5, Math.max(seed.local.x1 - seed.local.x0, seed.local.y1 - seed.local.y0) / 24);
-        seed.fine = seed.items.map((item) => ({ ...item, paths: subdivide(item.paths, step) }));
-      }
-    },
     make: (current) => {
       const s = current.settings;
       const { seeds, track } = current;
       if (!seeds.length || !track?.length) return [];
       const k = s.size / 100;
-      const out = seeds.map((seed) => seed.fine.map((item) => ({ paths: [], winding: item.winding, paints: item.paints, opacity: item.opacity, name: seed.node.name })));
+      const out = seeds.map((seed) => seed.items.map((item) => ({ paths: [], winding: item.winding, paints: item.paints, opacity: item.opacity, name: seed.node.name })));
       for (const line of track) {
         const lengths = seeds.map((seed) => (seed.local.x1 - seed.local.x0) * k);
         const average = lengths.reduce((a, b) => a + b, 0) / lengths.length;
@@ -11300,7 +11407,8 @@ const PAGE_JS: &str = r##"(() => {
             const [ux, uy] = line.direction(d, 2);
             return [px - uy * off, py + ux * off];
           };
-          seed.fine.forEach((item, j) => out[which][j].paths.push(...mapPaths(item.paths, bend)));
+          const size = Math.max(seed.local.x1 - seed.local.x0, seed.local.y1 - seed.local.y0) * k;
+          seed.items.forEach((item, j) => out[which][j].paths.push(...bendPaths(item.paths, bend, Math.max(0.05, size / 600), size)));
           at += lengths[which] * stretch + gap;
           if (at > line.length + 1e-3 && !line.closed) break;
         }
@@ -11351,19 +11459,16 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Depth ----------
 
-  // The outlines as lines, each edge and the same edge moved by the depth
-  // making a side
-  const edgesOf = (current) => {
-    const step = Math.max(0.5, current.unit / 300);
-    return current.items.map((item) => flatten(item.paths, step).filter((line) => line.points.length >= 6 && line.closed !== false));
-  };
-
   // Gives the layer depth behind it, as Illustrator's 3D Extrude seen
-  // front on: the outline swept back along an angle, each side face shaded
-  // by which way it faces the light, the back face darkest. The faces
-  // are drawn back to front, as far along the depth as they reach, so
-  // nearer sides cover farther ones, side faces of a shade in a row made
-  // one layer. The original stays on top as the front
+  // front on, from the layer's own curves, so the sides meet its edges
+  // exactly. Only the sides facing the way it goes back show, the rest
+  // and the back face being behind them: each is a stretch of outline
+  // facing that way and the same moved by the depth, one layer, shaded
+  // along it by which way it faces the light, as a gradient where that
+  // changes. They're drawn back to front, by how far
+  // along the depth they reach, over the whole swept outline in the
+  // darkest shade, which covers any hairline between them. The original
+  // stays on top as the front
   const EXTRUDE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 6.5h9v9h-9z"/><path ${STROKE} d="m14.5 6.5 4 4v9h-9l-4-4M14.5 15.5l4 4"/></svg>`;
   const extrudeEffect = vectorEffect({
     id: "extrude",
@@ -11383,68 +11488,89 @@ const PAGE_JS: &str = r##"(() => {
       ["Up left", (u) => ({ angle: -135, depth: Math.max(2, Math.round(u * 0.12)), light: 45 })],
     ],
     summary: (s) => `${s.depth}px · ${s.angle}°`,
-    read: (current) => {
-      current.edges = edgesOf(current);
-    },
     make: (current) => {
       const s = current.settings;
+      if (s.depth <= 0) return [];
       const [ax, ay] = turnOf(s.angle);
       const dx = ax * s.depth;
       const dy = ay * s.depth;
-      if (s.depth <= 0) return [];
       const [lx, ly] = turnOf(s.light);
       const strength = s.shade / 100;
       const out = [];
-      current.edges.forEach((lines, which) => {
-        const item = current.items[which];
+      // How bright a side facing (`tx`, `ty`) along the outline is
+      const shadeOf = (tx, ty) => {
+        const l = Math.hypot(tx, ty) || 1;
+        const lit = (ty / l) * -lx + (-tx / l) * -ly;
+        return Math.min(1, Math.max(0, 1 - strength * (0.62 - 0.38 * lit)));
+      };
+      // The way the outline runs at `t` along a curve
+      const tangent = (x0, y0, g, t) => {
+        const u = 1 - t;
+        const tx = 3 * (u * u * (g[0] - x0) + 2 * u * t * (g[2] - g[0]) + t * t * (g[4] - g[2]));
+        const ty = 3 * (u * u * (g[1] - y0) + 2 * u * t * (g[3] - g[1]) + t * t * (g[5] - g[3]));
+        return Math.hypot(tx, ty) > 1e-9 ? [tx, ty] : [g[4] - x0, g[5] - y0];
+      };
+      current.items.forEach((item) => {
+        const evenOdd = item.winding === "EVENODD";
         const base = s.colors === "own" ? paintColor(item.paints) : hexRgb(s.color);
-        const tone = (k) => {
+        const color = (k) => {
           const [r, g, b] = base.map((c) => Math.min(1, Math.max(0, c * k)));
-          return [{ type: "SOLID", color: { r, g, b } }];
+          return { r, g, b };
         };
-        // The back face, darkest
-        const back = [];
-        for (const line of lines) {
-          const pts = [];
-          for (let i = 0; i < line.points.length; i += 2) pts.push(line.points[i] + dx, line.points[i + 1] + dy);
-          back.push(polygonPaths(clockwise(pts)));
-        }
-        out.push({ paths: back, winding: "NONZERO", paints: tone(1 - 0.55 * strength), opacity: item.opacity, name: "Back" });
-        // Each side, its shade by where it faces
-        const faces = [];
-        for (const line of lines) {
-          const p = line.points;
-          const n = p.length / 2;
-          for (let i = 0; i < n; i++) {
-            const j = (i + 1) % n;
-            const [x0, y0, x1, y1] = [p[i * 2], p[i * 2 + 1], p[j * 2], p[j * 2 + 1]];
-            const ex = x1 - x0;
-            const ey = y1 - y0;
-            const len = Math.hypot(ex, ey);
-            if (len < 1e-6) continue;
-            // The side's normal, the way it faces out toward the viewer
-            let [nx, ny] = [ey / len, -ex / len];
-            if (nx * ax + ny * ay < 0) [nx, ny] = [-nx, -ny];
-            const lit = nx * -lx + ny * -ly;
-            const shade = 1 - strength * (0.62 - 0.38 * lit);
-            // A hair longer each way, so neighbours meet without a seam
-            const [gx, gy] = [(ex / len) * 0.35, (ey / len) * 0.35];
-            const quad = clockwise([x0 - gx, y0 - gy, x1 + gx, y1 + gy, x1 + gx + dx, y1 + gy + dy, x0 - gx + dx, y0 - gy + dy]);
-            faces.push({ quad, key: ((x0 + x1) / 2) * ax + ((y0 + y1) / 2) * ay, level: Math.round(Math.min(1, Math.max(0, shade)) * 14) });
+        // The whole of it swept, in the darkest a side gets
+        out.push({ paths: sweepPaths(item.paths, dx, dy, evenOdd), winding: "NONZERO", paints: [{ type: "SOLID", color: color(1 - strength) }], opacity: item.opacity, name: "Depth" });
+        const sides = [];
+        for (const { pieces } of facingPieces(item.paths, dx, dy, evenOdd))
+          for (const piece of pieces) {
+            if (!piece.front) continue;
+            const [x0, y0, g] = [piece.sx, piece.sy, piece.seg];
+            const side = {
+              x: x0,
+              y: y0,
+              closed: true,
+              segs: [g, lineSeg(g[4], g[5], g[4] + dx, g[5] + dy), [g[2] + dx, g[3] + dy, g[0] + dx, g[1] + dy, x0 + dx, y0 + dy], lineSeg(x0 + dx, y0 + dy, x0, y0)],
+            };
+            // A side facing the depth only ever moves one way across it,
+            // so its shade is one gradient square to the depth, sampled
+            // along it: a shade runs straight back and meets its
+            // neighbour's exactly
+            const samples = [];
+            for (let i = 0; i <= 12; i++) {
+              const t = i / 12;
+              const [px, py] = cubicAt(x0, y0, g, t);
+              samples.push({ c: -px * ay + py * ax, k: shadeOf(...tangent(x0, y0, g, t)) });
+            }
+            const [c0, c1] = [samples[0].c, samples[12].c];
+            const [mx, my] = cubicAt(x0, y0, g, 0.5);
+            const flat = Math.abs(c1 - c0) < 1e-3 || samples.every((one) => Math.abs(one.k - samples[0].k) < 0.012);
+            // Stops only where the shade bends away from a straight run
+            const stops = [samples[0]];
+            for (let i = 1; i < 12; i++) {
+              const prev = stops[stops.length - 1];
+              const next = samples[i + 1];
+              const along = (samples[i].c - prev.c) / (next.c - prev.c || 1);
+              if (Math.abs(prev.k + (next.k - prev.k) * along - samples[i].k) > 0.008) stops.push(samples[i]);
+            }
+            stops.push(samples[12]);
+            sides.push({ side, from: [x0, y0], to: [x0 - ay * (c1 - c0), y0 + ax * (c1 - c0)], flat, k: samples.reduce((sum, one) => sum + one.k, 0) / samples.length, stops: stops.map((one) => ({ position: Math.min(1, Math.max(0, (one.c - c0) / (c1 - c0))), k: one.k })), key: mx * ax + my * ay });
           }
-        }
-        faces.sort((a, b) => a.key - b.key);
+        sides.sort((a, b) => a.key - b.key);
         let run = null;
-        for (const face of faces) {
-          if (!run || run.level !== face.level) {
-            run = { level: face.level, paths: [] };
+        for (const one of sides) {
+          if (one.flat) {
+            // Flat sides of a shade in a row, one layer
+            const k = Math.round(one.k * 100) / 100;
+            if (run && run.k === k) {
+              run.paths.push(one.side);
+              continue;
+            }
+            run = { k, paths: [one.side], winding: "NONZERO", paints: [{ type: "SOLID", color: color(k) }], opacity: item.opacity, name: "Side", seam: true };
             out.push(run);
+          } else {
+            run = null;
+            const stops = one.stops.map(({ position, k }) => ({ position, color: { ...color(k), a: 1 } }));
+            out.push({ paths: [one.side], winding: "NONZERO", paints: [linearPaint([one.side], one.from, one.to, stops)], opacity: item.opacity, name: "Side", seam: true });
           }
-          run.paths.push(polygonPaths(face.quad));
-        }
-        for (const entry of out) {
-          if (entry.level === undefined || entry.paints) continue;
-          Object.assign(entry, { winding: "NONZERO", paints: tone(entry.level / 14), opacity: item.opacity, name: "Side" });
         }
       });
       return out;
@@ -11532,7 +11658,10 @@ const PAGE_JS: &str = r##"(() => {
   // sweep joins them. Outlines run so their outside is on the right, as
   // Figma's are with holes the other way, so holes stay where nothing
   // passes over them
-  const sweepPaths = (paths, dx, dy, evenOdd) => {
+  // Each outline as pieces of curve, each facing toward (`dx`, `dy`) or
+  // away from it all along, cut where a curve turns from one to the other,
+  // the outlines run with their outside on the right
+  const facingPieces = (paths, dx, dy, evenOdd) => {
     const area = (sp) => signedArea(flatten([sp], 4)[0].points);
     let all = closedPaths(paths);
     if (evenOdd) all = all.map((sp) => (area(sp) < 0 ? reversed(sp) : sp));
@@ -11542,7 +11671,6 @@ const PAGE_JS: &str = r##"(() => {
     }
     const cross = (ax, ay) => ax * dy - ay * dx;
     return all.map((sp) => {
-      // Pieces of curve, each facing one way
       const pieces = [];
       let [x, y] = [sp.x, sp.y];
       for (const g of sp.segs) {
@@ -11570,12 +11698,16 @@ const PAGE_JS: &str = r##"(() => {
           const u = 1 - tm;
           const tx = 3 * (u * u * (g[0] - x) + 2 * u * tm * (g[2] - g[0]) + tm * tm * (g[4] - g[2]));
           const ty = 3 * (u * u * (g[1] - y) + 2 * u * tm * (g[3] - g[1]) + tm * tm * (g[5] - g[3]));
-          const facing = ty * dx - tx * dy;
-          pieces.push({ sx, sy, seg: piece, front: facing > 1e-9 });
+          pieces.push({ sx, sy, seg: piece, front: ty * dx - tx * dy > 1e-9 });
         }
         [x, y] = [g[4], g[5]];
       }
-      if (!pieces.length) return sp;
+      return { sp, pieces };
+    });
+  };
+  const sweepPaths = (paths, dx, dy, evenOdd) =>
+    facingPieces(paths, dx, dy, evenOdd).map(({ sp, pieces }) => {
+      if (!pieces.length) return sp;      if (!pieces.length) return sp;
       const out = { x: 0, y: 0, closed: true, segs: [] };
       const first = pieces[0];
       let off = first.front ? 1 : 0;
@@ -11596,6 +11728,22 @@ const PAGE_JS: &str = r##"(() => {
       if (Math.hypot(px - out.x, py - out.y) > 1e-6) out.segs.push(lineSeg(px, py, out.x, out.y));
       return out;
     });
+  // A linear gradient from `from` to `to`, points in the paths' own
+  // coordinates, as Figma places one in the layer's box, its bands square to
+  // the line however the box is stretched
+  const linearPaint = (paths, from, to, stops) => {
+    const box = pathsBounds(paths);
+    const w = Math.max(1e-3, box.x1 - box.x0);
+    const h = Math.max(1e-3, box.y1 - box.y0);
+    const [rx, ry] = [to[0] - from[0], to[1] - from[1]];
+    const p0 = [(from[0] - box.x0) / w, (from[1] - box.y0) / h];
+    const [gx, gy] = [rx / w, ry / h];
+    const [qx, qy] = [-ry / w, rx / h];
+    const t = invert([
+      [gx, qx, p0[0] - 0.5 * qx],
+      [gy, qy, p0[1] - 0.5 * qy],
+    ]);
+    return { type: "GRADIENT_LINEAR", gradientTransform: [t[0], t[1]], gradientStops: stops };
   };
 
   // A flat shadow cast far from the layer at an angle, as one vector with
@@ -11637,31 +11785,13 @@ const PAGE_JS: &str = r##"(() => {
         }
       const [r, g, b] = hexRgb(s.color);
       let paints = [{ type: "SOLID", color: { r, g, b } }];
-      if (s.fade > 0) {
-        // Along the angle across the shadow's box, from where it starts to
-        // its end, in the box's own 0 to 1
-        const box = pathsBounds(paths);
-        const w = Math.max(1e-3, box.x1 - box.x0);
-        const h = Math.max(1e-3, box.y1 - box.y0);
-        const p0 = [(ax * low - box.x0) / w, (ay * low - box.y0) / h];
-        const p1 = [(ax * high - box.x0) / w, (ay * high - box.y0) / h];
-        const [gx, gy] = [p1[0] - p0[0], p1[1] - p0[1]];
-        const M = [
-          [gx, -gy, p0[0] + 0.5 * gy],
-          [gy, gx, p0[1] - 0.5 * gx],
-        ];
-        const t = invert(M);
+      if (s.fade > 0)
         paints = [
-          {
-            type: "GRADIENT_LINEAR",
-            gradientTransform: [t[0], t[1]],
-            gradientStops: [
-              { position: 0, color: { r, g, b, a: 1 } },
-              { position: 1, color: { r, g, b, a: 1 - s.fade / 100 } },
-            ],
-          },
+          linearPaint(paths, [ax * low, ay * low], [ax * high, ay * high], [
+            { position: 0, color: { r, g, b, a: 1 } },
+            { position: 1, color: { r, g, b, a: 1 - s.fade / 100 } },
+          ]),
         ];
-      }
       return [{ paths, winding: "NONZERO", paints, opacity: s.opacity / 100, name: "Long Shadow" }];
     },
     panel: (ui) => [
@@ -11712,10 +11842,174 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Outline Stack ----------
 
+  // A curve moved `r` to its right all along, as few curves as hold it:
+  // each piece's ends moved along their normals, its handles following the
+  // moved curve, cut in two where that strays more than `tol` from it
+  const offsetCubic = (x0, y0, g, r, tol, into, depth = 0) => {
+    const tangent = (t) => {
+      const u = 1 - t;
+      const tx = 3 * (u * u * (g[0] - x0) + 2 * u * t * (g[2] - g[0]) + t * t * (g[4] - g[2]));
+      const ty = 3 * (u * u * (g[1] - y0) + 2 * u * t * (g[3] - g[1]) + t * t * (g[5] - g[3]));
+      if (Math.hypot(tx, ty) > 1e-9) return [tx, ty];
+      return t < 0.5 ? [g[4] - x0, g[5] - y0] : [g[4] - x0, g[5] - y0];
+    };
+    const at = (t) => {
+      const [px, py] = cubicAt(x0, y0, g, t);
+      const [tx, ty] = tangent(t);
+      const l = Math.hypot(tx, ty) || 1;
+      return [px + (ty / l) * r, py - (tx / l) * r];
+    };
+    const [q0, q1] = [at(0), at(1)];
+    // Handles a third of the moved curve's own speed at each end, so where
+    // a tight curve's moved one turns back on itself, they turn back too
+    const e = 1e-4;
+    const [a0, a1] = [at(e), at(1 - e)];
+    const seg = [q0[0] + (a0[0] - q0[0]) / (3 * e), q0[1] + (a0[1] - q0[1]) / (3 * e), q1[0] - (q1[0] - a1[0]) / (3 * e), q1[1] - (q1[1] - a1[1]) / (3 * e), q1[0], q1[1]];
+    if (depth < 7)
+      for (const t of [0.25, 0.5, 0.75]) {
+        const [ex, ey] = at(t);
+        const [ax, ay] = cubicAt(q0[0], q0[1], seg, t);
+        if (Math.hypot(ex - ax, ey - ay) > tol) {
+          const left = cubicPart(x0, y0, g, 0, 0.5);
+          const right = cubicPart(x0, y0, g, 0.5, 1);
+          offsetCubic(x0, y0, left, r, tol, into, depth + 1);
+          offsetCubic(left[4], left[5], right, r, tol, into, depth + 1);
+          return;
+        }
+      }
+    // Its start, when it's the first, then the piece
+    if (!into.length) into.push(q0);
+    into.push(seg);
+  };
+  // Half a turn of circle round (`cx`, `cy`) from angle `from`, as two
+  // quarter curves
+  const halfTurn = (cx, cy, r, from) => {
+    const k = 0.5523 * r;
+    const out = [];
+    for (let i = 0; i < 2; i++) {
+      const a = from + (i * Math.PI) / 2;
+      const b = a + Math.PI / 2;
+      out.push([cx + r * Math.cos(a) - k * Math.sin(a), cy + r * Math.sin(a) + k * Math.cos(a), cx + r * Math.cos(b) + k * Math.sin(b), cy + r * Math.sin(b) - k * Math.cos(b), cx + r * Math.cos(b), cy + r * Math.sin(b)]);
+    }
+    return out;
+  };
+  // An arc round (`cx`, `cy`) from angle `from`, turning `sweep`, as
+  // curves of a quarter turn at most
+  const arcSegs = (cx, cy, r, from, sweep) => {
+    const n = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.PI / 2) - 1e-9));
+    const step = sweep / n;
+    const k = (4 / 3) * Math.tan(step / 4) * r;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = from + i * step;
+      const b = a + step;
+      out.push([cx + r * Math.cos(a) - k * Math.sin(a), cy + r * Math.sin(a) + k * Math.cos(a), cx + r * Math.cos(b) + k * Math.sin(b), cy + r * Math.sin(b) - k * Math.cos(b), cx + r * Math.cos(b), cy + r * Math.sin(b)]);
+    }
+    return out;
+  };
+  // Outlines run with their outside on the right, holes the other way
+  const outsideRight = (paths) => {
+    const area = (sp) => signedArea(flatten([sp], 4)[0].points);
+    const all = closedPaths(paths);
+    const largest = all.reduce((best, sp) => (Math.abs(area(sp)) > Math.abs(best) ? area(sp) : best), 0);
+    return largest < 0 ? all.map(reversed) : all;
+  };
+  // The shape grown by `r`, as one path per outline: the outline moved `r`
+  // outward all along, an arc round each corner from one side's normal to
+  // the next, whichever way the corner turns. This is the outline's
+  // convolution with a circle, whose nonzero winding covers exactly the
+  // grown shape, even where moving a tight curve folds it over itself
+  // How deep a closed outline goes: the farthest any point inside it is
+  // from its edge, found on a grid and to within a step of it
+  const depthOf = (sp) => {
+    const points = flatten([sp], 0.5)[0].points;
+    const n = points.length / 2;
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < n; i++) {
+      x0 = Math.min(x0, points[i * 2]);
+      x1 = Math.max(x1, points[i * 2]);
+      y0 = Math.min(y0, points[i * 2 + 1]);
+      y1 = Math.max(y1, points[i * 2 + 1]);
+    }
+    const step = Math.max(x1 - x0, y1 - y0) / 40 || 1;
+    let deepest = 0;
+    for (let y = y0 + step / 2; y < y1; y += step)
+      for (let x = x0 + step / 2; x < x1; x += step) {
+        let inside = false;
+        let near = Infinity;
+        for (let i = 0, j = n - 1; i < n; j = i++) {
+          const [ax, ay, bx, by] = [points[j * 2], points[j * 2 + 1], points[i * 2], points[i * 2 + 1]];
+          if (ay > y !== by > y && x < ax + ((y - ay) * (bx - ax)) / (by - ay)) inside = !inside;
+          const [ex, ey] = [bx - ax, by - ay];
+          const t = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey || 1)));
+          near = Math.min(near, Math.hypot(ax + ex * t - x, ay + ey * t - y));
+        }
+        if (inside) deepest = Math.max(deepest, near);
+      }
+    return deepest + step * 0.75;
+  };
+  const offsetRegion = (paths, r, tol) => {
+    // A hole no deeper than `r` is closed up by growing it, which its
+    // moved outline, turned inside out, wouldn't show
+    const all = outsideRight(paths).filter((sp) => signedArea(flatten([sp], 4)[0].points) > 0 || depthOf(sp) > r);
+    const normalAt = (x0, y0, g, end) => {
+      const pairs = end
+        ? [
+            [g[4] - g[2], g[5] - g[3]],
+            [g[4] - g[0], g[5] - g[1]],
+            [g[4] - x0, g[5] - y0],
+          ]
+        : [
+            [g[0] - x0, g[1] - y0],
+            [g[2] - x0, g[3] - y0],
+            [g[4] - x0, g[5] - y0],
+          ];
+      const [tx, ty] = pairs.find(([x, y]) => Math.hypot(x, y) > 1e-9) ?? [1, 0];
+      const l = Math.hypot(tx, ty);
+      return [ty / l, -tx / l];
+    };
+    const out = [];
+    for (const sp of all) {
+      const segs = [];
+      let [x, y] = [sp.x, sp.y];
+      for (const g of sp.segs) if (Math.hypot(g[4] - x, g[5] - y) > 1e-9 || Math.hypot(g[0] - x, g[1] - y) > 1e-9) {
+        segs.push([x, y, g]);
+        [x, y] = [g[4], g[5]];
+      }
+      if (!segs.length) continue;
+      const path = { x: 0, y: 0, closed: true, segs: [] };
+      segs.forEach(([x0, y0, g], i) => {
+        const moved = [];
+        offsetCubic(x0, y0, g, r, tol, moved);
+        if (i === 0) [path.x, path.y] = moved[0];
+        path.segs.push(...moved.slice(1));
+        // Round the corner to the next, from this end's normal to its start's
+        const [nx, ny] = segs[(i + 1) % segs.length];
+        const [ax, ay] = normalAt(x0, y0, g, true);
+        const [bx, by] = normalAt(nx, ny, segs[(i + 1) % segs.length][2], false);
+        const sweep = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+        if (Math.abs(sweep) > 1e-4) path.segs.push(...arcSegs(g[4], g[5], Math.abs(r), Math.atan2(ay * Math.sign(r), ax * Math.sign(r)), sweep));
+      });
+      out.push(path);
+    }
+    return out;
+  };
+  // Everywhere outside the shape grown by `r` into it, kept to a box `pad`
+  // past it: a box round it less the shape, as outlines run the other way,
+  // grown. What of the shape that leaves is the shape shrunk by `r`
+  const outsideGrown = (paths, r, tol, pad) => {
+    const b = pathsBounds(paths);
+    const box = polygonPaths([b.x0 - pad, b.y0 - pad, b.x1 + pad, b.y0 - pad, b.x1 + pad, b.y1 + pad, b.x0 - pad, b.y1 + pad]);
+    return offsetRegion([box, ...outsideRight(paths).map(reversed)], r, tol);
+  };
+
   // Rings round the layer, or inside it, as retro type's: each ring the
-  // band between two distances from its edge. Figma makes each: the
-  // outline given a stroke outside or inside as wide as the far distance,
-  // outlined, less the same for the near one, flattened to one vector
+  // points between two distances from its edge, worked out here (see
+  // `offsetRegion`) as the shape grown by the far distance less the shape
+  // grown by the near one, or for rings inside, the shape's part within
+  // the far distance of its outside less within the near one, which
+  // Figma's boolean operations make a clean vector. Their edges never meet,
+  // so nothing's left between them
   const OUTLINE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="3"/><circle ${STROKE} cx="12" cy="12" r="5.5"/><circle ${STROKE} cx="12" cy="12" r="8"/></svg>`;
   const outlineEffect = vectorEffect({
     id: "outlineStack",
@@ -11726,6 +12020,7 @@ const PAGE_JS: &str = r##"(() => {
     verb: "Add outlines",
     ask: "Select a shape or text to outline",
     wait: 120,
+    inFile: true,
     // Rings inside go over it, as it'd hide them
     above: (s) => s.side === "inside",
     start: (u) => ({ width: Math.max(1, Math.round(u * 0.025)), gap: Math.max(1, Math.round(u * 0.025)) }),
@@ -11740,12 +12035,14 @@ const PAGE_JS: &str = r##"(() => {
     summary: (s) => `${s.rings} ${s.rings === 1 ? "ring" : "rings"} · ${s.side === "inside" ? "Inside" : "Outside"}`,
     done: (current) => `${current.made.length} ${current.made.length === 1 ? "ring" : "rings"} made`,
     read: (current) => {
-      // One vector of every outline, kept hidden, to stroke and outline
+      // One vector of every outline, kept hidden, for the shape the rings
+      // are cut by
       const paths = current.items.flatMap((item) => item.paths);
       const b = pathsBounds(paths);
       if (!Number.isFinite(b.x0)) return;
+      current.outline = paths;
       const template = current.figma.createVector();
-      template.fills = [];
+      template.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
       template.visible = false;
       const parent = current.source.parent;
       parent.appendChild(template);
@@ -11763,33 +12060,47 @@ const PAGE_JS: &str = r##"(() => {
       const { figma, template, source } = current;
       if (!template || template.removed) return [];
       const parent = source.parent;
-      // The band from the edge out, or in, as far as `weight`
-      const band = (weight) => {
-        const copy = template.clone();
-        copy.visible = true;
-        copy.strokes = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
-        copy.strokeWeight = weight;
-        copy.strokeAlign = s.side === "inside" ? "INSIDE" : "OUTSIDE";
-        copy.strokeJoin = s.join;
-        const outline = copy.outlineStroke();
-        copy.remove();
-        return outline;
+      // The shape grown by `r`, or for rings inside, everything outside it
+      // grown into it by `r`, a vector placed as the layer
+      const size = Math.max(1, current.unit);
+      const tol = Math.max(0.02, Math.min(0.2, size / 3000));
+      const pad = s.gap + s.rings * (s.width + s.gap) + 10;
+      const grown = (r) => {
+        const paths = s.side === "inside" ? outsideGrown(current.outline, r, tol, pad) : offsetRegion(current.outline, r, tol);
+        const b = pathsBounds(paths);
+        if (!Number.isFinite(b.x0)) return null;
+        const node = figma.createVector();
+        parent.appendChild(node);
+        node.relativeTransform = relativeFor(parent, multiply(current.base, moved(b.x0, b.y0)));
+        node.vectorPaths = [{ windingRule: "NONZERO", data: pathData(paths, -b.x0, -b.y0) }];
+        node.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
+        return node;
+      };
+      const shape = () => {
+        const node = template.clone();
+        node.visible = true;
+        return node;
       };
       const entries = [];
       for (let i = 0; i < s.rings; i++) {
-        const near = s.gap + i * (s.width + s.gap);
-        const far = near + s.width;
-        let ring = band(far);
-        if (!ring) continue;
-        const inner = near > 0 ? band(near) : null;
-        if (inner) {
-          const cut = figma.subtract([ring, inner], parent);
-          ring = figma.flatten([cut], parent);
+        const from = s.gap + i * (s.width + s.gap);
+        const to = from + s.width;
+        let ring = null;
+        try {
+          if (s.side === "inside") {
+            // What's within the far distance of the outside, kept to the
+            // shape, less what's within the near one
+            const within = figma.intersect([grown(to), shape()], parent);
+            ring = figma.flatten([from > 0 ? figma.subtract([within, grown(from)], parent) : within], parent);
+          } else ring = figma.flatten([figma.subtract([grown(to), from > 0 ? grown(from) : shape()], parent)], parent);
+        } catch {
+          ring = null;
         }
         if (!ring || ring.removed) continue;
         const [r, g, b] = hexRgb(s.alternate && i % 2 ? s.color2 : s.color);
         ring.fills = [{ type: "SOLID", color: { r, g, b } }];
         ring.strokes = [];
+        ring.visible = true;
         ring.name = `Outline ${i + 1}`;
         entries.push({ node: ring });
       }
@@ -11813,7 +12124,7 @@ const PAGE_JS: &str = r##"(() => {
             const off = (current.ringCanvas ??= document.createElement("canvas"));
             [off.width, off.height] = [canvas.width, canvas.height];
             const g = off.getContext("2d");
-            const join = { ROUND: "round", MITER: "miter", BEVEL: "bevel" }[s.join] ?? "round";
+            const join = "round";
             for (let i = s.rings - 1; i >= 0; i--) {
               const near = s.gap + i * (s.width + s.gap);
               const far = near + s.width;
@@ -11857,11 +12168,6 @@ const PAGE_JS: &str = r##"(() => {
           ["rings", "Rings", "", () => ({ min: 1, max: 12 })],
           ["width", "Width", "px", (u) => ({ min: 0.5, max: Math.max(10, Math.round(u * 0.1)), shape: "curve", digits: 1 })],
           ["gap", "Gap", "px", (u) => ({ min: 0, max: Math.max(10, Math.round(u * 0.1)), shape: "curve", digits: 1 })],
-        ]),
-        ui.segments("join", "Corners", [
-          ["ROUND", "Round"],
-          ["MITER", "Sharp"],
-          ["BEVEL", "Bevel"],
         ]),
       ),
       ui.section("Colors", ui.color("color", "Color"), ui.check("alternate", "Alternate colours"), ui.when(ui.color("color2", "Second color"), () => ui.s.alternate)),
