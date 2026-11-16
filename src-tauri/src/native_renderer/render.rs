@@ -1710,14 +1710,25 @@ impl Painter {
             }
         }
         if !editing.is_zero() && settle.is_zero() && (behind || missing > 0 || self.whole.is_some()) {
-            let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale && !whole.rough);
+            let current = self.whole.as_ref().filter(|whole| whole.at == (ox, oy, pxb) && !whole.stale && !whole.rough).map(|whole| (whole.patch.is_empty(), whole.vello));
             // One drawn at a time, what changes meanwhile drawn together
             // once the GPU's done
             if self.whole_busy() {
                 return Some(Duration::from_millis(1));
             }
             match current {
-                Some(whole) if whole.patch.is_empty() => return Some(editing),
+                Some((true, _)) => return Some(editing),
+                // Drawn again by what drew it, as Skia draws images and
+                // effects a little otherwise, which would show where it
+                // patched it till Vello drew the view again
+                Some((_, true)) if self.vello_ready() => {
+                    let phase = self.phase;
+                    if let Some(next) = self.fill_once(px, (ox, oy, width, height), phase) {
+                        self.dirty = true;
+                        return next;
+                    }
+                    self.patch_whole();
+                }
                 Some(_) => self.patch_whole(),
                 None => self.draw_whole(ox, oy, width, height, px, true),
             }
