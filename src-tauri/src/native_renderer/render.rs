@@ -4129,7 +4129,7 @@ impl Painter {
             let mut aside: Vec<(Option<Instant>, usize, String)> = self
                 .images
                 .iter()
-                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !(soon && need.contains_key(key.as_str())) && img.image.width().max(img.image.height()) > PLACEHOLDER)
+                .filter(|(key, img)| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !((soon || key.starts_with(EFFECT)) && need.contains_key(key.as_str())) && img.image.width().max(img.image.height()) > PLACEHOLDER)
                 .map(|(key, img)| (self.wanted.get(key).copied(), img.bytes(), key.clone()))
                 .collect();
             aside.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
@@ -4459,11 +4459,19 @@ impl Painter {
                 self.pending = None;
             }
         }
+        // Only what changed where they show, as one hidden for a change
+        // off it would show tiles meanwhile, a fraction of a pixel off
+        let over = |layer: &Layer| {
+            let at = Rect::from_xywh(layer.x as f32 / layer.px, layer.y as f32 / layer.px, layer.tex.width as f32 / layer.px, layer.tex.height as f32 / layer.px);
+            areas.iter().filter(move |area| Rect::intersects2(&at, area)).copied()
+        };
         if let Some(whole) = &mut self.whole {
-            whole.patch.extend_from_slice(areas);
+            let inside: Vec<Rect> = over(&whole.layer).collect();
+            whole.patch.extend(inside);
         }
         if let Some(unchecked) = &mut self.unchecked {
-            unchecked.patch.extend_from_slice(areas);
+            let inside: Vec<Rect> = over(&unchecked.layer).collect();
+            unchecked.patch.extend(inside);
         }
         if let Some(kept) = &self.scene_kept {
             let px = f32::from_bits(kept.px);
