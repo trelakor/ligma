@@ -351,6 +351,13 @@ pub(super) fn stand_in(node: &str, content: u64) -> String {
     format!("{EFFECT}g{node}.{content}")
 }
 
+/// Where the last of what custom effects drew for node `node` over `area`
+/// is kept, shown where Figma sends it again with what they run on changed
+/// too, as it does over and over as a file loads, till they've run on that
+pub(super) fn last_drawn(node: &str, area: Rect) -> String {
+    format!("{EFFECT}n{node}.{:.0}x{:.0}", area.width(), area.height())
+}
+
 /// The node and content the custom effects image `key` is of, for one of
 /// the tree's (see `Tree::custom_effect`)
 
@@ -1299,6 +1306,9 @@ pub struct Painter {
     /// Where each effect asked for keeps what it drew once its node is
     /// sent again as another (see `stand_in`)
     effect_nodes: HashMap<String, String>,
+    /// The same for the last each node's effects drew (see `last_drawn`),
+    /// kept for runs whose node has gone since, which can still come
+    effect_last: HashMap<String, String>,
     /// The images each effect's node draws, and how wide, kept while the
     /// effect is, as it runs again on them whenever the node changes
     effect_images: HashMap<String, Vec<(String, f64)>>,
@@ -1434,6 +1444,7 @@ impl Painter {
             effects,
             effects_waiting: Vec::new(),
             effect_nodes: HashMap::new(),
+            effect_last: HashMap::new(),
             effect_images: HashMap::new(),
             waiting_areas: HashMap::new(),
             image_units: HashMap::new(),
@@ -3823,6 +3834,10 @@ impl Painter {
         if let Some(stand_in) = self.effect_nodes.get(&key) {
             self.images.insert(stand_in.clone(), Img { stale: true, ..img.clone() });
         }
+        let live = tree_effect_of(&key).is_some_and(|(id, content)| self.tree.as_ref().is_some_and(|tree| tree.node(id).is_some() && tree.content(id) == content));
+        if let Some(last) = if live { self.effect_last.get(&key).cloned() } else { self.effect_last.remove(&key) } {
+            self.images.insert(last, Img { stale: true, ..img.clone() });
+        }
         self.images.insert(key.clone(), img);
         self.drop_tiles(&areas);
         self.wake_effects(&key);
@@ -3904,11 +3919,15 @@ impl Painter {
             }
             img.stale = true;
             let node = self.effect_nodes.remove(&key);
+            let last = self.effect_last.remove(&key);
             let images = self.effect_images.remove(&key);
             match (now, node) {
                 (Some(now), node) => {
                     if let Some(node) = node {
                         self.effect_nodes.insert(now.clone(), node);
+                    }
+                    if let Some(last) = last {
+                        self.effect_last.insert(now.clone(), last);
                     }
                     if let Some(images) = images {
                         self.effect_images.insert(now.clone(), images);
@@ -3931,6 +3950,11 @@ impl Painter {
             }
         }
         self.effect_images.retain(|key, _| !gone(key));
+        // Those of runs whose node has gone are kept a while for what they
+        // draw, if they come
+        if self.effect_last.len() > 512 {
+            self.effect_last.retain(|key, _| !gone(key));
+        }
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
         if first {
@@ -5256,6 +5280,7 @@ impl Painter {
             return;
         };
         self.effect_nodes.insert(key.to_string(), effect.stand_in.clone());
+        self.effect_last.insert(key.to_string(), effect.last_drawn.clone());
         if self.kept.lock().unwrap().has(key) {
             let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
             return;

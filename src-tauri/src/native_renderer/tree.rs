@@ -252,6 +252,8 @@ pub struct CustomEffect {
     pub node: String,
     /// Where what they drew is kept while they run again (see `stand_in`)
     pub stand_in: String,
+    /// Where the last they drew for the node is kept (see `last_drawn`)
+    pub last_drawn: String,
     /// Each effect's code by name, and its settings
     pub chain: Vec<(String, serde_json::Value)>,
     /// The box they run over and draw, in the node's own space
@@ -769,6 +771,7 @@ impl Tree {
         Some(CustomEffect {
             key: format!("{}t{id}.{}", draw::EFFECT, self.content(id)),
             stand_in: super::render::stand_in(&node_id, self.content(child)),
+            last_drawn: super::render::last_drawn(&node_id, area),
             node: node_id,
             chain,
             area,
@@ -1186,7 +1189,7 @@ impl<'a> Drawer<'a> {
         // Till its effects have run, what they drew for it before Figma sent
         // it again as another node, if they did
         let own = self.images.get(&effect.key);
-        let stand_in_key = effect.stand_in.clone();
+        let stand_in_key = if own.is_none() && !self.images.contains_key(&effect.stand_in) { effect.last_drawn.clone() } else { effect.stand_in.clone() };
         let stand_in = if own.is_none() { self.images.get(&stand_in_key) } else { None };
         if stand_in.is_some() {
             self.missing_images.push((effect.key.clone(), shown));
