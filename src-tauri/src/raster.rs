@@ -23,7 +23,11 @@
 //! painting, a canvas over Figma's shows the layer, and strokes in quick
 //! succession replace its image together, as one undo step, so Figma's
 //! undo works as it does for anything else. The canvas stays until Figma
-//! has drawn the new image sharply, then fades. Erasing hides Figma's copy
+//! has drawn the new image sharply, then fades. It follows the layer as
+//! it's moved, turned or resized in Figma, goes at once when the layer is
+//! undone, changed by someone else, hidden or deleted, and as soon as Figma
+//! has the strokes when anything above it changes (Figma's
+//! `documentchange`), so it never hides Figma's own. Erasing hides Figma's copy
 //! of the layer until the change is in, so what's under it shows
 //!
 //! The selection is a mask on a layer's pixels, drawn with marching ants,
@@ -324,6 +328,7 @@ const PAGE_JS: &str = r##"(() => {
     emit();
     mount();
     loop();
+    watchDocument(true);
   };
   const exit = () => {
     if (!active) return;
@@ -341,6 +346,7 @@ const PAGE_JS: &str = r##"(() => {
     setCursor(null);
     selection = null;
     showing = null;
+    watchDocument(false);
     emit();
     releaseMemory();
   };
@@ -707,7 +713,7 @@ const PAGE_JS: &str = r##"(() => {
     const fresh = !t.node && !t.creating;
     if (fresh) t.creating = true;
     return commit(t, t.base, { reveals, select: fresh }).then(() => {
-      t.holdUntil = performance.now() + holdFor(t);
+      t.holdUntil = t.released ? 0 : performance.now() + holdFor(t);
       if (fresh && t.node) target = t;
     });
   };
@@ -795,18 +801,13 @@ const PAGE_JS: &str = r##"(() => {
     if (ui.live.firstChild !== canvas) ui.live.replaceChildren(canvas);
     appear();
     let opacity = 1;
-    let clip = null;
     try {
       if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
-      for (let at = t.node?.parent ?? t.place?.parent; at && at.type !== "PAGE"; at = at.parent) {
-        if (at.clipsContent) {
-          clip = { M: matrix(at.absoluteTransform), w: at.width, h: at.height };
-          break;
-        }
-      }
     } catch {}
+    const clip = clipOf(t);
     canvas.style.opacity = opacity;
-    showing = { t, canvas, clip, fading: 0 };
+    t.released = false;
+    showing = { t, canvas, clip, fading: 0, opacity, at: null };
     place();
   };
   // Shown at once, never faded in: a fade out stopped partway would
@@ -822,6 +823,119 @@ const PAGE_JS: &str = r##"(() => {
     ui.live?.replaceChildren();
     showing = null;
   };
+  // Keeps the canvas with the layer in Figma, every frame: moved, turned or
+  // resized there, or a frame around it moved, it goes with it, its
+  // pixels stretched as Figma stretches the image. Undone, redone, changed
+  // by someone else, hidden or deleted, it's Figma's to show at once
+  const follow = (shown) => {
+    const { t } = shown;
+    const node = t.node;
+    if (!node) return;
+    try {
+      if (node.removed) return gone(t);
+      const at = node.absoluteTransform;
+      const key = `${at[0].join()},${at[1].join()},${node.width},${node.height}`;
+      if (shown.at !== key) {
+        if (shown.at !== null) {
+          Object.assign(t, { M: matrix(at), w: node.width, h: node.height });
+          shown.clip = clipOf(t);
+        }
+        shown.at = key;
+      }
+      if (!t.pending && !t.unsaved && !(drag?.stroke?.t === t)) {
+        const paint = fillsOf(node)[imageIndex(node)];
+        if (paint?.imageHash !== t.hash) return gone(t);
+      }
+      if (!node.visible && !t.hidden) return gone(t);
+      const opacity = (node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      if (opacity !== shown.opacity) {
+        shown.opacity = opacity;
+        shown.canvas.style.opacity = opacity;
+      }
+    } catch {}
+  };
+  // Changed in Figma: what Ligma has of it is out of date
+  const gone = (t) => {
+    if (showing?.t === t) hideNow();
+    if (target === t && !t.unsaved) target = null;
+  };
+  // The frame clipping the layer, if any
+  const clipOf = (t) => {
+    try {
+      for (let at = t.node?.parent ?? t.place?.parent; at && at.type !== "PAGE"; at = at.parent) {
+        if (at.clipsContent) return { M: matrix(at.absoluteTransform), w: at.width, h: at.height };
+      }
+    } catch {}
+    return null;
+  };
+  // Where a layer is in the order Figma draws the page, so later is above
+  const order = (node) => {
+    const path = [];
+    for (let at = node; at?.parent; at = at.parent) path.unshift(at.parent.children.indexOf(at));
+    return path;
+  };
+  const later = (a, b) => {
+    for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return a.length > b.length;
+  };
+  const boxOfNode = (node) => {
+    const box = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+    if (box) return [box.x, box.y, box.x + box.width, box.y + box.height];
+    if (!node.absoluteTransform) return null;
+    const corners = [
+      [0, 0],
+      [node.width, 0],
+      [node.width, node.height],
+      [0, node.height],
+    ].map((corner) => apply(matrix(node.absoluteTransform), corner));
+    const xs = corners.map(([x]) => x);
+    const ys = corners.map(([, y]) => y);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  };
+  const overlaps = (a, b) => a && b && a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  // Anything else changed in Figma over the layer, as it's edited or by
+  // someone else: the canvas would hide it, so it goes as soon as Figma
+  // has the strokes. The layer's own changes are followed every frame
+  let watching = null;
+  const onDocument = (event) => {
+    const t = showing?.t;
+    if (!t?.node || t.released) return;
+    let mine = null;
+    for (const change of event.documentChanges ?? []) {
+      if (change.id === t.id || change.type === "STYLE_CREATE" || change.type === "STYLE_DELETE" || change.type === "STYLE_PROPERTY_CHANGE") continue;
+      const node = change.node;
+      if (!node || node.removed || node.type === "PAGE" || node.type === "DOCUMENT") continue;
+      try {
+        // A frame around the layer moves it, which it follows
+        let around = false;
+        for (let at = t.node.parent; at && !around; at = at.parent) around = at.id === node.id;
+        if (around) continue;
+        mine ??= { order: order(t.node), box: boxOfNode(t.node) };
+        if (later(order(node), mine.order) && overlaps(boxOfNode(node), mine.box)) {
+          release(t);
+          return;
+        }
+      } catch {}
+    }
+  };
+  const release = (t) => {
+    t.released = true;
+    t.holdUntil = 0;
+    if (t.unsaved) save(t);
+    else if (!t.pending && showing?.t === t && drag?.stroke?.t !== t) hideNow();
+  };
+  const watchDocument = (on) => {
+    const figma = api();
+    try {
+      if (watching) watching.figma.off("documentchange", onDocument);
+      watching = null;
+      if (on && figma) {
+        figma.on("documentchange", onDocument);
+        watching = { figma };
+      }
+    } catch {}
+  };
+
   // Whether the canvas still covers the layer: while it's painted, until
   // Figma has the change, and a moment after. The gradient's preview only
   // while it's dragged
@@ -850,6 +964,7 @@ const PAGE_JS: &str = r##"(() => {
         ui.live.classList.add("fading");
       } else if (now - showing.fading > 320) hideNow();
     }
+    if (showing) follow(showing);
     if (showing) {
       const { t, canvas, clip } = showing;
       // Laid out a pixel square and scaled up to the layer, so it's never
