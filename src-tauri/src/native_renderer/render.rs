@@ -340,13 +340,16 @@ fn half_octave(px: f32) -> f32 {
     2f32.powf((px.max(1e-6).log2() * 2.0).ceil() / 2.0)
 }
 
+/// Where what custom effects drew is kept once Figma sends their node again
+/// as another, shown till they've run on the new one: by Figma's id of the
+/// node they're on and what they run on, as a group's run on each child
+/// alone, all with the group's id, and moving a child doesn't change it
+pub(super) fn stand_in(node: &str, content: u64) -> String {
+    format!("{EFFECT}g{node}.{content}")
+}
+
 /// The node and content the custom effects image `key` is of, for one of
 /// the tree's (see `Tree::custom_effect`)
-/// Where what a node's effects drew is kept once Figma sends the node again
-/// as another, by Figma's id of it, shown till they've run on the new one
-pub(super) fn stand_in(node: &str) -> String {
-    format!("{EFFECT}g{node}")
-}
 
 fn tree_effect_of(key: &str) -> Option<(u32, u64)> {
     let (id, content) = key.strip_prefix(EFFECT)?.strip_prefix('t')?.split_once('.')?;
@@ -1281,9 +1284,12 @@ pub struct Painter {
     /// Effects waiting on images the node draws, and those images, each
     /// run again once one of its own comes
     effects_waiting: Vec<(String, f64, Vec<String>)>,
-    /// Figma's id of the node each effect asked for is of, which stays the
-    /// same as its render tree id changes (see `stand_in`)
+    /// Where each effect asked for keeps what it drew once its node is
+    /// sent again as another (see `stand_in`)
     effect_nodes: HashMap<String, String>,
+    /// The images each effect's node draws, and how wide, kept while the
+    /// effect is, as it runs again on them whenever the node changes
+    effect_images: HashMap<String, Vec<(String, f64)>>,
     /// Where units were drawn without images or effects not here yet, or
     /// with them at another size, by image: drawn again once they come,
     /// though the pictures that drew them may have gone by then
@@ -1415,6 +1421,7 @@ impl Painter {
             effects,
             effects_waiting: Vec::new(),
             effect_nodes: HashMap::new(),
+            effect_images: HashMap::new(),
             waiting_areas: HashMap::new(),
             image_units: HashMap::new(),
             versions: HashMap::new(),
@@ -3733,8 +3740,8 @@ impl Painter {
         trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
         // What a node's effects drew stands in for them once Figma sends it
         // again as another, which it can before they come
-        if let Some(node) = self.effect_nodes.get(&key) {
-            self.images.insert(stand_in(node), Img { stale: true, ..img.clone() });
+        if let Some(stand_in) = self.effect_nodes.get(&key) {
+            self.images.insert(stand_in.clone(), Img { stale: true, ..img.clone() });
         }
         self.images.insert(key.clone(), img);
         self.drop_tiles(&areas);
@@ -3753,6 +3760,8 @@ impl Painter {
         let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.effects_waiting).into_iter().partition(|(_, _, on)| on.iter().any(|image| image == key));
         self.effects_waiting = waiting;
         for (effect, width, _) in ready {
+            // Run again on what came, not only resized as it was
+            self.kept.lock().unwrap().retain(|kept| kept != effect);
             self.asked.remove(&effect);
             self.ask(&[(effect, width)]);
         }
@@ -3797,7 +3806,13 @@ impl Painter {
                     return Some((key.clone(), None));
                 }
                 let now = tree.content(id);
-                (now != content).then(|| (key.clone(), Some(format!("{EFFECT}t{id}.{now}"))))
+                if now == content {
+                    return None;
+                }
+                // Carried to what's under its id now only if that's the same
+                // node, as Figma gives an id to another node at times
+                let same = tree.custom_effect(id).is_some_and(|effect| self.effect_nodes.get(key).is_none_or(|was| *was == effect.stand_in));
+                Some((key.clone(), same.then(|| format!("{EFFECT}t{id}.{now}"))))
             })
             .collect();
         // Nodes Figma sends again as others, as it does as a file loads,
@@ -3807,20 +3822,25 @@ impl Painter {
             self.asked.remove(&key);
             img.stale = true;
             let node = self.effect_nodes.remove(&key);
+            let images = self.effect_images.remove(&key);
             match (now, node) {
                 (Some(now), node) => {
                     if let Some(node) = node {
                         self.effect_nodes.insert(now.clone(), node);
                     }
+                    if let Some(images) = images {
+                        self.effect_images.insert(now.clone(), images);
+                    }
                     self.images.entry(now).or_insert(img);
                 }
                 (None, Some(node)) => {
-                    self.images.insert(stand_in(&node), img);
+                    self.images.insert(node, img);
                 }
                 (None, None) => {}
             }
         }
         self.kept.lock().unwrap().retain(|key| !gone(key));
+        self.effect_images.retain(|key, _| !gone(key));
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
         if first {
@@ -4042,6 +4062,24 @@ impl Painter {
                 } else {
                     let entry = coarse_need.entry(key.clone()).or_insert(0.0);
                     *entry = entry.max(width * (coarse_px / drawn_px.max(1e-6)).min(1.0) as f64);
+                }
+            }
+        }
+        // And the images effects run on, wherever those effects are needed,
+        // as they run again on them each time their node changes
+        for (effect, images) in &self.effect_images {
+            if !need.contains_key(effect) {
+                continue;
+            }
+            let (shown, close) = (in_view.contains(effect), fine_use.contains(effect));
+            for (key, width) in images {
+                let entry = need.entry(key.clone()).or_insert(0.0);
+                *entry = entry.max(*width);
+                if shown {
+                    in_view.insert(key.clone());
+                }
+                if close {
+                    fine_use.insert(key.clone());
                 }
             }
         }
@@ -5098,7 +5136,7 @@ impl Painter {
         let Some(effect) = tree.custom_effect(id) else {
             return;
         };
-        self.effect_nodes.insert(key.to_string(), effect.node.clone());
+        self.effect_nodes.insert(key.to_string(), effect.stand_in.clone());
         if self.kept.lock().unwrap().has(key) {
             let _ = self.effects.send(Job::Resize { key: key.to_string(), width });
             return;
@@ -5121,7 +5159,10 @@ impl Painter {
         let mut drawer = Drawer::new(tree, &self.images, &self.kit, canvas, 1.0);
         drawer.draw(effect.child);
         let images: Vec<(String, f64)> = drawer.missing_images.drain(..).filter(|(missing, _)| missing != key).collect();
+        let sharper: Vec<(String, f64)> = drawer.sharper_images.drain(..).filter(|(sharper, _)| sharper != key).collect();
+        let used: Vec<(String, f64)> = drawer.used_images.drain(..).filter(|(used, _)| used != key).collect();
         drop(drawer);
+        self.effect_images.insert(key.to_string(), used);
         if !images.is_empty() {
             // Asked for still: run again once one of those images comes,
             // not each time what draws it is recorded or another image comes
@@ -5135,6 +5176,14 @@ impl Painter {
         let mut pixels = vec![0u8; (pw * ph * 4) as usize];
         if !surface.canvas().read_pixels(&info, &mut pixels, (pw * 4) as usize, (0, 0)) {
             return;
+        }
+        // Run now on the smaller copies here, and again once sharper ones
+        // come, rather than keeping what an image's thumbnail drew
+        if !sharper.is_empty() {
+            let on: Vec<String> = sharper.iter().map(|(image, _)| image.clone()).collect();
+            self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
+            self.effects_waiting.push((key.to_string(), width, on));
+            self.ask(&sharper);
         }
         trace(|| format!("effect input {key} {pw}x{ph}"));
         let run = Run { key: key.to_string(), node: effect.node, chain: effect.chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width };

@@ -250,6 +250,8 @@ pub struct CustomEffect {
     pub key: String,
     /// The Figma node they're on
     pub node: String,
+    /// Where what they drew is kept while they run again (see `stand_in`)
+    pub stand_in: String,
     /// Each effect's code by name, and its settings
     pub chain: Vec<(String, serde_json::Value)>,
     /// The box they run over and draw, in the node's own space
@@ -762,13 +764,16 @@ impl Tree {
             return None;
         }
         let guid = texture.node_guid.unwrap_or_default();
+        let child = node.child?;
+        let node_id = format!("{}:{}", guid.session_id, guid.local_id);
         Some(CustomEffect {
             key: format!("{}t{id}.{}", draw::EFFECT, self.content(id)),
-            node: format!("{}:{}", guid.session_id, guid.local_id),
+            stand_in: super::render::stand_in(&node_id, self.content(child)),
+            node: node_id,
             chain,
             area,
             to: Drawer::effect_space(node),
-            child: node.child?,
+            child,
         })
     }
 
@@ -1181,7 +1186,7 @@ impl<'a> Drawer<'a> {
         // Till its effects have run, what they drew for it before Figma sent
         // it again as another node, if they did
         let own = self.images.get(&effect.key);
-        let stand_in_key = super::render::stand_in(&effect.node);
+        let stand_in_key = effect.stand_in.clone();
         let stand_in = if own.is_none() { self.images.get(&stand_in_key) } else { None };
         if stand_in.is_some() {
             self.missing_images.push((effect.key.clone(), shown));
