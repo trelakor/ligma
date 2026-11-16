@@ -369,6 +369,8 @@ fn set_status(status: impl Into<String>) {
 }
 
 pub fn start(app: &AppHandle) {
+    #[cfg(windows)]
+    probe_input(app);
     let app = app.clone();
     std::thread::spawn(move || {
         if let Err(error) = open(&app) {
@@ -2067,4 +2069,42 @@ fn autorun(ctx: &Arc<Ctx>) {
         let _ = std::fs::write(dir.join("native-renderer").join("autorun.json"), summary.to_string());
     }
     log::info!("native renderer autorun: {summary}");
+}
+
+/// Traced: where the pointer is as Windows has it, each time it moves, and
+/// how long the main thread takes to answer when it's slow, which holds up
+/// input to the tab, to tell where input that comes late is held up
+#[cfg(windows)]
+fn probe_input(app: &AppHandle) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if !super::render::tracing() || STARTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("native-input-probe".into()).spawn(|| {
+        let mut last = POINT::default();
+        loop {
+            let mut at = POINT::default();
+            if unsafe { GetCursorPos(&mut at) }.is_ok() && (at.x, at.y) != (last.x, last.y) {
+                last = at;
+                super::render::trace(|| format!("cursor {},{} at={:.2}", at.x, at.y, super::render::since_epoch_ms()));
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("native-main-probe".into()).spawn(move || loop {
+        let asked = Instant::now();
+        let (answer, answered) = std::sync::mpsc::channel();
+        if app.run_on_main_thread(move || { let _ = answer.send(()); }).is_err() {
+            return;
+        }
+        let _ = answered.recv();
+        let took = asked.elapsed().as_secs_f64() * 1000.0;
+        if took > 8.0 {
+            super::render::trace(|| format!("main thread answered {took:.1}ms late at={:.2}", super::render::since_epoch_ms()));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    });
 }
