@@ -278,9 +278,6 @@ pub struct Hub {
     pub shared: Mutex<Option<crate::webview2::Shared>>,
     /// Frames of the render tree from the one shown now on
     frames: Mutex<std::collections::VecDeque<FrameView>>,
-    /// Frames lately, by when Figma sent them, which the view is shown
-    /// between, see `Hub::sample`
-    timeline: Mutex<Timeline>,
     /// The frame last shown, for tracing
     pub shown_seq: AtomicU64,
     changes: Mutex<u64>,
@@ -298,7 +295,6 @@ impl Hub {
             tree_failures: std::sync::atomic::AtomicU32::new(0),
             shared: Mutex::new(None),
             frames: Mutex::new(std::collections::VecDeque::new()),
-            timeline: Mutex::new(Timeline::default()),
             shown_seq: AtomicU64::new(0),
             changes: Mutex::new(0),
             changed: Condvar::new(),
@@ -313,22 +309,18 @@ impl Hub {
 
     pub fn set_view(&self, view: View) {
         self.frames.lock().unwrap().clear();
-        self.timeline.lock().unwrap().frames.clear();
         *self.view.lock().unwrap() = Some(view);
         self.poke();
     }
 
     /// Frame `seq` of the render tree: its view, what Figma draws over the
-    /// canvas in it, whether it `edits` the scene, and when Figma sent it,
-    /// in milliseconds since the epoch by its clock
-    pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool, at: f64) {
+    /// canvas in it, and whether it `edits` the scene
+    pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool) {
         let mut frames = self.frames.lock().unwrap();
         // Lost track: those before go
         if frames.back().is_some_and(|last| last.seq >= seq) {
             frames.clear();
-            self.timeline.lock().unwrap().frames.clear();
         }
-        self.timeline.lock().unwrap().add(Timed { seq, at, view: view.clone(), overlay: overlay.clone() });
         frames.push_back(FrameView { seq, view: view.clone(), overlay, edits });
         while frames.len() > 256 {
             frames.pop_front();
@@ -360,60 +352,6 @@ impl Hub {
         Some((frame.view.clone(), frame.overlay.clone(), frame.seq))
     }
 
-    /// The view to show now, given frame `seq` is the latest that can be,
-    /// whose view is `view`. Figma sends frames as its page draws them,
-    /// which while the view moves is every refresh or two of the screen, a
-    /// few milliseconds apart or twice that, back and forth. Shown as they
-    /// come, the view moves in jerks. Each is shown instead when it's as old
-    /// as the frames lately were apart at most, and between them the view's
-    /// where it was between them, so it moves the same at each refresh
-    fn sample(&self, seq: u64, view: View, overlay: Overlay, size: (u32, u32)) -> Sample {
-        let caught_up = |view: View, overlay: Overlay| Sample { view, overlay, from: None, interpolated: false, delay: 0.0 };
-        if !smoothing() {
-            return caught_up(view, overlay);
-        }
-        let mut timeline = self.timeline.lock().unwrap();
-        let now = super::render::since_epoch_ms();
-        let (delay, offset) = timeline.settle(now);
-        // By Figma's clock, as the frames are
-        let at = now - offset - delay;
-        let frames: Vec<&Timed> = timeline.frames.iter().filter(|frame| frame.seq <= seq).collect();
-        let Some(next) = frames.iter().position(|frame| frame.at > at) else {
-            return caught_up(view, overlay);
-        };
-        // Not before the first, and up to the latest that can be shown
-        if next == 0 || frames.last().is_none_or(|last| last.seq != seq) {
-            return caught_up(view, overlay);
-        }
-        let (from, to) = (frames[next - 1], frames[next]);
-        let (a, b) = (&from.view, &to.view);
-        // Only the view moving: the canvas the same size and in the same place
-        // and it moving at all, else what's over it would be a frame behind
-        if (a.cx, a.cy, a.cw, a.ch, a.dpr) != (b.cx, b.cy, b.cw, b.ch, b.dpr) || a.page != b.page || a.w <= 0.0 || b.w <= 0.0 || (a.x, a.y, a.w, a.h) == (b.x, b.y, b.w, b.h) {
-            return caught_up(view, overlay);
-        }
-        // From a frame long before, as it starts moving, from as long before
-        // as frames are apart
-        let start = from.at.max(to.at - delay.max(1.0));
-        let t = ((at - start) / (to.at - start).max(1e-3)).clamp(0.0, 1.0);
-        let mut shown = b.clone();
-        if a.w == b.w && a.h == b.h {
-            // Moved by whole pixels from where `to` is, so what's drawn for
-            // it is shown a pixel to a pixel rather than filtered
-            let px = size.0 as f64 / b.w;
-            shown.x = b.x + (((a.x + (b.x - a.x) * t) - b.x) * px).round() / px;
-            shown.y = b.y + (((a.y + (b.y - a.y) * t) - b.y) * px).round() / px;
-        } else {
-            let scale = |p: f64, q: f64| p * (q / p).powf(t);
-            shown.w = scale(a.w, b.w);
-            shown.h = scale(a.h, b.h);
-            shown.zoom = scale(a.zoom, b.zoom);
-            shown.x = a.x + (b.x - a.x) * t;
-            shown.y = a.y + (b.y - a.y) * t;
-        }
-        Sample { view: shown, overlay: from.overlay.clone(), from: Some(a.clone()), interpolated: true, delay }
-    }
-
     /// Waits until poked after `seen`, or `timeout`, and returns the count
     fn wait(&self, seen: u64, timeout: Duration) -> u64 {
         let changes = self.changes.lock().unwrap();
@@ -427,97 +365,6 @@ struct FrameView {
     view: View,
     overlay: Overlay,
     edits: bool,
-}
-
-/// Dev tools: LIGMA_NATIVE_NO_SMOOTH=1 shows each frame as it comes
-fn smoothing() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| !(super::dev() && std::env::var_os("LIGMA_NATIVE_NO_SMOOTH").is_some()))
-}
-
-struct Timed {
-    seq: u64,
-    at: f64,
-    view: View,
-    overlay: Overlay,
-}
-
-/// The view to show, and what Figma draws over it: of the frame `from`'s
-/// view where it's between frames
-struct Sample {
-    view: View,
-    overlay: Overlay,
-    from: Option<View>,
-    interpolated: bool,
-    delay: f64,
-}
-
-#[derive(Default)]
-struct Timeline {
-    frames: std::collections::VecDeque<Timed>,
-    /// How much later than Figma sent them frames came lately, the least of
-    /// which is how far its clock is behind ours, near enough
-    late: std::collections::VecDeque<f64>,
-    /// How far apart frames came lately, while the view moved
-    apart: std::collections::VecDeque<f64>,
-    /// The delay and offset in use, and when they were last used: each
-    /// goes to what it should be a little at a time, as a step would move
-    /// the view as far as it moves in that time, a jerk
-    used: Option<(f64, f64, f64)>,
-}
-
-impl Timeline {
-    fn add(&mut self, frame: Timed) {
-        self.late.push_back(super::render::since_epoch_ms() - frame.at);
-        if self.late.len() > 256 {
-            self.late.pop_front();
-        }
-        if let Some(last) = self.frames.back() {
-            let apart = frame.at - last.at;
-            if apart > 0.0 && apart < 50.0 && (last.view.x, last.view.y, last.view.w) != (frame.view.x, frame.view.y, frame.view.w) {
-                self.apart.push_back(apart);
-                if self.apart.len() > 16 {
-                    self.apart.pop_front();
-                }
-            }
-        }
-        // Figma makes a frame for each input it handles, then sends those it
-        // made together: one moment, of which the latest is what's shown
-        if self.frames.back().is_some_and(|last| frame.at - last.at < 0.5) {
-            self.frames.pop_back();
-        }
-        let at = frame.at;
-        self.frames.push_back(frame);
-        while self.frames.len() > 2 && self.frames.front().is_some_and(|first| at - first.at > 250.0) {
-            self.frames.pop_front();
-        }
-    }
-
-    fn offset(&self) -> f64 {
-        self.late.iter().copied().fold(f64::INFINITY, f64::min).min(1e3).max(-1e3)
-    }
-
-    /// The delay and offset to use at `now`, each gone towards what it should
-    /// be by at most a twentieth of the time since they were last used, so
-    /// the view runs at most that much faster or slower meanwhile
-    fn settle(&mut self, now: f64) -> (f64, f64) {
-        let (delay, offset) = (self.delay(), self.offset());
-        let (delay, offset) = match self.used {
-            Some((was_delay, was_offset, at)) if now - at < 1000.0 => {
-                let step = (now - at).max(0.0) * 0.05;
-                (was_delay + (delay - was_delay).clamp(-step, step), was_offset + (offset - was_offset).clamp(-step, step))
-            }
-            _ => (delay, offset),
-        };
-        self.used = Some((delay, offset, now));
-        (delay, offset)
-    }
-
-    /// How old a frame is when it's shown: as far apart as frames were lately
-    /// at most, so the next has come by then, within a refresh or four
-    fn delay(&self) -> f64 {
-        (self.apart.iter().copied().fold(0.0, f64::max) + 1.0).clamp(6.0, 20.0)
-    }
 }
 
 /// The pixel `at`, in device pixels, is in, and how far into it, which is
@@ -795,11 +642,6 @@ pub struct Screen {
     reading: std::collections::VecDeque<(u64, Vec<Arc<Tex>>)>,
     /// The textures the last frame showed
     shown: std::collections::HashSet<usize>,
-    /// Whether the frame's view is between Figma's frames, and how old
-    /// frames are when shown, for tracing
-    pace: (bool, f64),
-    /// The view the overlay was drawn for, where it's not the one shown
-    overlay_from: Option<View>,
 }
 
 impl Screen {
@@ -871,8 +713,6 @@ impl Screen {
             fence,
             frames: 0,
             reading: std::collections::VecDeque::new(),
-            pace: (false, 0.0),
-            overlay_from: None,
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -988,11 +828,6 @@ impl Screen {
                 Some(_) => view.canvas(),
                 None => *hub.size.lock().unwrap(),
             };
-            let Sample { view, overlay, from, interpolated, delay } = hub.sample(seq, view, overlay, size);
-            self.pace = (interpolated, delay);
-            self.overlay_from = from;
-            // Back at the next refresh while it's between frames
-            let patience = if interpolated { Duration::from_millis(1) } else { Duration::from_millis(100) };
             if size != self.size && size.0 > 0 && size.1 > 0 {
                 if let Err(error) = self.resize(size) {
                     log::warn!("native renderer: {error}");
@@ -1008,7 +843,7 @@ impl Screen {
             let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
             if shown.as_ref() == Some(&now) {
                 drop(snapshot);
-                seen = hub.wait(seen, patience);
+                seen = hub.wait(seen, Duration::from_millis(100));
                 continue;
             }
             // All of the view or nothing: what's shown stays till the
@@ -1070,7 +905,7 @@ impl Screen {
                         levels.sort();
                         format!("present held: seq={seq} px={:.3} drawn={drawn_seq} layers={}", view.px(self.size.0), levels.join(","))
                     });
-                    seen = hub.wait(seen, patience);
+                    seen = hub.wait(seen, Duration::from_millis(100));
                     continue;
                 };
                 hub.shown_seq.store(seq, Ordering::Relaxed);
@@ -1148,12 +983,6 @@ impl Screen {
         if let Some(overlay) = overlay {
             let (sx, sy) = view.stretch(size);
             canvas.save();
-            // Drawn for the frame before, moved to where the view is now
-            if let Some(from) = self.overlay_from.as_ref().filter(|from| from.w > 0.0 && from.h > 0.0 && view.w > 0.0 && view.h > 0.0) {
-                let (kx, ky) = (size.0 as f64 / view.w, size.1 as f64 / view.h);
-                canvas.translate((((from.x - view.x) * kx) as f32, ((from.y - view.y) * ky) as f32));
-                canvas.scale(((from.w / view.w) as f32, (from.h / view.h) as f32));
-            }
             canvas.scale((sx as f32, sy as f32));
             canvas.draw_picture(overlay, None, None);
             canvas.restore();
@@ -1187,16 +1016,14 @@ impl Screen {
         let px = view.px(size.0);
         super::render::trace(|| {
             format!(
-                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={} between={} delay={:.1}",
+                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={}",
                 pieces.len(),
                 encoded.as_secs_f64() * 1000.0,
                 rendered.as_secs_f64() * 1000.0,
                 (view.x * px as f64).round(),
                 (view.y * px as f64).round(),
                 self.layer.as_ref().and_then(|layer| layer.at),
-                snapshot.seq,
-                self.pace.0,
-                self.pace.1
+                snapshot.seq
             )
         });
         super::hud::presented(Instant::now());
