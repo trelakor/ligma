@@ -339,7 +339,96 @@ const PAGE_JS: &str = r##"(() => {
       border-radius: 4px;
       box-shadow: inset 0 0 0 1px var(--color-bordertranslucent, #0000001a);
     }
-    [${ROOT}="panel"] .hidden-picker { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+    /* A color: its swatch and hex in one field, as Figma's fill rows */
+    [${ROOT}="panel"] .color-field {
+      grid-column: 2 / -1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 4px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: var(--color-bg-secondary);
+    }
+    [${ROOT}="panel"] .color-field:hover { border-color: var(--color-border); }
+    [${ROOT}="panel"] .color-field:focus-within { border-color: var(--color-border-selected, #0d99ff); }
+    [${ROOT}="panel"] .color-field .swatch { flex: none; width: 14px; height: 14px; border-radius: 3px; cursor: default; }
+    [${ROOT}="panel"] .color-field input {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      outline: 0;
+      background: none;
+      color: var(--color-text);
+      font: inherit;
+      text-transform: uppercase;
+    }
+    [${ROOT}="panel"] .swatch[aria-expanded="true"] { box-shadow: inset 0 0 0 1px var(--color-bordertranslucent, #0000001a), 0 0 0 2px var(--color-border-selected, #0d99ff); }
+    /* The picker, as Figma's */
+    [${ROOT}="picker"] {
+      position: fixed;
+      z-index: 11;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 240px;
+      padding: 8px;
+      border-radius: var(--radius-large, 13px);
+      background: var(--color-bg, #2c2c2c);
+      color: var(--color-text, #fff);
+      box-shadow: var(--elevation-500, 0 8px 24px rgb(0 0 0 / 0.4));
+    }
+    [${ROOT}="picker"] .area {
+      position: relative;
+      height: 168px;
+      border-radius: 5px;
+      background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+      cursor: crosshair;
+      touch-action: none;
+    }
+    [${ROOT}="picker"] .knob {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      margin: -7px 0 0 -7px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 0 0 1px rgb(0 0 0 / 0.25), inset 0 0 0 1px rgb(0 0 0 / 0.25);
+      pointer-events: none;
+    }
+    [${ROOT}="picker"] .strip { display: flex; align-items: center; gap: 8px; height: 24px; }
+    [${ROOT}="picker"] .strip .icon-button { flex: none; }
+    [${ROOT}="picker"] .hue {
+      position: relative;
+      flex: 1;
+      height: 12px;
+      margin: 0 6px;
+      border-radius: 6px;
+      background: linear-gradient(to right, #f00, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00);
+      box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.1);
+      touch-action: none;
+    }
+    [${ROOT}="picker"] .hue .knob { top: 50%; }
+    [${ROOT}="picker"] .values { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: center; }
+    [${ROOT}="picker"] .format { padding: 0 2px 0 4px; color: var(--color-text-secondary, #b3b3b3); }
+    [${ROOT}="picker"] .values input {
+      height: 24px;
+      padding: 0 7px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      outline: 0;
+      background: var(--color-bg-secondary, #383838);
+      color: var(--color-text, #fff);
+      font: inherit;
+      text-transform: uppercase;
+    }
+    [${ROOT}="picker"] .values input:focus { border-color: var(--color-border-selected, #0d99ff); }
+    [${ROOT}="picker"] .icon-button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--color-icon, #fff); }
+    [${ROOT}="picker"] .icon-button:hover { background: var(--color-bg-hover, #383838); }
+    [${ROOT}="picker"] .icon-button svg [stroke] { stroke: currentColor; }
     [${ROOT}="panel"] .under { display: flex; justify-content: flex-end; padding: 8px 16px 12px; }
     [${ROOT}="panel"] .link {
       padding: 0;
@@ -887,6 +976,153 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // A segmented control: one of a few, side by side
+  // Figma's color picker, condensed: saturation and brightness in a
+  // square, hue on a strip with the eyedropper beside it where the webview
+  // has one, and the hex. It opens from a swatch, beside it, and a click off
+  // it or Escape closes it. Hue's kept while it's open, so it holds through
+  // grays and black
+  let colorPopover = null;
+  const rgbToHsv = ([r, g, b]) => {
+    const max = Math.max(r, g, b);
+    const d = max - Math.min(r, g, b);
+    const h = d === 0 ? 0 : max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [((h * 60) + 360) % 360, max ? d / max : 0, max];
+  };
+  const hsvToHex = (h, sat, v) => {
+    const f = (n) => {
+      const k = (n + h / 60) % 6;
+      return v - v * sat * Math.max(0, Math.min(k, 4 - k, 1));
+    };
+    return `#${[f(5), f(3), f(1)].map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("")}`;
+  };
+  // A hex as typed, with or without #, three or six digits, or null
+  const parseHex = (text) => {
+    let hex = String(text).trim().replace(/^#/, "");
+    if (/^[0-9a-f]{3}$/i.test(hex)) hex = hex.replace(/./g, (c) => c + c);
+    return /^[0-9a-f]{6}$/i.test(hex) ? `#${hex.toLowerCase()}` : null;
+  };
+  const EYEDROPPER = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="m14.5 6.5 3 3m-1.5-4.5 1.6-1.6a1.4 1.4 0 0 1 2 2L18 7l1 1-1.5 1.5-4-4L15 4l1 1Zm-2 2.5-7 7v3h3l7-7"/></svg>`;
+  const closeColorPicker = () => {
+    if (!colorPopover) return;
+    colorPopover.root.remove();
+    colorPopover.anchor.setAttribute("aria-expanded", "false");
+    removeEventListener("pointerdown", colorPopover.outside, true);
+    removeEventListener("keydown", colorPopover.keys, true);
+    colorPopover = null;
+  };
+  const openColorPicker = (anchor, get, set) => {
+    if (colorPopover?.anchor === anchor) return closeColorPicker();
+    closeColorPicker();
+    let [h, sat, v] = rgbToHsv(hexRgb(get()));
+    const root = element("div");
+    root.setAttribute(ROOT, "picker");
+    root.setAttribute("role", "dialog");
+    root.setAttribute("aria-label", anchor.title || "Color");
+    const area = root.appendChild(element("div", { className: "area" }));
+    area.setAttribute("aria-label", "Saturation and brightness");
+    const spot = area.appendChild(element("span", { className: "knob" }));
+    const strip = root.appendChild(element("div", { className: "strip" }));
+    if ("EyeDropper" in window) {
+      const dropper = strip.appendChild(element("button", { type: "button", className: "icon-button", title: "Pick a color from the screen", innerHTML: EYEDROPPER }));
+      dropper.addEventListener("click", async () => {
+        try {
+          const { sRGBHex } = await new window.EyeDropper().open();
+          const hex = parseHex(sRGBHex);
+          if (hex) {
+            [h, sat, v] = rgbToHsv(hexRgb(hex));
+            commit();
+          }
+        } catch {}
+      });
+    }
+    const hue = strip.appendChild(element("div", { className: "hue" }));
+    hue.setAttribute("aria-label", "Hue");
+    const hueKnob = hue.appendChild(element("span", { className: "knob" }));
+    const values = root.appendChild(element("div", { className: "values" }));
+    values.append(element("span", { className: "format", textContent: "Hex" }));
+    const hex = values.appendChild(element("input", { type: "text", spellcheck: false, maxLength: 7 }));
+    hex.setAttribute("aria-label", "Hex");
+    // What's shown, then the color set, at most once a frame while dragged
+    let frame = 0;
+    const show = () => {
+      area.style.backgroundColor = `hsl(${h} 100% 50%)`;
+      spot.style.left = `${sat * 100}%`;
+      spot.style.top = `${(1 - v) * 100}%`;
+      spot.style.background = hsvToHex(h, sat, v);
+      hueKnob.style.left = `${(h / 360) * 100}%`;
+      hueKnob.style.background = `hsl(${h} 100% 50%)`;
+      if (document.activeElement !== hex) hex.value = hsvToHex(h, sat, v).slice(1).toUpperCase();
+    };
+    const commit = () => {
+      show();
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        set(hsvToHex(h, sat, v));
+      });
+    };
+    const drag = (target, at) => {
+      target.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        target.setPointerCapture(event.pointerId);
+        const move = (event) => {
+          const box = target.getBoundingClientRect();
+          at(clamp01((event.clientX - box.left) / box.width), clamp01((event.clientY - box.top) / box.height));
+          commit();
+        };
+        move(event);
+        target.addEventListener("pointermove", move);
+        target.addEventListener("lostpointercapture", () => target.removeEventListener("pointermove", move), { once: true });
+      });
+    };
+    drag(area, (x, y) => ([sat, v] = [x, 1 - y]));
+    drag(hue, (x) => (h = Math.min(359.9, x * 360)));
+    hex.addEventListener("change", () => {
+      const parsed = parseHex(hex.value);
+      if (parsed) [h, sat, v] = rgbToHsv(hexRgb(parsed));
+      hex.value = "";
+      commit();
+    });
+    hex.addEventListener("keydown", (event) => event.key === "Enter" && hex.blur());
+    hex.addEventListener("focus", () => hex.select());
+    document.body.append(root);
+    show();
+    // Beside the panel the swatch is in, as Figma's opens beside its
+    // properties, on the side with room, at the swatch's height
+    const box = anchor.getBoundingClientRect();
+    const side = anchor.closest(`[${ROOT}="panel"]`)?.getBoundingClientRect() ?? box;
+    const [w, height] = [root.offsetWidth, root.offsetHeight];
+    const left = side.left - w - 8 >= 8 ? side.left - w - 8 : Math.min(innerWidth - w - 8, side.right + 8);
+    root.style.left = `${Math.max(8, left)}px`;
+    root.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, box.top - 16))}px`;
+    anchor.setAttribute("aria-expanded", "true");
+    const outside = (event) => {
+      if (!root.contains(event.target) && !anchor.contains(event.target)) closeColorPicker();
+    };
+    const keys = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeColorPicker();
+      anchor.focus();
+    };
+    addEventListener("pointerdown", outside, true);
+    addEventListener("keydown", keys, true);
+    colorPopover = { root, anchor, outside, keys };
+  };
+  // A swatch that opens the picker, and `paint` to show the color it has
+  const colorSwatch = (get, set, title) => {
+    const swatch = element("button", { type: "button", className: "swatch", title });
+    swatch.setAttribute("aria-haspopup", "dialog");
+    swatch.setAttribute("aria-expanded", "false");
+    swatch.addEventListener("click", (event) => {
+      event.preventDefault();
+      openColorPicker(swatch, get, set);
+    });
+    return { swatch, paint: () => (swatch.style.background = get()) };
+  };
+
   const segments = (label, options, get, set) => {
     const group = element("div", { className: "segments" });
     group.setAttribute("role", "radiogroup");
@@ -1111,7 +1347,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // Escape cancels and Enter applies while `active()`, unless typing
   const panelKeys = (root, active, cancel, go) => (event) => {
-    if (!active()) return;
+    if (!active() || colorPopover) return;
     const typing = event.target.closest?.("input[type=text], textarea, [contenteditable]");
     if (event.key === "Escape" && !typing) {
       event.preventDefault();
@@ -1454,6 +1690,7 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const closeRepeater = (current, applied) => {
+    closeColorPicker();
     if (repeating !== current) return;
     repeating = null;
     if (!applied) {
@@ -1671,14 +1908,8 @@ const PAGE_JS: &str = r##"(() => {
     ease.classList.add("wide");
     const blend = element("input", { type: "checkbox" });
     blend.addEventListener("change", () => change("blend", blend.checked, true));
-    const picker = element("input", { type: "color", className: "hidden-picker" });
-    picker.addEventListener("input", () => change("blendColor", picker.value, true));
-    const swatch = element("button", { type: "button", className: "swatch", title: "Blend color" });
-    swatch.addEventListener("click", (event) => {
-      event.preventDefault();
-      picker.click();
-    });
-    const blendRow = element("label", { className: "row check" }, element("span", { className: "label", textContent: "Blend toward a color" }), swatch, picker, blend);
+    const { swatch } = colorSwatch(() => s.blendColor, (value) => change("blendColor", value, true), "Blend color");
+    const blendRow = element("label", { className: "row check" }, element("span", { className: "label", textContent: "Blend toward a color" }), swatch, blend);
     const blendAmount = element("div", { className: "rows" }, ...ROWS.blend.map(slider));
     const toward = element(
       "section",
@@ -1735,7 +1966,6 @@ const PAGE_JS: &str = r##"(() => {
       blend.checked = s.blend;
       blendAmount.hidden = !s.blend;
       swatch.style.background = s.blendColor;
-      picker.value = s.blendColor;
       order.show();
       editable.checked = s.editable;
       drawPreview(current);
@@ -3825,7 +4055,7 @@ const PAGE_JS: &str = r##"(() => {
         resolve(null);
       };
       try {
-        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `onmessage = async ({ data: { id, image, s, k, png } }) => {`, `  try {`, `    const made = process(image, s, k);`, `    let bytes = null;`, `    if (png && typeof OffscreenCanvas !== "undefined") {`, `      try {`, `        const canvas = new OffscreenCanvas(made.image.width, made.image.height);`, `        canvas.getContext("2d").putImageData(made.image, 0, 0);`, `        bytes = await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();`, `      } catch {}`, `    }`, `    postMessage({ id, out: made.image, x: made.x, y: made.y, bytes }, bytes ? [made.image.data.buffer, bytes] : [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
+        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `const pictures = {};`, `onmessage = async ({ data: { id, level, image, s, k, png } }) => {`, `  try {`, `    if (image) pictures[level] = image;`, `    const made = process(pictures[level], s, k);`, `    let bytes = null;`, `    if (png && typeof OffscreenCanvas !== "undefined") {`, `      try {`, `        const canvas = new OffscreenCanvas(made.image.width, made.image.height);`, `        canvas.getContext("2d").putImageData(made.image, 0, 0);`, `        bytes = await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();`, `      } catch {}`, `    }`, `    postMessage({ id, out: made.image, x: made.x, y: made.y, bytes }, bytes ? [made.image.data.buffer, bytes] : [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
         const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
         worker = new Worker(url);
         worker.onmessage = ({ data }) => {
@@ -3883,11 +4113,14 @@ const PAGE_JS: &str = r##"(() => {
     if (current.closed) return null;
     let made = null;
     if (worker) {
+      // Each worker's sent a level's picture once, and keeps it
+      const sent = ((current.sent ??= {})[slot] ??= new Set());
       try {
         made = await new Promise((resolve, reject) => {
           const id = ++filterJob;
           current.jobs.set(id, { resolve, reject });
-          worker.postMessage({ id, image, s, k: entry.k, png });
+          worker.postMessage({ id, level, image: sent.has(level) ? null : image, s, k: entry.k, png });
+          sent.add(level);
         });
       } catch {}
     }
@@ -4005,8 +4238,9 @@ const PAGE_JS: &str = r##"(() => {
     const entry = current.levels.preview;
     const ratio = devicePixelRatio || 1;
     const box = canvas.getBoundingClientRect();
-    canvas.width = Math.round(box.width * ratio);
-    canvas.height = Math.round(box.height * ratio);
+    // Resized only when its box is, as a resize starts it over
+    const [cw, ch] = [Math.round(box.width * ratio), Math.round(box.height * ratio)];
+    if (canvas.width !== cw || canvas.height !== ch) [canvas.width, canvas.height] = [cw, ch];
     const context = canvas.getContext("2d");
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, box.width, box.height);
@@ -4057,24 +4291,24 @@ const PAGE_JS: &str = r##"(() => {
         shows.push(() => (input.checked = Boolean(s[key])));
         return checkRow(label, input, title);
       },
-      swatch: (get, set, title) => {
-        const picker = element("input", { type: "color", className: "hidden-picker" });
-        picker.addEventListener("input", () => set(picker.value));
-        const swatch = element("button", { type: "button", className: "swatch", title });
-        swatch.addEventListener("click", (event) => {
-          event.preventDefault();
-          picker.click();
-        });
-        const paint = () => {
-          swatch.style.background = get();
-          picker.value = get();
-        };
-        shows.push(paint);
-        return [swatch, picker, paint];
-      },
+      // A color, its swatch, which opens the picker, and its hex, typed
+      // in, in one field, as Figma's fills
       color: (key, label) => {
-        const [swatch, picker] = ui.swatch(() => s[key], (value) => change(key, value), label);
-        return element("label", { className: "row check" }, element("span", { className: "label", textContent: label }), swatch, picker);
+        const { swatch, paint } = colorSwatch(() => s[key], (value) => change(key, value), label);
+        const hex = element("input", { type: "text", spellcheck: false, maxLength: 7 });
+        hex.setAttribute("aria-label", `${label}, hex`);
+        hex.addEventListener("change", () => {
+          const parsed = parseHex(hex.value);
+          if (parsed) change(key, parsed);
+          else hex.value = s[key].slice(1);
+        });
+        hex.addEventListener("keydown", (event) => event.key === "Enter" && hex.blur());
+        hex.addEventListener("focus", () => hex.select());
+        shows.push(() => {
+          paint();
+          if (document.activeElement !== hex) hex.value = s[key].slice(1);
+        });
+        return element("div", { className: "row" }, element("span", { className: "label", textContent: label }), element("div", { className: "color-field" }, swatch, hex));
       },
       shuffle: (key, label = "Random seed") => {
         const button = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
@@ -4291,7 +4525,7 @@ const PAGE_JS: &str = r##"(() => {
           Object.assign(sheet.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px` });
           Object.assign(bar.style, belt?.width ? { left: `${belt.left + belt.width / 2}px`, bottom: `${innerHeight - belt.top + 8}px` } : { left: `${area.left + area.width / 2}px`, bottom: "72px" });
           if (drawn) {
-            const k = current.levels.live.k;
+            const k = drawn.k;
             Object.assign(drawn.canvas.style, {
               left: `${(current.bounds.x + drawn.x / k - view.x) * view.zoom}px`,
               top: `${(current.bounds.y + drawn.y / k - view.y) * view.zoom}px`,
@@ -4312,7 +4546,13 @@ const PAGE_JS: &str = r##"(() => {
       try {
         do {
           paint.again = false;
-          const drawn = await filterAt(current, "live", false, "paint");
+          // No larger than the layer shows on screen: the small picture
+          // when it's shown no larger than that, as when zoomed out
+          const shown = current.bounds.width * (paint.view?.zoom ?? 1) * (devicePixelRatio || 1);
+          const level = shown <= current.levels.preview.picture.width * 1.25 ? "preview" : "live";
+          const started = performance.now();
+          const drawn = await filterAt(current, level, false, "paint");
+          if (drawn) drawn.k = current.levels[level].k;
           if (drawn && current.painting === paint) {
             Object.assign(drawn.canvas.style, { position: "absolute", pointerEvents: "none" });
             paint.drawn?.canvas.remove();
@@ -4331,6 +4571,8 @@ const PAGE_JS: &str = r##"(() => {
               } catch {}
             }
           }
+          // At most 30 a second, however fast the pointer moves
+          if (paint.again) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 33 - (performance.now() - started))));
         } while (paint.again && current.painting === paint);
       } catch {}
       paint.busy = false;
@@ -4589,6 +4831,7 @@ const PAGE_JS: &str = r##"(() => {
 
   const closeFilter = (current, applied) => {
     current.unpaint?.();
+    closeColorPicker();
     if (filtering !== current) return;
     stopPainting(current, false);
     filtering = null;

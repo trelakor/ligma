@@ -57,6 +57,8 @@ Dither, Halftone, Modulate, Chromatic Aberration, Fisheye, Liquify, Displace, Mo
 
 Their pictures are made in workers, one for the panel's preview, one for the file, which encodes the PNG there too, and one for painting, each making only the newest settings once it's free, so input never waits on them. The preview's handles follow the pointer at once over the last preview made. The file's picture is put in a moment after a change, at most four times a second while something's dragged, as each is a new image in the file; Disintegrate and Bitcrush are held to the same, and their previews to one a frame.
 
+A color is its swatch and hex in one field, as Figma's fills are: the hex can be typed, and the swatch opens a picker drawn as Figma's, beside the panel, with saturation and brightness in a square, hue on a strip, the eyedropper where the webview has one, and the hex. Repeater's blend color opens the same picker.
+
 An effect's center, Fisheye's and Liquify's with a ring for its radius, and Modulate's rings, Chromatic Aberration's lens and Motion Blur's Zoom and Spin's, is a handle dragged on the panel's preview, as Disintegrate's forces are, rather than sliders. A spec's `handles` name the settings each moves, and when it shows.
 
 Liquify, Displace, Motion Blur, Glow and Rim Light keep a photo, a picture with nothing see-through, to its bounds, its edge pixels repeated where they reach past it, and grow a cutout to fit what they draw past its edge.
