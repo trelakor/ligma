@@ -21,9 +21,10 @@
 //! Disintegrate breaks the selected layer into pieces and throws them, as
 //! After Effects' Shatter does, and Bitcrush pixelates, posterizes,
 //! dithers and glitches it. Dither, Halftone and Modulate are Dither Boy's
-//! kinds of dithers, Chromatic Aberration and Fisheye are a lens's, and
-//! Shadow and Reflection are worked out from a cutout's own shape, with no
-//! generated pixels. Each draws an image over the original, which is kept,
+//! kinds of dithers, Chromatic Aberration and Fisheye are a lens's,
+//! Liquify, Displace, Motion Blur and Glow warp, smear or light it, and
+//! Shadow, Reflection and Rim Light are worked out from a cutout's own
+//! shape, with no generated pixels. Each draws an image over the original, which is kept,
 //! hidden, in a group to change them from
 //!
 //! Effects stack, and a Ligma Effects section under Figma's own Effects in
@@ -681,6 +682,45 @@ const PAGE_JS: &str = r##"(() => {
           g.fillRect(i * 20, j * 20, 20, 20);
         }
     },
+    // Colored bands, which show every way they're pushed
+    stripes: (g) => {
+      ["#ff5a5f", "#ffb400", "#3ec300", "#00a6ed", "#7b2ff7", "#f4f1ea"].forEach((color, i, all) => {
+        g.fillStyle = color;
+        g.fillRect(0, (i * THUMB) / all.length, THUMB, THUMB / all.length + 1);
+      });
+    },
+    // Neon tubes on a dark wall
+    neon: (g) => {
+      g.fillStyle = "#0d0c18";
+      g.fillRect(0, 0, THUMB, THUMB);
+      g.lineCap = "round";
+      g.lineWidth = 5;
+      g.strokeStyle = "#ff4fd8";
+      g.beginPath();
+      g.arc(64, 70, 30, 0, Math.PI * 2);
+      g.stroke();
+      g.strokeStyle = "#5ee7ff";
+      g.beginPath();
+      g.moveTo(42, 122);
+      g.lineTo(124, 122);
+      g.moveTo(112, 40);
+      g.lineTo(112, 98);
+      g.stroke();
+    },
+    // City lights at night, which streak as they move
+    lights: (g) => {
+      g.fillStyle = "#0e1020";
+      g.fillRect(0, 0, THUMB, THUMB);
+      const colors = ["#ffcf6b", "#ff6b8b", "#6bd8ff", "#fff3d6", "#ff9a4d"];
+      for (let i = 0; i < 26; i++) {
+        const [x, y, r] = [hash2(i, 1, 3) * 150 + 5, hash2(i, 2, 3) * 130 + 15, 3 + hash2(i, 3, 3) * 6];
+        g.fillStyle = colors[i % colors.length];
+        g.beginPath();
+        g.arc(x, y, r, 0, Math.PI * 2);
+        g.fill();
+      }
+    },
+    pawnOnNight: (g) => pawn(g, 80, 126),
     pawnOnFloor: (g) => pawn(g, 54, 118),
     pawnOnWater: (g) => pawn(g, 80, 100),
   };
@@ -690,6 +730,13 @@ const PAGE_JS: &str = r##"(() => {
         [0, "#ebe6dd"],
         [1, "#cdc5b8"],
       ]);
+      g.fillRect(0, 0, THUMB, THUMB);
+    },
+    night: (g) => {
+      const sky = g.createRadialGradient(118, 30, 4, 100, 60, 130);
+      sky.addColorStop(0, "#33456e");
+      sky.addColorStop(1, "#0b0e1c");
+      g.fillStyle = sky;
       g.fillRect(0, 0, THUMB, THUMB);
     },
     // Dusk over water, its edge at the pawn's foot
@@ -3535,8 +3582,8 @@ const PAGE_JS: &str = r##"(() => {
   // ---------- Picture effects ----------
 
   // Effects that make a new picture from the layer's, as Bitcrush does:
-  // Dither, Halftone, Modulate, Chromatic Aberration, Fisheye, Shadow
-  // and Reflection. Each gives its settings, panel and a
+  // Dither, Halftone, Modulate, Chromatic Aberration, Fisheye, Liquify,
+  // Displace, Motion Blur, Glow, Shadow, Reflection and Rim Light. Each gives its settings, panel and a
   // pixel function; opening, the live picture in the file, applying,
   // cancelling and stacking are shared. A pixel function takes the
   // picture as ImageData, the settings and the picture's pixels a point,
@@ -3697,7 +3744,15 @@ const PAGE_JS: &str = r##"(() => {
     for (let y = H - 1; y >= 0 && bottom < 0; y--) for (let x = 0; x < W; x++) if (f[(y * W + x) * 4 + 3] > 0.5) { bottom = y + 1; break; }
     return top < 0 ? { top: 0, bottom: H } : { top, bottom };
   };
-  const PIXEL_HELPERS = { clamp01, premultiplied, toImage, sampleAt, channelAt, boxPass, blurChannel, hexRgb, lumaOf, hash2, cellGrid, gridAt, solidRows };
+  // Whether none of it's see-through, a photo rather than a cutout, so
+  // effects that move its pixels keep to its bounds and repeat its edges
+  const isOpaque = (f) => {
+    for (let i = 3; i < f.length; i += 4) if (f[i] < 0.999) return false;
+    return true;
+  };
+  // `sampleAt` with its edge pixels repeated past it
+  const edgeAt = (f, W, H, x, y, into) => sampleAt(f, W, H, Math.min(W - 0.5, Math.max(0.5, x)), Math.min(H - 0.5, Math.max(0.5, y)), into);
+  const PIXEL_HELPERS = { clamp01, premultiplied, toImage, sampleAt, channelAt, boxPass, blurChannel, hexRgb, lumaOf, hash2, cellGrid, gridAt, solidRows, isOpaque, edgeAt };
 
   style.textContent += `
   `;
@@ -4824,6 +4879,480 @@ const PAGE_JS: &str = r##"(() => {
     },
   });
 
+  // ---------- Liquify ----------
+
+  // Photoshop's distort filters: Twirl turns it more toward the center,
+  // Pinch squeezes it in or puffs it out, Ripple sends rings out from the
+  // center as on a pond, Zigzag twists those rings back and forth, all
+  // within a radius, and Wave moves it across waves running one way. A
+  // photo keeps its bounds, its edges repeated; a cutout grows to fit
+  const LIQUIFY_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12 12.5a1 1 0 1 1 1-1.5 2.5 2.5 0 0 1-2.5 3.5A3.5 3.5 0 0 1 7 11a5 5 0 0 1 5-5 6 6 0 0 1 6 6 7 7 0 0 1-7 7"/></svg>`;
+  const LIQUIFY_MODES = [
+    ["twirl", "Twirl"],
+    ["pinch", "Pinch"],
+    ["ripple", "Ripple"],
+    ["zigzag", "Zigzag"],
+    ["wave", "Wave"],
+  ];
+  pictureEffect({
+    id: "liquify",
+    thumb: { sample: "checks", settings: { twirl: 240 } },
+    name: "Liquify",
+    about: "Twirl, pinch, ripple or wave it",
+    icon: LIQUIFY_ICON,
+    verb: "Warp",
+    defaults: { mode: "twirl", twirl: 180, pinch: 50, amplitude: 6, wavelength: 24, angle: 0, radius: 100, centerX: 50, centerY: 50, editable: true },
+    presets: [
+      ["Twirl", () => ({})],
+      ["Whirlpool", () => ({ twirl: 540, radius: 80 })],
+      ["Pinch", () => ({ mode: "pinch", pinch: 60 })],
+      ["Puff", () => ({ mode: "pinch", pinch: -60 })],
+      ["Pond", () => ({ mode: "ripple", amplitude: 4, wavelength: 16 })],
+      ["Zigzag", () => ({ mode: "zigzag", amplitude: 10, wavelength: 20 })],
+      ["Wave", () => ({ mode: "wave", amplitude: 8, wavelength: 60 })],
+    ],
+    limits: { twirl: [-3600, 3600], pinch: [-100, 100], amplitude: [0, 1000], wavelength: [1, 4000], angle: [-360, 360], radius: [1, 1000], centerX: [-200, 300], centerY: [-200, 300] },
+    summary: (s) =>
+      ({
+        twirl: `Twirl · ${s.twirl}°`,
+        pinch: `${s.pinch < 0 ? "Puff" : "Pinch"} · ${Math.abs(s.pinch)}%`,
+        ripple: `Ripple · ${s.amplitude}pt`,
+        zigzag: `Zigzag · ${s.amplitude}pt`,
+        wave: `Wave · ${s.amplitude}pt`,
+      })[s.mode] ?? "",
+    panel: (ui) => {
+      const { s } = ui;
+      const waving = () => ["ripple", "zigzag", "wave"].includes(s.mode);
+      return [
+        ui.section(
+          "Warp",
+          ui.select("mode", "Warp", LIQUIFY_MODES),
+          ui.when(ui.sliders([["twirl", "Angle", "°", () => ({ min: -720, max: 720 })]]), () => s.mode === "twirl"),
+          ui.when(ui.sliders([["pinch", "Amount", "%", () => ({ min: -100, max: 100 })]]), () => s.mode === "pinch"),
+          ui.when(
+            ui.sliders([
+              ["amplitude", "Amplitude", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
+              ["wavelength", "Wavelength", "pt", (u) => ({ min: 2, max: upTo(u, 0.5, 64), shape: "curve" })],
+            ]),
+            waving,
+          ),
+          ui.when(ui.sliders([["angle", "Angle", "°", () => ({ min: -180, max: 180 })]]), () => s.mode === "wave"),
+        ),
+        ui.when(
+          ui.section(
+            "Area",
+            ui.sliders([
+              ["radius", "Radius", "%", () => ({ min: 5, max: 200, middle: 100 })],
+              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
+              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
+            ]),
+          ),
+          () => s.mode !== "wave",
+        ),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const amp = s.amplitude * k;
+      const opaque = isOpaque(f);
+      const sample = opaque ? edgeAt : sampleAt;
+      const pad = s.mode === "wave" && !opaque ? Math.ceil(amp) + 1 : 0;
+      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      const [cx, cy] = [(W * s.centerX) / 100, (H * s.centerY) / 100];
+      const R = Math.max(1, ((s.radius / 100) * Math.max(W, H)) / 2);
+      const wave = Math.max(1, s.wavelength * k);
+      const [ax, ay] = [Math.cos((s.angle * Math.PI) / 180), Math.sin((s.angle * Math.PI) / 180)];
+      const twirl = (s.twirl * Math.PI) / 180;
+      const pinch = s.pinch / 100;
+      const power = pinch >= 0 ? 1 - 0.7 * pinch : 1 - 1.5 * pinch;
+      const out = new Float32Array(OW * OH * 4);
+      const p = new Float32Array(4);
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++) {
+          let [X, Y] = [x - pad + 0.5, y - pad + 0.5];
+          if (s.mode === "wave") {
+            // Moved across the waves by a sine along them
+            const shift = amp * Math.sin((2 * Math.PI * (X * ax + Y * ay)) / wave);
+            X += ay * shift;
+            Y -= ax * shift;
+          } else {
+            const [dx, dy] = [X - cx, Y - cy];
+            const r = Math.hypot(dx, dy);
+            if (r > 0 && r < R) {
+              // Strongest at the center, nothing at the radius
+              const t = r / R;
+              const fall = (1 - t) * (1 - t);
+              let [reach, turn] = [r, 0];
+              if (s.mode === "twirl") turn = twirl * fall;
+              else if (s.mode === "pinch") reach = R * t ** power;
+              else if (s.mode === "ripple") reach = r + amp * Math.sin((2 * Math.PI * r) / wave) * fall;
+              else turn = (amp / r) * Math.sin((2 * Math.PI * r) / wave) * fall;
+              const angle = Math.atan2(dy, dx) + turn;
+              [X, Y] = [cx + Math.cos(angle) * reach, cy + Math.sin(angle) * reach];
+            }
+          }
+          out.set(sample(f, W, H, X, Y, p), (y * OW + x) * 4);
+        }
+      return { image: toImage(out, OW, OH), x: -pad, y: -pad };
+    },
+  });
+
+  // ---------- Displace ----------
+
+  // Each pixel taken from a little way off, as far and which way a map
+  // says: smooth noise, rougher turbulence, or the layer's own brightness,
+  // which pushes light parts one way and dark the other. Split moves red
+  // and blue more and less than green, for a prism's fringes. A photo
+  // keeps its bounds, its edges repeated; a cutout grows to fit
+  const DISPLACE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 8c2.5-2 5 2 7.5 0s5-2 7.5 0M4.5 12c2.5-2 5 2 7.5 0s5-2 7.5 0M4.5 16c2.5-2 5 2 7.5 0s5-2 7.5 0"/></svg>`;
+  // Smooth noise in octaves, about −1 to 1, folded into turbulence's
+  // ridges with `turbulent`
+  const noiseAt = (x, y, seed, octaves, turbulent) => {
+    let v = 0;
+    let amp = 1;
+    let total = 0;
+    for (let o = 0; o < octaves; o++) {
+      const n = valueNoise(x, y, seed + o * 131) * 2 - 1;
+      v += (turbulent ? 1 - 2 * Math.abs(n) : n) * amp;
+      total += amp;
+      [x, y] = [x * 2.03 + 11.7, y * 2.03 + 5.3];
+      amp *= 0.5;
+    }
+    return v / total;
+  };
+  Object.assign(PIXEL_HELPERS, { noiseAt });
+  pictureEffect({
+    id: "displace",
+    thumb: { sample: "stripes", settings: { amount: 9, scale: 36, detail: 3 } },
+    name: "Displace",
+    about: "Push its pixels around with noise or its own tones",
+    icon: DISPLACE_ICON,
+    verb: "Displace",
+    defaults: { map: "noise", amount: 8, scale: 40, detail: 2, stretch: 0, axis: "both", angle: 0, smooth: 4, split: 0, seed: 1, editable: true },
+    presets: [
+      ["Wobble", () => ({})],
+      ["Heat haze", () => ({ amount: 3, scale: 12, detail: 3, stretch: -70, axis: "x" })],
+      ["Turbulence", () => ({ map: "turbulence", amount: 14, scale: 60, detail: 5 })],
+      ["Smear", () => ({ map: "self", amount: 12, smooth: 6 })],
+      ["Prism", () => ({ amount: 6, scale: 30, detail: 3, split: 60 })],
+    ],
+    limits: { amount: [0, 1000], scale: [1, 4000], detail: [1, 6], stretch: [-100, 100], angle: [-360, 360], smooth: [0, 1000], split: [0, 100] },
+    summary: (s) => `${{ noise: "Noise", turbulence: "Turbulence", self: "Its tones" }[s.map] ?? ""} · ${s.amount}pt`,
+    panel: (ui) => {
+      const { s } = ui;
+      const noisy = () => s.map !== "self";
+      return [
+        ui.section(
+          "Map",
+          ui.segments("map", "Map", [
+            ["noise", "Noise"],
+            ["turbulence", "Turbulence", "Noise folded into sharp ridges"],
+            ["self", "Its tones", "Light parts pushed one way, dark the other"],
+          ]),
+          ui.sliders([["amount", "Amount", "pt", (u) => ({ min: 0, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })]]),
+          ui.when(
+            ui.sliders([
+              ["scale", "Scale", "pt", (u) => ({ min: 2, max: upTo(u, 0.6, 96), shape: "curve" })],
+              ["detail", "Detail", "", () => ({ min: 1, max: 6 })],
+              ["stretch", "Stretch", "%", () => ({ min: -100, max: 100 })],
+            ]),
+            noisy,
+          ),
+          ui.when(
+            ui.segments("axis", "Moves", [
+              ["both", "Both ways"],
+              ["x", "Across"],
+              ["y", "Up and down"],
+            ]),
+            noisy,
+          ),
+          ui.when(ui.shuffle("seed", "Noise"), noisy),
+          ui.when(
+            ui.sliders([
+              ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+              ["smooth", "Smoothing", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
+            ]),
+            () => !noisy(),
+          ),
+        ),
+        ui.section("Color", ui.sliders([["split", "Split", "%", () => ({ min: 0, max: 100 })]])),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const amount = s.amount * k;
+      const split = s.split / 100;
+      const opaque = isOpaque(f);
+      const sample = opaque ? edgeAt : sampleAt;
+      const pad = opaque ? 0 : Math.ceil(amount * (1 + split) * 1.2) + 1;
+      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      const self = s.map === "self";
+      // Its tones, transparency a middle gray that moves nothing
+      let tones = null;
+      if (self) {
+        tones = new Float32Array(W * H);
+        for (let i = 0; i < W * H; i++) tones[i] = lumaOf(f[i * 4], f[i * 4 + 1], f[i * 4 + 2]) + (1 - f[i * 4 + 3]) * 0.5;
+        tones = blurChannel(tones, W, H, s.smooth * k);
+      }
+      const [ux, uy] = [Math.cos((s.angle * Math.PI) / 180), Math.sin((s.angle * Math.PI) / 180)];
+      const size = Math.max(1, s.scale * k);
+      const st = s.stretch / 100;
+      const [sx, sy] = [size * (1 + Math.max(0, st) * 3), size * (1 + Math.max(0, -st) * 3)];
+      const [octaves, turbulent, seed] = [Math.round(s.detail), s.map === "turbulence", s.seed | 0];
+      const out = new Float32Array(OW * OH * 4);
+      const [p, red, blue] = [new Float32Array(4), new Float32Array(4), new Float32Array(4)];
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++) {
+          const [X, Y] = [x - pad + 0.5, y - pad + 0.5];
+          let [dx, dy] = [0, 0];
+          if (self) {
+            const m = (channelAt(tones, W, H, Math.min(W - 0.5, Math.max(0.5, X)), Math.min(H - 0.5, Math.max(0.5, Y))) - 0.5) * 2 * amount;
+            [dx, dy] = [m * ux, m * uy];
+          } else {
+            // In points, so the look holds at any size
+            if (s.axis !== "y") dx = noiseAt(X / sx, Y / sy, seed, octaves, turbulent) * amount * 1.6;
+            if (s.axis !== "x") dy = noiseAt(X / sx, Y / sy, seed + 977, octaves, turbulent) * amount * 1.6;
+          }
+          const at = (y * OW + x) * 4;
+          sample(f, W, H, X + dx, Y + dy, p);
+          if (split > 0) {
+            sample(f, W, H, X + dx * (1 + split), Y + dy * (1 + split), red);
+            sample(f, W, H, X + dx * (1 - split), Y + dy * (1 - split), blue);
+            out[at] = red[0];
+            out[at + 1] = p[1];
+            out[at + 2] = blue[2];
+            out[at + 3] = Math.max(red[3], p[3], blue[3]);
+          } else out.set(p, at);
+        }
+      return { image: toImage(out, OW, OH), x: -pad, y: -pad };
+    },
+  });
+
+  // ---------- Motion Blur ----------
+
+  // Smeared along its motion: one way (Linear), out from a center (Zoom)
+  // or around it (Spin). Each pixel averages eight along the path, then
+  // eight between those and eight between those again, so even a long
+  // blur is smooth. Trail smears it one way only, behind its motion. A
+  // photo keeps its bounds, its edges repeated; a cutout grows to fit
+  const MOTION_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="15" cy="12" r="4.5"/><path ${STROKE} d="M4.5 9.5h4M3.5 12h5M4.5 14.5h4"/></svg>`;
+  pictureEffect({
+    id: "motionBlur",
+    thumb: { sample: "lights", settings: { distance: 26, angle: 0, trail: true } },
+    name: "Motion Blur",
+    about: "Smear it along a line, out from a point or around it",
+    icon: MOTION_ICON,
+    verb: "Blur",
+    defaults: { mode: "linear", distance: 20, angle: 0, trail: false, zoom: 20, spin: 10, centerX: 50, centerY: 50, editable: true },
+    presets: [
+      ["Pan", () => ({})],
+      ["Speed", () => ({ distance: 40, trail: true })],
+      ["Shake", () => ({ distance: 8, angle: 90 })],
+      ["Zoom burst", () => ({ mode: "zoom", zoom: 30 })],
+      ["Spin", () => ({ mode: "spin", spin: 15 })],
+    ],
+    limits: { distance: [0, 4000], angle: [-360, 360], zoom: [0, 95], spin: [-360, 360], centerX: [-200, 300], centerY: [-200, 300] },
+    summary: (s) => ({ linear: `Linear · ${s.distance}pt`, zoom: `Zoom · ${s.zoom}%`, spin: `Spin · ${s.spin}°` })[s.mode] ?? "",
+    panel: (ui) => {
+      const { s } = ui;
+      return [
+        ui.section(
+          "Motion",
+          ui.segments("mode", "Motion", [
+            ["linear", "Linear"],
+            ["zoom", "Zoom", "Out from a center"],
+            ["spin", "Spin", "Around a center"],
+          ]),
+          ui.when(
+            ui.sliders([
+              ["distance", "Distance", "pt", (u) => ({ min: 0, max: upTo(u, 0.5, 64), shape: "curve" })],
+              ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+            ]),
+            () => s.mode === "linear",
+          ),
+          ui.when(ui.sliders([["zoom", "Amount", "%", () => ({ min: 0, max: 80 })]]), () => s.mode === "zoom"),
+          ui.when(ui.sliders([["spin", "Angle", "°", () => ({ min: -90, max: 90 })]]), () => s.mode === "spin"),
+          ui.check("trail", "Trail", "Smeared one way only, behind its motion"),
+        ),
+        ui.when(
+          ui.section(
+            "Center",
+            ui.sliders([
+              ["centerX", "Center x", "%", () => ({ min: 0, max: 100 })],
+              ["centerY", "Center y", "%", () => ({ min: 0, max: 100 })],
+            ]),
+          ),
+          () => s.mode !== "linear",
+        ),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const zoom = Math.min(0.95, s.zoom / 100);
+      const spin = (s.spin * Math.PI) / 180;
+      const length = s.distance * k;
+      const opaque = isOpaque(f);
+      const sample = opaque ? edgeAt : sampleAt;
+      const pad = opaque
+        ? 0
+        : s.mode === "linear"
+          ? Math.ceil(length) + 1
+          : s.mode === "zoom"
+            ? Math.ceil(Math.min(Math.max(W, H), (Math.max(W, H) / 2) * (zoom / (1 - zoom)))) + 1
+            : Math.ceil((Math.hypot(W, H) / 2 - Math.min(W, H) / 2) * Math.min(1, Math.abs(s.spin) / 45)) + 1;
+      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      let from = new Float32Array(OW * OH * 4);
+      for (let y = 0; y < H; y++) from.set(f.subarray(y * W * 4, (y + 1) * W * 4), ((y + pad) * OW + pad) * 4);
+      const [cx, cy] = [pad + (W * s.centerX) / 100, pad + (H * s.centerY) / 100];
+      const [vx, vy] = [Math.cos((s.angle * Math.PI) / 180) * length, Math.sin((s.angle * Math.PI) / 180) * length];
+      // How far along the path, `t` of it, a pixel at `X`, `Y` takes from
+      const along = (X, Y, t, into) => {
+        if (s.mode === "linear") return sample(from, OW, OH, X + vx * t, Y + vy * t, into);
+        const [dx, dy] = [X - cx, Y - cy];
+        if (s.mode === "zoom") return sample(from, OW, OH, cx + dx * (1 - zoom * t), cy + dy * (1 - zoom * t), into);
+        const [c, n] = [Math.cos(spin * t), Math.sin(spin * t)];
+        return sample(from, OW, OH, cx + dx * c - dy * n, cy + dx * n + dy * c, into);
+      };
+      // The longest the path gets, in pixels, to skip passes too fine to see
+      const reach = s.mode === "linear" ? length : s.mode === "zoom" ? (zoom * Math.hypot(OW, OH)) / 2 : (Math.abs(spin) * Math.hypot(OW, OH)) / 2;
+      const TAPS = 8;
+      const p = new Float32Array(4);
+      for (let pass = 0, span = 1; pass < 3 && (reach * span) / (TAPS - 1) >= 0.25 && reach >= 0.5; pass++, span /= TAPS - 1) {
+        const to = new Float32Array(OW * OH * 4);
+        for (let y = 0; y < OH; y++)
+          for (let x = 0; x < OW; x++) {
+            const at = (y * OW + x) * 4;
+            for (let j = 0; j < TAPS; j++) {
+              const t = (s.trail ? j / (TAPS - 1) : j / (TAPS - 1) - 0.5) * span;
+              along(x + 0.5, y + 0.5, t, p);
+              to[at] += p[0] / TAPS;
+              to[at + 1] += p[1] / TAPS;
+              to[at + 2] += p[2] / TAPS;
+              to[at + 3] += p[3] / TAPS;
+            }
+          }
+        from = to;
+      }
+      return { image: toImage(from, OW, OH), x: -pad, y: -pad };
+    },
+  });
+
+  // ---------- Glow ----------
+
+  // Light spilling past its brightest parts (Bloom), or past its whole
+  // shape (Outer), blurred at three sizes and added over it as light is,
+  // so it washes toward white where it's strongest. Tint turns the light
+  // toward a color
+  const GLOW_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="3.5"/><path ${STROKE} d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4"/></svg>`;
+  pictureEffect({
+    id: "glow",
+    thumb: { sample: "neon", settings: { threshold: 40, radius: 12, intensity: 150 } },
+    name: "Glow",
+    about: "Make its bright parts or its shape glow",
+    icon: GLOW_ICON,
+    verb: "Add glow",
+    defaults: { mode: "bloom", threshold: 65, softness: 20, radius: 16, intensity: 120, tint: 0, color: "#ffd38a", only: false, editable: true },
+    presets: [
+      ["Bloom", () => ({})],
+      ["Dreamy", () => ({ threshold: 35, radius: 30, intensity: 90 })],
+      ["Highlights", () => ({ threshold: 80, softness: 10, radius: 8, intensity: 170 })],
+      ["Neon", () => ({ mode: "outer", radius: 10, intensity: 160 })],
+      ["Halo", () => ({ mode: "outer", radius: 24, intensity: 120, tint: 100, color: "#9ad7ff" })],
+    ],
+    limits: { threshold: [0, 100], softness: [0, 100], radius: [0, 1000], intensity: [0, 1000], tint: [0, 100] },
+    summary: (s) => `${s.mode === "outer" ? "Outer" : "Bloom"} · ${s.radius}pt`,
+    panel: (ui) => {
+      const { s } = ui;
+      return [
+        ui.section(
+          "Glow",
+          ui.segments("mode", "From", [
+            ["bloom", "Bright parts"],
+            ["outer", "Its shape", "Light from all of it, past its edges"],
+          ]),
+          ui.when(
+            ui.sliders([
+              ["threshold", "Threshold", "%", () => ({ min: 0, max: 100 })],
+              ["softness", "Softness", "%", () => ({ min: 0, max: 100 })],
+            ]),
+            () => s.mode === "bloom",
+          ),
+          ui.sliders([
+            ["radius", "Radius", "pt", (u) => ({ min: 0, max: upTo(u, 0.3, 48), shape: "curve" })],
+            ["intensity", "Intensity", "%", () => ({ min: 0, max: 300, middle: 100 })],
+          ]),
+        ),
+        ui.section("Color", ui.sliders([["tint", "Tint", "%", () => ({ min: 0, max: 100 })]]), ui.color("color", "Color"), ui.check("only", "Glow only", "Only the glow, without the layer under it")),
+      ];
+    },
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const r = Math.max(0.5, s.radius * k);
+      const pad = isOpaque(f) ? 0 : Math.ceil(3 * r) + 1;
+      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      // Worked out smaller, as it's blurred anyway, but never so small its
+      // finest blur's lost
+      const q = Math.min(1, Math.max(700 / Math.max(OW, OH), 4 / r));
+      const [MW, MH] = [Math.max(1, Math.ceil(OW * q)), Math.max(1, Math.ceil(OH * q))];
+      const [th, knee, tint] = [s.threshold / 100, Math.max(0.001, s.softness / 100), s.tint / 100];
+      const color = hexRgb(s.color);
+      const light = [0, 1, 2].map(() => new Float32Array(MW * MH));
+      const p = new Float32Array(4);
+      for (let v = 0; v < MH; v++)
+        for (let u = 0; u < MW; u++) {
+          sampleAt(f, W, H, (u + 0.5) / q - pad, (v + 0.5) / q - pad, p);
+          if (p[3] <= 0.001) continue;
+          const c = [p[0] / p[3], p[1] / p[3], p[2] / p[3]];
+          let w = 1;
+          if (s.mode === "bloom") {
+            const t = clamp01((lumaOf(c[0], c[1], c[2]) - th + knee) / (2 * knee));
+            w = t * t * (3 - 2 * t);
+          }
+          for (let ch = 0; ch < 3; ch++) light[ch][v * MW + u] = (c[ch] + (color[ch] - c[ch]) * tint) * w * p[3];
+        }
+      // Three sizes together, as light scatters near and far, stronger
+      // than the light alone, so a thin line still glows
+      const glow = new Float32Array(MW * MH * 4);
+      for (let ch = 0; ch < 3; ch++)
+        for (const [m, weight] of [
+          [0.25, 0.6],
+          [0.55, 0.8],
+          [1, 1.2],
+        ]) {
+          const blurred = blurChannel(light[ch], MW, MH, r * m * q);
+          for (let i = 0; i < MW * MH; i++) glow[i * 4 + ch] += blurred[i] * weight;
+        }
+      const intensity = s.intensity / 100;
+      const out = new Float32Array(OW * OH * 4);
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++) {
+          sampleAt(glow, MW, MH, (x + 0.5) * q, (y + 0.5) * q, p);
+          const [gr, gg, gb] = [p[0] * intensity, p[1] * intensity, p[2] * intensity];
+          const ga = Math.min(1, Math.max(gr, gg, gb));
+          const at = (y * OW + x) * 4;
+          const [sx, sy] = [x - pad, y - pad];
+          if (!s.only && sx >= 0 && sy >= 0 && sx < W && sy < H) {
+            const from = (sy * W + sx) * 4;
+            const a = f[from + 3];
+            out[at] = f[from] + gr;
+            out[at + 1] = f[from + 1] + gg;
+            out[at + 2] = f[from + 2] + gb;
+            out[at + 3] = a + ga * (1 - a);
+          } else {
+            out[at] = gr;
+            out[at + 1] = gg;
+            out[at + 2] = gb;
+            out[at + 3] = ga;
+          }
+        }
+      return { image: toImage(out, OW, OH), x: -pad, y: -pad };
+    },
+  });
+
   // ---------- Shadow ----------
 
   // A shadow worked out from a cutout's own shape, for a figure or object
@@ -5324,6 +5853,95 @@ const PAGE_JS: &str = r##"(() => {
         }
       }
       return { image: toImage(out, OW, OH), x: x0, y: y0 };
+    },
+  });
+
+  // ---------- Rim Light ----------
+
+  // A light behind a cutout catching its edges on one side: each edge lit
+  // as much as it faces Direction, found by looking a Width toward the
+  // light and seeing how much of the cutout's there. Shade darkens the
+  // rest as a backlit subject is, and Halo lets the light spill past its
+  // edge
+  const RIM_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="11" cy="13" r="6.5"/><path ${STROKE} d="M8.5 7a6.5 6.5 0 0 1 9 4.5"/><path ${STROKE} d="M18 4.5l-1 1.5M20 8l-1.5.5"/></svg>`;
+  pictureEffect({
+    id: "rimLight",
+    thumb: { sample: "pawnOnNight", backdrop: "night", settings: { direction: -40, width: 3.5, softness: 1, color: "#8fdcff", intensity: 200, shade: 55, halo: 70 } },
+    name: "Rim Light",
+    about: "Light a cutout's edges from behind",
+    icon: RIM_ICON,
+    verb: "Add light",
+    defaults: { direction: -45, width: 4, softness: 2, intensity: 120, shade: 0, halo: 30, color: "#ffe2b0", editable: true },
+    presets: [
+      ["Golden hour", () => ({})],
+      ["Cool edge", () => ({ direction: 60, color: "#8fdcff", intensity: 140 })],
+      ["Backlit", () => ({ direction: 0, width: 6, shade: 45, halo: 50, intensity: 150, color: "#fff4e0" })],
+      ["Neon", () => ({ direction: 90, width: 3, softness: 1, intensity: 220, halo: 80, color: "#ff4fd8" })],
+      ["Dramatic", () => ({ direction: -60, width: 7, shade: 60, intensity: 170 })],
+    ],
+    limits: { direction: [-360, 360], width: [0, 1000], softness: [0, 1000], intensity: [0, 1000], shade: [0, 100], halo: [0, 100] },
+    summary: (s) => `${s.direction}° · ${s.width}pt`,
+    panel: (ui) => [
+      ui.section(
+        "Light",
+        ui.sliders([
+          ["direction", "Direction", "°", () => ({ min: -180, max: 180 })],
+          ["width", "Width", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
+          ["softness", "Softness", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 16), shape: "curve", digits: 1 })],
+          ["intensity", "Intensity", "%", () => ({ min: 0, max: 300, middle: 100 })],
+        ]),
+        ui.color("color", "Color"),
+      ),
+      ui.section(
+        "Look",
+        ui.sliders([
+          ["shade", "Shade", "%", () => ({ min: 0, max: 100 })],
+          ["halo", "Halo", "%", () => ({ min: 0, max: 100 })],
+        ]),
+      ),
+    ],
+    process: (image, s, k) => {
+      const { width: W, height: H } = image;
+      const f = premultiplied(image);
+      const width = Math.max(0.5, s.width * k);
+      const soft = s.softness * k;
+      const halo = s.halo / 100;
+      const pad = halo > 0 && !isOpaque(f) ? Math.ceil(3 * (width + soft)) + 1 : 0;
+      const [OW, OH] = [W + 2 * pad, H + 2 * pad];
+      const alpha = new Float32Array(W * H);
+      for (let i = 0; i < W * H; i++) alpha[i] = f[i * 4 + 3];
+      const near = blurChannel(alpha, W, H, Math.max(0.5, width * 0.5));
+      // Toward the light: 0° from above, turning clockwise
+      const [lx, ly] = [Math.sin((s.direction * Math.PI) / 180), -Math.cos((s.direction * Math.PI) / 180)];
+      // How lit each pixel is, in the padded picture, for the halo
+      let rim = new Float32Array(OW * OH);
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const a = alpha[y * W + x];
+          if (!a) continue;
+          const toward = channelAt(near, W, H, x + 0.5 + lx * width, y + 0.5 + ly * width);
+          rim[(y + pad) * OW + x + pad] = a * clamp01(1 - toward) ** 1.5;
+        }
+      rim = blurChannel(rim, OW, OH, soft * 0.5);
+      const spill = halo > 0 ? blurChannel(rim, OW, OH, width + soft) : null;
+      const color = hexRgb(s.color);
+      const [intensity, shade] = [s.intensity / 100, s.shade / 100];
+      const out = new Float32Array(OW * OH * 4);
+      for (let y = 0; y < OH; y++)
+        for (let x = 0; x < OW; x++) {
+          const i = y * OW + x;
+          const [sx, sy] = [x - pad, y - pad];
+          const inside = sx >= 0 && sy >= 0 && sx < W && sy < H;
+          const from = (sy * W + sx) * 4;
+          const a = inside ? f[from + 3] : 0;
+          const lit = rim[i] * a * intensity;
+          const glow = spill ? spill[i] * halo * intensity : 0;
+          const darken = 1 - shade * (1 - Math.min(1, rim[i] * 2));
+          const at = i * 4;
+          for (let c = 0; c < 3; c++) out[at + c] = (inside ? f[from + c] * darken : 0) + color[c] * (lit + glow * (1 - a));
+          out[at + 3] = a + Math.min(1, glow) * (1 - a);
+        }
+      return { image: toImage(out, OW, OH), x: -pad, y: -pad };
     },
   });
 
