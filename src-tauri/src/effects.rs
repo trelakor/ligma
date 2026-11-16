@@ -8572,7 +8572,8 @@ const PAGE_JS: &str = r##"(() => {
               into[3] = a * backA;
             } else {
               const turned = Math.sin(phi);
-              const shade = 1 - 0.5 * turned ** 1.4 + 0.12 * (lambert - light[2]) * turned;
+              // As dark as Shadow says, 45% being the usual
+              const shade = 1 - Math.min(0.9, (0.5 * s.peelShadow) / 45 * turned ** 1.4) + 0.12 * (lambert - light[2]) * turned;
               const spec = gauss((phi - Math.PI * 0.18) * 6) * 0.14 * lambert;
               into[0] = pick(sx, sy, 0) * shade + spec;
               into[1] = pick(sx, sy, 1) * shade + spec;
