@@ -148,6 +148,9 @@ pub enum Msg {
     Image(String, Img, Option<f64>),
     /// Image `key` couldn't be had, so it's asked for again later
     Failed(String),
+    /// Effects `key` weren't run, as a later run for the same node came
+    /// first, so they're asked for again if they're still needed
+    Skipped(String),
     Resize(u32, u32),
     /// Draw node `id` alone, offscreen, over `bounds` at `width` by
     /// `height`, and send back its pixels, RGBA with straight alpha. With
@@ -557,6 +560,8 @@ struct Unchecked {
     started: Instant,
     stats: String,
     rough: bool,
+    /// What changed since it was drawn, as for a whole view shown
+    patch: Vec<Rect>,
 }
 
 /// A scene Vello keeps on the GPU
@@ -1955,7 +1960,7 @@ impl Painter {
             Ok((tex, counts, stats, rough)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough, patch: Vec::new() });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -1986,7 +1991,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 let at = (ox, oy, px.to_bits());
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: Vec::new() });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2010,9 +2015,12 @@ impl Painter {
         }
         let started = Instant::now();
         let inside = inside.map(|kept| (kept.id, kept.left, kept.top));
-        if let Some(whole) = self.whole.as_mut() {
-            whole.patch.clear();
-        }
+        // A kept scene used though out of date leaves what changed since out
+        let behind = match (inside.is_some() && self.kept_stale, self.whole.as_mut()) {
+            (true, Some(whole)) => whole.patch.clone(),
+            (_, Some(whole)) => std::mem::take(&mut whole.patch),
+            _ => Vec::new(),
+        };
         let drawn = match inside {
             Some(kept) => {
                 let (id, x, y) = (kept.0, kept.1 - ox, kept.2 - oy);
@@ -2047,7 +2055,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 self.kept_drawn = self.scene_kept.as_ref().map(|kept| (kept.id, at));
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: behind });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2397,6 +2405,11 @@ impl Painter {
                 self.whole_took = last.started.elapsed();
                 stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
                 self.hand_whole(last.layer, last.fence, last.at, last.rough, true);
+                // What changed as the GPU drew it isn't in it, as when an
+                // object's moved, which would show it where it was
+                if let Some(whole) = self.whole.as_mut() {
+                    whole.patch = last.patch;
+                }
                 // At rest alone, as it waits for the GPU
                 if !last.rough && self.moved.elapsed() >= PAN_STILL {
                     self.verify_tiles();
@@ -3555,7 +3568,11 @@ impl Painter {
             Msg::View(view) => self.set_view(view),
             Msg::Failed(key) => {
                 self.asked.remove(&key);
+                self.kept.lock().unwrap().stale.remove(&key);
                 self.failed.insert(key, Instant::now());
+            }
+            Msg::Skipped(key) => {
+                self.asked.remove(&key);
             }
             Msg::Image(key, img, width) => {
                 // Fetches run side by side, so one asked for before can come
@@ -3563,6 +3580,7 @@ impl Painter {
                 // is on its way
                 // is on its way. It's still shown till then, unless what's
                 // here is as sharp
+                self.kept.lock().unwrap().stale.remove(&key);
                 let superseded = width.is_some_and(|width| self.asked.get(&key).is_some_and(|&asked| asked != width));
                 let sharper = self.images.get(&key).is_none_or(|kept| kept.stale || kept.image.width() < img.image.width());
                 if superseded && !sharper {
@@ -3819,7 +3837,9 @@ impl Painter {
         // show what their effects drew before till they've run again too
         for (key, now) in changed {
             let Some(mut img) = self.images.remove(&key) else { continue };
-            self.asked.remove(&key);
+            if self.asked.remove(&key).is_some() {
+                self.kept.lock().unwrap().stale.insert(key.clone());
+            }
             img.stale = true;
             let node = self.effect_nodes.remove(&key);
             let images = self.effect_images.remove(&key);
@@ -3839,7 +3859,15 @@ impl Painter {
                 (None, None) => {}
             }
         }
-        self.kept.lock().unwrap().retain(|key| !gone(key));
+        {
+            let mut kept = self.kept.lock().unwrap();
+            kept.retain(|key| !gone(key));
+            let asked: Vec<String> = self.asked.keys().filter(|key| gone(key)).cloned().collect();
+            for key in asked {
+                self.asked.remove(&key);
+                kept.stale.insert(key);
+            }
+        }
         self.effect_images.retain(|key, _| !gone(key));
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
@@ -4427,6 +4455,9 @@ impl Painter {
         }
         if let Some(whole) = &mut self.whole {
             whole.patch.extend_from_slice(areas);
+        }
+        if let Some(unchecked) = &mut self.unchecked {
+            unchecked.patch.extend_from_slice(areas);
         }
         if let Some(kept) = &self.scene_kept {
             let px = f32::from_bits(kept.px);

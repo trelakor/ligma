@@ -36,6 +36,8 @@ pub struct Results {
     kept: HashMap<String, Full>,
     bytes: usize,
     clock: u64,
+    /// Runs asked for of what's since changed or gone, not to be run
+    pub stale: std::collections::HashSet<String>,
 }
 
 pub type Kept = Arc<Mutex<Results>>;
@@ -158,6 +160,12 @@ fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch,
         }
         for job in latest {
             let key = job.key().to_string();
+            // Moving a node asks again each frame, and what it was a frame
+            // ago would show it going back there once it's stopped
+            if matches!(job, Job::Run(_)) && kept.lock().unwrap().stale.remove(&key) {
+                let _ = messages.send(Msg::Skipped(key));
+                continue;
+            }
             let done = match job {
                 Job::Run(run) => one(&mut host, &fetch, &mut missing, &kept, run),
                 Job::Resize { key, width } => resize(&kept, &key, width),
