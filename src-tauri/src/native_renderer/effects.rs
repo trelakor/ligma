@@ -57,6 +57,19 @@ struct Full {
 /// again if needed
 const KEPT_BUDGET: usize = 48 << 20;
 
+impl Full {
+    /// What it counts for against the budget: as it'll be once compressed,
+    /// about a quarter its size, so one left as it is for now doesn't put
+    /// out others kept
+    fn counted(&self) -> usize {
+        if self.raw {
+            self.data.len() / 4
+        } else {
+            self.data.len()
+        }
+    }
+}
+
 impl Results {
     pub fn has(&self, key: &str) -> bool {
         self.kept.contains_key(key)
@@ -68,7 +81,7 @@ impl Results {
         self.kept.retain(|key, full| {
             let kept = keep(key);
             if !kept {
-                bytes -= full.data.len();
+                bytes -= full.counted();
             }
             kept
         });
@@ -76,16 +89,16 @@ impl Results {
     }
 
     fn put(&mut self, key: &str, full: Full) {
-        self.bytes += full.data.len();
+        self.bytes += full.counted();
         if let Some(old) = self.kept.insert(key.to_string(), full) {
-            self.bytes -= old.data.len();
+            self.bytes -= old.counted();
         }
         while self.bytes > KEPT_BUDGET && self.kept.len() > 1 {
             let Some(oldest) = self.kept.iter().filter(|(other, _)| *other != key).min_by_key(|(_, full)| full.used).map(|(key, _)| key.clone()) else {
                 break;
             };
             if let Some(gone) = self.kept.remove(&oldest) {
-                self.bytes -= gone.data.len();
+                self.bytes -= gone.counted();
             }
         }
     }
@@ -157,7 +170,7 @@ fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch,
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 // Idle: one result compressed at a time, then back to any
                 // job that's come meanwhile
-                if compress_one(&kept) {
+                if compress_one(&kept, false) {
                     continue;
                 }
                 match jobs.recv() {
@@ -184,6 +197,7 @@ fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch,
                 let _ = messages.send(Msg::Skipped(key));
                 continue;
             }
+            let ran = matches!(job, Job::Run(_));
             let done = match job {
                 Job::Run(run) => one(&mut host, &fetch, &mut missing, &kept, run),
                 Job::Resize { key, width } => resize(&kept, &key, width),
@@ -191,6 +205,9 @@ fn run(mut host: Host, jobs: Receiver<Job>, messages: Sender<Msg>, fetch: Fetch,
             match done {
                 Ok(img) => {
                     let _ = messages.send(Msg::Image(key, img, None));
+                    // Once it's sent, those before it, so no more than the
+                    // latest is left as it is while runs keep coming
+                    while ran && compress_one(&kept, true) {}
                 }
                 Err(error) => {
                     log::warn!("native renderer: effects of {key}: {error}");
@@ -230,12 +247,14 @@ fn one(host: &mut Host, fetch: &Fetch, missing: &mut HashMap<String, (String, In
     img
 }
 
-/// Compresses one result left as it is, if there's one, and whether there was
-fn compress_one(kept: &Kept) -> bool {
+/// Compresses one result left as it is, but the latest where `older`, if
+/// there's one, and whether there was
+fn compress_one(kept: &Kept, older: bool) -> bool {
     // Copied out, so what draws isn't held up while it's compressed
     let (key, pixels, used) = {
         let results = kept.lock().unwrap();
-        let Some((key, full)) = results.kept.iter().find(|(_, full)| full.raw) else {
+        let latest = results.clock;
+        let Some((key, full)) = results.kept.iter().find(|(_, full)| full.raw && !(older && full.used == latest)) else {
             return false;
         };
         (key.clone(), full.data.clone(), full.used)
@@ -245,7 +264,7 @@ fn compress_one(kept: &Kept) -> bool {
     let Results { kept: all, bytes, .. } = &mut *results;
     // Unless it's been run again or used since
     if let Some(full) = all.get_mut(&key).filter(|full| full.raw && full.used == used) {
-        *bytes = *bytes - full.data.len() + compressed.len();
+        *bytes = *bytes - full.counted() + compressed.len();
         full.data = compressed;
         full.raw = false;
     }
