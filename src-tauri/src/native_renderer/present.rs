@@ -396,12 +396,13 @@ pub struct Piece {
 /// view drawn at it, then the rest, scaled, each where those before don't
 /// cover. And whether that leaves some of the view out
 pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
-    cover_over(layers, layers.len(), content, view, size)
+    cover_over(layers, layers.len(), content, view, size, &std::collections::HashSet::new())
 }
 
 /// As `cover`, with the layers from `behind` on used only where those
-/// before them leave holes
-fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
+/// before them leave holes, and out of date ones of textures in `shown`,
+/// the last frame's, first of those out of date
+fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32), shown: &std::collections::HashSet<usize>) -> (Vec<Piece>, bool) {
     if view.outline().is_some() {
         return (Vec::new(), false);
     }
@@ -429,12 +430,16 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
             // One drawn from the fraction of a pixel the view is at is
             // sharper there than one moved to it
             let off = if !preview && layer.px == drawn && !at_phase(layer) { 1.1 } else { 0.0 };
-            let rank = off + match (layer.kind, layer.px == drawn) {
-                (LayerKind::Tile, true) => 0.0,
-                (LayerKind::Whole, true) => 1.0,
-                (LayerKind::Draft, true) => 1.2,
+            let rank = match (layer.kind, layer.px == drawn) {
+                (LayerKind::Tile, true) => off,
+                (LayerKind::Whole, true) => off + 1.0,
+                (LayerKind::Draft, true) => off + 1.2,
                 (LayerKind::Whole, false) => 1.5 + distance(layer.px),
-                (LayerKind::Stale, _) => 1.6 + distance(layer.px),
+                // Shown only till what changed is drawn again, so where it
+                // lands on the grid doesn't matter. What the last frame
+                // showed first: another, older or never shown, would show
+                // the view other than it just was for a frame
+                (LayerKind::Stale, _) => (if shown.contains(&(Arc::as_ptr(&layer.tex) as usize)) { 1.3 } else { 1.6 }) + distance(layer.px),
                 _ => 2.0 + distance(layer.px),
             };
             (if i >= behind { rank + 1000.0 } else { rank }, i)
@@ -625,6 +630,8 @@ pub struct Screen {
     /// Textures frames read, held till the GPU's drawn them, so the render
     /// thread draws into none the GPU's still reading here
     reading: std::collections::VecDeque<(u64, Vec<Arc<Tex>>)>,
+    /// The textures the last frame showed
+    shown: std::collections::HashSet<usize>,
 }
 
 impl Screen {
@@ -691,6 +698,7 @@ impl Screen {
             size: (width.max(1), height.max(1)),
             images: std::collections::HashMap::new(),
             patterns: Patterns::new(),
+            shown: std::collections::HashSet::new(),
             queue,
             fence,
             frames: 0,
@@ -831,7 +839,7 @@ impl Screen {
             // All of the view or nothing: what's shown stays till the
             // render thread has drawn what the view needs. Its whole view
             // is drawn for the view itself, so it's what there is
-            let (pieces, holes) = cover(&snapshot.layers, snapshot.content, &view, self.size);
+            let (pieces, holes) = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
             if holes && snapshot.whole_at != Some(view_at(&view, self.size)) {
                 stats().lock().unwrap().holes(true);
                 // Its holes filled from the last snapshot shown whole, as
@@ -840,7 +848,7 @@ impl Screen {
                 let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial).and_then(|before| {
                     let mut layers = snapshot.layers.clone();
                     layers.extend(before.layers.iter().cloned());
-                    let (pieces, holes) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size);
+                    let (pieces, holes) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
                     let merged = Snapshot {
                         seq: snapshot.seq,
                         fence: snapshot.fence.clone(),
@@ -974,6 +982,7 @@ impl Screen {
         drop(images);
         self.frames += 1;
         let read: Vec<Arc<Tex>> = pieces.iter().map(|piece| snapshot.layers[piece.layer].tex.clone()).collect();
+        self.shown = read.iter().map(|tex| Arc::as_ptr(tex) as usize).collect();
         if unsafe { self.queue.Signal(&self.fence, self.frames) }.is_err() {
             // Without the fence, waited for instead
             self.context.submit(SyncCpu::Yes);

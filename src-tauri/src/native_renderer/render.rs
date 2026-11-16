@@ -1723,7 +1723,14 @@ impl Painter {
             // What changed that isn't an edit, an image come or the like,
             // is drawn from thumbs, as the view is meanwhile, rather than
             // exactly, which for a big image is hundreds of milliseconds,
-            // as tiles are drawn exactly after
+            // as tiles are drawn exactly after. Vello draws it from where
+            // the view is, as it would next, rather than off it, softer, for
+            // a few frames
+            if settle.is_zero() && self.vello_ready() {
+                if let Some(next) = self.fill_once(px, (ox, oy, width, height), phase) {
+                    return next;
+                }
+            }
             self.draw_whole(ox, oy, width, height, px, true);
             self.dirty = true;
             return Some(Duration::ZERO);
@@ -3398,7 +3405,25 @@ impl Painter {
     /// What's drawn and up to date: tiles, and the whole view
     /// What's drawn, with tiles being drawn again as they were if `stale`
     fn layers(&self, stale: bool) -> Vec<Layer> {
-        let tiles = self.tiles.iter().filter(|(_, tile)| stale || !tile.stale).map(|(key, tile)| Layer {
+        // A tile out of date since before the whole view was drawn is older
+        // than it wherever they meet, and past it is off the view. Wherever
+        // it's preferred it would show the view as it was seconds ago, till
+        // what changed is drawn again
+        let whole_area = self.whole.as_ref().map(|whole| {
+            let layer = &whole.layer;
+            (Rect::from_xywh(layer.x as f32 / layer.px, layer.y as f32 / layer.px, layer.tex.width as f32 / layer.px, layer.tex.height as f32 / layer.px), layer.drawn, layer.px, whole.rough)
+        });
+        let older = |key: &TileKey, tile: &Tile| whole_area.is_some_and(|(area, drawn, _, _)| tile.drawn < drawn && Rect::intersects2(&area, &key.area()));
+        // One drawn before it at its zoom and wholly inside it is no newer
+        // where it's up to date, and may not be where it's not marked so,
+        // as for what effects drew while it was drawn
+        let under = |key: &TileKey, tile: &Tile| {
+            whole_area.is_some_and(|(area, drawn, px, rough)| {
+                let tile_area = key.area();
+                !rough && tile.drawn < drawn && key.px() == px && area.left <= tile_area.left && area.top <= tile_area.top && area.right >= tile_area.right && area.bottom >= tile_area.bottom
+            })
+        };
+        let tiles = self.tiles.iter().filter(|(key, tile)| !under(key, tile) && (!tile.stale || (stale && !older(key, tile)))).map(|(key, tile)| Layer {
             tex: tile.tex.clone(),
             x: key.x * TILE,
             y: key.y * TILE,
