@@ -11720,10 +11720,8 @@ const PAGE_JS: &str = r##"(() => {
           }
       }
       });
-      // Each layer's sides over those of the layers under it, as the
-      // layers are stacked, and back to front within each: of two sides
-      // that cover the same line along the depth, the one whose edge is
-      // farther along it is in front. Sides of one outline never cross, so
+      // Back to front: of two sides that cover the same line along the
+      // depth, the one whose edge is farther along it is in front. Sides of one outline never cross, so
       // that never contradicts itself, and they're drawn in an order that
       // keeps every such pair, the nearest last
       const along = (one, c) => {
@@ -11734,10 +11732,13 @@ const PAGE_JS: &str = r##"(() => {
         const t = q.c > p.c ? Math.min(1, Math.max(0, (c - p.c) / (q.c - p.c))) : 0;
         return p.a + (q.a - p.a) * t;
       };
+      // Layers stacked only where their sides run close, an outline and
+      // what's just inside it, so they show as bands; elsewhere, as one
+      // part of the shape in front of another, by where they are
+      const near = Math.max(4, current.unit * 0.1);
       const ordered = [];
-      const layers = [...new Set(sides.map((one) => one.layer))].sort((a, b) => a - b);
-      for (const layer of layers) {
-        const mine = sides.filter((one) => one.layer === layer);
+      {
+        const mine = sides;
         const behind = mine.map(() => []);
         const waiting = mine.map(() => 0);
         for (let i = 0; i < mine.length; i++)
@@ -11749,8 +11750,12 @@ const PAGE_JS: &str = r##"(() => {
             const c = (low + high) / 2;
             const gap = along(A, c) - along(B, c);
             // Only sides close enough along the depth to overlap
-            if (Math.abs(gap) >= s.depth || Math.abs(gap) < 1e-6) continue;
-            if (gap < 0) {
+            if (Math.abs(gap) >= s.depth) continue;
+            let first;
+            if (A.layer !== B.layer && Math.abs(gap) < near) first = A.layer < B.layer;
+            else if (Math.abs(gap) < 1e-6) continue;
+            else first = gap < 0;
+            if (first) {
               behind[i].push(j);
               waiting[j]++;
             } else {
@@ -11761,14 +11766,14 @@ const PAGE_JS: &str = r##"(() => {
         // Those with none behind them first, the farthest back first
         const ready = mine.map((one, i) => i).filter((i) => !waiting[i]);
         const done = new Set();
-        while (ready.length || done.size < mine.length) {
+        while (done.size < mine.length) {
           if (!ready.length) {
-            // Never expected, as sides of an outline don't cross; whatever's
-            // left goes by where its middle is
-            const rest = mine.map((one, i) => i).filter((i) => !done.has(i)).sort((a, b) => mine[a].key - mine[b].key);
+            // Where the two rules disagree in a loop, whatever's left goes by
+            // layer, then where its middle is
+            const rest = mine.map((one, i) => i).filter((i) => !done.has(i)).sort((a, b) => mine[a].layer - mine[b].layer || mine[a].key - mine[b].key);
             ready.push(rest[0]);
           }
-          ready.sort((a, b) => mine[b].key - mine[a].key);
+          ready.sort((a, b) => mine[b].layer - mine[a].layer || mine[b].key - mine[a].key);
           const i = ready.pop();
           if (done.has(i)) continue;
           done.add(i);
