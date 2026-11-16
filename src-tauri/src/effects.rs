@@ -3583,12 +3583,12 @@ const PAGE_JS: &str = r##"(() => {
 
   // Effects that make a new picture from the layer's, as Bitcrush does:
   // Dither, Halftone, Modulate, Chromatic Aberration, Fisheye, Liquify,
-  // Displace, Motion Blur, Glow, Shadow, Reflection and Rim Light. Each gives its settings, panel and a
-  // pixel function; opening, the live picture in the file, applying,
-  // cancelling and stacking are shared. A pixel function takes the
-  // picture as ImageData, the settings and the picture's pixels a point,
-  // and gives back an ImageData and where its top left sits from the
-  // picture's, as Shadow and Reflection draw past the layer. For the
+  // Displace, Motion Blur, Glow, Shadow, Reflection and Rim Light. Each
+  // gives its settings, panel and a pixel function; opening, the live
+  // picture in the file, applying, cancelling and stacking are shared. A
+  // pixel function takes the picture as ImageData, the settings and the
+  // picture's pixels a point, and gives back an ImageData and where its
+  // top left sits from the picture's, as some draw past the layer. For the
   // file's pictures it runs in a worker, so it uses nothing of the page's
   // but the helpers in `PIXEL_HELPERS`. Nothing's generated: every result
   // is worked out from the layer's own pixels
