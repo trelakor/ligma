@@ -807,12 +807,13 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- The library's pictures ----------
 
-  // Each tile shows its effect at work on a picture drawn here, one that
-  // shows it best: a sunset's tones for the dithers and Bitcrush, rings
-  // for Chromatic Aberration, checks for Fisheye and a pawn on a floor or
-  // on water for Shadow and Reflection. A picture effect's `thumb` names
-  // its sample, backdrop and settings. Each is made once, the first time
-  // the library opens, one a frame so the library's up at once
+  // Each tile shows its effect at work on a subject drawn here, one that
+  // shows it best: a lit orb's tones for the dithers, Halftone, Modulate,
+  // Bitcrush and Disintegrate, rings for Chromatic Aberration, checks for
+  // Fisheye and a pawn on a floor or on water for Shadow and Reflection,
+  // all on one stage in one palette. A picture effect's `thumb` names its
+  // sample, backdrop and settings. Each is made once, the first time the
+  // library opens, one a frame so the library's up at once
   const THUMB = 160;
   const thumbs = new Map();
   const canvas2d = (width = THUMB, height = THUMB) => {
@@ -858,45 +859,72 @@ const PAGE_JS: &str = r##"(() => {
     g.fill();
     g.restore();
   };
+  // Every tile on one stage, in one palette, its subject centred with the
+  // light from the top left, so the library reads as a set
+  const STAGE = "#1f1f24";
+  const INK = { paper: "#f6f2ea", blue: "#2f8cff", violet: "#8b5cf6", coral: "#ff5c4d", amber: "#ffb224", mint: "#1fc7a0", pink: "#ff5fa8" };
+  const stage = (g) => {
+    g.fillStyle = STAGE;
+    g.fillRect(0, 0, THUMB, THUMB);
+  };
+  // A sphere lit from the top left, from cream through amber and coral to
+  // violet in its shade: every tone, for the effects that work by tone
+  const orb = (g, cx = 80, cy = 80, r = 52) => {
+    const light = g.createRadialGradient(cx - r * 0.38, cy - r * 0.42, r * 0.04, cx - r * 0.1, cy - r * 0.1, r * 1.12);
+    light.addColorStop(0, "#fff6e0");
+    light.addColorStop(0.2, "#ffd36a");
+    light.addColorStop(0.45, "#ff8a3d");
+    light.addColorStop(0.72, "#e3436b");
+    light.addColorStop(1, "#4b1f78");
+    g.fillStyle = light;
+    g.beginPath();
+    g.arc(cx, cy, r, 0, Math.PI * 2);
+    g.fill();
+  };
+  const starPath = (cx, cy, outer, inner, points = 5, turn = -Math.PI / 2) => {
+    const path = new Path2D();
+    for (let i = 0; i < points * 2; i++) {
+      const a = turn + (i / (points * 2)) * Math.PI * 2;
+      const r = i % 2 ? inner : outer;
+      path.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+    }
+    path.closePath();
+    return path;
+  };
+  const heartPath = (cx, cy, size) => {
+    const path = new Path2D();
+    const s = size / 32;
+    path.moveTo(cx, cy + 26 * s);
+    path.bezierCurveTo(cx - 38 * s, cy + 2 * s, cx - 34 * s, cy - 30 * s, cx - 14 * s, cy - 30 * s);
+    path.bezierCurveTo(cx - 4 * s, cy - 30 * s, cx, cy - 22 * s, cx, cy - 18 * s);
+    path.bezierCurveTo(cx, cy - 22 * s, cx + 4 * s, cy - 30 * s, cx + 14 * s, cy - 30 * s);
+    path.bezierCurveTo(cx + 34 * s, cy - 30 * s, cx + 38 * s, cy + 2 * s, cx, cy + 26 * s);
+    path.closePath();
+    return path;
+  };
   const SAMPLES = {
-    // A sun over hills at dusk: every tone, from the sky's dark to the
-    // sun's light
-    sunset: (g) => {
-      g.fillStyle = linear(g, 0, 0, 0, THUMB, [
-        [0, "#1b1f4b"],
-        [0.55, "#d1497a"],
-        [1, "#ffb36b"],
-      ]);
-      g.fillRect(0, 0, THUMB, THUMB);
-      const sun = g.createRadialGradient(94, 58, 2, 104, 70, 32);
-      sun.addColorStop(0, "#fff6d8");
-      sun.addColorStop(0.5, "#ffc46b");
-      sun.addColorStop(1, "#e2615a");
-      g.fillStyle = sun;
-      g.beginPath();
-      g.arc(104, 70, 30, 0, Math.PI * 2);
-      g.fill();
-      for (const [color, y0, a, b, y1] of [
-        ["#6a2d6e", 104, 84, 118, 96],
-        ["#2a1640", 132, 112, 140, 124],
-      ]) {
-        g.fillStyle = color;
-        g.beginPath();
-        g.moveTo(0, y0);
-        g.bezierCurveTo(40, a, 100, b, THUMB, y1);
-        g.lineTo(THUMB, THUMB);
-        g.lineTo(0, THUMB);
-        g.fill();
-      }
+    orb: (g) => {
+      stage(g);
+      orb(g);
     },
-    // Light rings on black, where colors split at every edge
-    rings: (g) => {
-      g.fillStyle = "#101014";
+    // The orb on black, for effects whose black then gives way to the
+    // stage, and on white, for those that draw where it's dark
+    orbOnBlack: (g) => {
+      g.fillStyle = "#000000";
       g.fillRect(0, 0, THUMB, THUMB);
-      g.strokeStyle = g.fillStyle = "#ffffff";
+      orb(g);
+    },
+    orbOnWhite: (g) => {
+      g.fillStyle = "#ffffff";
+      g.fillRect(0, 0, THUMB, THUMB);
+      orb(g);
+    },
+    // Light rings, where colours split at every edge
+    rings: (g) => {
+      g.strokeStyle = g.fillStyle = INK.paper;
       for (const [r, width] of [
-        [52, 12],
-        [27, 8],
+        [50, 11],
+        [27, 7],
       ]) {
         g.lineWidth = width;
         g.beginPath();
@@ -907,133 +935,122 @@ const PAGE_JS: &str = r##"(() => {
       g.arc(80, 80, 7, 0, Math.PI * 2);
       g.fill();
     },
-    // Checks, which show a lens's bulge best
+    // Checks, which show a lens's bulge best, blue through violet to pink
     checks: (g) => {
+      stage(g);
       for (let j = 0; j < 8; j++)
         for (let i = 0; i < 8; i++) {
-          g.fillStyle = (i + j) % 2 ? "#1e2233" : `hsl(${190 + (i + j) * 12} 75% 62%)`;
+          if ((i + j) % 2) continue;
+          const t = (i + j) / 14;
+          g.fillStyle = t < 0.5 ? mixHex(INK.blue, INK.violet, t * 2) : mixHex(INK.violet, INK.pink, t * 2 - 1);
           g.fillRect(i * 20, j * 20, 20, 20);
         }
     },
-    // Colored bands, which show every way they're pushed
-    stripes: (g) => {
-      ["#ff5a5f", "#ffb400", "#3ec300", "#00a6ed", "#7b2ff7", "#f4f1ea"].forEach((color, i, all) => {
+    // Upright bands, which a twirl winds round
+    bands: (g) => {
+      stage(g);
+      [INK.coral, INK.amber, INK.mint, INK.blue, INK.violet].forEach((color, i) => {
         g.fillStyle = color;
-        g.fillRect(0, (i * THUMB) / all.length, THUMB, THUMB / all.length + 1);
+        g.fillRect(8 + i * 30, 0, 22, THUMB);
       });
     },
-    // Neon tubes on a dark wall
+    // Level lines, which show every way they're pushed, as a map's contours
+    contours: (g) => {
+      stage(g);
+      for (let i = 0; i < 12; i++) {
+        const t = i / 11;
+        g.fillStyle = t < 0.5 ? mixHex(INK.blue, INK.mint, t * 2) : mixHex(INK.mint, INK.amber, t * 2 - 1);
+        g.fillRect(0, 10 + i * 12.4, THUMB, 5);
+      }
+    },
+    // A ball, which streaks as it moves
+    ball: (g) => orb(g, 112, 80, 22),
+    // Neon tubes, a ring and a corner
     neon: (g) => {
-      g.fillStyle = "#0d0c18";
-      g.fillRect(0, 0, THUMB, THUMB);
+      stage(g);
       g.lineCap = "round";
       g.lineWidth = 5;
-      g.strokeStyle = "#ff4fd8";
+      g.strokeStyle = INK.pink;
       g.beginPath();
-      g.arc(64, 70, 30, 0, Math.PI * 2);
+      g.arc(64, 72, 28, 0, Math.PI * 2);
       g.stroke();
       g.strokeStyle = "#5ee7ff";
       g.beginPath();
-      g.moveTo(42, 122);
-      g.lineTo(124, 122);
-      g.moveTo(112, 40);
-      g.lineTo(112, 98);
+      g.moveTo(44, 120);
+      g.lineTo(120, 120);
+      g.lineTo(120, 42);
       g.stroke();
     },
-    // City lights at night, which streak as they move
-    lights: (g) => {
-      g.fillStyle = "#0e1020";
-      g.fillRect(0, 0, THUMB, THUMB);
-      const colors = ["#ffcf6b", "#ff6b8b", "#6bd8ff", "#fff3d6", "#ff9a4d"];
-      for (let i = 0; i < 26; i++) {
-        const [x, y, r] = [hash2(i, 1, 3) * 150 + 5, hash2(i, 2, 3) * 130 + 15, 3 + hash2(i, 3, 3) * 6];
-        g.fillStyle = colors[i % colors.length];
-        g.beginPath();
-        g.arc(x, y, r, 0, Math.PI * 2);
-        g.fill();
-      }
+    // A heart, cut out of nothing, for glitter
+    heart: (g) => {
+      g.fillStyle = INK.pink;
+      g.fill(heartPath(80, 84, 46));
     },
-    // A badge cut out of nothing: a pink star over a green disc, with a
-    // light band across them, colours and edges for glitter and stickers
+    // A star with a band across it, cut out of nothing, for a sticker
     badge: (g) => {
-      g.fillStyle = "#1f9d63";
+      g.fillStyle = INK.amber;
+      g.fill(starPath(80, 84, 58, 28));
+      g.fillStyle = INK.coral;
       g.beginPath();
-      g.arc(70, 88, 44, 0, Math.PI * 2);
+      g.arc(80, 88, 16, 0, Math.PI * 2);
       g.fill();
-      g.fillStyle = "#ff8fc8";
-      g.beginPath();
-      for (let i = 0; i < 10; i++) {
-        const r = i % 2 ? 18 : 40;
-        const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
-        g.lineTo(104 + Math.cos(a) * r, 64 + Math.sin(a) * r);
-      }
-      g.fill();
-      g.fillStyle = "#f6efe2";
-      g.fillRect(38, 92, 68, 12);
     },
-    // A search page: a field with a blue button over lines of text
-    ui: (g) => {
-      g.fillStyle = "#f4f6f9";
-      g.fillRect(0, 0, THUMB, THUMB);
-      g.fillStyle = "#ffffff";
-      g.strokeStyle = "#c9d1dc";
-      g.lineWidth = 2;
+    // A video's frame: a play button on a blue card, for a screen
+    play: (g) => {
+      stage(g);
+      g.fillStyle = linear(g, 0, 20, 0, 140, [
+        [0, "#4fa3ff"],
+        [1, "#5a3ee6"],
+      ]);
       g.beginPath();
-      g.roundRect(14, 40, 132, 30, 15);
+      g.roundRect(14, 30, 132, 100, 12);
       g.fill();
-      g.stroke();
-      g.fillStyle = "#1f6feb";
+      g.fillStyle = INK.paper;
       g.beginPath();
-      g.roundRect(106, 44, 36, 22, 11);
+      g.moveTo(68, 56);
+      g.lineTo(100, 80);
+      g.lineTo(68, 104);
+      g.closePath();
       g.fill();
-      g.fillStyle = "#3a3f47";
-      g.font = "bold 14px sans-serif";
-      g.fillText("search", 26, 60);
-      g.fillStyle = "#9aa4b2";
-      for (const [y, w] of [
-        [88, 110],
-        [102, 96],
-        [116, 120],
-        [130, 70],
-      ])
-        g.fillRect(16, y, w, 6);
     },
     pawnOnNight: (g) => pawn(g, 80, 126),
-    pawnOnFloor: (g) => pawn(g, 54, 118),
+    pawnOnFloor: (g) => pawn(g, 58, 122),
     pawnOnWater: (g) => pawn(g, 80, 100),
   };
   const BACKDROPS = {
-    floor: (g) => {
+    stage,
+    // A lit studio floor, light enough to cast a shadow on
+    studio: (g) => {
       g.fillStyle = linear(g, 0, 0, 0, THUMB, [
-        [0, "#ebe6dd"],
-        [1, "#cdc5b8"],
+        [0, "#4a4a53"],
+        [1, "#2c2c33"],
       ]);
       g.fillRect(0, 0, THUMB, THUMB);
     },
-    slate: (g) => {
-      g.fillStyle = "#2a2d36";
-      g.fillRect(0, 0, THUMB, THUMB);
-    },
     night: (g) => {
-      const sky = g.createRadialGradient(118, 30, 4, 100, 60, 130);
-      sky.addColorStop(0, "#33456e");
-      sky.addColorStop(1, "#0b0e1c");
+      const sky = g.createRadialGradient(112, 34, 4, 96, 64, 130);
+      sky.addColorStop(0, "#2c3a5e");
+      sky.addColorStop(1, STAGE);
       g.fillStyle = sky;
       g.fillRect(0, 0, THUMB, THUMB);
     },
     // Dusk over water, its edge at the pawn's foot
     water: (g) => {
       g.fillStyle = linear(g, 0, 0, 0, 100, [
-        [0, "#f3dcc0"],
-        [1, "#e9a983"],
+        [0, "#2a2a33"],
+        [1, "#4a3a52"],
       ]);
       g.fillRect(0, 0, THUMB, 100);
       g.fillStyle = linear(g, 0, 100, 0, THUMB, [
-        [0, "#3a6b88"],
-        [1, "#16324a"],
+        [0, "#24506b"],
+        [1, "#10202e"],
       ]);
       g.fillRect(0, 100, THUMB, THUMB - 100);
     },
+  };
+  const mixHex = (a, b, t) => {
+    const [x, y] = [hexRgb(a), hexRgb(b)];
+    return `rgb(${x.map((v, i) => Math.round((v + (y[i] - v) * t) * 255)).join(", ")})`;
   };
   const pictureThumb = (spec) => {
     const { sample, backdrop, settings = {} } = spec.thumb;
@@ -1061,62 +1078,80 @@ const PAGE_JS: &str = r##"(() => {
         const scale = (THUMB - 16) / Math.max(x1 - x0, y1 - y0);
         tg.drawImage(result, x0, y0, x1 - x0, y1 - y0, (THUMB - (x1 - x0) * scale) / 2, (THUMB - (y1 - y0) * scale) / 2, (x1 - x0) * scale, (y1 - y0) * scale);
       }
-    } else tg.drawImage(result, done.x, done.y);
+    } else {
+      // Blended onto the stage, as black that gives way to it, and the
+      // original over it, as a moving ball's sharp head
+      tg.save();
+      // Kept to the orb, for an effect that also draws on the ground
+      if (spec.thumb.clip === "orb") {
+        tg.beginPath();
+        tg.arc(80, 80, 53, 0, Math.PI * 2);
+        tg.clip();
+      }
+      tg.globalCompositeOperation = spec.thumb.blend ?? "source-over";
+      tg.drawImage(result, done.x, done.y);
+      tg.restore();
+      tg.globalCompositeOperation = "source-over";
+      if (spec.thumb.over) SAMPLES[sample](tg);
+    }
     return tile;
   };
   const bitcrushThumb = () => {
     const [tile, g] = canvas2d();
-    SAMPLES.sunset(g);
-    g.putImageData(crushRows(g.getImageData(0, 0, THUMB, THUMB), { ...BITCRUSH_DEFAULTS, pixelSize: 7 }, 1, 0, THUMB), 0, 0);
-    return tile;
+    SAMPLES.orbOnBlack(g);
+    g.putImageData(crushRows(g.getImageData(0, 0, THUMB, THUMB), { ...BITCRUSH_DEFAULTS, pixelSize: 8 }, 1, 0, THUMB), 0, 0);
+    const [staged, sg] = canvas2d();
+    stage(sg);
+    sg.globalCompositeOperation = "lighten";
+    sg.drawImage(tile, 0, 0);
+    return staged;
   };
-  // A card stepped along a curve, turning and shrinking as it goes
+  // A card stepped along a curve, turning and shrinking as it goes, the
+  // nearest solid and the farthest faint
   const repeaterThumb = () => {
     const [tile, g] = canvas2d();
-    g.fillStyle = linear(g, 0, 0, 0, THUMB, [
-      [0, "#eeebfa"],
-      [1, "#dad4f2"],
-    ]);
-    g.fillRect(0, 0, THUMB, THUMB);
+    stage(g);
     for (let i = 0; i < 6; i++) {
       const t = i / 5;
-      const size = 44 - 16 * t;
+      const size = 46 - 18 * t;
       g.save();
-      g.translate(36 + 88 * t, 46 + 70 * t - 30 * Math.sin(Math.PI * t));
+      g.translate(38 + 86 * t, 48 + 68 * t - 30 * Math.sin(Math.PI * t));
       g.rotate((i * 16 * Math.PI) / 180);
-      g.globalAlpha = 0.3 + 0.7 * t;
-      g.fillStyle = "#6457f0";
-      g.strokeStyle = "#ffffff";
-      g.lineWidth = 2;
+      g.globalAlpha = 0.22 + 0.78 * t;
+      g.fillStyle = INK.violet;
       g.beginPath();
-      g.roundRect(-size / 2, -size / 2, size, size, size * 0.2);
+      g.roundRect(-size / 2, -size / 2, size, size, size * 0.22);
       g.fill();
-      g.stroke();
       g.restore();
     }
     return tile;
   };
-  // A square whose right side has broken into flakes, blown up and away
+  // The orb, its right side broken into flakes, blown up and away
   const disintegrateThumb = () => {
     const [tile, g] = canvas2d();
-    g.fillStyle = "#15171d";
-    g.fillRect(0, 0, THUMB, THUMB);
-    const [x0, y0, cell, n] = [24, 46, 4, 17];
-    for (let j = 0; j < n; j++)
-      for (let i = 0; i < n; i++) {
-        const [u, v] = [i / (n - 1), j / (n - 1)];
-        const [r, r2] = [hash2(i, j, 5), hash2(i, j, 9)];
-        g.fillStyle = `hsl(${18 + 30 * v - 10 * u} 90% ${60 - 10 * v}%)`;
-        if (u + (r - 0.5) * 0.5 <= 0.55) {
+    const [source, sg] = canvas2d();
+    orb(sg, 70, 80, 46);
+    const { data } = sg.getImageData(0, 0, THUMB, THUMB);
+    stage(g);
+    const cell = 4;
+    for (let y = 0; y < THUMB; y += cell)
+      for (let x = 0; x < THUMB; x += cell) {
+        const at = ((y + 2) * THUMB + x + 2) * 4;
+        if (data[at + 3] < 128) continue;
+        const [r, r2] = [hash2(x, y, 5), hash2(x, y, 9)];
+        const u = (x - 24) / 92;
+        g.fillStyle = `rgb(${data[at]}, ${data[at + 1]}, ${data[at + 2]})`;
+        if (u + (r - 0.5) * 0.35 <= 0.5) {
           g.globalAlpha = 1;
-          g.fillRect(x0 + i * cell, y0 + j * cell, cell, cell);
+          g.fillRect(x, y, cell, cell);
           continue;
         }
-        const t = clamp01(((u - 0.3) / 0.7) * (0.4 + r2 * 0.9));
-        const size = cell * (1 - 0.5 * t);
-        g.globalAlpha = 1 - 0.75 * t;
-        g.fillRect(x0 + i * cell + 6 + 72 * t + r * 8, y0 + j * cell - 36 * t * (0.5 + r) + (r2 - 0.5) * 8, size, size);
+        const t = clamp01(((u - 0.3) / 0.7) * (0.45 + r2 * 0.9));
+        const size = cell * (1 - 0.45 * t);
+        g.globalAlpha = 1 - 0.7 * t;
+        g.fillRect(x + 6 + 64 * t + r * 8, y - 40 * t * (0.5 + r) + (r2 - 0.5) * 8, size, size);
       }
+    g.globalAlpha = 1;
     return tile;
   };
   const drawThumbs = (tiles) => {
@@ -5351,7 +5386,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "dither",
     // Cells at least three pixels across, so the pattern is the one applied
     detail: (s) => 3 / Math.max(0.1, s.pixelSize),
-    thumb: { sample: "sunset", settings: { palette: "duo", pixelSize: 2.5 } },
+    thumb: { sample: "orbOnBlack", backdrop: "stage", blend: "lighten", settings: { palette: "duo", pixelSize: 2.5, ink: "#000000", paper: "#f6f2ea" } },
     name: "Dither",
     about: "Error diffusion, Bayer and more, in a palette",
     icon: DITHER_ICON,
@@ -5604,7 +5639,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "halftone",
     // Cells at least eight pixels across, so dots keep their shape
     detail: (s) => 8 / Math.max(0.1, s.cell),
-    thumb: { sample: "sunset", settings: { mode: "cmyk", cell: 6 } },
+    thumb: { sample: "orbOnBlack", backdrop: "stage", blend: "lighten", settings: { mode: "cmyk", cell: 6 } },
     name: "Halftone",
     about: "Print it in dots, lines or four inks",
     icon: HALFTONE_ICON,
@@ -5744,7 +5779,7 @@ const PAGE_JS: &str = r##"(() => {
     // Lines at least six pixels apart
     detail: (s) => 6 / Math.max(0.1, s.spacing),
     handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode === "rings" }],
-    thumb: { sample: "sunset", settings: { mode: "waves", spacing: 9 } },
+    thumb: { sample: "orbOnWhite", backdrop: "stage", blend: "lighten", clip: "orb", settings: { mode: "waves", spacing: 7, ink: "#f6f2ea", paper: "#000000" } },
     name: "Modulate",
     about: "Draw it in lines, waves or rings",
     icon: MODULATE_ICON,
@@ -5871,7 +5906,7 @@ const PAGE_JS: &str = r##"(() => {
   pictureEffect({
     id: "chromatic",
     handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode === "lens" }],
-    thumb: { sample: "rings", settings: { amount: 10 } },
+    thumb: { sample: "rings", backdrop: "stage", settings: { amount: 10 } },
     name: "Chromatic Aberration",
     about: "Split its colors as a lens does",
     icon: CHROMATIC_ICON,
@@ -6194,7 +6229,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "liquify",
     handles: [{ x: "centerX", y: "centerY", radius: "radius", when: (s) => s.mode !== "wave" && s.mode !== "none" }],
     keep: ["strokes", "brushTool", "brushSize", "brushStrength"],
-    thumb: { sample: "checks", settings: { twirl: 240 } },
+    thumb: { sample: "bands", settings: { twirl: 240 } },
     name: "Liquify",
     about: "Twirl, pinch, ripple or wave it, or brush it around",
     icon: LIQUIFY_ICON,
@@ -6596,7 +6631,7 @@ const PAGE_JS: &str = r##"(() => {
   pictureEffect({
     id: "displace",
     keep: ["image"],
-    thumb: { sample: "stripes", settings: { amount: 9, scale: 36, detail: 3 } },
+    thumb: { sample: "contours", settings: { amount: 9, scale: 36, detail: 3 } },
     name: "Displace",
     about: "Push its pixels around with a pattern or an image",
     icon: DISPLACE_ICON,
@@ -6771,7 +6806,7 @@ const PAGE_JS: &str = r##"(() => {
   pictureEffect({
     id: "motionBlur",
     handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode !== "linear" }],
-    thumb: { sample: "lights", settings: { distance: 26, angle: 0, trail: true } },
+    thumb: { sample: "ball", backdrop: "stage", over: true, settings: { distance: 70, angle: 0, trail: true } },
     name: "Motion Blur",
     about: "Smear it along a line, out from a point or around it",
     icon: MOTION_ICON,
@@ -7002,7 +7037,7 @@ const PAGE_JS: &str = r##"(() => {
   const SHADOW_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="6.5" y="4.5" width="5" height="12" rx="2.5"/><path ${STROKE} stroke-dasharray="1.5 1.5" d="M11.5 16.5l6.5-3.5M7 16.5l7.5 3h4l-.5-6.5"/></svg>`;
   pictureEffect({
     id: "shadow",
-    thumb: { sample: "pawnOnFloor", backdrop: "floor", settings: { direction: 65, length: 120, perspective: 60, softFar: 6, opacity: 75, fade: 25 } },
+    thumb: { sample: "pawnOnFloor", backdrop: "studio", settings: { direction: 65, length: 120, perspective: 60, softFar: 6, opacity: 75, fade: 25 } },
     name: "Shadow",
     about: "Cast a shadow from a cutout's shape",
     icon: SHADOW_ICON,
@@ -7642,7 +7677,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "glitter",
     // Flakes at least four pixels across
     detail: (s) => 4 / Math.max(0.1, s.size),
-    thumb: { sample: "badge", settings: { size: 4 } },
+    thumb: { sample: "heart", backdrop: "stage", settings: { size: 4 } },
     name: "Glitter",
     about: "Turn it into sparkling glitter",
     icon: GLITTER_ICON,
@@ -7977,7 +8012,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "sticker",
     // Where the peel lifts from, dragged anywhere round the sticker
     handles: [{ x: "peelX", y: "peelY", when: (s) => s.peel }],
-    thumb: { sample: "badge", backdrop: "slate", fit: true, settings: { border: 7, gloss: 18, peel: true, peelSize: 34, shadowBlur: 10, shadowY: 5 } },
+    thumb: { sample: "badge", backdrop: "stage", fit: true, settings: { border: 7, gloss: 18, peel: true, peelSize: 34, shadowBlur: 10, shadowY: 5 } },
     name: "Sticker",
     about: "Make it a die-cut, kiss-cut or holographic sticker",
     icon: STICKER_ICON,
@@ -8842,7 +8877,7 @@ const PAGE_JS: &str = r##"(() => {
       { x: "centerX", y: "centerY" },
       { x: "focusX", y: "focusY", ring: true },
     ],
-    thumb: { sample: "ui", settings: { pitch: 2.4, tiltX: 30, tiltY: -24, zoom: 190, focus: 40 } },
+    thumb: { sample: "play", settings: { pitch: 2.4, tiltX: 26, tiltY: -22, zoom: 125, focus: 40 } },
     name: "Screen",
     about: "Film it off a monitor, in 3D with depth of field",
     icon: SCREEN_ICON,
@@ -9963,9 +9998,8 @@ const PAGE_JS: &str = r##"(() => {
   // hexagons, centred, in blue, teal and amber
   const fillThumb = () => {
     const [tile, g] = canvas2d();
-    g.fillStyle = "#eef3fa";
-    g.fillRect(0, 0, THUMB, THUMB);
-    const colors = ["#3b6fe0", "#1fae9b", "#f2b13a"];
+    stage(g);
+    const colors = [INK.blue, INK.mint, INK.amber, INK.pink];
     const draw = (kind, x, y, r, turn) => {
       g.save();
       g.translate(x, y);
@@ -10009,7 +10043,7 @@ const PAGE_JS: &str = r##"(() => {
       if (placed.some(([px, py, pr]) => Math.hypot(px - x, py - y) < (pr + r) * 0.74)) continue;
       placed.push([x, y, r]);
       const kind = Math.floor(hash2(i, 4, 9) * 5);
-      g.fillStyle = colors[kind % 3];
+      g.fillStyle = colors[kind % 4];
       draw(kind, x, y, r, hash2(i, 3, 9) * Math.PI * 2);
     }
     return tile;
@@ -11060,21 +11094,16 @@ const PAGE_JS: &str = r##"(() => {
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
-      g.fillStyle = "#eef3fa";
-      g.fillRect(0, 0, THUMB, THUMB);
-      // Stripes and a frame, as a flag, waved
+      stage(g);
+      // Stripes, as a flag, waved
       const stripes = [];
       for (let i = 0; i < 5; i++) stripes.push(polygonPaths([-50, -36 + i * 14.4, 50, -36 + i * 14.4, 50, -36 + (i + 1) * 14.4, -50, -36 + (i + 1) * 14.4]));
-      const colors = ["#3b6fe0", "#eef3fa", "#3b6fe0", "#eef3fa", "#3b6fe0"];
+      const colors = [INK.violet, INK.paper, INK.violet, INK.paper, INK.violet];
       stripes.forEach((paths, i) => {
         const bent = mapPaths(subdivide([paths], 3), (x, y) => warpPoint("flag", x, y, 50, 36, 0.55));
         g.fillStyle = colors[i];
         g.fill(new Path2D(pathData(bent, 80, 80)));
       });
-      const frame = mapPaths(subdivide([polygonPaths([-50, -36, 50, -36, 50, 36, -50, 36])], 3), (x, y) => warpPoint("flag", x, y, 50, 36, 0.55));
-      g.strokeStyle = "#1e2a44";
-      g.lineWidth = 2.5;
-      g.stroke(new Path2D(pathData(frame, 80, 80)));
       return tile;
     },
   });
@@ -11179,15 +11208,14 @@ const PAGE_JS: &str = r##"(() => {
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
-      g.fillStyle = "#eef3fa";
-      g.fillRect(0, 0, THUMB, THUMB);
+      stage(g);
       const line = measured(flatten([{ x: 18, y: 118, closed: false, segs: [[48, 40, 92, 150, 142, 46]] }], 1)[0]);
-      g.strokeStyle = "#c3cde0";
+      g.strokeStyle = "rgba(246, 242, 234, 0.22)";
       g.lineWidth = 1.5;
       g.beginPath();
       for (let d = 0; d <= line.length; d += 2) g.lineTo(...line.point(d));
       g.stroke();
-      const colors = ["#3b6fe0", "#1fae9b", "#f2b13a"];
+      const colors = [INK.blue, INK.mint, INK.amber, INK.pink];
       for (let i = 0, d = 6; d < line.length; d += 17, i++) {
         const [x, y] = line.point(d);
         const [ux, uy] = line.direction(d);
@@ -11196,7 +11224,7 @@ const PAGE_JS: &str = r##"(() => {
         g.save();
         g.translate(x - uy * off, y + ux * off);
         g.rotate(hash2(i, 4, 5) * Math.PI * 2);
-        g.fillStyle = colors[i % 3];
+        g.fillStyle = colors[i % 4];
         g.beginPath();
         for (let k = 0; k < 10; k++) {
           const a = (k / 10) * Math.PI * 2 - Math.PI / 2;
@@ -11298,8 +11326,7 @@ const PAGE_JS: &str = r##"(() => {
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
-      g.fillStyle = "#eef3fa";
-      g.fillRect(0, 0, THUMB, THUMB);
+      stage(g);
       const line = measured(flatten([{ x: 16, y: 104, closed: false, segs: [[52, 20, 104, 150, 144, 58]] }], 1)[0]);
       // Diamonds on a band, end to end, bent with the path
       const tiles = 7;
@@ -11312,10 +11339,10 @@ const PAGE_JS: &str = r##"(() => {
           return [px - uy * y, py + ux * y];
         };
         const band = mapPaths(subdivide([polygonPaths([0, -9, 1, -9, 1, 9, 0, 9])], 0.05), bend);
-        g.fillStyle = "#3b6fe0";
+        g.fillStyle = INK.violet;
         g.fill(new Path2D(pathData(band)));
         const diamond = mapPaths(subdivide([polygonPaths([0.5, -7, 0.85, 0, 0.5, 7, 0.15, 0])], 0.05), bend);
-        g.fillStyle = n % 2 ? "#f2b13a" : "#1fae9b";
+        g.fillStyle = n % 2 ? INK.amber : INK.mint;
         g.fill(new Path2D(pathData(diamond)));
       }
       return tile;
@@ -11445,8 +11472,7 @@ const PAGE_JS: &str = r##"(() => {
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
-      g.fillStyle = "#eef3fa";
-      g.fillRect(0, 0, THUMB, THUMB);
+      stage(g);
       // A star, swept back down and right, its sides shaded
       const star = [];
       for (let k = 0; k < 10; k++) {
@@ -11468,10 +11494,10 @@ const PAGE_JS: &str = r##"(() => {
       }
       faces.sort((a, b) => a.key - b.key);
       for (const face of faces) {
-        g.fillStyle = `rgb(${59 * face.k}, ${111 * face.k}, ${224 * face.k})`;
+        g.fillStyle = `rgb(${47 * face.k}, ${140 * face.k}, ${255 * face.k})`;
         g.fill(new Path2D(pathData([polygonPaths(face.pts)])));
       }
-      g.fillStyle = "#3b6fe0";
+      g.fillStyle = INK.blue;
       g.fill(new Path2D(pathData([polygonPaths(star)])));
       return tile;
     },
@@ -11579,23 +11605,29 @@ const PAGE_JS: &str = r##"(() => {
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
-      g.fillStyle = "#1fae9b";
-      g.fillRect(0, 0, THUMB, THUMB);
-      const shadow = g.createLinearGradient(56, 56, 160, 160);
-      shadow.addColorStop(0, "rgba(0, 0, 0, 0.32)");
+      stage(g);
+      // A card, a disc on it casting its shadow off the card's corner
+      g.save();
+      g.beginPath();
+      g.roundRect(18, 18, 124, 124, 20);
+      g.clip();
+      g.fillStyle = INK.mint;
+      g.fillRect(18, 18, 124, 124);
+      const shadow = g.createLinearGradient(66, 66, 150, 150);
+      shadow.addColorStop(0, "rgba(0, 0, 0, 0.34)");
       shadow.addColorStop(1, "rgba(0, 0, 0, 0)");
       g.fillStyle = shadow;
       g.beginPath();
-      g.moveTo(80, 44);
-      g.lineTo(196, 160);
-      g.lineTo(160, 196);
-      g.lineTo(44, 80);
-      g.arc(80, 80, 36, Math.PI * 0.75, Math.PI * 1.75);
+      g.moveTo(80 + 28 * Math.cos(-Math.PI / 4), 72 + 28 * Math.sin(-Math.PI / 4));
+      g.lineTo(80 + 28 * Math.cos(-Math.PI / 4) + 120, 72 + 28 * Math.sin(-Math.PI / 4) + 120);
+      g.lineTo(80 + 28 * Math.cos((3 * Math.PI) / 4) + 120, 72 + 28 * Math.sin((3 * Math.PI) / 4) + 120);
+      g.lineTo(80 + 28 * Math.cos((3 * Math.PI) / 4), 72 + 28 * Math.sin((3 * Math.PI) / 4));
       g.fill();
       g.beginPath();
-      g.arc(80, 80, 36, 0, Math.PI * 2);
-      g.fillStyle = "#ffffff";
+      g.arc(80, 72, 28, 0, Math.PI * 2);
+      g.fillStyle = INK.paper;
       g.fill();
+      g.restore();
       return tile;
     },
   });
@@ -11758,8 +11790,7 @@ const PAGE_JS: &str = r##"(() => {
     ],
     thumb: () => {
       const [tile, g] = canvas2d();
-      g.fillStyle = "#eef3fa";
-      g.fillRect(0, 0, THUMB, THUMB);
+      stage(g);
       const star = new Path2D();
       for (let k = 0; k < 10; k++) {
         const a = (k / 10) * Math.PI * 2 - Math.PI / 2;
@@ -11769,17 +11800,17 @@ const PAGE_JS: &str = r##"(() => {
       star.closePath();
       g.lineJoin = "round";
       const rings = [
-        [28, "#f24822"],
-        [22, "#eef3fa"],
-        [16, "#3b6fe0"],
-        [10, "#eef3fa"],
+        [30, INK.coral],
+        [23, STAGE],
+        [16, INK.amber],
+        [9, STAGE],
       ];
       for (const [w, color] of rings) {
         g.strokeStyle = color;
         g.lineWidth = w;
         g.stroke(star);
       }
-      g.fillStyle = "#1e2a44";
+      g.fillStyle = INK.blue;
       g.fill(star);
       return tile;
     },
