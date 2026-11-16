@@ -4256,10 +4256,6 @@ impl Painter {
         };
         self.asked.remove(key);
         let bytes = img.bytes();
-        // Effects are run again
-        if key.starts_with(EFFECT) {
-            return total - bytes;
-        }
         let (w, h) = (img.image.width(), img.image.height());
         let scale = PLACEHOLDER as f32 / w.max(h) as f32;
         if scale >= 1.0 {
