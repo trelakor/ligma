@@ -11006,6 +11006,33 @@ const PAGE_JS: &str = r##"(() => {
     const canvas = element("canvas", { className: "preview" });
     canvas.setAttribute("aria-hidden", "true");
     current.preview = canvas;
+    // Dragging round the preview turns the way it goes back, as if seen
+    // from where the pointer is: it goes away from the pointer, past the
+    // middle
+    if (spec.orbit) {
+      canvas.style.cursor = "grab";
+      canvas.style.touchAction = "none";
+      const turn = (event) => {
+        const box = canvas.getBoundingClientRect();
+        const x = event.clientX - box.left - box.width / 2;
+        const y = event.clientY - box.top - box.height / 2;
+        if (Math.hypot(x, y) < 3) return;
+        change(spec.orbit, Math.round((Math.atan2(-y, -x) * 180) / Math.PI));
+      };
+      canvas.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        canvas.setPointerCapture(event.pointerId);
+        canvas.style.cursor = "grabbing";
+        turn(event);
+      });
+      canvas.addEventListener("pointermove", (event) => canvas.hasPointerCapture(event.pointerId) && turn(event));
+      const end = (event) => {
+        if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+        canvas.style.cursor = "grab";
+      };
+      canvas.addEventListener("pointerup", end);
+      canvas.addEventListener("pointercancel", end);
+    }
     const pick = (values) => {
       const kept = Object.fromEntries(["editable", "seeds", ...(spec.keep ?? [])].map((key) => [key, s[key]]));
       Object.assign(s, structuredClone(spec.defaults), values(current.unit), kept);
@@ -11473,75 +11500,112 @@ const PAGE_JS: &str = r##"(() => {
     copy.relativeTransform = node.relativeTransform;
     return copy;
   };
-  // The layer's outlines for depth: a shape with a stroke as one outline,
-  // its fill and stroke together, from the outside of the stroke, in the
-  // stroke's colour, so its depth follows its outline. Figma joins them:
-  // vectors of its fill and stroke outlines, joined, flattened, read, and
-  // taken away
-  const silhouettes = (current) => {
+  // The layer's outline for depth: all its fills and strokes as one, from
+  // the outside of any stroke, as it's the whole of it that has depth, not
+  // each of its layers. Figma joins them: vectors of their outlines,
+  // placed by the layer, joined, flattened, read, and taken away
+  const outlineOfAll = (current, items = current.items) => {
     const { figma, source } = current;
-    const base = invert(source.absoluteTransform);
-    const out = [];
-    const done = new Set();
-    for (const item of current.items) {
-      if (!item.leaf || done.has(item.leaf)) continue;
-      const own = current.items.filter((one) => one.leaf === item.leaf);
-      const strokes = own.filter((one) => one.stroke);
-      if (!strokes.length) {
-        out.push(...own);
-        continue;
-      }
-      done.add(item.leaf);
-      const made = [];
-      try {
-        // Its fill and stroke outlines, already read, as vectors placed by
-        // the layer, joined and flattened by Figma where they are
-        const black = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
-        const parts = own.map((one) => vectorAt(current, one.paths, one.winding, black)).filter(Boolean);
-        made.push(...parts);
-        const home = source.parent;
-        const joined = figma.flatten([parts.length > 1 ? figma.union(parts, home) : parts[0]], home);
-        made.push(joined);
-        // Placed from its container's transform, as a layer in a group
-        // keeps its place in the group's frame
-        let container = joined.parent;
-        while (container && (container.type === "GROUP" || container.type === "BOOLEAN_OPERATION")) container = container.parent;
-        const placed = container && container.type !== "PAGE" ? multiply(container.absoluteTransform, joined.relativeTransform) : joined.relativeTransform;
-        const m = multiply(base, placed);
-        for (const g of joined.fillGeometry) {
-          const paths = transformPaths(parsePath(g.data), m);
-          if (paths.length) out.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: strokes[0].paints, opacity: strokes[0].opacity, leaf: item.leaf });
-        }
-      } catch {
-        out.push(...own);
-      }
+    if (items.length < 2) return items.map((item) => ({ paths: item.paths, winding: item.winding }));
+    const made = [];
+    try {
+      const black = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
+      const parts = items.map((one) => vectorAt(current, one.paths, one.winding, black)).filter(Boolean);
+      made.push(...parts);
+      const home = source.parent;
+      const joined = figma.flatten([figma.union(parts, home)], home);
+      made.push(joined);
+      // Placed from its container's transform, as a layer in a group keeps
+      // its place in the group's frame
+      let container = joined.parent;
+      while (container && (container.type === "GROUP" || container.type === "BOOLEAN_OPERATION")) container = container.parent;
+      const placed = container && container.type !== "PAGE" ? multiply(container.absoluteTransform, joined.relativeTransform) : joined.relativeTransform;
+      const m = multiply(invert(source.absoluteTransform), placed);
+      return joined.fillGeometry.map((g) => ({ paths: transformPaths(parsePath(g.data), m), winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO" })).filter((one) => one.paths.length);
+    } catch {
+      return items.map((item) => ({ paths: item.paths, winding: item.winding }));
+    } finally {
       for (const node of made) if (!node.removed) node.remove();
     }
-    return out;
+  };
+  // Each of the layer's layers as its own outline, its fill and stroke as
+  // one, with the outlines it's made from
+  const outlinesOfEach = (current) => {
+    const leaves = [];
+    for (const item of current.items) {
+      const leaf = leaves.find((one) => one.leaf === item.leaf);
+      if (leaf) leaf.items.push(item);
+      else leaves.push({ leaf: item.leaf, items: [item] });
+    }
+    return leaves.map(({ items }) => ({ outline: outlineOfAll(current, items), items }));
+  };
+  // The colour of the layer at a point in its coordinates: the topmost of
+  // `items` there, a gradient's colour where it falls
+  const colorAt = (current, x, y, items = current.items) => {
+    const context = (current.probe ??= document.createElement("canvas").getContext("2d"));
+    const cache = (current.itemPaths ??= new WeakMap());
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      if (!cache.has(item)) cache.set(item, new Path2D(pathData(item.paths)));
+      if (!context.isPointInPath(cache.get(item), x, y, item.winding === "EVENODD" ? "evenodd" : "nonzero")) continue;
+      const paint = item.paints?.[0];
+      if (!paint) continue;
+      if (paint.type === "SOLID") return [paint.color.r, paint.color.g, paint.color.b];
+      const stops = paint.gradientStops;
+      if (!stops?.length) return paintColor(item.paints);
+      let t = 0;
+      try {
+        // Into the layer's own box, 0 to 1, then the gradient's space
+        const leaf = item.leaf;
+        const [[a, c, e], [b, d, f]] = multiply(invert(leaf.absoluteTransform), current.base);
+        const u = (a * x + c * y + e) / Math.max(1e-6, leaf.width);
+        const v = (b * x + d * y + f) / Math.max(1e-6, leaf.height);
+        const [[ga, gc, ge], [gb, gd, gf]] = paint.gradientTransform;
+        const [gx, gy] = [ga * u + gc * v + ge, gb * u + gd * v + gf];
+        t =
+          paint.type === "GRADIENT_LINEAR"
+            ? gx
+            : paint.type === "GRADIENT_ANGULAR"
+              ? (Math.atan2(gy - 0.5, gx - 0.5) / (2 * Math.PI) + 1) % 1
+              : paint.type === "GRADIENT_DIAMOND"
+                ? 2 * (Math.abs(gx - 0.5) + Math.abs(gy - 0.5))
+                : 2 * Math.hypot(gx - 0.5, gy - 0.5);
+      } catch {
+        t = 0;
+      }
+      t = Math.min(1, Math.max(0, t));
+      let k = 0;
+      while (k < stops.length - 1 && stops[k + 1].position < t) k++;
+      const [s0, s1] = [stops[k], stops[Math.min(stops.length - 1, k + 1)]];
+      const w = s1.position > s0.position ? Math.min(1, Math.max(0, (t - s0.position) / (s1.position - s0.position))) : 0;
+      return ["r", "g", "b"].map((key) => s0.color[key] + (s1.color[key] - s0.color[key]) * w);
+    }
+    return paintColor(items[items.length - 1]?.paints);
   };
 
   // Gives the layer depth behind it, as Illustrator's 3D Extrude seen
-  // front on, from the layer's own curves, so the sides meet its edges
-  // exactly. Only the sides facing the way it goes back show, the rest
-  // and the back face being behind them: each is a stretch of outline
-  // facing that way and the same moved by the depth, one layer, shaded
-  // along it by which way it faces the light, as a gradient where that
-  // changes. They're drawn back to front, by how far
-  // along the depth they reach, over the whole swept outline in the
-  // darkest shade, which covers any hairline between them. The original
-  // stays on top as the front
+  // front on, from each of its layers' outlines, stacked, or its whole
+  // outline (see `outlineOfAll`), so the sides meet its edges exactly. Only the sides facing the way it goes back
+  // show, the rest and the back face being behind them: each is a stretch
+  // of outline facing that way and the same moved by the depth, one
+  // layer, coloured as the layer is just inside its edge there and shaded
+  // by which way it faces the light, as a gradient where that changes.
+  // They're drawn back to front, by how far along the depth they reach,
+  // each with a hair of outline in its own paint so no seam shows. The
+  // original stays on top as the front
   const EXTRUDE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 6.5h9v9h-9z"/><path ${STROKE} d="m14.5 6.5 4 4v9h-9l-4-4M14.5 15.5l4 4"/></svg>`;
   const extrudeEffect = vectorEffect({
     id: "extrude",
     name: "Extrude 3D",
     follows: true,
+    orbit: "angle",
     about: "Give a shape or text depth with shaded sides",
     icon: EXTRUDE_ICON,
     place: "below",
     verb: "Extrude",
     ask: "Select a shape or text to extrude",
     start: (u) => ({ depth: Math.max(2, Math.round(u * 0.12)) }),
-    defaults: { angle: 45, depth: 20, light: -135, shade: 60, colors: "own", color: "#3b6fe0", follow: true, editable: true },
+    defaults: { angle: 45, depth: 20, light: -135, shade: 60, layers: "each", colors: "own", color: "#3b6fe0", follow: true, editable: true },
     limits: { depth: [0, 100000], angle: [-180, 180], light: [-180, 180], shade: [0, 100] },
     presets: [
       ["Down right", (u) => ({ angle: 45, depth: Math.max(2, Math.round(u * 0.12)) })],
@@ -11550,12 +11614,15 @@ const PAGE_JS: &str = r##"(() => {
       ["Up left", (u) => ({ angle: -135, depth: Math.max(2, Math.round(u * 0.12)), light: 45 })],
     ],
     summary: (s) => `${s.depth}px · ${s.angle}°`,
-    read: (current) => {
-      current.solid = silhouettes(current);
-    },
     make: (current) => {
       const s = current.settings;
       if (s.depth <= 0) return [];
+      // Each layer with depth of its own, stacked, or the whole as one,
+      // each worked out once
+      const groups =
+        s.layers === "whole"
+          ? [{ outline: (current.whole ??= outlineOfAll(current)), items: current.items }]
+          : (current.each ??= outlinesOfEach(current));
       const [ax, ay] = turnOf(s.angle);
       const dx = ax * s.depth;
       const dy = ay * s.depth;
@@ -11575,16 +11642,14 @@ const PAGE_JS: &str = r##"(() => {
         const ty = 3 * (u * u * (g[1] - y0) + 2 * u * t * (g[3] - g[1]) + t * t * (g[5] - g[3]));
         return Math.hypot(tx, ty) > 1e-9 ? [tx, ty] : [g[4] - x0, g[5] - y0];
       };
-      current.solid.forEach((item) => {
+      const own = s.colors === "own";
+      const single = hexRgb(s.color);
+      const tone = ([r, g, b], k) => ({ r: Math.min(1, Math.max(0, r * k)), g: Math.min(1, Math.max(0, g * k)), b: Math.min(1, Math.max(0, b * k)) });
+      const same = (a, b, e) => Math.abs(a.r - b.r) < e && Math.abs(a.g - b.g) < e && Math.abs(a.b - b.b) < e;
+      for (const group of groups) {
+      const sides = [];
+      for (const item of group.outline) {
         const evenOdd = item.winding === "EVENODD";
-        const base = s.colors === "own" ? paintColor(item.paints) : hexRgb(s.color);
-        const color = (k) => {
-          const [r, g, b] = base.map((c) => Math.min(1, Math.max(0, c * k)));
-          return { r, g, b };
-        };
-        // The whole of it swept, in the darkest a side gets
-        out.push({ paths: sweepPaths(item.paths, dx, dy, evenOdd), winding: "NONZERO", paints: [{ type: "SOLID", color: color(1 - strength) }], opacity: item.opacity, name: "Depth" });
-        const sides = [];
         for (const { pieces } of facingPieces(item.paths, dx, dy, evenOdd))
           for (const piece of pieces) {
             if (!piece.front) continue;
@@ -11596,48 +11661,53 @@ const PAGE_JS: &str = r##"(() => {
               segs: [g, lineSeg(g[4], g[5], g[4] + dx, g[5] + dy), [g[2] + dx, g[3] + dy, g[0] + dx, g[1] + dy, x0 + dx, y0 + dy], lineSeg(x0 + dx, y0 + dy, x0, y0)],
             };
             // A side facing the depth only ever moves one way across it,
-            // so its shade is one gradient square to the depth, sampled
-            // along it: a shade runs straight back and meets its
-            // neighbour's exactly
+            // so its colour is one gradient square to the depth, sampled
+            // along it: the layer's colour just inside the edge, shaded
+            // by which way it faces, running straight back and meeting
+            // its neighbour's exactly
             const samples = [];
             for (let i = 0; i <= 12; i++) {
               const t = i / 12;
               const [px, py] = cubicAt(x0, y0, g, t);
-              samples.push({ c: -px * ay + py * ax, k: shadeOf(...tangent(x0, y0, g, t)) });
+              const [tx, ty] = tangent(x0, y0, g, t);
+              const l = Math.hypot(tx, ty) || 1;
+              const base = own ? colorAt(current, px - (ty / l) * 1.5, py + (tx / l) * 1.5, group.items) : single;
+              samples.push({ c: -px * ay + py * ax, rgb: tone(base, shadeOf(tx, ty)) });
             }
             const [c0, c1] = [samples[0].c, samples[12].c];
             const [mx, my] = cubicAt(x0, y0, g, 0.5);
-            const flat = Math.abs(c1 - c0) < 1e-3 || samples.every((one) => Math.abs(one.k - samples[0].k) < 0.012);
-            // Stops only where the shade bends away from a straight run
+            const flat = Math.abs(c1 - c0) < 1e-3 || samples.every((one) => same(one.rgb, samples[0].rgb, 0.01));
+            // Stops only where the colour bends away from a straight run
             const stops = [samples[0]];
             for (let i = 1; i < 12; i++) {
               const prev = stops[stops.length - 1];
               const next = samples[i + 1];
               const along = (samples[i].c - prev.c) / (next.c - prev.c || 1);
-              if (Math.abs(prev.k + (next.k - prev.k) * along - samples[i].k) > 0.008) stops.push(samples[i]);
+              const mix = { r: prev.rgb.r + (next.rgb.r - prev.rgb.r) * along, g: prev.rgb.g + (next.rgb.g - prev.rgb.g) * along, b: prev.rgb.b + (next.rgb.b - prev.rgb.b) * along };
+              if (!same(mix, samples[i].rgb, 0.008)) stops.push(samples[i]);
             }
             stops.push(samples[12]);
-            sides.push({ side, from: [x0, y0], to: [x0 - ay * (c1 - c0), y0 + ax * (c1 - c0)], flat, k: samples.reduce((sum, one) => sum + one.k, 0) / samples.length, stops: stops.map((one) => ({ position: Math.min(1, Math.max(0, (one.c - c0) / (c1 - c0))), k: one.k })), key: mx * ax + my * ay });
+            sides.push({ side, from: [x0, y0], to: [x0 - ay * (c1 - c0), y0 + ax * (c1 - c0)], flat, rgb: samples[6].rgb, stops: stops.map((one) => ({ position: Math.min(1, Math.max(0, (one.c - c0) / (c1 - c0))), color: { ...one.rgb, a: 1 } })), key: mx * ax + my * ay });
           }
-        sides.sort((a, b) => a.key - b.key);
-        let run = null;
-        for (const one of sides) {
-          if (one.flat) {
-            // Flat sides of a shade in a row, one layer
-            const k = Math.round(one.k * 100) / 100;
-            if (run && run.k === k) {
-              run.paths.push(one.side);
-              continue;
-            }
-            run = { k, paths: [one.side], winding: "NONZERO", paints: [{ type: "SOLID", color: color(k) }], opacity: item.opacity, name: "Side", seam: true };
-            out.push(run);
-          } else {
-            run = null;
-            const stops = one.stops.map(({ position, k }) => ({ position, color: { ...color(k), a: 1 } }));
-            out.push({ paths: [one.side], winding: "NONZERO", paints: [linearPaint([one.side], one.from, one.to, stops)], opacity: item.opacity, name: "Side", seam: true });
+      }
+      sides.sort((a, b) => a.key - b.key);
+      let run = null;
+      for (const one of sides) {
+        if (one.flat) {
+          // Flat sides of a colour in a row, one layer
+          const key = [one.rgb.r, one.rgb.g, one.rgb.b].map((v) => Math.round(v * 255)).join();
+          if (run && run.key === key) {
+            run.paths.push(one.side);
+            continue;
           }
+          run = { key, paths: [one.side], winding: "NONZERO", paints: [{ type: "SOLID", color: one.rgb }], opacity: 1, name: "Side", seam: true };
+          out.push(run);
+        } else {
+          run = null;
+          out.push({ paths: [one.side], winding: "NONZERO", paints: [linearPaint([one.side], one.from, one.to, one.stops)], opacity: 1, name: "Side", seam: true });
         }
-      });
+      }
+      }
       return out;
     },
     panel: (ui) => [
@@ -11646,6 +11716,10 @@ const PAGE_JS: &str = r##"(() => {
         ui.sliders([
           ["depth", "Depth", "px", (u) => ({ min: 0, max: Math.max(40, Math.round(u * 1.5)), shape: "curve" })],
           ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+        ]),
+        ui.segments("layers", "Depth of", [
+          ["each", "Each layer", "Every layer with depth of its own, stacked, so an outline and what's inside it each show theirs"],
+          ["whole", "Whole", "The whole of it as one solid"],
         ]),
       ),
       ui.section(
@@ -11823,6 +11897,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "longShadow",
     name: "Long Shadow",
     follows: true,
+    orbit: "angle",
     about: "Cast a long flat shadow at an angle",
     icon: SHADOW_LONG_ICON,
     place: "below",
@@ -11838,7 +11913,7 @@ const PAGE_JS: &str = r##"(() => {
     ],
     summary: (s) => `${s.length}px · ${s.angle}°`,
     read: (current) => {
-      current.solid = silhouettes(current);
+      current.solid = outlineOfAll(current);
     },
     make: (current) => {
       const s = current.settings;
