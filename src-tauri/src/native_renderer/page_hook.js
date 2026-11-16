@@ -548,14 +548,6 @@
           ),
       },
       {
-        // How Figma's main thread decodes images (see `MAIN_IMAGES`), as
-        // its bindings hand it to Figma's wasm. Its own module comes with
-        // the page, before any patch can take it
-        many: true,
-        match: (source) => /ImageIo:\(\)=>[\w$]+\.[\w$]+,/.test(source),
-        source: (source) => source.replace(/ImageIo:\(\)=>([\w$]+\.[\w$]+),/, "ImageIo:()=>window.__ligmaHook?.imageIo?.($1)??$1,"),
-      },
-      {
         // Listeners some of which may run later
         match: (source) => source.includes("deferrableListeners") && source.includes("runDeferredListeners"),
         getter: (value) =>
@@ -590,126 +582,361 @@
     else addEventListener("DOMContentLoaded", add, { once: true });
   }
 
-  // Figma's main thread decodes every image it downloads and keeps a copy
-  // of each on its own GPU, at full size, for what it still draws itself
-  // while Ligma draws the canvas: thumbnails and previews a few hundred
-  // pixels across. While Ligma draws, those copies are made no larger than
-  // `MAIN_IMAGES`, and Figma draws them as it draws any image. A file's
-  // took 958 MB of video memory at full size and 244 MB so. Figma still
-  // gets each image at its own size, as its size controls and plugins read
-  // it, and only its texture is smaller
-  const MAIN_IMAGES = 512;
-  // Sizes of the textures Figma is about to make for smaller copies, each
-  // with the size to make instead, for this task only
-  const shrinking = new Map();
-  // Each smaller copy's full size image, kept till it's copied to the GPU
-  // in case Figma's texture is full size after all
-  const fullSize = new WeakMap();
-  // Copies are made off the main thread, once the worker has said it runs,
-  // as images handed to it are gone from here
-  const SHRINK = `postMessage("ready");
-    onmessage = async ({ data: { id, bitmap, width, height } }) => {
-      let small = null;
-      try {
-        small = await createImageBitmap(bitmap, { resizeWidth: width, resizeHeight: height, resizeQuality: "high", premultiplyAlpha: "none" });
-      } catch {}
-      postMessage({ id, bitmap, small }, small ? [bitmap, small] : [bitmap]);
-    };`;
-  let shrinker = null;
-  let shrinkerReady = false;
-  const shrinkJobs = new Map();
-  let shrinkNext = 0;
-  function startShrinker() {
-    try {
-      shrinker = new Worker(URL.createObjectURL(new Blob([SHRINK], { type: "text/javascript" })));
-      shrinker.onmessage = ({ data }) => {
-        if (data === "ready") shrinkerReady = true;
-        else {
-          shrinkJobs.get(data.id)?.(data);
-          shrinkJobs.delete(data.id);
-        }
-      };
-    } catch {
-      shrinker = false;
-    }
-  }
-  // Figma's decoded image `result`, with a smaller copy in place of its
-  // pixels when Ligma draws
-  function smaller(result) {
-    const bitmap = result?.bitmap;
-    if (!hook.pushTo || !(bitmap instanceof ImageBitmap)) return result;
-    const scale = MAIN_IMAGES / Math.max(bitmap.width, bitmap.height);
-    if (!(scale < 1)) return result;
-    if (shrinker === null) startShrinker();
-    if (!shrinkerReady) return result;
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
-    return new Promise((resolve) => {
-      const id = shrinkNext++;
-      shrinkJobs.set(id, resolve);
-      shrinker.postMessage({ id, bitmap, width, height }, [bitmap]);
-    }).then(({ bitmap: full, small }) => {
-      if (!small) return { ...result, bitmap: full };
-      fullSize.set(small, full);
-      const key = `${full.width}x${full.height}`;
-      const entry = { width, height };
-      if (!shrinking.has(key)) shrinking.set(key, []);
-      shrinking.get(key).push(entry);
-      setTimeout(() => {
-        const list = shrinking.get(key);
-        const at = list?.indexOf(entry) ?? -1;
-        if (at >= 0) list.splice(at, 1);
-        if (list && !list.length) shrinking.delete(key);
-      });
-      return { ...result, bitmap: small };
-    });
-  }
-  // Figma's image decoding, as its wasm gets it, decoding as it did with
-  // `smaller` after
-  hook.imageIo = (io) => {
-    if (typeof io?.decodeImage !== "function" || io.__ligmaDecode) return io;
-    const decode = io.decodeImage;
-    io.__ligmaDecode = decode;
-    io.decodeImage = function () {
-      const decoded = decode.apply(this, arguments);
-      return hook.pushTo ? Promise.resolve(decoded).then(smaller) : decoded;
-    };
-    return io;
-  };
+  // Figma's main thread decodes the images in a file as it opens and copies
+  // each to its own GPU, for what it still draws itself while Ligma draws the
+  // canvas: layer previews, thumbnails and exports. Of 319 in a file, it drew
+  // with 28. So each is given a stand-in texture of a pixel, which tells
+  // Figma its own size, and its pixels are kept as Figma decoded them, off
+  // the GPU, till Figma first draws with it, as it makes a bind group with
+  // it, or copies to or from it. It's made then, at once, with those pixels,
+  // and used in the stand-in's place from then on. Figma draws with most of
+  // those it does within seconds of decoding them, for layer previews. An
+  // image not drawn with after `KEEP_FULL` ms is kept only `SAFETY` pixels
+  // across. Before Figma draws layers for an export, a thumbnail or a
+  // preview, it makes sure their images are loaded (`loadAllImagesUnder`),
+  // and those it's about to draw are decoded again then, as Figma decoded
+  // them (`imagesNeeded`). What it draws without asking gets the small copy
+  // (counted in `fromSafety`)
+  const KEEP_FULL = 30000;
+  const SAFETY = 128;
+  // Images Figma decodes for thumbnails, no larger than this across
+  const THUMBNAIL = 512;
+  hook.images = { deferred: 0, drawn: 0, fromSafety: 0, shrunk: 0, restored: 0, failed: 0, keptMB: 0 };
   try {
     const createTexture = GPUDevice.prototype.createTexture;
-    GPUDevice.prototype.createTexture = function (descriptor) {
-      if (shrinking.size && descriptor?.label === "Image") {
-        const size = descriptor.size;
-        const key = `${size?.width ?? size?.[0]}x${size?.height ?? size?.[1] ?? 1}`;
-        const list = shrinking.get(key);
-        const entry = list?.shift();
-        if (list && !list.length) shrinking.delete(key);
-        if (entry && (size?.depthOrArrayLayers ?? size?.[2] ?? 1) === 1 && (descriptor.mipLevelCount ?? 1) === 1 && (descriptor.dimension ?? "2d") === "2d")
-          descriptor = { ...descriptor, size: { width: entry.width, height: entry.height, depthOrArrayLayers: 1 } };
-      }
-      return createTexture.call(this, descriptor);
-    };
+    const createView = GPUTexture.prototype.createView;
+    const destroy = GPUTexture.prototype.destroy;
+    const close = ImageBitmap.prototype.close;
     const copyExternal = GPUQueue.prototype.copyExternalImageToTexture;
-    GPUQueue.prototype.copyExternalImageToTexture = function (source, destination, copySize) {
-      const small = source?.source;
-      const full = small && fullSize.get(small);
-      if (full) {
-        fullSize.delete(small);
-        const texture = destination?.texture;
-        if (texture && (texture.width !== small.width || texture.height !== small.height)) {
-          try {
-            small.close();
-          } catch {}
-          source = { ...source, source: full };
-        } else {
-          try {
-            full.close();
-          } catch {}
-        }
-      }
-      return copyExternal.call(this, source, destination, copySize);
+    // Each stand-in's image: its device, Figma's descriptor and size, its
+    // texture once drawn with (`version` counts new ones), till then its
+    // pixels, and how Figma decoded them
+    const images = new WeakMap();
+    // Each view of a stand-in: its image, Figma's view descriptor, and the
+    // view made of the image's texture
+    const views = new WeakMap();
+    // Each image Figma decoded on the main thread: its hash and the rest of
+    // what it was decoded with
+    const decodes = new WeakMap();
+    // Images by hash, for an export's
+    const byHash = new Map();
+    let io = null;
+    // Pixels kept, which Figma closing doesn't close
+    const kept = new WeakSet();
+    let keptBytes = 0;
+    const keep = (bitmap) => {
+      kept.add(bitmap);
+      keptBytes += bitmap.width * bitmap.height * 4;
+      hook.images.keptMB = Math.round(keptBytes / 1e6);
     };
+    const letGo = (bitmap) => {
+      if (!bitmap || !kept.has(bitmap)) return;
+      kept.delete(bitmap);
+      keptBytes -= bitmap.width * bitmap.height * 4;
+      hook.images.keptMB = Math.round(keptBytes / 1e6);
+      try {
+        close.call(bitmap);
+      } catch {}
+    };
+    ImageBitmap.prototype.close = function () {
+      if (!kept.has(this)) return close.call(this);
+    };
+
+    // How Figma decodes images on the main thread, as its wasm gets it
+    hook.imageIo = (value) => {
+      if (!value || typeof value.decodeImage !== "function" || value.__ligmaDecode) return value;
+      const decode = value.decodeImage;
+      value.__ligmaDecode = decode;
+      value.decodeImage = function (bytes, ...rest) {
+        const decoded = decode.apply(this, arguments);
+        try {
+          const copy = bytes instanceof Uint8Array ? bytes.slice() : bytes instanceof ArrayBuffer ? new Uint8Array(bytes.slice(0)) : null;
+          if (copy) {
+            const hash = crypto.subtle.digest("SHA-1", copy).then((digest) => [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join(""));
+            Promise.resolve(decoded).then(
+              (result) => result?.bitmap instanceof ImageBitmap && decodes.set(result.bitmap, { hash, rest }),
+              () => {},
+            );
+          }
+        } catch {}
+        return decoded;
+      };
+      io = value;
+      return value;
+    };
+    window.__ligmaModules?.patch([
+      {
+        match: (source) => source.includes("decodeImage(") && source.includes("decodeAsync(") && source.includes("cancelCurrentImageWorkers("),
+        getter: (value) => hook.imageIo(value),
+      },
+      {
+        // Where Figma's bindings hand it to its wasm, as its own module may
+        // come with the page, before any patch can take it
+        many: true,
+        match: (source) => /ImageIo:\(\)=>[\w$]+\.[\w$]+,/.test(source),
+        source: (source) => source.replace(/ImageIo:\(\)=>([\w$]+\.[\w$]+),/, "ImageIo:()=>window.__ligmaHook?.imageIo?.($1)??$1,"),
+      },
+      {
+        // Before Figma draws layers for an export or a thumbnail
+        match: (source) => source.includes("loadAllImagesUnder(") && source.includes("unresolvedImagesUnder(") && source.includes("findImagesUnder("),
+        source: (source) => {
+          const bindings = source.match(/([\w$]+\.[\w$]+)\?\.findImagesUnder\(/)?.[1];
+          const documents = source.match(/([\w$]+\.[\w$]+)\?\.getMutableActiveDocument\(\)/)?.[1];
+          if (!bindings || !documents) return source;
+          return source.replace(
+            /\bloadAllImagesUnder\(([^)]*)\)\{/,
+            (all, params) =>
+              `__ligmaImagesUnder(e,t,r){const n=r??${documents}?.getMutableActiveDocument();return n&&${bindings}?.findImagesUnder(n,e,t)||[]}` +
+              `loadAllImagesUnder(...a){const p=this.__ligmaLoadAllImagesUnder(...a),h=window.__ligmaHook;return h?.imagesNeeded?p.then(r=>h.imagesNeeded(()=>this.__ligmaImagesUnder(a[0],a[1],a[4]),a[2]).then(()=>r,()=>r)):p}` +
+              `__ligmaLoadAllImagesUnder(${params}){`,
+          );
+        },
+      },
+    ]);
+
+    const plain = (descriptor) => {
+      const size = descriptor?.size;
+      const [width, height, layers] = Array.isArray(size) ? size : [size?.width, size?.height, size?.depthOrArrayLayers];
+      return (
+        descriptor?.label === "Image" &&
+        width > 1 &&
+        height > 1 &&
+        (layers ?? 1) === 1 &&
+        (descriptor.mipLevelCount ?? 1) === 1 &&
+        (descriptor.sampleCount ?? 1) === 1 &&
+        (descriptor.dimension ?? "2d") === "2d" &&
+        /^(rgba8unorm|bgra8unorm)(-srgb)?$/.test(descriptor.format) &&
+        !descriptor.viewFormats?.length && { width, height }
+      );
+    };
+    GPUDevice.prototype.createTexture = function (descriptor) {
+      const size = plain(descriptor);
+      if (!size) return createTexture.apply(this, arguments);
+      const standIn = createTexture.call(this, { label: "Image", size: [1, 1], format: descriptor.format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      Object.defineProperties(standIn, {
+        width: { value: size.width },
+        height: { value: size.height },
+        usage: { value: descriptor.usage },
+      });
+      const image = { device: this, descriptor, size, texture: null, version: 0, pending: null, copied: null, decode: null, timer: 0 };
+      images.set(standIn, image);
+      collected.register(standIn, image);
+      return standIn;
+    };
+    // Stand-ins Figma lets go of without destroying them
+    const collected = new FinalizationRegistry((image) => {
+      clearTimeout(image.timer);
+      letGo(image.pending?.bitmap);
+      image.pending = null;
+    });
+    const full = (image, bitmap) => bitmap.width === image.size.width && bitmap.height === image.size.height;
+    // A texture for the image with `pending`'s pixels
+    const upload = (image, pending) => {
+      const bitmap = pending.bitmap;
+      const small = !full(image, bitmap);
+      const texture = createTexture.call(image.device, small ? { ...image.descriptor, size: [bitmap.width, bitmap.height] } : image.descriptor);
+      try {
+        copyExternal.call(image.device.queue, { ...pending.source, source: bitmap }, { ...pending.destination, texture }, small ? [bitmap.width, bitmap.height] : pending.copySize);
+      } catch {
+        hook.images.failed++;
+      }
+      letGo(bitmap);
+      return texture;
+    };
+    // The image's texture, made and given its pixels if not yet
+    const made = (image) => {
+      if (image.texture) return image.texture;
+      const pending = image.pending;
+      image.pending = null;
+      clearTimeout(image.timer);
+      if (pending) hook.images.drawn++;
+      if (pending && !full(image, pending.bitmap)) hook.images.fromSafety++;
+      image.texture = pending ? upload(image, pending) : createTexture.call(image.device, image.descriptor);
+      image.version++;
+      return image.texture;
+    };
+    const texture = (t) => {
+      const image = t && images.get(t);
+      return image ? made(image) : t;
+    };
+    const view = (v) => {
+      const of = v && views.get(v);
+      if (!of) return v;
+      const texture = made(of.image);
+      if (!of.view || of.version !== of.image.version) {
+        of.view = createView.call(texture, of.descriptor);
+        of.version = of.image.version;
+      }
+      return of.view;
+    };
+    const withTexture = (where) => (where && images.has(where.texture) ? { ...where, texture: texture(where.texture) } : where);
+
+    GPUTexture.prototype.createView = function (descriptor) {
+      const image = images.get(this);
+      if (!image) return createView.apply(this, arguments);
+      const standIn = createView.call(this);
+      views.set(standIn, { image, descriptor, view: null, version: -1 });
+      return standIn;
+    };
+    GPUTexture.prototype.destroy = function () {
+      const image = images.get(this);
+      if (image) {
+        clearTimeout(image.timer);
+        letGo(image.pending?.bitmap);
+        image.pending = null;
+        image.texture?.destroy();
+      }
+      return destroy.call(this);
+    };
+
+    // Figma's pixels for a stand-in, kept, as long as they're the whole of
+    // an image Figma decoded; anything else makes its texture at once
+    const whole = (source, destination, copySize, image) => {
+      const size = Array.isArray(copySize) ? copySize : [copySize?.width, copySize?.height];
+      const origin = (o) => !o || ((o.x ?? o[0] ?? 0) === 0 && (o.y ?? o[1] ?? 0) === 0);
+      return (
+        source?.source instanceof ImageBitmap &&
+        full(image, source.source) &&
+        size[0] === image.size.width &&
+        (size[1] ?? 1) === image.size.height &&
+        origin(source.origin) &&
+        origin(destination.origin) &&
+        (destination.mipLevel ?? 0) === 0
+      );
+    };
+    const keepSmaller = (image) => {
+      const bitmap = image.pending?.bitmap;
+      const scale = bitmap && SAFETY / Math.max(bitmap.width, bitmap.height);
+      if (!(scale < 1)) return;
+      createImageBitmap(bitmap, {
+        resizeWidth: Math.max(1, Math.round(bitmap.width * scale)),
+        resizeHeight: Math.max(1, Math.round(bitmap.height * scale)),
+        resizeQuality: "high",
+        premultiplyAlpha: "none",
+        colorSpaceConversion: "none",
+      }).then(
+        (small) => {
+          if (image.pending?.bitmap !== bitmap) return close.call(small);
+          keep(small);
+          image.pending.bitmap = small;
+          letGo(bitmap);
+          hook.images.shrunk++;
+        },
+        () => {},
+      );
+    };
+    const pend = (image, bitmap, pending) => {
+      keep(bitmap);
+      image.pending = { ...pending, bitmap };
+      image.copied = { source: pending.source, destination: pending.destination };
+      clearTimeout(image.timer);
+      image.timer = setTimeout(() => keepSmaller(image), KEEP_FULL);
+    };
+    GPUQueue.prototype.copyExternalImageToTexture = function (source, destination, copySize) {
+      const image = images.get(destination?.texture);
+      if (!image) return copyExternal.apply(this, arguments);
+      if (!image.texture && whole(source, destination, copySize, image)) {
+        letGo(image.pending?.bitmap);
+        const { source: bitmap, ...rest } = source;
+        const { texture: _, ...to } = destination;
+        pend(image, bitmap, { source: rest, destination: to, copySize });
+        hook.images.deferred++;
+        const decode = decodes.get(bitmap);
+        if (decode && !image.decode) {
+          image.decode = decode;
+          const ref = new WeakRef(image);
+          decode.hash.then(
+            (hash) => {
+              if (!byHash.has(hash)) byHash.set(hash, []);
+              const list = byHash.get(hash).filter((r) => r.deref());
+              list.push(ref);
+              byHash.set(hash, list);
+            },
+            () => {},
+          );
+        }
+        return;
+      }
+      const target = made(image);
+      // A texture made smaller takes no other size
+      if (target.width !== image.size.width || target.height !== image.size.height) return;
+      return copyExternal.call(this, source, { ...destination, texture: target }, copySize);
+    };
+
+    // Images under the layers Figma is about to draw, at full size again
+    // where kept or made smaller. Figma's own decoder decodes them, as it
+    // did at first, from the file's bytes. Given up on after `RESTORE_WAIT`
+    // ms, for Figma to go ahead as it would have
+    const RESTORE_WAIT = 15000;
+    const restore = async (image) => {
+      const smaller = image.texture ? !full(image, image.texture) : image.pending && !full(image, image.pending.bitmap);
+      if (!smaller || !image.decode || !io?.__ligmaDecode) return;
+      const hash = await image.decode.hash;
+      const bytes = await window.figma?.getImageByHash?.(hash)?.getBytesAsync?.();
+      if (!bytes) return;
+      const result = await io.__ligmaDecode.call(io, bytes, ...image.decode.rest);
+      const bitmap = result?.bitmap;
+      if (!(bitmap instanceof ImageBitmap) || !full(image, bitmap)) {
+        try {
+          bitmap?.close?.();
+        } catch {}
+        return;
+      }
+      if (image.texture && image.copied) {
+        // Bind groups made with the smaller one keep it till they're gone
+        keep(bitmap);
+        image.texture = upload(image, { ...image.copied, copySize: [bitmap.width, bitmap.height], bitmap });
+        image.version++;
+      } else if (image.pending) {
+        letGo(image.pending.bitmap);
+        pend(image, bitmap, image.pending);
+      } else return close.call(bitmap);
+      hook.images.restored++;
+    };
+    hook.imagesNeeded = async (hashesUnder, reason) => {
+      // Thumbnails and previews are drawn with Figma's smaller decodes
+      const small = /thumb|preview/i.test(String(reason));
+      let hashes = [];
+      try {
+        hashes = hashesUnder() ?? [];
+      } catch {}
+      const work = [];
+      for (const hash of hashes) for (const ref of byHash.get(hash) ?? []) {
+        const image = ref.deref();
+        if (image && (!small || Math.max(image.size.width, image.size.height) <= THUMBNAIL)) work.push(restore(image).catch(() => {}));
+      }
+      if (!work.length) return;
+      await Promise.race([Promise.all(work), new Promise((resolve) => setTimeout(resolve, RESTORE_WAIT))]);
+    };
+
+    const writeTexture = GPUQueue.prototype.writeTexture;
+    GPUQueue.prototype.writeTexture = function (destination, ...rest) {
+      return writeTexture.call(this, withTexture(destination), ...rest);
+    };
+    const createBindGroup = GPUDevice.prototype.createBindGroup;
+    GPUDevice.prototype.createBindGroup = function (descriptor) {
+      const entries = descriptor?.entries;
+      if (!entries?.some?.((e) => views.has(e?.resource))) return createBindGroup.apply(this, arguments);
+      return createBindGroup.call(this, { ...descriptor, entries: entries.map((e) => (views.has(e?.resource) ? { ...e, resource: view(e.resource) } : e)) });
+    };
+    const beginRenderPass = GPUCommandEncoder.prototype.beginRenderPass;
+    GPUCommandEncoder.prototype.beginRenderPass = function (descriptor) {
+      const attached = (a) => a && (views.has(a.view) || views.has(a.resolveTarget));
+      if (!descriptor?.colorAttachments?.some?.(attached) && !attached(descriptor?.depthStencilAttachment)) return beginRenderPass.apply(this, arguments);
+      const swap = (a) => (attached(a) ? { ...a, view: view(a.view), resolveTarget: view(a.resolveTarget) } : a);
+      return beginRenderPass.call(this, { ...descriptor, colorAttachments: descriptor.colorAttachments?.map(swap), depthStencilAttachment: swap(descriptor.depthStencilAttachment) });
+    };
+    for (const [name, at] of [
+      ["copyTextureToTexture", [0, 1]],
+      ["copyTextureToBuffer", [0]],
+      ["copyBufferToTexture", [1]],
+    ]) {
+      const copy = GPUCommandEncoder.prototype[name];
+      GPUCommandEncoder.prototype[name] = function (...args) {
+        for (const i of at) args[i] = withTexture(args[i]);
+        return copy.apply(this, args);
+      };
+    }
   } catch {}
 
   // Figma's worker keeps the scene and images of any frame it's drawn, and
@@ -808,7 +1035,6 @@
     clearTimeout(handBack);
     if (path) {
       sendFonts();
-      if (shrinker === null) startShrinker();
       handBack = setTimeout(() => {
         if (hook.replacing || hook.toWorker) return;
         worker(true);
