@@ -19,11 +19,12 @@
 //! large as their frame, up to 4,096 pixels across, as Figma keeps images.
 //! Painting with nothing to paint on adds one. Its pixels are read through
 //! Figma's console plugin API, `window.figma`, which Figma only offers in
-//! files that can be edited, so the mode is greyed out in others. While a
-//! stroke is drawn, a canvas over Figma's shows it, and when it's done the
-//! layer's image is replaced, as one undo step, so Figma's undo works as
-//! it does for anything else. Erasing hides Figma's copy of the layer
-//! until the change is in, so what's under it shows
+//! files that can be edited, so the mode is greyed out in others. While
+//! painting, a canvas over Figma's shows the layer, and strokes in quick
+//! succession replace its image together, as one undo step, so Figma's
+//! undo works as it does for anything else. The canvas stays until Figma
+//! has drawn the new image sharply, then fades. Erasing hides Figma's copy
+//! of the layer until the change is in, so what's under it shows
 //!
 //! The selection is a mask on a layer's pixels, drawn with marching ants,
 //! that strokes, fills and erasing stay inside, as in Photoshop. Figma's
@@ -98,6 +99,11 @@ const PAGE_JS: &str = r##"(() => {
     return node;
   };
   const canvasOf = (width, height) => Object.assign(document.createElement("canvas"), { width, height });
+  const copyOf = (canvas) => {
+    const copy = canvasOf(canvas.width, canvas.height);
+    copy.getContext("2d").drawImage(canvas, 0, 0);
+    return copy;
+  };
   const tooltip = (node, text, shortcut = "") => {
     Object.assign(node.dataset, { tooltip: text, tooltipType: "text", tooltipShowAbove: "true", tooltipShortcut: shortcut });
     node.setAttribute("aria-label", text);
@@ -190,19 +196,19 @@ const PAGE_JS: &str = r##"(() => {
     polygon: { mode: "new", feather: 0 },
     wand: { mode: "new", tolerance: 32, contiguous: true, all: false, smooth: true },
     eyedropper: { sample: 1, all: true },
-    brush: { size: 24, hardness: 80, opacity: 100, pressure: true },
-    pencil: { size: 4, opacity: 100, pressure: false },
-    clone: { size: 40, hardness: 50, opacity: 100, aligned: true },
-    eraser: { size: 40, hardness: 80, opacity: 100, pressure: true },
+    brush: { size: 24, angle: 0, roundness: 100, hardness: 80, opacity: 100, smoothing: 10, pressure: true },
+    pencil: { size: 4, angle: 0, roundness: 100, opacity: 100, smoothing: 0, pressure: false },
+    clone: { size: 40, angle: 0, roundness: 100, hardness: 50, opacity: 100, smoothing: 0, aligned: true },
+    eraser: { size: 40, angle: 0, roundness: 100, hardness: 80, opacity: 100, smoothing: 0, pressure: true },
     magicEraser: { tolerance: 32, contiguous: true, opacity: 100 },
     bucket: { tolerance: 32, contiguous: true, all: false, opacity: 100 },
     gradient: { shape: "linear", colors: "background", opacity: 100, reverse: false },
-    blur: { size: 40, hardness: 0, strength: 50 },
-    sharpen: { size: 40, hardness: 0, strength: 30 },
-    smudge: { size: 30, hardness: 0, strength: 50 },
-    dodge: { size: 60, hardness: 0, exposure: 30 },
-    burn: { size: 60, hardness: 0, exposure: 30 },
-    sponge: { size: 60, hardness: 0, flow: 40, saturate: false },
+    blur: { size: 40, angle: 0, roundness: 100, hardness: 0, strength: 50, smoothing: 0 },
+    sharpen: { size: 40, angle: 0, roundness: 100, hardness: 0, strength: 30, smoothing: 0 },
+    smudge: { size: 30, angle: 0, roundness: 100, hardness: 0, strength: 50, smoothing: 0 },
+    dodge: { size: 60, angle: 0, roundness: 100, hardness: 0, exposure: 30, smoothing: 0 },
+    burn: { size: 60, angle: 0, roundness: 100, hardness: 0, exposure: 30, smoothing: 0 },
+    sponge: { size: 60, angle: 0, roundness: 100, hardness: 0, flow: 40, smoothing: 0, saturate: false },
   };
 
   // The tool, its options and the colors, kept between files
@@ -322,6 +328,7 @@ const PAGE_JS: &str = r##"(() => {
   const exit = () => {
     if (!active) return;
     cancelAll();
+    save(target);
     active = false;
     try {
       sessionStorage.removeItem(ACTIVE_KEY);
@@ -486,7 +493,7 @@ const PAGE_JS: &str = r##"(() => {
       ctx.imageSmoothingQuality = "high";
       draw(ctx);
       bitmap.close?.();
-      const next = { ...describe(node, index), W, H, base, pending: 0 };
+      const next = { ...describe(node, index), W, H, base, live: copyOf(base), pending: 0 };
       if (reading?.promise === promise) reading = null;
       target = next;
       return next;
@@ -562,7 +569,7 @@ const PAGE_JS: &str = r##"(() => {
   const blank = (place) => {
     const scale = Math.min(DENSITY, LARGEST / Math.max(place.w, place.h));
     const [W, H] = [Math.max(1, Math.round(place.w * scale)), Math.max(1, Math.round(place.h * scale))];
-    return { node: null, id: null, index: 0, paint: null, hash: null, w: place.w, h: place.h, M: place.M, W, H, base: canvasOf(W, H), pending: 0, place };
+    return { node: null, id: null, index: 0, paint: null, hash: null, w: place.w, h: place.h, M: place.M, W, H, base: canvasOf(W, H), live: canvasOf(W, H), pending: 0, place };
   };
   const layerName = (parent) => {
     let most = 0;
@@ -625,17 +632,15 @@ const PAGE_JS: &str = r##"(() => {
       if (!t.hidden && t.node && !t.node.removed) t.node.visible = true;
     } catch {}
   };
-  const commit = (t, picture, { reveal = false, select = false } = {}) => {
+  const commit = (t, picture, { reveals = 0, select = false } = {}) => {
     const figma = api();
     if (!figma) return Promise.resolve();
     t.pending++;
     const blob = new Promise((resolve) => picture.toBlob(resolve, "image/png"));
     const done = (writing = writing.then(async () => {
-      let revealed = !reveal;
+      let left = reveals;
       const uncover = () => {
-        if (revealed) return;
-        revealed = true;
-        unconceal(t);
+        for (; left > 0; left--) unconceal(t);
       };
       try {
         const bytes = new Uint8Array(await (await blob).arrayBuffer());
@@ -672,6 +677,54 @@ const PAGE_JS: &str = r##"(() => {
       }
     }));
     return done;
+  };
+
+  // Strokes in quick succession go to Figma together: each new image is
+  // work for Figma to read and draw again, and Ligma's canvas shows the
+  // layer meanwhile. A new layer goes at once, so there's one to paint on
+  const COMMIT_AFTER = 450;
+  // How long Ligma's canvas stays once Figma has the change, as Figma
+  // draws a new image roughly first and sharp a moment later
+  const HOLD = 1400;
+  const schedule = (t, { reveal = false } = {}) => {
+    t.unsaved = true;
+    if (reveal) t.reveals = (t.reveals ?? 0) + 1;
+    clearTimeout(t.timer);
+    if (!t.node) return save(t);
+    t.timer = setTimeout(() => save(t), COMMIT_AFTER);
+    return Promise.resolve();
+  };
+  const save = (t) => {
+    if (!t) return writing;
+    clearTimeout(t.timer);
+    if (!t.unsaved) return writing;
+    t.unsaved = false;
+    const reveals = t.reveals ?? 0;
+    t.reveals = 0;
+    const fresh = !t.node && !t.creating;
+    if (fresh) t.creating = true;
+    return commit(t, t.base, { reveals, select: fresh }).then(() => {
+      t.holdUntil = performance.now() + HOLD;
+      if (fresh && t.node) target = t;
+    });
+  };
+  // Undo before the strokes have gone to Figma takes them back here
+  const discard = (t) => {
+    clearTimeout(t.timer);
+    t.unsaved = false;
+    for (let i = t.reveals ?? 0; i > 0; i--) unconceal(t);
+    t.reveals = 0;
+    if (target === t) target = null;
+    if (showing?.t === t) hideNow();
+    if (t.node) read(t.node).catch(() => {});
+  };
+  // A change made at once, by a fill or the gradient, becomes the layer's
+  const adopt = (t, canvas, { reveal = false } = {}) => {
+    t.base = canvas;
+    t.live = copyOf(canvas);
+    t.pixels = null;
+    show(t);
+    return schedule(t, { reveal });
   };
 
   // Up and down a layer, among the layer's siblings, and a new one
@@ -720,75 +773,92 @@ const PAGE_JS: &str = r##"(() => {
       const shape = svg.appendChild(make("svg:path", { class: "shape" }));
       const shapeOver = svg.appendChild(make("svg:path", { class: "shape over" }));
       const line = svg.appendChild(make("svg:path", { class: "line" }));
+      const string = svg.appendChild(make("svg:path", { class: "string" }));
       const source = svg.appendChild(make("svg:path", { class: "source" }));
-      const brushUnder = svg.appendChild(make("svg:circle", { class: "brush under" }));
-      const brushOver = svg.appendChild(make("svg:circle", { class: "brush" }));
-      Object.assign(ui, { overlay: root, live, svg, ants, antsUnder, antsOver, shape, shapeOver, line, source, brushUnder, brushOver });
+      const brushUnder = svg.appendChild(make("svg:ellipse", { class: "brush under" }));
+      const brushOver = svg.appendChild(make("svg:ellipse", { class: "brush" }));
+      Object.assign(ui, { overlay: root, live, svg, ants, antsUnder, antsOver, shape, shapeOver, line, string, source, brushUnder, brushOver });
     }
     if (ui.overlay.previousElementSibling !== canvas) canvas.after(ui.overlay);
     return ui.overlay;
   };
   // The canvas shown over the layer while it's painted, until Figma has
-  // drawn the change
+  // drawn the change sharply. How it's drawn in the file, its opacity and
+  // the frame clipping it, is read once, as the plugin API is slow to ask
+  // every frame
   let showing = null;
-  const show = (t, canvas) => {
+  const show = (t, canvas = t.live) => {
     if (!overlay()) return;
     if (ui.live.firstChild !== canvas) ui.live.replaceChildren(canvas);
-    showing = { t, canvas, until: Infinity };
+    ui.live.classList.remove("fading");
+    let opacity = 1;
+    let clip = null;
+    try {
+      if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      for (let at = t.node?.parent ?? t.place?.parent; at && at.type !== "PAGE"; at = at.parent) {
+        if (at.clipsContent) {
+          clip = { M: matrix(at.absoluteTransform), w: at.width, h: at.height };
+          break;
+        }
+      }
+    } catch {}
+    canvas.style.opacity = opacity;
+    showing = { t, canvas, clip, fading: 0 };
     place();
   };
-  // Figma takes a moment to draw a new image, so the canvas stays a
-  // little longer. Only if it's still the one shown
-  const hideSoon = (canvas, ms = 600) => {
-    if (showing && (!canvas || showing.canvas === canvas)) showing.until = performance.now() + ms;
+  const hideNow = () => {
+    ui.live?.replaceChildren();
+    showing = null;
+  };
+  // Whether the canvas still covers the layer: while it's painted, until
+  // Figma has the change, and a moment after. The gradient's preview only
+  // while it's dragged
+  const needed = ({ t, canvas }) => {
+    if (canvas !== t.live) return drag?.live === canvas;
+    return drag?.stroke?.t === t || drag?.t === t || t.unsaved || t.pending > 0 || performance.now() < (t.holdUntil ?? 0);
   };
   const place = () => {
     const v = view();
     const root = ui.overlay;
     if (!v || !root) return;
-    Object.assign(root.style, { left: `${v.canvas.offsetLeft}px`, top: `${v.canvas.offsetTop}px`, width: `${v.canvas.offsetWidth}px`, height: `${v.canvas.offsetHeight}px` });
+    const box = [`${v.canvas.offsetLeft}px`, `${v.canvas.offsetTop}px`, `${v.canvas.offsetWidth}px`, `${v.canvas.offsetHeight}px`];
+    if (root.dataset.box !== box.join()) {
+      root.dataset.box = box.join();
+      Object.assign(root.style, { left: box[0], top: box[1], width: box[2], height: box[3] });
+    }
     if (showing) {
-      if (performance.now() > showing.until) {
-        ui.live.replaceChildren();
-        showing = null;
-      } else {
-        const { t, canvas } = showing;
-        // Laid out a pixel square and scaled up to the layer, so it's never
-        // the largest canvas on the page, which features take for Figma's
-        const m = v.toScreen.multiply(gridOf(t));
-        canvas.style.transform = m.scale(t.W, t.H).toString();
-        // Pixels show as squares once they're large, as Figma shows them
-        canvas.style.imageRendering = Math.hypot(m.a, m.b) >= 2 ? "pixelated" : "auto";
-        let opacity = 1;
-        try {
-          if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
-        } catch {}
-        canvas.style.opacity = opacity;
-        clipTo(t, v);
+      const now = performance.now();
+      if (needed(showing)) {
+        if (showing.fading) {
+          showing.fading = 0;
+          ui.live.classList.remove("fading");
+        }
+      } else if (!showing.fading) {
+        showing.fading = now;
+        ui.live.classList.add("fading");
+      } else if (now - showing.fading > 200) hideNow();
+    }
+    if (showing) {
+      const { t, canvas, clip } = showing;
+      // Laid out a pixel square and scaled up to the layer, so it's never
+      // the largest canvas on the page, which features take for Figma's
+      const transform = v.toScreen.multiply(gridOf(t)).scale(t.W, t.H).toString();
+      if (canvas.style.transform !== transform) canvas.style.transform = transform;
+      let path = "none";
+      if (clip) {
+        const m = v.toScreen.multiply(clip.M);
+        const corners = [
+          [0, 0],
+          [clip.w, 0],
+          [clip.w, clip.h],
+          [0, clip.h],
+        ].map((corner) => apply(m, corner));
+        path = `polygon(${corners.map(([x, y]) => `${x.toFixed(1)}px ${y.toFixed(1)}px`).join(",")})`;
       }
+      if (ui.live.style.clipPath !== path) ui.live.style.clipPath = path;
     }
     if (selection) ui.ants.setAttribute("transform", v.toScreen.multiply(selection.G).toString());
     marks(v);
-  };
-  // Inside the frame that clips the layer, if any
-  const clipTo = (t, v) => {
-    let clip = "none";
-    try {
-      for (let at = t.node?.parent ?? t.place?.parent; at && at.type !== "PAGE"; at = at.parent) {
-        if (at.clipsContent) {
-          const m = v.toScreen.multiply(matrix(at.absoluteTransform));
-          const corners = [
-            [0, 0],
-            [at.width, 0],
-            [at.width, at.height],
-            [0, at.height],
-          ].map((corner) => apply(m, corner));
-          clip = `polygon(${corners.map(([x, y]) => `${x}px ${y}px`).join(",")})`;
-          break;
-        }
-      }
-    } catch {}
-    ui.live.style.clipPath = clip;
   };
 
   // Runs every frame in Raster mode: keeps what's on the canvas with it
@@ -812,10 +882,23 @@ const PAGE_JS: &str = r##"(() => {
         lastCheck = time;
         refreshBar();
         preload();
+        settle();
       }
       requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
+  };
+
+  // Strokes waiting for Figma go once another layer's picked, and the
+  // canvas stops covering a layer that's been undone or changed in Figma
+  const settle = () => {
+    if (target?.unsaved && !drag && target.node && rasterNode()?.id !== target.id) save(target);
+    const t = showing?.t;
+    if (!t?.node || t.unsaved || t.pending || drag) return;
+    try {
+      const paint = fillsOf(t.node)[imageIndex(t.node)];
+      if (t.node.removed || paint?.imageHash !== t.hash) t.holdUntil = 0;
+    } catch {}
   };
 
   // Reads the selected layer ahead of the first stroke
@@ -962,12 +1045,20 @@ const PAGE_JS: &str = r##"(() => {
     const digits = found[1].length === 3 ? [...found[1]].map((digit) => digit + digit).join("") : found[1];
     return [0, 2, 4].map((at) => parseInt(digits.slice(at, at + 2), 16));
   };
-  // A round brush tip `size` pixels across, opaque to `hardness` of its
-  // radius and fading out past it, or with a hard, aliased edge
+  // A brush tip `size` pixels across, turned `angle` degrees and squashed
+  // to `roundness`, as Photoshop's: opaque to `hardness` of its radius
+  // and fading out past it, or with a hard, aliased edge
   const tips = new Map();
-  const tip = (size, hardness, aliased) => {
+  // How far a point is from a tip's middle, in its own radii, its long
+  // axis along `angle`
+  const shaped = (dx, dy, angle, roundness) => {
+    const a = (angle * Math.PI) / 180;
+    const [c, s] = [Math.cos(a), Math.sin(a)];
+    return Math.hypot(c * dx - s * dy, (s * dx + c * dy) / Math.max(0.01, roundness / 100));
+  };
+  const tip = (size, hardness, aliased, angle = 0, roundness = 100, color = null) => {
     const d = Math.max(1, Math.ceil(size));
-    const key = `${d}:${hardness}:${aliased}`;
+    const key = `${d}:${hardness}:${aliased}:${angle}:${roundness}:${color}`;
     if (tips.has(key)) return tips.get(key);
     const canvas = canvasOf(d, d);
     const ctx = canvas.getContext("2d");
@@ -976,25 +1067,36 @@ const PAGE_JS: &str = r##"(() => {
       const image = ctx.createImageData(d, d);
       for (let y = 0; y < d; y++)
         for (let x = 0; x < d; x++) {
-          if (Math.hypot(x + 0.5 - d / 2, y + 0.5 - d / 2) <= Math.max(0.5, r)) image.data[(y * d + x) * 4 + 3] = 255;
+          if (shaped(x + 0.5 - d / 2, y + 0.5 - d / 2, angle, roundness) <= Math.max(0.5, r)) image.data[(y * d + x) * 4 + 3] = 255;
         }
       ctx.putImageData(image, 0, 0);
     } else {
       const inner = clamp(hardness / 100, 0, 0.99) * r;
-      const gradient = ctx.createRadialGradient(d / 2, d / 2, inner, d / 2, d / 2, r);
+      ctx.translate(d / 2, d / 2);
+      ctx.rotate((-angle * Math.PI) / 180);
+      ctx.scale(1, Math.max(0.01, roundness / 100));
+      const gradient = ctx.createRadialGradient(0, 0, inner, 0, 0, r);
       gradient.addColorStop(0, "#000");
       // Eased, so a soft brush fades smoothly
       for (let i = 1; i <= 8; i++) gradient.addColorStop(i / 8, `rgb(0 0 0 / ${(1 - i / 8) ** 2})`);
       ctx.fillStyle = gradient;
       ctx.beginPath();
-      ctx.arc(d / 2, d / 2, r, 0, Math.PI * 2);
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
       ctx.fill();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    // Tinted once, rather than at every dab
+    if (color) {
+      ctx.globalCompositeOperation = "source-in";
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, d, d);
     }
     if (tips.size > 24) tips.delete(tips.keys().next().value);
     tips.set(key, canvas);
     return canvas;
   };
-  // How much of a brush's strength reaches `distance` from its middle
+  // How much of a brush's strength reaches a point `distance` radii from
+  // its middle
   const falloff = (distance, r, hardness) => {
     if (distance >= r) return 0;
     const inner = clamp(hardness / 100, 0, 0.99) * r;
@@ -1018,7 +1120,8 @@ const PAGE_JS: &str = r##"(() => {
   // Composites the stroke onto the layer over `rect`, through the
   // selection: `live` = `base` with the stroke on top, or taken away
   const composite = (stroke, [x0, y0, x1, y1]) => {
-    const { t, live, opacity, erase } = stroke;
+    const { t, opacity, erase } = stroke;
+    const live = t.live;
     x0 = Math.max(0, Math.floor(x0));
     y0 = Math.max(0, Math.floor(y0));
     x1 = Math.min(t.W, Math.ceil(x1));
@@ -1055,9 +1158,12 @@ const PAGE_JS: &str = r##"(() => {
     const figma = api();
     const tool = prefs.tool;
     const node = rasterNode();
+    // A new layer still on its way to Figma takes more strokes meanwhile
+    if (!node && target && !target.node && target.place) return { tool, points: [], ready: Promise.resolve(target) };
     if (!node && (tool === "brush" || tool === "pencil")) {
       // Painting with no layer to paint on adds one
       const t = blank(placement(figma, page));
+      target = t;
       return { tool, t, fresh: true, points: [], ready: Promise.resolve(t) };
     }
     if (!node) {
@@ -1067,41 +1173,71 @@ const PAGE_JS: &str = r##"(() => {
     return { tool, points: [], ready: read(node) };
   };
 
+  // The layer's pixels as data, for the tools that change them in place,
+  // kept while only those tools change them
+  const pixelsOf_ = (t) => {
+    if (!t.pixels) t.pixels = t.live.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, t.W, t.H);
+    return t.pixels;
+  };
+
   const beginStroke = (stroke) => {
     const { t, tool } = stroke;
     const o = prefs.options[tool];
     stroke.opacity = (o.opacity ?? 100) / 100;
     stroke.erase = tool === "eraser";
     stroke.mask = maskFor(t);
-    stroke.live = canvasOf(t.W, t.H);
-    stroke.live.getContext("2d").drawImage(t.base, 0, 0);
-    stroke.scale = Math.hypot(gridOf(t).a, gridOf(t).b);
     stroke.leftover = 0;
-    if (TOOLS[tool].direct) {
-      const ctx = t.base.getContext("2d", { willReadFrequently: true });
-      stroke.pixels = ctx.getImageData(0, 0, t.W, t.H);
-      stroke.dirty = null;
-    } else {
-      if (!strokeBuffer || strokeBuffer.width !== t.W || strokeBuffer.height !== t.H) strokeBuffer = canvasOf(t.W, t.H);
-      else strokeBuffer.getContext("2d").clearRect(0, 0, t.W, t.H);
+    stroke.rect = null;
+    stroke.total = null;
+    const grid = gridOf(t);
+    // Pixels of the layer to a pixel on screen, for smoothing's string
+    stroke.perScreen = 1 / Math.max(1e-6, Math.hypot(grid.a, grid.b) * (view()?.zoom ?? 1));
+    if (TOOLS[tool].direct) stroke.pixels = pixelsOf_(t);
+    else {
       if (tool === "clone" && (!cloneSource || cloneSource.id !== t.id)) {
         notify(`${mac ? "Option" : "Alt"}-click to set where to clone from`);
         return false;
       }
+      if (!strokeBuffer || strokeBuffer.width !== t.W || strokeBuffer.height !== t.H) strokeBuffer = canvasOf(t.W, t.H);
+      if (tool !== "clone") {
+        const color = tool === "eraser" ? "#000" : rgb(prefs.foreground);
+        stroke.stamp = tip(o.size, tool === "pencil" ? 100 : o.hardness ?? 100, tool === "pencil", o.angle ?? 0, o.roundness ?? 100, color);
+      }
     }
     // Smudging and blurring can thin the layer too
     stroke.reveal = ["eraser", "smudge", "blur"].includes(tool) && conceal(t);
-    show(t, stroke.live);
+    show(t);
     return true;
   };
 
-  // Dabs from the last point to `to`, a quarter of the brush apart
+  // A point from the pointer. With smoothing, the brush trails the pointer
+  // on a string, as Photoshop's does, moving only once it's pulled taut
+  const feed = (stroke, page, pressure) => {
+    const point = apply(gridOf(stroke.t).inverse(), page);
+    stroke.pointer = point;
+    const smoothing = (prefs.options[stroke.tool].smoothing ?? 0) / 100;
+    if (!stroke.brush || !smoothing) {
+      stroke.brush = point;
+      strokeTo(stroke, point, pressure);
+      return;
+    }
+    const length = smoothing * 90 * stroke.perScreen;
+    const [dx, dy] = [point[0] - stroke.brush[0], point[1] - stroke.brush[1]];
+    const distance = Math.hypot(dx, dy);
+    if (distance <= length) return;
+    const pull = (distance - length) / distance;
+    stroke.brush = [stroke.brush[0] + dx * pull, stroke.brush[1] + dy * pull];
+    strokeTo(stroke, stroke.brush, pressure);
+  };
+
+  // Dabs from the last point to `to`, spaced by the brush's size
   const strokeTo = (stroke, to, pressure) => {
-    const { t, tool } = stroke;
+    const { tool } = stroke;
     const o = prefs.options[tool];
+    stroke.pressure = pressure;
     const p = o.pressure ? clamp(pressure, 0.05, 1) : 1;
     const size = Math.max(1, o.size * p);
-    const spacing = Math.max(tool === "pencil" ? 0.5 : 1, size * (TOOLS[tool].direct ? 0.2 : 0.12));
+    const spacing = Math.max(tool === "pencil" ? 0.5 : 1, size * Math.max(0.05, (o.roundness ?? 100) / 100) * (TOOLS[tool].direct ? 0.2 : 0.1));
     const from = stroke.last;
     stroke.last = to;
     if (!from) {
@@ -1118,43 +1254,49 @@ const PAGE_JS: &str = r##"(() => {
     stroke.leftover = length - (at - spacing);
   };
 
+  const grow = (rect, [x0, y0, x1, y1]) => (rect ? [Math.min(rect[0], x0), Math.min(rect[1], y0), Math.max(rect[2], x1), Math.max(rect[3], y1)] : [x0, y0, x1, y1]);
+  // Dabs go into the stroke buffer as they come, and onto the canvas shown
+  // once a frame
   const dab = (stroke, [x, y], size) => {
     const { t, tool } = stroke;
     const o = prefs.options[tool];
     const r = size / 2;
     if (TOOLS[tool].direct) return directDab(stroke, x, y, r);
     const ctx = strokeBuffer.getContext("2d");
+    let rect;
     if (tool === "pencil") {
-      const brush = tip(size, 100, true);
-      const [dx, dy] = [Math.round(x - brush.width / 2), Math.round(y - brush.height / 2)];
-      const color = scratchOf(brush.width, brush.height);
-      color.drawImage(brush, 0, 0);
-      color.globalCompositeOperation = "source-in";
-      color.fillStyle = rgb(prefs.foreground);
-      color.fillRect(0, 0, brush.width, brush.height);
-      ctx.drawImage(scratch, 0, 0, brush.width, brush.height, dx, dy, brush.width, brush.height);
-      composite(stroke, [dx, dy, dx + brush.width, dy + brush.height]);
-      return;
-    }
-    const brush = tip(size, o.hardness ?? 100, false);
-    const [dx, dy] = [x - r, y - r];
-    const d = Math.ceil(size);
-    const color = scratchOf(d + 2, d + 2);
-    if (tool === "clone") {
+      ctx.imageSmoothingEnabled = false;
+      const d = Math.max(1, Math.ceil(size));
+      const [dx, dy] = [Math.round(x - d / 2), Math.round(y - d / 2)];
+      ctx.drawImage(stroke.stamp, dx, dy, d, d);
+      ctx.imageSmoothingEnabled = true;
+      rect = [dx, dy, dx + d, dy + d];
+    } else if (tool === "clone") {
+      const brush = tip(size, o.hardness ?? 100, false, o.angle ?? 0, o.roundness ?? 100);
+      const [dx, dy] = [x - r, y - r];
+      const d = Math.ceil(size);
+      const color = scratchOf(d + 2, d + 2);
       if (cloneSource.offset === null || cloneSource.offset === undefined) cloneSource.offset = [cloneSource.at[0] - x, cloneSource.at[1] - y];
       const [ox, oy] = cloneSource.offset;
       color.drawImage(t.base, dx + ox, dy + oy, size, size, 0, 0, size, size);
       color.globalCompositeOperation = "destination-in";
       color.drawImage(brush, 0, 0, size, size);
       stroke.source = [x + ox, y + oy];
+      ctx.drawImage(scratch, 0, 0, size, size, dx, dy, size, size);
+      rect = [dx - 1, dy - 1, dx + size + 1, dy + size + 1];
     } else {
-      color.drawImage(brush, 0, 0, size, size);
-      color.globalCompositeOperation = "source-in";
-      color.fillStyle = tool === "eraser" ? "#000" : rgb(prefs.foreground);
-      color.fillRect(0, 0, d + 2, d + 2);
+      ctx.drawImage(stroke.stamp, x - r, y - r, size, size);
+      rect = [x - r - 1, y - r - 1, x + r + 1, y + r + 1];
     }
-    ctx.drawImage(scratch, 0, 0, size, size, dx, dy, size, size);
-    composite(stroke, [dx - 1, dy - 1, dx + size + 1, dy + size + 1]);
+    stroke.rect = grow(stroke.rect, rect);
+    stroke.total = grow(stroke.total, rect);
+    if (!stroke.frame) stroke.frame = requestAnimationFrame(() => drawStroke(stroke));
+  };
+  const drawStroke = (stroke) => {
+    stroke.frame = 0;
+    if (!stroke.rect) return;
+    composite(stroke, stroke.rect);
+    stroke.rect = null;
   };
 
   // Changes the pixels under a dab of the blur, sharpen, smudge, dodge,
@@ -1213,7 +1355,7 @@ const PAGE_JS: &str = r##"(() => {
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w; x++) {
         const [px, py] = [x0 + x, y0 + y];
-        let weight = falloff(Math.hypot(px + 0.5 - cx, py + 0.5 - cy), r, hardness);
+        let weight = falloff(shaped(px + 0.5 - cx, py + 0.5 - cy, o.angle ?? 0, o.roundness ?? 100), r, hardness);
         if (mask) weight *= mask[py * W + px] / 255;
         const i = (y * w + x) * 4;
         const at = (py * W + px) * 4;
@@ -1254,9 +1396,8 @@ const PAGE_JS: &str = r##"(() => {
         if (inCarry && next) for (let c = 0; c < 4; c++) next[ci + c] = out[c];
       }
     if (carry) carry.data = next;
-    stroke.dirty = stroke.dirty
-      ? [Math.min(stroke.dirty[0], x0), Math.min(stroke.dirty[1], y0), Math.max(stroke.dirty[2], x1), Math.max(stroke.dirty[3], y1)]
-      : [x0, y0, x1, y1];
+    stroke.dirty = grow(stroke.dirty, [x0, y0, x1, y1]);
+    stroke.total = grow(stroke.total, [x0, y0, x1, y1]);
     flushSoon(stroke);
   };
   // The changed pixels onto the canvas shown, once a frame
@@ -1269,21 +1410,34 @@ const PAGE_JS: &str = r##"(() => {
     if (!stroke.dirty) return;
     const [x0, y0, x1, y1] = stroke.dirty;
     stroke.dirty = null;
-    stroke.live.getContext("2d").putImageData(stroke.pixels, 0, 0, x0, y0, x1 - x0, y1 - y0);
+    stroke.t.live.getContext("2d").putImageData(stroke.pixels, 0, 0, x0, y0, x1 - x0, y1 - y0);
   };
 
   const endStroke = (stroke) => {
     const { t, tool } = stroke;
+    // Smoothing catches up with the pointer, so the stroke ends under it
+    if (stroke.pointer && stroke.brush && stroke.pointer !== stroke.brush) strokeTo(stroke, stroke.pointer, stroke.pressure ?? 1);
     if (TOOLS[tool].direct) {
       if (stroke.flushing) cancelAnimationFrame(stroke.flushing);
       flush(stroke);
+    } else {
+      if (stroke.frame) cancelAnimationFrame(stroke.frame);
+      drawStroke(stroke);
+      t.pixels = null;
     }
     if (tool === "clone" && !prefs.options.clone.aligned && cloneSource) cloneSource.offset = null;
-    // The stroke is the layer's now
-    t.base = stroke.live;
-    const done = commit(t, stroke.live, { reveal: stroke.reveal, select: stroke.fresh });
-    if (stroke.fresh) done.then(() => t.node && (target = t));
-    done.then(() => hideSoon(stroke.live));
+    // The stroke is the layer's now: `base` catches up with what's shown
+    // where it went, and the stroke buffer is cleared there
+    if (stroke.total) {
+      const [x0, y0, x1, y1] = [Math.max(0, Math.floor(stroke.total[0])), Math.max(0, Math.floor(stroke.total[1])), Math.min(t.W, Math.ceil(stroke.total[2])), Math.min(t.H, Math.ceil(stroke.total[3]))];
+      if (x1 > x0 && y1 > y0) {
+        const ctx = t.base.getContext("2d");
+        ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.drawImage(t.live, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+        if (!TOOLS[tool].direct) strokeBuffer.getContext("2d").clearRect(x0, y0, x1 - x0, y1 - y0);
+      }
+    }
+    schedule(t, { reveal: stroke.reveal });
     ui.source?.removeAttribute("d");
   };
 
@@ -1296,6 +1450,8 @@ const PAGE_JS: &str = r##"(() => {
     let frame = null;
     for (let at = t.node?.parent; at && at.type !== "PAGE"; at = at.parent) if (CONTAINERS.has(at.type)) frame = at;
     if (!frame) return t.base;
+    // Figma draws what it has, so the strokes still waiting go first
+    await save(t);
     const turned = Math.abs(frame.absoluteTransform[0][1]) > 1e-6 || Math.abs(frame.absoluteTransform[1][0]) > 1e-6;
     if (turned) return t.base;
     const scale = Math.min(Math.hypot(gridOf(t).a, gridOf(t).b) ** -1, LARGEST / Math.max(frame.width, frame.height));
@@ -1415,13 +1571,9 @@ const PAGE_JS: &str = r##"(() => {
     ctx.drawImage(paint, 0, 0);
     finishInstant(t, live, !node);
   };
-  // A change made at once, shown until Figma has it
   const finishInstant = (t, live, fresh, reveal = false) => {
-    show(t, live);
-    t.base = live;
-    const done = commit(t, live, { select: fresh, reveal });
-    if (fresh) done.then(() => t.node && (target = t));
-    done.then(() => hideSoon(live));
+    if (fresh) target = t;
+    adopt(t, live, { reveal });
   };
 
   // Fills the selection, or the whole layer, with a color, or clears it
@@ -1639,6 +1791,9 @@ const PAGE_JS: &str = r##"(() => {
     return prefs.options[prefs.tool]?.mode ?? "new";
   };
 
+  const setPath = (node, d) => {
+    if (node.getAttribute("d") !== d) node.setAttribute("d", d);
+  };
   // Marks on the canvas: what's being drawn, the brush and the clone
   // stamp's source, in screen pixels
   const marks = (v) => {
@@ -1671,23 +1826,35 @@ const PAGE_JS: &str = r##"(() => {
     }
     if (polygon) shape = path([...polygon.points, ...(polygon.hover ? [polygon.hover] : [])], false);
     if (drag?.kind === "gradient" && drag.to) line = path([drag.from, drag.to], false);
-    ui.shape.setAttribute("d", shape);
-    ui.shapeOver.setAttribute("d", shape);
-    ui.line.setAttribute("d", line);
-    // The brush, as a circle its size
+    // Smoothing's string, from the brush to the pointer
+    const stroke = drag?.kind === "paint" ? drag.stroke : null;
+    let string = "";
+    if (stroke?.brush && stroke.pointer && stroke.t && (prefs.options[stroke.tool].smoothing ?? 0) > 0) {
+      const grid = gridOf(stroke.t);
+      string = path([apply(grid, stroke.brush), apply(grid, stroke.pointer)], false);
+    }
+    setPath(ui.shape, shape);
+    setPath(ui.shapeOver, shape);
+    setPath(ui.line, line);
+    setPath(ui.string, string);
+    // The brush, its size and shape. The layer's grid, if it's the one
+    // read, or a new layer's
     const o = options();
     const brushy = TOOLS[prefs.tool]?.paints && o.size;
     let radius = 0;
     if (brushy && pointer.over) {
-      const t = drag?.t ?? (target && rasterNode()?.id === target.id ? target : null);
+      const t = stroke?.t ?? (target && target.id && target.id === shownId ? target : null);
       const scale = t ? Math.hypot(gridOf(t).a, gridOf(t).b) : 1 / DENSITY;
       radius = (o.size / 2) * scale * v.zoom;
     }
-    for (const circle of [ui.brushUnder, ui.brushOver]) {
-      circle.setAttribute("cx", pointer.x - v.rect.left);
-      circle.setAttribute("cy", pointer.y - v.rect.top);
-      circle.setAttribute("r", Math.max(0, radius));
-      circle.style.display = radius >= 3 ? "" : "none";
+    const [cx, cy] = stroke?.brush && stroke.t && (o.smoothing ?? 0) > 0 ? screen(apply(gridOf(stroke.t), stroke.brush)) : [pointer.x - v.rect.left, pointer.y - v.rect.top];
+    for (const ring of [ui.brushUnder, ui.brushOver]) {
+      ring.setAttribute("cx", cx.toFixed(1));
+      ring.setAttribute("cy", cy.toFixed(1));
+      ring.setAttribute("rx", Math.max(0, radius).toFixed(2));
+      ring.setAttribute("ry", Math.max(0, (radius * (o.roundness ?? 100)) / 100).toFixed(2));
+      ring.setAttribute("transform", `rotate(${-(o.angle ?? 0)} ${cx.toFixed(1)} ${cy.toFixed(1)})`);
+      ring.style.display = radius >= 3 ? "" : "none";
     }
     setCursor(cursorFor(radius));
     // The clone stamp's source
@@ -1743,7 +1910,6 @@ const PAGE_JS: &str = r##"(() => {
       drag.stroke.ended = true;
       if (drag.stroke.began) finishPaint(drag.stroke);
     }
-    if (drag?.kind === "gradient") hideSoon(drag.live, 0);
     drag = null;
     polygon = null;
   };
@@ -1755,7 +1921,7 @@ const PAGE_JS: &str = r##"(() => {
       type,
       (event) => {
         if (!active) return;
-        if (type === "pointerdown" && menuOpen() && !event.target.closest?.(`[${ATTR}-menu], [${ATTR}-picker], [${ATTR}-tools] .chevron, [${ATTR}-tools] .swatch`)) closeMenus();
+        if (type === "pointerdown" && menuOpen() && !event.target.closest?.(`[${ATTR}-menu], [${ATTR}-picker], [${ATTR}-tip], [${ATTR}-bar] .tip, [${ATTR}-tools] .chevron, [${ATTR}-tools] .swatch`)) closeMenus();
         if (type === "pointermove" || type === "pointerdown") {
           pointer.over = onCanvas(event);
           pointer.x = event.clientX;
@@ -1851,8 +2017,7 @@ const PAGE_JS: &str = r##"(() => {
           if (!drag || drag.ready !== ready) return;
           drag.t = t;
           drag.mask = maskFor(t);
-          drag.live = canvasOf(t.W, t.H);
-          drag.live.getContext("2d").drawImage(t.base, 0, 0);
+          drag.live = copyOf(t.base);
           show(t, drag.live);
           if (drag.to) gradientInto(drag);
         })
@@ -1875,7 +2040,7 @@ const PAGE_JS: &str = r##"(() => {
           return;
         }
         stroke.began = true;
-        for (const [point, p] of stroke.queue) strokeTo(stroke, apply(gridOf(t).inverse(), point), p);
+        for (const [point, p] of stroke.queue) feed(stroke, point, p);
         stroke.queue = [];
         if (stroke.ended) finishPaint(stroke);
       })
@@ -1896,7 +2061,7 @@ const PAGE_JS: &str = r##"(() => {
         const page = pageAt(each, v);
         const pressure = each.pointerType === "pen" ? each.pressure : 1;
         if (!stroke.began) stroke.queue.push([page, pressure]);
-        else strokeTo(stroke, apply(gridOf(stroke.t).inverse(), page), pressure);
+        else feed(stroke, page, pressure);
       }
       return;
     }
@@ -1933,14 +2098,9 @@ const PAGE_JS: &str = r##"(() => {
       done.stroke.ended = true;
       if (done.stroke.began) finishPaint(done.stroke);
     } else if (done.kind === "gradient") {
-      if (!done.live || !done.to || Math.hypot(done.to[0] - done.from[0], done.to[1] - done.from[1]) * done.zoom < 2) {
-        hideSoon(done.live, 0);
-        return;
-      }
-      done.t.base = done.live;
-      const committed = commit(done.t, done.live, { select: done.fresh });
-      if (done.fresh) committed.then(() => done.t.node && (target = done.t));
-      committed.then(() => hideSoon(done.live));
+      if (!done.live || !done.to || Math.hypot(done.to[0] - done.from[0], done.to[1] - done.from[1]) * done.zoom < 2) return;
+      if (done.fresh) target = done.t;
+      adopt(done.t, done.live);
     }
   };
   const finishPaint = (stroke) => {
@@ -2017,6 +2177,9 @@ const PAGE_JS: &str = r##"(() => {
         return;
       }
       if (mod && !event.altKey) {
+        // Strokes not yet in Figma are undone here, and go before a redo
+        if (key === "Z" && !event.shiftKey && target?.unsaved) return void (handled(), discard(target));
+        if ((key === "Y" || (key === "Z" && event.shiftKey)) && target?.unsaved) save(target);
         if (key === "D" && !event.shiftKey) return void (handled(), setSelection(null));
         if (key === "A" && !event.shiftKey && rasterNode()) return void (handled(), selectAll());
         if (key === "I" && event.shiftKey) return void (handled(), invert());
@@ -2083,7 +2246,9 @@ const PAGE_JS: &str = r##"(() => {
   const layerVia = async (cut) => {
     const figma = api();
     const node = rasterNode();
-    const t = await read(node);
+    let t = await read(node);
+    await save(t);
+    t = await read(node);
     const mask = maskFor(t);
     const copy = canvasOf(t.W, t.H);
     const ctx = copy.getContext("2d");
@@ -2099,10 +2264,10 @@ const PAGE_JS: &str = r##"(() => {
       rctx.globalCompositeOperation = "destination-out";
       if (mask) rctx.drawImage(mask.canvas, 0, 0);
       else rctx.fillRect(0, 0, t.W, t.H);
-      t.base = rest;
-      await commit(t, rest);
+      await adopt(t, rest);
+      await save(t);
     }
-    const fresh = { ...blank({ parent: node.parent, index: node.parent.children.indexOf(node) + 1, M: t.M, w: t.w, h: t.h, like: node }), W: t.W, H: t.H, base: copy };
+    const fresh = { ...blank({ parent: node.parent, index: node.parent.children.indexOf(node) + 1, M: t.M, w: t.w, h: t.h, like: node }), W: t.W, H: t.H, base: copy, live: copyOf(copy) };
     await commit(fresh, copy, { select: true });
     if (fresh.node) target = fresh;
     setSelection(null);
@@ -2365,7 +2530,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // A group's tools, Figma's flyout menu
   let menu = null;
-  const menuOpen = () => !!(menu || picker);
+  const menuOpen = () => !!(menu || picker || tipPopover);
   const closeMenus = () => {
     if (menu) {
       menu.chevron.setAttribute("aria-expanded", "false");
@@ -2375,6 +2540,11 @@ const PAGE_JS: &str = r##"(() => {
     if (picker) {
       picker.root.remove();
       picker = null;
+    }
+    if (tipPopover) {
+      tipPopover.root.remove();
+      tipPopover.anchor.setAttribute("aria-expanded", "false");
+      tipPopover = null;
     }
   };
   const openMenu = (index, chevron) => {
@@ -2437,6 +2607,9 @@ const PAGE_JS: &str = r##"(() => {
     flow: { label: "Flow", min: 1, max: 100, unit: "%" },
     tolerance: { label: "Tolerance", min: 0, max: 255, unit: "", tip: "How far a color can be from the one clicked" },
     feather: { label: "Feather", min: 0, max: 250, unit: "px", tip: "Softens the selection's edge" },
+    smoothing: { label: "Smoothing", min: 0, max: 100, unit: "%", tip: "Steadies strokes: the brush trails the pointer on a string" },
+    angle: { label: "Angle", min: -180, max: 180, unit: "°" },
+    roundness: { label: "Roundness", min: 1, max: 100, unit: "%" },
   };
   const TOGGLES = {
     pressure: ["Pressure", "Pen pressure sets the size"],
@@ -2452,7 +2625,7 @@ const PAGE_JS: &str = r##"(() => {
     sample: ["Sample", [[1, "Point"], [3, "3 × 3"], [5, "5 × 5"]]],
     saturate: ["Mode", [[false, "Desaturate"], [true, "Saturate"]]],
   };
-  const ORDER = ["mode", "size", "hardness", "opacity", "strength", "exposure", "flow", "tolerance", "feather", "shape", "colors", "sample", "saturate", "pressure", "contiguous", "all", "smooth", "aligned", "reverse"];
+  const ORDER = ["mode", "size", "tip", "hardness", "opacity", "strength", "exposure", "flow", "smoothing", "tolerance", "feather", "shape", "colors", "sample", "saturate", "pressure", "contiguous", "all", "smooth", "aligned", "reverse"];
 
   const buildBar = () => {
     ui.bar = make("div", { [`${ATTR}-ui`]: true, [`${ATTR}-bar`]: true, role: "toolbar", "aria-label": "Tool options", "data-fullscreen-prevent-event-capture": "true" });
@@ -2468,9 +2641,11 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
     return { node, raster, name };
   };
+  let shownId = null;
   const refreshBar = () => {
     if (!ui.bar) return;
     const { node, raster, name } = status();
+    shownId = raster ? node.id : null;
     const key = `${prefs.tool}|${node?.id ?? ""}|${raster}|${name}|${!!selection}`;
     if (key !== barKey) renderBar();
   };
@@ -2500,9 +2675,14 @@ const PAGE_JS: &str = r##"(() => {
       bar.appendChild(make("span", { class: "hint", text: "Select, move and resize layers as in Design" }));
     }
     for (const name of ORDER) {
-      if (o[name] === undefined) continue;
-      bar.appendChild(make("div", { class: "divider" }));
-      if (name === "mode") bar.appendChild(modes(o));
+      if (name === "tip" ? o.angle === undefined : o[name] === undefined) continue;
+      // The tip sits with the size, as one
+      if (name !== "tip") bar.appendChild(make("div", { class: "divider" }));
+      if (name === "tip") {
+        const button = bar.appendChild(tipButton(o));
+        if (tipPopover?.o === o) tipPopover.anchor = button;
+      }
+      else if (name === "mode") bar.appendChild(modes(o));
       else if (FIELDS[name]) bar.appendChild(field(o, name));
       else if (TOGGLES[name]) bar.appendChild(toggle(o, name));
       else if (CHOICES[name]) bar.appendChild(choice(o, name));
@@ -2526,6 +2706,104 @@ const PAGE_JS: &str = r##"(() => {
     savePrefs();
     renderBar();
   };
+
+  // The brush tip's angle and roundness, Photoshop's dial: a circle with
+  // the tip's outline in it, an arrow along its long axis to turn it and
+  // two dots across it to squash it
+  const dial = (o, size) => {
+    const svg = make("svg:svg", { width: size, height: size, viewBox: "-50 -50 100 100", class: "dial", "aria-hidden": "true" });
+    svg.innerHTML = `<circle class="track" r="44"/><g class="shape"><ellipse class="outline" rx="34" ry="34"/><path class="axis" d="M-34 0H34"/><path class="arrow" d="M34 0l-9-5v10z"/><circle class="dot" cx="0" cy="-34" r="4.5"/><circle class="dot" cx="0" cy="34" r="4.5"/></g>`;
+    const sync = () => {
+      const ry = (34 * o.roundness) / 100;
+      svg.querySelector(".shape").setAttribute("transform", `rotate(${-o.angle})`);
+      svg.querySelector(".outline").setAttribute("ry", ry);
+      const [top, bottom] = svg.querySelectorAll(".dot");
+      top.setAttribute("cy", -ry);
+      bottom.setAttribute("cy", ry);
+    };
+    sync();
+    svg.sync = sync;
+    return svg;
+  };
+  const tipButton = (o) => {
+    const button = make("button", { type: "button", class: "tip", "aria-haspopup": "dialog", "aria-expanded": String(tipPopover?.o === o) });
+    button.append(dial(o, 24));
+    tooltip(button, `Brush tip: ${o.angle}°, ${o.roundness}% round`);
+    button.addEventListener("click", () => openTip(o, button));
+    return button;
+  };
+  let tipPopover = null;
+  const openTip = (o, anchor) => {
+    if (tipPopover) return closeMenus();
+    closeMenus();
+    const root = make("div", { [`${ATTR}-ui`]: true, [`${ATTR}-tip`]: true, "data-fullscreen-prevent-event-capture": "true", role: "dialog", "aria-label": "Brush tip" });
+    root.appendChild(make("div", { class: "title" }, make("span", { text: "Brush tip" })));
+    const big = root.appendChild(dial(o, 136));
+    big.setAttribute("aria-hidden", "false");
+    big.setAttribute("role", "img");
+    const fields = root.appendChild(make("div", { class: "fields" }));
+    const renderFields = () => {
+      fields.replaceChildren(field(o, "angle", refresh), field(o, "roundness", refresh));
+    };
+    // The dial follows the fields, and the bar's button both
+    function refresh() {
+      big.sync();
+      anchor.querySelector(".dial")?.sync?.();
+      tooltip(anchor, `Brush tip: ${o.angle}°, ${o.roundness}% round`);
+    }
+    renderFields();
+    // Dragging the dots squashes the tip, anywhere else turns it, as the
+    // arrow points to the pointer
+    big.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      try {
+        big.setPointerCapture(event.pointerId);
+      } catch {}
+      const rect = big.getBoundingClientRect();
+      const local = (each) => {
+        const scale = 100 / rect.width;
+        return [(each.clientX - rect.left) * scale - 50, (each.clientY - rect.top) * scale - 50];
+      };
+      const [x, y] = local(event);
+      const a = (o.angle * Math.PI) / 180;
+      // Across the tip's long axis, where the dots are
+      const across = Math.abs(-Math.sin(-a) * x + Math.cos(-a) * y);
+      const along = Math.abs(Math.cos(-a) * x + Math.sin(-a) * y);
+      const squash = Math.abs(across - (34 * o.roundness) / 100) < 9 && along < 12;
+      const moveTo = (each) => {
+        const [px, py] = local(each);
+        if (squash) {
+          const off = Math.abs(-Math.sin(-a) * px + Math.cos(-a) * py);
+          o.roundness = clamp(Math.round((off / 34) * 100), 1, 100);
+        } else {
+          let angle = Math.round((Math.atan2(-py, px) * 180) / Math.PI);
+          if (each.shiftKey) angle = Math.round(angle / 15) * 15;
+          o.angle = angle > 180 ? angle - 360 : angle;
+        }
+        savePrefs();
+        refresh();
+        renderFields();
+      };
+      moveTo(event);
+      big.addEventListener("pointermove", moveTo);
+      big.addEventListener("pointerup", () => big.removeEventListener("pointermove", moveTo), { once: true });
+    });
+    // Double-click puts it back round and upright
+    big.addEventListener("dblclick", () => {
+      o.angle = 0;
+      o.roundness = 100;
+      savePrefs();
+      refresh();
+      renderFields();
+    });
+    document.body.append(root);
+    const rect = anchor.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    root.style.left = `${clamp(rect.left + rect.width / 2 - box.width / 2, 8, innerWidth - box.width - 8)}px`;
+    root.style.top = `${Math.max(8, rect.top - box.height - 12)}px`;
+    anchor.setAttribute("aria-expanded", "true");
+    tipPopover = { root, o, anchor };
+  };
   const modes = (o) => {
     const group = make("div", { class: "segments", role: "radiogroup", "aria-label": "Selection mode" });
     for (const [value, label, body] of SELECT_MODES) {
@@ -2540,7 +2818,7 @@ const PAGE_JS: &str = r##"(() => {
     return group;
   };
   // A number, typed, or dragged by its label as Figma's fields are
-  const field = (o, name) => {
+  const field = (o, name, onChange = null) => {
     const spec = FIELDS[name];
     const wrap = make("div", { class: "field" });
     const label = wrap.appendChild(make("span", { class: "label", text: spec.label }));
@@ -2553,6 +2831,7 @@ const PAGE_JS: &str = r##"(() => {
       o[name] = clamp(Math.round(value), spec.min, spec.max);
       input.value = o[name];
       savePrefs();
+      onChange?.();
     };
     input.addEventListener("change", () => set(parseFloat(input.value)));
     input.addEventListener("keydown", (event) => {
@@ -2565,7 +2844,7 @@ const PAGE_JS: &str = r##"(() => {
         set((parseFloat(input.value) || 0) + (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 10 : 1));
       }
     });
-    input.addEventListener("blur", () => setTimeout(renderBar));
+    if (!onChange) input.addEventListener("blur", () => setTimeout(renderBar));
     label.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       label.setPointerCapture(event.pointerId);
@@ -2697,6 +2976,26 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-bar] .toggle[aria-checked="true"] { color: var(--color-text); }
     [${ATTR}-bar] .toggle[aria-checked="true"] .box { background: var(--color-bg-brand) url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="m4 8.5 2.5 2.5L12 5" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`)}") center / 12px no-repeat; box-shadow: none; }
 
+    [${ATTR}-bar] .tip { width: 28px; height: 28px; margin: 0 -4px 0 -2px; }
+    [${ATTR}-bar] .tip:hover, [${ATTR}-bar] .tip[aria-expanded="true"] { background: var(--color-bg-hover); }
+    [${ATTR}-bar] .dial .track, [${ATTR}-tip] .dial .track { fill: none; stroke: var(--color-icon-secondary); stroke-width: 6; }
+    [${ATTR}-bar] .dial .outline { fill: var(--color-icon); stroke: none; opacity: 0.9; }
+    [${ATTR}-bar] .dial .axis, [${ATTR}-bar] .dial .arrow, [${ATTR}-bar] .dial .dot { display: none; }
+    [${ATTR}-tip] { position: fixed; z-index: 100; width: 216px; padding: 0 0 12px; border-radius: 13px; background: var(--color-bg, #2c2c2c); color: var(--color-text); font: 450 11px/16px Inter, sans-serif; box-shadow: 0 2px 5px rgb(0 0 0 / 0.35), inset 0 0 0.5px rgb(255 255 255 / 0.35), 0 10px 16px rgb(0 0 0 / 0.35), inset 0 0.5px 0 rgb(255 255 255 / 0.08); }
+    [${ATTR}-tip] .title { display: flex; align-items: center; height: 40px; padding: 0 16px; font-weight: 550; border-bottom: 1px solid var(--color-border); margin-bottom: 12px; }
+    [${ATTR}-tip] .dial { display: block; margin: 0 auto; cursor: grab; touch-action: none; }
+    [${ATTR}-tip] .dial:active { cursor: grabbing; }
+    [${ATTR}-tip] .dial .track { stroke-width: 1; stroke: var(--color-border); fill: var(--color-bg-secondary); }
+    [${ATTR}-tip] .dial .outline { fill: none; stroke: var(--color-icon); stroke-width: 1.25; }
+    [${ATTR}-tip] .dial .axis { stroke: var(--color-icon-secondary); stroke-width: 1; stroke-dasharray: 2 2; }
+    [${ATTR}-tip] .dial .arrow { fill: var(--color-icon); }
+    [${ATTR}-tip] .dial .dot { fill: var(--color-bg); stroke: var(--color-icon); stroke-width: 1.25; cursor: ns-resize; }
+    [${ATTR}-tip] .fields { display: flex; gap: 8px; margin: 12px 12px 0; }
+    [${ATTR}-tip] .field { flex: 1; display: flex; align-items: center; height: 24px; padding: 0 6px 0 0; border-radius: 5px; background: var(--color-bg-secondary); }
+    [${ATTR}-tip] .field:focus-within { box-shadow: inset 0 0 0 1px var(--color-border-selected, #0d99ff); }
+    [${ATTR}-tip] .field .label { padding: 0 6px 0 8px; color: var(--color-text-secondary); cursor: ew-resize; user-select: none; }
+    [${ATTR}-tip] .field input { all: unset; flex: 1; min-width: 0; text-align: right; color: var(--color-text); font-variant-numeric: tabular-nums; }
+    [${ATTR}-tip] .field .unit { margin-left: 1px; color: var(--color-text-secondary); }
     [${ATTR}-picker] { position: fixed; z-index: 100; width: 240px; padding: 0 0 12px; border-radius: 13px; background: var(--color-bg, #2c2c2c); color: var(--color-text); font: 450 11px/16px Inter, sans-serif; box-shadow: 0 2px 5px rgb(0 0 0 / 0.35), inset 0 0 0.5px rgb(255 255 255 / 0.35), 0 10px 16px rgb(0 0 0 / 0.35), inset 0 0.5px 0 rgb(255 255 255 / 0.08); }
     [${ATTR}-picker] .title { display: flex; align-items: center; height: 40px; padding: 0 16px; font-weight: 550; border-bottom: 1px solid var(--color-border); margin-bottom: 12px; }
     [${ATTR}-picker] .area { --hue: red; position: relative; height: 160px; margin: 0 12px; border-radius: 4px; background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue)); cursor: crosshair; touch-action: none; }
@@ -2715,7 +3014,8 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-picker] .recent button:hover { box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15), 0 0 0 1px var(--color-bg), 0 0 0 2px var(--color-icon-secondary); }
 
     [${ATTR}-overlay] { position: absolute; overflow: hidden; pointer-events: none; }
-    [${ATTR}-overlay] .live { position: absolute; inset: 0; }
+    [${ATTR}-overlay] .live { position: absolute; inset: 0; transition: opacity 0.16s ease-out; }
+    [${ATTR}-overlay] .live.fading { opacity: 0; }
     [${ATTR}-overlay] .live canvas { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; background: transparent !important; pointer-events: none !important; }
     [${ATTR}-overlay], [${ATTR}-overlay] * { pointer-events: none !important; }
     [${ATTR}-overlay] .marks { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
@@ -2725,6 +3025,7 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-overlay] .shape { fill: none; stroke: #fff; stroke-width: 1px; }
     [${ATTR}-overlay] .shape.over { stroke: #000; stroke-dasharray: 4 4; animation: ligma-raster-ants 0.5s linear infinite; }
     [${ATTR}-overlay] .line { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1.5px; }
+    [${ATTR}-overlay] .string { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1px; stroke-linecap: round; opacity: 0.8; }
     [${ATTR}-overlay] .source { fill: none; stroke: #fff; stroke-width: 1px; filter: drop-shadow(0 0 1px #000); }
     [${ATTR}-overlay] .brush { fill: none; stroke: #fff; stroke-width: 1px; }
     [${ATTR}-overlay] .brush.under { stroke: rgb(0 0 0 / 0.6); stroke-width: 3px; }
@@ -2759,7 +3060,10 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
   };
   addEventListener("storage", (event) => event.key === KEY && sync());
-  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && sync());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") sync();
+    else save(target);
+  });
   // The plugin API arrives once the file has loaded, and goes in files
   // that can't be edited
   let editable = false;
