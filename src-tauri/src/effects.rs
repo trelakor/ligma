@@ -8491,6 +8491,7 @@ const PAGE_JS: &str = r##"(() => {
       let flap = null;
       let lift = null;
       let height = null;
+      let curl = null;
       if (s.peel) {
         // Toward the point dragged, from the sticker's middle
         let [cx0, cy0, cx1, cy1] = [W, H, 0, 0];
@@ -8526,6 +8527,7 @@ const PAGE_JS: &str = r##"(() => {
           flap = new Float32Array(n * 4);
           lift = new Float32Array(n);
           height = new Float32Array(n);
+          curl = { ux, uy, fold };
           const at = (phi, x, y, proj, into) => {
             if (phi < 0 || phi > phiMax) return false;
             const along = proj - (fold + R * phi);
@@ -8654,45 +8656,61 @@ const PAGE_JS: &str = r##"(() => {
       }
       over2(body);
       if (flap) {
-        // The flap's shadow, cast by a light from the top left: each point of
-        // the sheet lands as far down and right as it's lifted. Where it
-        // still touches, by the fold, it casts nothing, so the shadow grows
-        // under the raised curl, darker and softer the higher it is, and
-        // never draws a line along the fold
+        // The flap's shadow on the sticker itself, under a light above
+        // and past the curl: it starts at the fold, where the sheet
+        // lifts, and fades back over the sticker as far as the curl
+        // stands high there, only where the curl is along the fold
         if (s.peelShadow > 0) {
-          let top = 0;
-          for (let i = 0; i < n; i++) if (lift[i] && height[i] > top) top = height[i];
-          if (top > 0) {
-            const low = new Float32Array(n);
-            const high = new Float32Array(n);
-            for (let y = 0; y < H; y++)
-              for (let x = 0; x < W; x++) {
-                const i = y * W + x;
-                if (!lift[i]) continue;
-                const t = height[i] / top;
-                const rise = clamp01((t - 0.12) / 0.48);
-                const a = lift[i] * rise * rise * (3 - 2 * rise);
-                if (a <= 0) continue;
-                const aLow = a * (1 - t);
-                const aHigh = a * t;
-                const sx = Math.floor(x + 0.55 * height[i]);
-                const sy = Math.floor(y + 0.7 * height[i]);
-                for (let j = 0; j < 2; j++)
-                  for (let m = 0; m < 2; m++) {
-                    const tx = sx + m;
-                    const ty = sy + j;
-                    if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
-                    const d = ty * W + tx;
-                    if (low[d] < aLow) low[d] = aLow;
-                    if (high[d] < aHigh) high[d] = aHigh;
-                  }
+          const { ux, uy, fold } = curl;
+          const span = W + H + 2;
+          const cover = new Float32Array(span * 2);
+          const tall = new Float32Array(span * 2);
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) {
+              const i = y * W + x;
+              if (!lift[i]) continue;
+              const v = Math.round(y * ux - x * uy) + span;
+              if (cover[v] < lift[i]) cover[v] = lift[i];
+              if (tall[v] < height[i]) tall[v] = height[i];
+            }
+          // Softened along the fold, so the curl's sides fade in
+          const side = Math.max(1, Math.round(s.peelBlur * k * 0.5));
+          const soften = (line) => {
+            let from = line;
+            for (let pass = 0; pass < 3; pass++) {
+              const to = new Float32Array(line.length);
+              let sum = 0;
+              for (let i = 0; i < side && i < line.length; i++) sum += from[i];
+              for (let i = 0; i < line.length; i++) {
+                if (i + side < line.length) sum += from[i + side];
+                if (i - side - 1 >= 0) sum -= from[i - side - 1];
+                to[i] = sum / (side * 2 + 1);
               }
-            const blur = Math.max(1, s.peelBlur * k);
-            const sharp = blurChannel(low, W, H, blur * 0.3);
-            const soft = blurChannel(high, W, H, blur * 0.7);
-            for (let i = 0; i < n; i++) low[i] = Math.min(1, sharp[i] + soft[i]);
-            under(low, 0, 0, 0, s.peelShadow / 100);
-          }
+              from = to;
+            }
+            return from;
+          };
+          const coverSoft = soften(cover);
+          const tallSoft = soften(tall);
+          const reachExtra = s.peelBlur * k;
+          const cast = new Float32Array(n);
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) {
+              const i = y * W + x;
+              const bodyA = body[i * 4 + 3];
+              if (!bodyA) continue;
+              const back = fold - (x * ux + y * uy);
+              if (back < -0.5) continue;
+              const v = Math.round(y * ux - x * uy) + span;
+              const c = coverSoft[v];
+              if (c <= 0.002) continue;
+              const length = tallSoft[v] * 1.1 + reachExtra + 1;
+              const t = Math.max(0, back) / length;
+              if (t >= 1) continue;
+              const fade = (1 - t) * (1 - t);
+              cast[i] = c * fade * bodyA;
+            }
+          under(cast, Math.max(1, s.peelBlur * k * 0.3), 0, 0, s.peelShadow / 100);
         }
         over2(flap);
       }
