@@ -2762,7 +2762,13 @@ impl Painter {
             self.drew_with(drew, unit);
             let mut uses = used;
             uses.extend(images);
-            self.vello_uses.insert(unit, (px, uses));
+            // What the zoom nearest the view's drew it with is what it
+            // needs: tiles far out leave things out, and would have what's
+            // in view let go and had again over and over
+            let off = |at: f32| (at.max(1e-6) / self.zoom.0.max(1e-6)).log2().abs();
+            if self.vello_uses.get(&unit).is_none_or(|(was, _)| off(px) <= off(*was) + 0.01) {
+                self.vello_uses.insert(unit, (px, uses));
+            }
         }
         let stats = format!(
             "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} atlas={}k {}",
