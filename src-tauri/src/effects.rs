@@ -7845,7 +7845,7 @@ const PAGE_JS: &str = r##"(() => {
     id: "sticker",
     // Where the peel lifts from, dragged anywhere round the sticker
     handles: [{ x: "peelX", y: "peelY", when: (s) => s.peel }],
-    thumb: { sample: "badge", backdrop: "slate", fit: true, settings: { border: 7, gloss: 18, peel: true, peelSize: 34, shadowBlur: 10, shadowY: 5 } },
+    thumb: { sample: "badge", backdrop: "slate", fit: true, settings: { border: 7, gloss: 18, peel: true, peelSize: 24, shadowBlur: 10, shadowY: 5 } },
     name: "Sticker",
     about: "Make it a die-cut, kiss-cut or holographic sticker",
     icon: STICKER_ICON,
@@ -7855,7 +7855,7 @@ const PAGE_JS: &str = r##"(() => {
       border: 16, borderColor: "#ffffff", borderOpacity: 100, keyline: 0, keylineColor: "#101828", keylineOpacity: 100,
       cornerRadius: 40, points: 14, depth: 20, rotate: 0, square: true,
       foil: 0, pattern: "pastel", coverage: "behind", pastel: 35, crinkle: 60, foilAngle: 35, foilScale: 45, foilHue: 0, sparkle: 12,
-      peel: false, peelX: 88, peelY: 10, peelSize: 38, curl: 88, backColor: "#ffffff", backOpacity: 100, peelShadow: 38, peelBlur: 14,
+      peel: false, peelX: 88, peelY: 10, peelSize: 20, curl: 88, backColor: "#ffffff", backOpacity: 100, peelShadow: 38,
       texture: "none", textureAmount: 32, grain: 70, bevel: 0, gloss: 14,
       shadow: true, shadowBlur: 18, shadowY: 8, shadowColor: "#000000", shadowOpacity: 30,
       editable: true,
@@ -7871,7 +7871,7 @@ const PAGE_JS: &str = r##"(() => {
     limits: {
       smoothing: [0, 12], bgTolerance: [4, 120], border: [0, 400], borderOpacity: [0, 100], keyline: [0, 400], keylineOpacity: [0, 100], cornerRadius: [0, 400], points: [3, 32], depth: [0, 80], rotate: [-360, 360],
       foil: [0, 100], pastel: [0, 100], crinkle: [0, 100], foilAngle: [0, 180], foilScale: [8, 150], foilHue: [0, 360], sparkle: [0, 100],
-      peelSize: [5, 60], curl: [0, 100], backOpacity: [0, 100], peelShadow: [0, 100], peelBlur: [0, 200],
+      peelSize: [5, 60], curl: [0, 100], backOpacity: [0, 100], peelShadow: [0, 100],
       textureAmount: [0, 100], grain: [16, 800], bevel: [0, 100], gloss: [0, 100], shadowBlur: [0, 200], shadowY: [-200, 200], shadowOpacity: [0, 100],
     },
     summary: (s) => [`${(STICKER_SHAPES.find(([key]) => key === s.shape) ?? ["", ""])[1]} · ${s.border}pt`, s.foil > 0 ? "foil" : "", s.peel ? "peeled" : ""].filter(Boolean).join(" · "),
@@ -7946,8 +7946,7 @@ const PAGE_JS: &str = r##"(() => {
               ]),
               ui.color("backColor", "Back color"),
               ui.sliders([
-                ["peelShadow", "Shadow", "%", () => ({ min: 0, max: 100 })],
-                ["peelBlur", "Shadow blur", "pt", (u) => ({ min: 0, max: upTo(u, 0.1, 60), shape: "curve" })],
+                ["peelShadow", "Shading", "%", () => ({ min: 0, max: 100 })],
               ]),
             ),
             () => s.peel,
@@ -8012,8 +8011,7 @@ const PAGE_JS: &str = r##"(() => {
         if (radial) growth += s.shape === "polygon" ? (long / 2 + border) * (1 / Math.cos(Math.PI / Math.max(3, Math.round(s.points))) - 1) : (long / 2 + border) * (s.depth / 100);
       }
       const shadowReach = s.shadow ? (s.shadowBlur + Math.abs(s.shadowY)) * k : 0;
-      const peelReach = s.peel && s.peelShadow > 0 ? s.peelBlur * 1.5 * k : 0;
-      const pad = Math.ceil(border + s.keyline * k + shadowReach + peelReach + growth + 4 * k);
+      const pad = Math.ceil(border + s.keyline * k + shadowReach + growth + 4 * k);
       const W = W0 + pad * 2;
       const H = H0 + pad * 2;
       const n = W * H;
@@ -8483,15 +8481,10 @@ const PAGE_JS: &str = r##"(() => {
             }
         }
       }
-      // A peeled corner: the sheet past a fold wraps round a cylinder lying
-      // on it. A point a way along the sheet sits at an angle round it, so
-      // the lift foreshortens by itself; where two points land on one spot
-      // the one further round is higher and shows, and past upright that's
-      // the sheet's back
+      // A peeled corner: the sheet past a fold turns round a crease and
+      // lies back, its back up, under the sticker, showing through a notch
+      // whose corners curl up into lobes
       let flap = null;
-      let lift = null;
-      let height = null;
-      let curl = null;
       if (s.peel) {
         // Toward the point dragged, from the sticker's middle
         let [cx0, cy0, cx1, cy1] = [W, H, 0, 0];
@@ -8505,9 +8498,13 @@ const PAGE_JS: &str = r##"(() => {
             }
         const tx = pad + (s.peelX / 100) * W0 - (cx0 + cx1 + 1) / 2;
         const ty = pad + (s.peelY / 100) * H0 - (cy0 + cy1 + 1) / 2;
-        const reach = Math.hypot(tx, ty) || 1;
-        const ux = reach > 0.5 ? tx / reach : 0.7071;
-        const uy = reach > 0.5 ? ty / reach : -0.7071;
+        // Measured against the sticker's size, so a corner folds at 45°
+        // and a side straight across, as the sheet would
+        const nx = tx / Math.max(1, cx1 - cx0 + 1);
+        const ny = ty / Math.max(1, cy1 - cy0 + 1);
+        const reach = Math.hypot(nx, ny);
+        const ux = reach > 0.002 ? nx / reach : 0.7071;
+        const uy = reach > 0.002 ? ny / reach : -0.7071;
         let [most, least] = [-Infinity, Infinity];
         for (let y = 0; y < H; y++)
           for (let x = 0; x < W; x++) {
@@ -8517,101 +8514,178 @@ const PAGE_JS: &str = r##"(() => {
             if (proj < least) least = proj;
           }
         if (most > least) {
+          // The sheet past the fold wraps round a crease, then lies flat
+          // back over the sticker, its back up, as a corner folded over
+          // does: Curl tightens the crease, from a loose roll to a flat fold
           const T = Math.max(2, (most - least) * (s.peelSize / 100));
           const fold = most - T;
-          const phiMax = lerp(0.4, 1.05, s.curl / 100) * Math.PI;
-          const R = T / phiMax;
+          const r = Math.max(0.75, T * lerp(0.3, 0.03, s.curl / 100));
+          const arc = Math.PI * r;
           const back = hexRgb(s.backColor);
           const backA = s.backOpacity / 100;
           const light = [-0.35, -0.45, 0.82];
+          // The light's way across the sheet, for the back's gradient
+          const lx = 0.6;
+          const ly = 0.8;
           flap = new Float32Array(n * 4);
-          lift = new Float32Array(n);
-          height = new Float32Array(n);
-          curl = { ux, uy, fold };
-          const at = (phi, x, y, proj, into) => {
-            if (phi < 0 || phi > phiMax) return false;
-            const along = proj - (fold + R * phi);
-            const sx = x - along * ux;
-            const sy = y - along * uy;
+          const pick = (sx, sy, c) => {
             const x0 = Math.floor(sx);
             const y0 = Math.floor(sy);
-            if (x0 < 0 || y0 < 0 || x0 + 1 >= W || y0 + 1 >= H) return false;
             const fx = sx - x0;
             const fy = sy - y0;
             const p00 = (y0 * W + x0) * 4;
             const p01 = p00 + W * 4;
-            const pick = (c) => {
-              const top = body[p00 + c] + (body[p00 + 4 + c] - body[p00 + c]) * fx;
-              return top + (body[p01 + c] + (body[p01 + 4 + c] - body[p01 + c]) * fx - top) * fy;
-            };
-            const a = pick(3);
+            const top = body[p00 + c] + (body[p00 + 4 + c] - body[p00 + c]) * fx;
+            return top + (body[p01 + c] + (body[p01 + 4 + c] - body[p01 + c]) * fx - top) * fy;
+          };
+          // Where on the sheet a point `along` it from the fold lands, and
+          // how it looks: its face shaded as the crease turns it, or its
+          // back, lit across by the light
+          const at = (along, phi, x, y, proj, into) => {
+            if (along < 0 || along > T) return false;
+            const shift = proj - (fold + along);
+            const sx = x - shift * ux;
+            const sy = y - shift * uy;
+            if (sx < 0 || sy < 0 || sx + 1 >= W || sy + 1 >= H) return false;
+            const a = pick(sx, sy, 3);
             if (a <= 0.004) return false;
-            // The cylinder's normal, flipped once the back faces up
             const showsBack = phi > Math.PI / 2;
             const sign = showsBack ? 1 : -1;
             const nu = Math.sin(phi) * sign;
             const nz = -Math.cos(phi) * sign;
             const lambert = Math.max(0, ux * nu * light[0] + uy * nu * light[1] + nz * light[2]);
-            const shade = 0.62 + 0.46 * lambert;
-            // The cut edge catches the light where it stands upright
+            let shade = 0.62 + 0.46 * lambert;
             const spec = lambert ** 22 * 0.5 + gauss((phi - Math.PI / 2) * 3.4) * 0.2;
             if (showsBack) {
+              // Duller toward the tip and away from the light
+              const lie = Math.max(0, along - arc) / Math.max(1, T - arc);
+              const across = ((x - lightX) * lx + (y - lightY) * ly) / Math.max(1, T);
+              shade *= 1 - 0.07 * lie - 0.16 * clamp01(across * 0.6 + 0.5);
               into[0] = back[0] * shade + spec;
               into[1] = back[1] * shade + spec;
               into[2] = back[2] * shade + spec;
               into[3] = a * backA;
             } else {
-              into[0] = pick(0) * shade + spec;
-              into[1] = pick(1) * shade + spec;
-              into[2] = pick(2) * shade + spec;
+              into[0] = pick(sx, sy, 0) * shade + spec;
+              into[1] = pick(sx, sy, 1) * shade + spec;
+              into[2] = pick(sx, sy, 2) * shade + spec;
               into[3] = a;
             }
             return true;
           };
-          const far = new Float32Array(4);
-          const near = new Float32Array(4);
+          // Where the light falls first on the folded part
+          let lightX = 0;
+          let lightY = 0;
+          {
+            let best = Infinity;
+            for (let y = 0; y < H; y++)
+              for (let x = 0; x < W; x++) {
+                const q = x * ux + y * uy - fold;
+                if (q > 0 || q < arc - T) continue;
+                const along = arc - q;
+                const shift = x * ux + y * uy - (fold + along);
+                const sx = Math.round(x - shift * ux);
+                const sy = Math.round(y - shift * uy);
+                if (sx < 0 || sy < 0 || sx >= W || sy >= H || body[(sy * W + sx) * 4 + 3] <= 0.004) continue;
+                const d = x * lx + y * ly;
+                if (d < best) {
+                  best = d;
+                  lightX = x;
+                  lightY = y;
+                }
+              }
+          }
+          const layers = [new Float32Array(4), new Float32Array(4), new Float32Array(4)];
           for (let y = 0; y < H; y++)
             for (let x = 0; x < W; x++) {
               const proj = x * ux + y * uy;
               const q = proj - fold;
-              if (q < -0.5 || q > R) continue;
-              const seam = clamp01(q + 0.5);
-              const asinq = Math.asin(clamp01(q / R));
-              const phiFar = Math.PI - asinq;
-              const hasFar = at(phiFar, x, y, proj, far);
-              const hasNear = at(asinq, x, y, proj, near);
-              if (!hasFar && !hasNear) continue;
-              let r;
-              let g;
-              let b;
-              let a;
-              let rise;
-              if (hasFar && hasNear) {
-                a = far[3] + near[3] * (1 - far[3]);
-                const wf = far[3] / a;
-                const wn = (near[3] * (1 - far[3])) / a;
-                r = far[0] * wf + near[0] * wn;
-                g = far[1] * wf + near[1] * wn;
-                b = far[2] * wf + near[2] * wn;
-                rise = (1 - Math.cos(phiFar)) * wf + (1 - Math.cos(asinq)) * wn;
-              } else {
-                const only = hasFar ? far : near;
-                [r, g, b, a] = only;
-                rise = 1 - Math.cos(hasFar ? phiFar : asinq);
+              if (q < arc - T - 0.5 || q > r) continue;
+              // Top down: the flat part, then the crease's far and near sides
+              let count = 0;
+              if (q <= 0 && at(arc - q, Math.PI, x, y, proj, layers[count])) count++;
+              if (q >= 0) {
+                const turn = Math.asin(clamp01(q / r));
+                if (at(r * (Math.PI - turn), Math.PI - turn, x, y, proj, layers[count])) count++;
+              }
+              if (!count) continue;
+              let [cr, cg, cb, ca] = [0, 0, 0, 0];
+              for (let j = count - 1; j >= 0; j--) {
+                const [lr, lg, lb, la] = layers[j];
+                cr = cr * (1 - la) + lr * la;
+                cg = cg * (1 - la) + lg * la;
+                cb = cb * (1 - la) + lb * la;
+                ca = ca * (1 - la) + la;
               }
               const i = y * W + x;
-              flap[i * 4] = clamp01(r);
-              flap[i * 4 + 1] = clamp01(g);
-              flap[i * 4 + 2] = clamp01(b);
-              flap[i * 4 + 3] = clamp01(a * seam);
-              // How much of the sheet's here and how high, for its shadow
-              lift[i] = clamp01(a * seam);
-              height[i] = rise * R;
+              const seam = q < 0 ? 1 : clamp01(r - q + 0.5);
+              flap[i * 4] = clamp01(cr / ca);
+              flap[i * 4 + 1] = clamp01(cg / ca);
+              flap[i * 4 + 2] = clamp01(cb / ca);
+              flap[i * 4 + 3] = clamp01(ca * seam);
             }
-          // The body's cut with a hard edge just past where the flap's whole,
-          // so the two never leave a see-through seam
+          // The sticker's cut where the corner's gone and where its back
+          // lies, so the back shows through a notch under it, and the
+          // notch's corners where the fold meets the edge rounded into
+          // lobes, curling up as a lifted sheet does: each lobe shaded as a
+          // tube, dark at its rim with a bright streak just inside
+          const round = T * 0.6;
+          const mirror = fold + arc / 2;
+          const sdfAt = (x, y) => {
+            if (x < 0 || y < 0 || x >= W - 1 || y >= H - 1) return 1e6;
+            const x0 = Math.floor(x);
+            const y0 = Math.floor(y);
+            const fx = x - x0;
+            const fy = y - y0;
+            const i = y0 * W + x0;
+            const top = sdf[i] + (sdf[i + 1] - sdf[i]) * fx;
+            return top + (sdf[i + W] + (sdf[i + W + 1] - sdf[i + W]) * fx - top) * fy;
+          };
+          const width = Math.max(2, round);
+          const tint = Math.min(1.6, s.peelShadow / 38);
+          // Where the fold meets the edge, at either end: the lobes curl
+          // most there
+          let [v0, v1, e0x, e0y, e1x, e1y] = [Infinity, -Infinity, 0, 0, 0, 0];
           for (let y = 0; y < H; y++)
-            for (let x = 0; x < W; x++) if (x * ux + y * uy - fold >= 0.5) body[(y * W + x) * 4 + 3] = 0;
+            for (let x = 0; x < W; x++) {
+              if (Math.abs(x * ux + y * uy - fold) > 1 || Math.abs(sdf[y * W + x]) > 1.5) continue;
+              const v = y * ux - x * uy;
+              if (v < v0) [v0, e0x, e0y] = [v, x, y];
+              if (v > v1) [v1, e1x, e1y] = [v, x, y];
+            }
+          const reachEnd = round * 1.9;
+          for (let y = 0; y < H; y++)
+            for (let x = 0; x < W; x++) {
+              const i = y * W + x;
+              if (body[i * 4 + 3] <= 0) continue;
+              const proj = x * ux + y * uy;
+              const q = proj - fold;
+              if (q >= 0.5) {
+                body[i * 4 + 3] = 0;
+                continue;
+              }
+              // Outside the folded back, as its own shape mirrored over
+              const shift = 2 * (mirror - proj);
+              const out = -sdfAt(x + shift * ux, y + shift * uy);
+              const d = sdf[i];
+              const end = Math.min(Math.hypot(x - e0x, y - e0y), Math.hypot(x - e1x, y - e1y));
+              if (out < -(round + width * 2) && end > reachEnd) continue;
+              const e = Math.min(-round, Math.max(d, out)) + Math.hypot(Math.max(0, round + d), Math.max(0, round + out));
+              body[i * 4 + 3] *= Math.min(1, clamp01(0.5 - e) / Math.max(1e-3, clamp01(0.5 - d)));
+              if (!tint || e >= 0.5) continue;
+              // Across the lobe's rim, from its edge in
+              const t = clamp01(-e / width);
+              const fade = clamp01(1 - end / reachEnd);
+              const near = fade * fade * (3 - 2 * fade);
+              if (near <= 0 || t >= 1) continue;
+              const dark = (1 - t) ** 1.2 * 0.62;
+              const streak = gauss((t - 0.55) * 4.5) * 0.45;
+              for (let c = 0; c < 3; c++) {
+                const v = body[i * 4 + c];
+                const lit = v * (1 - dark * near * tint);
+                body[i * 4 + c] = lit + (1 - lit) * streak * near * tint;
+              }
+            }
         }
       }
       // All of it together, premultiplied: the drop shadow, the body, the
@@ -8651,69 +8725,12 @@ const PAGE_JS: &str = r##"(() => {
       };
       if (s.shadow && s.shadowOpacity > 0) {
         const mask = new Float32Array(n);
-        for (let i = 0; i < n; i++) mask[i] = body[i * 4 + 3];
+        for (let i = 0; i < n; i++) mask[i] = flap ? Math.max(body[i * 4 + 3], flap[i * 4 + 3]) : body[i * 4 + 3];
         under(mask, s.shadowBlur * k, 0, s.shadowY * k, s.shadowOpacity / 100);
       }
+      // The folded back under the sticker, showing through its notch
+      if (flap) over2(flap);
       over2(body);
-      if (flap) {
-        // The flap's shadow on the sticker itself, under a light above
-        // and past the curl: it starts at the fold, where the sheet
-        // lifts, and fades back over the sticker as far as the curl
-        // stands high there, only where the curl is along the fold
-        if (s.peelShadow > 0) {
-          const { ux, uy, fold } = curl;
-          const span = W + H + 2;
-          const cover = new Float32Array(span * 2);
-          const tall = new Float32Array(span * 2);
-          for (let y = 0; y < H; y++)
-            for (let x = 0; x < W; x++) {
-              const i = y * W + x;
-              if (!lift[i]) continue;
-              const v = Math.round(y * ux - x * uy) + span;
-              if (cover[v] < lift[i]) cover[v] = lift[i];
-              if (tall[v] < height[i]) tall[v] = height[i];
-            }
-          // Softened along the fold, so the curl's sides fade in
-          const side = Math.max(1, Math.round(s.peelBlur * k * 0.5));
-          const soften = (line) => {
-            let from = line;
-            for (let pass = 0; pass < 3; pass++) {
-              const to = new Float32Array(line.length);
-              let sum = 0;
-              for (let i = 0; i < side && i < line.length; i++) sum += from[i];
-              for (let i = 0; i < line.length; i++) {
-                if (i + side < line.length) sum += from[i + side];
-                if (i - side - 1 >= 0) sum -= from[i - side - 1];
-                to[i] = sum / (side * 2 + 1);
-              }
-              from = to;
-            }
-            return from;
-          };
-          const coverSoft = soften(cover);
-          const tallSoft = soften(tall);
-          const reachExtra = s.peelBlur * k;
-          const cast = new Float32Array(n);
-          for (let y = 0; y < H; y++)
-            for (let x = 0; x < W; x++) {
-              const i = y * W + x;
-              const bodyA = body[i * 4 + 3];
-              if (!bodyA) continue;
-              const back = fold - (x * ux + y * uy);
-              if (back < -0.5) continue;
-              const v = Math.round(y * ux - x * uy) + span;
-              const c = coverSoft[v];
-              if (c <= 0.002) continue;
-              const length = tallSoft[v] * 1.1 + reachExtra + 1;
-              const t = Math.max(0, back) / length;
-              if (t >= 1) continue;
-              const fade = (1 - t) * (1 - t);
-              cast[i] = c * fade * bodyA;
-            }
-          under(cast, Math.max(1, s.peelBlur * k * 0.3), 0, 0, s.peelShadow / 100);
-        }
-        over2(flap);
-      }
       return { image: toImage(out, W, H), x: -pad, y: -pad };
     },
   });
