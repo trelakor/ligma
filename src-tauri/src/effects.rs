@@ -11698,7 +11698,7 @@ const PAGE_JS: &str = r##"(() => {
               const [tx, ty] = tangent(x0, y0, g, t);
               const l = Math.hypot(tx, ty) || 1;
               const base = own ? colorAt(current, px - (ty / l) * 1.5, py + (tx / l) * 1.5, group.items) : single;
-              samples.push({ c: -px * ay + py * ax, rgb: tone(base, shadeOf(tx, ty)) });
+              samples.push({ c: -px * ay + py * ax, a: px * ax + py * ay, rgb: tone(base, shadeOf(tx, ty)) });
             }
             const [c0, c1] = [samples[0].c, samples[12].c];
             const [mx, my] = cubicAt(x0, y0, g, 0.5);
@@ -11713,13 +11713,70 @@ const PAGE_JS: &str = r##"(() => {
               if (!same(mix, samples[i].rgb, 0.008)) stops.push(samples[i]);
             }
             stops.push(samples[12]);
-            sides.push({ layer, order: sides.length, side, from: [x0, y0], to: [x0 - ay * (c1 - c0), y0 + ax * (c1 - c0)], flat, rgb: samples[6].rgb, stops: stops.map((one) => ({ position: Math.min(1, Math.max(0, (one.c - c0) / (c1 - c0))), color: { ...one.rgb, a: 1 } })), key: mx * ax + my * ay });
+            // Where it is across the depth, and how far along the depth its
+            // edge is there, for which of two sides is in front
+            const across = samples[0].c <= samples[12].c ? samples : [...samples].reverse();
+            sides.push({ across, low: across[0].c, high: across[12].c, layer, order: sides.length, side, from: [x0, y0], to: [x0 - ay * (c1 - c0), y0 + ax * (c1 - c0)], flat, rgb: samples[6].rgb, stops: stops.map((one) => ({ position: Math.min(1, Math.max(0, (one.c - c0) / (c1 - c0))), color: { ...one.rgb, a: 1 } })), key: mx * ax + my * ay });
           }
       }
       });
       // Each layer's sides over those of the layers under it, as the
-      // layers are stacked, and back to front within each
-      sides.sort((a, b) => a.layer - b.layer || a.key - b.key || a.order - b.order);
+      // layers are stacked, and back to front within each: of two sides
+      // that cover the same line along the depth, the one whose edge is
+      // farther along it is in front. Sides of one outline never cross, so
+      // that never contradicts itself, and they're drawn in an order that
+      // keeps every such pair, the nearest last
+      const along = (one, c) => {
+        const list = one.across;
+        let i = 0;
+        while (i < list.length - 2 && list[i + 1].c < c) i++;
+        const [p, q] = [list[i], list[i + 1]];
+        const t = q.c > p.c ? Math.min(1, Math.max(0, (c - p.c) / (q.c - p.c))) : 0;
+        return p.a + (q.a - p.a) * t;
+      };
+      const ordered = [];
+      const layers = [...new Set(sides.map((one) => one.layer))].sort((a, b) => a - b);
+      for (const layer of layers) {
+        const mine = sides.filter((one) => one.layer === layer);
+        const behind = mine.map(() => []);
+        const waiting = mine.map(() => 0);
+        for (let i = 0; i < mine.length; i++)
+          for (let j = i + 1; j < mine.length; j++) {
+            const [A, B] = [mine[i], mine[j]];
+            const low = Math.max(A.low, B.low);
+            const high = Math.min(A.high, B.high);
+            if (high - low <= 1e-3) continue;
+            const c = (low + high) / 2;
+            const gap = along(A, c) - along(B, c);
+            // Only sides close enough along the depth to overlap
+            if (Math.abs(gap) >= s.depth || Math.abs(gap) < 1e-6) continue;
+            if (gap < 0) {
+              behind[i].push(j);
+              waiting[j]++;
+            } else {
+              behind[j].push(i);
+              waiting[i]++;
+            }
+          }
+        // Those with none behind them first, the farthest back first
+        const ready = mine.map((one, i) => i).filter((i) => !waiting[i]);
+        const done = new Set();
+        while (ready.length || done.size < mine.length) {
+          if (!ready.length) {
+            // Never expected, as sides of an outline don't cross; whatever's
+            // left goes by where its middle is
+            const rest = mine.map((one, i) => i).filter((i) => !done.has(i)).sort((a, b) => mine[a].key - mine[b].key);
+            ready.push(rest[0]);
+          }
+          ready.sort((a, b) => mine[b].key - mine[a].key);
+          const i = ready.pop();
+          if (done.has(i)) continue;
+          done.add(i);
+          ordered.push(mine[i]);
+          for (const j of behind[i]) if (--waiting[j] === 0 && !done.has(j)) ready.push(j);
+        }
+      }
+      sides.splice(0, sides.length, ...ordered);
       let run = null;
       for (const one of sides) {
         if (one.flat) {
