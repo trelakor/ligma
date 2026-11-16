@@ -78,9 +78,9 @@ const PAGE_JS: &str = r##"(() => {
     event.stopImmediatePropagation();
   };
   const typing = (event) => event.target?.closest?.(':is(input, textarea):not([readonly]), [contenteditable]:not([contenteditable="false"])');
-  // Figma's canvas, the largest
+  // Figma's canvas, the largest, not one of Raster mode's own
   const mainCanvas = () =>
-    [...document.querySelectorAll("canvas")].reduce(
+    [...document.querySelectorAll("canvas")].filter((canvas) => !canvas.closest(`[${ATTR}-overlay]`)).reduce(
       (best, canvas) => (canvas.offsetWidth * canvas.offsetHeight > (best ? best.offsetWidth * best.offsetHeight : 0) ? canvas : best),
       null,
     );
@@ -753,8 +753,10 @@ const PAGE_JS: &str = r##"(() => {
         showing = null;
       } else {
         const { t, canvas } = showing;
+        // Laid out a pixel square and scaled up to the layer, so it's never
+        // the largest canvas on the page, which features take for Figma's
         const m = v.toScreen.multiply(gridOf(t));
-        canvas.style.transform = m.toString();
+        canvas.style.transform = m.scale(t.W, t.H).toString();
         // Pixels show as squares once they're large, as Figma shows them
         canvas.style.imageRendering = Math.hypot(m.a, m.b) >= 2 ? "pixelated" : "auto";
         let opacity = 1;
@@ -1746,7 +1748,7 @@ const PAGE_JS: &str = r##"(() => {
     polygon = null;
   };
 
-  const onCanvas = (event) => event.target === mainCanvas();
+  const onCanvas = (event) => event.target === mainCanvas() || !!event.target?.closest?.(`[${ATTR}-overlay]`);
   const POINTER = ["pointerdown", "pointermove", "pointerup", "pointercancel", "mousedown", "mousemove", "mouseup", "click", "dblclick", "contextmenu"];
   for (const type of POINTER) {
     addEventListener(
@@ -2714,7 +2716,8 @@ const PAGE_JS: &str = r##"(() => {
 
     [${ATTR}-overlay] { position: absolute; overflow: hidden; pointer-events: none; }
     [${ATTR}-overlay] .live { position: absolute; inset: 0; }
-    [${ATTR}-overlay] .live canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+    [${ATTR}-overlay] .live canvas { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; background: transparent !important; pointer-events: none !important; }
+    [${ATTR}-overlay], [${ATTR}-overlay] * { pointer-events: none !important; }
     [${ATTR}-overlay] .marks { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
     [${ATTR}-overlay] .ants path { fill: none; stroke-width: 1px; vector-effect: non-scaling-stroke; shape-rendering: crispEdges; }
     [${ATTR}-overlay] .ants .under { stroke: #fff; }
