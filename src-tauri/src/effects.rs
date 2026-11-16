@@ -2459,14 +2459,25 @@ const PAGE_JS: &str = r##"(() => {
       } catch {
         return;
       }
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
+  };
+
+  // `draw` on the next frame, once however many times it's asked for
+  const drawSoon = (current, draw) => {
+    if (current.drawing) return;
+    current.drawing = true;
+    requestAnimationFrame(() => {
+      current.drawing = false;
+      draw();
+    });
   };
 
   const placeDrawn = async (current, drawn, k) => {
     const { figma, result, bounds } = current;
     if (!drawn || result.removed) return;
-    const blob = await new Promise((resolve) => drawn.canvas.toBlob(resolve, "image/png"));
-    const bytes = new Uint8Array(await blob.arrayBuffer());
+    // Encoded in a worker already, where it was made, or here
+    const bytes = drawn.bytes ? new Uint8Array(drawn.bytes) : new Uint8Array(await (await new Promise((resolve) => drawn.canvas.toBlob(resolve, "image/png"))).arrayBuffer());
     if (result.removed) return;
     const fill = { type: "IMAGE", imageHash: figma.createImage(bytes).hash, scaleMode: "FILL" };
     // One with nothing to see never reads back as loaded, and showing it
@@ -2627,7 +2638,10 @@ const PAGE_JS: &str = r##"(() => {
       try {
         do {
           current.again = false;
+          const started = performance.now();
           await placeDrawn(current, renderAt(current, "live"), current.levels.live.k);
+          // A few a second at most while it's dragged, each a new image
+          if (current.again) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 250 - (performance.now() - started))));
         } while (current.again && !current.busy && disintegrating === current);
       } catch {}
       current.placing = false;
@@ -2927,7 +2941,8 @@ const PAGE_JS: &str = r##"(() => {
       tumble.show();
       wind.hidden = s.mode !== "snap";
       editable.checked = s.editable;
-      drawDisintegratePreview(current);
+      // Once a frame at most, however fast the settings change
+      drawSoon(current, () => disintegrating === current && drawDisintegratePreview(current));
     };
     show();
     current.root = root;
@@ -3329,7 +3344,8 @@ const PAGE_JS: &str = r##"(() => {
       ditherMode.show();
       for (const row of rows) row.show();
       editable.checked = s.editable;
-      drawBitcrushPreview(current);
+      // Once a frame at most, however fast the settings change
+      drawSoon(current, () => crushing === current && drawBitcrushPreview(current));
     };
     show();
     current.root = root;
@@ -3482,7 +3498,10 @@ const PAGE_JS: &str = r##"(() => {
       try {
         do {
           current.again = false;
+          const started = performance.now();
           await placeDrawn(current, await crushAt(current, "live"), current.levels.live.k);
+          // A few a second at most while it's dragged, each a new image
+          if (current.again) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 250 - (performance.now() - started))));
         } while (current.again && !current.busy && crushing === current);
       } catch {}
       current.placing = false;
@@ -3789,13 +3808,16 @@ const PAGE_JS: &str = r##"(() => {
       thumb: () => pictureThumb(spec),
     });
 
-  // The open effect's worker, once it's said it's loaded, or null where
-  // one can't start, and the page runs it instead
-  const filterWorker = (current) =>
-    (current.worker ??= new Promise((resolve) => {
+  // The open effect's workers, once each has said it's loaded, or null
+  // where one can't start, and the page runs it instead: one for the
+  // panel's preview, one for the file and one for painting, so a small
+  // picture never waits behind a large one. A picture for the file's
+  // encoded as a PNG there too, rather than in the page
+  const filterWorker = (current, slot = "live") =>
+    ((current.workers ??= {})[slot] ??= new Promise((resolve) => {
       let ready = false;
       let worker = null;
-      current.jobs = new Map();
+      current.jobs ??= new Map();
       const fail = () => {
         if (ready) return;
         ready = true;
@@ -3803,7 +3825,7 @@ const PAGE_JS: &str = r##"(() => {
         resolve(null);
       };
       try {
-        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `onmessage = ({ data: { id, image, s, k } }) => {`, `  try {`, `    const made = process(image, s, k);`, `    postMessage({ id, out: made.image, x: made.x, y: made.y }, [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
+        const source = [...Object.entries(PIXEL_HELPERS).map(([name, fn]) => `const ${name} = ${fn};`), `const process = ${current.spec.process};`, `onmessage = async ({ data: { id, image, s, k, png } }) => {`, `  try {`, `    const made = process(image, s, k);`, `    let bytes = null;`, `    if (png && typeof OffscreenCanvas !== "undefined") {`, `      try {`, `        const canvas = new OffscreenCanvas(made.image.width, made.image.height);`, `        canvas.getContext("2d").putImageData(made.image, 0, 0);`, `        bytes = await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer();`, `      } catch {}`, `    }`, `    postMessage({ id, out: made.image, x: made.x, y: made.y, bytes }, bytes ? [made.image.data.buffer, bytes] : [made.image.data.buffer]);`, `  } catch (error) {`, `    postMessage({ id, error: String(error) });`, `  }`, `};`, `postMessage({ ready: true });`].join("\n");
         const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
         worker = new Worker(url);
         worker.onmessage = ({ data }) => {
@@ -3815,7 +3837,7 @@ const PAGE_JS: &str = r##"(() => {
           const job = current.jobs.get(data.id);
           current.jobs.delete(data.id);
           if (data.error) job?.reject(new Error(data.error));
-          else job?.resolve({ image: data.out, x: data.x, y: data.y });
+          else job?.resolve({ image: data.out, x: data.x, y: data.y, bytes: data.bytes });
         };
         worker.onerror = (event) => {
           event.preventDefault();
@@ -3829,7 +3851,7 @@ const PAGE_JS: &str = r##"(() => {
       }
     }));
   const stopFilterWorker = (current) => {
-    current.worker?.then((worker) => worker?.terminate());
+    for (const worker of Object.values(current.workers ?? {})) worker.then((worker) => worker?.terminate());
     for (const job of current.jobs?.values() ?? []) job.reject(new Error("Worker stopped"));
     current.jobs?.clear();
   };
@@ -3837,25 +3859,27 @@ const PAGE_JS: &str = r##"(() => {
   // What a pixel function made, as `drawBroken` gives its own: a canvas,
   // made smaller if it's past what an image can be in Figma, and where it
   // sits from the picture's top left, in the picture's pixels
-  const drawnFrom = ({ image, x, y }) => {
+  const drawnFrom = ({ image, x, y, bytes = null }) => {
     let canvas = Object.assign(document.createElement("canvas"), { width: image.width, height: image.height });
     canvas.getContext("2d").putImageData(image, 0, 0);
     const side = Math.max(image.width, image.height);
     if (side > MAX_SIDE) {
+      bytes = null;
       const ratio = MAX_SIDE / side;
       const small = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round(image.width * ratio)), height: Math.max(1, Math.round(image.height * ratio)) });
       small.getContext("2d").drawImage(canvas, 0, 0, small.width, small.height);
       canvas = small;
     }
-    return { canvas, x, y, width: image.width, height: image.height };
+    return { canvas, x, y, width: image.width, height: image.height, bytes };
   };
 
-  // The picture for `level` made apart from the page
-  const filterAt = async (current, level) => {
+  // The picture for `level` made apart from the page, by the worker for
+  // `slot`, encoded as a PNG with `png`
+  const filterAt = async (current, level, png = false, slot = "live") => {
     const entry = current.levels[level];
     const image = crushedPixels(entry);
     const s = structuredClone(current.settings);
-    const worker = await filterWorker(current);
+    const worker = await filterWorker(current, slot);
     if (current.closed) return null;
     let made = null;
     if (worker) {
@@ -3863,7 +3887,7 @@ const PAGE_JS: &str = r##"(() => {
         made = await new Promise((resolve, reject) => {
           const id = ++filterJob;
           current.jobs.set(id, { resolve, reject });
-          worker.postMessage({ id, image, s, k: entry.k });
+          worker.postMessage({ id, image, s, k: entry.k, png });
         });
       } catch {}
     }
@@ -3926,7 +3950,7 @@ const PAGE_JS: &str = r##"(() => {
     canvas.addEventListener("pointermove", (event) => {
       if (canvas.hasPointerCapture(event.pointerId)) return;
       const at = hit(event);
-      canvas.style.cursor = at ? (at.what === "move" ? "move" : "ew-resize") : (current.cursor ?? "");
+      canvas.style.cursor = at ? (at.what === "move" ? "move" : "ew-resize") : "";
     });
     canvas.addEventListener("pointerdown", (event) => {
       const at = hit(event);
@@ -3950,16 +3974,35 @@ const PAGE_JS: &str = r##"(() => {
     });
   };
 
-  const drawFilterPreview = (current) => {
-    const canvas = current.preview;
-    if (!canvas || !current.levels.preview) return;
-    const entry = current.levels.preview;
-    let drawn;
-    try {
-      drawn = drawnFrom(current.spec.process(crushedPixels(entry), current.settings, entry.k));
-    } catch {
+  // The panel's preview, made by its worker apart from the page, so input
+  // never waits on it: while one's being made, changes wait, then only
+  // the newest settings are made
+  const renderPreview = async (current) => {
+    if (!current.levels.preview) return;
+    if (current.previewing) {
+      current.previewAgain = true;
       return;
     }
+    current.previewing = true;
+    try {
+      do {
+        current.previewAgain = false;
+        const drawn = await filterAt(current, "preview", false, "preview");
+        if (drawn && filtering === current) {
+          current.previewDrawn = drawn;
+          drawFilterPreview(current);
+        }
+      } while (current.previewAgain && filtering === current);
+    } catch {}
+    current.previewing = false;
+  };
+  // The last preview made, and the handles where the settings have them
+  // now, so they follow the pointer at once
+  const drawFilterPreview = (current) => {
+    const canvas = current.preview;
+    const drawn = current.previewDrawn;
+    if (!canvas || !drawn) return;
+    const entry = current.levels.preview;
     const ratio = devicePixelRatio || 1;
     const box = canvas.getBoundingClientRect();
     canvas.width = Math.round(box.width * ratio);
@@ -4046,18 +4089,14 @@ const PAGE_JS: &str = r##"(() => {
         return node;
       },
       onShow: (fn) => shows.push(fn),
-      // The preview, where the picture is on it, and its pointer when
-      // it's not over a handle
+      // Where the picture is on the preview, and the open effect, for
+      // what an effect does by hand, as Liquify's painting
       view: () => current.view,
-      cursor: (value) => {
-        current.cursor = value;
-        if (!ui.canvas.style.cursor || ui.canvas.style.cursor.startsWith("url") || ui.canvas.style.cursor === "crosshair") ui.canvas.style.cursor = value;
-      },
+      current,
     };
     const canvas = element("canvas", { className: "preview" });
     canvas.setAttribute("aria-hidden", "true");
     current.preview = canvas;
-    ui.canvas = canvas;
     dragHandles(current, canvas, change);
     // A preset or Reset keeps what's drawn by hand, as Liquify's strokes,
     // and only Reset clears it
@@ -4097,10 +4136,234 @@ const PAGE_JS: &str = r##"(() => {
         go.textContent = on ? "Making…" : label;
       },
       close: () => closes.forEach((fn) => fn()),
+      show,
     };
-    current.keys = panelKeys(root, () => filtering === current, () => closeFilter(current, false), () => !current.busy && applyFilter(current));
+    current.keys = panelKeys(root, () => filtering === current && !current.painting, () => closeFilter(current, false), () => !current.busy && applyFilter(current));
     addEventListener("keydown", current.keys, true);
     go.focus();
+  };
+
+  // ---------- Painting on the canvas ----------
+
+  // On <html> while painting, to hide Figma's own bars under the brushes'
+  const PAINTING = "data-ligma-painting";
+  // The brushes' bar, as the image bars of Select object, Heal and Upscale
+  // look: above Figma's toolbar, its tools as icons, its numbers as fields
+  // whose labels drag to change them, and Done
+  const BRUSHES = "data-ligma-brushes";
+  style.textContent += `
+    html[${PAINTING}] [data-secondary-toolbelt] { display: none !important; }
+    [${BRUSHES}] { position: fixed; z-index: 10; transform: translateX(-50%); }
+    [${BRUSHES}] > div {
+      display: flex; align-items: center; gap: 4px; height: 40px; box-sizing: border-box; padding: 8px; border-radius: 13px;
+      background: var(--color-bg-toolbar, var(--color-bg, #2c2c2c)); color: var(--color-text, #fff);
+      box-shadow: var(--elevation-200-canvas, 0 3px 8px rgb(0 0 0 / 0.35)); font: 500 11px/16px Inter, system-ui, sans-serif; white-space: nowrap;
+    }
+    [${BRUSHES}] .divider { align-self: stretch; width: 1px; margin: 0 4px; background: var(--color-border, #444); }
+    [${BRUSHES}] .group { display: flex; gap: 2px; }
+    [${BRUSHES}] .icon { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--color-icon, #fff); }
+    [${BRUSHES}] .icon:hover { background: var(--color-bg-hover, #383838); }
+    [${BRUSHES}] .icon[aria-checked="true"] { background: var(--color-bg-selected, #4a4a4a); }
+    [${BRUSHES}] .icon svg [stroke] { stroke: currentColor; }
+    [${BRUSHES}] button:disabled { opacity: 0.4; pointer-events: none; }
+    [${BRUSHES}] .field { display: flex; align-items: center; gap: 6px; padding-left: 4px; color: var(--color-text-secondary, #b3b3b3); }
+    [${BRUSHES}] .field span { cursor: ew-resize; user-select: none; }
+    [${BRUSHES}] .field input {
+      width: 40px; height: 24px; box-sizing: border-box; padding: 0 6px; border: 1px solid transparent; border-radius: 5px; outline: none;
+      background: var(--color-bg-secondary, #383838); color: var(--color-text, #fff); font: inherit; font-variant-numeric: tabular-nums;
+    }
+    [${BRUSHES}] .field input:focus { border-color: var(--color-border-selected, #0d99ff); }
+    [${BRUSHES}] .done { background: var(--color-bg-brand, #0d99ff); color: var(--color-icon-onbrand, #fff); }
+    [${BRUSHES}] .done:hover { background: var(--color-bg-brand-hover, var(--color-bg-brand, #0d99ff)); }
+  `;
+  // Figma takes keys on the window as they go down to their target, so
+  // keys typed in the bar's fields stop here, before it sees them, as the
+  // image bars' do
+  for (const type of ["keydown", "keypress", "keyup"]) {
+    addEventListener(
+      type,
+      (event) => {
+        if (event.target instanceof Element && event.target.matches("input") && event.target.closest(`[${BRUSHES}]`)) event.stopImmediatePropagation();
+      },
+      true,
+    );
+  }
+
+  // Liquify's brushes paint on the layer in the file. A sheet over Figma's
+  // canvas takes the pointer, and the layer's drawn on it as it's painted,
+  // made by the effect's own worker for painting, the newest strokes only,
+  // with the layer in the file hidden under it. The file's updated as a
+  // stroke ends. A bar above Figma's toolbar holds the brush's settings.
+  // The wheel and Space reach Figma, to zoom and pan between strokes, [
+  // and ] resize the brush, and Escape or Done stops painting
+  const figmaCanvas = () => [...document.querySelectorAll("canvas")].find((canvas) => !canvas.closest(`[${ROOT}]`) && canvas.width > 100)?.getBoundingClientRect();
+  const stopPainting = (current, refresh = true) => {
+    const paint = current.painting;
+    if (!paint) return;
+    current.painting = null;
+    current.stroking = false;
+    cancelAnimationFrame(paint.frame);
+    clearTimeout(paint.pass);
+    clearInterval(paint.hold);
+    removeEventListener("keydown", paint.keys, true);
+    removeEventListener("keyup", paint.keyup, true);
+    paint.sheet.remove();
+    paint.bar.remove();
+    document.documentElement.removeAttribute(PAINTING);
+    current.panel?.show();
+    if (refresh && filtering === current) refreshFilter(current);
+  };
+  // `stroke(point)` starts a stroke where the pointer went down and gives
+  // back what to call with each point after; `spacing` is how far apart,
+  // on screen, those are, `size` how wide the brush is there and `resize`
+  // makes it larger or smaller, for [ and ]
+  const startPainting = (current, bar, { size, stroke, spacing, resize }) => {
+    if (current.painting || !current.ready) return;
+    const { figma } = current;
+    const sheet = element("div");
+    sheet.setAttribute(ROOT, "paint");
+    Object.assign(sheet.style, { position: "fixed", zIndex: 7, overflow: "hidden", touchAction: "none", cursor: "crosshair" });
+    // The brush's outline, following the pointer
+    const ring = element("div");
+    Object.assign(ring.style, { position: "absolute", zIndex: 1, borderRadius: "50%", border: "1px solid #fff", boxShadow: "0 0 0 1px rgb(0 0 0 / 0.45), inset 0 0 0 1px rgb(0 0 0 / 0.45)", pointerEvents: "none", display: "none" });
+    sheet.append(ring);
+    const moveRing = (event) => {
+      if (!paint.area) return;
+      const d = size(paint.view.zoom);
+      Object.assign(ring.style, { display: "block", width: `${d}px`, height: `${d}px`, left: `${event.clientX - paint.area.left - d / 2}px`, top: `${event.clientY - paint.area.top - d / 2}px` });
+    };
+    sheet.addEventListener("pointermove", moveRing);
+    sheet.addEventListener("pointerleave", () => (ring.style.display = "none"));
+    document.body.append(sheet, bar);
+    document.documentElement.setAttribute(PAINTING, "");
+    const paint = { sheet, bar, drawn: null, busy: false, again: false, key: "" };
+    current.painting = paint;
+    current.panel?.show();
+    // Kept over the canvas, the layer where Figma shows it, as it pans
+    // and zooms
+    const place = () => {
+      if (current.painting !== paint) return;
+      const area = figmaCanvas();
+      let view = null;
+      try {
+        view = { ...figma.viewport.bounds, zoom: figma.viewport.zoom };
+      } catch {}
+      if (area && view) {
+        const drawn = paint.drawn;
+        // Above Figma's toolbar, where its own bars go
+        const belt = document.querySelector('[data-testid="design-toolbelt-wrapper"]')?.getBoundingClientRect();
+        const key = [area.left, area.top, area.width, area.height, view.x, view.y, view.zoom, drawn?.canvas.width, belt?.top, belt?.left, belt?.width, innerHeight].join();
+        if (key !== paint.key) {
+          paint.key = key;
+          paint.area = area;
+          paint.view = view;
+          Object.assign(sheet.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px` });
+          Object.assign(bar.style, belt?.width ? { left: `${belt.left + belt.width / 2}px`, bottom: `${innerHeight - belt.top + 8}px` } : { left: `${area.left + area.width / 2}px`, bottom: "72px" });
+          if (drawn) {
+            const k = current.levels.live.k;
+            Object.assign(drawn.canvas.style, {
+              left: `${(current.bounds.x + drawn.x / k - view.x) * view.zoom}px`,
+              top: `${(current.bounds.y + drawn.y / k - view.y) * view.zoom}px`,
+              width: `${(drawn.width / k) * view.zoom}px`,
+              height: `${(drawn.height / k) * view.zoom}px`,
+            });
+          }
+        }
+      }
+      paint.frame = requestAnimationFrame(place);
+    };
+    paint.render = async () => {
+      if (paint.busy) {
+        paint.again = true;
+        return;
+      }
+      paint.busy = true;
+      try {
+        do {
+          paint.again = false;
+          const drawn = await filterAt(current, "live", false, "paint");
+          if (drawn && current.painting === paint) {
+            Object.assign(drawn.canvas.style, { position: "absolute", pointerEvents: "none" });
+            paint.drawn?.canvas.remove();
+            sheet.append(drawn.canvas);
+            paint.drawn = drawn;
+            paint.key = "";
+          }
+        } while (paint.again && current.painting === paint);
+      } catch {}
+      paint.busy = false;
+    };
+    // Where the pointer is on the layer, across its picture, 0 to 1
+    const toPicture = (event) => {
+      const { area, view } = paint;
+      const x = view.x + (event.clientX - area.left) / view.zoom;
+      const y = view.y + (event.clientY - area.top) / view.zoom;
+      return [Math.round(((x - current.bounds.x) / current.bounds.width) * 10000) / 10000, Math.round(((y - current.bounds.y) / current.bounds.height) * 10000) / 10000];
+    };
+    sheet.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || !paint.view) return;
+      event.preventDefault();
+      sheet.setPointerCapture(event.pointerId);
+      current.stroking = true;
+      // The sheet shows the layer while it's painted
+      try {
+        if (!current.result.removed) current.result.visible = false;
+      } catch {}
+      const add = stroke(toPicture(event), event);
+      paint.render();
+      let last = [event.clientX, event.clientY];
+      const move = (event) => {
+        if (Math.hypot(event.clientX - last[0], event.clientY - last[1]) < spacing(paint.view.zoom)) return;
+        last = [event.clientX, event.clientY];
+        add.next(toPicture(event));
+        paint.render();
+      };
+      if (add.held) {
+        paint.hold = setInterval(() => {
+          add.held();
+          paint.render();
+        }, 60);
+      }
+      sheet.addEventListener("pointermove", move);
+      sheet.addEventListener(
+        "lostpointercapture",
+        () => {
+          sheet.removeEventListener("pointermove", move);
+          clearInterval(paint.hold);
+          current.stroking = false;
+          refreshFilter(current);
+        },
+        { once: true },
+      );
+    });
+    // The wheel and Space go to Figma for a moment, to zoom and pan
+    const pass = (ms) => {
+      sheet.style.pointerEvents = "none";
+      clearTimeout(paint.pass);
+      if (ms) paint.pass = setTimeout(() => (sheet.style.pointerEvents = ""), ms);
+    };
+    sheet.addEventListener("wheel", () => pass(500), { passive: true });
+    paint.keys = (event) => {
+      if (current.painting !== paint) return;
+      const typing = event.target.closest?.("input[type=text], input[type=search], textarea, [contenteditable]");
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        stopPainting(current);
+      } else if ((event.key === "[" || event.key === "]") && !typing) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        resize(event.key === "]" ? 1 : -1);
+        paint.key = "";
+      } else if (event.code === "Space" && !typing && !current.stroking) pass(0);
+    };
+    paint.keyup = (event) => {
+      if (event.code === "Space") sheet.style.pointerEvents = "";
+    };
+    addEventListener("keydown", paint.keys, true);
+    addEventListener("keyup", paint.keyup, true);
+    place();
+    paint.render();
   };
 
   const openFilter = async (spec, figma, edit = false, run = null) => {
@@ -4205,32 +4468,31 @@ const PAGE_JS: &str = r##"(() => {
     refreshFilter(current);
   };
 
-  // The panel's preview at once, and the file's a moment after
+  // The panel's preview as soon as its worker's free, and the file's a
+  // moment after, at most a few times a second while something's dragged,
+  // as each is a new image in the file, and not mid-stroke while painting
   const refreshFilter = (current) => {
-    if (!current.drawing) {
-      current.drawing = true;
-      requestAnimationFrame(() => {
-        current.drawing = false;
-        if (filtering === current) drawFilterPreview(current);
-      });
+    renderPreview(current);
+    if (!current.ready || current.stroking) return;
+    if (current.placing) {
+      current.again = true;
+      return;
     }
-    if (!current.ready) return;
-    clearTimeout(current.timer);
+    if (current.timer) return;
     current.timer = setTimeout(async () => {
-      if (filtering !== current || current.busy) return;
-      if (current.placing) {
-        current.again = true;
-        return;
-      }
+      current.timer = null;
+      if (filtering !== current || current.busy || current.stroking) return;
       current.placing = true;
       try {
         do {
           current.again = false;
-          await placeDrawn(current, await filterAt(current, "live"), current.levels.live.k);
-        } while (current.again && !current.busy && filtering === current);
+          const started = performance.now();
+          await placeDrawn(current, await filterAt(current, "live", true), current.levels.live.k);
+          if (current.again) await new Promise((resolve) => setTimeout(resolve, Math.max(0, 250 - (performance.now() - started))));
+        } while (current.again && !current.busy && filtering === current && !current.stroking);
       } catch {}
       current.placing = false;
-    }, 40);
+    }, 80);
   };
 
   // Closed as Cancel closes it if it fails, rather than left making
@@ -4246,6 +4508,7 @@ const PAGE_JS: &str = r##"(() => {
 
   const finishFilter = async (current) => {
     const { figma, source, settings, spec } = current;
+    stopPainting(current, false);
     clearTimeout(current.timer);
     current.busy = true;
     current.panel?.busy(true);
@@ -4254,7 +4517,7 @@ const PAGE_JS: &str = r##"(() => {
       if (filtering !== current) return;
     }
     current.again = false;
-    await placeDrawn(current, await filterAt(current, "full"), current.levels.full.k);
+    await placeDrawn(current, await filterAt(current, "full", true), current.levels.full.k);
     if (filtering !== current) return;
     let result = current.group ?? current.wrap;
     if (settings.editable) {
@@ -4286,6 +4549,7 @@ const PAGE_JS: &str = r##"(() => {
 
   const closeFilter = (current, applied) => {
     if (filtering !== current) return;
+    stopPainting(current, false);
     filtering = null;
     clearTimeout(current.timer);
     current.closed = true;
@@ -4981,8 +5245,8 @@ const PAGE_JS: &str = r##"(() => {
   // center as on a pond, Zigzag twists those rings back and forth, all
   // within a radius, and Wave moves it across waves running one way. A
   // photo keeps its bounds, its edges repeated; a cutout grows to fit.
-  // Over any of them, brushes painted on the preview push, twirl, pinch,
-  // bloat or restore it, as Liquify's do, each stroke kept in the settings
+  // Over any of them, brushes painted on the layer on the canvas push,
+  // twirl, pinch, bloat or restore it, as Liquify's do, each stroke kept in the settings
   // as points across the picture, so it's the same at any size
   const LIQUIFY_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12 12.5a1 1 0 1 1 1-1.5 2.5 2.5 0 0 1-2.5 3.5A3.5 3.5 0 0 1 7 11a5 5 0 0 1 5-5 6 6 0 0 1 6 6 7 7 0 0 1-7 7"/></svg>`;
   const LIQUIFY_MODES = [
@@ -4993,81 +5257,122 @@ const PAGE_JS: &str = r##"(() => {
     ["zigzag", "Zigzag"],
     ["wave", "Wave"],
   ];
+  const brushIcon = (paths) => `<svg width="24" height="24" fill="none" viewBox="0 0 24 24">${paths}</svg>`;
   const BRUSH_TOOLS = [
-    ["push", "Push", "Drag to push it along"],
-    ["twirl", "Twirl", "Hold or drag to twirl it clockwise, with Alt the other way"],
-    ["pinch", "Pinch", "Hold or drag to pull it in, with Alt to puff it out"],
-    ["bloat", "Bloat", "Hold or drag to puff it out, with Alt to pull it in"],
-    ["restore", "Restore", "Brush it back as it was"],
+    ["push", "Push: drag to push it along", brushIcon(`<circle ${STROKE} cx="7.5" cy="12" r="2.5"/><path ${STROKE} d="M11 12h7.5m-3-3 3 3-3 3"/>`)],
+    ["twirl", "Twirl: hold or drag to turn it, with Alt the other way", brushIcon(`<path ${STROKE} d="M12 12.5a1 1 0 1 1 1-1.5 2.5 2.5 0 0 1-2.5 3.5A3.5 3.5 0 0 1 7 11a5 5 0 0 1 5-5 6 6 0 0 1 6 6 7 7 0 0 1-7 7"/>`)],
+    ["pinch", "Pinch: hold or drag to pull it in, with Alt to puff it out", brushIcon(`<path ${STROKE} d="m5.5 5.5 4 4m0-3v3h-3m12-4-4 4m0-3v3h3m-12 9 4-4m0 3v-3h-3m12 4-4-4m0 3v-3h3"/>`)],
+    ["bloat", "Bloat: hold or drag to puff it out, with Alt to pull it in", brushIcon(`<path ${STROKE} d="m9.5 9.5-4-4m0 3v-3h3m6 4 4-4m0 3v-3h-3m-6 9-4 4m0-3v3h3m6-4 4 4m0-3v3h-3"/>`)],
+    ["restore", "Restore: brush it back as it was", brushIcon(`<path ${STROKE} d="M6.5 9.5a6 6 0 1 1 0 5"/><path ${STROKE} d="M6.5 5.5v4h4"/>`)],
   ];
-  // The brush's outline, as the pointer over the preview
-  const brushCursor = (diameter) => {
-    const d = Math.max(8, Math.min(126, Math.round(diameter)));
-    const c = d / 2 + 1;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${d + 2}" height="${d + 2}"><circle cx="${c}" cy="${c}" r="${d / 2}" fill="none" stroke="black" stroke-opacity="0.5" stroke-width="2"/><circle cx="${c}" cy="${c}" r="${d / 2}" fill="none" stroke="white"/></svg>`;
-    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${c} ${c}, crosshair`;
+  const UNDO_ICON = brushIcon(`<path ${STROKE} d="M8.5 9.5h6.5a3.5 3.5 0 0 1 0 7h-5"/><path ${STROKE} d="m11 6.5-3 3 3 3"/>`);
+  const CLEAR_ICON = brushIcon(`<path ${STROKE} d="M6.5 8.5h11M10 8.5V6.5h4v2m-6 0 .7 9.1a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9l.7-9.1"/>`);
+  const DONE_ICON = brushIcon(`<path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="m7.5 12.5 3 3 6-7"/>`);
+  // The brushes' bar: the tools, Size and Strength, Undo and Clear, Done
+  const brushBar = (ui, done) => {
+    const { s } = ui;
+    const root = element("div");
+    root.setAttribute(BRUSHES, "");
+    root.setAttribute("data-fullscreen-prevent-event-capture", "true");
+    const strip = root.appendChild(element("div"));
+    strip.setAttribute("role", "toolbar");
+    strip.setAttribute("aria-label", "Liquify brushes");
+    const tip = (node, text) => Object.assign(node.dataset, { tooltip: text, tooltipType: "text", tooltipShowAbove: "true" });
+    const tools = strip.appendChild(element("div", { className: "group" }));
+    tools.setAttribute("role", "radiogroup");
+    tools.setAttribute("aria-label", "Brush");
+    for (const [value, name, svg] of BRUSH_TOOLS) {
+      const button = tools.appendChild(element("button", { type: "button", className: "icon", innerHTML: svg }));
+      button.setAttribute("role", "radio");
+      button.setAttribute("aria-label", name);
+      tip(button, name);
+      button.addEventListener("click", () => ui.change("brushTool", value));
+      ui.onShow(() => button.setAttribute("aria-checked", String(s.brushTool === value)));
+    }
+    strip.append(element("span", { className: "divider" }));
+    // Fields, whose labels drag to change them, as Figma's do
+    for (const [key, label, text, min, max, per] of [
+      ["brushSize", "Size", "Brush size, in points, [ and ] to change it", 1, 4000, 1],
+      ["brushStrength", "Strength", "Brush strength, in percent", 1, 100, 2],
+    ]) {
+      const field = strip.appendChild(element("label", { className: "field" }));
+      tip(field, text);
+      const name = field.appendChild(element("span", { textContent: label }));
+      const input = field.appendChild(element("input", { type: "text", inputMode: "numeric", spellcheck: false }));
+      input.setAttribute("aria-label", text);
+      const set = (value) => Number.isFinite(value) && ui.change(key, Math.min(max, Math.max(min, Math.round(value))));
+      input.addEventListener("change", () => set(Number(input.value)));
+      input.addEventListener("keydown", (event) => event.key === "Enter" && input.blur());
+      name.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        name.setPointerCapture(event.pointerId);
+        const [from, start] = [event.clientX, s[key]];
+        const move = (event) => set(start + (event.clientX - from) / per);
+        name.addEventListener("pointermove", move);
+        name.addEventListener("lostpointercapture", () => name.removeEventListener("pointermove", move), { once: true });
+      });
+      ui.onShow(() => document.activeElement !== input && (input.value = String(s[key])));
+    }
+    strip.append(element("span", { className: "divider" }));
+    for (const [svg, text, act] of [
+      [UNDO_ICON, "Undo stroke", () => ui.change("strokes", s.strokes.slice(0, -1))],
+      [CLEAR_ICON, "Clear strokes", () => ui.change("strokes", [])],
+    ]) {
+      const button = strip.appendChild(element("button", { type: "button", className: "icon", innerHTML: svg }));
+      button.setAttribute("aria-label", text);
+      tip(button, text);
+      button.addEventListener("click", act);
+      ui.onShow(() => (button.disabled = !s.strokes.length));
+    }
+    strip.append(element("span", { className: "divider" }));
+    const finish = strip.appendChild(element("button", { type: "button", className: "icon done", innerHTML: DONE_ICON }));
+    finish.setAttribute("aria-label", "Done painting");
+    tip(finish, "Done painting");
+    finish.addEventListener("click", done);
+    return root;
   };
-  // The brushes' controls, and painting on the preview: each stroke a
-  // tool, size and strength and the points it went through, a little apart.
-  // Twirl, Pinch, Bloat and Restore keep working while held still
+  // The brushes: Paint on canvas in the panel, which brings up the bar
+  // above Figma's toolbar with the tool, size and strength. Each stroke's
+  // a tool, size and strength and the points it went through, a little
+  // apart; Twirl, Pinch, Bloat and Restore keep working while held still
   const liquifyBrushes = (ui) => {
-    const { s, canvas } = ui;
-    const toPicture = (event) => {
-      const v = ui.view();
-      const box = canvas.getBoundingClientRect();
-      return [Math.round(((event.clientX - box.left - v.ox) / (v.width * v.fit)) * 10000) / 10000, Math.round(((event.clientY - box.top - v.oy) / (v.height * v.fit)) * 10000) / 10000];
-    };
-    canvas.addEventListener("pointerdown", (event) => {
-      const v = ui.view();
-      if (event.button !== 0 || !v) return;
-      event.preventDefault();
-      canvas.setPointerCapture(event.pointerId);
-      let tool = s.brushTool;
-      if (event.altKey) tool = { twirl: "untwirl", pinch: "bloat", bloat: "pinch" }[tool] ?? tool;
-      const stroke = { tool, size: s.brushSize, strength: s.brushStrength, points: [toPicture(event)] };
-      ui.change("strokes", [...s.strokes, stroke]);
-      const add = (point) => {
-        stroke.points.push(point);
-        ui.change("strokes", s.strokes);
-      };
-      let last = [event.clientX, event.clientY];
-      const move = (event) => {
-        const spacing = Math.max(2, s.brushSize * v.k * v.fit * 0.15);
-        if (Math.hypot(event.clientX - last[0], event.clientY - last[1]) < spacing) return;
-        last = [event.clientX, event.clientY];
-        add(toPicture(event));
-      };
-      const hold = tool === "push" ? null : setInterval(() => add(stroke.points.at(-1)), 60);
-      canvas.addEventListener("pointermove", move);
-      canvas.addEventListener(
-        "lostpointercapture",
-        () => {
-          canvas.removeEventListener("pointermove", move);
-          clearInterval(hold);
+    const { s, current } = ui;
+    const bar = brushBar(ui, () => stopPainting(current));
+    const paint = element("button", { type: "button", className: "button primary" });
+    paint.addEventListener("click", () => {
+      if (current.painting) return stopPainting(current);
+      startPainting(current, bar, {
+        size: (zoom) => s.brushSize * zoom,
+        spacing: (zoom) => Math.max(2, s.brushSize * zoom * 0.15),
+        resize: (step) => ui.change("brushSize", Math.max(1, Math.round(s.brushSize * (step > 0 ? 1.2 : 1 / 1.2)))),
+        stroke: (point, event) => {
+          let tool = s.brushTool;
+          if (event.altKey) tool = { twirl: "untwirl", pinch: "bloat", bloat: "pinch" }[tool] ?? tool;
+          const stroke = { tool, size: s.brushSize, strength: s.brushStrength, points: [point] };
+          ui.change("strokes", [...s.strokes, stroke]);
+          const next = (point) => {
+            stroke.points.push(point);
+            ui.change("strokes", s.strokes);
+          };
+          return { next, held: tool === "push" ? null : () => next(stroke.points.at(-1)) };
         },
-        { once: true },
-      );
+      });
     });
     const undo = element("button", { type: "button", className: "chip", textContent: "Undo stroke" });
     undo.addEventListener("click", () => ui.change("strokes", s.strokes.slice(0, -1)));
     const clear = element("button", { type: "button", className: "chip", textContent: "Clear" });
     clear.addEventListener("click", () => ui.change("strokes", []));
-    const buttons = element("div", { className: "row" }, element("span", { className: "label", textContent: "Paint on the preview" }), element("div", { className: "chips" }, undo, clear));
-    buttons.style.gridTemplateColumns = "1fr auto";
+    const count = element("span", { className: "label" });
     ui.onShow(() => {
+      paint.textContent = current.painting ? "Stop painting" : "Paint on canvas";
+      count.textContent = s.strokes.length ? `${s.strokes.length} ${s.strokes.length === 1 ? "stroke" : "strokes"}` : "No strokes yet";
       undo.disabled = clear.disabled = !s.strokes.length;
-      const v = ui.view();
-      ui.cursor(v ? brushCursor(s.brushSize * v.k * v.fit) : "crosshair");
     });
-    return ui.section(
-      "Brushes",
-      ui.segments("brushTool", "Tool", BRUSH_TOOLS, true),
-      ui.sliders([
-        ["brushSize", "Size", "pt", (u) => ({ min: 1, max: upTo(u, 0.5, 64), shape: "curve" })],
-        ["brushStrength", "Strength", "%", () => ({ min: 1, max: 100 })],
-      ]),
-      buttons,
-    );
+    const strokes = element("div", { className: "row" }, count, element("div", { className: "chips" }, undo, clear));
+    strokes.style.gridTemplateColumns = "1fr auto";
+    paint.style.width = "100%";
+    return ui.section("Brushes", paint, strokes);
   };
   pictureEffect({
     id: "liquify",
