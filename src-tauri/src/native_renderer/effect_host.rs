@@ -44,6 +44,8 @@ struct Gpu {
     errors: Arc<Mutex<Vec<String>>>,
     scopes: Vec<usize>,
     logs: Vec<String>,
+    /// Dev tools: time in each op this run
+    ops: HashMap<String, (u32, std::time::Duration)>,
 }
 
 type Fail = String;
@@ -117,6 +119,21 @@ impl Gpu {
     }
 
     fn call(&mut self, op: &str, args: Json, bytes: Option<&[u8]>) -> Result<Json, Fail> {
+        let at = std::time::Instant::now();
+        let result = self.call_inner(op, args, bytes);
+        if super::render::tracing() {
+            if !self.ops.contains_key(op) {
+                self.ops.insert(op.to_string(), Default::default());
+            }
+            if let Some((count, took)) = self.ops.get_mut(op) {
+                *count += 1;
+                *took += at.elapsed();
+            }
+        }
+        result
+    }
+
+    fn call_inner(&mut self, op: &str, args: Json, bytes: Option<&[u8]>) -> Result<Json, Fail> {
         if std::env::var_os("LIGMA_EFFECT_OPS").is_some() {
             eprintln!("{op} {}", args.to_string().chars().take(300).collect::<String>());
         }
@@ -994,7 +1011,7 @@ impl Host {
                 caught.push(error.to_string());
             }
         }));
-        let gpu = Rc::new(RefCell::new(Gpu { device, queue, objects: HashMap::new(), next: 0, owners: HashMap::new(), owner: None, errors, scopes: Vec::new(), logs: Vec::new() }));
+        let gpu = Rc::new(RefCell::new(Gpu { device, queue, objects: HashMap::new(), next: 0, owners: HashMap::new(), owner: None, errors, scopes: Vec::new(), logs: Vec::new(), ops: HashMap::new() }));
         let runtime = Runtime::new().map_err(|error| error.to_string())?;
         runtime.set_memory_limit(512 << 20);
         runtime.set_max_stack_size(4 << 20);
@@ -1047,6 +1064,7 @@ impl Host {
     /// size and premultiplied too
     pub fn run(&mut self, node: &str, chain: &[(String, String)], input: &[u8], width: u32, height: u32, scale: f32, time: f64) -> Result<Vec<u8>, String> {
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let began = std::time::Instant::now();
         let (input_id, output_id, output) = {
             let mut gpu = self.gpu.borrow_mut();
             gpu.errors.lock().unwrap().clear();
@@ -1111,6 +1129,7 @@ impl Host {
                 }
             })
         });
+        let js = began.elapsed();
         // What it ran with is kept no longer than the run: its output is
         // kept instead, and it runs again from setup if it has to
         self.context.with(|ctx| {
@@ -1132,12 +1151,17 @@ impl Host {
             Some(error) => Err(error.clone()),
             None => Ok(()),
         });
+        let read_at = std::time::Instant::now();
         let pixels = result.and_then(|_| read_back(&gpu.device, &gpu.queue, &output, width, height));
+        let read = read_at.elapsed();
         output.destroy();
         gpu.release(node);
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         let after = held(&gpu);
-        super::render::trace(|| format!("effect memory {node} {width}x{height} during={during:?} after={after:?} objects={}", gpu.objects.len()));
+        let mut ops: Vec<_> = gpu.ops.drain().collect();
+        ops.sort_by_key(|(_, (_, took))| std::cmp::Reverse(*took));
+        let ops: Vec<String> = ops.iter().take(8).map(|(op, (n, took))| format!("{op}x{n}={:.1}", took.as_secs_f64() * 1000.0)).collect();
+        super::render::trace(|| format!("effect memory {node} {width}x{height} during={during:?} after={after:?} objects={} js={:.1} read={:.1} ops={}", gpu.objects.len(), js.as_secs_f64() * 1000.0, read.as_secs_f64() * 1000.0, ops.join(" ")));
         pixels
     }
 }
