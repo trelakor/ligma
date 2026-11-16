@@ -5246,8 +5246,9 @@ const PAGE_JS: &str = r##"(() => {
   // within a radius, and Wave moves it across waves running one way. A
   // photo keeps its bounds, its edges repeated; a cutout grows to fit.
   // Over any of them, brushes painted on the layer on the canvas push,
-  // twirl, pinch, bloat or restore it, as Liquify's do, each stroke kept in the settings
-  // as points across the picture, so it's the same at any size
+  // twirl, pinch, bloat or restore it, as Liquify's do, each stroke kept
+  // in the settings as points across the picture, so it's the same at any
+  // size
   const LIQUIFY_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M12 12.5a1 1 0 1 1 1-1.5 2.5 2.5 0 0 1-2.5 3.5A3.5 3.5 0 0 1 7 11a5 5 0 0 1 5-5 6 6 0 0 1 6 6 7 7 0 0 1-7 7"/></svg>`;
   const LIQUIFY_MODES = [
     ["none", "None, brushes only"],
