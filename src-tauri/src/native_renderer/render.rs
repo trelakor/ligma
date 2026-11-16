@@ -3141,7 +3141,7 @@ impl Painter {
         let mut recorded = 0usize;
         let mut pictures: Vec<(Rect, Drawn)> = Vec::new();
         for unit in under {
-            let level = self.level(&self.units[unit], px, false);
+            let level = self.level(&self.units[unit], px, self.units[unit].custom);
             if !self.pictures.contains_key(&(self.units[unit].slot, self.units[unit].section, level, true)) {
                 recorded += 1;
             }
