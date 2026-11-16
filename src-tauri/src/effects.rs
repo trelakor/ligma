@@ -21,11 +21,10 @@
 //! Disintegrate breaks the selected layer into pieces and throws them, as
 //! After Effects' Shatter does, and Bitcrush pixelates, posterizes,
 //! dithers and glitches it. Dither, Halftone and Modulate are Dither Boy's
-//! kinds of dithers, Gradient Map maps its tones to a gradient, Chromatic
-//! Aberration and Fisheye are a lens's, and Shadow and Reflection are
-//! worked out from a cutout's own shape, with no generated pixels. Each
-//! draws an image over the original, which is kept, hidden, in a group to
-//! change them from
+//! kinds of dithers, Chromatic Aberration and Fisheye are a lens's, and
+//! Shadow and Reflection are worked out from a cutout's own shape, with no
+//! generated pixels. Each draws an image over the original, which is kept,
+//! hidden, in a group to change them from
 //!
 //! Effects stack, and a Ligma Effects section under Figma's own Effects in
 //! the right panel lists them to edit, hide, reorder or remove. See
@@ -3169,8 +3168,8 @@ const PAGE_JS: &str = r##"(() => {
   // ---------- Picture effects ----------
 
   // Effects that make a new picture from the layer's, as Bitcrush does:
-  // Dither, Halftone, Modulate, Gradient Map, Chromatic Aberration,
-  // Fisheye, Shadow and Reflection. Each gives its settings, panel and a
+  // Dither, Halftone, Modulate, Chromatic Aberration, Fisheye, Shadow
+  // and Reflection. Each gives its settings, panel and a
   // pixel function; opening, the live picture in the file, applying,
   // cancelling and stacking are shared. A pixel function takes the
   // picture as ImageData, the settings and the picture's pixels a point,
@@ -3335,11 +3334,6 @@ const PAGE_JS: &str = r##"(() => {
 
   style.textContent += `
     [${ROOT}="menu"] { max-height: calc(100vh - 16px); overflow-y: auto; }
-    [${ROOT}="panel"] .gradient { position: relative; height: 24px; margin: 4px 6px 14px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--color-bordertranslucent, #0000001a); cursor: copy; }
-    [${ROOT}="panel"] .gradient .stop { position: absolute; top: 100%; width: 12px; height: 12px; margin: -6px 0 0 -6px; padding: 0; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3); cursor: ew-resize; }
-    [${ROOT}="panel"] .gradient .stop[aria-selected="true"] { box-shadow: 0 0 0 2px var(--color-border-selected, #0d99ff); }
-    [${ROOT}="panel"] .row.stop-row { grid-template-columns: 16px 1fr 52px 24px; }
-    [${ROOT}="panel"] .row.stop-row .hex { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; text-transform: uppercase; }
   `;
 
   let filtering = null;
@@ -3539,7 +3533,6 @@ const PAGE_JS: &str = r##"(() => {
         shows.push(() => (node.hidden = !test()));
         return node;
       },
-      onShow: (fn) => shows.push(fn),
     };
     const canvas = element("canvas", { className: "preview" });
     canvas.setAttribute("aria-hidden", "true");
@@ -4289,176 +4282,6 @@ const PAGE_JS: &str = r##"(() => {
     },
   });
 
-  // ---------- Gradient Map ----------
-
-  // Each pixel's brightness looked up along a gradient, its stops set on
-  // a bar: dragged along it, a click on the bar adding one
-  const GRADIENT_MAP_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="4.5" y="6.5" width="15" height="8" rx="1.5"/><path ${STROKE} d="M8.5 6.5v8M12 6.5v8M15.5 6.5v8M6.5 17.5l1.5 2h-3zM17.5 17.5l1.5 2h-3z"/></svg>`;
-  const stop = (at, color) => ({ at, color });
-  const GRADIENTS = {
-    noir: [stop(0, "#000000"), stop(100, "#ffffff")],
-    sepia: [stop(0, "#1e130a"), stop(55, "#8a6239"), stop(100, "#f6e7c8")],
-    cyanotype: [stop(0, "#04203f"), stop(60, "#2c6ea3"), stop(100, "#e8f1f8")],
-    sunset: [stop(0, "#2a0845"), stop(40, "#c4325d"), stop(75, "#f79c42"), stop(100, "#fff1c1")],
-    infrared: [stop(0, "#000000"), stop(30, "#3d0a6b"), stop(55, "#e3215b"), stop(80, "#ffb000"), stop(100, "#ffffff")],
-    teal: [stop(0, "#0b2a33"), stop(50, "#3d8a8f"), stop(100, "#ffb27a")],
-    gold: [stop(0, "#140b00"), stop(50, "#9a6b12"), stop(100, "#fff3bd")],
-  };
-  // The gradient's color at `t`, 0 to 1, stops sorted
-  const gradientAt = (stops, t) => {
-    if (t <= stops[0][0]) return stops[0][1];
-    for (let i = 1; i < stops.length; i++) {
-      const [at, color] = stops[i];
-      if (t <= at) {
-        const [from, before] = stops[i - 1];
-        const m = at - from > 0 ? (t - from) / (at - from) : 1;
-        return [before[0] + (color[0] - before[0]) * m, before[1] + (color[1] - before[1]) * m, before[2] + (color[2] - before[2]) * m];
-      }
-    }
-    return stops[stops.length - 1][1];
-  };
-  PIXEL_HELPERS.gradientAt = gradientAt;
-  const sortedStops = (stops) => [...stops].sort((a, b) => a.at - b.at).map(({ at, color }) => [Math.min(1, Math.max(0, at / 100)), hexRgb(color)]);
-  const rgbHex = (rgb) => `#${rgb.map((v) => Math.round(clamp01(v) * 255).toString(16).padStart(2, "0")).join("")}`;
-  // The bar and a row a stop, its color, where it is and −
-  const gradientEditor = (ui) => {
-    const { s, change } = ui;
-    const bar = element("div", { className: "gradient" });
-    bar.setAttribute("aria-label", "Gradient");
-    const list = element("div", { className: "rows" });
-    let selected = 0;
-    let shape = "";
-    const changed = () => change("stops", s.stops);
-    const paintBar = () => {
-      const css = [...s.stops].sort((a, b) => a.at - b.at).map(({ at, color }) => `${color} ${at}%`);
-      bar.style.background = `linear-gradient(90deg, ${css.join(", ")})`;
-      [...bar.children].forEach((handle, i) => {
-        handle.style.left = `${s.stops[i].at}%`;
-        handle.style.background = s.stops[i].color;
-        handle.setAttribute("aria-selected", String(i === selected));
-      });
-    };
-    const build = () => {
-      shape = String(s.stops.length);
-      bar.replaceChildren();
-      list.replaceChildren();
-      s.stops.forEach((entry, i) => {
-        const handle = bar.appendChild(element("button", { type: "button", className: "stop", title: "Drag to move the stop" }));
-        handle.addEventListener("pointerdown", (event) => {
-          if (event.button !== 0) return;
-          event.preventDefault();
-          event.stopPropagation();
-          selected = i;
-          handle.setPointerCapture(event.pointerId);
-          const box = bar.getBoundingClientRect();
-          const move = (event) => {
-            entry.at = Math.round(clamp01((event.clientX - box.left) / box.width) * 100);
-            changed();
-          };
-          handle.addEventListener("pointermove", move);
-          handle.addEventListener("lostpointercapture", () => handle.removeEventListener("pointermove", move), { once: true });
-          paintBar();
-        });
-        const [swatch, picker] = ui.swatch(
-          () => entry.color,
-          (value) => {
-            entry.color = value;
-            changed();
-          },
-          "Stop color",
-        );
-        const hex = element("span", { className: "hex" });
-        const at = element("input", { type: "text", className: "value", inputMode: "decimal", spellcheck: false });
-        at.setAttribute("aria-label", "Stop position");
-        at.addEventListener("change", () => {
-          const number = parseFloat(at.value);
-          if (Number.isFinite(number)) entry.at = Math.min(100, Math.max(0, Math.round(number)));
-          changed();
-        });
-        at.addEventListener("keydown", (event) => event.key === "Enter" && at.blur());
-        const remove = element("button", { type: "button", className: "icon-button", title: "Remove stop", innerHTML: REMOVE, disabled: s.stops.length <= 2 });
-        remove.addEventListener("click", () => {
-          s.stops.splice(i, 1);
-          selected = 0;
-          changed();
-        });
-        const row = list.appendChild(element("div", { className: "row stop-row" }, swatch, picker, hex, at, remove));
-        row.show = () => {
-          hex.textContent = entry.color.replace("#", "");
-          if (document.activeElement !== at) at.value = `${entry.at}%`;
-        };
-      });
-    };
-    // A click on the bar adds a stop there, its color the gradient's
-    bar.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.target !== bar) return;
-      const box = bar.getBoundingClientRect();
-      const t = clamp01((event.clientX - box.left) / box.width);
-      s.stops.push(stop(Math.round(t * 100), rgbHex(gradientAt(sortedStops(s.stops), t))));
-      selected = s.stops.length - 1;
-      changed();
-    });
-    ui.onShow(() => {
-      if (shape !== String(s.stops.length)) build();
-      for (const row of list.children) row.show();
-      paintBar();
-    });
-    return [bar, list];
-  };
-  pictureEffect({
-    id: "gradientMap",
-    name: "Gradient Map",
-    about: "Map its tones to a gradient",
-    icon: GRADIENT_MAP_ICON,
-    verb: "Map",
-    defaults: { stops: GRADIENTS.sunset, reverse: false, steps: 0, mix: 100, editable: true },
-    presets: [
-      ["Sunset", () => ({ stops: structuredClone(GRADIENTS.sunset) })],
-      ["Noir", () => ({ stops: structuredClone(GRADIENTS.noir) })],
-      ["Sepia", () => ({ stops: structuredClone(GRADIENTS.sepia) })],
-      ["Cyanotype", () => ({ stops: structuredClone(GRADIENTS.cyanotype) })],
-      ["Infrared", () => ({ stops: structuredClone(GRADIENTS.infrared) })],
-      ["Teal and orange", () => ({ stops: structuredClone(GRADIENTS.teal) })],
-      ["Gold", () => ({ stops: structuredClone(GRADIENTS.gold) })],
-    ],
-    limits: { steps: [0, 64], mix: [0, 100] },
-    summary: (s) => `${s.stops.length} stops${s.steps > 1 ? ` · ${s.steps} steps` : ""}`,
-    panel: (ui) => [
-      ui.section("Gradient", ...gradientEditor(ui), ui.check("reverse", "Reverse", "Dark tones to the gradient's end, light to its start")),
-      ui.section(
-        "Mapping",
-        ui.sliders([
-          ["steps", "Steps", "", () => ({ min: 0, max: 16 })],
-          ["mix", "Mix", "%", () => ({ min: 0, max: 100 })],
-        ]),
-      ),
-    ],
-    process: (image, s) => {
-      const { width: W, height: H, data } = image;
-      const stops = [...s.stops].sort((a, b) => a.at - b.at).map(({ at, color }) => [Math.min(1, Math.max(0, at / 100)), hexRgb(color)]);
-      const steps = Math.round(s.steps);
-      const lut = new Float32Array(256 * 3);
-      for (let i = 0; i < 256; i++) {
-        let t = i / 255;
-        if (s.reverse) t = 1 - t;
-        if (steps > 1) t = Math.min(steps - 1, Math.floor(t * steps)) / (steps - 1);
-        lut.set(gradientAt(stops, t), i * 3);
-      }
-      const mix = s.mix / 100;
-      const out = new ImageData(W, H);
-      const o = out.data;
-      for (let at = 0; at < data.length; at += 4) {
-        if (!data[at + 3]) continue;
-        const l = Math.min(255, Math.max(0, Math.round(lumaOf(data[at], data[at + 1], data[at + 2])))) * 3;
-        o[at] = Math.round(data[at] + (lut[l] * 255 - data[at]) * mix);
-        o[at + 1] = Math.round(data[at + 1] + (lut[l + 1] * 255 - data[at + 1]) * mix);
-        o[at + 2] = Math.round(data[at + 2] + (lut[l + 2] * 255 - data[at + 2]) * mix);
-        o[at + 3] = data[at + 3];
-      }
-      return { image: out, x: 0, y: 0 };
-    },
-  });
-
   // ---------- Chromatic Aberration ----------
 
   // A lens's color fringes: red, green and blue drawn apart, out from a
@@ -4833,115 +4656,290 @@ const PAGE_JS: &str = r##"(() => {
 
   // ---------- Reflection ----------
 
-  // A floor's reflection of a cutout, worked out from its own picture:
-  // mirrored at its lowest solid row, fading and blurring as it goes from
-  // the footing, foreshortened by Squash, slanted by Skew for a floor seen
-  // at an angle, rippled for water and tinted the floor's color. The
-  // original's drawn over it
+  // A cutout's reflection on a floor or on water, worked out from its own
+  // picture: mirrored at its lowest solid row and faded and blurred as it
+  // goes from the footing. Fresnel makes it fainter toward the viewer, as
+  // a real surface's is, and Streaks smear it downward as wet ground and
+  // water do. On water, waves seen in perspective, small near the footing
+  // and larger toward the viewer, shift it up and down and side to side,
+  // their steepest faces breaking it apart and catching glints. Surface
+  // lays the floor's or water's own color under it. The original's drawn
+  // over it
   const REFLECTION_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="7.5" y="3.5" width="9" height="8" rx="1.5"/><path ${STROKE} d="M4.5 13.5h15"/><path ${STROKE} stroke-dasharray="1.5 1.5" d="M7.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg>`;
+  // Smooth noise, about 0 to 1, eased between whole points
+  const valueNoise = (x, y, seed) => {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    let fx = x - xi;
+    let fy = y - yi;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    const a = hash2(xi, yi, seed);
+    const b = hash2(xi + 1, yi, seed);
+    const c = hash2(xi, yi + 1, seed);
+    const d = hash2(xi + 1, yi + 1, seed);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  };
+  // A wave surface's height, about −0.5 to 0.5: octaves of noise, each
+  // half the size of the last and turned a little from it
+  const wavesAt = (x, y, seed) => {
+    let v = 0;
+    let amp = 1;
+    let total = 0;
+    for (let o = 0; o < 4; o++) {
+      v += (valueNoise(x, y, seed + o * 101) - 0.5) * amp;
+      total += amp;
+      [x, y] = [x * 1.9 + y * 0.35 + 17.3, y * 1.9 - x * 0.35 + 9.1];
+      amp *= 0.5;
+    }
+    return v / total;
+  };
+  Object.assign(PIXEL_HELPERS, { valueNoise, wavesAt });
   pictureEffect({
     id: "reflection",
     name: "Reflection",
-    about: "Reflect a cutout on a glossy floor",
+    about: "Reflect a cutout on a floor or water",
     icon: REFLECTION_ICON,
     verb: "Add reflection",
-    defaults: { gap: 0, length: 45, opacity: 40, blur: 4, squash: 100, skew: 0, ripple: 0, wavelength: 12, tint: "#ffffff", tintAmount: 0, only: false, editable: true },
+    defaults: { surface: "floor", length: 45, opacity: 40, fade: 100, fresnel: 0, gap: 0, blur: 4, streak: 0, squash: 100, skew: 0, waves: 3, waveSize: 20, perspective: 70, chop: 30, sparkle: 0, seed: 1, tint: "#ffffff", tintAmount: 0, surfaceOpacity: 0, only: false, editable: true },
     presets: [
       ["Glossy", () => ({})],
       ["Mirror", () => ({ length: 100, opacity: 65, blur: 0 })],
       ["Satin", () => ({ length: 35, opacity: 30, blur: 12 })],
-      ["Water", () => ({ length: 70, opacity: 45, blur: 2, ripple: 3, wavelength: 10, tint: "#1d4e89", tintAmount: 35 })],
+      ["Wet ground", () => ({ length: 90, opacity: 50, fade: 60, fresnel: 50, blur: 2, streak: 10, tint: "#2b2f36", tintAmount: 25 })],
+      ["Still water", () => ({ surface: "water", length: 100, opacity: 75, fade: 20, fresnel: 45, blur: 0, streak: 1, waves: 1, waveSize: 28, chop: 0, tint: "#1d4e89", tintAmount: 25 })],
+      ["Lake", () => ({ surface: "water", length: 100, opacity: 70, fade: 25, fresnel: 50, blur: 0.5, streak: 3, waves: 4, waveSize: 18, chop: 35, sparkle: 15, tint: "#24506b", tintAmount: 35 })],
+      ["Choppy", () => ({ surface: "water", length: 100, opacity: 80, fade: 35, fresnel: 35, blur: 1, streak: 5, waves: 9, waveSize: 14, chop: 70, sparkle: 45, tint: "#1b3f5c", tintAmount: 45 })],
       ["Angled", () => ({ squash: 60, skew: 25, length: 55 })],
     ],
-    limits: { gap: [-1000, 1000], length: [1, 400], opacity: [0, 100], blur: [0, 1000], squash: [5, 400], skew: [-400, 400], ripple: [0, 1000], wavelength: [1, 4000], tintAmount: [0, 100] },
-    summary: (s) => `${s.length}% · ${s.opacity}%`,
-    panel: (ui) => [
-      ui.section(
-        "Reflection",
-        ui.sliders([
-          ["length", "Length", "%", () => ({ min: 1, max: 100 })],
-          ["opacity", "Opacity", "%", () => ({ min: 0, max: 100 })],
-          ["blur", "Blur", "pt", (u) => ({ min: 0, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })],
-          ["gap", "Gap", "pt", (u) => ({ min: -upTo(u, 0.1, 16), max: upTo(u, 0.1, 16), digits: 1 })],
-        ]),
-      ),
-      ui.section(
-        "Floor",
-        ui.sliders([
-          ["squash", "Squash", "%", () => ({ min: 10, max: 200, middle: 100 })],
-          ["skew", "Skew", "%", () => ({ min: -100, max: 100 })],
-          ["ripple", "Ripple", "pt", (u) => ({ min: 0, max: upTo(u, 0.05, 8), shape: "curve", digits: 1 })],
-          ["wavelength", "Wavelength", "pt", (u) => ({ min: 2, max: upTo(u, 0.2, 32), shape: "curve" })],
-          ["tintAmount", "Tint", "%", () => ({ min: 0, max: 100 })],
-        ]),
-        ui.color("tint", "Tint color"),
-        ui.check("only", "Reflection only", "Only the reflection, without the layer over it"),
-      ),
-    ],
+    limits: { length: [1, 400], opacity: [0, 100], fade: [0, 100], fresnel: [0, 100], gap: [-1000, 1000], blur: [0, 1000], streak: [0, 1000], squash: [5, 400], skew: [-400, 400], waves: [0, 1000], waveSize: [1, 4000], perspective: [0, 100], chop: [0, 100], sparkle: [0, 100], tintAmount: [0, 100], surfaceOpacity: [0, 100] },
+    summary: (s) => `${s.surface === "water" ? "Water" : "Floor"} · ${s.length}% · ${s.opacity}%`,
+    panel: (ui) => {
+      const { s } = ui;
+      return [
+        ui.section(
+          "Reflection",
+          ui.segments("surface", "Surface", [
+            ["floor", "Floor", "A glossy floor, polished or worn"],
+            ["water", "Water", "Waves that shift and break the reflection"],
+          ]),
+          ui.sliders([
+            ["length", "Length", "%", () => ({ min: 1, max: 100 })],
+            ["opacity", "Opacity", "%", () => ({ min: 0, max: 100 })],
+            ["fade", "Fade", "%", () => ({ min: 0, max: 100 })],
+            ["fresnel", "Fresnel", "%", () => ({ min: 0, max: 100 })],
+          ]),
+        ),
+        ui.when(
+          ui.section(
+            "Waves",
+            ui.sliders([
+              ["waves", "Height", "pt", (u) => ({ min: 0, max: upTo(u, 0.08, 12), shape: "curve", digits: 1 })],
+              ["waveSize", "Size", "pt", (u) => ({ min: 2, max: upTo(u, 0.3, 48), shape: "curve" })],
+              ["perspective", "Perspective", "%", () => ({ min: 0, max: 100 })],
+              ["chop", "Broken", "%", () => ({ min: 0, max: 100 })],
+              ["sparkle", "Glints", "%", () => ({ min: 0, max: 100 })],
+            ]),
+            ui.shuffle("seed", "Waves"),
+          ),
+          () => s.surface === "water",
+        ),
+        ui.section(
+          "Softness",
+          ui.sliders([
+            ["blur", "Blur", "pt", (u) => ({ min: 0, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })],
+            ["streak", "Streaks", "pt", (u) => ({ min: 0, max: upTo(u, 0.15, 24), shape: "curve", digits: 1 })],
+          ]),
+        ),
+        ui.section(
+          "Placement",
+          ui.sliders([
+            ["gap", "Gap", "pt", (u) => ({ min: -upTo(u, 0.1, 16), max: upTo(u, 0.1, 16), digits: 1 })],
+            ["squash", "Squash", "%", () => ({ min: 10, max: 200, middle: 100 })],
+            ["skew", "Skew", "%", () => ({ min: -100, max: 100 })],
+          ]),
+        ),
+        ui.section(
+          "Color",
+          ui.sliders([
+            ["tintAmount", "Tint", "%", () => ({ min: 0, max: 100 })],
+            ["surfaceOpacity", "Surface", "%", () => ({ min: 0, max: 100 })],
+          ]),
+          ui.color("tint", "Color"),
+          ui.check("only", "Reflection only", "Only the reflection, without the layer over it"),
+        ),
+      ];
+    },
     process: (image, s, k) => {
       const { width: W, height: H } = image;
+      const smooth = (a, b, x) => {
+        const t = clamp01((x - a) / (b - a));
+        return t * t * (3 - 2 * t);
+      };
       const f = premultiplied(image);
       const { top, bottom } = solidRows(f, W, H);
       const tall = Math.max(1, bottom - top);
-      const gap = s.gap * k;
+      const water = s.surface === "water";
       const reach = Math.max(1, (tall * s.length) / 100);
       const squash = Math.max(0.05, s.squash / 100);
       const skew = s.skew / 100;
-      const [ripple, wave] = [s.ripple * k, Math.max(1, s.wavelength * k)];
+      const depth = reach * squash;
       const blur = s.blur * k;
-      const margin = Math.ceil(3 * blur + ripple) + 2;
-      const start = bottom + gap;
-      const x0 = Math.floor(Math.min(0, reach * skew)) - margin;
-      const x1 = Math.ceil(Math.max(W, W + reach * skew)) + margin;
+      const streak = s.streak * k;
+      const waves = water ? s.waves * k : 0;
+      const margin = Math.ceil(3 * blur + 2 * waves) + 2;
+      const start = bottom + s.gap * k;
+      // The surface's a pool around the footing, as wide as the cutout and
+      // more, as deep as the reflection goes
+      const surface = s.surfaceOpacity / 100;
+      let [left, right] = [W, 0];
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++)
+          if (f[(y * W + x) * 4 + 3] > 0.5) {
+            left = Math.min(left, x);
+            right = Math.max(right, x + 1);
+          }
+      if (left >= right) [left, right] = [0, W];
+      const cx = (left + right) / 2 + (depth / squash / 2) * skew;
+      const rx = (right - left) * 1.1 + depth * 0.6;
+      const ry = depth + 3 * streak;
+      const x0 = Math.floor(Math.min(0, reach * skew, surface > 0 ? cx - rx : 0)) - margin;
+      const x1 = Math.ceil(Math.max(W, W + reach * skew, surface > 0 ? cx + rx : 0)) + margin;
       const y0 = Math.min(0, Math.floor(start) - margin);
-      const y1 = Math.max(H, Math.ceil(start + reach * squash) + margin);
+      const y1 = Math.max(H, Math.ceil(start + depth + 3 * streak) + margin);
       const [OW, OH] = [x1 - x0, y1 - y0];
-      const q = blur > 0.5 ? Math.min(1, 1200 / Math.max(OW, OH)) : 1;
+      const q = blur > 0.5 || streak > 0.5 || water ? Math.min(1, 1200 / Math.max(OW, OH)) : 1;
       const [MW, MH] = [Math.max(1, Math.ceil(OW * q)), Math.max(1, Math.ceil(OH * q))];
       const tint = hexRgb(s.tint);
-      const [tintAmount, opacity] = [s.tintAmount / 100, s.opacity / 100];
-      const mirror = new Float32Array(MW * MH * 4);
-      const heights = new Float32Array(MW * MH);
-      const p = new Float32Array(4);
-      for (let v = 0; v < MH; v++)
-        for (let u = 0; u < MW; u++) {
-          const [X, Y] = [x0 + (u + 0.5) / q, y0 + (v + 0.5) / q];
-          const h = (Y - start) / squash;
-          if (h < 0 || h > reach) continue;
-          const t = h / reach;
-          heights[v * MW + u] = t;
-          const sway = ripple ? ripple * Math.min(1, t * 4) * Math.sin((2 * Math.PI * (Y - start)) / wave) : 0;
-          sampleAt(f, W, H, X - h * skew + sway, bottom - h, p);
-          const fade = opacity * (1 - t * t * (3 - 2 * t));
-          const at = (v * MW + u) * 4;
-          mirror[at] = (p[0] + (tint[0] * p[3] - p[0]) * tintAmount) * fade;
-          mirror[at + 1] = (p[1] + (tint[1] * p[3] - p[1]) * tintAmount) * fade;
-          mirror[at + 2] = (p[2] + (tint[2] * p[3] - p[2]) * tintAmount) * fade;
-          mirror[at + 3] = p[3] * fade;
+      const [tintAmount, opacity, fresnel] = [s.tintAmount / 100, s.opacity / 100, s.fresnel / 100];
+      const fadeFrom = 1 - s.fade / 100;
+      // Waves in perspective, the horizon `d0` rows above the footing, so
+      // they're `waveSize` at the reflection's end and smaller up toward
+      // it, wider than deep, as water seen at a low angle is
+      const size = Math.max(2, s.waveSize * k);
+      const d0 = depth * (0.08 + (1 - s.perspective / 100) * 3);
+      const [WIDE, DEEP] = [2.2, 0.45];
+      const scaleAt = (d) => (d + d0) / (depth + d0);
+      const field = water ? new Float32Array(MW * MH) : null;
+      if (water)
+        for (let v = 0; v < MH; v++) {
+          const d = Math.max(0, y0 + (v + 0.5) / q - start);
+          const scale = scaleAt(d);
+          const wv = ((depth + d0) / (size * DEEP)) * Math.log(d + d0);
+          for (let u = 0; u < MW; u++) field[v * MW + u] = wavesAt((x0 + (u + 0.5) / q - W / 2) / (size * WIDE * scale), wv, s.seed | 0);
         }
-      // Blurrier the farther from the footing, as a glossy floor's are,
-      // a channel at a time
-      let reflected = mirror;
-      if (blur > 0.5) {
-        reflected = new Float32Array(MW * MH * 4);
-        const channel = new Float32Array(MW * MH);
-        for (let c = 0; c < 4; c++) {
-          for (let i = 0; i < MW * MH; i++) channel[i] = mirror[i * 4 + c];
-          const levels = [0, 0.5, 1].map((m) => blurChannel(channel, MW, MH, blur * m * q));
-          for (let i = 0; i < MW * MH; i++) {
-            const at = heights[i] * 2;
-            const j = Math.min(1, Math.floor(at));
-            const m = at - j;
-            reflected[i * 4 + c] = levels[j][i] * (1 - m) + levels[j + 1][i] * m;
+      // The waves' slopes, and how steep they usually are, so Height is
+      // about how far they move the reflection
+      const slopes = water ? new Float32Array(MW * MH * 2) : null;
+      let [rms, rmsX] = [1, 1];
+      if (water) {
+        let [sum, sumX, n] = [0, 0, 0];
+        for (let v = 0; v < MH; v++) {
+          const d = y0 + (v + 0.5) / q - start;
+          if (d < 0) continue;
+          const scale = scaleAt(d);
+          const [up, down] = [Math.max(0, v - 1), Math.min(MH - 1, v + 1)];
+          for (let u = 0; u < MW; u++) {
+            const [left, right] = [Math.max(0, u - 1), Math.min(MW - 1, u + 1)];
+            const sx = ((field[v * MW + right] - field[v * MW + left]) * q * size * WIDE * scale) / Math.max(1, right - left);
+            const sy = ((field[down * MW + u] - field[up * MW + u]) * q * size * DEEP * scale) / Math.max(1, down - up);
+            slopes[(v * MW + u) * 2] = sx;
+            slopes[(v * MW + u) * 2 + 1] = sy;
+            sum += sy * sy;
+            sumX += sx * sx;
+            n++;
           }
         }
+        rms = Math.sqrt(sum / Math.max(1, n)) || 1;
+        rmsX = Math.sqrt(sumX / Math.max(1, n)) || 1;
       }
+      const chop = s.chop / 100;
+      const breakAt = 2.4 - 2 * chop;
+      const sparkle = s.sparkle / 100;
+      const mirror = new Float32Array(MW * MH * 4);
+      const along = new Float32Array(MW * MH);
+      const p = new Float32Array(4);
+      for (let v = 0; v < MH; v++) {
+        const d = y0 + (v + 0.5) / q - start;
+        if (d < 0 || d > depth) continue;
+        const t = d / depth;
+        // Schlick's Fresnel for water, the view going from grazing at the
+        // footing to looking down at the near end
+        const cos = 0.12 + 0.6 * t;
+        const reflectance = 0.02 + 0.98 * (1 - cos) ** 5;
+        const fade = opacity * (1 - smooth(fadeFrom, 1, t)) * (1 - fresnel + fresnel * reflectance);
+        const scale = scaleAt(d);
+        for (let u = 0; u < MW; u++) {
+          const i = v * MW + u;
+          along[i] = t;
+          const X = x0 + (u + 0.5) / q;
+          let [dx, dy, keep, glint] = [0, 0, 1, 0];
+          if (water) {
+            const [sx, sy] = [slopes[i * 2], slopes[i * 2 + 1]];
+            dx = (waves * scale * sx * 0.6) / rmsX;
+            dy = (waves * scale * sy) / rms;
+            const steep = Math.abs(sy) / rms;
+            if (chop > 0) keep = 1 - Math.min(1, chop * 2) * smooth(breakAt - 0.35, breakAt + 0.35, steep);
+            if (sparkle > 0) glint = sparkle * smooth(2.6 - sparkle, 3.2 - sparkle, -sy / rms);
+          }
+          const h = Math.abs(d + dy) / squash;
+          sampleAt(f, W, H, X - h * skew + dx, bottom - h, p);
+          if (!p[3]) continue;
+          const w = fade * keep;
+          const at = i * 4;
+          for (let c = 0; c < 3; c++) {
+            const color = p[c] + (tint[c] * p[3] - p[c]) * tintAmount;
+            mirror[at + c] = (color + (p[3] - color) * glint) * w;
+          }
+          mirror[at + 3] = p[3] * w;
+        }
+      }
+      // Blurrier and more streaked the farther from the footing, a channel
+      // at a time
+      const spread = (c, radius, vertical) => {
+        if (!vertical) return blurChannel(c, MW, MH, radius);
+        const out = Float32Array.from(c);
+        const r = Math.round(radius);
+        if (r < 1) return out;
+        const tmp = new Float32Array(c.length);
+        boxPass(out, tmp, MW, MH, r, false);
+        boxPass(tmp, out, MW, MH, r, false);
+        return out;
+      };
+      let reflected = mirror;
+      for (const [amount, vertical] of [
+        [blur, false],
+        [streak, true],
+      ]) {
+        if (!(amount > 0.5)) continue;
+        const next = new Float32Array(MW * MH * 4);
+        const channel = new Float32Array(MW * MH);
+        for (let c = 0; c < 4; c++) {
+          for (let i = 0; i < MW * MH; i++) channel[i] = reflected[i * 4 + c];
+          const levels = [0, 0.5, 1].map((m) => spread(channel, amount * m * q, vertical));
+          for (let i = 0; i < MW * MH; i++) {
+            const at = along[i] * 2;
+            const j = Math.min(1, Math.floor(at));
+            const m = at - j;
+            next[i * 4 + c] = levels[j][i] * (1 - m) + levels[j + 1][i] * m;
+          }
+        }
+        reflected = next;
+      }
+      // The surface's own color under the reflection, a rounded oblong
+      // soft toward its edge
       const out = new Float32Array(OW * OH * 4);
-      for (let y = 0; y < OH; y++)
+      for (let y = 0; y < OH; y++) {
+        const d = y + y0 + 0.5 - start;
         for (let x = 0; x < OW; x++) {
           const at = (y * OW + x) * 4;
           if (q === 1) p.set(reflected.subarray(at, at + 4));
           else sampleAt(reflected, MW, MH, (x + 0.5) * q, (y + 0.5) * q, p);
+          if (surface > 0 && d >= 0) {
+            const a = surface * (1 - smooth(0.55, 1, Math.sqrt(Math.hypot(((x + x0 + 0.5 - cx) / rx) ** 2, (d / ry) ** 2)))) * (1 - p[3]);
+            for (let c = 0; c < 3; c++) p[c] += tint[c] * a;
+            p[3] += a;
+          }
           const [sx, sy] = [x + x0, y + y0];
           if (!s.only && sx >= 0 && sy >= 0 && sx < W && sy < H) {
             const from = (sy * W + sx) * 4;
@@ -4950,6 +4948,7 @@ const PAGE_JS: &str = r##"(() => {
           }
           out.set(p, at);
         }
+      }
       return { image: toImage(out, OW, OH), x: x0, y: y0 };
     },
   });
