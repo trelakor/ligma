@@ -10748,8 +10748,6 @@ const PAGE_JS: &str = r##"(() => {
       } else for (const node of made) if (node.parent !== result) result.appendChild(node);
       source.setSharedPluginData(PLUGIN, ROLE, "source");
       result.setSharedPluginData(PLUGIN, spec.id, JSON.stringify(settings));
-      // What the original was when it was made, for following it
-      if (spec.follows) result.setSharedPluginData(PLUGIN, FOLLOW, String(shapeSignature(source)));
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
     } else {
@@ -12717,7 +12715,20 @@ const PAGE_JS: &str = r##"(() => {
     }
     if (stackOf(group).indexOf(group) > 0) restackAbove(figma, group);
   };
-  const FOLLOW = "follow-made-from";
+  // What's made in an effect's group, as a hash of its layers
+  const madeSignature = (group, source) => {
+    let h = 5381;
+    const add = (text) => {
+      for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+    };
+    for (const child of group.children) {
+      if (child === source) continue;
+      add(child.id);
+      if (child.type === "VECTOR") for (const path of child.vectorPaths) add(path.data);
+      add(JSON.stringify(child.relativeTransform.flat().map((v) => Math.round(v * 100))));
+    }
+    return h;
+  };
   let following = [];
   let followFound = 0;
   const followed = new Map();
@@ -12745,32 +12756,41 @@ const PAGE_JS: &str = r##"(() => {
         const source = sourceOf(group);
         if (!source) continue;
         const sig = shapeSignature(source);
+        const now2 = madeSignature(group, source);
         let known = followed.get(group.id);
-        if (!known) followed.set(group.id, (known = { sig, changed: 0, built: null, base: sig }));
-        // What it was made from, kept on the group, so undo takes it back
-        // with what was made
-        const made = group.getSharedPluginData(PLUGIN, FOLLOW) || String(known.base);
-        if (made === String(sig)) {
+        // First seen, it's taken to match its original
+        if (!known) followed.set(group.id, (known = { sig, changed: 0, built: null, undos: 0, made: new Map([[sig, now2]]) }));
+        if (known.made.get(sig) === now2) {
+          // As made for the original as it is
           known.sig = sig;
           known.changed = 0;
+          if (known.built !== sig) known.built = null;
+          known.undos = 0;
           continue;
         }
-        // Its last making undone while the original's as it was then: the
-        // change it followed is undone too, so one undo takes back both
-        if (known.built === sig) {
-          known.built = null;
-          try {
-            figma.triggerUndo();
-          } catch {}
+        // What was made for the original as it is now has been undone,
+        // in however many steps undo takes it: what the original's change
+        // was is undone too, so undo takes back both. Never more than a few
+        // Its layers themselves, not moved or changed by hand, as undo
+        // swaps them back for those made before
+        const ids = group.children.filter((child) => child !== source).map((child) => child.id).join();
+        if (known.built === sig && ids !== known.ids) {
+          if (known.undos++ < 8)
+            try {
+              figma.triggerUndo();
+            } catch {}
           continue;
         }
+        if (known.built === sig) continue;
         if (known.sig !== sig) Object.assign(known, { sig, changed: now });
         // Once it's stopped changing for a moment
         else if (known.changed && now - known.changed > 450) {
           known.changed = 0;
           refreshVector(figma, group, effect, settings);
-          group.setSharedPluginData(PLUGIN, FOLLOW, String(sig));
+          known.made.set(sig, madeSignature(group, source));
+          known.ids = group.children.filter((child) => child !== source).map((child) => child.id).join();
           known.built = sig;
+          known.undos = 0;
         }
       }
     } catch {}
