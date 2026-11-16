@@ -141,6 +141,10 @@ pub struct Header {
     /// Bytes of what Figma draws over the canvas, after the forest
     #[serde(default)]
     pub ui: usize,
+    /// For tracing: what the page went through since the frame before, see
+    /// `pageLog` in page_hook.js
+    #[serde(default)]
+    pub page: Option<serde_json::Value>,
 }
 
 fn no_outline() -> f64 {

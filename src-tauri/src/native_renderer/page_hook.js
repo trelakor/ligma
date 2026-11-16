@@ -197,6 +197,41 @@
   };
   addEventListener("resize", () => (rect = null));
   const encoder = new TextEncoder();
+  // What the page went through since the frame before, for Ligma's trace:
+  // the pointer moves it got, by when the browser had them and when the page
+  // ran them, and its long tasks, so time a frame took to come can be put
+  // down to input coming late or the page being busy
+  const pageLog = { moves: 0, first: 0, last: 0, ran: 0, long: [] };
+  addEventListener(
+    "pointermove",
+    (event) => {
+      const now = performance.now();
+      if (!pageLog.moves) pageLog.first = event.timeStamp;
+      pageLog.moves++;
+      pageLog.last = event.timeStamp;
+      pageLog.ran = Math.max(pageLog.ran, now - event.timeStamp);
+    },
+    { capture: true, passive: true },
+  );
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (entry.duration < 30 || pageLog.long.length > 8) continue;
+        const scripts = (entry.scripts ?? [])
+          .filter((script) => script.duration > 5)
+          .map((script) => `${script.invoker}|${(script.sourceURL ?? "").split("/").pop().slice(0, 40)}|${script.sourceFunctionName}|${Math.round(script.duration)}`);
+        pageLog.long.push({ at: Math.round(entry.startTime), ms: Math.round(entry.duration), block: Math.round(entry.blockingDuration), layout: Math.round(entry.styleAndLayoutStart ? entry.startTime + entry.duration - entry.styleAndLayoutStart : 0), scripts });
+      }
+    }).observe({ type: "long-animation-frame" });
+  } catch {}
+  function pageSince() {
+    const now = performance.now();
+    const log = { frame: Math.round(now - (document.timeline?.currentTime ?? now)), moves: pageLog.moves, first: Math.round(now - pageLog.first), last: Math.round(now - pageLog.last), ran: Math.round(pageLog.ran), long: pageLog.long };
+    pageLog.moves = 0;
+    pageLog.ran = 0;
+    pageLog.long = [];
+    return log;
+  }
   function send(f) {
     const [cx, cy, cw, ch] = rect ?? measure() ?? [0, 0, innerWidth, innerHeight];
     const ui = f.uiCommands instanceof Uint8Array ? f.uiCommands : new Uint8Array(0);
@@ -225,6 +260,7 @@
         visible: document.visibilityState === "visible",
         at: performance.timeOrigin + performance.now(),
         ui: ui.length,
+        page: pageSince(),
       }),
     );
     const forest = f.renderTreeForest;

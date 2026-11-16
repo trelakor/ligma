@@ -302,7 +302,7 @@ fn take_frames(ctx: Arc<Ctx>) {
             follow_canvas(&ctx, &view);
             let drawn = overlay.as_mut().and_then(|overlay| overlay.decode(frame.ui()));
             ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits(), frame.header.at);
-            super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at));
+            super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2} page={}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at, frame.header.page.as_ref().map_or_else(String::new, |page| page.to_string())));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
         // One missing a while is lost, so Figma sends the whole scene again
