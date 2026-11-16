@@ -1551,10 +1551,11 @@ impl Painter {
     /// composes them
     fn shown_tiles(&self) -> std::collections::HashSet<TileKey> {
         let Some(view) = self.view.as_ref() else { return std::collections::HashSet::new() };
-        // `layers` lists the tiles first, in the order `tiles` iterates
-        let keys: Vec<TileKey> = self.tiles.keys().copied().collect();
-        let (pieces, _) = cover(&self.layers(true), self.content(), view, self.gpu.size);
-        pieces.iter().filter(|piece| piece.layer < keys.len()).map(|piece| keys[piece.layer]).collect()
+        // By texture, as `layers` leaves some tiles out
+        let keys: HashMap<usize, TileKey> = self.tiles.iter().map(|(key, tile)| (Arc::as_ptr(&tile.tex) as usize, *key)).collect();
+        let layers = self.layers(true);
+        let (pieces, _) = cover(&layers, self.content(), view, self.gpu.size);
+        pieces.iter().filter_map(|piece| keys.get(&(Arc::as_ptr(&layers[piece.layer].tex) as usize)).copied()).collect()
     }
 
     /// The view's area in units and its zoom
