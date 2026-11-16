@@ -2362,6 +2362,8 @@ impl Painter {
         let px = first.px();
         let reach = Rect::from_xywh(left as f32 / px, top as f32 / px, w as f32 / px, h as f32 / px);
         self.settle_unchecked();
+        let settled = started.elapsed();
+        let mut waited = Duration::ZERO;
         let fail = |why: String| (first, why);
         let mut drawn = None;
         for _ in 0..8 {
@@ -2372,7 +2374,9 @@ impl Painter {
             let budget = (!exact).then_some(Duration::ZERO);
             let (out, counts, stats, rough) = self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, false, None).map_err(fail)?;
             let vello = self.vello.as_mut().ok_or_else(|| fail("no Vello".into()))?;
-            match vello.check(usize::MAX).map_err(fail)? {
+            let checked = vello.check(usize::MAX).map_err(fail)?;
+            waited += vello.waited;
+            match checked {
                 Some(why) => trace(|| format!("  vello ran out of room, drawing again: {why}")),
                 None => {
                     // With nothing standing in, it's as drawing them exactly
@@ -2402,7 +2406,7 @@ impl Painter {
         super::stats().lock().unwrap().vello_tiles_ms = started.elapsed().as_secs_f64() * 1000.0;
         trace(|| {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-            format!("  vello tiles px={px:.4} at {x0},{y0} {}x{} exact={exact} rendered={:.1}ms {:.1}ms {stats} gpu:{stages}", x1 - x0 + 1, y1 - y0 + 1, ms(rendered), ms(started.elapsed()))
+            format!("  vello tiles px={px:.4} at {x0},{y0} {}x{} exact={exact} rendered={:.1}ms {:.1}ms settled={:.1} waited={:.1} {stats} gpu:{stages}", x1 - x0 + 1, y1 - y0 + 1, ms(rendered), ms(started.elapsed()), ms(settled), ms(waited))
         });
         Ok(())
     }
