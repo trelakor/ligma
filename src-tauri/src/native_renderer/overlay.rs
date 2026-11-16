@@ -223,7 +223,7 @@ impl Decoder {
                     let extent = -metrics.ascent + metrics.descent;
                     let drop = if extent > 0.0 { font.size() * -metrics.ascent / extent } else { font.size() * 0.8 };
                     let (x, y) = vector(v.get("point"));
-                    canvas.draw_str(v.get("text").map(Value::str).unwrap_or_default(), (x, y + drop), &font, &paint);
+                    draw_text(canvas, v.get("text").map(Value::str).unwrap_or_default(), (x, y + drop), &font, &paint);
                 }
                 true
             }
@@ -570,7 +570,7 @@ fn text_with_box(v: &Value, canvas: &Canvas) {
     canvas.draw_rrect(RRect::new_rect_xy(r, radius, radius), &fill(color(v.get("bkColor")), true));
     // Centered in the box by the font's ascent and descent
     let baseline = top + bh / 2.0 + (-metrics.ascent - metrics.descent) / 2.0;
-    canvas.draw_str(text, (left + px, baseline), &font, &fill(color(v.get("color")), true));
+    draw_text(canvas, text, (left + px, baseline), &font, &fill(color(v.get("color")), true));
 }
 
 /// Figma's section name pills, a level at a time
@@ -592,6 +592,14 @@ fn section_names(v: &Value, canvas: &Canvas) {
                 num(s, "fontAttributes", 0.0) as u32,
             );
             let Some(font) = font else { continue };
+            // Figma's renderer draws the name with its capitals centered in
+            // the pill, a little above `textOrigin`'s baseline
+            let cap = font.metrics().1.cap_height;
+            let centered = |origin: Option<&Value>, within: Rect| {
+                let (x, y) = vector(origin);
+                (x, if cap > 0.0 && !within.is_empty() { within.center_y() + cap / 2.0 } else { y })
+            };
+            let lift = centered(s.get("textOrigin"), pill).1 - vector(s.get("textOrigin")).1;
             let text_paint = fill(with(color(s.get("textColor"))), true);
             let runs = s.get("highlightNormalTextRuns").map(Value::items).unwrap_or_default();
             if num(s, "useSearchHighlights", 0.0) != 0.0 && !runs.is_empty() {
@@ -600,16 +608,17 @@ fn section_names(v: &Value, canvas: &Canvas) {
                     canvas.draw_rrect(RRect::new_rect_xy(rect(h.get("rect")), r, r), &fill(with(color(h.get("fill"))), true));
                 }
                 for run in runs.iter().chain(s.get("highlightMatchedTextRuns").map(Value::items).unwrap_or_default()) {
-                    canvas.draw_str(run.get("text").map(Value::str).unwrap_or_default(), vector(run.get("origin")), &font, &fill(with(color(run.get("color"))), true));
+                    let (x, y) = vector(run.get("origin"));
+                    draw_text(canvas, run.get("text").map(Value::str).unwrap_or_default(), (x, y + lift), &font, &fill(with(color(run.get("color"))), true));
                 }
             } else {
-                canvas.draw_str(s.get("text").map(Value::str).unwrap_or_default(), vector(s.get("textOrigin")), &font, &text_paint);
+                draw_text(canvas, s.get("text").map(Value::str).unwrap_or_default(), centered(s.get("textOrigin"), pill), &font, &text_paint);
             }
             if num(s, "renderStatus", 0.0) != 0.0 {
                 let r = rect(s.get("statusPillRect"));
                 let h = r.height() / 2.0;
                 canvas.draw_rrect(RRect::new_rect_xy(r, h, h), &fill(with(color(s.get("statusPillBackgroundColor"))), true));
-                canvas.draw_str(s.get("statusText").map(Value::str).unwrap_or_default(), vector(s.get("statusTextOrigin")), &font, &fill(with(color(s.get("statusTextColor"))), true));
+                draw_text(canvas, s.get("statusText").map(Value::str).unwrap_or_default(), centered(s.get("statusTextOrigin"), r), &font, &fill(with(color(s.get("statusTextColor"))), true));
             }
         }
     }
@@ -668,6 +677,22 @@ fn font_named(family: &str, size: f32, attributes: u32) -> Option<Font> {
         font.set_skew_x(-0.2);
     }
     Some(font)
+}
+
+/// Text as its glyphs' outlines, filled. Skia's glyph masks add contrast to
+/// small text, so light text on dark comes out bolder and brighter than
+/// Figma's renderer draws it
+fn draw_text(canvas: &Canvas, text: &str, origin: impl Into<Point>, font: &Font, paint: &Paint) {
+    let glyphs = font.str_to_glyphs_vec(text);
+    let mut at = vec![Point::default(); glyphs.len()];
+    font.get_pos(&glyphs, &mut at, Some(origin.into()));
+    let mut outlines = PathBuilder::new();
+    for (glyph, at) in glyphs.iter().zip(at) {
+        if let Some(outline) = font.get_path(*glyph) {
+            outlines.add_path_with_offset(&outline, at, None);
+        }
+    }
+    canvas.draw_path(&outlines.detach(), paint);
 }
 
 fn font_of(v: &Value, field: &str) -> Option<Font> {
