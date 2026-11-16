@@ -224,7 +224,7 @@ pub struct Stats {
     /// view, from starting till the GPU was done, in ms
     pub vello_tiles_ms: f64,
     pub whole_ms: f64,
-    /// Dedicated GPU memory of Ligma's own process (the native renderer)
+    /// GPU memory on the card of Ligma's own process (the native renderer)
     /// and of WebView2's (Figma), in bytes
     pub vram_ligma: u64,
     pub vram_webview: u64,

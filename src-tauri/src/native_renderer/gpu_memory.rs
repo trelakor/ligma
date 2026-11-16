@@ -1,7 +1,9 @@
-//! Dedicated GPU memory per process, from Windows' `GPU Process Memory`
-//! performance counters (what Task Manager shows), for Ligma's own process,
-//! where the native renderer draws, and for WebView2's processes under it,
-//! where Figma draws
+//! GPU memory each process has on the card, from Windows' `GPU Process
+//! Memory` performance counters, for Ligma's own process, where the native
+//! renderer draws, and for WebView2's processes under it, where Figma draws.
+//! Not the dedicated figure Task Manager shows, which counts memory meant
+//! for the card whether it's there or not, memory the driver keeps after
+//! it's freed too, and so climbs past what's used after a busy moment
 
 use std::collections::HashMap;
 
@@ -17,7 +19,7 @@ use windows::Win32::System::Performance::{
 
 pub struct GpuMemory {
     query: PDH_HQUERY,
-    dedicated: PDH_HCOUNTER,
+    local: PDH_HCOUNTER,
 }
 
 // The handles are only used from the thread that samples
@@ -40,17 +42,17 @@ impl GpuMemory {
             if PdhOpenQueryW(None, 0, &mut query) != 0 {
                 return None;
             }
-            let mut dedicated = PDH_HCOUNTER::default();
-            if PdhAddEnglishCounterW(query, w!("\\GPU Process Memory(*)\\Dedicated Usage"), 0, &mut dedicated) != 0 {
+            let mut local = PDH_HCOUNTER::default();
+            if PdhAddEnglishCounterW(query, w!("\\GPU Process Memory(*)\\Local Usage"), 0, &mut local) != 0 {
                 PdhCloseQuery(query);
                 return None;
             }
             PdhCollectQueryData(query);
-            Some(Self { query, dedicated })
+            Some(Self { query, local })
         }
     }
 
-    /// Dedicated bytes by process id
+    /// Bytes on the card by process id
     fn by_process(&self) -> HashMap<u32, u64> {
         let mut out = HashMap::new();
         unsafe {
@@ -58,13 +60,13 @@ impl GpuMemory {
                 return out;
             }
             let (mut size, mut count) = (0u32, 0u32);
-            if PdhGetFormattedCounterArrayW(self.dedicated, PDH_FMT_LARGE, &mut size, &mut count, None) != PDH_MORE_DATA {
+            if PdhGetFormattedCounterArrayW(self.local, PDH_FMT_LARGE, &mut size, &mut count, None) != PDH_MORE_DATA {
                 return out;
             }
             // u64-aligned, as the items hold 64-bit values
             let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
             let items = buffer.as_mut_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>();
-            if PdhGetFormattedCounterArrayW(self.dedicated, PDH_FMT_LARGE, &mut size, &mut count, Some(items)) != 0 {
+            if PdhGetFormattedCounterArrayW(self.local, PDH_FMT_LARGE, &mut size, &mut count, Some(items)) != 0 {
                 return out;
             }
             for item in std::slice::from_raw_parts(items, count as usize) {
