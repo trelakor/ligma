@@ -229,7 +229,10 @@
   // A line of frame times: the typical big or not, then p95 and worst
   const timesLine = (ctx, y, right, s, ink, label, big, fps) => {
     const rate = fps ? [[`${Math.round(fps)}`, ink, BIG], [" fps  ", SECONDARY]] : [];
-    const parts = big ? [...rate, [s.p50.toFixed(1), ink, BOLD], [" ms a frame", SECONDARY]] : [[label, SECONDARY], [s.p50.toFixed(1), ink], [" ms a frame", MUTED]];
+    // And what the frame time alone would allow, were the view moving at
+    // every refresh
+    const could = [` (${Math.round(1000 / Math.max(s.p50, 0.1))} fps)`, MUTED];
+    const parts = big ? [...rate, [s.p50.toFixed(1), ink, BOLD], [" ms", SECONDARY], could] : [[label, SECONDARY], [s.p50.toFixed(1), ink], [" ms a frame", MUTED]];
     text(ctx, PAD + 8, y, parts);
     textRight(ctx, right, y, [
       ["p95 ", MUTED],
