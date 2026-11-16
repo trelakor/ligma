@@ -388,7 +388,8 @@ impl Hub {
         let (from, to) = (frames[next - 1], frames[next]);
         let (a, b) = (&from.view, &to.view);
         // Only the view moving: the canvas the same size and in the same place
-        if (a.cx, a.cy, a.cw, a.ch, a.dpr) != (b.cx, b.cy, b.cw, b.ch, b.dpr) || a.page != b.page || a.w <= 0.0 || b.w <= 0.0 {
+        // and it moving at all, else what's over it would be a frame behind
+        if (a.cx, a.cy, a.cw, a.ch, a.dpr) != (b.cx, b.cy, b.cw, b.ch, b.dpr) || a.page != b.page || a.w <= 0.0 || b.w <= 0.0 || (a.x, a.y, a.w, a.h) == (b.x, b.y, b.w, b.h) {
             return caught_up(view, overlay);
         }
         // From a frame long before, as it starts moving, from as long before
