@@ -11698,7 +11698,7 @@ const PAGE_JS: &str = r##"(() => {
               const [tx, ty] = tangent(x0, y0, g, t);
               const l = Math.hypot(tx, ty) || 1;
               const base = own ? colorAt(current, px - (ty / l) * 1.5, py + (tx / l) * 1.5, group.items) : single;
-              samples.push({ c: -px * ay + py * ax, a: px * ax + py * ay, rgb: tone(base, shadeOf(tx, ty)) });
+              samples.push({ c: -px * ay + py * ax, a: px * ax + py * ay, nx: ty / l, ny: -tx / l, rgb: tone(base, shadeOf(tx, ty)) });
             }
             const [c0, c1] = [samples[0].c, samples[12].c];
             const [mx, my] = cubicAt(x0, y0, g, 0.5);
@@ -11724,17 +11724,19 @@ const PAGE_JS: &str = r##"(() => {
       // depth, the one whose edge is farther along it is in front. Sides of one outline never cross, so
       // that never contradicts itself, and they're drawn in an order that
       // keeps every such pair, the nearest last
-      const along = (one, c) => {
+      const at = (one, c) => {
         const list = one.across;
         let i = 0;
         while (i < list.length - 2 && list[i + 1].c < c) i++;
         const [p, q] = [list[i], list[i + 1]];
         const t = q.c > p.c ? Math.min(1, Math.max(0, (c - p.c) / (q.c - p.c))) : 0;
-        return p.a + (q.a - p.a) * t;
+        return { a: p.a + (q.a - p.a) * t, nx: p.nx + (q.nx - p.nx) * t, ny: p.ny + (q.ny - p.ny) * t };
       };
-      // Layers stacked only where their sides run close, an outline and
-      // what's just inside it, so they show as bands; elsewhere, as one
-      // part of the shape in front of another, by where they are
+      // Layers stacked only where their sides run close and face the same
+      // way, an outline and what's just inside it, so they show as bands;
+      // elsewhere, as one part of the shape in front of another, by where
+      // they are, as where the underside of one part and the top of another
+      // happen to come close along the depth
       const near = Math.max(4, current.unit * 0.1);
       const ordered = [];
       {
@@ -11748,11 +11750,12 @@ const PAGE_JS: &str = r##"(() => {
             const high = Math.min(A.high, B.high);
             if (high - low <= 1e-3) continue;
             const c = (low + high) / 2;
-            const gap = along(A, c) - along(B, c);
+            const [pa, pb] = [at(A, c), at(B, c)];
+            const gap = pa.a - pb.a;
             // Only sides close enough along the depth to overlap
             if (Math.abs(gap) >= s.depth) continue;
             let first;
-            if (A.layer !== B.layer && Math.abs(gap) < near) first = A.layer < B.layer;
+            if (A.layer !== B.layer && Math.abs(gap) < near && pa.nx * pb.nx + pa.ny * pb.ny > 0.5) first = A.layer < B.layer;
             else if (Math.abs(gap) < 1e-6) continue;
             else first = gap < 0;
             if (first) {
