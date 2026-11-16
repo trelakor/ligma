@@ -204,6 +204,7 @@
       f.updateMode = 1;
       f.releasedNodeIds = [];
     }
+    hook.workerScene = true;
     return false;
   }
 
@@ -711,6 +712,55 @@
     };
   } catch {}
 
+  // Figma's worker keeps the scene and images of any frame it's drawn, and
+  // the video memory for them, after Ligma takes over: 630 MB in a file
+  // drawn once, as it is as Ligma starts. So once Ligma draws, the worker is
+  // swapped for a fresh one, as Figma does when its worker crashes. Ligma
+  // takes the scene Figma sends the new worker, and the worker gets it when
+  // Ligma hands drawing back (`wantFull`)
+  // Should Figma change, the worker is just kept, as it was before
+  window.__ligmaModules?.patch([
+    {
+      // Figma's manager of its workers, the canvas's among them, as it
+      // starts one
+      match: (source) => source.includes("restartWorker(") && source.includes("spawnWorker(") && source.includes("_role"),
+      source: (source) =>
+        source.replace(
+          /\bspawnWorker\(\)\{/,
+          (all) => `${all}"canvas"===this._role&&window.__ligmaHook&&(window.__ligmaHook.canvasWorker=this);`,
+        ),
+    },
+  ]);
+  let freshening = 0;
+  let tries = 0;
+  let warned = false;
+  function freshWorker() {
+    clearTimeout(freshening);
+    if (!hook.replacing || hook.toWorker || !hook.workerScene) return;
+    const manager = hook.canvasWorker;
+    if (typeof manager?.restartWorker !== "function") {
+      if (!warned) console.warn("Ligma: Figma's canvas worker wasn't found, so the memory it holds isn't freed");
+      warned = true;
+      return;
+    }
+    // Not mid export, which a restart would send down Figma's slower path,
+    // nor while it starts. Given up on after a minute, as when it's failed
+    if (manager._currentState !== "started") {
+      if (++tries < 60) freshening = setTimeout(freshWorker, 1000);
+      return;
+    }
+    tries = 0;
+    hook.workerScene = false;
+    try {
+      manager.restartWorker();
+      hook.freshWorkers = (hook.freshWorkers ?? 0) + 1;
+    } catch (error) {
+      hook.error = String(error);
+    }
+    // Figma puts a new canvas in for the new worker
+    under(true);
+  }
+
   // Whether frames go to Figma's worker. Images it was meant to get
   // meanwhile are decoded and sent along with the next frames
   function worker(on) {
@@ -736,6 +786,7 @@
     // Figma's worker needs the whole scene back when it draws it again
     if (!on) hook.wantFull = true;
     worker(!on);
+    if (on) freshWorker();
     return true;
   };
   hook.resync = () => {
