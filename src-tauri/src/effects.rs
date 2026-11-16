@@ -4354,7 +4354,8 @@ const PAGE_JS: &str = r##"(() => {
   // A spec's `handles` are centers dragged on the preview, as Disintegrate's
   // forces are: `x` and `y` name the settings they move, in percent of the
   // picture, `radius` one whose ring resizes it, in percent of half its
-  // longer side, and `when` when it shows
+  // longer side, `ring` draws a solid ring round its dot, to tell it from
+  // another, and `when` when it shows
   const shownHandles = (current) => (current.spec.handles ?? []).filter((handle) => !handle.when || handle.when(current.settings));
   const handlePlace = (current, handle) => {
     const v = current.view;
@@ -4382,6 +4383,13 @@ const PAGE_JS: &str = r##"(() => {
       context.arc(x, y, 5, 0, Math.PI * 2);
       context.fill();
       context.stroke();
+      // A ringed one, to tell it from another
+      if (handle.ring) {
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(x, y, 9, 0, Math.PI * 2);
+        context.stroke();
+      }
     }
   };
   // Dragging a handle's dot moves it, and its ring resizes it. Anything
@@ -8616,8 +8624,8 @@ const PAGE_JS: &str = r##"(() => {
   // pixels Pitch apart, each three stripes of red, green and blue with dark
   // gaps between, lit as bright as the artwork's colour there; a camera
   // looks at that screen tilted, turned and rolled in 3D, from as close as
-  // Zoom says, toward Look at. What's as far from the camera as the
-  // focus, the point dragged on the preview, is sharp, and nearer and
+  // Zoom says, toward the dot dragged on the preview. What's as far from
+  // the camera as the focus, the ringed dot, is sharp, and nearer and
   // farther blurs as a lens's depth of field does, so the stripes show
   // only where it's in focus and moiré where they're finer than the
   // camera's pixels. A glow
@@ -8629,14 +8637,17 @@ const PAGE_JS: &str = r##"(() => {
     // Each stripe of a pixel at least two pixels across, so the grid
     // and its moiré are the ones applied
     detail: (s) => 6 / Math.max(0.1, s.pitch),
-    // The focus, where it's sharp, in the picture as the camera sees it
-    handles: [{ x: "focusX", y: "focusY" }],
+    // Where the camera looks, and the focus, where it's sharp, ringed
+    handles: [
+      { x: "centerX", y: "centerY" },
+      { x: "focusX", y: "focusY", ring: true },
+    ],
     thumb: { sample: "ui", settings: { pitch: 2.4, tiltX: 30, tiltY: -24, zoom: 190, focus: 40 } },
     name: "Screen",
     about: "Film it off a monitor, in 3D with depth of field",
     icon: SCREEN_ICON,
     verb: "Make screen",
-    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focusX: 50, focusY: 50, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
+    defaults: { pitch: 2, gaps: 55, tiltX: 22, tiltY: -18, roll: 0, zoom: 150, centerX: 50, centerY: 50, focusX: 62, focusY: 62, focus: 35, aperture: 55, glow: 30, fringe: 40, vignette: 35, grain: 12, exposure: 110, editable: true },
     presets: [
       ["Angled", () => ({})],
       ["Close up", () => ({ zoom: 320, tiltX: 18, tiltY: -28, pitch: 2.5, aperture: 75 })],
@@ -8649,18 +8660,16 @@ const PAGE_JS: &str = r##"(() => {
     summary: (s) => `${s.tiltX}° · ${s.tiltY}° · ${s.zoom}%`,
     panel: (ui) => [
       ui.section(
-        "Camera",
+        "Camera · drag the plain dot to aim",
         ui.sliders([
           ["tiltX", "Tilt", "°", () => ({ min: -75, max: 75 })],
           ["tiltY", "Turn", "°", () => ({ min: -75, max: 75 })],
           ["roll", "Roll", "°", () => ({ min: -180, max: 180 })],
           ["zoom", "Zoom", "%", () => ({ min: 25, max: 800, middle: 100, shape: "curve" })],
-          ["centerX", "Look at x", "%", () => ({ min: 0, max: 100 })],
-          ["centerY", "Look at y", "%", () => ({ min: 0, max: 100 })],
         ]),
       ),
       ui.section(
-        "Focus · drag on the preview",
+        "Focus · drag the ringed dot on the preview",
         ui.sliders([
           ["aperture", "Depth of field", "%", () => ({ min: 0, max: 100 })],
           ["focus", "Focus spread", "%", () => ({ min: 0, max: 100 })],
