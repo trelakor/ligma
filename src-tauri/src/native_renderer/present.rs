@@ -435,6 +435,11 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
                 (LayerKind::Whole, true) => off + 1.0,
                 (LayerKind::Draft, true) => off + 1.2,
                 (LayerKind::Whole, false) => 1.5 + distance(layer.px),
+                // One drawn from where the view is stays till the next is,
+                // over tiles moved to it, which sample what's fine in it,
+                // as custom effects draw, otherwise, so it'd change back
+                // and forth as each change came
+                (LayerKind::Stale, true) if !preview && at_phase(layer) && (px_x, px_y) != (0.0, 0.0) => 1.05,
                 // Shown only till what changed is drawn again, so where it
                 // lands on the grid doesn't matter. What the last frame
                 // showed first: another, older or never shown, would show
