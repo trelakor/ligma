@@ -2811,6 +2811,16 @@ impl Painter {
             self.drew_with(drew, unit);
             let mut uses = used;
             uses.extend(images);
+            // Figma sends a node again as another while a file loads, and
+            // till the new one's drawn nothing alive uses what the old drew
+            // with, a stand-in for its custom effects among them
+            if over_view {
+                for (key, width) in &uses {
+                    let (widest, at) = self.vello_in_view.entry(key.clone()).or_insert((0.0, now));
+                    *widest = if at.elapsed() < IN_VIEW { widest.max(*width as f32) } else { *width as f32 };
+                    *at = now;
+                }
+            }
             // What the zoom nearest the view's drew it with is what it
             // needs: tiles far out leave things out, and would have what's
             // in view let go and had again over and over
