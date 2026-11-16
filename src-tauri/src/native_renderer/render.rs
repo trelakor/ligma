@@ -511,6 +511,9 @@ const PAN_STILL: Duration = Duration::from_millis(300);
 /// How long images Vello drew over the view count as in it
 const IN_VIEW: Duration = Duration::from_secs(2);
 
+/// How long a node's effects running holds up its next run
+const EFFECT_PATIENCE: Duration = Duration::from_secs(5);
+
 /// Tiles a side Vello draws at most at once
 const VELLO_BLOCK: i32 = 1;
 /// Tiles kept drawn by Vello, 1 MB each, past those the view needs
@@ -1308,6 +1311,12 @@ pub struct Painter {
     /// Effects waiting on images the node draws, and those images, each
     /// run again once one of its own comes
     effects_waiting: Vec<(String, f64, Vec<String>)>,
+    /// Nodes whose effects are running, by Figma's id, with the key of the
+    /// run and since when, and the key and width each is asked for again at
+    /// once it's done. Each edit to an effect is another key, and drawing
+    /// its input for each would mostly be for runs the next edit passes over
+    effects_running: HashMap<String, (String, Instant)>,
+    effects_again: HashMap<String, (String, f64)>,
     /// Where each effect asked for keeps what it drew once its node is
     /// sent again as another (see `stand_in`)
     effect_nodes: HashMap<String, String>,
@@ -1448,6 +1457,8 @@ impl Painter {
             requests,
             effects,
             effects_waiting: Vec::new(),
+            effects_running: HashMap::new(),
+            effects_again: HashMap::new(),
             effect_nodes: HashMap::new(),
             effect_last: HashMap::new(),
             effect_images: HashMap::new(),
@@ -3672,12 +3683,15 @@ impl Painter {
             Msg::Failed(key) => {
                 self.asked.remove(&key);
                 self.kept.lock().unwrap().stale.remove(&key);
+                self.effects_done(&key);
                 self.failed.insert(key, Instant::now());
             }
             Msg::Skipped(key) => {
                 self.asked.remove(&key);
+                self.effects_done(&key);
             }
             Msg::Image(key, img, width) => {
+                self.effects_done(&key);
                 // Fetches run side by side, so one asked for before can come
                 // after: it's of a view gone by, and what's asked for since
                 // is on its way
@@ -3874,6 +3888,22 @@ impl Painter {
         self.fresh = true;
         self.update_memory();
         self.dirty = true;
+    }
+
+    /// The run of effects `key` done, and the node's run since asked for
+    /// asked for again
+    fn effects_done(&mut self, key: &str) {
+        if !key.starts_with(EFFECT) || self.effects_running.is_empty() {
+            return;
+        }
+        let Some(node) = self.effects_running.iter().find(|(_, (running, _))| running == key).map(|(node, _)| node.clone()) else {
+            return;
+        };
+        self.effects_running.remove(&node);
+        if let Some((again, width)) = self.effects_again.remove(&node) {
+            self.asked.remove(&again);
+            self.ask(&[(again, width)]);
+        }
     }
 
     /// Runs again the effects that waited on image `key`, which may itself
@@ -5305,12 +5335,21 @@ impl Painter {
     /// does: at a pixel a unit, on the node's content as drawn over the box
     /// they cover, in the node's own space
     fn tree_effect(&mut self, key: &str, id: u32, width: f64) {
+        let began = Instant::now();
         let Some(tree) = &self.tree else {
             return;
         };
         let Some(effect) = tree.custom_effect(id) else {
             return;
         };
+        // A run that never answers holds up no more than a while
+        let running = self.effects_running.get(&effect.node).is_some_and(|(running, at)| running != key && at.elapsed() < EFFECT_PATIENCE);
+        if running && !self.kept.lock().unwrap().has(key) {
+            // Asked for again once it's done, so not asked for meanwhile
+            self.effects_again.insert(effect.node.clone(), (key.to_string(), width));
+            self.asked.remove(key);
+            return;
+        }
         self.effect_nodes.insert(key.to_string(), effect.stand_in.clone());
         self.effect_last.insert(key.to_string(), effect.last_drawn.clone());
         if self.kept.lock().unwrap().has(key) {
@@ -5361,7 +5400,9 @@ impl Painter {
             self.effects_waiting.push((key.to_string(), width, on));
             self.ask(&sharper);
         }
-        trace(|| format!("effect input {key} {pw}x{ph}"));
+        trace(|| format!("effect input {key} {pw}x{ph} took={:.1}", began.elapsed().as_secs_f64() * 1000.0));
+        self.effects_running.insert(effect.node.clone(), (key.to_string(), Instant::now()));
+        self.effects_again.remove(&effect.node);
         let run = Run { key: key.to_string(), node: effect.node, chain: effect.chain, pixels, width: pw as u32, height: ph as u32, scale, shown: width };
         let _ = self.effects.send(Job::Run(run));
     }
