@@ -501,6 +501,9 @@ const VELLO_STILL: Duration = Duration::from_secs(1);
 /// How long the view stays put before Vello draws it at once
 const PAN_STILL: Duration = Duration::from_millis(300);
 
+/// How long images Vello drew over the view count as in it
+const IN_VIEW: Duration = Duration::from_secs(2);
+
 /// Tiles a side Vello draws at most at once
 const VELLO_BLOCK: i32 = 1;
 /// Tiles kept drawn by Vello, 1 MB each, past those the view needs
@@ -1178,6 +1181,10 @@ pub struct Painter {
     /// How wide Vello showed each image it drew since images were last
     /// fitted, the widest
     vello_shown: HashMap<String, f32>,
+    /// Images Vello drew over the view, how wide, and when last. Fragments
+    /// drawn again as they were don't say what they use otherwise, and
+    /// what the view shows would be let go and had again over and over
+    vello_in_view: HashMap<String, (f32, Instant)>,
     /// Units encoded for Vello, by unit and level, see `Encoded`
     fragments: HashMap<(usize, bool, i32), Encoded>,
     /// Images of units made for the tile or view being drawn
@@ -1340,6 +1347,7 @@ impl Painter {
             vello_starting,
             vello_uses: HashMap::new(),
             vello_shown: HashMap::new(),
+            vello_in_view: HashMap::new(),
             fragments: HashMap::new(),
             gpu,
             kit: Kit::new(),
@@ -2743,7 +2751,16 @@ impl Painter {
         // the view does, all there is drawn small
         let kept = super::vello::Kept { one_off: px < coarse(self.zoom.0), ..kept };
         let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, tw, th, used_pages, &pictures, &plan, kept);
+        // Coarse tiles under the view draw most of the file, small
+        let near_zoom = (px.max(1e-6) / self.zoom.0.max(1e-6)).log2().abs() < 1.0;
+        let over_view = near_zoom && self.view.as_ref().is_some_and(|view| Rect::intersects2(&reach, &Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32)));
+        let now = Instant::now();
         for (key, width) in widths {
+            if over_view {
+                let (widest, at) = self.vello_in_view.entry(key.clone()).or_insert((0.0, now));
+                *widest = if at.elapsed() < IN_VIEW { widest.max(width) } else { width };
+                *at = now;
+            }
             let widest = self.vello_shown.entry(key).or_insert(0.0);
             *widest = widest.max(width);
         }
@@ -4129,6 +4146,12 @@ impl Painter {
         }
         // And the images effects run on, wherever those effects are needed,
         // as they run again on them each time their node changes
+        self.vello_in_view.retain(|_, (_, at)| at.elapsed() < IN_VIEW);
+        for (key, (width, _)) in &self.vello_in_view {
+            let entry = need.entry(key.clone()).or_insert(0.0);
+            *entry = entry.max(*width as f64);
+            in_view.insert(key.clone());
+        }
         for (effect, images) in &self.effect_images {
             if !need.contains_key(effect) {
                 continue;
