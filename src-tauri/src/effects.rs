@@ -9361,36 +9361,58 @@ const PAGE_JS: &str = r##"(() => {
     addEventListener("keydown", current.keys, true);
     go.focus();
   };
-  // Its tile: stars packed into a heart
+  // Its tile: a heart packed with stars, circles, triangles, squares and
+  // hexagons, centred, in blue, teal and amber
   const fillThumb = () => {
     const [tile, g] = canvas2d();
-    g.fillStyle = "#fbf3f8";
+    g.fillStyle = "#eef3fa";
     g.fillRect(0, 0, THUMB, THUMB);
-    const star = (x, y, r, turn, color) => {
-      g.fillStyle = color;
+    const colors = ["#3b6fe0", "#1fae9b", "#f2b13a"];
+    const draw = (kind, x, y, r, turn) => {
+      g.save();
+      g.translate(x, y);
+      g.rotate(turn);
       g.beginPath();
-      for (let i = 0; i < 10; i++) {
-        const a = turn + (i / 10) * Math.PI * 2 - Math.PI / 2;
-        const d = i % 2 ? r * 0.45 : r;
-        g.lineTo(x + Math.cos(a) * d, y + Math.sin(a) * d);
-      }
+      if (kind === 0)
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+          const d = i % 2 ? r * 0.45 : r;
+          g.lineTo(Math.cos(a) * d, Math.sin(a) * d);
+        }
+      else if (kind === 1) g.arc(0, 0, r * 0.8, 0, Math.PI * 2);
+      else if (kind === 2)
+        for (let i = 0; i < 3; i++) {
+          const a = (i / 3) * Math.PI * 2 - Math.PI / 2;
+          g.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+        }
+      else if (kind === 3) g.rect(-r * 0.68, -r * 0.68, r * 1.36, r * 1.36);
+      else
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          g.lineTo(Math.cos(a) * r * 0.85, Math.sin(a) * r * 0.85);
+        }
       g.fill();
+      g.restore();
     };
-    // A heart, as the shape the stars are packed into
+    // A heart, as the shape they're packed into, centred in the tile: the
+    // curve spans 2.28 across and from −1 to 1.24 up, so its middle's 0.12 up
+    const S = 54;
     const heart = (x, y) => {
-      const u = (x - 80) / 52;
-      const v = (76 - y) / 52;
+      const u = (x - 80) / S;
+      const v = (80 + 0.12 * S - y) / S;
       return (u * u + v * v - 1) ** 3 - u * u * v * v * v < 0;
     };
     const placed = [];
-    for (let i = 0; i < 2400 && placed.length < 90; i++) {
-      const x = 14 + hash2(i, 1, 9) * 132;
-      const y = 14 + hash2(i, 2, 9) * 132;
-      const r = 14 - (i / 2400) * 10;
-      if (!heart(x, y) || !heart(x + r * 0.6, y) || !heart(x - r * 0.6, y) || !heart(x, y + r * 0.6) || !heart(x, y - r * 0.6)) continue;
-      if (placed.some(([px, py, pr]) => Math.hypot(px - x, py - y) < (pr + r) * 0.62)) continue;
+    for (let i = 0; i < 6000 && placed.length < 150; i++) {
+      const x = 12 + hash2(i, 1, 9) * 136;
+      const y = 12 + hash2(i, 2, 9) * 136;
+      const r = 12 - (i / 6000) * 9;
+      if (!heart(x, y) || !heart(x + r * 0.7, y) || !heart(x - r * 0.7, y) || !heart(x, y + r * 0.7) || !heart(x, y - r * 0.7)) continue;
+      if (placed.some(([px, py, pr]) => Math.hypot(px - x, py - y) < (pr + r) * 0.74)) continue;
       placed.push([x, y, r]);
-      star(x, y, r, hash2(i, 3, 9) * 3, hash2(i, 4, 9) > 0.3 ? "#f28ad6" : "#2a1f2d");
+      const kind = Math.floor(hash2(i, 4, 9) * 5);
+      g.fillStyle = colors[kind % 3];
+      draw(kind, x, y, r, hash2(i, 3, 9) * Math.PI * 2);
     }
     return tile;
   };
