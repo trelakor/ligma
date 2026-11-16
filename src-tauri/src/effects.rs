@@ -521,6 +521,7 @@ const PAGE_JS: &str = r##"(() => {
     if (crushing) closeBitcrush(crushing, false);
     if (filtering) closeFilter(filtering, false);
     if (filling) closeFill(filling, false);
+    if (vectoring) closeVector(vectoring, false);
   };
   // An effect's `open`, undone if it throws. Run for a stack, the stack's
   // made again by `restack`, which hears of it and says so itself
@@ -547,6 +548,7 @@ const PAGE_JS: &str = r##"(() => {
       summary: (s) => (s.mode === "grid" ? `Grid · ${s.columns} × ${s.rows}` : `${s.mode === "radial" ? "Radial" : "Trail"} · ${s.copies} ${s.copies === 1 ? "copy" : "copies"}`),
       open: guarded((figma, edit, run) => openRepeater(figma, edit, run)),
       thumb: () => repeaterThumb(),
+      keepsSource: () => true,
     },
     {
       id: "disintegrate",
@@ -1624,7 +1626,7 @@ const PAGE_JS: &str = r##"(() => {
   let repeating = null;
 
   const openRepeater = (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering || filling) return;
+    if (repeating || disintegrating || crushing || filtering || filling || vectoring) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to repeat" : "Select a layer to repeat", { timeout: 2000 });
@@ -3031,7 +3033,7 @@ const PAGE_JS: &str = r##"(() => {
   let disintegrating = null;
 
   const openDisintegrate = async (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering || filling) return;
+    if (repeating || disintegrating || crushing || filtering || filling || vectoring) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to disintegrate" : "Select a layer to disintegrate", { timeout: 2000 });
@@ -3904,7 +3906,7 @@ const PAGE_JS: &str = r##"(() => {
   let crushing = null;
 
   const openBitcrush = async (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering || filling) return;
+    if (repeating || disintegrating || crushing || filtering || filling || vectoring) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? "Select one layer to bitcrush" : "Select a layer to bitcrush", { timeout: 2000 });
@@ -5085,7 +5087,7 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   const openFilter = async (spec, figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering || filling) return;
+    if (repeating || disintegrating || crushing || filtering || filling || vectoring) return;
     const selected = figma.currentPage.selection;
     if (selected.length !== 1) {
       figma.notify(selected.length ? `Select one layer for ${spec.name}` : `Select a layer for ${spec.name}`, { timeout: 2000 });
@@ -9520,7 +9522,7 @@ const PAGE_JS: &str = r##"(() => {
     return copies;
   };
   const openFill = async (figma, edit = false, run = null) => {
-    if (repeating || disintegrating || crushing || filtering || filling) return;
+    if (repeating || disintegrating || crushing || filtering || filling || vectoring) return;
     const selected = figma.currentPage.selection;
     if (!selected.length) {
       figma.notify("Select a shape or text to fill, and the layers to fill it with", { timeout: 2500 });
@@ -10025,6 +10027,1764 @@ const PAGE_JS: &str = r##"(() => {
     thumb: () => fillThumb(),
   });
 
+  // ---------- Vector effects ----------
+
+  // Effects that only move points and paths: what they make is vector
+  // layers, outlines of the layer worked out here, copies of layers, or
+  // Figma's own outlined strokes and boolean operations, so the result
+  // stays sharp and editable at any size. Nothing is read or drawn as a
+  // picture, the panel's preview included, which draws the same paths
+
+  // Paths as subpaths of cubic curves: a start, then each segment as its
+  // two control points and its end, lines as cubics a third of the way
+  // along, so every operation handles one kind of segment
+  const lineSeg = (x0, y0, x1, y1) => [x0 + (x1 - x0) / 3, y0 + (y1 - y0) / 3, x0 + ((x1 - x0) * 2) / 3, y0 + ((y1 - y0) * 2) / 3, x1, y1];
+  const parsePath = (d) => {
+    const tokens = String(d).match(/[a-zA-Z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
+    const out = [];
+    let sp = null;
+    let [x, y] = [0, 0];
+    let i = 0;
+    let cmd = "";
+    const num = () => Number(tokens[i++]);
+    while (i < tokens.length) {
+      if (/[a-zA-Z]/.test(tokens[i])) cmd = tokens[i++];
+      const C = cmd.toUpperCase();
+      const rel = cmd !== C;
+      const [ox, oy] = rel ? [x, y] : [0, 0];
+      if (C === "Z") {
+        if (sp) {
+          sp.closed = true;
+          [x, y] = [sp.x, sp.y];
+        }
+        sp = null;
+        continue;
+      }
+      if (C === "M") {
+        x = ox + num();
+        y = oy + num();
+        sp = { x, y, segs: [], closed: false };
+        out.push(sp);
+        cmd = rel ? "l" : "L";
+        continue;
+      }
+      if (!sp) {
+        sp = { x, y, segs: [], closed: false };
+        out.push(sp);
+      }
+      if (C === "L" || C === "H" || C === "V") {
+        let [nx, ny] = [x, y];
+        if (C === "L") [nx, ny] = [ox + num(), oy + num()];
+        else if (C === "H") nx = ox + num();
+        else ny = oy + num();
+        sp.segs.push(lineSeg(x, y, nx, ny));
+        [x, y] = [nx, ny];
+      } else if (C === "C") {
+        const seg = [ox + num(), oy + num(), ox + num(), oy + num(), ox + num(), oy + num()];
+        sp.segs.push(seg);
+        [x, y] = [seg[4], seg[5]];
+      } else if (C === "Q") {
+        const [qx, qy, nx, ny] = [ox + num(), oy + num(), ox + num(), oy + num()];
+        sp.segs.push([x + ((qx - x) * 2) / 3, y + ((qy - y) * 2) / 3, nx + ((qx - nx) * 2) / 3, ny + ((qy - ny) * 2) / 3, nx, ny]);
+        [x, y] = [nx, ny];
+      } else i++;
+      if (tokens.slice(i - 1, i).some((t) => Number.isNaN(Number(t)) && !/[a-zA-Z]/.test(t))) break;
+    }
+    return out.filter((one) => one.segs.length);
+  };
+  const short = (v) => String(Math.round(v * 1000) / 1000);
+  // As SVG path data, moved by `dx`, `dy`
+  const pathData = (paths, dx = 0, dy = 0) =>
+    paths
+      .map((sp) => {
+        let d = `M ${short(sp.x + dx)} ${short(sp.y + dy)}`;
+        for (const g of sp.segs) d += ` C ${short(g[0] + dx)} ${short(g[1] + dy)} ${short(g[2] + dx)} ${short(g[3] + dy)} ${short(g[4] + dx)} ${short(g[5] + dy)}`;
+        return sp.closed ? `${d} Z` : d;
+      })
+      .join(" ");
+  // Every point through `f`, control points too
+  const mapPaths = (paths, f) =>
+    paths.map((sp) => {
+      const [x, y] = f(sp.x, sp.y);
+      return {
+        x,
+        y,
+        closed: sp.closed,
+        segs: sp.segs.map((g) => {
+          const [a, b] = f(g[0], g[1]);
+          const [c, d] = f(g[2], g[3]);
+          const [e, h] = f(g[4], g[5]);
+          return [a, b, c, d, e, h];
+        }),
+      };
+    });
+  // Affine transforms as [[a, c, e], [b, d, f]], as Figma's
+  const multiply = ([[a, c, e], [b, d, f]], [[A, C, E], [B, D, F]]) => [
+    [a * A + c * B, a * C + c * D, a * E + c * F + e],
+    [b * A + d * B, b * C + d * D, b * E + d * F + f],
+  ];
+  const invert = ([[a, c, e], [b, d, f]]) => {
+    const det = a * d - b * c || 1;
+    return [
+      [d / det, -c / det, (c * f - d * e) / det],
+      [-b / det, a / det, (b * e - a * f) / det],
+    ];
+  };
+  const moved = (x, y) => [
+    [1, 0, x],
+    [0, 1, y],
+  ];
+  const transformPaths = (paths, [[a, c, e], [b, d, f]]) => mapPaths(paths, (x, y) => [a * x + c * y + e, b * x + d * y + f]);
+  const cubicAt = (x0, y0, g, t) => {
+    const u = 1 - t;
+    const [w0, w1, w2, w3] = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+    return [w0 * x0 + w1 * g[0] + w2 * g[2] + w3 * g[4], w0 * y0 + w1 * g[1] + w2 * g[3] + w3 * g[5]];
+  };
+  const segLength = (x0, y0, g) => (Math.hypot(g[4] - x0, g[5] - y0) + Math.hypot(g[0] - x0, g[1] - y0) + Math.hypot(g[2] - g[0], g[3] - g[1]) + Math.hypot(g[4] - g[2], g[5] - g[3])) / 2;
+  // The piece of a cubic from `t0` to `t1`
+  const cubicPart = (x0, y0, g, t0, t1) => {
+    const split = (p, t) => {
+      const [a, b, c, d] = p;
+      const ab = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const bc = [b[0] + (c[0] - b[0]) * t, b[1] + (c[1] - b[1]) * t];
+      const cd = [c[0] + (d[0] - c[0]) * t, c[1] + (d[1] - c[1]) * t];
+      const abc = [ab[0] + (bc[0] - ab[0]) * t, ab[1] + (bc[1] - ab[1]) * t];
+      const bcd = [bc[0] + (cd[0] - bc[0]) * t, bc[1] + (cd[1] - bc[1]) * t];
+      const m = [abc[0] + (bcd[0] - abc[0]) * t, abc[1] + (bcd[1] - abc[1]) * t];
+      return [
+        [a, ab, abc, m],
+        [m, bcd, cd, d],
+      ];
+    };
+    const whole = [[x0, y0], [g[0], g[1]], [g[2], g[3]], [g[4], g[5]]];
+    const left = t1 < 1 ? split(whole, t1)[0] : whole;
+    const piece = t0 > 0 ? split(left, t0 / t1)[1] : left;
+    return [piece[1][0], piece[1][1], piece[2][0], piece[2][1], piece[3][0], piece[3][1]];
+  };
+  // Each segment cut into pieces no longer than `step`, so a bend applied
+  // to the points follows a curve's whole length
+  const subdivide = (paths, step) =>
+    paths.map((sp) => {
+      const segs = [];
+      let [x, y] = [sp.x, sp.y];
+      for (const g of sp.segs) {
+        const n = Math.min(64, Math.max(1, Math.ceil(segLength(x, y, g) / step)));
+        for (let k = 0; k < n; k++) segs.push(cubicPart(x, y, g, k / n, (k + 1) / n));
+        [x, y] = [g[4], g[5]];
+      }
+      // A closed one ends where it starts, so it bends with the rest
+      if (sp.closed && Math.hypot(x - sp.x, y - sp.y) > 1e-6) {
+        const n = Math.min(64, Math.max(1, Math.ceil(Math.hypot(x - sp.x, y - sp.y) / step)));
+        for (let k = 0; k < n; k++) {
+          const [ax, ay] = [x + ((sp.x - x) * k) / n, y + ((sp.y - y) * k) / n];
+          const [bx, by] = [x + ((sp.x - x) * (k + 1)) / n, y + ((sp.y - y) * (k + 1)) / n];
+          segs.push(lineSeg(ax, ay, bx, by));
+        }
+      }
+      return { x: sp.x, y: sp.y, closed: sp.closed, segs };
+    });
+  // As lines no longer than `step`: a flat list of points per subpath
+  const flatten = (paths, step) =>
+    paths.map((sp) => {
+      const points = [sp.x, sp.y];
+      let [x, y] = [sp.x, sp.y];
+      for (const g of sp.segs) {
+        const straight = Math.hypot(g[0] - (x + (g[4] - x) / 3), g[1] - (y + (g[5] - y) / 3)) + Math.hypot(g[2] - (x + ((g[4] - x) * 2) / 3), g[3] - (y + ((g[5] - y) * 2) / 3)) < 1e-6;
+        const n = straight ? 1 : Math.min(96, Math.max(2, Math.ceil(segLength(x, y, g) / step)));
+        for (let k = 1; k <= n; k++) points.push(...cubicAt(x, y, g, k / n));
+        [x, y] = [g[4], g[5]];
+      }
+      if (sp.closed && points.length > 2 && Math.hypot(points[0] - x, points[1] - y) < 1e-6) points.length -= 2;
+      return { points, closed: sp.closed };
+    });
+  const pathsBounds = (paths) => {
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const { points } of flatten(paths, 2))
+      for (let i = 0; i < points.length; i += 2) {
+        x0 = Math.min(x0, points[i]);
+        x1 = Math.max(x1, points[i]);
+        y0 = Math.min(y0, points[i + 1]);
+        y1 = Math.max(y1, points[i + 1]);
+      }
+    return { x0, y0, x1, y1 };
+  };
+  const polygonPaths = (points) => {
+    const segs = [];
+    const n = points.length / 2;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      segs.push(lineSeg(points[i * 2], points[i * 2 + 1], points[j * 2], points[j * 2 + 1]));
+    }
+    return { x: points[0], y: points[1], segs, closed: true };
+  };
+  const signedArea = (points) => {
+    let a = 0;
+    for (let i = 0, n = points.length / 2; i < n; i++) {
+      const j = (i + 1) % n;
+      a += points[i * 2] * points[j * 2 + 1] - points[j * 2] * points[i * 2 + 1];
+    }
+    return a / 2;
+  };
+  // Points turned to run one way round, for unions by nonzero winding
+  const clockwise = (points) => {
+    if (signedArea(points) >= 0) return points;
+    const out = [];
+    for (let i = points.length - 2; i >= 0; i -= 2) out.push(points[i], points[i + 1]);
+    return out;
+  };
+
+  // A layer's look as filled outlines in its own coordinates: each shape's
+  // fill geometry with its fills, and its stroke geometry, the stroke as a
+  // filled outline, with its strokes. Text's fill geometry is its glyphs'
+  // outlines. Hidden layers are left out, the layer itself aside
+  const visiblePaints = (paints) => (Array.isArray(paints) ? paints.filter((paint) => paint.visible !== false && (paint.opacity ?? 1) > 0) : []);
+  const shapesOf = (root) => {
+    const base = invert(root.absoluteTransform);
+    const items = [];
+    const walk = (node, opacity, top) => {
+      if (!top && node.visible === false) return;
+      const o = opacity * (node.opacity ?? 1);
+      const m = multiply(base, node.absoluteTransform);
+      if ("fillGeometry" in node) {
+        let fills = node.fills;
+        if (fills === window.figma.mixed) {
+          try {
+            fills = node.getRangeFills(0, 1);
+          } catch {
+            fills = [];
+          }
+        }
+        fills = visiblePaints(fills);
+        if (fills.length)
+          for (const g of node.fillGeometry) {
+            const paths = transformPaths(parsePath(g.data), m);
+            if (paths.length) items.push({ paths, winding: g.windingRule === "EVENODD" ? "EVENODD" : "NONZERO", paints: fills, opacity: o });
+          }
+        const strokes = visiblePaints(node.strokes);
+        if (strokes.length && "strokeGeometry" in node)
+          for (const g of node.strokeGeometry) {
+            const paths = transformPaths(parsePath(g.data), m);
+            if (paths.length) items.push({ paths, winding: "NONZERO", paints: strokes, opacity: o });
+          }
+      }
+      if ("children" in node && node.type !== "BOOLEAN_OPERATION") for (const child of node.children) walk(child, o, false);
+    };
+    walk(root, 1, true);
+    return items;
+  };
+  // The line a brush follows, in the layer's own coordinates: a vector's
+  // own paths, a line's length, or any other shape's outline
+  const trackOf = (node) => {
+    if (node.type === "LINE") return [{ x: 0, y: 0, segs: [lineSeg(0, 0, node.width, 0)], closed: false }];
+    if (node.type === "VECTOR") return node.vectorPaths.flatMap((path) => parsePath(path.data));
+    if ("fillGeometry" in node && node.fillGeometry.length) return node.fillGeometry.flatMap((path) => parsePath(path.data));
+    return shapesOf(node).flatMap((item) => item.paths);
+  };
+  // A paint's colour for the preview: a solid's own, a gradient's first
+  const paintCss = (paints, opacity = 1) => {
+    const paint = paints?.[0];
+    const color = paint?.type === "SOLID" ? paint.color : paint?.gradientStops?.[0]?.color;
+    if (!color) return `rgba(150, 150, 150, ${opacity})`;
+    const a = (paint.opacity ?? 1) * (color.a ?? 1) * opacity;
+    return `rgba(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(color.b * 255)}, ${a})`;
+  };
+  const solid = (hex, opacity = 1) => {
+    const [r, g, b] = hexRgb(hex);
+    return { type: "SOLID", color: { r, g, b }, opacity };
+  };
+  const paintColor = (paints) => {
+    const paint = paints?.[0];
+    const color = paint?.type === "SOLID" ? paint.color : paint?.gradientStops?.[0]?.color;
+    return color ? [color.r, color.g, color.b] : [0.6, 0.6, 0.6];
+  };
+
+  // A line as points with the distance along it at each, to find the point
+  // and direction any distance along
+  const measured = ({ points, closed }) => {
+    const pts = closed ? [...points, points[0], points[1]] : points;
+    const at = [0];
+    for (let i = 2; i < pts.length; i += 2) at.push(at[at.length - 1] + Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]));
+    const length = at[at.length - 1];
+    const point = (d) => {
+      const s = closed ? ((d % length) + length) % length : Math.min(length, Math.max(0, d));
+      let lo = 0;
+      let hi = at.length - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (at[mid] <= s) lo = mid;
+        else hi = mid;
+      }
+      const span = at[hi] - at[lo] || 1;
+      const t = (s - at[lo]) / span;
+      return [pts[lo * 2] + (pts[hi * 2] - pts[lo * 2]) * t, pts[lo * 2 + 1] + (pts[hi * 2 + 1] - pts[lo * 2 + 1]) * t];
+    };
+    // Its direction, smoothed over a little of its length either way, so
+    // corners of the flattened curve don't show
+    const direction = (d, reach = 1.5) => {
+      const [ax, ay] = point(closed ? d - reach : Math.max(0, d - reach));
+      const [bx, by] = point(closed ? d + reach : Math.min(length, d + reach));
+      const l = Math.hypot(bx - ax, by - ay) || 1;
+      return [(bx - ax) / l, (by - ay) / l];
+    };
+    return { length, point, direction, closed };
+  };
+
+  let vectoring = null;
+  const VECTOR_ROLE_MADE = "made";
+  const vectorOf = (spec, node) => {
+    try {
+      return node?.type === "GROUP" && node.getSharedPluginData(PLUGIN, spec.id) ? node : null;
+    } catch {
+      return null;
+    }
+  };
+  // An effect's layers, matched to what it makes each time: vectors kept
+  // and given new paths, copies of the same layer moved, the rest made
+  const syncMade = (current, entries) => {
+    const { source, figma, meta } = current;
+    const parent = source.parent;
+    const vectors = [];
+    const clones = new Map();
+    for (const node of current.made) {
+      if (node.removed) continue;
+      const kind = meta.get(node);
+      if (kind?.kind === "vector") vectors.push(node);
+      else if (kind?.kind === "clone") {
+        if (!clones.has(kind.seed)) clones.set(kind.seed, []);
+        clones.get(kind.seed).push(node);
+      } else node.remove();
+    }
+    const flowing = "layoutMode" in parent && parent.layoutMode !== "NONE";
+    const made = [];
+    for (const entry of entries) {
+      let node;
+      try {
+        if (entry.node) {
+          node = entry.node;
+          meta.set(node, { kind: "fixed" });
+        } else if (entry.clone !== undefined) {
+          node = clones.get(entry.clone)?.pop();
+          if (!node) {
+            node = current.seeds[entry.clone].node.clone();
+            node.visible = true;
+            meta.set(node, { kind: "clone", seed: entry.clone, scale: 1 });
+          }
+          const kind = meta.get(node);
+          const ratio = entry.scale / kind.scale;
+          if (Math.abs(ratio - 1) > 1e-4 && "rescale" in node) {
+            node.rescale(ratio);
+            kind.scale = entry.scale;
+          }
+          if (node.parent !== parent) parent.appendChild(node);
+          node.relativeTransform = relativeFor(parent, entry.abs);
+        } else {
+          const b = pathsBounds(entry.paths);
+          if (!Number.isFinite(b.x0)) continue;
+          node = vectors.pop();
+          if (!node) {
+            node = figma.createVector();
+            node.strokes = [];
+            meta.set(node, { kind: "vector" });
+          }
+          const kind = meta.get(node);
+          if (node.parent !== parent) parent.appendChild(node);
+          const data = pathData(entry.paths, -b.x0, -b.y0);
+          const winding = entry.winding ?? "NONZERO";
+          const at = relativeFor(parent, multiply(current.base, moved(b.x0, b.y0)));
+          if (kind.data !== data || kind.winding !== winding) {
+            // Figma moves new paths to start at their own exact bounds and
+            // the layer by as much, which is kept to place it after
+            node.relativeTransform = at;
+            node.vectorPaths = [{ windingRule: winding, data }];
+            const [[a, c, e], [b2, d, f]] = node.relativeTransform;
+            const det = a * d - b2 * c || 1;
+            const [ex, ey] = [e - at[0][2], f - at[1][2]];
+            Object.assign(kind, { data, winding, shift: [(d * ex - c * ey) / det, (-b2 * ex + a * ey) / det] });
+          }
+          const paints = JSON.stringify(entry.paints);
+          if (kind.paints !== paints) {
+            node.fills = entry.paints;
+            kind.paints = paints;
+          }
+          node.opacity = Math.min(1, Math.max(0, entry.opacity ?? 1));
+          if (entry.name && node.name !== entry.name) node.name = entry.name;
+          node.relativeTransform = relativeFor(parent, multiply(current.base, moved(b.x0 + kind.shift[0], b.y0 + kind.shift[1])));
+        }
+      } catch {
+        continue;
+      }
+      if (node.getSharedPluginData(PLUGIN, ROLE) !== VECTOR_ROLE_MADE) node.setSharedPluginData(PLUGIN, ROLE, VECTOR_ROLE_MADE);
+      if (flowing && "layoutPositioning" in node && node.layoutPositioning !== "ABSOLUTE") node.layoutPositioning = "ABSOLUTE";
+      made.push(node);
+    }
+    for (const node of vectors) node.remove();
+    for (const list of clones.values()) for (const node of list) node.remove();
+    current.made = made;
+    // In order, bottom first, under the original or where it is
+    const key = made.map((node) => node.id).join();
+    if (key !== current.order || made.some((node) => node.parent !== parent)) {
+      current.order = key;
+      if (current.spec.place === "below" && !current.spec.above?.(current.settings)) for (const node of made) parent.insertChild(parent.children.indexOf(source), node);
+      else made.forEach((node, i) => parent.insertChild(parent.children.indexOf(source) + 1 + i, node));
+    }
+  };
+
+  const buildVector = (current) => {
+    if (vectoring !== current || current.source.removed) return;
+    let entries = [];
+    try {
+      entries = current.spec.make(current) ?? [];
+    } catch {
+      entries = [];
+    }
+    current.entries = entries;
+    syncMade(current, entries);
+    current.panel?.show();
+  };
+  // Made again on the next frame, or a little later for an effect whose
+  // making is slower, however many changes come meanwhile
+  const scheduleVector = (current) => {
+    if (current.queued) return;
+    current.queued = true;
+    const wait = Math.max(0, (current.spec.wait ?? 0) - (performance.now() - (current.last ?? 0)));
+    setTimeout(
+      () =>
+        requestAnimationFrame(() => {
+          current.queued = false;
+          current.last = performance.now();
+          buildVector(current);
+        }),
+      wait,
+    );
+  };
+
+  const openVector = async (spec, figma, edit = false, run = null) => {
+    if (repeating || disintegrating || crushing || filtering || filling || vectoring) return;
+    const selected = figma.currentPage.selection;
+    if (!selected.length) {
+      figma.notify(spec.ask, { timeout: 2500 });
+      return;
+    }
+    let group = edit ? vectorOf(spec, selected[0]) : null;
+    const settings = structuredClone(spec.defaults);
+    let source;
+    let seedNodes = [];
+    if (group) {
+      source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
+      try {
+        Object.assign(settings, JSON.parse(group.getSharedPluginData(PLUGIN, spec.id)));
+      } catch {}
+      if (!source) {
+        group = null;
+        source = selected[0];
+      }
+    } else if (spec.seeds) {
+      // The largest selected is the path, the rest go along it
+      const area = (node) => {
+        const box = node.absoluteBoundingBox ?? node.absoluteRenderBounds;
+        return box ? Math.max(box.width, 1) * Math.max(box.height, 1) : 0;
+      };
+      source = [...selected].sort((a, b) => area(b) - area(a))[0];
+      seedNodes = selected.filter((node) => node !== source);
+    } else {
+      if (selected.length !== 1) {
+        figma.notify(`Select one layer for ${spec.name}`, { timeout: 2000 });
+        return;
+      }
+      source = selected[0];
+    }
+    if (run) Object.assign(settings, structuredClone(run), { editable: true });
+    if (source.type === "SECTION" || !("clone" in source)) {
+      figma.notify(`Sections can't take ${spec.name}`, { timeout: 2000 });
+      return;
+    }
+    if (spec.seeds) {
+      const known = new Set(seedNodes.map((node) => node.id));
+      for (const id of settings.seeds) known.add(id);
+      settings.seeds = [...known];
+    }
+    const current = { spec, figma, group, source, settings, kept: group ? group.children.filter((child) => child !== source) : [], made: [], meta: new WeakMap(), wasVisible: group ? true : source.visible, sourceWas: source.visible, seeds: [] };
+    vectoring = current;
+    try {
+      figma.commitUndo();
+    } catch {}
+    try {
+      current.base = source.absoluteTransform;
+      current.items = spec.seeds ? [] : shapesOf(source);
+      if (spec.seeds) {
+        current.track = flatten(trackOf(source), 0.75).filter((line) => line.points.length >= 4).map(measured);
+        current.seeds = (
+          await Promise.all(
+            settings.seeds.map(async (id) => {
+              const node = await figma.getNodeByIdAsync(id);
+              return node && !node.removed && "clone" in node && node !== source ? readVectorSeed(node) : null;
+            }),
+          )
+        ).filter(Boolean);
+        settings.seeds = current.seeds.map((seed) => seed.node.id);
+      }
+      current.unit = Math.max(1, source.width ?? 100, source.height ?? 100);
+      spec.read?.(current);
+    } catch {
+      vectoring = null;
+      if (run) throw new Error("Couldn't read the layer");
+      figma.notify("Couldn't read the layer", { timeout: 2000 });
+      return;
+    }
+    if (vectoring !== current) return;
+    if (!run && !spec.seeds && !current.items.length && !spec.anyLayer) {
+      vectoring = null;
+      figma.notify(`${spec.name} needs a shape or text with a fill or stroke`, { timeout: 2500 });
+      return;
+    }
+    for (const node of current.kept) node.visible = false;
+    const parent = source.parent;
+    if (!group && parent && !("layoutMode" in parent && parent.layoutMode !== "NONE")) {
+      current.home = { parent, index: parent.children.indexOf(source) };
+      try {
+        current.wrap = figma.group([source], parent, current.home.index);
+        current.wrap.name = `${spec.name} · ${plainName(source.name)}`;
+        figma.currentPage.selection = [current.wrap];
+      } catch {
+        current.wrap = null;
+      }
+    }
+    current.base = source.absoluteTransform;
+    showVectorSource(current);
+    if (run) {
+      buildVector(current);
+      return finishVector(current, true);
+    }
+    buildVectorPanel(current);
+    buildVector(current);
+  };
+  // The original shown under what's made, hidden where what's made takes
+  // its place, or as its settings say for a brush's path
+  const sourceShown = (spec, settings) => (spec.place === "below" ? true : Boolean(spec.showsSource?.(settings)));
+  const showVectorSource = (current) => {
+    const shown = sourceShown(current.spec, current.settings) && current.wasVisible;
+    if (current.source.visible !== shown) current.source.visible = shown;
+  };
+  // A layer to put along a path, its outlines and size, and its middle in
+  // its own coordinates, so a copy can be turned and sized about it
+  const readVectorSeed = (node) => {
+    const box = node.absoluteBoundingBox ?? node.absoluteRenderBounds ?? { x: 0, y: 0, width: 1, height: 1 };
+    const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+    const mx = box.x + box.width / 2 - e;
+    const my = box.y + box.height / 2 - f;
+    const det = a * d - b * c || 1;
+    const items = shapesOf(node);
+    const local = pathsBounds(items.flatMap((item) => item.paths));
+    return {
+      node,
+      items,
+      size: Math.max(1, box.width, box.height),
+      middle: [(d * mx - c * my) / det, (-b * mx + a * my) / det],
+      linear: [a, c, b, d],
+      local: Number.isFinite(local.x0) ? local : { x0: 0, y0: 0, x1: node.width ?? 1, y1: node.height ?? 1 },
+    };
+  };
+
+  const applyVector = async (current, quiet = false) => {
+    try {
+      await finishVector(current, quiet);
+    } catch (error) {
+      if (vectoring === current) closeVector(current, false);
+      if (quiet) throw error;
+      current.figma.notify(`Couldn't make the ${current.spec.name.toLowerCase()}`, { timeout: 2000 });
+    }
+  };
+  const finishVector = async (current, quiet) => {
+    const { figma, source, settings, spec } = current;
+    if (current.busy) return;
+    current.busy = true;
+    if (current.queued || !current.entries) {
+      current.queued = false;
+      buildVector(current);
+    }
+    for (const node of current.kept) if (!node.removed) node.remove();
+    const made = current.made.filter((node) => !node.removed);
+    source.visible = sourceShown(spec, settings) && current.wasVisible;
+    let result = current.group ?? current.wrap;
+    if (settings.editable) {
+      const parent = source.parent;
+      if (!result || result.removed) {
+        result = figma.group([source, ...made], parent, parent.children.indexOf(source));
+        result.name = `${spec.name} · ${plainName(source.name)}`;
+      } else for (const node of made) if (node.parent !== result) result.appendChild(node);
+      source.setSharedPluginData(PLUGIN, ROLE, "source");
+      result.setSharedPluginData(PLUGIN, spec.id, JSON.stringify(settings));
+      result.setSharedPluginData(PLUGIN, OFF, "");
+      figma.currentPage.selection = [result];
+    } else {
+      for (const node of made) node.setSharedPluginData(PLUGIN, ROLE, "");
+      if (result && !result.removed) {
+        result.setSharedPluginData(PLUGIN, spec.id, "");
+        source.setSharedPluginData(PLUGIN, ROLE, "");
+      }
+      if (current.wrap && !current.wrap.removed) figma.ungroup(current.wrap);
+      // What's made takes the original's place, unless it shows
+      const keep = sourceShown(spec, settings);
+      if (!keep && !source.removed) source.remove();
+      figma.currentPage.selection = made.length ? (keep ? [source, ...made] : made) : keep ? [source] : [];
+    }
+    try {
+      figma.commitUndo();
+    } catch {}
+    closeVector(current, true);
+    if (current.group && settings.editable) restackAbove(figma, current.group);
+    if (!quiet) figma.notify(spec.done?.(current) ?? `${spec.name} made`, { timeout: 1500 });
+  };
+  const closeVector = (current, applied) => {
+    if (vectoring !== current) return;
+    vectoring = null;
+    closeColorPicker();
+    current.spec.close?.(current);
+    if (!applied) {
+      for (const node of current.made) if (!node.removed) node.remove();
+      for (const node of current.kept) if (!node.removed) node.visible = true;
+      const { home, wrap, source } = current;
+      if (!source.removed) source.visible = current.sourceWas;
+      if (wrap && home && !source.removed && !home.parent.removed) {
+        try {
+          home.parent.insertChild(Math.min(home.index, home.parent.children.length), source);
+          if (!wrap.removed) wrap.remove();
+        } catch {}
+      }
+      try {
+        if (current.group && !current.group.removed && isOff(current.group)) setOff(current.group, true);
+        if (current.group && !current.group.removed) current.figma.currentPage.selection = [current.group];
+        else if (!source.removed) current.figma.currentPage.selection = [source];
+      } catch {}
+    }
+    current.panel?.close();
+    current.root?.remove();
+    removeEventListener("keydown", current.keys, true);
+  };
+
+  // The preview: what's made, fitted, drawn from the same paths, with the
+  // original over it where it shows
+  const drawVectorPreview = (current) => {
+    const canvas = current.preview;
+    if (!canvas) return;
+    const ratio = devicePixelRatio || 1;
+    const box = canvas.getBoundingClientRect();
+    const [cw, ch] = [Math.round(box.width * ratio), Math.round(box.height * ratio)];
+    if (canvas.width !== cw || canvas.height !== ch) [canvas.width, canvas.height] = [cw, ch];
+    const context = canvas.getContext("2d");
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+    // Everything in the original's coordinates: paths, and copies by
+    // their transform from it
+    const toLocal = invert(current.base);
+    const shapes = [];
+    for (const entry of current.entries ?? []) {
+      if (entry.paths) shapes.push({ paths: entry.paths, winding: entry.winding, fill: paintCss(entry.paints, entry.opacity ?? 1) });
+      else if (entry.clone !== undefined) {
+        const seed = current.seeds[entry.clone];
+        if (!seed) continue;
+        // The copy's transform, sized, from the seed's own coordinates
+        const m = multiply(toLocal, multiply(entry.abs, [[entry.scale, 0, 0], [0, entry.scale, 0]]));
+        for (const item of seed.items) shapes.push({ paths: transformPaths(item.paths, m), winding: item.winding, fill: paintCss(item.paints, item.opacity) });
+      }
+    }
+    const extra = current.spec.preview?.(current) ?? [];
+    const top = sourceShown(current.spec, current.settings) ? current.items.map((item) => ({ paths: item.paths, winding: item.winding, fill: paintCss(item.paints, item.opacity) })) : [];
+    const track = current.spec.seeds && current.settings.showPath !== undefined ? current.track : null;
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    const grow = (b) => {
+      x0 = Math.min(x0, b.x0);
+      y0 = Math.min(y0, b.y0);
+      x1 = Math.max(x1, b.x1);
+      y1 = Math.max(y1, b.y1);
+    };
+    for (const shape of [...shapes, ...top]) grow(pathsBounds(shape.paths));
+    for (const shape of extra) grow(shape.bounds);
+    if (track) for (const line of current.track) for (let d = 0; d <= line.length; d += Math.max(1, line.length / 64)) {
+      const [x, y] = line.point(d);
+      grow({ x0: x, y0: y, x1: x, y1: y });
+    }
+    if (!Number.isFinite(x0)) return;
+    const pad = 16;
+    const fit = Math.min((box.width - pad * 2) / Math.max(1, x1 - x0), (box.height - pad * 2) / Math.max(1, y1 - y0));
+    const ox = box.width / 2 - ((x0 + x1) / 2) * fit;
+    const oy = box.height / 2 - ((y0 + y1) / 2) * fit;
+    context.save();
+    context.translate(ox, oy);
+    context.scale(fit, fit);
+    const paint = (shape) => {
+      context.fillStyle = shape.fill;
+      context.fill(new Path2D(pathData(shape.paths)), shape.winding === "EVENODD" ? "evenodd" : "nonzero");
+    };
+    if (track && current.settings.showPath) {
+      context.strokeStyle = "rgba(255, 255, 255, 0.35)";
+      context.lineWidth = 1 / fit;
+      for (const line of current.track) {
+        context.beginPath();
+        for (let d = 0; d <= line.length; d += Math.max(0.5, line.length / 400)) context.lineTo(...line.point(d));
+        context.stroke();
+      }
+    }
+    for (const shape of extra.filter((one) => one.under)) shape.draw(context, fit);
+    for (const shape of shapes) paint(shape);
+    for (const shape of extra.filter((one) => !one.under && !one.over)) shape.draw(context, fit);
+    for (const shape of top) paint(shape);
+    for (const shape of extra.filter((one) => one.over)) shape.draw(context, fit);
+    context.restore();
+  };
+
+  const buildVectorPanel = (current) => {
+    const { spec } = current;
+    const s = current.settings;
+    const rows = [];
+    const shows = [];
+    const closes = [];
+    const change = (key, value) => {
+      s[key] = value;
+      if (key === "showPath") showVectorSource(current);
+      scheduleVector(current);
+      show();
+    };
+    const slider = makeSlider({ s, unit: current.unit, rows, change, limits: spec.limits ?? {} });
+    const labelled = (text, control) => element("div", { className: "row" }, element("span", { className: "label", textContent: text }), control);
+    const ui = {
+      s,
+      unit: current.unit,
+      change,
+      section: (caption, ...parts) => element("section", {}, ...(caption ? [element("div", { className: "caption", textContent: caption })] : []), ...parts.filter(Boolean)),
+      sliders: (list) => element("div", { className: "rows" }, ...list.map(slider)),
+      segments: (key, label, options, wide = false) => {
+        const control = segments(label, options, () => s[key], (value) => change(key, value));
+        shows.push(() => control.show());
+        return wide ? element("div", { className: "row wide" }, control) : labelled(label, control);
+      },
+      select: (key, label, options) => {
+        const control = select(label, options, () => s[key], (value) => change(key, value));
+        shows.push(() => control.show());
+        closes.push(() => control.close());
+        return labelled(label, control);
+      },
+      check: (key, label, title = "") => {
+        const input = element("input", { type: "checkbox" });
+        input.addEventListener("change", () => change(key, input.checked));
+        shows.push(() => (input.checked = Boolean(s[key])));
+        return checkRow(label, input, title);
+      },
+      color: (key, label) => {
+        const { swatch, paint } = colorSwatch(() => s[key], (value) => change(key, value), label);
+        const hex = element("input", { type: "text", spellcheck: false, maxLength: 7 });
+        hex.setAttribute("aria-label", `${label}, hex`);
+        hex.addEventListener("change", () => {
+          const parsed = parseHex(hex.value);
+          if (parsed) change(key, parsed);
+          else hex.value = s[key].slice(1);
+        });
+        hex.addEventListener("keydown", (event) => event.key === "Enter" && hex.blur());
+        hex.addEventListener("focus", () => hex.select());
+        shows.push(() => {
+          paint();
+          if (document.activeElement !== hex) hex.value = s[key].slice(1);
+        });
+        return element("div", { className: "row" }, element("span", { className: "label", textContent: label }), element("div", { className: "color-field" }, swatch, hex));
+      },
+      shuffle: (key, label = "Layout") => {
+        const button = element("button", { type: "button", className: "chip", textContent: "Shuffle" });
+        button.addEventListener("click", () => change(key, Math.floor(Math.random() * 65536)));
+        button.style.gridColumn = "span 2";
+        button.style.justifySelf = "start";
+        return labelled(label, button);
+      },
+      when: (node, test) => {
+        shows.push(() => (node.hidden = !test()));
+        return node;
+      },
+      // The layers a brush puts along its path, each with a way to take it
+      // off, and a way to add what's selected
+      seeds: () => {
+        const list = element("div", { className: "rows" });
+        const hint = element("div", { className: "row" }, element("span", { className: "label", textContent: "Select layers on the canvas, then add them" }));
+        hint.style.gridTemplateColumns = "1fr";
+        const add = element("button", { type: "button", className: "chip", textContent: "Add selected" });
+        let shape = "";
+        add.addEventListener("click", () => {
+          const ids = new Set(current.seeds.map((seed) => seed.node.id));
+          const own = new Set([current.source.id, current.wrap?.id, current.group?.id, ...current.made.map((node) => node.id)]);
+          const fresh = current.figma.currentPage.selection.filter((node) => !ids.has(node.id) && !own.has(node.id) && "clone" in node);
+          if (!fresh.length) return current.figma.notify("Select layers to add first", { timeout: 2000 });
+          try {
+            current.seeds.push(...fresh.map(readVectorSeed));
+          } catch {
+            return current.figma.notify("Couldn't read those layers", { timeout: 2000 });
+          }
+          s.seeds = current.seeds.map((seed) => seed.node.id);
+          spec.read?.(current);
+          scheduleVector(current);
+          show();
+        });
+        const adding = element("div", { className: "row" }, element("span", { className: "label", textContent: spec.seedsLabel ?? "Along the path" }), element("div", { className: "chips" }, add));
+        adding.style.gridTemplateColumns = "1fr auto";
+        shows.push(() => {
+          hint.hidden = current.seeds.length > 0;
+          const now = current.seeds.map((seed) => seed.node.id).join();
+          if (now === shape) return;
+          shape = now;
+          list.replaceChildren();
+          current.seeds.forEach((seed, i) => {
+            const name = element("span", { className: "label", textContent: seed.node.name });
+            Object.assign(name.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+            const remove = element("button", { type: "button", className: "icon-button", title: "Remove", innerHTML: REMOVE });
+            remove.addEventListener("click", () => {
+              current.seeds.splice(i, 1);
+              s.seeds = current.seeds.map((one) => one.node.id);
+              spec.read?.(current);
+              scheduleVector(current);
+              show();
+            });
+            const row = list.appendChild(element("div", { className: "row" }, name, remove));
+            row.style.gridTemplateColumns = "1fr 24px";
+          });
+        });
+        return element("section", {}, element("div", { className: "caption", textContent: spec.seedsCaption ?? "Layers" }), adding, list, hint);
+      },
+      current,
+    };
+    const canvas = element("canvas", { className: "preview" });
+    canvas.setAttribute("aria-hidden", "true");
+    current.preview = canvas;
+    const pick = (values) => {
+      const kept = Object.fromEntries(["editable", "seeds", ...(spec.keep ?? [])].map((key) => [key, s[key]]));
+      Object.assign(s, structuredClone(spec.defaults), values(current.unit), kept);
+      scheduleVector(current);
+      show();
+    };
+    const presets = spec.presets?.length ? makeChips(spec.presets, pick) : null;
+    const sections = spec.panel(ui);
+    const editable = element("input", { type: "checkbox" });
+    editable.addEventListener("change", () => change("editable", editable.checked));
+    const result = element("section", {}, checkRow("Keep editable", editable, `The original kept in a group ${spec.name} can change later`));
+    const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
+    reset.addEventListener("click", () => pick(spec.start ?? (() => ({}))));
+    const scroll = element("div", { className: "scroll" }, ...[presets, ...sections].filter(Boolean), result, element("div", { className: "under" }, reset));
+    const name = element("div", { className: "source", textContent: current.source.name });
+    const cancel = element("button", { type: "button", className: "button", textContent: "Cancel" });
+    cancel.addEventListener("click", () => closeVector(current, false));
+    const label = current.group ? "Update" : spec.verb;
+    const go = element("button", { type: "button", className: "button primary", textContent: label });
+    go.addEventListener("click", () => !current.busy && applyVector(current));
+    const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
+    const root = makePanel(current.group ? `${spec.name} · ${plainName(current.source.name)}` : spec.name, () => closeVector(current, false), canvas, scroll, footer);
+    const show = () => {
+      for (const fn of shows) fn();
+      for (const row of rows) row.show();
+      editable.checked = s.editable;
+      go.disabled = Boolean(spec.seeds && !current.seeds.length);
+      drawVectorPreview(current);
+    };
+    current.root = root;
+    current.panel = { close: () => closes.forEach((fn) => fn()), show };
+    show();
+    current.keys = panelKeys(root, () => vectoring === current, () => closeVector(current, false), () => !current.busy && applyVector(current));
+    addEventListener("keydown", current.keys, true);
+    go.focus();
+  };
+
+  const vectorEffect = (spec) => {
+    const effect = {
+      id: spec.id,
+      name: spec.name,
+      kind: "vector",
+      about: spec.about,
+      icon: spec.icon,
+      of: (node) => vectorOf(spec, node),
+      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, spec.id) || "{}"),
+      summary: (s) => spec.summary({ ...structuredClone(spec.defaults), ...s }),
+      keepsSource: (s) => sourceShown(spec, { ...spec.defaults, ...s }),
+      open: guarded((figma, edit, run) => openVector(spec, figma, edit, run)),
+      thumb: () => spec.thumb(),
+    };
+    EFFECTS.push(effect);
+    return effect;
+  };
+  const turnOf = (degrees) => [Math.cos((degrees * Math.PI) / 180), Math.sin((degrees * Math.PI) / 180)];
+  const itemsBounds = (items) => pathsBounds(items.flatMap((item) => item.paths));
+
+  // ---------- Warp ----------
+
+  // Bends the layer's outlines as Illustrator's Warp does: each point moved
+  // by where it is in the layer's box, the outlines cut first into short
+  // curves so the bend follows them. Horizontal bends across, Vertical
+  // the same turned a quarter. Distortion then tapers it, as if seen at an
+  // angle
+  const WARP_STYLES = [
+    ["arc", "Arc"],
+    ["arcLower", "Arc Lower"],
+    ["arcUpper", "Arc Upper"],
+    ["arch", "Arch"],
+    ["bulge", "Bulge"],
+    ["shellLower", "Shell Lower"],
+    ["shellUpper", "Shell Upper"],
+    ["flag", "Flag"],
+    ["wave", "Wave"],
+    ["fish", "Fish"],
+    ["rise", "Rise"],
+    ["fisheye", "Fisheye"],
+    ["inflate", "Inflate"],
+    ["squeeze", "Squeeze"],
+    ["twist", "Twist"],
+  ];
+  // A point `x`, `y` from the box's middle, `hw` and `hh` its half sizes,
+  // bent by `b`, -1 to 1, as the style says
+  const warpPoint = (style, x, y, hw, hh, b) => {
+    const u = x / hw;
+    const v = y / hh;
+    const t = (v + 1) / 2;
+    const across = 1 - u * u;
+    switch (style) {
+      case "arc": {
+        // Round an arc of a circle, its middle line keeping its length
+        const angle = Math.abs(b) * Math.PI;
+        if (angle < 1e-3) return [x, y];
+        const sign = b > 0 ? 1 : -1;
+        const R = hw / (angle / 2);
+        const theta = u * (angle / 2);
+        const r = R - y * sign;
+        return [r * Math.sin(theta), sign * (R - r * Math.cos(theta))];
+      }
+      case "arcLower":
+        return [x, y + b * hh * across * t];
+      case "arcUpper":
+        return [x, y - b * hh * across * (1 - t)];
+      case "arch":
+        return [x, y - b * hh * across];
+      case "bulge":
+        return [x, y * (1 + b * across)];
+      case "shellLower":
+        return [x * (1 - 0.35 * b * (1 - t)), y + b * hh * across * t * t];
+      case "shellUpper":
+        return [x * (1 - 0.35 * b * t), y - b * hh * across * (1 - t) * (1 - t)];
+      case "flag":
+        return [x, y + b * hh * 0.6 * Math.sin(Math.PI * u)];
+      case "wave":
+        return [x, y + b * hh * 0.6 * Math.sin(Math.PI * u) * (0.6 + 0.4 * v)];
+      case "fish":
+        return [x, y * (1 + b * 0.7 * Math.cos((u + 0.35) * Math.PI * 0.75))];
+      case "rise":
+        return [x, y - b * hh * 0.5 * (((u + 1) * (u + 1)) / 2 - 0.5)];
+      case "fisheye": {
+        const r = Math.min(1, u * u + v * v);
+        const k = 1 + b * 0.6 * (1 - r);
+        return [x * k, y * k];
+      }
+      case "inflate":
+        return [x * (1 + b * 0.4 * (1 - v * v)), y * (1 + b * 0.4 * across)];
+      case "squeeze":
+        return [x * (1 - b * 0.4 * (1 - v * v)), y * (1 + b * 0.25 * across)];
+      case "twist": {
+        const r = Math.min(1, Math.hypot(u, v) / Math.SQRT2);
+        const a = b * Math.PI * 0.6 * (1 - r) * (1 - r);
+        const [c, sn] = [Math.cos(a), Math.sin(a)];
+        return [x * c - y * sn, x * sn + y * c];
+      }
+      default:
+        return [x, y];
+    }
+  };
+  const WARP_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 10c5-4 10-4 15 0v5.5c-5-4-10-4-15 0z"/></svg>`;
+  const warpEffect = vectorEffect({
+    id: "warp",
+    name: "Warp",
+    about: "Bend a shape or text into an arc, flag, wave or bulge",
+    icon: WARP_ICON,
+    place: "replace",
+    verb: "Warp",
+    ask: "Select a shape or text to warp",
+    defaults: { style: "arc", direction: "horizontal", bend: 50, distortX: 0, distortY: 0, editable: true },
+    limits: { bend: [-100, 100], distortX: [-100, 100], distortY: [-100, 100] },
+    presets: [
+      ["Arc", () => ({ style: "arc", bend: 50 })],
+      ["Arch", () => ({ style: "arch", bend: 40 })],
+      ["Flag", () => ({ style: "flag", bend: 50 })],
+      ["Bulge", () => ({ style: "bulge", bend: 40 })],
+      ["Rise", () => ({ style: "rise", bend: 50 })],
+      ["Twist", () => ({ style: "twist", bend: 50 })],
+    ],
+    summary: (s) => `${WARP_STYLES.find(([id]) => id === s.style)?.[1] ?? "Arc"} · ${s.bend}%`,
+    read: (current) => {
+      const b = itemsBounds(current.items);
+      current.box = b;
+      const step = Math.max(0.5, Math.max(b.x1 - b.x0, b.y1 - b.y0) / 48);
+      current.fine = current.items.map((item) => ({ ...item, paths: subdivide(item.paths, step) }));
+    },
+    make: (current) => {
+      const s = current.settings;
+      const { x0, y0, x1, y1 } = current.box;
+      const cx = (x0 + x1) / 2;
+      const cy = (y0 + y1) / 2;
+      const vertical = s.direction === "vertical";
+      const hw = Math.max(1e-3, ((vertical ? y1 - y0 : x1 - x0) / 2));
+      const hh = Math.max(1e-3, ((vertical ? x1 - x0 : y1 - y0) / 2));
+      const b = s.bend / 100;
+      const dx = s.distortX / 100;
+      const dy = s.distortY / 100;
+      const bend = (px, py) => {
+        // Turned a quarter for Vertical, bent, turned back
+        let [x, y] = vertical ? [py - cy, -(px - cx)] : [px - cx, py - cy];
+        [x, y] = warpPoint(s.style, x, y, hw, hh, b);
+        if (vertical) [x, y] = [-y, x];
+        // Tapered, as Illustrator's distortion
+        const W = vertical ? hh : hw;
+        const H = vertical ? hw : hh;
+        const ny = y * (1 + dx * 0.5 * (x / W));
+        const nx = x * (1 + dy * 0.5 * (y / H));
+        return [cx + nx, cy + ny];
+      };
+      return current.fine.map((item) => ({ paths: mapPaths(item.paths, bend), winding: item.winding, paints: item.paints, opacity: item.opacity, name: "Warp" }));
+    },
+    panel: (ui) => [
+      ui.section(
+        "",
+        ui.select("style", "Style", WARP_STYLES),
+        ui.segments("direction", "Direction", [
+          ["horizontal", "Horizontal"],
+          ["vertical", "Vertical"],
+        ]),
+        ui.sliders([["bend", "Bend", "%", () => ({ min: -100, max: 100 })]]),
+      ),
+      ui.section(
+        "Distortion",
+        ui.sliders([
+          ["distortX", "Horizontal", "%", () => ({ min: -100, max: 100 })],
+          ["distortY", "Vertical", "%", () => ({ min: -100, max: 100 })],
+        ]),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      g.fillStyle = "#eef3fa";
+      g.fillRect(0, 0, THUMB, THUMB);
+      // Stripes and a frame, as a flag, waved
+      const stripes = [];
+      for (let i = 0; i < 5; i++) stripes.push(polygonPaths([-50, -36 + i * 14.4, 50, -36 + i * 14.4, 50, -36 + (i + 1) * 14.4, -50, -36 + (i + 1) * 14.4]));
+      const colors = ["#3b6fe0", "#eef3fa", "#3b6fe0", "#eef3fa", "#3b6fe0"];
+      stripes.forEach((paths, i) => {
+        const bent = mapPaths(subdivide([paths], 3), (x, y) => warpPoint("flag", x, y, 50, 36, 0.55));
+        g.fillStyle = colors[i];
+        g.fill(new Path2D(pathData(bent, 80, 80)));
+      });
+      const frame = mapPaths(subdivide([polygonPaths([-50, -36, 50, -36, 50, 36, -50, 36])], 3), (x, y) => warpPoint("flag", x, y, 50, 36, 0.55));
+      g.strokeStyle = "#1e2a44";
+      g.lineWidth = 2.5;
+      g.stroke(new Path2D(pathData(frame, 80, 80)));
+      return tile;
+    },
+  });
+
+  // ---------- Brushes ----------
+
+  // Copies of layers along a path, or the layers bent along it. The
+  // largest selected is the path, the rest go along it. The path's hidden
+  // unless Show the path is on
+  const SCATTER_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 16.5c3-5 6-6 9-4.5s4.5 0 6-4.5"/><circle ${STROKE} cx="6.5" cy="9.5" r="1.5"/><circle ${STROKE} cx="12" cy="16.5" r="1"/><circle ${STROKE} cx="16.5" cy="7.5" r="1.5"/></svg>`;
+  const scatterEffect = vectorEffect({
+    id: "scatterBrush",
+    name: "Scatter Brush",
+    about: "Scatter copies of layers along a path",
+    icon: SCATTER_ICON,
+    place: "replace",
+    verb: "Scatter",
+    seeds: true,
+    seedsCaption: "Layers",
+    ask: "Select a path and the layers to scatter along it",
+    showsSource: (s) => s.showPath,
+    defaults: { seeds: [], spacing: 120, size: 100, sizeVary: 0, follow: true, angle: 0, angleVary: 0, scatter: 0, order: "sequence", seed: 1, showPath: false, editable: true },
+    limits: { spacing: [5, 2000], size: [1, 2000], sizeVary: [0, 100], angle: [-360, 360], angleVary: [0, 180], scatter: [0, 2000] },
+    presets: [
+      ["Even", () => ({})],
+      ["Scattered", () => ({ spacing: 70, sizeVary: 50, angleVary: 180, scatter: 120, order: "random" })],
+      ["Confetti", () => ({ spacing: 45, size: 60, sizeVary: 60, angleVary: 180, scatter: 200, order: "random" })],
+      ["Trail", () => ({ spacing: 90, size: 100, sizeVary: 0, scatter: 0, follow: true })],
+    ],
+    summary: (s) => `${(s.seeds ?? []).length} ${(s.seeds ?? []).length === 1 ? "layer" : "layers"} · ${s.spacing}%`,
+    done: (current) => `${current.made.length} ${current.made.length === 1 ? "copy" : "copies"} placed`,
+    make: (current) => {
+      const s = current.settings;
+      const { seeds, track } = current;
+      if (!seeds.length || !track?.length) return [];
+      const average = seeds.reduce((sum, seed) => sum + seed.size, 0) / seeds.length;
+      const step = Math.max(1, average * (s.size / 100) * (s.spacing / 100));
+      const random = (i, j) => hash2(i, j, s.seed | 0);
+      const [[ta, tc, te], [tb, td, tf]] = current.base;
+      const entries = [];
+      let i = 0;
+      for (const line of track) {
+        const ends = line.closed ? line.length - step * 0.5 : line.length;
+        for (let d = 0; d <= ends + 1e-6 && entries.length < 1000; d += step, i++) {
+          const which = s.order === "random" ? Math.floor(random(i, 1) * seeds.length) % seeds.length : i % seeds.length;
+          const seed = seeds[which];
+          const scale = Math.max(0.01, (s.size / 100) * (1 + (s.sizeVary / 100) * (random(i, 2) * 2 - 1)));
+          const [lx, ly] = line.point(d);
+          const [ux, uy] = line.direction(d);
+          // On the page, the path's own transform applied
+          const px = ta * lx + tc * ly + te;
+          const py = tb * lx + td * ly + tf;
+          let [dx, dy] = [ta * ux + tc * uy, tb * ux + td * uy];
+          const l = Math.hypot(dx, dy) || 1;
+          [dx, dy] = [dx / l, dy / l];
+          const off = (s.scatter / 100) * seed.size * 0.5 * (random(i, 3) * 2 - 1);
+          const cx = px - dy * off;
+          const cy = py + dx * off;
+          const turn = (s.follow ? Math.atan2(dy, dx) : 0) + (((s.angle + s.angleVary * (random(i, 4) * 2 - 1)) * Math.PI) / 180);
+          const [c, sn] = [Math.cos(turn), Math.sin(turn)];
+          const [a, cc, b, dd] = seed.linear;
+          const m = [c * a - sn * b, c * cc - sn * dd, sn * a + c * b, sn * cc + c * dd];
+          const mx = seed.middle[0] * scale;
+          const my = seed.middle[1] * scale;
+          entries.push({
+            clone: which,
+            scale,
+            abs: [
+              [m[0], m[1], cx - (m[0] * mx + m[1] * my)],
+              [m[2], m[3], cy - (m[2] * mx + m[3] * my)],
+            ],
+          });
+        }
+      }
+      return entries;
+    },
+    panel: (ui) => [
+      ui.seeds(),
+      ui.section(
+        "Spacing and size",
+        ui.sliders([
+          ["spacing", "Spacing", "%", () => ({ min: 10, max: 400, middle: 100 })],
+          ["size", "Size", "%", () => ({ min: 5, max: 400, middle: 100 })],
+          ["sizeVary", "Size varies", "%", () => ({ min: 0, max: 100 })],
+          ["scatter", "Scatter", "%", () => ({ min: 0, max: 400, shape: "curve" })],
+        ]),
+      ),
+      ui.section(
+        "Turn",
+        ui.check("follow", "Turn with the path"),
+        ui.sliders([
+          ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+          ["angleVary", "Angle varies", "°", () => ({ min: 0, max: 180 })],
+        ]),
+        ui.segments("order", "Order", [
+          ["sequence", "In turn"],
+          ["random", "Random"],
+        ]),
+        ui.shuffle("seed"),
+      ),
+      ui.section("", ui.check("showPath", "Show the path", "The path under the copies, or only the copies")),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      g.fillStyle = "#eef3fa";
+      g.fillRect(0, 0, THUMB, THUMB);
+      const line = measured(flatten([{ x: 18, y: 118, closed: false, segs: [[48, 40, 92, 150, 142, 46]] }], 1)[0]);
+      g.strokeStyle = "#c3cde0";
+      g.lineWidth = 1.5;
+      g.beginPath();
+      for (let d = 0; d <= line.length; d += 2) g.lineTo(...line.point(d));
+      g.stroke();
+      const colors = ["#3b6fe0", "#1fae9b", "#f2b13a"];
+      for (let i = 0, d = 6; d < line.length; d += 17, i++) {
+        const [x, y] = line.point(d);
+        const [ux, uy] = line.direction(d);
+        const off = (hash2(i, 3, 5) * 2 - 1) * 16;
+        const r = 4 + hash2(i, 2, 5) * 6;
+        g.save();
+        g.translate(x - uy * off, y + ux * off);
+        g.rotate(hash2(i, 4, 5) * Math.PI * 2);
+        g.fillStyle = colors[i % 3];
+        g.beginPath();
+        for (let k = 0; k < 10; k++) {
+          const a = (k / 10) * Math.PI * 2 - Math.PI / 2;
+          const dd = k % 2 ? r * 0.45 : r;
+          g.lineTo(Math.cos(a) * dd, Math.sin(a) * dd);
+        }
+        g.fill();
+        g.restore();
+      }
+      return tile;
+    },
+  });
+
+  // The layers bent along the path end to end, as Illustrator's pattern
+  // brush lays its tiles: a point a way across a tile goes as far along the
+  // path, and as far from it as it was from the tile's middle. Stretch to
+  // fit sizes the tiles so a whole number fills each path
+  const PATTERN_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M4.5 15c2.5-4 5-4 7.5 0s5 4 7.5 0"/><path ${STROKE} d="M4.5 11c2.5-4 5-4 7.5 0s5 4 7.5 0"/><path ${STROKE} d="M8 9v4.5M12 11v4M16 13v4.5"/></svg>`;
+  const patternEffect = vectorEffect({
+    id: "patternBrush",
+    name: "Pattern Brush",
+    about: "Bend layers end to end along a path",
+    icon: PATTERN_ICON,
+    place: "replace",
+    verb: "Make",
+    seeds: true,
+    seedsCaption: "Tiles",
+    seedsLabel: "Bent along the path",
+    ask: "Select a path and the layers to bend along it",
+    showsSource: (s) => s.showPath,
+    defaults: { seeds: [], size: 100, spacing: 0, fit: "stretch", flip: false, offset: 0, showPath: false, editable: true },
+    limits: { size: [1, 2000], spacing: [-10000, 10000], offset: [-10000, 10000] },
+    presets: [
+      ["Stretched", () => ({ fit: "stretch", spacing: 0 })],
+      ["Spaced", (u) => ({ fit: "stretch", spacing: Math.round(u * 0.02) })],
+      ["As drawn", () => ({ fit: "exact", spacing: 0 })],
+    ],
+    summary: (s) => `${(s.seeds ?? []).length} ${(s.seeds ?? []).length === 1 ? "tile" : "tiles"} · ${s.fit === "stretch" ? "Stretched" : "As drawn"}`,
+    read: (current) => {
+      // Each tile cut into short curves, so it bends smoothly
+      for (const seed of current.seeds) {
+        if (seed.fine) continue;
+        const step = Math.max(0.5, Math.max(seed.local.x1 - seed.local.x0, seed.local.y1 - seed.local.y0) / 24);
+        seed.fine = seed.items.map((item) => ({ ...item, paths: subdivide(item.paths, step) }));
+      }
+    },
+    make: (current) => {
+      const s = current.settings;
+      const { seeds, track } = current;
+      if (!seeds.length || !track?.length) return [];
+      const k = s.size / 100;
+      const out = seeds.map((seed) => seed.fine.map((item) => ({ paths: [], winding: item.winding, paints: item.paints, opacity: item.opacity, name: seed.node.name })));
+      for (const line of track) {
+        const lengths = seeds.map((seed) => (seed.local.x1 - seed.local.x0) * k);
+        const average = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+        const gap = s.spacing;
+        let count = Math.max(1, Math.floor((line.length + gap) / Math.max(1, average + gap)));
+        if (count > 600) count = 600;
+        // Stretched so the tiles meet the path's ends, or as drawn
+        const stretch = s.fit === "stretch" ? (line.length - gap * (line.closed ? count : count - 1)) / Math.max(1e-3, average * count) : 1;
+        let at = 0;
+        for (let n = 0; n < count; n++) {
+          const which = n % seeds.length;
+          const seed = seeds[which];
+          const { x0, y0, y1 } = seed.local;
+          const middle = (y0 + y1) / 2;
+          const across = k * stretch;
+          const start = at;
+          const bend = (x, y) => {
+            const d = start + (x - x0) * across;
+            const off = ((s.flip ? -1 : 1) * (y - middle) * k) + s.offset;
+            const [px, py] = line.point(d);
+            const [ux, uy] = line.direction(d, 2);
+            return [px - uy * off, py + ux * off];
+          };
+          seed.fine.forEach((item, j) => out[which][j].paths.push(...mapPaths(item.paths, bend)));
+          at += lengths[which] * stretch + gap;
+          if (at > line.length + 1e-3 && !line.closed) break;
+        }
+      }
+      return out.flat().filter((entry) => entry.paths.length);
+    },
+    panel: (ui) => [
+      ui.seeds(),
+      ui.section(
+        "Tiles",
+        ui.segments("fit", "Fit", [
+          ["stretch", "Stretch to fit", "Tiles sized so they fill the path end to end"],
+          ["exact", "As drawn", "Tiles their own length, the end left over"],
+        ]),
+        ui.sliders([
+          ["size", "Size", "%", () => ({ min: 5, max: 400, middle: 100 })],
+          ["spacing", "Spacing", "px", (u) => ({ min: -Math.max(10, Math.round(u * 0.05)), max: Math.max(20, Math.round(u * 0.2)) })],
+          ["offset", "Offset", "px", (u) => ({ min: -Math.max(10, Math.round(u * 0.1)), max: Math.max(10, Math.round(u * 0.1)) })],
+        ]),
+        ui.check("flip", "Flip across the path"),
+      ),
+      ui.section("", ui.check("showPath", "Show the path", "The path under the tiles, or only the tiles")),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      g.fillStyle = "#eef3fa";
+      g.fillRect(0, 0, THUMB, THUMB);
+      const line = measured(flatten([{ x: 16, y: 104, closed: false, segs: [[52, 20, 104, 150, 144, 58]] }], 1)[0]);
+      // Diamonds on a band, end to end, bent with the path
+      const tiles = 7;
+      const length = line.length / tiles;
+      for (let n = 0; n < tiles; n++) {
+        const bend = (x, y) => {
+          const d = n * length + x * length;
+          const [px, py] = line.point(d);
+          const [ux, uy] = line.direction(d, 2);
+          return [px - uy * y, py + ux * y];
+        };
+        const band = mapPaths(subdivide([polygonPaths([0, -9, 1, -9, 1, 9, 0, 9])], 0.05), bend);
+        g.fillStyle = "#3b6fe0";
+        g.fill(new Path2D(pathData(band)));
+        const diamond = mapPaths(subdivide([polygonPaths([0.5, -7, 0.85, 0, 0.5, 7, 0.15, 0])], 0.05), bend);
+        g.fillStyle = n % 2 ? "#f2b13a" : "#1fae9b";
+        g.fill(new Path2D(pathData(diamond)));
+      }
+      return tile;
+    },
+  });
+
+  // ---------- Depth ----------
+
+  // The outlines as lines, each edge and the same edge moved by the depth
+  // making a side
+  const edgesOf = (current) => {
+    const step = Math.max(0.5, current.unit / 300);
+    return current.items.map((item) => flatten(item.paths, step).filter((line) => line.points.length >= 6 && line.closed !== false));
+  };
+
+  // Gives the layer depth behind it, as Illustrator's 3D Extrude seen
+  // front on: the outline swept back along an angle, each side face shaded
+  // by which way it faces the light, the back face darkest. The faces
+  // are drawn back to front, as far along the depth as they reach, so
+  // nearer sides cover farther ones, side faces of a shade in a row made
+  // one layer. The original stays on top as the front
+  const EXTRUDE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 6.5h9v9h-9z"/><path ${STROKE} d="m14.5 6.5 4 4v9h-9l-4-4M14.5 15.5l4 4"/></svg>`;
+  const extrudeEffect = vectorEffect({
+    id: "extrude",
+    name: "Extrude 3D",
+    about: "Give a shape or text depth with shaded sides",
+    icon: EXTRUDE_ICON,
+    place: "below",
+    verb: "Extrude",
+    ask: "Select a shape or text to extrude",
+    start: (u) => ({ depth: Math.max(2, Math.round(u * 0.12)) }),
+    defaults: { angle: 45, depth: 20, light: -135, shade: 60, colors: "own", color: "#3b6fe0", editable: true },
+    limits: { depth: [0, 100000], angle: [-180, 180], light: [-180, 180], shade: [0, 100] },
+    presets: [
+      ["Down right", (u) => ({ angle: 45, depth: Math.max(2, Math.round(u * 0.12)) })],
+      ["Down", (u) => ({ angle: 90, depth: Math.max(2, Math.round(u * 0.1)) })],
+      ["Deep", (u) => ({ angle: 50, depth: Math.max(4, Math.round(u * 0.35)) })],
+      ["Up left", (u) => ({ angle: -135, depth: Math.max(2, Math.round(u * 0.12)), light: 45 })],
+    ],
+    summary: (s) => `${s.depth}px · ${s.angle}°`,
+    read: (current) => {
+      current.edges = edgesOf(current);
+    },
+    make: (current) => {
+      const s = current.settings;
+      const [ax, ay] = turnOf(s.angle);
+      const dx = ax * s.depth;
+      const dy = ay * s.depth;
+      if (s.depth <= 0) return [];
+      const [lx, ly] = turnOf(s.light);
+      const strength = s.shade / 100;
+      const out = [];
+      current.edges.forEach((lines, which) => {
+        const item = current.items[which];
+        const base = s.colors === "own" ? paintColor(item.paints) : hexRgb(s.color);
+        const tone = (k) => {
+          const [r, g, b] = base.map((c) => Math.min(1, Math.max(0, c * k)));
+          return [{ type: "SOLID", color: { r, g, b } }];
+        };
+        // The back face, darkest
+        const back = [];
+        for (const line of lines) {
+          const pts = [];
+          for (let i = 0; i < line.points.length; i += 2) pts.push(line.points[i] + dx, line.points[i + 1] + dy);
+          back.push(polygonPaths(clockwise(pts)));
+        }
+        out.push({ paths: back, winding: "NONZERO", paints: tone(1 - 0.55 * strength), opacity: item.opacity, name: "Back" });
+        // Each side, its shade by where it faces
+        const faces = [];
+        for (const line of lines) {
+          const p = line.points;
+          const n = p.length / 2;
+          for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            const [x0, y0, x1, y1] = [p[i * 2], p[i * 2 + 1], p[j * 2], p[j * 2 + 1]];
+            const ex = x1 - x0;
+            const ey = y1 - y0;
+            const len = Math.hypot(ex, ey);
+            if (len < 1e-6) continue;
+            // The side's normal, the way it faces out toward the viewer
+            let [nx, ny] = [ey / len, -ex / len];
+            if (nx * ax + ny * ay < 0) [nx, ny] = [-nx, -ny];
+            const lit = nx * -lx + ny * -ly;
+            const shade = 1 - strength * (0.62 - 0.38 * lit);
+            // A hair longer each way, so neighbours meet without a seam
+            const [gx, gy] = [(ex / len) * 0.35, (ey / len) * 0.35];
+            const quad = clockwise([x0 - gx, y0 - gy, x1 + gx, y1 + gy, x1 + gx + dx, y1 + gy + dy, x0 - gx + dx, y0 - gy + dy]);
+            faces.push({ quad, key: ((x0 + x1) / 2) * ax + ((y0 + y1) / 2) * ay, level: Math.round(Math.min(1, Math.max(0, shade)) * 14) });
+          }
+        }
+        faces.sort((a, b) => a.key - b.key);
+        let run = null;
+        for (const face of faces) {
+          if (!run || run.level !== face.level) {
+            run = { level: face.level, paths: [] };
+            out.push(run);
+          }
+          run.paths.push(polygonPaths(face.quad));
+        }
+        for (const entry of out) {
+          if (entry.level === undefined || entry.paints) continue;
+          Object.assign(entry, { winding: "NONZERO", paints: tone(entry.level / 14), opacity: item.opacity, name: "Side" });
+        }
+      });
+      return out;
+    },
+    panel: (ui) => [
+      ui.section(
+        "Depth",
+        ui.sliders([
+          ["depth", "Depth", "px", (u) => ({ min: 0, max: Math.max(40, Math.round(u * 1.5)), shape: "curve" })],
+          ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+        ]),
+      ),
+      ui.section(
+        "Light",
+        ui.sliders([
+          ["light", "Light from", "°", () => ({ min: -180, max: 180 })],
+          ["shade", "Shading", "%", () => ({ min: 0, max: 100 })],
+        ]),
+        ui.segments("colors", "Sides", [
+          ["own", "Its colours"],
+          ["color", "One colour"],
+        ]),
+        ui.when(ui.color("color", "Color"), () => ui.s.colors === "color"),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      g.fillStyle = "#eef3fa";
+      g.fillRect(0, 0, THUMB, THUMB);
+      // A star, swept back down and right, its sides shaded
+      const star = [];
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * Math.PI * 2 - Math.PI / 2;
+        const r = k % 2 ? 20 : 44;
+        star.push(68 + Math.cos(a) * r, 70 + Math.sin(a) * r);
+      }
+      const [dx, dy] = [18, 18];
+      const faces = [];
+      for (let i = 0; i < 10; i++) {
+        const j = (i + 1) % 10;
+        const [x0, y0, x1, y1] = [star[i * 2], star[i * 2 + 1], star[j * 2], star[j * 2 + 1]];
+        let [nx, ny] = [y1 - y0, -(x1 - x0)];
+        const l = Math.hypot(nx, ny);
+        [nx, ny] = [nx / l, ny / l];
+        if (nx + ny < 0) [nx, ny] = [-nx, -ny];
+        const lit = (nx * 0.7071 + ny * 0.7071) * -1;
+        faces.push({ pts: [x0, y0, x1, y1, x1 + dx, y1 + dy, x0 + dx, y0 + dy], key: (x0 + x1 + y0 + y1) / 2, k: 1 - 0.6 * (0.62 - 0.38 * lit) });
+      }
+      faces.sort((a, b) => a.key - b.key);
+      for (const face of faces) {
+        g.fillStyle = `rgb(${59 * face.k}, ${111 * face.k}, ${224 * face.k})`;
+        g.fill(new Path2D(pathData([polygonPaths(face.pts)])));
+      }
+      g.fillStyle = "#3b6fe0";
+      g.fill(new Path2D(pathData([polygonPaths(star)])));
+      return tile;
+    },
+  });
+
+  // A flat shadow cast far from the layer at an angle, as one vector: the
+  // outline swept along the angle, every side and both ends, run one way
+  // round so they make one shape, fading toward its end
+  const SHADOW_LONG_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path ${STROKE} d="M5.5 5.5h7v7h-7z"/><path ${STROKE} d="m12.5 5.5 7 7v7h-7l-7-7"/></svg>`;
+  const longShadowEffect = vectorEffect({
+    id: "longShadow",
+    name: "Long Shadow",
+    about: "Cast a long flat shadow at an angle",
+    icon: SHADOW_LONG_ICON,
+    place: "below",
+    verb: "Add shadow",
+    ask: "Select a shape or text to cast a shadow",
+    start: (u) => ({ length: Math.max(4, Math.round(u * 1.2)) }),
+    defaults: { angle: 45, length: 120, color: "#000000", opacity: 30, fade: 100, editable: true },
+    limits: { length: [0, 100000], angle: [-180, 180], opacity: [0, 100], fade: [0, 100] },
+    presets: [
+      ["Classic", (u) => ({ angle: 45, length: Math.max(4, Math.round(u * 1.2)), opacity: 30, fade: 100 })],
+      ["Solid", (u) => ({ angle: 45, length: Math.max(4, Math.round(u * 0.6)), opacity: 22, fade: 0 })],
+      ["Down", (u) => ({ angle: 90, length: Math.max(4, Math.round(u * 0.8)), opacity: 28, fade: 100 })],
+    ],
+    summary: (s) => `${s.length}px · ${s.angle}°`,
+    read: (current) => {
+      current.edges = edgesOf(current);
+    },
+    make: (current) => {
+      const s = current.settings;
+      if (s.length <= 0) return [];
+      const [ax, ay] = turnOf(s.angle);
+      const dx = ax * s.length;
+      const dy = ay * s.length;
+      const paths = [];
+      let [low, high] = [Infinity, -Infinity];
+      for (const lines of current.edges)
+        for (const line of lines) {
+          const p = line.points;
+          const n = p.length / 2;
+          const front = [];
+          const back = [];
+          for (let i = 0; i < n; i++) {
+            front.push(p[i * 2], p[i * 2 + 1]);
+            back.push(p[i * 2] + dx, p[i * 2 + 1] + dy);
+            const t = p[i * 2] * ax + p[i * 2 + 1] * ay;
+            low = Math.min(low, t);
+            high = Math.max(high, t + s.length);
+          }
+          paths.push(polygonPaths(clockwise(front)), polygonPaths(clockwise(back)));
+          for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            const [x0, y0, x1, y1] = [p[i * 2], p[i * 2 + 1], p[j * 2], p[j * 2 + 1]];
+            if (Math.abs((x1 - x0) * ay - (y1 - y0) * ax) < 1e-6) continue;
+            paths.push(polygonPaths(clockwise([x0, y0, x1, y1, x1 + dx, y1 + dy, x0 + dx, y0 + dy])));
+          }
+        }
+      if (!paths.length) return [];
+      const [r, g, b] = hexRgb(s.color);
+      let paints = [{ type: "SOLID", color: { r, g, b } }];
+      if (s.fade > 0) {
+        // Along the angle across the shadow's box, from where it starts to
+        // its end, in the box's own 0 to 1
+        const box = pathsBounds(paths);
+        const w = Math.max(1e-3, box.x1 - box.x0);
+        const h = Math.max(1e-3, box.y1 - box.y0);
+        const p0 = [(ax * low - box.x0) / w, (ay * low - box.y0) / h];
+        const p1 = [(ax * high - box.x0) / w, (ay * high - box.y0) / h];
+        const [gx, gy] = [p1[0] - p0[0], p1[1] - p0[1]];
+        const M = [
+          [gx, -gy, p0[0] + 0.5 * gy],
+          [gy, gx, p0[1] - 0.5 * gx],
+        ];
+        const t = invert(M);
+        paints = [
+          {
+            type: "GRADIENT_LINEAR",
+            gradientTransform: [t[0], t[1]],
+            gradientStops: [
+              { position: 0, color: { r, g, b, a: 1 } },
+              { position: 1, color: { r, g, b, a: 1 - s.fade / 100 } },
+            ],
+          },
+        ];
+      }
+      return [{ paths, winding: "NONZERO", paints, opacity: s.opacity / 100, name: "Long Shadow" }];
+    },
+    panel: (ui) => [
+      ui.section(
+        "",
+        ui.sliders([
+          ["length", "Length", "px", (u) => ({ min: 0, max: Math.max(40, Math.round(u * 4)), shape: "curve" })],
+          ["angle", "Angle", "°", () => ({ min: -180, max: 180 })],
+        ]),
+      ),
+      ui.section(
+        "Look",
+        ui.color("color", "Color"),
+        ui.sliders([
+          ["opacity", "Opacity", "%", () => ({ min: 0, max: 100 })],
+          ["fade", "Fade", "%", () => ({ min: 0, max: 100 })],
+        ]),
+      ),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      g.fillStyle = "#1fae9b";
+      g.fillRect(0, 0, THUMB, THUMB);
+      const shadow = g.createLinearGradient(56, 56, 160, 160);
+      shadow.addColorStop(0, "rgba(0, 0, 0, 0.32)");
+      shadow.addColorStop(1, "rgba(0, 0, 0, 0)");
+      g.fillStyle = shadow;
+      g.beginPath();
+      g.moveTo(80, 44);
+      g.lineTo(196, 160);
+      g.lineTo(160, 196);
+      g.lineTo(44, 80);
+      g.arc(80, 80, 36, Math.PI * 0.75, Math.PI * 1.75);
+      g.fill();
+      g.beginPath();
+      g.arc(80, 80, 36, 0, Math.PI * 2);
+      g.fillStyle = "#ffffff";
+      g.fill();
+      return tile;
+    },
+  });
+
+  // ---------- Outline Stack ----------
+
+  // Rings round the layer, or inside it, as retro type's: each ring the
+  // band between two distances from its edge. Figma makes each: the
+  // outline given a stroke outside or inside as wide as the far distance,
+  // outlined, less the same for the near one, flattened to one vector
+  const OUTLINE_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="3"/><circle ${STROKE} cx="12" cy="12" r="5.5"/><circle ${STROKE} cx="12" cy="12" r="8"/></svg>`;
+  const outlineEffect = vectorEffect({
+    id: "outlineStack",
+    name: "Outline Stack",
+    about: "Stack rings round a shape or text, or inside it",
+    icon: OUTLINE_ICON,
+    place: "below",
+    verb: "Add outlines",
+    ask: "Select a shape or text to outline",
+    wait: 120,
+    // Rings inside go over it, as it'd hide them
+    above: (s) => s.side === "inside",
+    start: (u) => ({ width: Math.max(1, Math.round(u * 0.025)), gap: Math.max(1, Math.round(u * 0.025)) }),
+    defaults: { side: "outside", rings: 3, width: 4, gap: 4, join: "ROUND", color: "#1e1e1e", alternate: false, color2: "#f24822", editable: true },
+    limits: { rings: [1, 20], width: [0.5, 10000], gap: [0, 10000] },
+    presets: [
+      ["Retro", (u) => ({ rings: 3, width: Math.max(1, Math.round(u * 0.025)), gap: Math.max(1, Math.round(u * 0.025)), alternate: false })],
+      ["Halo", (u) => ({ rings: 1, width: Math.max(2, Math.round(u * 0.06)), gap: Math.max(1, Math.round(u * 0.03)) })],
+      ["Lines", (u) => ({ rings: 6, width: Math.max(0.5, Math.round(u * 0.008)), gap: Math.max(1, Math.round(u * 0.016)) })],
+      ["Inline", (u) => ({ side: "inside", rings: 2, width: Math.max(1, Math.round(u * 0.015)), gap: Math.max(1, Math.round(u * 0.015)) })],
+    ],
+    summary: (s) => `${s.rings} ${s.rings === 1 ? "ring" : "rings"} · ${s.side === "inside" ? "Inside" : "Outside"}`,
+    done: (current) => `${current.made.length} ${current.made.length === 1 ? "ring" : "rings"} made`,
+    read: (current) => {
+      // One vector of every outline, kept hidden, to stroke and outline
+      const paths = current.items.flatMap((item) => item.paths);
+      const b = pathsBounds(paths);
+      if (!Number.isFinite(b.x0)) return;
+      const template = current.figma.createVector();
+      template.fills = [];
+      template.visible = false;
+      const parent = current.source.parent;
+      parent.appendChild(template);
+      if ("layoutMode" in parent && parent.layoutMode !== "NONE") template.layoutPositioning = "ABSOLUTE";
+      // Placed first, as Figma moves the layer when its paths are set
+      template.relativeTransform = relativeFor(template.parent, multiply(current.base, moved(b.x0, b.y0)));
+      template.vectorPaths = [{ windingRule: "NONZERO", data: pathData(paths, -b.x0, -b.y0) }];
+      current.template = template;
+    },
+    close: (current) => {
+      if (current.template && !current.template.removed) current.template.remove();
+    },
+    make: (current) => {
+      const s = current.settings;
+      const { figma, template, source } = current;
+      if (!template || template.removed) return [];
+      const parent = source.parent;
+      // The band from the edge out, or in, as far as `weight`
+      const band = (weight) => {
+        const copy = template.clone();
+        copy.visible = true;
+        copy.strokes = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
+        copy.strokeWeight = weight;
+        copy.strokeAlign = s.side === "inside" ? "INSIDE" : "OUTSIDE";
+        copy.strokeJoin = s.join;
+        const outline = copy.outlineStroke();
+        copy.remove();
+        return outline;
+      };
+      const entries = [];
+      for (let i = 0; i < s.rings; i++) {
+        const near = s.gap + i * (s.width + s.gap);
+        const far = near + s.width;
+        let ring = band(far);
+        if (!ring) continue;
+        const inner = near > 0 ? band(near) : null;
+        if (inner) {
+          const cut = figma.subtract([ring, inner], parent);
+          ring = figma.flatten([cut], parent);
+        }
+        if (!ring || ring.removed) continue;
+        const [r, g, b] = hexRgb(s.alternate && i % 2 ? s.color2 : s.color);
+        ring.fills = [{ type: "SOLID", color: { r, g, b } }];
+        ring.strokes = [];
+        ring.name = `Outline ${i + 1}`;
+        entries.push({ node: ring });
+      }
+      // Outermost at the back
+      return entries.reverse();
+    },
+    // The same rings in the preview, drawn as wide strokes cut by narrower
+    // ones and by the shape
+    preview: (current) => {
+      const s = current.settings;
+      const shape = new Path2D(pathData(current.items.flatMap((item) => item.paths)));
+      const b = itemsBounds(current.items);
+      const reach = s.side === "inside" ? 0 : s.gap + s.rings * (s.width + s.gap);
+      return [
+        {
+          under: s.side !== "inside",
+          over: s.side === "inside",
+          bounds: { x0: b.x0 - reach, y0: b.y0 - reach, x1: b.x1 + reach, y1: b.y1 + reach },
+          draw: (context, fit) => {
+            const canvas = context.canvas;
+            const off = (current.ringCanvas ??= document.createElement("canvas"));
+            [off.width, off.height] = [canvas.width, canvas.height];
+            const g = off.getContext("2d");
+            const join = { ROUND: "round", MITER: "miter", BEVEL: "bevel" }[s.join] ?? "round";
+            for (let i = s.rings - 1; i >= 0; i--) {
+              const near = s.gap + i * (s.width + s.gap);
+              const far = near + s.width;
+              g.setTransform(1, 0, 0, 1, 0, 0);
+              g.clearRect(0, 0, off.width, off.height);
+              g.setTransform(context.getTransform());
+              g.lineJoin = join;
+              g.globalCompositeOperation = "source-over";
+              g.strokeStyle = "#000";
+              g.lineWidth = far * 2;
+              g.stroke(shape);
+              if (near > 0) {
+                g.globalCompositeOperation = "destination-out";
+                g.lineWidth = near * 2;
+                g.stroke(shape);
+              }
+              g.globalCompositeOperation = s.side === "inside" ? "destination-in" : "destination-out";
+              g.fillStyle = "#000";
+              g.fill(shape);
+              g.globalCompositeOperation = "source-in";
+              g.setTransform(1, 0, 0, 1, 0, 0);
+              g.fillStyle = s.alternate && i % 2 ? s.color2 : s.color;
+              g.fillRect(0, 0, off.width, off.height);
+              context.save();
+              context.setTransform(1, 0, 0, 1, 0, 0);
+              context.drawImage(off, 0, 0);
+              context.restore();
+            }
+          },
+        },
+      ];
+    },
+    panel: (ui) => [
+      ui.section(
+        "",
+        ui.segments("side", "Side", [
+          ["outside", "Outside"],
+          ["inside", "Inside"],
+        ]),
+        ui.sliders([
+          ["rings", "Rings", "", () => ({ min: 1, max: 12 })],
+          ["width", "Width", "px", (u) => ({ min: 0.5, max: Math.max(10, Math.round(u * 0.1)), shape: "curve", digits: 1 })],
+          ["gap", "Gap", "px", (u) => ({ min: 0, max: Math.max(10, Math.round(u * 0.1)), shape: "curve", digits: 1 })],
+        ]),
+        ui.segments("join", "Corners", [
+          ["ROUND", "Round"],
+          ["MITER", "Sharp"],
+          ["BEVEL", "Bevel"],
+        ]),
+      ),
+      ui.section("Colors", ui.color("color", "Color"), ui.check("alternate", "Alternate colours"), ui.when(ui.color("color2", "Second color"), () => ui.s.alternate)),
+    ],
+    thumb: () => {
+      const [tile, g] = canvas2d();
+      g.fillStyle = "#eef3fa";
+      g.fillRect(0, 0, THUMB, THUMB);
+      const star = new Path2D();
+      for (let k = 0; k < 10; k++) {
+        const a = (k / 10) * Math.PI * 2 - Math.PI / 2;
+        const r = k % 2 ? 17 : 36;
+        star.lineTo(80 + Math.cos(a) * r, 84 + Math.sin(a) * r);
+      }
+      star.closePath();
+      g.lineJoin = "round";
+      const rings = [
+        [28, "#f24822"],
+        [22, "#eef3fa"],
+        [16, "#3b6fe0"],
+        [10, "#eef3fa"],
+      ];
+      for (const [w, color] of rings) {
+        g.strokeStyle = color;
+        g.lineWidth = w;
+        g.stroke(star);
+      }
+      g.fillStyle = "#1e2a44";
+      g.fill(star);
+      return tile;
+    },
+  });
+
   // ---------- Ligma effects in the right panel ----------
 
   // Under Figma's own Effects, drawn as they are but apart from them, the
@@ -10055,7 +11815,14 @@ const PAGE_JS: &str = r##"(() => {
   const setOff = (group, off) => {
     group.setSharedPluginData(PLUGIN, OFF, off ? "1" : "");
     const source = sourceOf(group);
-    for (const child of group.children) child.visible = child === source ? off || effectOf(group) === EFFECTS[0] : !off;
+    // Under some effects the original shows too, as Repeater's first copy
+    // or under an Extrude 3D
+    const effect = effectOf(group);
+    let keeps = false;
+    try {
+      keeps = Boolean(effect?.keepsSource?.(effect.saved(group)));
+    } catch {}
+    for (const child of group.children) child.visible = child === source ? off || keeps : !off;
   };
 
   // Makes the stack again from `base` with `layers`, outermost first, each
@@ -10063,7 +11830,7 @@ const PAGE_JS: &str = r##"(() => {
   // the old stack shows until the new one's made
   let restacking = false;
   const restack = async (figma, outer, base, layers) => {
-    if (restacking || repeating || disintegrating || crushing || filtering || filling) return;
+    if (restacking || repeating || disintegrating || crushing || filtering || filling || vectoring) return;
     restacking = true;
     showSection();
     const parent = outer.parent;
