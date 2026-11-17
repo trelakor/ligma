@@ -139,8 +139,8 @@ const PAGE_JS: &str = r##"(() => {
     dodge: `<circle ${STROKE} cx="9.5" cy="9.5" r="4"/><path ${STROKE} d="m12.5 12.5 6.5 6.5"/>`,
     burn: `<path ${STROKE} d="M8 19.5v-3.8c0-1-1.5-2.2-1.5-4.2a5.5 5.5 0 0 1 11 0c0 2-1.5 3.2-1.5 4.2v3.8"/><circle ${STROKE} cx="12" cy="11.5" r="2"/>`,
     sponge: `<rect ${STROKE} x="5.5" y="7.5" width="13" height="9" rx="3"/><circle fill="currentColor" cx="9.5" cy="11" r="1"/><circle fill="currentColor" cx="14" cy="10.5" r=".75"/><circle fill="currentColor" cx="12.5" cy="13.5" r=".75"/><circle fill="currentColor" cx="15.5" cy="13.5" r="1"/>`,
-    // The mode: a square of pixels
-    raster: `<rect ${STROKE} x="5.5" y="5.5" width="13" height="13" rx="2"/><path fill="currentColor" d="M8 8h4v4H8zM12 12h4v4h-4z"/>`,
+    // The mode: a brush laying down pixels
+    raster: `<path ${STROKE} d="M19.4 4.6a1.4 1.4 0 0 0-2 0l-6.2 6.7 2 2 6.7-6.2a1.4 1.4 0 0 0-.5-2.5z"/><path fill="currentColor" d="M8 13h3v3H8zM5 16h3v3H5zM8 16h3v3H8z"/>`,
   };
   const SMALL = {
     up: `<path ${STROKE} d="M8 12.5v-9M4.5 7 8 3.5 11.5 7"/>`,
@@ -170,9 +170,9 @@ const PAGE_JS: &str = r##"(() => {
     magicEraser: { label: "Magic eraser", key: "E", icon: "magicEraser" },
     bucket: { label: "Paint bucket", key: "G", icon: "bucket" },
     gradient: { label: "Gradient", key: "G", icon: "gradient" },
-    blur: { label: "Blur", key: "R", icon: "blur", paints: true, direct: true },
+    blur: { label: "Blur", key: "R", icon: "blur", paints: true, gpu: true },
     sharpen: { label: "Sharpen", key: "R", icon: "sharpen", paints: true, direct: true },
-    smudge: { label: "Smudge", key: "R", icon: "smudge", paints: true, direct: true },
+    smudge: { label: "Smudge", key: "R", icon: "smudge", paints: true, gpu: true },
     dodge: { label: "Dodge", key: "O", icon: "dodge", paints: true, direct: true },
     burn: { label: "Burn", key: "O", icon: "burn", paints: true, direct: true },
     sponge: { label: "Sponge", key: "O", icon: "sponge", paints: true, direct: true },
@@ -1383,7 +1383,10 @@ const PAGE_JS: &str = r##"(() => {
     // Pixels of the layer to a pixel on screen, for smoothing's string
     stroke.perScreen = 1 / Math.max(1e-6, Math.hypot(grid.a, grid.b) * (view()?.zoom ?? 1));
     if (TOOLS[tool].direct) stroke.pixels = pixelsOf_(t);
-    else {
+    else if (TOOLS[tool].gpu) {
+      stroke.mark = tip(o.size, o.hardness ?? 0, false, o.angle ?? 0, o.roundness ?? 100);
+      stroke.carried = null;
+    } else {
       if (tool === "clone" && (!cloneSource || cloneSource.id !== t.id)) {
         notify(`${mac ? "Option" : "Alt"}-click to set where to clone from`);
         return false;
@@ -1451,7 +1454,9 @@ const PAGE_JS: &str = r##"(() => {
     stroke.pressure = pressure;
     const p = o.pressure ? clamp(pressure, 0.05, 1) : 1;
     const size = Math.max(1, o.size * p);
-    const spacing = Math.max(tool === "pencil" ? 0.5 : 1, size * Math.max(0.05, (o.roundness ?? 100) / 100) * (TOOLS[tool].direct ? 0.2 : 0.1));
+    // Smudge spaced closely, so it drags paint rather than stamping it
+    const step = tool === "smudge" ? 0.05 : TOOLS[tool].direct ? 0.2 : TOOLS[tool].gpu ? 0.12 : 0.1;
+    const spacing = Math.max(tool === "pencil" ? 0.5 : 1, size * Math.max(0.05, (o.roundness ?? 100) / 100) * step);
     const from = stroke.last;
     stroke.last = to;
     if (!from) {
@@ -1476,6 +1481,7 @@ const PAGE_JS: &str = r##"(() => {
     const o = prefs.options[tool];
     const r = size / 2;
     if (TOOLS[tool].direct) return directDab(stroke, x, y, r);
+    if (TOOLS[tool].gpu) return gpuDab(stroke, x, y, size);
     const ctx = strokeBuffer.getContext("2d");
     let rect;
     if (tool === "pencil") {
@@ -1511,6 +1517,74 @@ const PAGE_JS: &str = r##"(() => {
     if (!stroke.rect) return;
     composite(stroke, stroke.rect);
     stroke.rect = null;
+  };
+
+  // Blur and smudge, on the graphics card through the canvas: each dab
+  // mixes the layer under it toward a blurred copy of itself, or toward
+  // the paint the smudge has carried from its last dab, by the tip's
+  // shape, the strength and the selection. Mixing is exact: the layer is
+  // taken away under the dab by the weight and the other added back by it
+  const gpuCanvases = [];
+  const gpuScratch = (i, size) => {
+    let canvas = gpuCanvases[i];
+    if (!canvas || canvas.width < size || canvas.height < size) canvas = gpuCanvases[i] = canvasOf(Math.max(size, canvas?.width ?? 0), Math.max(size, canvas?.height ?? 0));
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.filter = "none";
+    ctx.clearRect(0, 0, size, size);
+    return ctx;
+  };
+  const gpuDab = (stroke, x, y, size) => {
+    const { t, tool } = stroke;
+    const o = prefs.options[tool];
+    const d = Math.max(2, Math.ceil(size));
+    const [dx, dy] = [Math.round(x - d / 2), Math.round(y - d / 2)];
+    const live = t.live.getContext("2d");
+    const strength = (o.strength ?? 50) / 100;
+    if (tool === "smudge" && !stroke.carried) {
+      // The first dab picks up what's under it
+      stroke.carried = canvasOf(d, d);
+      stroke.carried.getContext("2d").drawImage(t.live, dx, dy, d, d, 0, 0, d, d);
+      return;
+    }
+    // How much each pixel moves: the tip, by the strength, in the selection
+    const weight = gpuScratch(0, d);
+    // The smudge keeps its paint by the strength over two dabs' spacing in
+    // ten, so the smear reaches as far whatever the brush's size: at 100%
+    // it never runs out, as in Photoshop
+    weight.globalAlpha = tool === "smudge" ? Math.min(1, strength ** 0.1) : 0.25 + strength * 0.75;
+    weight.drawImage(stroke.mark, 0, 0, d, d);
+    weight.globalAlpha = 1;
+    if (stroke.mask) {
+      weight.globalCompositeOperation = "destination-in";
+      weight.drawImage(stroke.mask.canvas, dx, dy, d, d, 0, 0, d, d);
+    }
+    // What it moves toward
+    const other = gpuScratch(1, d);
+    if (tool === "blur") {
+      const radius = clamp(size * 0.06, 1, 48);
+      const pad = Math.ceil(radius * 2);
+      other.filter = `blur(${radius}px)`;
+      other.drawImage(t.live, dx - pad, dy - pad, d + pad * 2, d + pad * 2, -pad, -pad, d + pad * 2, d + pad * 2);
+      other.filter = "none";
+    } else other.drawImage(stroke.carried, 0, 0);
+    other.globalCompositeOperation = "destination-in";
+    other.drawImage(gpuCanvases[0], 0, 0, d, d, 0, 0, d, d);
+    live.save();
+    live.globalCompositeOperation = "destination-out";
+    live.drawImage(gpuCanvases[0], 0, 0, d, d, dx, dy, d, d);
+    live.globalCompositeOperation = "lighter";
+    live.drawImage(gpuCanvases[1], 0, 0, d, d, dx, dy, d, d);
+    live.restore();
+    // The smudge carries on with what's now under it
+    if (tool === "smudge") {
+      const carried = stroke.carried.getContext("2d");
+      carried.clearRect(0, 0, d, d);
+      carried.drawImage(t.live, dx, dy, d, d, 0, 0, d, d);
+    }
+    stroke.total = grow(stroke.total, [dx, dy, dx + d, dy + d]);
   };
 
   // Changes the pixels under a dab of the blur, sharpen, smudge, dodge,
@@ -1652,7 +1726,7 @@ const PAGE_JS: &str = r##"(() => {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
         ctx.drawImage(t.live, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
-        if (!TOOLS[tool].direct) strokeBuffer.getContext("2d").clearRect(x0, y0, x1 - x0, y1 - y0);
+        if (!TOOLS[tool].direct && !TOOLS[tool].gpu) strokeBuffer.getContext("2d").clearRect(x0, y0, x1 - x0, y1 - y0);
       }
     }
     if (stroke.last) lastEnd = { t, point: stroke.last };
@@ -3234,7 +3308,8 @@ const PAGE_JS: &str = r##"(() => {
 
   const style = document.createElement("style");
   style.textContent = `
-    html[${ATTR}] [class*="toolbelt_left_side--leftSideCarouselContainer"] { display: none !important; }
+    html[${ATTR}] [class*="toolbelt_left_side--leftSideCarouselContainer"], html[${ATTR}] [class*="toolbelt_left_side--leftSideRow"] { display: none !important; }
+    html[${ATTR}] [class*="web_stacking--layer"]:has([class*="tooltip--"]) { z-index: 9 !important; }
     html[${ATTR}] [data-secondary-toolbelt] { display: none !important; }
     html[${ATTR}] canvas[${CURSOR}] { cursor: var(--ligma-raster-cursor) !important; }
     [${ATTR}-tools] { display: flex; align-items: center; height: 48px; padding: 0 8px; gap: 8px; color: var(--color-icon); }
