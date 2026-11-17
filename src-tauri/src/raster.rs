@@ -858,7 +858,9 @@ const PAGE_JS: &str = r##"(() => {
     ui.live.style.mixBlendMode = BLEND.get(blend).css;
     canvas.style.opacity = opacity;
     t.released = false;
-    showing = { t, canvas, clip, fading: 0, opacity, at: null, blend };
+    showing = { t, canvas, clip, fading: 0, opacity, at: null, blend, masks: null };
+    // Masked in Figma, it's masked here too, once the masks are read
+    applyMasks(showing);
     place();
   };
   // Shown at once, never faded in: a fade out stopped partway would
@@ -872,7 +874,102 @@ const PAGE_JS: &str = r##"(() => {
   };
   const hideNow = () => {
     ui.live?.replaceChildren();
+    if (ui.live) ui.live.style.maskImage = ui.live.style.webkitMaskImage = "";
     showing = null;
+  };
+
+  // Figma's masks: a layer marked as a mask masks the layers above it in
+  // its parent, and each parent is masked by those under it in its own.
+  // Each mask is read as Figma draws it, as an alpha picture, a luminance
+  // mask's brightness made its alpha, and kept until it changes
+  const masksOf = (node) => {
+    const found = [];
+    try {
+      for (let at = node; at?.parent && at.parent.type !== "PAGE" && at.parent.type !== "DOCUMENT"; at = at.parent) {
+        const siblings = at.parent.children;
+        for (let i = siblings.indexOf(at) - 1; i >= 0; i--) {
+          if (siblings[i].isMask) {
+            if (siblings[i].visible) found.push(siblings[i]);
+            break;
+          }
+        }
+      }
+    } catch {}
+    return found;
+  };
+  const maskKey = (mask) => {
+    try {
+      return JSON.stringify([mask.id, mask.absoluteTransform, mask.width, mask.height, mask.maskType, fillsOf(mask).map((paint) => paint.imageHash ?? paint.color ?? paint.type)]);
+    } catch {
+      return mask.id;
+    }
+  };
+  const maskPictures = new Map();
+  const maskPicture = (mask) => {
+    const key = maskKey(mask);
+    const known = maskPictures.get(mask.id);
+    if (known?.key === key) return known.promise;
+    const promise = (async () => {
+      // Masks aren't drawn, so Figma has no render bounds for them, and
+      // draws them for export only over their full bounds
+      const box = mask.absoluteBoundingBox;
+      if (!box || !box.width || !box.height) return null;
+      const scale = Math.min(DENSITY, 2048 / Math.max(box.width, box.height));
+      const bytes = await mask.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale }, useAbsoluteBounds: true });
+      const bitmap = await createImageBitmap(new Blob([bytes]));
+      const canvas = canvasOf(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close?.();
+      if (mask.maskType === "LUMINANCE" || mask.maskType === "VECTOR") {
+        const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const { data } = image;
+        for (let i = 0; i < data.length; i += 4) {
+          const alpha = mask.maskType === "VECTOR" ? (data[i + 3] ? 255 : 0) : ((0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) * data[i + 3]) / 255;
+          data[i] = data[i + 1] = data[i + 2] = 0;
+          data[i + 3] = alpha;
+        }
+        ctx.putImageData(image, 0, 0);
+      }
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      return { url: URL.createObjectURL(blob), box: { x: box.x, y: box.y, width: box.width, height: box.height } };
+    })();
+    promise.catch(() => {});
+    if (known?.url) promise.then(() => URL.revokeObjectURL(known.url)).catch(() => {});
+    maskPictures.set(mask.id, { key, promise });
+    return promise;
+  };
+  // The masks over what's shown, read first if need be: hidden till then,
+  // as unmasked it would show what Figma doesn't
+  const applyMasks = (shown) => {
+    const masks = masksOf(shown.t.node);
+    shown.maskIds = new Set(masks.map((mask) => mask.id));
+    if (!masks.length) {
+      shown.masks = [];
+      ui.live.style.maskImage = ui.live.style.webkitMaskImage = "";
+      ui.live.style.visibility = "";
+      return;
+    }
+    ui.live.style.visibility = shown.masks ? "" : "hidden";
+    Promise.all(masks.map(maskPicture))
+      .then((pictures) => {
+        if (showing !== shown) return;
+        shown.masks = pictures.filter(Boolean);
+        const urls = shown.masks.map(({ url }) => `url("${url}")`).join(",");
+        ui.live.style.maskImage = ui.live.style.webkitMaskImage = urls;
+        ui.live.style.maskRepeat = ui.live.style.webkitMaskRepeat = "no-repeat";
+        ui.live.style.maskComposite = "intersect";
+        ui.live.style.webkitMaskComposite = "source-in";
+        ui.live.style.visibility = "";
+        place();
+      })
+      .catch(() => {
+        if (showing === shown) ui.live.style.visibility = "";
+      });
+  };
+  // Read ahead, with the layer
+  const readMasks = (node) => {
+    for (const mask of masksOf(node)) maskPicture(mask).catch(() => {});
   };
   // Keeps the canvas with the layer in Figma, every frame: moved, turned or
   // resized there, or a frame around it moved, it goes with it, its
@@ -958,6 +1055,11 @@ const PAGE_JS: &str = r##"(() => {
     if (!t?.node || t.released) return;
     let mine = null;
     for (const change of event.documentChanges ?? []) {
+      // A mask over the layer changed: read again
+      if (showing.maskIds?.has(change.id)) {
+        applyMasks(showing);
+        continue;
+      }
       if (change.id === t.id || change.type === "STYLE_CREATE" || change.type === "STYLE_DELETE" || change.type === "STYLE_PROPERTY_CHANGE") continue;
       const node = change.node;
       if (!node || node.removed || node.type === "PAGE" || node.type === "DOCUMENT") continue;
@@ -1039,6 +1141,20 @@ const PAGE_JS: &str = r##"(() => {
         path = `polygon(${corners.map(([x, y]) => `${x.toFixed(1)}px ${y.toFixed(1)}px`).join(",")})`;
       }
       if (ui.live.style.clipPath !== path) ui.live.style.clipPath = path;
+      // The masks, where they are on screen
+      if (showing.masks?.length) {
+        const sizes = [];
+        const positions = [];
+        for (const { box } of showing.masks) {
+          const [x, y] = apply(v.toScreen, [box.x, box.y]);
+          sizes.push(`${(box.width * v.zoom).toFixed(2)}px ${(box.height * v.zoom).toFixed(2)}px`);
+          positions.push(`${x.toFixed(2)}px ${y.toFixed(2)}px`);
+        }
+        const size = sizes.join(",");
+        const position = positions.join(",");
+        if (ui.live.style.maskSize !== size) ui.live.style.maskSize = ui.live.style.webkitMaskSize = size;
+        if (ui.live.style.maskPosition !== position) ui.live.style.maskPosition = ui.live.style.webkitMaskPosition = position;
+      }
     }
     if (selection) {
       const m = v.toScreen.multiply(selection.G);
@@ -1093,7 +1209,10 @@ const PAGE_JS: &str = r##"(() => {
   const preload = () => {
     if (!TOOLS[prefs.tool].paints && !["bucket", "gradient", "magicEraser", "wand", "eyedropper"].includes(prefs.tool)) return;
     const node = rasterNode();
-    if (node && !drag) read(node).catch(() => {});
+    if (node && !drag) {
+      read(node).catch(() => {});
+      readMasks(node);
+    }
   };
 
   // ---------------------------------------------------------------------
