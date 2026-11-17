@@ -54,8 +54,9 @@ static CHECKING: Mutex<()> = Mutex::new(());
 
 pub fn start(app: &AppHandle) {
     app.manage(Pending::default());
-    // Debug builds would replace themselves with the release build
-    if cfg!(debug_assertions) {
+    // Debug builds would replace themselves with the release build, and so
+    // would release builds run from where cargo built them
+    if cfg!(debug_assertions) || built_here() {
         return;
     }
     // After a failure, don't offer the same update again straight away
@@ -80,6 +81,12 @@ pub fn start(app: &AppHandle) {
         }
         std::thread::sleep(CHECK_EVERY);
     });
+}
+
+/// Whether this is a build run from cargo's `target` folder rather than
+/// an installed Ligma
+fn built_here() -> bool {
+    std::env::current_exe().is_ok_and(|exe| exe.components().any(|part| part.as_os_str() == "target"))
 }
 
 /// The version downloaded and waiting to be installed, for the tab bar's
@@ -129,8 +136,8 @@ pub fn offer_last_failure(app: &AppHandle) {
 pub fn check_now(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
-        if cfg!(debug_assertions) {
-            tell(&app, "Updates are off in debug builds".into());
+        if cfg!(debug_assertions) || built_here() {
+            tell(&app, "Updates are off in development builds".into());
             return;
         }
         match tauri::async_runtime::block_on(check(&app)) {

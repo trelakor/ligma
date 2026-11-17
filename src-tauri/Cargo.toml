@@ -57,7 +57,25 @@ windows-core = "0.62"
 # notifications show as (src/notifications.rs), and the picked app icon on
 # Ligma's shortcuts (src/app_icon.rs), and checking and loading Windows'
 # DirectML for Upscale (src/upscale.rs)
-windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader"] }
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_DirectComposition", "Win32_Security"] }
+# The native renderer draws the view with Vello, on wgpu's D3D12 device,
+# its shaders compiled with DXC built in (src/native_renderer/vello.rs)
+vello = { version = "=0.11.0", default-features = false, features = ["wgpu"] }
+# The native renderer's layer, stretched as the browser stretches Figma's
+# canvas (src/native_renderer/present.rs)
+windows-numerics = "0.3"
+# The experimental native renderer (src/native_renderer): Skia on D3D12,
+# and the GPU memory counters it shows (PDH, above)
+skia-safe = { version = "0.157", features = ["d3d"] }
+# Figma's interface font, which comes as WOFF2, for what the native
+# renderer draws over the canvas (src/native_renderer/overlay.rs)
+wuff = { version = "0.2", default-features = false, features = ["brotli"] }
+# Custom effects, the file's own code, run natively: QuickJS for their
+# code, wgpu on D3D12 for their WebGPU (src/native_renderer/effect_host.rs)
+rquickjs = "0.14"
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "dx12", "wgsl", "static-dxc"] }
+pollster = "0.4"
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode", "safe-decode", "std"] }
 # figma:// registration in src/figma_scheme.rs
 windows-registry = "0.6"
 # Remove background in src/background.rs: ONNX Runtime, linked in, to run
@@ -107,3 +125,13 @@ lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true
+
+[patch.crates-io]
+# Vello's shaders with Figma's blend modes, image sampling and layers
+# that start as a copy of what's under them, see vendor/vello_shaders. Its
+# encoding packs images afresh each frame and counts any left out, and
+# Vello sizes its GPU buffers to what scenes take, drawing a scene again
+# where one ran out rather than leaving it undrawn
+vello = { path = "vendor/vello" }
+vello_shaders = { path = "vendor/vello_shaders" }
+vello_encoding = { path = "vendor/vello_encoding" }

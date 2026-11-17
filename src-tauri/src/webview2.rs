@@ -4,7 +4,8 @@
 
 use tauri::{AppHandle, Manager, Webview};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2_19, ICoreWebView2_22, ICoreWebView2_3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
+    ICoreWebView2Environment12, ICoreWebView2SharedBuffer, ICoreWebView2_17, ICoreWebView2_19, ICoreWebView2_22,
+    ICoreWebView2_3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG, COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_WRITE,
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS,
@@ -12,8 +13,8 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
 use webview2_com::{
-    AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, PermissionRequestedEventHandler,
-    TrySuspendCompletedHandler,
+    take_pwstr, AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, PermissionRequestedEventHandler,
+    TrySuspendCompletedHandler, WebResourceRequestedEventHandler,
 };
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
@@ -96,6 +97,28 @@ pub fn drop_request_filters(webview: &Webview) {
                 COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
             );
         }
+    });
+}
+
+/// Makes `webview` see-through wherever its page is, and runs `script` as
+/// each of its pages starts from now on, then loads it again so it runs.
+/// For a tab opened before the native renderer was turned on
+pub fn hook_and_reload(webview: &Webview, script: &'static str) {
+    let _ = webview.with_webview(move |platform| unsafe {
+        use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Controller2, COREWEBVIEW2_COLOR};
+        if let Ok(controller) = platform.controller().cast::<ICoreWebView2Controller2>() {
+            let _ = controller.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR { A: 0, R: 0, G: 0, B: 0 });
+        }
+        let Ok(core) = platform.controller().CoreWebView2() else {
+            return;
+        };
+        let script = windows_core::HSTRING::from(script);
+        let reload = core.clone();
+        let handler = webview2_com::AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(move |_, _| {
+            let _ = reload.Reload();
+            Ok(())
+        }));
+        let _ = core.AddScriptToExecuteOnDocumentCreated(&script, &handler);
     });
 }
 
@@ -222,6 +245,117 @@ pub fn try_suspend(webview: &Webview, done: impl FnOnce(bool) + Send + 'static) 
         }));
         let _ = core.TrySuspend(&handler);
     });
+}
+
+/// Answers the requests tab `webview` makes to addresses starting with
+/// `prefix` itself, with an empty response, so they never reach the
+/// network: `on` gets the rest of the address and the request's body, on
+/// the main thread. How the native renderer's page script hands Ligma what
+/// it reads, as Figma tabs get no IPC. `added` is told whether that's set
+/// up
+pub fn intercept(
+    webview: &Webview,
+    prefix: String,
+    on: impl Fn(&str, Vec<u8>) + Send + 'static,
+    added: impl FnOnce(bool) + Send + 'static,
+) {
+    let result = webview.with_webview(move |platform| unsafe {
+        let Ok(core) = platform.controller().CoreWebView2() else {
+            return added(false);
+        };
+        let environment = platform.environment();
+        let filter = windows_core::HSTRING::from(format!("{prefix}*"));
+        let filtered = match core.cast::<ICoreWebView2_22>() {
+            Ok(core) => core.AddWebResourceRequestedFilterWithRequestSourceKinds(
+                &filter,
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
+            ),
+            Err(_) => core.AddWebResourceRequestedFilter(&filter, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL),
+        };
+        if filtered.is_err() {
+            return added(false);
+        }
+        let handler = WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let request = args.Request()?;
+            let mut uri = windows_core::PWSTR::null();
+            request.Uri(&mut uri)?;
+            let uri = take_pwstr(uri);
+            let Some(rest) = uri.strip_prefix(prefix.as_str()) else {
+                return Ok(());
+            };
+            let mut body = Vec::new();
+            if let Ok(content) = request.Content() {
+                let mut buffer = vec![0u8; 1 << 20];
+                loop {
+                    let mut read = 0u32;
+                    if content.Read(buffer.as_mut_ptr().cast(), buffer.len() as u32, Some(&mut read)).is_err() || read == 0 {
+                        break;
+                    }
+                    body.extend_from_slice(&buffer[..read as usize]);
+                }
+            }
+            on(rest, body);
+            let response = environment.CreateWebResourceResponse(None, 204, w!("No Content"), w!(""))?;
+            args.SetResponse(&response)?;
+            Ok(())
+        }));
+        let mut token = 0;
+        added(core.add_WebResourceRequested(&handler, &mut token).is_ok());
+    });
+    if result.is_err() {
+        log::warn!("native renderer: couldn't reach the tab's webview");
+    }
+}
+
+/// Memory shared with a tab's page, which it can write to and Ligma read
+/// from any thread at once, with no round trip through either's main thread
+#[derive(Clone, Copy)]
+pub struct Shared {
+    pub ptr: *mut u8,
+    pub len: usize,
+}
+
+// The memory stays mapped for as long as Ligma runs (see `share`)
+unsafe impl Send for Shared {}
+unsafe impl Sync for Shared {}
+
+struct Kept(#[allow(dead_code)] ICoreWebView2SharedBuffer);
+unsafe impl Send for Kept {}
+
+/// Hands tab `webview`'s page `len` bytes of memory shared with Ligma, the
+/// same each time it's asked for the tab, as an ArrayBuffer through the
+/// `sharedbufferreceived` event of `chrome.webview`, with `data`, JSON, as
+/// its `additionalData`. `done` gets it, on the main thread, or None where
+/// WebView2 is too old to share memory
+pub fn share(webview: &Webview, len: usize, data: &'static str, done: impl FnOnce(Option<Shared>) + Send + 'static) {
+    static KEPT: std::sync::Mutex<Vec<(String, Shared, Kept)>> = std::sync::Mutex::new(Vec::new());
+    let label = webview.label().to_string();
+    let result = webview.with_webview(move |platform| unsafe {
+        let run = || -> windows_core::Result<Shared> {
+            let core = platform.controller().CoreWebView2()?.cast::<ICoreWebView2_17>()?;
+            let mut kept = KEPT.lock().unwrap();
+            let found = kept.iter().position(|(kept, shared, _)| *kept == label && shared.len == len);
+            let index = match found {
+                Some(index) => index,
+                None => {
+                    let buffer = platform.environment().cast::<ICoreWebView2Environment12>()?.CreateSharedBuffer(len as u64)?;
+                    let mut ptr = std::ptr::null_mut();
+                    buffer.Buffer(&mut ptr)?;
+                    kept.push((label.clone(), Shared { ptr, len }, Kept(buffer)));
+                    kept.len() - 1
+                }
+            };
+            let (_, shared, Kept(buffer)) = &kept[index];
+            core.PostSharedBufferToScript(buffer, COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_WRITE, &windows_core::HSTRING::from(data))?;
+            Ok(*shared)
+        };
+        done(run().ok());
+    });
+    if result.is_err() {
+        log::warn!("native renderer: couldn't reach the tab's webview");
+    }
 }
 
 /// Takes an image of what `webview` shows now, for its tab's preview.

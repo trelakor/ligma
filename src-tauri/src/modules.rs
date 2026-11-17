@@ -17,7 +17,9 @@
 ///   are; `patch.loaded(exports, React)` sees them once it has run. `React`
 ///   is what the module imports, or null. `patch.source(source)` instead
 ///   rewrites the module's code before it runs, for what isn't exported;
-///   if it throws or the code doesn't parse, the module runs as it was
+///   if it throws or the code doesn't parse, the module runs as it was.
+///   Patches that take the same module all apply, rewrites first. One
+///   with `many` takes every module it matches, not only the first
 /// - `arrived(match)` says whether a module `match` accepts has already
 ///   loaded, so it's too late to patch it
 pub const PAGE_JS: &str = r##"(() => {
@@ -99,10 +101,20 @@ pub const PAGE_JS: &str = r##"(() => {
       const factory = modules[id];
       if (typeof factory !== "function") continue;
       const source = Function.prototype.toString.call(factory);
-      const patch = patches.find((patch) => !patch.done && patch.match(source));
-      if (!patch) continue;
-      patch.done = true;
-      modules[id] = patch.source ? rewrite(factory, patch, source) : wrapFactory(factory, patch, source);
+      const matched = patches.filter((patch) => !patch.done && patch.match(source));
+      if (!matched.length) continue;
+      // Rewrites first, as they need the factory's own source
+      matched.sort((a, b) => !!b.source - !!a.source);
+      let next = factory;
+      let nextSource = source;
+      for (const patch of matched) {
+        patch.done = !patch.many;
+        if (patch.source) {
+          next = rewrite(next, patch, nextSource);
+          nextSource = Function.prototype.toString.call(next);
+        } else next = wrapFactory(next, patch, nextSource);
+      }
+      modules[id] = next;
       if (!patches.some((patch) => !patch.done)) return;
     }
   };

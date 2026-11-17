@@ -170,6 +170,16 @@ pub struct Settings {
     /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
     /// is no longer read, so it's on for everyone once
     pub ligma_mcp: bool,
+    /// Shows Settings' experimental features. Off, they're all off,
+    /// whatever their own settings say
+    pub experimental: bool,
+    /// Experimental: Ligma draws Figma's canvas itself in place of Figma's
+    /// renderer (see native_renderer.rs). Only while `experimental` is on.
+    /// Windows only
+    pub native_renderer: bool,
+    /// Frame times and GPU memory over the canvas, of whichever renderer
+    /// draws it, beside the one used before. Only while `experimental` is on
+    pub renderer_stats: bool,
 }
 
 impl Default for Settings {
@@ -228,6 +238,9 @@ impl Default for Settings {
             ligma_home: true,
             ligma_home_start: "home".into(),
             ligma_mcp: true,
+            experimental: false,
+            native_renderer: false,
+            renderer_stats: false,
         }
     }
 }
@@ -491,6 +504,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::copy_code::apply_settings(app, &settings);
     crate::lasso::apply_settings(app, &settings);
     crate::mcp_bridge::apply_settings(app, &settings);
+    crate::native_renderer::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();
         let mut current = current.0.lock().unwrap();
