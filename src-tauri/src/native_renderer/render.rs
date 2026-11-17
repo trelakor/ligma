@@ -1044,6 +1044,7 @@ impl Gpu {
             memory,
         };
         log::info!("native renderer: started on {}, {:?}, {:.0} MB of GPU memory", gpu.adapter, config(), gpu.used() as f64 / 1e6);
+        trace(|| format!("started on {}, {:?}, {:.0} MB of GPU memory", gpu.adapter, config(), gpu.used() as f64 / 1e6));
         Ok(gpu)
     }
 
@@ -1171,8 +1172,8 @@ pub struct Painter {
     rasters: HashMap<(usize, bool, i32, bool, u32), Raster>,
     raster_bytes: usize,
     rasters_off: bool,
-    /// Draws the whole view, with LIGMA_NATIVE_VELLO set (see vello.rs),
-    /// once it's started
+    /// Draws the whole view (see vello.rs) once it's started, unless
+    /// LIGMA_NATIVE_VELLO=0 leaves it to Skia
     vello: Option<super::vello::Vello>,
     /// Vello's copies of the tree's paths
     vello_paths: super::vello::Paths,
@@ -1358,7 +1359,7 @@ type Mark = ((usize, bool), [u32; 4], u64, u64);
 
 impl Painter {
     pub fn new(gpu: Gpu, requests: Arc<Requests>, effects: Sender<Job>, kept: Kept, hub: Arc<Hub>) -> Self {
-        let vello_starting = std::env::var_os("LIGMA_NATIVE_VELLO").filter(|value| value != "0").map(|_| super::vello::start(&gpu.device));
+        let vello_starting = (std::env::var_os("LIGMA_NATIVE_VELLO").as_deref() != Some(std::ffi::OsStr::new("0"))).then(|| super::vello::start(&gpu.device));
         Self {
             vello: None,
             vello_paths: Default::default(),

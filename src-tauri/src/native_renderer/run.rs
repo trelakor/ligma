@@ -157,6 +157,8 @@ fn start_pushing(webview: &Webview) -> bool {
                         log::warn!("native renderer: Figma's font {family} couldn't be read: {error}");
                     }
                 } else if key.starts_with('f') {
+                    static ONCE: std::sync::Once = std::sync::Once::new();
+                    ONCE.call_once(|| super::render::trace(|| "frames come over HTTP, not shared memory".into()));
                     frames().put(&tab, body);
                 } else {
                     pushed().put(key, body);

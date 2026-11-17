@@ -130,8 +130,14 @@ pub fn start(device: &ID3D12Device) -> std::sync::mpsc::Receiver<Result<Vello, S
         let started = std::time::Instant::now();
         let made = Vello::new(&device.0);
         match &made {
-            Ok(_) => log::info!("native renderer: Vello started in {:.0}ms", started.elapsed().as_secs_f64() * 1000.0),
-            Err(error) => log::warn!("native renderer: Vello didn't start: {error}"),
+            Ok(_) => {
+                log::info!("native renderer: Vello started in {:.0}ms", started.elapsed().as_secs_f64() * 1000.0);
+                super::render::trace(|| format!("Vello started in {:.0}ms", started.elapsed().as_secs_f64() * 1000.0));
+            }
+            Err(error) => {
+                log::warn!("native renderer: Vello didn't start: {error}");
+                super::render::trace(|| format!("Vello didn't start: {error}"));
+            }
         }
         let _ = send.send(made);
     });
