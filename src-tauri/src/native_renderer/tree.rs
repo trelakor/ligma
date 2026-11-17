@@ -1666,8 +1666,11 @@ impl<'a> Drawer<'a> {
         let ext = node.ext();
         let space = Self::effect_space(node);
         let point = |offset: Option<rt::Vector>, default: [f32; 2]| {
-            let [x, y] = offset.filter(|p| p[0].is_finite() && p[1].is_finite()).unwrap_or(default);
-            space.map_point((x, y))
+            // Figma sends them in the space the layer's drawn in already
+            match offset.filter(|p| p[0].is_finite() && p[1].is_finite()) {
+                Some([x, y]) => Point::new(x, y),
+                None => space.map_point((default[0], default[1])),
+            }
         };
         let (p0, p1) = (point(ext.start_offset, [0.0, 0.0]), point(ext.end_offset, [0.0, 1.0]));
         let (start, end) = (finite(ext.start_radius), finite(node.radius));

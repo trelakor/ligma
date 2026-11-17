@@ -1202,20 +1202,28 @@ struct Depth {
     blurs: Vec<Placed>,
     /// How wide what's placed reaches
     used: i32,
+    /// Where the column of rows being filled starts
+    column: i32,
 }
 
 impl Depth {
     /// Room for `width` by `height`, in rows the view's width, or wider for
-    /// one that is
+    /// one that is, and once a column of them is as tall as a texture can
+    /// be, in another to its right
     fn room(&mut self, width: i32, height: i32, soft: i32) -> Option<(i32, i32)> {
         let shelf = &mut self.shelf;
-        if shelf.x > 0 && shelf.x + width > soft {
-            shelf.x = 0;
+        if shelf.x > self.column && shelf.x + width > self.column + soft {
+            shelf.x = self.column;
             shelf.y += shelf.row;
             shelf.row = 0;
         }
         if shelf.y + height > 8192 {
-            return None;
+            let next = self.used + 1;
+            if shelf.y == 0 || next + width > 8192 {
+                return None;
+            }
+            self.column = next;
+            (shelf.x, shelf.y, shelf.row) = (next, 0, 0);
         }
         let at = (shelf.x, shelf.y);
         shelf.x += width + 1;
@@ -2484,10 +2492,66 @@ impl<'a> Encoder<'a> {
         let Some(child) = node.child else { return };
         let ext = node.ext();
         let m = self.m;
-        let sigma = draw::tent_sigma(node.radius.filter(|radius| radius.is_finite()).unwrap_or(0.0).max(0.0) as f64);
-        if ext.blur_op_type == Some(rt::BlurOpType::Progressive) || m.has_perspective() || m.skew_x().abs() > 1e-6 || m.skew_y().abs() > 1e-6 {
+        if m.has_perspective() || m.skew_x().abs() > 1e-6 || m.skew_y().abs() > 1e-6 {
             return self.fall_back("blur", false, bounds, Box::new(move |drawer| drawer.draw(id)));
         }
+        if ext.blur_op_type == Some(rt::BlurOpType::Progressive) {
+            return self.progressive(node, child, bounds);
+        }
+        let sigma = draw::tent_sigma(node.radius.filter(|radius| radius.is_finite()).unwrap_or(0.0).max(0.0) as f64);
+        self.blur_of(child, sigma, ext.clamp.map(|clamp| clamp.to_skia()), bounds);
+    }
+
+    /// A progressive blur, more from its start to its end, as Skia draws it
+    /// (see tree.rs): blurs of radii evenly apart, each shown about where
+    /// the radius is its own, added up
+    fn progressive(&mut self, node: &Node, child: u32, bounds: Rect) {
+        let ext = node.ext();
+        let space = tree::Drawer::effect_space(node);
+        let point = |offset: Option<rt::Vector>, default: [f32; 2]| {
+            // Figma sends them in the space the layer's drawn in already
+            let p = match offset.filter(|p| p[0].is_finite() && p[1].is_finite()) {
+                Some([x, y]) => skia_safe::Point::new(x, y),
+                None => space.map_point((default[0], default[1])),
+            };
+            (p.x as f64, p.y as f64)
+        };
+        let (p0, p1) = (point(ext.start_offset, [0.0, 0.0]), point(ext.end_offset, [0.0, 1.0]));
+        let finite = |value: Option<f32>| value.filter(|value| value.is_finite()).unwrap_or(0.0).max(0.0);
+        let (start, end) = (finite(ext.start_radius), finite(node.radius));
+        let span = (end - start).abs() * self.scale();
+        let levels = ((span / 6.0).ceil() as usize + 1).clamp(2, 8);
+        let rect = kurbo::Rect::new(bounds.left as f64, bounds.top as f64, bounds.right as f64, bounds.bottom as f64);
+        if !self.push(BlendMode::default(), 1.0, bounds) {
+            return;
+        }
+        for level in 0..levels {
+            let at = level as f32 / (levels - 1) as f32;
+            let radius = start + (end - start) * at;
+            let step = 1.0 / (levels - 1) as f32;
+            let stops: Vec<ColorStop> = [(at - step, 0.0), (at, 1.0), (at + step, 0.0)]
+                .into_iter()
+                .filter(|(position, _)| (-1e-6..=1.0 + 1e-6).contains(position))
+                .map(|(position, alpha)| ColorStop { offset: position.clamp(0.0, 1.0), color: DynamicColor::from_alpha_color(AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, alpha])) })
+                .collect();
+            if !self.push(BlendMode::new(Mix::Normal, Compose::Plus), 1.0, bounds) {
+                continue;
+            }
+            self.blur_of(child, draw::tent_sigma(radius as f64), None, bounds);
+            if self.push(BlendMode::new(Mix::Normal, Compose::DestIn), 1.0, bounds) {
+                let ramp = peniko::Gradient::new_linear(p0, p1).with_extend(Extend::Pad).with_stops(stops.as_slice());
+                self.fill(Fill::NonZero, affine(&self.m), &peniko::Brush::Gradient(ramp), None, &rect);
+                self.pop();
+            }
+            self.pop();
+        }
+        self.pop();
+    }
+
+    /// `child` blurred by `sigma`, in the current space, clamped to `clamp`
+    /// if it is
+    fn blur_of(&mut self, child: u32, sigma: f32, clamp: Option<Rect>, bounds: Rect) {
+        let m = self.m;
         if sigma <= 0.0 {
             return self.draw(child);
         }
@@ -2519,7 +2583,7 @@ impl<'a> Encoder<'a> {
                 effects: nested,
                 reach: krect(reach),
                 sigma: ((sigma * sx) as f64, (sigma * sy) as f64),
-                clamp: ext.clamp.map(|clamp| krect(clamp.to_skia())),
+                clamp: clamp.map(krect),
             },
             bounds: shown,
             transform,
@@ -2593,7 +2657,7 @@ impl<'a> Encoder<'a> {
                         return Err("blur bigger than its texture".into());
                     }
                     while plan.depths.len() <= depth {
-                        plan.depths.push(Depth { scene: vello::Scene::new(), shelf: Shelf { width: 8192, height: 8192, x: 0, y: 0, row: 0 }, blurs: Vec::new(), used: 0 });
+                        plan.depths.push(Depth { scene: vello::Scene::new(), shelf: Shelf { width: 8192, height: 8192, x: 0, y: 0, row: 0 }, blurs: Vec::new(), used: 0, column: 0 });
                     }
                     let soft = plan.width;
                     let (x, y) = plan.depths[depth].room(width, height, soft).ok_or("blurs past their texture")?;

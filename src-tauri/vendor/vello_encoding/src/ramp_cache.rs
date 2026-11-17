@@ -122,7 +122,8 @@ fn make_ramp(
 ) -> impl Iterator<Item = u32> + '_ {
     let mut last_u = 0.0;
     let mut last_c = stops[0].color.to_alpha_color::<Srgb>();
-    let mut this_u = last_u;
+    // Before the first stop is its color, wherever that stop is
+    let mut this_u = stops[0].offset.max(0.0);
     let mut this_c = last_c;
     let mut j = 0;
     (0..N_SAMPLES).map(move |i| {
