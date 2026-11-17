@@ -1767,7 +1767,25 @@ impl<'a> Encoder<'a> {
                     self.draw(child);
                 }
             }
-            // Noise, grain and effects, as Skia draws them
+            // Glass and 3D layers, which Skia draws as what's in them, drawn
+            // here the same where what's in them blends with what's under
+            Op::Glass | Op::SpatialPlane | Op::SpatialTransform | Op::SpatialComposition if self.tree.info(id).blends => {
+                let ext = node.ext();
+                let children: Vec<u32> = node
+                    .child
+                    .into_iter()
+                    .chain(node.children.iter().copied())
+                    .chain(ext.spatial_plane_content_id)
+                    .chain(ext.spatial_transform_child_id)
+                    .chain(ext.spatial_composition_child_ids.iter().copied())
+                    .collect();
+                for child in children {
+                    self.draw(child);
+                }
+            }
+            // Noise, grain and effects, as Skia draws them. Noise and grain
+            // take what's in them in a layer of their own, as an effect
+            // takes it once it's run, so what blends in them stays in them
             Op::Noise
             | Op::Grain
             | Op::CustomEffect
@@ -1775,7 +1793,7 @@ impl<'a> Encoder<'a> {
             | Op::Glass
             | Op::SpatialPlane
             | Op::SpatialTransform
-            | Op::SpatialComposition => self.fall_back(op_name(node.op), self.tree.info(id).blends, bounds, Box::new(move |drawer| drawer.draw(id))),
+            | Op::SpatialComposition => self.fall_back(op_name(node.op), false, bounds, Box::new(move |drawer| drawer.draw(id))),
             _ => {
                 for child in node.child.into_iter().chain(node.children.iter().copied()) {
                     self.draw(child);
@@ -1936,8 +1954,21 @@ impl<'a> Encoder<'a> {
         let Some((brush, brush_transform)) = brush else {
             // Images, patterns and the rest, as Skia draws them
             let bounds = skia.bounds().with_outset((1.0, 1.0));
-            let (node, paint, skia) = (node.clone(), paint.clone(), skia.clone());
-            return self.fall_back(paint_name(kind), tree::blends(paint.blend_mode), bounds, Box::new(move |drawer| drawer.paint(&node, &paint, &skia)));
+            // Skia draws it alone and it's blended here as it's put in place
+            let blended = match mix(paint.blend_mode) {
+                Some(mode) => self.push(mode, 1.0, bounds),
+                None => false,
+            };
+            let blends = !blended && tree::blends(paint.blend_mode);
+            let (node, mut paint, skia) = (node.clone(), paint.clone(), skia.clone());
+            if blended {
+                paint.blend_mode = Some(rt::BlendMode::Normal);
+            }
+            self.fall_back(paint_name(kind), blends, bounds, Box::new(move |drawer| drawer.paint(&node, &paint, &skia)));
+            if blended {
+                self.pop();
+            }
+            return;
         };
         if mix(paint.blend_mode).is_some() {
             SIZES[11].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2436,7 +2467,7 @@ impl<'a> Encoder<'a> {
         let _t = timer(8);
         // Drawn alone, it can't mix with what's under it
         if blends {
-            return self.fail("blends in what Skia draws");
+            return self.fail(format!("blends in what Skia draws: {kind}"));
         }
         let device = self.m.map_rect(bounds).0;
         // Pixels more each way, where it's smoothed at the edges, as what's
