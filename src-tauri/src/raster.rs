@@ -206,7 +206,9 @@ const PAGE_JS: &str = r##"(() => {
     clone: { size: 40, angle: 0, roundness: 100, hardness: 50, opacity: 100, smoothing: 0, aligned: true },
     eraser: { size: 40, angle: 0, roundness: 100, hardness: 80, opacity: 100, smoothing: 0, pressure: true },
     magicEraser: { tolerance: 32, contiguous: true, opacity: 100 },
-    bucket: { tolerance: 32, contiguous: true, all: false, opacity: 100 },
+    // What's drawn, as layers Raster mode makes start clear: sampling a
+    // clear layer alone would fill all of it
+    bucket: { tolerance: 32, contiguous: true, all: true, opacity: 100 },
     gradient: { shape: "linear", colors: "background", opacity: 100, reverse: false },
     blur: { size: 40, angle: 0, roundness: 100, hardness: 0, strength: 50, smoothing: 0 },
     sharpen: { size: 40, angle: 0, roundness: 100, hardness: 0, strength: 30, smoothing: 0 },
@@ -225,6 +227,11 @@ const PAGE_JS: &str = r##"(() => {
   } catch {}
   if (!TOOLS[prefs.tool]) prefs.tool = "brush";
   for (const [tool, options] of Object.entries(DEFAULTS)) prefs.options[tool] = { ...options, ...(prefs.options[tool] ?? {}) };
+  // The bucket samples every layer now, unless it's turned off again
+  if ((prefs.version ?? 1) < 2) {
+    prefs.options.bucket.all = true;
+    prefs.version = 2;
+  }
   let saveTimer = 0;
   const savePrefs = () => {
     clearTimeout(saveTimer);
@@ -626,10 +633,15 @@ const PAGE_JS: &str = r##"(() => {
     const [W, H] = [Math.max(1, Math.round(place.w * scale)), Math.max(1, Math.round(place.h * scale))];
     return { node: null, id: null, index: 0, paint: null, hash: null, w: place.w, h: place.h, M: place.M, W, H, base: canvasOf(W, H), live: canvasOf(W, H), pending: 0, place };
   };
+  // The next number among every layer in the frame, groups included, so
+  // no two share a name
   const layerName = (parent) => {
+    let scope = parent;
+    for (let at = parent; at && at.type !== "PAGE"; at = at.parent) if (CONTAINERS.has(at.type)) scope = at;
     let most = 0;
-    for (const child of parent?.children ?? []) {
-      const found = /^Layer (\d+)$/.exec(child.name);
+    const names = scope?.type === "PAGE" ? (scope.children ?? []).map((child) => child.name) : [scope?.name, ...(scope?.findAll?.((node) => /^Layer \d+$/.test(node.name)) ?? []).map((node) => node.name)];
+    for (const name of names) {
+      const found = /^Layer (\d+)$/.exec(name ?? "");
       if (found) most = Math.max(most, +found[1]);
     }
     return `Layer ${most + 1}`;
@@ -1908,10 +1920,11 @@ const PAGE_JS: &str = r##"(() => {
   // outermost frame around it drawn as a picture. Without one, the layer
   const composited = async (t) => {
     let frame = null;
-    for (let at = t.node?.parent; at && at.type !== "PAGE"; at = at.parent) if (CONTAINERS.has(at.type)) frame = at;
+    // A new layer not yet in Figma samples the frame it's going in
+    for (let at = t.node?.parent ?? t.place?.parent; at && at.type !== "PAGE"; at = at.parent) if (CONTAINERS.has(at.type)) frame = at;
     if (!frame) return t.base;
     // Figma draws what it has, so the strokes still waiting go first
-    await save(t);
+    if (t.node) await save(t);
     const turned = Math.abs(frame.absoluteTransform[0][1]) > 1e-6 || Math.abs(frame.absoluteTransform[1][0]) > 1e-6;
     if (turned) return t.base;
     const scale = Math.min(Math.hypot(gridOf(t).a, gridOf(t).b) ** -1, LARGEST / Math.max(frame.width, frame.height));
@@ -2011,7 +2024,7 @@ const PAGE_JS: &str = r##"(() => {
     const o = prefs.options.bucket;
     const at = pixelAt(t, page);
     if (!inside(t, at)) return;
-    const source = o.all && t.node ? await composited(t) : t.base;
+    const source = o.all ? await composited(t) : t.base;
     const region = maskCanvas(floodMask(pixelsOf(source), at[0], at[1], o.tolerance, o.contiguous), t.W, t.H, true);
     const live = canvasOf(t.W, t.H);
     const ctx = live.getContext("2d");
