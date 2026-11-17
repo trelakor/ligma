@@ -504,6 +504,9 @@ const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 /// quarter of the room
 const COARSEST_IMAGES: u32 = 4;
 
+/// A pass of the render loop past this is traced, step by step
+const SLOW_PASS: Duration = Duration::from_millis(150);
+
 /// Most times blurs' sources are drawn at half again to fit their textures
 const COARSEST_BLURS: u32 = 3;
 
@@ -1109,6 +1112,16 @@ impl Gpu {
         unsafe { self.fence.GetCompletedValue() }
     }
 
+    /// GPU memory this process uses, and what the OS gives it before it
+    /// starts moving memory out, for the trace
+    fn used_and_budget(&self) -> (u64, u64) {
+        let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+        match &self.memory {
+            Some(adapter) if unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info) }.is_ok() => (info.CurrentUsage, info.Budget),
+            _ => (0, 0),
+        }
+    }
+
     /// GPU memory this process uses, as D3D12 counts it
     fn used(&self) -> u64 {
         let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
@@ -1545,24 +1558,33 @@ impl Painter {
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
             };
+            let began = Instant::now();
             let mut message = first;
+            let mut handled = 0;
             while let Some(one) = message {
                 if !self.handle(one) {
                     return;
                 }
+                handled += 1;
                 message = messages.try_recv().ok();
             }
+            let at_handled = began.elapsed();
             // The latest frame is handed over before more is drawn, which
             // takes a while, and again with what's drawn
             self.dirty = false;
             self.publish();
+            let at_published = began.elapsed();
             next = self.fill();
+            let at_filled = began.elapsed();
             // With nothing more to draw at once, the whole view Vello drew
             // last is shown once it's drawn
             if next != Some(Duration::ZERO) && self.unchecked.is_some() {
                 self.settle_unchecked();
             }
+            let at_settled = began.elapsed();
             self.publish();
+            let drew = self.drew;
+            let at_end = began.elapsed();
             if std::mem::take(&mut self.drew) {
                 self.drawn = Instant::now();
                 self.released = false;
@@ -1586,6 +1608,25 @@ impl Painter {
             } else if !self.freed && self.drawn.elapsed() > FREE_AFTER {
                 self.freed = true;
                 self.release();
+            }
+            // Where the time went while frames waited on this thread
+            if tracing() && began.elapsed() > SLOW_PASS {
+                let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+                let (total, (used, budget)) = (began.elapsed(), self.gpu.used_and_budget());
+                trace(|| {
+                    format!(
+                        "render pass {:.0}ms: {handled} handled {:.0}, publish {:.0}, fill {:.0}, settle {:.0}, publish {:.0}, after {:.0}, drew={drew}, gpu {} of {} MB",
+                        ms(total),
+                        ms(at_handled),
+                        ms(at_published - at_handled),
+                        ms(at_filled - at_published),
+                        ms(at_settled - at_filled),
+                        ms(at_end - at_settled),
+                        ms(total - at_end),
+                        used >> 20,
+                        budget >> 20
+                    )
+                });
             }
             self.dirty = next == Some(Duration::ZERO);
         }
