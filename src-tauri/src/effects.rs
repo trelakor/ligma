@@ -2996,9 +2996,48 @@ const PAGE_JS: &str = r##"(() => {
     });
   };
 
+  // Where the result and the original are on the page, as last placed
+  const placedAt = (current) => {
+    const [[, , rx], [, , ry]] = current.result.absoluteTransform;
+    const [[, , sx], [, , sy]] = current.source.absoluteTransform;
+    return { rx, ry, sx, sy };
+  };
+  // The result moved on the page since it was last placed, by anyone, as
+  // dragged while the panel's open: what's made from then on goes where
+  // it is now, and the original under it goes with it, unless it moved
+  // too, as when their group's moved
+  const followMoved = (current) => {
+    const was = current.placedAt;
+    if (!was || current.result.removed || current.source.removed) return;
+    const now = placedAt(current);
+    const dx = now.rx - was.rx;
+    const dy = now.ry - was.ry;
+    if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
+    current.bounds = { ...current.bounds, x: current.bounds.x + dx, y: current.bounds.y + dy };
+    const sx = was.sx + dx - now.sx;
+    const sy = was.sy + dy - now.sy;
+    if (Math.abs(sx) >= 0.01 || Math.abs(sy) >= 0.01) {
+      current.sourceFrom ??= current.source.relativeTransform;
+      const [[a, c, e], [b, d, f]] = current.source.absoluteTransform;
+      current.source.relativeTransform = relativeFor(current.source.parent, [
+        [a, c, e + sx],
+        [b, d, f + sy],
+      ]);
+    }
+    current.placedAt = placedAt(current);
+  };
+
+  // Cancelled, the original back where it was before it followed the result
+  const putBackSource = (current) => {
+    try {
+      if (current.sourceFrom && !current.source.removed) current.source.relativeTransform = current.sourceFrom;
+    } catch {}
+  };
+
   const placeDrawn = async (current, drawn, k) => {
-    const { figma, result, bounds } = current;
-    if (!drawn || result.removed) return;
+    if (!drawn || current.result.removed) return;
+    followMoved(current);
+    const { figma, result } = current;
     // Encoded in a worker already, where it was made, or here
     const bytes = drawn.bytes ? new Uint8Array(drawn.bytes) : new Uint8Array(await (await new Promise((resolve) => drawn.canvas.toBlob(resolve, "image/png"))).arrayBuffer());
     if (result.removed) return;
@@ -3008,6 +3047,9 @@ const PAGE_JS: &str = r##"(() => {
     if (inked(drawn.canvas)) await loaded(current, fill);
     // Closed meanwhile, as it was is kept
     if (result.removed || current.closed) return;
+    // Moved while the picture loaded
+    followMoved(current);
+    const { bounds } = current;
     const place = toParent(result.parent, bounds.x + drawn.x / k, bounds.y + drawn.y / k);
     result.resizeWithoutConstraints(Math.max(0.01, drawn.width / k), Math.max(0.01, drawn.height / k));
     result.relativeTransform = [
@@ -3018,7 +3060,10 @@ const PAGE_JS: &str = r##"(() => {
     result.visible = true;
     // The original's hidden once there's something in its place, so the
     // layer never shows empty
-    if (!current.source.removed) current.source.visible = false;
+    if (!current.source.removed) {
+      current.source.visible = false;
+      current.placedAt = placedAt(current);
+    }
   };
 
   // The layer as a picture for an effect: a small one first, quick to
@@ -3375,6 +3420,7 @@ const PAGE_JS: &str = r##"(() => {
       if (current.group) {
         // What it was before: its image, size and place
         try {
+          putBackSource(current);
           if (current.kept && !result.removed) {
             result.resizeWithoutConstraints(current.kept.width, current.kept.height);
             result.relativeTransform = current.kept.transform;
@@ -3385,6 +3431,7 @@ const PAGE_JS: &str = r##"(() => {
           if (!current.group.removed && isOff(current.group)) setOff(current.group, true);
         } catch {}
       } else {
+        putBackSource(current);
         if (result && !result.removed) result.remove();
         if (!source.removed) source.visible = current.wasVisible;
         if (wrap && home && !source.removed && !home.parent.removed) {
@@ -4146,6 +4193,7 @@ const PAGE_JS: &str = r##"(() => {
       if (current.group) {
         // What it was before: its image, size and place
         try {
+          putBackSource(current);
           if (current.kept && !result.removed) {
             result.resizeWithoutConstraints(current.kept.width, current.kept.height);
             result.relativeTransform = current.kept.transform;
@@ -4156,6 +4204,7 @@ const PAGE_JS: &str = r##"(() => {
           if (!current.group.removed && isOff(current.group)) setOff(current.group, true);
         } catch {}
       } else {
+        putBackSource(current);
         if (result && !result.removed) result.remove();
         if (!source.removed) source.visible = current.wasVisible;
         if (wrap && home && !source.removed && !home.parent.removed) {
@@ -5357,6 +5406,7 @@ const PAGE_JS: &str = r##"(() => {
       const { figma, source, result, home, wrap } = current;
       if (current.group) {
         try {
+          putBackSource(current);
           if (current.kept && !result.removed) {
             result.resizeWithoutConstraints(current.kept.width, current.kept.height);
             result.relativeTransform = current.kept.transform;
@@ -5366,6 +5416,7 @@ const PAGE_JS: &str = r##"(() => {
           if (!current.group.removed && isOff(current.group)) setOff(current.group, true);
         } catch {}
       } else {
+        putBackSource(current);
         if (result && !result.removed) result.remove();
         if (!source.removed) source.visible = current.wasVisible;
         if (wrap && home && !source.removed && !home.parent.removed) {
