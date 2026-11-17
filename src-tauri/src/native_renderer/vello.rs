@@ -253,6 +253,7 @@ impl Vello {
     /// A texture of Skia's of at least `width` by `height` that Vello can
     /// also use, kept in `slot` and made again only when it's too small
     fn target(skia: &ID3D12Device, vello: &wgpu::Device, slot: &mut Option<Target>, width: i32, height: i32) -> Result<Arc<Tex>, String> {
+        let _span = super::span::span("vello target");
         if let Some(target) = slot.as_ref().filter(|target| target.tex.width >= width && target.tex.height >= height) {
             return Ok(target.tex.clone());
         }
@@ -320,6 +321,7 @@ impl Vello {
         plan: &Plan,
         kept: Kept,
     ) -> Result<Arc<Tex>, String> {
+        let _span = super::span::span("vello submit");
         let out = Self::target(skia, &self.device, &mut self.out, width, height)?;
         self.signalled += 1;
         let value = self.signalled;
@@ -401,6 +403,7 @@ impl Vello {
     /// rendered again
     /// of the first `renders` not yet checked, waiting for those alone
     pub fn check(&mut self, renders: usize) -> Result<Option<String>, String> {
+        let _span = super::span::span("vello wait for GPU");
         let at = std::time::Instant::now();
         let fits = self.renderer.check(&self.device, renders).map_err(|error| format!("check: {error}"));
         self.waited = at.elapsed();
@@ -436,6 +439,7 @@ impl Vello {
     /// Draws the sources of `plan`'s blurs and blurs them, the deepest in
     /// other blurs first, each standing in as an image where it's drawn
     fn blur(&mut self, plan: &Plan, antialiasing_method: vello::AaConfig) -> Result<(), String> {
+        let _span = super::span::span("vello blurs");
         for (index, depth) in plan.depths.iter().enumerate().rev() {
             if depth.blurs.is_empty() {
                 continue;
@@ -491,6 +495,7 @@ impl Vello {
     /// texture Skia's. None where Vello can't copy it, or the image has no
     /// such level
     pub fn picture(&mut self, key: &str, img: &Img, level: u32) -> Option<ImageData> {
+        let _span = super::span::span("vello picture");
         // Dev tools: images as Skia draws them
         if std::env::var_os("LIGMA_NATIVE_VELLO_SKIA_IMAGES").is_some() {
             return None;
@@ -558,6 +563,7 @@ impl Vello {
     /// nothing's drawn for a while: the next view takes a few milliseconds
     /// more, to make it again
     pub fn trim(&mut self) {
+        let _span = super::span::span("vello trim");
         self.pieces.clear();
         self.piece_bytes = 0;
         self.renderer.trim();
@@ -586,6 +592,7 @@ impl Vello {
     /// A view begins: pieces no view's had for a while go, and the longest
     /// unused past what's kept
     fn begin_view(&mut self) {
+        let _span = super::span::span("vello begin view");
         self.views += 1;
         let views = self.views;
         self.pieces.retain(|_, piece| piece.view + PIECE_VIEWS >= views);
@@ -618,6 +625,7 @@ impl Vello {
     /// Puts the textures of pictures `keys` in the copy source state on
     /// Skia's queue, where Vello's copies take them, and has Skia know
     fn ready(&mut self, skia_queue: &ID3D12CommandQueue, keys: &[(String, u32)], value: u64) -> Result<(), String> {
+        let _span = super::span::span("vello ready");
         use windows::Win32::Graphics::Direct3D12::*;
         let mut barriers = Vec::new();
         for key in keys {

@@ -65,6 +65,8 @@ mod profile;
 #[cfg(windows)]
 mod shader_cache;
 #[cfg(windows)]
+mod span;
+#[cfg(windows)]
 mod render;
 #[cfg(windows)]
 mod rt;

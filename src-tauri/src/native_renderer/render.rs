@@ -251,13 +251,34 @@ fn tracing_units() -> bool {
     *ON.get_or_init(|| tracing() && std::env::var("LIGMA_NATIVE_TRACE_UNITS").is_ok_and(|value| value == "1"))
 }
 
+/// Lines are written on a thread of their own, so tracing doesn't hold up
+/// the thread tracing, and lines from different threads stay whole
 pub(super) fn trace(line: impl FnOnce() -> String) {
     if tracing() {
         static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        static LINES: std::sync::OnceLock<Option<std::sync::mpsc::Sender<String>>> = std::sync::OnceLock::new();
         let at = START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0;
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("ligma-trace.txt")) {
-            let _ = writeln!(file, "{at:9.1} {}", line());
+        let lines = LINES.get_or_init(|| {
+            let (send, lines) = std::sync::mpsc::channel::<String>();
+            std::thread::Builder::new()
+                .name("native-trace".into())
+                .spawn(move || {
+                    use std::io::Write;
+                    let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(std::env::temp_dir().join("ligma-trace.txt")) else { return };
+                    let mut file = std::io::BufWriter::new(file);
+                    while let Ok(line) = lines.recv() {
+                        let _ = writeln!(file, "{line}");
+                        while let Ok(line) = lines.try_recv() {
+                            let _ = writeln!(file, "{line}");
+                        }
+                        let _ = file.flush();
+                    }
+                })
+                .ok()
+                .map(|_| send)
+        });
+        if let Some(lines) = lines {
+            let _ = lines.send(format!("{at:9.1} {}", line()));
         }
     }
 }
@@ -506,6 +527,9 @@ const COARSEST_IMAGES: u32 = 4;
 
 /// A pass of the render loop past this is traced, step by step
 const SLOW_PASS: Duration = Duration::from_millis(150);
+
+/// Steps of a slow pass shorter than this aren't traced
+const SLOW_STEP: Duration = Duration::from_millis(3);
 
 /// Most times blurs' sources are drawn at half again to fit their textures
 const COARSEST_BLURS: u32 = 3;
@@ -1156,6 +1180,7 @@ impl Gpu {
     /// one let go, another image entirely. Each submit starts the tables
     /// afresh, and within a flush every texture is made before any is read
     fn flush(&mut self, surface: &mut Surface) {
+        let _span = super::span::span("skia flush");
         let _ = self.context.flush_and_submit_surface(surface, None);
     }
 }
@@ -1520,6 +1545,7 @@ impl Painter {
     /// all asked of it so far is submitted, and freed once the queue passes
     /// a fence signalled after
     fn bury(&mut self) {
+        let _span = super::span::span("bury");
         let buried = super::present::buried();
         if !buried.is_empty() {
             let _ = self.gpu.context.flush_and_submit();
@@ -1542,8 +1568,14 @@ impl Painter {
         super::profile::register();
         // How long until there's more to draw, if there is
         let mut next: Option<Duration> = Some(Duration::ZERO);
+        // Time busy, passes and the slowest this second, while tracing
+        let mut second = (Duration::ZERO, 0u32, Duration::ZERO, Instant::now());
         loop {
+            if tracing() {
+                super::span::begin();
+            }
             self.bury();
+            let waiting = Instant::now();
             let wait = if self.dirty { Duration::ZERO } else { next.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)) };
             let first = if wait.is_zero() {
                 match messages.try_recv() {
@@ -1558,33 +1590,28 @@ impl Painter {
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
             };
-            let began = Instant::now();
+            let idle = waiting.elapsed();
             let mut message = first;
-            let mut handled = 0;
-            while let Some(one) = message {
-                if !self.handle(one) {
-                    return;
+            {
+                let _span = super::span::span("messages");
+                while let Some(one) = message {
+                    if !self.handle(one) {
+                        return;
+                    }
+                    message = messages.try_recv().ok();
                 }
-                handled += 1;
-                message = messages.try_recv().ok();
             }
-            let at_handled = began.elapsed();
             // The latest frame is handed over before more is drawn, which
             // takes a while, and again with what's drawn
             self.dirty = false;
             self.publish();
-            let at_published = began.elapsed();
             next = self.fill();
-            let at_filled = began.elapsed();
             // With nothing more to draw at once, the whole view Vello drew
             // last is shown once it's drawn
             if next != Some(Duration::ZERO) && self.unchecked.is_some() {
                 self.settle_unchecked();
             }
-            let at_settled = began.elapsed();
             self.publish();
-            let drew = self.drew;
-            let at_end = began.elapsed();
             if std::mem::take(&mut self.drew) {
                 self.drawn = Instant::now();
                 self.released = false;
@@ -1610,23 +1637,30 @@ impl Painter {
                 self.release();
             }
             // Where the time went while frames waited on this thread
-            if tracing() && began.elapsed() > SLOW_PASS {
-                let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-                let (total, (used, budget)) = (began.elapsed(), self.gpu.used_and_budget());
-                trace(|| {
-                    format!(
-                        "render pass {:.0}ms: {handled} handled {:.0}, publish {:.0}, fill {:.0}, settle {:.0}, publish {:.0}, after {:.0}, drew={drew}, gpu {} of {} MB",
-                        ms(total),
-                        ms(at_handled),
-                        ms(at_published - at_handled),
-                        ms(at_filled - at_published),
-                        ms(at_settled - at_filled),
-                        ms(at_end - at_settled),
-                        ms(total - at_end),
-                        used >> 20,
-                        budget >> 20
-                    )
-                });
+            if let Some((took, steps)) = super::span::end(SLOW_STEP, idle) {
+                second.0 += took;
+                second.1 += 1;
+                second.2 = second.2.max(took);
+                if took > SLOW_PASS {
+                    let (used, budget) = self.gpu.used_and_budget();
+                    trace(|| format!("slow render pass {:.0}ms, gpu {} of {} MB: {steps}", took.as_secs_f64() * 1000.0, used >> 20, budget >> 20));
+                }
+                // How busy this thread was, a line a second
+                if second.3.elapsed() >= Duration::from_secs(1) {
+                    let (used, budget) = self.gpu.used_and_budget();
+                    trace(|| {
+                        format!(
+                            "render thread busy {:.0}% over {:.0}ms, {} passes, slowest {:.0}ms, gpu {} of {} MB",
+                            second.0.as_secs_f64() * 100.0 / second.3.elapsed().as_secs_f64(),
+                            second.3.elapsed().as_secs_f64() * 1000.0,
+                            second.1,
+                            second.2.as_secs_f64() * 1000.0,
+                            used >> 20,
+                            budget >> 20
+                        )
+                    });
+                    second = (Duration::ZERO, 0, Duration::ZERO, Instant::now());
+                }
             }
             self.dirty = next == Some(Duration::ZERO);
         }
@@ -1725,6 +1759,7 @@ impl Painter {
     /// the view has been still a moment. Returns how long until there's
     /// more to draw, if there is
     fn fill(&mut self) -> Option<Duration> {
+        let _span = super::span::span("fill");
         self.check();
         self.govern();
         // Till the file's first frame comes there's nothing to draw, not
@@ -2088,6 +2123,7 @@ impl Painter {
     /// each time, over what `draw_whole` draws. False where it can't be,
     /// for Skia to draw it
     fn draw_whole_vello(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32) -> bool {
+        let _span = super::span::span("draw whole vello");
         let _purpose = super::gpu_census::purpose("whole");
         let started = Instant::now();
         let at = (ox, oy, px.to_bits());
@@ -2133,6 +2169,7 @@ impl Painter {
     /// The view drawn by Vello at once, exactly, shown once it's checked.
     /// None where Vello can't, for tiles to be drawn instead
     fn fill_once(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), phase: (f32, f32)) -> Option<Option<Duration>> {
+        let _span = super::span::span("fill once");
         let started = Instant::now();
         let reach = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
         self.settle_unchecked();
@@ -2156,6 +2193,7 @@ impl Painter {
     }
 
     fn fill_kept(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32)) -> Option<Option<Duration>> {
+        let _span = super::span::span("fill kept");
         let pxb = px.to_bits();
         let at = (ox, oy, pxb);
         let inside = self.scene_kept.as_ref().filter(|kept| kept.px == pxb && (!self.kept_stale || (kept.built.elapsed() < KEPT_CHANGES && self.edited.elapsed() >= EDITING)) && ox >= kept.left && oy >= kept.top && ox + width <= kept.left + kept.width && oy + height <= kept.top + kept.height);
@@ -2229,6 +2267,7 @@ impl Painter {
     /// The scene Vello keeps as `id` drawn again, its corner at (`x`, `y`)
     /// in a `w` by `h` view
     fn vello_again(&mut self, id: u64, x: i32, y: i32, w: i32, h: i32) -> Result<(Arc<Tex>, Counts, String), String> {
+        let _span = super::span::span("vello again");
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let plan = super::vello::Plan::new(w);
@@ -2244,6 +2283,7 @@ impl Painter {
     /// What Vello drew into `out`, unpremultiplied, copied into a texture
     /// of the kind the present thread shows
     fn vello_copy(&mut self, out: &Arc<Tex>, w: i32, h: i32) -> Result<Arc<Tex>, String> {
+        let _span = super::span::span("vello copy");
         let tex = self.tex(w, h).ok_or("texture")?;
         let backend = tex.backend();
         let mut surface = self.target(&tex).ok_or("surface")?;
@@ -2265,6 +2305,7 @@ impl Painter {
     /// drawn at, then those of the level the zoom's headed to, then the
     /// furthest level, which stands in wherever the others don't reach
     fn fill_vello(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), furthest: Option<u32>, pyramid: &[TileKey], zooming: bool) -> Option<Duration> {
+        let _span = super::span::span("fill vello");
         let frame = self.frame;
         let area = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
         let over = |level: f32, area: Rect| {
@@ -2423,6 +2464,7 @@ impl Painter {
     /// Draws the first of `keys` and those near it with Vello, or Skia where
     /// Vello can't
     fn vello_or_skia(&mut self, keys: &[TileKey], exact: bool) {
+        let _span = super::span::span("vello or skia");
         let vello: Vec<TileKey> = keys.iter().copied().filter(|key| !self.vello_cant.contains(key)).collect();
         if !vello.is_empty() {
             if let Err((key, why)) = self.vello_tiles(&vello, exact) {
@@ -2444,6 +2486,7 @@ impl Painter {
     /// Draws the tiles of `keys` in the block of `VELLO_BLOCK` tiles a side
     /// the first is in with Vello, at once, all of a level
     fn vello_tiles(&mut self, keys: &[TileKey], mut exact: bool) -> Result<(), (TileKey, String)> {
+        let _span = super::span::span("vello tiles");
         let first = keys[0];
         let _purpose = super::gpu_census::purpose("drawing tiles");
         let started = Instant::now();
@@ -2509,6 +2552,7 @@ impl Painter {
     /// of `later` after, never those frames show, those of `keep` or the
     /// furthest level
     fn evict_vello(&mut self, keep: &[TileKey], later: &[TileKey], furthest: Option<u32>) {
+        let _span = super::span::span("evict vello");
         // What Skia makes drawing what Vello can't, often textures of a
         // pixel or two, each taking 64 KiB though Skia counts it as a few
         // bytes, so its cache's budget never lets them go. And images let
@@ -2554,6 +2598,7 @@ impl Painter {
     }
 
     fn settle(&mut self, last: Unchecked) {
+        let _span = super::span::span("settle");
         let Some(vello) = self.vello.as_mut() else { return };
         let short = vello.check(last.renders);
         let waited = vello.waited;
@@ -2595,6 +2640,7 @@ impl Painter {
     /// `top`), of units over `reach`, drawn by Vello into a texture of the
     /// kind the present thread shows, submitted, and how long that took
     fn vello_view(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect) -> Result<(Arc<Tex>, Counts, String), String> {
+        let _span = super::span::span("vello view");
         self.settle_unchecked();
         // Drawn again where it ran out of room in Vello's buffers, which
         // then have more, before it's shown
@@ -2629,6 +2675,7 @@ impl Painter {
     }
 
     fn vello_view_once(&mut self, left: i32, top: i32, w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
+        let _span = super::span::span("vello view once");
         self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, true, None)
     }
 
@@ -2670,6 +2717,7 @@ impl Painter {
 
     #[allow(clippy::too_many_arguments)]
     fn vello_render_at(&mut self, left: i32, top: i32, phase: (f32, f32), w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool, kept: Option<(super::vello::Kept, i32, i32)>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
+        let _span = super::span::span("vello render at");
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let _ = self.gpu.context.flush_and_submit();
@@ -2704,6 +2752,7 @@ impl Painter {
         let mut plan = super::vello::Plan::new(w);
         plan.coarser = self.blur_coarser;
         let whole = vello::kurbo::Rect::new(0.0, 0.0, w as f64, h as f64);
+        let encoding_span = super::span::span("encode scene");
         let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
             None => (vello::Scene::new(), Some("not a tree".to_string()), 0, Vec::new()),
             Some(tree) => {
@@ -2878,6 +2927,7 @@ impl Painter {
         };
         fragments.retain(|_, encoded| encoded.used.elapsed() < FRAGMENTS_KEPT);
         self.fragments = fragments;
+        drop(encoding_span);
         let encoded = started.elapsed();
         let mut steps = Vec::new();
         let mut step = Instant::now();
@@ -2905,7 +2955,10 @@ impl Painter {
             return Err(format!("images need {}M px of Vello's atlas", area >> 20));
         }
         lap(&mut steps);
-        let _ = self.gpu.context.flush_and_submit();
+        {
+            let _span = super::span::span("skia submit");
+            let _ = self.gpu.context.flush_and_submit();
+        }
         lap(&mut steps);
         // Dev tools: Skia's GPU work for the view done first, to time apart
         let skia_gpu = std::env::var_os("LIGMA_NATIVE_VELLO_SYNC").map(|_| {
@@ -3009,6 +3062,7 @@ impl Painter {
     }
 
     fn draw_whole(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32, quick: bool) {
+        let _span = super::span::span("draw whole");
         if quick && self.tree.is_some() && self.vello_ready() && self.draw_whole_vello(ox, oy, width, height, px) {
             return;
         }
@@ -3152,6 +3206,7 @@ impl Painter {
     /// Makes `layer`, which the GPU draws till `fence` passes, the whole
     /// view of `at`
     fn hand_whole(&mut self, mut layer: Layer, fence: u64, at: (i32, i32, u32), rough: bool, vello: bool) {
+        let _span = super::span::span("hand whole");
         self.serial += 1;
         let serial = self.serial;
         layer.drawn = serial;
@@ -3188,6 +3243,7 @@ impl Painter {
     /// that each time the view moves, so is drawn again, and traced with
     /// how it was drawn
     fn verify_tiles(&mut self) {
+        let _span = super::span::span("verify tiles");
         // Compared at half size, each pixel the average of 4, block by
         // block, so the fraction of a pixel the whole view's drawn at
         // makes no difference
@@ -3295,6 +3351,7 @@ impl Painter {
     /// present thread doesn't have it, otherwise onto a copy, as snapshots
     /// handed over never change
     fn patch_whole(&mut self) {
+        let _span = super::span::span("patch whole");
         let _purpose = super::gpu_census::purpose("whole");
         let started = Instant::now();
         let Some(whole) = self.whole.as_mut() else {
@@ -3483,6 +3540,7 @@ impl Painter {
 
     /// Dev tools: `tex`'s pixels
     fn read_tex(&mut self, tex: &Tex) -> Option<Vec<u8>> {
+        let _span = super::span::span("read tex");
         let (width, height) = (tex.width, tex.height);
         let info = ImageInfo::new((width, height), ColorType::RGBA8888, AlphaType::Premul, None);
         let mut target = self.gpu.surface(width, height, 1)?;
@@ -3496,6 +3554,7 @@ impl Painter {
     /// saved where they differ: with `live`, that tells a tile drawn wrong
     /// from one whose texture changed after
     fn verify_tile(&mut self, key: TileKey) {
+        let _span = super::span::span("verify tile");
         if std::env::var_os("LIGMA_NATIVE_VERIFY").is_none() || self.verifying {
             return;
         }
@@ -3570,6 +3629,7 @@ impl Painter {
     }
 
     fn clear_tiles(&mut self) {
+        let _span = super::span::span("clear tiles");
         self.pending = None;
         let tiles: Vec<Tile> = self.tiles.drain().map(|(_, tile)| tile).collect();
         for tile in tiles {
@@ -3654,6 +3714,7 @@ impl Painter {
     /// Hands the present thread a snapshot of what's drawn and up to date,
     /// as of the latest frame of Figma's render tree, when that's changed
     fn publish(&mut self) {
+        let _span = super::span::span("publish");
         self.check();
         let layers = self.layers(true);
         let background = self.background();
@@ -3910,6 +3971,7 @@ impl Painter {
     }
 
     fn set_view(&mut self, view: View) {
+        let _span = super::span::span("set view");
         if self.view.as_ref() == Some(&view) {
             return;
         }
@@ -3935,6 +3997,7 @@ impl Painter {
 
     /// Image `key` came: what waited for it is drawn again
     fn image_came(&mut self, key: String, img: Img) {
+        let _span = super::span::span("image came");
         // Sizes asked for one after another come in any order: only the
         // last asked for is kept, or one asked for before could follow it
         if !key.starts_with(RENDER) && !key.starts_with(EFFECT) {
@@ -4022,6 +4085,7 @@ impl Painter {
     /// The run of effects `key` done, and the node's run since asked for
     /// asked for again
     fn effects_done(&mut self, key: &str) {
+        let _span = super::span::span("effects done");
         if !key.starts_with(EFFECT) || self.effects_running.is_empty() {
             return;
         }
@@ -4038,6 +4102,7 @@ impl Painter {
     /// Runs again the effects that waited on image `key`, which may itself
     /// be another node's effects
     fn wake_effects(&mut self, key: &str) {
+        let _span = super::span::span("wake effects");
         if self.effects_waiting.is_empty() {
             return;
         }
@@ -4055,6 +4120,7 @@ impl Painter {
     /// again, the rest kept, as a node that changes is a new node. The view
     /// comes with it, as Figma drew it
     fn frame(&mut self, frame: Frame) {
+        let _span = super::span::span("apply frame");
         let first = self.tree.is_none();
         let tree = self.tree.get_or_insert_with(|| Tree::new(super::rt::Schema::bundled()));
         if tree.octaves.is_empty() {
@@ -4186,6 +4252,7 @@ impl Painter {
     /// Gives back the layers drawing took, keeping what the next draw would
     /// only make again, as an edit's first draw would wait on that
     fn trim(&mut self) {
+        let _span = super::span::span("trim");
         self.fit_images(false);
         // The whole view before this one only stands in while zooming, and
         // what's shown lets go of textures dropped here once it's done
@@ -4220,6 +4287,7 @@ impl Painter {
     /// Skia's spares, textures kept to use again, tiles out of view and
     /// images far from it, and none of it's kept till it's back under
     fn govern(&mut self) {
+        let _span = super::span::span("govern");
         let Some(budget) = self.budget else { return };
         let was = self.pressed;
         // At rest it takes what it takes, and the budget's set again once
@@ -4250,6 +4318,7 @@ impl Painter {
     /// Gives back the GPU memory an offscreen render took, whole views drawn
     /// supersampled, which Skia would otherwise keep for reuse
     fn release(&mut self) {
+        let _span = super::span::span("release");
         self.fit_images(false);
         if let Some(vello) = self.vello.as_mut() {
             vello.trim();
@@ -4269,6 +4338,7 @@ impl Painter {
     /// till it's had bigger again, so it'd flicker. `soon`, only those
     /// nowhere near the view go
     fn fit_images(&mut self, soon: bool) {
+        let _span = super::span::span("fit images");
         let budget = self.images_budget();
         // As run.rs sizes images it fetches
         let fitted = super::run::fitted;
@@ -4541,6 +4611,7 @@ impl Painter {
     /// asked for again at the size needed, rather than nothing. Returns
     /// `total` less what that saves
     fn shrink(&mut self, key: &str, total: usize) -> usize {
+        let _span = super::span::span("shrink");
         let _purpose = super::gpu_census::purpose("image");
         let Some(img) = self.images.remove(key) else {
             return total;
@@ -4589,6 +4660,7 @@ impl Painter {
     }
 
     fn update_memory(&mut self) {
+        let _span = super::span::span("update memory");
         let mut stats = stats().lock().unwrap();
         stats.images = self.images.len();
         stats.image_bytes = self.images.values().map(Img::bytes).sum();
@@ -4635,6 +4707,7 @@ impl Painter {
     /// so this finds every change, whatever brought it, and what's out of
     /// date is never shown
     fn check(&mut self) {
+        let _span = super::span::span("check changes");
         if self.revision == self.checked_revision {
             return;
         }
@@ -4690,6 +4763,7 @@ impl Painter {
     /// Tiles over `areas`, where images came sharper, drawn again, and
     /// shown as they are meanwhile
     fn sharpen(&mut self, areas: &[Rect]) {
+        let _span = super::span::span("sharpen");
         if areas.is_empty() {
             return;
         }
@@ -4712,6 +4786,7 @@ impl Painter {
     }
 
     fn drop_tiles(&mut self, areas: &[Rect]) {
+        let _span = super::span::span("drop tiles");
         if areas.is_empty() {
             return;
         }
@@ -4773,6 +4848,7 @@ impl Painter {
     }
 
     fn rebuild_units(&mut self) {
+        let _span = super::span::span("rebuild units");
         self.revision += 1;
         if let Some(tree) = &self.tree {
             // Background blurs draw from copies of what's behind them, so
@@ -4902,6 +4978,7 @@ impl Painter {
     /// Unit `unit`'s picture for zoom `level`, recorded if it isn't yet,
     /// with anti-aliased edges if `aa`
     fn picture(&mut self, unit: usize, level: i32, aa: bool) -> Option<&Recorded> {
+        let _span = super::span::span("record picture");
         let (slot, section, bounds) = (self.units[unit].slot, self.units[unit].section, self.units[unit].bounds);
         let key = (slot, section, level, aa);
         if !self.pictures.contains_key(&key) {
@@ -4991,6 +5068,7 @@ impl Painter {
 
     /// Notes that what's drawn over `bounds` waits on `missing`
     fn wait_for(&mut self, missing: &[String], bounds: Rect) {
+        let _span = super::span::span("wait for");
         for key in missing {
             let areas = self.waiting_areas.entry(key.clone()).or_default();
             if !areas.contains(&bounds) {
@@ -5064,6 +5142,7 @@ impl Painter {
     /// this draw, or else a thumb of another power stands in. None where it
     /// isn't drawn the same alone, is too big for one, or there's none yet
     fn thumb(&mut self, unit: usize, scale: f32) -> Option<(Drawn, Counts)> {
+        let _span = super::span::span("thumb");
         if self.rasters_off || !(scale > 0.0) {
             return None;
         }
@@ -5223,6 +5302,7 @@ impl Painter {
     /// is on it: what's drawn on it from it then draws from that, rather
     /// than Skia copying the page each time
     fn page_image(&mut self, page: usize, serial: u64) -> Option<Image> {
+        let _span = super::span::span("page image");
         if self.page_images.len() < self.thumb_pages.len() {
             self.page_images.resize(self.thumb_pages.len(), None);
         }
@@ -5238,6 +5318,7 @@ impl Painter {
     /// zoomed out up to 16 times, so zooming out has them. True if there's
     /// more to make
     fn prewarm(&mut self, view: &View, px: f32, levels: &[(Rect, f32)]) -> bool {
+        let _span = super::span::span("prewarm");
         let start = Instant::now();
         let (cx, cy) = ((view.x + view.w / 2.0) as f32, (view.y + view.h / 2.0) as f32);
         self.thumbs_ahead = true;
@@ -5323,6 +5404,7 @@ impl Painter {
 
     /// Thumbs as they're drawn, once all that's drawn of them for a view is
     fn unpage(&mut self, drawn: Vec<Drawn>) -> Vec<Drawn> {
+        let _span = super::span::span("unpage");
         self.page_images.clear();
         self.thumb_deadline = None;
         if !drawn.iter().any(|item| matches!(item, Drawn::Paged(..))) {
@@ -5386,6 +5468,7 @@ impl Painter {
     /// box in its own space, or for a group, on the child after `>` as drawn
     /// over its box. If that draws images not here yet, it waits for them
     fn effect(&mut self, key: &str, width: f64) {
+        let _span = super::span::span("effect input");
         let _purpose = super::gpu_census::purpose("effect input");
         let Some(name) = key.strip_prefix(EFFECT) else {
             return;
@@ -5464,6 +5547,7 @@ impl Painter {
     /// does: at a pixel a unit, on the node's content as drawn over the box
     /// they cover, in the node's own space
     fn tree_effect(&mut self, key: &str, id: u32, width: f64) {
+        let _span = super::span::span("effect input");
         let began = Instant::now();
         let Some(tree) = &self.tree else {
             return;
@@ -5540,6 +5624,7 @@ impl Painter {
     /// Figma's 16 samples a pixel, others one with anti-aliased edges, which
     /// is many times quicker
     fn draw_tile(&mut self, key: TileKey, exact: bool, draft: bool) -> Option<Tile> {
+        let _span = super::span::span("draw tile");
         let _purpose = super::gpu_census::purpose("drawing tiles");
         let exact = exact && !draft;
         if let Some(pending) = self.pending.take_if(|pending| (pending.key, pending.exact, pending.draft) == (key, exact, draft)) {
@@ -5638,6 +5723,7 @@ impl Painter {
     /// for about `TILE_SLICE`, then the rest later, so the view is never
     /// held up long by it. Returns the tile once it's all drawn
     fn step_tile(&mut self, mut pending: Pending) -> Option<Tile> {
+        let _span = super::span::span("step tile");
         let began = Instant::now();
         let scale = pending.key.px() * pending.ss as f32;
         let mut groups = 0;
@@ -5840,6 +5926,7 @@ impl Painter {
 
     /// `compose` at the window's own pixels
     fn compose_at(&mut self, target: &mut Surface, view: &View, budget: Option<Duration>, settled: bool) -> (Counts, Option<String>, bool) {
+        let _span = super::span::span("compose at");
         self.check();
         self.frame += 1;
         let (width, height) = (target.width(), target.height());
@@ -6010,6 +6097,7 @@ impl Painter {
     /// Keeps the most recently shown tiles. Quick tiles of zooms passed
     /// through go soon, as they only stand in for a moment
     fn evict(&mut self, current: u32, coarse: u32) {
+        let _span = super::span::span("evict");
         let frame = self.frame;
         let gone: Vec<TileKey> =
             self.tiles.iter().filter(|(key, tile)| !(tile.exact || key.px == current || key.px == coarse || self.pyramid.contains(&key.px) || frame - tile.used < PASSING)).map(|(key, _)| *key).collect();
@@ -6084,6 +6172,7 @@ impl Painter {
     }
 
     fn offscreen(&mut self, id: &str, bounds: Rect, width: u32, height: u32, backdrop: bool) -> Option<Offscreen> {
+        let _span = super::span::span("offscreen");
         let slot = *self.scene.by_id.get(id)?;
         let px = width as f32 / bounds.width().max(1e-6);
         // As tiles are drawn: supersampled, then scaled down
@@ -6126,6 +6215,7 @@ impl Painter {
     }
 
     fn render_view(&mut self, view: &View, width: u32, height: u32) -> Option<(Vec<u8>, usize)> {
+        let _span = super::span::span("render view");
         let mut target = self.gpu.surface(width as i32, height as i32, 1)?;
         self.compose(&mut target, view, None, true);
         let px = (width as f64 / view.w) as f32;
