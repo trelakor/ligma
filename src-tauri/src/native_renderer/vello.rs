@@ -2027,6 +2027,9 @@ impl<'a> Encoder<'a> {
                 }
             };
         }
+        if kind == PaintType::GradientDiamond && self.diamond(node, paint, skia, path) {
+            return;
+        }
         let mut image = None;
         let brush: Option<(peniko::Brush, Option<Affine>)> = match kind {
             PaintType::Image => match self.image(paint, node.paint_size.unwrap_or([1.0, 1.0]), opacity) {
@@ -2075,6 +2078,51 @@ impl<'a> Encoder<'a> {
         if blended {
             self.pop();
         }
+    }
+
+    /// A diamond gradient over `path`, as draw.rs's shader draws it: its
+    /// ramp at twice the distance from the middle across and down added
+    /// up, which in each quarter around the middle is a linear gradient,
+    /// each cut to its quarter and added to the rest in a layer of their
+    /// own, so where they meet what each covers of a pixel adds up to it
+    /// all, without a seam. False where Skia's to draw it
+    fn diamond(&mut self, node: &Node, paint: &rt::Paint, skia: &Path, path: &BezPath) -> bool {
+        let Some((peniko::Brush::Gradient(ramp), Some(local))) = gradient(paint, PaintType::GradientLinear, node.paint_size.unwrap_or([1.0, 1.0])) else { return false };
+        if local.determinant().abs() < 1e-12 {
+            return false;
+        }
+        let bounds = skia.bounds().with_outset((1.0, 1.0));
+        // Where the path is in the gradient's own space, which its quarters
+        // are cut to
+        let area = local.inverse().transform_rect_bbox(kurbo::Rect::new(bounds.left as f64, bounds.top as f64, bounds.right as f64, bounds.bottom as f64));
+        let blended = match mix(paint.blend_mode) {
+            Some(mode) => self.push(mode, 1.0, bounds),
+            None => false,
+        };
+        if self.push(BlendMode::default(), 1.0, bounds) {
+            let to_device = affine(&self.m) * local;
+            for (sx, sy) in [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+                let quarter = kurbo::Rect::new(
+                    if sx > 0.0 { 0.5 } else { area.x0.min(0.5) },
+                    if sy > 0.0 { 0.5 } else { area.y0.min(0.5) },
+                    if sx > 0.0 { area.x1.max(0.5) } else { 0.5 },
+                    if sy > 0.0 { area.y1.max(0.5) } else { 0.5 },
+                );
+                if quarter.width() <= 0.0 || quarter.height() <= 0.0 {
+                    continue;
+                }
+                let mut brush = ramp.clone();
+                brush.kind = peniko::GradientKind::Linear(peniko::LinearGradientPosition::new((0.5, 0.5), (0.5 + 0.25 * sx, 0.5 + 0.25 * sy)));
+                self.scene.push_layer(Fill::NonZero, BlendMode::new(Mix::Normal, Compose::Plus), 1.0, to_device, &quarter);
+                self.fill(fill_of(skia), affine(&self.m), &peniko::Brush::Gradient(brush), Some(local), path);
+                self.scene.pop_layer();
+            }
+            self.pop();
+        }
+        if blended {
+            self.pop();
+        }
+        true
     }
 
     /// An image just drawn over `skia`, whose patches were `patches`

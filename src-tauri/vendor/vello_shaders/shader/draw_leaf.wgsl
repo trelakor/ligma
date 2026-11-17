@@ -141,11 +141,20 @@ fn main(
                     info[di] = draw_flags;
                     var p0 = bitcast<vec2<f32>>(vec2(scene[dd + 1u], scene[dd + 2u]));
                     var p1 = bitcast<vec2<f32>>(vec2(scene[dd + 3u], scene[dd + 4u]));
+                    // Ligma: along the gradient in its own space, wherever
+                    // the transform skews or stretches it, not across
+                    // where its ends land
+                    let d = p1 - p0;
+                    let m = transform.matrx;
+                    let det = m.x * m.w - m.y * m.z;
+                    var line_xy = vec2(0.0);
+                    if abs(det) > 1e-20 {
+                        line_xy = vec2(m.w * d.x - m.y * d.y, -m.z * d.x + m.x * d.y) / (det * dot(d, d));
+                    } else {
+                        let dxy = transform_apply(transform, p1) - transform_apply(transform, p0);
+                        line_xy = dxy / dot(dxy, dxy);
+                    }
                     p0 = transform_apply(transform, p0);
-                    p1 = transform_apply(transform, p1);
-                    let dxy = p1 - p0;
-                    let scale = 1.0 / dot(dxy, dxy);
-                    let line_xy = dxy * scale;
                     let line_c = -dot(p0, line_xy);
                     info[di + 1u] = bitcast<u32>(line_xy.x);
                     info[di + 2u] = bitcast<u32>(line_xy.y);
