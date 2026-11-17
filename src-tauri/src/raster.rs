@@ -680,12 +680,16 @@ const PAGE_JS: &str = r##"(() => {
   // Erasing shows what's under the layer, so Figma's own copy of it is
   // hidden until the change is in, shown again with it in the same undo
   // step. Strokes overlap, so it's counted
+  // A mask's painting hides the layers it masks instead, which Ligma's
+  // canvas then shows through the mask as it's painted
   const conceal = (t) => {
     if (!t.node) return false;
     try {
       if (!t.hidden) {
-        if (!t.node.visible) return false;
-        t.node.visible = false;
+        const nodes = t.masking ?? [t.node];
+        t.hiddenNodes = nodes.filter((node) => !node.removed && node.visible);
+        if (!t.hiddenNodes.length) return false;
+        for (const node of t.hiddenNodes) node.visible = false;
       }
       t.hidden = (t.hidden ?? 0) + 1;
       return true;
@@ -695,9 +699,71 @@ const PAGE_JS: &str = r##"(() => {
   };
   const unconceal = (t) => {
     t.hidden = Math.max(0, (t.hidden ?? 0) - 1);
+    if (t.hidden) return;
+    for (const node of t.hiddenNodes ?? []) {
+      try {
+        if (!node.removed) node.visible = true;
+      } catch {}
+    }
+    t.hiddenNodes = null;
+  };
+
+  // A mask being painted: the layers it masks, those above it in its
+  // parent up to the next mask, drawn as Figma draws each, unmasked, on
+  // the mask's own grid. Shown through the mask as it's painted, so the
+  // canvas shows what the mask does rather than the mask
+  const maskedBy = (node) => {
     try {
-      if (!t.hidden && t.node && !t.node.removed) t.node.visible = true;
-    } catch {}
+      if (!node?.isMask || !node.parent) return null;
+      const siblings = node.parent.children;
+      const out = [];
+      for (const sibling of siblings.slice(siblings.indexOf(node) + 1)) {
+        if (sibling.isMask) break;
+        out.push(sibling);
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  };
+  const prepareMask = async (t) => {
+    const masking = maskedBy(t.node);
+    if (!masking) return t;
+    t.masking = masking;
+    if (t.maskView) return t;
+    const content = canvasOf(t.W, t.H);
+    const ctx = content.getContext("2d");
+    for (const node of masking) {
+      try {
+        if (!node.visible) continue;
+        const box = node.absoluteRenderBounds;
+        if (!box?.width || !box.height) continue;
+        const scale = Math.min(Math.hypot(gridOf(t).a, gridOf(t).b) ** -1, LARGEST / Math.max(box.width, box.height));
+        const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale } });
+        const bitmap = await createImageBitmap(new Blob([bytes]));
+        ctx.setTransform(gridOf(t).inverse().multiply(new DOMMatrix().translate(box.x, box.y).scale(box.width / bitmap.width, box.height / bitmap.height)));
+        ctx.globalAlpha = node.opacity ?? 1;
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close?.();
+      } catch {}
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    t.maskView = { content, display: canvasOf(t.W, t.H), dirty: true };
+    return t;
+  };
+  // The masked layers through the mask as it is now
+  const drawMaskView = (t) => {
+    const view = t.maskView;
+    if (!view) return;
+    view.dirty = false;
+    const ctx = view.display.getContext("2d");
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, t.W, t.H);
+    ctx.drawImage(view.content, 0, 0);
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.drawImage(t.live, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
   };
   const commit = (t, picture, { reveals = 0, select = false } = {}) => {
     const figma = api();
@@ -772,7 +838,7 @@ const PAGE_JS: &str = r##"(() => {
     const fresh = !t.node && !t.creating;
     if (fresh) t.creating = true;
     return commit(t, t.base, { reveals, select: fresh }).then(() => {
-      t.holdUntil = t.released || blendOf(t.node, t.paint) !== "NORMAL" ? 0 : performance.now() + holdFor(t);
+      t.holdUntil = t.released || t.maskView || blendOf(t.node, t.paint) !== "NORMAL" ? 0 : performance.now() + holdFor(t);
       if (fresh && t.node) target = t;
     });
   };
@@ -791,6 +857,7 @@ const PAGE_JS: &str = r##"(() => {
     t.base = canvas;
     t.live = copyOf(canvas);
     t.pixels = null;
+    if (t.maskView) t.maskView.dirty = true;
     show(t);
     return schedule(t, { reveal });
   };
@@ -806,8 +873,34 @@ const PAGE_JS: &str = r##"(() => {
       if (top) figma.currentPage.selection = [top];
       return;
     }
-    const siblings = node.parent?.children ?? [];
-    const next = siblings[siblings.indexOf(node) + by];
+    // In the layers panel's order, top to bottom, into groups and frames
+    // and out again, as Photoshop's Alt+[ and Alt+] go through its layers
+    const rows = (parent) => {
+      const out = [];
+      const walk = (at) => {
+        for (const child of [...at.children].reverse()) {
+          out.push(child);
+          if (Array.isArray(child.children) && child.type !== "INSTANCE") walk(child);
+        }
+      };
+      walk(parent);
+      return out;
+    };
+    let top = node;
+    while (top.parent && top.parent.type !== "PAGE") top = top.parent;
+    const pageRows = figma.currentPage.children;
+    const at = pageRows.indexOf(top);
+    const list = [top, ...(Array.isArray(top.children) && top.type !== "INSTANCE" ? rows(top) : [])];
+    const i = list.indexOf(node);
+    let next = null;
+    if (by > 0) {
+      if (i > 0) next = list[i - 1];
+      else {
+        // The bottom row of what's above, as the panel shows it
+        const above = pageRows[at + 1];
+        next = above ? (Array.isArray(above.children) && above.type !== "INSTANCE" ? rows(above).at(-1) ?? above : above) : null;
+      }
+    } else next = i < list.length - 1 ? list[i + 1] : pageRows[at - 1] ?? null;
     if (next) figma.currentPage.selection = [next];
     else notify(by > 0 ? "This is the top layer" : "This is the bottom layer");
     refreshBar();
@@ -859,14 +952,18 @@ const PAGE_JS: &str = r##"(() => {
   let showing = null;
   const show = (t, canvas = t.live) => {
     if (!overlay()) return;
+    if (canvas === t.live && t.maskView) {
+      drawMaskView(t);
+      canvas = t.maskView.display;
+    }
     if (ui.live.firstChild !== canvas) ui.live.replaceChildren(canvas);
     appear();
     let opacity = 1;
     try {
-      if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      if (t.node && !t.node.removed && !t.maskView) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
     } catch {}
     const clip = clipOf(t);
-    const blend = blendOf(t.node, t.paint);
+    const blend = t.maskView ? "NORMAL" : blendOf(t.node, t.paint);
     ui.live.style.mixBlendMode = BLEND.get(blend).css;
     canvas.style.opacity = opacity;
     t.released = false;
@@ -1007,12 +1104,13 @@ const PAGE_JS: &str = r##"(() => {
         if (paint?.imageHash !== t.hash) return gone(t);
       }
       if (!node.visible && !t.hidden) return gone(t);
-      const blend = blendOf(node, t.paint);
+      const blend = t.maskView ? "NORMAL" : blendOf(node, t.paint);
       if (blend !== shown.blend) {
         shown.blend = blend;
         ui.live.style.mixBlendMode = BLEND.get(blend).css;
       }
-      const opacity = (node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      // What a mask masks shows as Figma draws it, not by the mask's looks
+      const opacity = t.maskView ? 1 : (node.opacity ?? 1) * (t.paint?.opacity ?? 1);
       if (opacity !== shown.opacity) {
         shown.opacity = opacity;
         shown.canvas.style.opacity = opacity;
@@ -1067,6 +1165,13 @@ const PAGE_JS: &str = r##"(() => {
     if (!t?.node || t.released) return;
     let mine = null;
     for (const change of event.documentChanges ?? []) {
+      // What a mask being painted masks changed: drawn again, unless it's
+      // only been hidden or shown, as painting does
+      if (t.masking?.some((node) => node.id === change.id)) {
+        const properties = change.properties ?? [];
+        if (t.maskView && !(properties.length === 1 && properties[0] === "visible")) t.maskView = null;
+        continue;
+      }
       // A mask over the layer changed: read again
       if (showing.maskIds?.has(change.id)) {
         applyMasks(showing);
@@ -1110,7 +1215,7 @@ const PAGE_JS: &str = r##"(() => {
   // Figma has the change, and a moment after. The gradient's preview only
   // while it's dragged
   const needed = ({ t, canvas }) => {
-    if (canvas !== t.live) return drag?.live === canvas;
+    if (canvas !== t.live && canvas !== t.maskView?.display) return drag?.live === canvas;
     return drag?.stroke?.t === t || drag?.t === t || t.unsaved || t.pending > 0 || performance.now() < (t.holdUntil ?? 0);
   };
   const place = () => {
@@ -1135,6 +1240,7 @@ const PAGE_JS: &str = r##"(() => {
       } else if (now - showing.fading > 320) hideNow();
     }
     if (showing) follow(showing);
+    if (showing?.t.maskView && showing.canvas === showing.t.maskView.display && (showing.t.maskView.dirty || drag?.stroke?.t === showing.t)) drawMaskView(showing.t);
     if (showing) {
       const { t, canvas, clip } = showing;
       // Laid out a pixel square and scaled up to the layer, so it's never
@@ -1222,7 +1328,9 @@ const PAGE_JS: &str = r##"(() => {
     if (!TOOLS[prefs.tool].paints && !["bucket", "gradient", "magicEraser", "wand", "eyedropper"].includes(prefs.tool)) return;
     const node = rasterNode();
     if (node && !drag) {
-      read(node).catch(() => {});
+      read(node)
+        .then((t) => t && !drag && prepareMask(t))
+        .catch(() => {});
       readMasks(node);
     }
   };
@@ -1539,7 +1647,7 @@ const PAGE_JS: &str = r##"(() => {
       notify(`Select an image layer to use the ${TOOLS[tool].label.toLowerCase()} on`);
       return null;
     }
-    return { tool, points: [], ready: read(node) };
+    return { tool, points: [], ready: read(node).then((t) => t && prepareMask(t)) };
   };
 
   // The layer's pixels as data, for the tools that change them in place,
@@ -1578,7 +1686,7 @@ const PAGE_JS: &str = r##"(() => {
     }
     // Smudging and blurring can thin the layer too, and a layer that blends
     // would blend twice, over Figma's copy as well
-    stroke.reveal = (["eraser", "smudge", "blur"].includes(tool) || blendOf(t.node, t.paint) !== "NORMAL") && conceal(t);
+    stroke.reveal = (["eraser", "smudge", "blur"].includes(tool) || blendOf(t.node, t.paint) !== "NORMAL" || !!t.maskView) && conceal(t);
     show(t);
     return true;
   };
@@ -1909,6 +2017,7 @@ const PAGE_JS: &str = r##"(() => {
       }
     }
     if (stroke.last) lastEnd = { t, point: stroke.last };
+    if (t.maskView) t.maskView.dirty = true;
     schedule(t, { reveal: stroke.reveal });
     ui.source?.removeAttribute("d");
   };
