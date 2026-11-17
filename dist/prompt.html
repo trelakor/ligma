@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <title>Ligma</title>
-<!-- A prompt: join requests, updates and errors (see src-tauri/src/prompt.rs).
+<!-- A prompt: join requests, updates, errors and what's new (see src-tauri/src/prompt.rs).
      The window is exactly the prompt: the page draws the text and buttons
      from `get_prompt`, reports its size with `prompt_ready`, and sends the
      chosen button to `prompt_answer`. Colors come from the active Figma
-     tab's theme, like the settings window's -->
+     tab's theme, like the settings window's. What's new lists release
+     notes (dist/changelog.js) in place of the message, wider and scrolling -->
 <style>
   /* Figma's UI3 palette, until the first Figma tab reports its own */
   :root {
@@ -91,14 +92,50 @@
   button.primary:hover, button.primary:active { background: color-mix(in srgb, var(--brand) 88%, #000); }
   button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
   button.primary:focus-visible { outline-color: color-mix(in srgb, var(--brand) 60%, var(--text)); }
+
+  /* What's new: each version's notes, newest first */
+  #releases { display: none; }
+  #prompt.notes { width: 400px; }
+  .notes #message { display: none; }
+  .notes #releases {
+    display: block;
+    max-height: 360px;
+    padding: 0 16px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+  .notes #releases:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+  .notes footer { border-top: 1px solid var(--border); }
+  h2 { padding: 16px 0 6px; font-size: 11px; font-weight: 550; line-height: 16px; }
+  h2 .date { margin-left: 6px; color: var(--text-secondary); font-weight: 450; }
+  /* One version has no heading; the title names it */
+  .release-notes:first-child { padding-top: 16px; }
+  .release-notes { padding-left: 14px; text-wrap: pretty; }
+  .release-notes li { padding-left: 2px; }
+  .release-notes li + li { margin-top: 6px; }
+  .release-notes li::marker { color: var(--text-secondary); }
+  code {
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    font: 10px/1 "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  ::selection { background: color-mix(in srgb, var(--brand) 35%, transparent); }
 </style>
 </head>
 <body>
 <div id="prompt" role="alertdialog" aria-labelledby="title" aria-describedby="message">
   <header data-tauri-drag-region><h1 id="title"></h1></header>
   <p id="message"></p>
+  <div id="releases" tabindex="-1"></div>
   <footer></footer>
 </div>
+<script src="changelog.js"></script>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
@@ -148,6 +185,18 @@
     document.title = prompt.title;
     $("title").textContent = prompt.title;
     $("message").textContent = prompt.message;
+    if (prompt.releases?.length) {
+      $("prompt").classList.add("notes");
+      $("prompt").setAttribute("aria-describedby", "releases");
+      const single = prompt.releases.length === 1;
+      $("releases").replaceChildren(...prompt.releases.flatMap((release) => {
+        const list = window.ligmaReleaseNotes(release.notes);
+        if (single) return [list];
+        const heading = Object.assign(document.createElement("h2"), { textContent: `Ligma ${release.version}` });
+        if (release.date) heading.append(Object.assign(document.createElement("span"), { className: "date", textContent: window.ligmaReleaseDate(release.date) }));
+        return [heading, list];
+      }));
+    }
     buttons = prompt.buttons.map((text, index) => {
       const button = Object.assign(document.createElement("button"), { textContent: text });
       if (index === prompt.buttons.length - 1) button.className = "primary";
@@ -167,6 +216,12 @@
     } else if (e.key === "Enter" && !(document.activeElement instanceof HTMLButtonElement)) {
       e.preventDefault();
       buttons.at(-1)?.click();
+    } else if (["ArrowUp", "ArrowDown", "PageUp", "PageDown"].includes(e.key) && $("prompt").classList.contains("notes")) {
+      // The notes scroll while a button has focus
+      e.preventDefault();
+      const page = $("releases").clientHeight - 32;
+      const by = { ArrowUp: -40, ArrowDown: 40, PageUp: -page, PageDown: page }[e.key];
+      $("releases").scrollBy({ top: by, behavior: "smooth" });
     } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && buttons.length > 1) {
       e.preventDefault();
       const at = buttons.indexOf(document.activeElement);

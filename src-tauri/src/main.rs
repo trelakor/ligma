@@ -53,6 +53,7 @@ mod view_state;
 mod webview2;
 #[cfg(target_os = "macos")]
 mod web_auth;
+mod whats_new;
 #[cfg(target_os = "macos")]
 mod wkwebview;
 
@@ -306,6 +307,7 @@ fn main() {
             prompt::get_prompt,
             prompt::prompt_ready,
             prompt::prompt_answer,
+            whats_new::get_releases,
         ])
         .setup(|app| {
             report::catch_panics(app.handle());
@@ -320,6 +322,8 @@ fn main() {
                 figma_scheme::restore();
                 figma_scheme::claim_if_free();
             }
+            // Before settings::load writes the settings file on first launch
+            whats_new::init(app.handle());
             let settings = settings::load(app.handle());
             appearance::init(app.handle(), &settings);
             app_icon::init(app.handle(), &settings);
@@ -364,6 +368,7 @@ fn main() {
             // Once there's a window to show it over
             report::offer_last_crash(app.handle());
             updater::offer_last_failure(app.handle());
+            whats_new::offer(app.handle());
             // Started by a `figma://` link
             #[cfg(windows)]
             {

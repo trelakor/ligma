@@ -1,4 +1,4 @@
-//! Prompts (join requests, updates, errors) drawn by Ligma in Figma's style
+//! Prompts (join requests, updates, errors, what's new) drawn by Ligma in Figma's style
 //! (`dist/prompt.html`) rather than as system message boxes. Each is a small
 //! frameless window centered over the main window, like the tab menu: the
 //! page fetches its text (`get_prompt`), reports its size (`prompt_ready`)
@@ -22,6 +22,10 @@ struct Content {
     message: String,
     /// Left to right; the last is the default
     buttons: Vec<String>,
+    /// Release notes, for what's new (whats_new.rs), drawn as lists in
+    /// place of the message
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    releases: Vec<crate::whats_new::Release>,
 }
 
 struct Open {
@@ -44,16 +48,39 @@ pub fn show(
     buttons: &[&str],
     done: impl FnOnce(Option<usize>) + Send + 'static,
 ) {
-    let label = format!("{LABEL_PREFIX}{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let content = Content {
         title: title.to_owned(),
         message: message.into(),
         buttons: buttons.iter().map(|&button| button.to_owned()).collect(),
+        releases: Vec::new(),
     };
+    open(app, content, Box::new(done));
+}
+
+/// Shows `releases`' notes under `title`, newest first, in a wider prompt
+/// that scrolls, with `buttons` as in `show`
+pub fn show_releases(
+    app: &AppHandle,
+    title: &str,
+    releases: Vec<crate::whats_new::Release>,
+    buttons: &[&str],
+    done: impl FnOnce(Option<usize>) + Send + 'static,
+) {
+    let content = Content {
+        title: title.to_owned(),
+        message: String::new(),
+        buttons: buttons.iter().map(|&button| button.to_owned()).collect(),
+        releases,
+    };
+    open(app, content, Box::new(done));
+}
+
+fn open(app: &AppHandle, content: Content, done: Done) {
+    let label = format!("{LABEL_PREFIX}{}", NEXT.fetch_add(1, Ordering::Relaxed));
     OPEN.lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)
-        .insert(label.clone(), Open { content, done: Some(Box::new(done)), placed: false });
+        .insert(label.clone(), Open { content, done: Some(done), placed: false });
     // Off the caller's thread: making a window on the main thread, from a
     // webview's callback, would wait on itself
     let app = app.clone();
