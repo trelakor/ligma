@@ -27,8 +27,9 @@
 //! it's moved, turned or resized in Figma, goes at once when the layer is
 //! undone, changed by someone else, hidden or deleted, and as soon as Figma
 //! has the strokes when anything above it changes (Figma's
-//! `documentchange`), so it never hides Figma's own. Erasing hides Figma's copy
-//! of the layer until the change is in, so what's under it shows
+//! `documentchange`), so it never hides Figma's own. Erasing, and painting
+//! a layer that blends, hides Figma's copy of the layer until the change is
+//! in, so what's under it shows and the canvas blends as the layer does
 //!
 //! The selection is a mask on a layer's pixels, drawn with marching ants,
 //! that strokes, fills and erasing stay inside, as in Photoshop. Figma's
@@ -183,13 +184,13 @@ const PAGE_JS: &str = r##"(() => {
     ["wand"],
     ["eyedropper"],
     ["brush", "pencil"],
-    ["clone"],
     ["eraser", "magicEraser"],
+    ["clone"],
     ["bucket", "gradient"],
     ["blur", "sharpen", "smudge"],
     ["dodge", "burn", "sponge"],
   ];
-  const GROUP_NAMES = ["Move", "Marquee tools", "Lasso tools", "Magic wand", "Eyedropper", "Brush tools", "Clone stamp", "Eraser tools", "Fill tools", "Blur tools", "Toning tools"];
+  const GROUP_NAMES = ["Move", "Marquee tools", "Lasso tools", "Magic wand", "Eyedropper", "Brush tools", "Eraser tools", "Clone stamp", "Fill tools", "Blur tools", "Toning tools"];
   const groupOf = (tool) => GROUPS.find((group) => group.includes(tool));
 
   // What each tool's options are, and where they start
@@ -351,6 +352,50 @@ const PAGE_JS: &str = r##"(() => {
     releaseMemory();
   };
 
+  // Figma's layer blend modes, in Photoshop's groups and by its names, and
+  // the CSS that previews each. Figma's Plus darker and Plus lighter are
+  // Photoshop's Linear burn and Linear dodge
+  const BLENDS = [
+    [["NORMAL", "Normal", "normal"]],
+    [
+      ["DARKEN", "Darken", "darken"],
+      ["MULTIPLY", "Multiply", "multiply"],
+      ["COLOR_BURN", "Color burn", "color-burn"],
+      ["LINEAR_BURN", "Linear burn", CSS.supports("mix-blend-mode", "plus-darker") ? "plus-darker" : "multiply"],
+    ],
+    [
+      ["LIGHTEN", "Lighten", "lighten"],
+      ["SCREEN", "Screen", "screen"],
+      ["COLOR_DODGE", "Color dodge", "color-dodge"],
+      ["LINEAR_DODGE", "Linear dodge (Add)", CSS.supports("mix-blend-mode", "plus-lighter") ? "plus-lighter" : "screen"],
+    ],
+    [
+      ["OVERLAY", "Overlay", "overlay"],
+      ["SOFT_LIGHT", "Soft light", "soft-light"],
+      ["HARD_LIGHT", "Hard light", "hard-light"],
+    ],
+    [
+      ["DIFFERENCE", "Difference", "difference"],
+      ["EXCLUSION", "Exclusion", "exclusion"],
+    ],
+    [
+      ["HUE", "Hue", "hue"],
+      ["SATURATION", "Saturation", "saturation"],
+      ["COLOR", "Color", "color"],
+      ["LUMINOSITY", "Luminosity", "luminosity"],
+    ],
+  ];
+  const BLEND = new Map(BLENDS.flat().map(([mode, label, css]) => [mode, { label, css }]));
+  // How a layer blends: its own mode, or its image fill's when it's Normal
+  const blendOf = (node, paint) => {
+    let mode = "NORMAL";
+    try {
+      mode = node?.blendMode ?? "NORMAL";
+      if ((mode === "NORMAL" || mode === "PASS_THROUGH") && paint?.blendMode) mode = paint.blendMode;
+    } catch {}
+    return BLEND.has(mode) ? mode : "NORMAL";
+  };
+
   // ---------------------------------------------------------------------
   // Geometry. Figma's transforms are [[a, c, e], [b, d, f]], DOMMatrix's
   // [a, b, c, d, e, f]
@@ -500,6 +545,8 @@ const PAGE_JS: &str = r##"(() => {
       const ctx = base.getContext("2d");
       ctx.imageSmoothingQuality = "high";
       draw(ctx);
+      // The fill's placement isn't left on the canvas for what's drawn next
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       bitmap.close?.();
       const next = { ...describe(node, index), W, H, base, live: copyOf(base), pending: 0 };
       if (reading?.promise === promise) reading = null;
@@ -713,7 +760,7 @@ const PAGE_JS: &str = r##"(() => {
     const fresh = !t.node && !t.creating;
     if (fresh) t.creating = true;
     return commit(t, t.base, { reveals, select: fresh }).then(() => {
-      t.holdUntil = t.released ? 0 : performance.now() + holdFor(t);
+      t.holdUntil = t.released || blendOf(t.node, t.paint) !== "NORMAL" ? 0 : performance.now() + holdFor(t);
       if (fresh && t.node) target = t;
     });
   };
@@ -805,9 +852,11 @@ const PAGE_JS: &str = r##"(() => {
       if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
     } catch {}
     const clip = clipOf(t);
+    const blend = blendOf(t.node, t.paint);
+    ui.live.style.mixBlendMode = BLEND.get(blend).css;
     canvas.style.opacity = opacity;
     t.released = false;
-    showing = { t, canvas, clip, fading: 0, opacity, at: null };
+    showing = { t, canvas, clip, fading: 0, opacity, at: null, blend };
     place();
   };
   // Shown at once, never faded in: a fade out stopped partway would
@@ -847,6 +896,11 @@ const PAGE_JS: &str = r##"(() => {
         if (paint?.imageHash !== t.hash) return gone(t);
       }
       if (!node.visible && !t.hidden) return gone(t);
+      const blend = blendOf(node, t.paint);
+      if (blend !== shown.blend) {
+        shown.blend = blend;
+        ui.live.style.mixBlendMode = BLEND.get(blend).css;
+      }
       const opacity = (node.opacity ?? 1) * (t.paint?.opacity ?? 1);
       if (opacity !== shown.opacity) {
         shown.opacity = opacity;
@@ -1340,18 +1394,42 @@ const PAGE_JS: &str = r##"(() => {
         stroke.stamp = tip(o.size, tool === "pencil" ? 100 : o.hardness ?? 100, tool === "pencil", o.angle ?? 0, o.roundness ?? 100, color);
       }
     }
-    // Smudging and blurring can thin the layer too
-    stroke.reveal = ["eraser", "smudge", "blur"].includes(tool) && conceal(t);
+    // Smudging and blurring can thin the layer too, and a layer that blends
+    // would blend twice, over Figma's copy as well
+    stroke.reveal = (["eraser", "smudge", "blur"].includes(tool) || blendOf(t.node, t.paint) !== "NORMAL") && conceal(t);
     show(t);
     return true;
   };
 
   // A point from the pointer. With smoothing, the brush trails the pointer
   // on a string, as Photoshop's does, moving only once it's pulled taut
-  const feed = (stroke, page, pressure) => {
-    const point = apply(gridOf(stroke.t).inverse(), page);
+  // Shift held keeps the stroke on a straight line from where it was
+  // pressed, or where the stroke started, at the nearest 45° once the
+  // pointer has moved a few pixels, as Photoshop keeps it straight
+  const straighten = (stroke, point, shift) => {
+    if (!shift) {
+      stroke.anchor = null;
+      return point;
+    }
+    if (!stroke.anchor) {
+      stroke.anchor = stroke.brush ?? point;
+      stroke.axis = null;
+    }
+    const [ax, ay] = stroke.anchor;
+    const [dx, dy] = [point[0] - ax, point[1] - ay];
+    if (!stroke.axis) {
+      if (Math.hypot(dx, dy) < 4 * stroke.perScreen) return stroke.anchor;
+      const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+      stroke.axis = [Math.cos(angle), Math.sin(angle)];
+    }
+    const along = dx * stroke.axis[0] + dy * stroke.axis[1];
+    return [ax + stroke.axis[0] * along, ay + stroke.axis[1] * along];
+  };
+  const feed = (stroke, page, pressure, shift = false) => {
+    let point = apply(gridOf(stroke.t).inverse(), page);
+    point = straighten(stroke, point, shift);
     stroke.pointer = point;
-    const smoothing = (prefs.options[stroke.tool].smoothing ?? 0) / 100;
+    const smoothing = shift ? 0 : (prefs.options[stroke.tool].smoothing ?? 0) / 100;
     if (!stroke.brush || !smoothing) {
       stroke.brush = point;
       strokeTo(stroke, point, pressure);
@@ -1549,10 +1627,13 @@ const PAGE_JS: &str = r##"(() => {
     stroke.t.live.getContext("2d").putImageData(stroke.pixels, 0, 0, x0, y0, x1 - x0, y1 - y0);
   };
 
+  // Where the last stroke ended, for Shift-click to go on from
+  let lastEnd = null;
   const endStroke = (stroke) => {
     const { t, tool } = stroke;
     // Smoothing catches up with the pointer, so the stroke ends under it
     if (stroke.pointer && stroke.brush && stroke.pointer !== stroke.brush) strokeTo(stroke, stroke.pointer, stroke.pressure ?? 1);
+    stroke.anchor = null;
     if (TOOLS[tool].direct) {
       if (stroke.flushing) cancelAnimationFrame(stroke.flushing);
       flush(stroke);
@@ -1568,11 +1649,13 @@ const PAGE_JS: &str = r##"(() => {
       const [x0, y0, x1, y1] = [Math.max(0, Math.floor(stroke.total[0])), Math.max(0, Math.floor(stroke.total[1])), Math.min(t.W, Math.ceil(stroke.total[2])), Math.min(t.H, Math.ceil(stroke.total[3]))];
       if (x1 > x0 && y1 > y0) {
         const ctx = t.base.getContext("2d");
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
         ctx.drawImage(t.live, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
         if (!TOOLS[tool].direct) strokeBuffer.getContext("2d").clearRect(x0, y0, x1 - x0, y1 - y0);
       }
     }
+    if (stroke.last) lastEnd = { t, point: stroke.last };
     schedule(t, { reveal: stroke.reveal });
     ui.source?.removeAttribute("d");
   };
@@ -2057,7 +2140,7 @@ const PAGE_JS: &str = r##"(() => {
       type,
       (event) => {
         if (!active) return;
-        if (type === "pointerdown" && menuOpen() && !event.target.closest?.(`[${ATTR}-menu], [${ATTR}-picker], [${ATTR}-tip], [${ATTR}-bar] .tip, [${ATTR}-tools] .chevron, [${ATTR}-tools] .swatch`)) closeMenus();
+        if (type === "pointerdown" && menuOpen() && !event.target.closest?.(`[${ATTR}-menu], [${ATTR}-picker], [${ATTR}-tip], [${ATTR}-bar] .tip, [${ATTR}-bar] .blend, [${ATTR}-tools] .chevron, [${ATTR}-tools] .swatch`)) closeMenus();
         if (type === "pointermove" || type === "pointerdown") {
           pointer.over = onCanvas(event);
           pointer.x = event.clientX;
@@ -2165,7 +2248,8 @@ const PAGE_JS: &str = r##"(() => {
     if (!stroke) return;
     drag = { ...base, kind: "paint", stroke };
     const pressure = event.pointerType === "pen" ? event.pressure : 1;
-    stroke.queue = [[page, pressure]];
+    stroke.queue = [[page, pressure, event.shiftKey]];
+    stroke.connect = event.shiftKey;
     stroke.ready
       .then((t) => {
         if (!t || stroke.cancelled) return;
@@ -2176,7 +2260,18 @@ const PAGE_JS: &str = r##"(() => {
           return;
         }
         stroke.began = true;
-        for (const [point, p] of stroke.queue) feed(stroke, point, p);
+        // Shift-click draws a straight line from where the last stroke on
+        // this layer ended, as in Photoshop
+        const last = stroke.connect && lastEnd && (lastEnd.t === t || (lastEnd.t.id && lastEnd.t.id === t.id)) ? lastEnd.point : null;
+        if (last) {
+          stroke.brush = last;
+          strokeTo(stroke, last, 1);
+          stroke.anchor = null;
+          const [first, p] = stroke.queue[0];
+          feed(stroke, first, p, false);
+          stroke.queue.shift();
+        }
+        for (const [point, p, shift] of stroke.queue) feed(stroke, point, p, shift);
         stroke.queue = [];
         if (stroke.ended) finishPaint(stroke);
       })
@@ -2196,8 +2291,8 @@ const PAGE_JS: &str = r##"(() => {
       for (const each of events.length ? events : [event]) {
         const page = pageAt(each, v);
         const pressure = each.pointerType === "pen" ? each.pressure : 1;
-        if (!stroke.began) stroke.queue.push([page, pressure]);
-        else feed(stroke, page, pressure);
+        if (!stroke.began) stroke.queue.push([page, pressure, each.shiftKey]);
+        else feed(stroke, page, pressure, each.shiftKey);
       }
       return;
     }
@@ -2666,7 +2761,7 @@ const PAGE_JS: &str = r##"(() => {
 
   // A group's tools, Figma's flyout menu
   let menu = null;
-  const menuOpen = () => !!(menu || picker || tipPopover);
+  const menuOpen = () => !!(menu || picker || tipPopover || blendMenu);
   const closeMenus = () => {
     if (menu) {
       menu.chevron.setAttribute("aria-expanded", "false");
@@ -2676,6 +2771,11 @@ const PAGE_JS: &str = r##"(() => {
     if (picker) {
       picker.root.remove();
       picker = null;
+    }
+    if (blendMenu) {
+      blendMenu.root.remove();
+      blendMenu.anchor.setAttribute("aria-expanded", "false");
+      blendMenu = null;
     }
     if (tipPopover) {
       tipPopover.root.remove();
@@ -2772,24 +2872,26 @@ const PAGE_JS: &str = r##"(() => {
     const node = selected();
     const raster = isRaster(node);
     let name = "";
+    let blend = "";
     try {
       name = node?.name ?? "";
+      blend = node && "blendMode" in node ? node.blendMode : "";
     } catch {}
-    return { node, raster, name };
+    return { node, raster, name, blend };
   };
   let shownId = null;
   const refreshBar = () => {
     if (!ui.bar) return;
-    const { node, raster, name } = status();
+    const { node, raster, name, blend } = status();
     shownId = raster ? node.id : null;
-    const key = `${prefs.tool}|${node?.id ?? ""}|${raster}|${name}|${!!selection}`;
+    const key = `${prefs.tool}|${node?.id ?? ""}|${raster}|${name}|${blend}|${!!selection}`;
     if (key !== barKey) renderBar();
   };
   const renderBar = () => {
     if (!ui.bar) return;
     if (ui.bar.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
-    const { node, raster, name } = status();
-    barKey = `${prefs.tool}|${node?.id ?? ""}|${raster}|${name}|${!!selection}`;
+    const { node, raster, name, blend } = status();
+    barKey = `${prefs.tool}|${node?.id ?? ""}|${raster}|${name}|${blend}|${!!selection}`;
     const bar = ui.bar;
     bar.replaceChildren();
     const tool = prefs.tool;
@@ -2806,6 +2908,8 @@ const PAGE_JS: &str = r##"(() => {
       layer.classList.add("muted");
       tooltip(layer, TOOLS[tool].paints || tool === "bucket" || tool === "gradient" ? "Painting adds a new layer" : "Select an image layer");
     }
+    // Its blend mode, beside it, as in Photoshop's layers panel
+    if (node && blend) layer.appendChild(blendButton(node));
     if (tool === "move") {
       bar.appendChild(make("div", { class: "divider" }));
       bar.appendChild(make("span", { class: "hint", text: "Select, move and resize layers as in Design" }));
@@ -2841,6 +2945,67 @@ const PAGE_JS: &str = r##"(() => {
   const changed = () => {
     savePrefs();
     renderBar();
+  };
+
+  // The layer's blend mode, set on the layer in Figma as one undo step
+  const blendButton = (node) => {
+    const mode = blendOf(node, null);
+    const button = make("button", { type: "button", class: "blend", "aria-haspopup": "menu", "aria-expanded": "false" }, make("span", { text: BLEND.get(mode).label }));
+    button.insertAdjacentHTML("beforeend", icon(SMALL.chevron, 24));
+    tooltip(button, "Blend mode");
+    button.addEventListener("click", () => openBlend(node, button));
+    return button;
+  };
+  let blendMenu = null;
+  const openBlend = (node, anchor) => {
+    if (blendMenu) return closeMenus();
+    closeMenus();
+    const current = blendOf(node, null);
+    const root = make("div", { [`${ATTR}-ui`]: true, [`${ATTR}-menu`]: true, "data-fullscreen-prevent-event-capture": "true" });
+    const list = root.appendChild(make("ul", { role: "menu", "aria-label": "Blend mode" }));
+    const items = [];
+    BLENDS.forEach((group, index) => {
+      if (index) list.appendChild(make("li", { role: "separator", class: "separator" }));
+      for (const [mode, label] of group) {
+        const item = list.appendChild(make("li", { role: "menuitemradio", tabindex: "-1", "aria-checked": String(mode === current) }));
+        item.innerHTML = `<span class="row"><span class="check">${icon(SMALL.check, 16)}</span><span class="name"></span></span>`;
+        item.querySelector(".name").textContent = label;
+        item.addEventListener("click", () => {
+          closeMenus();
+          const figma = api();
+          try {
+            if (node.removed) return;
+            node.blendMode = mode;
+            figma?.commitUndo();
+          } catch {
+            notify("Couldn't change the blend mode");
+          }
+          renderBar();
+        });
+        item.addEventListener("pointermove", () => item.focus());
+        item.addEventListener("keydown", (event) => {
+          const at = items.indexOf(item);
+          if (event.key === "ArrowDown") items[(at + 1) % items.length].focus();
+          else if (event.key === "ArrowUp") items[(at + items.length - 1) % items.length].focus();
+          else if (event.key === "Enter" || event.key === " ") item.click();
+          else if (event.key === "Escape") {
+            closeMenus();
+            anchor.focus();
+          } else return;
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        items.push(item);
+      }
+    });
+    document.body.append(root);
+    const rect = anchor.getBoundingClientRect();
+    const box = root.getBoundingClientRect();
+    root.style.left = `${clamp(rect.left, 8, innerWidth - box.width - 8)}px`;
+    root.style.top = `${Math.max(8, rect.top - box.height - 8)}px`;
+    anchor.setAttribute("aria-expanded", "true");
+    blendMenu = { root, anchor };
+    (items.find((item) => item.getAttribute("aria-checked") === "true") ?? items[0]).focus();
   };
 
   // The brush tip's angle and roundness, Photoshop's dial: a circle with
@@ -3083,6 +3248,7 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-menu] li[aria-checked="true"] .check { visibility: visible; }
     [${ATTR}-menu] .glyph { width: 24px; height: 24px; display: flex; margin: -4px 4px -4px 4px; color: inherit; }
     [${ATTR}-menu] .name { flex: 1; }
+    [${ATTR}-menu] .separator { height: 1px; margin: 8px 0; padding: 0; background: var(--color-border-menu, #383838); }
     [${ATTR}-menu] .key { margin-left: 24px; color: var(--color-text-menu-secondary, rgb(255 255 255 / 0.5)); }
     [${ATTR}-menu] li:focus .key, [${ATTR}-menu] li:hover .key { color: rgb(255 255 255 / 0.7); }
 
@@ -3090,7 +3256,13 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-bar] .divider { width: 1px; align-self: stretch; background: var(--color-border); }
     [${ATTR}-bar] .layer { display: flex; align-items: center; gap: 4px; max-width: 160px; color: var(--color-text); }
     [${ATTR}-bar] .layer svg { flex: none; color: var(--color-icon-secondary); }
-    [${ATTR}-bar] .layer span { overflow: hidden; text-overflow: ellipsis; }
+    [${ATTR}-bar] .layer > span { overflow: hidden; text-overflow: ellipsis; }
+    [${ATTR}-bar] .layer { max-width: 300px; }
+    [${ATTR}-bar] .blend { flex: none; gap: 0; margin-left: 4px; padding: 0 0 0 8px; border-radius: 5px; background: var(--color-bg-secondary); color: var(--color-text); }
+    [${ATTR}-bar] .blend span { white-space: nowrap; }
+    [${ATTR}-bar] .blend svg { margin-left: -4px; color: var(--color-icon-secondary); }
+    [${ATTR}-bar] .blend:hover svg, [${ATTR}-bar] .blend[aria-expanded="true"] svg { color: var(--color-icon); }
+    [${ATTR}-bar] .blend[aria-expanded="true"] { box-shadow: inset 0 0 0 1px var(--color-border-selected, #0d99ff); }
     [${ATTR}-bar] .layer.muted { color: var(--color-text-secondary); }
     [${ATTR}-bar] .hint { color: var(--color-text-secondary); }
     [${ATTR}-bar] button { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center; height: 24px; border-radius: 5px; color: var(--color-text); cursor: default; }
