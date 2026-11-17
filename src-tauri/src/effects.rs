@@ -4525,6 +4525,30 @@ const PAGE_JS: &str = r##"(() => {
     return { canvas, x, y, width: image.width, height: image.height, bytes };
   };
 
+  // What an effect made cut to its picture's bounds, for Crop to bounds:
+  // the whole of it, or a patch, which goes where it falls in the picture
+  const croppedMade = (made, W, H) => {
+    const { image, x, y } = made;
+    const [ox, oy] = made.patch ? [x + made.px, y + made.py] : [x, y];
+    const x0 = Math.max(0, ox);
+    const y0 = Math.max(0, oy);
+    const x1 = Math.min(W, ox + image.width);
+    const y1 = Math.min(H, oy + image.height);
+    if (!made.patch && !x && !y && image.width === W && image.height === H) return made;
+    if (x1 <= x0 || y1 <= y0) return made.patch ? { ...made, image: new ImageData(1, 1), empty: true, x: 0, y: 0, px: 0, py: 0 } : { image: new ImageData(W, H), x: 0, y: 0 };
+    const out = new ImageData(x1 - x0, y1 - y0);
+    for (let row = y0; row < y1; row++) {
+      const from = ((row - oy) * image.width + (x0 - ox)) * 4;
+      out.data.set(image.data.subarray(from, from + (x1 - x0) * 4), (row - y0) * out.width * 4);
+    }
+    if (made.patch) return { ...made, image: out, x: 0, y: 0, px: x0, py: y0 };
+    // The whole picture's bounds, even where nothing shows at its edges
+    if (out.width === W && out.height === H) return { image: out, x: 0, y: 0 };
+    const whole = new ImageData(W, H);
+    for (let row = 0; row < out.height; row++) whole.data.set(out.data.subarray(row * out.width * 4, (row + 1) * out.width * 4), ((row + y0) * W + x0) * 4);
+    return { image: whole, x: 0, y: 0 };
+  };
+
   // The picture an effect's made from for `level`. An effect with detail
   // finer than that level's pixels, as a dither's cells or a screen's
   // stripes, says how many pixels a point it needs (`detail`), and gets a
@@ -4582,6 +4606,7 @@ const PAGE_JS: &str = r##"(() => {
       await new Promise((resolve) => setTimeout(resolve));
       made = current.spec.process(image, s, entry.k, patch);
     }
+    if (current.spec.grows && s.crop) made = croppedMade(made, image.width, image.height);
     const drawn = made.patch ? made : drawnFrom(made);
     return Object.assign(drawn, { k: entry.k, picture: { width: image.width, height: image.height } });
   };
@@ -4801,7 +4826,7 @@ const PAGE_JS: &str = r##"(() => {
     // and only Reset clears it
     const pick = (values, clear = false) => {
       const kept = clear ? {} : Object.fromEntries((spec.keep ?? []).map((key) => [key, s[key]]));
-      Object.assign(s, structuredClone(spec.defaults), values(current.unit), { editable: s.editable }, kept);
+      Object.assign(s, structuredClone(spec.defaults), values(current.unit), { editable: s.editable, crop: s.crop }, kept);
       refreshFilter(current);
       show();
     };
@@ -4809,7 +4834,9 @@ const PAGE_JS: &str = r##"(() => {
     const sections = spec.panel(ui);
     const editable = element("input", { type: "checkbox" });
     editable.addEventListener("change", () => change("editable", editable.checked));
-    const result = element("section", {}, checkRow("Keep editable", editable, `The original kept, hidden, in a group ${spec.name} can change later`));
+    const crop = element("input", { type: "checkbox" });
+    crop.addEventListener("change", () => change("crop", crop.checked));
+    const result = element("section", {}, ...(spec.grows ? [checkRow("Crop to bounds", crop, "Cut off what the effect spreads past the layer's own bounds")] : []), checkRow("Keep editable", editable, `The original kept, hidden, in a group ${spec.name} can change later`));
     const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
     reset.addEventListener("click", () => pick(() => ({}), true));
     const scroll = element("div", { className: "scroll" }, ...[presets, ...sections].filter(Boolean), result, element("div", { className: "under" }, reset));
@@ -4825,6 +4852,7 @@ const PAGE_JS: &str = r##"(() => {
       for (const fn of shows) fn();
       for (const row of rows) row.show();
       editable.checked = s.editable;
+      crop.checked = Boolean(s.crop);
       drawFilterPreview(current);
     };
     show();
@@ -5221,6 +5249,8 @@ const PAGE_JS: &str = r##"(() => {
   // as each is a new image in the file, and not mid-stroke while painting
   const refreshFilter = (current) => {
     renderPreview(current);
+    // While painting, the sheet over the canvas shows it, as after Undo
+    if (current.painting && !current.stroking) current.painting.render();
     if (!current.ready || current.stroking || current.painting) return;
     if (current.placing) {
       current.again = true;
@@ -5909,6 +5939,7 @@ const PAGE_JS: &str = r##"(() => {
   ];
   pictureEffect({
     id: "chromatic",
+    grows: true,
     handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode === "lens" }],
     thumb: { sample: "rings", backdrop: "stage", settings: { amount: 10 } },
     name: "Chromatic Aberration",
@@ -6224,13 +6255,17 @@ const PAGE_JS: &str = r##"(() => {
       count.textContent = s.strokes.length ? `${s.strokes.length} ${s.strokes.length === 1 ? "stroke" : "strokes"}` : "No strokes yet";
       undo.disabled = clear.disabled = !s.strokes.length;
     });
-    const strokes = element("div", { className: "row" }, count, element("div", { className: "chips" }, undo, clear));
+    const chips = element("div", { className: "chips" }, undo, clear);
+    chips.style.padding = "0";
+    const strokes = element("div", { className: "row" }, count, chips);
     strokes.style.gridTemplateColumns = "1fr auto";
+    strokes.style.marginTop = "8px";
     paint.style.width = "100%";
     return ui.section("Brushes", paint, strokes);
   };
   pictureEffect({
     id: "liquify",
+    grows: true,
     handles: [{ x: "centerX", y: "centerY", radius: "radius", when: (s) => s.mode !== "wave" && s.mode !== "none" }],
     keep: ["strokes", "brushTool", "brushSize", "brushStrength"],
     thumb: { sample: "bands", settings: { twirl: 240 } },
@@ -6322,9 +6357,24 @@ const PAGE_JS: &str = r##"(() => {
           kept.look === look &&
           kept.done.length <= s.strokes.length &&
           kept.done.every((was, i) => same(s.strokes[i], was) && (i === kept.done.length - 1 ? s.strokes[i].points.length >= was.count : s.strokes[i].points.length === was.count));
-        field = resume ? kept.field : new Float32Array(W * H * 2);
-        const [fromStroke, fromPoint] = resume && kept.done.length ? [kept.done.length - 1, kept.done.at(-1).count] : [0, 0];
-        globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field, done: s.strokes.map((stroke) => ({ tool: stroke.tool, size: stroke.size, strength: stroke.strength, count: stroke.points.length, x: stroke.points[0][0], y: stroke.points[0][1] })) };
+        // The field as it was before each of the last strokes, so Undo
+        // starts from the one before rather than from nothing, as many as
+        // fit in a couple of hundred megabytes
+        let saves = known && kept.look === look ? (kept.saves ?? []) : [];
+        let from = null;
+        if (resume && kept.done.length < s.strokes.length) {
+          saves.push({ done: kept.done, field: kept.field.slice() });
+          saves = saves.slice(-Math.max(1, Math.min(24, Math.floor(2e8 / (W * H * 8)))));
+        } else if (!resume) {
+          const at = saves.findLastIndex((save) => save.done.length <= s.strokes.length && save.done.every((was, i) => same(s.strokes[i], was) && s.strokes[i].points.length === was.count));
+          if (at >= 0) {
+            from = saves[at];
+            saves = saves.slice(0, at + 1);
+          } else saves = [];
+        }
+        field = resume ? kept.field : from ? from.field.slice() : new Float32Array(W * H * 2);
+        const [fromStroke, fromPoint] = resume && kept.done.length ? [kept.done.length - 1, kept.done.at(-1).count] : from ? [from.done.length, 0] : [0, 0];
+        globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field, saves, done: s.strokes.map((stroke) => ({ tool: stroke.tool, size: stroke.size, strength: stroke.strength, count: stroke.points.length, x: stroke.points[0][0], y: stroke.points[0][1] })) };
         // `into` is a Float32Array, rounded to as each corner's added
         const fieldAt = (x, y, into) => {
           x -= 0.5;
@@ -6434,7 +6484,7 @@ const PAGE_JS: &str = r##"(() => {
           }
         }
       }
-      if (!s.strokes?.length) globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field: null, done: [] };
+      if (!s.strokes?.length) globalThis.ligmaLiquifyField = { image, k, f, opaque, look, field: null, done: [], saves: known && kept.look === look ? (kept.saves ?? []).filter((save) => !save.done.length) : [] };
       const p = new Float32Array(4);
       // The output pixel at `x`, `y`, premultiplied, into `p`
       // The warp as a number, rather than its name read every pixel
@@ -6634,6 +6684,7 @@ const PAGE_JS: &str = r##"(() => {
   };
   pictureEffect({
     id: "displace",
+    grows: true,
     keep: ["image"],
     thumb: { sample: "contours", settings: { amount: 9, scale: 36, detail: 3 } },
     name: "Displace",
@@ -6809,6 +6860,7 @@ const PAGE_JS: &str = r##"(() => {
   const MOTION_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="15" cy="12" r="4.5"/><path ${STROKE} d="M4.5 9.5h4M3.5 12h5M4.5 14.5h4"/></svg>`;
   pictureEffect({
     id: "motionBlur",
+    grows: true,
     handles: [{ x: "centerX", y: "centerY", when: (s) => s.mode !== "linear" }],
     thumb: { sample: "ball", backdrop: "stage", over: true, settings: { distance: 70, angle: 0, trail: true } },
     name: "Motion Blur",
@@ -6919,6 +6971,7 @@ const PAGE_JS: &str = r##"(() => {
   const GLOW_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="12" cy="12" r="3.5"/><path ${STROKE} d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4"/></svg>`;
   pictureEffect({
     id: "glow",
+    grows: true,
     thumb: { sample: "neon", settings: { threshold: 40, radius: 12, intensity: 150 } },
     name: "Glow",
     about: "Make its bright parts or its shape glow",
@@ -7041,6 +7094,7 @@ const PAGE_JS: &str = r##"(() => {
   const SHADOW_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><rect ${STROKE} x="6.5" y="4.5" width="5" height="12" rx="2.5"/><path ${STROKE} stroke-dasharray="1.5 1.5" d="M11.5 16.5l6.5-3.5M7 16.5l7.5 3h4l-.5-6.5"/></svg>`;
   pictureEffect({
     id: "shadow",
+    grows: true,
     thumb: { sample: "pawnOnFloor", backdrop: "studio", settings: { direction: 65, length: 120, perspective: 60, softFar: 6, opacity: 75, fade: 25 } },
     name: "Shadow",
     about: "Cast a shadow from a cutout's shape",
@@ -7293,6 +7347,7 @@ const PAGE_JS: &str = r##"(() => {
   Object.assign(PIXEL_HELPERS, { valueNoise, wavesAt });
   pictureEffect({
     id: "reflection",
+    grows: true,
     thumb: { sample: "pawnOnWater", backdrop: "water", settings: { surface: "water", length: 100, opacity: 80, fade: 25, fresnel: 35, blur: 0.5, streak: 3, waves: 3, waveSize: 14, chop: 35, sparkle: 15, tint: "#24506b", tintAmount: 25 } },
     name: "Reflection",
     about: "Reflect a cutout on a floor or water",
@@ -7585,6 +7640,7 @@ const PAGE_JS: &str = r##"(() => {
   const RIM_ICON = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><circle ${STROKE} cx="11" cy="13" r="6.5"/><path ${STROKE} d="M8.5 7a6.5 6.5 0 0 1 9 4.5"/><path ${STROKE} d="M18 4.5l-1 1.5M20 8l-1.5.5"/></svg>`;
   pictureEffect({
     id: "rimLight",
+    grows: true,
     thumb: { sample: "pawnOnNight", backdrop: "night", settings: { direction: -40, width: 3.5, softness: 1, color: "#8fdcff", intensity: 200, shade: 55, halo: 70 } },
     name: "Rim Light",
     about: "Light a cutout's edges from behind",
@@ -8014,6 +8070,7 @@ const PAGE_JS: &str = r##"(() => {
   Object.assign(PIXEL_HELPERS, { noiseTile, tileAt, distanceField, fillPolygon });
   pictureEffect({
     id: "sticker",
+    grows: true,
     // Where the peel lifts from, dragged anywhere round the sticker
     handles: [{ x: "peelX", y: "peelY", when: (s) => s.peel }],
     thumb: { sample: "badge", backdrop: "stage", fit: true, settings: { border: 7, gloss: 18, peel: true, peelSize: 34, shadowBlur: 10, shadowY: 5 } },
