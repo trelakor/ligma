@@ -9645,18 +9645,19 @@ const PAGE_JS: &str = r##"(() => {
     return null;
   };
   // A seed's picture in one colour, kept per colour
-  const tinted = (seed, color) => {
-    if (!color) return seed.look;
-    seed.tints ??= new Map();
-    let canvas = seed.tints.get(color);
+  const tinted = (seed, color, fine = false) => {
+    const look = (fine && seed.sharp) || seed.look;
+    if (!color) return look;
+    const tints = look === seed.look ? (seed.tints ??= new Map()) : (seed.sharpTints ??= new Map());
+    let canvas = tints.get(color);
     if (!canvas) {
-      canvas = Object.assign(document.createElement("canvas"), { width: seed.look.width, height: seed.look.height });
+      canvas = Object.assign(document.createElement("canvas"), { width: look.width, height: look.height });
       const context = canvas.getContext("2d");
-      context.drawImage(seed.look, 0, 0);
+      context.drawImage(look, 0, 0);
       context.globalCompositeOperation = "source-in";
       context.fillStyle = color;
       context.fillRect(0, 0, canvas.width, canvas.height);
-      seed.tints.set(color, canvas);
+      tints.set(color, canvas);
     }
     return canvas;
   };
@@ -9675,14 +9676,17 @@ const PAGE_JS: &str = r##"(() => {
     paint(node);
     if ("findAll" in node) for (const child of node.findAll(() => true)) paint(child);
   };
-  const drawFill = (current) => {
+  // With `fine`, as sharp as the copies will be once made, for when changes
+  // have settled: up to four pixels a point, from the sharper pictures
+  // `sharpenFill` reads
+  const drawFill = (current, fine = false) => {
     const { shape, seeds, placed, settings } = current;
     const reach = fillExtent(current);
-    const k = Math.min(2, FILL_PICTURE_MOST / Math.max(1, reach.x1 - reach.x0, reach.y1 - reach.y0));
+    const k = fillScale(reach, fine);
     const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round((reach.x1 - reach.x0) * k)), height: Math.max(1, Math.round((reach.y1 - reach.y0) * k)) });
     const context = canvas.getContext("2d");
     context.translate(-reach.x0 * k, -reach.y0 * k);
-    if (settings.showShape) context.drawImage(shape.bitmap, 0, 0, shape.box.width * k, shape.box.height * k);
+    if (settings.showShape) context.drawImage((fine && shape.sharp) || shape.bitmap, 0, 0, shape.box.width * k, shape.box.height * k);
     placed.forEach((spot, i) => {
       const seed = seeds[spot.which];
       if (!seed) return;
@@ -9693,14 +9697,71 @@ const PAGE_JS: &str = r##"(() => {
       context.save();
       context.translate((spot.x / shape.g) * k, (spot.y / shape.g) * k);
       context.rotate((spot.turn * Math.PI) / 180);
-      context.drawImage(tinted(seed, fillColor(settings, i)), -across / 2, -down / 2, across, down);
+      context.drawImage(tinted(seed, fillColor(settings, i), fine), -across / 2, -down / 2, across, down);
       context.restore();
     });
     return { canvas, x: reach.x0 * k, y: reach.y0 * k, width: canvas.width, height: canvas.height, k };
   };
   // The picture put in the file, at most a few times a second while
   // something's dragged, as each is a new image
+  const FILL_PICTURE_FINE = 4096;
+  const fillScale = (reach, fine) => Math.min(fine ? 4 : 2, (fine ? FILL_PICTURE_FINE : FILL_PICTURE_MOST) / Math.max(1, reach.x1 - reach.x0, reach.y1 - reach.y0));
+  // A layer as a picture `most` pixels across at most, read from a copy
+  // if it's hidden, as the shape under the preview is
+  const pictureOf = async (node, most) => {
+    const reader = pictureReader(window.figma, node);
+    try {
+      return await reader.read(Math.min(8, most / Math.max(1, reader.bounds.width, reader.bounds.height)));
+    } finally {
+      reader.done();
+    }
+  };
+  // The shape and each layer as large as the fill shows them, once
+  const sharpenFill = async (current) => {
+    const k = fillScale(fillExtent(current), true);
+    const { shape } = current;
+    const shapeNeeds = Math.min(FILL_PICTURE_FINE, Math.max(shape.box.width, shape.box.height) * k);
+    if (current.settings.showShape && shapeNeeds > Math.max(shape.bitmap.width, shape.bitmap.height) * 1.1 && !(shape.sharp && Math.max(shape.sharp.width, shape.sharp.height) >= shapeNeeds * 0.9)) {
+      try {
+        shape.sharp = await pictureOf(current.container, shapeNeeds);
+      } catch {}
+    }
+    const largest = new Map();
+    for (const spot of current.placed) largest.set(spot.which, Math.max(largest.get(spot.which) ?? 0, spot.scale));
+    for (const [which, scale] of largest) {
+      const seed = current.seeds[which];
+      if (!seed || seed.node.removed) continue;
+      const needs = Math.min(2048, seed.size * scale * k);
+      const have = Math.max(...[seed.sharp ?? seed.look].map((one) => Math.max(one.width, one.height)));
+      if (needs <= have * 1.1) continue;
+      try {
+        seed.sharp = await pictureOf(seed.node, needs);
+        seed.sharpTints = new Map();
+      } catch {}
+      if (filling !== current) return;
+    }
+  };
+  // The sharp picture, a moment after the last change, unless another
+  // comes first
+  const settleFill = (current) => {
+    clearTimeout(current.settle);
+    const version = current.fillVersion;
+    current.settle = setTimeout(async () => {
+      if (filling !== current || current.busy) return;
+      await sharpenFill(current);
+      if (filling !== current || current.busy || current.placing || version !== current.fillVersion) return;
+      current.placing = true;
+      try {
+        const drawn = drawFill(current, true);
+        await placeDrawn(current, drawn, drawn.k);
+      } catch {}
+      current.placing = false;
+      if (version !== current.fillVersion) showFill(current);
+    }, 400);
+  };
   const showFill = async (current) => {
+    current.fillVersion = (current.fillVersion ?? 0) + 1;
+    clearTimeout(current.settle);
     if (current.placing) {
       current.again = true;
       return;
@@ -9716,6 +9777,7 @@ const PAGE_JS: &str = r##"(() => {
       } while (current.again && filling === current && !current.busy);
     } catch {}
     current.placing = false;
+    settleFill(current);
   };
   // Seeds as packing reads them: their layer, outline, size in points, and
   // their visual middle in their own coordinates, and a larger picture of
@@ -9935,6 +9997,7 @@ const PAGE_JS: &str = r##"(() => {
     filling = null;
     current.closed = true;
     clearTimeout(current.timer);
+    clearTimeout(current.settle);
     if (current.loader && !current.loader.removed) current.loader.remove();
     if (!applied) {
       // The shape it was opened on back in place of another used since
@@ -9963,8 +10026,10 @@ const PAGE_JS: &str = r##"(() => {
     for (const seed of current.seeds) {
       seed.bitmap?.close?.();
       seed.look?.close?.();
+      seed.sharp?.close?.();
     }
     current.shape?.bitmap?.close?.();
+    current.shape?.sharp?.close?.();
     current.panel?.close();
     current.root?.remove();
     removeEventListener("keydown", current.keys, true);
@@ -11145,6 +11210,34 @@ const PAGE_JS: &str = r##"(() => {
     removeEventListener("keydown", current.keys, true);
   };
 
+  // A layer put along a path as it looks, for the preview: its SVG, read
+  // once, with where it was on the page then. Null till it's loaded, the
+  // preview drawing its outlines meanwhile, and drawn again once it is
+  const seedLook = (current, seed) => {
+    if (seed.look !== undefined) return seed.look?.image ? seed.look : null;
+    seed.look = null;
+    const node = seed.node;
+    const box = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+    if (!box || node.removed || !node.visible) return null;
+    const at = node.absoluteTransform;
+    node
+      .exportAsync({ format: "SVG" })
+      .then((bytes) => {
+        const image = new Image();
+        const url = URL.createObjectURL(new Blob([bytes], { type: "image/svg+xml" }));
+        image.onload = () => {
+          URL.revokeObjectURL(url);
+          // From the top left of where it's drawn, a whole number of
+          // points across, as Figma rounds the SVG's size up
+          seed.look = { image, box: { x: box.x, y: box.y, width: image.naturalWidth || box.width, height: image.naturalHeight || box.height }, at };
+          if (vectoring === current) drawVectorPreview(current);
+        };
+        image.onerror = () => URL.revokeObjectURL(url);
+        image.src = url;
+      })
+      .catch(() => {});
+    return null;
+  };
   // The preview: what's made, fitted, drawn from the same paths, with the
   // original over it where it shows
   const drawVectorPreview = (current) => {
@@ -11168,7 +11261,14 @@ const PAGE_JS: &str = r##"(() => {
         if (!seed) continue;
         // The copy's transform, sized, from the seed's own coordinates
         const m = multiply(toLocal, multiply(entry.abs, [[entry.scale, 0, 0], [0, entry.scale, 0]]));
-        for (const item of seed.items) shapes.push({ paths: transformPaths(item.paths, m), winding: item.winding, fill: paintCss(item.paints, item.opacity) });
+        const look = seedLook(current, seed);
+        if (look) {
+          // From the page where the seed is to the preview, as the copy
+          const at = multiply(m, invert(look.at));
+          const { x, y, width, height } = look.box;
+          const corners = [[x, y], [x + width, y], [x, y + height], [x + width, y + height]].map(([px, py]) => [at[0][0] * px + at[0][1] * py + at[0][2], at[1][0] * px + at[1][1] * py + at[1][2]]);
+          shapes.push({ image: look, at, bounds: { x0: Math.min(...corners.map((c) => c[0])), y0: Math.min(...corners.map((c) => c[1])), x1: Math.max(...corners.map((c) => c[0])), y1: Math.max(...corners.map((c) => c[1])) } });
+        } else for (const item of seed.items) shapes.push({ paths: transformPaths(item.paths, m), winding: item.winding, fill: paintCss(item.paints, item.opacity) });
       }
     }
     const extra = current.spec.preview?.(current) ?? [];
@@ -11181,7 +11281,7 @@ const PAGE_JS: &str = r##"(() => {
       x1 = Math.max(x1, b.x1);
       y1 = Math.max(y1, b.y1);
     };
-    for (const shape of [...shapes, ...top]) grow(pathsBounds(shape.paths));
+    for (const shape of [...shapes, ...top]) grow(shape.bounds ?? pathsBounds(shape.paths));
     for (const shape of extra) grow(shape.bounds);
     if (track) for (const line of current.track) for (let d = 0; d <= line.length; d += Math.max(1, line.length / 64)) {
       const [x, y] = line.point(d);
@@ -11198,6 +11298,15 @@ const PAGE_JS: &str = r##"(() => {
     context.translate(ox, oy);
     context.scale(fit, fit);
     const paint = (shape) => {
+      if (shape.image) {
+        const { image, box } = shape.image;
+        const [[a, c, e], [b, d, f]] = shape.at;
+        context.save();
+        context.transform(a, b, c, d, e, f);
+        context.drawImage(image, box.x, box.y, box.width, box.height);
+        context.restore();
+        return;
+      }
       context.fillStyle = shape.gradient ? gradientFor(context, shape) : shape.fill;
       const path = new Path2D(pathData(shape.paths));
       context.fill(path, shape.winding === "EVENODD" ? "evenodd" : "nonzero");
