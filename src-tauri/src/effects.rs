@@ -3006,7 +3006,10 @@ const PAGE_JS: &str = r##"(() => {
       [b * w, d * h, f],
     ];
   };
-  const sameBox = (m, n) => m.every((row, i) => row.every((v, j) => Math.abs(v - n[i][j]) < 0.01));
+  // The same, near enough: Figma keeps places to a hundredth or so far
+  // from the page's middle, and nudges a group's layers by as much when
+  // it fits itself to them again
+  const sameBox = (m, n, far = 0.05) => m.every((row, i) => row.every((v, j) => Math.abs(v - n[i][j]) < (j === 2 ? far : 0.01)));
   const UNMOVED = [
     [1, 0, 0],
     [0, 1, 0],
@@ -3027,12 +3030,16 @@ const PAGE_JS: &str = r##"(() => {
     const was = current.placedAt;
     if (!was || current.result.removed || current.source.removed) return;
     const now = placedAt(current);
-    if (sameBox(was.result, now.result)) return;
-    const change = multiply(now.result, invert(was.result));
+    const resultMoved = !sameBox(was.result, now.result);
+    const sourceMoved = !sameBox(was.source, now.source);
+    if (!resultMoved && !sourceMoved) return;
+    // The result's change, or where only the original moved, the
+    // original's, as when it's dragged in the layers or on its own
+    const change = resultMoved ? multiply(now.result, invert(was.result)) : multiply(now.source, invert(was.source));
     const [[a, c, e], [b, d, f]] = change;
     if (!current.frame && Math.abs(a - 1) < 1e-4 && Math.abs(d - 1) < 1e-4 && Math.abs(b) < 1e-4 && Math.abs(c) < 1e-4) current.bounds = { ...current.bounds, x: current.bounds.x + e, y: current.bounds.y + f };
     else current.frame = multiply(change, current.frame ?? UNMOVED);
-    if (sameBox(was.source, now.source)) {
+    if (resultMoved && !sourceMoved) {
       try {
         changeSource(current, change);
       } catch {}
@@ -3065,6 +3072,54 @@ const PAGE_JS: &str = r##"(() => {
       [ux, -uy * side, te],
       [uy, ux * side, tf],
     ]);
+  };
+
+  // Swaps the layer an open effect's made from for `node`, as a brush's
+  // path or Shape Fill's shape: the one it was made from is let go, back
+  // where it came from, or beside its group, shown as it was (`shown`),
+  // and `node` takes its place in the group, where it is on the page.
+  // Gives whether `node` showed. The first is kept, to put back on Cancel
+  const swapSource = (current, node, shown, name) => {
+    const old = current.source;
+    const holder = old.parent;
+    const index = holder.children.indexOf(old);
+    const role = old.getSharedPluginData(PLUGIN, ROLE);
+    const from = { parent: node.parent, index: node.parent.children.indexOf(node) };
+    const visible = node.visible;
+    current.first ??= { node: old, shown };
+    const oldAt = old.absoluteTransform;
+    const back = current.home;
+    if (back && !back.parent.removed && back.parent !== holder) back.parent.insertChild(Math.min(back.index, back.parent.children.length), old);
+    else holder.parent.insertChild(holder.parent.children.indexOf(holder) + 1, old);
+    old.relativeTransform = relativeFor(old.parent, oldAt);
+    old.visible = shown;
+    if (role) old.setSharedPluginData(PLUGIN, ROLE, "");
+    const at = node.absoluteTransform;
+    holder.insertChild(Math.min(index, holder.children.length), node);
+    node.relativeTransform = relativeFor(holder, at);
+    if (role) node.setSharedPluginData(PLUGIN, ROLE, role);
+    current.home = from;
+    current.source = node;
+    if (holder.name === `${name} · ${plainName(old.name)}`) holder.name = `${name} · ${plainName(node.name)}`;
+    // Following the result starts again from the new one
+    current.placedAt = null;
+    current.frame = null;
+    current.sourceFrom = null;
+    return visible;
+  };
+  // The layer to use as the source, from what's selected: one, not the
+  // effect's own, nor one it's made with
+  const pickedSource = (current, own, what) => {
+    const picked = current.figma.currentPage.selection.filter((node) => !own.has(node.id));
+    if (picked.length !== 1) {
+      current.figma.notify(`Select one ${what} first`, { timeout: 2000 });
+      return null;
+    }
+    const [node] = picked;
+    if (node === current.source || node.type === "SECTION" || !("clone" in node)) return null;
+    // Not one inside the group, as what's made
+    for (let at = node.parent; at && at.type !== "PAGE"; at = at.parent) if (at === current.source.parent) return null;
+    return node;
   };
 
   // Cancelled, the original back as it was before it followed the result
@@ -9882,6 +9937,13 @@ const PAGE_JS: &str = r##"(() => {
     clearTimeout(current.timer);
     if (current.loader && !current.loader.removed) current.loader.remove();
     if (!applied) {
+      // The shape it was opened on back in place of another used since
+      if (current.first && current.first.node !== current.source && !current.first.node.removed)
+        try {
+          swapSource(current, current.first.node, current.wasVisible, "Shape Fill");
+          current.container = current.first.node;
+          current.wasVisible = current.first.shown;
+        } catch {}
       const { home, wrap, container } = current;
       if (current.result && !current.result.removed) current.result.remove();
       for (const node of current.kept) if (!node.removed) node.visible = true;
@@ -9983,6 +10045,38 @@ const PAGE_JS: &str = r##"(() => {
     });
     const adding = element("div", { className: "row" }, element("span", { className: "label", textContent: "Fill with" }), element("div", { className: "chips" }, add));
     adding.style.gridTemplateColumns = "1fr auto";
+    // The shape it fills, changed to what's selected
+    const shapeName = element("span", { className: "label" });
+    Object.assign(shapeName.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+    const useShape = element("button", { type: "button", className: "chip", textContent: "Use selected" });
+    useShape.title = "Fill the selected layer instead, letting go of this one";
+    useShape.addEventListener("click", async () => {
+      if (current.busy) return;
+      const own = new Set([current.wrap?.id, current.group?.id, current.result?.id]);
+      const node = pickedSource(current, own, "shape");
+      if (!node) return;
+      try {
+        const shown = swapSource(current, node, current.wasVisible, "Shape Fill");
+        current.container = node;
+        current.wasVisible = shown;
+        if (current.result && !current.result.removed) node.parent.insertChild(node.parent.children.indexOf(node) + 1, current.result);
+        node.visible = true;
+        current.shape?.bitmap?.close?.();
+        current.shape = await readAlpha(node, 480);
+        current.bounds = current.shape.box;
+        if (filling !== current) return;
+        current.seeds = current.seeds.filter((seed) => seed.node !== node);
+        s.seeds = current.seeds.map((seed) => ({ id: seed.node.id, weight: seed.weight }));
+        shape = "";
+      } catch {
+        current.figma.notify("Couldn't use that layer", { timeout: 2000 });
+      }
+      current.figma.currentPage.selection = [current.wrap ?? current.group ?? current.container].filter((one) => one && !one.removed);
+      refill(current);
+      show();
+    });
+    const shapeRow = element("div", { className: "row" }, element("span", { className: "label", textContent: "Shape" }), shapeName, useShape);
+    shapeRow.style.gridTemplateColumns = "96px 1fr auto";
     let shape = "";
     const buildList = () => {
       shape = current.seeds.map((seed) => seed.node.id).join();
@@ -10016,7 +10110,7 @@ const PAGE_JS: &str = r##"(() => {
         row.style.gridTemplateColumns = "16px 1fr 72px 24px";
       });
     };
-    const shapes = element("section", {}, element("div", { className: "caption", textContent: "Shapes" }), list, hint, adding);
+    const shapes = element("section", {}, element("div", { className: "caption", textContent: "Shapes" }), shapeRow, list, hint, adding);
     const fitting = segments(
       "Fit",
       [
@@ -10144,6 +10238,8 @@ const PAGE_JS: &str = r##"(() => {
     const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
     const root = makePanel(current.group ? `Shape Fill · ${plainName(current.container.name)}` : "Shape Fill", () => closeFill(current, false), canvas, scroll, footer);
     const show = () => {
+      shapeName.textContent = current.container.name;
+      name.textContent = current.container.name;
       if (shape !== current.seeds.map((seed) => seed.node.id).join()) buildList();
       hint.hidden = current.seeds.length > 0;
       fitting.show();
@@ -10760,10 +10856,39 @@ const PAGE_JS: &str = r##"(() => {
     current.entriesAt = current.version;
     return entries;
   };
+  // The original or what's made moved, turned or resized on the page since
+  // it was last made, by anyone, as their group dragged or turned while
+  // the panel's open: what's made from then on goes with the original as
+  // it is now, and where only what's made moved, together, the original
+  // goes with it, as an image effect's does
+  const followVector = (current) => {
+    const { source } = current;
+    if (source.removed) return;
+    const changed = () => {
+      current.base = source.absoluteTransform;
+      current.version = (current.version ?? 0) + 1;
+    };
+    if (!sameBox(current.base, source.absoluteTransform)) return changed();
+    const was = current.madeAt;
+    if (!was || was.node.removed || current.made[0] !== was.node) return;
+    const now = boxOf(was.node);
+    if (sameBox(now, was.box)) return;
+    const change = multiply(now, invert(was.box));
+    // Only where everything made moved as one
+    // Only where everything made moved as one
+    if (!current.made.every((node, i) => node.removed || sameBox(boxOf(node), multiply(change, was.boxes[i]), 0.5))) return;
+    try {
+      changeSource(current, change);
+    } catch {}
+    changed();
+  };
   const buildVector = (current) => {
     if (vectoring !== current || current.source.removed) return;
     const started = performance.now();
+    followVector(current);
     syncMade(current, entriesOf(current));
+    const first = current.made[0];
+    current.madeAt = first ? { node: first, box: boxOf(first), boxes: current.made.map(boxOf) } : null;
     // How long the file took, so the next change waits as long again
     current.cost = performance.now() - started;
     current.panel?.show();
@@ -10902,6 +11027,17 @@ const PAGE_JS: &str = r##"(() => {
   // The original shown under what's made, hidden where what's made takes
   // its place, or as its settings say for a brush's path
   const sourceShown = (spec, settings) => (spec.place === "below" ? true : Boolean(spec.showsSource?.(settings)));
+  // Everything read from the source, read again from a new one
+  const rereadVector = (current) => {
+    const { spec, source } = current;
+    current.base = source.absoluteTransform;
+    current.unit = Math.max(1, source.width ?? 100, source.height ?? 100);
+    current.items = spec.seeds && !spec.ownShape ? [] : shapesOf(source, spec.shadows);
+    if (spec.seeds) current.track = flatten(trackOf(source), 0.75).filter((line) => line.points.length >= 4).map(measured);
+    current.madeAt = null;
+    spec.read?.(current);
+    showVectorSource(current);
+  };
   const showVectorSource = (current) => {
     const shown = sourceShown(current.spec, current.settings) && current.wasVisible;
     if (current.source.visible !== shown) current.source.visible = shown;
@@ -10984,6 +11120,12 @@ const PAGE_JS: &str = r##"(() => {
     if (!applied) {
       for (const node of current.made) if (!node.removed) node.remove();
       for (const node of current.kept) if (!node.removed) node.visible = true;
+      putBackSource(current);
+      if (current.first && current.first.node !== current.source && !current.first.node.removed)
+        try {
+          swapSource(current, current.first.node, current.sourceWas, current.spec.name);
+          current.sourceWas = current.first.shown;
+        } catch {}
       const { home, wrap, source } = current;
       if (!source.removed) source.visible = current.sourceWas;
       if (wrap && home && !source.removed && !home.parent.removed) {
@@ -11185,8 +11327,37 @@ const PAGE_JS: &str = r##"(() => {
           scheduleVector(current);
           show();
         });
-        const adding = element("div", { className: "row" }, element("span", { className: "label", textContent: spec.seedsLabel ?? "Along the path" }), element("div", { className: "chips" }, add));
+        const adding = element("div", { className: "row" }, element("span", { className: "label", textContent: spec.seedsLabel ?? "Layers" }), element("div", { className: "chips" }, add));
         adding.style.gridTemplateColumns = "1fr auto";
+        // The path they go along, changed to what's selected
+        let path = null;
+        if (spec.sourceLabel) {
+          const named = element("span", { className: "label" });
+          Object.assign(named.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+          const use = element("button", { type: "button", className: "chip", textContent: "Use selected" });
+          use.title = `Use the selected layer as the ${spec.sourceLabel.toLowerCase()}, letting go of this one`;
+          use.addEventListener("click", () => {
+            const own = new Set([current.wrap?.id, current.group?.id, ...current.made.map((node) => node.id)]);
+            const node = pickedSource(current, own, spec.sourceLabel.toLowerCase());
+            if (!node) return;
+            try {
+              const shown = swapSource(current, node, current.sourceWas, spec.name);
+              current.sourceWas = shown;
+              current.wasVisible = current.group ? true : shown;
+              current.seeds = current.seeds.filter((seed) => seed.node !== node);
+              s.seeds = current.seeds.map((seed) => seed.node.id);
+              rereadVector(current);
+            } catch {
+              current.figma.notify("Couldn't use that layer", { timeout: 2000 });
+            }
+            current.figma.currentPage.selection = [current.wrap ?? current.group ?? current.source].filter((one) => one && !one.removed);
+            scheduleVector(current);
+            show();
+          });
+          shows.push(() => (named.textContent = current.source.name));
+          path = element("div", { className: "row" }, element("span", { className: "label", textContent: spec.sourceLabel }), named, use);
+          path.style.gridTemplateColumns = "96px 1fr auto";
+        }
         shows.push(() => {
           hint.hidden = current.seeds.length > 0;
           const now = current.seeds.map((seed) => seed.node.id).join();
@@ -11208,7 +11379,7 @@ const PAGE_JS: &str = r##"(() => {
             row.style.gridTemplateColumns = "1fr 24px";
           });
         });
-        return element("section", {}, element("div", { className: "caption", textContent: spec.seedsCaption ?? "Layers" }), adding, list, hint);
+        return element("section", {}, element("div", { className: "caption", textContent: spec.seedsCaption ?? "Layers" }), ...(path ? [path] : []), adding, list, hint);
       },
       current,
     };
@@ -11299,6 +11470,7 @@ const PAGE_JS: &str = r##"(() => {
     const footer = element("div", { className: "footer" }, name, element("div", { className: "actions" }, cancel, go));
     const root = makePanel(current.group ? `${spec.name} · ${plainName(current.source.name)}` : spec.name, () => closeVector(current, false), canvas, scroll, footer);
     const show = () => {
+      name.textContent = current.source.name;
       for (const fn of shows) fn();
       for (const row of rows) row.show();
       editable.checked = s.editable;
@@ -11513,6 +11685,8 @@ const PAGE_JS: &str = r##"(() => {
     place: "replace",
     verb: "Scatter",
     seeds: true,
+    seedsLabel: "Layers to scatter",
+    sourceLabel: "Path",
     seedsCaption: "Layers",
     ask: "Select a path and the layers to scatter along it",
     showsSource: (s) => s.showPath,
@@ -11643,7 +11817,8 @@ const PAGE_JS: &str = r##"(() => {
     verb: "Make",
     seeds: true,
     seedsCaption: "Tiles",
-    seedsLabel: "Bent along the path",
+    seedsLabel: "Layers to bend",
+    sourceLabel: "Path",
     ask: "Select a path and the layers to bend along it",
     showsSource: (s) => s.showPath,
     defaults: { seeds: [], size: 100, spacing: 0, fit: "stretch", flip: false, offset: 0, showPath: false, editable: true },
@@ -13800,7 +13975,15 @@ const PAGE_JS: &str = r##"(() => {
   // text or font changes, without touching the original, so typing in it
   // goes on. Their groups on the page are found every few seconds, and
   // each original's look checked as a hash of its outlines and paints
-  const shapeSignature = (root) => {
+  // A transform rounded to what a look can tell apart, a quarter of a
+  // point and a thousandth of a turn or scale, so the hundredths Figma's
+  // places drift by, as a group's layers do while it's turned, never read
+  // as a change
+  const roughly = (m) => JSON.stringify(m.flat().map((v, i) => Math.round(v * (i % 3 === 2 ? 4 : 1000))));
+  // With `group`, where the original is in it too, so the original moved
+  // or turned on its own is a change, and the whole group moved or turned
+  // isn't, what's made going with it
+  const shapeSignature = (root, group = null) => {
     let h = 5381;
     const add = (text) => {
       for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
@@ -13812,10 +13995,11 @@ const PAGE_JS: &str = r##"(() => {
       if ("fillGeometry" in node) for (const g of node.fillGeometry) add(g.data);
       if ("strokeGeometry" in node) for (const g of node.strokeGeometry) add(g.data);
       for (const key of ["fills", "strokes"]) if (key in node) add(node[key] === window.figma.mixed ? "mixed" : JSON.stringify(node[key]));
-      add(JSON.stringify(multiply(base, node.absoluteTransform).flat().map((v) => Math.round(v * 1000))));
+      add(roughly(multiply(base, node.absoluteTransform)));
       if ("children" in node && node.type !== "BOOLEAN_OPERATION") for (const child of node.children) walk(child, false);
     };
     walk(root, true);
+    if (group) add(roughly(multiply(invert(group.absoluteTransform), root.absoluteTransform)));
     return h;
   };
   const refreshVector = (figma, group, effect, settings) => {
@@ -13837,6 +14021,7 @@ const PAGE_JS: &str = r##"(() => {
   // What's made in an effect's group, as a hash of its layers
   const madeSignature = (group, source) => {
     let h = 5381;
+    const base = invert(group.absoluteTransform);
     const add = (text) => {
       for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
     };
@@ -13844,7 +14029,8 @@ const PAGE_JS: &str = r##"(() => {
       if (child === source) continue;
       add(child.id);
       if (child.type === "VECTOR") for (const path of child.vectorPaths) add(path.data);
-      add(JSON.stringify(child.relativeTransform.flat().map((v) => Math.round(v * 100))));
+      // Where it is in the group, so the group moved or turned is no change
+      add(roughly(multiply(base, child.absoluteTransform)));
     }
     return h;
   };
@@ -13874,7 +14060,7 @@ const PAGE_JS: &str = r##"(() => {
         if (!settings.follow || isOff(group)) continue;
         const source = sourceOf(group);
         if (!source) continue;
-        const sig = shapeSignature(source);
+        const sig = shapeSignature(source, group);
         const now2 = madeSignature(group, source);
         let known = followed.get(group.id);
         // First seen, it's taken to match its original
@@ -13906,9 +14092,13 @@ const PAGE_JS: &str = r##"(() => {
         else if (known.changed && now - known.changed > 450) {
           known.changed = 0;
           refreshVector(figma, group, effect, settings);
+          // As it is now, the group fitted to what's made again
+          const after = shapeSignature(source, group);
           known.made.set(sig, madeSignature(group, source));
+          known.made.set(after, madeSignature(group, source));
           known.ids = group.children.filter((child) => child !== source).map((child) => child.id).join();
-          known.built = sig;
+          known.sig = after;
+          known.built = after;
           known.undos = 0;
         }
       }
