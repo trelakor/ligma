@@ -83,6 +83,11 @@ pub struct Vello {
     pub renders: usize,
     out: Option<Target>,
     pages: Vec<Page>,
+    /// What Skia drew onto the atlas for earlier views, drawn again from
+    /// here where it would be the same, and the views drawn
+    pieces: HashMap<PieceKey, Piece>,
+    piece_bytes: usize,
+    views: u64,
     /// Vello's copies of paths, by the path they're of
 
     /// Set if wgpu reports an error, after which Vello isn't used
@@ -222,6 +227,9 @@ impl Vello {
             renders: 0,
             out: None,
             pages: Vec::new(),
+            pieces: HashMap::new(),
+            piece_bytes: 0,
+            views: 0,
 
             broken,
             pictures: HashMap::new(),
@@ -549,6 +557,8 @@ impl Vello {
     /// nothing's drawn for a while: the next view takes a few milliseconds
     /// more, to make it again
     pub fn trim(&mut self) {
+        self.pieces.clear();
+        self.piece_bytes = 0;
         self.renderer.trim();
         self.out = None;
         self.pages.clear();
@@ -562,6 +572,34 @@ impl Vello {
         if let Some(report) = std::env::var_os("LIGMA_NATIVE_VELLO_MEMORY").and_then(|_| self.device.generate_allocator_report()) {
             let names: Vec<String> = report.allocations.iter().map(|allocation| format!("{} {}MB", allocation.name, allocation.size >> 20)).collect();
             super::render::trace(|| format!("vello trimmed to {}/{}MB in {} blocks: {names:?}", report.total_allocated_bytes >> 20, report.total_reserved_bytes >> 20, report.blocks.len()));
+        }
+    }
+
+    fn keep_piece(&mut self, key: PieceKey, piece: Piece) {
+        self.piece_bytes += piece_bytes(&piece);
+        if let Some(old) = self.pieces.insert(key, piece) {
+            self.piece_bytes -= piece_bytes(&old);
+        }
+    }
+
+    /// A view begins: pieces no view's had for a while go, and the longest
+    /// unused past what's kept
+    fn begin_view(&mut self) {
+        self.views += 1;
+        let views = self.views;
+        self.pieces.retain(|_, piece| piece.view + PIECE_VIEWS >= views);
+        self.piece_bytes = self.pieces.values().map(piece_bytes).sum();
+        if self.piece_bytes > PIECES_KEPT {
+            let mut by_age: Vec<(u64, PieceKey)> = self.pieces.iter().map(|(key, piece)| (piece.view, key.clone())).collect();
+            by_age.sort_unstable_by_key(|(view, _)| *view);
+            for (_, key) in by_age {
+                if self.piece_bytes <= PIECES_KEPT {
+                    break;
+                }
+                if let Some(gone) = self.pieces.remove(&key) {
+                    self.piece_bytes -= piece_bytes(&gone);
+                }
+            }
         }
     }
 
@@ -1130,6 +1168,8 @@ enum Kind {
     /// which each view has it draw onto the atlas at the zoom it's at
     Skia {
         name: &'static str,
+        /// Which of what Skia draws it is, unique to it
+        id: u64,
         m: Matrix,
         cast: Option<Color4f>,
         draw: SkiaDraw,
@@ -1193,6 +1233,42 @@ pub struct Plan {
     /// What stands for what Skia drew, by page of the atlas and where
     skia: Vec<(ImageData, usize, i32, i32)>,
 }
+
+/// What Skia drew for one of `Kind::Skia`, placed in a view by `placed`,
+/// its coefficients to a 1024th, as a slot of `width` by `height`
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PieceKey {
+    id: u64,
+    placed: [i64; 6],
+    width: i32,
+    height: i32,
+}
+
+impl PieceKey {
+    fn new(id: u64, placed: Affine, width: i32, height: i32) -> Self {
+        Self { id, placed: placed.as_coeffs().map(|c| (c * 1024.0).round() as i64), width, height }
+    }
+}
+
+/// What Skia drew onto the atlas, as it was drawn: its pixels, its
+/// counts, the images it drew with and which copies of them, and the last
+/// view it was in
+struct Piece {
+    image: skia_safe::Image,
+    counts: Counts,
+    used: Vec<(String, f64)>,
+    images: Vec<(String, u32)>,
+    view: u64,
+}
+
+fn piece_bytes(piece: &Piece) -> usize {
+    piece.image.width() as usize * piece.image.height() as usize * 4
+}
+
+/// Bytes of what Skia drew kept for later views
+const PIECES_KEPT: usize = 96 << 20;
+/// Views a piece no view's had is kept for
+const PIECE_VIEWS: u64 = 8;
 
 /// A transparent pixel, which effects not in a view stand in as
 fn nothing() -> ImageData {
@@ -1265,6 +1341,9 @@ pub struct Encoder<'a> {
     kit: Option<&'a Kit>,
     pub vello: Option<&'a mut Vello>,
     pub scene: vello::Scene,
+    /// Levels coarser than the view needs images are drawn at, so they fit
+    /// Vello's atlas where there are too many at the size the view needs
+    pub coarser: u32,
     skia: Option<&'a ID3D12Device>,
     context: Option<&'a mut skia_safe::gpu::DirectContext>,
     paths: &'a Paths,
@@ -1333,6 +1412,7 @@ impl<'a> Encoder<'a> {
         width: i32,
         height: i32,
     ) -> Self {
+        vello.begin_view();
         let scene = {
             let mut scene = std::mem::take(&mut vello.spare);
             scene.reset();
@@ -1350,6 +1430,7 @@ impl<'a> Encoder<'a> {
             images,
             kit: None,
             scene: vello::Scene::new(),
+            coarser: 0,
             vello: None,
             skia: None,
             context: None,
@@ -2475,7 +2556,9 @@ impl<'a> Encoder<'a> {
         let pixel = 2.0;
         let rect = kurbo::Rect::new((device.left - pixel) as f64, (device.top - pixel) as f64, (device.right + pixel) as f64, (device.bottom + pixel) as f64);
         let Some((transform, patch)) = self.stand_in(rect) else { return };
-        self.effects.push(Effect { kind: Kind::Skia { name: kind, m: self.m, cast: self.cast, draw }, bounds: rect, transform, patch });
+        static IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.effects.push(Effect { kind: Kind::Skia { name: kind, id, m: self.m, cast: self.cast, draw }, bounds: rect, transform, patch });
     }
 
     /// Puts `effects`, of a scene with `encoding` that `t` places over
@@ -2559,6 +2642,7 @@ impl<'a> Encoder<'a> {
                         self.asked.sharper.push((key.clone(), wants as f64));
                     }
                     let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
+                    let level = (level + self.coarser).min(12);
                     let vello = self.vello.as_deref_mut().ok_or("no Vello")?;
                     let Some((data, level)) = (0..=level).rev().find_map(|level| vello.picture(key, img, level).map(|data| (data, level))) else {
                         return Err("image Vello can't draw".into());
@@ -2567,8 +2651,9 @@ impl<'a> Encoder<'a> {
                     self.shown.push((key.clone(), *width * scale as f32));
                     Plan::patch_image(encoding, effect, data);
                 }
-                Kind::Skia { name, m, cast, draw } => {
-                    let shown = t.transform_rect_bbox(effect.bounds).intersect(view);
+                Kind::Skia { name, id, m, cast, draw } => {
+                    let whole = t.transform_rect_bbox(effect.bounds);
+                    let shown = whole.intersect(view);
                     if shown.width() <= 0.0 || shown.height() <= 0.0 {
                         Plan::patch(encoding, effect, nothing(), Affine::IDENTITY);
                         continue;
@@ -2576,6 +2661,34 @@ impl<'a> Encoder<'a> {
                     let (left, top) = (shown.x0.floor() as i32, shown.y0.floor() as i32);
                     let (width, height) = (shown.x1.ceil() as i32 - left, shown.y1.ceil() as i32 - top);
                     let (page, x, y) = self.room(width, height).ok_or("atlas full")?;
+                    // Drawn whole, where it's placed the same to the pixel, it's
+                    // what an earlier view had Skia draw, unless an image it
+                    // drew with has come since
+                    let placed = Affine::translate((-(left as f64), -(top as f64))) * t;
+                    let key = (shown == whole).then(|| PieceKey::new(*id, placed, width, height));
+                    let images = self.images;
+                    let views = self.vello.as_deref().map_or(0, |vello| vello.views);
+                    let reused = key.as_ref().and_then(|key| {
+                        let vello = self.vello.as_deref_mut()?;
+                        let piece = vello.pieces.get_mut(key)?;
+                        if !piece.images.iter().all(|(key, id)| images.get(key).is_some_and(|img| img.image.unique_id() == *id)) {
+                            return None;
+                        }
+                        piece.view = views;
+                        Some((piece.image.clone(), piece.counts, piece.used.clone()))
+                    });
+                    if let Some((image, counts, mut used)) = reused {
+                        let canvas = self.pages[page].canvas();
+                        canvas.draw_image(&image, (x as f32, y as f32), None);
+                        self.counts += counts;
+                        self.asked.used.append(&mut used);
+                        let entry = self.kinds.entry(name).or_default();
+                        entry.0 += 1;
+                        let image = slot_image(width, height);
+                        Plan::patch(encoding, effect, image.clone(), t.inverse() * Affine::translate((left as f64, top as f64)));
+                        plan.skia.push((image, page, x, y));
+                        continue;
+                    }
                     self.fell_back += width as i64 * height as i64;
                     let entry = self.kinds.entry(name).or_default();
                     entry.0 += 1;
@@ -2605,6 +2718,13 @@ impl<'a> Encoder<'a> {
                     };
                     drop(drawer);
                     canvas.restore();
+                    if let Some(key) = key.filter(|_| asked.missing.is_empty() && asked.sharper.is_empty()) {
+                        let image = self.pages[page].image_snapshot_with_bounds(IRect::from_xywh(x, y, width, height));
+                        if let (Some(image), Some(vello)) = (image, self.vello.as_deref_mut()) {
+                            let images = asked.used.iter().filter_map(|(key, _)| self.images.get(key).map(|img| (key.clone(), img.image.unique_id()))).collect();
+                            vello.keep_piece(key, Piece { image, counts, used: asked.used.clone(), images, view: views });
+                        }
+                    }
                     self.counts += counts;
                     self.asked.missing.append(&mut asked.missing);
                     self.asked.sharper.append(&mut asked.sharper);

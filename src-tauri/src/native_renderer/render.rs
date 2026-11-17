@@ -500,6 +500,9 @@ struct Encoded {
 /// Pixels of Vello's image atlas, 8192 square at most, images and pages
 /// may take, leaving room for how they're packed
 const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
+/// Most levels coarser images are drawn at to fit Vello's atlas, each a
+/// quarter of the room
+const COARSEST_IMAGES: u32 = 4;
 
 /// How long the view stays still before tiles to stand in where Vello falls
 /// behind are drawn
@@ -1177,6 +1180,10 @@ pub struct Painter {
     vello: Option<super::vello::Vello>,
     /// Vello's copies of the tree's paths
     vello_paths: super::vello::Paths,
+    /// Levels coarser images are drawn at in Vello's views, so they fit its
+    /// atlas, and how much of it the last view took
+    image_coarser: u32,
+    atlas_used: u64,
     /// Tiles Vello couldn't draw, which Skia draws
     vello_cant: std::collections::HashSet<TileKey>,
     /// The scene Vello keeps on the GPU, drawn again for each view inside
@@ -1363,6 +1370,8 @@ impl Painter {
         Self {
             vello: None,
             vello_paths: Default::default(),
+            image_coarser: 0,
+            atlas_used: 0,
             vello_cant: Default::default(),
             scene_kept: None,
             kept_stale: false,
@@ -2554,7 +2563,30 @@ impl Painter {
     /// The view from (`left`, `top`) and `phase` of a pixel further, in
     /// device pixels, `w` by `h`
     #[allow(clippy::too_many_arguments)]
+    /// Images too many for Vello's atlas at the size the view needs are
+    /// drawn a level coarser at a time till they fit, rather than Skia
+    /// drawing the view, which on big files takes seconds. Finer again once
+    /// they'd fit with room to spare
+    #[allow(clippy::too_many_arguments)]
     fn vello_render(&mut self, left: i32, top: i32, phase: (f32, f32), w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool, kept: Option<(super::vello::Kept, i32, i32)>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
+        loop {
+            match self.vello_render_at(left, top, phase, w, h, px, reach, budget, copy, kept) {
+                Err(why) if (why.starts_with("images need") || why == "images past Vello's atlas") && self.image_coarser < COARSEST_IMAGES => {
+                    self.image_coarser += 1;
+                    trace(|| format!("  images a level coarser, {} in all, as {why}", self.image_coarser));
+                }
+                done => {
+                    if done.is_ok() && self.image_coarser > 0 && self.atlas_used * 4 < ATLAS_MOST / 2 {
+                        self.image_coarser -= 1;
+                    }
+                    return done;
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn vello_render_at(&mut self, left: i32, top: i32, phase: (f32, f32), w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool, kept: Option<(super::vello::Kept, i32, i32)>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
         let _ = self.gpu.context.flush_and_submit();
@@ -2681,6 +2713,7 @@ impl Painter {
                 });
                 encoding = begun.elapsed();
                 let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
+                encoder.coarser = self.image_coarser;
                 if !whole_tree {
                     encoder.failed = Some("not a tree".into());
                 }
@@ -2782,6 +2815,7 @@ impl Painter {
         pictures.dedup();
         // Past what Vello's atlas holds, it'd draw from where other images are
         let area = vello.atlas_area(&pictures, used_pages);
+        self.atlas_used = area;
         if area > ATLAS_MOST {
             self.vello = Some(vello);
             return Err(format!("images need {}M px of Vello's atlas", area >> 20));
