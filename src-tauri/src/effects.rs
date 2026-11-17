@@ -13969,6 +13969,8 @@ const PAGE_JS: &str = r##"(() => {
   const sectionStyle = document.createElement("style");
   sectionStyle.textContent = `
     [${SECTION}] { padding: 4px 0 12px; border-bottom: 1px solid var(--color-border); font-family: var(--font-family-default, Inter, sans-serif); font-size: 11px; font-weight: 450; letter-spacing: 0.005em; color: var(--color-text); -webkit-font-smoothing: antialiased; }
+    [${SECTION}].empty { padding: 4px 0; }
+    [${SECTION}].empty h2 { color: var(--color-text-secondary); }
     [${SECTION}] .head { display: flex; align-items: center; height: 32px; padding: 0 8px 0 16px; }
     [${SECTION}] h2 { flex: 1; margin: 0; font-size: 11px; font-weight: 550; letter-spacing: 0.01em; line-height: 32px; }
     [${SECTION}] .icon-button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: none; color: inherit; }
@@ -14000,10 +14002,14 @@ const PAGE_JS: &str = r##"(() => {
     let section = document.querySelector(`[${SECTION}]`);
     const [only] = figma?.currentPage.selection ?? [];
     let stack = [];
+    let selected = 0;
     try {
-      stack = state.on && figma && figma.currentPage.selection.length === 1 ? stackOf(only) : [];
+      selected = state.on && figma ? figma.currentPage.selection.length : 0;
+      stack = selected === 1 ? stackOf(only) : [];
     } catch {}
-    if (!stack.length || !anchor) {
+    // Shown for any selection, as Figma's own sections are, with only its
+    // title and + till an effect's applied
+    if (!selected || !anchor) {
       if (!restacking) {
         section?.remove();
         sectionKey = "";
@@ -14012,11 +14018,12 @@ const PAGE_JS: &str = r##"(() => {
     }
     if (!sectionStyle.isConnected) document.head.append(sectionStyle);
     const layers = layersOf(stack);
-    const key = layers.map(({ group, settings, off }) => group.id + off + JSON.stringify(settings)).join("|") + restacking;
+    const key = (stack.length ? layers.map(({ group, settings, off }) => group.id + off + JSON.stringify(settings)).join("|") : "empty") + restacking;
     if (section && section.previousElementSibling === anchor && key === sectionKey) return;
     sectionKey = key;
     section ??= document.createElement("div");
     section.setAttribute(SECTION, "");
+    section.classList.toggle("empty", !stack.length);
     section.innerHTML = "";
     const head = section.appendChild(document.createElement("div"));
     head.className = "head";
@@ -14025,9 +14032,13 @@ const PAGE_JS: &str = r##"(() => {
     add.setAttribute("aria-label", "Add a Ligma effect");
     Object.assign(add.dataset, { tooltip: "Add effect", tooltipType: "text" });
     add.addEventListener("click", () => {
-      figma.currentPage.selection = [stack[0]];
+      if (stack.length) figma.currentPage.selection = [stack[0]];
       openMenu(add);
     });
+    if (!stack.length) {
+      if (section.previousElementSibling !== anchor) anchor.after(section);
+      return;
+    }
     const rows = section.appendChild(document.createElement("div"));
     rows.className = "rows";
     if (restacking) rows.classList.add("busy");
