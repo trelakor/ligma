@@ -93,7 +93,7 @@ const PAGE_JS: &str = r##"(() => {
     [${ROOT}] * { box-sizing: border-box; }
     [${ROOT}] button { font: inherit; color: inherit; }
     /* The library: a search field, then every effect as a tile, a
-       picture of it at work over its name, in Figma's menu colors */
+       picture of it at work over its name, in the colors of Figma's panels, as its Actions window */
     [${ROOT}="menu"] {
       position: fixed;
       z-index: 9;
@@ -102,14 +102,14 @@ const PAGE_JS: &str = r##"(() => {
       display: flex;
       flex-direction: column;
       border-radius: var(--radius-large, 13px);
-      background: var(--color-bg-menu, #1e1e1e);
-      color: var(--color-text-menu, #fff);
-      box-shadow: var(--elevation-500);
+      background: var(--color-bg, #2c2c2c);
+      color: var(--color-text, #fff);
+      box-shadow: var(--elevation-500, 0 3px 8px #00000059, 0 1px 3px #00000080, inset 0 1px 0 #ffffff14, inset 0 0 1px #ffffff4d);
       overflow: hidden;
     }
     [${ROOT}="menu"] .top { flex: none; padding: 8px 8px 4px; }
     /* Categories under the search, as Figma's Resources tabs are: plain
-       labels, the chosen one on a light pill */
+       labels, the chosen one on a pill */
     [${ROOT}="menu"] .tabs { display: flex; gap: 2px; margin-top: 8px; }
     [${ROOT}="menu"] .tab {
       height: 24px;
@@ -117,22 +117,23 @@ const PAGE_JS: &str = r##"(() => {
       border: 0;
       border-radius: 5px;
       background: none;
-      color: var(--color-text-menu-secondary, #ffffffb2);
+      color: var(--color-text-secondary, #ffffffb2);
       font-size: 11px;
       font-weight: 500;
       cursor: default;
     }
-    [${ROOT}="menu"] .tab:hover { color: var(--color-text-menu, #fff); }
-    [${ROOT}="menu"] .tab[aria-selected="true"] { background: var(--color-bg-menu-hover, #ffffff1a); color: var(--color-text-menu, #fff); }
+    [${ROOT}="menu"] .tab:hover { color: var(--color-text, #fff); }
+    [${ROOT}="menu"] .tab[aria-selected="true"] { background: var(--color-bg-secondary, #383838); color: var(--color-text, #fff); }
     [${ROOT}="menu"] .tab:focus-visible { outline: 2px solid var(--color-border-selected, #0d99ff); outline-offset: -2px; }
     [${ROOT}="menu"] .search {
       display: flex;
       align-items: center;
       height: 32px;
       padding: 0 8px 0 3px;
-      border: 1px solid var(--color-border-menu, #383838);
-      border-radius: 8px;
-      color: var(--color-text-menu-secondary, #ffffffb2);
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: var(--color-bg-secondary, #383838);
+      color: var(--color-text-secondary, #ffffffb2);
     }
     [${ROOT}="menu"] .search:focus-within { border-color: var(--color-border-selected, #0d99ff); }
     [${ROOT}="menu"] .search svg { flex: none; }
@@ -147,10 +148,10 @@ const PAGE_JS: &str = r##"(() => {
       outline: 0;
       font: inherit;
       font-size: 13px;
-      color: var(--color-text-menu, #fff);
+      color: var(--color-text, #fff);
       caret-color: var(--color-border-selected, #0d99ff);
     }
-    [${ROOT}="menu"] .search input::placeholder { color: var(--color-text-menu-secondary, #ffffffb2); }
+    [${ROOT}="menu"] .search input::placeholder { color: var(--color-text-secondary, #ffffffb2); }
     [${ROOT}="menu"] .search input::-webkit-search-cancel-button { display: none; }
     [${ROOT}="menu"] .body {
       flex: 1;
@@ -161,10 +162,10 @@ const PAGE_JS: &str = r##"(() => {
          measured at when it shows */
       scrollbar-gutter: stable;
       scrollbar-width: thin;
-      scrollbar-color: #ffffff33 transparent;
+      scrollbar-color: var(--color-text-tertiary, #ffffff66) transparent;
     }
-    [${ROOT}="menu"] .separator { height: 1px; margin: 8px -8px; background: var(--color-border-menu, #383838); }
-    [${ROOT}="menu"] .heading { padding: 0 4px; height: 24px; display: flex; align-items: center; color: var(--color-text-menu-secondary, #ffffffb2); }
+    [${ROOT}="menu"] .separator { height: 1px; margin: 8px -8px; background: var(--color-border, #444); }
+    [${ROOT}="menu"] .heading { padding: 0 4px; height: 24px; display: flex; align-items: center; color: var(--color-text-secondary, #ffffffb2); }
     [${ROOT}="menu"] .item {
       display: grid;
       grid-template-columns: 24px 1fr;
@@ -177,12 +178,11 @@ const PAGE_JS: &str = r##"(() => {
       text-align: left;
       cursor: default;
     }
-    [${ROOT}="menu"] .item:hover, [${ROOT}="menu"] .item:focus-visible { background: var(--color-bg-menu-selected, #0c8ce9); outline: 0; }
+    [${ROOT}="menu"] .item:hover, [${ROOT}="menu"] .item:focus-visible { background: var(--color-bg-secondary, #383838); outline: 0; }
     [${ROOT}="menu"] .item svg { grid-row: span 2; margin: -4px 0 0 4px; }
     [${ROOT}="menu"] .item svg [stroke] { stroke: currentColor; }
     [${ROOT}="menu"] .item .name { font-weight: 500; }
-    [${ROOT}="menu"] .item .about { color: var(--color-text-menu-secondary, #ffffffb2); }
-    [${ROOT}="menu"] .item:hover .about, [${ROOT}="menu"] .item:focus-visible .about { color: inherit; }
+    [${ROOT}="menu"] .item .about { color: var(--color-text-secondary, #ffffffb2); }
     [${ROOT}="menu"] .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
     [${ROOT}="menu"] .cell { position: relative; min-width: 0; }
     [${ROOT}="menu"] .cell[hidden] { display: none; }
@@ -199,17 +199,17 @@ const PAGE_JS: &str = r##"(() => {
       text-align: center;
       cursor: default;
     }
-    [${ROOT}="menu"] .tile:hover { background: var(--color-bg-menu-hover, #ffffff14); }
+    [${ROOT}="menu"] .tile:hover { background: var(--color-bg-hover, #383838); }
     [${ROOT}="menu"] .tile:focus-visible { outline: 2px solid var(--color-border-selected, #0d99ff); outline-offset: -2px; }
     [${ROOT}="menu"] .tile .picture {
       position: relative;
       display: block;
       aspect-ratio: 1;
       border-radius: 6px;
-      background: #ffffff0f;
+      background: var(--color-bg-secondary, #383838);
       overflow: hidden;
     }
-    [${ROOT}="menu"] .tile .picture::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px #ffffff1a; pointer-events: none; }
+    [${ROOT}="menu"] .tile .picture::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--color-bordertranslucent, #ffffff1a); pointer-events: none; }
     [${ROOT}="menu"] .tile canvas { display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1); }
     [${ROOT}="menu"] .tile canvas.drawn { opacity: 1; }
     [${ROOT}="menu"] .tile .name { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 14px; overflow-wrap: anywhere; }
@@ -226,17 +226,17 @@ const PAGE_JS: &str = r##"(() => {
       padding: 0;
       border: 0;
       border-radius: 5px;
-      background: #1e1e1ed9;
-      color: var(--color-text-menu, #fff);
+      background: color-mix(in srgb, var(--color-bg, #2c2c2c) 85%, transparent);
+      color: var(--color-text, #fff);
       opacity: 0;
       cursor: default;
       transition: opacity 120ms cubic-bezier(0.16, 1, 0.3, 1);
     }
     [${ROOT}="menu"] .cell:hover .star, [${ROOT}="menu"] .cell:focus-within .star, [${ROOT}="menu"] .star[aria-pressed="true"] { opacity: 1; }
-    [${ROOT}="menu"] .star:hover { background: #2c2c2c; }
+    [${ROOT}="menu"] .star:hover { background: var(--color-bg-secondary, #383838); }
     [${ROOT}="menu"] .star:focus-visible { outline: 2px solid var(--color-border-selected, #0d99ff); outline-offset: 0; }
     [${ROOT}="menu"] .star[aria-pressed="true"] svg path { fill: currentColor; }
-    [${ROOT}="menu"] .empty { padding: 24px 8px; text-align: center; color: var(--color-text-menu-secondary, #ffffffb2); }
+    [${ROOT}="menu"] .empty { padding: 24px 8px; text-align: center; color: var(--color-text-secondary, #ffffffb2); }
     [${ROOT}="menu"] .empty .hint { display: block; margin-top: 4px; }
     @media (prefers-reduced-motion: reduce) {
       [${ROOT}="menu"] .tile canvas, [${ROOT}="menu"] .star { transition: none; }
