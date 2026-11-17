@@ -20,16 +20,20 @@
 //! Painting with nothing to paint on adds one. Its pixels are read through
 //! Figma's console plugin API, `window.figma`, which Figma only offers in
 //! files that can be edited, so the mode is greyed out in others. While
-//! painting, a canvas over Figma's shows the layer, and strokes in quick
-//! succession replace its image together, as one undo step, so Figma's
-//! undo works as it does for anything else. The canvas stays until Figma
-//! has drawn the new image sharply, then fades. It follows the layer as
-//! it's moved, turned or resized in Figma, goes at once when the layer is
-//! undone, changed by someone else, hidden or deleted, and as soon as Figma
-//! has the strokes when anything above it changes (Figma's
-//! `documentchange`), so it never hides Figma's own. Erasing, and painting
-//! a layer that blends, hides Figma's copy of the layer until the change is
-//! in, so what's under it shows and the canvas blends as the layer does
+//! painting, a canvas over Figma's shows the layer, when it shows it as
+//! Figma would: a plain rectangle on top, in groups and frames that don't
+//! blend, fade or add effects. Otherwise Figma draws it, from pictures of
+//! the layer as large as it shows on screen, handed over as it's painted:
+//! with a blend mode, effects, strokes, rounded corners, filters or other
+//! fills, its own or around it, a mask, rounded clipping or anything over
+//! it. Strokes in quick succession replace its image together, as one
+//! undo step, so Figma's undo works as it does for anything else. The
+//! canvas stays until Figma has drawn the new image sharply, then fades.
+//! It follows the layer as it's moved, turned or resized, goes at once
+//! when the layer is undone, changed by someone else, hidden or deleted,
+//! and as soon as Figma has the strokes when anything above it changes
+//! (Figma's `documentchange`). Erasing on it hides Figma's copy of the
+//! layer until the change is in, so what's under it shows
 //!
 //! The selection is a mask on a layer's pixels, drawn with marching ants,
 //! that strokes, fills and erasing stay inside, as in Photoshop. Figma's
@@ -537,7 +541,7 @@ const PAGE_JS: &str = r##"(() => {
     const paint = fillsOf(node)[index];
     // Figma keeps sizes as 32-bit floats, so they come back a little off
     const same = (a, b) => Math.abs(a - b) <= Math.max(1e-3, Math.abs(b) * 1e-6);
-    const fresh = target && target.id === node.id && target.hash === paint.imageHash && same(target.w, node.width) && same(target.h, node.height);
+    const fresh = target && target.id === node.id && (target.hash === paint.imageHash || (target.previewHash && target.previewHash === paint.imageHash)) && same(target.w, node.width) && same(target.h, node.height);
     if (fresh) {
       Object.assign(target, { node, index, paint, M: matrix(node.absoluteTransform) });
       return Promise.resolve(target);
@@ -680,13 +684,11 @@ const PAGE_JS: &str = r##"(() => {
   // Erasing shows what's under the layer, so Figma's own copy of it is
   // hidden until the change is in, shown again with it in the same undo
   // step. Strokes overlap, so it's counted
-  // A mask's painting hides the layers it masks instead, which Ligma's
-  // canvas then shows through the mask as it's painted
   const conceal = (t) => {
     if (!t.node) return false;
     try {
       if (!t.hidden) {
-        const nodes = t.masking ?? [t.node];
+        const nodes = [t.node];
         t.hiddenNodes = nodes.filter((node) => !node.removed && node.visible);
         if (!t.hiddenNodes.length) return false;
         for (const node of t.hiddenNodes) node.visible = false;
@@ -706,64 +708,6 @@ const PAGE_JS: &str = r##"(() => {
       } catch {}
     }
     t.hiddenNodes = null;
-  };
-
-  // A mask being painted: the layers it masks, those above it in its
-  // parent up to the next mask, drawn as Figma draws each, unmasked, on
-  // the mask's own grid. Shown through the mask as it's painted, so the
-  // canvas shows what the mask does rather than the mask
-  const maskedBy = (node) => {
-    try {
-      if (!node?.isMask || !node.parent) return null;
-      const siblings = node.parent.children;
-      const out = [];
-      for (const sibling of siblings.slice(siblings.indexOf(node) + 1)) {
-        if (sibling.isMask) break;
-        out.push(sibling);
-      }
-      return out;
-    } catch {
-      return null;
-    }
-  };
-  const prepareMask = async (t) => {
-    const masking = maskedBy(t.node);
-    if (!masking) return t;
-    t.masking = masking;
-    if (t.maskView) return t;
-    const content = canvasOf(t.W, t.H);
-    const ctx = content.getContext("2d");
-    for (const node of masking) {
-      try {
-        if (!node.visible) continue;
-        const box = node.absoluteRenderBounds;
-        if (!box?.width || !box.height) continue;
-        const scale = Math.min(Math.hypot(gridOf(t).a, gridOf(t).b) ** -1, LARGEST / Math.max(box.width, box.height));
-        const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale } });
-        const bitmap = await createImageBitmap(new Blob([bytes]));
-        ctx.setTransform(gridOf(t).inverse().multiply(new DOMMatrix().translate(box.x, box.y).scale(box.width / bitmap.width, box.height / bitmap.height)));
-        ctx.globalAlpha = node.opacity ?? 1;
-        ctx.drawImage(bitmap, 0, 0);
-        bitmap.close?.();
-      } catch {}
-    }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 1;
-    t.maskView = { content, display: canvasOf(t.W, t.H), dirty: true };
-    return t;
-  };
-  // The masked layers through the mask as it is now
-  const drawMaskView = (t) => {
-    const view = t.maskView;
-    if (!view) return;
-    view.dirty = false;
-    const ctx = view.display.getContext("2d");
-    ctx.globalCompositeOperation = "source-over";
-    ctx.clearRect(0, 0, t.W, t.H);
-    ctx.drawImage(view.content, 0, 0);
-    ctx.globalCompositeOperation = "destination-in";
-    ctx.drawImage(t.live, 0, 0);
-    ctx.globalCompositeOperation = "source-over";
   };
   const commit = (t, picture, { reveals = 0, select = false } = {}) => {
     const figma = api();
@@ -785,7 +729,7 @@ const PAGE_JS: &str = r##"(() => {
         } else {
           if (t.node.removed) return;
           const fills = [...fillsOf(t.node)];
-          const at = fills.findLastIndex((paint) => paint.type === "IMAGE" && paint.imageHash === t.hash);
+          const at = fills.findLastIndex((paint) => paint.type === "IMAGE" && (paint.imageHash === t.hash || (t.previewHash && paint.imageHash === t.previewHash)));
           // Undone or changed meanwhile: left as it is, and read again
           if (at < 0) {
             uncover();
@@ -801,6 +745,7 @@ const PAGE_JS: &str = r##"(() => {
           t.index = at;
         }
         t.hash = image.hash;
+        t.previewHash = null;
         figma.commitUndo();
       } catch {
         uncover();
@@ -810,6 +755,127 @@ const PAGE_JS: &str = r##"(() => {
       }
     }));
     return done;
+  };
+
+  // Whether Ligma's canvas over the layer shows it as Figma would: only
+  // when nothing draws it differently. Otherwise Figma draws it, from
+  // pictures of the layer handed to it as it's painted (see `push`): with
+  // a blend mode or effects of its own or a group's or frame's around it,
+  // a group's opacity, strokes, rounded corners, filters, other fills, a
+  // mask, or anything over it
+  const plainBlend = (mode) => !mode || mode === "PASS_THROUGH" || mode === "NORMAL";
+  const effected = (node) => (Array.isArray(node.effects) ? node.effects : []).some((effect) => effect.visible !== false);
+  const boundsOf = (node) => {
+    const box = node.absoluteRenderBounds ?? node.absoluteBoundingBox;
+    return box && [box.x, box.y, box.x + box.width, box.y + box.height];
+  };
+  const drawnByFigma = (t) => {
+    const node = t.node;
+    try {
+      if (node) {
+        // Hidden, masked or a mask, it's as Figma shows it, or doesn't
+        if (!node.visible || node.isMask || masksOf(node).length || !plainBlend(node.blendMode) || effected(node)) return true;
+        if ((Array.isArray(node.strokes) ? node.strokes : []).some((paint) => paint.visible !== false) && node.strokeWeight !== 0) return true;
+        if (node.type !== "RECTANGLE") return true;
+        if (typeof node.cornerRadius !== "number" || node.cornerRadius > 0) return true;
+        const fills = fillsOf(node);
+        const image = fills[imageIndex(node)];
+        if (fills.some((paint) => paint !== image && paint.visible !== false)) return true;
+        if (image && !plainBlend(image.blendMode)) return true;
+        if (image?.filters && Object.values(image.filters).some((value) => value)) return true;
+      }
+      const parent = node?.parent ?? t.place?.parent;
+      for (let at = parent; at && at.type !== "PAGE" && at.type !== "DOCUMENT"; at = at.parent) {
+        if (!at.visible || !plainBlend(at.blendMode) || (at.opacity ?? 1) < 1 || effected(at)) return true;
+        // Clipped by rounded corners, or a turned frame, which the canvas's
+        // clip doesn't follow
+        if (at.clipsContent && (typeof at.cornerRadius !== "number" || at.cornerRadius > 0)) return true;
+      }
+      // A new layer goes in over its parent's masks, and its parents' own
+      if (!node && parent && (parent.children?.some((child) => child.isMask && child.visible) || masksOf(parent).length)) return true;
+      // Anything over it, which the canvas would cover
+      const box = node ? boundsOf(node) : [t.M.e, t.M.f, t.M.e + t.w, t.M.f + t.h];
+      let at = node;
+      let holder = parent;
+      while (holder && holder.type !== "DOCUMENT") {
+        const siblings = holder.children;
+        const from = at ? siblings.indexOf(at) + 1 : t.place?.index ?? siblings.length;
+        for (const sibling of siblings.slice(from)) {
+          if (sibling.visible && !sibling.isMask && overlaps(boundsOf(sibling), box)) return true;
+        }
+        if (holder.type === "PAGE") break;
+        at = holder;
+        holder = holder.parent;
+      }
+    } catch {
+      return true;
+    }
+    return false;
+  };
+
+  // Figma drawing the layer as it's painted: a picture of it, as many of
+  // its pixels as show on screen, handed over at most every 50 ms and one
+  // at a time, in place of its image. They're all one undo step with the
+  // full picture that goes in when painting stops (see `commit`)
+  const push = (t, canvas = t.live) => {
+    t.pushCanvas = canvas;
+    if (t.pushing) {
+      t.pushAgain = true;
+      return;
+    }
+    t.pushing = true;
+    t.pushAgain = false;
+    const figma = api();
+    const v = view();
+    const grid = gridOf(t);
+    const onScreen = Math.hypot(grid.a, grid.b) * (v?.zoom ?? 1) * devicePixelRatio;
+    const scale = Math.min(1, Math.max(onScreen, 0.05), 2048 / Math.max(t.W, t.H));
+    const [W, H] = [Math.max(1, Math.round(t.W * scale)), Math.max(1, Math.round(t.H * scale))];
+    const small = scale < 1 ? canvasOf(W, H) : null;
+    if (small) {
+      const ctx = small.getContext("2d");
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(t.pushCanvas, 0, 0, W, H);
+    }
+    const blob = new Promise((resolve) => (small ?? copyOf(t.pushCanvas)).toBlob(resolve, "image/png"));
+    const started = performance.now();
+    writing = writing
+      .then(async () => {
+        try {
+          if (!figma) return;
+          const image = figma.createImage(new Uint8Array(await (await blob).arrayBuffer()));
+          if (!t.node) {
+            // A new layer goes in as it's first drawn
+            t.node = createLayer(figma, t, image.hash);
+            Object.assign(t, { id: t.node.id, index: 0, paint: t.node.fills[0], M: matrix(t.node.absoluteTransform), w: t.node.width, h: t.node.height, place: null });
+            figma.currentPage.selection = [t.node];
+            target = t;
+          } else {
+            if (t.node.removed) return;
+            const fills = [...fillsOf(t.node)];
+            const at = fills.findLastIndex((paint) => paint.type === "IMAGE" && (paint.imageHash === t.previewHash || paint.imageHash === t.hash));
+            if (at < 0) return;
+            const { imageTransform, scalingFactor, rotation, ...rest } = fills[at];
+            fills[at] = { ...rest, imageHash: image.hash, scaleMode: "FILL" };
+            t.node.fills = fills;
+            t.paint = fills[at];
+            t.index = at;
+          }
+          t.previewHash = image.hash;
+        } catch {}
+      })
+      .then(() => new Promise((resolve) => setTimeout(resolve, Math.max(0, 50 - (performance.now() - started)))))
+      .then(() => {
+        t.pushing = false;
+        // Not once the full picture's gone in, unless painting's gone on
+        if (t.pushAgain && (t.pushForce || t.unsaved || drag?.stroke?.t === t || drag?.t === t)) push(t, t.pushCanvas);
+        else t.pushForce = false;
+      });
+  };
+  // What's been painted shows: over the layer, or by Figma
+  const present = (t, canvas = t.live) => {
+    if (t.figmaDraws) push(t, canvas);
+    else if (canvas !== t.live) show(t, canvas);
   };
 
   // Strokes in quick succession go to Figma together: each new image is
@@ -838,7 +904,7 @@ const PAGE_JS: &str = r##"(() => {
     const fresh = !t.node && !t.creating;
     if (fresh) t.creating = true;
     return commit(t, t.base, { reveals, select: fresh }).then(() => {
-      t.holdUntil = t.released || t.maskView || blendOf(t.node, t.paint) !== "NORMAL" ? 0 : performance.now() + holdFor(t);
+      t.holdUntil = t.released ? 0 : performance.now() + holdFor(t);
       if (fresh && t.node) target = t;
     });
   };
@@ -846,6 +912,22 @@ const PAGE_JS: &str = r##"(() => {
   const discard = (t) => {
     clearTimeout(t.timer);
     t.unsaved = false;
+    // Figma shows a picture of the strokes: its image goes back
+    if (t.previewHash && t.node && !t.node.removed) {
+      try {
+        const fills = [...fillsOf(t.node)];
+        const at = fills.findLastIndex((paint) => paint.imageHash === t.previewHash);
+        if (at >= 0 && t.hash) {
+          fills[at] = { ...fills[at], imageHash: t.hash };
+          t.node.fills = fills;
+        } else if (!t.hash) {
+          // A new layer Figma only had pictures of goes
+          t.node.remove();
+          t.node = null;
+        }
+      } catch {}
+      t.previewHash = null;
+    }
     for (let i = t.reveals ?? 0; i > 0; i--) unconceal(t);
     t.reveals = 0;
     if (target === t) target = null;
@@ -857,7 +939,12 @@ const PAGE_JS: &str = r##"(() => {
     t.base = canvas;
     t.live = copyOf(canvas);
     t.pixels = null;
-    if (t.maskView) t.maskView.dirty = true;
+    t.figmaDraws = drawnByFigma(t);
+    if (t.figmaDraws) {
+      for (let i = reveal ? 1 : 0; i > 0; i--) unconceal(t);
+      push(t);
+      return schedule(t);
+    }
     show(t);
     return schedule(t, { reveal });
   };
@@ -952,18 +1039,14 @@ const PAGE_JS: &str = r##"(() => {
   let showing = null;
   const show = (t, canvas = t.live) => {
     if (!overlay()) return;
-    if (canvas === t.live && t.maskView) {
-      drawMaskView(t);
-      canvas = t.maskView.display;
-    }
     if (ui.live.firstChild !== canvas) ui.live.replaceChildren(canvas);
     appear();
     let opacity = 1;
     try {
-      if (t.node && !t.node.removed && !t.maskView) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
     } catch {}
     const clip = clipOf(t);
-    const blend = t.maskView ? "NORMAL" : blendOf(t.node, t.paint);
+    const blend = blendOf(t.node, t.paint);
     ui.live.style.mixBlendMode = BLEND.get(blend).css;
     canvas.style.opacity = opacity;
     t.released = false;
@@ -1101,16 +1184,15 @@ const PAGE_JS: &str = r##"(() => {
       }
       if (!t.pending && !t.unsaved && !(drag?.stroke?.t === t)) {
         const paint = fillsOf(node)[imageIndex(node)];
-        if (paint?.imageHash !== t.hash) return gone(t);
+        if (paint?.imageHash !== t.hash && paint?.imageHash !== t.previewHash) return gone(t);
       }
       if (!node.visible && !t.hidden) return gone(t);
-      const blend = t.maskView ? "NORMAL" : blendOf(node, t.paint);
+      const blend = blendOf(node, t.paint);
       if (blend !== shown.blend) {
         shown.blend = blend;
         ui.live.style.mixBlendMode = BLEND.get(blend).css;
       }
-      // What a mask masks shows as Figma draws it, not by the mask's looks
-      const opacity = t.maskView ? 1 : (node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      const opacity = (node.opacity ?? 1) * (t.paint?.opacity ?? 1);
       if (opacity !== shown.opacity) {
         shown.opacity = opacity;
         shown.canvas.style.opacity = opacity;
@@ -1165,13 +1247,6 @@ const PAGE_JS: &str = r##"(() => {
     if (!t?.node || t.released) return;
     let mine = null;
     for (const change of event.documentChanges ?? []) {
-      // What a mask being painted masks changed: drawn again, unless it's
-      // only been hidden or shown, as painting does
-      if (t.masking?.some((node) => node.id === change.id)) {
-        const properties = change.properties ?? [];
-        if (t.maskView && !(properties.length === 1 && properties[0] === "visible")) t.maskView = null;
-        continue;
-      }
       // A mask over the layer changed: read again
       if (showing.maskIds?.has(change.id)) {
         applyMasks(showing);
@@ -1215,7 +1290,7 @@ const PAGE_JS: &str = r##"(() => {
   // Figma has the change, and a moment after. The gradient's preview only
   // while it's dragged
   const needed = ({ t, canvas }) => {
-    if (canvas !== t.live && canvas !== t.maskView?.display) return drag?.live === canvas;
+    if (canvas !== t.live) return drag?.live === canvas;
     return drag?.stroke?.t === t || drag?.t === t || t.unsaved || t.pending > 0 || performance.now() < (t.holdUntil ?? 0);
   };
   const place = () => {
@@ -1240,7 +1315,6 @@ const PAGE_JS: &str = r##"(() => {
       } else if (now - showing.fading > 320) hideNow();
     }
     if (showing) follow(showing);
-    if (showing?.t.maskView && showing.canvas === showing.t.maskView.display && (showing.t.maskView.dirty || drag?.stroke?.t === showing.t)) drawMaskView(showing.t);
     if (showing) {
       const { t, canvas, clip } = showing;
       // Laid out a pixel square and scaled up to the layer, so it's never
@@ -1328,9 +1402,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!TOOLS[prefs.tool].paints && !["bucket", "gradient", "magicEraser", "wand", "eyedropper"].includes(prefs.tool)) return;
     const node = rasterNode();
     if (node && !drag) {
-      read(node)
-        .then((t) => t && !drag && prepareMask(t))
-        .catch(() => {});
+      read(node).catch(() => {});
       readMasks(node);
     }
   };
@@ -1647,7 +1719,7 @@ const PAGE_JS: &str = r##"(() => {
       notify(`Select an image layer to use the ${TOOLS[tool].label.toLowerCase()} on`);
       return null;
     }
-    return { tool, points: [], ready: read(node).then((t) => t && prepareMask(t)) };
+    return { tool, points: [], ready: read(node) };
   };
 
   // The layer's pixels as data, for the tools that change them in place,
@@ -1684,10 +1756,17 @@ const PAGE_JS: &str = r##"(() => {
         stroke.stamp = tip(o.size, tool === "pencil" ? 100 : o.hardness ?? 100, tool === "pencil", o.angle ?? 0, o.roundness ?? 100, color);
       }
     }
-    // Smudging and blurring can thin the layer too, and a layer that blends
-    // would blend twice, over Figma's copy as well
-    stroke.reveal = (["eraser", "smudge", "blur"].includes(tool) || blendOf(t.node, t.paint) !== "NORMAL" || !!t.maskView) && conceal(t);
-    show(t);
+    // Drawn by Figma where the canvas can't stand in for it. Otherwise, as
+    // erasing shows what's under the layer, and smudging and blurring can
+    // thin it, Figma's copy is hidden under the canvas
+    t.figmaDraws = drawnByFigma(t);
+    if (t.figmaDraws) {
+      if (showing?.t === t) hideNow();
+      stroke.reveal = false;
+    } else {
+      stroke.reveal = ["eraser", "smudge", "blur"].includes(tool) && conceal(t);
+      show(t);
+    }
     return true;
   };
 
@@ -1804,6 +1883,7 @@ const PAGE_JS: &str = r##"(() => {
     if (!stroke.rect) return;
     composite(stroke, stroke.rect);
     stroke.rect = null;
+    if (stroke.t.figmaDraws) push(stroke.t);
   };
 
   // Blur and smudge, on the graphics card through the canvas: each dab
@@ -1872,6 +1952,7 @@ const PAGE_JS: &str = r##"(() => {
       carried.drawImage(t.live, dx, dy, d, d, 0, 0, d, d);
     }
     stroke.total = grow(stroke.total, [dx, dy, dx + d, dy + d]);
+    if (t.figmaDraws && !stroke.frame) stroke.frame = requestAnimationFrame(() => ((stroke.frame = 0), push(t)));
   };
 
   // Changes the pixels under a dab of the blur, sharpen, smudge, dodge,
@@ -1986,6 +2067,7 @@ const PAGE_JS: &str = r##"(() => {
     const [x0, y0, x1, y1] = stroke.dirty;
     stroke.dirty = null;
     stroke.t.live.getContext("2d").putImageData(stroke.pixels, 0, 0, x0, y0, x1 - x0, y1 - y0);
+    if (stroke.t.figmaDraws) push(stroke.t);
   };
 
   // Where the last stroke ended, for Shift-click to go on from
@@ -2017,7 +2099,6 @@ const PAGE_JS: &str = r##"(() => {
       }
     }
     if (stroke.last) lastEnd = { t, point: stroke.last };
-    if (t.maskView) t.maskView.dirty = true;
     schedule(t, { reveal: stroke.reveal });
     ui.source?.removeAttribute("d");
   };
@@ -2531,6 +2612,13 @@ const PAGE_JS: &str = r##"(() => {
       drag.stroke.ended = true;
       if (drag.stroke.began) finishPaint(drag.stroke);
     }
+    // A cancelled gradient's preview goes, from Figma too
+    if (drag?.kind === "gradient" && drag.t?.figmaDraws) {
+      const t = drag.t;
+      drag = null;
+      t.pushForce = true;
+      push(t, t.live);
+    }
     drag = null;
     polygon = null;
   };
@@ -2639,8 +2727,12 @@ const PAGE_JS: &str = r##"(() => {
           drag.t = t;
           drag.mask = maskFor(t);
           drag.live = copyOf(t.base);
-          show(t, drag.live);
-          if (drag.to) gradientInto(drag);
+          t.figmaDraws = drawnByFigma(t);
+          present(t, drag.live);
+          if (drag.to) {
+            gradientInto(drag);
+            present(t, drag.live);
+          }
         })
         .catch(() => (drag = null));
       return;
@@ -2713,7 +2805,10 @@ const PAGE_JS: &str = r##"(() => {
         const length = Math.hypot(dx, dy);
         drag.to = [drag.from[0] + Math.cos(angle) * length, drag.from[1] + Math.sin(angle) * length];
       }
-      if (drag.live) gradientInto(drag);
+      if (drag.live) {
+        gradientInto(drag);
+        present(drag.t, drag.live);
+      }
     } else if (drag.kind === "sample") sample(page, drag.background, true).catch(() => {});
   };
 
