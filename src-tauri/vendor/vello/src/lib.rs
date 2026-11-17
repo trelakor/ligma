@@ -366,7 +366,7 @@ pub struct Renderer {
     pub profile_result: Option<Vec<wgpu_profiler::GpuTimerQueryResult>>,
     /// Ligma: renders' allocation counts being read back, and whether
     /// they've mapped
-    pending: Vec<(wgpu::Buffer, std::sync::Arc<std::sync::Mutex<Option<bool>>>, Option<wgpu::SubmissionIndex>, bool)>,
+    pending: Vec<(wgpu::Buffer, std::sync::Arc<std::sync::Mutex<Option<bool>>>, Option<wgpu::SubmissionIndex>, bool, [u32; 7], u32)>,
     /// Ligma: how long the last render took to record and to run, in ms
     pub timing: (f64, f64),
 }
@@ -540,6 +540,10 @@ impl Renderer {
             true,
         );
         vello_encoding::ENCODING_ONE_OFF.store(false, std::sync::atomic::Ordering::Relaxed);
+        // The room this render's buffers have, which others change before
+        // it's checked
+        let rooms = if params.one_off { &vello_encoding::ONE_OFF } else { &vello_encoding::CAPACITY }.all().map(|room| room.load(std::sync::atomic::Ordering::Relaxed));
+        let least = vello_encoding::LEAST.load(std::sync::atomic::Ordering::Relaxed);
         let target = render.out_image();
         let bump_buf = render.bump_buf();
         render.record_fine(&self.shaders, &mut recording);
@@ -568,7 +572,7 @@ impl Renderer {
             buf.slice(..).map_async(wgpu::MapMode::Read, move |result| {
                 *done.lock().unwrap() = Some(result.is_ok());
             });
-            self.pending.push((buf, mapped, self.engine.submitted.clone(), params.one_off));
+            self.pending.push((buf, mapped, self.engine.submitted.clone(), params.one_off, rooms, least));
         }
         self.engine.free_download(bump_buf);
         self.timing = (recorded.as_secs_f64() * 1000.0, (at.elapsed() - recorded).as_secs_f64() * 1000.0);
@@ -600,7 +604,7 @@ impl Renderer {
         let submission_index = self.pending[renders - 1].2.clone();
         let _ = device.poll(wgpu::PollType::Wait { submission_index, timeout: None });
         let mut short = None;
-        for (buf, mapped, _, one_off) in self.pending.drain(..renders).collect::<Vec<_>>() {
+        for (buf, mapped, _, one_off, rooms, least) in self.pending.drain(..renders).collect::<Vec<_>>() {
             if *mapped.lock().unwrap() != Some(true) {
                 return Err(Error::OutOfRoom);
             }
@@ -609,7 +613,7 @@ impl Renderer {
                 bytemuck::pod_read_unaligned(&view)
             };
             buf.unmap();
-            if let Some(why) = fit(&bump, one_off) {
+            if let Some(why) = fit(&bump, one_off, rooms, least) {
                 short = Some(why);
             }
         }
@@ -933,13 +937,20 @@ fn size_class(x: u32) -> u32 {
 /// Ligma: dev tools, what the last render checked took of each buffer
 pub static LAST_TOOK: std::sync::Mutex<[u32; 7]> = std::sync::Mutex::new([0; 7]);
 
-fn fit(bump: &BumpAllocators, one_off: bool) -> Option<String> {
+fn fit(bump: &BumpAllocators, one_off: bool, had: [u32; 7], least: u32) -> Option<String> {
     use std::sync::atomic::Ordering::Relaxed;
     let room = if one_off { vello_encoding::ONE_OFF.all() } else { vello_encoding::CAPACITY.all() };
     let took = [bump.binning, bump.ptcl, bump.tile, bump.seg_counts, bump.segments, bump.blend, bump.lines];
     *LAST_TOOK.lock().unwrap() = took;
-    let had = room.map(|room| room.load(Relaxed));
     let names = ["binning", "ptcl", "tile", "seg_counts", "segments", "blend", "lines"];
+    // Tiles each segment crossed, where all the lines were there to count,
+    // the most lately, coming down slowly, of scenes big enough to run out
+    if least >= 1 << 16 && took[6] <= had[6] {
+        let crossed = vello_encoding::CROSSINGS[one_off as usize].load(Relaxed);
+        let (was, now) = (f32::from_bits(crossed), took[3] as f32 / least as f32);
+        let next = if now > was { now } else { was * 0.75 + now * 0.25 };
+        vello_encoding::CROSSINGS[one_off as usize].store(next.clamp(0.5, 4.0).to_bits(), Relaxed);
+    }
     let mut short = (bump.failed != 0).then(|| format!("failed={:#x}", bump.failed));
     let mut taken = if one_off { TAKEN_ONE_OFF.lock().unwrap() } else { TAKEN.lock().unwrap() };
     for ((((room, took), have), taken), name) in room.into_iter().zip(took).zip(had).zip(taken.iter_mut()).zip(names) {
@@ -948,8 +959,10 @@ fn fit(bump: &BumpAllocators, one_off: bool) -> Option<String> {
         }
         let most = taken.0;
         // A quarter more than it's taken lately, in the pool's size classes
-        // so its buffers are used again
-        let want = size_class(most.saturating_add(most / 4).max(1 << 18)).min(1 << 27);
+        // so its buffers are used again, the command lists' 2MB at least,
+        // which views often take more than
+        let floor = if name == "ptcl" { 1 << 19 } else { 1 << 18 };
+        let want = size_class(most.saturating_add(most / 4).max(floor)).min(1 << 27);
         if took > have || took > have - have / 8 || (bump.failed == 0 && want < have - have / 4) {
             room.store(want.max(took.min(1 << 27)), Relaxed);
         }
@@ -965,10 +978,19 @@ fn fit(bump: &BumpAllocators, one_off: bool) -> Option<String> {
             (first.min(stage), grow.max(*took as f64 / have.max(1) as f64 * 1.25))
         });
         let first = if first == usize::MAX { 0 } else { first };
-        for ((room, (took, have)), stage) in room.into_iter().zip(took.into_iter().zip(had)).zip(stage) {
+        // Each line crosses a tile at least where it's in view, and each
+        // crossing counted is one written, so those take what came before
+        let crossings = took[6].max(took[3]);
+        for (index, ((room, (took, have)), stage)) in room.into_iter().zip(took.into_iter().zip(had)).zip(stage).enumerate() {
             if stage > first && took <= have {
-                let want = size_class((have as f64 * grow.min(8.0)).min((1u32 << 27) as f64) as u32).min(1 << 27);
+                let after = if index == 3 || index == 4 { crossings.saturating_add(crossings / 4) } else { 0 };
+                let want = size_class(((have as f64 * grow.min(8.0)).max(after as f64)).min((1u32 << 27) as f64) as u32).min(1 << 27);
                 room.store(want.max(room.load(Relaxed)), Relaxed);
+                // As if taken, so renders checked after that took less
+                // don't give it back before it's drawn again
+                if want > taken[index].0 {
+                    taken[index] = (want, Some(std::time::Instant::now()));
+                }
             }
         }
     }

@@ -875,8 +875,10 @@ fn outside(shape: &Path, device: IRect) -> Option<Path> {
 }
 
 /// `shape` drawn by `transform`, as lines no further than `tolerance` from
-/// it, where it's small enough that's fewer than it has
-fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64) -> Option<BezPath> {
+/// it, where it's small enough that's fewer than it has, or as the cells
+/// of a grid `cells` to a pixel it covers, filled by `style`, where that's
+/// fewer still
+fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, style: Fill, cells: f64) -> Option<BezPath> {
     // Half the tolerance flattening, half leaving points out
     let half = tolerance / 2.0;
     // Its control points' bounds, which hold it, and how many parts it has
@@ -951,8 +953,110 @@ fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64) -> O
             }
         }
         close(line, &mut out);
+        // Small with many contours, as text far out is, each takes lines
+        // however small, which what covers the grid's cells doesn't
+        let out = match out.elements().len() > RUNS_FROM && (high.x - low.x).max(high.y - low.y) <= RUNS_MOST {
+            true => runs(&out, style, cells).filter(|runs| runs.elements().len() < out.elements().len()).unwrap_or(out),
+            false => out,
+        };
         (out.elements().len() < had).then_some(out)
     })
+}
+
+/// Lines past which a small shape's drawn as the cells it covers
+const RUNS_FROM: usize = 96;
+
+/// Pixels across a shape's at most to be drawn as the cells it covers
+const RUNS_MOST: f64 = 8.0;
+
+/// What `lines`, closed contours of lines alone, covers filled by `style`,
+/// as rectangles of the cells of a grid `cells` to a pixel whose centres
+/// it covers, as Vello's samples take them, those of rows alike merged
+fn runs(lines: &BezPath, style: Fill, cells: f64) -> Option<BezPath> {
+    let bounds = kurbo::Shape::bounding_box(lines);
+    let (x0, y0) = ((bounds.x0 * cells).floor() / cells, (bounds.y0 * cells).floor() / cells);
+    let rows = ((bounds.y1 - y0) * cells).ceil().max(1.0) as usize;
+    let columns = ((bounds.x1 - x0) * cells).ceil().max(1.0) as i32;
+    if rows > 256 || columns > 256 {
+        return None;
+    }
+    // Where each edge crosses each row's centre, and which way
+    let mut crossings: Vec<Vec<(f64, i32)>> = vec![Vec::new(); rows];
+    let mut edge = |a: kurbo::Point, b: kurbo::Point| {
+        if a.y == b.y {
+            return;
+        }
+        let (low, high, way) = if a.y < b.y { (a, b, 1) } else { (b, a, -1) };
+        let first = (((low.y - y0) * cells - 0.5).ceil().max(0.0)) as usize;
+        let last = (((high.y - y0) * cells - 0.5).ceil().max(0.0) as usize).min(rows);
+        for row in first..last {
+            let y = y0 + (row as f64 + 0.5) / cells;
+            crossings[row].push((low.x + (y - low.y) / (high.y - low.y) * (high.x - low.x), way));
+        }
+    };
+    let (mut start, mut last) = (kurbo::Point::ZERO, kurbo::Point::ZERO);
+    for element in lines.elements() {
+        match *element {
+            kurbo::PathEl::MoveTo(p) => {
+                edge(last, start);
+                (start, last) = (p, p);
+            }
+            kurbo::PathEl::LineTo(p) => {
+                edge(last, p);
+                last = p;
+            }
+            kurbo::PathEl::ClosePath => {
+                edge(last, start);
+                last = start;
+            }
+            _ => return None,
+        }
+    }
+    edge(last, start);
+    // Each row's covered cells, as runs from one to before another
+    let cell = |x: f64| (((x - x0) * cells - 0.5).ceil() as i32).clamp(0, columns);
+    let mut out = BezPath::new();
+    let mut rect = |from: i32, to: i32, top: usize, bottom: usize| {
+        let (left, right) = (x0 + from as f64 / cells, x0 + to as f64 / cells);
+        let (top, bottom) = (y0 + top as f64 / cells, y0 + bottom as f64 / cells);
+        out.move_to((left, top));
+        out.line_to((right, top));
+        out.line_to((right, bottom));
+        out.line_to((left, bottom));
+        out.close_path();
+    };
+    let (mut open, mut since): (Vec<(i32, i32)>, usize) = (Vec::new(), 0);
+    let mut spans = Vec::new();
+    for (row, list) in crossings.iter_mut().enumerate() {
+        list.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        spans.clear();
+        let mut winding = 0;
+        for pair in list.windows(2) {
+            winding += pair[0].1;
+            let inside = match style {
+                Fill::NonZero => winding != 0,
+                Fill::EvenOdd => winding % 2 != 0,
+            };
+            let (from, to) = (cell(pair[0].0), cell(pair[1].0));
+            if inside && to > from {
+                match spans.last_mut() {
+                    Some((_, end)) if *end == from => *end = to,
+                    _ => spans.push((from, to)),
+                }
+            }
+        }
+        if spans != open {
+            for &(from, to) in &open {
+                rect(from, to, since, row);
+            }
+            open.clone_from(&spans);
+            since = row;
+        }
+    }
+    for &(from, to) in &open {
+        rect(from, to, since, rows);
+    }
+    Some(out)
 }
 
 thread_local! {
@@ -1619,7 +1723,9 @@ impl<'a> Encoder<'a> {
         drop(env);
         if whole {
             let simple = timer(2);
-            let lines = simplified(shape, transform, tolerance);
+            // Cells a quarter of a pixel as it's shown, as Vello's samples are
+            let cells = if self.retained { 8.0 } else { 4.0 };
+            let lines = simplified(shape, transform, tolerance, style, cells);
             drop(simple);
             if let Some(lines) = lines {
                 // What the brush is drawn by stays as it was

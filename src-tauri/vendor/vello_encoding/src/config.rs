@@ -206,6 +206,13 @@ pub static ONE_OFF: Capacity = Capacity {
     lines: AtomicU32::new(1 << 21),
 };
 
+/// Ligma: the tiles each segment crossed in renders lately, as `f32` bits,
+/// of renders and of one-offs, as large shapes and clips cross many
+pub static CROSSINGS: [AtomicU32; 2] = [AtomicU32::new(0x3f80_0000), AtomicU32::new(0x3f80_0000)];
+
+/// Ligma: the segments the scene last encoded has at least
+pub static LEAST: AtomicU32 = AtomicU32::new(0);
+
 /// Ligma: whether the render being encoded is a one-off, see `ONE_OFF`
 pub static ENCODING_ONE_OFF: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -233,7 +240,18 @@ impl RenderConfig {
             WorkgroupCounts::new(layout, width_in_tiles, height_in_tiles, n_path_tags);
         let mut buffer_sizes = BufferSizes::new(layout, &workgroup_counts);
         let room = |at: &AtomicU32| at.load(Ordering::Relaxed);
-        let capacity = if ENCODING_ONE_OFF.load(Ordering::Relaxed) { &ONE_OFF } else { &CAPACITY };
+        let one_off = ENCODING_ONE_OFF.load(Ordering::Relaxed);
+        let capacity = if one_off { &ONE_OFF } else { &CAPACITY };
+        // Ligma: each segment flattens to a line at least, a few to more,
+        // and crosses as many tiles as they did lately, so there's room for
+        // that many from the start rather than running out to render again
+        let least = layout.path_tags_size().saturating_sub(3 * layout.n_paths);
+        LEAST.store(least, Ordering::Relaxed);
+        let most = (1u32 << 27) as f32;
+        let crossings = (least as f32 * f32::from_bits(CROSSINGS[one_off as usize].load(Ordering::Relaxed)) * 1.125).min(most) as u32;
+        capacity.lines.fetch_max(least.saturating_add(least / 16).min(1 << 27).next_multiple_of(1 << 16), Ordering::Relaxed);
+        capacity.seg_counts.fetch_max(crossings.next_multiple_of(1 << 16), Ordering::Relaxed);
+        capacity.segments.fetch_max(crossings.next_multiple_of(1 << 16), Ordering::Relaxed);
         buffer_sizes.bin_data = BufferSize::new(layout.bin_data_start + room(&capacity.binning));
         buffer_sizes.ptcl = BufferSize::new(ptcl_start(width, height) + room(&capacity.ptcl));
         buffer_sizes.tiles = BufferSize::new(room(&capacity.tile));
