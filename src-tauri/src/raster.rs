@@ -651,7 +651,7 @@ const PAGE_JS: &str = r##"(() => {
     return `Layer ${most + 1}`;
   };
   // Makes the layer a blank target stands for, filled with `hash`
-  const createLayer = (figma, t, hash) => {
+  const createLayer = (figma, t, hash, opacity = 1) => {
     const place = t.place;
     const node = figma.createRectangle();
     const parent = place.parent ?? figma.currentPage;
@@ -674,24 +674,33 @@ const PAGE_JS: &str = r##"(() => {
     try {
       node.constraints = { horizontal: "SCALE", vertical: "SCALE" };
     } catch {}
-    node.fills = [{ type: "IMAGE", imageHash: hash, scaleMode: "FILL" }];
+    node.fills = [{ type: "IMAGE", imageHash: hash, scaleMode: "FILL", opacity }];
     return node;
   };
 
   // Hands a layer's pixels to Figma, one change at a time and each its own
   // undo step. The picture is taken now, so painting can go on meanwhile
   let writing = Promise.resolve();
-  // Erasing shows what's under the layer, so Figma's own copy of it is
-  // hidden until the change is in, shown again with it in the same undo
-  // step. Strokes overlap, so it's counted
+  // While Ligma's canvas shows the layer, Figma's own copy of it is
+  // hidden under it, or what's soft or see-through in it would show twice,
+  // and what's erased wouldn't go. Its image goes to no opacity rather
+  // than the layer being hidden, which would move what's next to it in
+  // auto layout. It's back with the change, in the same undo step.
+  // Strokes overlap, so it's counted. `kept` is the opacity it goes back to
+  const shownAt = (t, fills) => fills.findLastIndex((paint) => paint.type === "IMAGE" && paint.imageHash && (paint.imageHash === t.hash || (!!t.previewHash && paint.imageHash === t.previewHash)));
   const conceal = (t) => {
     if (!t.node) return false;
     try {
+      if (t.node.removed) return false;
       if (!t.hidden) {
-        const nodes = [t.node];
-        t.hiddenNodes = nodes.filter((node) => !node.removed && node.visible);
-        if (!t.hiddenNodes.length) return false;
-        for (const node of t.hiddenNodes) node.visible = false;
+        const fills = [...fillsOf(t.node)];
+        const at = shownAt(t, fills);
+        if (at < 0) return false;
+        t.kept ??= fills[at].opacity ?? 1;
+        if (fills[at].opacity !== 0) {
+          fills[at] = { ...fills[at], opacity: 0 };
+          t.node.fills = fills;
+        }
       }
       t.hidden = (t.hidden ?? 0) + 1;
       return true;
@@ -700,20 +709,84 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
   const unconceal = (t) => {
-    t.hidden = Math.max(0, (t.hidden ?? 0) - 1);
+    if (!t.hidden) return;
+    t.hidden--;
     if (t.hidden) return;
-    for (const node of t.hiddenNodes ?? []) {
-      try {
-        if (!node.removed) node.visible = true;
-      } catch {}
+    try {
+      if (t.node && !t.node.removed && t.kept !== null && t.kept !== undefined) {
+        const fills = [...fillsOf(t.node)];
+        const at = shownAt(t, fills);
+        if (at >= 0 && fills[at].opacity !== t.kept) {
+          fills[at] = { ...fills[at], opacity: t.kept };
+          t.node.fills = fills;
+        }
+      }
+    } catch {}
+    t.kept = null;
+  };
+  // The image's own opacity, hidden or not
+  const paintOpacity = (t) => t.kept ?? t.paint?.opacity ?? 1;
+
+  // Figma draws a new image only once it's read it, and nothing in its
+  // place till then, so each goes in first unseen, at no opacity under the
+  // one shown, and takes its place once Figma's had time to read it. Both
+  // in `writing`'s queue
+  const readTime = (pixels) => 40 + (12 * pixels) / 1e6;
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  const unplaced = ({ imageTransform, scalingFactor, rotation, ...rest }) => rest;
+  const stage = (t, hash, pixels) => {
+    const fills = [...fillsOf(t.node)];
+    if (t.staged) {
+      const old = fills.findIndex((paint) => paint.type === "IMAGE" && paint.imageHash === t.staged.hash);
+      if (old >= 0 && old !== shownAt(t, fills)) fills.splice(old, 1);
+      t.staged = null;
     }
-    t.hiddenNodes = null;
+    const at = shownAt(t, fills);
+    if (at < 0) return false;
+    fills.splice(at, 0, { ...unplaced(fills[at]), imageHash: hash, scaleMode: "FILL", opacity: 0 });
+    t.node.fills = fills;
+    t.staged = { hash, ready: performance.now() + readTime(pixels) };
+    return true;
+  };
+  // The staged image takes the shown one's place, at the opacity it's to
+  // have: none while it's still hidden. False if the layer's changed
+  // meanwhile, by an undo or someone else
+  const promote = async (t) => {
+    const staged = t.staged;
+    if (!staged) return false;
+    await pause(staged.ready - performance.now());
+    // At the start of a frame, so Figma draws it in the next, as Ligma's
+    // canvas goes (see `save`)
+    await nextFrame();
+    if (t.staged !== staged) return false;
+    t.staged = null;
+    if (!t.node || t.node.removed) return false;
+    const fills = [...fillsOf(t.node)];
+    const from = fills.findIndex((paint) => paint.type === "IMAGE" && paint.imageHash === staged.hash);
+    if (from < 0) return false;
+    const at = shownAt(t, fills);
+    if (at < 0) {
+      fills.splice(from, 1);
+      t.node.fills = fills;
+      return false;
+    }
+    const opacity = t.hidden ? 0 : t.kept ?? fills[at].opacity ?? 1;
+    if (!t.hidden) t.kept = null;
+    const paint = { ...unplaced(fills[at]), imageHash: staged.hash, scaleMode: "FILL", opacity };
+    fills[at] = paint;
+    if (from !== at) fills.splice(from, 1);
+    t.node.fills = fills;
+    t.paint = paint;
+    t.index = fills.indexOf(paint);
+    return true;
   };
   const commit = (t, picture, { reveals = 0, select = false } = {}) => {
     const figma = api();
     if (!figma) return Promise.resolve();
     t.pending++;
     const blob = new Promise((resolve) => picture.toBlob(resolve, "image/png"));
+    const pixels = picture.width * picture.height;
     const done = (writing = writing.then(async () => {
       let left = reveals;
       const uncover = () => {
@@ -723,26 +796,27 @@ const PAGE_JS: &str = r##"(() => {
         const bytes = new Uint8Array(await (await blob).arrayBuffer());
         const image = figma.createImage(bytes);
         if (!t.node) {
-          t.node = createLayer(figma, t, image.hash);
-          Object.assign(t, { id: t.node.id, index: 0, paint: t.node.fills[0], M: matrix(t.node.absoluteTransform), w: t.node.width, h: t.node.height, place: null });
+          // Unseen till Figma's read it
+          t.node = createLayer(figma, t, image.hash, 0);
+          Object.assign(t, { id: t.node.id, index: 0, paint: t.node.fills[0], M: matrix(t.node.absoluteTransform), w: t.node.width, h: t.node.height, place: null, previewHash: image.hash, kept: 1, staged: { hash: image.hash, ready: performance.now() + readTime(pixels) } });
           if (select) figma.currentPage.selection = [t.node];
+          await promote(t);
         } else {
           if (t.node.removed) return;
-          const fills = [...fillsOf(t.node)];
-          const at = fills.findLastIndex((paint) => paint.type === "IMAGE" && (paint.imageHash === t.hash || (t.previewHash && paint.imageHash === t.previewHash)));
           // Undone or changed meanwhile: left as it is, and read again
-          if (at < 0) {
+          const changed = () => {
             uncover();
             t.hash = null;
             notify("The layer changed while painting");
-            return;
+          };
+          if (!stage(t, image.hash, pixels)) return changed();
+          // What's still hidden for strokes since stays hidden
+          t.hidden = Math.max(0, (t.hidden ?? 0) - left);
+          left = 0;
+          if (!(await promote(t))) {
+            t.kept = null;
+            return changed();
           }
-          const { imageTransform, scalingFactor, rotation, ...rest } = fills[at];
-          fills[at] = { ...rest, imageHash: image.hash, scaleMode: "FILL" };
-          t.node.fills = fills;
-          uncover();
-          t.paint = fills[at];
-          t.index = at;
         }
         t.hash = image.hash;
         t.previewHash = null;
@@ -780,16 +854,19 @@ const PAGE_JS: &str = r##"(() => {
         if (typeof node.cornerRadius !== "number" || node.cornerRadius > 0) return true;
         const fills = fillsOf(node);
         const image = fills[imageIndex(node)];
-        if (fills.some((paint) => paint !== image && paint.visible !== false)) return true;
+        if (fills.some((paint) => paint !== image && paint.visible !== false && paint.opacity !== 0)) return true;
         if (image && !plainBlend(image.blendMode)) return true;
         if (image?.filters && Object.values(image.filters).some((value) => value)) return true;
       }
       const parent = node?.parent ?? t.place?.parent;
+      let clips = 0;
       for (let at = parent; at && at.type !== "PAGE" && at.type !== "DOCUMENT"; at = at.parent) {
         if (!at.visible || !plainBlend(at.blendMode) || (at.opacity ?? 1) < 1 || effected(at)) return true;
-        // Clipped by rounded corners, or a turned frame, which the canvas's
-        // clip doesn't follow
-        if (at.clipsContent && (typeof at.cornerRadius !== "number" || at.cornerRadius > 0)) return true;
+        // A shape in a boolean group is drawn as the group's
+        if (at.type === "BOOLEAN_OPERATION") return true;
+        // Clipped by rounded corners, or by more than one frame, which the
+        // canvas's clip doesn't follow
+        if (at.clipsContent && (typeof at.cornerRadius !== "number" || at.cornerRadius > 0 || ++clips > 1)) return true;
       }
       // A new layer goes in over its parent's masks, and its parents' own
       if (!node && parent && (parent.children?.some((child) => child.isMask && child.visible) || masksOf(parent).length)) return true;
@@ -815,8 +892,10 @@ const PAGE_JS: &str = r##"(() => {
 
   // Figma drawing the layer as it's painted: a picture of it, as many of
   // its pixels as show on screen, handed over at most every 50 ms and one
-  // at a time, in place of its image. They're all one undo step with the
-  // full picture that goes in when painting stops (see `commit`)
+  // at a time. Each is staged as the one before takes the image's place
+  // (see `stage`), so Figma never shows the layer empty. They're all one
+  // undo step with the full picture that goes in when painting stops (see
+  // `commit`)
   const push = (t, canvas = t.live) => {
     t.pushCanvas = canvas;
     if (t.pushing) {
@@ -845,31 +924,33 @@ const PAGE_JS: &str = r##"(() => {
           if (!figma) return;
           const image = figma.createImage(new Uint8Array(await (await blob).arrayBuffer()));
           if (!t.node) {
-            // A new layer goes in as it's first drawn
-            t.node = createLayer(figma, t, image.hash);
-            Object.assign(t, { id: t.node.id, index: 0, paint: t.node.fills[0], M: matrix(t.node.absoluteTransform), w: t.node.width, h: t.node.height, place: null });
+            // A new layer goes in as it's first drawn, unseen till Figma's
+            // read it
+            t.node = createLayer(figma, t, image.hash, 0);
+            Object.assign(t, { id: t.node.id, index: 0, paint: t.node.fills[0], M: matrix(t.node.absoluteTransform), w: t.node.width, h: t.node.height, place: null, previewHash: image.hash, kept: 1, staged: { hash: image.hash, ready: performance.now() + readTime(W * H) } });
             figma.currentPage.selection = [t.node];
             target = t;
-          } else {
-            if (t.node.removed) return;
-            const fills = [...fillsOf(t.node)];
-            const at = fills.findLastIndex((paint) => paint.type === "IMAGE" && (paint.imageHash === t.previewHash || paint.imageHash === t.hash));
-            if (at < 0) return;
-            const { imageTransform, scalingFactor, rotation, ...rest } = fills[at];
-            fills[at] = { ...rest, imageHash: image.hash, scaleMode: "FILL" };
-            t.node.fills = fills;
-            t.paint = fills[at];
-            t.index = at;
+            return;
           }
-          t.previewHash = image.hash;
+          if (t.node.removed) return;
+          const staged = t.staged?.hash;
+          if (staged && (await promote(t))) t.previewHash = staged;
+          stage(t, image.hash, W * H);
         } catch {}
       })
-      .then(() => new Promise((resolve) => setTimeout(resolve, Math.max(0, 50 - (performance.now() - started)))))
+      .then(() => pause(50 - (performance.now() - started)))
       .then(() => {
         t.pushing = false;
         // Not once the full picture's gone in, unless painting's gone on
-        if (t.pushAgain && (t.pushForce || t.unsaved || drag?.stroke?.t === t || drag?.t === t)) push(t, t.pushCanvas);
-        else t.pushForce = false;
+        if (t.pushAgain && (t.pushForce || t.unsaved || drag?.stroke?.t === t || drag?.t === t)) return push(t, t.pushCanvas);
+        t.pushForce = false;
+        // The last picture shows too
+        writing = writing.then(async () => {
+          const staged = t.staged?.hash;
+          try {
+            if (staged && !t.pushing && (await promote(t))) t.previewHash = staged;
+          } catch {}
+        });
       });
   };
   // What's been painted shows: over the layer, or by Figma
@@ -882,10 +963,11 @@ const PAGE_JS: &str = r##"(() => {
   // work for Figma to read and draw again, and Ligma's canvas shows the
   // layer meanwhile. A new layer goes at once, so there's one to paint on
   const COMMIT_AFTER = 450;
-  // How long Ligma's canvas stays once Figma has the change: Figma reads
-  // a new image, fades it in and draws it roughly before it's sharp, the
-  // longer the larger it is
-  const holdFor = (t) => 2200 + 1800 * Math.min(1, (t.W * t.H) / (LARGEST * LARGEST));
+  // Frames Ligma's canvas stays once Figma has the change: the image's
+  // read by then (see `stage`), so it's drawn in the next. Gone any
+  // sooner, nothing would show, and any later, see-through pixels would
+  // show twice
+  const SETTLE = 1;
   const schedule = (t, { reveal = false } = {}) => {
     t.unsaved = true;
     if (reveal) t.reveals = (t.reveals ?? 0) + 1;
@@ -904,8 +986,17 @@ const PAGE_JS: &str = r##"(() => {
     const fresh = !t.node && !t.creating;
     if (fresh) t.creating = true;
     return commit(t, t.base, { reveals, select: fresh }).then(() => {
-      t.holdUntil = t.released ? 0 : performance.now() + holdFor(t);
       if (fresh && t.node) target = t;
+      t.holdUntil = 0;
+      if (t.released || showing?.t !== t) return;
+      t.holdUntil = Infinity;
+      let frames = SETTLE;
+      const go = () => {
+        if (frames-- > 0) return void requestAnimationFrame(go);
+        t.holdUntil = 0;
+        if (showing?.t === t && !needed(showing)) hideNow();
+      };
+      go();
     });
   };
   // Undo before the strokes have gone to Figma takes them back here
@@ -916,6 +1007,11 @@ const PAGE_JS: &str = r##"(() => {
     if (t.previewHash && t.node && !t.node.removed) {
       try {
         const fills = [...fillsOf(t.node)];
+        if (t.staged) {
+          const staged = fills.findIndex((paint) => paint.type === "IMAGE" && paint.imageHash === t.staged.hash && paint.imageHash !== t.previewHash);
+          if (staged >= 0) fills.splice(staged, 1);
+          t.staged = null;
+        }
         const at = fills.findLastIndex((paint) => paint.imageHash === t.previewHash);
         if (at >= 0 && t.hash) {
           fills[at] = { ...fills[at], imageHash: t.hash };
@@ -935,16 +1031,18 @@ const PAGE_JS: &str = r##"(() => {
     if (t.node) read(t.node).catch(() => {});
   };
   // A change made at once, by a fill or the gradient, becomes the layer's
-  const adopt = (t, canvas, { reveal = false } = {}) => {
+  // `concealed` when Figma's copy was hidden for it already
+  const adopt = (t, canvas, { concealed = false } = {}) => {
     t.base = canvas;
     t.live = copyOf(canvas);
     t.pixels = null;
     t.figmaDraws = drawnByFigma(t);
     if (t.figmaDraws) {
-      for (let i = reveal ? 1 : 0; i > 0; i--) unconceal(t);
+      if (concealed) unconceal(t);
       push(t);
       return schedule(t);
     }
+    const reveal = concealed || conceal(t);
     show(t);
     return schedule(t, { reveal });
   };
@@ -1033,36 +1131,26 @@ const PAGE_JS: &str = r##"(() => {
     return ui.overlay;
   };
   // The canvas shown over the layer while it's painted, until Figma has
-  // drawn the change sharply. How it's drawn in the file, its opacity and
+  // the change. How it's drawn in the file, its opacity and
   // the frame clipping it, is read once, as the plugin API is slow to ask
   // every frame
   let showing = null;
   const show = (t, canvas = t.live) => {
     if (!overlay()) return;
     if (ui.live.firstChild !== canvas) ui.live.replaceChildren(canvas);
-    appear();
     let opacity = 1;
     try {
-      if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      if (t.node && !t.node.removed) opacity = (t.node.opacity ?? 1) * paintOpacity(t);
     } catch {}
     const clip = clipOf(t);
     const blend = blendOf(t.node, t.paint);
     ui.live.style.mixBlendMode = BLEND.get(blend).css;
     canvas.style.opacity = opacity;
     t.released = false;
-    showing = { t, canvas, clip, fading: 0, opacity, at: null, blend, masks: null };
+    showing = { t, canvas, clip, opacity, at: null, blend, masks: null };
     // Masked in Figma, it's masked here too, once the masks are read
     applyMasks(showing);
     place();
-  };
-  // Shown at once, never faded in: a fade out stopped partway would
-  // otherwise come back dim
-  const appear = () => {
-    if (!ui.live.classList.contains("fading")) return;
-    ui.live.style.transition = "none";
-    ui.live.classList.remove("fading");
-    void ui.live.offsetWidth;
-    ui.live.style.transition = "";
   };
   const hideNow = () => {
     ui.live?.replaceChildren();
@@ -1192,7 +1280,7 @@ const PAGE_JS: &str = r##"(() => {
         shown.blend = blend;
         ui.live.style.mixBlendMode = BLEND.get(blend).css;
       }
-      const opacity = (node.opacity ?? 1) * (t.paint?.opacity ?? 1);
+      const opacity = (node.opacity ?? 1) * paintOpacity(t);
       if (opacity !== shown.opacity) {
         shown.opacity = opacity;
         shown.canvas.style.opacity = opacity;
@@ -1302,18 +1390,8 @@ const PAGE_JS: &str = r##"(() => {
       root.dataset.box = box.join();
       Object.assign(root.style, { left: box[0], top: box[1], width: box[2], height: box[3] });
     }
-    if (showing) {
-      const now = performance.now();
-      if (needed(showing)) {
-        if (showing.fading) {
-          showing.fading = 0;
-          appear();
-        }
-      } else if (!showing.fading) {
-        showing.fading = now;
-        ui.live.classList.add("fading");
-      } else if (now - showing.fading > 320) hideNow();
-    }
+    // Gone at once once it's not needed: Figma shows the same by then
+    if (showing && !needed(showing)) hideNow();
     if (showing) follow(showing);
     if (showing) {
       const { t, canvas, clip } = showing;
@@ -1756,15 +1834,14 @@ const PAGE_JS: &str = r##"(() => {
         stroke.stamp = tip(o.size, tool === "pencil" ? 100 : o.hardness ?? 100, tool === "pencil", o.angle ?? 0, o.roundness ?? 100, color);
       }
     }
-    // Drawn by Figma where the canvas can't stand in for it. Otherwise, as
-    // erasing shows what's under the layer, and smudging and blurring can
-    // thin it, Figma's copy is hidden under the canvas
+    // Drawn by Figma where the canvas can't stand in for it. Otherwise
+    // Figma's copy is hidden under the canvas (see `conceal`)
     t.figmaDraws = drawnByFigma(t);
     if (t.figmaDraws) {
       if (showing?.t === t) hideNow();
       stroke.reveal = false;
     } else {
-      stroke.reveal = ["eraser", "smudge", "blur"].includes(tool) && conceal(t);
+      stroke.reveal = conceal(t);
       show(t);
     }
     return true;
@@ -2234,9 +2311,9 @@ const PAGE_JS: &str = r##"(() => {
     ctx.drawImage(paint, 0, 0);
     finishInstant(t, live, !node);
   };
-  const finishInstant = (t, live, fresh, reveal = false) => {
+  const finishInstant = (t, live, fresh) => {
     if (fresh) target = t;
-    adopt(t, live, { reveal });
+    adopt(t, live);
   };
 
   // Fills the selection, or the whole layer, with a color, or clears it
@@ -2263,7 +2340,7 @@ const PAGE_JS: &str = r##"(() => {
       if (mask) ctx.drawImage(mask.canvas, 0, 0);
       else ctx.fillRect(0, 0, t.W, t.H);
     }
-    finishInstant(t, live, false, !color && conceal(t));
+    finishInstant(t, live, false);
   };
 
   // The magic eraser: clears what's like the pixel clicked
@@ -2287,7 +2364,7 @@ const PAGE_JS: &str = r##"(() => {
     ctx.globalAlpha = o.opacity / 100;
     ctx.globalCompositeOperation = "destination-out";
     ctx.drawImage(region, 0, 0);
-    finishInstant(t, live, false, conceal(t));
+    finishInstant(t, live, false);
   };
 
   // The magic wand: picks what's like the pixel clicked
@@ -2603,6 +2680,18 @@ const PAGE_JS: &str = r##"(() => {
     } else canvas.removeAttribute(CURSOR);
   };
 
+  // A gradient not drawn: its preview goes, from Figma too
+  const dropGradient = (done) => {
+    const t = done.t;
+    if (!t) return;
+    if (t.figmaDraws) {
+      t.pushForce = true;
+      push(t, t.live);
+      return;
+    }
+    if (showing?.t === t && showing.canvas === done.live) hideNow();
+    if (done.concealed) unconceal(t);
+  };
   let polygon = null;
   let afterDrag = false;
   let space = false;
@@ -2612,12 +2701,10 @@ const PAGE_JS: &str = r##"(() => {
       drag.stroke.ended = true;
       if (drag.stroke.began) finishPaint(drag.stroke);
     }
-    // A cancelled gradient's preview goes, from Figma too
-    if (drag?.kind === "gradient" && drag.t?.figmaDraws) {
-      const t = drag.t;
+    if (drag?.kind === "gradient") {
+      const done = drag;
       drag = null;
-      t.pushForce = true;
-      push(t, t.live);
+      dropGradient(done);
     }
     drag = null;
     polygon = null;
@@ -2728,6 +2815,7 @@ const PAGE_JS: &str = r##"(() => {
           drag.mask = maskFor(t);
           drag.live = copyOf(t.base);
           t.figmaDraws = drawnByFigma(t);
+          if (!t.figmaDraws) drag.concealed = conceal(t);
           present(t, drag.live);
           if (drag.to) {
             gradientInto(drag);
@@ -2826,9 +2914,9 @@ const PAGE_JS: &str = r##"(() => {
       done.stroke.ended = true;
       if (done.stroke.began) finishPaint(done.stroke);
     } else if (done.kind === "gradient") {
-      if (!done.live || !done.to || Math.hypot(done.to[0] - done.from[0], done.to[1] - done.from[1]) * done.zoom < 2) return;
+      if (!done.live || !done.to || Math.hypot(done.to[0] - done.from[0], done.to[1] - done.from[1]) * done.zoom < 2) return dropGradient(done);
       if (done.fresh) target = done.t;
-      adopt(done.t, done.live);
+      adopt(done.t, done.live, { concealed: !!done.concealed });
     }
   };
   const finishPaint = (stroke) => {
@@ -3041,13 +3129,19 @@ const PAGE_JS: &str = r##"(() => {
       [local.a, local.c, local.e],
       [local.b, local.d, local.f],
     ];
+    // Hidden till Figma's read its image, or what it masks would show
+    // unmasked meanwhile
+    mask.visible = false;
     mask.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
+    await pause(readTime(selection.W * selection.H));
+    if (mask.removed || node.removed) return;
     mask.isMask = true;
     try {
       mask.maskType = "ALPHA";
     } catch {}
     const group = figma.group([mask, node], parent, parent.children.indexOf(mask));
     group.name = `${node.name} mask`;
+    mask.visible = true;
     figma.currentPage.selection = [node];
     figma.commitUndo();
     setSelection(null);
@@ -3903,8 +3997,7 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-picker] .recent button:hover { box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15), 0 0 0 1px var(--color-bg), 0 0 0 2px var(--color-icon-secondary); }
 
     [${ATTR}-overlay] { position: absolute; overflow: hidden; pointer-events: none; }
-    [${ATTR}-overlay] .live { position: absolute; inset: 0; transition: opacity 0.3s ease-in-out; }
-    [${ATTR}-overlay] .live.fading { opacity: 0; }
+    [${ATTR}-overlay] .live { position: absolute; inset: 0; }
     [${ATTR}-overlay] .live canvas { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; background: transparent !important; pointer-events: none !important; }
     [${ATTR}-overlay], [${ATTR}-overlay] * { pointer-events: none !important; }
     [${ATTR}-overlay] .marks { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
