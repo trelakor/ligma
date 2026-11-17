@@ -2088,16 +2088,55 @@ const PAGE_JS: &str = r##"(() => {
   };
 
   // The magic wand: picks what's like the pixel clicked
+  // A layer, group or frame as Figma draws it, everything in it, as
+  // pixels on its own grid
+  const drawnOf = async (node) => {
+    const box = node.absoluteBoundingBox;
+    if (!box || !box.width || !box.height) return null;
+    const scale = Math.min(DENSITY, LARGEST / Math.max(box.width, box.height));
+    const bytes = await node.exportAsync({ format: "PNG", constraint: { type: "SCALE", value: scale }, useAbsoluteBounds: true });
+    const bitmap = await createImageBitmap(new Blob([bytes]));
+    const canvas = canvasOf(bitmap.width, bitmap.height);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    return { canvas, G: new DOMMatrix().translate(box.x, box.y).scale(box.width / canvas.width, box.height / canvas.height), W: canvas.width, H: canvas.height };
+  };
+
+  // The magic wand: picks what's like the pixel clicked. With All layers,
+  // from what Figma draws: the selected layer, group or frame and all in
+  // it, or with nothing selected, the frame under the pointer. Otherwise
+  // from the selected image layer's own pixels
   const wand = async (page, mode) => {
-    const node = rasterNode();
-    if (!node) return notify("Select an image layer to pick from");
-    const t = await read(node);
+    const figma = api();
     const o = prefs.options.wand;
-    const at = pixelAt(t, page);
-    if (!inside(t, at)) return;
-    const source = o.all ? await composited(t) : t.base;
-    const shape = maskCanvas(floodMask(pixelsOf(source), at[0], at[1], o.tolerance, o.contiguous), t.W, t.H, o.smooth);
-    combine({ G: gridOf(t), W: t.W, H: t.H }, shape, mode);
+    const node = selected();
+    let grid;
+    let source;
+    if (o.all) {
+      const from = node ?? containerAt(figma, page);
+      if (!from) return notify("Select a layer, group or frame to pick from");
+      // An image layer's selection stays on its own pixels, picked from
+      // what's drawn over its frame
+      if (isRaster(from)) {
+        const t = await read(from);
+        grid = { G: gridOf(t), W: t.W, H: t.H };
+        source = await composited(t);
+      } else {
+        const drawn = await drawnOf(from);
+        if (!drawn) return;
+        grid = { G: drawn.G, W: drawn.W, H: drawn.H };
+        source = drawn.canvas;
+      }
+    } else {
+      if (!isRaster(node)) return notify(node ? "Select an image layer, or turn on All layers" : "Select an image layer to pick from");
+      const t = await read(node);
+      grid = { G: gridOf(t), W: t.W, H: t.H };
+      source = t.base;
+    }
+    const [x, y] = apply(grid.G.inverse(), page).map(Math.floor);
+    if (x < 0 || y < 0 || x >= grid.W || y >= grid.H) return;
+    const shape = maskCanvas(floodMask(pixelsOf(source), x, y, o.tolerance, o.contiguous), grid.W, grid.H, o.smooth);
+    combine(grid, shape, mode);
   };
 
   // The eyedropper: the color under the pointer, averaged over its sample
@@ -3145,7 +3184,7 @@ const PAGE_JS: &str = r##"(() => {
   const TOGGLES = {
     pressure: ["Pressure", "Pen pressure sets the size"],
     contiguous: ["Contiguous", "Only colors touching the one clicked"],
-    all: ["All layers", "Sample what's drawn, not only this layer"],
+    all: ["All layers", "Sample what's drawn: everything in the selected group or frame, not only one layer"],
     smooth: ["Anti-alias", "Smooths the selection's edge"],
     aligned: ["Aligned", "Each stroke carries on from where the last left off"],
     reverse: ["Reverse", "Swap the gradient's ends"],
