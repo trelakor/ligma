@@ -52,6 +52,15 @@
         ],
         "createdAt": "2026-11-11T20:39:14.264Z",
         "reason": "decision sketches: tiny text and tight boxes are miniature file thumbnails drawn inside cards, not UI; sketches never ship"
+      },
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          "assets/installer/installer.html"
+        ],
+        "createdAt": "2026-11-17T16:57:18.523Z",
+        "reason": "agent decision: detector measured #0a73c4 against the 1px grid dots (#d6d6d6); the label sits on #f5f5f5 canvas at 4.5:1"
       }
     ]
   }
