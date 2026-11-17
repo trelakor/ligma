@@ -1879,15 +1879,13 @@ impl Painter {
             let missing = pyramid.iter().copied().find(|key| Some(key.px) == furthest && !self.tiles.get(key).is_some_and(|tile| !tile.stale));
             if let Some(key) = missing {
                 // Drawn once the view's been still a while, as a tile of it
-                // takes tens of milliseconds no frame can be drawn in
+                // takes tens of milliseconds no frame can be drawn in. Vello
+                // draws it, as Skia records every unit of a big file for it
                 let still = VELLO_STILL.saturating_sub(self.moved.elapsed().min(self.edited.elapsed()));
                 if !still.is_zero() {
                     return Some(still);
                 }
-                if let Some(tile) = self.draw_tile(key, false, false) {
-                    self.put_tile(key, tile);
-                    self.drew = true;
-                }
+                self.vello_or_skia(&[key], false);
                 self.dirty = true;
                 return Some(Duration::ZERO);
             }
