@@ -1053,6 +1053,14 @@
   // page id's two numbers, when it was written, and the pixel preview
   let shared = null;
   let written = [];
+  // Now on the system's clock, as in page_hook.js
+  let drift = null;
+  const systemNow = () => {
+    const precise = performance.timeOrigin + performance.now();
+    const ahead = Date.now() - precise;
+    if (drift == null || ahead > drift || ahead < drift - 1) drift = ahead;
+    return precise + drift;
+  };
   const writeView = () => {
     const v = shared && window.__ligmaNative.view();
     if (!v) return;
@@ -1062,7 +1070,7 @@
     written = values;
     shared[0] += 1;
     for (let i = 0; i < 13; i++) shared[i + 1] = values[i];
-    shared[14] = performance.timeOrigin + performance.now();
+    shared[14] = systemNow();
     shared[15] = v.preview;
     shared[16] = v.grid ? 1 : 0;
     shared[17] = v.outline;

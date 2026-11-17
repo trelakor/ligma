@@ -20,6 +20,18 @@
     if (sessionStorage.getItem("ligmaNativeOff")) return;
   } catch {}
 
+  // Now on the system's clock, which Ligma times frames against.
+  // performance.now() drifts from it, by a second over a long session, and
+  // Date.now() keeps to it only to the ms, rounded down, so the drift is the
+  // most Date.now() has been ahead, set again once that's over a ms off
+  let drift = null;
+  const systemNow = () => {
+    const precise = performance.timeOrigin + performance.now();
+    const ahead = Date.now() - precise;
+    if (drift == null || ahead > drift || ahead < drift - 1) drift = ahead;
+    return precise + drift;
+  };
+
   const hook = (window.__ligmaHook = {
     // Ligma draws frames, Figma's worker gets none
     replacing: false,
@@ -300,7 +312,7 @@
         cw,
         ch,
         visible: document.visibilityState === "visible",
-        at: performance.timeOrigin + performance.now(),
+        at: systemNow(),
         ui: ui.length,
         page: pageSince(),
       }),
