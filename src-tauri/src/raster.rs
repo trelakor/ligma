@@ -822,8 +822,10 @@ const PAGE_JS: &str = r##"(() => {
     if (!ui.overlay) {
       const root = make("div", { [`${ATTR}-overlay`]: true });
       const live = root.appendChild(make("div", { class: "live" }));
+      const tint = root.appendChild(make("div", { class: "tint" }));
       const svg = root.appendChild(make("svg:svg", { class: "marks" }));
       const ants = svg.appendChild(make("svg:g", { class: "ants" }));
+      const antsHalo = ants.appendChild(make("svg:path", { class: "halo" }));
       const antsUnder = ants.appendChild(make("svg:path", { class: "under" }));
       const antsOver = ants.appendChild(make("svg:path", { class: "over" }));
       const shape = svg.appendChild(make("svg:path", { class: "shape" }));
@@ -833,7 +835,7 @@ const PAGE_JS: &str = r##"(() => {
       const source = svg.appendChild(make("svg:path", { class: "source" }));
       const brushUnder = svg.appendChild(make("svg:ellipse", { class: "brush under" }));
       const brushOver = svg.appendChild(make("svg:ellipse", { class: "brush" }));
-      Object.assign(ui, { overlay: root, live, svg, ants, antsUnder, antsOver, shape, shapeOver, line, string, source, brushUnder, brushOver });
+      Object.assign(ui, { overlay: root, live, tint, svg, ants, antsHalo, antsUnder, antsOver, shape, shapeOver, line, string, source, brushUnder, brushOver });
     }
     if (ui.overlay.previousElementSibling !== canvas) canvas.after(ui.overlay);
     return ui.overlay;
@@ -1038,7 +1040,12 @@ const PAGE_JS: &str = r##"(() => {
       }
       if (ui.live.style.clipPath !== path) ui.live.style.clipPath = path;
     }
-    if (selection) ui.ants.setAttribute("transform", v.toScreen.multiply(selection.G).toString());
+    if (selection) {
+      const m = v.toScreen.multiply(selection.G);
+      ui.ants.setAttribute("transform", m.toString());
+      const wash = ui.tint.firstChild;
+      if (wash) wash.style.transform = m.scale(selection.W, selection.H).toString();
+    }
     marks(v);
   };
 
@@ -1174,11 +1181,22 @@ const PAGE_JS: &str = r##"(() => {
     overlay();
     if (!ui.overlay) return;
     if (!selection) {
+      ui.antsHalo.removeAttribute("d");
       ui.antsUnder.removeAttribute("d");
       ui.antsOver.removeAttribute("d");
+      ui.tint.replaceChildren();
       return;
     }
     const { canvas } = selection;
+    // Inside, a light wash of the selection color, so what's picked reads
+    // at a glance and not only by its edge
+    const wash = canvasOf(canvas.width, canvas.height);
+    const washing = wash.getContext("2d");
+    washing.drawImage(canvas, 0, 0);
+    washing.globalCompositeOperation = "source-in";
+    washing.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--color-border-selected").trim() || "#0d99ff";
+    washing.fillRect(0, 0, wash.width, wash.height);
+    ui.tint.replaceChildren(wash);
     const step = canvas.width * canvas.height > 4e6 ? 2 : 1;
     const [W, H] = [Math.ceil(canvas.width / step), Math.ceil(canvas.height / step)];
     const small = canvasOf(W, H);
@@ -1186,14 +1204,16 @@ const PAGE_JS: &str = r##"(() => {
     ctx.drawImage(canvas, 0, 0, W, H);
     const { data } = ctx.getImageData(0, 0, W, H);
     const inside = (x, y) => x >= 0 && y >= 0 && x < W && y < H && data[(y * W + x) * 4 + 3] >= 128;
-    const parts = [];
+    // The edges as runs along rows and columns, then chained end to end
+    // into outlines, so the dashes run on around them unbroken
+    const runs = [];
     for (let y = 0; y <= H; y++) {
       let start = -1;
       for (let x = 0; x <= W; x++) {
         const edge = x < W && inside(x, y - 1) !== inside(x, y);
         if (edge && start < 0) start = x;
         if (!edge && start >= 0) {
-          parts.push(`M${start * step} ${y * step}H${x * step}`);
+          runs.push([start, y, x, y]);
           start = -1;
         }
       }
@@ -1204,12 +1224,40 @@ const PAGE_JS: &str = r##"(() => {
         const edge = y < H && inside(x - 1, y) !== inside(x, y);
         if (edge && start < 0) start = y;
         if (!edge && start >= 0) {
-          parts.push(`M${x * step} ${start * step}V${y * step}`);
+          runs.push([x, start, x, y]);
           start = -1;
         }
       }
     }
+    const ends = new Map();
+    const at = (x, y) => y * (W + 1) + x;
+    runs.forEach(([x1, y1, x2, y2], i) => {
+      for (const key of [at(x1, y1), at(x2, y2)]) {
+        const list = ends.get(key);
+        if (list) list.push(i);
+        else ends.set(key, [i]);
+      }
+    });
+    const used = new Uint8Array(runs.length);
+    const parts = [];
+    for (let first = 0; first < runs.length; first++) {
+      if (used[first]) continue;
+      used[first] = 1;
+      let [x, y, ex, ey] = runs[first];
+      const points = [`${x * step} ${y * step}`, `${ex * step} ${ey * step}`];
+      [x, y] = [ex, ey];
+      for (;;) {
+        const next = (ends.get(at(x, y)) ?? []).find((i) => !used[i]);
+        if (next === undefined) break;
+        used[next] = 1;
+        const [x1, y1, x2, y2] = runs[next];
+        [x, y] = x1 === x && y1 === y ? [x2, y2] : [x1, y1];
+        points.push(`${x * step} ${y * step}`);
+      }
+      parts.push(`M${points.join("L")}`);
+    }
     const d = parts.join("");
+    ui.antsHalo.setAttribute("d", d);
     ui.antsUnder.setAttribute("d", d);
     ui.antsOver.setAttribute("d", d);
     place();
@@ -2577,6 +2625,59 @@ const PAGE_JS: &str = r##"(() => {
     if (fresh.node) target = fresh;
     setSelection(null);
   };
+  // A mask from the selection, as Photoshop's layer mask: the layer and a
+  // new mask under it, grouped, as Figma masks what's above a mask in its
+  // group. The mask is the selection as an image, its alpha soft where
+  // the selection is, so it masks by alpha. With Alt, what's selected is
+  // hidden instead, as Photoshop's Alt-click hides
+  const maskLayer = async (hide = false) => {
+    const figma = api();
+    const node = selected();
+    if (!figma || !node || !selection) return notify("Select a layer to mask");
+    if (node.type === "PAGE" || !node.parent) return;
+    let picture = selection.canvas;
+    if (hide) {
+      picture = canvasOf(selection.W, selection.H);
+      const ctx = picture.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, selection.W, selection.H);
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.drawImage(selection.canvas, 0, 0);
+    }
+    const blob = await new Promise((resolve) => picture.toBlob(resolve, "image/png"));
+    const image = figma.createImage(new Uint8Array(await blob.arrayBuffer()));
+    if (node.removed) return;
+    // The mask covers the selection's grid, at its place on the page
+    const G = selection.G;
+    const [w, h] = [Math.hypot(G.a, G.b) * selection.W, Math.hypot(G.c, G.d) * selection.H];
+    const M = G.multiply(new DOMMatrix().scale(selection.W / w, selection.H / h));
+    const parent = node.parent;
+    const mask = figma.createRectangle();
+    parent.insertChild(parent.children.indexOf(node), mask);
+    if ("layoutMode" in parent && parent.layoutMode && parent.layoutMode !== "NONE") mask.layoutPositioning = "ABSOLUTE";
+    mask.name = "Mask";
+    mask.resize(w, h);
+    // In the space the parent places its children in, as a group's are
+    // placed in what holds it
+    let space = parent;
+    while (space.type === "GROUP" || space.type === "BOOLEAN_OPERATION") space = space.parent;
+    const local = space.type === "PAGE" ? M : matrix(space.absoluteTransform).inverse().multiply(M);
+    mask.relativeTransform = [
+      [local.a, local.c, local.e],
+      [local.b, local.d, local.f],
+    ];
+    mask.fills = [{ type: "IMAGE", imageHash: image.hash, scaleMode: "FILL" }];
+    mask.isMask = true;
+    try {
+      mask.maskType = "ALPHA";
+    } catch {}
+    const group = figma.group([mask, node], parent, parent.children.indexOf(mask));
+    group.name = `${node.name} mask`;
+    figma.currentPage.selection = [node];
+    figma.commitUndo();
+    setSelection(null);
+  };
+
   // The selected pixels to the clipboard, as a PNG cropped to them
   const copyPixels = async (cut) => {
     const t = await read(rasterNode());
@@ -3014,6 +3115,12 @@ const PAGE_JS: &str = r##"(() => {
       const deselect = bar.appendChild(make("button", { type: "button", class: "text", text: "Deselect" }));
       tooltip(deselect, "Deselect", `${modKey}D`);
       deselect.addEventListener("click", () => setSelection(null));
+      if (node) {
+        bar.appendChild(make("div", { class: "divider" }));
+        const maskButton = bar.appendChild(make("button", { type: "button", class: "text", text: "Mask" }));
+        tooltip(maskButton, "Mask the layer to the selection", `${mac ? "⌥" : "Alt+"}click to hide it instead`);
+        maskButton.addEventListener("click", (event) => maskLayer(event.altKey).catch(() => notify("Couldn't make the mask")));
+      }
     }
     placeBar();
   };
@@ -3426,9 +3533,12 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-overlay] .live canvas { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; background: transparent !important; pointer-events: none !important; }
     [${ATTR}-overlay], [${ATTR}-overlay] * { pointer-events: none !important; }
     [${ATTR}-overlay] .marks { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-    [${ATTR}-overlay] .ants path { fill: none; stroke-width: 1px; vector-effect: non-scaling-stroke; shape-rendering: crispEdges; }
-    [${ATTR}-overlay] .ants .under { stroke: #fff; }
-    [${ATTR}-overlay] .ants .over { stroke: #000; stroke-dasharray: 4 4; animation: ligma-raster-ants 0.5s linear infinite; }
+    [${ATTR}-overlay] .tint { position: absolute; inset: 0; opacity: 0.14; }
+    [${ATTR}-overlay] .tint canvas { position: absolute; left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; background: transparent !important; }
+    [${ATTR}-overlay] .ants path { fill: none; vector-effect: non-scaling-stroke; stroke-linecap: square; }
+    [${ATTR}-overlay] .ants .halo { stroke: rgb(0 0 0 / 0.35); stroke-width: 3px; }
+    [${ATTR}-overlay] .ants .under { stroke: #fff; stroke-width: 1.5px; }
+    [${ATTR}-overlay] .ants .over { stroke: var(--color-border-selected, #0d99ff); stroke-width: 1.5px; stroke-dasharray: 6 5; animation: ligma-raster-ants 1.6s linear infinite; }
     [${ATTR}-overlay] .shape { fill: none; stroke: #fff; stroke-width: 1px; }
     [${ATTR}-overlay] .shape.over { stroke: #000; stroke-dasharray: 4 4; animation: ligma-raster-ants 0.5s linear infinite; }
     [${ATTR}-overlay] .line { fill: none; stroke: var(--color-border-selected, #0d99ff); stroke-width: 1.5px; }
@@ -3436,7 +3546,7 @@ const PAGE_JS: &str = r##"(() => {
     [${ATTR}-overlay] .source { fill: none; stroke: #fff; stroke-width: 1px; filter: drop-shadow(0 0 1px #000); }
     [${ATTR}-overlay] .brush { fill: none; stroke: #fff; stroke-width: 1px; }
     [${ATTR}-overlay] .brush.under { stroke: rgb(0 0 0 / 0.6); stroke-width: 3px; }
-    @keyframes ligma-raster-ants { to { stroke-dashoffset: -8; } }
+    @keyframes ligma-raster-ants { to { stroke-dashoffset: -11; } }
     @media (prefers-reduced-motion: reduce) { [${ATTR}-overlay] .over { animation: none !important; } }
   `;
   const mountStyle = () => {
