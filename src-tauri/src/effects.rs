@@ -2996,41 +2996,87 @@ const PAGE_JS: &str = r##"(() => {
     });
   };
 
-  // Where the result and the original are on the page, as last placed
-  const placedAt = (current) => {
-    const [[, , rx], [, , ry]] = current.result.absoluteTransform;
-    const [[, , sx], [, , sy]] = current.source.absoluteTransform;
-    return { rx, ry, sx, sy };
+  // A layer's box on the page, as the transform of a unit square
+  const boxOf = (node) => {
+    const [[a, c, e], [b, d, f]] = node.absoluteTransform;
+    const w = Math.max(0.01, node.width);
+    const h = Math.max(0.01, node.height);
+    return [
+      [a * w, c * h, e],
+      [b * w, d * h, f],
+    ];
   };
-  // The result moved on the page since it was last placed, by anyone, as
-  // dragged while the panel's open: what's made from then on goes where
-  // it is now, and the original under it goes with it, unless it moved
-  // too, as when their group's moved
+  const sameBox = (m, n) => m.every((row, i) => row.every((v, j) => Math.abs(v - n[i][j]) < 0.01));
+  const UNMOVED = [
+    [1, 0, 0],
+    [0, 1, 0],
+  ];
+  // Where the result and the original are on the page, as last placed
+  const placedAt = (current) => ({ result: boxOf(current.result), source: boxOf(current.source) });
+  // How much the result's been scaled, for the brush's size
+  const frameScale = (current) => {
+    const [[a, c], [b, d]] = current.frame ?? UNMOVED;
+    return Math.sqrt(Math.abs(a * d - b * c)) || 1;
+  };
+  // The result moved, turned, resized or flipped on the page since it was
+  // last placed, by anyone, as while the panel's open: what's made from
+  // then on goes as it is now (moved, `bounds`, or anything more, `frame`,
+  // a transform on the page), and the original under it goes with it,
+  // unless it changed too, as when their group's moved
   const followMoved = (current) => {
     const was = current.placedAt;
     if (!was || current.result.removed || current.source.removed) return;
     const now = placedAt(current);
-    const dx = now.rx - was.rx;
-    const dy = now.ry - was.ry;
-    if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
-    current.bounds = { ...current.bounds, x: current.bounds.x + dx, y: current.bounds.y + dy };
-    const sx = was.sx + dx - now.sx;
-    const sy = was.sy + dy - now.sy;
-    if (Math.abs(sx) >= 0.01 || Math.abs(sy) >= 0.01) {
-      current.sourceFrom ??= current.source.relativeTransform;
-      const [[a, c, e], [b, d, f]] = current.source.absoluteTransform;
-      current.source.relativeTransform = relativeFor(current.source.parent, [
-        [a, c, e + sx],
-        [b, d, f + sy],
-      ]);
+    if (sameBox(was.result, now.result)) return;
+    const change = multiply(now.result, invert(was.result));
+    const [[a, c, e], [b, d, f]] = change;
+    if (!current.frame && Math.abs(a - 1) < 1e-4 && Math.abs(d - 1) < 1e-4 && Math.abs(b) < 1e-4 && Math.abs(c) < 1e-4) current.bounds = { ...current.bounds, x: current.bounds.x + e, y: current.bounds.y + f };
+    else current.frame = multiply(change, current.frame ?? UNMOVED);
+    if (sameBox(was.source, now.source)) {
+      try {
+        changeSource(current, change);
+      } catch {}
     }
     current.placedAt = placedAt(current);
   };
+  // The original changed as the result was: moved and turned, and scaled
+  // as Figma's scale tool does, strokes and all, or stretched as dragging
+  // its edges does where it's stretched more one way than the other
+  const changeSource = (current, change) => {
+    const node = current.source;
+    const from = (current.sourceFrom ??= { transform: node.relativeTransform, steps: [] });
+    const [[ta, tc, te], [tb, td, tf]] = multiply(change, node.absoluteTransform);
+    const fx = Math.hypot(ta, tb);
+    const fy = Math.hypot(tc, td);
+    if (Math.abs(fx - 1) > 1e-4 || Math.abs(fy - 1) > 1e-4) {
+      if (Math.abs(fx - fy) < 1e-3 && "rescale" in node) {
+        node.rescale(fx);
+        from.steps.push(["rescale", fx]);
+      } else if ("resize" in node) {
+        const [w, h] = [node.width, node.height];
+        node.resize(w ? Math.max(0.01, w * fx) : 0, h ? Math.max(0.01, h * fy) : 0);
+        from.steps.push(["resize", w, h]);
+      }
+    }
+    // Turned, and flipped where it's been flipped
+    const [ux, uy] = [ta / (fx || 1), tb / (fx || 1)];
+    const side = Math.sign(ta * td - tb * tc) || 1;
+    node.relativeTransform = relativeFor(node.parent, [
+      [ux, -uy * side, te],
+      [uy, ux * side, tf],
+    ]);
+  };
 
-  // Cancelled, the original back where it was before it followed the result
+  // Cancelled, the original back as it was before it followed the result
   const putBackSource = (current) => {
+    const from = current.sourceFrom;
+    if (!from || current.source.removed) return;
     try {
-      if (current.sourceFrom && !current.source.removed) current.source.relativeTransform = current.sourceFrom;
+      for (const [kind, x, y] of [...from.steps].reverse()) {
+        if (kind === "rescale") current.source.rescale(1 / x);
+        else current.source.resize(x, y);
+      }
+      current.source.relativeTransform = from.transform;
     } catch {}
   };
 
@@ -3049,13 +3095,19 @@ const PAGE_JS: &str = r##"(() => {
     if (result.removed || current.closed) return;
     // Moved while the picture loaded
     followMoved(current);
+    // Where it goes, as the result's been moved, turned or resized
     const { bounds } = current;
-    const place = toParent(result.parent, bounds.x + drawn.x / k, bounds.y + drawn.y / k);
-    result.resizeWithoutConstraints(Math.max(0.01, drawn.width / k), Math.max(0.01, drawn.height / k));
-    result.relativeTransform = [
-      [place.linear[0], place.linear[1], place.x],
-      [place.linear[2], place.linear[3], place.y],
-    ];
+    const [w, h] = [Math.max(0.01, drawn.width / k), Math.max(0.01, drawn.height / k)];
+    const [[a, c, e], [b, d, f]] = multiply(current.frame ?? UNMOVED, [
+      [w, 0, bounds.x + drawn.x / k],
+      [0, h, bounds.y + drawn.y / k],
+    ]);
+    const [W, H] = [Math.max(0.01, Math.hypot(a, b)), Math.max(0.01, Math.hypot(c, d))];
+    result.resizeWithoutConstraints(W, H);
+    result.relativeTransform = relativeFor(result.parent, [
+      [a / W, c / H, e],
+      [b / W, d / H, f],
+    ]);
     result.fills = [fill];
     result.visible = true;
     // The original's hidden once there's something in its place, so the
@@ -3387,7 +3439,7 @@ const PAGE_JS: &str = r##"(() => {
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
       // For the next effect up a stack being made again
-      if (current.run && made) {
+      if (current.run && made && !current.frame) {
         const k = current.levels.full.k;
         handedOn = { node: result, canvas: made.canvas, bounds: { x: current.bounds.x + made.x / k, y: current.bounds.y + made.y / k, width: made.width / k, height: made.height / k } };
       }
@@ -4156,7 +4208,7 @@ const PAGE_JS: &str = r##"(() => {
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
       // For the next effect up a stack being made again
-      if (current.run && made) {
+      if (current.run && made && !current.frame) {
         const k = current.levels.full.k;
         handedOn = { node: result, canvas: made.canvas, bounds: { x: current.bounds.x + made.x / k, y: current.bounds.y + made.y / k, width: made.width / k, height: made.height / k } };
       }
@@ -5046,7 +5098,7 @@ const PAGE_JS: &str = r##"(() => {
     sheet.append(ring);
     const moveRing = (event) => {
       if (!paint.area) return;
-      const d = size(paint.view.zoom);
+      const d = size(paint.view.zoom * frameScale(current));
       Object.assign(ring.style, { display: "block", width: `${d}px`, height: `${d}px`, left: `${event.clientX - paint.area.left - d / 2}px`, top: `${event.clientY - paint.area.top - d / 2}px` });
     };
     sheet.addEventListener("pointermove", moveRing);
@@ -5069,7 +5121,7 @@ const PAGE_JS: &str = r##"(() => {
         const drawn = paint.drawn;
         // Above Figma's toolbar, where its own bars go
         const belt = document.querySelector('[data-testid="design-toolbelt-wrapper"]')?.getBoundingClientRect();
-        const key = [area.left, area.top, area.width, area.height, view.x, view.y, view.zoom, drawn?.canvas.width, belt?.top, belt?.left, belt?.width, innerHeight].join();
+        const key = [area.left, area.top, area.width, area.height, view.x, view.y, view.zoom, drawn?.canvas.width, belt?.top, belt?.left, belt?.width, innerHeight, current.frame].join();
         if (key !== paint.key) {
           paint.key = key;
           paint.area = area;
@@ -5077,12 +5129,20 @@ const PAGE_JS: &str = r##"(() => {
           Object.assign(sheet.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px` });
           Object.assign(bar.style, belt?.width ? { left: `${belt.left + belt.width / 2}px`, bottom: `${innerHeight - belt.top + 8}px` } : { left: `${area.left + area.width / 2}px`, bottom: "72px" });
           if (drawn) {
+            // As the result's been moved, turned or resized
             const k = drawn.k;
+            const z = view.zoom;
+            const [[a, c, e], [b, d, f]] = multiply(current.frame ?? UNMOVED, [
+              [1, 0, current.bounds.x + drawn.x / k],
+              [0, 1, current.bounds.y + drawn.y / k],
+            ]);
             Object.assign(drawn.canvas.style, {
-              left: `${(current.bounds.x + drawn.x / k - view.x) * view.zoom}px`,
-              top: `${(current.bounds.y + drawn.y / k - view.y) * view.zoom}px`,
-              width: `${(drawn.width / k) * view.zoom}px`,
-              height: `${(drawn.height / k) * view.zoom}px`,
+              left: "0px",
+              top: "0px",
+              width: `${drawn.width / k}px`,
+              height: `${drawn.height / k}px`,
+              transformOrigin: "0 0",
+              transform: `matrix(${a * z}, ${b * z}, ${c * z}, ${d * z}, ${(e - view.x) * z}, ${(f - view.y) * z})`,
             });
           }
         }
@@ -5141,8 +5201,13 @@ const PAGE_JS: &str = r##"(() => {
     // Where the pointer is on the layer, across its picture, 0 to 1
     const toPicture = (event) => {
       const { area, view } = paint;
-      const x = view.x + (event.clientX - area.left) / view.zoom;
-      const y = view.y + (event.clientY - area.top) / view.zoom;
+      let x = view.x + (event.clientX - area.left) / view.zoom;
+      let y = view.y + (event.clientY - area.top) / view.zoom;
+      // Back from where the result's been turned or resized to
+      if (current.frame) {
+        const [[a, c, e], [b, d, f]] = invert(current.frame);
+        [x, y] = [a * x + c * y + e, b * x + d * y + f];
+      }
       return [Math.round(((x - current.bounds.x) / current.bounds.width) * 10000) / 10000, Math.round(((y - current.bounds.y) / current.bounds.height) * 10000) / 10000];
     };
     sheet.addEventListener("pointerdown", (event) => {
@@ -5154,7 +5219,7 @@ const PAGE_JS: &str = r##"(() => {
       paint.render();
       let last = [event.clientX, event.clientY];
       const move = (event) => {
-        if (Math.hypot(event.clientX - last[0], event.clientY - last[1]) < spacing(paint.view.zoom)) return;
+        if (Math.hypot(event.clientX - last[0], event.clientY - last[1]) < spacing(paint.view.zoom * frameScale(current))) return;
         last = [event.clientX, event.clientY];
         add.next(toPicture(event));
         paint.render();
@@ -5371,7 +5436,7 @@ const PAGE_JS: &str = r##"(() => {
       result.setSharedPluginData(PLUGIN, OFF, "");
       figma.currentPage.selection = [result];
       // For the next effect up a stack being made again
-      if (current.run && made) {
+      if (current.run && made && !current.frame) {
         const k = current.levels.full.k;
         handedOn = { node: result, canvas: made.canvas, bounds: { x: current.bounds.x + made.x / k, y: current.bounds.y + made.y / k, width: made.width / k, height: made.height / k } };
       }
