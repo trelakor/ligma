@@ -2773,6 +2773,7 @@ const PAGE_JS: &str = r##"(() => {
       picker = null;
     }
     if (blendMenu) {
+      blendMenu.restore?.();
       blendMenu.root.remove();
       blendMenu.anchor.setAttribute("aria-expanded", "false");
       blendMenu = null;
@@ -2961,6 +2962,23 @@ const PAGE_JS: &str = r##"(() => {
     if (blendMenu) return closeMenus();
     closeMenus();
     const current = blendOf(node, null);
+    // Hovering a mode tries it on the layer, as Figma's own blend menu
+    // does, so it's Figma that shows it. Nothing's kept until one's picked;
+    // closing the menu puts the layer's own back
+    let original = null;
+    try {
+      original = node.blendMode;
+    } catch {}
+    const preview = (mode) => {
+      try {
+        if (!node.removed && node.blendMode !== mode) node.blendMode = mode;
+      } catch {}
+    };
+    // Ligma's canvas would show the layer over Figma's, blended twice
+    if (showing?.t.node === node) {
+      showing.t.holdUntil = 0;
+      if (!showing.t.unsaved && !showing.t.pending) hideNow();
+    }
     const root = make("div", { [`${ATTR}-ui`]: true, [`${ATTR}-menu`]: true, "data-fullscreen-prevent-event-capture": "true" });
     const list = root.appendChild(make("ul", { role: "menu", "aria-label": "Blend mode" }));
     const items = [];
@@ -2971,6 +2989,8 @@ const PAGE_JS: &str = r##"(() => {
         item.innerHTML = `<span class="row"><span class="check">${icon(SMALL.check, 16)}</span><span class="name"></span></span>`;
         item.querySelector(".name").textContent = label;
         item.addEventListener("click", () => {
+          // Kept: from the layer's own mode to this one, as one undo step
+          blendMenu.restore = null;
           closeMenus();
           const figma = api();
           try {
@@ -2982,7 +3002,11 @@ const PAGE_JS: &str = r##"(() => {
           }
           renderBar();
         });
-        item.addEventListener("pointermove", () => item.focus());
+        item.addEventListener("pointermove", () => {
+          item.focus();
+          preview(mode);
+        });
+        item.addEventListener("focus", () => preview(mode));
         item.addEventListener("keydown", (event) => {
           const at = items.indexOf(item);
           if (event.key === "ArrowDown") items[(at + 1) % items.length].focus();
@@ -3004,7 +3028,7 @@ const PAGE_JS: &str = r##"(() => {
     root.style.left = `${clamp(rect.left, 8, innerWidth - box.width - 8)}px`;
     root.style.top = `${Math.max(8, rect.top - box.height - 8)}px`;
     anchor.setAttribute("aria-expanded", "true");
-    blendMenu = { root, anchor };
+    blendMenu = { root, anchor, restore: () => original && preview(original) };
     (items.find((item) => item.getAttribute("aria-checked") === "true") ?? items[0]).focus();
   };
 
