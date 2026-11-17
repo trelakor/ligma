@@ -10035,6 +10035,21 @@ const PAGE_JS: &str = r##"(() => {
     removeEventListener("keydown", current.keys, true);
   };
   // The shape with where each copy goes, drawn with the layers themselves
+  // The edge of a shape read by `readAlpha`, a pixel wide, in `color`
+  const shapeEdge = ({ alpha, w, h }, color) => {
+    const canvas = Object.assign(document.createElement("canvas"), { width: w, height: h });
+    const context = canvas.getContext("2d");
+    const image = context.createImageData(w, h);
+    const inside = (x, y) => x >= 0 && y >= 0 && x < w && y < h && alpha[y * w + x] >= 0.5;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++)
+        if (inside(x, y) && !(inside(x - 1, y) && inside(x + 1, y) && inside(x, y - 1) && inside(x, y + 1))) image.data[(y * w + x) * 4 + 3] = 255;
+    context.putImageData(image, 0, 0);
+    context.globalCompositeOperation = "source-in";
+    context.fillStyle = color;
+    context.fillRect(0, 0, w, h);
+    return canvas;
+  };
   const drawFillPreview = (current) => {
     const canvas = current.preview;
     if (!canvas || !current.shape) return;
@@ -10055,6 +10070,16 @@ const PAGE_JS: &str = r##"(() => {
     const oy = (box.height - rh * fit) / 2 - reach.y0 * g * fit;
     context.globalAlpha = current.settings.showShape ? 1 : 0.25;
     context.drawImage(bitmap, ox, oy, w * fit, h * fit);
+    context.globalAlpha = 1;
+    // Its edge, so where it'll be filled shows before anything's added and
+    // when it's hidden, in the panel's text colour
+    const color = getComputedStyle(canvas).color || "#fff";
+    if (current.shape.edgeColor !== color) {
+      current.shape.edgeColor = color;
+      current.shape.edge = shapeEdge(current.shape, color);
+    }
+    context.globalAlpha = current.seeds.length ? 0.35 : 0.7;
+    context.drawImage(current.shape.edge, ox, oy, w * fit, h * fit);
     context.globalAlpha = 1;
     current.placed.forEach((spot, i) => {
       const seed = current.seeds[spot.which];
@@ -11317,14 +11342,24 @@ const PAGE_JS: &str = r##"(() => {
         context.stroke(path);
       }
     };
-    if (track && current.settings.showPath) {
-      context.strokeStyle = "rgba(255, 255, 255, 0.35)";
-      context.lineWidth = 1 / fit;
+    if (track) {
+      // In the panel's text colour, so it shows on light and dark themes
+      const shown = current.settings.showPath;
+      context.strokeStyle = context.fillStyle = getComputedStyle(canvas).color || "#fff";
+      context.globalAlpha = shown ? 0.4 : current.seeds.length ? 0.3 : 0.6;
+      context.lineWidth = (shown ? 1 : 1.25) / fit;
+      context.setLineDash(shown ? [] : [4 / fit, 3 / fit]);
       for (const line of current.track) {
         context.beginPath();
         for (let d = 0; d <= line.length; d += Math.max(0.5, line.length / 400)) context.lineTo(...line.point(d));
+        if (line.closed) context.closePath();
         context.stroke();
+        context.beginPath();
+        context.arc(...line.point(0), 2.5 / fit, 0, Math.PI * 2);
+        context.fill();
       }
+      context.setLineDash([]);
+      context.globalAlpha = 1;
     }
     for (const shape of extra.filter((one) => one.under)) shape.draw(context, fit);
     for (const shape of shapes) paint(shape);
