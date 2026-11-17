@@ -228,6 +228,10 @@ pub struct Layer {
     pub drawn: u64,
 }
 
+/// Longest a view waits for what it needs drawn before it's shown with
+/// what there is
+const HOLD_MOST: Duration = Duration::from_millis(50);
+
 /// What the render thread has drawn, every layer of it up to date as of
 /// frame `seq` of Figma's render tree, so whatever's composed of it at any
 /// view is all of one moment of the page. Nothing in it changes once it's
@@ -824,6 +828,8 @@ impl Screen {
         let mut seen = 0;
         // Whether the swap chain has room for a frame already waited for
         let mut room = false;
+        // Since when the view's waited for what it needs drawn
+        let mut held: Option<Instant> = None;
         while !hub.stop.load(Ordering::Relaxed) {
             if !room {
                 unsafe { WaitForSingleObjectEx(self.waitable, 250, true) };
@@ -872,7 +878,7 @@ impl Screen {
                 // Its holes filled from the last snapshot shown whole, as
                 // it was a moment before, so the view never stands still
                 // for what's being drawn again
-                let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial).and_then(|before| {
+                let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial).map(|before| {
                     let mut layers = snapshot.layers.clone();
                     layers.extend(before.layers.iter().cloned());
                     let (pieces, holes) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
@@ -889,9 +895,30 @@ impl Screen {
                         dark: snapshot.dark,
                         pending: snapshot.pending,
                     };
-                    (!holes).then_some((merged, pieces))
+                    (merged, pieces, holes)
                 });
+                // Waited for too long, it's shown with what there is and
+                // the background where there's nothing yet, filled in as
+                // it's drawn, as a view standing still reads as frozen
+                let waited = held.get_or_insert_with(Instant::now).elapsed();
+                let late = waited >= HOLD_MOST;
+                let (merged, partial) = match merged {
+                    Some((merged, pieces, false)) => (Some((merged, pieces)), None),
+                    // Something of it, as nothing at all would hide Figma's
+                    // own canvas, before the first frame's drawn
+                    Some((merged, pieces, true)) => (None, (late && !pieces.is_empty()).then_some((Some(merged), pieces))),
+                    None => (None, (late && !pieces.is_empty()).then_some((None, pieces))),
+                };
+                if let Some((partial, pieces)) = partial {
+                    hub.shown_seq.store(seq, Ordering::Relaxed);
+                    PATH.store(3, Ordering::Relaxed);
+                    self.frame(partial.as_ref().unwrap_or(&snapshot), &pieces, &view, overlay.as_ref(), seq);
+                    room = false;
+                    shown = Some(now);
+                    continue;
+                }
                 if let Some((merged, pieces)) = merged {
+                    held = None;
                     hub.shown_seq.store(seq, Ordering::Relaxed);
                     PATH.store(1, Ordering::Relaxed);
                     self.frame(&merged, &pieces, &view, overlay.as_ref(), seq);
@@ -922,7 +949,8 @@ impl Screen {
                         levels.sort();
                         format!("present held: seq={seq} px={:.3} drawn={drawn_seq} layers={}", view.px(self.size.0), levels.join(","))
                     });
-                    seen = hub.wait(seen, Duration::from_millis(100));
+                    let left = HOLD_MOST.saturating_sub(held.map_or(Duration::ZERO, |at| at.elapsed()));
+                    seen = hub.wait(seen, left.max(Duration::from_millis(1)).min(Duration::from_millis(100)));
                     continue;
                 };
                 hub.shown_seq.store(seq, Ordering::Relaxed);
@@ -932,6 +960,7 @@ impl Screen {
                 shown = Some(then);
                 continue;
             }
+            held = None;
             hub.shown_seq.store(seq, Ordering::Relaxed);
             PATH.store(0, Ordering::Relaxed);
             self.frame(&snapshot, &pieces, &view, overlay.as_ref(), seq);

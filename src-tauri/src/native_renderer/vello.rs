@@ -199,6 +199,7 @@ impl Vello {
         let flag = broken.clone();
         device.on_uncaptured_error(Arc::new(move |error| {
             log::warn!("native renderer: Vello: {error}");
+            super::render::trace(|| format!("Vello error: {error}"));
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }));
         let renderer = vello::Renderer::new(
@@ -1202,28 +1203,20 @@ struct Depth {
     blurs: Vec<Placed>,
     /// How wide what's placed reaches
     used: i32,
-    /// Where the column of rows being filled starts
-    column: i32,
 }
 
 impl Depth {
     /// Room for `width` by `height`, in rows the view's width, or wider for
-    /// one that is, and once a column of them is as tall as a texture can
-    /// be, in another to its right
+    /// one that is
     fn room(&mut self, width: i32, height: i32, soft: i32) -> Option<(i32, i32)> {
         let shelf = &mut self.shelf;
-        if shelf.x > self.column && shelf.x + width > self.column + soft {
-            shelf.x = self.column;
+        if shelf.x > 0 && shelf.x + width > soft {
+            shelf.x = 0;
             shelf.y += shelf.row;
             shelf.row = 0;
         }
         if shelf.y + height > 8192 {
-            let next = self.used + 1;
-            if shelf.y == 0 || next + width > 8192 {
-                return None;
-            }
-            self.column = next;
-            (shelf.x, shelf.y, shelf.row) = (next, 0, 0);
+            return None;
         }
         let at = (shelf.x, shelf.y);
         shelf.x += width + 1;
@@ -1237,6 +1230,9 @@ impl Depth {
 /// drawn into a texture of their own, and what Skia drew onto the atlas
 pub struct Plan {
     width: i32,
+    /// Times blurs' sources are drawn at half again, where they wouldn't
+    /// fit their textures otherwise
+    pub coarser: u32,
     depths: Vec<Depth>,
     /// What stands for what Skia drew, by page of the atlas and where
     skia: Vec<(ImageData, usize, i32, i32)>,
@@ -1311,7 +1307,12 @@ fn to_matrix(t: Affine) -> Matrix {
 impl Plan {
     /// Effects in a view `width` wide
     pub fn new(width: i32) -> Self {
-        Self { width: width.clamp(256, 8192), depths: Vec::new(), skia: Vec::new() }
+        Self { width: width.clamp(256, 8192), coarser: 0, depths: Vec::new(), skia: Vec::new() }
+    }
+
+    /// How tall the tallest of its blurs' textures is
+    pub fn blur_rows(&self) -> i32 {
+        self.depths.iter().map(|depth| depth.shelf.y + depth.shelf.row).max().unwrap_or(0)
     }
 
     /// How many blurs it has
@@ -2646,7 +2647,7 @@ impl<'a> Encoder<'a> {
                     // would average it down to anyway, as Skia does, by
                     // half as much, for each of its pixels to be of 16
                     // samples still
-                    let shrink = shrink(sigma.0.max(sigma.1));
+                    let shrink = shrink(sigma.0.max(sigma.1)) << plan.coarser;
                     let (width, height) = ((region.x1.ceil() as i32 - left + shrink - 1) / shrink, (region.y1.ceil() as i32 - top + shrink - 1) / shrink);
                     let f = 1.0 / shrink as f64;
                     let sigma = (sigma.0 * f, sigma.1 * f);
@@ -2657,7 +2658,7 @@ impl<'a> Encoder<'a> {
                         return Err("blur bigger than its texture".into());
                     }
                     while plan.depths.len() <= depth {
-                        plan.depths.push(Depth { scene: vello::Scene::new(), shelf: Shelf { width: 8192, height: 8192, x: 0, y: 0, row: 0 }, blurs: Vec::new(), used: 0, column: 0 });
+                        plan.depths.push(Depth { scene: vello::Scene::new(), shelf: Shelf { width: 8192, height: 8192, x: 0, y: 0, row: 0 }, blurs: Vec::new(), used: 0 });
                     }
                     let soft = plan.width;
                     let (x, y) = plan.depths[depth].room(width, height, soft).ok_or("blurs past their texture")?;

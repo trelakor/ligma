@@ -504,6 +504,14 @@ const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 /// quarter of the room
 const COARSEST_IMAGES: u32 = 4;
 
+/// Most times blurs' sources are drawn at half again to fit their textures
+const COARSEST_BLURS: u32 = 3;
+
+/// Most times Vello's started again after errors in `VELLO_RESTARTS_IN`,
+/// past which Skia draws the view
+const VELLO_RESTARTS: usize = 3;
+const VELLO_RESTARTS_IN: Duration = Duration::from_secs(300);
+
 /// How long the view stays still before tiles to stand in where Vello falls
 /// behind are drawn
 const VELLO_STILL: Duration = Duration::from_secs(1);
@@ -1184,6 +1192,13 @@ pub struct Painter {
     /// atlas, and how much of it the last view took
     image_coarser: u32,
     atlas_used: u64,
+    /// Times blurs' sources are drawn at half again, where they wouldn't
+    /// fit their textures otherwise, and how tall those were last
+    blur_coarser: u32,
+    blur_rows: i32,
+    /// When Vello was started again after errors, to give up on it after
+    /// a few close together
+    vello_restarts: Vec<Instant>,
     /// Tiles Vello couldn't draw, which Skia draws
     vello_cant: std::collections::HashSet<TileKey>,
     /// The scene Vello keeps on the GPU, drawn again for each view inside
@@ -1372,6 +1387,9 @@ impl Painter {
             vello_paths: Default::default(),
             image_coarser: 0,
             atlas_used: 0,
+            blur_coarser: 0,
+            blur_rows: 0,
+            vello_restarts: Vec::new(),
             vello_cant: Default::default(),
             scene_kept: None,
             kept_stale: false,
@@ -1671,6 +1689,11 @@ impl Painter {
         // Till the file's first frame comes there's nothing to draw, not
         // even its background, and Figma's own canvas shows meanwhile
         self.tree.as_ref()?;
+        // While Vello starts, a second or so, what's shown stays, as Skia
+        // drawing the view meanwhile can take seconds on a big file
+        if !self.vello_ready() && self.vello_starting.is_some() {
+            return Some(Duration::from_millis(16));
+        }
         let view = self.view.clone()?;
         let (px, preview, width, height) = view.drawn(self.gpu.size);
         if !px.is_finite() || px <= 0.0 {
@@ -2003,8 +2026,19 @@ impl Painter {
             }
         }
         if self.vello.as_ref().is_some_and(|vello| vello.broken()) {
-            log::warn!("native renderer: Vello stopped after an error, Skia draws the view");
+            // What it holds goes with it, so the GPU has room for it again
             self.vello = None;
+            self.release();
+            self.vello_restarts.retain(|at| at.elapsed() < VELLO_RESTARTS_IN);
+            if self.vello_restarts.len() < VELLO_RESTARTS {
+                self.vello_restarts.push(Instant::now());
+                log::warn!("native renderer: Vello stopped after an error, starting it again");
+                trace(|| "Vello stopped after an error, starting it again".into());
+                self.vello_starting = Some(super::vello::start(&self.gpu.device));
+            } else {
+                log::warn!("native renderer: Vello stopped after an error, Skia draws the view");
+                trace(|| "Vello stopped after an error, Skia draws the view".into());
+            }
         }
         self.vello.is_some()
     }
@@ -2575,9 +2609,17 @@ impl Painter {
                     self.image_coarser += 1;
                     trace(|| format!("  images a level coarser, {} in all, as {why}", self.image_coarser));
                 }
+                Err(why) if (why == "blurs past their texture" || why == "blur bigger than its texture" || why == "blurs past their textures") && self.blur_coarser < COARSEST_BLURS => {
+                    self.blur_coarser += 1;
+                    trace(|| format!("  blurs a level coarser, {} in all, as {why}", self.blur_coarser));
+                }
                 done => {
                     if done.is_ok() && self.image_coarser > 0 && self.atlas_used * 4 < ATLAS_MOST / 2 {
                         self.image_coarser -= 1;
+                    }
+                    // Back a level once they'd fit at it with room to spare
+                    if done.is_ok() && self.blur_coarser > 0 && self.blur_rows < 8192 / 8 {
+                        self.blur_coarser -= 1;
                     }
                     return done;
                 }
@@ -2619,6 +2661,7 @@ impl Painter {
         let (mut encoding, mut rough) = (Duration::ZERO, false);
         // Blurs, drawn and put in place for the view
         let mut plan = super::vello::Plan::new(w);
+        plan.coarser = self.blur_coarser;
         let whole = vello::kurbo::Rect::new(0.0, 0.0, w as f64, h as f64);
         let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
             None => (vello::Scene::new(), Some("not a tree".to_string()), 0, Vec::new()),
@@ -2830,6 +2873,7 @@ impl Painter {
             at.elapsed().as_secs_f64() * 1000.0
         });
         let blurs = plan.len();
+        self.blur_rows = plan.blur_rows();
         let (paths, clips) = (scene.encoding().n_paths, scene.encoding().n_clips);
         let scene_mb = {
             use std::mem::size_of_val as size;
