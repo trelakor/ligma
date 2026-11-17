@@ -2746,6 +2746,8 @@ const PAGE_JS: &str = r##"(() => {
     top = Math.max(-most, Math.floor(top) - 1);
     right = Math.min(width + most, Math.ceil(right) + 1);
     bottom = Math.min(height + most, Math.ceil(bottom) + 1);
+    // Crop to bounds: only what falls on the picture itself
+    if (s.crop) [left, top, right, bottom] = [0, 0, width, height];
     // Drawn no larger than Figma keeps an image, smaller if need be
     const shrink = Math.min(1, MAX_SIDE / Math.max(right - left, bottom - top));
     const canvas = Object.assign(document.createElement("canvas"), { width: Math.max(1, Math.round((right - left) * shrink)), height: Math.max(1, Math.round((bottom - top) * shrink)) });
@@ -3478,7 +3480,9 @@ const PAGE_JS: &str = r##"(() => {
     const wind = element("section", {}, element("div", { className: "caption", textContent: "Snap" }), element("div", { className: "rows" }, ...DISINTEGRATE_ROWS.snap.map(slider)));
     const editable = element("input", { type: "checkbox" });
     editable.addEventListener("change", () => change("editable", editable.checked));
-    const result = element("section", {}, checkRow("Keep editable", editable, "The original kept, hidden, in a group Disintegrate can change later"));
+    const crop = element("input", { type: "checkbox" });
+    crop.addEventListener("change", () => change("crop", crop.checked));
+    const result = element("section", {}, checkRow("Crop to bounds", crop, "Cut off what's thrown past the layer's own bounds"), checkRow("Keep editable", editable, "The original kept, hidden, in a group Disintegrate can change later"));
 
     const reset = element("button", { type: "button", className: "link", textContent: "Reset" });
     reset.addEventListener("click", () => pick(DISINTEGRATE_PRESETS.find(([, values]) => values().mode === s.mode)[1]));
@@ -3501,6 +3505,7 @@ const PAGE_JS: &str = r##"(() => {
       tumble.show();
       wind.hidden = s.mode !== "snap";
       editable.checked = s.editable;
+      crop.checked = Boolean(s.crop);
       // Once a frame at most, however fast the settings change
       drawSoon(current, () => disintegrating === current && drawDisintegratePreview(current));
     };
