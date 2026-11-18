@@ -4,7 +4,8 @@
   "version": "0.45.0",
   "identifier": "dev.ligma.client",
   "build": {
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeBundleCommand": "node scripts/installer-ui.mjs"
   },
   "app": {
     "windows": [],

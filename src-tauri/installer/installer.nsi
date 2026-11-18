@@ -1,7 +1,8 @@
 ; Ligma's one-click installer: Tauri's NSIS template from tauri-cli 2.12.4
 ; (crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi), with the
-; changes marked "Ligma:". Opening the installer goes straight to the progress
-; page, installs over any earlier version, then opens Ligma. /P, /S and the
+; changes marked "Ligma:". Opening the installer shows Ligma's own window
+; (installer/ui) in place of the wizard, or the wizard's progress page when that
+; can't start, installs over any earlier version, then opens Ligma. /P, /S and the
 ; updater behave as they do in Tauri's template. When the Tauri CLI is
 ; upgraded, start from its new template and carry the marked changes over
 Unicode true
@@ -84,6 +85,17 @@ Var WixMode
 Var OldMainBinaryName
 ; Ligma: set when the installer is opened without /P or /S
 Var OneClickMode
+
+; Ligma: one-click shows Ligma's own window (installer/ui) in place of the
+; wizard. scripts/installer-ui.mjs builds it into target/installer-ui before
+; Tauri bundles. Without it, one-click keeps the wizard's progress page
+!searchparse /noerrors "${MAINBINARYSRCPATH}" "" LIGMASRCROOT "\target\"
+!ifdef LIGMASRCROOT
+  !if /FileExists "${LIGMASRCROOT}\target\installer-ui\release\ligma-setup-ui.exe"
+    !define LIGMAUI "${LIGMASRCROOT}\target\installer-ui\release\ligma-setup-ui.exe"
+    !define MUI_CUSTOMFUNCTION_GUIINIT LigmaUiStart
+  !endif
+!endif
 
 Name "${PRODUCTNAME}"
 ; Ligma: the version instead of an empty copyright, which shows "Nullsoft Install System"
@@ -988,6 +1000,63 @@ Function SkipIfPassive
   ; Ligma: one-click skips every page but the progress page
   ${IfThen} $OneClickMode = 1  ${|} Abort ${|}
 FunctionEnd
+
+!ifdef LIGMAUI
+; Ligma: starts Ligma's window and waits for it to draw (Local\LigmaSetupReady<hwnd>),
+; then turns the wizard invisible and drops its taskbar button. The window
+; reads the wizard's progress, and if the install stops on an error, it
+; makes the wizard visible again to show it. If the window can't start
+; (Local\LigmaSetupFailed<hwnd>, say without WebView2) or takes over 10
+; seconds, the wizard stays
+Function LigmaUiStart
+  ${If} $OneClickMode <> 1
+    Return
+  ${EndIf}
+  Push $0
+  Push $1
+  Push $2
+  Push $R9
+  ; In temp rather than $PLUGINSDIR, which the installer deletes on exit while the window is still open
+  CreateDirectory "$TEMP\LigmaSetup"
+  SetOverwrite try
+  File "/oname=$TEMP\LigmaSetup\ligma-setup-ui.exe" "${LIGMAUI}"
+  SetOverwrite on
+  ${If} ${FileExists} "$TEMP\LigmaSetup\ligma-setup-ui.exe"
+    System::Call 'kernel32::CreateEventW(p 0, i 1, i 0, w "Local\LigmaSetupReady$HWNDPARENT") p .r1'
+    System::Call 'kernel32::CreateEventW(p 0, i 1, i 0, w "Local\LigmaSetupFailed$HWNDPARENT") p .r2'
+    Exec '"$TEMP\LigmaSetup\ligma-setup-ui.exe" $HWNDPARENT ${VERSION}'
+    StrCpy $0 0
+    ${DoWhile} $0 < 100
+      System::Call 'kernel32::WaitForSingleObject(p r1, i 100) i .s'
+      Pop $R9
+      ${If} $R9 = 0
+        ${Break}
+      ${EndIf}
+      System::Call 'kernel32::WaitForSingleObject(p r2, i 0) i .s'
+      Pop $R9
+      ${If} $R9 = 0
+        ${Break}
+      ${EndIf}
+      IntOp $0 $0 + 1
+    ${Loop}
+    System::Call 'kernel32::WaitForSingleObject(p r1, i 0) i .s'
+    Pop $R9
+    System::Call 'kernel32::CloseHandle(p r1)'
+    System::Call 'kernel32::CloseHandle(p r2)'
+    ${If} $R9 = 0
+      ; WS_EX_LAYERED | WS_EX_TOOLWINDOW, then fully transparent
+      System::Call 'user32::GetWindowLongW(p $HWNDPARENT, i -20) i .r0'
+      IntOp $0 $0 | 0x80080
+      System::Call 'user32::SetWindowLongW(p $HWNDPARENT, i -20, i r0)'
+      System::Call 'user32::SetLayeredWindowAttributes(p $HWNDPARENT, i 0, i 0, i 2)'
+    ${EndIf}
+  ${EndIf}
+  Pop $R9
+  Pop $2
+  Pop $1
+  Pop $0
+FunctionEnd
+!endif
 Function un.SkipIfPassive
   ${IfThen} $PassiveMode = 1  ${|} Abort ${|}
 FunctionEnd

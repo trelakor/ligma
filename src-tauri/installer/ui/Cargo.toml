@@ -1,0 +1,31 @@
+# The Windows installer's window. installer.nsi embeds the built exe, runs it
+# when the installer is opened by hand and hides its own wizard behind it.
+# Built by scripts/installer-ui.mjs before Tauri bundles
+[package]
+name = "ligma-setup-ui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Its own workspace, so it never joins the app's build
+[workspace]
+
+[target.'cfg(windows)'.dependencies]
+tao = "0.37"
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+tauri-winres = "0.3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

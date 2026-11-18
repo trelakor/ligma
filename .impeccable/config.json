@@ -61,6 +61,15 @@
         ],
         "createdAt": "2026-11-17T16:57:18.523Z",
         "reason": "agent decision: detector measured #0a73c4 against the 1px grid dots (#d6d6d6); the label sits on #f5f5f5 canvas at 4.5:1"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "src-tauri/installer/ui/index.html"
+        ],
+        "createdAt": "2026-11-18T04:57:47.801Z",
+        "reason": "claude: the size pill and You cursor tag copy Figma's own canvas badges, which use 1-2px vertical padding by design"
       }
     ]
   }
