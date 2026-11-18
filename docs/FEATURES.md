@@ -135,6 +135,8 @@ Figma's own MCP server goes through Figma's API, which a free plan can call 6 ti
 
 On launch and every hour Ligma checks the latest release and downloads a newer version in the background. Once it's ready, an Update now button shows in the tab bar (before Settings on Windows, after the traffic lights on macOS) to restart into it, or it installs when you quit. Only an update ready within a minute of launch, while Ligma is in front, also asks to restart in a prompt; later ones never take focus from what you're doing. The app is replaced in place, so you stay signed in. If an update can't be installed, Ligma says why and offers to download it or report it.
 
+The first time Ligma opens after an update, it shows what changed since the version you last used, every version in between included, with All Updates to open the rest. Settings > What's New lists every release, and turning off Show after updates (`"whatsNewAfterUpdates"`) keeps the notes there only. The notes are the release's `CHANGELOG.md` section, built into the app, so they show offline. Nothing shows on a first install (see `src-tauri/src/whats_new.rs`). A release's main features also play as short looping demos above its notes, several in a carousel with arrows on hover and a dot for each. They're drawn in HTML in your theme rather than recorded, and small changes and fixes get none (see `dist/demos.js`).
+
 ## Reporting problems
 
 Use Report… in Settings (or Help > Report a Problem… on macOS). It opens a GitHub issue filled in with Ligma's version, the system and the end of `ligma.log`, for you to check and submit. The log is in `%LOCALAPPDATA%\dev.ligma.client\logs` on Windows and `~/Library/Logs/dev.ligma.client` on macOS.
