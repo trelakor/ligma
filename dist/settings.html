@@ -666,7 +666,7 @@
   }
   .slot .tool svg, .sub .tool svg { display: block; width: 100%; height: 100%; }
   .slot .chev { width: calc(16px * var(--u)); padding: 0; }
-  .slot .chev svg { width: calc(16px * var(--u)); height: calc(16px * var(--u)); transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1); }
+  .slot .chev svg { flex: none; width: calc(24px * var(--u)); height: calc(24px * var(--u)); transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1); }
   .mode .tool { width: calc(28px * var(--u)); height: calc(28px * var(--u)); padding: calc(2px * var(--u)); border-radius: calc(3px * var(--u)); }
   .mode .tool.text { width: auto; padding: 0 calc(8px * var(--u)); white-space: nowrap; }
   /* The mode whose toolbar is shown, as Figma marks the one you're in */
@@ -2415,7 +2415,8 @@
     ["handoff", "Dev Mode", "showDevMode"],
   ];
   const LASSO = { key: "ligmaLasso", name: "Lasso fill", ligma: true, icon: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="currentColor" d="m10.197 17.884.33.06q.496.073.98.05a.5.5 0 0 1 .043 1 6 6 0 0 1-1.169-.062l-.393-.07-.097-.031a.501.501 0 0 1 .205-.958zm4.23-.859a.5.5 0 0 1 .534.846q-.667.422-1.377.694a.5.5 0 0 1-.357-.934 7 7 0 0 0 1.2-.606m-7.703-.582a.5.5 0 0 1 .63-.053l.077.065.126.124q.193.18.402.321l.29.186q.146.088.29.168a.5.5 0 0 1-.483.876 8 8 0 0 1-.328-.19l-.326-.21a4 4 0 0 1-.527-.422l-.163-.158-.062-.08a.5.5 0 0 1 .074-.627m10.105-1.63a.5.5 0 0 1 .726.68l-.231.291-.25.287q-.258.282-.526.541a.5.5 0 0 1-.695-.719q.245-.236.481-.496l.221-.254q.107-.127.204-.256zm-11.322-1.85a.5.5 0 0 1 .54.328l.025.098.062.376q.11.557.301 1.06a.5.5 0 0 1-.935.355 7.5 7.5 0 0 1-.347-1.224l-.071-.428-.004-.101a.5.5 0 0 1 .43-.464m13.012-1.264a.5.5 0 0 1 .429.563 6.3 6.3 0 0 1-.393 1.48.5.5 0 0 1-.93-.37 5.3 5.3 0 0 0 .331-1.245.5.5 0 0 1 .563-.428M5.46 9.622a.5.5 0 0 1 .944.332c-.166.47-.279.958-.342 1.448l-.022.099a.501.501 0 0 1-.97-.228l.065-.416a8 8 0 0 1 .325-1.235m12.753-.865c.287.434.5.922.631 1.443a.501.501 0 0 1-.97.244 3.7 3.7 0 0 0-.496-1.136l.418-.275zm-8.182-.42a.5.5 0 0 1 .47.877l-.277.191q-.14.099-.28.205l-.086.053a.5.5 0 0 1-.516-.85l.301-.221q.15-.107.299-.207zm7.49.278a.5.5 0 0 1 .692.142l-.835.551a.5.5 0 0 1 .143-.693m-9.706-2.28a.5.5 0 0 1 .538.838l-.286.242q-.413.376-.738.807a.5.5 0 1 1-.797-.604A7 7 0 0 1 7.73 6.39zm5.392 1.105.109.488a7 7 0 0 0-1.247.414l-.097.03a.501.501 0 0 1-.303-.947l.366-.15a8 8 0 0 1 1.063-.323zm1.943-.59.204.033q.605.112 1.129.363l.172.087.084.056a.5.5 0 0 1-.461.865l-.094-.04-.268-.126a3.6 3.6 0 0 0-.906-.248.5.5 0 0 1 .14-.99m-2.052.102a.5.5 0 0 1 .218.976zM10.62 5.001a.5.5 0 0 1 .25.946l-.094.036q-.374.099-.714.228l-.098.026a.5.5 0 0 1-.255-.962l.397-.137a9 9 0 0 1 .414-.122z"/></svg>` };
-  const CHEVRON = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  // Figma's own arrow for a group of tools
+  const CHEVRON = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path fill="currentColor" d="M13.647 10.647a.5.5 0 0 1 .707.707l-2.5 2.5a.5.5 0 0 1-.707 0l-2.5-2.5a.5.5 0 0 1 .707-.707l2.146 2.146z"/></svg>';
   const EYE = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M1 6s1.8-3.5 5-3.5S11 6 11 6 9.2 9.5 6 9.5 1 6 1 6Z" stroke="currentColor"/><circle cx="6" cy="6" r="1.5" fill="currentColor"/></svg>';
   const EYE_OFF = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.6 3.6C1.6 4.6 1 6 1 6s1.8 3.5 5 3.5c.9 0 1.7-.3 2.4-.7M4.6 2.7c.4-.1.9-.2 1.4-.2C9.2 2.5 11 6 11 6s-.4.8-1.1 1.7M1.5 1.5l9 9" stroke="currentColor" stroke-linecap="round"/></svg>';
 
