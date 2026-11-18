@@ -2413,56 +2413,65 @@
   };
   for (const [id, spec] of Object.entries(EFFECTS)) DEMOS[`fx-${id}`] = effectDemo(spec);
 
-  // A tile of the library: its picture over its name
-  const tile = (fx, src, name, cls = "") =>
-    `<span class="tile ${cls}"><span class="pic2"><canvas data-size="66x40" data-fx="${fx}:1"${src ? ` data-src="${src}"` : ""}></canvas><span class="star">${ICON.star}</span></span><span class="nm">${name}</span></span>`;
+  // A tile of the library at its real size: its picture, as the app draws
+  // it (effect-thumbs.webp, made by the effects themselves: a 4 × 4 grid
+  // in the order of `THUMBS`), over its name
+  const THUMBS = ["Repeater", "Disintegrate", "Bitcrush", "Dither", "Halftone", "Modulate", "Chromatic Aberration", "Fisheye", "Shape Fill", "Warp", "Scatter Brush", "Pattern Brush", "Extrude 3D", "Long Shadow", "Outline Stack"];
+  const STAR = '<svg width="16" height="16" fill="none" viewBox="0 0 16 16"><path stroke="currentColor" stroke-linejoin="round" d="M8 2.85l1.5 3.69 3.97.28-3.04 2.57.95 3.86L8 11.15l-3.38 2.1.95-3.86-3.04-2.57 3.97-.28Z"/></svg>';
+  const tile = (name, cls = "") => {
+    const i = THUMBS.indexOf(name);
+    return `<span class="tile ${cls}"><span class="pic2" style="background-position:${(i % 4) * -75}px ${Math.floor(i / 4) * -75}px"></span><span class="nm">${name}</span><span class="star">${STAR}</span></span>`;
+  };
 
   DEMOS["fx-library"] = {
     title: "Effects",
+    // Larger, so the library shows at its real size
+    size: [600, 334],
     steps: [
-      { caption: "A button after Actions in the toolbar", ms: 1300, at: [300, 150] },
-      { caption: "A button after Actions in the toolbar", ms: 700, at: [362, 232], move: 800 },
+      { caption: "A button after Actions in the toolbar", ms: 1300, at: [380, 180] },
+      { caption: "A button after Actions in the toolbar", ms: 700, at: [244, 292], move: 800 },
       { caption: "Every effect, pictured at work", ms: 1800, click: true },
-      { caption: "Raster, Vector and Favorites", ms: 650, at: [207, 58], move: 600 },
+      { caption: "Raster, Vector and Favorites", ms: 650, at: [176, 72], move: 600 },
       { caption: "Raster, Vector and Favorites", ms: 1600, click: true },
-      { caption: "Star one to keep it in Favorites", ms: 700, at: [204, 104], move: 500 },
-      { caption: "Star one to keep it in Favorites", ms: 500, at: [225, 88], move: 350 },
+      { caption: "Star one to keep it in Favorites", ms: 700, at: [370, 140], move: 500 },
+      { caption: "Star one to keep it in Favorites", ms: 500, at: [393, 111], move: 350 },
       { caption: "Star one to keep it in Favorites", ms: 1800, click: true },
     ],
     html: `
       <div class="win fxwin"></div>
       <div class="tbclip"><div class="fxtb">${FIGMA_TOOLBAR}</div></div>
       <div class="fxm">
-        <div class="search">${ICON.search}<span>Search effects</span></div>
-        <div class="tabs"><span class="tab all" style="width:30px">All</span><span class="tab" style="width:50px">Raster</span><span class="tab vec" style="width:50px">Vector</span><span class="tab" style="width:66px">Favorites</span></div>
-        <div class="grid gall">${[["repeater", null, "Repeater"], ["disintegrate", "orb", "Disintegrate"], ["bitcrush", "photo", "Bitcrush"], ["dither", "photo", "Dither"], ["halftone", "photo", "Halftone"], ["glow", "photo", "Glow"], ["glitter", "heart", "Glitter"], ["kaleidoscope", "photo", "Kaleidoscope"]].map((t) => tile(...t)).join("")}</div>
-        <div class="grid gvec">${[["warp", null, "Warp"], ["scatter", null, "Scatter Brush", "t2"], ["pattern", null, "Pattern Brush"], ["extrude", null, "Extrude 3D"], ["longShadow", null, "Long Shadow"], ["outline", null, "Outline Stack"], ["blend", null, "Blend"], ["pucker", null, "Pucker & Bloat"]].map((t) => tile(...t)).join("")}</div>
+        <div class="top">
+          <div class="search">${ICON.search.replace(/width="16" height="16"/, 'width="24" height="24"')}<span>Search effects</span></div>
+          <div class="tabs"><span class="tab all">All</span><span class="tab">Raster</span><span class="tab vec">Vector</span><span class="tab">Favorites</span></div>
+        </div>
+        <div class="grid gall">${["Repeater", "Disintegrate", "Bitcrush", "Dither", "Halftone", "Modulate", "Chromatic Aberration", "Fisheye"].map((name) => tile(name)).join("")}</div>
+        <div class="grid gvec">${["Repeater", "Shape Fill", "Warp", "Scatter Brush", "Pattern Brush", "Extrude 3D", "Long Shadow", "Outline Stack"].map((name) => tile(name, name === "Scatter Brush" ? "t2" : "")).join("")}</div>
       </div>`,
     css: `
-      .tbclip { position: absolute; left: 12px; top: 12px; width: 456px; height: 243px; overflow: hidden; border-radius: 10px; }
-      .fxtb { position: absolute; left: -96px; top: 196px; }
-      .at-2 .fxbtn { background: var(--bg-secondary); }
-      .fxm { position: absolute; left: 90px; top: 6px; width: 300px; padding: 8px; border-radius: 13px; background: var(--bg); box-shadow: var(--d-shadow), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(6px); transition: opacity 180ms var(--demo-ease), transform 300ms var(--demo-ease); }
+      .fxwin { width: 576px; height: 310px; }
+      .tbclip { position: absolute; left: 12px; top: 12px; width: 576px; height: 310px; overflow: hidden; border-radius: 10px; }
+      .fxtb { position: absolute; left: -214px; top: 256px; }
+      .fxm { position: absolute; left: 60px; top: 12px; width: 368px; height: 252px; overflow: hidden; border-radius: 13px; background: var(--bg); box-shadow: var(--d-shadow), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(6px); transition: opacity 180ms var(--demo-ease), transform 300ms var(--demo-ease); }
       .at-2 .fxm { opacity: 1; transform: none; }
-      .search { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px; border-radius: 5px; background: var(--bg-secondary); color: var(--text-secondary); }
-      .tabs { display: flex; gap: 2px; height: 24px; margin: 4px 0 6px; }
-      .tab { display: grid; place-items: center; border-radius: 5px; color: var(--text-secondary); transition: background-color 120ms, color 120ms; }
+      .top { padding: 8px 8px 4px; }
+      .search { display: flex; align-items: center; height: 32px; padding: 0 8px 0 3px; border-radius: 5px; background: var(--bg-secondary); color: var(--text-secondary); }
+      .tabs { display: flex; gap: 2px; margin-top: 8px; }
+      .tab { height: 24px; padding: 0 8px; border-radius: 5px; color: var(--text-secondary); font-weight: 500; line-height: 24px; transition: background-color 120ms, color 120ms; }
       .tab.all { background: var(--bg-secondary); color: var(--text); }
       .at-4 .tab.all { background: none; color: var(--text-secondary); }
       .at-4 .tab.vec { background: var(--bg-secondary); color: var(--text); }
-      .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 6px; }
+      .grid { display: grid; grid-template-columns: repeat(4, 83px); gap: 4px; padding: 4px 8px 8px; }
       .gvec { display: none; }
       .at-4 .gall { display: none; }
       .at-4 .gvec { display: grid; }
-      .tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 2px; border-radius: 6px; transition: background-color 120ms; }
-      .pic2 { position: relative; height: 38px; overflow: hidden; border-radius: 4px; background: var(--bg-secondary); }
-      .pic2 canvas { display: block; width: 100%; height: 100%; }
-      .nm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-      .star { position: absolute; right: 2px; top: 2px; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: rgb(0 0 0 / .45); color: #fff; opacity: 0; transition: opacity 120ms; }
-      .star svg { width: 12px; height: 12px; }
+      .tile { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 4px 4px 6px; border-radius: 8px; text-align: center; transition: background-color 120ms; }
+      .pic2 { width: 75px; height: 75px; border-radius: 6px; background: #383838 url("effect-thumbs.webp") 0 0 / 300px 300px no-repeat; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1); }
+      .nm { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 14px; }
+      .star { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 5px; background: color-mix(in srgb, var(--bg) 85%, transparent); color: var(--text); opacity: 0; transition: opacity 120ms; }
       .at-5 .t2 { background: var(--bg-secondary); }
       .at-5 .t2 .star { opacity: 1; }
-      .at-7 .t2 .star { color: #ffcd29; }
+      .at-6 .t2 .star { background: var(--bg-secondary); }
       .at-7 .t2 .star path { fill: currentColor; }`,
   };
 
