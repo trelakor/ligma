@@ -49,6 +49,9 @@ pub struct Settings {
     /// Show Figma's notifications, the ones in its bell, as the system's
     /// own (see notifications.rs)
     pub figma_notifications: bool,
+    /// After an update, show what changed since the version that ran last
+    /// (see whats_new.rs)
+    pub whats_new_after_updates: bool,
     /// Show the open file, where in it you are and the selected tool on
     /// Discord
     pub discord_rich_presence: bool,
@@ -187,6 +190,7 @@ impl Default for Settings {
             reload_snapshots: false,
             game_mode: true,
             figma_notifications: true,
+            whats_new_after_updates: true,
             discord_rich_presence: true,
             discord_show_file: true,
             discord_hide_files_by_default: false,
