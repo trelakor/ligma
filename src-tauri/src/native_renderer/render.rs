@@ -2284,7 +2284,7 @@ impl Painter {
         let _span = super::span::span("vello again");
         let started = Instant::now();
         let Some(mut vello) = self.vello.take() else { return Err("no Vello".into()) };
-        let plan = super::vello::Plan::new(w);
+        let plan = super::vello::Plan::new();
         let kept = super::vello::Kept::at(id, true, x as f32, y as f32);
         let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &vello::Scene::new(), w, h, 0, &[], &plan, kept);
         self.vello = Some(vello);
@@ -2771,7 +2771,7 @@ impl Painter {
         let (mut reused, mut made_count) = (0, 0);
         let (mut encoding, mut rough) = (Duration::ZERO, false);
         // Blurs, drawn and put in place for the view
-        let mut plan = super::vello::Plan::new(w);
+        let mut plan = super::vello::Plan::new();
         plan.coarser = self.blur_coarser;
         let whole = vello::kurbo::Rect::new(0.0, 0.0, w as f64, h as f64);
         let encoding_span = super::span::span("encode scene");

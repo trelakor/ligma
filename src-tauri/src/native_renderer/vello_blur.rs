@@ -322,6 +322,10 @@ const MOST_SIGMA: f32 = 4.0;
 /// level 12 at the most
 const LEVELS: u32 = 12;
 
+/// Rows of the work textures blurs take before the next are blurred in a
+/// batch of their own, which bounds their memory however many a view has
+const WORK_ROWS: u32 = 1024;
+
 impl Blurrer {
     pub fn new(device: &wgpu::Device) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("ligma blur"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
@@ -347,9 +351,13 @@ impl Blurrer {
         // Each job's level and where it's worked on, shelved: blurs in the
         // work textures, noise and grain in the filtered one
         let mut infos: Vec<u8> = Vec::with_capacity(jobs.len() * 192);
-        let (mut small, mut big, mut filters): (Vec<[u32; 4]>, Vec<[u32; 4]>, Vec<[u32; 4]>) = (Vec::new(), Vec::new(), Vec::new());
+        // Blurs' tiles at their level and in their slot, in batches that
+        // each fit the work textures, which are used again for the next
+        let mut batches: Vec<(Vec<[u32; 4]>, Vec<[u32; 4]>)> = vec![(Vec::new(), Vec::new())];
+        let mut filters: Vec<[u32; 4]> = Vec::new();
         let width = width.max(16);
         let mut shelves = [(0u32, 0u32, 0u32); 2];
+        let mut work_rows = 0;
         // Where each of noise and grain is in the filtered texture, and its
         // slot
         let mut filtered: Vec<([u32; 4], [i32; 4])> = Vec::new();
@@ -368,9 +376,16 @@ impl Blurrer {
                 *y += *row;
                 *row = 0;
             }
+            if blur && *y > 0 && *y + h > WORK_ROWS {
+                batches.push((Vec::new(), Vec::new()));
+                (*x, *y, *row) = (0, 0, 0);
+            }
             let work = [*x, *y, w, h];
             *x += w;
             *row = (*row).max(h);
+            if blur {
+                work_rows = work_rows.max(*y + *row);
+            }
             let sigma = (job.sigma.0 / scale, job.sigma.1 / scale);
             let radius = |sigma: f32| if sigma > 0.03 { (3.0 * sigma).ceil() as i32 } else { 0 };
             let clamp = job.clamp.unwrap_or([0.0; 4]);
@@ -411,15 +426,15 @@ impl Blurrer {
                     }
                 }
             };
-            if blur {
-                tile(&mut small, w, h);
-                tile(&mut big, job.slot[2] as u32, job.slot[3] as u32);
+            if let (true, Some((small, big))) = (blur, batches.last_mut()) {
+                tile(small, w, h);
+                tile(big, job.slot[2] as u32, job.slot[3] as u32);
             } else {
                 tile(&mut filters, w, h);
                 filtered.push((work, job.slot));
             }
         }
-        let heights = shelves.map(|(_, y, row)| y + row);
+        let heights = [work_rows, shelves[1].1 + shelves[1].2];
         if heights.iter().any(|&height| height > 8192) {
             return Err("blurs past their textures".into());
         }
@@ -436,7 +451,7 @@ impl Blurrer {
                 view_formats: &[],
             })
         };
-        if !small.is_empty() && self.work.as_ref().is_none_or(|(_, _, w, h)| *w < width || *h < heights[0]) {
+        if batches.iter().any(|(small, _)| !small.is_empty()) && self.work.as_ref().is_none_or(|(_, _, w, h)| *w < width || *h < heights[0]) {
             let (w, h) = (step(width), step(heights[0]));
             let usage = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
             self.work = Some((make("ligma blur work", w, h, wgpu::TextureFormat::Rgba16Float, usage), make("ligma blur work", w, h, wgpu::TextureFormat::Rgba16Float, usage), w, h));
@@ -477,12 +492,14 @@ impl Blurrer {
             let x = count.min(65535);
             compute.dispatch_workgroups(x, count.div_ceil(x), 1);
         };
-        if let (false, Some((a, b, _, _))) = (small.is_empty(), &self.work) {
+        if let Some((a, b, _, _)) = &self.work {
             let (a_view, b_view) = (a.create_view(&Default::default()), b.create_view(&Default::default()));
-            pass(&self.down, &small, &texture_view, &a_view, false);
-            pass(&self.horizontal, &small, &a_view, &b_view, false);
-            pass(&self.vertical, &small, &b_view, &a_view, false);
-            pass(&self.up, &big, &a_view, &texture_view, true);
+            for (small, big) in &batches {
+                pass(&self.down, small, &texture_view, &a_view, false);
+                pass(&self.horizontal, small, &a_view, &b_view, false);
+                pass(&self.vertical, small, &b_view, &a_view, false);
+                pass(&self.up, big, &a_view, &texture_view, true);
+            }
         }
         // Noise and grain go from their slots to the filtered texture, then
         // back to the slots

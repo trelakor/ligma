@@ -1349,12 +1349,17 @@ struct Depth {
     used: i32,
 }
 
+/// How wide blurs' rows are, the same for every view, so how many rows a
+/// view's blurs take says the same of tiles and whole views, and their
+/// texture keeps its shape from one to the next
+const BLUR_ROW: i32 = 2048;
+
 impl Depth {
-    /// Room for `width` by `height`, in rows the view's width, or wider for
+    /// Room for `width` by `height`, in rows `BLUR_ROW` wide, or wider for
     /// one that is
-    fn room(&mut self, width: i32, height: i32, soft: i32) -> Option<(i32, i32)> {
+    fn room(&mut self, width: i32, height: i32) -> Option<(i32, i32)> {
         let shelf = &mut self.shelf;
-        if shelf.x > 0 && shelf.x + width > soft {
+        if shelf.x > 0 && shelf.x + width > BLUR_ROW {
             shelf.x = 0;
             shelf.y += shelf.row;
             shelf.row = 0;
@@ -1372,8 +1377,8 @@ impl Depth {
 
 /// What a view draws for scenes' effects: blurs' sources, each depth's
 /// drawn into a texture of their own, and what Skia drew onto the atlas
+#[derive(Default)]
 pub struct Plan {
-    width: i32,
     /// Times blurs' sources are drawn at half again, where they wouldn't
     /// fit their textures otherwise
     pub coarser: u32,
@@ -1451,9 +1456,9 @@ fn to_matrix(t: Affine) -> Matrix {
 }
 
 impl Plan {
-    /// Effects in a view `width` wide
-    pub fn new(width: i32) -> Self {
-        Self { width: width.clamp(256, 8192), coarser: 0, depths: Vec::new(), skia: Vec::new(), octaves: Vec::new() }
+    /// Effects in a view
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// How tall the tallest of its blurs' textures is
@@ -3010,8 +3015,7 @@ impl<'a> Encoder<'a> {
                     while plan.depths.len() <= depth {
                         plan.depths.push(Depth { scene: vello::Scene::new(), shelf: Shelf { width: 8192, height: 8192, x: 0, y: 0, row: 0 }, blurs: Vec::new(), used: 0 });
                     }
-                    let soft = plan.width;
-                    let (x, y) = plan.depths[depth].room(width, height, soft).ok_or("blurs past their texture")?;
+                    let (x, y) = plan.depths[depth].room(width, height).ok_or("blurs past their texture")?;
                     let in_slot = Affine::translate((x as f64, y as f64)) * Affine::scale(f) * Affine::translate((-left as f64, -top as f64)) * tf;
                     let to_slot = in_slot * turn.inverse();
                     let slot = kurbo::Rect::new(x as f64, y as f64, (x + width) as f64, (y + height) as f64);
