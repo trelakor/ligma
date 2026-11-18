@@ -12,6 +12,7 @@ Every release needs a section here, headed `## <version> - <date>`, before it's 
 - A Ligma Effects section under Figma's own Effects lists a layer's effects to edit, hide, reorder or remove. Effects stack, and changing one under others makes those above it again.
 - Moving, turning or resizing a result or its original while an effect's open carries on from where it is now. Extrude 3D and Long Shadow can follow their original as it changes.
 - Scatter Brush, Pattern Brush and Shape Fill show their path or shape in the preview before anything's added, and Use selected swaps it without reopening the effect.
+- After an update, Ligma shows what's new in it, with short demos of the main features and buttons to switch on those that start off. Settings > What's New has every release's notes.
 
 ## 0.44.0 - 2026-11-14
 
