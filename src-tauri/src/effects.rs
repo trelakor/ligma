@@ -1,7 +1,8 @@
 //! Effects library (Settings > Editor > Toolbar): a button in Figma
 //! Design's toolbar, after Actions, that lists effects Ligma makes in the
 //! file, each with a panel drawn as Figma's own are, using its colors,
-//! type and controls. On by default
+//! type and controls. Off by default. While it's off none of it is in
+//! the page: tabs get `PAGE_JS` only once it's switched on
 //!
 //! Effects run in the page through Figma's console plugin API,
 //! `window.figma`, rather than as plugins, so there's no plugin window:
@@ -32,10 +33,12 @@
 //! the right panel lists them to edit, hide, reorder or remove. See
 //! docs/EFFECTS.md
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Webview};
 
 use crate::settings::Settings;
 
@@ -43,7 +46,7 @@ use crate::settings::Settings;
 /// when the tab was made. A page loaded later in the same tab may find a
 /// newer one in `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
-  if (location.hostname !== "www.figma.com" || window.top !== window) return;
+  if (location.hostname !== "www.figma.com" || window.top !== window || window.__ligmaEffects) return;
   const KEY = "ligma-effects";
   let state = __LIGMA_EFFECTS__;
   try {
@@ -14570,7 +14573,7 @@ const PAGE_JS: &str = r##"(() => {
 })()"##;
 
 /// The setting,
-static ON: AtomicBool = AtomicBool::new(true);
+static ON: AtomicBool = AtomicBool::new(false);
 /// and when it last changed, for `PAGE_JS` to tell it from an older one in
 /// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
@@ -14590,19 +14593,81 @@ pub fn init(settings: &Settings) {
     REV.store(now(), Ordering::Relaxed);
 }
 
-/// `PAGE_JS`, for a new Figma tab
-pub fn page_js() -> String {
+/// Tabs made with `PAGE_JS` as an initialization script, so every page
+/// they load has it
+static BUILT_IN: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
+/// Tabs whose current page has it, built in or added since
+static LOADED: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
+
+fn mark(set: &Mutex<Option<HashSet<u32>>>, tab: u32, on: bool) {
+    let mut set = set.lock().unwrap();
+    let set = set.get_or_insert_with(HashSet::new);
+    if on {
+        set.insert(tab);
+    } else {
+        set.remove(&tab);
+    }
+}
+
+fn has(set: &Mutex<Option<HashSet<u32>>>, tab: u32) -> bool {
+    set.lock().unwrap().as_ref().is_some_and(|set| set.contains(&tab))
+}
+
+/// The initialization script for a new tab: `PAGE_JS` while the setting's
+/// on, nothing while it's off
+pub fn page_js(tab: u32) -> String {
+    let on = ON.load(Ordering::Relaxed);
+    mark(&BUILT_IN, tab, on);
+    mark(&LOADED, tab, on);
+    if on {
+        page_js_now()
+    } else {
+        String::new()
+    }
+}
+
+/// Adds `PAGE_JS` to a tab's page if the setting's on and it hasn't got it
+fn load(webview: &Webview, tab: u32) {
+    if !ON.load(Ordering::Relaxed) || has(&LOADED, tab) {
+        return;
+    }
+    if webview.eval(page_js_now()).is_ok() {
+        mark(&LOADED, tab, true);
+    }
+}
+
+fn page_js_now() -> String {
     PAGE_JS.replace("__LIGMA_EFFECTS__", &state())
 }
 
-/// Sends a changed setting to every loaded tab
+/// When a page in tab `tab` has loaded: one in a tab made while the
+/// setting was off gets `PAGE_JS` now if it's been switched on since
+pub fn on_page_load(webview: &Webview, tab: u32) {
+    if !has(&BUILT_IN, tab) {
+        mark(&LOADED, tab, false);
+        load(webview, tab);
+    }
+}
+
+/// When tab `tab` is shown, for one that was frozen when the setting was
+/// switched on
+pub fn on_shown(webview: &Webview, tab: u32) {
+    load(webview, tab);
+}
+
+/// Sends a changed setting to every loaded tab, adding `PAGE_JS` to those
+/// without it when it's switched on
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
     if ON.swap(settings.effects_library, Ordering::Relaxed) == settings.effects_library {
         return;
     }
     REV.store(now(), Ordering::Relaxed);
     let script = format!("window.__ligmaEffects?.({})", state());
-    for webview in crate::tabs::scriptable_tabs(app) {
-        let _ = webview.eval(&script);
+    for (tab, webview) in crate::tabs::scriptable_tabs_with_ids(app) {
+        if has(&LOADED, tab) {
+            let _ = webview.eval(&script);
+        } else {
+            load(&webview, tab);
+        }
     }
 }

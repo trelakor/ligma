@@ -833,6 +833,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                 let _ = webview.set_zoom(scale(webview.app_handle()));
                 crate::plugins::push_to(&webview);
                 crate::appearance::push_to(&webview);
+                crate::effects::on_page_load(&webview, id);
                 finish_loading(webview.app_handle(), id);
             }
         })
@@ -854,7 +855,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .initialization_script(crate::ai_actions::page_js())
         .initialization_script(crate::copy_code::page_js())
         .initialization_script(crate::lasso::page_js())
-        .initialization_script(crate::effects::page_js())
+        .initialization_script(crate::effects::page_js(id))
         .initialization_script(crate::page_avatars::PAGE_JS)
         .initialization_script(crate::mcp_bridge::PANEL_JS)
         .initialization_script(crate::split::PAGE_JS)
@@ -1179,6 +1180,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
         }
         #[cfg(windows)]
         crate::webview2::on_shown(&webview);
+        crate::effects::on_shown(&webview, id);
         #[cfg(target_os = "macos")]
         if resume {
             let app = app.clone();
@@ -2325,6 +2327,15 @@ pub fn scriptable_tabs(app: &AppHandle) -> Vec<Webview> {
         state.tabs.iter().filter(|tab| !tab.asleep && !tab.suspended).map(|tab| tab.id).collect()
     };
     ids.into_iter().filter_map(|id| app.get_webview(&label(id))).collect()
+}
+
+/// `scriptable_tabs`, with each tab's id
+pub fn scriptable_tabs_with_ids(app: &AppHandle) -> Vec<(u32, Webview)> {
+    let ids: Vec<u32> = {
+        let state = app.state::<Tabs>().inner().0.lock().unwrap();
+        state.tabs.iter().filter(|tab| !tab.asleep && !tab.suspended).map(|tab| tab.id).collect()
+    };
+    ids.into_iter().filter_map(|id| Some((id, app.get_webview(&label(id))?))).collect()
 }
 
 /// A file open in its editor, in a tab that can run JavaScript now

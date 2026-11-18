@@ -230,7 +230,7 @@ impl Default for Settings {
             image_bar_icons: false,
             copy_as_code: true,
             lasso_fill: true,
-            effects_library: true,
+            effects_library: false,
             classic_home: false,
             ligma_home: true,
             ligma_home_start: "home".into(),
