@@ -1615,60 +1615,93 @@
     rim(src, v, w) {
       const k = w / 176;
       const [W, H, d] = [src.width, src.height, fxData(src)];
+      const width = [0, 3, 6, 3][v] * k;
+      const [lx, ly] = v === 3 ? [0, -1] : [-0.8, -0.6];
+      const color = v === 3 ? [255, 79, 216] : [255, 214, 160];
+      const rim = fxCanvas(W, H);
+      const r = fxContext(rim);
+      const image = r.createImageData(W, H);
+      const o = image.data;
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          if (!d[i + 3]) continue;
+          const [sx, sy] = [Math.round(x + lx * width), Math.round(y + ly * width)];
+          const behind = sx < 0 || sy < 0 || sx >= W || sy >= H ? 0 : d[(sy * W + sx) * 4 + 3] / 255;
+          [o[i], o[i + 1], o[i + 2], o[i + 3]] = [...color, d[i + 3] * (1 - behind)];
+        }
+      r.putImageData(image, 0, 0);
       const out = fxCanvas(W, H);
       const c = fxContext(out);
       c.drawImage(src, 0, 0);
-      const image = c.getImageData(0, 0, W, H);
-      const o = image.data;
-      const width = [0, 3, 6, 4][v] * k;
-      const lights = v === 3 ? [[-1, -0.3, [80, 240, 255]], [1, -0.3, [255, 80, 210]]] : [[-0.8, -0.6, [255, 214, 160]]];
-      for (const [lx, ly, color] of lights)
-        for (let y = 0; y < H; y++)
-          for (let x = 0; x < W; x++) {
-            const i = (y * W + x) * 4;
-            if (!d[i + 3]) continue;
-            const [sx, sy] = [Math.round(x + lx * width), Math.round(y + ly * width)];
-            const behind = sx < 0 || sy < 0 || sx >= W || sy >= H ? 0 : d[(sy * W + sx) * 4 + 3] / 255;
-            const rim = (d[i + 3] / 255) * (1 - behind);
-            for (let ch = 0; ch < 3; ch++) o[i + ch] = Math.min(255, o[i + ch] + color[ch] * rim);
-          }
-      c.putImageData(image, 0, 0);
+      c.globalCompositeOperation = "lighter";
+      c.drawImage(rim, 0, 0);
+      if (v === 3) {
+        c.filter = `blur(${5 * k}px)`;
+        c.drawImage(rim, 0, 0);
+        c.drawImage(rim, 0, 0);
+      }
       return out;
     },
+    // As the effect makes it: the layer cut into facets around jittered
+    // points with no gaps, each tilted its own way and lit as much as it
+    // faces the light, darker where flakes meet. Disco's glints go on top
     glitter(src, v, w) {
       const k = w / 176;
       const [W, H, d] = [src.width, src.height, fxData(src)];
+      const size = [0, 6, 11, 8][v] * k;
+      const random = seeded(11);
+      const [cols, rows] = [Math.ceil(W / size) + 1, Math.ceil(H / size) + 1];
+      const light = [-0.45, -0.6, 0.66];
+      const cells = Array.from({ length: cols * rows }, (_, i) => {
+        const [cx, cy] = [i % cols, Math.floor(i / cols)];
+        const [tx, ty] = [(random() - 0.5) * 1.6, (random() - 0.5) * 1.6];
+        const len = Math.hypot(tx, ty, 1);
+        const lit = Math.max(0, (tx * light[0] + ty * light[1] + light[2]) / len);
+        return { x: (cx + random()) * size, y: (cy + random()) * size, lit, tint: (random() - 0.5) * 0.16 };
+      });
       const out = fxCanvas(W, H);
       const c = fxContext(out);
-      const random = seeded(11);
-      const f = [0, 4, 7, 5][v] * k;
-      for (let y = 0; y < H; y += f * 0.8)
-        for (let x = 0; x < W; x += f * 0.8) {
-          const [jx, jy] = [x + (random() - 0.5) * f * 0.6, y + (random() - 0.5) * f * 0.6];
-          const i = fxAt(W, H, jx, jy);
-          if (d[i + 3] < 128) continue;
-          const bright = 0.55 + random() * 1.1;
-          c.fillStyle = v === 3 ? `hsl(${((jx / W) * 300 + random() * 80) % 360} 90% ${55 + random() * 30}%)` : `rgb(${[d[i], d[i + 1], d[i + 2]].map((n) => Math.min(255, n * bright)).join(",")})`;
-          c.save();
-          c.translate(jx, jy);
-          c.rotate(random() * Math.PI);
-          c.fillRect(-f / 2, -f / 2, f * 0.9, f * 0.9);
-          c.restore();
+      const image = c.createImageData(W, H);
+      const o = image.data;
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          if (!d[i + 3]) continue;
+          const [gx, gy] = [Math.floor(x / size), Math.floor(y / size)];
+          let [best, first, second] = [null, Infinity, Infinity];
+          for (let ny = gy - 1; ny <= gy + 1; ny++)
+            for (let nx = gx - 1; nx <= gx + 1; nx++) {
+              const cell = nx >= 0 && ny >= 0 && nx < cols && ny < rows ? cells[ny * cols + nx] : null;
+              if (!cell) continue;
+              const dist = Math.hypot(cell.x - x, cell.y - y);
+              if (dist < first) [best, second, first] = [cell, first, dist];
+              else if (dist < second) second = dist;
+            }
+          const edge = second - first < 1.1 * k ? 0.72 : 1;
+          const shade = (0.4 + 1.25 * best.lit ** 2) * edge;
+          const flash = Math.max(0, (best.lit - 0.9) * 8);
+          for (let ch = 0; ch < 3; ch++) {
+            const tinted = d[i + ch] * (1 + (ch === 0 ? best.tint : ch === 2 ? -best.tint : 0));
+            o[i + ch] = Math.min(255, tinted * shade * (1 - flash) + 255 * flash);
+          }
+          o[i + 3] = d[i + 3];
         }
-      c.globalCompositeOperation = "lighter";
-      c.fillStyle = "#fff";
-      for (let n = 0, tries = 0; n < [0, 10, 14, 14][v] && tries < 400; tries++) {
-        const [x, y] = [random() * W, random() * H];
-        if (d[fxAt(W, H, x, y) + 3] < 128) continue;
-        const s = f * (1 + random());
-        c.beginPath();
-        c.moveTo(x, y - s);
-        c.quadraticCurveTo(x, y, x + s, y);
-        c.quadraticCurveTo(x, y, x, y + s);
-        c.quadraticCurveTo(x, y, x - s, y);
-        c.quadraticCurveTo(x, y, x, y - s);
-        c.fill();
-        n++;
+      c.putImageData(image, 0, 0);
+      if (v === 3) {
+        c.globalCompositeOperation = "lighter";
+        c.fillStyle = "#fff";
+        const bright = cells.filter((cell) => cell.lit > 0.92 && d[fxAt(W, H, cell.x, cell.y) + 3] > 128);
+        for (const cell of bright.slice(0, 14)) {
+          const r = 7 * k * (0.6 + random() * 0.6);
+          c.beginPath();
+          c.moveTo(cell.x, cell.y - r);
+          c.quadraticCurveTo(cell.x, cell.y, cell.x + r, cell.y);
+          c.quadraticCurveTo(cell.x, cell.y, cell.x, cell.y + r);
+          c.quadraticCurveTo(cell.x, cell.y, cell.x - r, cell.y);
+          c.quadraticCurveTo(cell.x, cell.y, cell.x, cell.y - r);
+          c.fill();
+        }
       }
       return out;
     },
@@ -2218,6 +2251,37 @@
     canvas.getContext("2d").drawImage(picture, 0, 0);
   };
 
+  // Figma Design's toolbar at its real size: Move, Frame, Rectangle, Pen,
+  // Text and Code, each with its menu, then Comment, Actions and Ligma's
+  // Effects, and the Draw and Design switch. 549 wide, so scenes crop it
+  const tool = (body, cls = "") => `<span class="ft${cls}">${svg(body, 24, ' stroke-width="1"')}</span>`;
+  const more = `<span class="fm">${svg('<path d="m5.5 7 2.5 2.5L10.5 7"/>', 16, ' stroke-width="1"')}</span>`;
+  const FIGMA_TOOLBAR = `<div class="ftb">
+    ${tool('<path d="M4 3.2 12.2 6.6 8.6 8 7.1 11.6z"/>', " on")}${more}
+    ${tool('<path d="M5.5 3v10M10.5 3v10M3 5.5h10M3 10.5h10"/>')}${more}
+    ${tool('<rect x="3.5" y="3.5" width="9" height="9" rx=".5"/>')}${more}
+    ${tool('<path d="M4.2 4.6 10 3.2l2.8 5.6-4.4 4.4-5.6-2.8z"/><circle cx="8" cy="8" r="1.2"/><path d="M4.2 4.6 7.2 7.2"/>')}${more}
+    ${tool('<path d="M3.5 4h9M8 4v8.5M6.5 12.5h3"/>')}${more}
+    ${tool('<path d="M6 3.5c-1.4 0-1.6.8-1.6 2v1.1c0 .9-.6 1.4-1.4 1.4.8 0 1.4.5 1.4 1.4v1.1c0 1.2.2 2 1.6 2M10 3.5c1.4 0 1.6.8 1.6 2v1.1c0 .9.6 1.4 1.4 1.4-.8 0-1.4.5-1.4 1.4v1.1c0 1.2-.2 2-1.6 2"/>')}${more}
+    ${tool('<path d="M3 12.8V8a5 5 0 1 1 5 5H3.2z"/>')}
+    ${tool('<circle cx="5.2" cy="5.2" r="1.7"/><circle cx="10.8" cy="5.2" r="1.7"/><rect x="3.5" y="9.1" width="3.4" height="3.4" rx=".6"/><path d="M10.8 9v4M8.8 11h4"/>', " gap")}
+    <span class="ft fx">${svg('<path d="M6.7 4.3c.37 2.6 1.07 3.3 3.67 3.67-2.6.37-3.3 1.07-3.67 3.67-.37-2.6-1.07-3.3-3.67-3.67 2.6-.37 3.3-1.07 3.67-3.67Z"/><path d="M11.3 3c.16 1.07.6 1.5 1.67 1.67-1.07.16-1.5.6-1.67 1.67-.16-1.07-.6-1.5-1.67-1.67 1.07-.16 1.5-.6 1.67-1.67Z"/>', 24, ' stroke-width="1"')}</span>
+    <span class="fdiv"></span>
+    <span class="fseg"><span class="fs">${svg('<path d="M3 11.5c1.6-3.4 3.4-5.6 4.4-4.8 1 .8-2.8 4.6-1.4 5 1.4.4 3.6-4.6 4.8-3.8 1 .6-1.6 3.4-.2 3.6.8.1 1.8-.8 2.4-1.6"/>', 24, ' stroke-width="1"')}</span><span class="fs on">${svg('<path d="M3 3h10M3 3v10M6 3v2M9 3v2M3 6h2M3 9h2"/><path d="m8.5 8.5 4.5 1.6-2 .8-.8 2z"/>', 24, ' stroke-width="1"')}</span></span>
+  </div>`;
+  const TOOLBAR_STYLE = `
+    .demo-scene .ftb { display: flex; align-items: center; height: 48px; padding: 0 8px; border-radius: 13px; background: var(--bg); box-shadow: 0 3px 8px rgb(0 0 0 / .35), 0 0 0 .5px rgba(127, 127, 127, .3); }
+    .demo-scene .ftb .ft { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 5px; transition: background-color 120ms; }
+    .demo-scene .ftb .ft.on { background: var(--brand); color: #fff; }
+    .demo-scene .ftb .ft.gap { margin-left: 8px; }
+    .demo-scene .ftb .ft.fx { margin-left: 8px; }
+    .demo-scene .ftb .fm { display: grid; place-items: center; width: 16px; height: 32px; margin: 0 8px 0 1px; color: var(--text-secondary); }
+    .demo-scene .ftb .fdiv { align-self: stretch; width: 1px; margin: 0 8px 0 5px; background: var(--border); }
+    .demo-scene .ftb .fseg { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--bg-secondary); }
+    .demo-scene .ftb .fs { display: grid; place-items: center; width: 30px; height: 28px; border-radius: 5px; color: var(--text-secondary); }
+    .demo-scene .ftb .fs.on { background: var(--bg); color: var(--brand); box-shadow: 0 0 0 .5px rgba(127, 127, 127, .3); }
+    .demo-scene.at-2 .ftb .ft.fx { background: var(--bg-secondary); }`;
+
   // Two sparkles, as the toolbar's Effects button draws them
   const SPARKLES = svg('<path d="M6.7 4.3c.37 2.6 1.07 3.3 3.67 3.67-2.6.37-3.3 1.07-3.67 3.67-.37-2.6-1.07-3.3-3.67-3.67 2.6-.37 3.3-1.07 3.67-3.67Z"/><path d="M11.3 3c.16 1.07.6 1.5 1.67 1.67-1.07.16-1.5.6-1.67 1.67-.16-1.07-.6-1.5-1.67-1.67 1.07-.16 1.5-.6 1.67-1.67Z"/>');
   const EYE = svg('<path d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/>');
@@ -2328,8 +2392,8 @@
     glow: { name: "Glow", fx: "glow", src: "photo", layer: "Photo", says: ["Makes a picture's bright parts glow", "Glows wider and brighter", "Dreamy glows more of it"], slider: ["Radius", [25, 60, 40], ["6", "14", "10"]], other: ["Threshold", 60, "60%"], presets: ["Bloom", "Neon", "Dreamy"], preset: 2 },
     shadow: { name: "Shadow", fx: "shadow", src: "pawn", floor: true, layer: "Pawn", says: ["Casts a shadow from a cutout's own shape", "A lower light lays it on the floor", "Studio spreads it out softly"], slider: ["Light height", [80, 25, 90], ["70°", "20°", "80°"]], other: ["Opacity", 45, "45%"], presets: ["Drop", "Floor", "Studio"], preset: 2 },
     reflection: { name: "Reflection", fx: "reflection", src: "tallPawn", floor: true, layer: "Pawn", says: ["Reflects a cutout in the floor", "A longer reflection", "Lake ripples it"], slider: ["Length", [45, 95, 80], ["45%", "95%", "80%"]], other: ["Opacity", 55, "55%"], presets: ["Glossy", "Mirror", "Lake"], preset: 2 },
-    rim: { name: "Rim Light", fx: "rim", src: "darkPawn", layer: "Pawn", says: ["Lights a cutout's edges from behind", "A wider rim", "Neon lights it from both sides"], slider: ["Width", [30, 60, 40], ["3", "6", "4"]], other: ["Direction", 35, "315°"], presets: ["Golden hour", "Neon"], preset: 1 },
-    glitter: { name: "Glitter", fx: "glitter", src: "heart", layer: "Heart", says: ["Turns a layer into sparkling flakes", "Larger flakes", "Holo shifts each flake's color"], slider: ["Flake size", [30, 60, 45], ["4", "7", "5"]], other: ["Sparkle", 55, "55%"], presets: ["Glitter", "Chunky", "Holo"], preset: 2 },
+    rim: { name: "Rim Light", fx: "rim", src: "darkPawn", layer: "Pawn", says: ["Lights a cutout's edges from behind", "A wider rim", "Neon, a bright pink rim that glows"], slider: ["Width", [30, 60, 30], ["3", "6", "3"]], other: ["Shade", 30, "30%"], presets: ["Golden hour", "Neon"], preset: 1 },
+    glitter: { name: "Glitter", fx: "glitter", src: "heart", layer: "Heart", says: ["Turns a layer into glitter, flake by flake", "Larger flakes", "Disco adds glints on top"], slider: ["Size", [30, 55, 40], ["6", "11", "8"]], other: ["Depth", 55, "55%"], presets: ["Glitter", "Chunky", "Disco"], preset: 2 },
     sticker: { name: "Sticker", fx: "sticker", src: "heart", layer: "Heart", says: ["Makes a layer a die-cut sticker", "A thicker border", "Hologram, as a foil sticker"], slider: ["Border", [35, 65, 45], ["5", "9", "6"]], other: ["Shadow", 40, "40%"], presets: ["Die cut", "Hologram"], preset: 1 },
     screen: { name: "Screen", fx: "screen", src: "photo", layer: "Photo", says: ["Films a picture off a monitor", "Closer, so its pixels show", "Head on films it square"], slider: ["Distance", [70, 35, 60], ["100%", "60%", "85%"]], other: ["Focus", 70, "70%"], presets: ["Angled", "Close up", "Head on"], preset: 2 },
     shapeFill: { name: "Shape Fill", fx: "shapeFill", layer: "Heart", says: ["Packs a shape with copies of other layers", "Smaller copies, packed tighter", "Loose lets them cross the edge"], slider: ["Size", [70, 35, 70], ["100%", "60%", "100%"]], other: ["Spacing", 20, "1"], presets: ["Inside", "Loose"], preset: 1, chipsLabel: "Fit" },
@@ -2357,17 +2421,17 @@
     title: "Effects",
     steps: [
       { caption: "A button after Actions in the toolbar", ms: 1300, at: [300, 150] },
-      { caption: "A button after Actions in the toolbar", ms: 700, at: [357, 238], move: 800 },
+      { caption: "A button after Actions in the toolbar", ms: 700, at: [362, 232], move: 800 },
       { caption: "Every effect, pictured at work", ms: 1800, click: true },
-      { caption: "Raster, Vector and Favorites", ms: 650, at: [207, 66], move: 600 },
+      { caption: "Raster, Vector and Favorites", ms: 650, at: [207, 58], move: 600 },
       { caption: "Raster, Vector and Favorites", ms: 1600, click: true },
-      { caption: "Star one to keep it in Favorites", ms: 700, at: [204, 110], move: 500 },
-      { caption: "Star one to keep it in Favorites", ms: 500, at: [225, 96], move: 350 },
+      { caption: "Star one to keep it in Favorites", ms: 700, at: [204, 104], move: 500 },
+      { caption: "Star one to keep it in Favorites", ms: 500, at: [225, 88], move: 350 },
       { caption: "Star one to keep it in Favorites", ms: 1800, click: true },
     ],
     html: `
       <div class="win fxwin"></div>
-      <div class="fxtb"><span class="tool on">${ICON.move}</span><span class="tool">${ICON.frameTool}</span><span class="tool">${ICON.rectTool}</span><span class="tool">${ICON.pen}</span><span class="tool">${ICON.textTool}</span><span class="tool">${ICON.comment}</span><span class="div"></span><span class="tool">${ICON.ai}</span><span class="tool fxbtn">${SPARKLES}</span></div>
+      <div class="tbclip"><div class="fxtb">${FIGMA_TOOLBAR}</div></div>
       <div class="fxm">
         <div class="search">${ICON.search}<span>Search effects</span></div>
         <div class="tabs"><span class="tab all" style="width:30px">All</span><span class="tab" style="width:50px">Raster</span><span class="tab vec" style="width:50px">Vector</span><span class="tab" style="width:66px">Favorites</span></div>
@@ -2375,12 +2439,10 @@
         <div class="grid gvec">${[["warp", null, "Warp"], ["scatter", null, "Scatter Brush", "t2"], ["pattern", null, "Pattern Brush"], ["extrude", null, "Extrude 3D"], ["longShadow", null, "Long Shadow"], ["outline", null, "Outline Stack"], ["blend", null, "Blend"], ["pucker", null, "Pucker & Bloat"]].map((t) => tile(...t)).join("")}</div>
       </div>`,
     css: `
-      .fxtb { position: absolute; left: 240px; top: 218px; display: flex; align-items: center; height: 40px; padding: 4px; border-radius: 13px; background: var(--bg); box-shadow: 0 3px 8px rgb(0 0 0 / .35), 0 0 0 .5px rgba(127, 127, 127, .3); transform: translateX(-50%); }
-      .fxtb .tool { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 5px; transition: background-color 120ms; }
-      .fxtb .tool.on { background: var(--brand); color: #fff; }
-      .fxtb .div { align-self: stretch; width: 1px; margin: 4px; background: var(--border); }
+      .tbclip { position: absolute; left: 12px; top: 12px; width: 456px; height: 243px; overflow: hidden; border-radius: 10px; }
+      .fxtb { position: absolute; left: -96px; top: 196px; }
       .at-2 .fxbtn { background: var(--bg-secondary); }
-      .fxm { position: absolute; left: 90px; top: 14px; width: 300px; padding: 8px; border-radius: 13px; background: var(--bg); box-shadow: var(--d-shadow), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(6px); transition: opacity 180ms var(--demo-ease), transform 300ms var(--demo-ease); }
+      .fxm { position: absolute; left: 90px; top: 6px; width: 300px; padding: 8px; border-radius: 13px; background: var(--bg); box-shadow: var(--d-shadow), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(6px); transition: opacity 180ms var(--demo-ease), transform 300ms var(--demo-ease); }
       .at-2 .fxm { opacity: 1; transform: none; }
       .search { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px; border-radius: 5px; background: var(--bg-secondary); color: var(--text-secondary); }
       .tabs { display: flex; gap: 2px; height: 24px; margin: 4px 0 6px; }
@@ -2393,7 +2455,7 @@
       .at-4 .gall { display: none; }
       .at-4 .gvec { display: grid; }
       .tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 2px; border-radius: 6px; transition: background-color 120ms; }
-      .pic2 { position: relative; height: 40px; overflow: hidden; border-radius: 4px; background: var(--bg-secondary); }
+      .pic2 { position: relative; height: 38px; overflow: hidden; border-radius: 4px; background: var(--bg-secondary); }
       .pic2 canvas { display: block; width: 100%; height: 100%; }
       .nm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
       .star { position: absolute; right: 2px; top: 2px; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: rgb(0 0 0 / .45); color: #fff; opacity: 0; transition: opacity 120ms; }
@@ -2754,7 +2816,7 @@
     const at = mode === "light" ? '[data-mode="light"]' : "";
     return `.demo-themes${at} .ted { ${themeVars("figma", mode)} } .demo-themes.at-2${at} .ted { ${themeVars("grove", mode)} } .demo-themes.at-4${at} .ted { ${themeVars("lagoon", mode)} }`;
   }).join("\n");
-  const CSS = STYLE + FX_STYLE + sceneStyle + themeStyle;
+  const CSS = STYLE + FX_STYLE + TOOLBAR_STYLE + sceneStyle + themeStyle;
   const style = document.createElement("style");
   style.textContent = CSS;
   document.head.append(style);
@@ -3130,11 +3192,15 @@
     let loops = 0;
     const dots = [];
 
+    // A pick while the last is fading out replaces it, so only one ever plays
+    let starting = 0;
     const show = (next, focus) => {
       index = (next + ids.length) % ids.length;
       player?.pause();
+      clearTimeout(starting);
       loops = 0;
       const start = () => {
+        player?.pause();
         player = play(ids[index], view, caption, () => {
           loops += 1;
           if (auto && loops >= 2) {
@@ -3147,7 +3213,7 @@
       };
       if (player) {
         view.classList.add("fading");
-        setTimeout(start, 200);
+        starting = setTimeout(start, 200);
       } else {
         start();
       }
