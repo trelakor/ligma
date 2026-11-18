@@ -666,6 +666,8 @@ struct Whole {
     vello: bool,
     /// The frame it's drawn as of, everything changed since in `patch`
     seq: u64,
+    /// Parts of it drawn again since by Vello, to draw it all again at rest
+    patched: bool,
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -676,6 +678,10 @@ const EDITING: Duration = Duration::from_millis(400);
 const PATCHES: usize = 24;
 /// Most units drawn again exactly in a patch of the whole view
 const PATCH_UNITS: usize = 160;
+/// Vello patches of the whole view are on a grid of this many pixels from
+/// its corner, as blurs drawn smaller and back come out a little otherwise
+/// from elsewhere
+const PATCH_GRID: i32 = 64;
 
 /// An image on the GPU once, with its mipmaps, and outside Skia's cache:
 /// left to the cache, layers drawn in a frame push images out, and each is
@@ -1242,6 +1248,9 @@ pub struct Painter {
     /// fit their textures otherwise, and how tall those were last
     blur_coarser: u32,
     blur_rows: i32,
+    /// Where blurs are drawn from while a patch of the whole view is drawn,
+    /// see `Plan::blur_view`
+    blur_view: Option<vello::kurbo::Rect>,
     /// When Vello was started again after errors, to give up on it after
     /// a few close together
     vello_restarts: Vec<Instant>,
@@ -1442,6 +1451,7 @@ impl Painter {
             image_coarser: 0,
             atlas_used: 0,
             blur_coarser: 0,
+            blur_view: None,
             blur_rows: 0,
             vello_restarts: Vec::new(),
             vello_too_big: None,
@@ -1885,6 +1895,9 @@ impl Painter {
                 // effects a little otherwise, which would show where it
                 // patched it till Vello drew the view again
                 Some((_, true)) if self.vello_ready() => {
+                    if self.patch_whole_vello() {
+                        return Some(Duration::ZERO);
+                    }
                     let phase = self.phase;
                     if let Some(next) = self.fill_once(px, (ox, oy, width, height), phase) {
                         self.dirty = true;
@@ -1923,7 +1936,7 @@ impl Painter {
         // tiles are shown, which a frame only moves
         let still = self.moved.elapsed() >= PAN_STILL;
         let sharp = in_view.iter().all(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && tile.exact));
-        let whole_at = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && whole.layer.phase == phase && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello);
+        let whole_at = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && whole.layer.phase == phase && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello && !whole.patched);
         let unchecked_at = self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb) && unchecked.layer.phase == phase);
         // Tiles land on whole pixels, so where Figma draws the view from a
         // fraction of one, it's drawn from there too once it's still
@@ -2654,7 +2667,7 @@ impl Painter {
                     whole.patch = last.patch;
                 }
                 // At rest alone, as it waits for the GPU
-                if !last.rough && self.moved.elapsed() >= PAN_STILL {
+                if !last.rough && self.moved.elapsed() >= PAN_STILL && self.edited.elapsed() >= EDITING {
                     self.verify_tiles();
                 }
             }
@@ -2773,10 +2786,14 @@ impl Painter {
         let mut asked = Vec::new();
         let (mut units, mut counts, mut inexact, mut skia_took, mut kinds) = (0, Counts::default(), 0, Duration::ZERO, String::new());
         let level = super::vello::level(px);
+        // Of those it draws alone, as hashing them all takes a while
         let stamps: Vec<u64> = self
             .units
             .iter()
             .map(|unit| {
+                if !Rect::intersects2(&unit.bounds, &reach) {
+                    return 0;
+                }
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 self.mark(unit).hash(&mut hasher);
                 self.sharpened.get(&(unit.slot, unit.section)).hash(&mut hasher);
@@ -2797,6 +2814,7 @@ impl Painter {
         // Blurs, drawn and put in place for the view
         let mut plan = super::vello::Plan::new();
         plan.coarser = self.blur_coarser;
+        plan.blur_view = self.blur_view;
         let whole = vello::kurbo::Rect::new(0.0, 0.0, w as f64, h as f64);
         let encoding_span = super::span::span("encode scene");
         let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
@@ -2852,16 +2870,16 @@ impl Painter {
                 type Done = Vec<(usize, (usize, bool, i32), bool, Option<Result<super::vello::Fragment, String>>)>;
                 let worked: Vec<(Done, i64, usize)> = std::thread::scope(|scope| {
                     let (jobs, shown, drawable, next) = (&jobs, &shown, &drawable, &next);
-                    let workers: Vec<_> = (0..threads)
-                        .map(|_| {
-                            scope.spawn(move || {
+                    let work = move |behind: bool| {
                                 // Behind every other thread, the browser's
                                 // above all, whose frames Figma's wait on: at
                                 // the same priority they halved Figma's frame
                                 // rate as new things came into view
-                                unsafe {
-                                    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
-                                    let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+                                if behind {
+                                    unsafe {
+                                        use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
+                                        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+                                    }
                                 }
                                 let mut encoder = super::vello::Encoder::worker(tree, images, paths, drawable, w, h);
                                 encoder.px = Some(px);
@@ -2885,9 +2903,13 @@ impl Painter {
                                     done.push((at, key, over, made));
                                 }
                                 (done, encoder.fell_back, encoder.inexact)
-                            })
-                        })
-                        .collect();
+                    };
+                    // One unit, as an edit changes, is encoded here at once,
+                    // rather than on a thread started for it, behind others
+                    if threads == 1 && jobs.len() == 1 {
+                        return vec![work(false)];
+                    }
+                    let workers: Vec<_> = (0..threads).map(|_| scope.spawn(move || work(true))).collect();
                     workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| (Vec::new(), 0, 0))).collect()
                 });
                 encoding = begun.elapsed();
@@ -3272,11 +3294,11 @@ impl Painter {
                 whole.at = at;
                 whole.stale = false;
                 whole.patch.clear();
-                (whole.rough, whole.vello, whole.seq) = (rough, vello, seq);
+                (whole.rough, whole.vello, whole.seq, whole.patched) = (rough, vello, seq, false);
                 Some(std::mem::replace(&mut whole.layer, layer))
             }
             None => {
-                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial, rough, vello, seq });
+                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial, rough, vello, seq, patched: false });
                 None
             }
         };
@@ -3556,6 +3578,144 @@ impl Painter {
             )
         });
         self.drew = true;
+    }
+
+    /// What changed in the whole view Vello drew, drawn again by Vello alone
+    /// over a copy of it, rather than all of it again, so an edit shows in
+    /// a few milliseconds. False where it's better drawn again whole
+    fn patch_whole_vello(&mut self) -> bool {
+        let _span = super::span::span("patch whole vello");
+        let _purpose = super::gpu_census::purpose("whole");
+        let started = Instant::now();
+        self.settle_shown();
+        let Some(whole) = self.whole.as_ref().filter(|whole| whole.vello && !whole.stale && !whole.rough && !whole.patch.is_empty() && whole.patch.len() <= PATCHES) else {
+            return false;
+        };
+        let (tex, x, y, px, phase) = (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px, whole.layer.phase);
+        let (width, height) = (tex.width, tex.height);
+        let snap = |at: i32, down: bool| if down { at.div_euclid(PATCH_GRID) * PATCH_GRID } else { (at + PATCH_GRID - 1).div_euclid(PATCH_GRID) * PATCH_GRID };
+        let mut rects: Vec<skia_safe::IRect> = Vec::new();
+        for area in &whole.patch {
+            let device: skia_safe::IRect = Rect::from_ltrb(area.left * px - x as f32, area.top * px - y as f32, area.right * px - x as f32, area.bottom * px - y as f32).round_out();
+            let device = device.with_outset((3, 3));
+            let snapped = skia_safe::IRect::from_ltrb(snap(device.left, true), snap(device.top, true), snap(device.right, false), snap(device.bottom, false));
+            if let Some(rect) = skia_safe::IRect::intersect(&snapped, &skia_safe::IRect::from_wh(width, height)) {
+                rects.push(rect);
+            }
+        }
+        // Rects mostly over each other drawn as one
+        let size = |rect: &skia_safe::IRect| rect.width() as i64 * rect.height() as i64;
+        'merge: loop {
+            for i in 0..rects.len() {
+                for j in i + 1..rects.len() {
+                    let (a, b) = (rects[i], rects[j]);
+                    let both = skia_safe::IRect::from_ltrb(a.left.min(b.left), a.top.min(b.top), a.right.max(b.right), a.bottom.max(b.bottom));
+                    if size(&both) * 4 <= (size(&a) + size(&b)) * 5 {
+                        rects[i] = both;
+                        rects.swap_remove(j);
+                        continue 'merge;
+                    }
+                }
+            }
+            break;
+        }
+        // Past half of it, drawing it all again takes about as long
+        if rects.iter().map(size).sum::<i64>() * 2 > width as i64 * height as i64 {
+            return false;
+        }
+        let in_place = Arc::strong_count(&tex) == 2;
+        let Some(target) = (if in_place { Some(tex.clone()) } else { self.tex(width, height) }) else {
+            return false;
+        };
+        let previous = if in_place {
+            None
+        } else {
+            match gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None) {
+                Some(previous) => Some(previous),
+                None => return false,
+            }
+        };
+        let Some(mut surface) = self.target(&target) else {
+            return false;
+        };
+        let backend = target.backend();
+        let mut copy = Paint::default();
+        copy.set_blend_mode(skia_safe::BlendMode::Src);
+        if let Some(previous) = &previous {
+            surface.canvas().draw_image(previous, (0, 0), Some(&copy));
+        }
+        let (mut waited, mut stats) = (Duration::ZERO, String::new());
+        for rect in &rects {
+            let reach = Rect::from_xywh((x + rect.left) as f32 / px, (y + rect.top) as f32 / px, rect.width() as f32 / px, rect.height() as f32 / px).with_outset((2.0 / px, 2.0 / px));
+            let mut drawn = None;
+            for _ in 0..8 {
+                // Blurs are drawn from all of the whole view, the same for
+                // each patch, so drawn once
+                self.blur_view = Some(vello::kurbo::Rect::new(-rect.left as f64, -rect.top as f64, (width - rect.left) as f64, (height - rect.top) as f64));
+                let rendered = self.vello_render(x + rect.left, y + rect.top, phase, rect.width(), rect.height(), px, reach, None, false, None);
+                self.blur_view = None;
+                let Ok((out, _, made, _)) = rendered else {
+                    break;
+                };
+                let Some(vello) = self.vello.as_mut() else { break };
+                let checked = vello.check(usize::MAX);
+                waited += vello.waited;
+                let stages = std::mem::take(&mut vello.stages);
+                match checked {
+                    Ok(None) => {
+                        stats = format!("{made} gpu:{stages}");
+                        drawn = Some(out);
+                        break;
+                    }
+                    Ok(Some(why)) if !why.starts_with("too big") => trace(|| format!("  vello ran out of room, drawing again: {why}")),
+                    _ => break,
+                }
+            }
+            let image = drawn.and_then(|out| gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None));
+            let Some(image) = image else {
+                // What's drawn into it so far is never shown
+                drop(surface);
+                let _ = self.gpu.context.flush_and_submit();
+                if !in_place {
+                    self.retire(target);
+                } else if let Some(whole) = self.whole.as_mut() {
+                    whole.stale = true;
+                }
+                return false;
+            };
+            let from = Rect::from_wh(rect.width() as f32, rect.height() as f32);
+            surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from(*rect), &copy);
+            // Drawn from Vello's target before its next render draws into it
+            let _ = self.gpu.context.flush_and_submit();
+        }
+        let image = self.finish(&backend, false);
+        drop(surface);
+        drop(previous);
+        let fence = self.gpu.signal();
+        self.serial += 1;
+        let (serial, seq) = (self.serial, self.seq);
+        let mut replaced = None;
+        if let Some(whole) = self.whole.as_mut() {
+            whole.fence = fence;
+            whole.serial = serial;
+            whole.layer.drawn = serial;
+            whole.stale |= image.is_none();
+            whole.patch.clear();
+            whole.seq = seq;
+            whole.patched = true;
+            if !in_place {
+                replaced = Some(std::mem::replace(&mut whole.layer.tex, target));
+            }
+        }
+        if let Some(replaced) = replaced {
+            self.retire(replaced);
+        }
+        trace(|| {
+            let rects: Vec<String> = rects.iter().map(|rect| format!("{}x{}", rect.width(), rect.height())).collect();
+            format!("  patch vello rects={rects:?} waited={:.1}ms {:.1}ms {stats}", waited.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0)
+        });
+        self.drew = true;
+        true
     }
 
     /// `area` of the view, with where the view is likely to be `lag`
@@ -4203,6 +4363,7 @@ impl Painter {
             }
         }
         let start = Instant::now();
+        let root = tree.root;
         let applied = match tree.apply(&frame) {
             Ok(applied) => applied,
             Err(error) => {
@@ -4217,6 +4378,9 @@ impl Painter {
             self.edited_seq = self.seq;
         }
         let applied_ms = start.elapsed().as_secs_f64() * 1000.0;
+        // Nothing of the tree changed, as for a frame that only moves
+        // Figma's overlay, so its units are as they were
+        let same = !first && frame.header.mode != 0 && applied.new_nodes.is_empty() && frame.header.released.is_empty() && tree.root == root;
         // What custom effects of nodes gone drew goes with them. That of
         // nodes that changed, as they do over and over as a file loads, is
         // kept for what they are now, shown till their effects have run
@@ -4284,6 +4448,12 @@ impl Painter {
         // draw, if they come
         if self.effect_last.len() > 512 {
             self.effect_last.retain(|key, _| !gone(key));
+        }
+        if same {
+            trace(|| format!("frame {} mode={} new=0 applied={applied_ms:.1}ms units={} areas=0", frame.header.seq, frame.header.mode, self.units.len()));
+            self.set_view(frame.view());
+            self.dirty = true;
+            return;
         }
         let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
@@ -4756,15 +4926,11 @@ impl Painter {
     fn mark(&self, unit: &Unit) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.version(unit.slot, unit.section).hash(&mut hasher);
-        if let Some(place) = &unit.place {
-            let matrix = |m: &skia_safe::Matrix| (0..9).map(|i| m[i].to_bits()).collect::<Vec<u32>>();
-            // By what the nodes draw, not their ids: Figma sends what's over
-            // an edit again under new ids each frame, the same otherwise
-            let content = |id: u32| self.tree.as_ref().map(|tree| tree.content(id));
-            (content(place.id), matrix(&place.at)).hash(&mut hasher);
-            for (id, at) in &place.clips {
-                (content(*id), matrix(at)).hash(&mut hasher);
-            }
+        // A unit of the tree is keyed by what its nodes draw and where, not
+        // their ids, as Figma sends what's over an edit again under new ids
+        // each frame, the same otherwise
+        if unit.place.is_some() {
+            unit.slot.hash(&mut hasher);
         }
         hasher.finish()
     }

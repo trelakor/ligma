@@ -104,6 +104,9 @@ pub struct Vello {
     /// The textures blurs' sources are drawn into, by how deep in other
     /// blurs they are, and when each was last used
     blurred: Vec<Option<(wgpu::Texture, std::time::Instant)>>,
+    /// What each of `blurred` holds, where it's blurs alone of sources
+    /// that don't change, for a view drawing the same to use it again
+    blurred_keys: Vec<Option<u64>>,
 }
 
 /// An image fill's texture, Skia's, which Vello copies into its atlas
@@ -252,6 +255,7 @@ impl Vello {
             skia: SendDevice(skia.clone()),
             blurrer: None,
             blurred: Vec::new(),
+            blurred_keys: Vec::new(),
         })
     }
 
@@ -420,6 +424,10 @@ impl Vello {
         let _span = super::span::span("vello wait for GPU");
         let at = std::time::Instant::now();
         let fits = self.renderer.check(&self.device, renders).map_err(|error| format!("check: {error}"));
+        // Blurs drawn past their buffers' room are drawn again
+        if !matches!(fits, Ok(None)) {
+            self.blurred_keys.clear();
+        }
         self.waited = at.elapsed();
         self.stages += &self.renderer.times();
         // Dev tools: what Vello's memory holds
@@ -462,8 +470,12 @@ impl Vello {
             while self.blurred.len() <= index {
                 self.blurred.push(None);
             }
+            while self.blurred_keys.len() <= index {
+                self.blurred_keys.push(None);
+            }
             let fits = self.blurred[index].as_ref().is_some_and(|(texture, _)| texture.width() >= width && texture.height() >= height);
             if !fits {
+                self.blurred_keys[index] = None;
                 let step = |size: u32| size.div_ceil(256) * 256;
                 let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("ligma blurred"),
@@ -485,6 +497,12 @@ impl Vello {
                 let base = wgpu::TexelCopyTextureInfoBase { texture: texture.clone(), mip_level: 0, origin, aspect: wgpu::TextureAspect::All };
                 self.renderer.override_image(&blur.image, Some(base));
             }
+            // The same as the last view drew there, which it still holds
+            let key = depth.key.as_ref().map(std::hash::Hasher::finish);
+            if key.is_some() && self.blurred_keys[index] == key {
+                continue;
+            }
+            self.blurred_keys[index] = None;
             let view = texture.create_view(&Default::default());
             let params = vello::RenderParams { base_color: AlphaColor::<Srgb>::new([0.0, 0.0, 0.0, 0.0]), width, height, antialiasing_method, view: IDENTITY, retain: 0, reuse: false, one_off: false };
             self.renderer.render_to_texture(&self.device, &self.queue, &depth.scene, &view, &params).map_err(|error| format!("blur's source: {error}"))?;
@@ -495,6 +513,7 @@ impl Vello {
             blurrer.blur(&self.device, &mut encoder, &texture, &jobs, width, &plan.octaves)?;
             self.queue.submit([encoder.finish()]);
             self.sync("blurs");
+            self.blurred_keys[index] = key;
         }
         // Textures for blurs no view has needed for a while go
         for slot in self.blurred.iter_mut().skip(plan.depths.len()) {
@@ -1302,6 +1321,8 @@ enum Kind {
         area: kurbo::Rect,
         /// What's done to it besides blurring it
         filter: Filter,
+        /// Its source's content, where it's paths alone, once worked out
+        hash: Option<u64>,
     },
     /// An image fill, `width` device pixels wide in the scene's space, which
     /// each view has drawn from the mipmap level for the zoom it's at
@@ -1347,6 +1368,8 @@ struct Depth {
     blurs: Vec<Placed>,
     /// How wide what's placed reaches
     used: i32,
+    /// What it draws, where that's blurs of sources alone
+    key: Option<std::collections::hash_map::DefaultHasher>,
 }
 
 /// How wide blurs' rows are, the same for every view, so how many rows a
@@ -1387,6 +1410,9 @@ pub struct Plan {
     skia: Vec<(ImageData, usize, i32, i32)>,
     /// Figma's noise octaves, for noise and grain
     octaves: Vec<f32>,
+    /// Where blurs are drawn from, of the view this draws part of, so a
+    /// blur drawn for it is the same for each part, to draw once
+    pub blur_view: Option<kurbo::Rect>,
 }
 
 /// What Skia drew for one of `Kind::Skia`, placed in a view by `placed`,
@@ -2829,7 +2855,7 @@ impl<'a> Encoder<'a> {
         let shown = krect(bounds);
         let Some((transform, patch)) = self.stand_in(shown) else { return };
         self.effects.push(Effect {
-            kind: Kind::Blur { source, effects: nested, reach: krect(reach), sigma: (0.0, 0.0), clamp: None, turn: Affine::IDENTITY, area: shown, filter },
+            kind: Kind::Blur { source, effects: nested, reach: krect(reach), sigma: (0.0, 0.0), clamp: None, turn: Affine::IDENTITY, area: shown, filter, hash: None },
             bounds: shown,
             transform,
             patch,
@@ -2926,6 +2952,7 @@ impl<'a> Encoder<'a> {
                 turn,
                 area: frect(bounds),
                 filter: Filter::Blur,
+                hash: None,
             },
             bounds: shown,
             transform,
@@ -2974,7 +3001,7 @@ impl<'a> Encoder<'a> {
         let scale = c[0].hypot(c[1]);
         for effect in effects {
             match &mut effect.kind {
-                Kind::Blur { source, effects, reach, sigma, clamp, turn, area, filter } => {
+                Kind::Blur { source, effects, reach, sigma, clamp, turn, area, filter, hash } => {
                     let sigma = (sigma.0 * scale, sigma.1 * scale);
                     let margin = match filter {
                         Filter::Blur => (3.0 * sigma.0.max(sigma.1)).ceil() + 2.0,
@@ -2996,6 +3023,12 @@ impl<'a> Encoder<'a> {
                         Plan::patch(encoding, effect, nothing(), Affine::IDENTITY);
                         continue;
                     }
+                    // From all of the view this draws part of, the same for
+                    // each part
+                    let shown = match plan.blur_view.filter(|_| depth == 0) {
+                        Some(whole) => tf.transform_rect_bbox(*area).intersect(frame.inverse().transform_rect_bbox(whole)).intersect(tf.transform_rect_bbox(*reach).inflate(margin, margin)),
+                        None => shown,
+                    };
                     let region = shown.inflate(margin, margin);
                     let (left, top) = (region.x0.floor() as i32, region.y0.floor() as i32);
                     // A wide blur's source is drawn smaller, which the blur
@@ -3013,13 +3046,47 @@ impl<'a> Encoder<'a> {
                         return Err("blur bigger than its texture".into());
                     }
                     while plan.depths.len() <= depth {
-                        plan.depths.push(Depth { scene: vello::Scene::new(), shelf: Shelf { width: 8192, height: 8192, x: 0, y: 0, row: 0 }, blurs: Vec::new(), used: 0 });
+                        plan.depths.push(Depth { scene: vello::Scene::new(), shelf: Shelf { width: 8192, height: 8192, x: 0, y: 0, row: 0 }, blurs: Vec::new(), used: 0, key: Some(Default::default()) });
                     }
                     let (x, y) = plan.depths[depth].room(width, height).ok_or("blurs past their texture")?;
                     let in_slot = Affine::translate((x as f64, y as f64)) * Affine::scale(f) * Affine::translate((-left as f64, -top as f64)) * tf;
                     let to_slot = in_slot * turn.inverse();
                     let slot = kurbo::Rect::new(x as f64, y as f64, (x + width) as f64, (y + height) as f64);
+                    // Of paths and images alone, the same each time it's
+                    // drawn the same: its paths hashed once, and the images
+                    // it draws each time
+                    let paths = source.encoding();
+                    let plain = effects.iter().all(|effect| matches!(effect.kind, Kind::Image { .. })) && matches!(filter, Filter::Blur) && paths.resources.glyphs.is_empty();
+                    if plain && hash.is_none() {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        bytemuck::cast_slice::<_, u8>(&paths.path_tags).hash(&mut hasher);
+                        paths.path_data.hash(&mut hasher);
+                        bytemuck::cast_slice::<_, u8>(&paths.draw_tags).hash(&mut hasher);
+                        paths.draw_data.hash(&mut hasher);
+                        bytemuck::cast_slice::<_, u8>(&paths.transforms).hash(&mut hasher);
+                        bytemuck::cast_slice::<_, u8>(&paths.styles).hash(&mut hasher);
+                        for stop in &paths.resources.color_stops {
+                            (stop.offset.to_bits(), stop.color.components.map(f32::to_bits)).hash(&mut hasher);
+                        }
+                        *hash = Some(hasher.finish());
+                    }
+                    let drawn_before = self.drawn.len();
                     self.put(plan, effects, source.encoding_mut(), to_slot, slot, depth + 1)?;
+                    let depth_key = &mut plan.depths[depth].key;
+                    match (plain, *hash, depth_key.as_mut()) {
+                        (true, Some(hash), Some(key)) => {
+                            use std::hash::Hash;
+                            // To a 1024th of a pixel, as where it's placed
+                            // comes out a little otherwise from each part
+                            let round = |v: f64| (v * 1024.0).round() as i64;
+                            (hash, to_slot.as_coeffs().map(round), [x, y, width, height], clamp.map(|clamp| [clamp.x0, clamp.y0, clamp.x1, clamp.y1].map(round)), round(sigma.0), round(sigma.1), shrink).hash(key);
+                            for (image, level) in &self.drawn[drawn_before..] {
+                                (image, level, self.images.get(image.as_str()).map(|img| img.image.unique_id())).hash(key);
+                            }
+                        }
+                        _ => *depth_key = None,
+                    }
                     let scene = &mut plan.depths[depth].scene;
                     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &slot);
                     if let Some(clamp) = clamp {

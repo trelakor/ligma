@@ -22,6 +22,10 @@ enum AtlasProxyAction {
 /// Ligma: the scene buffer last uploaded, to pack the next into
 pub(crate) static SPARE: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 
+/// Ligma: the texture gradients' ramps are written into, kept from one
+/// render to the next, as making one takes most of a millisecond
+static GRADIENTS: std::sync::Mutex<Option<ImageProxy>> = std::sync::Mutex::new(None);
+
 /// Ligma: a scene kept on the GPU after it's drawn, to draw again
 pub struct Retained {
     pub id: u64,
@@ -33,6 +37,8 @@ pub struct Retained {
 pub struct Render {
     /// Ligma: the scene and its gradients are kept, not freed
     kept: bool,
+    /// Ligma: gradients in `GRADIENTS`, not freed
+    shared_gradients: bool,
     fine_wg_count: Option<WorkgroupSize>,
     fine_resources: Option<FineResources>,
     mask_buf: Option<ResourceProxy>,
@@ -102,6 +108,7 @@ impl Render {
     pub fn new() -> Self {
         Self {
             kept: false,
+            shared_gradients: false,
             fine_wg_count: None,
             fine_resources: None,
             mask_buf: None,
@@ -149,7 +156,36 @@ impl Render {
         packed.clear();
 
         let (layout, ramps, images) = resolver.resolve(encoding, &mut packed);
-        let gradient_image = if ramps.height == 0 {
+        let gradient_image = if params.retain == 0 {
+            // Ligma: written into the kept texture, made taller as needed
+            self.shared_gradients = true;
+            let mut kept = GRADIENTS.lock().unwrap();
+            let (width, height) = (ramps.width.max(1), ramps.height.max(1));
+            let proxy = match *kept {
+                // Any, where there are none to draw
+                Some(proxy) if ramps.height == 0 || (proxy.width == width && proxy.height >= height) => proxy,
+                old => {
+                    if let Some(old) = old {
+                        recording.free_image(old);
+                    }
+                    let proxy = ImageProxy::new(width, height.next_power_of_two().max(16), ImageFormat::Rgba8);
+                    *kept = Some(proxy);
+                    proxy
+                }
+            };
+            if ramps.height > 0 {
+                let data: &[u8] = bytemuck::cast_slice(ramps.data);
+                let image = peniko::ImageData {
+                    data: peniko::Blob::new(std::sync::Arc::new(data.to_vec())),
+                    format: peniko::ImageFormat::Rgba8,
+                    alpha_type: peniko::ImageAlphaType::Alpha,
+                    width: ramps.width,
+                    height: ramps.height,
+                };
+                recording.write_image(proxy, 0, 0, image);
+            }
+            ResourceProxy::Image(proxy)
+        } else if ramps.height == 0 {
             ResourceProxy::new_image(1, 1, ImageFormat::Rgba8)
         } else {
             let data: &[u8] = bytemuck::cast_slice(ramps.data);
@@ -647,7 +683,7 @@ impl Render {
         recording.free_resource(fine.tile_buf);
         recording.free_resource(fine.segments_buf);
         recording.free_resource(fine.ptcl_buf);
-        if !self.kept {
+        if !self.kept && !self.shared_gradients {
             recording.free_resource(fine.gradient_image);
         }
         recording.free_resource(fine.info_bin_data_buf);
