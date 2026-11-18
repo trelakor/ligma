@@ -70,6 +70,15 @@
         ],
         "createdAt": "2026-11-18T04:57:47.801Z",
         "reason": "claude: the size pill and You cursor tag copy Figma's own canvas badges, which use 1-2px vertical padding by design"
+      },
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          "src-tauri/installer/ui/index.html"
+        ],
+        "createdAt": "2026-11-18T05:19:37.237Z",
+        "reason": "user asked to match the website's blues (site/index.html), which pairs white text with #0d99ff on buttons and the size pill"
       }
     ]
   }

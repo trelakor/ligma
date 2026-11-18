@@ -1,9 +1,14 @@
 // The Windows installer's window. installer.nsi starts it as
-// `ligma-setup-ui.exe <installer hwnd> <version>` and waits for it to set the
-// `Local\LigmaSetupReady<hwnd>` event, then makes its own wizard invisible, or
-// for `Local\LigmaSetupFailed<hwnd>`, then keeps the wizard. From
-// then on this window reads the wizard's progress bar, closes when the
-// installer exits, and gives the wizard back if the install stops on an error
+// `ligma-setup-ui.exe <installer hwnd> <version> <first|again> <bundle id> <install dir>`
+// and waits for it to set `Local\LigmaSetupReady<hwnd>`, or
+// `Local\LigmaSetupFailed<hwnd>` to keep its own wizard. A first install then
+// waits on the welcome step for `Local\LigmaSetupGo<hwnd>` (`GoBare` without a
+// desktop shortcut) or `Local\LigmaSetupQuit<hwnd>`. Once it installs, the
+// installer turns its wizard invisible, and this window reads the wizard's
+// progress bar, follows it to the end, and gives the wizard back if the
+// install stops on an error. A first install ends on a theme, saved to
+// Ligma's settings, and an Open Ligma button. Any other ends by itself, as
+// the installer opens Ligma
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(not(windows))]
@@ -22,11 +27,11 @@ mod app {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use tao::dpi::LogicalSize;
+    use tao::dpi::{LogicalSize, PhysicalPosition};
     use tao::event::{Event, WindowEvent};
     use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
     use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
-    use tao::window::WindowBuilder;
+    use tao::window::{Window, WindowBuilder};
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WAIT_OBJECT_0};
     use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
@@ -42,6 +47,7 @@ mod app {
     use wry::{WebContext, WebViewBuilder};
 
     const INDEX: &str = include_str!("../index.html");
+    const THEMES: &str = include_str!("../../../../dist/themes.js");
     const LOGO: &[u8] = include_bytes!("../../../../assets/logo.png");
     const INTER: &[u8] = include_bytes!("../../../../site/fonts/inter.woff2");
 
@@ -56,9 +62,20 @@ mod app {
     enum Msg {
         Ready,
         Drag,
+        Install { desktop: bool },
+        Quit,
+        Theme(String),
+        Open,
         Progress(f64),
         Done,
         Close,
+    }
+
+    struct Setup {
+        version: String,
+        first: bool,
+        bundle: String,
+        dir: PathBuf,
     }
 
     pub fn run() {
@@ -66,19 +83,23 @@ mod app {
         let Some(installer) = args.next().and_then(|a| a.parse::<isize>().ok()) else {
             return;
         };
-        let version = args.next().unwrap_or_default();
+        let setup = Setup {
+            version: args.next().unwrap_or_default(),
+            first: args.next().as_deref() == Some("first"),
+            bundle: args.next().unwrap_or_default(),
+            dir: args.next().map(PathBuf::from).unwrap_or_default(),
+        };
 
         // No WebView2 yet: the installer installs it, with its own wizard
         if wry::webview_version().is_err() {
-            signal(installer, "Failed");
-            return;
+            return signal(installer, "Failed");
         }
 
         let event_loop = EventLoopBuilder::<Msg>::with_user_event().build();
         let proxy = event_loop.create_proxy();
         let window = match WindowBuilder::new()
-            .with_title("Installing Ligma")
-            .with_inner_size(LogicalSize::new(400.0, 280.0))
+            .with_title("Install Ligma")
+            .with_inner_size(LogicalSize::new(440.0, 340.0))
             .with_resizable(false)
             .with_maximizable(false)
             .with_decorations(false)
@@ -90,56 +111,84 @@ mod app {
             Err(_) => return signal(installer, "Failed"),
         };
 
-        let mut context = WebContext::new(Some(data_dir()));
+        let mut context = WebContext::new(Some(temp().join("WebView2")));
         let ipc_proxy = proxy.clone();
-        let hwnd = window.hwnd();
         let webview = match WebViewBuilder::new_with_web_context(&mut context)
             .with_custom_protocol("ligma".into(), |_, req| {
                 let (body, mime): (&'static [u8], &str) = match req.uri().path() {
                     "/logo.png" => (LOGO, "image/png"),
                     "/inter.woff2" => (INTER, "font/woff2"),
+                    "/themes.js" => (THEMES.as_bytes(), "text/javascript"),
                     _ => (INDEX.as_bytes(), "text/html"),
                 };
-                Response::builder()
-                    .header("Content-Type", mime)
-                    .body(Cow::Borrowed(body))
-                    .unwrap()
+                Response::builder().header("Content-Type", mime).body(Cow::Borrowed(body)).unwrap()
             })
             .with_ipc_handler(move |req| {
-                let msg = match req.body().as_str() {
+                let body = req.body();
+                let msg = match body.as_str() {
                     "ready" => Msg::Ready,
                     "drag" => Msg::Drag,
+                    "install:desktop" => Msg::Install { desktop: true },
+                    "install" => Msg::Install { desktop: false },
+                    "quit" => Msg::Quit,
+                    "open" => Msg::Open,
                     "close" => Msg::Close,
-                    _ => return,
+                    _ => match body.strip_prefix("theme:") {
+                        Some(id) => Msg::Theme(id.to_owned()),
+                        None => return,
+                    },
                 };
                 let _ = ipc_proxy.send_event(msg);
             })
-            .with_url(format!("ligma://localhost/?v={version}"))
+            .with_url(format!(
+                "ligma://localhost/?v={}&first={}",
+                setup.version,
+                if setup.first { 1 } else { 0 }
+            ))
             .build(&window)
         {
             Ok(webview) => webview,
             Err(_) => return signal(installer, "Failed"),
         };
 
-        let mut finished = false;
+        // Until the install starts the window can close, which cancels it.
+        // While it installs it can't. After, it closes as it likes
+        let mut installing = false;
+        let hwnd = window.hwnd();
         event_loop.run(move |event, _, flow| {
             *flow = ControlFlow::Wait;
             match event {
                 Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                    // The install keeps going without the window, so it only closes once it's over
-                    if finished {
+                    if !installing {
+                        if !window.is_visible() || setup.first {
+                            signal(installer, "Quit");
+                        }
                         *flow = ControlFlow::Exit;
                     }
                 }
-                // Shown once the page has drawn, then the installer is told to hide its wizard
+                // Shown once the page has drawn, then the installer is told
                 Event::UserEvent(Msg::Ready) if !window.is_visible() => {
                     center(&window);
                     round_corners(hwnd);
                     window.set_visible(true);
                     window.set_focus();
                     signal(installer, "Ready");
+                    // Anything but a first install starts right away
+                    if !setup.first {
+                        installing = true;
+                        let proxy = proxy.clone();
+                        thread::spawn(move || watch(installer, proxy));
+                    }
+                }
+                Event::UserEvent(Msg::Install { desktop }) if setup.first && !installing => {
+                    installing = true;
+                    signal(installer, if desktop { "Go" } else { "GoBare" });
                     let proxy = proxy.clone();
                     thread::spawn(move || watch(installer, proxy));
+                }
+                Event::UserEvent(Msg::Quit) if !installing => {
+                    signal(installer, "Quit");
+                    *flow = ControlFlow::Exit;
                 }
                 Event::UserEvent(Msg::Drag) => {
                     let _ = window.drag_window();
@@ -148,17 +197,57 @@ mod app {
                     let _ = webview.evaluate_script(&format!("progress({p:.4})"));
                 }
                 Event::UserEvent(Msg::Done) => {
-                    finished = true;
+                    installing = false;
                     let _ = webview.evaluate_script("done()");
                 }
-                Event::UserEvent(Msg::Close) => *flow = ControlFlow::Exit,
+                Event::UserEvent(Msg::Theme(id)) => {
+                    if let Err(error) = save_theme(&setup, &id) {
+                        eprintln!("Couldn't save the theme: {error}");
+                    }
+                }
+                Event::UserEvent(Msg::Open) => {
+                    let _ = std::process::Command::new(setup.dir.join("ligma.exe")).current_dir(&setup.dir).spawn();
+                    *flow = ControlFlow::Exit;
+                }
+                Event::UserEvent(Msg::Close) => {
+                    installing = false;
+                    *flow = ControlFlow::Exit;
+                }
                 _ => {}
             }
         });
     }
 
+    fn temp() -> PathBuf {
+        std::env::temp_dir().join("LigmaSetup")
+    }
+
+    // Sets the theme for light and dark mode in Ligma's settings.json. On a
+    // first run Ligma takes an existing settings file to mean it ran before,
+    // so `last-version` goes with it, or What's New would show every release
+    fn save_theme(setup: &Setup, id: &str) -> Result<(), String> {
+        if !id.chars().all(|c| c.is_ascii_lowercase()) || setup.bundle.is_empty() {
+            return Err(format!("not a theme: {id}"));
+        }
+        let appdata = std::env::var_os("APPDATA").ok_or("no APPDATA")?;
+        let dir = PathBuf::from(appdata).join(&setup.bundle);
+        let path = dir.join("settings.json");
+        let mut settings = match std::fs::read_to_string(&path) {
+            Ok(json) => serde_json::from_str::<serde_json::Value>(&json).map_err(|e| e.to_string())?,
+            Err(_) => {
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                std::fs::write(dir.join("last-version"), &setup.version).map_err(|e| e.to_string())?;
+                serde_json::json!({})
+            }
+        };
+        let object = settings.as_object_mut().ok_or("settings.json isn't an object")?;
+        object.insert("lightTheme".into(), id.into());
+        object.insert("darkTheme".into(), id.into());
+        std::fs::write(&path, serde_json::to_string_pretty(&settings).unwrap()).map_err(|e| e.to_string())
+    }
+
     // On the screen the cursor is on, where the installer was opened from
-    fn center(window: &tao::window::Window) {
+    fn center(window: &Window) {
         let cursor = window.cursor_position().ok();
         let monitor = window
             .available_monitors()
@@ -172,14 +261,10 @@ mod app {
             .or_else(|| window.primary_monitor());
         let Some(monitor) = monitor else { return };
         let (p, s, w) = (monitor.position(), monitor.size(), window.outer_size());
-        window.set_outer_position(tao::dpi::PhysicalPosition::new(
+        window.set_outer_position(PhysicalPosition::new(
             p.x + (s.width as i32 - w.width as i32) / 2,
             p.y + (s.height as i32 - w.height as i32) / 2,
         ));
-    }
-
-    fn data_dir() -> PathBuf {
-        std::env::temp_dir().join("LigmaSetup").join("WebView2")
     }
 
     fn round_corners(hwnd: isize) {
@@ -194,7 +279,7 @@ mod app {
         }
     }
 
-    // Sets the installer's `Local\LigmaSetupReady<hwnd>` or `Local\LigmaSetupFailed<hwnd>` event
+    // Sets the installer's `Local\LigmaSetup<what><hwnd>` event
     fn signal(installer: isize, what: &str) {
         let name: Vec<u16> = format!("Local\\LigmaSetup{what}{installer}\0").encode_utf16().collect();
         unsafe {
@@ -206,7 +291,7 @@ mod app {
         }
     }
 
-    // Follows the installer until it exits. Runs once the window is up
+    // Follows the installer until it exits, from when it starts installing
     fn watch(installer: isize, proxy: EventLoopProxy<Msg>) {
         let hwnd = installer as HWND;
         let process = unsafe {

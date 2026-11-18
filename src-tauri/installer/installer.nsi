@@ -85,6 +85,10 @@ Var WixMode
 Var OldMainBinaryName
 ; Ligma: set when the installer is opened without /P or /S
 Var OneClickMode
+; Ligma: a first install in Ligma's window, which opens Ligma itself
+Var LigmaGuided
+; Ligma: unticked "Add a desktop shortcut" in Ligma's window
+Var LigmaNoDesktop
 
 ; Ligma: one-click shows Ligma's own window (installer/ui) in place of the
 ; wizard. scripts/installer-ui.mjs builds it into target/installer-ui before
@@ -806,11 +810,11 @@ Section Install
 
   ; Create desktop shortcut for silent and passive installers
   ; because finish page will be skipped
-  ; Ligma: and for one-click, which skips it too
+  ; Ligma: and for one-click, which skips it too, unless it was unticked
   ${If} $PassiveMode = 1
   ${OrIf} $OneClickMode = 1
   ${OrIf} ${Silent}
-    Call CreateOrUpdateDesktopShortcut
+    ${IfThen} $LigmaNoDesktop <> 1 ${|} Call CreateOrUpdateDesktopShortcut ${|}
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTINSTALL
@@ -826,9 +830,9 @@ Section Install
 SectionEnd
 
 Function .onInstSuccess
-  ; Ligma: one-click always opens the app
+  ; Ligma: one-click opens the app, or on a first install Ligma's window does, once a theme is picked
   ${If} $OneClickMode = 1
-    Call RunMainBinary
+    ${IfThen} $LigmaGuided <> 1 ${|} Call RunMainBinary ${|}
     Return
   ${EndIf}
 
@@ -1002,12 +1006,15 @@ Function SkipIfPassive
 FunctionEnd
 
 !ifdef LIGMAUI
-; Ligma: starts Ligma's window and waits for it to draw (Local\LigmaSetupReady<hwnd>),
-; then turns the wizard invisible and drops its taskbar button. The window
-; reads the wizard's progress, and if the install stops on an error, it
-; makes the wizard visible again to show it. If the window can't start
-; (Local\LigmaSetupFailed<hwnd>, say without WebView2) or takes over 10
-; seconds, the wizard stays
+; Ligma: starts Ligma's window and waits for it to draw (Local\LigmaSetupReady<hwnd>).
+; A first install, with no earlier Ligma, then waits on the window's welcome
+; step for Install (Local\LigmaSetupGo<hwnd>, or GoBare without a desktop
+; shortcut) or for it to close (Local\LigmaSetupQuit<hwnd>), which quits.
+; Then the wizard turns invisible and drops its taskbar button. The window
+; reads the wizard's progress, and if the install stops on an error, it makes
+; the wizard visible again to show it. If the window can't start
+; (Local\LigmaSetupFailed<hwnd>, say without WebView2), exits early or takes
+; over 10 seconds to draw, the wizard stays
 Function LigmaUiStart
   ${If} $OneClickMode <> 1
     Return
@@ -1015,34 +1022,102 @@ Function LigmaUiStart
   Push $0
   Push $1
   Push $2
+  Push $3
+  Push $4
+  Push $5
+  Push $6
+  Push $7
+  Push $R8
   Push $R9
   ; In temp rather than $PLUGINSDIR, which the installer deletes on exit while the window is still open
   CreateDirectory "$TEMP\LigmaSetup"
   SetOverwrite try
   File "/oname=$TEMP\LigmaSetup\ligma-setup-ui.exe" "${LIGMAUI}"
   SetOverwrite on
+  StrCpy $R9 1
   ${If} ${FileExists} "$TEMP\LigmaSetup\ligma-setup-ui.exe"
+    ReadRegStr $R8 SHCTX "${UNINSTKEY}" "DisplayVersion"
+    ${If} $R8 == ""
+      StrCpy $R8 "first"
+    ${Else}
+      StrCpy $R8 "again"
+    ${EndIf}
     System::Call 'kernel32::CreateEventW(p 0, i 1, i 0, w "Local\LigmaSetupReady$HWNDPARENT") p .r1'
     System::Call 'kernel32::CreateEventW(p 0, i 1, i 0, w "Local\LigmaSetupFailed$HWNDPARENT") p .r2'
-    Exec '"$TEMP\LigmaSetup\ligma-setup-ui.exe" $HWNDPARENT ${VERSION}'
-    StrCpy $0 0
-    ${DoWhile} $0 < 100
-      System::Call 'kernel32::WaitForSingleObject(p r1, i 100) i .s'
-      Pop $R9
+    System::Call 'kernel32::CreateEventW(p 0, i 1, i 0, w "Local\LigmaSetupGo$HWNDPARENT") p .r3'
+    System::Call 'kernel32::CreateEventW(p 0, i 1, i 0, w "Local\LigmaSetupGoBare$HWNDPARENT") p .r4'
+    System::Call 'kernel32::CreateEventW(p 0, i 1, i 0, w "Local\LigmaSetupQuit$HWNDPARENT") p .r5'
+    ; CreateProcessW rather than Exec, for a handle that tells if the window exits early
+    StrCpy $7 '"$TEMP\LigmaSetup\ligma-setup-ui.exe" $HWNDPARENT ${VERSION} $R8 ${BUNDLEID} "$INSTDIR"'
+    System::Alloc 104
+    Pop $0
+    System::Call '*$0(i 104)'
+    System::Alloc 24
+    Pop $6
+    System::Call 'kernel32::CreateProcessW(p 0, w r7, p 0, p 0, i 0, i 0, p 0, p 0, p r0, p r6) i .r7'
+    System::Free $0
+    ${If} $7 <> 0
+      System::Call '*$6(p .r7, p .r0)'
+      System::Free $6
+      System::Call 'kernel32::CloseHandle(p r0)'
+      StrCpy $6 $7
+      ; Drawn, failed or gone, for up to 10 seconds
+      StrCpy $0 0
+      ${DoWhile} $0 < 100
+        System::Call 'kernel32::WaitForSingleObject(p r1, i 100) i .s'
+        Pop $7
+        ${If} $7 = 0
+          StrCpy $R9 0
+          ${Break}
+        ${EndIf}
+        System::Call 'kernel32::WaitForSingleObject(p r2, i 0) i .s'
+        Pop $7
+        ${IfThen} $7 = 0 ${|} ${Break} ${|}
+        System::Call 'kernel32::WaitForSingleObject(p r6, i 0) i .s'
+        Pop $7
+        ${IfThen} $7 = 0 ${|} ${Break} ${|}
+        IntOp $0 $0 + 1
+      ${Loop}
+      ; A first install waits for Install, or quits if the window closes
       ${If} $R9 = 0
-        ${Break}
+      ${AndIf} $R8 == "first"
+        StrCpy $R9 1
+        ${Do}
+          System::Call 'kernel32::WaitForSingleObject(p r3, i 100) i .s'
+          Pop $7
+          ${If} $7 = 0
+            StrCpy $R9 0
+            ${Break}
+          ${EndIf}
+          System::Call 'kernel32::WaitForSingleObject(p r4, i 0) i .s'
+          Pop $7
+          ${If} $7 = 0
+            StrCpy $LigmaNoDesktop 1
+            StrCpy $R9 0
+            ${Break}
+          ${EndIf}
+          System::Call 'kernel32::WaitForSingleObject(p r5, i 0) i .s'
+          Pop $7
+          ${If} $7 = 0
+            StrCpy $R9 2
+            ${Break}
+          ${EndIf}
+          System::Call 'kernel32::WaitForSingleObject(p r6, i 0) i .s'
+          Pop $7
+          ${IfThen} $7 = 0 ${|} ${Break} ${|}
+        ${Loop}
+        ; The window opens Ligma once it's shown the theme step
+        ${IfThen} $R9 = 0 ${|} StrCpy $LigmaGuided 1 ${|}
       ${EndIf}
-      System::Call 'kernel32::WaitForSingleObject(p r2, i 0) i .s'
-      Pop $R9
-      ${If} $R9 = 0
-        ${Break}
-      ${EndIf}
-      IntOp $0 $0 + 1
-    ${Loop}
-    System::Call 'kernel32::WaitForSingleObject(p r1, i 0) i .s'
-    Pop $R9
+      System::Call 'kernel32::CloseHandle(p r6)'
+    ${Else}
+      System::Free $6
+    ${EndIf}
     System::Call 'kernel32::CloseHandle(p r1)'
     System::Call 'kernel32::CloseHandle(p r2)'
+    System::Call 'kernel32::CloseHandle(p r3)'
+    System::Call 'kernel32::CloseHandle(p r4)'
+    System::Call 'kernel32::CloseHandle(p r5)'
     ${If} $R9 = 0
       ; WS_EX_LAYERED | WS_EX_TOOLWINDOW, then fully transparent
       System::Call 'user32::GetWindowLongW(p $HWNDPARENT, i -20) i .r0'
@@ -1051,12 +1126,23 @@ Function LigmaUiStart
       System::Call 'user32::SetLayeredWindowAttributes(p $HWNDPARENT, i 0, i 0, i 2)'
     ${EndIf}
   ${EndIf}
+  StrCpy $0 $R9
   Pop $R9
+  Pop $R8
+  Pop $7
+  Pop $6
+  Pop $5
+  Pop $4
+  Pop $3
   Pop $2
   Pop $1
+  ${If} $0 = 2
+    Quit
+  ${EndIf}
   Pop $0
 FunctionEnd
 !endif
+
 Function un.SkipIfPassive
   ${IfThen} $PassiveMode = 1  ${|} Abort ${|}
 FunctionEnd
