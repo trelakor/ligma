@@ -525,6 +525,10 @@ const ATLAS_MOST: u64 = 8192 * 8192 * 3 / 4;
 /// quarter of the room
 const COARSEST_IMAGES: u32 = 4;
 
+/// How long views are drawn in tiles after one was too big for Vello's
+/// buffers
+const TOO_BIG_FOR: Duration = Duration::from_secs(3);
+
 /// A pass of the render loop past this is traced, step by step
 const SLOW_PASS: Duration = Duration::from_millis(150);
 
@@ -1237,6 +1241,9 @@ pub struct Painter {
     /// When Vello was started again after errors, to give up on it after
     /// a few close together
     vello_restarts: Vec<Instant>,
+    /// When a view was last too big for Vello's buffers, so for a while
+    /// tiles are drawn rather than it drawn again
+    vello_too_big: Option<Instant>,
     /// Tiles Vello couldn't draw, which Skia draws
     vello_cant: std::collections::HashSet<TileKey>,
     /// The scene Vello keeps on the GPU, drawn again for each view inside
@@ -1428,6 +1435,7 @@ impl Painter {
             blur_coarser: 0,
             blur_rows: 0,
             vello_restarts: Vec::new(),
+            vello_too_big: None,
             vello_cant: Default::default(),
             scene_kept: None,
             kept_stale: false,
@@ -2124,6 +2132,9 @@ impl Painter {
     /// for Skia to draw it
     fn draw_whole_vello(&mut self, ox: i32, oy: i32, width: i32, height: i32, px: f32) -> bool {
         let _span = super::span::span("draw whole vello");
+        if self.too_big() {
+            return false;
+        }
         let _purpose = super::gpu_census::purpose("whole");
         let started = Instant::now();
         let at = (ox, oy, px.to_bits());
@@ -2170,6 +2181,9 @@ impl Painter {
     /// None where Vello can't, for tiles to be drawn instead
     fn fill_once(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), phase: (f32, f32)) -> Option<Option<Duration>> {
         let _span = super::span::span("fill once");
+        if self.too_big() {
+            return None;
+        }
         let started = Instant::now();
         let reach = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
         self.settle_unchecked();
@@ -2514,6 +2528,7 @@ impl Painter {
             let checked = vello.check(usize::MAX).map_err(fail)?;
             waited += vello.waited;
             match checked {
+                Some(why) if why.starts_with("too big") => return Err(fail(why)),
                 Some(why) => trace(|| format!("  vello ran out of room, drawing again: {why}")),
                 None => {
                     // With nothing standing in, it's as drawing them exactly
@@ -2623,6 +2638,9 @@ impl Painter {
             // it's still wanted
             Ok(Some(why)) => {
                 trace(|| format!("  vello ran out of room, drawing again: {why}"));
+                if why.starts_with("too big") {
+                    self.vello_too_big = Some(Instant::now());
+                }
                 self.retire(last.layer.tex);
                 self.kept_drawn = None;
                 self.dirty = true;
@@ -2650,6 +2668,10 @@ impl Painter {
             let short = vello.check(usize::MAX)?;
             if let Some(why) = short {
                 trace(|| format!("  vello ran out of room, drawing again: {why}"));
+                if why.starts_with("too big") {
+                    self.vello_too_big = Some(Instant::now());
+                    return Err(why);
+                }
             } else {
                 let c = &vello::low_level::vello_encoding::CAPACITY;
                 let r = |a: &std::sync::atomic::AtomicU32| a.load(std::sync::atomic::Ordering::Relaxed) >> 10;
@@ -3199,6 +3221,11 @@ impl Painter {
     }
 
     /// The whole view's last drawing still on the GPU
+    /// Whether a view was too big for Vello's buffers a moment ago
+    fn too_big(&self) -> bool {
+        self.vello_too_big.is_some_and(|at| at.elapsed() < TOO_BIG_FOR)
+    }
+
     fn whole_busy(&self) -> bool {
         self.whole.as_ref().is_some_and(|whole| whole.fence > self.gpu.passed())
     }

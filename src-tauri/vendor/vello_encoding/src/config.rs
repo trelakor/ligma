@@ -221,6 +221,27 @@ impl Capacity {
     pub fn all(&self) -> [&AtomicU32; 7] {
         [&self.binning, &self.ptcl, &self.tile, &self.seg_counts, &self.segments, &self.blend, &self.lines]
     }
+
+    /// Back to the room it starts with
+    pub fn reset(&self) {
+        for (room, start) in self.all().into_iter().zip([1 << 18, 1 << 23, 1 << 21, 1 << 21, 1 << 21, 1 << 20, 1 << 21]) {
+            room.store(start, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Ligma: the most bytes any one of the buffers coarse allocates from
+/// takes, set from the device's limits. A render that needs more is too big
+/// to draw at once
+pub static MOST_BYTES: AtomicU32 = AtomicU32::new(256 << 20);
+
+/// Ligma: the bytes an element of each buffer takes, in the order of
+/// `Capacity::all`
+pub const ELEMENT_BYTES: [u32; 7] = [4, 4, size_of::<Tile>() as u32, size_of::<SegmentCount>() as u32, size_of::<PathSegment>() as u32, 4, size_of::<LineSoup>() as u32];
+
+/// Ligma: the most elements the buffer at `index` of `Capacity::all` holds
+pub fn most(index: usize) -> u32 {
+    MOST_BYTES.load(Ordering::Relaxed) / ELEMENT_BYTES[index]
 }
 
 /// Ligma: the up front part of the per tile command list, which the GPU
@@ -247,18 +268,20 @@ impl RenderConfig {
         // that many from the start rather than running out to render again
         let least = layout.path_tags_size().saturating_sub(3 * layout.n_paths);
         LEAST.store(least, Ordering::Relaxed);
-        let most = (1u32 << 27) as f32;
-        let crossings = (least as f32 * f32::from_bits(CROSSINGS[one_off as usize].load(Ordering::Relaxed)) * 1.125).min(most) as u32;
-        capacity.lines.fetch_max(least.saturating_add(least / 16).min(1 << 27).next_multiple_of(1 << 16), Ordering::Relaxed);
-        capacity.seg_counts.fetch_max(crossings.next_multiple_of(1 << 16), Ordering::Relaxed);
-        capacity.segments.fetch_max(crossings.next_multiple_of(1 << 16), Ordering::Relaxed);
-        buffer_sizes.bin_data = BufferSize::new(layout.bin_data_start + room(&capacity.binning));
-        buffer_sizes.ptcl = BufferSize::new(ptcl_start(width, height) + room(&capacity.ptcl));
-        buffer_sizes.tiles = BufferSize::new(room(&capacity.tile));
-        buffer_sizes.seg_counts = BufferSize::new(room(&capacity.seg_counts));
-        buffer_sizes.segments = BufferSize::new(room(&capacity.segments));
-        buffer_sizes.blend_spill = BufferSize::new(room(&capacity.blend));
-        buffer_sizes.lines = BufferSize::new(room(&capacity.lines));
+        let crossings = (least as f32 * f32::from_bits(CROSSINGS[one_off as usize].load(Ordering::Relaxed)) * 1.125).min(most(3).min(most(4)) as f32) as u32;
+        capacity.lines.fetch_max(least.saturating_add(least / 16).next_multiple_of(1 << 16).min(most(6)), Ordering::Relaxed);
+        capacity.seg_counts.fetch_max(crossings.next_multiple_of(1 << 16).min(most(3)), Ordering::Relaxed);
+        capacity.segments.fetch_max(crossings.next_multiple_of(1 << 16).min(most(4)), Ordering::Relaxed);
+        // Never past what the device can hold, as one past it is an error
+        // that stops every render after
+        let room = |index: usize| room(capacity.all()[index]).min(most(index));
+        buffer_sizes.bin_data = BufferSize::new(layout.bin_data_start + room(0));
+        buffer_sizes.ptcl = BufferSize::new(ptcl_start(width, height) + room(1));
+        buffer_sizes.tiles = BufferSize::new(room(2));
+        buffer_sizes.seg_counts = BufferSize::new(room(3));
+        buffer_sizes.segments = BufferSize::new(room(4));
+        buffer_sizes.blend_spill = BufferSize::new(room(5));
+        buffer_sizes.lines = BufferSize::new(room(6));
         Self {
             gpu: ConfigUniform {
                 width_in_tiles,

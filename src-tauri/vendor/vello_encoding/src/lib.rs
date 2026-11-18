@@ -49,7 +49,7 @@ mod resolve;
 pub use binning::BinHeader;
 pub use clip::{Clip, ClipBbox, ClipBic, ClipElement};
 pub use config::{
-    BufferSize, BufferSizes, BumpAllocatorMemory, BumpAllocators, CAPACITY, CROSSINGS, Capacity, ENCODING_ONE_OFF, LEAST, ONE_OFF, ConfigUniform, IndirectCount, ptcl_start,
+    BufferSize, BufferSizes, BumpAllocatorMemory, BumpAllocators, CAPACITY, CROSSINGS, Capacity, ELEMENT_BYTES, ENCODING_ONE_OFF, LEAST, MOST_BYTES, ONE_OFF, ConfigUniform, IndirectCount, most, ptcl_start,
     RenderConfig, WorkgroupCounts, WorkgroupSize,
 };
 pub use draw::{

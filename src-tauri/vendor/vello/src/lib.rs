@@ -638,7 +638,7 @@ impl Renderer {
     pub fn times(&mut self) -> String {
         let t = *LAST_TOOK.lock().unwrap();
         let took = format!(" took=binning {} ptcl {} tile {} seg_counts {} segments {} blend {} lines {}", t[0], t[1], t[2], t[3], t[4], t[5], t[6]);
-        self.engine.timer.as_mut().map(|timer| timer.read() + &took).unwrap_or_default()
+        self.engine.timer.as_mut().map(|timer| timer.read()).unwrap_or_default() + &took
     }
 
     /// Overwrite `image` with `texture`.
@@ -912,12 +912,26 @@ impl Renderer {
     }
 }
 /// Ligma: the most each buffer's taken lately, and when, which is
-/// forgotten after `PEAK_KEPT`
+/// forgotten after `PEAK_KEPT`, and what it took the last time its stage
+/// ran to the end
 #[cfg(feature = "wgpu")]
-static TAKEN: std::sync::Mutex<[(u32, Option<std::time::Instant>); 7]> = std::sync::Mutex::new([(0, None); 7]);
+static TAKEN: std::sync::Mutex<[(u32, Option<std::time::Instant>, u32); 7]> = std::sync::Mutex::new([(0, None, 0); 7]);
 /// Ligma: the same of one-off renders
 #[cfg(feature = "wgpu")]
-static TAKEN_ONE_OFF: std::sync::Mutex<[(u32, Option<std::time::Instant>); 7]> = std::sync::Mutex::new([(0, None); 7]);
+static TAKEN_ONE_OFF: std::sync::Mutex<[(u32, Option<std::time::Instant>, u32); 7]> = std::sync::Mutex::new([(0, None, 0); 7]);
+
+/// Ligma: the buffers' room back to what it starts with, as after an error,
+/// so what led to it isn't carried over
+#[cfg(feature = "wgpu")]
+pub fn reset_room() {
+    vello_encoding::CAPACITY.reset();
+    vello_encoding::ONE_OFF.reset();
+    for crossings in &vello_encoding::CROSSINGS {
+        crossings.store(1f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+    *TAKEN.lock().unwrap() = [(0, None, 0); 7];
+    *TAKEN_ONE_OFF.lock().unwrap() = [(0, None, 0); 7];
+}
 
 /// Ligma: how long buffers keep room for the most they took, so zooming
 /// back out doesn't run out
@@ -951,48 +965,70 @@ fn fit(bump: &BumpAllocators, one_off: bool, had: [u32; 7], least: u32) -> Optio
         let next = if now > was { now } else { was * 0.75 + now * 0.25 };
         vello_encoding::CROSSINGS[one_off as usize].store(next.clamp(0.5, 4.0).to_bits(), Relaxed);
     }
+    // The stage of each, in the order the GPU fills them: those past the
+    // first that ran out never ran to the end, so what they took isn't what
+    // they'd take
+    let stage = [1, 4, 2, 3, 5, 4, 0];
+    let (first, grow) = took.iter().zip(had).zip(stage).filter(|((took, have), _)| **took > *have).fold((usize::MAX, 1.25f64), |(first, grow), ((took, have), stage)| {
+        (first.min(stage), grow.max(*took as f64 / have.max(1) as f64 * 1.25))
+    });
+    let ran = |index: usize| stage[index] <= first;
     let mut short = (bump.failed != 0).then(|| format!("failed={:#x}", bump.failed));
+    let mut too_big = false;
     let mut taken = if one_off { TAKEN_ONE_OFF.lock().unwrap() } else { TAKEN.lock().unwrap() };
-    for ((((room, took), have), taken), name) in room.into_iter().zip(took).zip(had).zip(taken.iter_mut()).zip(names) {
+    for (index, ((((room, took), have), taken), name)) in room.into_iter().zip(took).zip(had).zip(taken.iter_mut()).zip(names).enumerate() {
         if took >= taken.0 || taken.1.is_none_or(|at| at.elapsed() > PEAK_KEPT) {
-            *taken = (took, Some(std::time::Instant::now()));
+            *taken = (took, Some(std::time::Instant::now()), taken.2);
+        }
+        if ran(index) {
+            taken.2 = took;
         }
         let most = taken.0;
+        let cap = vello_encoding::most(index);
         // A quarter more than it's taken lately, in the pool's size classes
         // so its buffers are used again, the command lists' 2MB at least,
         // which views often take more than
         let floor = if name == "ptcl" { 1 << 19 } else { 1 << 18 };
-        let want = size_class(most.saturating_add(most / 4).max(floor)).min(1 << 27);
+        let want = size_class(most.saturating_add(most / 4).max(floor)).min(cap);
         if took > have || took > have - have / 8 || (bump.failed == 0 && want < have - have / 4) {
-            room.store(want.max(took.min(1 << 27)), Relaxed);
+            room.store(want.max(took.min(cap)), Relaxed);
         }
         if took > have {
             *short.get_or_insert_with(String::new) += &format!(" {name} {took}>{have}");
         }
+        too_big |= took > cap;
     }
     if bump.failed != 0 {
-        // What's past the first that ran out, in the order the GPU fills
-        // them, never took all it would, so grows as much as that did
-        let stage = [1, 4, 2, 3, 5, 4, 0];
-        let (first, grow) = took.iter().zip(had).zip(stage).filter(|((took, have), _)| **took > *have).fold((usize::MAX, 1.25f64), |(first, grow), ((took, have), stage)| {
-            (first.min(stage), grow.max(*took as f64 / have.max(1) as f64 * 1.25))
-        });
-        let first = if first == usize::MAX { 0 } else { first };
-        // Each line crosses a tile at least where it's in view, and each
-        // crossing counted is one written, so those take what came before
-        let crossings = took[6].max(took[3]);
+        // Each segment counted is one written, and each line crosses as many
+        // tiles as lines did lately, at least one
+        let crossed = f32::from_bits(vello_encoding::CROSSINGS[one_off as usize].load(Relaxed));
+        let need = |index: usize| match index {
+            4 if ran(3) => Some(took[3]),
+            3 if ran(6) => Some(took[6].max((least as f32 * crossed) as u32)),
+            _ => None,
+        };
         for (index, ((room, (took, have)), stage)) in room.into_iter().zip(took.into_iter().zip(had)).zip(stage).enumerate() {
             if stage > first && took <= have {
-                let after = if index == 3 || index == 4 { crossings.saturating_add(crossings / 4) } else { 0 };
-                let want = size_class(((have as f64 * grow.min(8.0)).max(after as f64)).min((1u32 << 27) as f64) as u32).min(1 << 27);
+                // Grown from what it took when it last ran to the end, not
+                // from the room it has, so renders that run out again before
+                // it's drawn don't grow it again and again
+                let want = match need(index) {
+                    Some(need) => need.saturating_add(need / 4) as f64,
+                    None => taken[index].2.max(1 << 16).min(have.max(1)) as f64 * grow.min(8.0),
+                };
+                let want = size_class(want.min(u32::MAX as f64) as u32).min(vello_encoding::most(index));
                 room.store(want.max(room.load(Relaxed)), Relaxed);
                 // As if taken, so renders checked after that took less
                 // don't give it back before it's drawn again
                 if want > taken[index].0 {
-                    taken[index] = (want, Some(std::time::Instant::now()));
+                    taken[index] = (want, Some(std::time::Instant::now()), taken[index].2);
                 }
             }
         }
+    }
+    // More than any buffer can hold, so drawing it again won't fit either
+    if too_big {
+        short = Some(format!("too big for Vello's buffers:{}", short.unwrap_or_default()));
     }
     short
 }

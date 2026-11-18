@@ -59,6 +59,9 @@ struct Page {
 /// What shaders may bind at once, see `Vello::new`
 pub const BINDINGS: u32 = 1 << 16;
 
+/// The most bytes any one of Vello's buffers a render allocates from takes
+const MOST_BUFFER: u64 = 384 << 20;
+
 pub struct Vello {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -195,6 +198,16 @@ impl Vello {
             ..Default::default()
         }))
         .map_err(|error| format!("device: {error}"))?;
+        // A buffer past what the device takes is an error that stops every
+        // render after, and the pool makes buffers up to a quarter bigger
+        // than asked. A render needing more than this is drawn in tiles
+        let limits = device.limits();
+        let most = limits.max_buffer_size.min(limits.max_storage_buffer_binding_size as u64) / 5 * 4;
+        // Dev tools: less, to try views too big for it
+        let most_buffer = std::env::var("LIGMA_NATIVE_VELLO_MOST_MB").ok().and_then(|mb| mb.parse::<u64>().ok()).map_or(MOST_BUFFER, |mb| mb << 20);
+        vello::low_level::vello_encoding::MOST_BYTES.store(most.min(most_buffer) as u32, std::sync::atomic::Ordering::Relaxed);
+        // Started again after an error, not with the room that led to it
+        vello::reset_room();
         let broken = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = broken.clone();
         device.on_uncaptured_error(Arc::new(move |error| {
