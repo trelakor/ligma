@@ -1,15 +1,29 @@
-//! Toolbar modes (Settings > Editor > Toolbar): hides modes from the
-//! switch on the right of Figma Design's toolbar (Draw, Design, Motion and
-//! Dev Mode), and from the picker Figma's mode quick toggle shows. With one
-//! left, the toolbar shows no switch. The mode you're in always shows, so
-//! there's a way back from it
+//! Toolbar layout (Settings > Editor > Toolbar): the order of the tools in
+//! Figma Design's toolbar and of the modes in the switch on its right
+//! (Draw, Design, Motion and Dev Mode), and which of them show. A slot's
+//! tools can be hidden one by one, so a group can lose its first tool and
+//! keep the rest, and a slot with all its tools hidden goes, the toolbar
+//! closing up around it. Modes are hidden from the switch and from the
+//! picker Figma's mode quick toggle shows. With one left, the toolbar shows
+//! no switch. The mode you're in always shows, so there's a way back from
+//! it
 //!
-//! Figma's switch is one component, handed the modes it shows, and the
-//! picker lists the modes a jotai atom holds. `PAGE_JS` wraps both as their
-//! module loads (see `modules.rs`) to leave out the hidden ones, so only in
-//! pages loaded with a mode hidden. Changes apply right away in pages it
-//! wrapped. Hiding one in a file already open otherwise reloads it, when
-//! its tab is shown and its edits have been saved
+//! Each of Figma's toolbars (Design, Draw and Dev Mode each have one) is a
+//! row of elements handed to one component, the tools of a group to
+//! another, and the switch is a third, handed the modes it shows. The
+//! picker lists the modes a jotai atom holds. `PAGE_JS` wraps all four as
+//! their modules load (see `modules.rs`) to leave out what's hidden and
+//! put the rest in order, so only in pages loaded with the layout changed
+//! from Figma's. Changes apply right away in pages it wrapped. Changing it
+//! in a file already open otherwise reloads it, when its tab is shown and
+//! its edits have been saved. A group left with one tool loses its arrow
+//!
+//! Settings shows the toolbar as it is, from what a file's page reports:
+//! the slots of Figma Design's toolbar, their tools and the modes, with
+//! their names and icons, read from Figma's React elements as Figma hands
+//! them over. Pages report when what they see differs from what Ligma
+//! has, through `SIGNAL_HOST`, and `on_signal` keeps it in `toolbar.json`
+//! in the app config folder
 //!
 //! Accounts without Draw get Figma's older switch instead, a single Dev
 //! Mode toggle. A stylesheet hides it, with no reload, when the mode it
@@ -24,36 +38,64 @@
 //! `SIGNAL_HOST`, which `on_signal` handles, and picking one turns it on
 //! or off as in Settings
 //!
-//! Figma's shortcuts and the Actions menu still switch to hidden modes:
-//! they're handled where Ligma can't reach
+//! Figma's shortcuts and the Actions menu still reach hidden tools and
+//! modes: they're handled where Ligma can't reach
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tauri::{AppHandle, Url};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, Url, Webview};
 
 use crate::settings::Settings;
 
-/// Runs in Figma tabs. `__LIGMA_TOOLBAR_MODES__` is `{ hidden, rev }`: the
-/// modes hidden when the tab was made, by Figma's names for them. A page
-/// loaded later in the same tab may find a newer one in `localStorage`;
-/// the higher `rev` wins
+/// Runs in Figma tabs. `__LIGMA_TOOLBAR_MODES__` is `{ hidden, modeOrder,
+/// order, tools, rev, known }`: the modes hidden and their order, by
+/// Figma's names for them, the order of the slots and the tools hidden,
+/// when the tab was made, and the signatures of the layout Ligma has. A
+/// page loaded later in the same tab may find a newer one in
+/// `localStorage`; the higher `rev` wins
 const PAGE_JS: &str = r##"(() => {
   if (location.hostname !== "www.figma.com" || window.top !== window || !window.__ligmaModules) return;
   const KEY = "ligma-toolbar-modes";
-  let state = __LIGMA_TOOLBAR_MODES__;
+  const normal = (next) => ({ hidden: [], modeOrder: [], order: [], tools: [], ...next });
+  let state = normal(__LIGMA_TOOLBAR_MODES__);
+  let known = state.known ?? {};
   try {
     const stored = JSON.parse(localStorage.getItem(KEY));
-    if (stored?.rev > state.rev) state = stored;
+    if (stored?.rev > state.rev) state = normal(stored);
   } catch {}
+  const custom = () => !!(state.hidden.length || state.modeOrder.length || state.order.length || state.tools.length);
   const listeners = new Set();
   const subscribe = (listener) => {
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
-  // A string, so React sees the same value until it changes
-  const getHidden = () => state.hidden.join(" ");
+  // Bumped on each change, so the wrapped components draw again
+  let version = 0;
+  const getVersion = () => version;
+  let React = null;
+
+  // `ids` in `order`, those it leaves out after the one before them in
+  // Figma's order, or first
+  const arrange = (ids, order) => {
+    const placed = order.filter((id, i) => ids.includes(id) && order.indexOf(id) === i);
+    ids.forEach((id, i) => {
+      if (placed.includes(id)) return;
+      let at = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        const k = placed.indexOf(ids[j]);
+        if (k >= 0) {
+          at = k + 1;
+          break;
+        }
+      }
+      placed.splice(at, 0, id);
+    });
+    return placed;
+  };
+
   // The switch on screen: its modes, the one the file is in and how it
   // switches, for leaving a mode as it's hidden
   let shown = null;
@@ -75,6 +117,76 @@ const PAGE_JS: &str = r##"(() => {
   // from the others: `(0,r.eU)(e=>{...return e(a).filter(e=>"metronome"===
   // e?t:...)})`
   const QUICK_TOGGLE = (source) => source.includes('"design","illustration","handoff"') && source.includes("visibleModeCount");
+  // A toolbar's row, as seen on 2026-11-17: `function b({children:e,
+  // editorTheme:t}){return(0,n.jsx)("div",{className:"toolbelt_left_side--
+  // leftSideRow--xLXIr",...})}`, handed a div of the toolbar's elements
+  const ROW = (source) => source.includes("toolbelt_left_side--leftSideRow") && source.includes("editorTheme");
+  // A group's button and its menu, its only export: `function E(e){let{
+  // items:t}=e,n=t.filter(e=>!e.hidden);...}`, which draws `function I(e){
+  // let{items:t,toolGroupId:u,activeToolId:p,initialToolId:h,...}=e;...}`.
+  // It shows the tool in use if it's one of `items`, or else the one last
+  // used, or the first
+  const GROUP = (source) => source.includes("tool_group--toolGroup--") && source.includes("initialToolId");
+
+  // The toolbar's elements: `{ id, tools }`, the slot they fill and the
+  // keys Figma records their tools by, or null for dividers and the like.
+  // The Move tools come as one element of their own, which draws Figma's
+  // group, the rest as a group (`toolGroupId`, `tools`), a single tool
+  // (`config`) or a button (Comment, Actions)
+  const MOVE = ["toolDefault", "toolHand", "toolScale"];
+  const SINGLE = { toolFrame: "FrameTools", toolType: "TypeTools", toolCodeComponentToolbeltEntry: "CodeTools", toolSpec: "CodeTools", toolComment: "CommentTools" };
+  const slotOf = (element) => {
+    const props = element?.props;
+    if (!props || typeof props !== "object") return null;
+    if (props.toolGroupId && Array.isArray(props.tools)) return { id: props.toolGroupId, tools: props.tools.map((tool) => tool.recordingKey) };
+    if (props.toolbeltMode !== undefined && props.activateTool) return { id: "SelectTools", tools: MOVE };
+    const key = props.config?.recordingKey;
+    if (key) return { id: SINGLE[key] ?? key, tools: [key] };
+    if (props.toolId === "QUICK_ACTIONS") return { id: "Actions", tools: ["actions"] };
+    if (typeof props.recordingKey === "string" && props.recordingKey.endsWith("toolComment")) return { id: "CommentTools", tools: ["toolComment"] };
+    return null;
+  };
+  // The row's elements in order, leaving out slots with all their tools
+  // hidden. Dividers and the like keep their places
+  const arrangeSlots = (elements) => {
+    const slots = elements.map(slotOf);
+    const at = [];
+    const ids = [];
+    slots.forEach((slot, i) => {
+      if (!slot) return;
+      let id = slot.id;
+      while (ids.includes(id)) id += "+";
+      at.push(i);
+      ids.push(id);
+    });
+    const out = [...elements];
+    arrange(ids, state.order).forEach((id, n) => {
+      const from = at[ids.indexOf(id)];
+      const element = elements[from];
+      out[at[n]] = slots[from].tools.every((tool) => state.tools.includes(tool)) ? false : React.cloneElement(element, { key: id });
+    });
+    return out;
+  };
+  const arrangeRow = (children) => {
+    if (!state.order.length && !state.tools.length) return children;
+    const list = Array.isArray(children) ? children : [children];
+    let changed = false;
+    const out = list.map((child) => {
+      const elements = child?.props?.children;
+      if (child?.type !== "div" || !Array.isArray(elements) || !elements.some(slotOf)) return child;
+      changed = true;
+      return React.cloneElement(child, undefined, ...arrangeSlots(elements));
+    });
+    if (!changed) return children;
+    return Array.isArray(children) ? out : out[0];
+  };
+
+  // Groups left with one tool, by `toolGroupId`, lose their arrow
+  const singles = new Map();
+  const single = (group, on) => {
+    singles.set(group, (singles.get(group) ?? 0) + (on ? 1 : -1));
+    restyle();
+  };
 
   let patched = false;
   const install = () => {
@@ -82,17 +194,18 @@ const PAGE_JS: &str = r##"(() => {
     window.__ligmaModules.patch([
       {
         match: MODULE,
-        getter: (Switch, React) => {
-          if (typeof Switch !== "function" || !React || !String(Switch).includes("activeMode")) return Switch;
+        getter: (Switch, react) => {
+          if (typeof Switch !== "function" || !react || !String(Switch).includes("activeMode")) return Switch;
+          React ??= react;
           const Modes = (props) => {
-            const hidden = React.useSyncExternalStore(subscribe, getHidden).split(" ");
+            react.useSyncExternalStore(subscribe, getVersion);
             shown = props;
-            React.useEffect(() => () => {
+            react.useEffect(() => () => {
               if (shown === props) shown = null;
             });
             // Once, when the page reloaded for a hidden mode has drawn the
             // file: Figma doesn't take a switch before
-            React.useEffect(() => {
+            react.useEffect(() => {
               const left = leaving;
               leaving = [];
               if (!left.length) return;
@@ -100,12 +213,15 @@ const PAGE_JS: &str = r##"(() => {
               const wait = () => (ready() ? leave(left) : setTimeout(wait, 500));
               wait();
             }, []);
-            const modes = Array.isArray(props.modes)
-              ? props.modes.filter((item) => item.mode === props.activeMode || !hidden.includes(item.mode))
-              : props.modes;
-            if (modes === props.modes || modes.length === props.modes.length) return React.createElement(Switch, props);
+            if (!Array.isArray(props.modes)) return react.createElement(Switch, props);
+            const kept = props.modes.filter((item) => item.mode === props.activeMode || !state.hidden.includes(item.mode));
+            const modes = arrange(
+              kept.map((item) => item.mode),
+              state.modeOrder,
+            ).map((mode) => kept.find((item) => item.mode === mode));
+            if (modes.every((item, i) => item === props.modes[i]) && modes.length === props.modes.length) return react.createElement(Switch, props);
             if (modes.length < 2) return null;
-            return React.createElement(Switch, { ...props, modes });
+            return react.createElement(Switch, { ...props, modes });
           };
           Modes.displayName = "LigmaToolbarModes";
           return Modes;
@@ -128,6 +244,43 @@ const PAGE_JS: &str = r##"(() => {
           };
         },
       },
+      {
+        match: ROW,
+        getter: (Row, react) => {
+          if (typeof Row !== "function" || !react || !String(Row).includes("leftSideRow") || !String(Row).includes("editorTheme")) return Row;
+          React ??= react;
+          const Arranged = (props) => {
+            react.useSyncExternalStore(subscribe, getVersion);
+            return react.createElement(Row, { ...props, children: arrangeRow(props.children) });
+          };
+          Arranged.displayName = "LigmaToolbarRow";
+          return Arranged;
+        },
+      },
+      {
+        match: GROUP,
+        getter: (Group, react) => {
+          if (typeof Group !== "function" || !react || !String(Group).includes("items")) return Group;
+          React ??= react;
+          const Tools = (props) => {
+            react.useSyncExternalStore(subscribe, getVersion);
+            const all = Array.isArray(props.items) ? props.items : null;
+            const items = all?.filter((item) => !state.tools.includes(item.recordingKey));
+            // Pencil keeps its arrow for the lasso (see lasso.rs)
+            const one = items?.length === 1 && all.length > 1 && !(items[0].recordingKey === "toolPencil" && window.__ligmaLassoOn?.());
+            react.useLayoutEffect(() => {
+              if (!one) return;
+              single(props.toolGroupId, true);
+              return () => single(props.toolGroupId, false);
+            }, [one, props.toolGroupId]);
+            if (!items || items.length === all.length) return react.createElement(Group, props);
+            if (!items.length) return null;
+            return react.createElement(Group, { ...props, items });
+          };
+          Tools.displayName = "LigmaToolbarGroup";
+          return Tools;
+        },
+      },
     ]);
   };
 
@@ -145,9 +298,14 @@ const PAGE_JS: &str = r##"(() => {
     if (shown) {
       const { modes, activeMode, onModeSwitch } = shown;
       if (!hidden.includes(activeMode) || !Array.isArray(modes) || typeof onModeSwitch !== "function") return;
-      const next = modes.filter((item) => !item.disabled && !state.hidden.includes(item.mode))[tried];
+      const kept = modes.filter((item) => !item.disabled && !state.hidden.includes(item.mode));
+      const order = arrange(
+        kept.map((item) => item.mode),
+        state.modeOrder,
+      );
+      const next = order[tried];
       if (!next) return;
-      onModeSwitch(next.mode);
+      onModeSwitch(next);
       setTimeout(() => leave(hidden, tried + 1), 3000);
       return;
     }
@@ -160,9 +318,23 @@ const PAGE_JS: &str = r##"(() => {
     if (hidden.includes(from) && !state.hidden.includes(to)) toggle.querySelector('button, [role="switch"], input')?.click();
   };
 
-  // Right-clicking the switch asks Ligma for its menu (see `on_signal`):
-  // through `window.open` on Windows, and on macOS as an iframe load,
-  // which WKWebView reports to `on_navigation`
+  // Asks Ligma for something (see `on_signal`): through `window.open` on
+  // Windows, and on macOS as an iframe load, which WKWebView reports to
+  // `on_navigation`
+  const signal = (path) => {
+    const url = `https://toolbar.ligma.invalid${path}`;
+    if (navigator.userAgent.includes("Mac")) {
+      const frame = document.createElement("iframe");
+      frame.style.display = "none";
+      frame.src = url;
+      document.documentElement.appendChild(frame);
+      setTimeout(() => frame.remove(), 1000);
+    } else {
+      window.open(url, "_blank");
+    }
+  };
+
+  // Right-clicking the switch asks Ligma for its menu
   const SWITCH = `[class*="toolbelt_mode_segmented_control--container"], [data-testid="toolbelt-mode-segmented-control"], ${TOGGLE}`;
   addEventListener(
     "contextmenu",
@@ -170,16 +342,7 @@ const PAGE_JS: &str = r##"(() => {
       if (!event.target.closest?.(SWITCH)) return;
       event.preventDefault();
       event.stopPropagation();
-      const url = "https://toolbar.ligma.invalid/menu";
-      if (navigator.userAgent.includes("Mac")) {
-        const frame = document.createElement("iframe");
-        frame.style.display = "none";
-        frame.src = url;
-        document.documentElement.appendChild(frame);
-        setTimeout(() => frame.remove(), 1000);
-      } else {
-        window.open(url, "_blank");
-      }
+      signal("/menu");
     },
     true,
   );
@@ -189,9 +352,11 @@ const PAGE_JS: &str = r##"(() => {
     if (state.hidden.includes("handoff")) toggles.push(`${TOGGLE}:not(${TO_DESIGN})`);
     if (state.hidden.includes("design")) toggles.push(`${TOGGLE}${TO_DESIGN}`);
     const hidden = toggles.join(", ");
-    style.textContent = hidden
-      ? `:is(${hidden}), [class*="mode_toggle_switch_divider--hideIfLast"]:has(+ :is(${hidden})) { display: none !important; }`
-      : "";
+    const arrows = [...singles].filter(([, count]) => count > 0).map(([group]) => `[data-testid="${CSS.escape(group)}-chevron"]`);
+    style.textContent = [
+      hidden ? `:is(${hidden}), [class*="mode_toggle_switch_divider--hideIfLast"]:has(+ :is(${hidden})) { display: none !important; }` : "",
+      arrows.length ? `:is(${arrows.join(", ")}) { display: none !important; }` : "",
+    ].join("\n");
   };
   restyle();
   const mount = () => {
@@ -202,11 +367,203 @@ const PAGE_JS: &str = r##"(() => {
   };
   if (!mount()) new MutationObserver((_, observer) => mount() && observer.disconnect()).observe(document, { childList: true });
 
-  // Hid one after the switch loaded: reload, once the tab is shown and
-  // Figma has no edits still saving
+  // The layout as Figma has it, for Settings to show: read from the props
+  // Figma hands its components, above Ligma's wrappers, so with nothing
+  // left out or moved
+  const fiberOf = (node) => {
+    const key = node && Object.keys(node).find((name) => name.startsWith("__reactFiber$"));
+    return key ? node[key] : null;
+  };
+  // The outermost of the first run of components whose props `has`
+  const outermost = (fiber, has) => {
+    let found = null;
+    for (; fiber; fiber = fiber.return) {
+      const props = fiber.memoizedProps;
+      if (props && typeof props === "object" && has(props)) found = props;
+      else if (found) break;
+    }
+    return found;
+  };
+  const text = (get) => {
+    try {
+      return String(get() ?? "");
+    } catch {
+      return "";
+    }
+  };
+  const fromConfig = (config) => ({
+    key: config.recordingKey,
+    name: config.text ?? text(() => config.getText?.(false)),
+    icon: config.icon ?? (() => config.getIcon?.({ numUnreadComments: 0, isActive: false })),
+  });
+  // The tools of the row's element `element`, or null if they can't be
+  // read
+  const toolsOf = (element, row) => {
+    const props = element.props;
+    if (Array.isArray(props.tools)) return props.tools.map(fromConfig);
+    if (props.config) return [fromConfig(props.config)];
+    if (props.toolbeltMode !== undefined) {
+      const chevron = row.querySelector('[data-testid="SelectTools-chevron"]');
+      const group = outermost(fiberOf(chevron), (p) => Array.isArray(p.items) && "toolGroupId" in p);
+      return group ? group.items.map(fromConfig) : null;
+    }
+    if (props.toolId === "QUICK_ACTIONS") return [{ key: "actions", name: String(props.tooltipText ?? "Actions"), icon: props.icon }];
+    // Comment's tooltip counts unread comments
+    const name = String(props.tooltipText ?? "");
+    return [{ key: "toolComment", name: /\d/.test(name) ? "Comment" : name, icon: props.icon }];
+  };
+  const readTools = () => {
+    for (const row of document.querySelectorAll('[class*="toolbelt_left_side--leftSideRow"]')) {
+      const props = outermost(fiberOf(row), (p) => "editorTheme" in p && "children" in p);
+      const div = [props?.children].flat().find((child) => child?.type === "div" && Array.isArray(child.props?.children));
+      const elements = div?.props.children;
+      if (!elements?.some((element) => element?.props?.toolbeltMode === "design")) continue;
+      const slots = [];
+      for (const element of elements) {
+        const slot = slotOf(element);
+        if (!slot) continue;
+        const tools = toolsOf(element, row);
+        if (!tools?.length) return null;
+        let id = slot.id;
+        while (slots.some((other) => other.id === id)) id += "+";
+        slots.push({ id, tools });
+      }
+      return slots.length ? slots : null;
+    }
+    return null;
+  };
+  const readModes = () => {
+    const control = document.querySelector('[data-testid="toolbelt-mode-segmented-control"], [class*="toolbelt_mode_segmented_control--container"]');
+    const props = outermost(fiberOf(control), (p) => Array.isArray(p.modes) && "activeMode" in p);
+    return props?.modes.map((item) => ({ mode: item.mode, name: String(item.label ?? item.mode), icon: item.icon })) ?? null;
+  };
+
+  // React, for drawing icons, from Figma's own modules if no wrapper has
+  // been handed it
+  const findReact = () => {
+    if (React) return React;
+    let require = null;
+    try {
+      window.rspackChunk_figma_web_bundler.push([[Symbol("ligma")], {}, (r) => (require = r)]);
+    } catch {}
+    for (const id in require?.m ?? {}) {
+      const source = Function.prototype.toString.call(require.m[id]);
+      if (source.length > 40000 || !source.includes("useSyncExternalStore") || !source.includes("forwardRef") || !source.includes("createElement")) continue;
+      try {
+        const exports = require(id);
+        if (exports?.useSyncExternalStore && exports.createElement) return exports;
+      } catch {}
+    }
+    return null;
+  };
+  // An icon's markup: its components called with hooks that hand back
+  // their first values, as icons only read context and memoize
+  const KEEP_CASE = new Set(["viewBox", "preserveAspectRatio", "gradientUnits", "gradientTransform", "patternUnits", "maskUnits", "clipPathUnits", "stdDeviation"]);
+  const escape = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+  const markup = (react) => {
+    const internals = react.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED?.ReactCurrentDispatcher;
+    const client = react.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+    const hooks = {
+      readContext: (context) => context._currentValue,
+      use: (value) => value?._currentValue ?? value,
+      useContext: (context) => context._currentValue,
+      useState: (initial) => [typeof initial === "function" ? initial() : initial, () => {}],
+      useReducer: (reducer, initial, init) => [init ? init(initial) : initial, () => {}],
+      useMemo: (make) => make(),
+      useCallback: (callback) => callback,
+      useRef: (current) => ({ current }),
+      useEffect() {},
+      useLayoutEffect() {},
+      useInsertionEffect() {},
+      useImperativeHandle() {},
+      useDebugValue() {},
+      useId: () => "ligma",
+      useSyncExternalStore: (_, get) => get(),
+      useTransition: () => [false, (run) => run()],
+      useDeferredValue: (value) => value,
+    };
+    const draw = (node, depth) => {
+      if (node == null || typeof node === "boolean") return "";
+      if (typeof node === "string" || typeof node === "number") return escape(node);
+      if (Array.isArray(node)) return node.map((child) => draw(child, depth)).join("");
+      let type = node.type;
+      while (type && typeof type === "object" && (type.type || type.render)) type = type.type ?? type.render;
+      const props = node.props ?? {};
+      if (typeof type === "function") {
+        if (depth > 8) return "";
+        if (internals) {
+          const before = internals.current;
+          internals.current = hooks;
+          try {
+            return draw(type(props, null), depth + 1);
+          } finally {
+            internals.current = before;
+          }
+        }
+        if (client) {
+          const before = client.H;
+          client.H = hooks;
+          try {
+            return draw(type(props, null), depth + 1);
+          } finally {
+            client.H = before;
+          }
+        }
+        return "";
+      }
+      if (typeof type !== "string") return draw(props.children, depth);
+      const attributes = Object.entries(props)
+        .filter(([name, value]) => name !== "children" && (typeof value === "string" || typeof value === "number"))
+        .map(([name, value]) => ` ${name === "className" ? "class" : KEEP_CASE.has(name) ? name : name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}="${escape(value)}"`)
+        .join("");
+      return `<${type}${attributes}>${draw(props.children, depth)}</${type}>`;
+    };
+    return (icon) => {
+      try {
+        return draw(typeof icon === "function" ? icon() : icon, 0);
+      } catch {
+        return "";
+      }
+    };
+  };
+
+  // Tells Ligma the layout, if it differs from what Ligma has: the tools,
+  // and the modes when the switch is on screen to read them from
+  const report = () => {
+    const slots = readTools();
+    if (!slots) return false;
+    const modes = readModes();
+    const toolsSig = JSON.stringify(slots.map((slot) => [slot.id, slot.tools.map((tool) => [tool.key, tool.name])]));
+    const modesSig = modes ? JSON.stringify(modes.map((item) => [item.mode, item.name])) : known.modes;
+    if (toolsSig === known.tools && modesSig === known.modes) return true;
+    const react = findReact();
+    if (!react) return true;
+    const icon = markup(react);
+    const layout = {
+      toolsSig,
+      slots: slots.map((slot) => ({ id: slot.id, tools: slot.tools.map((tool) => ({ key: tool.key, name: tool.name, icon: icon(tool.icon) })) })),
+    };
+    if (modes && modesSig !== known.modes) {
+      layout.modesSig = modesSig;
+      layout.modes = modes.map((item) => ({ mode: item.mode, name: item.name, icon: icon(item.icon) }));
+    }
+    known = { tools: toolsSig, modes: modesSig };
+    signal(`/layout?data=${encodeURIComponent(JSON.stringify(layout))}`);
+    return true;
+  };
+  // Once the toolbar's drawn, and each time the tab's shown again
+  let tries = 0;
+  const reportSoon = () => {
+    if (report() || ++tries > 30) return;
+    setTimeout(reportSoon, 2000);
+  };
+  setTimeout(reportSoon, 2000);
+
+  // Changed the layout after the toolbar loaded: reload, once the tab is
+  // shown and Figma has no edits still saving
   let reloading = false;
   const reloadWhenReady = () => {
-    if (reloading || !state.hidden.length) return;
+    if (reloading || !custom()) return;
     if (document.visibilityState !== "visible") return;
     if (window.__ligmaCanRest && !window.__ligmaCanRest()) {
       setTimeout(reloadWhenReady, 1000);
@@ -218,24 +575,35 @@ const PAGE_JS: &str = r##"(() => {
     } catch {}
     location.reload();
   };
+  // Too late for a module, once it has loaded without being wrapped
+  const late = () => [MODULE, ROW, GROUP].some((match) => window.__ligmaModules.arrived(match));
 
   const apply = (next) => {
-    const changed = next.hidden.join(" ") !== state.hidden.join(" ");
-    const newly = next.hidden.filter((mode) => !state.hidden.includes(mode));
+    next = normal(next);
+    const was = state;
+    const changed = ["hidden", "modeOrder", "order", "tools"].some((key) => next[key].join(" ") !== was[key].join(" "));
+    const newly = next.hidden.filter((mode) => !was.hidden.includes(mode));
     state = next;
     if (!changed) return;
+    version++;
     restyle();
     for (const listener of listeners) listener();
     if (newly.length) {
       if (patched || !window.__ligmaModules.arrived(MODULE)) leave(newly);
       else leaving = [...new Set([...leaving, ...newly])].filter((mode) => state.hidden.includes(mode));
     }
-    if (!state.hidden.length || patched) return;
-    if (window.__ligmaModules.arrived(MODULE)) reloadWhenReady();
+    if (!custom() || patched) return;
+    if (late()) reloadWhenReady();
     else install();
+  };
+  // Draws the toolbar again, for the lasso's setting (see lasso.rs)
+  window.__ligmaToolbarRedraw = () => {
+    version++;
+    for (const listener of listeners) listener();
   };
   // From Ligma, when the setting changes
   window.__ligmaToolbarModes = (next) => {
+    if (next.known) known = next.known;
     try {
       localStorage.setItem(KEY, JSON.stringify(next));
     } catch {}
@@ -252,43 +620,86 @@ const PAGE_JS: &str = r##"(() => {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     sync();
-    if (state.hidden.length && !patched && window.__ligmaModules.arrived(MODULE)) reloadWhenReady();
+    if (custom() && !patched && late()) reloadWhenReady();
+    report();
   });
-  if (state.hidden.length) install();
+  if (custom()) install();
 })()"##;
 
-/// The modes hidden, by Figma's names for them,
-static HIDDEN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
-/// and when they last changed, for `PAGE_JS` to tell them from older ones
-/// in `localStorage`. Launch counts as a change
+/// The layout set in Settings, as `PAGE_JS` takes it: the modes hidden and
+/// their order, by Figma's names for them, the slots' order and the tools
+/// hidden
+#[derive(Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Layout {
+    hidden: Vec<&'static str>,
+    mode_order: Vec<String>,
+    order: Vec<String>,
+    tools: Vec<String>,
+}
+
+static LAYOUT: Mutex<Option<Layout>> = Mutex::new(None);
+/// and when it last changed, for `PAGE_JS` to tell it from older ones in
+/// `localStorage`. Launch counts as a change
 static REV: AtomicU64 = AtomicU64::new(0);
+
+/// The toolbar as a file's page last reported it (see `report` in
+/// `PAGE_JS`), kept in `toolbar.json`
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Reported {
+    tools_sig: String,
+    slots: serde_json::Value,
+    modes_sig: Option<String>,
+    modes: serde_json::Value,
+}
+
+static REPORTED: Mutex<Option<Reported>> = Mutex::new(None);
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |time| time.as_millis() as u64)
 }
 
-fn hidden(settings: &Settings) -> Vec<&'static str> {
-    [
-        (settings.show_draw_mode, "illustration"),
-        (settings.show_design_mode, "design"),
-        (settings.show_motion_mode, "metronome"),
-        (settings.show_dev_mode, "handoff"),
-    ]
-    .into_iter()
-    .filter_map(|(shown, mode)| (!shown).then_some(mode))
-    .collect()
+fn layout(settings: &Settings) -> Layout {
+    Layout {
+        hidden: [
+            (settings.show_draw_mode, "illustration"),
+            (settings.show_design_mode, "design"),
+            (settings.show_motion_mode, "metronome"),
+            (settings.show_dev_mode, "handoff"),
+        ]
+        .into_iter()
+        .filter_map(|(shown, mode)| (!shown).then_some(mode))
+        .collect(),
+        mode_order: settings.mode_order.clone(),
+        order: settings.toolbar_order.clone(),
+        tools: settings.hidden_tools.clone(),
+    }
 }
 
 fn state() -> String {
-    let hidden = serde_json::to_string(&*HIDDEN.lock().unwrap()).unwrap();
-    let rev = REV.load(Ordering::Relaxed);
-    format!(r#"{{"hidden":{hidden},"rev":{rev}}}"#)
+    let mut state = serde_json::to_value(LAYOUT.lock().unwrap().clone().unwrap_or_default()).unwrap();
+    state["rev"] = REV.load(Ordering::Relaxed).into();
+    let reported = REPORTED.lock().unwrap();
+    state["known"] = serde_json::json!({
+        "tools": reported.as_ref().map(|reported| reported.tools_sig.clone()),
+        "modes": reported.as_ref().and_then(|reported| reported.modes_sig.clone()),
+    });
+    state.to_string()
+}
+
+fn reported_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join("toolbar.json"))
 }
 
 /// Call at launch, before any tab
-pub fn init(settings: &Settings) {
-    *HIDDEN.lock().unwrap() = hidden(settings);
+pub fn init(app: &AppHandle, settings: &Settings) {
+    *LAYOUT.lock().unwrap() = Some(layout(settings));
     REV.store(now(), Ordering::Relaxed);
+    let reported = reported_path(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Reported>(&text).ok());
+    *REPORTED.lock().unwrap() = reported;
 }
 
 /// `PAGE_JS`, for a new Figma tab
@@ -296,11 +707,18 @@ pub fn page_js() -> String {
     PAGE_JS.replace("__LIGMA_TOOLBAR_MODES__", &state())
 }
 
-/// Origin of the links `PAGE_JS` opens to ask for the menu
+/// Origin of the links `PAGE_JS` opens to ask for the menu and to report
+/// the layout
 pub const SIGNAL_HOST: &str = "toolbar.ligma.invalid";
 
-/// The menu's items, in the switch's order: their actions and text
-const MODES: [(&str, &str); 4] = [("draw", "Draw"), ("design", "Design"), ("motion", "Motion"), ("dev", "Dev Mode")];
+/// The menu's items, in Figma's order: their actions, text and Figma's
+/// names for them
+const MODES: [(&str, &str, &str); 4] = [
+    ("draw", "Draw", "illustration"),
+    ("design", "Design", "design"),
+    ("motion", "Motion", "metronome"),
+    ("dev", "Dev Mode", "handoff"),
+];
 
 /// The setting that shows mode `action` (see `MODES`)
 fn shows<'a>(settings: &'a mut Settings, action: &str) -> Option<&'a mut bool> {
@@ -313,24 +731,66 @@ fn shows<'a>(settings: &'a mut Settings, action: &str) -> Option<&'a mut bool> {
     }
 }
 
-/// A right-click on the switch in tab `tab`: opens the menu of modes. Not
-/// from within the webview's own callback, which is still deciding on the
-/// page
+/// A right-click on the switch in tab `tab`: opens the menu of modes, in
+/// the switch's order. Or a page's report of the layout. Not from within
+/// the webview's own callback, which is still deciding on the page
 pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
-    if url.path() != "/menu" {
-        return;
+    match url.path() {
+        "/menu" => {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let mut settings = crate::settings::current(&app);
+                let mut modes = MODES.to_vec();
+                let rank = |name: &str| settings.mode_order.iter().position(|mode| mode == name).unwrap_or(usize::MAX);
+                if !settings.mode_order.is_empty() {
+                    modes.sort_by_key(|&(_, _, name)| rank(name));
+                }
+                let items = modes.iter().map(|&(action, text, _)| Some((action, text))).collect();
+                let checked = modes
+                    .iter()
+                    .map(|&(action, _, _)| action)
+                    .filter(|action| shows(&mut settings, action).is_some_and(|shown| *shown))
+                    .collect();
+                let _ = crate::tab_menu::show(&app, tab, items, crate::tab_menu::Extras { checked: Some(checked), ..Default::default() }, on_pick);
+            });
+        }
+        "/layout" => {
+            let Some((_, data)) = url.query_pairs().find(|(name, _)| name == "data") else {
+                return;
+            };
+            if data.len() > 1 << 20 {
+                return;
+            }
+            let Ok(layout) = serde_json::from_str::<Reported>(&data) else {
+                return;
+            };
+            if layout.tools_sig.is_empty() || !layout.slots.is_array() {
+                return;
+            }
+            let merged = {
+                let mut reported = REPORTED.lock().unwrap();
+                let mut merged = layout;
+                // Modes come only from pages with the switch on screen
+                if merged.modes_sig.is_none() {
+                    if let Some(previous) = reported.as_ref() {
+                        merged.modes_sig = previous.modes_sig.clone();
+                        merged.modes = previous.modes.clone();
+                    }
+                }
+                *reported = Some(merged.clone());
+                merged
+            };
+            if let Some(path) = reported_path(app) {
+                if let Err(error) = std::fs::write(path, serde_json::to_string(&merged).unwrap()) {
+                    log::error!("Couldn't save the toolbar's layout: {error}");
+                }
+            }
+            if let Some(window) = app.get_webview_window(crate::settings::WINDOW) {
+                let _ = window.eval(format!("window.applyToolbarLayout?.({})", serde_json::to_string(&merged).unwrap()));
+            }
+        }
+        _ => {}
     }
-    let app = app.clone();
-    std::thread::spawn(move || {
-        let mut settings = crate::settings::current(&app);
-        let items = MODES.iter().map(|&item| Some(item)).collect();
-        let checked = MODES
-            .iter()
-            .map(|&(action, _)| action)
-            .filter(|action| shows(&mut settings, action).is_some_and(|shown| *shown))
-            .collect();
-        let _ = crate::tab_menu::show(&app, tab, items, crate::tab_menu::Extras { checked: Some(checked), ..Default::default() }, on_pick);
-    });
 }
 
 /// Turns the mode picked in the menu on or off
@@ -347,10 +807,19 @@ fn on_pick(app: &AppHandle, _tab: u32, action: &str) {
     crate::settings::show_in_window(app, &settings);
 }
 
+/// The toolbar as last reported, for the settings window to draw
+#[tauri::command]
+pub async fn get_toolbar_layout(webview: Webview) -> Option<serde_json::Value> {
+    if !crate::settings::from_settings_window(&webview) {
+        return None;
+    }
+    REPORTED.lock().unwrap().as_ref().and_then(|reported| serde_json::to_value(reported).ok())
+}
+
 /// Sends changed settings to every loaded tab
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
-    let hidden = hidden(settings);
-    if std::mem::replace(&mut *HIDDEN.lock().unwrap(), hidden.clone()) == hidden {
+    let layout = layout(settings);
+    if std::mem::replace(&mut *LAYOUT.lock().unwrap(), Some(layout.clone())) == Some(layout) {
         return;
     }
     REV.store(now(), Ordering::Relaxed);

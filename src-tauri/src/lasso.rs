@@ -1152,7 +1152,11 @@ const PAGE_JS: &str = r##"(() => {
     show();
     const button = pencil();
     if (button) label(button);
+    window.__ligmaToolbarRedraw?.();
   };
+  // For the toolbar (see toolbar.rs): the lasso's menu item keeps Pencil's
+  // arrow when it's the only tool left in its group
+  window.__ligmaLassoOn = () => state.on;
   // From Ligma, when the setting changes
   window.__ligmaLassoFill = (next) => {
     try {

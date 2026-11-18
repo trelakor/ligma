@@ -272,6 +272,7 @@ fn main() {
             tabs::window_control,
             tabs::update_now,
             settings::get_settings,
+            toolbar::get_toolbar_layout,
             settings::get_theme,
             settings::set_settings,
             settings::get_version,
@@ -331,7 +332,7 @@ fn main() {
             frame_colors::init(&settings);
             home::init(&settings);
             new_home::init(&settings);
-            toolbar::init(&settings);
+            toolbar::init(app.handle(), &settings);
             adjustments::init(&settings);
             ai_actions::init(&settings);
             copy_code::init(&settings);

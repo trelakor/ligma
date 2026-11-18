@@ -609,6 +609,118 @@
     cursor: text;
   }
 
+  /* Toolbar layout: Figma Design's toolbar as a file last reported it
+     (toolbar.rs), on a stage the color of Figma's canvas. Sized in Figma's
+     own measures times --u, which `fitLayout` shrinks below 1 to fit */
+  :root { --stage: #1e1e1e; }
+  @media (prefers-color-scheme: light) { :root { --stage: #f5f5f5; } }
+  :root.dark { --stage: color-mix(in srgb, var(--bg) 68%, #000); }
+  :root.light { --stage: var(--bg-secondary); }
+  .layout-head { display: flex; align-items: flex-start; gap: 16px; }
+  .layout-head .button[hidden] { display: none; }
+  .stage {
+    --u: 1;
+    --color-icon: currentColor;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px 12px;
+    border-radius: 7px;
+    background: var(--stage);
+  }
+  .bar, .tray {
+    display: flex;
+    border-radius: calc(13px * var(--u));
+    background: var(--bg);
+    box-shadow: var(--menu-shadow);
+    color: var(--text);
+  }
+  .bar { align-items: stretch; height: calc(48px * var(--u)); }
+  .bar .tools { position: relative; display: flex; align-items: center; gap: calc(8px * var(--u)); padding: 0 calc(8px * var(--u)); }
+  .bar .empty { align-self: center; padding: 0 16px; color: var(--text-secondary); white-space: nowrap; }
+  .bar .divider { flex: none; width: 1px; background: var(--border); }
+  .bar .switch-area { display: flex; align-items: center; padding: 0 calc(8px * var(--u)); }
+  .bar .modes {
+    position: relative;
+    display: flex;
+    gap: calc(2px * var(--u));
+    padding: calc(2px * var(--u));
+    border-radius: calc(5px * var(--u));
+    background: var(--bg-tertiary);
+  }
+  .slot { position: relative; display: flex; gap: calc(1px * var(--u)); touch-action: none; }
+  .slot .tool, .slot .chev, .sub .tool {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: calc(32px * var(--u));
+    height: calc(32px * var(--u));
+    padding: calc(4px * var(--u));
+    border: 0;
+    border-radius: calc(5px * var(--u));
+    background: none;
+    color: inherit;
+    font: inherit;
+  }
+  .slot .tool svg, .sub .tool svg { display: block; width: 100%; height: 100%; }
+  .slot .chev { width: calc(16px * var(--u)); padding: 0; }
+  .slot .chev svg { width: calc(16px * var(--u)); height: calc(16px * var(--u)); transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1); }
+  .mode .tool { width: calc(28px * var(--u)); height: calc(28px * var(--u)); padding: calc(2px * var(--u)); border-radius: calc(3px * var(--u)); }
+  .mode .tool.text { width: auto; padding: 0 calc(8px * var(--u)); white-space: nowrap; }
+  .slot:hover .tool, .slot:hover .chev, .sub:hover .tool { background: var(--hover); }
+  .mode:hover .tool { background: color-mix(in srgb, var(--text) 8%, transparent); }
+  .slot.open .tool, .slot.open .chev { background: var(--bg-secondary); }
+  .slot.open .chev { color: var(--brand); }
+  .slot.open .chev svg { transform: rotate(180deg); }
+  /* Hidden: still here to bring back, greyed */
+  .slot.off .tool > svg, .slot.off .tool.text, .slot.off .chev, .sub.off .tool > svg { opacity: 0.3; }
+  .sub.off .name { color: var(--text-tertiary); }
+  .slot .tool:focus-visible, .slot .chev:focus-visible, .sub .tool:focus-visible, .eye:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+  /* The eye, at the square's top left on hover */
+  .eye {
+    position: absolute;
+    top: calc(-5px * var(--u));
+    left: calc(-5px * var(--u));
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: max(14px, calc(17px * var(--u)));
+    height: max(14px, calc(17px * var(--u)));
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--bg);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--border);
+    color: var(--text);
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  .eye:hover { color: var(--brand); }
+  .eye:disabled { color: var(--text-tertiary); }
+  .slot:hover > .eye, .slot:has(:focus-visible) > .eye, .sub:hover .eye, .sub:has(:focus-visible) .eye { opacity: 1; }
+  .eye svg { width: 10px; height: 10px; }
+  .stage.dragging .eye { opacity: 0; }
+  /* Lifted while dragged, above the rest, which make way */
+  .slot.lifted { z-index: 2; cursor: grabbing; }
+  .slot.lifted .tool, .slot.lifted .chev { background: var(--bg-secondary); }
+  .slot.lifted::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: calc(5px * var(--u));
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.25);
+  }
+  .stage.dragging, .stage.dragging * { cursor: grabbing; }
+  /* A group's tools, under it, as Figma's menu lists them */
+  .tray { flex-direction: column; align-self: flex-start; min-width: 168px; padding: 8px; gap: 2px; }
+  .tray[hidden] { display: none; }
+  .sub { display: flex; align-items: center; gap: 8px; padding-right: 8px; }
+  .sub .square { position: relative; }
+  .sub .name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .sub .tag { margin-left: 0; }
+
   .switch:focus-visible, #close:focus-visible, .button:focus-visible, .icon-button:focus-visible, nav button:focus-visible, .icon-choice:focus-visible, .manual summary:focus-visible {
     outline: 2px solid var(--brand);
     outline-offset: 1px;
@@ -839,15 +951,16 @@
     <div class="page-title">Editor</div>
     <section>
       <h2>Toolbar</h2>
-      <div class="row stack" data-keywords="mode switch dev mode">
-        <span class="label">Modes to switch between
-          <div class="hint">In the toolbar's switch, also changed by right-clicking it. Hiding one reloads open files.</div>
-        </span>
-        <div class="chips" role="group" aria-label="Modes to switch between">
-          <label class="chip"><input type="checkbox" id="mode-draw"><span class="box"></span>Draw</label>
-          <label class="chip"><input type="checkbox" id="mode-design"><span class="box"></span>Design</label>
-          <label class="chip"><input type="checkbox" id="mode-motion"><span class="box"></span>Motion</label>
-          <label class="chip"><input type="checkbox" id="mode-dev"><span class="box"></span>Dev Mode</label>
+      <div class="row stack" data-keywords="tools modes order reorder arrange move hide show switch draw design motion dev mode">
+        <div class="layout-head">
+          <span class="label">Tools and modes
+            <div class="hint">Drag to move them, modes within the switch. Hover one and click its eye to hide it, or open a group to hide its tools one by one. Changing Figma's layout reloads open files.</div>
+          </span>
+          <button type="button" class="button" id="layout-reset" hidden>Reset</button>
+        </div>
+        <div class="stage" id="layout-stage">
+          <div class="bar" id="layout-bar"></div>
+          <div class="tray" id="layout-tray" role="group" hidden></div>
         </div>
       </div>
       <label class="row" data-keywords="pencil procreate draw tool">
@@ -1302,13 +1415,6 @@
     "discord-chat": "discordShowChat",
     "discord-asset": "discordShowAsset",
     "discord-webpage": "discordShowWebpage",
-  };
-  // Modes in Figma Design's toolbar: switch and setting
-  const modeFields = {
-    "mode-draw": "showDrawMode",
-    "mode-design": "showDesignMode",
-    "mode-motion": "showMotionMode",
-    "mode-dev": "showDevMode",
   };
   // Interface scales − and + step through, like a browser's zoom levels
   // (SCALES in settings.rs)
@@ -1813,7 +1919,6 @@
     $("discord-invites").checked = settings.discordInvites;
     $("discord-join-requests").checked = settings.discordJoinRequests;
     for (const [id, key] of Object.entries(whereFields)) $(id).checked = settings[key];
-    for (const [id, key] of Object.entries(modeFields)) $(id).checked = settings[key];
     $("restore").checked = settings.restoreTabs;
     $("previews").checked = settings.tabPreviews;
     $("split-view").checked = settings.splitView;
@@ -1837,6 +1942,7 @@
     $("image-bar-icons").checked = settings.imageBarIcons;
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
+    showLayout();
     $("classic-home").checked = settings.classicHome;
     $("new-home").checked = settings.ligmaHome;
     $("new-home-start").value = settings.ligmaHomeStart;
@@ -1905,7 +2011,6 @@
       discordInvites: $("discord-invites").checked,
       discordJoinRequests: $("discord-join-requests").checked,
       ...Object.fromEntries(Object.entries(whereFields).map(([id, key]) => [key, $(id).checked])),
-      ...Object.fromEntries(Object.entries(modeFields).map(([id, key]) => [key, $(id).checked])),
       restoreTabs: $("restore").checked,
       tabPreviews: $("previews").checked,
       splitView: $("split-view").checked,
@@ -1939,7 +2044,7 @@
     await invoke("set_settings", { settings });
   }
 
-  for (const id of [...fields, ...Object.keys(whereFields), ...Object.keys(modeFields), "scale"]) $(id).addEventListener("change", () => save());
+  for (const id of [...fields, ...Object.keys(whereFields), "scale"]) $(id).addEventListener("change", () => save());
 
   // Number fields scrub like Figma's: drag one right to raise its value
   // and left to lower it, with Shift in steps of 10. A click without a
@@ -2258,6 +2363,343 @@
     copyButton($(`copy-${id}`), kind);
     invoke("get_mcp_config", { kind }).then((text) => { $(id).textContent = text ?? ""; });
   }
+
+  // Tools and modes: Figma Design's toolbar as a file last reported it
+  // (toolbar.rs), its slots and modes in the order set, to drag around and
+  // hide. A group's tools open in a tray under it, each hidden on its own,
+  // Ligma's lasso fill among them, after Pencil, whose item it copies
+  let reported = null;
+  let openSlot = null;
+  const MODES = [
+    ["illustration", "Draw", "showDrawMode"],
+    ["design", "Design", "showDesignMode"],
+    ["metronome", "Motion", "showMotionMode"],
+    ["handoff", "Dev Mode", "showDevMode"],
+  ];
+  const LASSO = { key: "ligmaLasso", name: "Lasso fill", ligma: true, icon: `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="currentColor" d="m10.197 17.884.33.06q.496.073.98.05a.5.5 0 0 1 .043 1 6 6 0 0 1-1.169-.062l-.393-.07-.097-.031a.501.501 0 0 1 .205-.958zm4.23-.859a.5.5 0 0 1 .534.846q-.667.422-1.377.694a.5.5 0 0 1-.357-.934 7 7 0 0 0 1.2-.606m-7.703-.582a.5.5 0 0 1 .63-.053l.077.065.126.124q.193.18.402.321l.29.186q.146.088.29.168a.5.5 0 0 1-.483.876 8 8 0 0 1-.328-.19l-.326-.21a4 4 0 0 1-.527-.422l-.163-.158-.062-.08a.5.5 0 0 1 .074-.627m10.105-1.63a.5.5 0 0 1 .726.68l-.231.291-.25.287q-.258.282-.526.541a.5.5 0 0 1-.695-.719q.245-.236.481-.496l.221-.254q.107-.127.204-.256zm-11.322-1.85a.5.5 0 0 1 .54.328l.025.098.062.376q.11.557.301 1.06a.5.5 0 0 1-.935.355 7.5 7.5 0 0 1-.347-1.224l-.071-.428-.004-.101a.5.5 0 0 1 .43-.464m13.012-1.264a.5.5 0 0 1 .429.563 6.3 6.3 0 0 1-.393 1.48.5.5 0 0 1-.93-.37 5.3 5.3 0 0 0 .331-1.245.5.5 0 0 1 .563-.428M5.46 9.622a.5.5 0 0 1 .944.332c-.166.47-.279.958-.342 1.448l-.022.099a.501.501 0 0 1-.97-.228l.065-.416a8 8 0 0 1 .325-1.235m12.753-.865c.287.434.5.922.631 1.443a.501.501 0 0 1-.97.244 3.7 3.7 0 0 0-.496-1.136l.418-.275zm-8.182-.42a.5.5 0 0 1 .47.877l-.277.191q-.14.099-.28.205l-.086.053a.5.5 0 0 1-.516-.85l.301-.221q.15-.107.299-.207zm7.49.278a.5.5 0 0 1 .692.142l-.835.551a.5.5 0 0 1 .143-.693m-9.706-2.28a.5.5 0 0 1 .538.838l-.286.242q-.413.376-.738.807a.5.5 0 1 1-.797-.604A7 7 0 0 1 7.73 6.39zm5.392 1.105.109.488a7 7 0 0 0-1.247.414l-.097.03a.501.501 0 0 1-.303-.947l.366-.15a8 8 0 0 1 1.063-.323zm1.943-.59.204.033q.605.112 1.129.363l.172.087.084.056a.5.5 0 0 1-.461.865l-.094-.04-.268-.126a3.6 3.6 0 0 0-.906-.248.5.5 0 0 1 .14-.99m-2.052.102a.5.5 0 0 1 .218.976zM10.62 5.001a.5.5 0 0 1 .25.946l-.094.036q-.374.099-.714.228l-.098.026a.5.5 0 0 1-.255-.962l.397-.137a9 9 0 0 1 .414-.122z"/></svg>` };
+  const CHEVRON = '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m5.5 7 2.5 2.5L10.5 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const EYE = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M1 6s1.8-3.5 5-3.5S11 6 11 6 9.2 9.5 6 9.5 1 6 1 6Z" stroke="currentColor"/><circle cx="6" cy="6" r="1.5" fill="currentColor"/></svg>';
+  const EYE_OFF = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.6 3.6C1.6 4.6 1 6 1 6s1.8 3.5 5 3.5c.9 0 1.7-.3 2.4-.7M4.6 2.7c.4-.1.9-.2 1.4-.2C9.2 2.5 11 6 11 6s-.4.8-1.1 1.7M1.5 1.5l9 9" stroke="currentColor" stroke-linecap="round"/></svg>';
+
+  // `ids` in `order`, those it leaves out after the one before them in
+  // Figma's order, or first. As toolbar.rs arranges them
+  const arrange = (ids, order) => {
+    const placed = order.filter((id, i) => ids.includes(id) && order.indexOf(id) === i);
+    ids.forEach((id, i) => {
+      if (placed.includes(id)) return;
+      let at = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        const k = placed.indexOf(ids[j]);
+        if (k >= 0) {
+          at = k + 1;
+          break;
+        }
+      }
+      placed.splice(at, 0, id);
+    });
+    return placed;
+  };
+
+  // Icons come from Figma's page: kept to plain shapes before they're shown
+  const SVG_TAGS = new Set(["svg", "g", "path", "circle", "ellipse", "rect", "line", "polyline", "polygon", "defs", "clipPath", "mask", "linearGradient", "radialGradient", "stop"]);
+  const SVG_ATTRIBUTES = /^(d|fill|fill-rule|fill-opacity|clip-rule|clip-path|mask|stroke|stroke-width|stroke-linecap|stroke-linejoin|stroke-miterlimit|stroke-dasharray|stroke-opacity|opacity|transform|viewBox|cx|cy|r|rx|ry|x|y|x1|x2|y1|y2|width|height|points|id|offset|stop-color|stop-opacity|gradientUnits|gradientTransform)$/;
+  const icons = new Map();
+  const icon = (markup) => {
+    if (!icons.has(markup)) {
+      let clean = "";
+      const svg = new DOMParser().parseFromString(markup || "<svg/>", "image/svg+xml").documentElement;
+      if (svg.localName === "svg") {
+        const strip = (el) => {
+          for (const child of [...el.children]) {
+            if (!SVG_TAGS.has(child.localName)) child.remove();
+            else strip(child);
+          }
+          for (const { name, value } of [...el.attributes]) {
+            if (!SVG_ATTRIBUTES.test(name) || /url\((?!\s*['"]?#)/i.test(value) || /javascript:|expression\(/i.test(value)) el.removeAttribute(name);
+          }
+        };
+        strip(svg);
+        svg.removeAttribute("width");
+        svg.removeAttribute("height");
+        svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+        svg.setAttribute("aria-hidden", "true");
+        clean = new XMLSerializer().serializeToString(svg);
+      }
+      icons.set(markup, clean);
+    }
+    return icons.get(markup);
+  };
+
+  // The tools of slot `slot`, with the lasso after Pencil
+  const toolsOf = (slot) => {
+    const tools = [...slot.tools];
+    const pencil = tools.findIndex((tool) => tool.key === "toolPencil");
+    if (pencil >= 0) tools.splice(pencil + 1, 0, LASSO);
+    return tools;
+  };
+  const hiddenTools = () => settings.hiddenTools ?? [];
+  const isOff = (tool) => (tool.key === LASSO.key ? !settings.lassoFill || hiddenTools().includes("toolPencil") : hiddenTools().includes(tool.key));
+  // Figma's keys, for the slot's eye: the lasso goes with Pencil
+  const keysOf = (slot) => slot.tools.map((tool) => tool.key);
+  const slots = () => {
+    const list = Array.isArray(reported?.slots) ? reported.slots : [];
+    const order = arrange(
+      list.map((slot) => slot.id),
+      settings.toolbarOrder ?? [],
+    );
+    return order.map((id) => list.find((slot) => slot.id === id));
+  };
+  const modes = () => {
+    const list = Array.isArray(reported?.modes) && reported.modes.length ? reported.modes : MODES.map(([mode, name]) => ({ mode, name }));
+    const known = list.filter((item) => MODES.some(([mode]) => mode === item.mode));
+    const order = arrange(
+      known.map((item) => item.mode),
+      settings.modeOrder ?? [],
+    );
+    return order.map((mode) => known.find((item) => item.mode === mode));
+  };
+  const modeShown = (mode) => settings[MODES.find(([key]) => key === mode)[2]] !== false;
+
+  const eyeButton = (name, off, onClick, blocked) => {
+    const button = node("button", { type: "button", className: "eye", disabled: !!blocked }, off ? EYE_OFF : EYE);
+    button.setAttribute("aria-label", `${off ? "Show" : "Hide"} ${name}`);
+    button.title = blocked ? `${name} shows with Pencil` : `${off ? "Show" : "Hide"} ${name}`;
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    return button;
+  };
+
+  const setHidden = (keys, hide) => {
+    const hidden = hiddenTools().filter((key) => !keys.includes(key));
+    if (hide) hidden.push(...keys);
+    save(undefined, { hiddenTools: hidden });
+  };
+  const toggleTool = (tool) => {
+    if (tool.key === LASSO.key) {
+      $("lasso-fill").checked = !settings.lassoFill;
+      save();
+    } else setHidden([tool.key], !hiddenTools().includes(tool.key));
+  };
+
+  // Drags `slot` along its list, the others making way, and on letting go
+  // has `commit` save the new order. A press without a drag is a click
+  let dragged = false;
+  let refocus = null;
+  const EASE = "cubic-bezier(0.2, 0.9, 0.3, 1)";
+  const draggable = (list, slot, commit) => {
+    slot.addEventListener("pointerdown", (down) => {
+      if (down.button !== 0 || down.target.closest(".eye")) return;
+      const stage = $("layout-stage");
+      const startX = down.clientX;
+      let grab = 0;
+      let dragging = false;
+      const shift = (change) => {
+        const others = [...list.children].filter((el) => el !== slot);
+        const before = new Map(others.map((el) => [el, el.offsetLeft]));
+        change();
+        for (const el of others) {
+          const dx = before.get(el) - el.offsetLeft;
+          if (dx) el.animate([{ transform: `translateX(${dx}px)` }, { transform: "none" }], { duration: 160, easing: EASE });
+        }
+      };
+      const move = (e) => {
+        if (!dragging) {
+          if (Math.abs(e.clientX - startX) < 4) return;
+          dragging = true;
+          slot.setPointerCapture(down.pointerId);
+          slot.classList.add("lifted");
+          stage.classList.add("dragging");
+          grab = startX - (list.getBoundingClientRect().left + slot.offsetLeft);
+        }
+        const left = e.clientX - list.getBoundingClientRect().left - grab;
+        const middle = left + slot.offsetWidth / 2;
+        const others = [...list.children].filter((el) => el !== slot);
+        const next = others.find((el) => middle < el.offsetLeft + el.offsetWidth / 2) ?? null;
+        if (slot.nextElementSibling !== next) shift(() => list.insertBefore(slot, next));
+        const lo = -slot.offsetLeft;
+        const hi = list.clientWidth - slot.offsetWidth - slot.offsetLeft;
+        slot.style.transform = `translateX(${Math.max(lo - 8, Math.min(hi + 8, left - slot.offsetLeft))}px)`;
+      };
+      const up = () => {
+        removeEventListener("pointermove", move);
+        removeEventListener("pointerup", up);
+        removeEventListener("pointercancel", up);
+        if (!dragging) return;
+        dragged = true;
+        setTimeout(() => (dragged = false));
+        const from = slot.style.transform;
+        slot.style.transform = "";
+        const done = () => {
+          slot.classList.remove("lifted");
+          stage.classList.remove("dragging");
+          commit([...list.children].map((el) => el.dataset.id));
+        };
+        slot.animate([{ transform: from }, { transform: "none" }], { duration: 160, easing: EASE }).finished.then(done, done);
+      };
+      addEventListener("pointermove", move);
+      addEventListener("pointerup", up);
+      addEventListener("pointercancel", up);
+    });
+    // Alt and the arrows move it with the keyboard
+    slot.addEventListener("keydown", (e) => {
+      if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+      e.preventDefault();
+      const ids = [...list.children].map((el) => el.dataset.id);
+      const at = ids.indexOf(slot.dataset.id);
+      const to = at + (e.key === "ArrowLeft" ? -1 : 1);
+      if (to < 0 || to >= ids.length) return;
+      ids.splice(to, 0, ...ids.splice(at, 1));
+      refocus = slot.dataset.id;
+      commit(ids);
+    });
+  };
+
+  const renderTray = () => {
+    const tray = $("layout-tray");
+    const slot = slots().find((item) => item.id === openSlot);
+    const tools = slot ? toolsOf(slot) : [];
+    tray.hidden = tools.length < 2;
+    tray.replaceChildren();
+    if (tray.hidden) return;
+    tray.setAttribute("aria-label", `${slot.tools[0].name} tools`);
+    const pencilOff = hiddenTools().includes("toolPencil");
+    for (const tool of tools) {
+      const off = isOff(tool);
+      const blocked = tool.key === LASSO.key && pencilOff;
+      const sub = node("div", { className: `sub${off ? " off" : ""}` });
+      sub.dataset.key = tool.key;
+      const square = node("span", { className: "square" });
+      const button = node("button", { type: "button", className: "tool", disabled: blocked }, icon(tool.icon));
+      button.setAttribute("aria-label", tool.name);
+      button.setAttribute("aria-pressed", String(!off));
+      button.addEventListener("click", () => toggleTool(tool));
+      square.append(button, eyeButton(tool.name, off, () => toggleTool(tool), blocked));
+      const name = node("span", { className: "name", textContent: tool.name });
+      if (tool.ligma) name.append(" ", node("span", { className: "tag", textContent: "Ligma" }));
+      sub.append(square, name);
+      tray.append(sub);
+    }
+    // Under its slot, as far as the stage allows
+    const anchor = $("layout-bar").querySelector(`.slot[data-id="${CSS.escape(openSlot)}"]`);
+    tray.style.marginLeft = "0px";
+    if (anchor) {
+      const stage = $("layout-stage").getBoundingClientRect();
+      const left = anchor.getBoundingClientRect().left - stage.left - 12;
+      tray.style.marginLeft = `${Math.max(0, Math.min(left, stage.width - 24 - tray.offsetWidth))}px`;
+    }
+  };
+
+  const renderLayout = () => {
+    const bar = $("layout-bar");
+    const active = document.activeElement;
+    const focused = active?.closest?.("#layout-stage [data-id], #layout-stage [data-key]");
+    const focus = refocus ?? focused?.dataset.id ?? focused?.dataset.key;
+    const focusEye = !refocus && active?.classList.contains("eye");
+    refocus = null;
+    bar.replaceChildren();
+    const list = slots();
+    if (!list.some((slot) => slot.id === openSlot)) openSlot = null;
+    const tools = node("div", { className: "tools" });
+    tools.setAttribute("role", "list");
+    tools.setAttribute("aria-label", "Tools");
+    for (const slot of list) {
+      const shown = slot.tools.filter((tool) => !hiddenTools().includes(tool.key));
+      const face = shown[0] ?? slot.tools[0];
+      const off = !shown.length;
+      const group = toolsOf(slot).length > 1;
+      const name = slot.tools.length > 1 ? `${slot.tools[0].name} tools` : face.name;
+      const el = node("div", { className: `slot${off ? " off" : ""}${openSlot === slot.id ? " open" : ""}` });
+      el.dataset.id = slot.id;
+      el.setAttribute("role", "listitem");
+      const button = node("button", { type: "button", className: "tool", title: face.name }, icon(face.icon));
+      button.setAttribute("aria-label", name);
+      button.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight");
+      el.append(button);
+      if (group) {
+        const toggle = () => {
+          if (dragged) return;
+          openSlot = openSlot === slot.id ? null : slot.id;
+          refocus = slot.id;
+          renderLayout();
+        };
+        button.setAttribute("aria-expanded", String(openSlot === slot.id));
+        button.addEventListener("click", toggle);
+        const chev = node("button", { type: "button", className: "chev", tabIndex: -1 }, CHEVRON);
+        chev.setAttribute("aria-label", name);
+        chev.addEventListener("click", toggle);
+        el.append(chev);
+      }
+      el.append(eyeButton(name, off, () => setHidden(keysOf(slot), !off)));
+      tools.append(el);
+      draggable(tools, el, (ids) => save(undefined, { toolbarOrder: ids }));
+    }
+    if (!list.length) tools.append(node("span", { className: "empty", textContent: "Open a design file to see its tools here" }));
+    const area = node("div", { className: "switch-area" });
+    const switcher = node("div", { className: "modes" });
+    switcher.setAttribute("role", "list");
+    switcher.setAttribute("aria-label", "Modes");
+    for (const item of modes()) {
+      const off = !modeShown(item.mode);
+      const markup = item.icon ? icon(item.icon) : "";
+      const el = node("div", { className: `slot mode${off ? " off" : ""}` });
+      el.dataset.id = item.mode;
+      el.setAttribute("role", "listitem");
+      const button = node("button", { type: "button", className: `tool${markup ? "" : " text"}`, title: item.name }, markup);
+      if (!markup) button.textContent = item.name;
+      button.setAttribute("aria-label", `${item.name} mode`);
+      button.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight");
+      const key = MODES.find(([mode]) => mode === item.mode)[2];
+      el.append(button, eyeButton(item.name, off, () => save(undefined, { [key]: off })));
+      switcher.append(el);
+      draggable(switcher, el, (ids) => save(undefined, { modeOrder: ids }));
+    }
+    area.append(switcher);
+    bar.append(tools, node("div", { className: "divider" }), area);
+    $("layout-reset").hidden = !(settings.toolbarOrder?.length || settings.modeOrder?.length || hiddenTools().length || MODES.some(([mode]) => !modeShown(mode)));
+    fitLayout();
+    renderTray();
+    if (focus) {
+      const target = $("layout-stage").querySelector(`[data-id="${CSS.escape(focus)}"], [data-key="${CSS.escape(focus)}"]`);
+      (focusEye ? target?.querySelector(".eye") : target?.querySelector(".tool"))?.focus();
+    }
+  };
+  // Figma's size, or smaller to fit the stage
+  const fitLayout = () => {
+    const stage = $("layout-stage");
+    if (!stage.clientWidth) return;
+    stage.style.setProperty("--u", "1");
+    const room = stage.clientWidth - 24;
+    stage.style.setProperty("--u", String(Math.min(1, room / $("layout-bar").offsetWidth)));
+  };
+  new ResizeObserver(() => {
+    fitLayout();
+    if (openSlot) renderTray();
+  }).observe($("layout-stage"));
+  function showLayout() {
+    if (!$("layout-stage").classList.contains("dragging")) renderLayout();
+  }
+  $("layout-reset").addEventListener("click", () => {
+    openSlot = null;
+    save(undefined, { toolbarOrder: [], modeOrder: [], hiddenTools: [], ...Object.fromEntries(MODES.map(([, , key]) => [key, true])) });
+  });
+  $("layout-stage").addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !openSlot) return;
+    e.stopPropagation();
+    refocus = openSlot;
+    openSlot = null;
+    renderLayout();
+  });
+  invoke("get_toolbar_layout").then((layout) => {
+    reported = layout;
+    if (settings) renderLayout();
+  });
+  // From Ligma, when a file's page reports a change
+  window.applyToolbarLayout = (layout) => {
+    reported = layout;
+    if (settings) showLayout();
+  };
 
   invoke("get_theme").then(window.applyTheme);
   invoke("get_settings").then((loaded) => {

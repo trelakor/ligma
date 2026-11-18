@@ -121,6 +121,19 @@ pub struct Settings {
     pub show_motion_mode: bool,
     /// and Dev Mode
     pub show_dev_mode: bool,
+    /// The modes in the switch, in this order, by Figma's names for them
+    /// ("illustration", "design", "metronome" and "handoff"). Modes left
+    /// out keep their place in Figma's order. Empty: Figma's order
+    pub mode_order: Vec<String>,
+    /// The toolbar's slots, in this order, by Figma's names for their tool
+    /// groups ("SelectTools", "FrameTools" and so on, "Actions" for the
+    /// Actions button). Slots left out keep their place in Figma's order.
+    /// Empty: Figma's order (see toolbar.rs)
+    pub toolbar_order: Vec<String>,
+    /// Tools hidden from the toolbar, by the keys Figma records them by
+    /// ("toolFrame", "toolShapeStar" and so on, "actions" for Actions). A
+    /// slot with all its tools hidden goes too
+    pub hidden_tools: Vec<String>,
     /// Copy and paste the adjustments of image fills, with Cmd+Shift+C in
     /// the image picker and Cmd+Shift+V, or from the picker's menu
     pub adjustments_clipboard: bool,
@@ -216,6 +229,9 @@ impl Default for Settings {
             show_design_mode: true,
             show_motion_mode: true,
             show_dev_mode: true,
+            mode_order: Vec::new(),
+            toolbar_order: Vec::new(),
+            hidden_tools: Vec::new(),
             adjustments_clipboard: true,
             adjustments_bar: true,
             hide_free_ai_actions: true,
