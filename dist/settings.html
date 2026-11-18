@@ -11,7 +11,8 @@
      the themes (dist/themes.js, src-tauri/src/appearance.rs). App Icon
      picks the app's icon (dist/app-icons.js, src-tauri/src/app_icon.rs). Plugins imports development plugins
      (src-tauri/src/plugins.rs) and switches them on and off. What's New lists every
-     release's notes (dist/changelog.js, src-tauri/src/whats_new.rs). About checks for updates and reports a
+     release's notes (dist/changelog.js, src-tauri/src/whats_new.rs), under demos of its
+     features (dist/demos.js). About checks for updates and reports a
      problem (src-tauri/src/report.rs). The window has no native title bar:
      the header is its own, and its colors follow the active Figma tab's
      theme (`applyTheme`, from `get_theme` and tabs.rs) -->
@@ -201,6 +202,8 @@
   #releases > .release:not(.miss):first-child { border-top: 1px solid var(--border); }
   .release h2 .date { margin-left: 6px; color: var(--text-secondary); font-weight: 450; }
   .release h2 .tag { margin-left: 8px; }
+  /* Its features' demos (dist/demos.js), above its notes */
+  .release .demos { max-width: 440px; margin: 4px 16px 10px; }
   .release-notes {
     max-width: 560px;
     padding: 2px 16px 0 30px;
@@ -1178,6 +1181,7 @@
 </div>
 <script src="themes.js"></script>
 <script src="changelog.js"></script>
+<script src="demos.js"></script>
 <script src="app-icons.js"></script>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
@@ -2057,7 +2061,10 @@
       if (release.date) heading.append(node("span", { className: "date", textContent: window.ligmaReleaseDate(release.date) }));
       if (release.version === version) heading.append(node("span", { className: "tag", textContent: "Installed" }));
       const section = node("section", { className: "release" });
-      section.append(heading, window.ligmaReleaseNotes(release.notes));
+      section.append(heading);
+      const demos = window.ligmaDemos(window.ligmaReleaseDemos(release.version));
+      if (demos) section.append(demos);
+      section.append(window.ligmaReleaseNotes(release.notes));
       return section;
     }));
   });

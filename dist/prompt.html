@@ -8,7 +8,8 @@
      from `get_prompt`, reports its size with `prompt_ready`, and sends the
      chosen button to `prompt_answer`. Colors come from the active Figma
      tab's theme, like the settings window's. What's new lists release
-     notes (dist/changelog.js) in place of the message, wider and scrolling -->
+     notes (dist/changelog.js) in place of the message, wider and scrolling,
+     under the demos of their features (dist/demos.js) -->
 <style>
   /* Figma's UI3 palette, until the first Figma tab reports its own */
   :root {
@@ -109,6 +110,11 @@
     user-select: text;
     cursor: text;
   }
+  /* Feature demos (dist/demos.js) on top, taller to make room */
+  #prompt.notes:has(.demos) { width: 440px; }
+  .notes #releases:has(.demos) { max-height: 500px; }
+  #releases > .demos { margin-top: 16px; }
+  .demos + .release-notes { padding-top: 12px; }
   .notes #releases:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
   .notes footer { border-top: 1px solid var(--border); }
   h2 { padding: 16px 0 6px; font-size: 11px; font-weight: 550; line-height: 16px; }
@@ -136,6 +142,9 @@
   <footer></footer>
 </div>
 <script src="changelog.js"></script>
+<script src="themes.js"></script>
+<script src="app-icons.js"></script>
+<script src="demos.js"></script>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
   const $ = (id) => document.getElementById(id);
@@ -196,6 +205,8 @@
         if (release.date) heading.append(Object.assign(document.createElement("span"), { className: "date", textContent: window.ligmaReleaseDate(release.date) }));
         return [heading, list];
       }));
+      const demos = window.ligmaDemos(prompt.releases.flatMap((release) => window.ligmaReleaseDemos(release.version)));
+      if (demos) $("releases").prepend(demos);
     }
     buttons = prompt.buttons.map((text, index) => {
       const button = Object.assign(document.createElement("button"), { textContent: text });
