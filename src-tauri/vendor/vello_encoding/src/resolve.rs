@@ -5,6 +5,7 @@
 pub static DROPPED_IMAGES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 use bytemuck::{Pod, Zeroable};
+use peniko::color::{ColorSpaceTag, HueDirection};
 use peniko::{Extend, ImageData, InterpolationAlphaSpace};
 use std::ops::Range;
 use std::sync::Arc;
@@ -422,9 +423,12 @@ impl Resolver {
                     stops,
                     extend,
                     interpolation_alpha_space,
+                    interpolation_cs,
+                    hue_direction,
                 } => {
                     let ramp_id = self.ramp_cache.add(
                         *interpolation_alpha_space,
+                        (*interpolation_cs, *hue_direction),
                         &resources.color_stops[stops.clone()],
                     );
                     self.patches.push(ResolvedPatch::Ramp {
@@ -562,6 +566,10 @@ pub enum Patch {
         extend: Extend,
         /// Interpolation alpha space for the gradient.
         interpolation_alpha_space: InterpolationAlphaSpace,
+        /// Color space the gradient's colors mix in.
+        interpolation_cs: ColorSpaceTag,
+        /// Which way hues go round in a cylindrical color space.
+        hue_direction: HueDirection,
     },
     /// Glyph run resource.
     GlyphRun {

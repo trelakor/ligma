@@ -9,7 +9,7 @@ use super::{
     Style, Transform,
 };
 
-use peniko::color::{DynamicColor, palette};
+use peniko::color::{ColorSpaceTag, DynamicColor, HueDirection, palette};
 use peniko::kurbo::{Shape, Stroke};
 use peniko::{
     BrushRef, ColorStop, Extend, Fill, GradientKind, ImageBrushRef, ImageSampler,
@@ -127,6 +127,8 @@ impl Encoding {
                         stops,
                         extend,
                         interpolation_alpha_space,
+                        interpolation_cs,
+                        hue_direction,
                     } => {
                         let stops = stops.start + stops_base..stops.end + stops_base;
                         Patch::Ramp {
@@ -134,6 +136,8 @@ impl Encoding {
                             stops,
                             extend: *extend,
                             interpolation_alpha_space: *interpolation_alpha_space,
+                            interpolation_cs: *interpolation_cs,
+                            hue_direction: *hue_direction,
                         }
                     }
                     Patch::GlyphRun { index } => Patch::GlyphRun {
@@ -297,6 +301,7 @@ impl Encoding {
                         alpha,
                         gradient.extend,
                         gradient.interpolation_alpha_space,
+                        (gradient.interpolation_cs, gradient.hue_direction),
                     );
                 }
                 GradientKind::Radial(RadialGradientPosition {
@@ -317,6 +322,7 @@ impl Encoding {
                         alpha,
                         gradient.extend,
                         gradient.interpolation_alpha_space,
+                        (gradient.interpolation_cs, gradient.hue_direction),
                     );
                 }
                 GradientKind::Sweep(SweepGradientPosition {
@@ -336,6 +342,7 @@ impl Encoding {
                         alpha,
                         gradient.extend,
                         gradient.interpolation_alpha_space,
+                        (gradient.interpolation_cs, gradient.hue_direction),
                     );
                 }
             },
@@ -361,8 +368,9 @@ impl Encoding {
         alpha: f32,
         extend: Extend,
         interpolation_alpha_space: InterpolationAlphaSpace,
+        space: (ColorSpaceTag, HueDirection),
     ) {
-        match self.add_ramp(color_stops, alpha, extend, interpolation_alpha_space) {
+        match self.add_ramp(color_stops, alpha, extend, interpolation_alpha_space, space) {
             RampStops::Empty => self.encode_color(palette::css::TRANSPARENT),
             RampStops::One(color) => {
                 self.encode_color(color);
@@ -383,6 +391,7 @@ impl Encoding {
         alpha: f32,
         extend: Extend,
         interpolation_alpha_space: InterpolationAlphaSpace,
+        space: (ColorSpaceTag, HueDirection),
     ) {
         // Match Skia's epsilon for radii comparison
         const SKIA_EPSILON: f32 = 1.0 / (1 << 12) as f32;
@@ -390,7 +399,7 @@ impl Encoding {
             self.encode_color(palette::css::TRANSPARENT);
             return;
         }
-        match self.add_ramp(color_stops, alpha, extend, interpolation_alpha_space) {
+        match self.add_ramp(color_stops, alpha, extend, interpolation_alpha_space, space) {
             RampStops::Empty => self.encode_color(palette::css::TRANSPARENT),
             RampStops::One(color) => self.encode_color(color),
             RampStops::Many => {
@@ -409,13 +418,14 @@ impl Encoding {
         alpha: f32,
         extend: Extend,
         interpolation_alpha_space: InterpolationAlphaSpace,
+        space: (ColorSpaceTag, HueDirection),
     ) {
         const SKIA_DEGENERATE_THRESHOLD: f32 = 1.0 / (1 << 15) as f32;
         if (gradient.t0 - gradient.t1).abs() < SKIA_DEGENERATE_THRESHOLD {
             self.encode_color(palette::css::TRANSPARENT);
             return;
         }
-        match self.add_ramp(color_stops, alpha, extend, interpolation_alpha_space) {
+        match self.add_ramp(color_stops, alpha, extend, interpolation_alpha_space, space) {
             RampStops::Empty => self.encode_color(palette::css::TRANSPARENT),
             RampStops::One(color) => self.encode_color(color),
             RampStops::Many => {
@@ -519,6 +529,7 @@ impl Encoding {
         alpha: f32,
         extend: Extend,
         interpolation_alpha_space: InterpolationAlphaSpace,
+        (interpolation_cs, hue_direction): (ColorSpaceTag, HueDirection),
     ) -> RampStops {
         let offset = self.draw_data.len();
         let stops_start = self.resources.color_stops.len();
@@ -539,6 +550,8 @@ impl Encoding {
                     stops: stops_start..stops_end,
                     extend,
                     interpolation_alpha_space,
+                    interpolation_cs,
+                    hue_direction,
                 });
                 RampStops::Many
             }

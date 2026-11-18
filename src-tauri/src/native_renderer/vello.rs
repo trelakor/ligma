@@ -1283,6 +1283,12 @@ enum Kind {
         sigma: (f64, f64),
         /// The area it's clamped to, if it is
         clamp: Option<kurbo::Rect>,
+        /// Turns the frame it's blurred in, along whose axes the blur is,
+        /// to the scene's space, which `reach`, `clamp`, `sigma` and
+        /// `area` are in
+        turn: Affine,
+        /// Where it shows
+        area: kurbo::Rect,
     },
     /// An image fill, `width` device pixels wide in the scene's space, which
     /// each view has drawn from the mipmap level for the zoom it's at
@@ -1984,9 +1990,11 @@ impl<'a> Encoder<'a> {
                     self.draw(child);
                 }
             }
-            // Glass and 3D layers, which Skia draws as what's in them, drawn
-            // here the same where what's in them blends with what's under
-            Op::Glass | Op::SpatialPlane | Op::SpatialTransform | Op::SpatialComposition if self.tree.info(id).blends => {
+            Op::CustomEffect if self.cast.is_none() && self.custom_effect(id) => {}
+            // Glass, 3D layers and effects that haven't run, drawn as
+            // what's in them, as Skia draws them
+            Op::CustomEffect | Op::CustomEffectFill | Op::Glass | Op::SpatialPlane | Op::SpatialTransform | Op::SpatialComposition => {
+                self.counts.approximate += 1;
                 let ext = node.ext();
                 let children: Vec<u32> = node
                     .child
@@ -2000,17 +2008,10 @@ impl<'a> Encoder<'a> {
                     self.draw(child);
                 }
             }
-            // Noise, grain and effects, as Skia draws them. Noise and grain
-            // take what's in them in a layer of their own, as an effect
-            // takes it once it's run, so what blends in them stays in them
-            Op::Noise
-            | Op::Grain
-            | Op::CustomEffect
-            | Op::CustomEffectFill
-            | Op::Glass
-            | Op::SpatialPlane
-            | Op::SpatialTransform
-            | Op::SpatialComposition => self.fall_back(op_name(node.op), false, bounds, Box::new(move |drawer| drawer.draw(id))),
+            // Noise and grain, as Skia draws them, which take what's in
+            // them in a layer of their own, so what blends in them stays in
+            // them
+            Op::Noise | Op::Grain => self.fall_back(op_name(node.op), false, bounds, Box::new(move |drawer| drawer.draw(id))),
             _ => {
                 for child in node.child.into_iter().chain(node.children.iter().copied()) {
                     self.draw(child);
@@ -2136,6 +2137,60 @@ impl<'a> Encoder<'a> {
                     kind == PaintType::Solid && mix(paint.blend_mode).is_none() && !tree::blends(paint.blend_mode) && tree::rgba(paint.color.unwrap_or_default()).a * opacity >= 1.0
                 })
         })
+    }
+
+    /// Custom effect node `id` as its effects drew it, as tree.rs draws
+    /// it: what they drew covers the box they ran over. Till they've run
+    /// again, what they drew for it before stands in. False where they
+    /// haven't drawn it
+    fn custom_effect(&mut self, id: u32) -> bool {
+        let Some(effect) = self.tree.custom_effect(id) else { return false };
+        let m = Matrix::concat(&self.m, &effect.to);
+        let shows = if self.retained { self.shows } else { 1.0 };
+        let scale = m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y())) * shows;
+        let shown = (effect.area.width().max(effect.area.height()) * scale) as f64 * ASKED;
+        let own = self.images.get(&effect.key);
+        let stand_in_key = if own.is_none() && !self.images.contains_key(&effect.stand_in) { effect.last_drawn.clone() } else { effect.stand_in.clone() };
+        let stand_in = if own.is_none() { self.images.get(&stand_in_key) } else { None };
+        let Some((key, img)) = own.map(|img| (effect.key.clone(), img)).or(stand_in.map(|img| (stand_in_key.clone(), img))) else {
+            self.asked.missing.push((effect.key.clone(), shown));
+            return false;
+        };
+        let Some(area) = img.area else { return false };
+        let drawable = self.drawable.get(&key).filter(|drawable| drawable.id == img.image.unique_id());
+        if drawable.is_none_or(|d| (d.width.max(d.height)) > 8192) {
+            return false;
+        }
+        if stand_in.is_some() {
+            self.asked.missing.push((effect.key.clone(), shown));
+            self.asked.used.push((stand_in_key, shown));
+        } else if img.stale {
+            self.asked.missing.push((effect.key.clone(), shown));
+        } else {
+            self.asked.used.push((effect.key.clone(), shown));
+            // Kept about as big as it shows, in steps of halves of what the
+            // effects drew, as the effects thread sizes it
+            let (fw, fh) = img.original;
+            let longest = fw.max(fh);
+            let fits = longest >> super::run::halvings(longest, longest as f64 * shown * 1.25 / fw.max(1) as f64);
+            if (img.image.width().max(img.image.height()) as u32) < fits {
+                self.asked.sharper.push((effect.key.clone(), shown));
+            }
+        }
+        let at = Rect::from_xywh(effect.area.left, effect.area.top, area.width(), area.height());
+        let rect = kurbo::Rect::new(at.left as f64, at.top as f64, at.right as f64, at.bottom as f64);
+        let local = Affine::new([rect.width(), 0.0, 0.0, rect.height(), rect.x0, rect.y0]);
+        let brush = ImageBrush { image: nothing(), sampler: ImageSampler { x_extend: Extend::Pad, y_extend: Extend::Pad, quality: ImageQuality::High, alpha: 1.0 } };
+        // How wide the image shows, in device pixels as it's encoded
+        let width = m.scale_x().hypot(m.skew_y()) * at.width();
+        let was = std::mem::replace(&mut self.m, m);
+        let patches = self.scene.encoding().resources.patches.len();
+        self.pictures.push((key.clone(), 0, img.image.unique_id() as u64));
+        self.fill(Fill::NonZero, affine(&self.m), &peniko::Brush::Image(brush), Some(local), &rect);
+        self.image_drawn(patches, key, width, &Path::rect(at, None));
+        self.m = was;
+        self.counts.native += 1;
+        true
     }
 
     /// One paint over `path`, in the node's own coordinates
@@ -2668,7 +2723,9 @@ impl<'a> Encoder<'a> {
         let Some(child) = node.child else { return };
         let ext = node.ext();
         let m = self.m;
-        if m.has_perspective() || m.skew_x().abs() > 1e-6 || m.skew_y().abs() > 1e-6 {
+        // Clamped, it's to the node's box, which its frame has to be square
+        // to
+        if m.has_perspective() || (ext.clamp.is_some() && !blur_frame(&m).3) {
             return self.fall_back("blur", false, bounds, Box::new(move |drawer| drawer.draw(id)));
         }
         if ext.blur_op_type == Some(rt::BlurOpType::Progressive) {
@@ -2732,9 +2789,14 @@ impl<'a> Encoder<'a> {
             return self.draw(child);
         }
         let Some(reach) = self.tree.info(child).bounds else { return };
-        let (sx, sy) = (m.scale_x().abs(), m.scale_y().abs());
+        let (turn, sx, sy, _) = blur_frame(&m);
+        let in_frame = Matrix::concat(&to_matrix(turn.inverse()), &m);
         let krect = |rect: Rect| {
             let rect = m.map_rect(rect).0;
+            kurbo::Rect::new(rect.left as f64, rect.top as f64, rect.right as f64, rect.bottom as f64)
+        };
+        let frect = |rect: Rect| {
+            let rect = in_frame.map_rect(rect).0;
             kurbo::Rect::new(rect.left as f64, rect.top as f64, rect.right as f64, rect.bottom as f64)
         };
         // Drawn for one view, what's just outside it is blurred into it too
@@ -2757,9 +2819,11 @@ impl<'a> Encoder<'a> {
             kind: Kind::Blur {
                 source,
                 effects: nested,
-                reach: krect(reach),
+                reach: frect(reach),
                 sigma: ((sigma * sx) as f64, (sigma * sy) as f64),
-                clamp: clamp.map(krect),
+                clamp: clamp.map(frect),
+                turn,
+                area: frect(bounds),
             },
             bounds: shown,
             transform,
@@ -2808,10 +2872,16 @@ impl<'a> Encoder<'a> {
         let scale = c[0].hypot(c[1]);
         for effect in effects {
             match &mut effect.kind {
-                Kind::Blur { source, effects, reach, sigma, clamp } => {
+                Kind::Blur { source, effects, reach, sigma, clamp, turn, area } => {
                     let sigma = (sigma.0 * scale, sigma.1 * scale);
                     let margin = (3.0 * sigma.0.max(sigma.1)).ceil() + 2.0;
-                    let shown = t.transform_rect_bbox(effect.bounds).intersect(view).intersect(t.transform_rect_bbox(*reach).inflate(margin, margin));
+                    // Blurred in its frame as `t` turns it, from which `tf`
+                    // only scales and moves
+                    let k = scale.max(1e-12);
+                    let frame = Affine::new([c[0] / k, c[1] / k, c[2] / k, c[3] / k, 0.0, 0.0]) * *turn;
+                    let tf = frame.inverse() * t * *turn;
+                    let view_f = frame.inverse().transform_rect_bbox(view);
+                    let shown = tf.transform_rect_bbox(*area).intersect(view_f).intersect(tf.transform_rect_bbox(*reach).inflate(margin, margin));
                     if shown.width() <= 0.0 || shown.height() <= 0.0 {
                         Plan::patch(encoding, effect, nothing(), Affine::IDENTITY);
                         continue;
@@ -2837,13 +2907,14 @@ impl<'a> Encoder<'a> {
                     }
                     let soft = plan.width;
                     let (x, y) = plan.depths[depth].room(width, height, soft).ok_or("blurs past their texture")?;
-                    let to_slot = Affine::translate((x as f64, y as f64)) * Affine::scale(f) * Affine::translate((-left as f64, -top as f64)) * t;
+                    let in_slot = Affine::translate((x as f64, y as f64)) * Affine::scale(f) * Affine::translate((-left as f64, -top as f64)) * tf;
+                    let to_slot = in_slot * turn.inverse();
                     let slot = kurbo::Rect::new(x as f64, y as f64, (x + width) as f64, (y + height) as f64);
                     self.put(plan, effects, source.encoding_mut(), to_slot, slot, depth + 1)?;
                     let scene = &mut plan.depths[depth].scene;
                     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &slot);
                     if let Some(clamp) = clamp {
-                        scene.push_clip_layer(Fill::NonZero, to_slot, clamp);
+                        scene.push_clip_layer(Fill::NonZero, in_slot, clamp);
                     }
                     scene.append(source, Some(to_slot));
                     if clamp.is_some() {
@@ -2852,11 +2923,12 @@ impl<'a> Encoder<'a> {
                     scene.pop_layer();
                     let image = slot_image(width, height);
                     let clamp = clamp.map(|clamp| {
-                        let clamp = to_slot.transform_rect_bbox(clamp);
+                        let clamp = in_slot.transform_rect_bbox(clamp);
                         [(clamp.x0 - x as f64) as f32, (clamp.y0 - y as f64) as f32, (clamp.x1 - x as f64) as f32, (clamp.y1 - y as f64) as f32]
                     });
                     let job = Job { slot: [x, y, width, height], sigma: (sigma.0 as f32, sigma.1 as f32), clamp };
-                    Plan::patch(encoding, effect, image.clone(), t.inverse() * Affine::translate((left as f64, top as f64)) * Affine::scale(shrink as f64));
+                    let back = *turn * tf.inverse() * Affine::translate((left as f64, top as f64)) * Affine::scale(shrink as f64);
+                    Plan::patch(encoding, effect, image.clone(), back);
                     // Drawn bigger, it's sampled smoothly, as Skia scales a
                     // blur back up
                     if let Some(Patch::Image { draw_data_offset, .. }) = encoding.resources.patches.get(effect.patch) {
@@ -2998,9 +3070,6 @@ enum Picture {
 /// `paint`'s gradient as Vello's, and how it's placed, where Vello draws it
 /// as Skia does
 fn gradient(paint: &rt::Paint, kind: PaintType, size: [f32; 2]) -> Option<(peniko::Brush, Option<Affine>)> {
-    if paint.interpolation_color_space.is_some_and(|space| !matches!(space, rt::InterpolationColorSpace::Default)) {
-        return None;
-    }
     let (w, h) = (size[0].max(1e-3), size[1].max(1e-3));
     let t = rt::to_matrix(&paint.transform.unwrap_or(rt::IDENTITY));
     let mut local = Matrix::scale((w, h));
@@ -3023,7 +3092,51 @@ fn gradient(paint: &rt::Paint, kind: PaintType, size: [f32; 2]) -> Option<(penik
     .with_extend(extend)
     .with_stops(stops.as_slice());
     gradient.interpolation_alpha_space = peniko::InterpolationAlphaSpace::Unpremultiplied;
+    (gradient.interpolation_cs, gradient.hue_direction) = interpolation(paint);
     Some((peniko::Brush::Gradient(gradient), Some(affine(&local))))
+}
+
+/// The color space a gradient mixes its colors in, as tree.rs's
+/// `interpolation` gives Skia
+fn interpolation(paint: &rt::Paint) -> (peniko::color::ColorSpaceTag, peniko::color::HueDirection) {
+    use peniko::color::{ColorSpaceTag, HueDirection};
+    let space = match paint.interpolation_color_space {
+        Some(rt::InterpolationColorSpace::Oklab) => ColorSpaceTag::Oklab,
+        Some(rt::InterpolationColorSpace::Oklch) => ColorSpaceTag::Oklch,
+        Some(rt::InterpolationColorSpace::Hsl) => ColorSpaceTag::Hsl,
+        Some(rt::InterpolationColorSpace::SrgbLinear) => ColorSpaceTag::LinearSrgb,
+        _ => return (ColorSpaceTag::Srgb, HueDirection::Shorter),
+    };
+    let hue = match paint.interpolation_hue_method {
+        Some(rt::InterpolationHueMethod::Longer) => HueDirection::Longer,
+        Some(rt::InterpolationHueMethod::Increasing) => HueDirection::Increasing,
+        Some(rt::InterpolationHueMethod::Decreasing) => HueDirection::Decreasing,
+        _ => HueDirection::Shorter,
+    };
+    (space, hue)
+}
+
+/// The frame a blur through `m` is blurred in: what turns it to `m`'s
+/// space, along whose axes a blur round in the node's own space is
+/// stretched, and by how much each way. Its axes are the node's where `m`
+/// only scales and turns, so its box is square to them, which the last
+/// says
+fn blur_frame(m: &Matrix) -> (Affine, f32, f32, bool) {
+    let (a, b, c, d) = (m.scale_x() as f64, m.skew_y() as f64, m.skew_x() as f64, m.scale_y() as f64);
+    let size = (a * a + b * b + c * c + d * d).max(1e-24);
+    let angle = if b.abs() < 1e-9 && c.abs() < 1e-9 {
+        0.0
+    } else if (a * b + c * d).abs() < 1e-6 * size && (a * a + c * c - b * b - d * d).abs() < 1e-6 * size {
+        b.atan2(a)
+    } else {
+        // Where it stretches most and least, square to each other
+        0.5 * (2.0 * (a * b + c * d)).atan2(a * a + c * c - b * b - d * d)
+    };
+    let (sin, cos) = angle.sin_cos();
+    let row = [(cos * a + sin * b, cos * c + sin * d), (cos * b - sin * a, cos * d - sin * c)];
+    let square = (row[0].1.abs() + row[1].0.abs()).min(row[0].0.abs() + row[1].1.abs()) < 1e-4 * size.sqrt();
+    let turn = if angle == 0.0 { Affine::IDENTITY } else { Affine::rotate(angle) };
+    (turn, row[0].0.hypot(row[0].1) as f32, row[1].0.hypot(row[1].1) as f32, square)
 }
 
 fn op_name(op: Op) -> &'static str {
