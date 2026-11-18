@@ -7,6 +7,7 @@
 //! the gear by the window controls elsewhere)
 //! edits the same file and applies each change right away
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -125,15 +126,9 @@ pub struct Settings {
     /// ("illustration", "design", "metronome" and "handoff"). Modes left
     /// out keep their place in Figma's order. Empty: Figma's order
     pub mode_order: Vec<String>,
-    /// The toolbar's slots, in this order, by Figma's names for their tool
-    /// groups ("SelectTools", "FrameTools" and so on, "Actions" for the
-    /// Actions button). Slots left out keep their place in Figma's order.
-    /// Empty: Figma's order (see toolbar.rs)
-    pub toolbar_order: Vec<String>,
-    /// Tools hidden from the toolbar, by the keys Figma records them by
-    /// ("toolFrame", "toolShapeStar" and so on, "actions" for Actions). A
-    /// slot with all its tools hidden goes too
-    pub hidden_tools: Vec<String>,
+    /// Each mode's toolbar, by Figma's name for the mode, as changed from
+    /// Figma's (see toolbar.rs)
+    pub toolbar_layouts: BTreeMap<String, ToolbarLayout>,
     /// Copy and paste the adjustments of image fills, with Cmd+Shift+C in
     /// the image picker and Cmd+Shift+V, or from the picker's menu
     pub adjustments_clipboard: bool,
@@ -230,8 +225,7 @@ impl Default for Settings {
             show_motion_mode: true,
             show_dev_mode: true,
             mode_order: Vec::new(),
-            toolbar_order: Vec::new(),
-            hidden_tools: Vec::new(),
+            toolbar_layouts: BTreeMap::new(),
             adjustments_clipboard: true,
             adjustments_bar: true,
             hide_free_ai_actions: true,
@@ -250,6 +244,21 @@ impl Default for Settings {
             ligma_mcp: true,
         }
     }
+}
+
+/// A mode's toolbar, as changed from Figma's
+#[derive(Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ToolbarLayout {
+    /// Its slots, in this order, by Figma's names for their tool groups
+    /// ("SelectTools", "FrameTools" and so on, "Actions" for the Actions
+    /// button, "DrawingTools" for Draw's pen, brush and pencil). Slots left
+    /// out keep their place in Figma's order
+    pub order: Vec<String>,
+    /// Tools hidden, by the keys Figma records them by ("toolFrame",
+    /// "toolShapeStar" and so on, "actions" for Actions, Draw's by their
+    /// tooltips, "set-tool-brush"). A slot with all its tools hidden goes
+    pub hidden: Vec<String>,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
@@ -383,12 +392,13 @@ pub fn open_window_at(app: &AppHandle, section: Option<&str>) -> tauri::Result<(
     Ok(())
 }
 
-/// The settings window's size at the interface scale: fits most pages, and
+/// The settings window's size at the interface scale: wide enough for the
+/// toolbars at full size in Settings > Editor, and fits most pages, and
 /// longer ones (Images) scroll. On a small screen it fits the screen
 /// instead
 fn window_size(app: &AppHandle) -> LogicalSize<f64> {
     let scale = crate::tabs::scale(app);
-    let (mut width, mut height) = (680.0 * scale, 600.0 * scale);
+    let (mut width, mut height) = (920.0 * scale, 600.0 * scale);
     if let Ok(Some(monitor)) = app.primary_monitor() {
         let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
         width = width.min(area.width - 40.0);

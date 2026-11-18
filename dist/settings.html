@@ -639,7 +639,7 @@
   .bar { align-items: stretch; height: calc(48px * var(--u)); }
   .bar .tools { position: relative; display: flex; align-items: center; gap: calc(8px * var(--u)); padding: 0 calc(8px * var(--u)); }
   .bar .empty { align-self: center; padding: 0 16px; color: var(--text-secondary); white-space: nowrap; }
-  .bar .divider { flex: none; width: 1px; background: var(--border); }
+  .bar .bar-divider { flex: none; width: 1px; background: var(--border); }
   .bar .switch-area { display: flex; align-items: center; padding: 0 calc(8px * var(--u)); }
   .bar .modes {
     position: relative;
@@ -668,6 +668,23 @@
   .slot .chev svg { width: calc(16px * var(--u)); height: calc(16px * var(--u)); transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1); }
   .mode .tool { width: calc(28px * var(--u)); height: calc(28px * var(--u)); padding: calc(2px * var(--u)); border-radius: calc(3px * var(--u)); }
   .mode .tool.text { width: auto; padding: 0 calc(8px * var(--u)); white-space: nowrap; }
+  /* The mode whose toolbar is shown, as Figma marks the one you're in */
+  .mode.current .tool, .mode.current:hover .tool {
+    background: var(--bg);
+    box-shadow: 0 0 0.5px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 0 1px rgba(255, 255, 255, 0.3);
+  }
+  /* Draw's pen, brush and pencil: pictures rising from the bar's bottom,
+     between dividers, as Figma draws them */
+  .slot.drawing { align-self: stretch; gap: calc(8px * var(--u)); }
+  .slot.drawing .bar-divider { flex: none; width: 1px; background: var(--border); }
+  .slot.drawing .tool { width: auto; height: auto; padding: 0; border-radius: 0; display: flex; align-items: stretch; }
+  .slot.drawing:hover .tool, .slot.drawing.open .tool { background: none; }
+  .drawn { position: relative; flex: none; width: calc(48px * var(--u)); overflow: hidden; }
+  .drawn img { position: absolute; top: calc(4px * var(--u)); left: 50%; height: calc(68px * var(--u)); transform: translateX(-50%); transition: transform 0.15s cubic-bezier(0.2, 0.9, 0.3, 1); }
+  .slot.drawing:hover .drawn img, .slot.drawing.open .drawn img { transform: translate(-50%, calc(-3px * var(--u))); }
+  .drawn.off img, .sub.off .drawn img { opacity: 0.3; }
+  .sub .tool .drawn { width: 100%; height: 100%; }
+  .sub .tool .drawn img { top: 0; height: 200%; }
   .slot:hover .tool, .slot:hover .chev, .sub:hover .tool { background: var(--hover); }
   .mode:hover .tool { background: color-mix(in srgb, var(--text) 8%, transparent); }
   .slot.open .tool, .slot.open .chev { background: var(--bg-secondary); }
@@ -954,7 +971,7 @@
       <div class="row stack" data-keywords="tools modes order reorder arrange move hide show switch draw design motion dev mode">
         <div class="layout-head">
           <span class="label">Tools and modes
-            <div class="hint">Drag to move them, modes within the switch. Hover one and click its eye to hide it, or open a group to hide its tools one by one. Changing Figma's layout reloads open files.</div>
+            <div class="hint">Click a mode in the switch to edit its toolbar. Drag to move tools and modes, and hover one and click its eye to hide it, or open a group to hide its tools one by one. Changing Figma's layout reloads open files.</div>
           </span>
           <button type="button" class="button" id="layout-reset" hidden>Reset</button>
         </div>
@@ -2364,12 +2381,15 @@
     invoke("get_mcp_config", { kind }).then((text) => { $(id).textContent = text ?? ""; });
   }
 
-  // Tools and modes: Figma Design's toolbar as a file last reported it
-  // (toolbar.rs), its slots and modes in the order set, to drag around and
-  // hide. A group's tools open in a tray under it, each hidden on its own,
-  // Ligma's lasso fill among them, after Pencil, whose item it copies
+  // Tools and modes: each mode's toolbar as a file last reported it
+  // (toolbar.rs), its slots and the modes in the order set, to drag around
+  // and hide. Clicking a mode in the switch shows its toolbar; Motion's is
+  // Design's tools, arranged on their own. A group's tools open in a tray
+  // under it, each hidden on its own, Ligma's lasso fill among them, after
+  // Pencil, whose item it copies
   let reported = null;
   let openSlot = null;
+  let editMode = "design";
   const MODES = [
     ["illustration", "Draw", "showDrawMode"],
     ["design", "Design", "showDesignMode"],
@@ -2437,15 +2457,21 @@
     if (pencil >= 0) tools.splice(pencil + 1, 0, LASSO);
     return tools;
   };
-  const hiddenTools = () => settings.hiddenTools ?? [];
+  const layoutOf = () => settings.toolbarLayouts?.[editMode] ?? {};
+  const hiddenTools = () => layoutOf().hidden ?? [];
+  const saveLayout = (change) => {
+    const layout = { order: layoutOf().order ?? [], hidden: hiddenTools(), ...change };
+    save(undefined, { toolbarLayouts: { ...settings.toolbarLayouts, [editMode]: layout } });
+  };
   const isOff = (tool) => (tool.key === LASSO.key ? !settings.lassoFill || hiddenTools().includes("toolPencil") : hiddenTools().includes(tool.key));
   // Figma's keys, for the slot's eye: the lasso goes with Pencil
   const keysOf = (slot) => slot.tools.map((tool) => tool.key);
   const slots = () => {
-    const list = Array.isArray(reported?.slots) ? reported.slots : [];
+    const toolbar = reported?.toolbars?.[editMode === "metronome" ? "design" : editMode];
+    const list = Array.isArray(toolbar) ? toolbar : [];
     const order = arrange(
       list.map((slot) => slot.id),
-      settings.toolbarOrder ?? [],
+      layoutOf().order ?? [],
     );
     return order.map((id) => list.find((slot) => slot.id === id));
   };
@@ -2474,7 +2500,14 @@
   const setHidden = (keys, hide) => {
     const hidden = hiddenTools().filter((key) => !keys.includes(key));
     if (hide) hidden.push(...keys);
-    save(undefined, { hiddenTools: hidden });
+    saveLayout({ hidden });
+  };
+  // A tool's face: its icon, or Draw's pictures of it
+  const face = (tool, off) => {
+    if (!Array.isArray(tool.images)) return icon(tool.icon);
+    const drawn = node("span", { className: `drawn${off ? " off" : ""}` });
+    for (const src of tool.images.filter((src) => /^https:\/\/static\.figma\.com\//.test(src))) drawn.append(node("img", { src, alt: "", draggable: false }));
+    return drawn.outerHTML;
   };
   const toggleTool = (tool) => {
     if (tool.key === LASSO.key) {
@@ -2571,7 +2604,7 @@
       const sub = node("div", { className: `sub${off ? " off" : ""}` });
       sub.dataset.key = tool.key;
       const square = node("span", { className: "square" });
-      const button = node("button", { type: "button", className: "tool", disabled: blocked }, icon(tool.icon));
+      const button = node("button", { type: "button", className: "tool", disabled: blocked }, face(tool));
       button.setAttribute("aria-label", tool.name);
       button.setAttribute("aria-pressed", String(!off));
       button.addEventListener("click", () => toggleTool(tool));
@@ -2606,18 +2639,31 @@
     tools.setAttribute("aria-label", "Tools");
     for (const slot of list) {
       const shown = slot.tools.filter((tool) => !hiddenTools().includes(tool.key));
-      const face = shown[0] ?? slot.tools[0];
+      const first = shown[0] ?? slot.tools[0];
       const off = !shown.length;
+      const drawing = slot.tools.some((tool) => Array.isArray(tool.images));
       const group = toolsOf(slot).length > 1;
-      const name = slot.tools.length > 1 ? `${slot.tools[0].name} tools` : face.name;
-      const el = node("div", { className: `slot${off ? " off" : ""}${openSlot === slot.id ? " open" : ""}` });
+      const name = drawing ? slot.tools.map((tool) => tool.name).join(", ") : slot.tools.length > 1 ? `${slot.tools[0].name} tools` : first.name;
+      const el = node("div", { className: `slot${drawing ? " drawing" : ""}${off ? " off" : ""}${openSlot === slot.id ? " open" : ""}` });
       el.dataset.id = slot.id;
       el.setAttribute("role", "listitem");
-      const button = node("button", { type: "button", className: "tool", title: face.name }, icon(face.icon));
+      // Draw's tools show side by side, those hidden greyed
+      const button = node("button", { type: "button", className: "tool", title: drawing ? name : first.name }, drawing ? slot.tools.map((tool) => face(tool, hiddenTools().includes(tool.key))).join("") : face(first));
       button.setAttribute("aria-label", name);
       button.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight");
       el.append(button);
-      if (group) {
+      if (drawing) {
+        el.prepend(node("span", { className: "bar-divider" }));
+        el.append(node("span", { className: "bar-divider" }));
+        const toggle = () => {
+          if (dragged) return;
+          openSlot = openSlot === slot.id ? null : slot.id;
+          refocus = slot.id;
+          renderLayout();
+        };
+        button.setAttribute("aria-expanded", String(openSlot === slot.id));
+        button.addEventListener("click", toggle);
+      } else if (group) {
         const toggle = () => {
           if (dragged) return;
           openSlot = openSlot === slot.id ? null : slot.id;
@@ -2633,9 +2679,9 @@
       }
       el.append(eyeButton(name, off, () => setHidden(keysOf(slot), !off)));
       tools.append(el);
-      draggable(tools, el, (ids) => save(undefined, { toolbarOrder: ids }));
+      draggable(tools, el, (ids) => saveLayout({ order: ids }));
     }
-    if (!list.length) tools.append(node("span", { className: "empty", textContent: "Open a design file to see its tools here" }));
+    if (!list.length) tools.append(node("span", { className: "empty", textContent: "Open a design file to see this toolbar here" }));
     const area = node("div", { className: "switch-area" });
     const switcher = node("div", { className: "modes" });
     switcher.setAttribute("role", "list");
@@ -2643,21 +2689,31 @@
     for (const item of modes()) {
       const off = !modeShown(item.mode);
       const markup = item.icon ? icon(item.icon) : "";
-      const el = node("div", { className: `slot mode${off ? " off" : ""}` });
+      const current = item.mode === editMode;
+      const el = node("div", { className: `slot mode${off ? " off" : ""}${current ? " current" : ""}` });
       el.dataset.id = item.mode;
       el.setAttribute("role", "listitem");
-      const button = node("button", { type: "button", className: `tool${markup ? "" : " text"}`, title: item.name }, markup);
+      const button = node("button", { type: "button", className: `tool${markup ? "" : " text"}`, title: `Edit ${item.name}'s toolbar` }, markup);
       if (!markup) button.textContent = item.name;
-      button.setAttribute("aria-label", `${item.name} mode`);
+      button.setAttribute("aria-label", `${item.name} toolbar`);
+      button.setAttribute("aria-pressed", String(current));
       button.setAttribute("aria-keyshortcuts", "Alt+ArrowLeft Alt+ArrowRight");
+      button.addEventListener("click", () => {
+        if (dragged || current) return;
+        editMode = item.mode;
+        openSlot = null;
+        refocus = item.mode;
+        renderLayout();
+      });
       const key = MODES.find(([mode]) => mode === item.mode)[2];
       el.append(button, eyeButton(item.name, off, () => save(undefined, { [key]: off })));
       switcher.append(el);
       draggable(switcher, el, (ids) => save(undefined, { modeOrder: ids }));
     }
     area.append(switcher);
-    bar.append(tools, node("div", { className: "divider" }), area);
-    $("layout-reset").hidden = !(settings.toolbarOrder?.length || settings.modeOrder?.length || hiddenTools().length || MODES.some(([mode]) => !modeShown(mode)));
+    bar.append(tools, node("div", { className: "bar-divider" }), area);
+    const changed = Object.values(settings.toolbarLayouts ?? {}).some((layout) => layout.order?.length || layout.hidden?.length);
+    $("layout-reset").hidden = !(changed || settings.modeOrder?.length || MODES.some(([mode]) => !modeShown(mode)));
     fitLayout();
     renderTray();
     if (focus) {
@@ -2682,7 +2738,7 @@
   }
   $("layout-reset").addEventListener("click", () => {
     openSlot = null;
-    save(undefined, { toolbarOrder: [], modeOrder: [], hiddenTools: [], ...Object.fromEntries(MODES.map(([, , key]) => [key, true])) });
+    save(undefined, { toolbarLayouts: {}, modeOrder: [], ...Object.fromEntries(MODES.map(([, , key]) => [key, true])) });
   });
   $("layout-stage").addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !openSlot) return;
