@@ -6,7 +6,7 @@ Every release needs a section here, headed `## <version> - <date>`, before it's 
 
 - Tools and modes, in Settings > Editor > Toolbar, shows Figma's toolbar as your files have it. Drag a tool to move it, or a mode to move it within the switch, and hover one and click its eye to hide it. Hidden ones stay in Settings, greyed, to bring back, and the toolbar closes up around them in Figma. It takes the place of the checkboxes for the modes to switch between.
 - Open a group to hide its tools one by one, so it can lose its first tool and keep the rest. A group left with one tool loses its arrow, except Pencil while Lasso fill is on, which shows in the group after Pencil.
-- Click a mode in the switch to arrange its own toolbar: Draw, Design, Motion and Dev Mode each keep their own. Draw's pen, brush and pencil move together and hide one by one.
+- Click a mode in the switch to arrange its own toolbar: Draw, Design, Motion and Dev Mode each keep their own. Draw's pen, brush and pencil move together and hide one by one, and with Effects on, its button moves and hides like the rest.
 - The settings window is wider, and What's New's demos with it.
 
 ## 0.45.0 - 2026-11-17

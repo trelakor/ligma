@@ -207,6 +207,9 @@ const PAGE_JS: &str = r##"(() => {
     const swap = (child) => (child === toolbar ? React.cloneElement(child, undefined, ...arrangeSlots(child.props.children, mode)) : child);
     return Array.isArray(children) ? children.map(swap) : swap(children);
   };
+  // Ligma's Effects button (see effects.rs): its slot and its tool's key
+  const EFFECTS = "LigmaEffects";
+  const EFFECTS_KEY = "ligmaEffects";
   // Marks a group left with one tool, which loses its arrow (see `restyle`)
   const SINGLE_ATTRIBUTE = "data-ligma-single-tool";
 
@@ -657,6 +660,59 @@ const PAGE_JS: &str = r##"(() => {
   };
   // Draws the toolbar again, for the lasso's setting (see lasso.rs)
   window.__ligmaToolbarRedraw = redraw;
+  // Where Ligma's Effects button goes (see effects.rs), a slot of Design's
+  // toolbar (and Motion's) of its own, after Actions unless moved: `{
+  // hidden }`, or `{ parent, after }`, the element it follows, null to go
+  // first. Undefined while the layout is Figma's, or the toolbar can't be
+  // read, for it to go after Actions
+  window.__ligmaToolbarEffects = () => {
+    if (!patched) return undefined;
+    for (const row of document.querySelectorAll('[class*="toolbelt_left_side--leftSideRow"]')) {
+      const toolbar = toolbarOf(outermost(fiberOf(row), (p) => "editorTheme" in p && "children" in p)?.children);
+      const elements = toolbar?.props.children;
+      if (!elements?.some((element) => element?.props?.toolbeltMode === "design")) continue;
+      const mode = modeOf(elements);
+      const hidden = hiddenOf(mode);
+      if (hidden.includes(EFFECTS_KEY)) return { hidden: true };
+      const slots = new Map();
+      for (const element of elements) {
+        const slot = slotOf(element);
+        if (slot && !slots.has(slot.id)) slots.set(slot.id, slot);
+      }
+      const ids = [...slots.keys()];
+      ids.splice(ids.includes("Actions") ? ids.indexOf("Actions") + 1 : ids.length, 0, EFFECTS);
+      const order = arrange(ids, orderOf(mode));
+      const parent = row.querySelector(`div.${String(toolbar.props.className).trim().split(/\s+/).join(".")}`);
+      const fiber = fiberOf(parent);
+      if (!parent || !fiber) return undefined;
+      // The last element drawn for the slot shown before it
+      const nodes = (child) => {
+        const found = [];
+        for (let next = child; next; next = next.sibling) {
+          if (next.stateNode instanceof Element) found.push(next.stateNode);
+          else found.push(...nodes(next.child));
+        }
+        return found;
+      };
+      const drawn = new Map();
+      for (let child = fiber.child; child; child = child.sibling) {
+        // In the row itself, not a menu drawn elsewhere
+        const last = nodes(child.child ?? null)
+          .concat(child.stateNode instanceof Element ? [child.stateNode] : [])
+          .filter((node) => node.parentElement === parent)
+          .at(-1);
+        if (child.key && last) drawn.set(child.key, last);
+      }
+      for (let i = order.indexOf(EFFECTS) - 1; i >= 0; i--) {
+        const slot = slots.get(order[i]);
+        if (!slot || slot.tools.every((tool) => hidden.includes(tool))) continue;
+        const after = drawn.get(order[i]);
+        if (after) return { parent, after };
+      }
+      return { parent, after: null };
+    }
+    return undefined;
+  };
   // From Ligma, when the setting changes
   window.__ligmaToolbarModes = (next) => {
     if (next.known) known = { tools: {}, ...next.known };
