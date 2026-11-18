@@ -84,6 +84,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Tauri skips the Finder step that lays out the DMG (background and
+          # icon positions) when CI is set, this runs it anyway
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
         with:
           tagName: v__VERSION__
           releaseName: Ligma v__VERSION__

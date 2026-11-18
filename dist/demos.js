@@ -20,7 +20,7 @@
 
   // Demos per release, in the order of its notes
   const RELEASES = {
-    "0.46.0": ["toolbar-layout", "toolbar-figma"],
+    "0.47.0": ["toolbar-layout", "toolbar-figma"],
     "0.45.0": ["fx-library", "fx-repeater", "fx-disintegrate", "fx-bitcrush", "fx-dither", "fx-halftone", "fx-modulate", "fx-chromatic", "fx-fisheye", "fx-liquify", "fx-displace", "fx-motion", "fx-glow", "fx-shadow", "fx-reflection", "fx-rim", "fx-glitter", "fx-sticker", "fx-screen", "fx-shapeFill", "fx-warp", "fx-scatter", "fx-pattern", "fx-extrude", "fx-longShadow", "fx-outline", "fx-blend", "fx-roughen", "fx-pucker", "fx-round", "fx-envelope", "fx-polar", "fx-kaleidoscope", "fx-section"],
     "0.44.0": ["color-frames", "settings-search"],
     "0.43.0": ["heal", "upscale"],
