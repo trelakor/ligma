@@ -270,7 +270,6 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
     let _ = window.set_focus();
 }
 
-/// The user chose button `index`, or dismissed the prompt (None)
 /// Opens Settings at switch `setting` (an id in settings.html), from a
 /// release's button in what's new
 #[tauri::command]
@@ -284,6 +283,7 @@ pub async fn prompt_open_setting(app: AppHandle, webview: Webview, setting: Stri
     }
 }
 
+/// The user chose button `index`, or dismissed the prompt (None)
 #[tauri::command]
 pub async fn prompt_answer(app: AppHandle, webview: Webview, index: Option<usize>) {
     if is_prompt(&webview) {

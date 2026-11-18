@@ -538,6 +538,33 @@ const PAGE_JS: &str = r##"(() => {
     }
   };
 
+  // `value` with only what has the type `model` gives it, a finite number
+  // where it's a number. Keys `model` hasn't got are kept as they are
+  const like = (value, model) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const out = {};
+    for (const [key, v] of Object.entries(value)) {
+      if (key === "__proto__") continue;
+      const m = model?.[key];
+      if (m === undefined || m === null) out[key] = v;
+      else if (Array.isArray(m)) {
+        if (Array.isArray(v)) out[key] = v;
+      } else if (typeof m === "object") {
+        if (v && typeof v === "object" && !Array.isArray(v)) out[key] = like(v, m);
+      } else if (typeof v === typeof m && (typeof v !== "number" || Number.isFinite(v))) out[key] = v;
+    }
+    return out;
+  };
+  // An effect group's settings, as `like` its defaults. They're read from
+  // the file, where anyone who can edit it, or any plugin, can write them
+  const savedSettings = (group, key, defaults) => {
+    try {
+      return like(JSON.parse(group.getSharedPluginData(PLUGIN, key) || "{}"), defaults);
+    } catch {
+      return {};
+    }
+  };
+
   // The effects the library lists
   const EFFECTS = [
     {
@@ -547,7 +574,7 @@ const PAGE_JS: &str = r##"(() => {
       about: "Repeat a layer in a trail, ring or grid",
       icon: REPEATER_ICON,
       of: (node) => repeaterOf(node),
-      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, SETTINGS) || "{}"),
+      saved: (group) => savedSettings(group, SETTINGS, DEFAULTS),
       summary: (s) => (s.mode === "grid" ? `Grid · ${s.columns} × ${s.rows}` : `${s.mode === "radial" ? "Radial" : "Trail"} · ${s.copies} ${s.copies === 1 ? "copy" : "copies"}`),
       open: guarded((figma, edit, run) => openRepeater(figma, edit, run)),
       thumb: () => repeaterThumb(),
@@ -559,7 +586,7 @@ const PAGE_JS: &str = r##"(() => {
       about: "Snap it into dust, or shatter it like glass",
       icon: DISINTEGRATE_ICON,
       of: (node) => disintegrateOf(node),
-      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE) || "{}"),
+      saved: (group) => savedSettings(group, DISINTEGRATE, DISINTEGRATE_DEFAULTS),
       summary: (s) => `${s.mode === "snap" ? "Snap" : "Shatter"} · ${s.pieces} pieces`,
       open: guarded((figma, edit, run) => openDisintegrate(figma, edit, run)),
       thumb: () => disintegrateThumb(),
@@ -570,7 +597,7 @@ const PAGE_JS: &str = r##"(() => {
       about: "Pixelate, posterize, dither and glitch it",
       icon: BITCRUSH_ICON,
       of: (node) => bitcrushOf(node),
-      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, BITCRUSH) || "{}"),
+      saved: (group) => savedSettings(group, BITCRUSH, BITCRUSH_DEFAULTS),
       summary: (s) => `${s.pixelSize}pt · ${s.bitDepth}-bit`,
       open: guarded((figma, edit, run) => openBitcrush(figma, edit, run)),
       thumb: () => bitcrushThumb(),
@@ -1677,7 +1704,7 @@ const PAGE_JS: &str = r##"(() => {
     if (group) {
       source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source") ?? group.children.at(-1);
       try {
-        settings = { ...DEFAULTS, ...JSON.parse(group.getSharedPluginData(PLUGIN, SETTINGS)) };
+        settings = { ...DEFAULTS, ...savedSettings(group, SETTINGS, DEFAULTS) };
       } catch {}
     } else {
       source = selected[0];
@@ -3239,7 +3266,7 @@ const PAGE_JS: &str = r##"(() => {
       source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
       result = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "result") ?? null;
       try {
-        const saved = JSON.parse(group.getSharedPluginData(PLUGIN, DISINTEGRATE));
+        const saved = savedSettings(group, DISINTEGRATE, DISINTEGRATE_DEFAULTS);
         // Settings from before forces, which aren't kept
         if (saved.force1 && "depth" in saved.force1) Object.assign(settings, saved);
       } catch {}
@@ -4117,7 +4144,7 @@ const PAGE_JS: &str = r##"(() => {
       source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
       result = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "result") ?? null;
       try {
-        const saved = JSON.parse(group.getSharedPluginData(PLUGIN, BITCRUSH));
+        const saved = savedSettings(group, BITCRUSH, BITCRUSH_DEFAULTS);
         Object.assign(settings, saved);
       } catch {}
       if (!source) {
@@ -4589,7 +4616,7 @@ const PAGE_JS: &str = r##"(() => {
       about: spec.about,
       icon: spec.icon,
       of: (node) => filterOf(spec, node),
-      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, spec.id) || "{}"),
+      saved: (group) => savedSettings(group, spec.id, spec.defaults),
       summary: (s) => spec.summary({ ...structuredClone(spec.defaults), ...s }),
       open: guarded((figma, edit, run) => openFilter(spec, figma, edit, run)),
       thumb: () => pictureThumb(spec),
@@ -5345,7 +5372,7 @@ const PAGE_JS: &str = r##"(() => {
       source = sourceOf(group);
       result = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "result") ?? null;
       try {
-        Object.assign(settings, JSON.parse(group.getSharedPluginData(PLUGIN, spec.id)));
+        Object.assign(settings, savedSettings(group, spec.id, spec.defaults));
       } catch {}
       if (!source) {
         group = null;
@@ -9872,7 +9899,7 @@ const PAGE_JS: &str = r##"(() => {
     if (group) {
       container = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
       try {
-        Object.assign(settings, JSON.parse(group.getSharedPluginData(PLUGIN, FILL)));
+        Object.assign(settings, savedSettings(group, FILL, FILL_DEFAULTS));
       } catch {}
       if (!container) {
         group = null;
@@ -10426,7 +10453,7 @@ const PAGE_JS: &str = r##"(() => {
     about: "Fill a shape with copies of other layers",
     icon: FILL_ICON,
     of: (node) => fillOf(node),
-    saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, FILL) || "{}"),
+    saved: (group) => savedSettings(group, FILL, FILL_DEFAULTS),
     summary: (s) => `${(s.seeds ?? []).length} ${(s.seeds ?? []).length === 1 ? "layer" : "layers"} · ${s.fit === "loose" ? "Loose" : "Inside"}`,
     open: guarded((figma, edit, run) => openFill(figma, edit, run)),
     thumb: () => fillThumb(),
@@ -11031,7 +11058,7 @@ const PAGE_JS: &str = r##"(() => {
     if (group) {
       source = group.children.find((child) => child.getSharedPluginData(PLUGIN, ROLE) === "source");
       try {
-        Object.assign(settings, JSON.parse(group.getSharedPluginData(PLUGIN, spec.id)));
+        Object.assign(settings, savedSettings(group, spec.id, spec.defaults));
       } catch {}
       if (!source) {
         group = null;
@@ -11642,7 +11669,7 @@ const PAGE_JS: &str = r##"(() => {
       about: spec.about,
       icon: spec.icon,
       of: (node) => vectorOf(spec, node),
-      saved: (group) => JSON.parse(group.getSharedPluginData(PLUGIN, spec.id) || "{}"),
+      saved: (group) => savedSettings(group, spec.id, spec.defaults),
       summary: (s) => spec.summary({ ...structuredClone(spec.defaults), ...s }),
       keepsSource: (s) => sourceShown(spec, { ...spec.defaults, ...s }),
       open: guarded((figma, edit, run) => openVector(spec, figma, edit, run)),
@@ -14451,7 +14478,9 @@ const PAGE_JS: &str = r##"(() => {
       const grip = row.appendChild(Object.assign(document.createElement("span"), { className: "grip", innerHTML: GRIP }));
       grip.setAttribute("aria-hidden", "true");
       const card = row.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "card" }));
-      card.innerHTML = `<span class="glyph">${layer.effect.icon}</span><span class="name">${layer.effect.name}</span><span class="about">${layer.effect.summary(layer.settings)}</span>`;
+      card.innerHTML = `<span class="glyph">${layer.effect.icon}</span><span class="name"></span><span class="about"></span>`;
+      card.querySelector(".name").textContent = layer.effect.name;
+      card.querySelector(".about").textContent = layer.effect.summary(layer.settings);
       card.setAttribute("aria-label", `Edit ${layer.effect.name}`);
       card.addEventListener("click", () => {
         figma.currentPage.selection = [layer.group];
@@ -14649,10 +14678,21 @@ pub fn on_page_load(webview: &Webview, tab: u32) {
     }
 }
 
-/// When tab `tab` is shown, for one that was frozen when the setting was
-/// switched on
+/// Tells a page with `PAGE_JS` the setting
+fn update_js() -> String {
+    format!("window.__ligmaEffects?.({})", state())
+}
+
+/// When tab `tab` is shown, for one that was frozen when the setting
+/// changed: the setting again, or `PAGE_JS` if it's been switched on.
+/// Another tab may not have passed it on through `localStorage`, as every
+/// loaded one may have been frozen too
 pub fn on_shown(webview: &Webview, tab: u32) {
-    load(webview, tab);
+    if has(&LOADED, tab) {
+        let _ = webview.eval(update_js());
+    } else {
+        load(webview, tab);
+    }
 }
 
 /// Sends a changed setting to every loaded tab, adding `PAGE_JS` to those
@@ -14662,7 +14702,7 @@ pub fn apply_settings(app: &AppHandle, settings: &Settings) {
         return;
     }
     REV.store(now(), Ordering::Relaxed);
-    let script = format!("window.__ligmaEffects?.({})", state());
+    let script = update_js();
     for (tab, webview) in crate::tabs::scriptable_tabs_with_ids(app) {
         if has(&LOADED, tab) {
             let _ = webview.eval(&script);
