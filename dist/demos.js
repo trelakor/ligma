@@ -20,6 +20,7 @@
 
   // Demos per release, in the order of its notes
   const RELEASES = {
+    "0.46.0": ["toolbar-layout", "toolbar-figma"],
     "0.45.0": ["fx-library", "fx-repeater", "fx-disintegrate", "fx-bitcrush", "fx-dither", "fx-halftone", "fx-modulate", "fx-chromatic", "fx-fisheye", "fx-liquify", "fx-displace", "fx-motion", "fx-glow", "fx-shadow", "fx-reflection", "fx-rim", "fx-glitter", "fx-sticker", "fx-screen", "fx-shapeFill", "fx-warp", "fx-scatter", "fx-pattern", "fx-extrude", "fx-longShadow", "fx-outline", "fx-blend", "fx-roughen", "fx-pucker", "fx-round", "fx-envelope", "fx-polar", "fx-kaleidoscope", "fx-section"],
     "0.44.0": ["color-frames", "settings-search"],
     "0.43.0": ["heal", "upscale"],
@@ -2815,6 +2816,233 @@
 
   // Each scene's CSS, scoped to it. `.at-<step>` is on the scene itself
   const scope = (id, selector) => (selector.startsWith(".at-") ? `.demo-${id}${selector}` : `.demo-${id} ${selector}`);
+  // Tools and modes (Settings > Editor > Toolbar): Figma's toolbar copied
+  // at its real size, the same 24px icons as `FIGMA_TOOLBAR`, its slots at
+  // the places Settings puts them
+  const TL = {
+    move: '<path d="M4 3.2 12.2 6.6 8.6 8 7.1 11.6z"/>',
+    frame: '<path d="M5.5 3v10M10.5 3v10M3 5.5h10M3 10.5h10"/>',
+    rect: '<rect x="3.5" y="3.5" width="9" height="9" rx=".5"/>',
+    pen: '<path d="M4.2 4.6 10 3.2l2.8 5.6-4.4 4.4-5.6-2.8z"/><circle cx="8" cy="8" r="1.2"/><path d="M4.2 4.6 7.2 7.2"/>',
+    pencil: '<path d="m10.3 3.2 2.5 2.5-6.6 6.6-3.2.7.7-3.2z"/><path d="m8.8 4.7 2.5 2.5"/>',
+    lasso: '<ellipse cx="8.5" cy="6.6" rx="4.8" ry="3.1" stroke-dasharray="1.6 1.4"/><path d="M5.2 9.2c-1 .9-1.1 2.3-.1 3"/>',
+    text: '<path d="M3.5 4h9M8 4v8.5M6.5 12.5h3"/>',
+    code: '<path d="M6 3.5c-1.4 0-1.6.8-1.6 2v1.1c0 .9-.6 1.4-1.4 1.4.8 0 1.4.5 1.4 1.4v1.1c0 1.2.2 2 1.6 2M10 3.5c1.4 0 1.6.8 1.6 2v1.1c0 .9.6 1.4 1.4 1.4-.8 0-1.4.5-1.4 1.4v1.1c0 1.2-.2 2-1.6 2"/>',
+    comment: '<path d="M3 12.8V8a5 5 0 1 1 5 5H3.2z"/>',
+    actions: '<circle cx="5.2" cy="5.2" r="1.7"/><circle cx="10.8" cy="5.2" r="1.7"/><rect x="3.5" y="9.1" width="3.4" height="3.4" rx=".6"/><path d="M10.8 9v4M8.8 11h4"/>',
+    draw: '<path d="M3 11.5c1.6-3.4 3.4-5.6 4.4-4.8 1 .8-2.8 4.6-1.4 5 1.4.4 3.6-4.6 4.8-3.8 1 .6-1.6 3.4-.2 3.6.8.1 1.8-.8 2.4-1.6"/>',
+    design: '<path d="M3 3h10M3 3v10M6 3v2M9 3v2M3 6h2M3 9h2"/><path d="m8.5 8.5 4.5 1.6-2 .8-.8 2z"/>',
+    motion: '<path d="M8 2.8 13.2 8 8 13.2 2.8 8z"/><path d="m7 6.3 2.3 1.7L7 9.7z"/>',
+    dev: '<path d="m6 5.5-2.5 2.5 2.5 2.5M10 5.5l2.5 2.5-2.5 2.5"/>',
+  };
+  const tlIcon = (name) => svg(TL[name], 24, ' stroke-width="1"');
+  const tlArrow = `<i class="tc">${svg('<path d="m5.5 7 2.5 2.5L10.5 7"/>', 16, ' stroke-width="1"')}</i>`;
+  const tlEye = `<i class="te">${svg('<path d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/>', 12, ' stroke-width="1.3"')}</i><i class="te shut">${svg('<path d="M2.5 6.5S4.5 10 8 10s5.5-3.5 5.5-3.5M4.6 8.9l-1 1.4M8 10v1.7M11.4 8.9l1 1.4"/>', 12, ' stroke-width="1.3"')}</i>`;
+  // Draw's pen, brush and pencil, standing up out of the toolbar
+  const tlDrawn = (kind) => {
+    const body = {
+      pen: '<path d="M17 4 26 22v20H8V22z" fill="url(#tlm)"/><path d="M17 4v13" stroke="#2b2b2b" stroke-width="1.4"/><circle cx="17" cy="20" r="2.6" fill="#2b2b2b"/><rect x="8" y="42" width="18" height="30" rx="2" fill="url(#tlb)"/>',
+      brush: '<path d="M9 6c2-3 14-3 16 0l1 22H8z" fill="url(#tlh)"/><path d="M12 6v20M17 4v22M22 6v20" stroke="rgba(0,0,0,.18)"/><rect x="8" y="26" width="18" height="10" fill="url(#tlm)"/><rect x="8" y="36" width="18" height="36" rx="2" fill="url(#tlb)"/>',
+      pencil: '<path d="M17 4 26 24H8z" fill="#e9d2a8"/><path d="M17 4l3.4 7.6h-6.8z" fill="#3a3a3a"/><rect x="8" y="24" width="18" height="48" rx="1.5" fill="url(#tlb)"/><path d="M14 24v48M20 24v48" stroke="rgba(0,0,0,.14)"/>',
+    }[kind];
+    return `<svg class="drawn" viewBox="0 0 34 72" width="34" height="72"><defs><linearGradient id="tlm" x1="0" x2="1"><stop offset="0" stop-color="#cfcfcf"/><stop offset=".5" stop-color="#8a8a8a"/><stop offset="1" stop-color="#5b5b5b"/></linearGradient><linearGradient id="tlb" x1="0" x2="1"><stop offset="0" stop-color="#d9d9d9"/><stop offset=".45" stop-color="#9c9c9c"/><stop offset="1" stop-color="#666"/></linearGradient><linearGradient id="tlh" x1="0" x2="1"><stop offset="0" stop-color="#bdbdbd"/><stop offset="1" stop-color="#6e6e6e"/></linearGradient></defs>${body}</svg>`;
+  };
+  // A slot: its tool, its arrow if it's a group, and the eye at its top
+  // left. `x` is where Settings puts it, left of the bar
+  const tlSlot = (name, x, face, group = true) => `<span class="ts ts-${name}" style="left:${x}px"><i class="tt">${face}</i>${group ? tlArrow : ""}${tlEye}</span>`;
+  const tlModes = (current, x) =>
+    `<span class="tm" style="left:${x}px">${["draw", "design", "motion", "dev"].map((mode) => `<i class="mo mo-${mode}${mode === current ? " cur" : ""}">${tlIcon(mode)}</i>`).join("")}</span>`;
+  const tlPen = `<span class="swap"><span class="was">${tlIcon("pen")}</span><span class="now">${tlIcon("pencil")}</span></span>`;
+
+  DEMOS["toolbar-layout"] = {
+    title: "Tools and modes",
+    // Settings at the width it opens at, so the toolbar shows at its size
+    size: [840, 468],
+    steps: [
+      { caption: "Your toolbar, in Settings > Editor", ms: 1500, at: [640, 330] },
+      { caption: "Drag a tool to move it", ms: 650, at: [366, 222], move: 700 },
+      { caption: "Drag a tool to move it", ms: 1000, along: "M366 222L309 222", move: 750 },
+      { caption: "Drag a tool to move it", ms: 900 },
+      { caption: "Hover one for its eye", ms: 700, at: [596, 224], move: 600 },
+      { caption: "Hover one for its eye", ms: 600, at: [581, 209], move: 400 },
+      { caption: "Hidden, it stays here greyed", ms: 1500, click: true },
+      { caption: "Open a group for its tools", ms: 700, at: [448, 222], move: 700 },
+      { caption: "Open a group for its tools", ms: 1000, click: true },
+      { caption: "Hide one tool of the group", ms: 700, at: [418, 265], move: 600 },
+      { caption: "The group shows the next one", ms: 1800, click: true },
+      { caption: "Each mode has a toolbar of its own", ms: 700, at: [683, 222], move: 800 },
+      { caption: "Each mode has a toolbar of its own", ms: 2600, click: true },
+    ],
+    html: `
+      <div class="win tlwin">
+        <div class="head">Settings<span class="shut">${ICON.close}</span></div>
+        <nav class="snav">
+          <div class="find">${ICON.search}<span class="q"><span class="ph">Search</span></span></div>
+          <span class="pg">${ICON.general}General</span><span class="pg">${ICON.appearance}Appearance</span><span class="pg">${ICON.appIcon}App Icon</span><span class="pg">${ICON.tabs}Tabs &amp; Memory</span>
+          <i class="rule"></i>
+          <span class="pg on">${ICON.editor}Editor</span><span class="pg">${ICON.images}Images</span><span class="pg">${ICON.plugins}Plugins</span>
+          <i class="rule"></i>
+          <span class="pg">${ICON.ai}AI Tools</span><span class="pg">${ICON.discord}Discord</span>
+        </nav>
+        <div class="pt">Editor</div>
+        <h5>Toolbar</h5>
+        <div class="tlh"><b>Tools and modes</b><small>Click a mode in the switch to edit its toolbar. Drag to move tools and modes, and hover one and click its eye to hide it, or open a group to hide its tools one by one.</small><span class="treset">Reset</span></div>
+        <div class="below"><div class="tlr"><span><b>Lasso fill</b><small>Under Pencil: draw around an area to fill it, like Procreate</small></span><i class="sw on"></i></div></div>
+      </div>
+      <div class="tstage"></div>
+      <div class="tbar bd">
+        ${tlSlot("move", 8, tlIcon("move"))}${tlSlot("frame", 65, tlIcon("frame"))}${tlSlot("rect", 122, tlIcon("rect"))}${tlSlot("pen", 179, tlPen)}${tlSlot("text", 236, tlIcon("text"))}${tlSlot("code", 293, tlIcon("code"))}${tlSlot("comment", 350, tlIcon("comment"), false)}${tlSlot("actions", 390, tlIcon("actions"), false)}
+        <i class="dv" style="left:430px"></i>${tlModes("design", 439)}
+      </div>
+      <div class="tbar bw">
+        ${tlSlot("dmove", 8, tlIcon("move"))}<i class="dv" style="left:65px"></i>
+        <span class="dt" style="left:74px">${tlDrawn("pen")}${tlDrawn("brush")}${tlDrawn("pencil")}</span>
+        <i class="dv" style="left:226px"></i>${tlSlot("dframe", 235, tlIcon("frame"))}${tlSlot("drect", 292, tlIcon("rect"))}${tlSlot("dtext", 349, tlIcon("text"))}${tlSlot("dcode", 406, tlIcon("code"))}${tlSlot("dcomment", 463, tlIcon("comment"), false)}${tlSlot("dactions", 503, tlIcon("actions"), false)}
+        <i class="dv" style="left:543px"></i>${tlModes("draw", 552)}
+      </div>
+      <div class="ttray">
+        <span class="trow r-pen"><i class="tt">${tlIcon("pen")}</i>${tlEye}<span>Pen</span></span>
+        <span class="trow"><i class="tt">${tlIcon("pencil")}</i><span>Pencil</span></span>
+        <span class="trow"><i class="tt">${tlIcon("lasso")}</i><span>Lasso fill</span><em>Ligma</em></span>
+      </div>`,
+    css: `
+      .tlwin { left: 16px; top: 16px; width: 808px; height: 436px; }
+      .head { position: relative; display: flex; align-items: center; height: 38px; padding-left: 16px; border-bottom: 1px solid var(--border); font-weight: 550; }
+      .shut { position: absolute; right: 0; top: 0; display: grid; place-items: center; width: 46px; height: 38px; color: var(--text-secondary); }
+      .pt { position: absolute; left: 201px; top: 52px; font-size: 13px; font-weight: 600; line-height: 20px; }
+      h5 { position: absolute; left: 201px; top: 84px; margin: 0; font-size: 11px; font-weight: 550; line-height: 16px; }
+      .tlh { position: absolute; left: 201px; top: 108px; width: 591px; }
+      .tlh b, .tlr b { display: block; font-weight: 450; }
+      .tlh small, .tlr small { display: block; max-width: 470px; margin-top: 1px; color: var(--text-secondary); font-size: 11px; }
+      .treset { position: absolute; right: 0; top: 0; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; line-height: 22px; opacity: 0; transition: opacity 200ms; }
+      .below { position: absolute; left: 185px; right: 0; top: 280px; padding-top: 6px; transition: transform 300ms ${EASE}; }
+      .tlr { display: flex; align-items: center; gap: 16px; padding: 6px 16px; }
+      .tlr > span { flex: 1; }
+
+      .tstage { position: absolute; left: 217px; top: 178px; width: 591px; height: 88px; border-radius: 7px; background: var(--d-canvas); transition: height 300ms ${EASE}; }
+      .tbar { position: absolute; top: 198px; height: 48px; border-radius: 13px; background: var(--bg); box-shadow: 0 3px 8px rgb(0 0 0 / .35), 0 0 0 .5px rgba(127, 127, 127, .3); transition: opacity 300ms ${EASE}; }
+      .bd { left: 228px; width: 569px; }
+      .bw { left: 171px; width: 682px; opacity: 0; transform: scale(.83); }
+      .dv { position: absolute; top: 0; width: 1px; height: 48px; background: var(--border); }
+      .ts { position: absolute; top: 8px; display: flex; gap: 1px; height: 32px; transition: transform 220ms ${EASE}; }
+      .tt { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 5px; transition: background-color 120ms, opacity 200ms; }
+      .tc { display: grid; place-items: center; width: 16px; height: 32px; border-radius: 5px; color: var(--text-secondary); transition: background-color 120ms, color 120ms; }
+      .te { position: absolute; left: -5px; top: -5px; z-index: 1; display: grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .3), 0 0 0 1px var(--border); opacity: 0; transition: opacity 100ms; }
+      .te.shut { display: none; }
+      .swap { position: relative; display: grid; }
+      .swap .now { position: absolute; inset: 0; opacity: 0; }
+      .swap span { transition: opacity 200ms; }
+      .tm { position: absolute; top: 8px; display: flex; gap: 2px; padding: 2px; border-radius: 5px; background: var(--bg-tertiary); }
+      .mo { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 3px; color: var(--text); transition: background-color 120ms, box-shadow 120ms; }
+      .mo.cur { background: var(--bg); box-shadow: 0 0 .5px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .1); }
+      .dt { position: absolute; top: 0; display: flex; width: 144px; height: 48px; overflow: hidden; }
+      .dt .drawn { flex: none; margin: 4px 7px 0; }
+
+      .at-1 .ts-rect :is(.tt, .tc), .at-2 .ts-rect :is(.tt, .tc) { background: var(--hover); }
+      .at-2 .ts-rect { z-index: 2; transform: translateX(-57px); transition: transform 750ms linear; }
+      .at-2 .ts-rect .tt { background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(0, 0, 0, .3), 0 1px 3px rgba(0, 0, 0, .25); }
+      .at-2 .ts-frame { transform: translateX(57px); transition-delay: 300ms; }
+      .at-3 .ts-rect :is(.tt, .tc) { background: none; box-shadow: none; }
+      .at-3 .treset { opacity: 1; }
+      .at-4 .ts-comment .tt { background: var(--hover); }
+      .at-4 .ts-comment .te { opacity: 1; }
+      .at-6 .ts-comment .te { display: none; }
+      .at-6 .ts-comment .te.shut { display: grid; opacity: 1; }
+      .at-6 .ts-comment .tt svg { opacity: .3; }
+      .at-7 .ts-comment .te.shut { opacity: 0; }
+      .at-7 .ts-comment .tt { background: none; }
+      .at-7 .ts-pen .tc { background: var(--hover); }
+      .at-8 .ts-pen :is(.tt, .tc) { background: var(--bg-secondary); }
+      .at-8 .ts-pen .tc { color: var(--brand); }
+      .at-8 .ts-pen .tc svg { transform: rotate(180deg); }
+      .tc svg { transition: transform 150ms ${EASE}; }
+
+      .ttray { position: absolute; left: 407px; top: 254px; display: flex; flex-direction: column; gap: 2px; width: 176px; padding: 8px; border-radius: 13px; background: var(--bg); box-shadow: 0 3px 8px rgb(0 0 0 / .35), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(-4px); transition: opacity 160ms, transform 160ms ${EASE}; }
+      .trow { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; }
+      .trow em { padding: 0 5px; border-radius: 4px; background: var(--bg-secondary); color: var(--text-secondary); font-style: normal; }
+      .at-8 .tstage { height: 218px; }
+      .at-8 .below { transform: translateY(130px); }
+      .at-8 .ttray { opacity: 1; transform: none; }
+      .at-9 .r-pen .tt { background: var(--hover); }
+      .at-9 .r-pen .te { opacity: 1; }
+      .at-10 .r-pen .tt { background: none; }
+      .at-10 .r-pen .tt svg { opacity: .3; }
+      .at-10 .r-pen > span { color: var(--d-text3); }
+      .at-10 .r-pen .te { display: none; }
+      .at-10 .r-pen .te.shut { display: grid; opacity: 1; }
+      .at-10 .swap .was { opacity: 0; }
+      .at-10 .swap .now { opacity: 1; }
+      .at-11 .ttray { opacity: 0; transform: translateY(-4px); }
+      .at-11 .tstage { height: 88px; }
+      .at-11 .below { transform: none; }
+      .at-11 .ts-pen :is(.tt, .tc) { background: none; }
+      .at-11 .ts-pen .tc { color: var(--text-secondary); }
+      .at-11 .ts-pen .tc svg { transform: none; }
+      .at-11 .bd .mo-draw { background: color-mix(in srgb, var(--text) 8%, transparent); }
+      .at-12 .bd { opacity: 0; }
+      .at-12 .bw { opacity: 1; }
+      .at-12 .tstage { height: 88px; }`,
+  };
+
+  DEMOS["toolbar-figma"] = {
+    title: "In Figma",
+    pointer: false,
+    size: [600, 334],
+    steps: [
+      { caption: "Figma's toolbar, as Settings has it", ms: 1600 },
+      { caption: "A hidden tool leaves it, and it closes up", ms: 1900 },
+      { caption: "A group shows the first tool it keeps", ms: 1900 },
+      { caption: "With one tool left, its arrow goes", ms: 1900 },
+      { caption: "In the order you set", ms: 1900 },
+      { caption: "Hidden modes leave the switch", ms: 2400 },
+    ],
+    html: `
+      <div class="win fxwin tlfig"><div class="tcanvas"><span class="fl">Landing</span><div class="page"><i class="h1"></i><i class="h2"></i><i class="tbtn"></i><i class="orb"></i></div></div></div>
+      <div class="tbclip">
+        <div class="ftb tlbar">
+          <span class="fi f-move"><span class="ft on">${tlIcon("move")}</span>${tlArrow}</span>
+          <span class="fi f-frame"><span class="ft">${tlIcon("frame")}</span>${tlArrow}</span>
+          <span class="fi f-rect"><span class="ft">${tlIcon("rect")}</span>${tlArrow}</span>
+          <span class="fi f-pen"><span class="ft">${tlPen}</span>${tlArrow}</span>
+          <span class="fi f-text"><span class="ft">${tlIcon("text")}</span><span class="fa">${tlArrow}</span></span>
+          <span class="fi f-code"><span class="ft">${tlIcon("code")}</span>${tlArrow}</span>
+          <span class="fi f-comment"><span class="ft">${tlIcon("comment")}</span></span>
+          <span class="fi f-actions"><span class="ft">${tlIcon("actions")}</span></span>
+          <span class="fdiv"></span>
+          <span class="fseg">${["draw", "design", "motion", "dev"].map((mode) => `<span class="fs fs-${mode}${mode === "design" ? " on" : ""}">${tlIcon(mode)}</span>`).join("")}</span>
+        </div>
+      </div>`,
+    css: `
+      .fxwin { left: 12px; top: 12px; width: 576px; height: 310px; }
+      .tbclip { position: absolute; left: 12px; top: 12px; width: 576px; height: 310px; overflow: hidden; border-radius: 10px; }
+      .tcanvas { position: absolute; inset: 0; background: var(--d-canvas); }
+      .fl { position: absolute; left: 150px; top: 30px; color: var(--text-secondary); }
+      .page { position: absolute; left: 150px; top: 48px; width: 276px; height: 172px; background: #fff; }
+      .page i { position: absolute; display: block; border-radius: 2px; }
+      .h1 { left: 20px; top: 34px; width: 120px; height: 14px; background: #1e1a3a; }
+      .h2 { left: 20px; top: 56px; width: 92px; height: 14px; background: #1e1a3a; }
+      .tbtn { left: 20px; top: 90px; width: 64px; height: 20px; border-radius: 5px !important; background: #6d5cff; }
+      .orb { left: 160px; top: 30px; width: 96px; height: 96px; border-radius: 50% !important; background: radial-gradient(circle at 35% 35%, #8f7bff, #5b4bd6); }
+      .tlbar { position: absolute; left: 288px; top: 250px; padding: 0 8px; transform: translateX(-50%); gap: 8px; }
+      .tlbar .fi { display: flex; flex: none; gap: 1px; max-width: 60px; overflow: hidden; transition: max-width 400ms ${EASE}, margin 400ms ${EASE}, opacity 250ms, transform 400ms ${EASE}; }
+      .tlbar .tc { display: grid; place-items: center; width: 16px; height: 32px; color: var(--text-secondary); }
+      .tlbar .fa { display: flex; max-width: 16px; overflow: hidden; transition: max-width 400ms ${EASE}, opacity 200ms; }
+      .tlbar .fdiv { margin: 0; }
+      .tlbar .fseg { gap: 2px; padding: 2px; border-radius: 5px; background: var(--bg-tertiary); }
+      .tlbar .fs { width: 28px; height: 28px; border-radius: 3px; color: var(--text); max-width: 28px; overflow: hidden; transition: max-width 400ms ${EASE}, opacity 250ms, margin 400ms ${EASE}; }
+      .tlbar .fs.on { color: var(--text); }
+      .swap { position: relative; display: grid; }
+      .swap .now { position: absolute; inset: 0; opacity: 0; }
+      .swap span { transition: opacity 250ms; }
+      .at-1 .f-comment { max-width: 0; margin-left: -8px; opacity: 0; }
+      .at-2 .swap .was { opacity: 0; }
+      .at-2 .swap .now { opacity: 1; }
+      .at-3 .f-text .fa { max-width: 0; opacity: 0; }
+      .at-4 .f-rect { transform: translateX(-57px); }
+      .at-4 .f-frame { transform: translateX(57px); }
+      .at-5 .fs-motion { max-width: 0; margin-left: -2px; opacity: 0; }`,
+  };
+
   const sceneStyle = Object.entries(DEMOS)
     .map(([id, demo]) => demo.css.replace(/(^|\})\s*([^{}@]+)\{/g, (_, close, selectors) =>
       `${close}\n${selectors.split(/,(?![^(]*\))/).map((s) => scope(id, s.trim())).join(", ")} {`))

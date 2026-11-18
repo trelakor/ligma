@@ -2,6 +2,13 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.46.0 - 2026-11-17
+
+- Tools and modes, in Settings > Editor > Toolbar, shows Figma's toolbar as your files have it. Drag a tool to move it, or a mode to move it within the switch, and hover one and click its eye to hide it. Hidden ones stay in Settings, greyed, to bring back, and the toolbar closes up around them in Figma. It takes the place of the checkboxes for the modes to switch between.
+- Open a group to hide its tools one by one, so it can lose its first tool and keep the rest. A group left with one tool loses its arrow, except Pencil while Lasso fill is on, which shows in the group after Pencil.
+- Click a mode in the switch to arrange its own toolbar: Draw, Design, Motion and Dev Mode each keep their own. Draw's pen, brush and pencil move together and hide one by one.
+- The settings window is wider, and What's New's demos with it.
+
 ## 0.45.0 - 2026-11-17
 
 - Effects, in Settings > Editor > Toolbar, adds a button after Actions in Figma Design's toolbar with 32 effects made right in the file, through Figma's plugin API, so there's no plugin window. What they make shows on the canvas as real layers while you change it, Cancel takes it away and Apply is one undo step. It's off until you switch it on, and nothing of it loads while it's off.
