@@ -24,6 +24,7 @@ use super::present::Tex;
 use super::rt::{self, MaskOpType, Node, Op, PaintType};
 use super::tree::{self, Drawer, Place, Tree};
 use super::vello_blur::{Blurrer, Job};
+use super::vello_blur::Effect as SlotEffect;
 
 type Dx12 = wgpu::hal::api::Dx12;
 
@@ -471,7 +472,7 @@ impl Vello {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                    usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 });
                 self.blurred[index] = Some((texture, std::time::Instant::now()));
@@ -491,7 +492,7 @@ impl Vello {
             let blurrer = self.blurrer.get_or_insert_with(|| Blurrer::new(&self.device));
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let jobs: Vec<Job> = depth.blurs.iter().map(|blur| blur.job.clone()).collect();
-            blurrer.blur(&self.device, &mut encoder, &texture, &jobs, width)?;
+            blurrer.blur(&self.device, &mut encoder, &texture, &jobs, width, &plan.octaves)?;
             self.queue.submit([encoder.finish()]);
             self.sync("blurs");
         }
@@ -585,6 +586,7 @@ impl Vello {
         self.blurred.clear();
         if let Some(blurrer) = &mut self.blurrer {
             blurrer.work = None;
+            blurrer.filtered = None;
         }
         self.spare = vello::Scene::new();
         let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
@@ -1271,6 +1273,15 @@ pub struct Effect {
     patch: usize,
 }
 
+/// What's done to a blur's source besides blurring it, in the scene's space
+enum Filter {
+    Blur,
+    /// Figma's noise over it, `space` the effect's own (see `Encoder::filter`)
+    Noise { space: Affine, frequency: [f32; 2], center: [f32; 2], kind: u32, density: f32, color: [f32; 4], secondary: [f32; 4] },
+    /// Moved by grain's fields as far as `push` in the units of `local`
+    Grain { space: Affine, local: Affine, frequency: [f32; 2], center: [f32; 2], push: f64 },
+}
+
 enum Kind {
     /// A blur of `source`, a scene of its own, which each view draws at the
     /// zoom it's at and blurs
@@ -1289,6 +1300,8 @@ enum Kind {
         turn: Affine,
         /// Where it shows
         area: kurbo::Rect,
+        /// What's done to it besides blurring it
+        filter: Filter,
     },
     /// An image fill, `width` device pixels wide in the scene's space, which
     /// each view has drawn from the mipmap level for the zoom it's at
@@ -1367,6 +1380,8 @@ pub struct Plan {
     depths: Vec<Depth>,
     /// What stands for what Skia drew, by page of the atlas and where
     skia: Vec<(ImageData, usize, i32, i32)>,
+    /// Figma's noise octaves, for noise and grain
+    octaves: Vec<f32>,
 }
 
 /// What Skia drew for one of `Kind::Skia`, placed in a view by `placed`,
@@ -1438,7 +1453,7 @@ fn to_matrix(t: Affine) -> Matrix {
 impl Plan {
     /// Effects in a view `width` wide
     pub fn new(width: i32) -> Self {
-        Self { width: width.clamp(256, 8192), coarser: 0, depths: Vec::new(), skia: Vec::new() }
+        Self { width: width.clamp(256, 8192), coarser: 0, depths: Vec::new(), skia: Vec::new(), octaves: Vec::new() }
     }
 
     /// How tall the tallest of its blurs' textures is
@@ -2008,10 +2023,7 @@ impl<'a> Encoder<'a> {
                     self.draw(child);
                 }
             }
-            // Noise and grain, as Skia draws them, which take what's in
-            // them in a layer of their own, so what blends in them stays in
-            // them
-            Op::Noise | Op::Grain => self.fall_back(op_name(node.op), false, bounds, Box::new(move |drawer| drawer.draw(id))),
+            Op::Noise | Op::Grain => self.filter(node, id, bounds),
             _ => {
                 for child in node.child.into_iter().chain(node.children.iter().copied()) {
                     self.draw(child);
@@ -2202,6 +2214,11 @@ impl<'a> Encoder<'a> {
                 Some(true) => self.fill(fill_of(skia), affine(&self.m), color(cast), None, path),
                 Some(false) => {}
                 None if kind == PaintType::Image && self.image_silhouette(node, paint, skia, path, cast) => {}
+                None if matches!(kind, PaintType::GradientLinear | PaintType::GradientRadial) => {
+                    if let Some((brush, at)) = cast_gradient(paint, kind, node.paint_size.unwrap_or([1.0, 1.0]), cast) {
+                        self.fill(fill_of(skia), affine(&self.m), &brush, at, path);
+                    }
+                }
                 None => {
                     let bounds = skia.bounds().with_outset((1.0, 1.0));
                     let (node, paint, skia) = (node.clone(), paint.clone(), skia.clone());
@@ -2735,6 +2752,85 @@ impl<'a> Encoder<'a> {
         self.blur_of(child, sigma, ext.clamp.map(|clamp| clamp.to_skia()), bounds);
     }
 
+    /// Noise or grain over what's in `node`, as tree.rs draws them, in a
+    /// slot as a blur is (see `Kind::Blur`), so what blends in it stays in
+    /// it
+    fn filter(&mut self, node: &Node, id: u32, bounds: Rect) {
+        let Some(child) = node.child else { return };
+        let m = self.m;
+        if m.has_perspective() {
+            return self.fall_back(op_name(node.op), false, bounds, Box::new(move |drawer| drawer.draw(id)));
+        }
+        let ext = node.ext();
+        let space = tree::Drawer::effect_space(node);
+        let octaves = if node.op == Op::Noise { 36 } else { 18 };
+        // Without them, or where the effect's space is flat, what's in it
+        // as it is, as Skia draws it
+        if self.tree.octaves.len() < octaves || space.invert().is_none() {
+            if self.tree.octaves.len() < octaves {
+                self.counts.approximate += 1;
+            }
+            if self.push(BlendMode::default(), 1.0, bounds) {
+                self.draw(child);
+                self.pop();
+            }
+            return;
+        }
+        let size = ext.noise_size.unwrap_or([1.0, 1.0]);
+        let frequency = [1.0 / size[0].max(1e-3), 1.0 / size[1].max(1e-3)];
+        let center = ext.center_point.unwrap_or([0.0, 0.0]);
+        let in_space = affine(&Matrix::concat(&m, &space));
+        let filter = if node.op == Op::Noise {
+            let color = ext.noise_color.unwrap_or(rt::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.25 });
+            let secondary = ext.secondary_noise_color.unwrap_or(rt::Color { r: 1.0, g: 1.0, b: 1.0, a: 0.25 });
+            let kind = match ext.noise_type {
+                Some(rt::NoiseType::Multitone) => 0,
+                Some(rt::NoiseType::Duotone) => 2,
+                _ => 1,
+            };
+            Filter::Noise {
+                space: in_space,
+                frequency,
+                center,
+                kind,
+                density: ext.density.unwrap_or(0.5).clamp(0.0, 1.0),
+                color: [color.r, color.g, color.b, color.a],
+                secondary: [secondary.r, secondary.g, secondary.b, secondary.a],
+            }
+        } else {
+            let push = 4.0 * node.radius.filter(|radius| radius.is_finite()).unwrap_or(0.0) * space.scale_x().hypot(space.skew_y());
+            Filter::Grain { space: in_space, local: affine(&m), frequency, center, push: push as f64 }
+        };
+        let Some(reach) = self.tree.info(child).bounds else { return };
+        let krect = |rect: Rect| {
+            let rect = m.map_rect(rect).0;
+            kurbo::Rect::new(rect.left as f64, rect.top as f64, rect.right as f64, rect.bottom as f64)
+        };
+        // Drawn for one view, what grain moves into it from just outside
+        // it is drawn too
+        let view = self.view;
+        if let (false, Filter::Grain { push, .. }) = (self.retained, &filter) {
+            let spread = (0.5 * *push as f32 * self.scale() * std::f32::consts::SQRT_2).ceil() as i32 + 2;
+            self.view = view.with_outset((spread, spread));
+        }
+        let scene = std::mem::replace(&mut self.scene, vello::Scene::new());
+        let effects = std::mem::take(&mut self.effects);
+        let soft = self.soft.take();
+        self.draw(child);
+        self.soft = soft;
+        self.view = view;
+        let source = std::mem::replace(&mut self.scene, scene);
+        let nested = std::mem::replace(&mut self.effects, effects);
+        let shown = krect(bounds);
+        let Some((transform, patch)) = self.stand_in(shown) else { return };
+        self.effects.push(Effect {
+            kind: Kind::Blur { source, effects: nested, reach: krect(reach), sigma: (0.0, 0.0), clamp: None, turn: Affine::IDENTITY, area: shown, filter },
+            bounds: shown,
+            transform,
+            patch,
+        });
+    }
+
     /// A progressive blur, more from its start to its end, as Skia draws it
     /// (see tree.rs): blurs of radii evenly apart, each shown about where
     /// the radius is its own, added up
@@ -2824,6 +2920,7 @@ impl<'a> Encoder<'a> {
                 clamp: clamp.map(frect),
                 turn,
                 area: frect(bounds),
+                filter: Filter::Blur,
             },
             bounds: shown,
             transform,
@@ -2872,9 +2969,17 @@ impl<'a> Encoder<'a> {
         let scale = c[0].hypot(c[1]);
         for effect in effects {
             match &mut effect.kind {
-                Kind::Blur { source, effects, reach, sigma, clamp, turn, area } => {
+                Kind::Blur { source, effects, reach, sigma, clamp, turn, area, filter } => {
                     let sigma = (sigma.0 * scale, sigma.1 * scale);
-                    let margin = (3.0 * sigma.0.max(sigma.1)).ceil() + 2.0;
+                    let margin = match filter {
+                        Filter::Blur => (3.0 * sigma.0.max(sigma.1)).ceil() + 2.0,
+                        Filter::Noise { .. } => 1.0,
+                        // As far as grain moves what's drawn, any way
+                        Filter::Grain { local, push, .. } => {
+                            let l = (t * *local).as_coeffs();
+                            (0.5 * *push * l[0].hypot(l[1]).max(l[2].hypot(l[3])) * std::f64::consts::SQRT_2).ceil() + 2.0
+                        }
+                    };
                     // Blurred in its frame as `t` turns it, from which `tf`
                     // only scales and moves
                     let k = scale.max(1e-12);
@@ -2892,7 +2997,7 @@ impl<'a> Encoder<'a> {
                     // would average it down to anyway, as Skia does, by
                     // half as much, for each of its pixels to be of 16
                     // samples still
-                    let shrink = shrink(sigma.0.max(sigma.1)) << plan.coarser;
+                    let shrink = if matches!(filter, Filter::Blur) { shrink(sigma.0.max(sigma.1)) } else { 1 } << plan.coarser;
                     let (width, height) = ((region.x1.ceil() as i32 - left + shrink - 1) / shrink, (region.y1.ceil() as i32 - top + shrink - 1) / shrink);
                     let f = 1.0 / shrink as f64;
                     let sigma = (sigma.0 * f, sigma.1 * f);
@@ -2926,7 +3031,27 @@ impl<'a> Encoder<'a> {
                         let clamp = in_slot.transform_rect_bbox(clamp);
                         [(clamp.x0 - x as f64) as f32, (clamp.y0 - y as f64) as f32, (clamp.x1 - x as f64) as f32, (clamp.y1 - y as f64) as f32]
                     });
-                    let job = Job { slot: [x, y, width, height], sigma: (sigma.0 as f32, sigma.1 as f32), clamp };
+                    // From a pixel of the slot, from its corner, to the
+                    // effect's own space
+                    let from_slot = |space: &Affine| {
+                        let c = (Affine::translate((-(x as f64), -(y as f64))) * to_slot * *space).inverse().as_coeffs();
+                        c.map(|c| c as f32)
+                    };
+                    let done = match filter {
+                        Filter::Blur => SlotEffect::Blur,
+                        Filter::Noise { space, frequency, center, kind, density, color, secondary } => {
+                            SlotEffect::Noise { to_effect: from_slot(space), frequency: *frequency, center: *center, kind: *kind, density: *density, color: *color, secondary: *secondary }
+                        }
+                        Filter::Grain { space, local, frequency, center, push } => {
+                            let l = (to_slot * *local).as_coeffs();
+                            let push = [l[0] * *push, l[1] * *push, l[2] * *push, l[3] * *push].map(|v| v as f32);
+                            SlotEffect::Grain { to_effect: from_slot(space), frequency: *frequency, center: *center, push }
+                        }
+                    };
+                    if !matches!(filter, Filter::Blur) && plan.octaves.is_empty() {
+                        plan.octaves = self.tree.octaves.clone();
+                    }
+                    let job = Job { slot: [x, y, width, height], sigma: (sigma.0 as f32, sigma.1 as f32), clamp, effect: done };
                     let back = *turn * tf.inverse() * Affine::translate((left as f64, top as f64)) * Affine::scale(shrink as f64);
                     Plan::patch(encoding, effect, image.clone(), back);
                     // Drawn bigger, it's sampled smoothly, as Skia scales a
@@ -3072,17 +3197,24 @@ enum Picture {
 fn gradient(paint: &rt::Paint, kind: PaintType, size: [f32; 2]) -> Option<(peniko::Brush, Option<Affine>)> {
     let (w, h) = (size[0].max(1e-3), size[1].max(1e-3));
     let t = rt::to_matrix(&paint.transform.unwrap_or(rt::IDENTITY));
-    let mut local = Matrix::scale((w, h));
-    local.pre_concat(&t.invert()?);
-    let ramp = paint.gradient.as_ref()?;
-    if ramp.stops.len() < 2 || ramp.stops.windows(2).any(|pair| pair[1].position < pair[0].position) {
-        return None;
+    // Where Skia has no shader for it, it draws nothing
+    let nothing = Some((peniko::Brush::Solid(AlphaColor::<Srgb>::TRANSPARENT), None));
+    let (Some(inverse), Some(ramp)) = (t.invert(), paint.gradient.as_ref()) else { return nothing };
+    if ramp.stops.is_empty() {
+        return nothing;
     }
+    let mut local = Matrix::scale((w, h));
+    local.pre_concat(&inverse);
     let opacity = paint.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+    // Each stop no earlier than the one before, as Skia takes them
+    let mut last = 0.0f32;
     let stops: Vec<ColorStop> = ramp
         .stops
         .iter()
-        .map(|stop| ColorStop { offset: stop.position.clamp(0.0, 1.0), color: DynamicColor::from_alpha_color(color(draw::color(tree::rgba(stop.color), opacity))) })
+        .map(|stop| {
+            last = stop.position.clamp(0.0, 1.0).max(last);
+            ColorStop { offset: last, color: DynamicColor::from_alpha_color(color(draw::color(tree::rgba(stop.color), opacity))) }
+        })
         .collect();
     let extend = if ramp.kind == Some(rt::GradientType::Wrap) { Extend::Repeat } else { Extend::Pad };
     let mut gradient = match kind {
@@ -3094,6 +3226,32 @@ fn gradient(paint: &rt::Paint, kind: PaintType, size: [f32; 2]) -> Option<(penik
     gradient.interpolation_alpha_space = peniko::InterpolationAlphaSpace::Unpremultiplied;
     (gradient.interpolation_cs, gradient.hue_direction) = interpolation(paint);
     Some((peniko::Brush::Gradient(gradient), Some(affine(&local))))
+}
+
+/// A gradient fill's silhouette in `cast`, as Skia casts it: solid where
+/// any of it shows, clear where none does, so its stops step from one to
+/// the other where the gradient's alpha crosses into showing
+fn cast_gradient(paint: &rt::Paint, kind: PaintType, size: [f32; 2], cast: Color4f) -> Option<(peniko::Brush, Option<Affine>)> {
+    let (peniko::Brush::Gradient(mut ramp), at) = gradient(paint, kind, size)? else { return None };
+    // A pixel's seen at half a step of 8 bits
+    let seen = 0.5 / 255.0;
+    let alpha: Vec<(f32, f32)> = ramp.stops.iter().map(|stop| (stop.offset, stop.color.to_alpha_color::<Srgb>().components[3])).collect();
+    let shade = |shows: bool| DynamicColor::from_alpha_color(color(Color4f::new(cast.r, cast.g, cast.b, if shows { cast.a } else { 0.0 })));
+    let mut stops: Vec<ColorStop> = Vec::with_capacity(alpha.len() * 2);
+    for (index, &(offset, a)) in alpha.iter().enumerate() {
+        if let Some(&(before, was)) = index.checked_sub(1).and_then(|i| alpha.get(i)) {
+            if (was >= seen) != (a >= seen) {
+                // Alpha's mixed as it is in every color space
+                let at = before + (offset - before) * ((seen - was) / (a - was)).clamp(0.0, 1.0);
+                stops.push(ColorStop { offset: at, color: shade(was >= seen) });
+                stops.push(ColorStop { offset: at, color: shade(a >= seen) });
+            }
+        }
+        stops.push(ColorStop { offset, color: shade(a >= seen) });
+    }
+    ramp.stops = stops.as_slice().into();
+    ramp.interpolation_cs = peniko::color::ColorSpaceTag::Srgb;
+    Some((peniko::Brush::Gradient(ramp), at))
 }
 
 /// The color space a gradient mixes its colors in, as tree.rs's
