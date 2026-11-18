@@ -10,6 +10,7 @@ mod background;
 mod copy_code;
 mod discord_ipc;
 mod downloads;
+mod effects;
 mod emoji_picker;
 #[cfg(windows)]
 mod figma_scheme;
@@ -308,6 +309,7 @@ fn main() {
             prompt::get_prompt,
             prompt::prompt_ready,
             prompt::prompt_answer,
+            prompt::prompt_open_setting,
             whats_new::get_releases,
         ])
         .setup(|app| {
@@ -337,6 +339,7 @@ fn main() {
             ai_actions::init(&settings);
             copy_code::init(&settings);
             lasso::init(&settings);
+            effects::init(&settings);
             game_mode::init(&settings);
             notifications::init(&settings);
             mcp_bridge::init(&settings);

@@ -125,6 +125,7 @@
   .release-notes li { padding-left: 2px; }
   .release-notes li + li { margin-top: 6px; }
   .release-notes li::marker { color: var(--text-secondary); }
+  .release-settings { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
   code {
     padding: 1px 4px;
     border-radius: 3px;
@@ -200,10 +201,11 @@
       const single = prompt.releases.length === 1;
       $("releases").replaceChildren(...prompt.releases.flatMap((release) => {
         const list = window.ligmaReleaseNotes(release.notes);
-        if (single) return [list];
+        const links = window.ligmaReleaseSettings(release.version, (setting) => invoke("prompt_open_setting", { setting }));
+        if (single) return [list, links].filter(Boolean);
         const heading = Object.assign(document.createElement("h2"), { textContent: `Ligma ${release.version}` });
         if (release.date) heading.append(Object.assign(document.createElement("span"), { className: "date", textContent: window.ligmaReleaseDate(release.date) }));
-        return [heading, list];
+        return [heading, list, links].filter(Boolean);
       }));
       const demos = window.ligmaDemos(prompt.releases.flatMap((release) => window.ligmaReleaseDemos(release.version)));
       if (demos) $("releases").prepend(demos);
