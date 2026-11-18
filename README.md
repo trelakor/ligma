@@ -77,7 +77,7 @@ Download the latest build from [Releases](../../releases/latest). Builds aren't 
 xattr -dr com.apple.quarantine /Applications/Ligma.app
 ```
 
-**Windows:** run the `-setup.exe` installer. It installs in one step and opens Ligma. If SmartScreen warns, choose More info > Run anyway.
+**Windows:** run the `-setup.exe` installer. The first time, it walks you through installing and picking a theme, then opens Ligma. Reinstalls go straight through. If SmartScreen warns, choose More info > Run anyway.
 
 To report a problem, use **Report…** in Settings (or **Help > Report a Problem…** on macOS). It opens a GitHub issue filled in with your version, system and log.
 
