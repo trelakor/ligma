@@ -68,15 +68,17 @@ static RECORDS: Mutex<[Option<Record>; 2]> = Mutex::new([None, None]);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// A frame of Figma's Ligma's renderer presented, and how long Figma and
-/// the renderer took to make it, in ms
-pub fn presented(figma: f32, ligma: f32) {
+/// the renderer took to make it, in ms. `waiting` where it was already
+/// waiting when the one before was presented, so the time between is a
+/// stutter however long, not the view at rest
+pub fn presented(figma: f32, ligma: f32, waiting: bool) {
     if !super::show_stats() {
         return;
     }
     let mut records = RECORDS.lock().unwrap();
     let record = records[0].get_or_insert_with(Record::default);
     let now = Instant::now();
-    let since = record.last.replace(now).map(|last| (now - last).as_secs_f32() * 1000.0).filter(|ms| *ms < IDLE_MS);
+    let since = record.last.replace(now).map(|last| (now - last).as_secs_f32() * 1000.0).filter(|ms| waiting || *ms < IDLE_MS);
     record.frame((figma, ligma, since));
 }
 

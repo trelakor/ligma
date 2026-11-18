@@ -325,7 +325,7 @@ impl Hub {
         if frames.back().is_some_and(|last| last.seq >= seq) {
             frames.clear();
         }
-        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, made });
+        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, made, came: Instant::now() });
         while frames.len() > 256 {
             frames.pop_front();
         }
@@ -339,21 +339,32 @@ impl Hub {
     /// what Figma draws over it go with the scene as it is in the snapshot.
     /// None while the next is an edit not drawn yet, to show nothing new
     /// till it is
-    fn pick(&self, seq: u64) -> Option<(View, Overlay, u64, Option<Made>)> {
+    /// The latest frame to show with what's drawn up to frame `seq`, and
+    /// the oldest frame after `shown` up to it, which it's shown in place
+    /// of. Else how long till one changing the scene is shown without it
+    fn pick(&self, seq: u64, shown: u64) -> Result<Picked, Option<Duration>> {
         let mut frames = self.frames.lock().unwrap();
         if frames.is_empty() {
-            return self.view.lock().unwrap().clone().map(|view| (view, None, seq, None));
+            return self.view.lock().unwrap().clone().map(|view| Picked { view, overlay: None, seq, oldest: None, wait: None }).ok_or(None);
         }
         let mut take = None;
+        let mut wait = None;
         for (i, frame) in frames.iter().enumerate() {
-            if frame.edits && frame.seq > seq {
+            // One that changes the scene waits for it to be drawn, so what
+            // moves with the view moves with it, but not for long, as the
+            // view standing still reads as a stutter
+            let waited = frame.came.elapsed();
+            if frame.edits && frame.seq > seq && waited < HOLD_MOST {
+                wait = Some(HOLD_MOST - waited);
                 break;
             }
             take = Some(i);
         }
-        frames.drain(..take?);
-        let frame = frames.front()?;
-        Some((frame.view.clone(), frame.overlay.clone(), frame.seq, frame.made))
+        let take = take.ok_or(wait)?;
+        let oldest = frames.iter().take(take + 1).filter(|frame| frame.seq > shown).find_map(|frame| frame.made);
+        frames.drain(..take);
+        let frame = frames.front().ok_or(wait)?;
+        Ok(Picked { view: frame.view.clone(), overlay: frame.overlay.clone(), seq: frame.seq, oldest, wait })
     }
 
     /// Waits until poked after `seen`, or `timeout`, and returns the count
@@ -370,6 +381,17 @@ struct FrameView {
     overlay: Overlay,
     edits: bool,
     made: Option<Made>,
+    came: Instant,
+}
+
+struct Picked {
+    view: View,
+    overlay: Overlay,
+    seq: u64,
+    oldest: Option<Made>,
+    /// How long till a frame after it that changes the scene is shown
+    /// without waiting for it
+    wait: Option<Duration>,
 }
 
 /// How long Figma took to make a frame: when it handed it over, in ms since
@@ -656,10 +678,12 @@ pub struct Screen {
     reading: std::collections::VecDeque<(u64, Vec<Arc<Tex>>)>,
     /// The textures the last frame showed
     shown: std::collections::HashSet<usize>,
-    /// How long the frame of Figma's to show took to make, and the last
-    /// frame of Figma's shown, for Show stats
-    made: Option<(u64, Made)>,
+    /// For Show stats: the oldest frame of Figma's not shown yet, as those
+    /// passed over while the render thread was behind count too, the last
+    /// one shown, and when
+    owed: Option<Made>,
     timed: u64,
+    timed_at: f64,
 }
 
 impl Screen {
@@ -731,8 +755,9 @@ impl Screen {
             fence,
             frames: 0,
             reading: std::collections::VecDeque::new(),
-            made: None,
+            owed: None,
             timed: 0,
+            timed_at: 0.0,
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -839,14 +864,19 @@ impl Screen {
             if let Some(latest) = latest.filter(|latest| current.as_ref().is_none_or(|current| (current.serial, current.seq) != (latest.serial, latest.seq)) && latest.drawn()) {
                 current = Some(latest);
             }
-            let picked = current.as_ref().and_then(|snapshot| hub.pick(snapshot.seq).map(|picked| (snapshot.clone(), picked)));
-            let Some((snapshot, (view, overlay, seq, made))) = picked else {
-                // The render thread pokes once there's more, and the GPU
-                // has drawn it
-                seen = hub.wait(seen, Duration::from_millis(100));
-                continue;
+            let picked = current.as_ref().ok_or(None).and_then(|snapshot| hub.pick(snapshot.seq, self.timed).map(|picked| (snapshot.clone(), picked)));
+            let (snapshot, Picked { view, overlay, seq, oldest, wait }) = match picked {
+                Ok(picked) => picked,
+                Err(wait) => {
+                    // The render thread pokes once there's more, and the GPU
+                    // has drawn it
+                    seen = hub.wait(seen, wait.unwrap_or(Duration::from_millis(100)).clamp(Duration::from_millis(1), Duration::from_millis(100)));
+                    continue;
+                }
             };
-            self.made = made.map(|made| (seq, made));
+            if let Some(oldest) = oldest.filter(|oldest| self.owed.is_none_or(|owed| oldest.at < owed.at)) {
+                self.owed = Some(oldest);
+            }
             let size = match &self.layer {
                 Some(_) => view.canvas(),
                 None => *hub.size.lock().unwrap(),
@@ -865,8 +895,13 @@ impl Screen {
             }
             let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
             if shown.as_ref() == Some(&now) {
+                // Nothing to show that isn't on screen already, so it's
+                // not waiting for anything
+                if self.owed.take().is_some() {
+                    self.timed = seq;
+                }
                 drop(snapshot);
-                seen = hub.wait(seen, Duration::from_millis(100));
+                seen = hub.wait(seen, wait.unwrap_or(Duration::from_millis(100)).clamp(Duration::from_millis(1), Duration::from_millis(100)));
                 continue;
             }
             // All of the view or nothing: what's shown stays till the
@@ -1093,10 +1128,18 @@ impl Screen {
             )
         });
         // Once a frame of Figma's, not again as what's drawn under it gets
-        // sharper
-        if let Some((seq, made)) = self.made.filter(|(seq, _)| *seq != self.timed) {
+        // sharper: from when the oldest frame not shown till now was sent.
+        // While it was waiting at the last one shown, the time since counts
+        // to the frame rate however long, as that's a stutter, not the view
+        // at rest
+        if let Some(owed) = self.owed.take().filter(|_| seq != self.timed) {
+            let late = (presented - owed.at).max(0.0);
+            if late > 50.0 {
+                super::render::trace(|| format!("shown late: seq={seq} {late:.1}ms after Figma sent the oldest frame waiting"));
+            }
+            super::hud::presented(owed.figma, late as f32, owed.at < self.timed_at);
             self.timed = seq;
-            super::hud::presented(made.figma, (presented - made.at).max(0.0) as f32);
+            self.timed_at = presented;
         }
         let mut stats = stats().lock().unwrap();
         stats.holes(false);
