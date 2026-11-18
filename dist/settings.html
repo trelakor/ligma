@@ -10,7 +10,9 @@
      on any page (`runSearch`). Appearance picks the color scheme and
      the themes (dist/themes.js, src-tauri/src/appearance.rs). App Icon
      picks the app's icon (dist/app-icons.js, src-tauri/src/app_icon.rs). Plugins imports development plugins
-     (src-tauri/src/plugins.rs) and switches them on and off. About checks for updates and reports a
+     (src-tauri/src/plugins.rs) and switches them on and off. What's New lists every
+     release's notes (dist/changelog.js, src-tauri/src/whats_new.rs), under demos of its
+     features (dist/demos.js). About checks for updates and reports a
      problem (src-tauri/src/report.rs). The window has no native title bar:
      the header is its own, and its colors follow the active Figma tab's
      theme (`applyTheme`, from `get_theme` and tabs.rs) -->
@@ -194,6 +196,32 @@
   }
   h2.disabled { color: var(--text-tertiary); }
   .section-hint { padding: 0 16px 4px; }
+
+  /* What's New: every release, newest first, each a section */
+  /* Ruled off from the switch above, like sections that are siblings */
+  #releases > .release:not(.miss):first-child { border-top: 1px solid var(--border); }
+  .release h2 .date { margin-left: 6px; color: var(--text-secondary); font-weight: 450; }
+  .release h2 .tag { margin-left: 8px; }
+  .release-settings { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 0 30px; }
+  /* Its features' demos (dist/demos.js), above its notes */
+  .release .demos { max-width: 440px; margin: 4px 16px 10px; }
+  .release-notes {
+    max-width: 560px;
+    padding: 2px 16px 0 30px;
+    text-wrap: pretty;
+    -webkit-user-select: text;
+    user-select: text;
+    cursor: text;
+  }
+  .release-notes li { padding-left: 2px; }
+  .release-notes li + li { margin-top: 6px; }
+  .release-notes li::marker { color: var(--text-tertiary); }
+  .release-notes code {
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    font: 10px/1 "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
 
   .row {
     display: flex;
@@ -652,6 +680,10 @@
       Discord<span class="count" aria-hidden="true"></span>
     </button>
     <div class="divider bottom" aria-hidden="true"></div>
+    <button role="tab" id="tab-whats-new" aria-controls="whats-new">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 2.5h6l3 3v8h-9z"/><path d="M9.5 2.5v3h3M5.5 8.5h5M5.5 11h3"/></svg>
+      What's New<span class="count" aria-hidden="true"></span>
+    </button>
     <button role="tab" id="tab-about" aria-controls="about">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 7.5v3"/><circle cx="8" cy="5.5" r=".7" fill="currentColor" stroke="none"/></svg>
       About<span class="count" aria-hidden="true"></span>
@@ -830,6 +862,12 @@
           <div class="hint">Under Pencil: draw around an area to fill it, like Procreate</div>
         </span>
         <input type="checkbox" class="switch" id="lasso-fill">
+      </label>
+      <label class="row" data-keywords="effects repeater disintegrate shatter bitcrush pixelate glitch dither halftone liquify warp extrude brush shape fill blend kaleidoscope">
+        <span class="label">Effects<span class="tag">Editable files</span>
+          <div class="hint">A button after Actions with 32 effects made right in the file, as layers you can change later</div>
+        </span>
+        <input type="checkbox" class="switch" id="effects-library">
       </label>
     </section>
     <section>
@@ -1113,6 +1151,19 @@
     </section>
   </div>
 
+  <div role="tabpanel" id="whats-new" aria-labelledby="tab-whats-new" hidden>
+    <div class="page-title">What's New</div>
+    <section>
+      <label class="row" data-keywords="changelog release notes updates history version popup">
+        <span class="label">Show after updates
+          <div class="hint">What changed since the version you last used, the first time Ligma opens after an update</div>
+        </span>
+        <input type="checkbox" class="switch" id="whats-new-after-updates">
+      </label>
+    </section>
+    <div id="releases"></div>
+  </div>
+
   <div role="tabpanel" id="about" aria-labelledby="tab-about" hidden>
     <div class="page-title">About</div>
     <section>
@@ -1142,6 +1193,8 @@
 </main>
 </div>
 <script src="themes.js"></script>
+<script src="changelog.js"></script>
+<script src="demos.js"></script>
 <script src="app-icons.js"></script>
 <script>
   const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
@@ -1253,7 +1306,7 @@
     });
   }
   for (const el of document.querySelectorAll(".picker")) picker(el);
-  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "classic-home", "new-home", "new-home-start", "new-home-tab-search", "ligma-mcp"];
+  const fields = ["restore", "previews", "split-view", "uniform-split", "sleep", "sleep-after", "limit", "max-hidden", "snapshots", "game-mode", "figma-notifications", "whats-new-after-updates", "discord", "discord-file", "discord-hide-files", "discord-tool", "discord-invites", "discord-join-requests", "rail-plugins", "rail-widgets", "actions-plugins-tab", "layer-previews", "frame-colors", "frame-palette", "frame-tint", "adjustments-clipboard", "adjustments-bar", "hide-free-ai-actions", "local-remove-background", "use-background-model", "local-vectorize", "local-select-object", "local-heal", "local-upscale", "image-bar-icons", "copy-as-code", "lasso-fill", "effects-library", "classic-home", "new-home", "new-home-start", "new-home-tab-search", "ligma-mcp"];
   // Where you are in the file, per product: switch and setting
   const whereFields = {
     "discord-page": "discordShowPage",
@@ -1515,6 +1568,13 @@
     if (!tab) return;
     if (searching) clearSearch();
     showPage(tab);
+    // A switch rather than a section: its row, lit
+    if (section.matches("input")) {
+      const row = section.closest(".row") ?? section;
+      reveal(row);
+      section.focus({ preventScroll: true });
+      return;
+    }
     // The lists above it fill in as they load, so it's kept in view until
     // they have, or until the page is scrolled
     const keep = () => section.scrollIntoView({ block: "start" });
@@ -1765,6 +1825,7 @@
     $("snapshots").checked = settings.reloadSnapshots;
     $("game-mode").checked = settings.gameMode;
     $("figma-notifications").checked = settings.figmaNotifications;
+    $("whats-new-after-updates").checked = settings.whatsNewAfterUpdates;
     $("discord").checked = settings.discordRichPresence;
     $("discord-file").checked = settings.discordShowFile;
     $("discord-hide-files").checked = settings.discordHideFilesByDefault;
@@ -1796,6 +1857,7 @@
     $("image-bar-icons").checked = settings.imageBarIcons;
     $("copy-as-code").checked = settings.copyAsCode;
     $("lasso-fill").checked = settings.lassoFill;
+    $("effects-library").checked = settings.effectsLibrary;
     $("classic-home").checked = settings.classicHome;
     $("new-home").checked = settings.ligmaHome;
     $("new-home-start").value = settings.ligmaHomeStart;
@@ -1858,6 +1920,7 @@
       reloadSnapshots: $("snapshots").checked,
       gameMode: $("game-mode").checked,
       figmaNotifications: $("figma-notifications").checked,
+      whatsNewAfterUpdates: $("whats-new-after-updates").checked,
       discordRichPresence: $("discord").checked,
       discordShowFile: $("discord-file").checked,
       discordHideFilesByDefault: $("discord-hide-files").checked,
@@ -1889,6 +1952,7 @@
       imageBarIcons: $("image-bar-icons").checked,
       copyAsCode: $("copy-as-code").checked,
       lassoFill: $("lasso-fill").checked,
+      effectsLibrary: $("effects-library").checked,
       classicHome: $("classic-home").checked,
       ligmaHome: $("new-home").checked,
       ligmaHomeStart: $("new-home-start").value,
@@ -2015,6 +2079,23 @@
     invoke("get_model", { name }).then((state) => state && window.applyModel(name, state));
   }
   $("report").addEventListener("click", () => invoke("report_problem"));
+  // What's New, newest first, with the version running marked
+  Promise.all([invoke("get_releases"), invoke("get_version")]).then(([releases, version]) => {
+    $("releases").replaceChildren(...(releases ?? []).map((release) => {
+      const heading = Object.assign(document.createElement("h2"), { textContent: `Ligma ${release.version}` });
+      if (release.date) heading.append(node("span", { className: "date", textContent: window.ligmaReleaseDate(release.date) }));
+      if (release.version === version) heading.append(node("span", { className: "tag", textContent: "Installed" }));
+      const section = node("section", { className: "release" });
+      section.append(heading);
+      const demos = window.ligmaDemos(window.ligmaReleaseDemos(release.version));
+      if (demos) section.append(demos);
+      section.append(window.ligmaReleaseNotes(release.notes));
+      const links = window.ligmaReleaseSettings(release.version, (id) => window.showSection(id));
+      if (links) section.append(links);
+      return section;
+    }));
+  });
+
   invoke("get_version").then((version) => {
     if (version) $("version").textContent = `Ligma ${version}`;
   });

@@ -49,6 +49,9 @@ pub struct Settings {
     /// Show Figma's notifications, the ones in its bell, as the system's
     /// own (see notifications.rs)
     pub figma_notifications: bool,
+    /// After an update, show what changed since the version that ran last
+    /// (see whats_new.rs)
+    pub whats_new_after_updates: bool,
     /// Show the open file, where in it you are and the selected tool on
     /// Discord
     pub discord_rich_presence: bool,
@@ -154,6 +157,8 @@ pub struct Settings {
     pub copy_as_code: bool,
     /// Lasso fill in the Creation tools menu, under Pencil (see lasso.rs)
     pub lasso_fill: bool,
+    /// The Effects button in the toolbar, after Actions (see effects.rs)
+    pub effects_library: bool,
     /// Keep Figma's long-standing home page layout on accounts Figma is
     /// trying a newer one on
     pub classic_home: bool,
@@ -189,6 +194,7 @@ impl Default for Settings {
             reload_snapshots: false,
             game_mode: true,
             figma_notifications: true,
+            whats_new_after_updates: true,
             discord_rich_presence: true,
             discord_show_file: true,
             discord_hide_files_by_default: false,
@@ -228,6 +234,7 @@ impl Default for Settings {
             image_bar_icons: false,
             copy_as_code: true,
             lasso_fill: true,
+            effects_library: false,
             classic_home: false,
             ligma_home: true,
             ligma_home_start: "home".into(),
@@ -495,6 +502,7 @@ pub fn change(app: &AppHandle, settings: Settings) -> Result<(), String> {
     crate::ai_actions::apply_settings(app, &settings);
     crate::copy_code::apply_settings(app, &settings);
     crate::lasso::apply_settings(app, &settings);
+    crate::effects::apply_settings(app, &settings);
     crate::mcp_bridge::apply_settings(app, &settings);
     let plugins_changed = {
         let current = app.state::<Current>();

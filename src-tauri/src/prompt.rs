@@ -1,4 +1,4 @@
-//! Prompts (join requests, updates, errors) drawn by Ligma in Figma's style
+//! Prompts (join requests, updates, errors, what's new) drawn by Ligma in Figma's style
 //! (`dist/prompt.html`) rather than as system message boxes. Each is a small
 //! frameless window centered over the main window, like the tab menu: the
 //! page fetches its text (`get_prompt`), reports its size (`prompt_ready`)
@@ -22,6 +22,10 @@ struct Content {
     message: String,
     /// Left to right; the last is the default
     buttons: Vec<String>,
+    /// Release notes, for what's new (whats_new.rs), drawn as lists in
+    /// place of the message
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    releases: Vec<crate::whats_new::Release>,
 }
 
 struct Open {
@@ -44,16 +48,39 @@ pub fn show(
     buttons: &[&str],
     done: impl FnOnce(Option<usize>) + Send + 'static,
 ) {
-    let label = format!("{LABEL_PREFIX}{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let content = Content {
         title: title.to_owned(),
         message: message.into(),
         buttons: buttons.iter().map(|&button| button.to_owned()).collect(),
+        releases: Vec::new(),
     };
+    open(app, content, Box::new(done));
+}
+
+/// Shows `releases`' notes under `title`, newest first, in a wider prompt
+/// that scrolls, with `buttons` as in `show`
+pub fn show_releases(
+    app: &AppHandle,
+    title: &str,
+    releases: Vec<crate::whats_new::Release>,
+    buttons: &[&str],
+    done: impl FnOnce(Option<usize>) + Send + 'static,
+) {
+    let content = Content {
+        title: title.to_owned(),
+        message: String::new(),
+        buttons: buttons.iter().map(|&button| button.to_owned()).collect(),
+        releases,
+    };
+    open(app, content, Box::new(done));
+}
+
+fn open(app: &AppHandle, content: Content, done: Done) {
+    let label = format!("{LABEL_PREFIX}{}", NEXT.fetch_add(1, Ordering::Relaxed));
     OPEN.lock()
         .unwrap()
         .get_or_insert_with(HashMap::new)
-        .insert(label.clone(), Open { content, done: Some(Box::new(done)), placed: false });
+        .insert(label.clone(), Open { content, done: Some(done), placed: false });
     // Off the caller's thread: making a window on the main thread, from a
     // webview's callback, would wait on itself
     let app = app.clone();
@@ -241,6 +268,19 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
         let _ = window.show();
     }
     let _ = window.set_focus();
+}
+
+/// Opens Settings at switch `setting` (an id in settings.html), from a
+/// release's button in what's new
+#[tauri::command]
+pub async fn prompt_open_setting(app: AppHandle, webview: Webview, setting: String) {
+    let id = !setting.is_empty() && setting.len() <= 64 && setting.bytes().all(|b| b.is_ascii_lowercase() || b == b'-');
+    if !is_prompt(&webview) || !id {
+        return;
+    }
+    if let Err(error) = crate::settings::open_window_at(&app, Some(&setting)) {
+        log::error!("Couldn't open Settings: {error}");
+    }
 }
 
 /// The user chose button `index`, or dismissed the prompt (None)
