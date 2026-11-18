@@ -271,6 +271,19 @@ pub async fn prompt_ready(app: AppHandle, webview: Webview, width: f64, height: 
 }
 
 /// The user chose button `index`, or dismissed the prompt (None)
+/// Opens Settings at switch `setting` (an id in settings.html), from a
+/// release's button in what's new
+#[tauri::command]
+pub async fn prompt_open_setting(app: AppHandle, webview: Webview, setting: String) {
+    let id = !setting.is_empty() && setting.len() <= 64 && setting.bytes().all(|b| b.is_ascii_lowercase() || b == b'-');
+    if !is_prompt(&webview) || !id {
+        return;
+    }
+    if let Err(error) = crate::settings::open_window_at(&app, Some(&setting)) {
+        log::error!("Couldn't open Settings: {error}");
+    }
+}
+
 #[tauri::command]
 pub async fn prompt_answer(app: AppHandle, webview: Webview, index: Option<usize>) {
     if is_prompt(&webview) {

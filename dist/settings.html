@@ -202,6 +202,7 @@
   #releases > .release:not(.miss):first-child { border-top: 1px solid var(--border); }
   .release h2 .date { margin-left: 6px; color: var(--text-secondary); font-weight: 450; }
   .release h2 .tag { margin-left: 8px; }
+  .release-settings { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 0 30px; }
   /* Its features' demos (dist/demos.js), above its notes */
   .release .demos { max-width: 440px; margin: 4px 16px 10px; }
   .release-notes {
@@ -1561,6 +1562,13 @@
     if (!tab) return;
     if (searching) clearSearch();
     showPage(tab);
+    // A switch rather than a section: its row, lit
+    if (section.matches("input")) {
+      const row = section.closest(".row") ?? section;
+      reveal(row);
+      section.focus({ preventScroll: true });
+      return;
+    }
     // The lists above it fill in as they load, so it's kept in view until
     // they have, or until the page is scrolled
     const keep = () => section.scrollIntoView({ block: "start" });
@@ -2073,6 +2081,8 @@
       const demos = window.ligmaDemos(window.ligmaReleaseDemos(release.version));
       if (demos) section.append(demos);
       section.append(window.ligmaReleaseNotes(release.notes));
+      const links = window.ligmaReleaseSettings(release.version, (id) => window.showSection(id));
+      if (links) section.append(links);
       return section;
     }));
   });

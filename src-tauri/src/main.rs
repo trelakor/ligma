@@ -308,6 +308,7 @@ fn main() {
             prompt::get_prompt,
             prompt::prompt_ready,
             prompt::prompt_answer,
+            prompt::prompt_open_setting,
             whats_new::get_releases,
         ])
         .setup(|app| {
