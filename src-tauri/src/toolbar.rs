@@ -701,13 +701,17 @@ const PAGE_JS: &str = r##"(() => {
           .concat(child.stateNode instanceof Element ? [child.stateNode] : [])
           .filter((node) => node.parentElement === parent)
           .at(-1);
-        if (child.key && last) drawn.set(child.key, last);
+        // Slots are keyed by their ids once moved, and told by their props
+        // while in Figma's order
+        const id = child.key ?? slotOf({ type: child.elementType, props: child.memoizedProps })?.id;
+        if (id && last && !drawn.has(id)) drawn.set(id, last);
       }
       for (let i = order.indexOf(EFFECTS) - 1; i >= 0; i--) {
         const slot = slots.get(order[i]);
         if (!slot || slot.tools.every((tool) => hidden.includes(tool))) continue;
         const after = drawn.get(order[i]);
-        if (after) return { parent, after };
+        // A slot that can't be found: after Actions, as without a layout
+        return after ? { parent, after } : undefined;
       }
       return { parent, after: null };
     }
