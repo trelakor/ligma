@@ -222,6 +222,8 @@ pub(super) struct Info {
     pub(super) bounds: Option<Rect>,
     /// Nodes under it, itself included, counting shared ones each time
     count: u32,
+    /// Points of the paths under it, counted the same way
+    points: u32,
     /// Draws with a blend mode that reaches what's drawn before it
     pub(super) blends: bool,
     /// Has a custom effect, drawn as Figma's canvas draws it at its zoom
@@ -271,6 +273,10 @@ pub struct CustomEffect {
 /// Subtrees with more nodes than this are split into units of their own
 /// children where that draws the same, so a change redraws less
 const SPLIT: u32 = 1500;
+
+/// Subtrees with paths of more points than this are split too, as
+/// encoding them for Vello again takes milliseconds each time
+const SPLIT_POINTS: u32 = 50_000;
 
 /// Feeds what's written to a hasher
 struct HashWrite<'a>(&'a mut std::collections::hash_map::DefaultHasher);
@@ -492,7 +498,7 @@ impl Tree {
         if let Some(info) = self.info.read().unwrap().get(&id) {
             return *info;
         }
-        let none = Info { bounds: None, count: 1, blends: false, custom: false, approximate: None };
+        let none = Info { bounds: None, count: 1, points: 0, blends: false, custom: false, approximate: None };
         let Some(node) = self.forest.get(id).cloned() else {
             return none;
         };
@@ -516,6 +522,8 @@ impl Tree {
         let refs: Vec<u32> = node.refs().collect();
         let below: Vec<Info> = refs.iter().map(|&child| self.info_at(child, depth + 1)).collect();
         info.count = 1 + below.iter().map(|info| info.count).sum::<u32>();
+        let own = node.geometry.iter().chain(&node.fill_geometries).chain(&node.stroke_geometries).filter_map(|g| g.path.as_ref()).map(|path| path.points.len() as u32).sum::<u32>();
+        info.points = below.iter().fold(own, |points, info| points.saturating_add(info.points));
         info.custom = below.iter().any(|info| info.custom);
         info.approximate = below.iter().find_map(|info| info.approximate);
         let children_bounds = || below.iter().map(|info| info.bounds).fold(None, union);
@@ -651,7 +659,11 @@ impl Tree {
             return;
         };
         let info = self.info(id);
-        let big = info.count > SPLIT && depth < 32;
+        let big = (info.count > SPLIT || info.points > SPLIT_POINTS) && depth < 32;
+        // Split under a mask, what's in it is clipped piece by piece, which
+        // shows where they meet along its edge, so only where there's no
+        // other way to keep a change from redrawing much
+        let many = info.count > SPLIT && depth < 32;
         match node.op {
             Op::OcclusionScope | Op::Metadata | Op::CompositeTileGrid if big => {
                 if let Some(child) = node.child {
@@ -669,7 +681,7 @@ impl Tree {
                     return self.expand(child, Matrix::concat(&at, &rt::to_matrix(&t)), clips, depth + 1, out);
                 }
             }
-            Op::Mask if big && matches!(node.mask_op, None | Some(MaskOpType::Normal)) => {
+            Op::Mask if many && matches!(node.mask_op, None | Some(MaskOpType::Normal)) => {
                 if let (Some(color), Some((fill, to))) = (node.color_node, node.alpha_node.and_then(|alpha| self.clip_of(alpha))) {
                     clips.push((fill, Matrix::concat(&at, &to)));
                     self.expand(color, at, clips, depth + 1, out);

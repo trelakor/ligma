@@ -232,12 +232,20 @@ pub struct Layer {
 /// what there is
 const HOLD_MOST: Duration = Duration::from_millis(50);
 
+/// Longest a frame that changes the scene waits for the change to be drawn,
+/// so Figma's overlay never shows ahead of what it's drawn over, unless the
+/// render thread's that far behind
+const EDIT_HOLD: Duration = Duration::from_millis(250);
+
 /// What the render thread has drawn, every layer of it up to date as of
 /// frame `seq` of Figma's render tree, so whatever's composed of it at any
 /// view is all of one moment of the page. Nothing in it changes once it's
 /// handed over: what's drawn again is drawn into textures of its own
 pub struct Snapshot {
     pub seq: u64,
+    /// The latest frame whose changes are drawn wherever the view is: one
+    /// after it that changes the scene isn't shown over this
+    pub changes: u64,
     /// The GPU has drawn all of it once `fence` passes `value`
     pub fence: Arc<Fence>,
     pub value: u64,
@@ -354,8 +362,8 @@ impl Hub {
             // moves with the view moves with it, but not for long, as the
             // view standing still reads as a stutter
             let waited = frame.came.elapsed();
-            if frame.edits && frame.seq > seq && waited < HOLD_MOST {
-                wait = Some(HOLD_MOST - waited);
+            if frame.edits && frame.seq > seq && waited < EDIT_HOLD {
+                wait = Some(EDIT_HOLD - waited);
                 break;
             }
             take = Some(i);
@@ -864,7 +872,7 @@ impl Screen {
             if let Some(latest) = latest.filter(|latest| current.as_ref().is_none_or(|current| (current.serial, current.seq) != (latest.serial, latest.seq)) && latest.drawn()) {
                 current = Some(latest);
             }
-            let picked = current.as_ref().ok_or(None).and_then(|snapshot| hub.pick(snapshot.seq, self.timed).map(|picked| (snapshot.clone(), picked)));
+            let picked = current.as_ref().ok_or(None).and_then(|snapshot| hub.pick(snapshot.changes, self.timed).map(|picked| (snapshot.clone(), picked)));
             let (snapshot, Picked { view, overlay, seq, oldest, wait }) = match picked {
                 Ok(picked) => picked,
                 Err(wait) => {
@@ -919,6 +927,7 @@ impl Screen {
                     let (pieces, holes) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
                     let merged = Snapshot {
                         seq: snapshot.seq,
+                        changes: snapshot.changes,
                         fence: snapshot.fence.clone(),
                         value: snapshot.value,
                         serial: snapshot.serial,

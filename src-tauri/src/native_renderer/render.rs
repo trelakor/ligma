@@ -617,6 +617,8 @@ struct Unchecked {
     rough: bool,
     /// What changed since it was drawn, as for a whole view shown
     patch: Vec<Rect>,
+    /// The frame it's drawn as of
+    seq: u64,
 }
 
 /// A scene Vello keeps on the GPU
@@ -662,6 +664,8 @@ struct Whole {
     rough: bool,
     /// Drawn by Vello, all of it at its zoom
     vello: bool,
+    /// The frame it's drawn as of, everything changed since in `patch`
+    seq: u64,
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -1277,6 +1281,11 @@ pub struct Painter {
     /// What the last snapshot handed over had, its frame, and the fence the
     /// GPU passes once it's drawn it
     published: Option<(u64, u64, u64)>,
+    /// The latest frame whose changes are drawn all over the view, as of
+    /// the last snapshot handed over
+    changes_drawn: u64,
+    /// The latest frame that changed the scene
+    edited_seq: u64,
     /// Draws snapshots as the present thread does, for dev tools
     patterns: Patterns,
     /// Counts up, for each thing drawn to be told apart from what it was
@@ -1470,6 +1479,8 @@ impl Painter {
             rasters_off: super::dev() && std::env::var("LIGMA_NATIVE_RASTERS").is_ok_and(|value| value == "0"),
             spare: Vec::new(),
             published: None,
+            changes_drawn: 0,
+            edited_seq: 0,
             patterns: Patterns::new(),
             serial: 0,
             whole: None,
@@ -2135,6 +2146,10 @@ impl Painter {
         if self.too_big() {
             return false;
         }
+        // The last, once the GPU's drawn it, is shown before this is encoded
+        if self.unchecked.as_ref().is_some_and(|unchecked| self.gpu.passed() >= unchecked.fence) {
+            self.settle_shown();
+        }
         let _purpose = super::gpu_census::purpose("whole");
         let started = Instant::now();
         let at = (ox, oy, px.to_bits());
@@ -2157,7 +2172,7 @@ impl Painter {
             Ok((tex, counts, stats, rough)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough, patch: Vec::new() });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough, patch: Vec::new(), seq: self.seq });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2186,13 +2201,13 @@ impl Painter {
         }
         let started = Instant::now();
         let reach = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
-        self.settle_unchecked();
+        self.settle_shown();
         match self.vello_render(ox, oy, phase, width, height, px, reach, None, true, None) {
             Ok((tex, counts, stats, _)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 let at = (ox, oy, px.to_bits());
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: Vec::new() });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: Vec::new(), seq: self.seq });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2257,7 +2272,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 self.kept_drawn = self.scene_kept.as_ref().map(|kept| (kept.id, at));
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: behind });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: behind, seq: self.seq });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2604,6 +2619,15 @@ impl Painter {
         }
     }
 
+    /// As `settle_unchecked`, and shows it before more is drawn, which
+    /// would hold it back by as long as that takes to encode
+    fn settle_shown(&mut self) {
+        if self.unchecked.is_some() {
+            self.settle_unchecked();
+            self.publish();
+        }
+    }
+
     /// Hands over the whole view Vello drew last once it's checked it had
     /// room for it, waiting for the GPU to draw it
     fn settle_unchecked(&mut self) {
@@ -2623,7 +2647,7 @@ impl Painter {
                 trace(|| format!("  whole vello px={:.3} {} checked={:.1}ms {:.1}ms gpu:{stages}", last.layer.px, last.stats, waited.as_secs_f64() * 1000.0, last.started.elapsed().as_secs_f64() * 1000.0));
                 self.whole_took = last.started.elapsed();
                 stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
-                self.hand_whole(last.layer, last.fence, last.at, last.rough, true);
+                self.hand_whole(last.layer, last.fence, last.at, last.rough, true, last.seq);
                 // What changed as the GPU drew it isn't in it, as when an
                 // object's moved, which would show it where it was
                 if let Some(whole) = self.whole.as_mut() {
@@ -3214,7 +3238,7 @@ impl Painter {
                 }
             )
         });
-        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, false, false);
+        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, false, false, self.seq);
         self.whole_took = started.elapsed();
         stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
         self.drew = true;
@@ -3232,7 +3256,7 @@ impl Painter {
 
     /// Makes `layer`, which the GPU draws till `fence` passes, the whole
     /// view of `at`
-    fn hand_whole(&mut self, mut layer: Layer, fence: u64, at: (i32, i32, u32), rough: bool, vello: bool) {
+    fn hand_whole(&mut self, mut layer: Layer, fence: u64, at: (i32, i32, u32), rough: bool, vello: bool, seq: u64) {
         let _span = super::span::span("hand whole");
         self.serial += 1;
         let serial = self.serial;
@@ -3248,11 +3272,11 @@ impl Painter {
                 whole.at = at;
                 whole.stale = false;
                 whole.patch.clear();
-                (whole.rough, whole.vello) = (rough, vello);
+                (whole.rough, whole.vello, whole.seq) = (rough, vello, seq);
                 Some(std::mem::replace(&mut whole.layer, layer))
             }
             None => {
-                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial, rough, vello });
+                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial, rough, vello, seq });
                 None
             }
         };
@@ -3757,9 +3781,29 @@ impl Painter {
         self.whole.as_ref().map(|whole| whole.serial).hash(&mut hasher);
         (whole_at, background.as_array().map(f32::to_bits), transparent, dark).hash(&mut hasher);
         let signature = hasher.finish();
-        if self.published.is_some_and(|(last, seq, _)| last == signature && seq == self.seq) {
+        // Where what changed is drawn only as it was before, or not yet,
+        // the frames that changed it wait, overlay and all: they're drawn
+        // as of the frame the whole view's drawn as of, where it covers the
+        // view, and of the latest where everything over it is up to date
+        let before = if self.changes_drawn > self.seq { 0 } else { self.changes_drawn };
+        let changes = if self.edited_seq <= before {
+            // No change since that's waiting
+            self.seq
+        } else {
+            let covers = |layers: &[Layer]| self.view.as_ref().is_none_or(|view| !super::present::cover(layers, self.content(), view, self.gpu.size).1);
+            let mut fresh = self.layers(false);
+            if self.last_whole.is_some() {
+                fresh.pop();
+            }
+            match covers(&fresh) {
+                true => self.seq,
+                false => before.max(self.whole.as_ref().filter(|whole| !whole.rough && covers(std::slice::from_ref(&whole.layer))).map_or(0, |whole| whole.seq)),
+            }
+        };
+        if self.published.is_some_and(|(last, seq, _)| last == signature && seq == self.seq) && changes == self.changes_drawn {
             return;
         }
+        self.changes_drawn = changes;
         // What it has is drawn once the GPU passes this
         let value = match self.published {
             Some((last, _, value)) if last == signature => value,
@@ -3773,6 +3817,7 @@ impl Painter {
         self.published = Some((signature, self.seq, value));
         let snapshot = Snapshot {
             seq: self.seq,
+            changes,
             fence: self.gpu.shared_fence.clone(),
             value,
             serial: self.serial,
@@ -4168,6 +4213,9 @@ impl Painter {
         };
         self.hub.tree_failures.store(0, std::sync::atomic::Ordering::Relaxed);
         self.seq = frame.header.seq;
+        if frame.edits() {
+            self.edited_seq = self.seq;
+        }
         let applied_ms = start.elapsed().as_secs_f64() * 1000.0;
         // What custom effects of nodes gone drew goes with them. That of
         // nodes that changed, as they do over and over as a file loads, is
@@ -4710,9 +4758,12 @@ impl Painter {
         self.version(unit.slot, unit.section).hash(&mut hasher);
         if let Some(place) = &unit.place {
             let matrix = |m: &skia_safe::Matrix| (0..9).map(|i| m[i].to_bits()).collect::<Vec<u32>>();
-            (place.id, matrix(&place.at)).hash(&mut hasher);
+            // By what the nodes draw, not their ids: Figma sends what's over
+            // an edit again under new ids each frame, the same otherwise
+            let content = |id: u32| self.tree.as_ref().map(|tree| tree.content(id));
+            (content(place.id), matrix(&place.at)).hash(&mut hasher);
             for (id, at) in &place.clips {
-                (id, self.tree.as_ref().map(|tree| tree.content(*id)), matrix(at)).hash(&mut hasher);
+                (content(*id), matrix(at)).hash(&mut hasher);
             }
         }
         hasher.finish()
