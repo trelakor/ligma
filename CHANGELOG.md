@@ -2,6 +2,17 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.45.0 - 2026-11-17
+
+- Effects, in Settings > Editor > Toolbar, adds a button after Actions in Figma Design's toolbar with 32 effects made right in the file, through Figma's plugin API, so there's no plugin window. What they make shows on the canvas as real layers while you change it, Cancel takes it away and Apply is one undo step. It's off until you switch it on, and nothing of it loads while it's off.
+- The library is a searchable grid of each effect pictured at work, with All, Raster, Vector and Favorites tabs. Each effect's panel has a preview, presets and Figma's own sliders, fields and color picker.
+- Repeater repeats a layer along a trail, around a ring or in a grid. Disintegrate breaks it into pieces and throws them, as After Effects' Shatter does, Thanos snap included, and Bitcrush pixelates, posterizes and glitches it.
+- Picture effects remake a layer from its own pixels: Dither, Halftone, Modulate, Chromatic Aberration, Fisheye, Liquify (with brushes you paint on the canvas), Displace, Motion Blur, Glow, Shadow, Reflection, Rim Light, Glitter, Sticker, Screen and Shape Fill. Those that spread past the layer can crop to its bounds.
+- Vector effects only move points and paths, so what they make stays vector: Warp, Scatter Brush, Pattern Brush, Extrude 3D, Long Shadow, Outline Stack, Blend, Roughen, Pucker & Bloat, Round Corners and Envelope. Polar Coordinates and Kaleidoscope work on vectors and pictures.
+- A Ligma Effects section under Figma's own Effects lists a layer's effects to edit, hide, reorder or remove. Effects stack, and changing one under others makes those above it again.
+- Moving, turning or resizing a result or its original while an effect's open carries on from where it is now. Extrude 3D and Long Shadow can follow their original as it changes.
+- Scatter Brush, Pattern Brush and Shape Fill show their path or shape in the preview before anything's added, and Use selected swaps it without reopening the effect.
+
 ## 0.44.0 - 2026-11-14
 
 - Color frames, in Settings > Editor > Layers, colors each frame in the layers panel, with a guide in its color down everything inside it, so you can see where each one starts and ends. Pick Rainbow or a palette: Sunset, Ocean, Forest, Aurora, Candy or Ember. Tint rows also washes each row in its frame's color, hover and selection included.

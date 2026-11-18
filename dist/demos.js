@@ -3,9 +3,10 @@
 // and weigh a few KB. Each is a crop of the real interface at its real
 // size: the tab bar (index.html), tab menu (menu.html), emoji picker
 // (emoji.html), Settings, Ligma's home page, and Figma's editor with
-// Ligma's additions to it. The what's new prompt (prompt.html) shows the
-// demos of every release it lists, Settings > What's New each release's
-// own. Small changes and fixes get none
+// Ligma's additions to it, its effects painted as they make them. The
+// what's new prompt (prompt.html) shows the demos of every release it
+// lists, Settings > What's New each release's own. Small changes and fixes
+// get none
 //
 // A scene is drawn at its `size`, 480 × 267 unless it says, and scaled to
 // fit. Its steps play in order and loop: each adds `at-<step>` to the
@@ -19,6 +20,7 @@
 
   // Demos per release, in the order of its notes
   const RELEASES = {
+    "0.45.0": ["fx-library", "fx-repeater", "fx-disintegrate", "fx-bitcrush", "fx-dither", "fx-halftone", "fx-modulate", "fx-chromatic", "fx-fisheye", "fx-liquify", "fx-displace", "fx-motion", "fx-glow", "fx-shadow", "fx-reflection", "fx-rim", "fx-glitter", "fx-sticker", "fx-screen", "fx-shapeFill", "fx-warp", "fx-scatter", "fx-pattern", "fx-extrude", "fx-longShadow", "fx-outline", "fx-blend", "fx-roughen", "fx-pucker", "fx-round", "fx-envelope", "fx-polar", "fx-kaleidoscope", "fx-section"],
     "0.44.0": ["color-frames", "settings-search"],
     "0.43.0": ["heal", "upscale"],
     "0.42.0": ["account-settings"],
@@ -1147,6 +1149,1323 @@
     },
   };
 
+  // ---------- Effects (effects.rs) ----------
+  // Each effect is shown at work on a layer, painted here the way the
+  // effect makes it, small: from a picture in `FX_SOURCES`, or a vector
+  // drawn from scratch. A painter takes `v`: 0 as the layer was, 1 as the
+  // effect opens, 2 with its slider moved and 3 with a preset. Canvases
+  // with `data-fx` are painted when their scene plays: `name:v`, or steps
+  // joined by `>` for effects stacked in that order, on `data-src`
+
+  const fxCanvas = (w, h) => Object.assign(document.createElement("canvas"), { width: w, height: h });
+  const fxContext = (canvas) => canvas.getContext("2d", { willReadFrequently: true });
+  const fxData = (canvas) => fxContext(canvas).getImageData(0, 0, canvas.width, canvas.height).data;
+  const lum = (d, i) => (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+  // Lightness of pixel `i`, stretched from the picture's darkest to its lightest
+  const tones = (d) => {
+    let [lo, hi] = [1, 0];
+    for (let i = 0; i < d.length; i += 64) {
+      const l = lum(d, i);
+      [lo, hi] = [Math.min(lo, l), Math.max(hi, l)];
+    }
+    return (i) => Math.min(1, Math.max(0, (lum(d, i) - lo) / (hi - lo || 1)));
+  };
+  // Index of pixel x, y, kept inside the picture
+  const fxAt = (w, h, x, y) => (Math.min(h - 1, Math.max(0, Math.round(y))) * w + Math.min(w - 1, Math.max(0, Math.round(x)))) * 4;
+  // The same numbers every time
+  const seeded = (seed) => () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  const mix = (a, b, t) => {
+    const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const [x, y] = [rgb(a), rgb(b)];
+    return `rgb(${x.map((v, i) => Math.round(v + (y[i] - v) * t)).join(",")})`;
+  };
+  // A new picture whose pixel x, y is the one `from(x, y)` gives in `src`,
+  // or clear where it gives null
+  const remap = (src, from) => {
+    const { width: w, height: h } = src;
+    const input = fxData(src);
+    const out = fxCanvas(w, h);
+    const c = fxContext(out);
+    const image = c.createImageData(w, h);
+    const d = image.data;
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const at = from(x, y);
+        if (!at) continue;
+        const i = (y * w + x) * 4;
+        const j = fxAt(w, h, at[0], at[1]);
+        d[i] = input[j];
+        d[i + 1] = input[j + 1];
+        d[i + 2] = input[j + 2];
+        d[i + 3] = input[j + 3];
+      }
+    c.putImageData(image, 0, 0);
+    return out;
+  };
+  // `src` with each pixel changed by `change(d, i)`
+  const recolor = (src, change) => {
+    const out = fxCanvas(src.width, src.height);
+    const c = fxContext(out);
+    c.drawImage(src, 0, 0);
+    const image = c.getImageData(0, 0, out.width, out.height);
+    for (let i = 0; i < image.data.length; i += 4) change(image.data, i);
+    c.putImageData(image, 0, 0);
+    return out;
+  };
+  // `src`'s shape in `color`
+  const silhouette = (src, color) => {
+    const out = fxCanvas(src.width, src.height);
+    const c = fxContext(out);
+    c.drawImage(src, 0, 0);
+    c.globalCompositeOperation = "source-in";
+    c.fillStyle = color;
+    c.fillRect(0, 0, out.width, out.height);
+    return out;
+  };
+  const shape = (c, points) => {
+    c.beginPath();
+    points.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+    c.closePath();
+  };
+  const starPoints = (cx, cy, outer, inner, n = 5) =>
+    Array.from({ length: n * 2 }, (_, i) => {
+      const a = -Math.PI / 2 + (i * Math.PI) / n;
+      const r = i % 2 ? inner : outer;
+      return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+    });
+  const heartPath = (cx, cy, s) => {
+    const path = new Path2D();
+    path.moveTo(cx, cy + s * 0.9);
+    path.bezierCurveTo(cx - s * 1.5, cy + s * 0.1, cx - s, cy - s, cx, cy - s * 0.4);
+    path.bezierCurveTo(cx + s, cy - s, cx + s * 1.5, cy + s * 0.1, cx, cy + s * 0.9);
+    return path;
+  };
+  const pawn = (c, cx, b, height, colors) => {
+    const u = height / 10;
+    c.beginPath();
+    c.moveTo(cx - 3.2 * u, b);
+    c.lineTo(cx + 3.2 * u, b);
+    c.quadraticCurveTo(cx + 3.2 * u, b - 1.2 * u, cx + 2.2 * u, b - 1.4 * u);
+    c.quadraticCurveTo(cx + 1.2 * u, b - 3 * u, cx + 1.1 * u, b - 5.6 * u);
+    c.lineTo(cx + 2 * u, b - 6 * u);
+    c.quadraticCurveTo(cx + 2 * u, b - 6.6 * u, cx + 1.2 * u, b - 6.8 * u);
+    c.arc(cx, b - 8.2 * u, 1.8 * u, Math.PI * 0.3, Math.PI * 0.7, true);
+    c.quadraticCurveTo(cx - 2 * u, b - 6.6 * u, cx - 2 * u, b - 6 * u);
+    c.lineTo(cx - 1.1 * u, b - 5.6 * u);
+    c.quadraticCurveTo(cx - 1.2 * u, b - 3 * u, cx - 2.2 * u, b - 1.4 * u);
+    c.quadraticCurveTo(cx - 3.2 * u, b - 1.2 * u, cx - 3.2 * u, b);
+    c.closePath();
+    const g = c.createLinearGradient(cx - 3.2 * u, 0, cx + 3.2 * u, 0);
+    colors.forEach((color, i) => g.addColorStop(i / (colors.length - 1), color));
+    c.fillStyle = g;
+    c.fill();
+  };
+  const word = (c, text, x, y, size, fill) => {
+    c.font = `800 ${size}px Inter, -apple-system, "Segoe UI", sans-serif`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    if (fill) {
+      c.fillStyle = fill;
+      c.fillText(text, x, y);
+    }
+  };
+  const PINK = "#ff5fa8";
+  const ORANGE = "#ff8a3d";
+  const YELLOW = "#ffd23f";
+  const BLUE = "#3d7bff";
+  const GREEN = "#2fd08a";
+  const PURPLE = "#8b5cff";
+  const LIGHT_PAWN = ["#e3e9ff", "#8ea2f0", "#3a4796"];
+
+  const FX_SOURCES = {
+    photo(w, h) {
+      const canvas = fxCanvas(w, h);
+      paintLandscape(canvas, w, h, false);
+      return canvas;
+    },
+    orb(w, h) {
+      const canvas = fxCanvas(w, h);
+      const c = fxContext(canvas);
+      const [cx, cy, r] = [w / 2, h / 2, h * 0.36];
+      const g = c.createRadialGradient(cx - r * 0.4, cy - r * 0.45, r * 0.05, cx, cy, r * 1.05);
+      g.addColorStop(0, "#fff0f7");
+      g.addColorStop(0.25, "#ff8cc6");
+      g.addColorStop(0.65, "#9b3be6");
+      g.addColorStop(1, "#2a0f5c");
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(cx, cy, r, 0, Math.PI * 2);
+      c.fill();
+      return canvas;
+    },
+    ball(w, h) {
+      const canvas = fxCanvas(w, h);
+      const c = fxContext(canvas);
+      const [cx, cy, r] = [w / 2, h / 2, h * 0.3];
+      c.beginPath();
+      c.arc(cx, cy, r, 0, Math.PI * 2);
+      c.clip();
+      ["#ff5a4f", "#ffffff", YELLOW, "#ffffff", "#3d9bff", "#ffffff"].forEach((color, i) => {
+        c.beginPath();
+        c.moveTo(cx, cy);
+        c.arc(cx, cy, r * 1.1, (i * Math.PI) / 3 - 0.3, ((i + 1) * Math.PI) / 3 - 0.3);
+        c.fillStyle = color;
+        c.fill();
+      });
+      const g = c.createRadialGradient(cx - r * 0.4, cy - r * 0.4, r * 0.1, cx, cy, r);
+      g.addColorStop(0, "rgba(255, 255, 255, .35)");
+      g.addColorStop(0.6, "rgba(0, 0, 0, 0)");
+      g.addColorStop(1, "rgba(0, 0, 0, .35)");
+      c.fillStyle = g;
+      c.fillRect(0, 0, w, h);
+      return canvas;
+    },
+    heart(w, h) {
+      const canvas = fxCanvas(w, h);
+      const c = fxContext(canvas);
+      const g = c.createLinearGradient(w * 0.3, h * 0.15, w * 0.7, h * 0.9);
+      g.addColorStop(0, "#ffb36b");
+      g.addColorStop(1, "#ff2f6d");
+      c.fillStyle = g;
+      c.fill(heartPath(w / 2, h * 0.52, h * 0.4));
+      return canvas;
+    },
+    pawn(w, h) {
+      const canvas = fxCanvas(w, h);
+      pawn(fxContext(canvas), w * 0.64, h * 0.86, h * 0.66, LIGHT_PAWN);
+      return canvas;
+    },
+    tallPawn(w, h) {
+      const canvas = fxCanvas(w, h);
+      pawn(fxContext(canvas), w / 2, h * 0.56, h * 0.5, LIGHT_PAWN);
+      return canvas;
+    },
+    darkPawn(w, h) {
+      const canvas = fxCanvas(w, h);
+      pawn(fxContext(canvas), w / 2, h * 0.88, h * 0.72, ["#454b68", "#262a40", "#15172a"]);
+      return canvas;
+    },
+  };
+
+  // A wavy line across the layer, for the brushes: where it is `t` of the
+  // way along, and the way it's heading
+  const track = (w, h) => {
+    const at = (t) => [w * (0.08 + 0.84 * t), h * (0.55 - Math.sin(t * Math.PI * 2) * 0.2)];
+    const points = Array.from({ length: 301 }, (_, i) => at(i / 300));
+    const lengths = [0];
+    for (let i = 1; i < points.length; i++) lengths.push(lengths[i - 1] + Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]));
+    const total = lengths.at(-1);
+    const along = (d) => {
+      const i = Math.max(1, Math.min(points.length - 1, lengths.findIndex((l) => l >= d)));
+      const [a, b] = [points[i - 1], points[i]];
+      return { x: b[0], y: b[1], angle: Math.atan2(b[1] - a[1], b[0] - a[0]) };
+    };
+    return { points, total, along };
+  };
+  const drawTrack = (c, w, h, k) => {
+    c.strokeStyle = "rgba(127, 127, 127, .7)";
+    c.lineWidth = 1.5 * k;
+    c.beginPath();
+    track(w, h).points.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+    c.stroke();
+  };
+
+  const BAYER = [0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21].map((n) => (n + 0.5) / 64);
+
+  // Painters that remake a picture start from it at `v` 0
+  const FX = {
+    dither(src, v, w) {
+      const k = w / 176;
+      const p = Math.max(1, Math.round([0, 2, 4, 2.5][v] * k));
+      const palette = v === 3 ? ["#0f380f", "#306230", "#8bac0f", "#c4d86a"] : ["#1d1b33", "#f2e6cf"];
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const light = tones(d);
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      const n = palette.length;
+      for (let by = 0; by * p < H; by++)
+        for (let bx = 0; bx * p < W; bx++) {
+          const level = light(fxAt(W, H, bx * p + p / 2, by * p + p / 2)) * (n - 1);
+          const f = Math.floor(level);
+          c.fillStyle = palette[Math.min(n - 1, f + (level - f > BAYER[(bx & 7) + 8 * (by & 7)] ? 1 : 0))];
+          c.fillRect(bx * p, by * p, p, p);
+        }
+      return out;
+    },
+    halftone(src, v, w) {
+      const k = w / 176;
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      const light = tones(d);
+      c.fillStyle = "#f4efe4";
+      c.fillRect(0, 0, W, H);
+      c.globalCompositeOperation = "multiply";
+      const s = [0, 5, 8, 6][v] * k;
+      const screens = v === 3 ? [[15, "#00aeef", 0], [75, "#ec008c", 1], [0, "#f5d400", 2]] : [[45, "#1c1c2b", -1]];
+      const reach = Math.hypot(W, H) / 2 + s;
+      for (const [degrees, color, channel] of screens) {
+        const [cos, sin] = [Math.cos((degrees * Math.PI) / 180), Math.sin((degrees * Math.PI) / 180)];
+        c.fillStyle = color;
+        for (let u = -reach; u < reach; u += s)
+          for (let t = -reach; t < reach; t += s) {
+            const [x, y] = [W / 2 + u * cos - t * sin, H / 2 + u * sin + t * cos];
+            if (x < -s || y < -s || x > W + s || y > H + s) continue;
+            const i = fxAt(W, H, x, y);
+            const ink = channel < 0 ? 1 - light(i) : 1 - d[i + channel] / 255;
+            const r = s * 0.62 * Math.sqrt(ink);
+            if (r < 0.3) continue;
+            c.beginPath();
+            c.arc(x, y, r, 0, Math.PI * 2);
+            c.fill();
+          }
+      }
+      return out;
+    },
+    modulate(src, v, w) {
+      const k = w / 176;
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      c.fillStyle = "#efe9de";
+      c.fillRect(0, 0, W, H);
+      c.fillStyle = "#23233b";
+      const s = 5 * k;
+      const light = tones(d);
+      const dark = (x, y) => 1 - light(fxAt(W, H, x, y));
+      if (v === 3) {
+        for (let r = s; r < Math.hypot(W, H) / 2; r += s)
+          for (let a = 0; a < Math.PI * 2; a += 0.6 / r) {
+            const [x, y] = [W / 2 + Math.cos(a) * r, H / 2 + Math.sin(a) * r];
+            if (x < 0 || y < 0 || x >= W || y >= H) continue;
+            const t = dark(x, y) * s * 0.9;
+            c.fillRect(x - t / 2, y - t / 2, t, t);
+          }
+        return out;
+      }
+      for (let y0 = s / 2; y0 < H; y0 += s)
+        for (let x = 0; x < W; x++) {
+          const t = dark(x, y0);
+          const y = v === 2 ? y0 + Math.sin(x / (3 * k)) * t * s * 0.8 : y0;
+          c.fillRect(x, y - (t * s * 0.9) / 2, 1, t * s * 0.9);
+        }
+      return out;
+    },
+    chromatic(src, v, w) {
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      const image = c.createImageData(W, H);
+      const o = image.data;
+      const m = [0, 0.03, 0.06, 0.012][v];
+      const shift = v === 3 ? (6 * w) / 176 : 0;
+      const [cx, cy] = [W / 2, H / 2];
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          const r = fxAt(W, H, cx + (x - cx) * (1 - m) - shift, cy + (y - cy) * (1 - m));
+          const b = fxAt(W, H, cx + (x - cx) * (1 + m) + shift, cy + (y - cy) * (1 + m));
+          o[i] = d[r];
+          o[i + 1] = d[i + 1];
+          o[i + 2] = d[b + 2];
+          o[i + 3] = Math.max(d[r + 3], d[i + 3], d[b + 3]);
+        }
+      c.putImageData(image, 0, 0);
+      return out;
+    },
+    fisheye(src, v) {
+      const [W, H] = [src.width, src.height];
+      const [cx, cy, R] = [W / 2, H / 2, Math.hypot(W, H) / 2];
+      const s = [0, 0.6, 1.1, -0.45][v];
+      return remap(src, (x, y) => {
+        const [nx, ny] = [(x - cx) / R, (y - cy) / R];
+        const r = Math.hypot(nx, ny);
+        if (!r || r >= 1) return [x, y];
+        const f = r ** s;
+        return [cx + nx * f * R, cy + ny * f * R];
+      });
+    },
+    liquify(src, v, w) {
+      const k = w / 176;
+      const [W, H] = [src.width, src.height];
+      const [cx, cy, R] = [W / 2, H / 2, Math.min(W, H) * 0.6];
+      return remap(src, (x, y) => {
+        const [dx, dy] = [x - cx, y - cy];
+        const r = Math.hypot(dx, dy);
+        if (!r || r >= R) return [x, y];
+        const t = 1 - r / R;
+        if (v === 3) {
+          const to = r + Math.sin(r / (5 * k)) * 9 * k * t;
+          return [cx + (dx / r) * to, cy + (dy / r) * to];
+        }
+        const a = [0, 2.2, 4.6][v] * t * t;
+        return [cx + dx * Math.cos(a) - dy * Math.sin(a), cy + dx * Math.sin(a) + dy * Math.cos(a)];
+      });
+    },
+    displace(src, v, w) {
+      const k = w / 176;
+      if (v === 3) {
+        const cell = 22 * k;
+        const hash = (a, b) => {
+          const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+          return s - Math.floor(s) - 0.5;
+        };
+        return remap(src, (x, y) => {
+          const [a, b] = [Math.floor(x / cell), Math.floor(y / cell)];
+          return [x + hash(a, b) * 18 * k, y + hash(b + 7, a) * 18 * k];
+        });
+      }
+      const amp = [0, 4, 9][v] * k;
+      return remap(src, (x, y) => [x + Math.sin(y / (9 * k) + Math.sin(x / (23 * k)) * 2) * amp, y + Math.cos(x / (11 * k) + Math.cos(y / (17 * k)) * 2) * amp]);
+    },
+    motion(src, v, w) {
+      const k = w / 176;
+      const [W, H] = [src.width, src.height];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      const n = 28;
+      c.globalCompositeOperation = "lighter";
+      c.globalAlpha = 1 / n;
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1) - 0.5;
+        if (v === 3) {
+          c.setTransform(1, 0, 0, 1, W / 2, H / 2);
+          c.rotate(t * 1.1);
+          c.drawImage(src, -W / 2, -H / 2);
+        } else {
+          c.setTransform(1, 0, 0, 1, 0, 0);
+          c.drawImage(src, t * [0, 34, 76][v] * k, 0);
+        }
+      }
+      return out;
+    },
+    glow(src, v, w) {
+      const k = w / 176;
+      const [threshold, radius, strength] = [[], [0.5, 8, 1.6], [0.42, 16, 2.6], [0.28, 12, 1.8]][v];
+      const bright = recolor(src, (d, i) => {
+        const m = Math.max(0, (lum(d, i) - threshold) / (1 - threshold));
+        d[i] *= m;
+        d[i + 1] *= m;
+        d[i + 2] *= m;
+      });
+      const out = fxCanvas(src.width, src.height);
+      const c = fxContext(out);
+      c.drawImage(src, 0, 0);
+      c.globalCompositeOperation = "lighter";
+      c.filter = `blur(${radius * k}px)`;
+      for (let left = strength; left > 0; left -= 1) {
+        c.globalAlpha = Math.min(1, left);
+        c.drawImage(bright, 0, 0);
+      }
+      return out;
+    },
+    shadow(src, v, w) {
+      const k = w / 176;
+      const [W, H] = [src.width, src.height];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      const shade = silhouette(src, "#000");
+      const base = H * 0.86;
+      c.save();
+      if (v === 2) {
+        const [lean, flat] = [1.1, 0.42];
+        c.globalAlpha = 0.45;
+        c.filter = `blur(${3 * k}px)`;
+        c.setTransform(1, 0, lean, flat, -lean * base, base * (1 - flat));
+        c.drawImage(shade, 0, 0);
+      } else {
+        c.globalAlpha = v === 3 ? 0.4 : 0.45;
+        c.filter = `blur(${(v === 3 ? 12 : 5) * k}px)`;
+        c.drawImage(shade, v === 3 ? 0 : 7 * k, (v === 3 ? 10 : 7) * k);
+      }
+      c.restore();
+      c.drawImage(src, 0, 0);
+      return out;
+    },
+    reflection(src, v, w) {
+      const k = w / 176;
+      const [W, H] = [src.width, src.height];
+      const base = H * 0.56;
+      let flip = fxCanvas(W, H);
+      const f = fxContext(flip);
+      f.translate(0, base * 2);
+      f.scale(1, -1);
+      f.drawImage(src, 0, 0);
+      if (v === 3) {
+        flip = remap(flip, (x, y) => [x + Math.sin(y / (2.2 * k)) * 2.5 * k * Math.max(0, (y - base) / (H - base)), y]);
+        const t = fxContext(flip);
+        t.globalCompositeOperation = "source-atop";
+        t.fillStyle = "rgba(40, 120, 220, .3)";
+        t.fillRect(0, 0, W, H);
+      }
+      const fade = fxContext(flip);
+      fade.setTransform(1, 0, 0, 1, 0, 0);
+      fade.globalCompositeOperation = "destination-in";
+      const g = fade.createLinearGradient(0, base, 0, base + [0, 0.45, 0.95, 0.8][v] * (H - base));
+      g.addColorStop(0, "rgba(0, 0, 0, .55)");
+      g.addColorStop(1, "rgba(0, 0, 0, 0)");
+      fade.fillStyle = g;
+      fade.fillRect(0, 0, W, H);
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      c.drawImage(flip, 0, 0);
+      c.drawImage(src, 0, 0);
+      return out;
+    },
+    rim(src, v, w) {
+      const k = w / 176;
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      c.drawImage(src, 0, 0);
+      const image = c.getImageData(0, 0, W, H);
+      const o = image.data;
+      const width = [0, 3, 6, 4][v] * k;
+      const lights = v === 3 ? [[-1, -0.3, [80, 240, 255]], [1, -0.3, [255, 80, 210]]] : [[-0.8, -0.6, [255, 214, 160]]];
+      for (const [lx, ly, color] of lights)
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const i = (y * W + x) * 4;
+            if (!d[i + 3]) continue;
+            const [sx, sy] = [Math.round(x + lx * width), Math.round(y + ly * width)];
+            const behind = sx < 0 || sy < 0 || sx >= W || sy >= H ? 0 : d[(sy * W + sx) * 4 + 3] / 255;
+            const rim = (d[i + 3] / 255) * (1 - behind);
+            for (let ch = 0; ch < 3; ch++) o[i + ch] = Math.min(255, o[i + ch] + color[ch] * rim);
+          }
+      c.putImageData(image, 0, 0);
+      return out;
+    },
+    glitter(src, v, w) {
+      const k = w / 176;
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      const random = seeded(11);
+      const f = [0, 4, 7, 5][v] * k;
+      for (let y = 0; y < H; y += f * 0.8)
+        for (let x = 0; x < W; x += f * 0.8) {
+          const [jx, jy] = [x + (random() - 0.5) * f * 0.6, y + (random() - 0.5) * f * 0.6];
+          const i = fxAt(W, H, jx, jy);
+          if (d[i + 3] < 128) continue;
+          const bright = 0.55 + random() * 1.1;
+          c.fillStyle = v === 3 ? `hsl(${((jx / W) * 300 + random() * 80) % 360} 90% ${55 + random() * 30}%)` : `rgb(${[d[i], d[i + 1], d[i + 2]].map((n) => Math.min(255, n * bright)).join(",")})`;
+          c.save();
+          c.translate(jx, jy);
+          c.rotate(random() * Math.PI);
+          c.fillRect(-f / 2, -f / 2, f * 0.9, f * 0.9);
+          c.restore();
+        }
+      c.globalCompositeOperation = "lighter";
+      c.fillStyle = "#fff";
+      for (let n = 0, tries = 0; n < [0, 10, 14, 14][v] && tries < 400; tries++) {
+        const [x, y] = [random() * W, random() * H];
+        if (d[fxAt(W, H, x, y) + 3] < 128) continue;
+        const s = f * (1 + random());
+        c.beginPath();
+        c.moveTo(x, y - s);
+        c.quadraticCurveTo(x, y, x + s, y);
+        c.quadraticCurveTo(x, y, x, y + s);
+        c.quadraticCurveTo(x, y, x - s, y);
+        c.quadraticCurveTo(x, y, x, y - s);
+        c.fill();
+        n++;
+      }
+      return out;
+    },
+    sticker(src, v, w) {
+      const k = w / 176;
+      const [W, H] = [src.width, src.height];
+      const white = silhouette(src, "#fff");
+      const border = fxCanvas(W, H);
+      const b = fxContext(border);
+      const size = [0, 5, 9, 6][v] * k;
+      for (const r of [size, size / 2])
+        for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) b.drawImage(white, Math.cos(a) * r, Math.sin(a) * r);
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      c.save();
+      c.shadowColor = "rgba(0, 0, 0, .35)";
+      c.shadowBlur = 8 * k;
+      c.shadowOffsetY = 3 * k;
+      c.drawImage(border, 0, 0);
+      c.restore();
+      c.drawImage(src, 0, 0);
+      if (v === 3) {
+        const holo = fxCanvas(W, H);
+        const h = fxContext(holo);
+        h.drawImage(border, 0, 0);
+        h.globalCompositeOperation = "source-in";
+        const g = h.createLinearGradient(0, 0, W, H);
+        ["#ff7ad9", "#7afcff", "#fff27a", "#9d7aff", "#7affb0"].forEach((color, i) => g.addColorStop(i / 4, color));
+        h.fillStyle = g;
+        h.fillRect(0, 0, W, H);
+        c.globalAlpha = 0.6;
+        c.globalCompositeOperation = "overlay";
+        c.drawImage(holo, 0, 0);
+      }
+      return out;
+    },
+    screen(src, v, w) {
+      const k = w / 176;
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      c.fillStyle = "#08080c";
+      c.fillRect(0, 0, W, H);
+      const p = Math.max(3, Math.round([0, 3, 5, 3.5][v] * k));
+      for (let y = 0; y < H; y += p)
+        for (let x = 0; x < W; x += p) {
+          const i = fxAt(W, H, x + p / 2, y + p / 2);
+          const third = p / 3;
+          c.fillStyle = `rgb(${d[i]},0,0)`;
+          c.fillRect(x, y, third, p - 1);
+          c.fillStyle = `rgb(0,${d[i + 1]},0)`;
+          c.fillRect(x + third, y, third, p - 1);
+          c.fillStyle = `rgb(0,0,${d[i + 2]})`;
+          c.fillRect(x + third * 2, y, third, p - 1);
+        }
+      const lit = fxCanvas(W, H);
+      fxContext(lit).drawImage(out, 0, 0);
+      c.globalCompositeOperation = "lighter";
+      c.filter = `blur(${1.6 * k}px)`;
+      c.drawImage(lit, 0, 0);
+      c.drawImage(lit, 0, 0);
+      c.filter = "none";
+      c.globalAlpha = 1;
+      c.globalCompositeOperation = "source-over";
+      const g = c.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.hypot(W, H) / 2);
+      g.addColorStop(0, "rgba(0, 0, 0, 0)");
+      g.addColorStop(1, "rgba(0, 0, 0, .4)");
+      c.fillStyle = g;
+      c.fillRect(0, 0, W, H);
+      return out;
+    },
+    bitcrush(src, v, w) {
+      const k = w / 176;
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const p = Math.max(1, Math.round([0, 4, 7, 3][v] * k));
+      const levels = [0, 6, 4, 5][v];
+      const q = (n) => Math.round(((n / 255) * (levels - 1))) / (levels - 1) * 255;
+      let out = fxCanvas(W, H);
+      const c = fxContext(out);
+      for (let y = 0; y < H; y += p)
+        for (let x = 0; x < W; x += p) {
+          const i = fxAt(W, H, x + p / 2, y + p / 2);
+          c.fillStyle = `rgb(${q(d[i])},${q(d[i + 1])},${q(d[i + 2])})`;
+          c.fillRect(x, y, p, p);
+        }
+      if (v === 3) {
+        const copy = fxCanvas(W, H);
+        fxContext(copy).drawImage(out, 0, 0);
+        const random = seeded(3);
+        for (let n = 0; n < 10; n++) {
+          const [y, band, dx] = [random() * H, (2 + random() * 9) * k, (random() - 0.5) * 44 * k];
+          c.drawImage(copy, 0, y, W, band, dx, y, W, band);
+          c.globalCompositeOperation = "lighter";
+          c.fillStyle = random() < 0.5 ? "rgba(255, 0, 90, .35)" : "rgba(0, 220, 255, .35)";
+          c.fillRect(0, y, W, band / 2);
+          c.globalCompositeOperation = "source-over";
+        }
+      }
+      return out;
+    },
+    disintegrate(src, v, w) {
+      const k = w / 176;
+      const [W, H, d] = [src.width, src.height, fxData(src)];
+      const out = fxCanvas(W, H);
+      const c = fxContext(out);
+      const random = seeded(9);
+      const cell = [0, 9, 9, 4][v] * k;
+      const t = [0, 0.22, 0.6, 0.5][v];
+      const [fx, fy] = [W * 0.42, H * 0.56];
+      for (let y = 0; y < H; y += cell)
+        for (let x = 0; x < W; x += cell) {
+          if (d[fxAt(W, H, x + cell / 2, y + cell / 2) + 3] < 20) continue;
+          let [ox, oy, turn, alpha, scale] = [0, 0, 0, 1, 1];
+          const r = random();
+          if (v === 3) {
+            // Snap: a ragged wipe from the left, each piece then drifting
+            const go = Math.max(0, t * 1.7 - x / W - r * 0.25);
+            [ox, oy, alpha, scale] = [go * 80 * k * (0.5 + r), -go * (14 + 30 * random()) * k, 1 - go * 1.3, 1 - Math.min(0.7, go * 0.6)];
+            turn = go * (random() - 0.5) * 4;
+          } else {
+            const [dx, dy] = [x - fx, y - fy];
+            const dist = Math.hypot(dx, dy) || 1;
+            const push = Math.max(0, 1 - dist / (W * 0.8)) ** 0.7 * t * 55 * k * (0.7 + r * 0.6);
+            [ox, oy] = [(dx / dist) * push, (dy / dist) * push + t * t * 18 * k];
+            turn = (random() - 0.5) * push * 0.08;
+          }
+          if (alpha <= 0) continue;
+          c.save();
+          c.globalAlpha = alpha;
+          c.translate(x + cell / 2 + ox, y + cell / 2 + oy);
+          c.rotate(turn);
+          c.scale(scale, scale);
+          c.drawImage(src, x, y, cell, cell, -cell / 2, -cell / 2, cell, cell);
+          c.restore();
+        }
+      return out;
+    },
+    polar(src, v) {
+      const [W, H] = [src.width, src.height];
+      const [cx, cy, R] = [W / 2, H / 2, Math.min(W, H) * 0.48];
+      return remap(src, (x, y) => {
+        const hole = v === 2 ? 0.4 : 0;
+        const r = (Math.hypot(x - cx, y - cy) / R - hole) / (1 - hole);
+        if (r > 1 || r < 0) return null;
+        const a = Math.atan2(y - cy, x - cx);
+        return [((a / (2 * Math.PI) + 1.25) % 1) * (W - 1), (v === 3 ? 1 - r : r) * (H - 1)];
+      });
+    },
+    kaleidoscope(src, v) {
+      const [W, H] = [src.width, src.height];
+      const n = [0, 6, 12, 8][v];
+      const segment = (Math.PI * 2) / n;
+      const [zoom, spin] = v === 3 ? [1.25, 0.5] : [0.9, 0];
+      return remap(src, (x, y) => {
+        const [dx, dy] = [x - W / 2, y - H / 2];
+        const r = Math.hypot(dx, dy) * zoom;
+        const turned = Math.atan2(dy, dx) + spin + Math.PI * 4;
+        let a = turned % segment;
+        if (Math.floor(turned / segment) % 2) a = segment - a;
+        return [W * 0.62 + Math.cos(a) * r, H * 0.6 + Math.sin(a) * r * 0.8];
+      });
+    },
+
+    // Painters that draw a vector from scratch draw it as it was at `v` 0
+    repeater(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const size = 26 * k;
+      const card = (x, y, scale, turn, alpha, color) => {
+        c.save();
+        c.globalAlpha = alpha;
+        c.translate(x, y);
+        c.rotate(turn);
+        c.fillStyle = color;
+        c.beginPath();
+        c.roundRect((-size * scale) / 2, (-size * scale) / 2, size * scale, size * scale, 6 * k * scale);
+        c.fill();
+        c.restore();
+      };
+      if (v === 0) {
+        card(w * 0.24, h * 0.4, 1, 0, 1, PINK);
+        return out;
+      }
+      const copies = [];
+      if (v === 3) {
+        for (let i = 0; i < 12; i++) {
+          const a = -Math.PI / 2 + (i * Math.PI * 2) / 12;
+          copies.push([w / 2 + Math.cos(a) * h * 0.34, h / 2 + Math.sin(a) * h * 0.34, 0.75, a, 1, mix(PINK, YELLOW, i / 11)]);
+        }
+      } else {
+        const n = v === 1 ? 8 : 14;
+        let [x, y, heading, scale] = [w * 0.24, h * 0.4, 0.35, 1];
+        for (let i = 0; i < n; i++) {
+          copies.push([x, y, scale, i * 0.14, 1 - (i / n) * 0.75, mix(PINK, YELLOW, i / (n - 1))]);
+          x += Math.cos(heading) * 15 * k;
+          y += Math.sin(heading) * 15 * k;
+          heading -= v === 2 ? 0.32 : 0.06;
+          scale *= v === 2 ? 0.95 : 0.97;
+        }
+      }
+      for (const copy of copies.reverse()) card(...copy);
+      return out;
+    },
+    warp(_, v, w, h) {
+      const k = w / 176;
+      const flat = fxCanvas(w, h);
+      const f = fxContext(flat);
+      const g = f.createLinearGradient(w * 0.15, 0, w * 0.85, 0);
+      g.addColorStop(0, PINK);
+      g.addColorStop(1, ORANGE);
+      word(f, "Ligma", w / 2, h / 2, 50 * k, g);
+      if (v === 0) return flat;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      for (let x = 0; x < w; x++) {
+        const u = (x - w / 2) / (w / 2);
+        let [dy, s] = [0, 1];
+        if (v === 3) dy = Math.sin(u * Math.PI * 1.5) * 13 * k;
+        else dy = -(1 - u * u) * (v === 1 ? 20 : 36) * k + (v === 1 ? 10 : 18) * k;
+        c.drawImage(flat, x, 0, 1, h, x, dy + (h - h * s) / 2, 1.5, h * s);
+      }
+      return out;
+    },
+    scatter(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      if (v === 0) {
+        drawTrack(c, w, h, k);
+        c.fillStyle = YELLOW;
+        shape(c, starPoints(w * 0.88, h * 0.16, 8 * k, 3.6 * k));
+        c.fill();
+        return out;
+      }
+      const { total, along } = track(w, h);
+      const random = seeded(4);
+      const n = [0, 26, 60, 46][v];
+      const colors = v === 3 ? [PINK, YELLOW, BLUE, GREEN, PURPLE] : [YELLOW, ORANGE, PINK];
+      for (let i = 0; i < n; i++) {
+        const { x, y, angle } = along(((i + random() * 0.7) / n) * total);
+        const off = (random() - 0.5) * [0, 24, 34, 34][v] * k;
+        const [px, py] = [x - Math.sin(angle) * off, y + Math.cos(angle) * off];
+        const s = (3 + random() * 6) * k * (v === 2 ? 0.75 : 1);
+        c.fillStyle = colors[Math.floor(random() * colors.length)];
+        c.save();
+        c.translate(px, py);
+        c.rotate(random() * Math.PI);
+        if (v === 3 && random() < 0.5) c.fillRect(-s / 2, -s / 4, s, s / 2);
+        else if (v === 3) {
+          c.beginPath();
+          c.arc(0, 0, s / 2.4, 0, Math.PI * 2);
+        } else shape(c, starPoints(0, 0, s, s * 0.45));
+        c.fill();
+        c.restore();
+      }
+      return out;
+    },
+    pattern(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const leaf = (x, y, angle, size, side) => {
+        c.save();
+        c.translate(x, y);
+        c.rotate(angle + side * 0.7);
+        c.beginPath();
+        c.ellipse(size * 0.55, 0, size * 0.55, size * 0.22, 0, 0, Math.PI * 2);
+        c.fill();
+        c.restore();
+      };
+      if (v === 0) {
+        drawTrack(c, w, h, k);
+        c.fillStyle = GREEN;
+        leaf(w * 0.8, h * 0.16, 0, 14 * k, 0);
+        return out;
+      }
+      const { points, total, along } = track(w, h);
+      c.strokeStyle = "#1f9e68";
+      c.lineWidth = 1.6 * k;
+      c.beginPath();
+      points.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+      c.stroke();
+      const size = (v === 2 ? 10 : 16) * k;
+      c.fillStyle = GREEN;
+      for (let d = size / 2, i = 0; d < total; d += size * (v === 3 ? 1.6 : 0.75), i++) {
+        const { x, y, angle } = along(d);
+        leaf(x, y, angle, size, i % 2 ? 1 : -1);
+      }
+      return out;
+    },
+    extrude(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const front = starPoints(w * (v === 3 ? 0.56 : 0.44), h * (v === 3 ? 0.58 : 0.46), h * 0.36, h * 0.16);
+      const [n, dx, dy] = [[0, 0, 0], [16, 0.9, 0.9], [32, 0.9, 0.9], [22, -0.9, -0.75]][v];
+      const [top, bottom, sideNear, sideFar] = v === 3 ? ["#a9c2ff", "#5f86ff", "#2c4bb3", "#14235e"] : ["#ffd36b", ORANGE, "#b55a12", "#5a2606"];
+      for (let i = n; i > 0; i--) {
+        c.fillStyle = mix(sideNear, sideFar, i / n);
+        shape(c, front.map(([x, y]) => [x + i * dx * k, y + i * dy * k]));
+        c.fill();
+      }
+      const g = c.createLinearGradient(0, h * 0.1, 0, h * 0.82);
+      g.addColorStop(0, top);
+      g.addColorStop(1, bottom);
+      c.fillStyle = g;
+      shape(c, front);
+      c.fill();
+      return out;
+    },
+    longShadow(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const size = h * 0.84;
+      const [x, y] = [(w - size) / 2, (h - size) / 2];
+      c.beginPath();
+      c.roundRect(x, y, size, size, 18 * k);
+      c.fillStyle = BLUE;
+      c.fill();
+      c.clip();
+      const star = starPoints(w / 2, h / 2, size * 0.3, size * 0.13);
+      const length = [0, 40, 130, 130][v] * k;
+      c.fillStyle = "#2453d6";
+      for (let i = length; i > 0; i -= 1) {
+        shape(c, star.map(([sx, sy]) => [v === 3 ? sx : sx + i, sy + i]));
+        c.fill();
+      }
+      c.fillStyle = "#fff";
+      shape(c, star);
+      c.fill();
+      return out;
+    },
+    outline(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      word(c, "Ligma", w / 2, h / 2, 42 * k);
+      const colors = v === 3 ? ["#ffb3d1", "#ffe39a", "#a9c5ff", "#a8f0cf"] : [PINK, YELLOW, GREEN, ORANGE, PURPLE, "#3ec8ff"];
+      const [n, gap] = [[0, 0], [3, 4], [6, 3.4], [4, 4.4]][v];
+      c.lineJoin = "round";
+      for (let i = n; i > 0; i--) {
+        c.lineWidth = i * gap * 2 * k;
+        c.strokeStyle = colors[(i - 1) % colors.length];
+        c.strokeText("Ligma", w / 2, h / 2);
+      }
+      c.fillStyle = BLUE;
+      c.fillText("Ligma", w / 2, h / 2);
+      return out;
+    },
+    blend(_, v, w, h) {
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const N = 60;
+      const [R, inner] = [h * 0.2, h * 0.085];
+      const circle = Array.from({ length: N }, (_, i) => R * 0.85);
+      const star = Array.from({ length: N }, (_, i) => {
+        const phase = (i / N) * 10 % 2;
+        const f = phase < 1 ? phase : 2 - phase;
+        return R + (inner - R) * f;
+      });
+      const n = [2, 5, 10, 44][v];
+      for (let s = 0; s < n; s++) {
+        const t = s / (n - 1);
+        const [cx, cy] = [w * (0.2 + 0.6 * t), h / 2 - Math.sin(t * Math.PI) * (v === 3 ? 0 : h * 0.1)];
+        c.fillStyle = mix(PINK, BLUE, t);
+        shape(c, circle.map((r0, i) => {
+          const a = -Math.PI / 2 + (i * Math.PI * 2) / N;
+          const r = r0 + (star[i] - r0) * t;
+          return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+        }));
+        c.fill();
+      }
+      return out;
+    },
+    roughen(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const corners = starPoints(w / 2, h * 0.52, h * 0.4, h * 0.2);
+      const random = seeded(21);
+      const [parts, amp] = [[1, 0], [6, 3], [10, 7], [4, 3.5]][v];
+      const points = [];
+      corners.forEach(([x, y], i) => {
+        const [nx, ny] = corners[(i + 1) % corners.length];
+        for (let p = 0; p < parts; p++) {
+          const t = p / parts;
+          const jitter = p ? (random() - 0.5) * 2 * amp * k : 0;
+          const [ex, ey] = [nx - x, ny - y];
+          const len = Math.hypot(ex, ey);
+          points.push([x + ex * t - (ey / len) * jitter, y + ey * t + (ex / len) * jitter]);
+        }
+      });
+      if (v === 3) {
+        c.fillStyle = "#ffd9a8";
+        c.strokeStyle = "#ff5f7a";
+        c.lineWidth = 1.6 * k;
+        c.lineJoin = "round";
+        for (const pass of [0, 1]) {
+          c.beginPath();
+          points.forEach(([x, y], i) => {
+            const [nx, ny] = points[(i + 1) % points.length];
+            const wobble = (random() - 0.5) * 3 * k;
+            if (!i) c.moveTo(x, y);
+            c.quadraticCurveTo(x + wobble, y - wobble, (x + nx) / 2, (y + ny) / 2);
+          });
+          c.closePath();
+          if (!pass) c.fill();
+          c.stroke();
+        }
+        return out;
+      }
+      c.fillStyle = YELLOW;
+      shape(c, points);
+      c.fill();
+      return out;
+    },
+    pucker(_, v, w, h) {
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const [cx, cy, R, n] = [w / 2, h / 2, h * 0.38, 6];
+      const f = [1, 0.35, -0.05, 1.75][v];
+      const corner = (i) => {
+        const a = -Math.PI / 2 + (i * Math.PI * 2) / n;
+        return [cx + Math.cos(a) * R, cy + Math.sin(a) * R];
+      };
+      c.beginPath();
+      c.moveTo(...corner(0));
+      for (let i = 0; i < n; i++) {
+        const [a, b] = [corner(i), corner(i + 1)];
+        const [mx, my] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        c.quadraticCurveTo(cx + (mx - cx) * f, cy + (my - cy) * f, ...b);
+      }
+      c.closePath();
+      const g = c.createLinearGradient(0, cy - R, 0, cy + R);
+      g.addColorStop(0, "#b49bff");
+      g.addColorStop(1, PURPLE);
+      c.fillStyle = g;
+      c.fill();
+      return out;
+    },
+    round(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const points = starPoints(w / 2, h * 0.53, h * 0.42, h * 0.2);
+      const r = [0, 5, 11, 22][v] * k;
+      const last = points.at(-1);
+      const edge = Math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1]);
+      c.beginPath();
+      c.moveTo((last[0] + points[0][0]) / 2, (last[1] + points[0][1]) / 2);
+      points.forEach((p, i) => {
+        const [prev, next] = [points.at(i - 1), points[(i + 1) % points.length]];
+        const a = Math.atan2(prev[1] - p[1], prev[0] - p[0]) - Math.atan2(next[1] - p[1], next[0] - p[0]);
+        const half = Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) / 2;
+        const most = Math.tan(half) * edge * 0.5;
+        if (r) c.arcTo(p[0], p[1], next[0], next[1], Math.min(r, most));
+        else c.lineTo(p[0], p[1]);
+      });
+      c.closePath();
+      c.fillStyle = GREEN;
+      c.fill();
+      return out;
+    },
+    envelope(_, v, w, h) {
+      const k = w / 176;
+      const flat = fxCanvas(w, h);
+      const f = fxContext(flat);
+      word(f, "Ligma", w / 2, h / 2, 44 * k, ORANGE);
+      const [left, right, top, bottom] = [w * 0.1, w * 0.9, h * 0.3, h * 0.7];
+      f.strokeStyle = "rgba(13, 153, 255, .8)";
+      f.lineWidth = 1 * k;
+      for (let i = 0; i <= 4; i++) {
+        const x = left + ((right - left) * i) / 4;
+        f.beginPath();
+        f.moveTo(x, top);
+        f.lineTo(x, bottom);
+        f.stroke();
+      }
+      for (let i = 0; i <= 2; i++) {
+        const y = top + ((bottom - top) * i) / 2;
+        f.beginPath();
+        f.moveTo(left, y);
+        f.lineTo(right, y);
+        f.stroke();
+      }
+      if (v === 0) return flat;
+      const [cx, cy] = [w / 2, h / 2];
+      return remap(flat, (x, y) => {
+        const u = Math.min(1, Math.abs(x - cx) / (w * 0.42));
+        if (v === 3) return [x, y + Math.sin(((x - cx) / (w * 0.42)) * Math.PI) * 14 * k];
+        const grow = [0, 0.55, 0.95][v] * (1 - u * u);
+        return [x, cy + (y - cy) / (1 + grow)];
+      });
+    },
+    shapeFill(_, v, w, h) {
+      const k = w / 176;
+      const out = fxCanvas(w, h);
+      const c = fxContext(out);
+      const heart = heartPath(w / 2, h * 0.52, h * 0.4);
+      c.fillStyle = "rgba(127, 127, 127, .16)";
+      c.fill(heart);
+      if (v === 0) {
+        c.strokeStyle = "rgba(127, 127, 127, .7)";
+        c.lineWidth = 1.2 * k;
+        c.stroke(heart);
+        c.fillStyle = YELLOW;
+        shape(c, starPoints(w * 0.88, h * 0.18, 8 * k, 3.6 * k));
+        c.fill();
+        return out;
+      }
+      const random = seeded(5);
+      const [small, large, tries] = [[], [3, 9, 1800], [2, 5.5, 3200], [3, 9, 1800]][v];
+      const colors = [PINK, ORANGE, YELLOW];
+      const placed = [];
+      const inside = (x, y) => c.isPointInPath(heart, x, y);
+      for (let t = 0; t < tries; t++) {
+        const r = (large - (large - small) * (t / tries)) * k;
+        const [x, y] = [w * 0.1 + random() * w * 0.8, h * 0.05 + random() * h * 0.9];
+        if (!inside(x, y) || (v !== 3 && (!inside(x - r, y) || !inside(x + r, y) || !inside(x, y - r) || !inside(x, y + r)))) continue;
+        if (placed.some(([px, py, pr]) => Math.hypot(px - x, py - y) < pr + r + 0.8 * k)) continue;
+        placed.push([x, y, r]);
+      }
+      for (const [x, y, r] of placed) {
+        c.fillStyle = colors[Math.floor(random() * colors.length)];
+        c.beginPath();
+        c.arc(x, y, r, 0, Math.PI * 2);
+        c.fill();
+      }
+      return out;
+    },
+  };
+
+  // Paints `canvas[data-fx]` at its `data-size`, sharper than the screen
+  const paintEffect = (canvas) => {
+    const [lw, lh] = canvas.dataset.size.split("x").map(Number);
+    const sharp = Math.min(3, Math.max(2, Math.ceil(devicePixelRatio || 1)));
+    const [w, h] = [lw * sharp, lh * sharp];
+    let picture = canvas.dataset.src ? FX_SOURCES[canvas.dataset.src](w, h) : null;
+    for (const step of canvas.dataset.fx.split(">")) {
+      const [name, v] = step.split(":");
+      if (!(picture && Number(v) === 0)) picture = FX[name](picture, Number(v), w, h);
+    }
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(picture, 0, 0);
+  };
+
+  // Two sparkles, as the toolbar's Effects button draws them
+  const SPARKLES = svg('<path d="M6.7 4.3c.37 2.6 1.07 3.3 3.67 3.67-2.6.37-3.3 1.07-3.67 3.67-.37-2.6-1.07-3.3-3.67-3.67 2.6-.37 3.3-1.07 3.67-3.67Z"/><path d="M11.3 3c.16 1.07.6 1.5 1.67 1.67-1.07.16-1.5.6-1.67 1.67-.16-1.07-.6-1.5-1.67-1.67 1.07-.16 1.5-.6 1.67-1.67Z"/>');
+  const EYE = svg('<path d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z"/><circle cx="8" cy="8" r="1.8"/>');
+  const EYE_SHUT = svg('<path d="M2.5 6.5S4.5 10 8 10s5.5-3.5 5.5-3.5M4.6 8.9l-1 1.4M8 10v1.7M11.4 8.9l1 1.4"/>');
+  const MINUS = svg('<path d="M4 8h8"/>');
+
+  // An effect's panel beside the layer it's on, opened: the slider is
+  // dragged, then a preset picked. `slider` is its label, where the thumb
+  // sits as it opens, after dragging and with the preset, in percent, and
+  // the values shown then
+  const effectDemo = ({ name, fx, src, layer, says, slider, other, presets, preset, chipsLabel = "Presets", floor }) => {
+    const [label, [a, b, c], [ta, tb, tc]] = slider;
+    const thumb = (p) => [320 + (90 * p) / 100, 135];
+    let x = 252;
+    const chips = presets.map((chip) => {
+      const width = Math.round(chip.length * 5.8 + 22);
+      const html = `<span class="fxchip" style="width:${width}px">${chip}</span>`;
+      const center = x + width / 2;
+      x += width + 6;
+      return { html, center };
+    });
+    const stage = (v) => `<canvas class="s${v}" data-size="176x132" data-fx="${fx}:${v}"${src ? ` data-src="${src}"` : ""}></canvas>`;
+    const row = (cls, text, style, values) =>
+      `<div class="fxrow ${cls}" style="${style}"><span class="lab">${text}</span><span class="track"><i class="fill"></i><i class="thumb"></i></span><span class="val">${values}</span></div>`;
+    return {
+      title: name,
+      steps: [
+        { caption: says[0], ms: 1000, at: [196, 232] },
+        { caption: says[0], ms: 1500 },
+        { caption: says[1], ms: 650, at: thumb(a), move: 550 },
+        { caption: says[1], ms: 1500, at: thumb(b), move: 1000 },
+        { caption: says[2], ms: 650, at: [chips[preset].center, 96], move: 550 },
+        { caption: says[2], ms: 2200, click: true },
+      ],
+      html: `
+        <div class="win fxwin"></div>
+        <span class="fl fxname">${layer}</span>
+        <div class="fxl${floor ? " floor" : ""}">${[0, 1, 2, 3].map(stage).join("")}<i class="sel"><b></b><b></b><b></b><b></b></i></div>
+        <div class="fxp">
+          <div class="fxt"><span>${name}</span>${ICON.close}</div>
+          <div class="fxsec"><div class="fxcap">${chipsLabel}</div><div class="fxchips">${chips.map((chip) => chip.html).join("")}</div></div>
+          <div class="fxsec">
+            ${row("r1", label, `--a:${a};--b:${b};--c:${c}`, `<em class="va">${ta}</em><em class="vb">${tb}</em><em class="vc">${tc}</em>`)}
+            ${row("", other[0], `--a:${other[1]}`, `<em>${other[2]}</em>`)}
+          </div>
+          <div class="fxfoot"><span class="btn">Cancel</span><span class="btn primary">Apply</span></div>
+        </div>`,
+      css: `.at-4 .fxchip:nth-child(${preset + 1}) { background: var(--bg-secondary); }`,
+    };
+  };
+
+  const FX_STYLE = `
+    .demo-scene .fxwin { left: 12px; top: 12px; width: 456px; height: 243px; background: var(--d-canvas); }
+    .demo-scene .fxname { left: 36px; top: 46px; }
+    .demo-scene .fxl { position: absolute; left: 36px; top: 64px; width: 176px; height: 132px; }
+    .demo-scene .fxl.floor { background: #ece8f2; }
+    .demo-scene .fxl canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 500ms var(--demo-ease); }
+    .demo-scene .fxl .s0 { opacity: 1; }
+    .demo-scene.at-1 .fxl .s0 { opacity: 0; }
+    .demo-scene.at-1 .fxl .s1 { opacity: 1; }
+    .demo-scene.at-3 .fxl .s1 { opacity: 0; transition-duration: 900ms; }
+    .demo-scene.at-3 .fxl .s2 { opacity: 1; transition-duration: 900ms; }
+    .demo-scene.at-5 .fxl .s2 { opacity: 0; }
+    .demo-scene.at-5 .fxl .s3 { opacity: 1; }
+    .demo-scene .fxp { position: absolute; left: 240px; top: 22px; width: 220px; overflow: hidden; border-radius: 13px; background: var(--bg); box-shadow: var(--d-shadow), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(6px); transition: opacity 200ms var(--demo-ease), transform 320ms var(--demo-ease); }
+    .demo-scene.at-1 .fxp { opacity: 1; transform: none; }
+    .demo-scene .fxt { display: flex; align-items: center; justify-content: space-between; height: 36px; padding: 0 10px 0 12px; font-weight: 600; }
+    .demo-scene .fxt svg { color: var(--text-secondary); }
+    .demo-scene .fxsec { padding: 8px 12px; border-top: 1px solid var(--border); }
+    .demo-scene .fxsec:has(.fxrow) { padding: 6px 12px; }
+    .demo-scene .fxcap { height: 18px; color: var(--text-secondary); }
+    .demo-scene .fxchips { display: flex; gap: 6px; height: 22px; }
+    .demo-scene .fxchip { display: grid; flex: none; place-items: center; height: 22px; border: 1px solid var(--border); border-radius: 11px; white-space: nowrap; transition: background-color 120ms; }
+    .demo-scene .fxrow { --p: var(--a); display: grid; grid-template-columns: 60px 1fr 30px; column-gap: 8px; align-items: center; height: 26px; }
+    .demo-scene .fxrow .lab { overflow: hidden; color: var(--text-secondary); white-space: nowrap; text-overflow: ellipsis; }
+    .demo-scene .fxrow .track { position: relative; height: 12px; background: linear-gradient(var(--border), var(--border)) 0 50% / 100% 2px no-repeat; }
+    .demo-scene .fxrow .fill { position: absolute; left: 0; top: 5px; width: calc(var(--p) * 1%); height: 2px; background: var(--brand); transition: width 300ms var(--demo-ease); }
+    .demo-scene .fxrow .thumb { position: absolute; top: 0; left: calc(var(--p) * 1% - 6px); width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgb(0 0 0 / .2), 0 1px 3px rgb(0 0 0 / .3); transition: left 300ms var(--demo-ease); }
+    .demo-scene.at-3 .fxrow.r1 { --p: var(--b); }
+    .demo-scene.at-3 .fxrow.r1 :is(.fill, .thumb) { transition-duration: 1000ms; }
+    .demo-scene.at-5 .fxrow.r1 { --p: var(--c); }
+    .demo-scene.at-5 .fxrow.r1 :is(.fill, .thumb) { transition-duration: 300ms; }
+    .demo-scene .fxrow .val { text-align: right; font-variant-numeric: tabular-nums; }
+    .demo-scene .fxrow .val em { font-style: normal; }
+    .demo-scene .fxrow .vb, .demo-scene .fxrow .vc { display: none; }
+    .demo-scene.at-3 .fxrow .va { display: none; }
+    .demo-scene.at-3 .fxrow .vb { display: inline; }
+    .demo-scene.at-5 .fxrow .vb { display: none; }
+    .demo-scene.at-5 .fxrow .vc { display: inline; }
+    .demo-scene .fxfoot { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); }
+    .demo-scene .fxfoot .btn { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: 5px; line-height: 22px; }
+    .demo-scene .fxfoot .primary { border-color: transparent; background: var(--brand); color: #fff; }`;
+
+  // Each effect's demo: what it says at each stage, its slider, another
+  // row left as it is, and its presets (the effect's own), one picked
+  const EFFECTS = {
+    repeater: { name: "Repeater", fx: "repeater", layer: "Card", says: ["Repeats a layer along a trail", "More copies, turning as they go", "Ring puts them around a circle"], slider: ["Copies", [20, 55, 40], ["8", "14", "12"]], other: ["Size", 60, "97%"], presets: ["Trail", "Spiral", "Ring"], preset: 2 },
+    disintegrate: { name: "Disintegrate", fx: "disintegrate", src: "orb", layer: "Orb", says: ["Breaks a layer into pieces and throws them", "Time throws them further", "Snap, the Thanos snap"], slider: ["Time", [22, 60, 50], ["0.22", "0.60", "0.50"]], other: ["Pieces", 45, "320"], presets: ["Dissolve", "Snap", "Explode"], preset: 1 },
+    bitcrush: { name: "Bitcrush", fx: "bitcrush", src: "photo", layer: "Photo", says: ["Pixelates and posterizes a layer", "Bigger pixels, fewer colors", "Glitch tears it into bands"], slider: ["Pixel size", [20, 45, 15], ["4", "7", "3"]], other: ["Bit depth", 50, "5"], presets: ["Classic", "Game Boy", "Glitch"], preset: 2 },
+    dither: { name: "Dither", fx: "dither", src: "photo", layer: "Photo", says: ["Dithers a picture in a palette", "Larger pixels", "Handheld's four greens"], slider: ["Pixel size", [15, 45, 25], ["2", "4", "3"]], other: ["Contrast", 50, "0"], presets: ["Classic", "Bayer", "Handheld"], preset: 2 },
+    halftone: { name: "Halftone", fx: "halftone", src: "photo", layer: "Photo", says: ["Prints a picture as dots", "Larger dots", "Pop prints it in three inks"], slider: ["Dot size", [30, 60, 40], ["5", "8", "6"]], other: ["Angle", 25, "45°"], presets: ["Dots", "Newspaper", "Pop"], preset: 2 },
+    modulate: { name: "Modulate", fx: "modulate", src: "photo", layer: "Photo", says: ["Draws a picture in lines, thicker where it's dark", "Waves bend the lines", "Or in rings"], slider: ["Wave", [0, 60, 0], ["0", "60", "0"]], other: ["Spacing", 35, "5"], presets: ["Lines", "Waves", "Rings"], preset: 2 },
+    chromatic: { name: "Chromatic Aberration", fx: "chromatic", src: "photo", layer: "Photo", says: ["Splits a picture's colors as a lens does", "Stronger toward the edges", "Shift moves them sideways"], slider: ["Amount", [30, 60, 15], ["3", "6", "1"]], other: ["Falloff", 50, "50%"], presets: ["Lens", "Strong", "Shift"], preset: 2 },
+    fisheye: { name: "Fisheye", fx: "fisheye", src: "photo", layer: "Photo", says: ["Bulges a picture as a fisheye lens does", "Bulges further", "Pinch squeezes it in"], slider: ["Strength", [60, 85, 25], ["60%", "110%", "−45%"]], other: ["Radius", 100, "100%"], presets: ["Fisheye", "Bulge", "Pinch"], preset: 2 },
+    liquify: { name: "Liquify", fx: "liquify", src: "photo", layer: "Photo", says: ["Twirls, pinches or ripples a picture", "Twirls further", "Pond sends out rings. Or paint it with brushes"], slider: ["Angle", [35, 75, 0], ["120°", "260°", "0°"]], other: ["Radius", 60, "60%"], presets: ["Twirl", "Whirlpool", "Pond"], preset: 2 },
+    displace: { name: "Displace", fx: "displace", src: "photo", layer: "Photo", says: ["Pushes a picture's pixels around with noise", "Pushes further", "Glass blocks moves it cell by cell"], slider: ["Strength", [30, 65, 50], ["4", "9", "7"]], other: ["Scale", 40, "40"], presets: ["Wobble", "Glass blocks"], preset: 1 },
+    motion: { name: "Motion Blur", fx: "motion", src: "ball", layer: "Ball", says: ["Smears a layer along a line", "Smears it further", "Spin turns it around its middle"], slider: ["Distance", [25, 60, 40], ["30", "70", "45°"]], other: ["Angle", 0, "0°"], presets: ["Pan", "Zoom burst", "Spin"], preset: 2 },
+    glow: { name: "Glow", fx: "glow", src: "photo", layer: "Photo", says: ["Makes a picture's bright parts glow", "Glows wider and brighter", "Dreamy glows more of it"], slider: ["Radius", [25, 60, 40], ["6", "14", "10"]], other: ["Threshold", 60, "60%"], presets: ["Bloom", "Neon", "Dreamy"], preset: 2 },
+    shadow: { name: "Shadow", fx: "shadow", src: "pawn", floor: true, layer: "Pawn", says: ["Casts a shadow from a cutout's own shape", "A lower light lays it on the floor", "Studio spreads it out softly"], slider: ["Light height", [80, 25, 90], ["70°", "20°", "80°"]], other: ["Opacity", 45, "45%"], presets: ["Drop", "Floor", "Studio"], preset: 2 },
+    reflection: { name: "Reflection", fx: "reflection", src: "tallPawn", floor: true, layer: "Pawn", says: ["Reflects a cutout in the floor", "A longer reflection", "Lake ripples it"], slider: ["Length", [45, 95, 80], ["45%", "95%", "80%"]], other: ["Opacity", 55, "55%"], presets: ["Glossy", "Mirror", "Lake"], preset: 2 },
+    rim: { name: "Rim Light", fx: "rim", src: "darkPawn", layer: "Pawn", says: ["Lights a cutout's edges from behind", "A wider rim", "Neon lights it from both sides"], slider: ["Width", [30, 60, 40], ["3", "6", "4"]], other: ["Direction", 35, "315°"], presets: ["Golden hour", "Neon"], preset: 1 },
+    glitter: { name: "Glitter", fx: "glitter", src: "heart", layer: "Heart", says: ["Turns a layer into sparkling flakes", "Larger flakes", "Holo shifts each flake's color"], slider: ["Flake size", [30, 60, 45], ["4", "7", "5"]], other: ["Sparkle", 55, "55%"], presets: ["Glitter", "Chunky", "Holo"], preset: 2 },
+    sticker: { name: "Sticker", fx: "sticker", src: "heart", layer: "Heart", says: ["Makes a layer a die-cut sticker", "A thicker border", "Hologram, as a foil sticker"], slider: ["Border", [35, 65, 45], ["5", "9", "6"]], other: ["Shadow", 40, "40%"], presets: ["Die cut", "Hologram"], preset: 1 },
+    screen: { name: "Screen", fx: "screen", src: "photo", layer: "Photo", says: ["Films a picture off a monitor", "Closer, so its pixels show", "Head on films it square"], slider: ["Distance", [70, 35, 60], ["100%", "60%", "85%"]], other: ["Focus", 70, "70%"], presets: ["Angled", "Close up", "Head on"], preset: 2 },
+    shapeFill: { name: "Shape Fill", fx: "shapeFill", layer: "Heart", says: ["Packs a shape with copies of other layers", "Smaller copies, packed tighter", "Loose lets them cross the edge"], slider: ["Size", [70, 35, 70], ["100%", "60%", "100%"]], other: ["Spacing", 20, "1"], presets: ["Inside", "Loose"], preset: 1, chipsLabel: "Fit" },
+    warp: { name: "Warp", fx: "warp", layer: "Ligma", says: ["Bends text or a shape into an arc", "Bends it further", "Flag waves it"], slider: ["Bend", [35, 70, 40], ["35%", "70%", "40%"]], other: ["Distort", 50, "0"], presets: ["Arc", "Bulge", "Flag"], preset: 2 },
+    scatter: { name: "Scatter Brush", fx: "scatter", layer: "Path", says: ["Scatters copies of layers along a path", "Denser, and spread wider", "Confetti mixes shapes and colors"], slider: ["Density", [30, 70, 55], ["26", "60", "46"]], other: ["Size", 50, "100%"], presets: ["Even", "Confetti"], preset: 1 },
+    pattern: { name: "Pattern Brush", fx: "pattern", layer: "Path", says: ["Bends layers end to end along a path", "Smaller, so more fit", "Spaced leaves gaps between them"], slider: ["Size", [70, 40, 70], ["100%", "60%", "100%"]], other: ["Turn", 0, "0°"], presets: ["Stretched", "Spaced"], preset: 1 },
+    extrude: { name: "Extrude 3D", fx: "extrude", layer: "Star", says: ["Gives a shape shaded depth", "Deeper", "Up left turns it the other way"], slider: ["Depth", [30, 60, 45], ["16", "32", "22"]], other: ["Light", 35, "315°"], presets: ["Down right", "Deep", "Up left"], preset: 2 },
+    longShadow: { name: "Long Shadow", fx: "longShadow", layer: "Tile", says: ["Casts a long flat shadow", "Longer, out past the edge", "Down drops it straight down"], slider: ["Length", [25, 80, 80], ["40", "130", "130"]], other: ["Angle", 35, "45°"], presets: ["Classic", "Solid", "Down"], preset: 2 },
+    outline: { name: "Outline Stack", fx: "outline", layer: "Ligma", says: ["Stacks rings around a layer", "More rings", "Halo, softer and wider apart"], slider: ["Rings", [30, 60, 40], ["3", "6", "4"]], other: ["Gap", 40, "4"], presets: ["Retro", "Halo", "Lines"], preset: 1 },
+    blend: { name: "Blend", fx: "blend", layer: "Shapes", says: ["Morphs one shape into another in steps", "More steps", "Smooth blends them as one shape"], slider: ["Steps", [15, 35, 100], ["5", "10", "Smooth"]], other: ["Spacing", 50, "Even"], presets: ["Smooth", "Steps"], preset: 0 },
+    roughen: { name: "Roughen", fx: "roughen", layer: "Star", says: ["Makes edges jagged", "Rougher", "Hand drawn wobbles them"], slider: ["Size", [30, 70, 35], ["3", "7", "3.5"]], other: ["Detail", 55, "10"], presets: ["Jagged", "Hand drawn"], preset: 1 },
+    pucker: { name: "Pucker & Bloat", fx: "pucker", layer: "Hexagon", says: ["Pinches a shape's edges into spikes", "Further, to sharp points", "Bloat puffs them into lobes"], slider: ["Amount", [35, 10, 85], ["−65%", "−105%", "75%"]], other: ["Smooth", 50, "50%"], presets: ["Pucker", "Spiky", "Bloat"], preset: 2 },
+    round: { name: "Round Corners", fx: "round", layer: "Star", says: ["Rounds every sharp corner", "Rounder", "Pill rounds them all the way"], slider: ["Radius", [20, 45, 90], ["5", "11", "22"]], other: ["Smoothing", 60, "60%"], presets: ["Soft", "Round", "Pill"], preset: 2 },
+    envelope: { name: "Envelope", fx: "envelope", layer: "Ligma", says: ["Bends a layer by a grid", "Bulges it further", "Wave, or drag the grid on the preview"], slider: ["Amount", [40, 75, 50], ["55%", "95%", "60%"]], other: ["Grid", 40, "4 × 2"], presets: ["Arch", "Bulge", "Wave"], preset: 2 },
+    polar: { name: "Polar Coordinates", fx: "polar", src: "photo", layer: "Photo", says: ["Wraps a layer round a circle", "A hole in the middle makes a ring", "Inside out puts the top outside"], slider: ["Hole", [0, 40, 0], ["0%", "40%", "0%"]], other: ["Turn", 0, "0°"], presets: ["Disc", "Ring", "Inside out"], preset: 2 },
+    kaleidoscope: { name: "Kaleidoscope", fx: "kaleidoscope", src: "photo", layer: "Photo", says: ["Mirrors a slice of a layer round a center", "More slices", "Eight, turned and closer"], slider: ["Segments", [30, 70, 45], ["6", "12", "8"]], other: ["Zoom", 45, "90%"], presets: ["Six", "Eight", "Twelve"], preset: 1 },
+  };
+  for (const [id, spec] of Object.entries(EFFECTS)) DEMOS[`fx-${id}`] = effectDemo(spec);
+
+  // A tile of the library: its picture over its name
+  const tile = (fx, src, name, cls = "") =>
+    `<span class="tile ${cls}"><span class="pic2"><canvas data-size="66x40" data-fx="${fx}:1"${src ? ` data-src="${src}"` : ""}></canvas><span class="star">${ICON.star}</span></span><span class="nm">${name}</span></span>`;
+
+  DEMOS["fx-library"] = {
+    title: "Effects",
+    steps: [
+      { caption: "A button after Actions in the toolbar", ms: 1300, at: [300, 150] },
+      { caption: "A button after Actions in the toolbar", ms: 700, at: [357, 238], move: 800 },
+      { caption: "Every effect, pictured at work", ms: 1800, click: true },
+      { caption: "Raster, Vector and Favorites", ms: 650, at: [207, 66], move: 600 },
+      { caption: "Raster, Vector and Favorites", ms: 1600, click: true },
+      { caption: "Star one to keep it in Favorites", ms: 700, at: [204, 110], move: 500 },
+      { caption: "Star one to keep it in Favorites", ms: 500, at: [225, 96], move: 350 },
+      { caption: "Star one to keep it in Favorites", ms: 1800, click: true },
+    ],
+    html: `
+      <div class="win fxwin"></div>
+      <div class="fxtb"><span class="tool on">${ICON.move}</span><span class="tool">${ICON.frameTool}</span><span class="tool">${ICON.rectTool}</span><span class="tool">${ICON.pen}</span><span class="tool">${ICON.textTool}</span><span class="tool">${ICON.comment}</span><span class="div"></span><span class="tool">${ICON.ai}</span><span class="tool fxbtn">${SPARKLES}</span></div>
+      <div class="fxm">
+        <div class="search">${ICON.search}<span>Search effects</span></div>
+        <div class="tabs"><span class="tab all" style="width:30px">All</span><span class="tab" style="width:50px">Raster</span><span class="tab vec" style="width:50px">Vector</span><span class="tab" style="width:66px">Favorites</span></div>
+        <div class="grid gall">${[["repeater", null, "Repeater"], ["disintegrate", "orb", "Disintegrate"], ["bitcrush", "photo", "Bitcrush"], ["dither", "photo", "Dither"], ["halftone", "photo", "Halftone"], ["glow", "photo", "Glow"], ["glitter", "heart", "Glitter"], ["kaleidoscope", "photo", "Kaleidoscope"]].map((t) => tile(...t)).join("")}</div>
+        <div class="grid gvec">${[["warp", null, "Warp"], ["scatter", null, "Scatter Brush", "t2"], ["pattern", null, "Pattern Brush"], ["extrude", null, "Extrude 3D"], ["longShadow", null, "Long Shadow"], ["outline", null, "Outline Stack"], ["blend", null, "Blend"], ["pucker", null, "Pucker & Bloat"]].map((t) => tile(...t)).join("")}</div>
+      </div>`,
+    css: `
+      .fxtb { position: absolute; left: 240px; top: 218px; display: flex; align-items: center; height: 40px; padding: 4px; border-radius: 13px; background: var(--bg); box-shadow: 0 3px 8px rgb(0 0 0 / .35), 0 0 0 .5px rgba(127, 127, 127, .3); transform: translateX(-50%); }
+      .fxtb .tool { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 5px; transition: background-color 120ms; }
+      .fxtb .tool.on { background: var(--brand); color: #fff; }
+      .fxtb .div { align-self: stretch; width: 1px; margin: 4px; background: var(--border); }
+      .at-2 .fxbtn { background: var(--bg-secondary); }
+      .fxm { position: absolute; left: 90px; top: 14px; width: 300px; padding: 8px; border-radius: 13px; background: var(--bg); box-shadow: var(--d-shadow), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(6px); transition: opacity 180ms var(--demo-ease), transform 300ms var(--demo-ease); }
+      .at-2 .fxm { opacity: 1; transform: none; }
+      .search { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px; border-radius: 5px; background: var(--bg-secondary); color: var(--text-secondary); }
+      .tabs { display: flex; gap: 2px; height: 24px; margin: 4px 0 6px; }
+      .tab { display: grid; place-items: center; border-radius: 5px; color: var(--text-secondary); transition: background-color 120ms, color 120ms; }
+      .tab.all { background: var(--bg-secondary); color: var(--text); }
+      .at-4 .tab.all { background: none; color: var(--text-secondary); }
+      .at-4 .tab.vec { background: var(--bg-secondary); color: var(--text); }
+      .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 6px; }
+      .gvec { display: none; }
+      .at-4 .gall { display: none; }
+      .at-4 .gvec { display: grid; }
+      .tile { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 2px; border-radius: 6px; transition: background-color 120ms; }
+      .pic2 { position: relative; height: 40px; overflow: hidden; border-radius: 4px; background: var(--bg-secondary); }
+      .pic2 canvas { display: block; width: 100%; height: 100%; }
+      .nm { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+      .star { position: absolute; right: 2px; top: 2px; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: rgb(0 0 0 / .45); color: #fff; opacity: 0; transition: opacity 120ms; }
+      .star svg { width: 12px; height: 12px; }
+      .at-5 .t2 { background: var(--bg-secondary); }
+      .at-5 .t2 .star { opacity: 1; }
+      .at-7 .t2 .star { color: #ffcd29; }
+      .at-7 .t2 .star path { fill: currentColor; }`,
+  };
+
+  DEMOS["fx-section"] = {
+    title: "Ligma Effects",
+    steps: [
+      { caption: "A layer's effects, under Figma's own", ms: 1600, at: [200, 230] },
+      { caption: "Hide one to see what's under it", ms: 700, at: [424, 209], move: 700 },
+      { caption: "Hide one to see what's under it", ms: 1600, click: true },
+      { caption: "Hide one to see what's under it", ms: 1000, click: true },
+      { caption: "Drag them to change the order", ms: 600, at: [330, 209], move: 500 },
+      { caption: "Drag them to change the order", ms: 2200, at: [330, 237], move: 700 },
+    ],
+    html: `
+      <div class="win fxwin"></div>
+      <span class="fl fxname">Photo</span>
+      <div class="fxl sx">
+        <canvas class="q0" data-size="176x132" data-src="photo" data-fx="fisheye:1>halftone:1"></canvas>
+        <canvas class="q1" data-size="176x132" data-src="photo" data-fx="fisheye:1"></canvas>
+        <canvas class="q2" data-size="176x132" data-src="photo" data-fx="halftone:1>fisheye:1"></canvas>
+        <i class="sel"><b></b><b></b><b></b><b></b></i>
+      </div>
+      <div class="dp">
+        <div class="ps"><div class="ph">Layer</div><div class="pr"><span class="box">Pass through</span><span class="box n">100%</span></div></div>
+        <div class="ps"><div class="ph">Fill</div><div class="pr"><span class="box"><i class="sw"></i>Image</span><span class="box n">100%</span></div></div>
+        <div class="ps"><div class="ph dim">Effects<span>${ICON.plus}</span></div></div>
+        <div class="ps last"><div class="ph">Ligma Effects<span>${ICON.plus}</span></div>
+          <div class="er e1"><span class="ei">${SPARKLES}</span><span class="en">Halftone</span><span class="eye o">${EYE}</span><span class="eye c">${EYE_SHUT}</span><span class="rm">${MINUS}</span></div>
+          <div class="er e2"><span class="ei">${SPARKLES}</span><span class="en">Fisheye</span><span class="eye o">${EYE}</span><span class="rm">${MINUS}</span></div>
+        </div>
+      </div>`,
+    css: `
+      .sx .q0 { opacity: 1; }
+      .at-2 .sx .q0 { opacity: 0; }
+      .at-2 .sx .q1 { opacity: 1; }
+      .at-3 .sx .q1 { opacity: 0; }
+      .at-3 .sx .q0 { opacity: 1; }
+      .at-5 .sx .q0 { opacity: 0; transition-delay: 300ms; }
+      .at-5 .sx .q2 { opacity: 1; transition-delay: 300ms; }
+      .dp { position: absolute; left: 262px; top: 12px; width: 206px; height: 243px; border-left: 1px solid var(--border); background: var(--bg); }
+      .ps { padding: 0 8px 4px 12px; border-bottom: 1px solid var(--border); }
+      .ps.last { border-bottom: 0; }
+      .ph { display: flex; align-items: center; justify-content: space-between; height: 28px; font-weight: 550; }
+      .ph.dim { color: var(--text-secondary); }
+      .ph span { display: grid; place-items: center; width: 24px; height: 24px; color: var(--text); }
+      .pr { display: flex; gap: 6px; height: 24px; margin-bottom: 4px; }
+      .box { display: flex; flex: 1; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; background: var(--bg-secondary); }
+      .box.n { flex: none; width: 52px; }
+      .sw { width: 12px; height: 12px; border-radius: 2px; background: linear-gradient(135deg, #8a7bb8, #f0a98c); }
+      .er { position: relative; display: flex; align-items: center; gap: 6px; height: 28px; margin-left: -4px; padding-left: 4px; border-radius: 5px; transition: transform 700ms var(--demo-ease), opacity 160ms, background-color 120ms; }
+      .ei { display: grid; place-items: center; width: 20px; color: var(--text-secondary); }
+      .en { flex: 1; }
+      .eye, .rm { display: grid; place-items: center; width: 24px; height: 24px; color: var(--text-secondary); }
+      .eye.c { display: none; }
+      .at-2 .e1 :is(.ei, .en) { opacity: .4; }
+      .at-2 .e1 .eye.o { display: none; }
+      .at-2 .e1 .eye.c { display: grid; }
+      .at-3 .e1 :is(.ei, .en) { opacity: 1; }
+      .at-3 .e1 .eye.o { display: grid; }
+      .at-3 .e1 .eye.c { display: none; }
+      .at-4 .e1 { background: var(--bg-secondary); }
+      .at-5 .e1 { transform: translateY(28px); box-shadow: var(--d-shadow); }
+      .at-5 .e2 { transform: translateY(-28px); }`,
+  };
+
   // Shared by every scene and the carousel
   const STYLE = `
     .demos {
@@ -1435,7 +2754,7 @@
     const at = mode === "light" ? '[data-mode="light"]' : "";
     return `.demo-themes${at} .ted { ${themeVars("figma", mode)} } .demo-themes.at-2${at} .ted { ${themeVars("grove", mode)} } .demo-themes.at-4${at} .ted { ${themeVars("lagoon", mode)} }`;
   }).join("\n");
-  const CSS = STYLE + sceneStyle + themeStyle;
+  const CSS = STYLE + FX_STYLE + sceneStyle + themeStyle;
   const style = document.createElement("style");
   style.textContent = CSS;
   document.head.append(style);
@@ -1664,6 +2983,8 @@
       if (kind === "vector") paintVector(canvas, cw * sharp, ch * sharp, Number(colors), gray === "gray");
       else paintLandscape(canvas, cw * sharp, ch * sharp);
     }
+    // Effects at work (`paintEffect`)
+    for (const canvas of scene.querySelectorAll("canvas[data-fx]")) paintEffect(canvas);
     // Settings' app icons (app-icons.js) and the themes' orbs (themes.js)
     for (const img of scene.querySelectorAll("img[data-icon]")) {
       img.alt = "";
