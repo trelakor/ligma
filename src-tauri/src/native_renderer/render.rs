@@ -696,6 +696,10 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
         .unwrap_or(image)
 }
 
+/// Time a pass of the render thread spends at most taking in images that
+/// came, past the first, the rest left for the passes after
+const IMAGES_A_PASS: Duration = Duration::from_millis(6);
+
 /// Images are kept as big as they were ever needed, which drawn with
 /// mipmaps shows the same as a smaller copy, till together they pass this
 /// many bytes. Then those needed longest ago go, never any in view, down
@@ -1293,6 +1297,8 @@ pub struct Painter {
     /// The latest frame whose changes are drawn all over the view, as of
     /// the last snapshot handed over
     changes_drawn: u64,
+    /// Images come past what a pass takes in of them, see `IMAGES_A_PASS`
+    images_later: std::collections::VecDeque<Msg>,
     /// The latest frame that changed the scene
     edited_seq: u64,
     /// Draws snapshots as the present thread does, for dev tools
@@ -1490,6 +1496,7 @@ impl Painter {
             spare: Vec::new(),
             published: None,
             changes_drawn: 0,
+            images_later: std::collections::VecDeque::new(),
             edited_seq: 0,
             patterns: Patterns::new(),
             serial: 0,
@@ -1605,7 +1612,7 @@ impl Painter {
             }
             self.bury();
             let waiting = Instant::now();
-            let wait = if self.dirty { Duration::ZERO } else { next.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)) };
+            let wait = if self.dirty || !self.images_later.is_empty() { Duration::ZERO } else { next.unwrap_or(Duration::from_millis(100)).min(Duration::from_millis(100)) };
             let first = if wait.is_zero() {
                 match messages.try_recv() {
                     Ok(message) => Some(message),
@@ -1623,8 +1630,25 @@ impl Painter {
             let mut message = first;
             {
                 let _span = super::span::span("messages");
+                // Images are taken in a few milliseconds' worth a pass, as
+                // a page's worth coming at once would hold up all else
+                let mut on_images = Duration::ZERO;
+                while on_images < IMAGES_A_PASS {
+                    let Some(image) = self.images_later.pop_front() else { break };
+                    let started = Instant::now();
+                    self.handle(image);
+                    on_images += started.elapsed();
+                }
                 while let Some(one) = message {
-                    if !self.handle(one) {
+                    if matches!(one, Msg::Image(..)) {
+                        if on_images >= IMAGES_A_PASS || !self.images_later.is_empty() {
+                            self.images_later.push_back(one);
+                        } else {
+                            let started = Instant::now();
+                            self.handle(one);
+                            on_images += started.elapsed();
+                        }
+                    } else if !self.handle(one) {
                         return;
                     }
                     message = messages.try_recv().ok();
@@ -4267,6 +4291,7 @@ impl Painter {
         } else {
             self.bump(drew);
         }
+        let pictures_span = super::span::span("pictures with it");
         let waiting: Vec<(usize, bool, i32, bool)> =
             self.pictures.iter().filter(|(_, recorded)| recorded.missing.contains(&key)).map(|(&key, _)| key).collect();
         let mut areas: Vec<Rect> = waiting
@@ -4288,12 +4313,16 @@ impl Painter {
         if let Some(tree) = &self.tree {
             tree.forget_patterns(Some(&key));
         }
+        drop(pictures_span);
         let mut img = img;
-        img.image = upload(&mut self.gpu.context, img.image);
-        // Its copy on the way up is let go once the GPU has it, not
-        // with those of every other image that came in meanwhile
-        if img.bytes() > 1 << 20 {
-            let _ = self.gpu.context.flush_and_submit();
+        {
+            let _span = super::span::span("upload image");
+            img.image = upload(&mut self.gpu.context, img.image);
+            // Its copy on the way up is let go once the GPU has it, not
+            // with those of every other image that came in meanwhile
+            if img.bytes() > 1 << 20 {
+                let _ = self.gpu.context.flush_and_submit();
+            }
         }
         let vram = if tracing() { self.gpu.used() >> 20 } else { 0 };
         trace(|| format!("image {key} {}x{} areas={} vram={vram}", img.image.width(), img.image.height(), areas.len()));
@@ -4307,7 +4336,10 @@ impl Painter {
             self.images.insert(last, Img { stale: true, ..img.clone() });
         }
         self.images.insert(key.clone(), img);
-        self.drop_tiles(&areas);
+        {
+            let _span = super::span::span("drop tiles");
+            self.drop_tiles(&areas);
+        }
         self.wake_effects(&key);
         self.fresh = true;
         self.update_memory();

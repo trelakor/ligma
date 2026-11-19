@@ -357,12 +357,16 @@ impl Hub {
         }
         let mut take = None;
         let mut wait = None;
+        let latest = frames.back().map(|frame| frame.view.clone());
         for (i, frame) in frames.iter().enumerate() {
             // One that changes the scene waits for it to be drawn, so what
             // moves with the view moves with it, but not for long, as the
-            // view standing still reads as a stutter
+            // view standing still reads as a stutter. Not while the view
+            // moves, as Figma sends nodes again as it pans and zooms, and
+            // what's drawn moves with the view either way
             let waited = frame.came.elapsed();
-            if frame.edits && frame.seq > seq && waited < EDIT_HOLD {
+            let still = Some(&frame.view) == latest.as_ref() && (i == 0 || frames[i - 1].view == frame.view);
+            if frame.edits && still && frame.seq > seq && waited < EDIT_HOLD {
                 wait = Some(EDIT_HOLD - waited);
                 break;
             }

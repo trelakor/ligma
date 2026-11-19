@@ -288,6 +288,60 @@ impl std::fmt::Write for HashWrite<'_> {
     }
 }
 
+/// A hash of what `node` draws of itself, by everything of it but the
+/// nodes it refers to, see `Tree::contents`
+fn own_hash(node: &Node) -> u64 {
+    use std::fmt::Write;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Each field, so one added to `Node` has to be thought of here
+    let Node {
+        id,
+        op,
+        children,
+        child,
+        transform,
+        paint_size,
+        geometry,
+        fill_geometries,
+        stroke_geometries,
+        stroke_mode,
+        bg_blur_expansion_for_frame_fill,
+        is_created_from_brush,
+        blend_mode,
+        opacity,
+        alpha_node,
+        color_node,
+        mask_op,
+        color,
+        radius,
+        ext,
+        extra,
+    } = node;
+    // Custom effects are run and kept by node
+    if matches!(op, Op::CustomEffect) {
+        id.hash(&mut hasher);
+    }
+    let _ = write!(
+        HashWrite(&mut hasher),
+        "{op:?}{transform:?}{paint_size:?}{stroke_mode:?}{bg_blur_expansion_for_frame_fill:?}{is_created_from_brush:?}{blend_mode:?}{opacity:?}{mask_op:?}{color:?}{radius:?}{ext:?}{extra:?}"
+    );
+    for geometry in geometry.iter().chain(fill_geometries).chain(stroke_geometries) {
+        let rt::Geometry { path, paints, glyph_batch, glyph_metadata, extra } = geometry;
+        path.as_deref().map(path_hash).hash(&mut hasher);
+        let _ = write!(HashWrite(&mut hasher), "{paints:?}{glyph_metadata:?}{extra:?}");
+        if let Some(batch) = glyph_batch {
+            let rt::GlyphBatch { glyphs, decoration_paths, should_round_y, extra } = &**batch;
+            let _ = write!(HashWrite(&mut hasher), "{glyphs:?}{should_round_y:?}{extra:?}");
+            for path in decoration_paths {
+                path_hash(path).hash(&mut hasher);
+            }
+        }
+        0xfeu8.hash(&mut hasher);
+    }
+    (children.len(), child.is_some(), alpha_node.is_some(), color_node.is_some()).hash(&mut hasher);
+    hasher.finish()
+}
+
 /// A hash of a path's outline: Figma's own, when it sends one
 fn path_hash(path: &rt::Path) -> u64 {
     if let Some(hash) = path.content_hash {
@@ -311,6 +365,8 @@ pub struct Tree {
     /// are known: Figma sends a node again under another id, unchanged, and
     /// an id again for another node
     contents: IdMap<u32, u64>,
+    /// What each node draws of itself, see `own_hash`
+    owns: IdMap<u32, u64>,
     /// Skia's copy of each path, by the path's address. The path is held
     /// weakly, which still keeps its address from being reused: held
     /// strongly, this and Vello's copies kept each other's paths forever
@@ -330,6 +386,7 @@ impl Tree {
             header: None,
             info: RwLock::default(),
             contents: IdMap::default(),
+            owns: IdMap::default(),
             paths: Mutex::default(),
             patterns: Mutex::default(),
             octaves: Vec::new(),
@@ -344,8 +401,14 @@ impl Tree {
             return Err("a change before the whole scene".into());
         }
         // What a whole scene's nodes were, to know those sent again the same
-        let previous = (header.mode == 0).then(|| self.forest.nodes.clone());
-        let applied = self.forest.apply(frame.forest(), header.mode, &header.released, self.schema)?;
+        let previous = {
+            let _span = super::span::span("keep tree");
+            (header.mode == 0).then(|| self.forest.nodes.clone())
+        };
+        let applied = {
+            let _span = super::span::span("decode tree");
+            self.forest.apply(frame.forest(), header.mode, &header.released, self.schema)?
+        };
         if !self.forest.nodes.contains_key(&header.root) {
             self.root = None;
             return Err(format!("root {} isn't there", header.root));
@@ -359,7 +422,10 @@ impl Tree {
             }
         }
         drop(info);
-        self.renew(&applied, previous.as_ref(), &header.released);
+        {
+            let _span = super::span::span("hash nodes");
+            self.renew(&applied, previous.as_ref(), &header.released);
+        }
         if header.mode == 0 || !header.released.is_empty() {
             self.paths.lock().unwrap().retain(|_, (path, _)| path.strong_count() > 0);
             self.patterns.lock().unwrap().clear();
@@ -378,87 +444,58 @@ impl Tree {
     /// of them and far quicker than hashing them again
     fn renew(&mut self, applied: &rt::Applied, previous: Option<&IdMap<u32, Arc<Node>>>, released: &[u32]) {
         let before = match previous {
-            Some(_) => std::mem::take(&mut self.contents),
+            Some(_) => {
+                self.contents.clear();
+                std::mem::take(&mut self.owns)
+            }
             None => {
                 for id in released {
                     self.contents.remove(id);
+                    self.owns.remove(id);
                 }
                 IdMap::default()
             }
         };
+        // What each draws of itself, on every core, as a file's whole scene
+        // is a hundred thousand nodes or so
+        let mut todo: Vec<(u32, &Arc<Node>)> = Vec::new();
         for &id in &applied.new_nodes {
             let Some(node) = self.forest.get(id) else { continue };
-            let kept = previous
-                .and_then(|previous| previous.get(&id))
-                .filter(|old| ***old == **node)
-                .and_then(|_| before.get(&id))
-                .filter(|_| node.refs().all(|r| before.get(&r) == self.contents.get(&r)));
-            let content = match kept {
-                Some(&content) => content,
-                None => self.hash_node(node),
-            };
-            self.contents.insert(id, content);
+            let kept = previous.and_then(|previous| previous.get(&id)).filter(|old| ***old == **node).and_then(|_| before.get(&id));
+            match kept {
+                Some(&own) => {
+                    self.owns.insert(id, own);
+                }
+                None => todo.push((id, node)),
+            }
+        }
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
+        let owns: Vec<u64> = if todo.len() < 2048 || threads < 2 {
+            todo.iter().map(|(_, node)| own_hash(node)).collect()
+        } else {
+            std::thread::scope(|scope| {
+                let parts: Vec<_> = todo.chunks(todo.len().div_ceil(threads)).map(|part| scope.spawn(move || part.iter().map(|(_, node)| own_hash(node)).collect::<Vec<u64>>())).collect();
+                parts.into_iter().flat_map(|part| part.join().unwrap_or_default()).collect()
+            })
+        };
+        for ((id, _), own) in todo.iter().zip(owns) {
+            self.owns.insert(*id, own);
+        }
+        // Then with what they refer to, each after those
+        for &id in &applied.new_nodes {
+            let Some(node) = self.forest.get(id) else { continue };
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            self.owns.get(&id).copied().unwrap_or(0).hash(&mut hasher);
+            for id in node.refs() {
+                self.content(id).hash(&mut hasher);
+            }
+            self.contents.insert(id, hasher.finish());
         }
     }
 
     /// A hash of what node `id` draws, see `contents`
     pub fn content(&self, id: u32) -> u64 {
         self.contents.get(&id).copied().unwrap_or(0)
-    }
-
-    fn hash_node(&self, node: &Node) -> u64 {
-        use std::fmt::Write;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        // Each field, so one added to `Node` has to be thought of here
-        let Node {
-            id,
-            op,
-            children,
-            child,
-            transform,
-            paint_size,
-            geometry,
-            fill_geometries,
-            stroke_geometries,
-            stroke_mode,
-            bg_blur_expansion_for_frame_fill,
-            is_created_from_brush,
-            blend_mode,
-            opacity,
-            alpha_node,
-            color_node,
-            mask_op,
-            color,
-            radius,
-            ext,
-            extra,
-        } = node;
-        // Custom effects are run and kept by node
-        if matches!(op, Op::CustomEffect) {
-            id.hash(&mut hasher);
-        }
-        let _ = write!(
-            HashWrite(&mut hasher),
-            "{op:?}{transform:?}{paint_size:?}{stroke_mode:?}{bg_blur_expansion_for_frame_fill:?}{is_created_from_brush:?}{blend_mode:?}{opacity:?}{mask_op:?}{color:?}{radius:?}{ext:?}{extra:?}"
-        );
-        for geometry in geometry.iter().chain(fill_geometries).chain(stroke_geometries) {
-            let rt::Geometry { path, paints, glyph_batch, glyph_metadata, extra } = geometry;
-            path.as_deref().map(path_hash).hash(&mut hasher);
-            let _ = write!(HashWrite(&mut hasher), "{paints:?}{glyph_metadata:?}{extra:?}");
-            if let Some(batch) = glyph_batch {
-                let rt::GlyphBatch { glyphs, decoration_paths, should_round_y, extra } = &**batch;
-                let _ = write!(HashWrite(&mut hasher), "{glyphs:?}{should_round_y:?}{extra:?}");
-                for path in decoration_paths {
-                    path_hash(path).hash(&mut hasher);
-                }
-            }
-            0xfeu8.hash(&mut hasher);
-        }
-        (children.len(), child.is_some(), alpha_node.is_some(), color_node.is_some()).hash(&mut hasher);
-        for id in node.refs() {
-            self.content(id).hash(&mut hasher);
-        }
-        hasher.finish()
     }
 
     pub fn node(&self, id: u32) -> Option<&Arc<Node>> {

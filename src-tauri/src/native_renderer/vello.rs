@@ -230,6 +230,9 @@ impl Vello {
             let handle = shared_handle(skia, &skia_fence.cast().map_err(|error| error.to_string())?)?;
             Ok(Shared { skia: skia_fence, vello: open(&raw, handle)? })
         };
+        // Made here, off the render thread, as its shaders take a while to
+        // make, which the first view with a blur would wait on
+        let blurrer = Blurrer::new(&device);
         Ok(Self {
             atlas_drawn: fence("atlas fence")?,
             view_drawn: fence("view fence")?,
@@ -253,7 +256,7 @@ impl Vello {
             pictures: HashMap::new(),
             barriers: Barriers { allocators: Vec::new(), list: None },
             skia: SendDevice(skia.clone()),
-            blurrer: None,
+            blurrer: Some(blurrer),
             blurred: Vec::new(),
             blurred_keys: Vec::new(),
         })
@@ -916,6 +919,11 @@ fn outside(shape: &Path, device: IRect) -> Option<Path> {
     Some(out)
 }
 
+/// Parts of a shape past which `simplified` leaves it as it is
+const SIMPLIFY_MOST: usize = 4096;
+/// Points of one of its lines, flattened, past which it's left as it is
+const SIMPLIFY_POINTS: usize = 16384;
+
 /// `shape` drawn by `transform`, as lines no further than `tolerance` from
 /// it, where it's small enough that's fewer than it has, or as the cells
 /// of a grid `cells` to a pixel it covers, filled by `style`, where that's
@@ -932,7 +940,9 @@ fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, styl
             (low.x, low.y, high.x, high.y) = (low.x.min(point.x), low.y.min(point.y), high.x.max(point.x), high.y.max(point.y));
         });
     }
-    if had == 0 || (high.x - low.x).max(high.y - low.y) > 64.0 {
+    // One of very many parts, as a traced or scanned vector is, takes far
+    // longer to make fewer of than Vello takes to draw as it is
+    if had == 0 || had > SIMPLIFY_MOST || (high.x - low.x).max(high.y - low.y) > 64.0 {
         return None;
     }
     SCRATCH.with_borrow_mut(|(line, keep, kept, spans)| {
@@ -957,6 +967,10 @@ fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, styl
         line.clear();
         let mut last = kurbo::Point::ZERO;
         for element in shape.path_elements(0.1) {
+            // Making fewer of a line takes up to the square of its points
+            if line.len() > SIMPLIFY_POINTS {
+                return None;
+            }
             let element = transform * element;
             match element {
                 kurbo::PathEl::MoveTo(p) => {
