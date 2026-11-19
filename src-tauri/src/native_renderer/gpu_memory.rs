@@ -8,10 +8,6 @@
 use std::collections::HashMap;
 
 use windows::core::w;
-use windows::Win32::Foundation::CloseHandle;
-use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-};
 use windows::Win32::System::Performance::{
     PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterArrayW, PdhOpenQueryW,
     PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_LARGE, PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA,
@@ -100,35 +96,8 @@ impl Drop for GpuMemory {
     }
 }
 
-/// Processes started by `root`, and by them, and so on
+/// Processes started by `root`, and by them, and so on, from one query of
+/// Windows', as Toolhelp's snapshot takes tens of milliseconds
 fn descendants(root: u32) -> Vec<u32> {
-    let mut parents: Vec<(u32, u32)> = Vec::new();
-    unsafe {
-        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
-            return Vec::new();
-        };
-        let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        if Process32FirstW(snapshot, &mut entry).is_ok() {
-            loop {
-                parents.push((entry.th32ProcessID, entry.th32ParentProcessID));
-                if Process32NextW(snapshot, &mut entry).is_err() {
-                    break;
-                }
-            }
-        }
-        let _ = CloseHandle(snapshot);
-    }
-    let mut found = vec![root];
-    let mut at = 0;
-    while at < found.len() {
-        let parent = found[at];
-        for &(pid, ppid) in &parents {
-            if ppid == parent && pid != parent && !found.contains(&pid) {
-                found.push(pid);
-            }
-        }
-        at += 1;
-    }
-    found.remove(0);
-    found
+    super::monitor::descendants(&super::monitor::system_processes(&mut Vec::new(), 0), root)
 }

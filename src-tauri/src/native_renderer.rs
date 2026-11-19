@@ -55,6 +55,8 @@ mod hud;
 #[cfg(windows)]
 mod gpu_census;
 #[cfg(windows)]
+mod monitor;
+#[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
 mod overlay_icons;
@@ -118,7 +120,10 @@ pub fn mark(what: impl FnOnce() -> String) {
     static START: OnceLock<std::time::Instant> = OnceLock::new();
     let start = *START.get_or_init(std::time::Instant::now);
     if dev() {
-        log::info!("native renderer @{}: {}", start.elapsed().as_millis(), what());
+        let what = what();
+        #[cfg(windows)]
+        render::trace(|| format!("mark: {what}"));
+        log::info!("native renderer @{}: {}", start.elapsed().as_millis(), what);
     }
 }
 

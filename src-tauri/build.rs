@@ -14,5 +14,15 @@ fn main() {
         println!("cargo:rustc-link-arg=/DELAYLOAD:DirectML.dll");
         println!("cargo:rustc-link-lib=delayimp");
     }
+    // The commit built, for dev traces
+    if let Ok(out) = std::process::Command::new("git").args(["rev-parse", "--short", "HEAD"]).output() {
+        if out.status.success() {
+            println!("cargo:rustc-env=LIGMA_COMMIT={}", String::from_utf8_lossy(&out.stdout).trim());
+            // Built again once the commit changes: HEAD's log moves with each
+            if let Ok(log) = std::process::Command::new("git").args(["rev-parse", "--git-path", "logs/HEAD"]).output() {
+                println!("cargo:rerun-if-changed={}", String::from_utf8_lossy(&log.stdout).trim());
+            }
+        }
+    }
     tauri_build::build()
 }

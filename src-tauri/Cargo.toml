@@ -57,7 +57,7 @@ windows-core = "0.62"
 # notifications show as (src/notifications.rs), and the picked app icon on
 # Ligma's shortcuts (src/app_icon.rs), and checking and loading Windows'
 # DirectML for Upscale (src/upscale.rs)
-windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_DirectComposition", "Win32_Security"] }
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_Com_StructuredStorage", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "UI_Notifications", "Data_Xml_Dom", "Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_System_Performance", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_System_Power", "Win32_System_Diagnostics_ToolHelp", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_DirectComposition", "Win32_Security"] }
 # The native renderer draws the view with Vello, on wgpu's D3D12 device,
 # its shaders compiled with DXC built in (src/native_renderer/vello.rs)
 vello = { version = "=0.11.0", default-features = false, features = ["wgpu"] }

@@ -530,7 +530,7 @@ const COARSEST_IMAGES: u32 = 4;
 const TOO_BIG_FOR: Duration = Duration::from_secs(3);
 
 /// A pass of the render loop past this is traced, step by step
-const SLOW_PASS: Duration = Duration::from_millis(150);
+const SLOW_PASS: Duration = Duration::from_millis(30);
 
 /// Steps of a slow pass shorter than this aren't traced
 const SLOW_STEP: Duration = Duration::from_millis(3);
@@ -1602,6 +1602,7 @@ impl Painter {
 
     fn serve(&mut self, messages: Receiver<Msg>) {
         super::profile::register();
+        super::monitor::start();
         // How long until there's more to draw, if there is
         let mut next: Option<Duration> = Some(Duration::ZERO);
         // Time busy, passes and the slowest this second, while tracing
@@ -1712,11 +1713,40 @@ impl Painter {
                             budget >> 20
                         )
                     });
+                    trace(|| self.holds());
                     second = (Duration::ZERO, 0, Duration::ZERO, Instant::now());
                 }
             }
             self.dirty = next == Some(Duration::ZERO);
         }
+    }
+
+    /// Dev tools: what it holds, for the trace, once a second
+    fn holds(&self) -> String {
+        let mb = |bytes: usize| bytes as f64 / (1024.0 * 1024.0);
+        let cache = self.gpu.context.resource_cache_usage();
+        let stale = self.tiles.values().filter(|tile| tile.stale).count();
+        let whole = self.whole.as_ref().map_or_else(|| "none".to_string(), |whole| format!("{}x{} px={:.3}{}", whole.layer.tex.width, whole.layer.tex.height, whole.layer.px, if whole.stale { " stale" } else { "" }));
+        format!(
+            "render holds: units={} nodes={} images={} {:.0}MB tiles={} ({stale} stale) {:.0}MB rasters={} {:.0}MB pictures={} thumbs={} whole={whole} skia cache={:.0}MB of {} resources asked={} images queued={} effects waiting={} running={} | {}",
+            self.units.len(),
+            self.tree.as_ref().map_or(0, |tree| tree.forest.nodes.len()),
+            self.images.len(),
+            mb(self.images.values().map(Img::bytes).sum()),
+            self.tiles.len(),
+            mb(self.tiles.len() * (TILE * TILE * 4) as usize),
+            self.rasters.len(),
+            mb(self.raster_bytes),
+            self.pictures.len(),
+            self.thumbs.len(),
+            mb(cache.resource_bytes),
+            cache.resource_count,
+            self.asked.len(),
+            self.images_later.len(),
+            self.effects_waiting.len(),
+            self.effects_running.len(),
+            self.vello.as_ref().map_or_else(|| "no vello".to_string(), |vello| vello.holds()),
+        )
     }
 
     /// The tiles frames of the view show now, as the present thread

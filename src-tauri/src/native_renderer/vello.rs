@@ -262,6 +262,23 @@ impl Vello {
         })
     }
 
+    /// Dev tools: what it holds, for the trace
+    pub fn holds(&self) -> String {
+        let mb = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+        let blurred: Vec<&wgpu::Texture> = self.blurred.iter().flatten().map(|(texture, _)| texture).collect();
+        let blurred_bytes: u64 = blurred.iter().map(|texture| texture.width() as u64 * texture.height() as u64 * 4).sum();
+        format!(
+            "vello pages={} pieces={} {:.0}MB pictures={} blurred={} {:.0}MB renders={}",
+            self.pages.len(),
+            self.pieces.len(),
+            mb(self.piece_bytes as u64),
+            self.pictures.len(),
+            blurred.len(),
+            mb(blurred_bytes),
+            self.renders,
+        )
+    }
+
     fn raw_device(device: &wgpu::Device) -> Result<ID3D12Device, String> {
         let hal = unsafe { device.as_hal::<Dx12>() }.ok_or("not D3D12")?;
         Ok(hal.raw_device().clone())

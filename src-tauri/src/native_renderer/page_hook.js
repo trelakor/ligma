@@ -277,10 +277,29 @@
       }
     }).observe({ type: "long-animation-frame" });
   } catch {}
+  // The page's memory, about once a second, and once what the browser says
+  // the machine is
+  let memoryAt = -Infinity;
+  let described = false;
+  function pageMemory() {
+    const now = performance.now();
+    if (now - memoryAt < 1000) return undefined;
+    memoryAt = now;
+    const mb = (bytes) => Math.round(bytes / 1048576);
+    const heap = performance.memory;
+    const out = { heap: heap ? [mb(heap.usedJSHeapSize), mb(heap.totalJSHeapSize), mb(heap.jsHeapSizeLimit)] : null, dom: document.getElementsByTagName("*").length, canvases: document.getElementsByTagName("canvas").length };
+    if (!described) {
+      described = true;
+      out.cores = navigator.hardwareConcurrency;
+      out.ram = navigator.deviceMemory;
+      out.agent = navigator.userAgent;
+    }
+    return out;
+  }
   function pageSince() {
     const now = performance.now();
     const tenths = (ms) => Math.round(ms * 10) / 10;
-    const log = { frame: tenths(now - (document.timeline?.currentTime ?? now)), moves: pageLog.moves, first: tenths(now - pageLog.first), last: tenths(now - pageLog.last), ran: Math.round(pageLog.ran), long: pageLog.long };
+    const log = { frame: tenths(now - (document.timeline?.currentTime ?? now)), moves: pageLog.moves, first: tenths(now - pageLog.first), last: tenths(now - pageLog.last), ran: Math.round(pageLog.ran), long: pageLog.long, memory: pageMemory() };
     pageLog.moves = 0;
     pageLog.ran = 0;
     pageLog.long = [];

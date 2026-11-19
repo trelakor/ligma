@@ -1102,7 +1102,9 @@ impl Screen {
             self.reading.pop_front();
         }
         let rendered = start.elapsed();
+        let called = Instant::now();
         let _ = unsafe { self.swap_chain.Present(1, DXGI_PRESENT(0)) };
+        super::monitor::presented(called.elapsed());
         let presented = super::render::since_epoch_ms();
         // Textures of snapshots before, let go of
         let kept: std::collections::HashSet<usize> = snapshot.layers.iter().map(|layer| Arc::as_ptr(&layer.tex) as usize).collect();
