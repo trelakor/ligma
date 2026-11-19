@@ -1357,6 +1357,10 @@ pub(super) fn halvings(longest: u32, side: f64) -> u32 {
 fn premultiplied(image: &image::RgbaImage) -> Option<skia_safe::Image> {
     let (iw, ih) = image.dimensions();
     let mut pixels = image.as_raw().clone();
+    // Its smaller copies made here, which Skia otherwise makes as it's
+    // uploaded, on the render thread, a hundred milliseconds or more for a
+    // big one, holding up all it draws
+    let image = image.with_default_mipmaps().unwrap_or(image);
     for texel in pixels.chunks_exact_mut(4) {
         let a = texel[3] as u32;
         if a < 255 {
