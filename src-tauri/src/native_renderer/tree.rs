@@ -413,19 +413,24 @@ impl Tree {
             self.root = None;
             return Err(format!("root {} isn't there", header.root));
         }
+        let before = {
+            let _span = super::span::span("hash nodes");
+            self.renew(&applied, previous.as_ref(), &header.released)
+        };
         let mut info = self.info.write().unwrap();
-        if header.mode == 0 {
-            info.clear();
-        } else {
-            for id in &header.released {
-                info.remove(id);
+        match before {
+            // Of a whole scene, what's known of nodes that draw the same as
+            // they did stays, as it's of them and what they refer to alone,
+            // which is most of them, as working it out again for all is
+            // much of taking a scene
+            Some(before) => info.retain(|id, _| before.get(id).is_some_and(|content| self.contents.get(id) == Some(content))),
+            None => {
+                for id in &header.released {
+                    info.remove(id);
+                }
             }
         }
         drop(info);
-        {
-            let _span = super::span::span("hash nodes");
-            self.renew(&applied, previous.as_ref(), &header.released);
-        }
         if header.mode == 0 || !header.released.is_empty() {
             self.paths.lock().unwrap().retain(|_, (path, _)| path.strong_count() > 0);
             self.patterns.lock().unwrap().clear();
@@ -442,55 +447,79 @@ impl Tree {
     /// to, as they come. Of a whole scene, a node the same as the one its
     /// id was, over nodes all the same too, keeps its hash, which is most
     /// of them and far quicker than hashing them again
-    fn renew(&mut self, applied: &rt::Applied, previous: Option<&IdMap<u32, Arc<Node>>>, released: &[u32]) {
-        let before = match previous {
-            Some(_) => {
-                self.contents.clear();
-                std::mem::take(&mut self.owns)
-            }
+    /// Returns, of a whole scene, the hashes nodes had before
+    fn renew(&mut self, applied: &rt::Applied, previous: Option<&IdMap<u32, Arc<Node>>>, released: &[u32]) -> Option<IdMap<u32, u64>> {
+        let (before, contents) = match previous {
+            Some(_) => (std::mem::take(&mut self.owns), Some(std::mem::take(&mut self.contents))),
             None => {
                 for id in released {
                     self.contents.remove(id);
                     self.owns.remove(id);
                 }
-                IdMap::default()
+                (IdMap::default(), None)
             }
         };
         // What each draws of itself, on every core, as a file's whole scene
-        // is a hundred thousand nodes or so
-        let mut todo: Vec<(u32, &Arc<Node>)> = Vec::new();
-        for &id in &applied.new_nodes {
-            let Some(node) = self.forest.get(id) else { continue };
-            let kept = previous.and_then(|previous| previous.get(&id)).filter(|old| ***old == **node).and_then(|_| before.get(&id));
-            match kept {
-                Some(&own) => {
-                    self.owns.insert(id, own);
-                }
-                None => todo.push((id, node)),
-            }
-        }
+        // is a hundred thousand nodes or so. One the same as the node its id
+        // was keeps its hash, which telling takes about as long
+        let todo: Vec<(u32, &Arc<Node>, Option<(&Arc<Node>, u64)>)> = applied
+            .new_nodes
+            .iter()
+            .filter_map(|&id| {
+                let node = self.forest.get(id)?;
+                let old = previous.and_then(|previous| previous.get(&id)).zip(before.get(&id).copied());
+                Some((id, node, old))
+            })
+            .collect();
+        let own = |(_, node, old): &(u32, &Arc<Node>, Option<(&Arc<Node>, u64)>)| match old {
+            Some((old, own)) if Arc::ptr_eq(old, node) || ***old == ***node => *own,
+            _ => own_hash(node),
+        };
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
         let owns: Vec<u64> = if todo.len() < 2048 || threads < 2 {
-            todo.iter().map(|(_, node)| own_hash(node)).collect()
+            todo.iter().map(own).collect()
         } else {
             std::thread::scope(|scope| {
-                let parts: Vec<_> = todo.chunks(todo.len().div_ceil(threads)).map(|part| scope.spawn(move || part.iter().map(|(_, node)| own_hash(node)).collect::<Vec<u64>>())).collect();
+                let parts: Vec<_> = todo.chunks(todo.len().div_ceil(threads)).map(|part| scope.spawn(move || part.iter().map(own).collect::<Vec<u64>>())).collect();
                 parts.into_iter().flat_map(|part| part.join().unwrap_or_default()).collect()
             })
         };
-        for ((id, _), own) in todo.iter().zip(owns) {
+        for ((id, ..), own) in todo.iter().zip(owns) {
             self.owns.insert(*id, own);
         }
-        // Then with what they refer to, each after those
+        // Then with what they refer to, each after those, which a frame
+        // can send after it, as a pattern's source
         for &id in &applied.new_nodes {
-            let Some(node) = self.forest.get(id) else { continue };
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            self.owns.get(&id).copied().unwrap_or(0).hash(&mut hasher);
-            for id in node.refs() {
-                self.content(id).hash(&mut hasher);
-            }
-            self.contents.insert(id, hasher.finish());
+            self.contents.remove(&id);
         }
+        let (forest, owns, contents_now) = (&self.forest, &self.owns, &mut self.contents);
+        let mut visiting = std::collections::HashSet::new();
+        let mut stack = Vec::new();
+        for &id in &applied.new_nodes {
+            stack.push((id, false));
+            while let Some((id, ready)) = stack.pop() {
+                if contents_now.contains_key(&id) {
+                    continue;
+                }
+                let Some(node) = forest.get(id) else { continue };
+                if !ready {
+                    // One that refers back to itself hashes without that
+                    if !visiting.insert(id) {
+                        continue;
+                    }
+                    stack.push((id, true));
+                    stack.extend(node.refs().filter(|id| !contents_now.contains_key(id) && !visiting.contains(id)).map(|id| (id, false)));
+                    continue;
+                }
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                owns.get(&id).copied().unwrap_or(0).hash(&mut hasher);
+                for id in node.refs() {
+                    contents_now.get(&id).copied().unwrap_or(0).hash(&mut hasher);
+                }
+                contents_now.insert(id, hasher.finish());
+            }
+        }
+        contents
     }
 
     /// A hash of what node `id` draws, see `contents`
