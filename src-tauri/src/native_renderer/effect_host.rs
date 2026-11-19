@@ -983,6 +983,7 @@ impl Host {
     pub fn new(prefer: Option<&str>) -> Result<Self, String> {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::DX12;
+        descriptor.flags = super::vello::instance_flags();
         // Windows' own compiler: left to choose, wgpu takes any dxcompiler.dll
         // on the PATH, which some other app's old one crashes
         descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;

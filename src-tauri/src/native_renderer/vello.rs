@@ -169,11 +169,22 @@ fn open<T: Interface>(device: &ID3D12Device, handle: HANDLE) -> Result<T, String
     out.ok_or_else(|| "open shared: nothing".to_string())
 }
 
+/// wgpu's checks only with D3D12's, as LIGMA_NATIVE_D3D_DEBUG turns on.
+/// Left to itself it turns them on in debug builds, and D3D12's debug layer
+/// turned on once Skia's device is made removes that device
+pub(super) fn instance_flags() -> wgpu::InstanceFlags {
+    match std::env::var_os("LIGMA_NATIVE_D3D_DEBUG").is_some() && super::dev() {
+        true => wgpu::InstanceFlags::debugging(),
+        false => wgpu::InstanceFlags::empty(),
+    }
+}
+
 impl Vello {
     fn new(skia: &ID3D12Device) -> Result<Self, String> {
         let luid: LUID = unsafe { skia.GetAdapterLuid() };
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         desc.backends = wgpu::Backends::DX12;
+        desc.flags = instance_flags();
         desc.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::StaticDxc;
         let instance = wgpu::Instance::new(desc);
         let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12));
