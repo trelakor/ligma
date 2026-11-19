@@ -670,6 +670,10 @@ const FAILED_MOST: Duration = Duration::from_secs(30);
 /// How long since an image last came in before the furthest level's tiles
 /// are drawn again for what changed
 const IMAGES_QUIET: Duration = Duration::from_secs(1);
+/// How often, while images keep coming in, the furthest level's tiles are
+/// drawn again for what changed anyway, as zooming out shows them, and as
+/// they were before images came they'd show the file as it was opening
+const FAR_EVERY: Duration = Duration::from_secs(2);
 
 /// What changes in a kept scene other than edits, images coming in and the
 /// like, builds it again no sooner than this after it was built, as they
@@ -1318,6 +1322,9 @@ pub struct Painter {
     kept_drawn: Option<(u64, (i32, i32, u32))>,
     /// When an image last came in
     image_came_at: Instant,
+    /// When the furthest level's tiles were last drawn again for what
+    /// changed
+    far_redrawn: Instant,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
     /// Images units drew with when Vello last drew them, and at what
     /// pixels a unit, by unit, as pictures keep them
@@ -1511,6 +1518,7 @@ impl Painter {
             kept_serial: 0,
             kept_drawn: None,
             image_came_at: Instant::now(),
+            far_redrawn: Instant::now(),
             vello_starting,
             vello_uses: HashMap::new(),
             vello_shown: HashMap::new(),
@@ -2546,6 +2554,7 @@ impl Painter {
         let ahead_missing: Vec<TileKey> = if full { Vec::new() } else { ahead.iter().copied().filter(|key| !ready(&self.tiles, key)).collect() };
         let between_missing: Vec<TileKey> = if full || zooming || self.moved.elapsed() < PAN_STILL { Vec::new() } else { levels.iter().copied().filter(|key| !ready(&self.tiles, key)).collect() };
         let between_waits = !zooming && levels.iter().any(|key| !ready(&self.tiles, key));
+        let images_quiet = self.image_came_at.elapsed() >= IMAGES_QUIET || self.far_redrawn.elapsed() >= FAR_EVERY;
         // The furthest level changes as the zoom goes out, past which the
         // one there is stands in till it's still
         let far_missing: Vec<TileKey> = match zooming && self.tiles.keys().any(|key| key.px <= far.first().map_or(0, |key| key.px)) {
@@ -2553,12 +2562,12 @@ impl Painter {
             // One there that's out of date waits till images stop coming
             // in, as a file opens, and the view's still, as each takes long
             // and stands in only while the zoom goes out
-            false => far.iter().copied().filter(|key| !ready(&self.tiles, key) && (!self.tiles.contains_key(key) || (self.image_came_at.elapsed() >= IMAGES_QUIET && self.moved.elapsed() >= VELLO_STILL))).collect(),
+            false => far.iter().copied().filter(|key| !ready(&self.tiles, key) && (!self.tiles.contains_key(key) || (images_quiet && self.moved.elapsed() >= VELLO_STILL))).collect(),
         };
         // The furthest drawn while the zoom changed is drawn again exactly
         // once it's been still a while, as is one out of date, as units of
         // other levels standing in for its own can look wrong
-        let far_rough: Vec<TileKey> = match zooming || self.image_came_at.elapsed() < IMAGES_QUIET || self.moved.elapsed() < VELLO_STILL {
+        let far_rough: Vec<TileKey> = match zooming || !images_quiet || self.moved.elapsed() < VELLO_STILL {
             true => Vec::new(),
             false => far.iter().copied().filter(|key| self.tiles.get(key).is_some_and(|tile| !tile.exact)).collect(),
         };
@@ -2577,6 +2586,9 @@ impl Painter {
         for (keys, exact, later) in todo {
             if keys.is_empty() {
                 continue;
+            }
+            if keys.iter().any(|key| Some(key.px) == furthest && self.tiles.contains_key(key)) {
+                self.far_redrawn = Instant::now();
             }
             let started = Instant::now();
             self.vello_or_skia(&keys, exact);
@@ -2597,7 +2609,8 @@ impl Painter {
         // Back once images stop coming in, for those waiting on that
         let rough = far.iter().any(|key| self.tiles.get(key).is_some_and(|tile| !tile.exact));
         if far.iter().any(|key| !ready(&self.tiles, key)) || rough {
-            return Some(IMAGES_QUIET.saturating_sub(self.image_came_at.elapsed()).max(VELLO_STILL.saturating_sub(self.moved.elapsed())).max(Duration::from_millis(1)));
+            let quiet = IMAGES_QUIET.saturating_sub(self.image_came_at.elapsed()).min(FAR_EVERY.saturating_sub(self.far_redrawn.elapsed()));
+            return Some(quiet.max(VELLO_STILL.saturating_sub(self.moved.elapsed())).max(Duration::from_millis(1)));
         }
         let view = self.view.clone()?;
         self.update_reason(&view, px, width, height);
