@@ -20,6 +20,7 @@
 
   // Demos per release, in the order of its notes
   const RELEASES = {
+    "0.47.0": ["toolbar-layout", "toolbar-figma"],
     "0.45.0": ["fx-library", "fx-repeater", "fx-disintegrate", "fx-bitcrush", "fx-dither", "fx-halftone", "fx-modulate", "fx-chromatic", "fx-fisheye", "fx-liquify", "fx-displace", "fx-motion", "fx-glow", "fx-shadow", "fx-reflection", "fx-rim", "fx-glitter", "fx-sticker", "fx-screen", "fx-shapeFill", "fx-warp", "fx-scatter", "fx-pattern", "fx-extrude", "fx-longShadow", "fx-outline", "fx-blend", "fx-roughen", "fx-pucker", "fx-round", "fx-envelope", "fx-polar", "fx-kaleidoscope", "fx-section"],
     "0.44.0": ["color-frames", "settings-search"],
     "0.43.0": ["heal", "upscale"],
@@ -2815,6 +2816,234 @@
 
   // Each scene's CSS, scoped to it. `.at-<step>` is on the scene itself
   const scope = (id, selector) => (selector.startsWith(".at-") ? `.demo-${id}${selector}` : `.demo-${id} ${selector}`);
+  // Tools and modes (Settings > Editor > Toolbar), drawn with the icons
+  // the app shows: Figma's own, as a file reports them (toolbar.rs), Ligma's
+  // lasso (lasso.rs), Settings' eye and Draw's pictures of its tools
+  // Figma's own toolbar icons, 24px, as a file reports them (toolbar.rs)
+  const FIGMA_ICON = {
+    move: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M4.586 4.586a2 2 0 0 1 2.005-.497l.14.05 13 5.107a2 2 0 0 1 1.267 1.779v.159a2 2 0 0 1-1.26 1.782l-.15.053-5.024 1.545-1.545 5.024a2 2 0 0 1-1.677 1.398l-.158.012a2 2 0 0 1-1.938-1.267l-5.107-13a2 2 0 0 1 .447-2.145m1.78.484a1 1 0 0 0-1.073.223l-.097.112a1 1 0 0 0-.127.96l5.108 13a1 1 0 0 0 .811.628l.158.006a1 1 0 0 0 .859-.558l.058-.147 1.7-5.53 5.531-1.701a1 1 0 0 0 .687-.76l.018-.157a1 1 0 0 0-.492-.9l-.142-.069z"/></svg>',
+    frame: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M7.5 4a.5.5 0 0 0-.5.5V7H4.5a.5.5 0 0 0 0 1H7v8H4.5a.5.5 0 0 0 0 1H7v2.5a.5.5 0 0 0 1 0V17h8v2.5a.5.5 0 0 0 1 0V17h2.5a.5.5 0 0 0 0-1H17V8h2.5a.5.5 0 0 0 0-1H17V4.5a.5.5 0 0 0-1 0V7H8V4.5a.5.5 0 0 0-.5-.5M16 8H8v8h8z" clip-rule="evenodd"/></svg>',
+    rect: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M18 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1M6 4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z" clip-rule="evenodd"/></svg>',
+    pen: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M4.886 3.21a1 1 0 0 1 .812-.19l7.698 1.56.338.076a7.67 7.67 0 0 1 5.806 7.266v.346l-.008.329 1.197 1.197a1 1 0 0 1 0 1.414l-5.523 5.522a1 1 0 0 1-1.413 0l-1.198-1.197-.328.008a7.67 7.67 0 0 1-7.612-5.806l-.077-.338L3.02 5.7a1 1 0 0 1 .274-.906l1.5-1.5zm.674 9.99a6.666 6.666 0 0 0 6.383 5.342h.3l.756-.018 1.5 1.5 5.523-5.522-1.5-1.5.018-.756a6.67 6.67 0 0 0-5.048-6.619l-.295-.066L5.5 4l-.396.397 5.16 5.16A3 3 0 0 1 12 9.001 3.001 3.001 0 0 1 12 15a3 3 0 0 1-2.444-4.737l-5.16-5.16L4 5.5zM12 10.001a2 2 0 0 0-2 2l.01.204a2 2 0 0 0 1.786 1.785L12 14a2 2 0 0 0 1.989-1.795l.01-.204a2 2 0 0 0-1.795-1.99z"/></svg>',
+    pencil: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M4.008 5.124a1 1 0 0 1 1.116-1.116l3.66.457-.124.992-2.636-.329L5 5l.128 1.024.33 2.636a1 1 0 0 0 .285.583l7.403 7.403 3.5-3.5-7.403-7.403a1 1 0 0 0-.583-.286l.124-.992a2 2 0 0 1 1.166.57l9.55 9.55a2 2 0 0 1 0 2.83L17.414 19.5a2 2 0 0 1-2.828 0l-9.55-9.55a2 2 0 0 1-.57-1.166zm13.346 8.73-3.5 3.5 1.439 1.439a1 1 0 0 0 1.414 0l2.086-2.086a1 1 0 0 0 0-1.414z" clip-rule="evenodd"/></svg>',
+    text: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M4 5.5a.5.5 0 0 1 .5-.5h14a.5.5 0 0 1 .5.5v3a.5.5 0 0 1-1 0V6h-6v12h2.5a.5.5 0 0 1 0 1h-6a.5.5 0 0 1 0-1H11V6H5v2.5a.5.5 0 0 1-1 0z" clip-rule="evenodd"/></svg>',
+    code: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M9.5 4a.5.5 0 0 1 0 1H8a2 2 0 0 0-2 2v3a.5.5 0 0 1-.146.354L4.207 12l1.647 1.646A.5.5 0 0 1 6 14v3a2 2 0 0 0 2 2h1.5a.5.5 0 0 1 0 1H8a3 3 0 0 1-3-3v-2.793l-1.854-1.854a.5.5 0 0 1 0-.707L5 9.794V7a3 3 0 0 1 3-3zM16 4a3 3 0 0 1 3 3v2.793l1.854 1.854a.5.5 0 0 1 0 .707L19 14.207V17a3 3 0 0 1-3 3h-1.5a.5.5 0 0 1 0-1H16a2 2 0 0 0 2-2v-3a.5.5 0 0 1 .146-.354L19.793 12l-1.646-1.646A.5.5 0 0 1 18 10V7a2 2 0 0 0-2-2h-1.5a.5.5 0 0 1 0-1z"/></svg>',
+    comment: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M12.5 3a8.5 8.5 0 0 1 0 17H7.09c-.89 0-1.39 0-1.767-.121l-.154-.06a2 2 0 0 1-.906-.828l-.082-.16c-.136-.297-.17-.657-.178-1.248L4 16.909V11.5A8.5 8.5 0 0 1 12.5 3m0 1A7.5 7.5 0 0 0 5 11.5v5.41c0 .523 0 .861.02 1.12.018.247.05.34.07.385a1 1 0 0 0 .495.494c.045.02.138.053.386.072.258.019.596.019 1.12.019H12.5a7.5 7.5 0 0 0 0-15"/></svg>',
+    actions: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M9 13a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zm7.5 0a.5.5 0 0 1 .5.5V16h2.5a.5.5 0 0 1 0 1H17v2.5a.5.5 0 0 1-1 0V17h-2.5a.5.5 0 0 1 0-1H16v-2.5a.5.5 0 0 1 .5-.5M6 14a1 1 0 0 0-1 1v3a1 1 0 0 0 .897.995L6 19h3a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1zm.87-10.275a1 1 0 0 1 1.337.068l3 3a1 1 0 0 1 0 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3a1 1 0 0 1 0-1.414l3-3zM16.5 4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7m-12 3.5 3 3 3-3-3-3zm12-2.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5"/></svg>',
+    draw: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M13.407 5.06c.61-.123 1.227-.079 1.657.343l.135.15c.277.361.316.79.208 1.204-.115.44-.397.887-.734 1.314-.68.86-1.74 1.829-2.748 2.76-1.031.952-2.01 1.867-2.606 2.662-.3.4-.466.724-.517.97-.044.21-.003.34.12.46l.065.052c.072.044.167.062.313.039.217-.034.505-.155.866-.378.72-.445 1.561-1.183 2.445-1.966.862-.763 1.768-1.571 2.57-2.076.4-.252.817-.457 1.221-.527.427-.074.87.002 1.223.346l.102.112c.22.271.296.593.266.918-.032.344-.183.684-.364.993-.363.617-.963 1.296-1.515 1.922-.574.651-1.1 1.251-1.403 1.767-.151.257-.218.449-.23.581-.01.106.012.163.072.22l.054.04c.074.038.214.062.474-.031.356-.128.853-.456 1.465-1.1a.5.5 0 0 1 .725.687c-.666.702-1.291 1.153-1.853 1.354-.535.192-1.08.173-1.485-.163l-.08-.071a1.23 1.23 0 0 1-.369-1.03c.033-.344.183-.684.364-.993.363-.617.964-1.297 1.516-1.923.574-.651 1.1-1.25 1.402-1.766.152-.258.22-.449.232-.581.007-.08-.004-.132-.035-.177l-.038-.045c-.07-.068-.162-.108-.353-.075-.213.037-.5.161-.858.388-.717.451-1.555 1.194-2.44 1.978-.862.764-1.774 1.57-2.584 2.07-.404.249-.826.45-1.237.514-.38.06-.767 0-1.095-.247l-.136-.118c-.402-.394-.502-.887-.399-1.38.097-.46.367-.923.696-1.363.663-.885 1.718-1.865 2.728-2.798 1.033-.954 2.023-1.862 2.642-2.645.31-.393.489-.71.55-.946.04-.152.028-.246-.017-.32l-.057-.069c-.082-.08-.284-.172-.76-.076-.468.094-1.091.352-1.863.803-1.537.898-3.552 2.496-5.893 4.786a.5.5 0 0 1-.699-.715c2.37-2.319 4.45-3.98 6.087-4.935.815-.476 1.55-.794 2.17-.92" clip-rule="evenodd"/></svg>',
+    design: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M12.11 13.956c-.44-1.121.618-2.23 1.738-1.885l.108.038 4.15 1.63.115.051c1.136.556 1.027 2.254-.218 2.637l-1.205.372-.37 1.205c-.397 1.29-2.196 1.356-2.689.102zm1.48-.916a.425.425 0 0 0-.55.55l1.63 4.15c.138.35.618.356.775.038l.027-.068.526-1.711 1.711-.527a.425.425 0 0 0 .031-.802zM16.5 6A1.5 1.5 0 0 1 18 7.5v1a1.5 1.5 0 0 1-1.5 1.5H10v6.5A1.5 1.5 0 0 1 8.5 18h-1A1.5 1.5 0 0 1 6 16.5v-9A1.5 1.5 0 0 1 7.5 6zM7 16.5a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 .5-.5V15h-.5a.5.5 0 0 1 0-1H9v-1h-.5a.5.5 0 0 1 0-1H9v-2H7zM7.5 7a.5.5 0 0 0-.5.5V9h2V7zM10 9h2v-.5a.5.5 0 0 1 1 0V9h1v-.5a.5.5 0 0 1 1 0V9h1.5a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-.5-.5H10z"/></svg>',
+    motion: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" fill-rule="evenodd" d="M10.94 5.44a1.5 1.5 0 0 1 2.12 0l5.502 5.5a1.5 1.5 0 0 1 0 2.121l-5.501 5.502a1.5 1.5 0 0 1-2.121 0l-5.502-5.502a1.5 1.5 0 0 1 0-2.121zm1.414.706a.5.5 0 0 0-.707 0l-5.501 5.501a.5.5 0 0 0 0 .707l5.5 5.502a.5.5 0 0 0 .707 0l5.502-5.502a.5.5 0 0 0 0-.707zm-1.207 2.001a.5.5 0 0 1 .707 0l3.5 3.5a.5.5 0 0 1 0 .707l-3.5 3.5a.5.5 0 1 1-.707-.707l3.146-3.146-3.146-3.147a.5.5 0 0 1 0-.707m-2 2a.5.5 0 0 1 .707 0l1.5 1.5a.5.5 0 0 1 0 .707l-1.5 1.5a.5.5 0 1 1-.707-.707l1.146-1.146-1.146-1.147a.5.5 0 0 1 0-.707" clip-rule="evenodd"/></svg>',
+    dev: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M13.631 6.018a.5.5 0 0 1 .367.513l-.016.1-3 11-.036.095a.5.5 0 0 1-.93-.358l3-11 .037-.095a.5.5 0 0 1 .578-.255M8.224 8.582a.501.501 0 0 1 .693.693l-.064.079L6.206 12l2.647 2.646a.5.5 0 1 1-.707.707l-3-3a.5.5 0 0 1 0-.707l3-3zm6.922.064a.5.5 0 0 1 .707 0l3 3a.5.5 0 0 1 0 .707l-3 3-.078.065a.5.5 0 0 1-.694-.693l.065-.079L17.792 12l-2.646-2.646a.5.5 0 0 1 0-.707"/></svg>',
+    chevron: '<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="M13.647 10.647a.5.5 0 0 1 .707.707l-2.5 2.5a.5.5 0 0 1-.707 0l-2.5-2.5a.5.5 0 0 1 .707-.707l2.146 2.146z"/></svg>',
+  };
+  FIGMA_ICON.lasso = `<svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="var(--fpl-icon-color, var(--color-icon))" d="m10.197 17.884.33.06q.496.073.98.05a.5.5 0 0 1 .043 1 6 6 0 0 1-1.169-.062l-.393-.07-.097-.031a.501.501 0 0 1 .205-.958zm4.23-.859a.5.5 0 0 1 .534.846q-.667.422-1.377.694a.5.5 0 0 1-.357-.934 7 7 0 0 0 1.2-.606m-7.703-.582a.5.5 0 0 1 .63-.053l.077.065.126.124q.193.18.402.321l.29.186q.146.088.29.168a.5.5 0 0 1-.483.876 8 8 0 0 1-.328-.19l-.326-.21a4 4 0 0 1-.527-.422l-.163-.158-.062-.08a.5.5 0 0 1 .074-.627m10.105-1.63a.5.5 0 0 1 .726.68l-.231.291-.25.287q-.258.282-.526.541a.5.5 0 0 1-.695-.719q.245-.236.481-.496l.221-.254q.107-.127.204-.256zm-11.322-1.85a.5.5 0 0 1 .54.328l.025.098.062.376q.11.557.301 1.06a.5.5 0 0 1-.935.355 7.5 7.5 0 0 1-.347-1.224l-.071-.428-.004-.101a.5.5 0 0 1 .43-.464m13.012-1.264a.5.5 0 0 1 .429.563 6.3 6.3 0 0 1-.393 1.48.5.5 0 0 1-.93-.37 5.3 5.3 0 0 0 .331-1.245.5.5 0 0 1 .563-.428M5.46 9.622a.5.5 0 0 1 .944.332c-.166.47-.279.958-.342 1.448l-.022.099a.501.501 0 0 1-.97-.228l.065-.416a8 8 0 0 1 .325-1.235m12.753-.865c.287.434.5.922.631 1.443a.501.501 0 0 1-.97.244 3.7 3.7 0 0 0-.496-1.136l.418-.275zm-8.182-.42a.5.5 0 0 1 .47.877l-.277.191q-.14.099-.28.205l-.086.053a.5.5 0 0 1-.516-.85l.301-.221q.15-.107.299-.207zm7.49.278a.5.5 0 0 1 .692.142l-.835.551a.5.5 0 0 1 .143-.693m-9.706-2.28a.5.5 0 0 1 .538.838l-.286.242q-.413.376-.738.807a.5.5 0 1 1-.797-.604A7 7 0 0 1 7.73 6.39zm5.392 1.105.109.488a7 7 0 0 0-1.247.414l-.097.03a.501.501 0 0 1-.303-.947l.366-.15a8 8 0 0 1 1.063-.323zm1.943-.59.204.033q.605.112 1.129.363l.172.087.084.056a.5.5 0 0 1-.461.865l-.094-.04-.268-.126a3.6 3.6 0 0 0-.906-.248.5.5 0 0 1 .14-.99m-2.052.102a.5.5 0 0 1 .218.976zM10.62 5.001a.5.5 0 0 1 .25.946l-.094.036q-.374.099-.714.228l-.098.026a.5.5 0 0 1-.255-.962l.397-.137a9 9 0 0 1 .414-.122z"/></svg>`;
+  const tlIcon = (name) => FIGMA_ICON[name];
+  const tlArrow = `<i class="tc">${FIGMA_ICON.chevron}</i>`;
+  const tlEye = '<i class="te"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M1 6s1.8-3.5 5-3.5S11 6 11 6 9.2 9.5 6 9.5 1 6 1 6Z" stroke="currentColor"/><circle cx="6" cy="6" r="1.5" fill="currentColor"/></svg></i><i class="te shut"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.6 3.6C1.6 4.6 1 6 1 6s1.8 3.5 5 3.5c.9 0 1.7-.3 2.4-.7M4.6 2.7c.4-.1.9-.2 1.4-.2C9.2 2.5 11 6 11 6s-.4.8-1.1 1.7M1.5 1.5l9 9" stroke="currentColor" stroke-linecap="round"/></svg></i>';
+  // Draw's pen, brush and pencil: Figma's pictures, the tool and over it
+  // its color
+  const tlDrawn = (kind) => `<span class="drawn"><img src="draw-${kind}.svg" alt=""><img src="draw-${kind}-over.svg" alt=""></span>`;
+  // A slot: its tool, its arrow if it's a group, and the eye at its top
+  // left. `x` is where Settings puts it, left of the bar
+  const tlSlot = (name, x, face, group = true) => `<span class="ts ts-${name}" style="left:${x}px"><i class="tt">${face}</i>${group ? tlArrow : ""}${tlEye}</span>`;
+  const tlModes = (current, x) =>
+    `<span class="tm" style="left:${x}px">${["draw", "design", "motion", "dev"].map((mode) => `<i class="mo mo-${mode}${mode === current ? " cur" : ""}">${tlIcon(mode)}</i>`).join("")}</span>`;
+  const tlPen = `<span class="swap"><span class="was">${tlIcon("pen")}</span><span class="now">${tlIcon("pencil")}</span></span>`;
+
+  DEMOS["toolbar-layout"] = {
+    title: "Tools and modes",
+    // Settings at the width it opens at, so the toolbar shows at its size
+    size: [840, 468],
+    steps: [
+      { caption: "Your toolbar, in Settings > Editor", ms: 1500, at: [640, 330] },
+      { caption: "Drag a tool to move it", ms: 650, at: [366, 222], move: 700 },
+      { caption: "Drag a tool to move it", ms: 1000, along: "M366 222L309 222", move: 750 },
+      { caption: "Drag a tool to move it", ms: 900 },
+      { caption: "Hover one for its eye", ms: 700, at: [596, 224], move: 600 },
+      { caption: "Hover one for its eye", ms: 600, at: [581, 209], move: 400 },
+      { caption: "Hidden, it stays here greyed", ms: 1500, click: true },
+      { caption: "Open a group for its tools", ms: 700, at: [448, 222], move: 700 },
+      { caption: "Open a group for its tools", ms: 1000, click: true },
+      { caption: "Hide one tool of the group", ms: 700, at: [418, 265], move: 600 },
+      { caption: "The group shows the next one", ms: 1800, click: true },
+      { caption: "Each mode has a toolbar of its own", ms: 700, at: [683, 222], move: 800 },
+      { caption: "Each mode has a toolbar of its own", ms: 2600, click: true },
+    ],
+    html: `
+      <div class="win tlwin">
+        <div class="head">Settings<span class="shut">${ICON.close}</span></div>
+        <nav class="snav">
+          <div class="find">${ICON.search}<span class="q"><span class="ph">Search</span></span></div>
+          <span class="pg">${ICON.general}General</span><span class="pg">${ICON.appearance}Appearance</span><span class="pg">${ICON.appIcon}App Icon</span><span class="pg">${ICON.tabs}Tabs &amp; Memory</span>
+          <i class="rule"></i>
+          <span class="pg on">${ICON.editor}Editor</span><span class="pg">${ICON.images}Images</span><span class="pg">${ICON.plugins}Plugins</span>
+          <i class="rule"></i>
+          <span class="pg">${ICON.ai}AI Tools</span><span class="pg">${ICON.discord}Discord</span>
+        </nav>
+        <div class="pt">Editor</div>
+        <h5>Toolbar</h5>
+        <div class="tlh"><b>Tools and modes</b><small>Click a mode in the switch to edit its toolbar. Drag to move tools and modes, and hover one and click its eye to hide it, or open a group to hide its tools one by one.</small><span class="treset">Reset</span></div>
+        <div class="below"><div class="tlr"><span><b>Lasso fill</b><small>Under Pencil: draw around an area to fill it, like Procreate</small></span><i class="sw on"></i></div></div>
+      </div>
+      <div class="tstage"></div>
+      <div class="tbar bd">
+        ${tlSlot("move", 8, tlIcon("move"))}${tlSlot("frame", 65, tlIcon("frame"))}${tlSlot("rect", 122, tlIcon("rect"))}${tlSlot("pen", 179, tlPen)}${tlSlot("text", 236, tlIcon("text"))}${tlSlot("code", 293, tlIcon("code"))}${tlSlot("comment", 350, tlIcon("comment"), false)}${tlSlot("actions", 390, tlIcon("actions"), false)}
+        <i class="dv" style="left:430px"></i>${tlModes("design", 439)}
+      </div>
+      <div class="tbar bw">
+        ${tlSlot("dmove", 8, tlIcon("move"))}<i class="dv" style="left:65px"></i>
+        <span class="dt" style="left:74px">${tlDrawn("pen")}${tlDrawn("brush")}${tlDrawn("pencil")}</span>
+        <i class="dv" style="left:226px"></i>${tlSlot("dframe", 235, tlIcon("frame"))}${tlSlot("drect", 292, tlIcon("rect"))}${tlSlot("dtext", 349, tlIcon("text"))}${tlSlot("dcode", 406, tlIcon("code"))}${tlSlot("dcomment", 463, tlIcon("comment"), false)}${tlSlot("dactions", 503, tlIcon("actions"), false)}
+        <i class="dv" style="left:543px"></i>${tlModes("draw", 552)}
+      </div>
+      <div class="ttray">
+        <span class="trow r-pen"><i class="tt">${tlIcon("pen")}</i>${tlEye}<span>Pen</span></span>
+        <span class="trow"><i class="tt">${tlIcon("pencil")}</i><span>Pencil</span></span>
+        <span class="trow"><i class="tt">${tlIcon("lasso")}</i><span>Lasso fill</span><em>Ligma</em></span>
+      </div>`,
+    css: `
+      .tlwin { left: 16px; top: 16px; width: 808px; height: 436px; }
+      .tbar, .ttray { --color-icon: currentColor; }
+      .head { position: relative; display: flex; align-items: center; height: 38px; padding-left: 16px; border-bottom: 1px solid var(--border); font-weight: 550; }
+      .shut { position: absolute; right: 0; top: 0; display: grid; place-items: center; width: 46px; height: 38px; color: var(--text-secondary); }
+      .pt { position: absolute; left: 201px; top: 52px; font-size: 13px; font-weight: 600; line-height: 20px; }
+      h5 { position: absolute; left: 201px; top: 84px; margin: 0; font-size: 11px; font-weight: 550; line-height: 16px; }
+      .tlh { position: absolute; left: 201px; top: 108px; width: 591px; }
+      .tlh b, .tlr b { display: block; font-weight: 450; }
+      .tlh small, .tlr small { display: block; max-width: 470px; margin-top: 1px; color: var(--text-secondary); font-size: 11px; }
+      .treset { position: absolute; right: 0; top: 0; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; line-height: 22px; opacity: 0; transition: opacity 200ms; }
+      .below { position: absolute; left: 185px; right: 0; top: 280px; padding-top: 6px; transition: transform 300ms ${EASE}; }
+      .tlr { display: flex; align-items: center; gap: 16px; padding: 6px 16px; }
+      .tlr > span { flex: 1; }
+
+      .tstage { position: absolute; left: 217px; top: 178px; width: 591px; height: 88px; border-radius: 7px; background: var(--d-canvas); transition: height 300ms ${EASE}; }
+      .tbar { position: absolute; top: 198px; height: 48px; border-radius: 13px; background: var(--bg); box-shadow: 0 3px 8px rgb(0 0 0 / .35), 0 0 0 .5px rgba(127, 127, 127, .3); transition: opacity 300ms ${EASE}; }
+      .bd { left: 228px; width: 569px; }
+      .bw { left: 171px; width: 682px; opacity: 0; transform: scale(.83); }
+      .dv { position: absolute; top: 0; width: 1px; height: 48px; background: var(--border); }
+      .ts { position: absolute; top: 8px; display: flex; gap: 1px; height: 32px; transition: transform 220ms ${EASE}; }
+      .tt { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 5px; transition: background-color 120ms, opacity 200ms; }
+      .tc { display: grid; place-items: center; width: 16px; height: 32px; border-radius: 5px; transition: background-color 120ms, color 120ms; }
+      .tc svg { flex: none; margin: 0 -4px; }
+      .te { position: absolute; left: -5px; top: -5px; z-index: 1; display: grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .3), 0 0 0 1px var(--border); opacity: 0; transition: opacity 100ms; }
+      .te.shut { display: none; }
+      .swap { position: relative; display: grid; }
+      .swap .now { position: absolute; inset: 0; opacity: 0; }
+      .swap span { transition: opacity 200ms; }
+      .tm { position: absolute; top: 8px; display: flex; gap: 2px; padding: 2px; border-radius: 5px; background: var(--bg-tertiary); }
+      .mo { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 3px; color: var(--text-secondary); transition: background-color 120ms, box-shadow 120ms; }
+      .mo.cur { color: var(--text); }
+      .mo.cur { background: var(--bg); box-shadow: 0 0 .5px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .1); }
+      .dt { position: absolute; top: 0; display: flex; width: 144px; height: 48px; overflow: hidden; }
+      .dt .drawn { position: relative; flex: none; width: 48px; height: 68px; margin-top: 4px; }
+      .dt .drawn img { position: absolute; left: 7px; top: 0; width: 34px; height: 68px; }
+
+      .at-1 .ts-rect :is(.tt, .tc), .at-2 .ts-rect :is(.tt, .tc) { background: var(--hover); }
+      .at-2 .ts-rect { z-index: 2; transform: translateX(-57px); transition: transform 750ms linear; }
+      .at-2 .ts-rect .tt { background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(0, 0, 0, .3), 0 1px 3px rgba(0, 0, 0, .25); }
+      .at-2 .ts-frame { transform: translateX(57px); transition-delay: 300ms; }
+      .at-3 .ts-rect :is(.tt, .tc) { background: none; box-shadow: none; }
+      .at-3 .treset { opacity: 1; }
+      .at-4 .ts-comment .tt { background: var(--hover); }
+      .at-4 .ts-comment .te { opacity: 1; }
+      .at-6 .ts-comment .te { display: none; }
+      .at-6 .ts-comment .te.shut { display: grid; opacity: 1; }
+      .at-6 .ts-comment .tt svg { opacity: .3; }
+      .at-7 .ts-comment .te.shut { opacity: 0; }
+      .at-7 .ts-comment .tt { background: none; }
+      .at-7 .ts-pen .tc { background: var(--hover); }
+      .at-8 .ts-pen :is(.tt, .tc) { background: var(--bg-secondary); }
+      .at-8 .ts-pen .tc { color: var(--brand); }
+      .at-8 .ts-pen .tc svg { transform: rotate(180deg); }
+      .tc svg { transition: transform 150ms ${EASE}; }
+
+      .ttray { position: absolute; left: 407px; top: 254px; display: flex; flex-direction: column; gap: 2px; width: 176px; padding: 8px; border-radius: 13px; background: var(--bg); box-shadow: 0 3px 8px rgb(0 0 0 / .35), 0 0 0 .5px rgba(127, 127, 127, .3); opacity: 0; transform: translateY(-4px); transition: opacity 160ms, transform 160ms ${EASE}; }
+      .trow { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; }
+      .trow em { padding: 0 5px; border-radius: 4px; background: var(--bg-secondary); color: var(--text-secondary); font-style: normal; }
+      .at-8 .tstage { height: 218px; }
+      .at-8 .below { transform: translateY(130px); }
+      .at-8 .ttray { opacity: 1; transform: none; }
+      .at-9 .r-pen .tt { background: var(--hover); }
+      .at-9 .r-pen .te { opacity: 1; }
+      .at-10 .r-pen .tt { background: none; }
+      .at-10 .r-pen .tt svg { opacity: .3; }
+      .at-10 .r-pen > span { color: var(--d-text3); }
+      .at-10 .r-pen .te { display: none; }
+      .at-10 .r-pen .te.shut { display: grid; opacity: 1; }
+      .at-10 .swap .was { opacity: 0; }
+      .at-10 .swap .now { opacity: 1; }
+      .at-11 .ttray { opacity: 0; transform: translateY(-4px); }
+      .at-11 .tstage { height: 88px; }
+      .at-11 .below { transform: none; }
+      .at-11 .ts-pen :is(.tt, .tc) { background: none; }
+      .at-11 .ts-pen .tc { color: inherit; }
+      .at-11 .ts-pen .tc svg { transform: none; }
+      .at-11 .bd .mo-draw { background: color-mix(in srgb, var(--text) 8%, transparent); }
+      .at-12 .bd { opacity: 0; }
+      .at-12 .bw { opacity: 1; }
+      .at-12 .tstage { height: 88px; }`,
+  };
+
+  DEMOS["toolbar-figma"] = {
+    title: "In Figma",
+    pointer: false,
+    size: [600, 334],
+    steps: [
+      { caption: "Figma's toolbar, as Settings has it", ms: 1600 },
+      { caption: "A hidden tool leaves it, and it closes up", ms: 1900 },
+      { caption: "A group shows the first tool it keeps", ms: 1900 },
+      { caption: "With one tool left, its arrow goes", ms: 1900 },
+      { caption: "In the order you set", ms: 1900 },
+      { caption: "Hidden modes leave the switch", ms: 2400 },
+    ],
+    html: `
+      <div class="win fxwin tlfig"><div class="tcanvas"><span class="fl">Landing</span><div class="page"><i class="h1"></i><i class="h2"></i><i class="tbtn"></i><i class="orb"></i></div></div></div>
+      <div class="tbclip">
+        <div class="ftb tlbar">
+          <span class="fi f-move"><span class="ft on">${tlIcon("move")}</span>${tlArrow}</span>
+          <span class="fi f-frame"><span class="ft">${tlIcon("frame")}</span>${tlArrow}</span>
+          <span class="fi f-rect"><span class="ft">${tlIcon("rect")}</span>${tlArrow}</span>
+          <span class="fi f-pen"><span class="ft">${tlPen}</span>${tlArrow}</span>
+          <span class="fi f-text"><span class="ft">${tlIcon("text")}</span><span class="fa">${tlArrow}</span></span>
+          <span class="fi f-code"><span class="ft">${tlIcon("code")}</span>${tlArrow}</span>
+          <span class="fi f-comment"><span class="ft">${tlIcon("comment")}</span></span>
+          <span class="fi f-actions"><span class="ft">${tlIcon("actions")}</span></span>
+          <span class="fdiv"></span>
+          <span class="fseg">${["draw", "design", "motion", "dev"].map((mode) => `<span class="fs fs-${mode}${mode === "design" ? " on" : ""}">${tlIcon(mode)}</span>`).join("")}</span>
+        </div>
+      </div>`,
+    css: `
+      .fxwin { left: 12px; top: 12px; width: 576px; height: 310px; }
+      .tbclip { position: absolute; left: 12px; top: 12px; width: 576px; height: 310px; overflow: hidden; border-radius: 10px; --color-icon: currentColor; }
+      .tcanvas { position: absolute; inset: 0; background: var(--d-canvas); }
+      .fl { position: absolute; left: 150px; top: 30px; color: var(--text-secondary); }
+      .page { position: absolute; left: 150px; top: 48px; width: 276px; height: 172px; background: #fff; }
+      .page i { position: absolute; display: block; border-radius: 2px; }
+      .h1 { left: 20px; top: 34px; width: 120px; height: 14px; background: #1e1a3a; }
+      .h2 { left: 20px; top: 56px; width: 92px; height: 14px; background: #1e1a3a; }
+      .tbtn { left: 20px; top: 90px; width: 64px; height: 20px; border-radius: 5px !important; background: #6d5cff; }
+      .orb { left: 160px; top: 30px; width: 96px; height: 96px; border-radius: 50% !important; background: radial-gradient(circle at 35% 35%, #8f7bff, #5b4bd6); }
+      .tlbar { position: absolute; left: 288px; top: 250px; padding: 0 8px; transform: translateX(-50%); gap: 8px; }
+      .tlbar .fi { display: flex; flex: none; gap: 1px; max-width: 60px; overflow: hidden; transition: max-width 400ms ${EASE}, margin 400ms ${EASE}, opacity 250ms, transform 400ms ${EASE}; }
+      .tlbar .tc { display: grid; place-items: center; width: 16px; height: 32px; }
+      .tlbar .tc svg { flex: none; margin: 0 -4px; }
+      .tlbar .fa { display: flex; max-width: 16px; overflow: hidden; transition: max-width 400ms ${EASE}, opacity 200ms; }
+      .tlbar .fdiv { margin: 0; }
+      .tlbar .fseg { gap: 2px; padding: 2px; border-radius: 5px; background: var(--bg-tertiary); }
+      .tlbar .fs { width: 28px; height: 28px; border-radius: 3px; color: var(--text-secondary); max-width: 28px; overflow: hidden; transition: max-width 400ms ${EASE}, opacity 250ms, margin 400ms ${EASE}; }
+      .tlbar .fs.on { color: var(--text); }
+      .swap { position: relative; display: grid; }
+      .swap .now { position: absolute; inset: 0; opacity: 0; }
+      .swap span { transition: opacity 250ms; }
+      .at-1 .f-comment { max-width: 0; margin-left: -8px; opacity: 0; }
+      .at-2 .swap .was { opacity: 0; }
+      .at-2 .swap .now { opacity: 1; }
+      .at-3 .f-text .fa { max-width: 0; opacity: 0; }
+      .at-4 .f-rect { transform: translateX(-57px); }
+      .at-4 .f-frame { transform: translateX(57px); }
+      .at-5 .fs-motion { max-width: 0; margin-left: -2px; opacity: 0; }`,
+  };
+
   const sceneStyle = Object.entries(DEMOS)
     .map(([id, demo]) => demo.css.replace(/(^|\})\s*([^{}@]+)\{/g, (_, close, selectors) =>
       `${close}\n${selectors.split(/,(?![^(]*\))/).map((s) => scope(id, s.trim())).join(", ")} {`))

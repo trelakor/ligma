@@ -1208,15 +1208,19 @@ const PAGE_JS: &str = r##"(() => {
     requestAnimationFrame(next);
   };
 
-  // Keeps the button after Actions, as Figma draws its toolbar again
+  // Keeps the button after Actions, or where the toolbar's layout puts it
+  // (see toolbar.rs), as Figma draws its toolbar again
   const place = () => {
     const actions = document.querySelector('[data-testid="Actions-tool"]');
     const mine = button();
-    if (!state.on || !actions || !api()) {
+    const where = window.__ligmaToolbarEffects?.();
+    const parent = where ? where.parent : actions?.parentElement;
+    const after = where ? where.after : actions;
+    if (!state.on || !parent || where?.hidden || !api()) {
       mine?.remove();
       return;
     }
-    if (mine && mine.previousElementSibling === actions) return;
+    if (mine && mine.parentElement === parent && (after ? mine.previousElementSibling === after : parent.firstElementChild === mine)) return;
     const made = mine ?? document.createElement("button");
     if (!mine) {
       made.type = "button";
@@ -1228,8 +1232,9 @@ const PAGE_JS: &str = r##"(() => {
       made.innerHTML = ICON;
       made.addEventListener("click", () => (menu ? closeMenu() : openMenu()));
     }
-    made.className = actions.className;
-    actions.after(made);
+    made.className = (actions ?? parent.querySelector("button"))?.className ?? made.className;
+    if (after) after.after(made);
+    else parent.prepend(made);
   };
 
   // ---------- Controls drawn as Figma's ----------
