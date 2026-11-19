@@ -664,6 +664,9 @@ struct KeptScene {
     built: Instant,
 }
 
+/// Longest an image that couldn't be had waits to be asked for again
+const FAILED_MOST: Duration = Duration::from_secs(30);
+
 /// How long since an image last came in before the furthest level's tiles
 /// are drawn again for what changed
 const IMAGES_QUIET: Duration = Duration::from_secs(1);
@@ -1260,8 +1263,10 @@ pub struct Painter {
     /// The most each image was needed at near the view lately, and when,
     /// which it's kept at least as big as for `NEEDED_FOR`
     needed: HashMap<String, (f64, Instant)>,
-    /// Images that couldn't be had, and when
-    failed: HashMap<String, Instant>,
+    /// Images that couldn't be had, when, and how long till they're
+    /// asked for again: a second, then twice as long each time, as one can
+    /// fail only till the page is ready
+    failed: HashMap<String, (Instant, Duration)>,
     tiles: HashMap<TileKey, Tile>,
     /// Tiles drawn again for not matching the whole view, and how often,
     /// see `verify_tiles`
@@ -4208,7 +4213,8 @@ impl Painter {
                 self.asked.remove(&key);
                 self.kept.lock().unwrap().stale.remove(&key);
                 self.effects_done(&key);
-                self.failed.insert(key, Instant::now());
+                let wait = self.failed.get(&key).map_or(Duration::from_secs(1), |(_, wait)| (*wait * 2).min(FAILED_MOST));
+                self.failed.insert(key, (Instant::now(), wait));
             }
             Msg::Skipped(key) => {
                 self.asked.remove(&key);
@@ -4821,6 +4827,18 @@ impl Painter {
         let now = Instant::now();
         for key in need.keys() {
             self.wanted.insert(key.clone(), now);
+        }
+        // Those that couldn't be had are asked for again once they've
+        // waited, as what drew without them doesn't ask again
+        let retry: Vec<(String, f64)> = self
+            .failed
+            .iter()
+            .filter(|(key, (at, wait))| at.elapsed() >= *wait && !self.asked.contains_key(key.as_str()))
+            .filter_map(|(key, _)| need.get(key).filter(|width| **width > 0.0).map(|width| (key.clone(), *width)))
+            .collect();
+        for (key, width) in retry {
+            self.asked.insert(key.clone(), width);
+            self.request(&key, width, None);
         }
         for (key, &width) in &need {
             if !in_view.contains(key) && !fine_use.contains(key) {
@@ -5796,7 +5814,7 @@ impl Painter {
     /// asked for last
     fn ask_exact(&mut self, renders: &[(String, f64)], at: Option<Rect>) {
         for (key, width) in renders {
-            if self.failed.get(key).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+            if self.failed.get(key).is_some_and(|(at, wait)| at.elapsed() < *wait) {
                 continue;
             }
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
@@ -5809,7 +5827,7 @@ impl Painter {
 
     fn ask(&mut self, images: &[(String, f64)], at: Option<Rect>) {
         for (key, width) in images {
-            if self.failed.get(key).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+            if self.failed.get(key).is_some_and(|(at, wait)| at.elapsed() < *wait) {
                 continue;
             }
             let asked = self.asked.get(key).copied().unwrap_or(0.0);

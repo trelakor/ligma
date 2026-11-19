@@ -349,16 +349,26 @@
   const imageBytes = async (figma, hash, key) => {
     let stop;
     const gaveUp = new Promise((resolve) => (stop = resolve));
-    // Without the plugin API, as in files that can only be viewed, only
-    // from the cache
-    if (!figma) return fromCache(hash, new Promise((resolve) => setTimeout(resolve, 30000)), key);
+    // The plugin API comes a while after a file opens, and never in files
+    // that can only be viewed, where only the cache has images, and only
+    // those Figma has drawn. Either is waited on only a little, as Ligma
+    // asks again, so those that can be had aren't held up behind them
     const fromFigma = async () => {
+      for (let waited = 0; !figma; waited += 100) {
+        if (waited >= 2000) throw new Error("no plugin API yet");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        figma = api();
+      }
       const image = figma.getImageByHash(hash);
       if (!image) throw new Error("no image");
       return image.getBytesAsync();
     };
+    const figmaFirst = fromFigma().catch((error) => {
+      setTimeout(stop, 2000);
+      throw error;
+    });
     try {
-      return await Promise.any([fromCache(hash, gaveUp, key), fromFigma()]);
+      return await Promise.any([fromCache(hash, gaveUp, key), figmaFirst]);
     } catch (error) {
       throw error.errors?.[1] ?? error;
     } finally {

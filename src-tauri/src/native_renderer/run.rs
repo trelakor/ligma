@@ -550,8 +550,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
     spawn("native-view", ctx.clone(), poll_view);
     spawn("native-frames", ctx.clone(), take_frames);
     spawn("native-memory", ctx.clone(), sample_memory);
-    // Images come from the page in parallel, each decoded on its own thread
-    for _ in 0..6 {
+    // Images come from the page in parallel, as each mostly waits on it
+    for _ in 0..FETCHES {
         let requests = requests.clone();
         spawn("native-fetch", ctx.clone(), move |ctx| fetch(ctx, requests));
     }
@@ -1241,6 +1241,35 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<super::render::Requests>) {
     }
 }
 
+/// Images read from the page at once
+const FETCHES: usize = 12;
+/// Of those, decoded at once, as more would take the cores Figma's page
+/// and the renderer need
+const DECODES: usize = 4;
+
+/// One of the `DECODES` image decodes at a time, held till it's dropped
+struct Decoding;
+
+static DECODING: (Mutex<usize>, std::sync::Condvar) = (Mutex::new(0), std::sync::Condvar::new());
+
+impl Decoding {
+    fn start() -> Decoding {
+        let mut running = DECODING.0.lock().unwrap();
+        while *running >= DECODES {
+            running = DECODING.1.wait(running).unwrap();
+        }
+        *running += 1;
+        Decoding
+    }
+}
+
+impl Drop for Decoding {
+    fn drop(&mut self) {
+        *DECODING.0.lock().unwrap() -= 1;
+        DECODING.1.notify_one();
+    }
+}
+
 /// Largest side an image is ever kept at. Below it, images are kept at
 /// about the size they show at, and decoded again bigger when zoomed into
 const IMAGE_LIMIT: u32 = 4096;
@@ -1339,6 +1368,7 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
         }
     };
     let fetched = started.elapsed();
+    let _decoding = Decoding::start();
     let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?.to_rgba8();
     let decoded = started.elapsed();
     let original = image.dimensions();
