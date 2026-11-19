@@ -48,7 +48,7 @@ struct Ctx {
     busy: AtomicBool,
     /// Image fills' original bytes, kept to decode again at a bigger size
     /// when zooming in, without asking Figma again
-    encoded: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    encoded: Mutex<Encoded>,
     /// Memory the mirrored tab writes its view to every frame, and the tab
     shared: Mutex<Option<(String, crate::webview2::Shared)>>,
     /// What the render and present threads share
@@ -467,7 +467,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         peak: Mutex::new(None),
         resync: AtomicBool::new(false),
         busy: AtomicBool::new(false),
-        encoded: Mutex::new(HashMap::new()),
+        encoded: Mutex::new(Encoded::default()),
         shared: Mutex::new(None),
         hub: Arc::new(Hub::new((size.width, size.height))),
         replaced: Mutex::new(None),
@@ -1194,6 +1194,48 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<super::render::Requests>) {
 /// about the size they show at, and decoded again bigger when zoomed into
 const IMAGE_LIMIT: u32 = 4096;
 
+/// Most of image fills' original bytes kept, as a file of thousands of
+/// photos would otherwise keep gigabytes. Past it those used longest ago
+/// go, and are asked of the page again if they're needed
+const ENCODED_MOST: usize = 256 << 20;
+
+/// Image fills' original bytes, those used longest ago going past
+/// `ENCODED_MOST`
+#[derive(Default)]
+struct Encoded {
+    held: HashMap<String, (Arc<Vec<u8>>, u64)>,
+    bytes: usize,
+    uses: u64,
+}
+
+/// What `Encoded` holds, images and bytes, for the trace
+pub(super) static ENCODED_HELD: (std::sync::atomic::AtomicUsize, std::sync::atomic::AtomicUsize) = (std::sync::atomic::AtomicUsize::new(0), std::sync::atomic::AtomicUsize::new(0));
+
+impl Encoded {
+    fn get(&mut self, hash: &str) -> Option<Arc<Vec<u8>>> {
+        self.uses += 1;
+        let (bytes, used) = self.held.get_mut(hash)?;
+        *used = self.uses;
+        Some(bytes.clone())
+    }
+
+    fn insert(&mut self, hash: &str, bytes: Arc<Vec<u8>>) {
+        self.uses += 1;
+        self.bytes += bytes.len();
+        if let Some((old, _)) = self.held.insert(hash.to_string(), (bytes, self.uses)) {
+            self.bytes -= old.len();
+        }
+        while self.bytes > ENCODED_MOST && self.held.len() > 1 {
+            let Some(oldest) = self.held.iter().min_by_key(|(_, (_, used))| *used).map(|(hash, _)| hash.clone()) else { break };
+            if let Some((gone, _)) = self.held.remove(&oldest) {
+                self.bytes -= gone.len();
+            }
+        }
+        ENCODED_HELD.0.store(self.held.len(), Ordering::Relaxed);
+        ENCODED_HELD.1.store(self.bytes, Ordering::Relaxed);
+    }
+}
+
 /// Image fill `key` (its hash, then `#` and its adjustments if it has
 /// any), decoded at about `width` pixels wide
 fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Img, String> {
@@ -1204,11 +1246,11 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     let started = Instant::now();
     let short = hash.get(..8).unwrap_or(hash);
     // In view, so handed over before it was asked for
-    let kept = ctx.encoded.lock().unwrap().get(hash).cloned();
+    let kept = ctx.encoded.lock().unwrap().get(hash);
     let cached = kept.or_else(|| {
         let bytes = Arc::new(pushed().wait(&format!("i{hash}"), Instant::now())?);
         super::mark(|| format!("image {short} was handed over"));
-        ctx.encoded.lock().unwrap().insert(hash.to_string(), bytes.clone());
+        ctx.encoded.lock().unwrap().insert(hash, bytes.clone());
         Some(bytes)
     });
     let bytes = match cached {
@@ -1241,7 +1283,7 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
             };
             let bytes = Arc::new(bytes);
             super::mark(|| format!("image {short} read, the job started after {} ms, read after {} ms", started_in_page.as_millis(), asked.elapsed().as_millis()));
-            ctx.encoded.lock().unwrap().insert(hash.to_string(), bytes.clone());
+            ctx.encoded.lock().unwrap().insert(hash, bytes.clone());
             bytes
         }
     };

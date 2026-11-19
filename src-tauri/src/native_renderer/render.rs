@@ -1728,11 +1728,13 @@ impl Painter {
         let stale = self.tiles.values().filter(|tile| tile.stale).count();
         let whole = self.whole.as_ref().map_or_else(|| "none".to_string(), |whole| format!("{}x{} px={:.3}{}", whole.layer.tex.width, whole.layer.tex.height, whole.layer.px, if whole.stale { " stale" } else { "" }));
         format!(
-            "render holds: units={} nodes={} images={} {:.0}MB tiles={} ({stale} stale) {:.0}MB rasters={} {:.0}MB pictures={} thumbs={} whole={whole} skia cache={:.0}MB of {} resources asked={} images queued={} effects waiting={} running={} | {}",
+            "render holds: units={} nodes={} images={} {:.0}MB originals={} {:.0}MB tiles={} ({stale} stale) {:.0}MB rasters={} {:.0}MB pictures={} thumbs={} whole={whole} skia cache={:.0}MB of {} resources asked={} images queued={} effects waiting={} running={} | {}",
             self.units.len(),
             self.tree.as_ref().map_or(0, |tree| tree.forest.nodes.len()),
             self.images.len(),
             mb(self.images.values().map(Img::bytes).sum()),
+            super::run::ENCODED_HELD.0.load(std::sync::atomic::Ordering::Relaxed),
+            mb(super::run::ENCODED_HELD.1.load(std::sync::atomic::Ordering::Relaxed)),
             self.tiles.len(),
             mb(self.tiles.len() * (TILE * TILE * 4) as usize),
             self.rasters.len(),
