@@ -3934,9 +3934,11 @@ impl Painter {
     /// What's drawn, with tiles being drawn again as they were if `stale`
     fn layers(&self, stale: bool) -> Vec<Layer> {
         // A tile out of date since before the whole view was drawn is older
-        // than it wherever they meet, and past it is off the view. Wherever
-        // it's preferred it would show the view as it was seconds ago, till
-        // what changed is drawn again
+        // than it wherever they meet. Preferred anywhere it would show the
+        // view as it was seconds ago, so it's under all else, there only for
+        // what a pan uncovers that nothing else has, as the furthest level
+        // is, which waits out a file opening and the view moving before
+        // it's drawn again
         let whole_area = self.whole.as_ref().map(|whole| {
             let layer = &whole.layer;
             (Rect::from_xywh(layer.x as f32 / layer.px, layer.y as f32 / layer.px, layer.tex.width as f32 / layer.px, layer.tex.height as f32 / layer.px), layer.drawn, layer.px, whole.rough)
@@ -3951,7 +3953,7 @@ impl Painter {
                 !rough && tile.drawn < drawn && key.px() == px && area.left <= tile_area.left && area.top <= tile_area.top && area.right >= tile_area.right && area.bottom >= tile_area.bottom
             })
         };
-        let tiles = self.tiles.iter().filter(|(key, tile)| !under(key, tile) && (!tile.stale || (stale && !older(key, tile)))).map(|(key, tile)| Layer {
+        let tiles = self.tiles.iter().filter(|(key, tile)| !under(key, tile) && (!tile.stale || stale)).map(|(key, tile)| Layer {
             tex: tile.tex.clone(),
             x: key.x * TILE,
             y: key.y * TILE,
@@ -3959,7 +3961,7 @@ impl Painter {
             px: key.px(),
             counts: tile.counts,
             drawn: tile.drawn,
-            kind: if tile.stale && tile.seen {
+            kind: if tile.stale && tile.seen && !older(key, tile) {
                 LayerKind::Stale
             } else if tile.stale {
                 LayerKind::Old

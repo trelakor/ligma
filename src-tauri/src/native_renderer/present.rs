@@ -447,15 +447,16 @@ pub struct Piece {
 /// view drawn at it, then the rest, scaled, each where those before don't
 /// cover. And whether that leaves some of the view out
 pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
-    cover_over(layers, layers.len(), content, view, size, &std::collections::HashSet::new())
+    let (pieces, hole) = cover_over(layers, layers.len(), content, view, size, &std::collections::HashSet::new());
+    (pieces, hole.is_some())
 }
 
 /// As `cover`, with the layers from `behind` on used only where those
 /// before them leave holes, and out of date ones of textures in `shown`,
 /// the last frame's, first of those out of date
-fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32), shown: &std::collections::HashSet<usize>) -> (Vec<Piece>, bool) {
+fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32), shown: &std::collections::HashSet<usize>) -> (Vec<Piece>, Option<skia_safe::IRect>) {
     if view.outline().is_some() {
-        return (Vec::new(), false);
+        return (Vec::new(), None);
     }
     let px = view.px(size.0);
     let (drawn, preview, _, _) = view.drawn(size);
@@ -568,7 +569,7 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
             pieces.push(Piece { layer: i, dest, clip, square });
         }
     }
-    (pieces, !left.is_empty())
+    (pieces, (!left.is_empty()).then(|| *left.bounds()))
 }
 
 /// What draws Figma's checkerboard and pixel grid
@@ -919,8 +920,8 @@ impl Screen {
             // All of the view or nothing: what's shown stays till the
             // render thread has drawn what the view needs. Its whole view
             // is drawn for the view itself, so it's what there is
-            let (pieces, holes) = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
-            if holes && snapshot.whole_at != Some(view_at(&view, self.size)) {
+            let (pieces, hole) = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
+            if hole.is_some() && snapshot.whole_at != Some(view_at(&view, self.size)) {
                 stats().lock().unwrap().holes(true);
                 // Its holes filled from the last snapshot shown whole, as
                 // it was a moment before, so the view never stands still
@@ -928,7 +929,8 @@ impl Screen {
                 let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial).map(|before| {
                     let mut layers = snapshot.layers.clone();
                     layers.extend(before.layers.iter().cloned());
-                    let (pieces, holes) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
+                    let (pieces, merged_hole) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
+                    let holes = merged_hole.is_some();
                     let merged = Snapshot {
                         seq: snapshot.seq,
                         changes: snapshot.changes,
@@ -976,6 +978,7 @@ impl Screen {
                 }
                 let before = complete.clone().filter(|before| before.serial != snapshot.serial).and_then(|before| {
                     let (pieces, holes) = cover_over(&before.layers, before.layers.len(), before.content, &view, self.size, &self.shown);
+                    let holes = holes.is_some();
                     let then = (before.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
                     (!holes && shown.as_ref() != Some(&then)).then_some((before, pieces, then))
                 });
@@ -995,7 +998,8 @@ impl Screen {
                     super::render::trace(|| {
                         let mut levels: Vec<String> = snapshot_levels.iter().map(|(px, kind, n)| format!("{px:.4}{kind:?}x{n}")).collect();
                         levels.sort();
-                        format!("present held: seq={seq} px={:.3} drawn={drawn_seq} layers={}", view.px(self.size.0), levels.join(","))
+                        let hole = hole.map(|at| format!("{},{} {}x{}", at.left, at.top, at.width(), at.height())).unwrap_or_default();
+                        format!("present held: seq={seq} px={:.3} drawn={drawn_seq} hole={hole} size={}x{} layers={}", view.px(self.size.0), self.size.0, self.size.1, levels.join(","))
                     });
                     let left = HOLD_MOST.saturating_sub(held.map_or(Duration::ZERO, |at| at.elapsed()));
                     seen = hub.wait(seen, left.max(Duration::from_millis(1)).min(Duration::from_millis(100)));
