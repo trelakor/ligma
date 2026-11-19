@@ -408,6 +408,7 @@ pub fn stop(app: &AppHandle) {
         if let Some(webview) = ctx.replaced.lock().unwrap().take() {
             give_back(&webview);
         }
+        fine_timers(false);
         ctx.stop.store(true, Ordering::Relaxed);
         ctx.hub.stop.store(true, Ordering::Relaxed);
         ctx.hub.poke();
@@ -545,6 +546,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         window_event(&events, event);
     });
 
+    fine_timers(true);
     spawn("native-view", ctx.clone(), poll_view);
     spawn("native-frames", ctx.clone(), take_frames);
     spawn("native-memory", ctx.clone(), sample_memory);
@@ -945,6 +947,49 @@ const RING_MORE: u32 = 1;
 /// The part goes on from the one before
 const RING_REST: u32 = 2;
 
+/// Windows rounds timed waits up to its timer tick, 15.6ms unless an app
+/// asks for finer, so frames waited on by the present thread would come late
+fn fine_timers(on: bool) {
+    #[link(name = "winmm")]
+    extern "system" {
+        fn timeBeginPeriod(period: u32) -> u32;
+        fn timeEndPeriod(period: u32) -> u32;
+    }
+    static ON: AtomicBool = AtomicBool::new(false);
+    if ON.swap(on, Ordering::Relaxed) != on {
+        unsafe {
+            if on { timeBeginPeriod(1) } else { timeEndPeriod(1) };
+        }
+    }
+}
+
+/// Sleeps about `duration`, within a fraction of a millisecond. A plain
+/// sleep lasts till the system timer's next tick, 15.6ms apart unless some
+/// app asks for them closer, which held each frame from the page up by as
+/// much
+pub(super) fn sleep_fine(duration: Duration) {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Threading::{CreateWaitableTimerExW, SetWaitableTimer, WaitForSingleObject, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE, TIMER_ALL_ACCESS};
+    struct Timer(HANDLE);
+    impl Drop for Timer {
+        fn drop(&mut self) {
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+    thread_local! {
+        static TIMER: Option<Timer> = unsafe { CreateWaitableTimerExW(None, windows::core::PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0) }.ok().map(Timer);
+    }
+    let waited = TIMER.with(|timer| {
+        let Some(timer) = timer else { return false };
+        // Relative, in 100ns ticks
+        let due = -((duration.as_nanos() / 100).max(1) as i64);
+        unsafe { SetWaitableTimer(timer.0, &due, 0, None, None, false) }.is_ok() && unsafe { WaitForSingleObject(timer.0, INFINITE) }.0 == 0
+    });
+    if !waited {
+        std::thread::sleep(duration);
+    }
+}
+
 /// Takes the frames tab `tab` writes to `ring`, as they're written, till the
 /// renderer stops. One reader a tab
 fn read_ring(tab: String, ring: crate::webview2::Shared) {
@@ -1012,7 +1057,7 @@ fn read_ring(tab: String, ring: crate::webview2::Shared) {
                 fence(Release);
                 unsafe { std::ptr::write_volatile((base as *mut f64).add(1), read as f64) };
             } else {
-                std::thread::sleep(Duration::from_micros(500));
+                sleep_fine(Duration::from_micros(500));
             }
         }
         READING.lock().unwrap().retain(|reading| *reading != tab);
@@ -1079,7 +1124,7 @@ fn poll_view(ctx: Arc<Ctx>) {
                     super::render::trace(|| format!("view x={:.1} y={:.1} zoom={:.3} {:.1}ms after the page wrote it", view.x, view.y, view.zoom, now - at));
                     send_view(&ctx, view);
                 }
-                std::thread::sleep(Duration::from_millis(1));
+                sleep_fine(Duration::from_millis(1));
                 continue;
             }
         }
@@ -1312,6 +1357,10 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     }
     let (iw, ih) = image.dimensions();
     let image = premultiplied(&image).ok_or("couldn't make the image")?;
+    // Its smaller copies made here, which Skia otherwise makes as it's
+    // uploaded, on the render thread, a hundred milliseconds or more for a
+    // big one, holding up all it draws
+    let image = image.with_default_mipmaps().unwrap_or(image);
     if super::dev() {
         let ms = |d: Duration| d.as_millis();
         log::info!(
@@ -1357,10 +1406,6 @@ pub(super) fn halvings(longest: u32, side: f64) -> u32 {
 fn premultiplied(image: &image::RgbaImage) -> Option<skia_safe::Image> {
     let (iw, ih) = image.dimensions();
     let mut pixels = image.as_raw().clone();
-    // Its smaller copies made here, which Skia otherwise makes as it's
-    // uploaded, on the render thread, a hundred milliseconds or more for a
-    // big one, holding up all it draws
-    let image = image.with_default_mipmaps().unwrap_or(image);
     for texel in pixels.chunks_exact_mut(4) {
         let a = texel[3] as u32;
         if a < 255 {
