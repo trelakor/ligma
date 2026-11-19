@@ -895,8 +895,8 @@ pub struct Asked {
     pub missing: Vec<(String, f64)>,
     pub sharper: Vec<(String, f64)>,
     pub used: Vec<(String, f64)>,
-    /// Where those missing or sharper are drawn, in units, for those
-    /// nearest the middle of the view to be had first
+    /// Where images are drawn, in units, for those nearest the middle of
+    /// the view to be had first, and those out of it to be let go
     pub places: Vec<(String, Rect)>,
 }
 
@@ -2625,9 +2625,9 @@ impl<'a> Encoder<'a> {
         let (iw, ih) = (img.original.0 as f32, img.original.1 as f32);
         let shown = to_node.scale_x().hypot(to_node.skew_y()) * node_scale * iw;
         let kept = img.image.width() as f32;
+        self.place_asked(&key, w, h);
         self.asked.used.push((key.clone(), (shown * ASKED as f32) as f64));
         if kept < shown * ASKED as f32 && iw > kept && kept < 4096.0 {
-            self.place_asked(&key, w, h);
             self.asked.sharper.push((key.clone(), (shown * ASKED as f32) as f64));
         }
         // Up to 4 texels a pixel where it's shown biggest, which Figma's

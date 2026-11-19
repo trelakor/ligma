@@ -727,10 +727,38 @@ const PATCH_GRID: i32 = 64;
 /// correctly, rather than on the GPU (see `draw::sampled`)
 fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
     let _purpose = super::gpu_census::purpose("image");
+    if image.is_texture_backed() && image.has_mipmaps() {
+        return image;
+    }
     let pixels = if image.is_texture_backed() { image.make_raster_image(&mut *context, None) } else { Some(image.clone()) };
     pixels
         .and_then(|pixels| skia_safe::gpu::images::texture_from_image(context, &pixels, skia_safe::gpu::Mipmapped::Yes, skia_safe::gpu::Budgeted::No))
         .unwrap_or(image)
+}
+
+/// `img` `halvings` times half as big, its mipmap level that far down
+/// copied on the GPU, with mipmaps of its own. Not yet submitted
+fn halved(gpu: &mut Gpu, probe: &mut Option<Surface>, img: &Img, halvings: u32) -> Option<Img> {
+    let (w, h) = ((img.image.width() >> halvings).max(1), (img.image.height() >> halvings).max(1));
+    let info = ImageInfo::new((w, h), ColorType::RGBA8888, AlphaType::Premul, None);
+    let mut surface = skia_safe::gpu::surfaces::render_target(&mut gpu.context, skia_safe::gpu::Budgeted::No, &info, 0, SurfaceOrigin::TopLeft, None, true, None)?;
+    let mut paint = Paint::default();
+    paint.set_blend_mode(skia_safe::BlendMode::Src);
+    let level = SamplingOptions::new(FilterMode::Linear, MipmapMode::Nearest);
+    surface.canvas().draw_image_rect_with_sampling_options(&img.image, None, Rect::from_iwh(w, h), level, &paint);
+    let image = surface.image_snapshot();
+    drop(surface);
+    if !image.has_mipmaps() {
+        return None;
+    }
+    // Skia makes an image's smaller levels once it's drawn with them, and
+    // Vello reads them as they are, so it's drawn with them once here
+    if probe.is_none() {
+        *probe = gpu.own_surface(1, 1, 0);
+    }
+    let probe = probe.as_mut()?;
+    probe.canvas().draw_image_rect_with_sampling_options(&image, None, Rect::from_wh(1.0, 1.0), SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear), &Paint::default());
+    Some(Img { image, original: img.original, area: img.area, stale: img.stale })
 }
 
 /// Time a pass of the render thread spends at most taking in images that
@@ -1267,6 +1295,10 @@ pub struct Painter {
     /// The most each image was needed at near the view lately, and when,
     /// which it's kept at least as big as for `NEEDED_FOR`
     needed: HashMap<String, (f64, Instant)>,
+    /// When each image last came bigger than it was kept, which isn't made
+    /// smaller again for `NEEDED_FOR`, or what asks for it and what makes
+    /// it smaller could take turns
+    grown: HashMap<String, Instant>,
     /// Images that couldn't be had, when, and how long till they're
     /// asked for again: a second, then twice as long each time, as one can
     /// fail only till the page is ready
@@ -1326,9 +1358,9 @@ pub struct Painter {
     /// changed
     far_redrawn: Instant,
     vello_starting: Option<std::sync::mpsc::Receiver<Result<super::vello::Vello, String>>>,
-    /// Images units drew with when Vello last drew them, and at what
-    /// pixels a unit, by unit, as pictures keep them
-    vello_uses: HashMap<(usize, bool), (f32, Vec<(String, f64)>)>,
+    /// Images units drew with when Vello last drew them, and where, and at
+    /// what pixels a unit, by unit, as pictures keep them
+    vello_uses: HashMap<(usize, bool), (f32, Vec<(String, f64, Rect)>)>,
     /// How wide Vello showed each image it drew since images were last
     /// fitted, the widest
     vello_shown: HashMap<String, f32>,
@@ -1395,6 +1427,8 @@ pub struct Painter {
     /// When a frame was last drawn, and whether memory was given back since
     drawn: Instant,
     released: bool,
+    /// Whether images were fitted again once what moving needed was past
+    refitted: bool,
     freed: bool,
     drew: bool,
     /// Figma's checkerboard, and the pixel grid it draws when zoomed in
@@ -1536,6 +1570,7 @@ impl Painter {
             asked: HashMap::new(),
             wanted: HashMap::new(),
             needed: HashMap::new(),
+            grown: HashMap::new(),
             failed: HashMap::new(),
             tiles: HashMap::new(),
             mismatched: HashMap::new(),
@@ -1575,6 +1610,7 @@ impl Painter {
             between: Vec::new(),
             drawn: Instant::now(),
             released: true,
+            refitted: true,
             freed: true,
             checker: skia_safe::RuntimeEffect::make_for_shader(CHECKER, None)
                 .map_err(|error| log::warn!("native renderer: checker: {error}"))
@@ -1722,6 +1758,7 @@ impl Painter {
             if std::mem::take(&mut self.drew) {
                 self.drawn = Instant::now();
                 self.released = false;
+                self.refitted = false;
                 self.freed = false;
                 // Images sized for where the view was go while it moves on,
                 // not only once it stops
@@ -1739,6 +1776,11 @@ impl Painter {
                 // driver for reuse until given back
                 self.released = true;
                 self.trim();
+            } else if !self.refitted && self.drawn.elapsed() > NEEDED_FOR {
+                // Images kept bigger for where the view was moving are made
+                // as small as the view needs once that's past
+                self.refitted = true;
+                self.fit_images(false);
             } else if !self.freed && self.drawn.elapsed() > FREE_AFTER {
                 self.freed = true;
                 self.release();
@@ -3165,14 +3207,9 @@ impl Painter {
         let rendered = vello.render(&self.gpu.device, &self.gpu.queue, &scene, tw, th, used_pages, &pictures, &plan, kept);
         // Coarse tiles under the view draw most of the file, small
         let near_zoom = (px.max(1e-6) / self.zoom.0.max(1e-6)).log2().abs() < 1.0;
-        let over_view = near_zoom && self.view.as_ref().is_some_and(|view| Rect::intersects2(&reach, &Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32)));
+        let seen = self.view.as_ref().map(|view| Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32)).filter(|_| near_zoom);
         let now = Instant::now();
         for (key, width) in widths {
-            if over_view {
-                let (widest, at) = self.vello_in_view.entry(key.clone()).or_insert((0.0, now));
-                *widest = if at.elapsed() < IN_VIEW { widest.max(width) } else { width };
-                *at = now;
-            }
             let widest = self.vello_shown.entry(key).or_insert(0.0);
             *widest = widest.max(width);
         }
@@ -3195,23 +3232,52 @@ impl Painter {
             let super::vello::Asked { missing, sharper, used, places } = asked;
             let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).map(|(key, _)| key.clone()).collect();
             let images: Vec<(String, f64)> = missing.iter().chain(&sharper).cloned().collect();
-            let places: HashMap<&str, Rect> = places.iter().rev().map(|(key, at)| (key.as_str(), *at)).collect();
+            // Where each image's drawn in the unit, each place apart, as an
+            // image used across a frame would span it: the whole unit for
+            // those drawn without a place, as effects
+            let mut placed: HashMap<&str, Vec<Rect>> = HashMap::new();
+            for (key, at) in &places {
+                let all = placed.entry(key.as_str()).or_default();
+                if !all.contains(at) {
+                    all.push(*at);
+                }
+            }
+            let centre = seen.map(|seen| (seen.center_x(), seen.center_y()));
+            let nearest = |key: &str| {
+                let all = placed.get(key).map_or(&[][..], |all| &all[..]);
+                let off = |at: &Rect| centre.map_or(0.0, |(x, y)| (at.center_x() - x).hypot(at.center_y() - y));
+                all.iter().copied().min_by(|a, b| off(a).total_cmp(&off(b))).unwrap_or(bounds)
+            };
             for image in &images {
-                self.ask(std::slice::from_ref(image), Some(places.get(image.0.as_str()).copied().unwrap_or(bounds)));
+                self.ask(std::slice::from_ref(image), Some(nearest(&image.0)));
             }
             let waiting: Vec<String> = missing.into_iter().map(|(key, _)| key).collect();
             self.wait_for(&waiting, bounds);
             self.drew_with(drew, unit);
-            let mut uses = used;
-            uses.extend(images);
+            let mut widest: HashMap<String, f64> = HashMap::new();
+            for (key, width) in used.into_iter().chain(images) {
+                let entry = widest.entry(key).or_insert(0.0);
+                *entry = entry.max(width);
+            }
+            let uses: Vec<(String, f64, Rect)> = widest
+                .into_iter()
+                .flat_map(|(key, width)| {
+                    let all = placed.get(key.as_str()).cloned().unwrap_or_else(|| vec![bounds]);
+                    all.into_iter().map(move |at| (key.clone(), width, at))
+                })
+                .collect();
             // Figma sends a node again as another while a file loads, and
             // till the new one's drawn nothing alive uses what the old drew
             // with, a stand-in for its custom effects among them
-            if over_view {
-                for (key, width) in &uses {
-                    let (widest, at) = self.vello_in_view.entry(key.clone()).or_insert((0.0, now));
-                    *widest = if at.elapsed() < IN_VIEW { widest.max(*width as f32) } else { *width as f32 };
-                    *at = now;
+            // As wide as at the view's zoom, as tiles a level up draw it
+            // twice as wide
+            let to_view = self.zoom.0 as f64 / px.max(1e-6) as f64;
+            for (key, width, at) in &uses {
+                if seen.is_some_and(|seen| Rect::intersects2(at, &seen)) {
+                    let width = &(width * to_view);
+                    let (widest, when) = self.vello_in_view.entry(key.clone()).or_insert((0.0, now));
+                    *widest = if when.elapsed() < IN_VIEW { widest.max(*width as f32) } else { *width as f32 };
+                    *when = now;
                 }
             }
             // What the zoom nearest the view's drew it with is what it
@@ -4237,7 +4303,6 @@ impl Painter {
                 self.effects_done(&key);
                 // Fetches run side by side, so one asked for before can come
                 // after: it's of a view gone by, and what's asked for since
-                // is on its way
                 // is on its way. It's still shown till then, unless what's
                 // here is as sharp
                 self.kept.lock().unwrap().stale.remove(&key);
@@ -4367,6 +4432,9 @@ impl Painter {
             }
         }
         self.image_came_at = Instant::now();
+        if self.images.get(&key).is_some_and(|kept| kept.image.width() < img.image.width()) {
+            self.grown.insert(key.clone(), Instant::now());
+        }
         self.failed.remove(&key);
 
         // Asked for twice, by pictures wanting it at sizes that came
@@ -4744,9 +4812,10 @@ impl Painter {
         });
         let seen: Option<Rect> = self.view.as_ref().map(|view| Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32));
         // Where tiles at this zoom are drawn as the view moves: a tile
-        // around it, and where it's headed. Further out, only coarse tiles
+        // around it, and where it's headed. Further out, only coarse tiles.
+        // Tiles are on a grid, so those around reach up to two past its edge
         let fine: Option<Rect> = self.view.as_ref().map(|view| {
-            let margin = TILE as f64 / px.max(1e-6) as f64;
+            let margin = 2.0 * TILE as f64 / px.max(1e-6) as f64;
             let moving = self.moved.elapsed() < Duration::from_millis(150);
             let (vx, vy) = if moving { (self.velocity.0 * LOOKAHEAD * 2.0, self.velocity.1 * LOOKAHEAD * 2.0) } else { (0.0, 0.0) };
             let grow = if moving { (2f64.powf((self.widening * LOOKAHEAD * 2.0).clamp(0.0, 2.0)) - 1.0) / 2.0 } else { 0.0 };
@@ -4798,10 +4867,13 @@ impl Painter {
         // And what Vello drew them with
         let coarse_px = coarse(px.max(1e-6));
         for (unit, (drawn_px, uses)) in &self.vello_uses {
-            let Some(&(shown, close)) = near_units.get(unit) else {
+            if !near_units.contains_key(unit) {
                 continue;
-            };
-            for (key, width) in uses {
+            }
+            for (key, width, at) in uses {
+                // Each image where it is, as a frame of many is one unit
+                let shown = seen.is_none_or(|seen| Rect::intersects2(at, &seen));
+                let close = shown || fine.is_none_or(|fine| Rect::intersects2(at, &fine));
                 // At this zoom, whichever level last drew it
                 let entry = need.entry(key.clone()).or_insert(0.0);
                 *entry = entry.max(width * (px / drawn_px.max(1e-6)) as f64);
@@ -4866,6 +4938,7 @@ impl Painter {
             }
         }
         self.needed.retain(|_, (_, at)| at.elapsed() < NEEDED_FOR);
+        self.grown.retain(|_, at| at.elapsed() < NEEDED_FOR);
         let needed: HashMap<String, f64> = self.needed.iter().map(|(key, (width, _))| (key.clone(), *width)).collect();
         let needed = |key: &str| needed.get(key).copied().unwrap_or(0.0);
         let mut total: usize = self.images.values().map(Img::bytes).sum();
@@ -4911,6 +4984,7 @@ impl Painter {
         // swapped in once here. Vello draws from a mipmap level of them as
         // big, so they look the same
         let shown = std::mem::take(&mut self.vello_shown);
+        let mut halve: Vec<(String, f64)> = Vec::new();
         for (key, width) in shown {
             let Some(img) = self.images.get(&key) else { continue };
             if key.starts_with(RENDER) || key.starts_with(EFFECT) || img.stale {
@@ -4925,8 +4999,7 @@ impl Painter {
             let fits = fitted(img.original, asked) as f64;
             if kept > fits * 2.0 && self.asked.get(&key) != Some(&asked) {
                 total = total.saturating_sub((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize);
-                self.asked.insert(key.clone(), asked);
-                self.request(&key, asked, None);
+                halve.push((key, asked));
             }
         }
         // Moving, those only coarse tiles draw are had again at the size
@@ -4949,10 +5022,7 @@ impl Painter {
                     break;
                 }
                 total = total.saturating_sub(saving);
-                if self.asked.get(&key) != Some(&width) {
-                    self.asked.insert(key.clone(), width);
-                    self.request(&key, width, None);
-                }
+                halve.push((key, width));
             }
         }
         // Those in view alone past it, as far out with many images each
@@ -4976,12 +5046,10 @@ impl Painter {
                     break;
                 }
                 total = total.saturating_sub(saving);
-                if self.asked.get(&key) != Some(&width) {
-                    self.asked.insert(key.clone(), width);
-                    self.request(&key, width, None);
-                }
+                halve.push((key, width));
             }
         }
+        self.make_smaller(halve);
         let images = &self.images;
         self.wanted.retain(|key, _| images.contains_key(key));
         // Small copies of images far off are let go past their own budget,
@@ -5044,6 +5112,42 @@ impl Painter {
         let total = total - bytes + small.bytes();
         self.images.insert(key.to_string(), small);
         total
+    }
+
+    /// Has images `smaller` kept at what each width takes. Where that's a
+    /// mipmap level of what's kept, the level is copied on the GPU, so it's
+    /// at once and draws as it did, rather than fetched, decoded and
+    /// uploaded again behind the images still loading. Others are asked for
+    /// again
+    fn make_smaller(&mut self, smaller: Vec<(String, f64)>) {
+        let _span = super::span::span("make smaller");
+        let _purpose = super::gpu_census::purpose("image");
+        let mut made: Vec<(String, Img)> = Vec::new();
+        let mut probe = None;
+        for (key, width) in smaller {
+            if self.asked.get(&key) == Some(&width) || made.iter().any(|(done, _)| *done == key) || self.grown.get(&key).is_some_and(|at| at.elapsed() < NEEDED_FOR) {
+                continue;
+            }
+            let Some(img) = self.images.get(&key) else { continue };
+            let kept = img.image.width().max(img.image.height()) as u32;
+            let fits = super::run::fitted(img.original, width).max(1);
+            let halvings = (kept / fits).max(1).ilog2();
+            let level = img.image.has_mipmaps() && halvings > 0 && kept >> halvings == fits;
+            self.asked.insert(key.clone(), width);
+            match level.then(|| halved(&mut self.gpu, &mut probe, img, halvings)).flatten() {
+                Some(small) => made.push((key, small)),
+                None => self.request(&key, width, None),
+            }
+        }
+        if made.is_empty() {
+            return;
+        }
+        // Drawn before any image they're made from is let go (see `Gpu::flush`)
+        let _ = self.gpu.context.flush_and_submit();
+        trace(|| format!("made {} images smaller on the GPU", made.len()));
+        for (key, small) in made {
+            self.image_came(key, small);
+        }
     }
 
     /// Pictures hold on to images they drew, so those that drew one of
