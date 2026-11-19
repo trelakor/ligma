@@ -727,9 +727,6 @@ const PATCH_GRID: i32 = 64;
 /// correctly, rather than on the GPU (see `draw::sampled`)
 fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
     let _purpose = super::gpu_census::purpose("image");
-    if image.is_texture_backed() && image.has_mipmaps() {
-        return image;
-    }
     let pixels = if image.is_texture_backed() { image.make_raster_image(&mut *context, None) } else { Some(image.clone()) };
     pixels
         .and_then(|pixels| skia_safe::gpu::images::texture_from_image(context, &pixels, skia_safe::gpu::Mipmapped::Yes, skia_safe::gpu::Budgeted::No))
@@ -737,29 +734,24 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 }
 
 /// `img` `halvings` times half as big, its mipmap level that far down
-/// copied on the GPU, with mipmaps of its own. Not yet submitted
-fn halved(gpu: &mut Gpu, probe: &mut Option<Surface>, img: &Img, halvings: u32) -> Option<Img> {
+/// copied on the GPU. Not yet submitted. Without mipmaps of its own, as
+/// Skia making those on the GPU leaves textures it records wrongly (see
+/// `draw::sampled`): it's kept as big as the view needs, which takes it
+/// as it is, and had again should the view need it smaller still
+fn halved(gpu: &mut Gpu, img: &Img, halvings: u32) -> Option<Img> {
     let (w, h) = ((img.image.width() >> halvings).max(1), (img.image.height() >> halvings).max(1));
-    let info = ImageInfo::new((w, h), ColorType::RGBA8888, AlphaType::Premul, None);
-    let mut surface = skia_safe::gpu::surfaces::render_target(&mut gpu.context, skia_safe::gpu::Budgeted::No, &info, 0, SurfaceOrigin::TopLeft, None, true, None)?;
+    let mut surface = gpu.own_surface(w, h, 0)?;
     let mut paint = Paint::default();
     paint.set_blend_mode(skia_safe::BlendMode::Src);
     let level = SamplingOptions::new(FilterMode::Linear, MipmapMode::Nearest);
     surface.canvas().draw_image_rect_with_sampling_options(&img.image, None, Rect::from_iwh(w, h), level, &paint);
     let image = surface.image_snapshot();
-    drop(surface);
-    if !image.has_mipmaps() {
-        return None;
-    }
-    // Skia makes an image's smaller levels once it's drawn with them, and
-    // Vello reads them as they are, so it's drawn with them once here
-    if probe.is_none() {
-        *probe = gpu.own_surface(1, 1, 0);
-    }
-    let probe = probe.as_mut()?;
-    probe.canvas().draw_image_rect_with_sampling_options(&image, None, Rect::from_wh(1.0, 1.0), SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear), &Paint::default());
     Some(Img { image, original: img.original, area: img.area, stale: img.stale })
 }
+
+/// Time a pass of the render thread spends at most making images smaller
+/// on the GPU, the rest left for the passes after
+const MAKE_SMALLER_A_PASS: Duration = Duration::from_millis(4);
 
 /// Time a pass of the render thread spends at most taking in images that
 /// came, past the first, the rest left for the passes after
@@ -4419,6 +4411,12 @@ impl Painter {
 
     /// Image `key` came: what waited for it is drawn again
     fn image_came(&mut self, key: String, img: Img) {
+        self.take_image(key, img, true);
+    }
+
+    /// Image `key` in place of what's kept of it, `upload`ed first if it
+    /// came from the CPU
+    fn take_image(&mut self, key: String, img: Img, upload: bool) {
         let _span = super::span::span("image came");
         // Sizes asked for one after another come in any order: only the
         // last asked for is kept, or one asked for before could follow it
@@ -4484,9 +4482,9 @@ impl Painter {
         }
         drop(pictures_span);
         let mut img = img;
-        {
+        if upload {
             let _span = super::span::span("upload image");
-            img.image = upload(&mut self.gpu.context, img.image);
+            img.image = self::upload(&mut self.gpu.context, img.image);
             // Its copy on the way up is let go once the GPU has it, not
             // with those of every other image that came in meanwhile
             if img.bytes() > 1 << 20 {
@@ -5122,10 +5120,17 @@ impl Painter {
     fn make_smaller(&mut self, smaller: Vec<(String, f64)>) {
         let _span = super::span::span("make smaller");
         let _purpose = super::gpu_census::purpose("image");
-        let mut made: Vec<(String, Img)> = Vec::new();
-        let mut probe = None;
+        let started = Instant::now();
+        let mut made = 0;
+        // What they're made from, kept till the GPU has read them (see
+        // `Gpu::flush`)
+        let mut from: Vec<Image> = Vec::new();
         for (key, width) in smaller {
-            if self.asked.get(&key) == Some(&width) || made.iter().any(|(done, _)| *done == key) || self.grown.get(&key).is_some_and(|at| at.elapsed() < NEEDED_FOR) {
+            // A few milliseconds' worth a pass, the rest at the next
+            if started.elapsed() >= MAKE_SMALLER_A_PASS {
+                break;
+            }
+            if self.asked.get(&key) == Some(&width) || self.grown.get(&key).is_some_and(|at| at.elapsed() < NEEDED_FOR) {
                 continue;
             }
             let Some(img) = self.images.get(&key) else { continue };
@@ -5134,20 +5139,20 @@ impl Painter {
             let halvings = (kept / fits).max(1).ilog2();
             let level = img.image.has_mipmaps() && halvings > 0 && kept >> halvings == fits;
             self.asked.insert(key.clone(), width);
-            match level.then(|| halved(&mut self.gpu, &mut probe, img, halvings)).flatten() {
-                Some(small) => made.push((key, small)),
+            match level.then(|| halved(&mut self.gpu, img, halvings)).flatten() {
+                Some(small) => {
+                    from.push(img.image.clone());
+                    made += 1;
+                    self.take_image(key, small, false);
+                }
                 None => self.request(&key, width, None),
             }
         }
-        if made.is_empty() {
-            return;
+        if made > 0 {
+            let _ = self.gpu.context.flush_and_submit();
+            trace(|| format!("made {made} images smaller on the GPU in {:.1}ms", started.elapsed().as_secs_f64() * 1000.0));
         }
-        // Drawn before any image they're made from is let go (see `Gpu::flush`)
-        let _ = self.gpu.context.flush_and_submit();
-        trace(|| format!("made {} images smaller on the GPU", made.len()));
-        for (key, small) in made {
-            self.image_came(key, small);
-        }
+        drop(from);
     }
 
     /// Pictures hold on to images they drew, so those that drew one of
