@@ -244,6 +244,13 @@
     const canvas = document.querySelector(".gpu-view-content canvas");
     if (!canvas) return null;
     const r = canvas.getBoundingClientRect();
+    // A canvas Figma's made again is 300 by 150 till it sizes it, where
+    // what holds it is already the size it'll be. Measured again each
+    // frame till they agree
+    const box = canvas.parentElement?.getBoundingClientRect();
+    if (box && (Math.abs(r.width - box.width) > 2 || Math.abs(r.height - box.height) > 2)) {
+      return [box.left, box.top, box.width, box.height];
+    }
     rect = [r.left, r.top, r.width, r.height];
     if (!canvas.__ligmaMeasured) {
       canvas.__ligmaMeasured = true;
@@ -422,7 +429,11 @@
     const canvas = document.querySelector(".gpu-view-content canvas") ?? document.querySelector("canvas");
     const style = document.getElementById(STYLE);
     if (!canvas || !style) return;
-    const r = canvas.getBoundingClientRect();
+    const own = canvas.getBoundingClientRect();
+    // What holds the canvas, while it's a canvas Figma's made again and
+    // not yet sized (see `measure`)
+    const box = canvas.parentElement?.getBoundingClientRect();
+    const r = box && (Math.abs(own.width - box.width) > 2 || Math.abs(own.height - box.height) > 2) ? box : own;
     const [w, h] = [innerWidth, innerHeight];
     const strip = (selector, left, top, width, height) => `
       ${selector} {
@@ -455,6 +466,7 @@
     if (canvas) {
       watcher = new ResizeObserver(hole);
       watcher.observe(canvas);
+      if (canvas.parentElement) watcher.observe(canvas.parentElement);
     }
     addEventListener("resize", hole);
   };

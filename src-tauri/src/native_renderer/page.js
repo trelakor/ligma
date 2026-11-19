@@ -735,8 +735,12 @@
       const figma = api();
       if (!figma) return null;
       const { x, y, width, height } = figma.viewport.bounds;
-      const canvas = document.querySelector("canvas");
-      const rect = canvas?.getBoundingClientRect();
+      const canvas = document.querySelector(".gpu-view-content canvas") ?? document.querySelector("canvas");
+      // A canvas Figma's made again is 300 by 150 till it sizes it, where
+      // what holds it is already the size it'll be
+      const own = canvas?.getBoundingClientRect();
+      const box = canvas?.parentElement?.getBoundingClientRect();
+      const rect = own && box && (Math.abs(own.width - box.width) > 2 || Math.abs(own.height - box.height) > 2) ? box : own;
       return {
         x,
         y,

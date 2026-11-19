@@ -4328,6 +4328,9 @@ impl Painter {
         if self.view.as_ref() == Some(&view) {
             return;
         }
+        if self.view.as_ref().is_none_or(|was| (was.cw, was.ch, was.dpr) != (view.cw, view.ch, view.dpr)) {
+            trace(|| format!("view's canvas {}x{} at {},{} dpr {} zoom {} shows {:.0}x{:.0}", view.cw, view.ch, view.cx, view.cy, view.dpr, view.zoom, view.w, view.h));
+        }
         let now = Instant::now();
         let (cx, cy) = (view.x + view.w / 2.0, view.y + view.h / 2.0);
         match self.motion {
