@@ -1138,6 +1138,12 @@ fn sample_memory(ctx: Arc<Ctx>) {
         return;
     };
     while !ctx.stop.load(Ordering::Relaxed) {
+        // Only what shows it or a benchmark reads it, and each sample takes
+        // a few percent of a core
+        if !(super::dev() || super::show_stats() || separate_window() || ctx.peak.lock().unwrap().is_some()) {
+            sleep(500);
+            continue;
+        }
         let sample = memory.sample();
         {
             let mut stats = stats().lock().unwrap();
