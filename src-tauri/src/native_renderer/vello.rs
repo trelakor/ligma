@@ -895,6 +895,9 @@ pub struct Asked {
     pub missing: Vec<(String, f64)>,
     pub sharper: Vec<(String, f64)>,
     pub used: Vec<(String, f64)>,
+    /// Where those missing or sharper are drawn, in units, for those
+    /// nearest the middle of the view to be had first
+    pub places: Vec<(String, Rect)>,
 }
 
 /// A unit encoded once for every zoom from `2^level` up to twice that,
@@ -1583,6 +1586,8 @@ pub struct Encoder<'a> {
     /// The view's pixels
     view: IRect,
     m: Matrix,
+    /// From what the unit's drawn to back to units
+    from_post: Matrix,
     pub counts: Counts,
     pub asked: Asked,
     /// Images views have drawn, at the levels they drew them
@@ -1668,6 +1673,7 @@ impl<'a> Encoder<'a> {
             shelf: Shelf { width: 0, height: 0, x: 0, y: 0, row: 0 },
             view: IRect::from_wh(width, height),
             m: Matrix::default(),
+            from_post: Matrix::default(),
             counts: Counts::default(),
             asked: Asked::default(),
             failed: None,
@@ -1903,6 +1909,7 @@ impl<'a> Encoder<'a> {
     /// Unit `place`, drawn with `post` after its own matrix
     pub fn place(&mut self, place: &Place, post: &Matrix) {
         self.m = *post;
+        self.from_post = post.invert().unwrap_or_default();
         let soft = self.tree.info(place.id).blends;
         let was = self.soft.clone();
         let mut clips = 0;
@@ -2590,6 +2597,12 @@ impl<'a> Encoder<'a> {
         }
     }
 
+    /// Where image `key`, filling a node `w` by `h`, is drawn, in units
+    fn place_asked(&mut self, key: &str, w: f32, h: f32) {
+        let drawn = self.m.map_rect(Rect::from_wh(w, h)).0;
+        self.asked.places.push((key.to_string(), self.from_post.map_rect(drawn).0));
+    }
+
     /// Image fill `paint` of a node `size` big, as `Drawer::image` draws it,
     /// with what it asked about the image
     fn image(&mut self, paint: &rt::Paint, size: [f32; 2], opacity: f32) -> Picture {
@@ -2603,6 +2616,7 @@ impl<'a> Encoder<'a> {
         let node_scale = self.m.scale_x().hypot(self.m.skew_y()) * shows;
         let Some(img) = self.images.get(&key) else {
             if !self.asked.missing.iter().any(|(missing, _)| *missing == key) {
+                self.place_asked(&key, w, h);
                 self.asked.missing.push((key, (w.max(h) * node_scale * ASKED as f32) as f64));
             }
             return Picture::Nothing;
@@ -2613,6 +2627,7 @@ impl<'a> Encoder<'a> {
         let kept = img.image.width() as f32;
         self.asked.used.push((key.clone(), (shown * ASKED as f32) as f64));
         if kept < shown * ASKED as f32 && iw > kept && kept < 4096.0 {
+            self.place_asked(&key, w, h);
             self.asked.sharper.push((key.clone(), (shown * ASKED as f32) as f64));
         }
         // Up to 4 texels a pixel where it's shown biggest, which Figma's
@@ -3265,6 +3280,7 @@ impl<'a> Encoder<'a> {
                         missing: std::mem::take(&mut drawer.missing_images),
                         sharper: std::mem::take(&mut drawer.sharper_images),
                         used: std::mem::take(&mut drawer.used_images),
+                        places: Vec::new(),
                     };
                     drop(drawer);
                     canvas.restore();

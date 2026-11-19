@@ -1206,7 +1206,7 @@ fn sample_memory(ctx: Arc<Ctx>) {
 /// Fetches the images the render thread asks for
 fn fetch(ctx: Arc<Ctx>, requests: Arc<super::render::Requests>) {
     while !ctx.stop.load(Ordering::Relaxed) {
-        let Some(Request { key, width }) = requests.take(Duration::from_millis(500)) else {
+        let Some(Request { key, width, .. }) = requests.take(Duration::from_millis(500)) else {
             continue;
         };
         let Some(webview) = current(&ctx) else {

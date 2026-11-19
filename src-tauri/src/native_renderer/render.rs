@@ -199,42 +199,72 @@ pub struct Offscreen {
 }
 
 /// What the render thread asks the page for: an image fill, about as wide
-/// as given in pixels
+/// as given in pixels, and where it's drawn, in units, where that's known
 pub struct Request {
     pub key: String,
     pub width: f64,
+    pub at: Option<Rect>,
 }
 
-/// Images asked for and not yet taken to be fetched. The widest goes
-/// first, as what's biggest on screen is what the view is waiting on most,
-/// and the furthest level's tiles, drawn behind the view, show every image
-/// at a few pixels. An image asked for again before it's taken is fetched
-/// once, at the larger width
+/// Images asked for and not yet taken to be fetched. Those nearest the
+/// middle of the view go first, out to its edges and then past them, as
+/// that's where the eye is, and of those as near the widest, as what's
+/// biggest on screen is what the view is waiting on most. An image asked
+/// for again before it's taken is fetched once, at the larger width, as
+/// near as it's drawn
 #[derive(Default)]
 pub struct Requests {
     queue: std::sync::Mutex<Vec<Request>>,
     added: std::sync::Condvar,
+    /// The view, in units, as of the last frame
+    view: std::sync::Mutex<Option<Rect>>,
 }
 
 impl Requests {
     pub fn send(&self, request: Request) {
+        let view = *self.view.lock().unwrap();
         let mut queue = self.queue.lock().unwrap();
         match queue.iter_mut().find(|queued| queued.key == request.key) {
-            Some(queued) => queued.width = queued.width.max(request.width),
+            Some(queued) => {
+                queued.width = queued.width.max(request.width);
+                if rank(request.at, view) < rank(queued.at, view) {
+                    queued.at = request.at;
+                }
+            }
             None => queue.push(request),
         }
         self.added.notify_one();
     }
 
-    /// The widest asked for, waiting up to `timeout` for one
+    pub fn set_view(&self, view: Rect) {
+        *self.view.lock().unwrap() = Some(view);
+    }
+
+    /// The one nearest the middle of the view, waiting up to `timeout` for
+    /// one
     pub fn take(&self, timeout: Duration) -> Option<Request> {
+        let view = *self.view.lock().unwrap();
         let mut queue = self.queue.lock().unwrap();
         if queue.is_empty() {
             queue = self.added.wait_timeout(queue, timeout).unwrap().0;
         }
-        let widest = (0..queue.len()).max_by(|&a, &b| queue[a].width.total_cmp(&queue[b].width).then(b.cmp(&a)))?;
-        Some(queue.remove(widest))
+        // In steps of a tenth of the view, so of those about as near, the
+        // widest
+        let key = |request: &Request| ((rank(request.at, view) * 10.0).floor() as i64, std::cmp::Reverse(request.width.max(0.0) as i64));
+        let first = (0..queue.len()).min_by_key(|&i| (key(&queue[i]), i))?;
+        Some(queue.remove(first))
     }
+}
+
+/// How far `at` is from the middle of `view`, in halves of the view's
+/// diagonal, so within the view is about 1 or less. Where it's drawn isn't
+/// known, as for an image an effect runs on, just past the view's edge
+fn rank(at: Option<Rect>, view: Option<Rect>) -> f32 {
+    let (Some(at), Some(view)) = (at, view) else { return 1.0 };
+    let center = view.center();
+    let dx = (at.left - center.x).max(center.x - at.right).max(0.0);
+    let dy = (at.top - center.y).max(center.y - at.bottom).max(0.0);
+    dx.hypot(dy) / (view.width().hypot(view.height()) / 2.0).max(1e-6)
 }
 
 /// In a dev build with LIGMA_NATIVE_TRACE=1, frame and tile timings are
@@ -3046,6 +3076,7 @@ impl Painter {
                             unit_asked.missing.append(&mut drawn.missing);
                             unit_asked.sharper.append(&mut drawn.sharper);
                             unit_asked.used.append(&mut drawn.used);
+                            unit_asked.places.append(&mut drawn.places);
                             asked.push(((unit.slot, unit.section), unit.bounds, unit_asked));
                         }
                         Err(why) => encoder.failed = Some(why.clone()),
@@ -3143,10 +3174,13 @@ impl Painter {
         // kind the present thread shows
         let tex = if !copy { out } else { self.vello_copy(&out, tw, th)? };
         for (unit, bounds, asked) in asked {
-            let super::vello::Asked { missing, sharper, used } = asked;
+            let super::vello::Asked { missing, sharper, used, places } = asked;
             let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).map(|(key, _)| key.clone()).collect();
             let images: Vec<(String, f64)> = missing.iter().chain(&sharper).cloned().collect();
-            self.ask(&images);
+            let places: HashMap<&str, Rect> = places.iter().rev().map(|(key, at)| (key.as_str(), *at)).collect();
+            for image in &images {
+                self.ask(std::slice::from_ref(image), Some(places.get(image.0.as_str()).copied().unwrap_or(bounds)));
+            }
             let waiting: Vec<String> = missing.into_iter().map(|(key, _)| key).collect();
             self.wait_for(&waiting, bounds);
             self.drew_with(drew, unit);
@@ -4290,6 +4324,7 @@ impl Painter {
             }
         }
         self.motion = Some((cx, cy, view.w, now));
+        self.requests.set_view(Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32));
         self.view = Some(view);
         self.moved = now;
         self.dirty = true;
@@ -4403,7 +4438,7 @@ impl Painter {
         self.effects_running.remove(&node);
         if let Some((again, width)) = self.effects_again.remove(&node) {
             self.asked.remove(&again);
-            self.ask(&[(again, width)]);
+            self.ask(&[(again, width)], None);
         }
     }
 
@@ -4420,7 +4455,7 @@ impl Painter {
             // Run again on what came, not only resized as it was
             self.kept.lock().unwrap().retain(|kept| kept != effect);
             self.asked.remove(&effect);
-            self.ask(&[(effect, width)]);
+            self.ask(&[(effect, width)], None);
         }
     }
 
@@ -4857,7 +4892,7 @@ impl Painter {
             if kept > fits * 2.0 && self.asked.get(&key) != Some(&asked) {
                 total = total.saturating_sub((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize);
                 self.asked.insert(key.clone(), asked);
-                self.request(&key, asked);
+                self.request(&key, asked, None);
             }
         }
         // Moving, those only coarse tiles draw are had again at the size
@@ -4882,7 +4917,7 @@ impl Painter {
                 total = total.saturating_sub(saving);
                 if self.asked.get(&key) != Some(&width) {
                     self.asked.insert(key.clone(), width);
-                    self.request(&key, width);
+                    self.request(&key, width, None);
                 }
             }
         }
@@ -4909,7 +4944,7 @@ impl Painter {
                 total = total.saturating_sub(saving);
                 if self.asked.get(&key) != Some(&width) {
                     self.asked.insert(key.clone(), width);
-                    self.request(&key, width);
+                    self.request(&key, width, None);
                 }
             }
         }
@@ -5342,7 +5377,7 @@ impl Painter {
                 uses.extend(images.iter().cloned());
                 drop(drawer);
                 let picture = recorder.finish_recording_as_picture(None)?;
-                self.ask(&images);
+                self.ask(&images, Some(bounds));
                 let missing: Vec<String> = images.into_iter().map(|(key, _)| key).collect();
                 self.wait_for(&missing, bounds);
                 self.drew_with(drew, (slot, section));
@@ -5380,8 +5415,8 @@ impl Painter {
             uses.extend(encoder.missing_images.iter().cloned());
             drop(encoder);
             let picture = recorder.finish_recording_as_picture(None)?;
-            self.ask(&images);
-            self.ask_exact(&exact);
+            self.ask(&images, Some(bounds));
+            self.ask_exact(&exact, Some(bounds));
             let missing: Vec<String> = images.into_iter().chain(exact).map(|(key, _)| key).collect();
             self.wait_for(&missing, bounds);
             self.drew_with(drew, (slot, section));
@@ -5759,7 +5794,7 @@ impl Painter {
 
     /// Asks for renders at exactly the width given, unless that's what was
     /// asked for last
-    fn ask_exact(&mut self, renders: &[(String, f64)]) {
+    fn ask_exact(&mut self, renders: &[(String, f64)], at: Option<Rect>) {
         for (key, width) in renders {
             if self.failed.get(key).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
                 continue;
@@ -5767,12 +5802,12 @@ impl Painter {
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
             if (width / asked - 1.0).abs() > EXACT_TOLERANCE as f64 {
                 self.asked.insert(key.clone(), *width);
-                self.request(key, *width);
+                self.request(key, *width, at);
             }
         }
     }
 
-    fn ask(&mut self, images: &[(String, f64)]) {
+    fn ask(&mut self, images: &[(String, f64)], at: Option<Rect>) {
         for (key, width) in images {
             if self.failed.get(key).is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
                 continue;
@@ -5780,18 +5815,18 @@ impl Painter {
             let asked = self.asked.get(key).copied().unwrap_or(0.0);
             if *width > asked * 1.05 {
                 self.asked.insert(key.clone(), *width);
-                self.request(key, *width);
+                self.request(key, *width, at);
             }
         }
     }
 
     /// Asks the page for image `key` about `width` pixels wide, or runs a
     /// node's effects for it
-    fn request(&mut self, key: &str, width: f64) {
+    fn request(&mut self, key: &str, width: f64, at: Option<Rect>) {
         if key.starts_with(EFFECT) {
             self.effect(key, width);
         } else {
-            self.requests.send(Request { key: key.to_string(), width });
+            self.requests.send(Request { key: key.to_string(), width, at });
         }
     }
 
@@ -5862,7 +5897,7 @@ impl Painter {
             let on: Vec<String> = images.iter().map(|(image, _)| image.clone()).collect();
             self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
             self.effects_waiting.push((key.to_string(), width, on));
-            self.ask(&images);
+            self.ask(&images, None);
             return;
         }
         let info = ImageInfo::new((pw, ph), ColorType::RGBA8888, AlphaType::Premul, None);
@@ -5929,7 +5964,7 @@ impl Painter {
             let on: Vec<String> = images.iter().map(|(image, _)| image.clone()).collect();
             self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
             self.effects_waiting.push((key.to_string(), width, on));
-            self.ask(&images);
+            self.ask(&images, None);
             return;
         }
         let info = ImageInfo::new((pw, ph), ColorType::RGBA8888, AlphaType::Premul, None);
@@ -5943,7 +5978,7 @@ impl Painter {
             let on: Vec<String> = sharper.iter().map(|(image, _)| image.clone()).collect();
             self.effects_waiting.retain(|(waiting, _, _)| waiting != key);
             self.effects_waiting.push((key.to_string(), width, on));
-            self.ask(&sharper);
+            self.ask(&sharper, None);
         }
         trace(|| format!("effect input {key} {pw}x{ph} took={:.1}", began.elapsed().as_secs_f64() * 1000.0));
         self.effects_running.insert(effect.node.clone(), (key.to_string(), Instant::now()));
@@ -6533,8 +6568,8 @@ impl Painter {
         let exact = std::mem::take(&mut encoder.exact_images);
         drop(encoder);
         let waiting = images.len() + exact.len();
-        self.ask(&images);
-        self.ask_exact(&exact);
+        self.ask(&images, Some(bounds));
+        self.ask_exact(&exact, Some(bounds));
         let drawn = big.image_snapshot();
         let mut surface = self.gpu.surface(width as i32, height as i32, 1)?;
         shrink(&mut surface, &drawn, skia_safe::IRect::from_wh(width as i32 * ss, height as i32 * ss), self.average.as_ref());
