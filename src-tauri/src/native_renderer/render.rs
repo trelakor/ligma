@@ -719,6 +719,12 @@ const FIT_SOON: Duration = Duration::from_millis(250);
 const PLACEHOLDER: i32 = 256;
 /// Bytes of those kept of images nothing near the view draws
 const PLACEHOLDERS: usize = 32 << 20;
+/// How long an image stays as big as it was last needed near the view.
+/// Made smaller sooner, panning back and forth over a file of many images
+/// had them again at one size and the other every few seconds, each time
+/// fetched, decoded and uploaded again and what draws them drawn again,
+/// blurrier then sharper
+const NEEDED_FOR: Duration = Duration::from_secs(10);
 
 /// Settings that trade memory for quality, which can be set by environment
 /// variable in a dev build to measure them
@@ -1221,6 +1227,9 @@ pub struct Painter {
     asked: HashMap<String, f64>,
     /// When each image was last needed near the view
     wanted: HashMap<String, Instant>,
+    /// The most each image was needed at near the view lately, and when,
+    /// which it's kept at least as big as for `NEEDED_FOR`
+    needed: HashMap<String, (f64, Instant)>,
     /// Images that couldn't be had, and when
     failed: HashMap<String, Instant>,
     tiles: HashMap<TileKey, Tile>,
@@ -1483,6 +1492,7 @@ impl Painter {
             images: HashMap::new(),
             asked: HashMap::new(),
             wanted: HashMap::new(),
+            needed: HashMap::new(),
             failed: HashMap::new(),
             tiles: HashMap::new(),
             mismatched: HashMap::new(),
@@ -4777,12 +4787,24 @@ impl Painter {
         for key in need.keys() {
             self.wanted.insert(key.clone(), now);
         }
+        for (key, &width) in &need {
+            if !in_view.contains(key) && !fine_use.contains(key) {
+                continue;
+            }
+            let entry = self.needed.entry(key.clone()).or_insert((width, now));
+            if width >= entry.0 || entry.1.elapsed() >= NEEDED_FOR {
+                *entry = (width, now);
+            }
+        }
+        self.needed.retain(|_, (_, at)| at.elapsed() < NEEDED_FOR);
+        let needed: HashMap<String, f64> = self.needed.iter().map(|(key, (width, _))| (key.clone(), *width)).collect();
+        let needed = |key: &str| needed.get(key).copied().unwrap_or(0.0);
         let mut total: usize = self.images.values().map(Img::bytes).sum();
         trace(|| format!("images {} MB, {} near the view, {} in it{}", total >> 20, need.len(), in_view.len(), if soon { ", soon" } else { "" }));
         if total > budget {
             // Those not in view, needed longest ago (or never) first, and of
             // those the biggest
-            let can_go = |key: &String, img: &Img| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !((soon || key.starts_with(EFFECT)) && need.contains_key(key.as_str())) && img.image.width().max(img.image.height()) > PLACEHOLDER;
+            let can_go = |key: &String, img: &Img| !key.starts_with(RENDER) && !in_view.contains(key.as_str()) && !((soon || key.starts_with(EFFECT)) && need.contains_key(key.as_str())) && needed(key) == 0.0 && img.image.width().max(img.image.height()) > PLACEHOLDER;
             // What custom effects drew is kept under more than one key: a
             // texture kept under keys still in use stays as it is, and one
             // let go is let go under each, or making it smaller under one
@@ -4829,7 +4851,7 @@ impl Painter {
             // drawn since may be only coarse tiles around it, which show it
             // small, while it's in view bigger, and it'd be had again and
             // again at each size
-            let asked = (width as f64 * super::vello::ASKED).max(need.get(&key).copied().unwrap_or(0.0));
+            let asked = (width as f64 * super::vello::ASKED).max(need.get(&key).copied().unwrap_or(0.0)).max(needed(&key));
             let kept = img.image.width().max(img.image.height()) as f64;
             let fits = fitted(img.original, asked) as f64;
             if kept > fits * 2.0 && self.asked.get(&key) != Some(&asked) {
@@ -4846,7 +4868,7 @@ impl Painter {
                 .iter()
                 .filter(|(key, _)| !key.starts_with(RENDER) && !key.starts_with(EFFECT) && !in_view.contains(key.as_str()) && !fine_use.contains(key.as_str()))
                 .filter_map(|(key, img)| {
-                    let width = *coarse_need.get(key.as_str()).filter(|width| **width > 0.0)?;
+                    let width = coarse_need.get(key.as_str()).filter(|width| **width > 0.0)?.max(needed(key));
                     let kept = img.image.width().max(img.image.height()) as f64;
                     let fits = fitted(img.original, width) as f64;
                     (kept > fits).then(|| ((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize, key.clone(), width))
@@ -4873,7 +4895,7 @@ impl Painter {
                 .iter()
                 .filter(|(key, _)| !key.starts_with(RENDER) && !key.starts_with(EFFECT))
                 .filter_map(|(key, img)| {
-                    let width = *need.get(key.as_str()).filter(|width| **width > 0.0)?;
+                    let width = need.get(key.as_str()).filter(|width| **width > 0.0)?.max(needed(key));
                     let kept = img.image.width().max(img.image.height()) as f64;
                     let fits = fitted(img.original, width) as f64;
                     (kept > fits * 2.0).then(|| ((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize, key.clone(), width))
