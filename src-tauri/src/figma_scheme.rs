@@ -10,9 +10,8 @@
 //! itself again meanwhile (it does on every update), its new entry stays
 //!
 //! A link starts a second Ligma, which `tauri-plugin-single-instance` hands
-//! to the running one (`on_args`)
+//! to the running one (`auth::on_args`)
 
-use tauri::{AppHandle, Url};
 use windows_registry::CURRENT_USER;
 
 const SCHEME_KEY: &str = r"Software\Classes\figma";
@@ -124,13 +123,4 @@ pub fn restore() {
         .write()
         .open(BACKUP_KEY)
         .and_then(|key| key.remove_value(BACKUP_VALUE));
-}
-
-/// Handles the `figma://` links among a Ligma's command line arguments
-pub fn on_args(app: &AppHandle, args: impl IntoIterator<Item = String>) {
-    for arg in args {
-        if let Some(url) = Url::parse(&arg).ok().filter(|url| url.scheme() == "figma") {
-            crate::auth::on_figma_link(app, &url);
-        }
-    }
 }

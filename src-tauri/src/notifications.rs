@@ -265,6 +265,30 @@ fn show(app: &AppHandle, title: &str, subtitle: &str, text: &str, link: Option<U
     }
 }
 
+#[cfg(target_os = "linux")]
+fn show(app: &AppHandle, title: &str, subtitle: &str, text: &str, link: Option<Url>) {
+    let body = [subtitle, text].iter().filter(|line| !line.is_empty()).copied().collect::<Vec<_>>().join("\n");
+    let (title, app) = (title.to_owned(), app.clone());
+    // Waits for the click, so on its own thread
+    std::thread::spawn(move || {
+        let shown = notify_rust::Notification::new()
+            .appname("Ligma")
+            .icon("ligma")
+            .summary(&title)
+            .body(&body)
+            .action("default", "Open")
+            .show();
+        match shown {
+            Ok(handle) => handle.wait_for_action(|action| {
+                if action == "default" {
+                    on_click(&app, link);
+                }
+            }),
+            Err(error) => log::warn!("Couldn't show a notification: {error}"),
+        }
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn show(app: &AppHandle, title: &str, subtitle: &str, text: &str, link: Option<Url>) {
     let (title, subtitle, text, app) = (title.to_owned(), subtitle.to_owned(), text.to_owned(), app.clone());

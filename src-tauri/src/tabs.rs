@@ -887,6 +887,11 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     )?;
     #[cfg(target_os = "macos")]
     crate::wkwebview::set_background(&webview, background);
+    #[cfg(target_os = "linux")]
+    {
+        set_bounds(&webview, tab_bounds(app, &window)?)?;
+        crate::webkitgtk::allow_resizing(&webview)?;
+    }
     webview.set_zoom(scale(app))?;
     #[cfg(target_os = "macos")]
     crate::wkwebview::pass_undo_to_pages(&webview);
@@ -1356,6 +1361,12 @@ fn fit_tab_bar(app: &AppHandle, label: &str) {
         state.snapshot_shown.iter().any(|shown| shown == label) || state.splits.contains_key(label)
     };
     let height = if full { size.height } else { bar_height(app).min(size.height) };
+    #[cfg(target_os = "linux")]
+    let _ = set_bounds(
+        &bar,
+        tauri::Rect { position: LogicalPosition::new(0.0, 0.0).into(), size: LogicalSize::new(size.width, height).into() },
+    );
+    #[cfg(not(target_os = "linux"))]
     let _ = bar.set_size(LogicalSize::new(size.width, height));
 }
 
@@ -1703,7 +1714,7 @@ fn move_to_window(app: &AppHandle, id: u32, target: &str, index: usize, back: bo
             let _ = tx.send(moving.reparent(&to));
         })?;
         rx.recv().map_err(|_| tauri::Error::FailedToReceiveMessage)??;
-        webview.set_bounds(tab_bounds(app, &target_window)?)?;
+        set_bounds(&webview, tab_bounds(app, &target_window)?)?;
         #[cfg(windows)]
         crate::webview2::on_moved(&webview);
     }
@@ -2538,6 +2549,8 @@ fn rest_now(app: &AppHandle, id: u32, since: Instant, rest: Rest) {
         return;
     };
     let still_hidden = move |tab: &Tab| tab.hidden_since == Some(since) && !tab.asleep;
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = (webview, still_hidden);
     match rest {
         #[cfg(any(windows, target_os = "macos"))]
         Rest::Suspend => {
@@ -2751,6 +2764,14 @@ pub fn tab_bounds(app: &AppHandle, window: &Window) -> tauri::Result<tauri::Rect
     })
 }
 
+/// `Webview::set_bounds`, which Tauri ignores on Linux (see webkitgtk.rs)
+pub fn set_bounds(webview: &Webview, bounds: tauri::Rect) -> tauri::Result<()> {
+    #[cfg(target_os = "linux")]
+    return crate::webkitgtk::set_bounds(webview, bounds);
+    #[cfg(not(target_os = "linux"))]
+    webview.set_bounds(bounds)
+}
+
 /// Zooms the tab bar, Figma tabs and open prompts to the interface scale,
 /// and fits the tabs under the bar at its new height
 pub fn apply_scale(app: &AppHandle) {
@@ -2778,7 +2799,7 @@ pub fn layout(app: &AppHandle) {
         };
         for webview in window.webviews() {
             if webview.label().starts_with("tab-") {
-                let _ = webview.set_bounds(bounds);
+                let _ = set_bounds(&webview, bounds);
             }
         }
         fit_tab_bar(app, window.label());
@@ -2874,6 +2895,8 @@ pub fn build_window(app: &AppHandle, label: &str, size: LogicalSize<f64>, visibl
     if let Some(bar) = app.get_webview(label) {
         bar.set_auto_resize(false)?;
         bar.set_zoom(scale(app))?;
+        #[cfg(target_os = "linux")]
+        fit_tab_bar(app, label);
         #[cfg(windows)]
         crate::webview2::add_tab_shortcuts(&bar);
     }

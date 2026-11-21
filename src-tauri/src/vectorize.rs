@@ -953,6 +953,7 @@ fn join_corners(mask: &mut [bool], w: usize, h: usize) {
 /// The outlines of `mask`, `width` pixels wide, as smooth SVG path
 /// commands, fitted as Vectorize fits its shapes, holes and all, for
 /// Select object (see objects.rs). Specks under `least` pixels are left out
+#[cfg_attr(not(birefnet), allow(dead_code))]
 pub fn outline(mask: &[bool], width: usize, height: usize, least: usize) -> String {
     let mut image = BinaryImage::new_w_h(width, height);
     for (i, _) in mask.iter().enumerate().filter(|(_, &set)| set) {

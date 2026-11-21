@@ -24,8 +24,15 @@ pub fn available() -> bool {
     true
 }
 
+/// Linux has neither Vision nor BiRefNet yet
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn available() -> bool {
+    false
+}
+
 enum Failure {
     /// Nothing to keep was found
+    #[cfg_attr(not(any(birefnet, target_os = "macos")), allow(dead_code))]
     NoSubject,
     /// The model wasn't downloaded, or the page cancelled the job
     #[cfg_attr(not(birefnet), allow(dead_code))]
@@ -58,7 +65,7 @@ fn cut_out(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<String, 
     return birefnet::remove(app, tab, job, bytes);
     #[cfg(not(birefnet))]
     {
-        let _ = (app, tab, job);
+        let _ = (app, tab, job, bytes);
         Err(Failure::Failed)
     }
 }

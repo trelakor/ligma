@@ -5,7 +5,8 @@
 Ligma is a lightweight desktop app for Figma on macOS and Windows, built with Tauri 2. It opens figma.com in the system webview (WKWebView on macOS, WebView2 on Windows) instead of bundling a browser engine, and adds tabs, Google sign-in, low memory use, color themes, plugins in the left rail, development plugins and Discord Rich Presence.
 
 - `src-tauri/src/` is the app, one module per feature: `tabs.rs` the tabs, `auth.rs` sign-in, `appearance.rs` themes, `plugins.rs` the left rail and development plugins, `presence.rs` and `discord_ipc.rs` Discord, `mcp_bridge.rs` and `mcp_clients.rs` AI tools through Figwright (its plugin code is vendored in `src-tauri/vendor/`), `updater.rs` updates
-- `wkwebview.rs`, `titlebar.rs`, `pressure.rs` and `web_auth.rs` are macOS only, `webview2.rs` and `frame.rs` are Windows only
+- `wkwebview.rs`, `titlebar.rs`, `pressure.rs` and `web_auth.rs` are macOS only, `webview2.rs`, `frame.rs` and `figma_scheme.rs` are Windows only, `webkitgtk.rs` and `desktop_entry.rs` are Linux only
+- Linux is a work in progress: it builds and runs, but Remove background, Select object, tab previews and suspending hidden tabs aren't there yet
 - `dist/` holds Ligma's own pages: the tab bar (`index.html`), settings, menus, tab previews and prompts. `dist/themes.js` is the source of truth for themes
 - `site/` is the project website, published to GitHub Pages from `main`
 - `scripts/` holds the release notes, Discord asset, memory measuring and worktree pruning scripts, `docs/` the feature, memory and development docs

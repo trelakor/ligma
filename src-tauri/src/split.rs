@@ -391,6 +391,7 @@ impl Region {
         subtract_all(self.add.iter().map(rect).collect(), &cut)
     }
 
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn scaled(&self, by: f64) -> Region {
         let scale = |shapes: &[Shape]| shapes.iter().map(|s| s.map(|v| v * by)).collect();
         Region { add: scale(&self.add), cut: scale(&self.cut) }
@@ -522,7 +523,7 @@ fn place(id: u32, webview: &Webview, half: Option<Rect>) {
             Err(_) => return,
         },
     };
-    let _ = webview.set_bounds(bounds);
+    let _ = crate::tabs::set_bounds(webview, bounds);
 }
 
 /// Forgets where tab webviews were placed, once they've all been fit to

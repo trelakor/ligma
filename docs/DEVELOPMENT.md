@@ -4,6 +4,7 @@
 
 - [Rust](https://rustup.rs) (stable)
 - Node.js (only for the Tauri CLI)
+- On Linux, WebKitGTK and GTK's development packages, as in [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/#linux). On Fedora: `sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel openssl-devel`
 
 ## Build and run
 
@@ -12,6 +13,8 @@ npm install
 npm run dev     # debug build, opens the app
 npm run build   # release bundle in src-tauri/target/release/bundle/
 ```
+
+On Linux, `npm run build -- --bundles deb,rpm` builds the Linux packages, as `tauri.conf.json` lists only the macOS and Windows ones. Without the update signing key, add `--config '{"bundle":{"createUpdaterArtifacts":false}}'`. On Wayland Ligma runs through XWayland, as Wayland doesn't let it place its tab menu, previews and prompts (see `pick_display_backend` in `src-tauri/src/main.rs`). Set `GDK_BACKEND=wayland` to run it natively
 
 The macOS icon is `assets/Ligma.icon`, an Icon Composer document, so it follows macOS 26's dark, tinted and clear icon styles. Edit it in Icon Composer (Xcode 26 or later, in Xcode > Open Developer Tool). The Windows icon is `assets/icon-windows.png`. Regenerate the icons after editing either, on macOS with Xcode 26 or later:
 

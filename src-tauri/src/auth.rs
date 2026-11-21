@@ -173,6 +173,16 @@ pub fn cancel(app: &AppHandle, error: Option<&str>) {
     }
 }
 
+/// Handles the `figma://` links among a Ligma's command line arguments
+#[cfg(any(windows, target_os = "linux"))]
+pub fn on_args(app: &AppHandle, args: impl IntoIterator<Item = String>) {
+    for arg in args {
+        if let Some(url) = Url::parse(&arg).ok().filter(|url| url.scheme() == "figma") {
+            on_figma_link(app, &url);
+        }
+    }
+}
+
 /// A `figma://` link: the end of a sign-in, or one of Figma's "Open in
 /// desktop app" links (from a Figma page, or on Windows, where Ligma may
 /// handle the scheme, from the OS), opened in a tab. Not on the main

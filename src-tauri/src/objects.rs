@@ -86,6 +86,7 @@ pub fn handle(app: &AppHandle, tab: u32, job: u64, bytes: &[u8]) -> Result<Strin
 }
 
 /// Lets the image and model go, before the model is removed
+#[cfg_attr(not(birefnet), allow(dead_code))]
 pub fn unload() {
     #[cfg(birefnet)]
     sam::unload();

@@ -8,6 +8,8 @@ mod appearance;
 mod auth;
 mod background;
 mod copy_code;
+#[cfg(target_os = "linux")]
+mod desktop_entry;
 mod discord_ipc;
 mod downloads;
 mod effects;
@@ -52,6 +54,8 @@ mod vectorize;
 mod view_state;
 #[cfg(windows)]
 mod webview2;
+#[cfg(target_os = "linux")]
+mod webkitgtk;
 #[cfg(target_os = "macos")]
 mod web_auth;
 mod whats_new;
@@ -205,25 +209,44 @@ fn shut_down(app: &tauri::AppHandle) {
     figma_scheme::restore();
 }
 
+/// Runs Ligma through XWayland on Wayland, unless `GDK_BACKEND` says
+/// otherwise: Wayland doesn't let apps place their own windows, and the tab
+/// menu, tab previews, prompts and tab dragging all need to. WebKitGTK's
+/// GPU buffers then fail on some drivers (NVIDIA's), leaving pages blank,
+/// so it renders without them. Before GTK starts
+#[cfg(target_os = "linux")]
+fn pick_display_backend() {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty());
+    if !wayland || std::env::var_os("GDK_BACKEND").is_some() || std::env::var_os("DISPLAY").is_none() {
+        return;
+    }
+    std::env::set_var("GDK_BACKEND", "x11");
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    pick_display_backend();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.menu(build_menu).on_web_content_process_terminate(tabs::on_process_terminated);
 
     builder
         // First, so a second launch exits before anything else starts. It
-        // brings this window forward, and on Windows the `figma://` link
-        // that started it to `figma_scheme`
+        // brings this window forward, and on Windows and Linux the
+        // `figma://` link that started it to `auth`
         .plugin(tauri_plugin_single_instance::init(|app, _args, _| {
             if let Some(window) = tabs::focused_window(app) {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
             // Off the main thread: a link may open a tab
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             {
                 let app = app.clone();
-                std::thread::spawn(move || figma_scheme::on_args(&app, _args));
+                std::thread::spawn(move || auth::on_args(&app, _args));
             }
         }))
         // Ligma opens links from Rust. The plugin's own handler would catch
@@ -324,6 +347,8 @@ fn main() {
                 figma_scheme::restore();
                 figma_scheme::claim_if_free();
             }
+            #[cfg(target_os = "linux")]
+            std::thread::spawn(desktop_entry::register);
             // Before settings::load writes the settings file on first launch
             whats_new::init(app.handle());
             let settings = settings::load(app.handle());
@@ -373,10 +398,10 @@ fn main() {
             updater::offer_last_failure(app.handle());
             whats_new::offer(app.handle());
             // Started by a `figma://` link
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             {
                 let app = app.handle().clone();
-                std::thread::spawn(move || figma_scheme::on_args(&app, std::env::args().skip(1)));
+                std::thread::spawn(move || auth::on_args(&app, std::env::args().skip(1)));
             }
 
             let handle = app.handle().clone();
