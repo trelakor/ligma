@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.46.1 - 2026-11-21
+
+- Ligma starts on a fresh Windows again, where it stopped with "MSVCP140_1.dll was not found". The installer now brings the Microsoft C++ runtime files it needs.
+
 ## 0.46.0 - 2026-11-18
 
 - The Windows installer has its own window in place of the old setup wizard, drawn as a Figma canvas: a selected frame your cursor drags wider as it installs. It follows Windows' light or dark mode.
