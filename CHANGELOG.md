@@ -2,6 +2,10 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.46.2 - 2026-11-21
+
+- Signed out, Home takes you to Figma's login page, where it showed an empty page that couldn't load anything. Once you're signed in, it goes back to Ligma's home page with your files.
+
 ## 0.46.1 - 2026-11-21
 
 - Ligma starts on a fresh Windows again, where it stopped with "MSVCP140_1.dll was not found". The installer now brings the Microsoft C++ runtime files it needs.
