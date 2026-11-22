@@ -1,12 +1,15 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
   profile: chill
-  # Approves once every comment of CodeRabbit's is resolved, which counts
-  # toward main's required approving review
-  request_changes_workflow: true
-  # dist/ is Ligma's own pages, not build output, so it's reviewed too
+  # Requests changes for blocking findings and approves once they're
+  # resolved, which counts toward main's required approving review
+  auto_approvals:
+    enabled: true
+  # dist/ is Ligma's own pages, not build output. This exact default
+  # pattern without its `!` lifts the default exclusion, where a narrower
+  # one would limit reviews to dist/ alone
   path_filters:
-    - "dist/**"
+    - "**/dist/**"
   path_instructions:
     - path: "src-tauri/src/**/*.rs"
       instructions: |
