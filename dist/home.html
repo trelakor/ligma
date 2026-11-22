@@ -2129,10 +2129,13 @@ async function start() {
       }
     });
     PLANS.splice(0, PLANS.length, ...plans);
+    Live.plansUid = Live.uid;
     for (const k of Object.keys(PROJECTS)) delete PROJECTS[k];
     for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
     takeReturn();
     render();
+    // A search typed meanwhile showed the projects it had
+    if (pal.open) drawPalette();
     await LG.load(VIEWS.recents);
     takeFromStore();
     markStarred();
@@ -2314,6 +2317,7 @@ function showCached() {
   Live.draftsByTeam = cache.drafts ?? {};
   for (const id of Object.values(Live.draftsByTeam)) DRAFT_FOLDERS.add(id);
   PLANS.splice(0, PLANS.length, ...cache.plans);
+  Live.plansUid = uid;
   Object.assign(FOLDER, cache.folders);
   for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
   // Previews are links Figma signs for 7 days: kept for 6
@@ -2323,7 +2327,12 @@ function showCached() {
   Live.ready.add("recents");
 }
 
+// Bumped on each account switch, so a search sent for the last account
+// doesn't add its files to the new one's
+let accountGen = 0;
 async function switchAccount(uid) {
+  accountGen++;
+  searched = "";
   if (acs.open) acs.close();
   // A load still under way picked its account already: let it finish, then
   // load the new one
@@ -2413,7 +2422,16 @@ function startView() {
 // A reload, or going back to the page, comes back where it was: its
 // history entry keeps that, or a tab opened on a project or team names it.
 // Projects and teams wait for their names
-let returnTo = typeof history.state?.view === "string" ? history.state.view : !START_VIEWS.includes(hashParts()[0]) && hashParts()[0] ? decodeURIComponent(hashParts()[0]) : null;
+let returnTo = typeof history.state?.view === "string" ? history.state.view : !START_VIEWS.includes(hashParts()[0]) && hashParts()[0] ? decodedView(hashParts()[0]) : null;
+// A fragment that isn't valid percent-encoding goes nowhere, so the page
+// starts on its start view
+function decodedView(part) {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+}
 function takeReturn() {
   if (!returnTo || !viewName(returnTo)) return;
   state.view = returnTo;
@@ -2455,7 +2473,9 @@ function viewName(view) {
   if (view.startsWith("d:")) return team && `Drafts · ${team}`;
   if (view.startsWith("t:")) return team && `Trash · ${team}`;
   if (view.startsWith("s:")) return teamById(view.slice(2))?.team.name;
-  return { home: "Home", recents: "Recents", starred: "Starred", shared: "Shared with you", drafts: "Drafts", trash: "Trash" }[view];
+  // Own keys only, so a fragment like `constructor` isn't taken for a page
+  const names = { home: "Home", recents: "Recents", starred: "Starred", shared: "Shared with you", drafts: "Drafts", trash: "Trash" };
+  return Object.prototype.hasOwnProperty.call(names, view) ? names[view] : undefined;
 }
 
 function viewFiles() {
@@ -3458,18 +3478,26 @@ function createFile(type = "design", name = "Untitled", project) {
   if (LIVE) {
     const folder = project ?? Live.draftsByTeam[currentTeam()] ?? DRAFTS()[0];
     toast(`Making a new ${TYPES[type].noun}`);
-    api("/api/files/create", { method: "POST", json: { folder_id: folder, editor_type: EDITOR_OF[type], name } })
+    // Resolves to null once it's open, or to the error shown
+    return api("/api/files/create", { method: "POST", json: { folder_id: folder, editor_type: EDITOR_OF[type], name } })
       .then((meta) => {
         const file = fromRest(meta.fig_file ?? meta);
         upsertFile(file.key, { viewedAt: Date.now(), recent: true });
         const url = meta.fig_file?.url ?? fileUrl(file);
-        if (IN_TAB) return void location.assign(url);
+        if (IN_TAB) {
+          location.assign(url);
+          return null;
+        }
         window.open(url, "_blank");
         toast(`Opening new ${TYPES[type].noun} “${file.name}” in ${placeOf(file.project)}`);
         render();
+        return null;
       })
-      .catch((error) => toast(`Couldn't make it: ${error.message}`));
-    return;
+      .catch((error) => {
+        const message = `Couldn't make it: ${error.message}`;
+        toast(message);
+        return message;
+      });
   }
   const look = { figjam: "board", slides: "deck" }[type] ?? "components";
   const file = addFile({ name, type, look, project, at: Date.now(), kind: "create", by: "me", unread: 0, starred: false, trashed: false }, true);
@@ -3742,7 +3770,9 @@ function renameProject(id, tile = null) {
       },
     }, (name) => saveProjectName(id, name), () => {
       render();
-      refocus($(`.ptile[data-project="${CSS.escape(id)}"]`, scroller));
+      // A suggested tile is the button itself, a team page's tile has its
+      // More button
+      refocus($(`.ptile[data-project="${CSS.escape(id)}"]`, scroller) ?? $(`.dtile [data-set="p-more"][data-project="${CSS.escape(id)}"]`, scroller));
     });
   }
   const row = $(`.nav[data-view="p:${CSS.escape(id)}"]`, side);
@@ -7351,8 +7381,10 @@ function searchFigma(query) {
   if (!LIVE || !Live.uid || !query || query === searched) return;
   searchTimer = setTimeout(async () => {
     searched = query;
+    const gen = accountGen;
     try {
       const meta = await api(`/api/search/full_results?${new URLSearchParams({ query, search_model_type: "files", sort: "relevancy", desc: "true" })}`);
+      if (gen !== accountGen) return;
       for (const result of meta?.results ?? []) if (result.model?.key && !result.model.trashed_at) fromRest(result.model).found = query;
     } catch {}
     if (pal.open && parse().query === query) drawPalette();
@@ -7369,7 +7401,12 @@ function drawPalette() {
   const scoped = live.filter((f) => chips.every((c) => (c.key === "in" ? f.project === c.value : c.key === "type" ? f.type === c.value : f.by === c.value)));
   const recency = (f) => 3 * Math.exp(-(Date.now() - f.at) / (7 * DAY));
 
-  if (scope) {
+  // Signed out, the launcher has nothing to search and its page's Sign in
+  // is out of sight behind it: it offers Figma's login page in a tab
+  if (LAUNCHER && LIVE && Live.signedOut) {
+    const i = items.push({ kind: "command", command: { label: "Sign in to Figma", url: "https://www.figma.com/login" } }) - 1;
+    html = `<div class="pmsg">Sign in to Figma to search your files</div>` + row(i, icon("users"), "Sign in to Figma", icon("ext"));
+  } else if (scope) {
     const options = SCOPES[scope.key].options()
       .map((o) => ({ o, m: scope.q ? match(scope.q, o.label) : { score: 0 } }))
       .filter((x) => x.m)
@@ -7414,7 +7451,8 @@ function drawPalette() {
       });
     }
     const inChip = chips.find((c) => c.key === "in");
-    if (query && !inChip) {
+    // Not while the projects known are still the last account's
+    if (query && !inChip && (!LIVE || Live.plansUid === Live.uid)) {
       const projects = Object.values(PROJECTS).map((p) => ({ p, m: match(query, p.name) })).filter((x) => x.m).sort((a, b) => b.m.score - a.m.score).slice(0, 3);
       if (projects.length) {
         html += `<div class="ph">Projects</div>`;
@@ -7466,6 +7504,18 @@ function activate(item, background = false) {
     if (palInput.value) palInput.value += " ";
     palIndex = 0;
     drawPalette();
+    return;
+  }
+  // The launcher stays up while a new file is made, as its toasts can't
+  // be seen behind it: the file opening hides it, or the error shows here
+  if (LAUNCHER && LIVE && item.kind === "create") {
+    palBody.classList.remove("split");
+    palBody.innerHTML = `<div class="pmsg">Making a new ${esc(TYPES[item.type].noun)}</div>`;
+    palItems = [];
+    createFile(item.type, item.name, item.project).then((error) => {
+      if (!error) return pal.close();
+      palBody.innerHTML = `<div class="pmsg">${esc(error)}</div>`;
+    });
     return;
   }
   pal.close();
@@ -8041,7 +8091,9 @@ function commitStarOrder(grid) {
    make room, and it drops into its place with a small bounce. Figma keeps
    no order: Ligma keeps it, per account, and new teams go last */
 
-const teamOrderKey = () => `team-order:${LIVE ? Live.uid : "sample"}`;
+// The account whose teams the sidebar shows, which lags `Live.uid` while
+// a switch loads
+const teamOrderKey = () => `team-order:${LIVE ? Live.plansUid ?? Live.uid : "sample"}`;
 function teamOrder(list, idOf) {
   const rank = new Map(store.get(teamOrderKey(), []).map((id, i) => [id, i]));
   return list.map((item, i) => [item, i]).sort(([a, i], [b, j]) => (rank.get(idOf(a)) ?? Infinity) - (rank.get(idOf(b)) ?? Infinity) || i - j).map(([item]) => item);
@@ -8154,8 +8206,14 @@ function stepTeamLift(now) {
   if (dy) l.tree.scrollTop += Math.round(Math.max(-16, Math.min(16, dy)) * dt);
   const x = l.left + (l.px - l.sx) * 0.12;
   l.ghost.style.transform = `translate(${x}px, ${l.py - l.oy}px) rotate(${l.ang.toFixed(2)}deg) scale(${l.scale.toFixed(4)})`;
-  // Its place: past every team whose middle it's below, measured as if
-  // it weren't there, so it doesn't flip back and forth at a boundary
+  placeTeamLift();
+  l.frame = requestAnimationFrame(stepTeamLift);
+}
+// Its place: past every team whose middle it's below, measured as if it
+// weren't there, so it doesn't flip back and forth at a boundary. Each
+// frame, and once more at the drop for a release before the next frame
+function placeTeamLift() {
+  const l = teamLift;
   const top = l.list.getBoundingClientRect().top;
   const mid = l.py - l.oy + l.h / 2 - top;
   const gap = l.block.offsetHeight;
@@ -8170,7 +8228,6 @@ function stepTeamLift(now) {
   }
   const others = [...l.list.children].filter((el) => el !== l.block);
   if ((others[index] ?? null) !== l.block.nextElementSibling) glideTeams(l.list, () => l.list.insertBefore(l.block, others[index] ?? null), l.block);
-  l.frame = requestAnimationFrame(stepTeamLift);
 }
 
 function dropTeamLift(cancel = false) {
@@ -8184,6 +8241,7 @@ function dropTeamLift(cancel = false) {
     side.releasePointerCapture(l.pointer);
   } catch {}
   if (cancel) glideTeams(l.list, () => l.list.insertBefore(l.block, l.next), l.block);
+  else if (l.live) placeTeamLift();
   const row = $(".team-row", l.block);
   const r = row.getBoundingClientRect();
   // Down into its place, quickening as it falls
