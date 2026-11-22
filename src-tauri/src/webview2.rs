@@ -9,12 +9,14 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN,
     COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MULTIPLE_AUTOMATIC_DOWNLOADS,
-    COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+    COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PHYSICAL_KEY_STATUS, COREWEBVIEW2_PROCESS_FAILED_KIND,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
     COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
 };
 use webview2_com::{
     take_pwstr, AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler, PermissionRequestedEventHandler,
-    TrySuspendCompletedHandler, WebResourceRequestedEventHandler,
+    ProcessFailedEventHandler, TrySuspendCompletedHandler, WebResourceRequestedEventHandler,
 };
 use windows::Win32::Foundation::HGLOBAL;
 use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
@@ -71,6 +73,42 @@ pub fn add_tab_shortcuts(webview: &Webview) {
         }));
         let mut token = 0;
         let _ = platform.controller().add_AcceleratorKeyPressed(&handler, &mut token);
+    });
+}
+
+/// Has `on_gone` hear when WebView2 itself ends under `webview`, which
+/// leaves it blank for good, and loads the page again where only its own
+/// process ended, crashed or killed, which leaves it blank till it does
+pub fn on_process_failed(webview: &Webview, on_gone: impl Fn() + Send + 'static) {
+    let _ = webview.with_webview(move |platform| unsafe {
+        let Ok(core) = platform.controller().CoreWebView2() else {
+            return;
+        };
+        // Not again within a while, as a page that ends as it loads would
+        // otherwise load over and over
+        let mut reloaded: Option<std::time::Instant> = None;
+        let handler = ProcessFailedEventHandler::create(Box::new(move |sender, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+            args.ProcessFailedKind(&mut kind)?;
+            if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED {
+                log::warn!("WebView2 ended under a tab");
+                on_gone();
+            } else if kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED {
+                if reloaded.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(30)) {
+                    log::warn!("a tab's page process ended again, so it's left as it is");
+                    return Ok(());
+                }
+                log::warn!("a tab's page process ended, so it's loaded again");
+                reloaded = Some(std::time::Instant::now());
+                if let Some(core) = sender {
+                    let _ = core.Reload();
+                }
+            }
+            Ok(())
+        }));
+        let mut token = 0;
+        let _ = core.add_ProcessFailed(&handler, &mut token);
     });
 }
 

@@ -806,6 +806,106 @@ pub fn open(app: &AppHandle, url: Url) -> tauri::Result<()> {
     select(app, id)
 }
 
+/// A tab's webview that hasn't started loading this long after it's made
+/// never does: WebView2 leaves one now and then as Ligma starts, and the
+/// tab stays blank
+const START_TIMEOUT: Duration = Duration::from_secs(15);
+/// Times in a row a tab's webview is made again for not starting, or for
+/// WebView2 ending under it
+const REMAKES: u32 = 3;
+
+/// Each tab's last webview: how many have been made for it, whether the
+/// last has started loading, and how many times in a row it's been made
+/// again
+#[derive(Default)]
+struct Start {
+    made: u64,
+    started: bool,
+    remade: u32,
+}
+
+static STARTS: std::sync::LazyLock<Mutex<HashMap<u32, Start>>> = std::sync::LazyLock::new(Default::default);
+
+/// Tab `id`'s webview is being made: which one it is
+fn starting(id: u32) -> u64 {
+    let mut starts = STARTS.lock().unwrap();
+    let start = starts.entry(id).or_default();
+    start.made += 1;
+    start.started = false;
+    start.made
+}
+
+/// Tab `id`'s webview has started loading
+fn started(id: u32) {
+    if let Some(start) = STARTS.lock().unwrap().get_mut(&id).filter(|start| !start.started) {
+        start.started = true;
+        start.remade = 0;
+    }
+}
+
+/// Makes tab `id`'s webview again if the one made as `made` hasn't
+/// started loading in `START_TIMEOUT`
+fn watch_start(app: &AppHandle, id: u32, made: u64) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(START_TIMEOUT);
+        let stuck = STARTS.lock().unwrap().get(&id).is_some_and(|start| start.made == made && !start.started);
+        if stuck && with_tab(&app, id, |tab| !tab.asleep).unwrap_or(false) {
+            remake(&app, id, "didn't start loading");
+        }
+    });
+}
+
+/// Closes tab `id`'s webview, which can't show anything, and makes it
+/// again as waking the tab from sleep does, now if it's shown, else once
+/// it's selected
+fn remake(app: &AppHandle, id: u32, why: &str) {
+    let app = app.clone();
+    let why = why.to_string();
+    // Off the main thread, where WebView2's events come, as making a
+    // webview there would block on itself
+    std::thread::spawn(move || {
+        let remade = STARTS.lock().unwrap().get_mut(&id).map(|start| {
+            start.remade += 1;
+            start.remade
+        });
+        if remade.is_some_and(|remade| remade > REMAKES) {
+            log::warn!("tab {id} {why} again, so it's left as it is");
+            return;
+        }
+        log::warn!("tab {id} {why}, so its webview is made again");
+        let url = app.get_webview(&label(id)).and_then(|webview| {
+            let url = webview.url().ok().filter(is_figma);
+            let _ = webview.close();
+            url
+        });
+        // Its label's taken till it's gone
+        for _ in 0..50 {
+            if app.get_webview(&label(id)).is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let window = with_tab(&app, id, |tab| {
+            tab.asleep = true;
+            tab.loading = false;
+            tab.suspended = false;
+            tab.revealing = false;
+            if let Some(url) = url {
+                tab.url = url;
+            }
+            tab.window.clone()
+        });
+        let Some(window) = window else { return };
+        let shown = app.state::<Tabs>().inner().0.lock().unwrap().actives.get(&window) == Some(&id);
+        if shown {
+            let _ = select(&app, id);
+        } else {
+            push_state(&app);
+        }
+    });
+}
+
 /// Loads tab `id`'s webview, for a new tab or one waking from sleep or
 /// reopened from the last session
 fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
@@ -813,12 +913,16 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         .and_then(|label| app.get_window(&label))
         .or_else(|| app.get_window(MAIN))
         .expect("main window exists");
+    let made = starting(id);
     let (nav_app, popup_app, title_app) = (app.clone(), app.clone(), app.clone());
     #[allow(unused_mut)]
     let mut builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
         // Let Figma receive HTML5 drag-and-drop (image/file imports)
         .disable_drag_drop_handler()
-        .on_navigation(move |url| on_navigation(&nav_app, id, url))
+        .on_navigation(move |url| {
+            started(id);
+            on_navigation(&nav_app, id, url)
+        })
         .on_new_window(move |url, _| {
             on_new_window(&popup_app, id, url);
             NewWindowResponse::Deny
@@ -829,6 +933,7 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         })
         // In case a new page starts at the default zoom
         .on_page_load(move |webview, payload| {
+            started(id);
             if let PageLoadEvent::Finished = payload.event() {
                 let _ = webview.set_zoom(scale(webview.app_handle()));
                 crate::plugins::push_to(&webview);
@@ -906,7 +1011,10 @@ fn create_webview(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         crate::webview2::drop_request_filters(&webview);
         crate::webview2::add_tab_shortcuts(&webview);
         crate::webview2::allow_downloads(&webview);
+        let gone_app = app.clone();
+        crate::webview2::on_process_failed(&webview, move || remake(&gone_app, id, "lost WebView2"));
     }
+    watch_start(app, id, made);
     Ok(())
 }
 
