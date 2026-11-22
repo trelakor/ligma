@@ -41,6 +41,15 @@ const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_FRAMECHANGED: u32 = 0x0020;
 
+/// Whether `window` is the one in front taking input. Not its own focus,
+/// which moves to its webview once that takes the keys
+pub fn is_foreground(window: &WebviewWindow) -> bool {
+    let Ok(hwnd) = window.hwnd() else {
+        return false;
+    };
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd }
+}
+
 /// Has Windows work out `window`'s frame again. A window made hidden keeps
 /// the default frame, title bar and all, until it's first shown, so a size
 /// set meanwhile comes out a title bar too tall. Call right after building
@@ -80,6 +89,19 @@ pub fn show_inactive(window: &WebviewWindow, shown: bool) {
     };
     unsafe {
         ShowWindow(hwnd.0 as isize, if shown { SW_SHOWNOACTIVATE } else { SW_HIDE });
+    }
+}
+
+/// Shows and hides `window` at once, without Windows' fade, for one whose
+/// page animates itself
+pub fn no_transitions(window: &WebviewWindow) {
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    // DWMWA_TRANSITIONS_FORCEDISABLED
+    let disabled: i32 = 1;
+    unsafe {
+        DwmSetWindowAttribute(hwnd.0 as isize, 3, (&disabled as *const i32).cast(), 4);
     }
 }
 

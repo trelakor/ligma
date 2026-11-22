@@ -170,6 +170,10 @@ pub struct Settings {
     /// The page Ligma's home page opens on: "home", "recents", "starred",
     /// "shared" or "drafts"
     pub ligma_home_start: String,
+    /// With Ligma's home page on, a new tab starts with its search floating
+    /// over it, to pick what the tab opens, as in Arc. Off, a new tab shows
+    /// the whole page
+    pub ligma_home_new_tab_search: bool,
     /// Ligma MCP: let AI tools read and edit open files through Figwright's
     /// MCP server, with Ligma in place of its plugin (see mcp_bridge.rs).
     /// It was `mcpBridge`, off by default, with Figma MCP Bridge. That key
@@ -234,6 +238,7 @@ impl Default for Settings {
             classic_home: false,
             ligma_home: true,
             ligma_home_start: "home".into(),
+            ligma_home_new_tab_search: true,
             ligma_mcp: true,
         }
     }

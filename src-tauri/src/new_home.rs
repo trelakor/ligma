@@ -96,6 +96,9 @@ pub const SETTINGS_JS: &str = r##"(() => {
 
 static ON: AtomicBool = AtomicBool::new(false);
 
+/// A new tab starts as the launcher (`ligmaHomeNewTabSearch`)
+static SEARCH: AtomicBool = AtomicBool::new(true);
+
 /// The Figma account the page is showing (its user id), so turning the page
 /// off opens Figma's file browser on that same account
 static ACCOUNT: Mutex<Option<String>> = Mutex::new(None);
@@ -114,6 +117,7 @@ fn start(settings: &Settings) -> String {
 /// Call at launch, before any tab
 pub fn init(settings: &Settings) {
     ON.store(settings.ligma_home, Ordering::Relaxed);
+    SEARCH.store(settings.ligma_home_new_tab_search, Ordering::Relaxed);
     *START.lock().unwrap() = start(settings);
 }
 
@@ -129,6 +133,32 @@ pub fn home_url() -> Url {
     if let Some(account) = ACCOUNT.lock().unwrap().as_deref() {
         url.query_pairs_mut().append_pair("fuid", account);
     }
+    url
+}
+
+/// Whether a new tab starts as the launcher, its search over the current
+/// tab (see launcher.rs)
+pub fn launcher_on() -> bool {
+    ON.load(Ordering::Relaxed) && SEARCH.load(Ordering::Relaxed)
+}
+
+/// What a new tab loads: Ligma's home page while it's on, on `view` or its
+/// start page, marked `tab` so it opens files in place. `None` for Figma's
+/// file browser
+pub fn new_tab_url(view: Option<&str>) -> Option<Url> {
+    if !ON.load(Ordering::Relaxed) {
+        return None;
+    }
+    let mut url: Url = URL.parse().unwrap();
+    let view = view.map_or_else(|| START.lock().unwrap().clone(), str::to_owned);
+    url.set_fragment(Some(&format!("{view}&tab")));
+    Some(url)
+}
+
+/// The launcher's page: Ligma's home page as its search alone
+pub fn launcher_url() -> Url {
+    let mut url: Url = URL.parse().unwrap();
+    url.set_fragment(Some("home&launcher"));
     url
 }
 
@@ -164,10 +194,11 @@ pub fn page_js() -> String {
 /// which account it's on
 pub const SIGNAL_HOST: &str = "home.ligma.invalid";
 
-/// A request from the page in tab `tab`, taken only from Home. Not from
-/// within the webview's own callback, which is still deciding on the page
+/// A request from the page in tab `tab`, taken only from Home or a tab
+/// showing the page. Not from within the webview's own callback, which is
+/// still deciding on the page
 pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
-    if tab != crate::tabs::HOME_ID {
+    if tab != crate::tabs::HOME_ID && !crate::tabs::shows_url(app, tab, is_url) {
         return;
     }
     let path = url.path().to_owned();
@@ -210,6 +241,7 @@ pub fn on_signal(app: &AppHandle, tab: u32, url: &Url) {
 
 /// Moves Home to the other page when the setting changes
 pub fn apply_settings(app: &AppHandle, settings: &Settings) {
+    SEARCH.store(settings.ligma_home_new_tab_search, Ordering::Relaxed);
     let switched = ON.swap(settings.ligma_home, Ordering::Relaxed) != settings.ligma_home;
     let moved = {
         let start = start(settings);

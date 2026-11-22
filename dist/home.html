@@ -212,6 +212,16 @@
   .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .tier { display: none; }
   .team-row:is(:hover, :has(:focus-visible), :has(.team-more[aria-expanded="true"])) .nav.team .lbl { margin-right: 50px; }
   .team-row.lit .nav.team { background: var(--sel); }
+  /* A team being dragged to another place in its list (startTeamLift):
+     folded to its row, an outlined gap where it'll land, and the row
+     itself hanging from the pointer */
+  .team-list { position: relative; }
+  .team-block.hole > :not(.team-row) { display: none; }
+  .team-block.hole > .team-row > * { visibility: hidden; }
+  .team-block.hole > .team-row::after { content: ""; position: absolute; inset: 1px 8px; border-radius: 5px; background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .team-row.lifted { position: fixed; left: 0; top: 0; z-index: 70; border-radius: 7px; background: var(--bg); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24), 0 3px 10px rgba(0, 0, 0, 0.16), 0 0 0 1px var(--line); pointer-events: none; will-change: transform; }
+  .team-row.lifted .nav.team { background: none; }
+  .team-row.lifted :is(.team-more, .team-star:not(.on)) { display: none; }
   .tm { display: grid; place-items: center; flex: none; width: 16px; height: 16px; border-radius: 4px; color: #fff; font: 600 10px/1 var(--font); }
   .sfoot { flex: none; padding: 8px 0; border-top: 1px solid var(--line); }
   .sfoot .ext { margin-left: auto; }
@@ -348,6 +358,8 @@
   .pname { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 4px; color: var(--text2); }
   .pname b { overflow: hidden; color: var(--text); font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
   .pname svg { flex: none; }
+  .pname .pedit { flex: 1; min-width: 0; }
+  .pname .pedit input { width: 100%; height: 22px; margin: -2px 0 -2px -4px; padding: 0 4px; border: 0; border-radius: 4px; outline: 1px solid var(--accent); background: var(--bg); color: var(--text); font: inherit; font-weight: 550; -webkit-user-select: text; user-select: text; }
   .pmeta { display: flex; gap: 8px; justify-content: space-between; padding: 0 4px 0 26px; color: var(--text2); font-size: 11px; line-height: 16px; white-space: nowrap; }
   .pmeta span:first-child { overflow: hidden; text-overflow: ellipsis; }
 
@@ -606,6 +618,15 @@
   }
   #pal[open] { display: flex; flex-direction: column; animation: pop 140ms var(--ease); }
   #pal::backdrop { background: rgba(0, 0, 0, 0.24); }
+  /* The launcher (launcher.rs): search alone, over an image of the tab
+     under it, softly blurred */
+  .launcher body > :not(#pal, #launch-bg) { display: none !important; }
+  #launch-bg { position: fixed; inset: 0; background: var(--canvas) center / 100% 100% no-repeat; transition: filter 180ms var(--ease), transform 180ms var(--ease); }
+  .launcher.shown #launch-bg { filter: blur(6px) brightness(0.92); transform: scale(1.02); }
+  .launcher #pal::backdrop { background: transparent; }
+  .launcher #pal[open] { animation: none; opacity: 0; transform: translateY(-8px) scale(0.98); transition: opacity 140ms var(--ease), transform 180ms var(--ease); }
+  .launcher.shown #pal[open] { opacity: 1; transform: none; }
+  .launcher.instant :is(#launch-bg, #pal[open]) { transition: none !important; }
   .pf { display: flex; flex: none; align-items: center; gap: 8px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--line); }
   .pf > .i { color: var(--text2); }
   .chips { display: contents; }
@@ -1949,6 +1970,8 @@ function upsertFile(key, fields) {
   let file = byId(key);
   if (!file) file = addFile({ id: key, key, name: "Untitled", type: "design", look: "components", project: null, at: 0, kind: "edit", by: null, unread: 0, starred: false, trashed: false, live: true });
   for (const [k, v] of Object.entries(fields)) if (v !== undefined) file[k] = v;
+  // Figma sends a null name for some files: one that throws search off
+  if (typeof file.name !== "string") file.name = "Untitled";
   // Where it sits in time: when you last opened it, or when it changed,
   // whichever is later
   const viewed = file.viewedAt ?? 0;
@@ -2027,8 +2050,10 @@ const colorForTeam = (id) => ["#0d99ff", "#9747ff", "#14ae5c", "#f24822", "#e5a0
 // Figma's login page, as Figma's own file browser does when signed out. A
 // session it already has sends it on to the file browser, which Ligma
 // brings back here (new_home.rs). Once a minute at most, so a session this
-// page still can't read shows Sign in instead of going round
+// page still can't read shows Sign in instead of going round. Not the
+// launcher, which would open the login page in a tab and still show
 function toLogin() {
+  if (LAUNCHER) return false;
   try {
     const last = Number(sessionStorage.getItem("ligma-home-login")) || 0;
     if (Date.now() - last < 60000) return false;
@@ -2048,6 +2073,7 @@ async function start() {
   Live.status = "Loading your files";
   Live.error = null;
   showCached();
+  takeReturn();
   render();
   try {
     // Signed out, Figma refuses, or its firewall answers with nothing until a
@@ -2103,9 +2129,13 @@ async function start() {
       }
     });
     PLANS.splice(0, PLANS.length, ...plans);
+    Live.plansUid = Live.uid;
     for (const k of Object.keys(PROJECTS)) delete PROJECTS[k];
     for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
+    takeReturn();
     render();
+    // A search typed meanwhile showed the projects it had
+    if (pal.open) drawPalette();
     await LG.load(VIEWS.recents);
     takeFromStore();
     markStarred();
@@ -2287,7 +2317,9 @@ function showCached() {
   Live.draftsByTeam = cache.drafts ?? {};
   for (const id of Object.values(Live.draftsByTeam)) DRAFT_FOLDERS.add(id);
   PLANS.splice(0, PLANS.length, ...cache.plans);
+  Live.plansUid = uid;
   Object.assign(FOLDER, cache.folders);
+  for (const k of Object.keys(PROJECTS)) delete PROJECTS[k];
   for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
   // Previews are links Figma signs for 7 days: kept for 6
   const fresh = Date.now() - cache.at < 6 * DAY;
@@ -2296,7 +2328,12 @@ function showCached() {
   Live.ready.add("recents");
 }
 
+// Bumped on each account switch, so a search sent for the last account
+// doesn't add its files to the new one's
+let accountGen = 0;
 async function switchAccount(uid) {
+  accountGen++;
+  searched = "";
   if (acs.open) acs.close();
   // A load still under way picked its account already: let it finish, then
   // load the new one
@@ -2371,10 +2408,38 @@ function activity(file) {
 
 /* State */
 
+// Ligma passes the page to open on as the URL's fragment (new_home.rs),
+// then `tab` in a tab of its own rather than Home, or `launcher` for the
+// search over the current tab that a new tab starts as (launcher.rs)
+const hashParts = () => location.hash.slice(1).split("&");
+const IN_TAB = hashParts().includes("tab");
+const LAUNCHER = hashParts().includes("launcher");
+if (LAUNCHER) document.documentElement.classList.add("launcher");
 const START_VIEWS = ["home", "recents", "starred", "shared", "drafts"];
 function startView() {
-  const view = location.hash.slice(1);
+  const view = hashParts()[0];
   return START_VIEWS.includes(view) ? view : "home";
+}
+// A reload, or going back to the page, comes back where it was: its
+// history entry keeps that, or a tab opened on a project or team names it.
+// Projects and teams wait for their names
+let returnTo = typeof history.state?.view === "string" ? history.state.view : !START_VIEWS.includes(hashParts()[0]) && hashParts()[0] ? decodedView(hashParts()[0]) : null;
+// A fragment that isn't valid percent-encoding goes nowhere, so the page
+// starts on its start view
+function decodedView(part) {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+}
+function takeReturn() {
+  if (!returnTo || !viewName(returnTo)) return;
+  state.view = returnTo;
+  returnTo = null;
+  try {
+    history.replaceState({ view: state.view, scroll: 0 }, "");
+  } catch {}
 }
 // Picking another start page in the settings goes there at once
 addEventListener("hashchange", () => go(startView()));
@@ -2409,7 +2474,9 @@ function viewName(view) {
   if (view.startsWith("d:")) return team && `Drafts · ${team}`;
   if (view.startsWith("t:")) return team && `Trash · ${team}`;
   if (view.startsWith("s:")) return teamById(view.slice(2))?.team.name;
-  return { home: "Home", recents: "Recents", starred: "Starred", shared: "Shared with you", drafts: "Drafts", trash: "Trash" }[view];
+  // Own keys only, so a fragment like `constructor` isn't taken for a page
+  const names = { home: "Home", recents: "Recents", starred: "Starred", shared: "Shared with you", drafts: "Drafts", trash: "Trash" };
+  return Object.prototype.hasOwnProperty.call(names, view) ? names[view] : undefined;
 }
 
 function viewFiles() {
@@ -2485,6 +2552,11 @@ function navRow(view, iconName, label, count, extra = "", tail = "") {
 function renderSide() {
   // Not while a project is renamed in place: it redraws once that's done
   if ($(".lbl input", side)) return;
+  // Nor under a team being dragged: once it's down
+  if (teamLift?.live) {
+    teamLift.rerender = true;
+    return;
+  }
   const live = FILES.filter((f) => !f.trashed);
   // Counts only for lists loaded whole
   const count = (pred, view) => (LIVE && view && !Live.ready.has(view) ? "" : live.filter(pred).length || "");
@@ -2511,29 +2583,30 @@ function renderSide() {
     const isStarred = starred.has(team.id);
     const face = team.img ? `<img src="${esc(team.img)}" alt="" referrerpolicy="no-referrer">` : esc(team.name[0]);
     const lit = (win.classList.contains("open") && winState.kind === "team" && winState.team === team.id) || state.view === `s:${team.id}`;
-    let out = `<div class="team-row${lit ? " lit" : ""}" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
+    let out = `<div class="team-block" data-key="tb:${team.id}" data-team-block="${team.id}"><div class="team-row${lit ? " lit" : ""}" data-key="team:${team.id}"><button class="nav team" data-team="${team.id}" aria-expanded="${open}"><span class="tm" style="background:${team.img ? "transparent" : team.color}">${face}</span><span class="lbl">${esc(team.name)}</span>${tier ? `<span class="tier">${esc(tier)}</span>` : ""}${fig("down", "chev")}</button>`;
     out += `<button class="team-more" data-team-more="${team.id}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(team.name)}" title="Settings, people and more">${icon("more")}</button>`;
     out += `<button class="team-star${isStarred ? " on" : ""}" data-star-team="${team.id}" aria-pressed="${isStarred}" aria-label="${isStarred ? `Unpin ${esc(team.name)}` : `Pin ${esc(team.name)} to the top`}" title="${isStarred ? "Unpin" : "Pin to the top"}">${fig(isStarred ? "starOn" : "star")}</button></div>`;
-    if (!open) return out;
+    if (!open) return out + "</div>";
     // Open, a team counts its projects, Drafts and Trash at once (countTeam)
     if (!LIVE || Live.ready.has("starred")) countTeam(team);
     const files = (id, view) => (LIVE && LG.count(id) !== undefined ? LG.count(id) || "" : count((f) => f.project === id, view));
     for (const [id, name] of team.projects) out += navRow("p:" + id, folderIcon(id), name, files(id, "p:" + id), "proj");
     if (!LIVE || Live.draftsByTeam[team.id]) out += navRow("d:" + team.id, "file", "Drafts", files(Live.draftsByTeam[team.id], "d:" + team.id), "proj");
     out += navRow("t:" + team.id, "trash", "Trash", count((f) => f.trashed && f.team === team.id), "proj");
-    return out;
+    return out + "</div>";
   };
   const section = (id, title, rows, tier = "") => {
     if (!rows) return "";
     const open = !state.collapsed.has(id);
-    return `<button class="plan sec-h" data-section="${esc(id)}" aria-expanded="${open}">${fig("down", "chev")}<b>${esc(title)}</b>${tier ? esc(tier) : ""}</button>${open ? rows : ""}`;
+    return `<button class="plan sec-h" data-section="${esc(id)}" aria-expanded="${open}">${fig("down", "chev")}<b>${esc(title)}</b>${tier ? esc(tier) : ""}</button>${open ? `<div class="team-list" data-key="tl:${esc(id)}">${rows}</div>` : ""}`;
   };
   const teamsOf = (plans) => plans.flatMap((p) => p.teams.map((t) => [t, p]));
   const all = teamsOf(PLANS);
-  const pinned = [...starred].map((id) => all.find(([t]) => t.id === id)).filter(Boolean);
+  // Each list in the order its teams were dragged into (teamOrder)
+  const pinned = teamOrder([...starred].map((id) => all.find(([t]) => t.id === id)).filter(Boolean), ([t]) => t.id);
   html += section("sec:starred", "Pinned teams", pinned.map(([t, p]) => teamRow(t, p.teams.length === 1 ? p.tier : p.name)).join(""));
-  html += section("sec:teams", "Teams", all.filter(([t, p]) => p.teams.length === 1 && !starred.has(t.id)).map(([t, p]) => teamRow(t, p.tier)).join(""));
-  for (const plan of PLANS.filter((p) => p.teams.length > 1)) html += section("sec:org:" + plan.id, plan.name, plan.teams.filter((t) => !starred.has(t.id)).map((t) => teamRow(t)).join(""), plan.tier);
+  html += section("sec:teams", "Teams", teamOrder(all.filter(([t, p]) => p.teams.length === 1 && !starred.has(t.id)), ([t]) => t.id).map(([t, p]) => teamRow(t, p.tier)).join(""));
+  for (const plan of PLANS.filter((p) => p.teams.length > 1)) html += section("sec:org:" + plan.id, plan.name, teamOrder(plan.teams.filter((t) => !starred.has(t.id)), (t) => t.id).map((t) => teamRow(t)).join(""), plan.tier);
   html += `</div><div class="sfoot">`;
   html += navRow("trash", "trash", "Trash", FILES.filter((f) => f.trashed).length || "");
   html += `<a class="nav" href="https://www.figma.com/files" target="_blank" rel="noopener" title="Admin, billing, sharing and Community">${fig("grid")}<span class="lbl">Figma's file browser</span>${fig("ext", "ext")}</a>`;
@@ -2913,8 +2986,9 @@ function render({ keepScroll = true } = {}) {
     lift.rerender = true;
     return;
   }
-  // Not under a team's name or description being edited on its page
-  if (settingsTeam() && $(".dash .editing", scroller)) return;
+  // Not under a team's name or description being edited on its page, or a
+  // suggested project's name
+  if ((settingsTeam() && $(".dash .editing", scroller)) || $(".ptile .editing", scroller)) return;
   const started = performance.now();
   const ready = LIVE && (state.view === "home" ? Live.ready.has("recents") || Live.ready.has("starred") : Live.ready.has(state.view));
   const home = state.view === "home" && state.mode !== "empty" && (!LIVE || ready) ? homeLayout() : null;
@@ -2926,6 +3000,8 @@ function render({ keepScroll = true } = {}) {
   renderSide();
   renderHead(list.length);
   renderFilters();
+  // What the launcher shows before anything is typed, once it's loaded
+  if (LAUNCHER && pal.open && !palInput.value && !chips.length) drawPalette();
   sections = [];
   let html = "";
   if (settings) html = settingsPage(settings);
@@ -3244,6 +3320,12 @@ function openFiles(ids, background = false) {
   if (!ids.length) return;
   const now = Date.now();
   if (LIVE) {
+    // A tab of its own opens one file in its place, as a browser's new tab
+    // would
+    if (IN_TAB && !background && ids.length === 1) {
+      upsertFile(ids[0], { viewedAt: now, recent: true });
+      return void location.assign(fileUrl(byId(ids[0])));
+    }
     // Home hands Figma links to tabs of their own (tabs.rs)
     for (const id of ids) {
       window.open(fileUrl(byId(id)), "_blank");
@@ -3397,16 +3479,26 @@ function createFile(type = "design", name = "Untitled", project) {
   if (LIVE) {
     const folder = project ?? Live.draftsByTeam[currentTeam()] ?? DRAFTS()[0];
     toast(`Making a new ${TYPES[type].noun}`);
-    api("/api/files/create", { method: "POST", json: { folder_id: folder, editor_type: EDITOR_OF[type], name } })
+    // Resolves to null once it's open, or to the error shown
+    return api("/api/files/create", { method: "POST", json: { folder_id: folder, editor_type: EDITOR_OF[type], name } })
       .then((meta) => {
         const file = fromRest(meta.fig_file ?? meta);
         upsertFile(file.key, { viewedAt: Date.now(), recent: true });
-        window.open(meta.fig_file?.url ?? fileUrl(file), "_blank");
+        const url = meta.fig_file?.url ?? fileUrl(file);
+        if (IN_TAB) {
+          location.assign(url);
+          return null;
+        }
+        window.open(url, "_blank");
         toast(`Opening new ${TYPES[type].noun} “${file.name}” in ${placeOf(file.project)}`);
         render();
+        return null;
       })
-      .catch((error) => toast(`Couldn't make it: ${error.message}`));
-    return;
+      .catch((error) => {
+        const message = `Couldn't make it: ${error.message}`;
+        toast(message);
+        return message;
+      });
   }
   const look = { figjam: "board", slides: "deck" }[type] ?? "components";
   const file = addFile({ name, type, look, project, at: Date.now(), kind: "create", by: "me", unread: 0, starred: false, trashed: false }, true);
@@ -3571,13 +3663,13 @@ function projectTools(p) {
 function colorItems(id) {
   return FOLDER_COLORS.map(([key, label, hex]) => ({ label, iconHtml: folderIcon(id, hex), checked: FOLDER[id]?.color === key, act: () => setProjectColor(id, key) }));
 }
-function projectMenu(id, at, { open = false } = {}) {
+function projectMenu(id, at, { open = false, tile = null } = {}) {
   const p = PROJECTS[id];
   if (!p) return;
   const others = allTeams().filter((t) => t.id !== p.team.id);
   showMenu([
     ...(open ? [{ label: "Open", act: () => go("p:" + id) }, null] : []),
-    { label: "Rename", act: () => renameProject(id) },
+    { label: "Rename", act: () => renameProject(id, tile) },
     { label: FOLDER[id]?.description ? "Edit description" : "Add a description", act: () => describeProject(id) },
     { label: "Color", sub: colorItems(id) },
     null,
@@ -3652,11 +3744,38 @@ function editInPlace(el, { value, label, multiline = false, wrap }, save, after)
   input.addEventListener("blur", () => finish(true));
 }
 
-// Renames in place: in the header when the project is open, else on its
-// row in the sidebar, else it opens to rename there
-function renameProject(id) {
+// Renames in place: on the tile it was picked from, in the header when the
+// project is open, else on its row in the sidebar, else it opens to rename
+// there
+function renameProject(id, tile = null) {
   const p = PROJECTS[id];
   if (!p) return;
+  if (tile?.isConnected && $(".pname b", tile)) {
+    // A field inside a button can't be clicked into: a suggested project's
+    // tile is a plain box while it's renamed
+    if (tile.tagName === "BUTTON") {
+      const box = document.createElement("div");
+      box.className = tile.className;
+      box.innerHTML = tile.innerHTML;
+      tile.replaceWith(box);
+      tile = box;
+    }
+    return editInPlace($(".pname b", tile), {
+      value: p.name,
+      label: "Project name",
+      wrap: (input) => {
+        const box = document.createElement("span");
+        box.className = "pedit editing";
+        box.append(input);
+        return box;
+      },
+    }, (name) => saveProjectName(id, name), () => {
+      render();
+      // A suggested tile is the button itself, a team page's tile has its
+      // More button
+      refocus($(`.ptile[data-project="${CSS.escape(id)}"]`, scroller) ?? $(`.dtile [data-set="p-more"][data-project="${CSS.escape(id)}"]`, scroller));
+    });
+  }
   const row = $(`.nav[data-view="p:${CSS.escape(id)}"]`, side);
   if (state.view !== "p:" + id && row) {
     return editInPlace(row, {
@@ -5055,7 +5174,7 @@ function settingsClick(el) {
   if (act === "pin") return toggleTeamStar(id);
   if (act === "p-new") return newProject(el.getBoundingClientRect(), id);
   if (act === "p-share") return openShare(el.dataset.project, el.getBoundingClientRect());
-  if (act === "p-more") return projectMenu(el.dataset.project, el.getBoundingClientRect(), { open: true });
+  if (act === "p-more") return projectMenu(el.dataset.project, el.getBoundingClientRect(), { open: true, tile: el.closest(".dtile") });
   if (act === "seat") return seatMenu(id, el.dataset.user, el.getBoundingClientRect());
   if (act === "seat-yes") return changeSeat(id);
   if (act === "seat-no") {
@@ -5255,6 +5374,7 @@ addEventListener("resize", () => win.classList.contains("open") && placeWin());
 
 function go(view, { back = false } = {}) {
   if (!viewName(view)) return;
+  returnTo = null;
   if (state.view.startsWith("s:")) reblur(scroller);
   const moved = view !== state.view;
   state.view = view;
@@ -5276,6 +5396,7 @@ function go(view, { back = false } = {}) {
    a keyboard's Back and Forward keys, or a two-finger swipe sideways. Each
    page is a step in the page's own history, with where it was scrolled to.
    Nothing on screen: it's what the hands already do */
+takeReturn();
 try {
   history.replaceState({ view: state.view, scroll: 0 }, "");
 } catch {}
@@ -6040,6 +6161,8 @@ $("#side").addEventListener("contextmenu", (e) => {
 });
 
 $("#side").addEventListener("click", (e) => {
+  // The click that ends dragging a team doesn't fold it
+  if (teamLiftJustEnded) return;
   const more = e.target.closest("[data-team-more]");
   if (more) return teamMenu(more.dataset.teamMore, more.getBoundingClientRect());
   const star = e.target.closest("[data-star-team]");
@@ -7076,7 +7199,7 @@ let palItems = [];
 let palIndex = 0;
 
 const SCOPES = {
-  in: { title: "Projects", options: () => [{ value: null, label: "Drafts" }, ...Object.values(PROJECTS).map((p) => ({ value: p.id, label: p.name, where: p.team.name }))] },
+  in: { title: "Projects", options: () => [{ value: null, label: "Drafts" }, ...(LIVE && Live.plansUid !== Live.uid ? [] : Object.values(PROJECTS)).map((p) => ({ value: p.id, label: p.name, where: p.team.name }))] },
   type: { title: "File types", options: () => Object.entries(TYPES).map(([value, t]) => ({ value, label: t.label })) },
   by: { title: "People", options: () => Object.entries(PEOPLE).map(([value, p]) => ({ value, label: value === "me" ? "You" : p.name })) },
 };
@@ -7116,13 +7239,14 @@ function paletteCommands() {
       { label: `Invite people to ${team.name}`, act: () => openTeamWin(team.id, at(), "invite"), icon: "users" },
     );
   }
-  return list;
+  // The launcher has no page for the rest to happen on
+  return LAUNCHER ? list.filter((c) => c.view || c.url) : list;
 }
 
 // Letters of `query` in order in `text`; more for runs, word starts and
 // whole substrings. Each word of the query has to match
 function match(query, text) {
-  const lower = text.toLowerCase();
+  const lower = String(text ?? "").toLowerCase();
   let total = 0;
   const hits = new Set();
   for (const word of query.toLowerCase().split(/\s+/).filter(Boolean)) {
@@ -7166,9 +7290,70 @@ function openPalette() {
   drawPalette();
 }
 pal.addEventListener("pointerdown", (e) => {
-  if (e.target === pal) pal.close();
+  if (e.target === pal) LAUNCHER ? dismissLauncher() : pal.close();
 });
+// As the launcher (launcher.rs) search is all there is: Ligma shows it
+// over the current tab for a new tab and calls this. What's picked opens
+// in a new tab, and closing it hides the launcher
+// `image` is of the tab under it, or null. It shows as the tab does until
+// Ligma shows the window, then blurs as the search comes in
+// Each time Ligma shows the launcher, so what a hidden one started doesn't
+// land in the next
+let launchSession = 0;
+window.__ligmaLaunch = (image) => {
+  launchSession++;
+  clearTimeout(dismissTimer);
+  document.documentElement.classList.add("instant");
+  document.documentElement.classList.remove("shown");
+  let bg = $("#launch-bg");
+  if (!bg) {
+    bg = document.createElement("div");
+    bg.id = "launch-bg";
+    document.body.prepend(bg);
+  }
+  bg.style.backgroundImage = image ? `url("${image}")` : "none";
+  palIndex = 0;
+  openPalette();
+  requestAnimationFrame(() => palInput.focus());
+  // The window is kept between uses, so Home may have switched accounts or
+  // signed in since this page loaded
+  if (LIVE) {
+    const selected = figmaAccount() ?? store.get("account", null);
+    if (Live.signedOut) boot();
+    else if (selected && Live.uid && selected !== Live.uid && Live.users.some((u) => u.id === selected)) switchAccount(selected);
+  }
+};
+window.__ligmaShown = () => {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    document.documentElement.classList.remove("instant");
+    document.documentElement.classList.add("shown");
+  }));
+  palInput.focus();
+};
+// Escape or a click beside the search: the same, backwards, then hidden
+let dismissTimer = 0;
+function dismissLauncher() {
+  document.documentElement.classList.remove("shown");
+  clearTimeout(dismissTimer);
+  dismissTimer = setTimeout(() => pal.open && pal.close(), 180);
+}
+if (LAUNCHER) pal.addEventListener("cancel", (e) => {
+  e.preventDefault();
+  dismissLauncher();
+});
+// Keys that land elsewhere in it still go to the search
+if (LAUNCHER) addEventListener("keydown", (e) => {
+  if (e.target !== palInput && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) palInput.focus();
+}, true);
+// Ligma's New Tab on Home opens its search there (tabs.rs)
+window.__ligmaSearch = () => {
+  if (!pal.open) openPalette();
+  palInput.focus();
+};
+// A page or project picked opens in a new tab of Ligma's home page
+const openView = (view) => (LAUNCHER ? signal("tab", { view }) : go(view));
 pal.addEventListener("close", () => {
+  if (LAUNCHER) return signal("close");
   if (document.activeElement && document.activeElement !== document.body && !pal.contains(document.activeElement)) return;
   const card = state.focus && cardEl(state.focus);
   card?.focus({ preventScroll: true });
@@ -7201,8 +7386,10 @@ function searchFigma(query) {
   if (!LIVE || !Live.uid || !query || query === searched) return;
   searchTimer = setTimeout(async () => {
     searched = query;
+    const gen = accountGen;
     try {
       const meta = await api(`/api/search/full_results?${new URLSearchParams({ query, search_model_type: "files", sort: "relevancy", desc: "true" })}`);
+      if (gen !== accountGen) return;
       for (const result of meta?.results ?? []) if (result.model?.key && !result.model.trashed_at) fromRest(result.model).found = query;
     } catch {}
     if (pal.open && parse().query === query) drawPalette();
@@ -7219,7 +7406,12 @@ function drawPalette() {
   const scoped = live.filter((f) => chips.every((c) => (c.key === "in" ? f.project === c.value : c.key === "type" ? f.type === c.value : f.by === c.value)));
   const recency = (f) => 3 * Math.exp(-(Date.now() - f.at) / (7 * DAY));
 
-  if (scope) {
+  // Signed out, the launcher has nothing to search and its page's Sign in
+  // is out of sight behind it: it offers Figma's login page in a tab
+  if (LAUNCHER && LIVE && Live.signedOut) {
+    const i = items.push({ kind: "command", command: { label: "Sign in to Figma", url: "https://www.figma.com/login" } }) - 1;
+    html = `<div class="pmsg">Sign in to Figma to search your files</div>` + row(i, icon("users"), "Sign in to Figma", icon("ext"));
+  } else if (scope) {
     const options = SCOPES[scope.key].options()
       .map((o) => ({ o, m: scope.q ? match(scope.q, o.label) : { score: 0 } }))
       .filter((x) => x.m)
@@ -7264,7 +7456,8 @@ function drawPalette() {
       });
     }
     const inChip = chips.find((c) => c.key === "in");
-    if (query && !inChip) {
+    // Not while the projects known are still the last account's
+    if (query && !inChip && (!LIVE || Live.plansUid === Live.uid)) {
       const projects = Object.values(PROJECTS).map((p) => ({ p, m: match(query, p.name) })).filter((x) => x.m).sort((a, b) => b.m.score - a.m.score).slice(0, 3);
       if (projects.length) {
         html += `<div class="ph">Projects</div>`;
@@ -7318,15 +7511,29 @@ function activate(item, background = false) {
     drawPalette();
     return;
   }
+  // The launcher stays up while a new file is made, as its toasts can't
+  // be seen behind it: the file opening hides it, or the error shows here
+  if (LAUNCHER && LIVE && item.kind === "create") {
+    palBody.classList.remove("split");
+    palBody.innerHTML = `<div class="pmsg">Making a new ${esc(TYPES[item.type].noun)}</div>`;
+    palItems = [];
+    const session = launchSession;
+    createFile(item.type, item.name, item.project).then((error) => {
+      if (session !== launchSession) return;
+      if (!error) return pal.close();
+      palBody.innerHTML = `<div class="pmsg">${esc(error)}</div>`;
+    });
+    return;
+  }
   pal.close();
   if (item.kind === "file") {
     state.focus = item.id;
     openFiles([item.id], background);
-  } else if (item.kind === "view") go(item.view);
+  } else if (item.kind === "view") openView(item.view);
   else if (item.kind === "create") createFile(item.type, item.name, item.project);
   else if (item.kind === "command") {
     const { command } = item;
-    if (command.view) go(command.view);
+    if (command.view) openView(command.view);
     else if (command.url) window.open(command.url, "_blank", "noopener");
     else command.act();
   }
@@ -7576,7 +7783,7 @@ scroller.addEventListener("contextmenu", (e) => {
   const project = e.target.closest("[data-project]")?.dataset.project;
   if (project) {
     e.preventDefault();
-    return projectMenu(project, { x: e.clientX, y: e.clientY }, { open: true });
+    return projectMenu(project, { x: e.clientX, y: e.clientY }, { open: true, tile: e.target.closest(".ptile, .dtile") });
   }
   const card = e.target.closest(".card[data-id]");
   if (!card) return;
@@ -7885,6 +8092,187 @@ function commitStarOrder(grid) {
   order = [...shown, ...order.filter((id) => !shown.includes(id))];
   previousOrder = order;
 }
+/* Teams in the sidebar: hold one and drag it up or down its list, Pinned
+   teams, Teams or an organization's, as a starred file moves. It folds to
+   its row, hangs from the pointer and leans as it goes, the teams around it
+   make room, and it drops into its place with a small bounce. Figma keeps
+   no order: Ligma keeps it, per account, and new teams go last */
+
+// The account whose teams the sidebar shows, which lags `Live.uid` while
+// a switch loads
+const teamOrderKey = () => `team-order:${LIVE ? Live.plansUid ?? Live.uid : "sample"}`;
+function teamOrder(list, idOf) {
+  const rank = new Map(store.get(teamOrderKey(), []).map((id, i) => [id, i]));
+  return list.map((item, i) => [item, i]).sort(([a, i], [b, j]) => (rank.get(idOf(a)) ?? Infinity) - (rank.get(idOf(b)) ?? Infinity) || i - j).map(([item]) => item);
+}
+
+let teamLift = null;
+let teamLiftJustEnded = false;
+
+side.addEventListener("pointerdown", (e) => {
+  if (teamLift?.live || e.button !== 0 || e.pointerType === "touch" || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const row = e.target.closest(".team-list > .team-block > .team-row");
+  if (!row || e.target.closest(".team-more, .team-star")) return;
+  const block = row.parentElement;
+  if (block.parentElement.children.length < 2) return;
+  // The order is saved for the account whose teams these are, even if
+  // another's load ends during the drag
+  teamLift = { id: block.dataset.teamBlock, pointer: e.pointerId, sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY, live: false, orderKey: teamOrderKey() };
+});
+side.addEventListener("pointermove", (e) => {
+  const l = teamLift;
+  if (!l || e.pointerId !== l.pointer || l.dropping) return;
+  l.px = e.clientX;
+  l.py = e.clientY;
+  if (!l.live && Math.hypot(e.clientX - l.sx, e.clientY - l.sy) > 4) startTeamLift();
+});
+side.addEventListener("pointerup", (e) => {
+  const l = teamLift;
+  if (!l || e.pointerId !== l.pointer || l.dropping) return;
+  if (l.live) dropTeamLift();
+  else teamLift = null;
+});
+side.addEventListener("pointercancel", (e) => {
+  const l = teamLift;
+  if (!l || e.pointerId !== l.pointer || l.dropping) return;
+  if (l.live) dropTeamLift(true);
+  else teamLift = null;
+});
+// Escape, or leaving the window, puts it back where it was
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !teamLift?.live || teamLift.dropping) return;
+  e.preventDefault();
+  e.stopPropagation();
+  dropTeamLift(true);
+}, true);
+addEventListener("blur", () => teamLift?.live && !teamLift.dropping && dropTeamLift(true));
+
+// Changes the list with `change`, and the teams in it glide from where they
+// were to where that puts them, with a little give
+function glideTeams(list, change, skip) {
+  const others = [...list.children].filter((el) => el !== skip);
+  const was = new Map(others.map((el) => [el, el.getBoundingClientRect().top]));
+  change();
+  for (const el of others) el.getAnimations().forEach((a) => a.cancel());
+  for (const el of others) {
+    const dy = was.get(el) - el.getBoundingClientRect().top;
+    if (Math.abs(dy) < 0.5) continue;
+    el.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: calm() ? 1 : 300, easing: "cubic-bezier(0.2, 0.9, 0.3, 1.12)" });
+  }
+}
+
+function startTeamLift() {
+  const l = teamLift;
+  // Another account's teams came in since the press: its row isn't the
+  // one pressed
+  if (teamOrderKey() !== l.orderKey) return void (teamLift = null);
+  // The sidebar may have been drawn again since the press
+  const block = $(`.team-list > [data-team-block="${CSS.escape(l.id)}"]`, side);
+  if (!block) return void (teamLift = null);
+  const list = block.parentElement;
+  const row = $(".team-row", block);
+  const r = row.getBoundingClientRect();
+  closeMenu();
+  tip.style.display = "none";
+  const ghost = row.cloneNode(true);
+  for (const el of [ghost, ...ghost.querySelectorAll("[id], [data-key]")]) {
+    el.removeAttribute("id");
+    el.removeAttribute("data-key");
+  }
+  ghost.className = "team-row lifted";
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.style.width = `${r.width}px`;
+  const ox = l.sx - r.left;
+  const oy = l.sy - r.top;
+  ghost.style.transformOrigin = `${ox}px ${oy}px`;
+  ghost.style.transform = `translate(${r.left}px, ${r.top}px)`;
+  document.body.append(ghost);
+  // Folded to its row while it's carried: the teams below close up
+  glideTeams(list, () => block.classList.add("hole"), block);
+  document.body.classList.add("grabbing");
+  try {
+    side.setPointerCapture(l.pointer);
+  } catch {}
+  Object.assign(l, { live: true, list, block, ghost, ox, oy, left: r.left, w: r.width, h: r.height, tree: $(".tree", side), next: block.nextElementSibling, lastY: l.py, lastT: performance.now(), vy: 0, ang: 0, angV: 0, scale: 1 });
+  l.frame = requestAnimationFrame(stepTeamLift);
+}
+
+// Each frame: follow the pointer, lean, scroll near an edge, make room
+function stepTeamLift(now) {
+  const l = teamLift;
+  if (!l?.live || l.dropping) return;
+  const dt = Math.min(3, Math.max(0.25, (now - l.lastT) / 16.67));
+  l.lastT = now;
+  l.vy += ((l.py - l.lastY) / dt - l.vy) * 0.12;
+  l.lastY = l.py;
+  // Up and down its list, giving a little sideways. Held off its middle,
+  // the far end trails behind as it moves, and a spring brings it level
+  const lever = (l.w / 2 - l.ox) / (l.w / 2);
+  const lean = calm() ? 0 : Math.max(-4, Math.min(4, -l.vy * 0.2 * lever));
+  l.angV += ((lean - l.ang) * 0.06 - l.angV * 0.2) * dt;
+  l.ang += l.angV * dt;
+  l.scale += ((calm() ? 1 : 1.03) - l.scale) * Math.min(1, 0.22 * dt);
+  const area = l.tree.getBoundingClientRect();
+  const edge = 40;
+  const dy = l.py < area.top + edge ? -(area.top + edge - l.py) / 3 : l.py > area.bottom - edge ? (l.py - area.bottom + edge) / 3 : 0;
+  if (dy) l.tree.scrollTop += Math.round(Math.max(-16, Math.min(16, dy)) * dt);
+  const x = l.left + (l.px - l.sx) * 0.12;
+  l.ghost.style.transform = `translate(${x}px, ${l.py - l.oy}px) rotate(${l.ang.toFixed(2)}deg) scale(${l.scale.toFixed(4)})`;
+  placeTeamLift();
+  l.frame = requestAnimationFrame(stepTeamLift);
+}
+// Its place: past every team whose middle it's below, measured as if it
+// weren't there, so it doesn't flip back and forth at a boundary. Each
+// frame, and once more at the drop for a release before the next frame
+function placeTeamLift() {
+  const l = teamLift;
+  const top = l.list.getBoundingClientRect().top;
+  const mid = l.py - l.oy + l.h / 2 - top;
+  const gap = l.block.offsetHeight;
+  let index = 0;
+  let after = false;
+  for (const el of l.list.children) {
+    if (el === l.block) {
+      after = true;
+      continue;
+    }
+    if (el.offsetTop - (after ? gap : 0) + el.offsetHeight / 2 < mid) index++;
+  }
+  const others = [...l.list.children].filter((el) => el !== l.block);
+  if ((others[index] ?? null) !== l.block.nextElementSibling) glideTeams(l.list, () => l.list.insertBefore(l.block, others[index] ?? null), l.block);
+}
+
+function dropTeamLift(cancel = false) {
+  const l = teamLift;
+  cancelAnimationFrame(l.frame);
+  l.dropping = true;
+  teamLiftJustEnded = true;
+  setTimeout(() => (teamLiftJustEnded = false));
+  document.body.classList.remove("grabbing");
+  try {
+    side.releasePointerCapture(l.pointer);
+  } catch {}
+  if (cancel) glideTeams(l.list, () => l.list.insertBefore(l.block, l.next), l.block);
+  else if (l.live) placeTeamLift();
+  const row = $(".team-row", l.block);
+  const r = row.getBoundingClientRect();
+  // Down into its place, quickening as it falls
+  const fall = l.ghost.animate([{ transform: l.ghost.style.transform }, { transform: `translate(${r.left}px, ${r.top}px) rotate(0deg) scale(1)` }], { duration: calm() ? 1 : 180, easing: "cubic-bezier(0.55, 0, 0.85, 0.5)", fill: "forwards" });
+  fall.onfinish = () => {
+    l.ghost.remove();
+    // Open again, the teams below making way for what it holds
+    glideTeams(l.list, () => l.block.classList.remove("hole"), l.block);
+    teamLift = null;
+    if (!calm()) row.animate([{ transform: "scale(1.02, 0.92)" }, { transform: "scale(0.995, 1.02)", offset: 0.45 }, { transform: "none" }], { duration: 300, easing: "ease-out" });
+    if (!cancel) {
+      // Every team in the sidebar as it shows now, then the rest
+      const shown = $$("[data-team-block]", side).map((el) => el.dataset.teamBlock);
+      store.set(l.orderKey, [...shown, ...store.get(l.orderKey, []).filter((id) => !shown.includes(id))]);
+    }
+    if (l.rerender) renderSide();
+  };
+}
+
 side.addEventListener("dragover", (e) => {
   const target = e.target.closest("[data-drop]");
   if (!target || !e.dataTransfer.types.includes("application/x-ligma-files")) return;
@@ -7956,6 +8344,10 @@ else {
   seedFiles();
   seedNotes();
   render({ keepScroll: false });
+}
+if (LAUNCHER) {
+  window.__ligmaLaunch(null);
+  window.__ligmaShown();
 }
 if (state.mode === "loading") setTimeout(() => {
   state.mode = null;
