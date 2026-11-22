@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  profile: chill
+  # Approves once every comment of CodeRabbit's is resolved, which counts
+  # toward main's required approving review
+  request_changes_workflow: true
+  # dist/ is Ligma's own pages, not build output, so it's reviewed too
+  path_filters:
+    - "dist/**"
+  path_instructions:
+    - path: "src-tauri/src/**/*.rs"
+      instructions: |
+        Ligma runs on macOS (WKWebView) and Windows (WebView2). Check that `cfg(target_os = ...)` paths stay in step and that a change on one platform doesn't break the other's build. `wkwebview.rs`, `titlebar.rs`, `pressure.rs` and `web_auth.rs` are macOS only, `webview2.rs` and `frame.rs` are Windows only
+    - path: "dist/**"
+      instructions: |
+        These are Ligma's own pages: the tab bar, settings, menus and home page. Read PRODUCT.md for UI and copy changes. User-facing strings have no period at the end unless they're more than one sentence long
+  auto_review:
+    enabled: true
+    drafts: false
