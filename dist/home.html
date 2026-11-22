@@ -2319,6 +2319,7 @@ function showCached() {
   PLANS.splice(0, PLANS.length, ...cache.plans);
   Live.plansUid = uid;
   Object.assign(FOLDER, cache.folders);
+  for (const k of Object.keys(PROJECTS)) delete PROJECTS[k];
   for (const plan of PLANS) for (const team of plan.teams) for (const [id, name] of team.projects) PROJECTS[id] = { id, name, team, plan };
   // Previews are links Figma signs for 7 days: kept for 6
   const fresh = Date.now() - cache.at < 6 * DAY;
@@ -7198,7 +7199,7 @@ let palItems = [];
 let palIndex = 0;
 
 const SCOPES = {
-  in: { title: "Projects", options: () => [{ value: null, label: "Drafts" }, ...Object.values(PROJECTS).map((p) => ({ value: p.id, label: p.name, where: p.team.name }))] },
+  in: { title: "Projects", options: () => [{ value: null, label: "Drafts" }, ...(LIVE && Live.plansUid !== Live.uid ? [] : Object.values(PROJECTS)).map((p) => ({ value: p.id, label: p.name, where: p.team.name }))] },
   type: { title: "File types", options: () => Object.entries(TYPES).map(([value, t]) => ({ value, label: t.label })) },
   by: { title: "People", options: () => Object.entries(PEOPLE).map(([value, p]) => ({ value, label: value === "me" ? "You" : p.name })) },
 };
@@ -8162,6 +8163,9 @@ function glideTeams(list, change, skip) {
 
 function startTeamLift() {
   const l = teamLift;
+  // Another account's teams came in since the press: its row isn't the
+  // one pressed
+  if (teamOrderKey() !== l.orderKey) return void (teamLift = null);
   // The sidebar may have been drawn again since the press
   const block = $(`.team-list > [data-team-block="${CSS.escape(l.id)}"]`, side);
   if (!block) return void (teamLift = null);
