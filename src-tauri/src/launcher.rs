@@ -67,26 +67,23 @@ pub fn show(app: &AppHandle) -> tauri::Result<()> {
             let owner = owner.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(40));
-                if GENERATION.load(Ordering::SeqCst) != generation {
-                    return;
-                }
-                crate::tab_menu::set_owner(&window, &owner);
-                let _ = window.show();
-                // A hide between the check and the show bumps it too: take
-                // the window back down rather than hold a lock across calls
-                // that wait on the main thread
-                if GENERATION.load(Ordering::SeqCst) != generation {
-                    crate::tab_menu::release(&window);
-                    let _ = window.hide();
-                    return;
-                }
-                let _ = window.set_focus();
-                // The page, not only its window, takes the keys
-                if let Some(webview) = app.get_webview(WINDOW) {
-                    let _ = webview.set_focus();
-                }
-                // Then it blurs the tab and brings the search in
-                let _ = window.eval("window.__ligmaShown?.()");
+                // On the main thread, in turn with `hide`'s, so a dismissal
+                // can't land between the check and the show
+                let main = app.clone();
+                let _ = main.run_on_main_thread(move || {
+                    if GENERATION.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    crate::tab_menu::set_owner(&window, &owner);
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    // The page, not only its window, takes the keys
+                    if let Some(webview) = app.get_webview(WINDOW) {
+                        let _ = webview.set_focus();
+                    }
+                    // Then it blurs the tab and brings the search in
+                    let _ = window.eval("window.__ligmaShown?.()");
+                });
             });
         }
     };
@@ -163,17 +160,23 @@ fn in_front(window: &WebviewWindow) -> bool {
 /// Hides the launcher. With `refocus`, the tab under it takes the keys
 /// again, as when Escape closes it
 pub fn hide(app: &AppHandle, refocus: bool) {
+    // At once, so a show started after this isn't taken for an older one.
+    // The hiding goes on the main thread, ordered with the shows there
     GENERATION.fetch_add(1, Ordering::SeqCst);
-    if let Some(window) = app.get_webview_window(WINDOW) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window(WINDOW) else {
+            return;
+        };
         if !window.is_visible().unwrap_or(false) {
             return;
         }
         crate::tab_menu::release(&window);
         let _ = window.hide();
         if refocus {
-            crate::tabs::refocus(app);
+            crate::tabs::refocus(&handle);
         }
-    }
+    });
 }
 
 /// Closes the launcher's window, for when the main window goes
