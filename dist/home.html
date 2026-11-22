@@ -7296,7 +7296,11 @@ pal.addEventListener("pointerdown", (e) => {
 // in a new tab, and closing it hides the launcher
 // `image` is of the tab under it, or null. It shows as the tab does until
 // Ligma shows the window, then blurs as the search comes in
+// Each time Ligma shows the launcher, so what a hidden one started doesn't
+// land in the next
+let launchSession = 0;
 window.__ligmaLaunch = (image) => {
+  launchSession++;
   clearTimeout(dismissTimer);
   document.documentElement.classList.add("instant");
   document.documentElement.classList.remove("shown");
@@ -7512,7 +7516,9 @@ function activate(item, background = false) {
     palBody.classList.remove("split");
     palBody.innerHTML = `<div class="pmsg">Making a new ${esc(TYPES[item.type].noun)}</div>`;
     palItems = [];
+    const session = launchSession;
     createFile(item.type, item.name, item.project).then((error) => {
+      if (session !== launchSession) return;
       if (!error) return pal.close();
       palBody.innerHTML = `<div class="pmsg">${esc(error)}</div>`;
     });
@@ -8108,7 +8114,9 @@ side.addEventListener("pointerdown", (e) => {
   if (!row || e.target.closest(".team-more, .team-star")) return;
   const block = row.parentElement;
   if (block.parentElement.children.length < 2) return;
-  teamLift = { id: block.dataset.teamBlock, pointer: e.pointerId, sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY, live: false };
+  // The order is saved for the account whose teams these are, even if
+  // another's load ends during the drag
+  teamLift = { id: block.dataset.teamBlock, pointer: e.pointerId, sx: e.clientX, sy: e.clientY, px: e.clientX, py: e.clientY, live: false, orderKey: teamOrderKey() };
 });
 side.addEventListener("pointermove", (e) => {
   const l = teamLift;
@@ -8255,7 +8263,7 @@ function dropTeamLift(cancel = false) {
     if (!cancel) {
       // Every team in the sidebar as it shows now, then the rest
       const shown = $$("[data-team-block]", side).map((el) => el.dataset.teamBlock);
-      store.set(teamOrderKey(), [...shown, ...store.get(teamOrderKey(), []).filter((id) => !shown.includes(id))]);
+      store.set(l.orderKey, [...shown, ...store.get(l.orderKey, []).filter((id) => !shown.includes(id))]);
     }
     if (l.rerender) renderSide();
   };
