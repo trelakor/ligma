@@ -7280,6 +7280,13 @@ window.__ligmaLaunch = (image) => {
   palIndex = 0;
   openPalette();
   requestAnimationFrame(() => palInput.focus());
+  // The window is kept between uses, so Home may have switched accounts or
+  // signed in since this page loaded
+  if (LIVE) {
+    const selected = figmaAccount() ?? store.get("account", null);
+    if (Live.signedOut) boot();
+    else if (selected && Live.uid && selected !== Live.uid && Live.users.some((u) => u.id === selected)) switchAccount(selected);
+  }
 };
 window.__ligmaShown = () => {
   requestAnimationFrame(() => requestAnimationFrame(() => {

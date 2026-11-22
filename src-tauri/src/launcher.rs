@@ -11,6 +11,7 @@
 //! its search alone and asks Ligma, through the same signal links, to open
 //! a page in a tab or to hide it
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,9 +20,14 @@ use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Url, WebviewUrl, 
 
 pub const WINDOW: &str = "launcher";
 
+/// Bumped on each hide, so a show still waiting for its image when the
+/// launcher is dismissed doesn't bring it back
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// Shows the launcher over the focused window's current tab, with an image
 /// of the tab behind it, blurred by the page
 pub fn show(app: &AppHandle) -> tauri::Result<()> {
+    let generation = GENERATION.load(Ordering::SeqCst);
     crate::tab_menu::hide(app);
     crate::preview::hide(app);
     let Some(owner) = crate::tabs::focused_window(app) else {
@@ -61,6 +67,9 @@ pub fn show(app: &AppHandle) -> tauri::Result<()> {
             let owner = owner.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(40));
+                if GENERATION.load(Ordering::SeqCst) != generation {
+                    return;
+                }
                 crate::tab_menu::set_owner(&window, &owner);
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -146,6 +155,7 @@ fn in_front(window: &WebviewWindow) -> bool {
 /// Hides the launcher. With `refocus`, the tab under it takes the keys
 /// again, as when Escape closes it
 pub fn hide(app: &AppHandle, refocus: bool) {
+    GENERATION.fetch_add(1, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window(WINDOW) {
         if !window.is_visible().unwrap_or(false) {
             return;
