@@ -1,10 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Ligma",
-  "version": "0.45.0",
+  "version": "0.46.2",
   "identifier": "dev.ligma.client",
   "build": {
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeBundleCommand": "node scripts/installer-ui.mjs"
   },
   "app": {
     "windows": [],
@@ -33,11 +34,22 @@
     "macOS": {
       "signingIdentity": "-",
       "entitlements": "Entitlements.plist",
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "dmg": {
+        "background": "installer/dmg-background.tiff",
+        "windowSize": { "width": 660, "height": 420 },
+        "appPosition": { "x": 170, "y": 190 },
+        "applicationFolderPosition": { "x": 490, "y": 190 }
+      }
     },
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "template": "installer/installer.nsi",
+        "headerImage": "installer/nsis-header.bmp",
+        "installerIcon": "icons/icon.ico"
       }
     },
     "shortDescription": "Lightweight desktop app for Figma"

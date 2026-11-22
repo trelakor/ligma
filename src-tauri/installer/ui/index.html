@@ -1,0 +1,270 @@
+<!doctype html>
+<!-- The Windows installer's window, served by main.rs. A Figma canvas, as in the
+     DMG art (assets/installer/installer.html). A first install walks through
+     four steps: welcome, install, theme, done. Any other install shows only the
+     install step and closes by itself. The progress is a selected frame being
+     dragged wider by your cursor, its size pill reading the percentage -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Install Ligma</title>
+<script src="/themes.js"></script>
+<style>
+  @font-face { font-family: "Inter"; src: url(/inter.woff2) format("woff2"); font-weight: 400 700; }
+
+  /* As on the website (site/index.html): one blue, Figma's #0d99ff, for
+     buttons, the selection, its handles, name and size, in light and dark */
+  :root {
+    --canvas: #f5f5f5; --dot: #d6d6d6; --text: #1e1e1e; --muted: #696969; --line: #e6e6e6;
+    --field: #0d99ff; --field-hover: color-mix(in oklab, #0d99ff 88%, #000);
+    --fill: rgb(13 153 255 / 0.08); --ghost: #c4c4c4;
+    --you: #9747ff; --handle: #fff; --hover: rgb(0 0 0 / 0.06); --box: rgb(0 0 0 / 0.5);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #1e1e1e; --dot: #383838; --text: #ffffff; --muted: #b3b3b3; --line: #383838;
+      --fill: rgb(13 153 255 / 0.14); --ghost: #4a4a4a;
+      --hover: rgb(255 255 255 / 0.08); --box: rgb(255 255 255 / 0.7);
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; overflow: hidden; user-select: none; cursor: default; }
+  body {
+    font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased; color: var(--text);
+    background: radial-gradient(circle, var(--dot) 0.9px, transparent 1.3px) 0 0 / 20px 20px, var(--canvas);
+  }
+
+  /* One step at a time, each centered */
+  .step { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+  .step.on { display: flex; animation: enter 220ms cubic-bezier(0.2, 0, 0, 1); }
+  @keyframes enter { from { opacity: 0; transform: translateY(6px); } }
+
+  .close { position: absolute; top: 8px; right: 8px; z-index: 1; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 5px; background: none; color: var(--muted); }
+  .close:hover { background: var(--hover); color: var(--text); }
+  :root[data-step="install"] .close { display: none; }
+
+  /* logo.png's mark spans x 220-604 and y 122-700 of 824; this crops it to 48px tall */
+  .mark { width: 32px; height: 48px; flex: none; background: url(/logo.png) -18.27px -10.13px / 68.43px no-repeat; }
+  h1 { margin-top: 12px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; font-weight: 600; letter-spacing: -0.005em; }
+  .lead { margin-top: 6px; font-size: 13px; color: var(--muted); line-height: 1.45; max-width: 300px; }
+  .note { font-size: 12px; color: var(--muted); }
+
+  button { font: inherit; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--field); outline-offset: 2px; }
+  .primary { height: 32px; min-width: 160px; padding: 0 16px; border: 0; border-radius: 5px; background: var(--field); color: #fff; font-size: 12px; font-weight: 500; box-shadow: inset 0 -1px 0 rgb(0 0 0 / 0.12); }
+  .primary:hover { background: var(--field-hover); }
+  .primary:focus-visible { outline-color: var(--text); }
+
+  /* Welcome */
+  /* Settings' checkbox (dist/settings.html .chip): a 12px box outlined in the
+     secondary text color, filled blue with a check once ticked */
+  .check { position: relative; margin-top: 22px; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 4px; border-radius: 5px; font-size: 12px; }
+  .check input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; }
+  .check:hover { background: var(--hover); }
+  .check:has(input:focus-visible) { outline: 2px solid var(--field); outline-offset: -2px; }
+  .check .box { display: grid; flex: none; place-items: center; width: 12px; height: 12px; margin: 2px; border-radius: 3px; box-shadow: inset 0 0 0 1px var(--box); color: #fff; pointer-events: none; }
+  .check .box svg { visibility: hidden; }
+  .check input:checked + .box { background: var(--field); box-shadow: none; }
+  .check input:checked + .box svg { visibility: visible; }
+  #welcome .primary { margin-top: 16px; }
+  #welcome .note { margin-top: 12px; }
+
+  /* Install: the full width, drawn as Figma draws a hovered layer's bounds */
+  .track { position: relative; margin-top: 46px; width: 280px; height: 28px; outline: 1px dashed var(--ghost); outline-offset: -1px; }
+  .name { position: absolute; left: -1px; bottom: calc(100% + 6px); white-space: nowrap; font-size: 11px; font-weight: 500; color: var(--field); }
+  /* Selected, as Figma draws it: outline, square handles */
+  .selected { outline: 1px solid var(--field); outline-offset: -1px; }
+  .selected > i { position: absolute; width: 7px; height: 7px; background: var(--handle); border: 1px solid var(--field); }
+  .selected > i:nth-of-type(1) { left: -3px; top: -3px; } .selected > i:nth-of-type(2) { right: -3px; top: -3px; }
+  .selected > i:nth-of-type(3) { left: -3px; bottom: -3px; } .selected > i:nth-of-type(4) { right: -3px; bottom: -3px; }
+  .frame { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; min-width: 1px; background: var(--fill); }
+  /* The size pill under a selection, here the percentage */
+  .size { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); padding: 2px 6px; border-radius: 3px; background: var(--field); color: #fff; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.3; white-space: nowrap; }
+  /* Your cursor, on the right edge, dragging it wider */
+  .you { position: absolute; right: -14px; top: 12px; display: flex; align-items: flex-start; transition: opacity 0.25s; }
+  .you svg { width: 16px; height: 16px; color: var(--you); filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.3)); }
+  .you span { margin: 13px 0 0 -2px; padding: 1px 6px 2px; border-radius: 4px; background: var(--you); color: #fff; font-size: 11px; font-weight: 600; line-height: 1.3; }
+  #install .note { margin-top: 52px; }
+  :root.installed .you { opacity: 0; }
+
+  /* Theme: each theme's mesh gradient orb (themes.js), the picked one selected */
+  .orbs { margin-top: 22px; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; width: 320px; }
+  .theme { position: relative; width: 60px; padding: 8px 0 6px; border: 0; background: none; color: var(--muted); display: grid; justify-items: center; gap: 6px; font-size: 11px; }
+  .theme .pick { position: absolute; inset: 0; display: none; }
+  .theme[aria-checked="true"] { color: var(--text); font-weight: 500; }
+  .theme[aria-checked="true"] .pick { display: block; }
+  .orb { position: relative; width: 36px; height: 36px; border-radius: 50%; overflow: hidden; isolation: isolate; box-shadow: 0 0 0 1px rgb(127 127 127 / 0.2); transition: transform 160ms cubic-bezier(0.2, 0.9, 0.3, 1); }
+  .orb::before { content: ""; position: absolute; inset: -18%; background: var(--orb); filter: blur(5px) saturate(1.2); animation: drift 4s ease-in-out infinite alternate paused; }
+  .theme:hover .orb { transform: scale(1.08); }
+  .theme:hover .orb::before, .theme[aria-checked="true"] .orb::before { animation-play-state: running; }
+  @keyframes drift {
+    33% { transform: rotate(40deg) scale(1.1); filter: blur(5px) saturate(1.4) hue-rotate(-10deg); }
+    66% { transform: rotate(-25deg) scale(1.05); filter: blur(5px) saturate(1.3) hue-rotate(8deg); }
+    100% { transform: rotate(70deg) scale(1.12); filter: blur(5px) saturate(1.45); }
+  }
+  #theme .primary { margin-top: 22px; }
+
+  /* Done: the mark, selected */
+  .ready { position: relative; padding: 10px 14px; }
+  .ready .name { left: -1px; }
+  #done h2 { margin-top: 18px; }
+  #done .primary { margin-top: 22px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .step.on { animation: none; }
+    .orb, .you { transition: none; }
+    .orb::before { animation: none; }
+  }
+</style>
+</head>
+<body>
+  <button class="close" id="close" aria-label="Close"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></button>
+
+  <section class="step" id="welcome">
+    <div class="mark" role="img" aria-label="Ligma"></div>
+    <h1>Ligma</h1>
+    <p class="lead">A lightweight desktop app for Figma</p>
+    <label class="check"><input type="checkbox" id="desktop" checked><span class="box"><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7"/></svg></span>Add a desktop shortcut</label>
+    <button class="primary" id="go" autofocus>Install</button>
+    <p class="note">Installs for you only, no admin needed</p>
+  </section>
+
+  <section class="step" id="install">
+    <div class="mark" role="img" aria-label="Ligma"></div>
+    <div class="track">
+      <span class="name" id="label">Installing</span>
+      <div class="frame selected" id="frame">
+        <i></i><i></i><i></i><i></i>
+        <span class="size" id="size">0%</span>
+        <div class="you"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.4 2.2c-.7-.3-1.4.4-1.1 1.1l4.3 10.3c.3.7 1.3.7 1.6-.1l1.3-3.7c.1-.3.3-.5.6-.6l3.7-1.3c.8-.3.8-1.3.1-1.6z" fill="currentColor" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/></svg><span>You</span></div>
+      </div>
+    </div>
+    <p class="note" id="status" aria-live="polite">Ligma opens when it's done</p>
+  </section>
+
+  <section class="step" id="theme">
+    <h2>Pick a theme</h2>
+    <p class="lead">It recolors Figma's interface, never your designs. You can change it any time in Settings</p>
+    <div class="orbs" id="orbs" role="radiogroup" aria-label="Theme"></div>
+    <button class="primary" id="pick">Continue</button>
+  </section>
+
+  <section class="step" id="done">
+    <div class="ready selected">
+      <span class="name">Ligma</span>
+      <i></i><i></i><i></i><i></i>
+      <div class="mark" role="img" aria-label="Ligma"></div>
+    </div>
+    <h2>Ligma is installed</h2>
+    <p class="lead">Sign in to Figma when it opens</p>
+    <button class="primary" id="open">Open Ligma</button>
+  </section>
+<script>
+  const params = new URLSearchParams(location.search);
+  const version = params.get("v");
+  const first = params.get("first") === "1";
+  const $ = (id) => document.getElementById(id);
+  const post = (msg) => window.ipc.postMessage(msg);
+
+  function show(step) {
+    document.documentElement.dataset.step = step;
+    for (const el of document.querySelectorAll(".step")) el.classList.toggle("on", el.id === step);
+    document.querySelector(`#${step} .primary`)?.focus();
+  }
+
+  // Install. The frame follows the installer's real progress, and on a first
+  // install takes at least MIN_MS, so it reads as a step rather than a blink
+  const MIN_MS = first ? 2600 : 0;
+  let real = 0;
+  let finished = false;
+  let started = null;
+  function draw(now) {
+    const paced = MIN_MS ? Math.min(1, (now - started) / MIN_MS) : 1;
+    const p = Math.min(real, paced);
+    $("frame").style.width = `${(p * 100).toFixed(1)}%`;
+    $("size").textContent = `${Math.round(p * 100)}%`;
+    if (finished && p >= 1) return installed();
+    requestAnimationFrame(draw);
+  }
+  function startInstall() {
+    if (version) $("label").textContent = `Installing ${version}`;
+    $("status").textContent = first ? "This takes a few seconds" : "Ligma opens when it's done";
+    show("install");
+    started = performance.now();
+    requestAnimationFrame(draw);
+  }
+  // Called by main.rs with the installer's progress, 0 to 1. Never goes backwards
+  function progress(p) { real = Math.max(real, p); }
+  // Called by main.rs once the installer has finished
+  function done() { real = 1; finished = true; }
+  function installed() {
+    document.documentElement.classList.add("installed");
+    $("label").textContent = "Installed";
+    if (first) return setTimeout(() => show("theme"), 450);
+    $("status").textContent = "Opening Ligma";
+    setTimeout(() => post("close"), 900);
+  }
+
+  // Theme
+  const mode = matchMedia("(prefers-color-scheme: dark)");
+  let picked = "figma";
+  for (const theme of LIGMA_THEMES) {
+    const button = document.createElement("button");
+    button.className = "theme";
+    button.setAttribute("role", "radio");
+    button.dataset.id = theme.id;
+    button.innerHTML = `<span class="pick selected"><i></i><i></i><i></i><i></i></span><span class="orb"></span><span></span>`;
+    button.lastElementChild.textContent = theme.name;
+    button.addEventListener("click", () => pickTheme(theme.id));
+    $("orbs").append(button);
+  }
+  function paintOrbs() {
+    for (const button of $("orbs").children) button.querySelector(".orb").style.setProperty("--orb", ligmaMesh(button.dataset.id, mode.matches ? "dark" : "light"));
+  }
+  function pickTheme(id) {
+    picked = id;
+    for (const button of $("orbs").children) button.setAttribute("aria-checked", String(button.dataset.id === id));
+  }
+  mode.addEventListener("change", paintOrbs);
+  paintOrbs();
+  pickTheme(picked);
+  $("orbs").addEventListener("keydown", (e) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    const ids = LIGMA_THEMES.map((theme) => theme.id);
+    const next = ids[(ids.indexOf(picked) + step + ids.length) % ids.length];
+    pickTheme(next);
+    $("orbs").querySelector(`[data-id="${next}"]`).focus();
+    e.preventDefault();
+  });
+
+  $("go").addEventListener("click", () => {
+    post($("desktop").checked ? "install:desktop" : "install");
+    startInstall();
+  });
+  $("pick").addEventListener("click", () => {
+    post(`theme:${picked}`);
+    show("done");
+  });
+  $("open").addEventListener("click", () => post("open"));
+  $("close").addEventListener("click", () => post(document.documentElement.dataset.step === "welcome" ? "quit" : "close"));
+
+  document.addEventListener("mousedown", (e) => {
+    if (e.button === 0 && !e.target.closest("button, label, input")) post("drag");
+  });
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  if (first) show("welcome");
+  else startInstall();
+
+  // Shown once the font and logo are in, so it never flashes half drawn
+  const logo = new Image();
+  logo.src = "/logo.png";
+  Promise.all([document.fonts.load("600 15px Inter"), logo.decode().catch(() => {})])
+    .catch(() => {})
+    .then(() => requestAnimationFrame(() => post("ready")));
+</script>
+</body>
+</html>

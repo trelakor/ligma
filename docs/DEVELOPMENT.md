@@ -27,6 +27,10 @@ The social cover, `site/social-cover.png`, is the site's `og:image`, the README'
 npm run graphics
 ```
 
+The installers have their own art, drawn in `assets/installer/installer.html` and rendered by the same command into `src-tauri/installer/`: the DMG window's background (a 1x and 2x TIFF, so rendering it needs macOS) and the Windows installer's header. The DMG's icon positions in `tauri.conf.json` must match the art. The release workflow sets `TAURI_BUNDLER_DMG_IGNORE_CI`, since Tauri otherwise skips laying out the DMG in CI.
+
+The Windows installer is one click: it installs over any earlier version and opens Ligma. It's built from `src-tauri/installer/installer.nsi`, Tauri's NSIS template with Ligma's changes marked `Ligma:`. When it's opened by hand, it shows Ligma's own window in place of the NSIS wizard: a small WebView2 program in `src-tauri/installer/ui` that reads the wizard's progress and hands the wizard back if the install stops on an error. A first install, with no earlier Ligma in the registry, walks through a welcome (with a desktop shortcut checkbox), the install, a theme, saved to `settings.json` along with `last-version` so What's New stays quiet, and an Open Ligma button. Reinstalls show only the install and open Ligma by themselves. To see the first-install steps on a PC with Ligma, uninstall it first. `scripts/installer-ui.mjs` builds it before Tauri bundles (`beforeBundleCommand`), and without WebView2 the installer falls back to the wizard's progress page. The updater's `/P /UPDATE` installs never show either. The template is tied to the Tauri CLI version in `package-lock.json`, so when the CLI is upgraded, start from Tauri's new template and carry the marked changes over.
+
 ## Cleaning up branches and worktrees
 
 Each feature gets its own branch, and often its own worktree. Once a branch's PR is merged, clear out everything that has landed on `main`:

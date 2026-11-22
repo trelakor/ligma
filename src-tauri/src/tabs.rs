@@ -985,6 +985,13 @@ fn on_navigation(app: &AppHandle, id: u32, url: &Url) -> bool {
         open_in_browser(app, url);
         return false;
     }
+    // Signing in from Home ends on Figma's file browser. With Ligma's home
+    // page on, Home goes back to it, now with the session it lacked
+    if id == HOME_ID && crate::new_home::is_sign_in_landing(url) {
+        let app = app.clone();
+        std::thread::spawn(move || set_home_url(&app, crate::new_home::home_url()));
+        return false;
+    }
     // Like the desktop app, files opened from Home get their own tab
     if id == HOME_ID && file_key(url).is_some() {
         open_later(app, url.clone());

@@ -2,6 +2,20 @@
 
 Every release needs a section here, headed `## <version> - <date>`, before it's tagged. The release workflow puts that section in the GitHub release notes and fails without it.
 
+## 0.46.2 - 2026-11-21
+
+- Signed out, Home takes you to Figma's login page, where it showed an empty page that couldn't load anything. Once you're signed in, it goes back to Ligma's home page with your files.
+
+## 0.46.1 - 2026-11-21
+
+- Ligma starts on a fresh Windows again, where it stopped with "MSVCP140_1.dll was not found". The installer now brings the Microsoft C++ runtime files it needs.
+
+## 0.46.0 - 2026-11-18
+
+- The Windows installer has its own window in place of the old setup wizard, drawn as a Figma canvas: a selected frame your cursor drags wider as it installs. It follows Windows' light or dark mode.
+- A first install walks you through it: a welcome with a desktop shortcut checkbox, the install, a theme to start with, and Open Ligma. Reinstalls go straight through and open Ligma by themselves, and updates install as before.
+- The macOS disk image opens on a Figma canvas too, with Ligma selected and a prototype arrow to Applications.
+
 ## 0.45.0 - 2026-11-17
 
 - Effects, in Settings > Editor > Toolbar, adds a button after Actions in Figma Design's toolbar with 32 effects made right in the file, through Figma's plugin API, so there's no plugin window. What they make shows on the canvas as real layers while you change it, Cancel takes it away and Apply is one undo step. It's off until you switch it on, and nothing of it loads while it's off.

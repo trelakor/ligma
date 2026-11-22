@@ -169,6 +169,19 @@ pub fn is_url(url: &Url) -> bool {
     url.as_str() == URL
 }
 
+/// Whether Home loading `url` is Figma sending it to its file browser after
+/// signing in, with Ligma's home page on. The page sends a signed-out Home
+/// to Figma's login page, and Figma's links from the page open new tabs, so
+/// only signing in loads the bare file browser in Home. Not the page that
+/// redeems a Google sign-in (auth.rs) or opens account settings
+pub fn is_sign_in_landing(url: &Url) -> bool {
+    ON.load(Ordering::Relaxed)
+        && url.host_str() == Some("www.figma.com")
+        && matches!(url.path(), "/files" | "/files/" | "/files/recents" | "/files/recent")
+        && url.fragment().is_none()
+        && !url.query_pairs().any(|(key, _)| key == "ligma_signin")
+}
+
 /// `PAGE_JS`, for the Home tab. Its themes come inline: the page can't load
 /// Ligma's files from figma.com
 pub fn page_js() -> String {

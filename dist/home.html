@@ -1675,7 +1675,7 @@ async function api(path, { method = "GET", json, user = Live.uid } = {}) {
   try {
     body = await res.json();
   } catch {}
-  if (!res.ok || body?.error === true) throw new Error(body?.message || `Figma answered ${res.status}`);
+  if (!res.ok || body?.error === true) throw Object.assign(new Error(body?.message || `Figma answered ${res.status}`), { status: res.status });
   return body?.meta ?? body;
 }
 
@@ -2047,6 +2047,22 @@ function changed() {
 const DRAFTS = () => Object.values(Live.draftsByTeam);
 const colorForTeam = (id) => ["#0d99ff", "#9747ff", "#14ae5c", "#f24822", "#e5a000", "#ff7262", "#1e1e1e", "#00b3a4"][hash(String(id)) % 8];
 
+// Figma's login page, as Figma's own file browser does when signed out. A
+// session it already has sends it on to the file browser, which Ligma
+// brings back here (new_home.rs). Once a minute at most, so a session this
+// page still can't read shows Sign in instead of going round
+function toLogin() {
+  try {
+    const last = Number(sessionStorage.getItem("ligma-home-login")) || 0;
+    if (Date.now() - last < 60000) return false;
+    sessionStorage.setItem("ligma-home-login", String(Date.now()));
+  } catch {
+    return false;
+  }
+  location.replace("https://www.figma.com/login");
+  return true;
+}
+
 let booting = null;
 function boot() {
   return (booting ??= start().finally(() => (booting = null)));
@@ -2058,10 +2074,15 @@ async function start() {
   takeReturn();
   render();
   try {
-    const session = await api("/api/session/state", { user: null });
-    Live.users = session.users ?? [];
+    // Signed out, Figma refuses, or its firewall answers with nothing until a
+    // page of Figma's own has run, which a fresh install hasn't
+    const session = await api("/api/session/state", { user: null }).catch((error) => {
+      if (error.status === 401 || error.status === 403) return null;
+      throw error;
+    });
+    Live.users = Array.isArray(session?.users) ? session.users : [];
     Live.signedOut = !Live.users.length;
-    if (Live.signedOut) return render();
+    if (Live.signedOut) return toLogin() || render();
     // The account Figma's own file browser is on, so turning either home
     // page off or on keeps you where you were
     const saved = figmaAccount() ?? store.get("account", null);
