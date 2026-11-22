@@ -347,6 +347,14 @@
   };
   // An image fill's original bytes, from whichever comes first, or PUSHED
   const imageBytes = async (figma, hash, key) => {
+    // Figma downloads images a few at a time, those its render worker asks
+    // for first. With Ligma drawing, its worker asks for none, so as a file
+    // opened the images in view came after hundreds elsewhere, and Figma's
+    // loading screen stayed up for minutes waiting on them. Ligma asks for
+    // those it draws, nearest the view first, the way the worker would
+    try {
+      window.__ligmaHook?.canvasWorker?._imageDownloadPriorityHandler?.(hash);
+    } catch {}
     let stop;
     const gaveUp = new Promise((resolve) => (stop = resolve));
     // The plugin API comes a while after a file opens, and never in files
@@ -734,19 +742,32 @@
     view() {
       const figma = api();
       if (!figma) return null;
-      const { x, y, width, height } = figma.viewport.bounds;
+      let { x, y, width, height } = figma.viewport.bounds;
+      const zoom = figma.viewport.zoom;
       const canvas = document.querySelector(".gpu-view-content canvas") ?? document.querySelector("canvas");
       // A canvas Figma's made again is 300 by 150 till it sizes it, where
       // what holds it is already the size it'll be
       const own = canvas?.getBoundingClientRect();
       const box = canvas?.parentElement?.getBoundingClientRect();
-      const rect = own && box && (Math.abs(own.width - box.width) > 2 || Math.abs(own.height - box.height) > 2) ? box : own;
+      let rect = own && box && (Math.abs(own.width - box.width) > 2 || Math.abs(own.height - box.height) > 2) ? box : own;
+      // Only its part in the window, as in page_hook.js
+      if (rect && (rect.left < 0 || rect.top < 0 || rect.right > innerWidth || rect.bottom > innerHeight)) {
+        const left = Math.max(rect.left, 0);
+        const top = Math.max(rect.top, 0);
+        const right = Math.max(left, Math.min(rect.right, innerWidth));
+        const bottom = Math.max(top, Math.min(rect.bottom, innerHeight));
+        x += (left - rect.left) / zoom;
+        y += (top - rect.top) / zoom;
+        width = (right - left) / zoom;
+        height = (bottom - top) / zoom;
+        rect = { left, top, width: right - left, height: bottom - top };
+      }
       return {
         x,
         y,
         w: width,
         h: height,
-        zoom: figma.viewport.zoom,
+        zoom,
         cx: rect?.left ?? 0,
         cy: rect?.top ?? 0,
         cw: rect?.width ?? width * figma.viewport.zoom,
