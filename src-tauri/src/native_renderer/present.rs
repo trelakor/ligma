@@ -327,13 +327,13 @@ impl Hub {
 
     /// Frame `seq` of the render tree: its view, what Figma draws over the
     /// canvas in it, whether it `edits` the scene, and how long it took
-    pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool, made: Option<Made>) {
+    pub fn frame_view(&self, seq: u64, view: View, overlay: Overlay, edits: bool, made: Option<Made>, sent: f64) {
         let mut frames = self.frames.lock().unwrap();
         // Lost track: those before go
         if frames.back().is_some_and(|last| last.seq >= seq) {
             frames.clear();
         }
-        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, made, came: Instant::now() });
+        frames.push_back(FrameView { seq, view: view.clone(), overlay, edits, made, came: Instant::now(), sent });
         while frames.len() > 256 {
             frames.pop_front();
         }
@@ -353,7 +353,7 @@ impl Hub {
     fn pick(&self, seq: u64, shown: u64) -> Result<Picked, Option<Duration>> {
         let mut frames = self.frames.lock().unwrap();
         if frames.is_empty() {
-            return self.view.lock().unwrap().clone().map(|view| Picked { view, overlay: None, seq, oldest: None, wait: None }).ok_or(None);
+            return self.view.lock().unwrap().clone().map(|view| Picked { view, overlay: None, seq, oldest: None, wait: None, came: None, sent: 0.0 }).ok_or(None);
         }
         let mut take = None;
         let mut wait = None;
@@ -376,7 +376,7 @@ impl Hub {
         let oldest = frames.iter().take(take + 1).filter(|frame| frame.seq > shown).find_map(|frame| frame.made);
         frames.drain(..take);
         let frame = frames.front().ok_or(wait)?;
-        Ok(Picked { view: frame.view.clone(), overlay: frame.overlay.clone(), seq: frame.seq, oldest, wait })
+        Ok(Picked { view: frame.view.clone(), overlay: frame.overlay.clone(), seq: frame.seq, oldest, wait, came: Some(frame.came), sent: frame.sent })
     }
 
     /// Waits until poked after `seen`, or `timeout`, and returns the count
@@ -394,6 +394,8 @@ struct FrameView {
     edits: bool,
     made: Option<Made>,
     came: Instant,
+    /// When Figma sent it, in ms since the epoch
+    sent: f64,
 }
 
 struct Picked {
@@ -404,6 +406,9 @@ struct Picked {
     /// How long till a frame after it that changes the scene is shown
     /// without waiting for it
     wait: Option<Duration>,
+    /// When it came and when Figma sent it, for frames between Figma's
+    came: Option<Instant>,
+    sent: f64,
 }
 
 /// How long Figma took to make a frame: when it handed it over, in ms since
@@ -672,6 +677,8 @@ struct Composed {
 
 pub struct Screen {
     context: DirectContext,
+    /// The window frames go to
+    window: isize,
     layer: Option<Composed>,
     swap_chain: IDXGISwapChain3,
     /// Signaled when the swap chain takes another frame, so each frame is
@@ -697,6 +704,772 @@ pub struct Screen {
     owed: Option<Made>,
     timed: u64,
     timed_at: f64,
+    /// Where the view's headed between Figma's frames (see `ahead`)
+    pan: Pan,
+    /// How far ahead of Figma's last frame the frame being drawn is, in
+    /// device pixels, which what Figma draws over the scene moves by too
+    ahead_px: (f32, f32),
+}
+
+/// The view's pan between Figma's frames. Figma sends one on fewer than
+/// every refresh while the view moves, 50 to 80 a second on a 100 Hz
+/// screen, so frames in between show the view moved on from the last.
+/// While a mouse drags the canvas the view is where the pointer puts it:
+/// Figma keeps the point under the pointer under it, so the view's corner
+/// and the pointer, in device pixels, add up to the same all drag long
+/// (`Drag`). Figma takes 10 to 40 ms to show a move, so where the pointer
+/// is shows the view as Figma will once it catches up. Otherwise, as with a
+/// wheel, it's moved on as it's moving, by about a frame of Figma's. It's
+/// never taken back from where it's shown while the view moves, and once
+/// it stops it's eased back to where Figma left it
+#[derive(Default)]
+struct Pan {
+    /// The last frame of Figma's seen: its seq
+    last: Option<u64>,
+    /// Figma's recent frames of the same zoom and canvas: when each was
+    /// sent and its view
+    recent: std::collections::VecDeque<(f64, View)>,
+    /// Units a millisecond, and the milliseconds between Figma's frames
+    velocity: Option<(f64, f64, f64)>,
+    drag: Option<Drag>,
+    /// Figma's last few frames while the wheel turns: when each was sent
+    /// and the view's corner in device pixels
+    wheeled: std::collections::VecDeque<(f64, (f64, f64))>,
+    wheel: Option<Wheel>,
+    /// Figma's frame before the last: when it was sent and the view's
+    /// corner, in device pixels
+    before: Option<(f64, (f64, f64))>,
+    /// How far ahead of Figma's last frame the view was shown last, in
+    /// units, and since when it's been eased back from there, both from the
+    /// view's corner in that frame
+    lead: (f64, f64),
+    back: Option<((f64, f64), Instant)>,
+    base: Option<(f64, f64)>,
+    /// The window frames go to, and where Figma's canvas is in it, in
+    /// device pixels: left, top, width and height
+    canvas: Option<(isize, (i32, i32, i32, i32))>,
+    /// When the buttons went down last that a drag was worked out from
+    tried: Option<f64>,
+}
+
+/// The wheel panning the view: the view's corner, in device pixels, is
+/// `at` plus `per` times how far the wheel's turned, across and down, as
+/// Figma took it a moment before each frame
+struct Wheel {
+    at: (f64, f64),
+    per: (f64, f64),
+    /// How far what's shown is from where the wheel puts the view, in
+    /// device pixels, taken up only as the wheel turns, and where the wheel
+    /// put it last
+    off: Option<(f64, f64)>,
+    exact: Option<(f64, f64)>,
+}
+
+/// A drag of the canvas with a button held, the view's corner and the
+/// pointer, in device pixels, adding up to `to`
+struct Drag {
+    to: (f64, f64),
+    /// How far what's shown is from where the pointer puts the view, in
+    /// device pixels, taken up only as the pointer moves, so the view never
+    /// moves on its own
+    off: Option<(f64, f64)>,
+    /// Pressed with what pans the canvas whatever's under the pointer, the
+    /// middle button or the left with space held, so followed from the
+    /// start, and when
+    sure: Option<f64>,
+    /// Figma's frames that moved the view as the pointer would, and those
+    /// since in a row that didn't
+    agreed: u32,
+    missed: u32,
+    /// The corner as Figma's last frame had it
+    corner: (f64, f64),
+    /// Where the pointer was when what's shown was worked out last
+    pointer: Option<(f64, f64)>,
+    /// What the last frame with the pointer still a while added up to, as
+    /// one may yet be a move behind
+    rested: Option<(f64, f64)>,
+}
+
+/// Figma's frames over this many milliseconds give the view's velocity, as
+/// one to the next moves unevenly: Figma takes in input in batches, and
+/// sends some frames in twos
+const VELOCITY_OVER: f64 = 60.0;
+
+/// Furthest ahead of Figma's last frame the view is moved without a pointer
+/// to follow, in milliseconds, and how much of the time between Figma's
+/// last two it covers, so the view keeps moving till the next is due
+const AHEAD_MOST: f64 = 20.0;
+const AHEAD_OF_GAP: f64 = 1.0;
+/// How long after Figma's last frame it's held there, through the gaps of
+/// 100 ms or so Figma leaves while the view moves, and then how long it's
+/// taken back over, in milliseconds
+const HOLD_MS: f64 = 120.0;
+const BACK_MS: f64 = 60.0;
+
+/// How long after the pointer moves Figma's frames show it, at most, and
+/// how long before, as the page's clock may be a little behind, in
+/// milliseconds
+const DRAG_LATE: f64 = 100.0;
+const DRAG_EARLY: f64 = 15.0;
+/// How far, in device pixels, a frame of Figma's may be from where the
+/// pointer put the view, a moment before, to agree
+const DRAG_NEAR: f64 = 3.0;
+/// Frames of Figma's that agree before the view follows the pointer, and
+/// that don't before it stops
+const DRAG_AGREED: u32 = 2;
+const DRAG_MISSED: u32 = 3;
+/// How long the pointer's still before Figma's frames show it where it is,
+/// in milliseconds
+const DRAG_REST: f64 = 80.0;
+/// How much of how far the pointer moves, or the wheel, what's shown is
+/// brought to where they put the view by
+const DRAG_TAKE_UP: f64 = 0.5;
+/// How long a drag followed from the start goes with the pointer moving
+/// and no frame of Figma's moving the view before it's let go, in ms
+const DRAG_UNSURE: f64 = 120.0;
+
+impl Pan {
+    /// The view to show for frame `seq` of Figma's, sent at `sent`, in ms
+    /// since the epoch, and come `age` ms ago, with how far it's moved on
+    /// from `view`, in units, `px` device pixels each
+    fn ahead(&mut self, seq: u64, sent: f64, age: f64, view: &View, px: f64) -> Option<(View, (f64, f64))> {
+        if self.last != Some(seq) {
+            self.last = Some(seq);
+            self.took(sent, view, px);
+        }
+        // From the corner of the frame it's shown over now, so it shows
+        // the same as Figma's frames come
+        if let Some(base) = self.base {
+            let by = (view.x - base.0, view.y - base.1);
+            // Where Figma's frame has gone past what was shown, it's shown
+            // as it is, rather than what's shown brought to it after
+            let past = |lead: f64, by: f64| if (lead - by) * by < 0.0 { 0.0 } else { lead - by };
+            self.lead = (past(self.lead.0, by.0), past(self.lead.1, by.1));
+            if let Some((from, _)) = &mut self.back {
+                *from = (past(from.0, by.0), past(from.1, by.1));
+            }
+        }
+        self.base = Some((view.x, view.y));
+        let lead = match self.target(age, view, px) {
+            Some(target) => {
+                self.back = None;
+                target
+            }
+            // Eased back from where it was shown, not at once
+            None if self.lead != (0.0, 0.0) || self.back.is_some() => {
+                let (from, since) = *self.back.get_or_insert((self.lead, Instant::now()));
+                let left = 1.0 - since.elapsed().as_secs_f64() * 1000.0 / BACK_MS;
+                if left <= 0.0 {
+                    self.back = None;
+                    (0.0, 0.0)
+                } else {
+                    (from.0 * left, from.1 * left)
+                }
+            }
+            None => (0.0, 0.0),
+        };
+        self.lead = lead;
+        if lead == (0.0, 0.0) {
+            return None;
+        }
+        let mut moved = view.clone();
+        moved.x += lead.0;
+        moved.y += lead.1;
+        Some((moved, lead))
+    }
+
+    /// What's shown was Figma's own frame after all, where moved on from it
+    /// would show what isn't drawn yet
+    fn not_ahead(&mut self) {
+        self.lead = (0.0, 0.0);
+        self.back = None;
+        if let Some(drag) = &mut self.drag {
+            drag.off = None;
+        }
+        if let Some(wheel) = &mut self.wheel {
+            wheel.off = None;
+        }
+    }
+
+    /// Whether the view follows the pointer
+    fn following(&self) -> bool {
+        // Pressed with what pans the canvas, a frame of Figma's moving the
+        // view as the pointer would is enough. Not none, as Figma pans
+        // no further than its limits, nor at all zoomed out all the way
+        self.drag.as_ref().is_some_and(|drag| drag.agreed >= if drag.sure.is_some() { 1 } else { DRAG_AGREED })
+    }
+
+    /// Takes in a new frame of Figma's
+    fn took(&mut self, sent: f64, view: &View, px: f64) {
+        sample_pointer();
+        watch_wheel();
+        let same = |before: &View| before.zoom == view.zoom && before.w == view.w && before.h == view.h && before.dpr == view.dpr && before.cx == view.cx && before.cy == view.cy && before.cw == view.cw && before.ch == view.ch && before.page == view.page && before.preview == view.preview;
+        if self.recent.back().is_some_and(|(_, before)| !same(before)) {
+            self.drag = None;
+            self.before = None;
+            self.wheeled.clear();
+            self.wheel = None;
+            // What's shown is of another zoom, so it's not eased back from
+            self.lead = (0.0, 0.0);
+            self.back = None;
+            self.base = None;
+        }
+        if self.recent.back().is_some_and(|(then, before)| !same(before) || sent - then > VELOCITY_OVER) {
+            self.recent.clear();
+        }
+        // Sent with the one before, so of the same input
+        if self.recent.back().is_some_and(|(then, _)| sent - then < 1.0) {
+            self.recent.pop_back();
+        }
+        self.recent.push_back((sent, view.clone()));
+        while self.recent.front().is_some_and(|(then, _)| sent - then > VELOCITY_OVER) {
+            self.recent.pop_front();
+        }
+        self.velocity = match (self.recent.front(), self.recent.len()) {
+            (Some((then, first)), n) if n >= 3 && sent - then >= 15.0 => {
+                let span = sent - then;
+                let (vx, vy) = ((view.x - first.x) / span, (view.y - first.y) / span);
+                (vx != 0.0 || vy != 0.0).then_some((vx, vy, span / (n - 1) as f64))
+            }
+            _ => None,
+        };
+        let corner = (view.x * px, view.y * px);
+        self.dragged(sent, corner);
+        self.before = Some((sent, corner));
+        self.wheeled(sent, corner);
+    }
+
+    /// Takes in a frame of Figma's, with the view's corner at `corner`, for
+    /// the wheel panning the view
+    fn wheeled(&mut self, sent: f64, corner: (f64, f64)) {
+        let turns = wheel_turns();
+        if self.following() || turns.last().is_none_or(|(when, ..)| sent - when > WHEEL_OVER) {
+            self.wheeled.clear();
+            self.wheel = None;
+            return;
+        }
+        self.wheeled.push_back((sent, corner));
+        while self.wheeled.len() > WHEEL_FRAMES || self.wheeled.front().is_some_and(|(then, _)| sent - then > WHEEL_OVER) {
+            self.wheeled.pop_front();
+        }
+        let fit = fit_wheel(&self.wheeled, &turns);
+        self.wheel = match (fit, self.wheel.take()) {
+            (Some((at, per)), Some(was)) => Some(Wheel { at, per, ..was }),
+            (Some((at, per)), None) => Some(Wheel { at, per, off: None, exact: None }),
+            (None, _) => None,
+        };
+    }
+
+    /// Takes in a frame of Figma's, with the view's corner at `corner`, for
+    /// a drag of the canvas
+    fn dragged(&mut self, sent: f64, corner: (f64, f64)) {
+        let samples: Vec<(f64, f64, f64, u8)> = {
+            let pointer = POINTER.lock().unwrap();
+            pointer.iter().copied().collect()
+        };
+        let held = samples.iter().rev().take_while(|(when, ..)| sent - when < 30.0).any(|(.., held)| held & BUTTONS != 0) || samples.last().is_some_and(|(.., held)| held & BUTTONS != 0);
+        if !held {
+            self.drag = None;
+            return;
+        }
+        // Where the pointer was at times `from` to `to`, and just before
+        let between = |from: f64, to: f64| {
+            let start = samples.partition_point(|(when, ..)| *when < from).saturating_sub(1);
+            samples[start..].iter().take_while(move |(when, ..)| *when <= to).map(|(_, x, y, _)| (*x, *y))
+        };
+        // Whether the pointer was still for `DRAG_REST` ms before `at`, and
+        // where
+        let rested = |at: f64| {
+            let mut points = between(at - DRAG_REST, at);
+            let first = points.next()?;
+            points.all(|point| (point.0 - first.0).abs() <= 1.0 && (point.1 - first.1).abs() <= 1.0).then_some(first)
+        };
+        match &mut self.drag {
+            Some(drag) => {
+                let moved = corner != drag.corner;
+                drag.corner = corner;
+                if moved && drag.sure.is_some() {
+                    drag.agreed = drag.agreed.max(1);
+                }
+                // Figma's frame has the view where the pointer put it at
+                // some moment before it was sent
+                let agrees = passed(between(sent - DRAG_LATE, sent + DRAG_EARLY), (drag.to.0 - corner.0, drag.to.1 - corner.1));
+                if agrees {
+                    drag.missed = 0;
+                    if moved {
+                        drag.agreed += 1;
+                    }
+                } else {
+                    drag.missed += 1;
+                    let (to, missed) = (drag.to, drag.missed);
+                    super::render::trace(|| format!("drag missed {missed}: corner {:.1},{:.1} to {:.1},{:.1} sent={sent:.1}", corner.0, corner.1, to.0, to.1));
+                    if missed >= DRAG_MISSED {
+                        self.drag = None;
+                        return;
+                    }
+                }
+                // Still a while, so Figma's caught up with the pointer: where
+                // it adds up to exactly, once two frames say so
+                match rested(sent) {
+                    Some(point) => {
+                        let to = (corner.0 + point.0, corner.1 + point.1);
+                        let again = drag.rested.is_some_and(|was| (was.0 - to.0).abs() <= 0.5 && (was.1 - to.1).abs() <= 0.5);
+                        if again && to != drag.to {
+                            let was = drag.to;
+                            super::render::trace(|| format!("drag rested: to {:.1},{:.1} was {:.1},{:.1}", to.0, to.1, was.0, was.1));
+                            // What's shown stays where it is, and comes to
+                            // where it should be as the pointer moves
+                            if let Some(off) = &mut drag.off {
+                                *off = (off.0 + was.0 - to.0, off.1 + was.1 - to.1);
+                            }
+                            drag.to = to;
+                        }
+                        drag.rested = Some(to);
+                    }
+                    None => drag.rested = None,
+                }
+            }
+            None => {
+                // The button went down, and the pointer hasn't moved since:
+                // the view's corner then and the pointer add up to what
+                // they will all drag long, should it drag the canvas
+                let pressed = samples.iter().rposition(|(.., held)| held & BUTTONS == 0).map_or(0, |i| i + 1);
+                let Some(&(at, x, y, _)) = samples.get(pressed) else { return };
+                let still = samples[pressed..].iter().take_while(|(when, ..)| *when <= sent).all(|(_, px, py, _)| (px - x).abs() <= 1.0 && (py - y).abs() <= 1.0);
+                // From this frame, or, should Figma have sent none from the
+                // button going down till the pointer moved, the one before
+                let from = if at <= sent && still { Some(corner) } else { self.before.filter(|(then, _)| *then <= at && pressed > 0).map(|(_, corner)| corner) };
+                if let Some(from) = from {
+                    // Pressed with what pans the canvas whatever's there, so
+                    // followed at once
+                    let held = samples[pressed].3;
+                    let pans = held & MIDDLE != 0 || held & (LEFT | SPACE) == LEFT | SPACE;
+                    let sure = (pans && self.canvas.is_some_and(|(window, canvas)| on_canvas(window, canvas, (x, y)))).then_some(at);
+                    let mut drag = Drag { to: (from.0 + x, from.1 + y), off: None, sure, agreed: 0, missed: 0, corner: from, pointer: None, rested: None };
+                    if from != corner {
+                        // This frame's the first to say whether the canvas is
+                        // dragged
+                        let agrees = passed(between(sent - DRAG_LATE, sent + DRAG_EARLY), (drag.to.0 - corner.0, drag.to.1 - corner.1));
+                        if !agrees {
+                            return;
+                        }
+                        drag.agreed = 1;
+                        drag.corner = corner;
+                    }
+                    let (to, agreed, sure) = (drag.to, drag.agreed, drag.sure.is_some());
+                    super::render::trace(|| format!("drag from {:.1},{:.1} pressed at {at:.1} sent={sent:.1}: to {:.1},{:.1} agreed={agreed} sure={sure}", from.0, from.1, to.0, to.1));
+                    self.drag = Some(drag);
+                }
+            }
+        }
+    }
+
+    /// The middle button's gone down on the canvas, or the left with space
+    /// held, which pans it whatever's there: the view's corner and the
+    /// pointer then add up to what they will all drag long
+    fn pressed(&mut self, view: &View, px: f64) {
+        let Some((window, canvas)) = self.canvas else { return };
+        let Some((at, x, y, held)) = pointer_pressed() else { return };
+        if self.tried == Some(at) {
+            return;
+        }
+        if held & MIDDLE == 0 && held & (LEFT | SPACE) != LEFT | SPACE {
+            return;
+        }
+        // Figma's frame shows the view as it was at the press: its last,
+        // with the view still a while by then
+        let Some((sent, corner)) = self.before else { return };
+        if sent > at || self.velocity.is_some() && at - sent < VELOCITY_OVER || corner != (view.x * px, view.y * px) {
+            let moving = self.velocity.is_some();
+            super::render::trace(|| format!("drag press not followed: frame sent {:.1} after it, moving={moving}", sent - at));
+            self.tried = Some(at);
+            return;
+        }
+        self.tried = Some(at);
+        if !on_canvas(window, canvas, (x, y)) {
+            super::render::trace(|| "drag press not followed: not on the canvas".to_string());
+            return;
+        }
+        let to = (corner.0 + x, corner.1 + y);
+        super::render::trace(|| format!("drag pressed at {at:.1}: to {:.1},{:.1}", to.0, to.1));
+        self.drag = Some(Drag { to, off: None, sure: Some(at), agreed: 0, missed: 0, corner, pointer: None, rested: None });
+    }
+
+    /// How far ahead of Figma's last frame to show the view now, none once
+    /// the view's not moving
+    fn target(&mut self, age: f64, view: &View, px: f64) -> Option<(f64, f64)> {
+        if self.drag.is_none() {
+            self.pressed(view, px);
+        }
+        if let Some(since) = self.drag.as_ref().filter(|drag| drag.agreed == 0).and_then(|drag| drag.sure) {
+            // Followed from the start, but the pointer's gone on moving
+            // with Figma moving the view none, so it's not a drag of the
+            // canvas after all
+            if pointer_moved_since(since).is_some_and(|moved| super::render::since_epoch_ms() - moved > DRAG_UNSURE) {
+                super::render::trace(|| "drag unsure: let go".to_string());
+                self.drag = None;
+            }
+        }
+        if self.following() {
+            // The button's up and Figma's sent nothing since, so the view's
+            // stopped where it was
+            if age > HOLD_MS && !pointer_held() {
+                return None;
+            }
+            // Where the pointer is, or was as the button went up, as Figma
+            // takes in that last move too
+            let (x, y) = pointer_now()?;
+            let drag = self.drag.as_mut()?;
+            // Figma's last frame didn't move the view as the pointer would,
+            // as at the edge of where it pans: held where it's shown, rather
+            // than gone on past where Figma stops
+            if drag.missed > 0 {
+                drag.pointer = Some((x, y));
+                drag.off = None;
+                return Some(self.lead);
+            }
+            let exact = (drag.to.0 - x, drag.to.1 - y);
+            let moved = drag.pointer.map_or((0.0, 0.0), |was| (x - was.0, y - was.1));
+            // Brought to where the pointer puts the view only as the pointer
+            // moves, by part of that, so the view never moves on its own or
+            // back against the pointer
+            let take_up = |off: f64, moved: f64| off - off.signum() * off.abs().min(moved.abs() * DRAG_TAKE_UP);
+            let off = match drag.off {
+                Some(off) => (take_up(off.0, moved.0), take_up(off.1, moved.1)),
+                // From where it's shown now, not at once
+                None => (view.x * px + self.lead.0 * px - exact.0, view.y * px + self.lead.1 * px - exact.1),
+            };
+            drag.off = Some(off);
+            drag.pointer = Some((x, y));
+            let lead = ((exact.0 + off.0) / px - view.x, (exact.1 + off.1) / px - view.y);
+            // No further than the view's width, as the pointer jumping that
+            // far is something else
+            let pixels = (lead.0 * px).hypot(lead.1 * px);
+            return (pixels < view.w * px).then_some(lead);
+        }
+        // A button's held but the view's not following the pointer, or was
+        // a moment ago, as a drag that's let go stops where it is: Figma's
+        // frames as they come, rather than moved on as if it'll go on
+        if pointer_held_within(RELEASED_MS) {
+            return None;
+        }
+        if let Some(wheel) = &mut self.wheel {
+            let turns = wheel_turns();
+            if age > HOLD_MS && turns.last().is_none_or(|(when, ..)| super::render::since_epoch_ms() - when > WHEEL_OVER) {
+                return None;
+            }
+            let turned = wheel_turned(&turns, f64::INFINITY);
+            let exact = (wheel.at.0 + wheel.per.0 * turned.0, wheel.at.1 + wheel.per.1 * turned.1);
+            // Where the wheel puts the view, as soon as it turns, as Figma
+            // moves it a step at a time too. What's shown is brought there
+            // only as the wheel turns, by part of each step, so the view
+            // never moves on its own or back against the wheel
+            let moved = wheel.exact.map_or((0.0, 0.0), |was| (exact.0 - was.0, exact.1 - was.1));
+            let take_up = |off: f64, moved: f64| off - off.signum() * off.abs().min(moved.abs() * DRAG_TAKE_UP);
+            let off = match wheel.off {
+                Some(off) => (take_up(off.0, moved.0), take_up(off.1, moved.1)),
+                // From where it's shown now, not at once
+                None => (view.x * px + self.lead.0 * px - exact.0, view.y * px + self.lead.1 * px - exact.1),
+            };
+            wheel.off = Some(off);
+            wheel.exact = Some(exact);
+            let shown = (exact.0 + off.0, exact.1 + off.1);
+            let lead = (shown.0 / px - view.x, shown.1 / px - view.y);
+            let pixels = (lead.0 * px).hypot(lead.1 * px);
+            return (pixels < view.w * px).then_some(lead);
+        }
+        let (vx, vy, dt) = self.velocity?;
+        let most = (dt * AHEAD_OF_GAP).min(AHEAD_MOST);
+        if age > HOLD_MS {
+            return None;
+        }
+        // The wheel's stopped, so the view's moved on no further, only held
+        // where it's shown till Figma's frames catch up, rather than taken
+        // back from past where they'll stop
+        if wheel_stopped() {
+            let hold = |lead: f64, v: f64| if lead * v > 0.0 { lead } else { 0.0 };
+            return Some((hold(self.lead.0, vx), hold(self.lead.1, vy)));
+        }
+        let by = age.min(most);
+        // Not back from where it's shown, along where it's headed, as Figma's
+        // next frame often moves less than the one before
+        let keep = |d: f64, v: f64, shown: f64| if v != 0.0 && shown * v.signum() > d * v.signum() { shown.min(v.abs() * AHEAD_MOST * 2.0) } else { d };
+        Some((keep(vx * by, vx, self.lead.0), keep(vy * by, vy, self.lead.1)))
+    }
+
+    /// How long till what's shown changes with no new frame of Figma's,
+    /// none once it's back where Figma left it
+    fn wake(&self, age: f64) -> Option<Duration> {
+        // Following the pointer, as it moves
+        if self.back.is_some() || self.following() && (age <= HOLD_MS || pointer_held()) || self.wheel.is_some() && age <= WHEEL_OVER {
+            return Some(Duration::from_millis(1));
+        }
+        // A button's down, which may be a drag of the canvas to follow
+        if self.drag.is_none() && pointer_held() {
+            return Some(Duration::from_millis(2));
+        }
+        let (_, _, dt) = self.velocity?;
+        let most = (dt * AHEAD_OF_GAP).min(AHEAD_MOST);
+        let ms = if age <= most {
+            0.0
+        } else if age <= HOLD_MS {
+            HOLD_MS - age
+        } else {
+            return None;
+        };
+        Some(Duration::from_secs_f64(ms / 1000.0))
+    }
+}
+
+/// The pointer, sampled a millisecond apart: when, in ms since the epoch,
+/// where, in screen pixels, and the mouse buttons held, and space
+static POINTER: Mutex<std::collections::VecDeque<(f64, f64, f64, u8)>> = Mutex::new(std::collections::VecDeque::new());
+const LEFT: u8 = 1;
+const MIDDLE: u8 = 2;
+const RIGHT: u8 = 4;
+const SPACE: u8 = 8;
+const BUTTONS: u8 = LEFT | MIDDLE | RIGHT;
+
+/// Samples the pointer from now on, for frames between Figma's
+fn sample_pointer() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("native-pointer".into()).spawn(|| {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_SPACE};
+        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        loop {
+            let mut at = POINT::default();
+            if unsafe { GetCursorPos(&mut at) }.is_ok() {
+                let held = [(VK_LBUTTON, LEFT), (VK_MBUTTON, MIDDLE), (VK_RBUTTON, RIGHT), (VK_SPACE, SPACE)]
+                    .iter()
+                    .filter(|(key, _)| unsafe { GetAsyncKeyState(key.0 as i32) } < 0)
+                    .fold(0, |held, (_, bit)| held | bit);
+                let mut samples = POINTER.lock().unwrap();
+                samples.push_back((super::render::since_epoch_ms(), at.x as f64, at.y as f64, held));
+                while samples.len() > 1000 {
+                    samples.pop_front();
+                }
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+}
+
+/// When the wheel last turned and the time before, in ms since the epoch,
+/// as bits
+static WHEELED: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// The wheel's turns, the last 2 s of them: when, in ms since the epoch,
+/// and how far it's turned across and down in all by then, shift turning
+/// it across as in Figma
+static WHEEL: Mutex<std::collections::VecDeque<(f64, f64, f64)>> = Mutex::new(std::collections::VecDeque::new());
+static WHEEL_TOTAL: Mutex<(f64, f64)> = Mutex::new((0.0, 0.0));
+
+/// Figma's frames the wheel's worked out from, at most, and over how many
+/// milliseconds, the wheel having turned in them
+const WHEEL_FRAMES: usize = 10;
+const WHEEL_OVER: f64 = 300.0;
+/// How long after the wheel turns Figma's frames show it, at most, in
+/// milliseconds
+const WHEEL_LATE: usize = 80;
+/// How far, in device pixels, Figma's frames may be from where the wheel
+/// put the view for the view to follow it
+const WHEEL_FIT: f64 = 2.0;
+
+/// The wheel's turns of the last 2 s
+fn wheel_turns() -> Vec<(f64, f64, f64)> {
+    WHEEL.lock().unwrap().iter().copied().collect()
+}
+
+/// How far the wheel had turned in all, across and down, by `at`
+fn wheel_turned(turns: &[(f64, f64, f64)], at: f64) -> (f64, f64) {
+    let i = turns.partition_point(|(when, ..)| *when <= at);
+    turns.get(i.saturating_sub(1)).map_or((0.0, 0.0), |turn| (turn.1, turn.2))
+}
+
+/// Where the view's corner is, in device pixels, with the wheel not turned
+/// at all, and how far it moves a step of the wheel, across and down, if
+/// Figma's frames `frames` have the view where the wheel put it, each as
+/// the wheel was the same time before it was sent
+fn fit_wheel(frames: &std::collections::VecDeque<(f64, (f64, f64))>, turns: &[(f64, f64, f64)]) -> Option<((f64, f64), (f64, f64))> {
+    if frames.len() < 3 {
+        return None;
+    }
+    let n = frames.len() as f64;
+    let mut best: Option<(f64, (f64, f64), (f64, f64))> = None;
+    for late in 0..=WHEEL_LATE {
+        let turned: Vec<(f64, f64)> = frames.iter().map(|(sent, _)| wheel_turned(turns, sent - late as f64)).collect();
+        let mut error = 0.0;
+        let mut fitted = [(0.0, 0.0); 2];
+        for (axis, fit) in fitted.iter_mut().enumerate() {
+            let xs: Vec<f64> = turned.iter().map(|t| if axis == 0 { t.0 } else { t.1 }).collect();
+            let ys: Vec<f64> = frames.iter().map(|(_, c)| if axis == 0 { c.0 } else { c.1 }).collect();
+            let (mx, my) = (xs.iter().sum::<f64>() / n, ys.iter().sum::<f64>() / n);
+            let var: f64 = xs.iter().map(|x| (x - mx).powi(2)).sum();
+            // Not turned this way: the view's not to move this way either
+            let k = if var < 1.0 { 0.0 } else { xs.iter().zip(&ys).map(|(x, y)| (x - mx) * (y - my)).sum::<f64>() / var };
+            let a = my - k * mx;
+            error += xs.iter().zip(&ys).map(|(x, y)| (y - a - k * x).powi(2)).sum::<f64>();
+            *fit = (a, k);
+        }
+        let per = (fitted[0].1, fitted[1].1);
+        // Moved, and by a plausible amount a step
+        let moves = (per.0.abs() >= 0.05 || per.1.abs() >= 0.05) && per.0.abs() <= 20.0 && per.1.abs() <= 20.0;
+        if moves && best.is_none_or(|(least, ..)| error < least) {
+            best = Some((error, (fitted[0].0, fitted[1].0), per));
+        }
+    }
+    let (error, at, per) = best?;
+    ((error / n).sqrt() <= WHEEL_FIT).then_some((at, per))
+}
+
+/// Watches the mouse wheel from now on, for when it stops
+fn watch_wheel() {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("native-wheel".into()).spawn(|| unsafe {
+        use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_SHIFT};
+        use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEHWHEEL, WM_MOUSEWHEEL};
+        unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+            if code >= 0 && (wparam.0 as u32 == WM_MOUSEWHEEL || wparam.0 as u32 == WM_MOUSEHWHEEL) {
+                let now = super::render::since_epoch_ms();
+                WHEELED[1].store(WHEELED[0].swap(now.to_bits(), Ordering::Relaxed), Ordering::Relaxed);
+                let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+                let delta = ((info.mouseData >> 16) as u16 as i16) as f64;
+                let held = |key: VIRTUAL_KEY| unsafe { GetAsyncKeyState(key.0 as i32) } < 0;
+                // Ctrl zooms, which isn't a pan
+                if !held(VK_CONTROL) {
+                    let across = wparam.0 as u32 == WM_MOUSEHWHEEL || held(VK_SHIFT);
+                    if let (Ok(mut turns), Ok(mut total)) = (WHEEL.try_lock(), WHEEL_TOTAL.try_lock()) {
+                        // How far it had turned before, for the frames before
+                        if turns.back().is_none_or(|(when, ..)| now - when > 2000.0) {
+                            turns.clear();
+                            turns.push_back((now - 1.0, total.0, total.1));
+                        }
+                        if across {
+                            total.0 += delta;
+                        } else {
+                            total.1 += delta;
+                        }
+                        turns.push_back((now, total.0, total.1));
+                        while turns.len() > 2 && turns[1].0 < now - 2000.0 {
+                            turns.pop_front();
+                        }
+                    }
+                }
+            }
+            unsafe { CallNextHookEx(None, code, wparam, lparam) }
+        }
+        let module = GetModuleHandleW(None).ok();
+        let Ok(handle) = SetWindowsHookExW(WH_MOUSE_LL, Some(hook), module.map(|module| module.into()), 0) else { return };
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {}
+        let _ = UnhookWindowsHookEx(handle);
+    });
+}
+
+/// Whether the wheel turned a moment ago but not since it would have again
+/// were it still turning: half again as long as between its last two turns
+fn wheel_stopped() -> bool {
+    let [last, before] = [&WHEELED[0], &WHEELED[1]].map(|at| f64::from_bits(at.load(Ordering::Relaxed)));
+    let since = super::render::since_epoch_ms() - last;
+    let quiet = if before > 0.0 { ((last - before) * 1.5).clamp(15.0, 120.0) } else { 120.0 };
+    last > 0.0 && since > quiet && since < 1000.0
+}
+
+/// Whether the pointer, moving along `points` from one to the next,
+/// passed within `DRAG_NEAR` of `at`, as moving fast it's tens of pixels
+/// from one sample to the next
+fn passed(points: impl Iterator<Item = (f64, f64)>, at: (f64, f64)) -> bool {
+    let mut before: Option<(f64, f64)> = None;
+    for point in points {
+        let from = before.unwrap_or(point);
+        before = Some(point);
+        let (dx, dy) = (point.0 - from.0, point.1 - from.1);
+        let length = dx * dx + dy * dy;
+        let along = if length > 0.0 { (((at.0 - from.0) * dx + (at.1 - from.1) * dy) / length).clamp(0.0, 1.0) } else { 0.0 };
+        let nearest = (from.0 + dx * along, from.1 + dy * along);
+        if (nearest.0 - at.0).abs() <= DRAG_NEAR && (nearest.1 - at.1).abs() <= DRAG_NEAR {
+            return true;
+        }
+    }
+    false
+}
+
+/// Where the pointer is, or was last while a button was held
+fn pointer_now() -> Option<(f64, f64)> {
+    let samples = POINTER.lock().unwrap();
+    samples.iter().rev().find(|(.., held)| held & BUTTONS != 0).map(|(_, x, y, _)| (*x, *y))
+}
+
+/// Whether a mouse button is held, or was a moment ago
+pub(super) fn pointer_held() -> bool {
+    pointer_held_within(30.0)
+}
+
+/// How long after a button's let go the view's not moved on as it was
+/// moving, in ms, as Figma's last frames of a drag come after
+const RELEASED_MS: f64 = 300.0;
+
+/// Whether a mouse button is held, or was in the last `ms` milliseconds
+fn pointer_held_within(ms: f64) -> bool {
+    let now = super::render::since_epoch_ms();
+    POINTER.lock().unwrap().iter().rev().take_while(|(when, ..)| now - when < ms).any(|(.., held)| held & BUTTONS != 0)
+}
+
+/// The buttons held now, if they've been since a moment ago, and when they
+/// went down, where the pointer was and what was held then, with space
+fn pointer_pressed() -> Option<(f64, f64, f64, u8)> {
+    let samples = POINTER.lock().unwrap();
+    let now = samples.back().filter(|(.., held)| held & BUTTONS != 0)?;
+    let pressed = samples.iter().rposition(|(.., held)| held & BUTTONS == 0).map_or(0, |i| i + 1);
+    // Pressed a while ago, so samples may be missing from the start of it
+    (pressed > 0 && now.0 - samples[pressed].0 < 500.0).then(|| samples[pressed])
+}
+
+/// When the pointer first moved more than a few pixels from where it was at
+/// `since`, with a button held all along
+fn pointer_moved_since(since: f64) -> Option<f64> {
+    let samples = POINTER.lock().unwrap();
+    let start = samples.partition_point(|(when, ..)| *when < since);
+    let &(_, x, y, _) = samples.get(start)?;
+    samples.range(start..).find(|(_, px, py, _)| (px - x).abs() > 3.0 || (py - y).abs() > 3.0).map(|(when, ..)| *when)
+}
+
+/// Whether `point`, on screen, is on the canvas `canvas` of window `window`,
+/// with the window in front and nothing over it there
+fn on_canvas(window: isize, (left, top, width, height): (i32, i32, i32, i32), (x, y): (f64, f64)) -> bool {
+    use windows::Win32::Foundation::{HWND, POINT};
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, WindowFromPoint, GA_ROOT};
+    let window = HWND(window as *mut _);
+    let mut corner = POINT { x: left, y: top };
+    unsafe {
+        let root = GetAncestor(window, GA_ROOT);
+        if GetForegroundWindow() != root || !ClientToScreen(window, &mut corner).as_bool() {
+            return false;
+        }
+        let point = POINT { x: x as i32, y: y as i32 };
+        if GetAncestor(WindowFromPoint(point), GA_ROOT) != root {
+            return false;
+        }
+    }
+    let (x, y) = (x - corner.x as f64, y - corner.y as f64);
+    x >= 0.0 && y >= 0.0 && x < width as f64 && y < height as f64
+}
+
+/// Whether frames between Figma's show the view moved on, off with
+/// LIGMA_NATIVE_PREDICT=0
+fn predicting() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LIGMA_NATIVE_PREDICT").map_or(true, |value| value != "0"))
 }
 
 impl Screen {
@@ -724,6 +1497,9 @@ impl Screen {
             AlphaMode: if composition { DXGI_ALPHA_MODE_IGNORE } else { DXGI_ALPHA_MODE_UNSPECIFIED },
             Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
             ..Default::default()
+        };
+        let window = match output {
+            Output::Window(hwnd) | Output::Layer(hwnd) => hwnd,
         };
         let (swap_chain, layer): (IDXGISwapChain3, Option<Composed>) = match output {
             Output::Window(hwnd) => {
@@ -756,6 +1532,7 @@ impl Screen {
         };
         let mut screen = Screen {
             context,
+            window,
             layer,
             swap_chain,
             waitable,
@@ -771,6 +1548,8 @@ impl Screen {
             owed: None,
             timed: 0,
             timed_at: 0.0,
+            pan: Pan::default(),
+            ahead_px: (0.0, 0.0),
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -870,7 +1649,12 @@ impl Screen {
         let mut held: Option<Instant> = None;
         while !hub.stop.load(Ordering::Relaxed) {
             if !room {
+                let waiting = Instant::now();
                 unsafe { WaitForSingleObjectEx(self.waitable, 250, true) };
+                let waited = waiting.elapsed();
+                if waited > Duration::from_millis(20) {
+                    super::render::trace(|| format!("present waited {:.1}ms for room in the swap chain", waited.as_secs_f64() * 1000.0));
+                }
                 room = true;
             }
             let latest = hub.snapshot.lock().unwrap().clone();
@@ -878,7 +1662,7 @@ impl Screen {
                 current = Some(latest);
             }
             let picked = current.as_ref().ok_or(None).and_then(|snapshot| hub.pick(snapshot.changes, self.timed).map(|picked| (snapshot.clone(), picked)));
-            let (snapshot, Picked { view, overlay, seq, oldest, wait }) = match picked {
+            let (snapshot, Picked { view, overlay, seq, oldest, wait, came, sent }) = match picked {
                 Ok(picked) => picked,
                 Err(wait) => {
                     // The render thread pokes once there's more, and the GPU
@@ -905,8 +1689,27 @@ impl Screen {
                 // device pixel, a pixel of it to a pixel of the screen
                 let at = (*hub.origin.lock().unwrap()).filter(|_| view.visible).map(|(x, y)| (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32));
                 self.place(at);
+                self.pan.canvas = at.map(|(x, y)| (self.window, (x, y, self.size.0 as i32, self.size.1 as i32)));
             }
-            let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
+            // Between Figma's frames, the view moved on as it's moving,
+            // where what's drawn covers it there
+            let age = came.map_or(f64::INFINITY, |came| came.elapsed().as_secs_f64() * 1000.0);
+            let px = view.px(self.size.0) as f64;
+            let ahead = (predicting() && came.is_some()).then(|| self.pan.ahead(seq, sent, age, &view, px)).flatten();
+            let (view, by) = match ahead {
+                Some((moved, by)) if cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, &self.shown).1.is_none() => (moved, by),
+                Some((moved, by)) => {
+                    let hole = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, &self.shown).1;
+                    let kinds: Vec<String> = snapshot.layers.iter().map(|layer| format!("{:?}@{},{} {}x{} px={:.3}", layer.kind, layer.x, layer.y, layer.tex.width, layer.tex.height, layer.px)).take(6).collect();
+                    super::render::trace(|| format!("present not ahead by {:.1},{:.1}: hole {hole:?}, {} layers {kinds:?}", by.0 * px, by.1 * px, snapshot.layers.len()));
+                    self.pan.not_ahead();
+                    (view, (0.0, 0.0))
+                }
+                None => (view, (0.0, 0.0)),
+            };
+            self.ahead_px = ((by.0 * px) as f32, (by.1 * px) as f32);
+            let wake = if predicting() { self.pan.wake(age) } else { None };
+            let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|drawn| drawn.canvas.unique_id()), self.size);
             if shown.as_ref() == Some(&now) {
                 // Nothing to show that isn't on screen already, so it's
                 // not waiting for anything
@@ -914,7 +1717,8 @@ impl Screen {
                     self.timed = seq;
                 }
                 drop(snapshot);
-                seen = hub.wait(seen, wait.unwrap_or(Duration::from_millis(100)).clamp(Duration::from_millis(1), Duration::from_millis(100)));
+                let timeout = wait.into_iter().chain(wake).min().unwrap_or(Duration::from_millis(100));
+                seen = hub.wait(seen, timeout.clamp(Duration::from_millis(1), Duration::from_millis(100)));
                 continue;
             }
             // All of the view or nothing: what's shown stays till the
@@ -979,7 +1783,7 @@ impl Screen {
                 let before = complete.clone().filter(|before| before.serial != snapshot.serial).and_then(|before| {
                     let (pieces, holes) = cover_over(&before.layers, before.layers.len(), before.content, &view, self.size, &self.shown);
                     let holes = holes.is_some();
-                    let then = (before.serial, view.clone(), overlay.as_ref().map(|picture| picture.unique_id()), self.size);
+                    let then = (before.serial, view.clone(), overlay.as_ref().map(|drawn| drawn.canvas.unique_id()), self.size);
                     (!holes && shown.as_ref() != Some(&then)).then_some((before, pieces, then))
                 });
                 let drawn_seq = snapshot.seq;
@@ -1063,7 +1867,7 @@ impl Screen {
 
     /// Shows `pieces` of `snapshot` at `view`, and what Figma draws over it
     /// in frame `seq`
-    fn frame(&mut self, snapshot: &Snapshot, pieces: &[Piece], view: &View, overlay: Option<&skia_safe::Picture>, seq: u64) {
+    fn frame(&mut self, snapshot: &Snapshot, pieces: &[Piece], view: &View, overlay: Option<&super::overlay::Drawn>, seq: u64) {
         let start = Instant::now();
         let index = unsafe { self.swap_chain.GetCurrentBackBufferIndex() } as usize;
         if index >= self.buffers.len() {
@@ -1080,10 +1884,29 @@ impl Screen {
         record(&mut self.context, &self.patterns, snapshot, &images, pieces, view, size, seq);
         if let Some(overlay) = overlay {
             let (sx, sy) = view.stretch(size);
+            let (sx, sy) = (sx as f32, sy as f32);
+            let (ax, ay) = self.ahead_px;
             canvas.save();
-            canvas.scale((sx as f32, sy as f32));
-            canvas.draw_picture(overlay, None, None);
+            // With the scene, where the view's moved on from Figma's frame
+            canvas.translate((-ax, -ay));
+            canvas.scale((sx, sy));
+            canvas.draw_picture(&overlay.canvas, None, None);
             canvas.restore();
+            // The rulers stay put, their marks moved with the scene along
+            // each, within it
+            let rulers = overlay.rulers.as_ref().map(|picture| (picture, (0.0, 0.0), None));
+            let across = overlay.across.as_ref().map(|(picture, within)| (picture, (ax, 0.0), Some(within)));
+            let down = overlay.down.as_ref().map(|(picture, within)| (picture, (0.0, ay), Some(within)));
+            for (picture, (bx, by), within) in [rulers, across, down].into_iter().flatten() {
+                canvas.save();
+                canvas.scale((sx, sy));
+                if let Some(within) = within {
+                    canvas.clip_rect(within, skia_safe::ClipOp::Intersect, true);
+                }
+                canvas.translate((-bx / sx, -by / sy));
+                canvas.draw_picture(picture, None, None);
+                canvas.restore();
+            }
         }
         let encoded = start.elapsed();
         // Left ready to present, and what it reads held till the GPU's done
@@ -1132,7 +1955,7 @@ impl Screen {
             let used: Vec<String> = used.iter().filter(|(_, _, shown)| *shown > 0.0).map(|(layer_px, kind, shown)| format!("{:.2}{kind:?}{:.0}%", layer_px / px, shown / area * 100.0)).collect();
             let coarsest = pieces.iter().filter(|piece| !piece.clip.is_empty()).map(|piece| snapshot.layers[piece.layer].px / px).fold(1.0f32, f32::min);
             format!(
-                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={} coarse={:.2} coarsest={coarsest:.2} serial={} path={} used={}",
+                "present seq={seq} at={presented:.2} px={px:.3} layers={} encoded={:.1} rendered={:.1} holes=false x={} y={} placed={:?} drawn={} coarse={:.2} coarsest={coarsest:.2} serial={} path={} used={} ahead={:.1},{:.1} pan={}",
                 pieces.len(),
                 encoded.as_secs_f64() * 1000.0,
                 rendered.as_secs_f64() * 1000.0,
@@ -1143,7 +1966,10 @@ impl Screen {
                 (coarse / area).min(1.0),
                 snapshot.serial,
                 PATH.load(Ordering::Relaxed),
-                used.join(",")
+                used.join(","),
+                self.ahead_px.0,
+                self.ahead_px.1,
+                if self.pan.following() { "pointer" } else if self.pan.wheel.is_some() { "wheel" } else if self.pan.velocity.is_some() { "velocity" } else { "-" }
             )
         });
         // Once a frame of Figma's, not again as what's drawn under it gets

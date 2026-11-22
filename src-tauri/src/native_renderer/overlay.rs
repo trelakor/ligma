@@ -27,7 +27,78 @@ use skia_safe::{
 use super::rt::{Raw, Schema, Value};
 
 /// A frame's overlay, ready to draw over the scene in device pixels
-pub type Overlay = Option<Picture>;
+pub type Overlay = Option<Drawn>;
+
+/// A frame's overlay: what's on the canvas, moved with it where the view's
+/// moved on from Figma's frame, and the rulers, which stay put but for
+/// their marks, which move with the canvas along each, within it
+#[derive(Clone)]
+pub struct Drawn {
+    pub canvas: Picture,
+    pub rulers: Option<Picture>,
+    /// The marks of the ruler across the top, and of the one down the left,
+    /// with where each ruler shows them
+    pub across: Option<(Picture, Rect)>,
+    pub down: Option<(Picture, Rect)>,
+}
+
+/// One command drawn, in device pixels, and whether it's drawn where the
+/// screen is rather than the canvas, as the rulers are
+struct Item {
+    picture: Picture,
+    screen: bool,
+}
+
+impl Drawn {
+    /// The rulers are drawn where the screen is, last, each a band Figma
+    /// fills along the top or the left, with marks along it. Those that
+    /// span a band are the ruler itself, the rest its marks and where the
+    /// selection is
+    fn compose(items: &[Item]) -> Option<Drawn> {
+        let band = |across: bool| {
+            items.iter().filter(|item| item.screen).map(|item| item.picture.cull_rect()).find(|r| match across {
+                true => r.top <= 1.0 && r.width() >= 8.0 * r.height() && r.height() >= 8.0,
+                false => r.left <= 1.0 && r.height() >= 8.0 * r.width() && r.width() >= 8.0,
+            })
+        };
+        let (top, left) = (band(true), band(false));
+        // Across a band, wherever along it, as marks run past its ends
+        let within = |from: f32, to: f32, start: f32, end: f32| from >= start - 1.0 && to <= end + 1.0;
+        let inside = |r: &Rect, band: Option<Rect>| {
+            band.is_some_and(|band| match band.width() > band.height() {
+                true => within(r.top, r.bottom, band.top, band.bottom),
+                false => within(r.left, r.right, band.left, band.right),
+            })
+        };
+        let bounds = Rect::from_xywh(-1e5, -1e5, 2e5, 2e5);
+        let mut recorders: [PictureRecorder; 4] = std::array::from_fn(|_| PictureRecorder::new());
+        let mut used = [false; 4];
+        for recorder in &mut recorders {
+            recorder.begin_recording(bounds, false);
+        }
+        for item in items {
+            let r = item.picture.cull_rect();
+            let (in_top, in_left) = (inside(&r, top), inside(&r, left));
+            let which = match (item.screen, in_top, in_left) {
+                (true, true, false) if top.is_some_and(|band| r.width() < band.width() / 2.0) => 2,
+                (true, false, true) if left.is_some_and(|band| r.height() < band.height() / 2.0) => 3,
+                (true, true, _) | (true, _, true) => 1,
+                _ => 0,
+            };
+            used[which] = true;
+            if let Some(canvas) = recorders[which].recording_canvas() {
+                canvas.draw_picture(&item.picture, None, None);
+            }
+        }
+        let [canvas, rulers, across, down] = recorders.map(|mut recorder| recorder.finish_recording_as_picture(None));
+        let canvas = canvas?;
+        let rulers = rulers.filter(|_| used[1]);
+        // Each ruler's marks within it, past where the other crosses it
+        let across = across.filter(|_| used[2]).zip(top.map(|band| Rect::from_ltrb(left.map_or(band.left, |left| left.right.max(band.left)), band.top, band.right, band.bottom)));
+        let down = down.filter(|_| used[3]).zip(left.map(|band| Rect::from_ltrb(band.left, top.map_or(band.top, |top| top.bottom.max(band.top)), band.right, band.bottom)));
+        Some(Drawn { canvas, rulers, across, down })
+    }
+}
 
 /// Turns frames' commands into pictures, keeping what later frames refer
 /// back to
@@ -44,7 +115,7 @@ pub struct Decoder {
     failed: bool,
     /// The last frame's commands and its overlay: Figma sends the same again
     /// in frames where only what's under it changed, which is shown as is
-    last: Option<(Vec<u8>, Picture)>,
+    last: Option<(Vec<u8>, Drawn)>,
 }
 
 impl Decoder {
@@ -71,26 +142,26 @@ impl Decoder {
         if bytes.is_empty() {
             return None;
         }
-        if let Some((_, picture)) = self.last.as_ref().filter(|(last, _)| last == bytes) {
-            return Some(picture.clone());
+        if let Some((_, drawn)) = self.last.as_ref().filter(|(last, _)| last == bytes) {
+            return Some(drawn.clone());
         }
-        let mut recorder = PictureRecorder::new();
-        let canvas = recorder.begin_recording(Rect::from_xywh(-1e5, -1e5, 2e5, 2e5), false);
-        let result = self.draw(bytes, canvas);
-        if let Err(error) = result {
+        let mut items = Vec::new();
+        if let Err(error) = self.draw(bytes, &mut items) {
             if !self.failed {
                 self.failed = true;
                 log::warn!("native renderer: Figma's overlay couldn't be read: {error}");
             }
         }
-        let picture = recorder.finish_recording_as_picture(None)?;
-        self.last = Some((bytes.to_vec(), picture.clone()));
-        Some(picture)
+        let drawn = Drawn::compose(&items)?;
+        self.last = Some((bytes.to_vec(), drawn.clone()));
+        Some(drawn)
     }
 
-    fn draw(&mut self, bytes: &[u8], canvas: &Canvas) -> Result<(), String> {
+    /// Each command of a frame's, as drawn
+    fn draw(&mut self, bytes: &[u8], items: &mut Vec<Item>) -> Result<(), String> {
         let mut raw = Raw::new(self.schema, bytes);
-        // Header: 3, 0, the count of commands, 0, 0, 2, 0, 3, the count again
+        // Header: 3, 0, the count of commands, 0, 0, 2, 0, 3, the count again.
+        // 4 in place of the first 3 since November 2026
         let (a, b) = (raw.byte()?, raw.byte()?);
         let count = raw.uint()?;
         let mut rest = [0u8; 5];
@@ -98,10 +169,21 @@ impl Decoder {
             *byte = raw.byte()?;
         }
         let again = raw.uint()?;
-        if (a, b) != (3, 0) || rest != [0, 0, 2, 0, 3] || again != count {
+        if !matches!((a, b), (3 | 4, 0)) || rest != [0, 0, 2, 0, 3] || again != count {
             return Err(format!("unexpected header {:02x?}", &bytes[..bytes.len().min(12)]));
         }
         let mut state = State { zoom: 1.0, offset: (0.0, 0.0) };
+        // Dev: each command, the view it's drawn in and where it lands, a
+        // frame every 3 s, while ligma-overlay-dump is in the temp folder
+        static DUMPED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+        let dump = super::dev() && {
+            let mut last = DUMPED.lock().unwrap();
+            let due = last.is_none_or(|at| at.elapsed().as_secs() >= 3);
+            if due {
+                *last = Some(std::time::Instant::now());
+            }
+            due && std::env::temp_dir().join("ligma-overlay-dump").exists()
+        };
         for _ in 0..count {
             if raw.done() {
                 break;
@@ -115,7 +197,18 @@ impl Decoder {
             };
             let value = raw.value(message)?;
             let name = self.names[t as usize].clone();
-            if !self.command(&name, &value, &mut state, canvas) {
+            // Each on its own, so where it lands is known
+            let mut recorder = PictureRecorder::new();
+            let canvas = recorder.begin_recording(Rect::from_xywh(-1e5, -1e5, 2e5, 2e5), true);
+            let drawn = self.command(&name, &value, &mut state, canvas);
+            if let Some(picture) = recorder.finish_recording_as_picture(None).filter(|picture| !picture.cull_rect().is_empty()) {
+                let bounds = picture.cull_rect();
+                if dump {
+                    super::render::trace(|| format!("overlay {name} zoom={:.4} offset={:.1},{:.1} at {:.0},{:.0} {:.0}x{:.0}", state.zoom, state.offset.0, state.offset.1, bounds.left, bounds.top, bounds.width(), bounds.height()));
+                }
+                items.push(Item { picture, screen: state.offset == (0.0, 0.0) });
+            }
+            if !drawn {
                 let what = match value.get("image").or(value.get("handles")) {
                     Some(which) => format!("{name} {}", which.str()),
                     None => name.to_string(),

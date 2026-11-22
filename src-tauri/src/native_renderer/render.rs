@@ -1835,6 +1835,57 @@ impl Painter {
             self.effects_waiting.len(),
             self.effects_running.len(),
             self.vello.as_ref().map_or_else(|| "no vello".to_string(), |vello| vello.holds()),
+        ) + &self.image_holds()
+    }
+
+    /// Dev tools: what images take, by kind and by size, and the biggest,
+    /// for the trace
+    fn image_holds(&self) -> String {
+        let mb = |bytes: usize| bytes as f64 / (1024.0 * 1024.0);
+        let mut kinds = [(0usize, 0usize); 3];
+        let mut sizes = [(0usize, 0usize); 5];
+        let mut biggest: Vec<(usize, String)> = Vec::new();
+        for (key, img) in &self.images {
+            let bytes = img.bytes();
+            let kind = if key.starts_with(super::draw::RENDER) { 1 } else if key.starts_with(super::draw::EFFECT) { 2 } else { 0 };
+            kinds[kind].0 += 1;
+            kinds[kind].1 += bytes;
+            let side = img.image.width().max(img.image.height());
+            let size = match side {
+                ..=256 => 0,
+                ..=512 => 1,
+                ..=1024 => 2,
+                ..=2048 => 3,
+                _ => 4,
+            };
+            sizes[size].0 += 1;
+            sizes[size].1 += bytes;
+            let needed = self.needed.get(key).map_or(0.0, |(width, _)| *width);
+            let asked = self.asked.get(key).copied().unwrap_or(0.0);
+            let vello = self.vello_in_view.get(key).map_or(0.0, |(width, _)| *width as f64);
+            biggest.push((bytes, format!("{}x{} of {}x{} {} needed={needed:.0} asked={asked:.0} vello={vello:.0}", img.image.width(), img.image.height(), img.original.0, img.original.1, key.get(..12).unwrap_or(key))));
+        }
+        biggest.sort_by(|a, b| b.0.cmp(&a.0));
+        let biggest: Vec<String> = biggest.iter().take(5).map(|(bytes, what)| format!("{:.0}MB {what}", mb(*bytes))).collect();
+        format!(
+            " | images fills={} {:.0}MB renders={} {:.0}MB effects={} {:.0}MB, by side <=256 {}/{:.0}MB <=512 {}/{:.0}MB <=1k {}/{:.0}MB <=2k {}/{:.0}MB >2k {}/{:.0}MB, biggest {}",
+            kinds[0].0,
+            mb(kinds[0].1),
+            kinds[1].0,
+            mb(kinds[1].1),
+            kinds[2].0,
+            mb(kinds[2].1),
+            sizes[0].0,
+            mb(sizes[0].1),
+            sizes[1].0,
+            mb(sizes[1].1),
+            sizes[2].0,
+            mb(sizes[2].1),
+            sizes[3].0,
+            mb(sizes[3].1),
+            sizes[4].0,
+            mb(sizes[4].1),
+            biggest.join(", ")
         )
     }
 
@@ -2077,7 +2128,9 @@ impl Painter {
         // at once, exactly, so it's sharp in one pass rather than tile by
         // tile, whose tiles are drawn behind it for pans. While it pans,
         // tiles are shown, which a frame only moves
-        let still = self.moved.elapsed() >= PAN_STILL;
+        // Not with a button held, as the view's about to be dragged again,
+        // and drawing all of it can take the GPU hundreds of milliseconds
+        let still = self.moved.elapsed() >= PAN_STILL && !super::present::pointer_held();
         let sharp = in_view.iter().all(|key| self.tiles.get(key).is_some_and(|tile| !tile.stale && tile.exact));
         let whole_at = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && whole.layer.phase == phase && !whole.stale && whole.patch.is_empty() && !whole.rough && whole.vello && !whole.patched);
         let unchecked_at = self.unchecked.as_ref().is_some_and(|unchecked| unchecked.at == (ox, oy, pxb) && unchecked.layer.phase == phase);
@@ -4682,7 +4735,15 @@ impl Painter {
                 }
             }
             trace(|| format!("frame {} mode={} new={} applied={applied_ms:.1}ms units={} areas={}", frame.header.seq, frame.header.mode, applied.new_nodes.len(), self.units.len(), areas.len()));
-            if !areas.is_empty() {
+            // An edit is drawn into the whole view at once, each frame. Not
+            // so units Figma sends as the view pans to them, or what changes
+            // out of view, whose tiles are drawn again as any are
+            let seen = self.view.as_ref().is_none_or(|view| {
+                let view = Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32);
+                areas.iter().any(|area| Rect::intersects2(area, &view))
+            });
+            let panning = self.moved.elapsed() < PAN_STILL;
+            if !areas.is_empty() && seen && !panning {
                 self.edited = Instant::now();
                 self.sent = Some(frame.header.at);
             }

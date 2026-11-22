@@ -318,7 +318,7 @@ fn take_frames(ctx: Arc<Ctx>) {
                 };
                 super::present::Made { at: frame.header.at, figma: figma.max(0.0) as f32 }
             });
-            ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits(), made);
+            ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits(), made, frame.header.at);
             super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2} page={}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at, frame.header.page.as_ref().map_or_else(String::new, |page| page.to_string())));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
@@ -749,6 +749,15 @@ fn sync(ctx: Arc<Ctx>) {
                 sleep(50);
                 continue;
             }
+        }
+        // A tab hooked as it loaded hands over Figma's own scene once Figma's
+        // renderer starts, seconds into a big file. Reading the plugin API's
+        // meanwhile took a minute on one, slowing Figma all along, and
+        // nothing's drawn from it once there's a tree
+        if !separate_window() && eval_value(&file.webview, "window.__ligmaHook ? !window.__ligmaHook.error : false") == Some(Value::Bool(true)) {
+            set_status("Waiting for Figma's scene");
+            sleep(50);
+            continue;
         }
         let page = eval_value(&file.webview, "window.__ligmaNative.view()?.page ?? null")
             .and_then(|page| page.as_str().map(str::to_owned));
