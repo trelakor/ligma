@@ -72,6 +72,14 @@ pub fn show(app: &AppHandle) -> tauri::Result<()> {
                 }
                 crate::tab_menu::set_owner(&window, &owner);
                 let _ = window.show();
+                // A hide between the check and the show bumps it too: take
+                // the window back down rather than hold a lock across calls
+                // that wait on the main thread
+                if GENERATION.load(Ordering::SeqCst) != generation {
+                    crate::tab_menu::release(&window);
+                    let _ = window.hide();
+                    return;
+                }
                 let _ = window.set_focus();
                 // The page, not only its window, takes the keys
                 if let Some(webview) = app.get_webview(WINDOW) {
