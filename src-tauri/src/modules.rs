@@ -141,6 +141,26 @@ pub const PAGE_JS: &str = r##"(() => {
     });
   };
 
+  // As WebView2 starts, its network service changes how it verifies
+  // certificates, failing the requests then in flight. Figma's scripts and
+  // styles failed so stay on the page, and the bundler, finding one there,
+  // waits on it, two minutes, its loading screen up and unstyled all that
+  // while. One failing as the page starts loads the page again, once
+  const RELOADED = "ligmaReloadedForFailedLoad";
+  const reloaded = sessionStorage.getItem(RELOADED);
+  if (reloaded) setTimeout(() => sessionStorage.removeItem(RELOADED), 60000);
+  document.addEventListener(
+    "error",
+    (event) => {
+      const element = event.target;
+      const url = element?.tagName === "SCRIPT" ? element.src : element?.tagName === "LINK" ? element.href : "";
+      if (reloaded || performance.now() > 20000 || !/^https:\/\/(www|static)\.figma\.com\//.test(url ?? "")) return;
+      sessionStorage.setItem(RELOADED, "1");
+      location.reload();
+    },
+    true,
+  );
+
   window.__ligmaModules = {
     patch: (more) => {
       patches.push(...more);
