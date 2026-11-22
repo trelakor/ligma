@@ -2050,8 +2050,10 @@ const colorForTeam = (id) => ["#0d99ff", "#9747ff", "#14ae5c", "#f24822", "#e5a0
 // Figma's login page, as Figma's own file browser does when signed out. A
 // session it already has sends it on to the file browser, which Ligma
 // brings back here (new_home.rs). Once a minute at most, so a session this
-// page still can't read shows Sign in instead of going round
+// page still can't read shows Sign in instead of going round. Not the
+// launcher, which would open the login page in a tab and still show
 function toLogin() {
+  if (LAUNCHER) return false;
   try {
     const last = Number(sessionStorage.getItem("ligma-home-login")) || 0;
     if (Date.now() - last < 60000) return false;
