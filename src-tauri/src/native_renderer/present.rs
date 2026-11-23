@@ -296,8 +296,6 @@ pub struct Hub {
     pub shown_seq: AtomicU64,
     /// The tab the last frame shown whole was drawn from
     pub whole_tab: Mutex<Option<Arc<str>>>,
-    /// To the render thread, for the view shown ahead of Figma's frames
-    pub messages: Mutex<Option<std::sync::mpsc::Sender<super::render::Msg>>>,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -315,7 +313,6 @@ impl Hub {
             frames: Mutex::new(std::collections::VecDeque::new()),
             shown_seq: AtomicU64::new(0),
             whole_tab: Mutex::new(None),
-            messages: Mutex::new(None),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
@@ -718,8 +715,6 @@ pub struct Screen {
     /// device pixels, which what Figma draws over the scene moves by too
     ahead_px: (f32, f32),
     ahead_scale: f32,
-    /// The view the render thread was told the wheel's zoomed to last
-    told: Option<View>,
 }
 
 /// The view's pan between Figma's frames. Figma sends one on fewer than
@@ -773,25 +768,6 @@ struct Pan {
     zoom_base: Option<f64>,
     /// Where the zoom's about, in CSS pixels from the canvas's corner
     anchor: (f64, f64),
-    /// Figma's last frames: when each was sent and its view
-    history: std::collections::VecDeque<(f64, View)>,
-    wheel_zoom: Option<WheelZoom>,
-}
-
-/// The wheel zooming, turned with Ctrl held. Each turn's shown the moment
-/// it's made, as Figma would, from Figma's last frame, as its page can take
-/// hundreds of milliseconds to show them while it's busy
-struct WheelZoom {
-    /// Figma's view before the first turn
-    base: View,
-    /// The turns since: their `ZOOM_TURNS` serial, when, how far, and the
-    /// point the zoom's about, in CSS pixels from the canvas's corner
-    turns: Vec<(u64, f64, f64, (f64, f64))>,
-    /// How many of them Figma's last frame shows
-    shown: usize,
-    /// Figma's frames didn't zoom as the wheel did, so they're shown as
-    /// they come
-    lost: bool,
 }
 
 /// The zoom changing as Figma's frames show it: the log of its ratio a
@@ -860,20 +836,6 @@ const BACK_MS: f64 = 60.0;
 /// about puts it
 const ZOOM_OVER: f64 = 80.0;
 const ZOOM_FIT: f64 = 1.5;
-/// Figma's least and most zoom
-const ZOOM_LEAST: f64 = 0.02;
-const ZOOM_MOST: f64 = 256.0;
-/// How long the wheel's still before a turn starts another zoom, how long
-/// after the last turn Figma's frames show all of it, and how long it's
-/// shown without, in milliseconds
-const ZOOM_QUIET: f64 = 300.0;
-const ZOOM_SETTLED: f64 = 100.0;
-const ZOOM_GIVE_UP: f64 = 2000.0;
-/// How far Figma's zoom may be from where the wheel put it, as the log of
-/// the ratio, to show those turns
-const ZOOM_MATCH: f64 = 0.01;
-/// Figma's frames kept for the view before the wheel turned
-const HISTORY: usize = 32;
 
 /// How long after the pointer moves Figma's frames show it, at most, and
 /// how long before, as the page's clock may be a little behind, in
@@ -905,15 +867,6 @@ impl Pan {
         if self.last != Some(seq) {
             self.last = Some(seq);
             self.took(sent, view, px);
-        }
-        if let Some(zoomed) = self.wheel_zoom(sent, view) {
-            self.lead = (0.0, 0.0);
-            self.back = None;
-            self.base = None;
-            self.zoom_lead = 0.0;
-            self.zoom_back = None;
-            self.zoom_base = None;
-            return zoomed;
         }
         if self.zooming.is_some() || self.zoom_lead != 0.0 || self.zoom_back.is_some() {
             return self.zoom_ahead(age, view);
@@ -1022,130 +975,6 @@ impl Pan {
         self.before = Some((sent, corner));
         self.wheeled(sent, corner);
         self.zoomed(sent, view);
-        self.history.push_back((sent, view.clone()));
-        while self.history.len() > HISTORY {
-            self.history.pop_front();
-        }
-    }
-
-    /// The view to show for Figma's frame `view`, sent at `sent`, as the
-    /// wheel zooms it, none while it doesn't
-    fn wheel_zoom(&mut self, sent: f64, view: &View) -> Option<Option<(View, (f64, f64))>> {
-        let now = super::render::since_epoch_ms();
-        let turns: Vec<(u64, f64, f64, (f64, f64))> = ZOOM_TURNS.lock().unwrap().iter().copied().collect();
-        if self.wheel_zoom.is_none() {
-            let last = turns.last()?;
-            if now - last.1 > ZOOM_QUIET || self.following() {
-                return None;
-            }
-            // From the first turn after the wheel was still a while
-            let mut start = turns.len() - 1;
-            while start > 0 && turns[start].1 - turns[start - 1].1 <= ZOOM_QUIET {
-                start -= 1;
-            }
-            let first = turns[start].1;
-            // Figma's frame before it, which was the view then however
-            // long before it was sent
-            let Some((_, base)) = self.history.iter().rev().find(|(then, _)| *then <= first) else {
-                super::render::trace(|| "wheel zoom not followed: no frame of Figma's before it".to_string());
-                return None;
-            };
-            self.wheel_zoom = Some(WheelZoom { base: base.clone(), turns: Vec::new(), shown: 0, lost: false });
-        }
-        let step = zoom_step();
-        let canvas = self.canvas;
-        let zoom = self.wheel_zoom.as_mut().unwrap();
-        let after = zoom.turns.last().map(|turn| turn.0);
-        let from = turns.iter().rposition(|turn| after.is_some_and(|after| turn.0 <= after)).map_or_else(
-            || {
-                let mut start = turns.len().saturating_sub(1);
-                while start > 0 && turns[start].1 - turns[start - 1].1 <= ZOOM_QUIET {
-                    start -= 1;
-                }
-                start
-            },
-            |i| i + 1,
-        );
-        let dpr = view.dpr;
-        let same = |other: &View| other.dpr == view.dpr && other.cx == view.cx && other.cy == view.cy && other.cw == view.cw && other.ch == view.ch && other.page == view.page && other.preview == view.preview;
-        if !zoom.lost && !same(&zoom.base) {
-            zoom.lost = true;
-            super::render::trace(|| "wheel zoom not followed: the canvas changed".to_string());
-        }
-        for &(serial, when, delta, at) in turns.iter().skip(from) {
-            if zoom.lost {
-                break;
-            }
-            // Where the pointer was on the canvas, as Figma zooms about it
-            let about = canvas.and_then(|(window, canvas)| canvas_point(window, canvas, at)).map(|(x, y)| (x / dpr, y / dpr)).filter(|(x, y)| (0.0..view.cw).contains(x) && (0.0..view.ch).contains(y));
-            match about {
-                Some(about) => zoom.turns.push((serial, when, delta, about)),
-                None => {
-                    zoom.lost = true;
-                    super::render::trace(|| format!("wheel zoom not followed: turned at {:.0},{:.0}, off the canvas", at.0, at.1));
-                }
-            }
-        }
-        // Which of the turns Figma's frame shows, by its zoom
-        let zooms = zoom.turns.iter().fold(vec![zoom.base.zoom], |mut zooms, (_, _, delta, _)| {
-            let last = *zooms.last().unwrap();
-            zooms.push((last * (step * delta).exp()).clamp(ZOOM_LEAST, ZOOM_MOST));
-            zooms
-        });
-        if !zoom.lost {
-            let have = view.zoom.ln();
-            let (best, off) = (zoom.shown..zooms.len()).map(|i| (i, (zooms[i].ln() - have).abs())).min_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((zoom.shown, f64::INFINITY));
-            if off <= ZOOM_MATCH {
-                if best != zoom.shown {
-                    let (n, shown) = (zoom.turns.len(), best);
-                    super::render::trace(|| format!("wheel zoom: Figma shows {shown} of {n} turns, {:.0}ms after the last", sent - zoom.turns[shown - 1].1));
-                }
-                zoom.shown = best;
-            } else {
-                zoom.lost = true;
-                let (base, turned) = (zoom.base.zoom, zoom.turns.iter().map(|turn| turn.2).sum::<f64>());
-                super::render::trace(|| format!("wheel zoom not followed: Figma's at {:.4} from {base:.4}, {turned} turned at {step:.6} a step", view.zoom));
-            }
-        }
-        let last = zoom.turns.last().map_or(now, |turn| turn.1);
-        let quiet = now - last > ZOOM_QUIET;
-        // Done: Figma's shown all of it, or doesn't zoom as the wheel did,
-        // or hasn't shown it for too long
-        if quiet && (zoom.lost || zoom.shown == zoom.turns.len()) || now - last > ZOOM_GIVE_UP {
-            // How far a step zooms, from how far Figma zoomed once it had
-            // taken all of it in
-            let turned: f64 = zoom.turns.iter().map(|turn| turn.2).sum();
-            let clamped = |z: f64| z <= ZOOM_LEAST * 1.01 || z >= ZOOM_MOST / 1.01;
-            let seen = zooms.iter().any(|z| clamped(*z)) || clamped(view.zoom);
-            if sent - last > ZOOM_SETTLED && turned.abs() >= 1.0 && !seen && same(&zoom.base) {
-                let found = (view.zoom / zoom.base.zoom).ln() / turned;
-                if found > ZOOM_STEP_GUESS / 8.0 && found < ZOOM_STEP_GUESS * 8.0 {
-                    let was = ZOOM_STEP.swap(found.to_bits(), Ordering::Relaxed);
-                    if was != found.to_bits() {
-                        super::render::trace(|| format!("wheel zoom step {found:.6}, was {:.6}", if was == 0 { ZOOM_STEP_GUESS } else { f64::from_bits(was) }));
-                    }
-                }
-            }
-            self.wheel_zoom = None;
-            return None;
-        }
-        if zoom.lost {
-            return None;
-        }
-        Some(wheel_zoomed(view, &zoom.turns[zoom.shown..], step))
-    }
-
-    /// The wheel's zoom with only the first `n` turns Figma's frame `view`
-    /// doesn't show yet, for where what's drawn covers no more
-    fn wheel_zoom_fewer(&self, view: &View, n: usize) -> Option<(View, (f64, f64))> {
-        let zoom = self.wheel_zoom.as_ref().filter(|zoom| !zoom.lost)?;
-        let left = &zoom.turns[zoom.shown..];
-        wheel_zoomed(view, &left[..n.min(left.len())], zoom_step())
-    }
-
-    /// How many turns of the wheel's zoom Figma's frames don't show yet
-    fn wheel_zoom_left(&self) -> usize {
-        self.wheel_zoom.as_ref().filter(|zoom| !zoom.lost).map_or(0, |zoom| zoom.turns.len() - zoom.shown)
     }
 
     /// Takes in a frame of Figma's for the zoom changing
@@ -1517,11 +1346,6 @@ impl Pan {
     /// How long till what's shown changes with no new frame of Figma's,
     /// none once it's back where Figma left it
     fn wake(&self, age: f64) -> Option<Duration> {
-        // The wheel zooming: each turn and frame wakes it, this for when
-        // it's done
-        if self.wheel_zoom.is_some() {
-            return Some(Duration::from_millis(50));
-        }
         // The zoom changing, moved on as it does
         if let Some(zooming) = self.zooming.filter(|_| age <= HOLD_MS) {
             let most = (zooming.gap * AHEAD_OF_GAP).min(AHEAD_MOST);
@@ -1656,44 +1480,6 @@ fn fit_wheel(frames: &std::collections::VecDeque<(f64, (f64, f64))>, turns: &[(f
     ((error / n).sqrt() <= WHEEL_FIT).then_some((at, per))
 }
 
-/// The wheel turned with Ctrl held, zooming, the last 10 s of it: each
-/// turn's serial, when it was, in ms since the epoch, how far, and where
-/// the pointer was, in screen pixels
-static ZOOM_TURNS: Mutex<std::collections::VecDeque<(u64, f64, f64, (f64, f64))>> = Mutex::new(std::collections::VecDeque::new());
-/// How much the log of Figma's zoom changes a step of the wheel, as bits,
-/// as worked out from the last zoom, 0 before one has been
-static ZOOM_STEP: AtomicU64 = AtomicU64::new(0);
-/// Till then: Figma zooms by a factor of 2 every 3 notches of 120
-const ZOOM_STEP_GUESS: f64 = std::f64::consts::LN_2 / 360.0;
-/// The present thread's hub, woken as the wheel turns
-static WHEEL_HUB: Mutex<Option<std::sync::Weak<Hub>>> = Mutex::new(None);
-
-fn zoom_step() -> f64 {
-    match ZOOM_STEP.load(Ordering::Relaxed) {
-        0 => ZOOM_STEP_GUESS,
-        bits => f64::from_bits(bits),
-    }
-}
-
-/// `view` zoomed by `turns` of the wheel, `step` each, and how far its
-/// corner moves, in units
-fn wheel_zoomed(view: &View, turns: &[(u64, f64, f64, (f64, f64))], step: f64) -> Option<(View, (f64, f64))> {
-    if turns.is_empty() {
-        return None;
-    }
-    let mut moved = view.clone();
-    for &(_, _, delta, (ax, ay)) in turns {
-        let to = (moved.zoom * (step * delta).exp()).clamp(ZOOM_LEAST, ZOOM_MOST);
-        moved.x += ax / moved.zoom - ax / to;
-        moved.y += ay / moved.zoom - ay / to;
-        moved.w *= moved.zoom / to;
-        moved.h *= moved.zoom / to;
-        moved.zoom = to;
-    }
-    let by = (moved.x - view.x, moved.y - view.y);
-    Some((moved, by))
-}
-
 /// Watches the mouse wheel from now on, for when it stops
 fn watch_wheel() {
     static STARTED: AtomicBool = AtomicBool::new(false);
@@ -1713,20 +1499,7 @@ fn watch_wheel() {
                 let delta = ((info.mouseData >> 16) as u16 as i16) as f64;
                 let held = |key: VIRTUAL_KEY| unsafe { GetAsyncKeyState(key.0 as i32) } < 0;
                 // Ctrl zooms, which isn't a pan
-                if held(VK_CONTROL) {
-                    if wparam.0 as u32 == WM_MOUSEWHEEL {
-                        static SERIAL: AtomicU64 = AtomicU64::new(0);
-                        if let Ok(mut turns) = ZOOM_TURNS.try_lock() {
-                            turns.push_back((SERIAL.fetch_add(1, Ordering::Relaxed), now, delta, (info.pt.x as f64, info.pt.y as f64)));
-                            while turns.front().is_some_and(|turn| now - turn.1 > 10_000.0) {
-                                turns.pop_front();
-                            }
-                        }
-                        if let Some(hub) = WHEEL_HUB.try_lock().ok().and_then(|hub| hub.as_ref().and_then(std::sync::Weak::upgrade)) {
-                            hub.poke();
-                        }
-                    }
-                } else {
+                if !held(VK_CONTROL) {
                     let across = wparam.0 as u32 == WM_MOUSEHWHEEL || held(VK_SHIFT);
                     if let (Ok(mut turns), Ok(mut total)) = (WHEEL.try_lock(), WHEEL_TOTAL.try_lock()) {
                         // How far it had turned before, for the frames before
@@ -1846,18 +1619,6 @@ fn on_canvas(window: isize, (left, top, width, height): (i32, i32, i32, i32), (x
     x >= 0.0 && y >= 0.0 && x < width as f64 && y < height as f64
 }
 
-/// Where `point`, on screen, is from the corner of the canvas `canvas` of
-/// window `window`, in pixels, if it's on it
-fn canvas_point(window: isize, canvas: (i32, i32, i32, i32), (x, y): (f64, f64)) -> Option<(f64, f64)> {
-    use windows::Win32::Foundation::{HWND, POINT};
-    use windows::Win32::Graphics::Gdi::ClientToScreen;
-    if !on_canvas(window, canvas, (x, y)) {
-        return None;
-    }
-    let mut corner = POINT { x: canvas.0, y: canvas.1 };
-    unsafe { ClientToScreen(HWND(window as *mut _), &mut corner) }.as_bool().then(|| (x - corner.x as f64, y - corner.y as f64))
-}
-
 /// Whether frames between Figma's show the view moved on, off with
 /// LIGMA_NATIVE_PREDICT=0
 fn predicting() -> bool {
@@ -1944,7 +1705,6 @@ impl Screen {
             pan: Pan::default(),
             ahead_px: (0.0, 0.0),
             ahead_scale: 1.0,
-            told: None,
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -2029,7 +1789,6 @@ impl Screen {
 
     pub fn run(mut self, hub: Arc<Hub>) {
         drawing();
-        *WHEEL_HUB.lock().unwrap() = Some(Arc::downgrade(&hub));
         // The snapshot frames are composed of: the latest the GPU has drawn
         let mut current: Option<Arc<Snapshot>> = None;
         // The last snapshot shown whole: while the latest has holes, the
@@ -2128,26 +1887,8 @@ impl Screen {
             let px = view.px(self.size.0) as f64;
             let ahead = (predicting() && came.is_some()).then(|| self.pan.ahead(seq, sent, age, &view, px)).flatten();
             let zoom = view.zoom;
-            // The render thread draws for where the wheel's zoomed to, not
-            // Figma's frame, which can be hundreds of milliseconds behind
-            let wanted = ahead.as_ref().filter(|_| self.pan.wheel_zoom_left() > 0).map(|(moved, _)| moved.clone());
-            if wanted != self.told {
-                if let Some(messages) = hub.messages.lock().unwrap().as_ref() {
-                    let _ = messages.send(super::render::Msg::Ahead(wanted.clone()));
-                }
-                self.told = wanted;
-            }
-            let covered = |view: &View| cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, view, self.size, &self.shown).1.is_none();
-            // The wheel zooming out past what's drawn: as far as it covers
-            let ahead = match ahead {
-                Some((moved, by)) if !covered(&moved) && self.pan.wheel_zoom_left() > 1 => {
-                    let left = self.pan.wheel_zoom_left();
-                    (1..left).rev().find_map(|n| self.pan.wheel_zoom_fewer(&view, n).filter(|(fewer, _)| covered(fewer))).or(Some((moved, by)))
-                }
-                ahead => ahead,
-            };
             let (view, by) = match ahead {
-                Some((moved, by)) if covered(&moved) => (moved, by),
+                Some((moved, by)) if cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, &self.shown).1.is_none() => (moved, by),
                 Some((moved, by)) => {
                     let hole = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, &self.shown).1;
                     let kinds: Vec<String> = snapshot.layers.iter().map(|layer| format!("{:?}@{},{} {}x{} px={:.3}", layer.kind, layer.x, layer.y, layer.tex.width, layer.tex.height, layer.px)).take(6).collect();
