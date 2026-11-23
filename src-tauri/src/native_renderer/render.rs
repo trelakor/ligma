@@ -664,6 +664,22 @@ struct Unchecked {
     seq: u64,
 }
 
+/// The view Vello draws exactly once it's still, a part the size of a
+/// tile a pass, so the GPU's never held long, nor Vello's buffers made big
+/// for all of it at once, which dense views took a second of the GPU for
+struct Chunked {
+    at: (i32, i32, u32),
+    phase: (f32, f32),
+    tex: Arc<Tex>,
+    /// The parts drawn so far of `parts`, each its corner and size in the
+    /// view, the middle first
+    next: usize,
+    parts: Vec<(i32, i32, i32, i32)>,
+    counts: Counts,
+    started: Instant,
+    seq: u64,
+}
+
 /// A scene Vello keeps on the GPU
 struct KeptScene {
     id: u64,
@@ -1457,6 +1473,7 @@ pub struct Painter {
     /// The whole view Vello drew last, handed over once Vello's checked it
     /// had room for it, meanwhile drawing the next
     unchecked: Option<Unchecked>,
+    chunked: Option<Chunked>,
     /// The last frame of Figma's render tree applied
     seq: u64,
     /// Units drawn small at powers of two, on pages of their own, for the
@@ -1635,6 +1652,7 @@ impl Painter {
             widening: 0.0,
             whole_took: Duration::ZERO,
             unchecked: None,
+            chunked: None,
             seq: 0,
             thumbs: HashMap::new(),
             thumb_pages: Vec::new(),
@@ -2153,8 +2171,15 @@ impl Painter {
         // Tiles land on whole pixels, so where Figma draws the view from a
         // fraction of one, it's drawn from there too once it's still
         let between = phase != (0.0, 0.0);
-        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && still && (!sharp || between) && !whole_at && !unchecked_at && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
-            if let Some(next) = self.fill_once(px, (ox, oy, width, height), phase) {
+        // Drawn a part at a time once tiles show it all exactly, as they
+        // draw what's missing sooner, and would be drawn twice
+        if self.chunked.as_ref().is_some_and(|chunked| chunked.at != (ox, oy, pxb) || chunked.phase != phase || self.edited.elapsed() < chunked.started.elapsed() || !still) {
+            if let Some(chunked) = self.chunked.take() {
+                self.retire(chunked.tex);
+            }
+        }
+        if self.vello_ready() && self.tree.is_some() && settle.is_zero() && still && sharp && between && !whole_at && !unchecked_at && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
+            if let Some(next) = self.fill_chunked(px, (ox, oy, width, height), phase) {
                 return next;
             }
         }
@@ -2444,6 +2469,95 @@ impl Painter {
                 None
             }
         }
+    }
+
+    /// A part more of the view Vello draws exactly at the fraction of a
+    /// pixel it's at, see `Chunked`, shown once it's all drawn. None where
+    /// Vello can't, for tiles to stand
+    fn fill_chunked(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), phase: (f32, f32)) -> Option<Option<Duration>> {
+        let _span = super::span::span("fill chunked");
+        if self.too_big() {
+            return None;
+        }
+        let at = (ox, oy, px.to_bits());
+        if self.chunked.is_none() {
+            let tex = self.tex(width, height)?;
+            let mut parts = Vec::new();
+            for y in (0..height).step_by(TILE as usize) {
+                for x in (0..width).step_by(TILE as usize) {
+                    parts.push((x, y, TILE.min(width - x), TILE.min(height - y)));
+                }
+            }
+            let (cx, cy) = (width / 2, height / 2);
+            parts.sort_by_key(|&(x, y, w, h)| (x + w / 2 - cx).pow(2) + (y + h / 2 - cy).pow(2));
+            self.chunked = Some(Chunked { at, phase, tex, next: 0, parts, counts: Counts::default(), started: Instant::now(), seq: self.seq });
+        }
+        let (x, y, w, h) = {
+            let chunked = self.chunked.as_ref()?;
+            chunked.parts[chunked.next]
+        };
+        let reach = Rect::from_xywh((ox + x) as f32 / px, (oy + y) as f32 / px, w as f32 / px, h as f32 / px);
+        let started = Instant::now();
+        self.slice = Some(ENCODE_SLICE);
+        let mut drawn = None;
+        for _ in 0..8 {
+            let rendered = self.vello_render(ox + x, oy + y, phase, w, h, px, reach, None, false, None);
+            let (out, counts) = match rendered {
+                Ok((out, counts, ..)) => (out, counts),
+                Err(why) if why == UNFINISHED => {
+                    self.slice = None;
+                    return Some(Some(Duration::ZERO));
+                }
+                Err(why) => {
+                    self.slice = None;
+                    trace(|| format!("  chunked vello px={px:.3} can't: {why}"));
+                    if let Some(chunked) = self.chunked.take() {
+                        self.retire(chunked.tex);
+                    }
+                    return None;
+                }
+            };
+            let vello = self.vello.as_mut()?;
+            match vello.check(usize::MAX) {
+                Ok(None) => {
+                    drawn = Some((out, counts));
+                    break;
+                }
+                Ok(Some(why)) if !why.starts_with("too big") => trace(|| format!("  vello ran out of room, drawing again: {why}")),
+                _ => break,
+            }
+        }
+        self.slice = None;
+        let Some((out, counts)) = drawn else {
+            if let Some(chunked) = self.chunked.take() {
+                self.retire(chunked.tex);
+            }
+            return None;
+        };
+        let target = self.chunked.as_ref()?.tex.clone();
+        let image = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None)?;
+        let mut surface = self.target(&target)?;
+        let mut paint = Paint::default();
+        paint.set_blend_mode(skia_safe::BlendMode::Src);
+        let from = Rect::from_wh(w as f32, h as f32);
+        surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_xywh(x as f32, y as f32, w as f32, h as f32), &paint);
+        drop(surface);
+        drop(image);
+        self.finish(&target.backend(), false)?;
+        let chunked = self.chunked.as_mut()?;
+        chunked.counts += counts;
+        chunked.next += 1;
+        trace(|| format!("  chunked vello px={px:.3} part {} of {} at {x},{y} {w}x{h} {:.1}ms", chunked.next, chunked.parts.len(), started.elapsed().as_secs_f64() * 1000.0));
+        if chunked.next == chunked.parts.len() {
+            let chunked = self.chunked.take()?;
+            let fence = self.gpu.signal();
+            let layer = Layer { tex: chunked.tex, x: ox, y: oy, phase, px, counts: chunked.counts, kind: LayerKind::Whole, drawn: 0 };
+            trace(|| format!("  whole vello chunked px={px:.3} {width}x{height} in {} parts {:.1}ms", chunked.parts.len(), chunked.started.elapsed().as_secs_f64() * 1000.0));
+            self.hand_whole(layer, fence, at, false, true, chunked.seq);
+            self.drew = true;
+        }
+        self.dirty = true;
+        Some(Some(Duration::ZERO))
     }
 
     fn fill_kept(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32)) -> Option<Option<Duration>> {
