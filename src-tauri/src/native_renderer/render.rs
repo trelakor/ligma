@@ -660,6 +660,64 @@ const TILE: i32 = 512;
 /// Textures kept to use again
 const SPARE: usize = 12;
 
+/// Free tiles' textures kept to use again past the GPU budget
+const SPARE_PRESSED: usize = 4;
+
+/// Tiles' textures made ahead, for when none's free to use again
+const MADE_AHEAD: usize = 2;
+
+/// Tiles' textures made ahead and those let go of freed on a thread of its
+/// own, as each took the render thread a millisecond
+struct Maker {
+    ready: Arc<std::sync::Mutex<Vec<Arc<Tex>>>>,
+    work: Sender<Making>,
+}
+
+enum Making {
+    Tiles,
+    Free(Vec<windows::Win32::Graphics::Direct3D12::ID3D12Resource>),
+}
+
+// D3D12 devices and resources are free-threaded
+unsafe impl Send for Making {}
+
+struct SendDevice(ID3D12Device);
+
+unsafe impl Send for SendDevice {}
+
+impl Maker {
+    fn new(device: &ID3D12Device) -> Option<Self> {
+        let ready: Arc<std::sync::Mutex<Vec<Arc<Tex>>>> = Arc::default();
+        let (work, works) = std::sync::mpsc::channel::<Making>();
+        let (made, device) = (ready.clone(), SendDevice(device.clone()));
+        std::thread::Builder::new()
+            .name("ligma textures".into())
+            .spawn(move || {
+                let device = device;
+                while let Ok(making) = works.recv() {
+                    match making {
+                        Making::Tiles => {
+                            while made.lock().unwrap().len() < MADE_AHEAD {
+                                let Some(tex) = Tex::new(&device.0, TILE, TILE) else { break };
+                                made.lock().unwrap().push(tex);
+                            }
+                        }
+                        Making::Free(resources) => drop(resources),
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self { ready, work })
+    }
+
+    /// A tile's texture made ahead, if there's one, and another made
+    fn take(&self) -> Option<Arc<Tex>> {
+        let tex = self.ready.lock().unwrap().pop();
+        let _ = self.work.send(Making::Tiles);
+        tex
+    }
+}
+
 /// The whole view, see `Painter::draw_whole`
 /// A whole view Vello's GPU work's been submitted for, not yet checked
 struct Unchecked {
@@ -1587,8 +1645,15 @@ pub struct Painter {
     /// Each unit as of the last `check`, in the order they're drawn: what
     /// it is, where, and its version
     checked: Vec<Mark>,
+    /// Units whose version changed since the last check, which is all that
+    /// changed unless `units_rebuilt`, and where each unit's mark is in
+    /// `checked`
+    touched: Vec<(usize, bool)>,
+    units_rebuilt: bool,
+    checked_at: HashMap<(usize, bool), usize>,
     /// Textures let go of, freed once the queue passes each fence value
     graves: Vec<(u64, Vec<windows::Win32::Graphics::Direct3D12::ID3D12Resource>)>,
+    maker: Option<Maker>,
 }
 
 /// A unit as `check` knows it: its slot and section, bounds as bits, a
@@ -1730,7 +1795,11 @@ impl Painter {
             revision: 1,
             checked_revision: 0,
             checked: Vec::new(),
+            touched: Vec::new(),
+            units_rebuilt: true,
+            checked_at: HashMap::new(),
             graves: Vec::new(),
+            maker: None,
             kept,
         }
     }
@@ -1747,7 +1816,17 @@ impl Painter {
             self.graves.push((value, buried));
         }
         let passed = self.gpu.passed();
-        self.graves.retain(|(value, _)| *value > passed);
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.graves).into_iter().partition(|(value, _)| *value <= passed);
+        self.graves = kept;
+        let gone: Vec<_> = gone.into_iter().flat_map(|(_, resources)| resources).collect();
+        if !gone.is_empty() {
+            match &self.maker {
+                Some(maker) => {
+                    let _ = maker.work.send(Making::Free(gone));
+                }
+                None => drop(gone),
+            }
+        }
     }
 
     pub fn run(mut self, messages: Receiver<Msg>) {
@@ -3424,8 +3503,8 @@ impl Painter {
                 // Encoded by threads at once, each taking the next unit until
                 // there are none
                 let (paths, begun, next, slice) = (&self.vello_paths, Instant::now(), std::sync::atomic::AtomicUsize::new(0), self.slice);
-                let threads = std::env::var("LIGMA_NATIVE_VELLO_THREADS").ok().and_then(|n| n.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, 8)).min(jobs.len());
-                let mut worked: Vec<(Done, i64, usize)> = std::thread::scope(|scope| {
+                let threads = std::env::var("LIGMA_NATIVE_VELLO_THREADS").ok().and_then(|n| n.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, super::pool::MOST)).min(jobs.len());
+                let mut worked: Vec<(Done, i64, usize)> = (|| {
                     let (jobs, shown, drawable, next) = (&jobs, &shown, &drawable, &next);
                     let work = move |behind: bool| {
                                 // Behind every other thread, the browser's
@@ -3469,9 +3548,8 @@ impl Painter {
                     if threads == 1 && jobs.len() == 1 {
                         return vec![work(false)];
                     }
-                    let workers: Vec<_> = (0..threads).map(|_| scope.spawn(move || work(true))).collect();
-                    workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| (Vec::new(), 0, 0))).collect()
-                });
+                    super::pool::run(threads, &move || work(true))
+                })();
                 encoding = begun.elapsed();
                 drop(made_span);
                 let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
@@ -4370,6 +4448,14 @@ impl Painter {
             std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
             return Some(self.spare.swap_remove(free));
         }
+        if (width, height) == (TILE, TILE) {
+            if self.maker.is_none() {
+                self.maker = Maker::new(&self.gpu.device);
+            }
+            if let Some(tex) = self.maker.as_ref().and_then(Maker::take) {
+                return Some(tex);
+            }
+        }
         Tex::new(&self.gpu.device, width, height)
     }
 
@@ -4909,6 +4995,7 @@ impl Painter {
             for unit in drew {
                 self.version_next += 1;
                 self.sharpened.insert(unit, self.version_next);
+                self.touched.push(unit);
                 self.revision += 1;
             }
         } else {
@@ -5210,7 +5297,14 @@ impl Painter {
         if !was {
             trace(|| format!("past the GPU budget of {} MB", budget >> 20));
         }
-        self.spare.retain(|tex| Arc::strong_count(tex) > 1);
+        // But for a few tiles' worth, which the next tiles drawn take at
+        // once, rather than each making a texture again, a millisecond each
+        let mut kept = 0;
+        self.spare.retain(|tex| {
+            let tile = Arc::strong_count(tex) == 1 && (tex.width, tex.height) == (TILE, TILE) && kept < SPARE_PRESSED;
+            kept += usize::from(tile);
+            tile || Arc::strong_count(tex) > 1
+        });
         if self.cleaned.elapsed() > Duration::from_millis(100) {
             self.cleaned = Instant::now();
             let _ = self.gpu.context.flush_and_submit();
@@ -5234,6 +5328,9 @@ impl Painter {
             vello.trim();
         }
         self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE) || Arc::strong_count(tex) > 1);
+        if let Some(maker) = &self.maker {
+            maker.ready.lock().unwrap().clear();
+        }
         // Surfaces drawn on are made again when next needed
         self.live = None;
         self.scratch.clear();
@@ -5672,6 +5769,7 @@ impl Painter {
         for key in keys {
             self.version_next += 1;
             self.versions.insert(key, self.version_next);
+            self.touched.push(key);
             self.revision += 1;
         }
     }
@@ -5689,15 +5787,44 @@ impl Painter {
         }
         self.checked_revision = self.revision;
         let bits = |r: &Rect| [r.left.to_bits(), r.top.to_bits(), r.right.to_bits(), r.bottom.to_bits()];
+        let rect = |b: &[u32; 4]| Rect::from_ltrb(f32::from_bits(b[0]), f32::from_bits(b[1]), f32::from_bits(b[2]), f32::from_bits(b[3]));
+        // The units the same, only those whose version changed are looked
+        // at, as images coming in had all of tens of thousands marked again
+        // each, a millisecond a pass
+        let touched = std::mem::take(&mut self.touched);
+        if !std::mem::take(&mut self.units_rebuilt) && self.checked.len() == self.units.len() {
+            let (mut areas, mut sharper) = (Vec::new(), Vec::new());
+            for key in touched {
+                let Some(&at) = self.checked_at.get(&key) else { continue };
+                let unit = &self.units[at];
+                let mark = ((unit.slot, unit.section), bits(&unit.bounds), self.mark(unit), self.sharpened.get(&(unit.slot, unit.section)).copied().unwrap_or(0));
+                let old = &self.checked[at];
+                if *old == mark {
+                    continue;
+                }
+                if (old.1, old.2) == (mark.1, mark.2) {
+                    sharper.push(rect(&mark.1));
+                } else {
+                    areas.push(rect(&old.1));
+                    areas.push(rect(&mark.1));
+                }
+                self.checked[at] = mark;
+            }
+            areas.retain(|area: &Rect| area.width() > 0.0 || area.height() > 0.0);
+            trace(|| format!("  check found {} areas changed, {} sharper", areas.len(), sharper.len()));
+            self.drop_tiles(&areas);
+            self.sharpen(&sharper);
+            return;
+        }
         let now: Vec<Mark> = self
             .units
             .iter()
             .map(|unit| ((unit.slot, unit.section), bits(&unit.bounds), self.mark(unit), self.sharpened.get(&(unit.slot, unit.section)).copied().unwrap_or(0)))
             .collect();
+        self.checked_at = now.iter().enumerate().map(|(at, mark)| (mark.0, at)).collect();
         if now == self.checked {
             return;
         }
-        let rect = |b: &[u32; 4]| Rect::from_ltrb(f32::from_bits(b[0]), f32::from_bits(b[1]), f32::from_bits(b[2]), f32::from_bits(b[3]));
         let mut areas: Vec<Rect> = Vec::new();
         // Where only images came sharper: what's drawn shows the same, so
         // it's shown till it's drawn again
@@ -5865,6 +5992,7 @@ impl Painter {
     fn rebuild_units(&mut self) {
         let _span = super::span::span("rebuild units");
         self.revision += 1;
+        self.units_rebuilt = true;
         if let Some(tree) = &self.tree {
             // Background blurs draw from copies of what's behind them, so
             // nothing reads what tiles have drawn

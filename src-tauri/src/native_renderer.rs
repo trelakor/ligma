@@ -61,6 +61,8 @@ mod overlay;
 #[cfg(windows)]
 mod overlay_icons;
 #[cfg(windows)]
+mod pool;
+#[cfg(windows)]
 mod present;
 #[cfg(windows)]
 mod profile;

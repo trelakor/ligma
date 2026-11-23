@@ -98,6 +98,8 @@ pub struct Vello {
     broken: Arc<std::sync::atomic::AtomicBool>,
     /// Image fills' textures Vello has, by key and mipmap level
     pictures: HashMap<(String, u32), Held>,
+    /// When `keep_pictures` last looked over them
+    kept_pictures: std::time::Instant,
     barriers: Barriers,
     skia: SendDevice,
     blurrer: Option<Blurrer>,
@@ -265,6 +267,7 @@ impl Vello {
 
             broken,
             pictures: HashMap::new(),
+            kept_pictures: std::time::Instant::now(),
             barriers: Barriers { allocators: Vec::new(), list: None },
             skia: SendDevice(skia.clone()),
             blurrer: Some(blurrer),
@@ -704,6 +707,13 @@ impl Vello {
 
     /// Lets go of pictures of images Skia no longer has as they were
     pub fn keep_pictures(&mut self, images: &HashMap<String, Img>) {
+        // A few times a second, as looking over them all took a millisecond
+        // of each tile with many images. Those of images gone meanwhile are
+        // held till then
+        if self.kept_pictures.elapsed() < std::time::Duration::from_millis(250) {
+            return;
+        }
+        self.kept_pictures = std::time::Instant::now();
         let gone: Vec<(String, u32)> =
             self.pictures.iter().filter(|((key, _), picture)| images.get(key).is_none_or(|img| img.image.unique_id() != picture.id)).map(|(key, _)| key.clone()).collect();
         for key in gone {
@@ -1708,6 +1718,12 @@ pub struct Encoder<'a> {
     pub drawn: Vec<(String, u32)>,
     /// And how wide they showed, in device pixels
     pub shown: Vec<(String, f32)>,
+    /// Pictures found for images at a level, and the widest each was
+    /// shown, for those drawn many times over, as thousands of times a tile
+    /// a lookup and two copies of their keys each took milliseconds. Each
+    /// is in `drawn` once
+    picked: HashMap<(&'a str, u32), Option<(ImageData, u32)>>,
+    widest: HashMap<&'a str, f32>,
     /// Why the view can't be drawn this way, if it can't
     pub failed: Option<String>,
     /// Pixels Skia drew into the atlas
@@ -1818,6 +1834,8 @@ impl<'a> Encoder<'a> {
             pictures: Vec::new(),
             drawn: Vec::new(),
             shown: Vec::new(),
+            picked: HashMap::new(),
+            widest: HashMap::new(),
             cast: None,
             alpha_only: false,
             effects: Vec::new(),
@@ -3489,7 +3507,8 @@ impl<'a> Encoder<'a> {
                         Plan::patch_image(encoding, effect, nothing());
                         continue;
                     }
-                    let Some(img) = self.images.get(key.as_str()) else { return Err("image gone".into()) };
+                    let images = self.images;
+                    let Some((name, img)) = images.get_key_value(key.as_str()) else { return Err("image gone".into()) };
                     // As `image` picks it, for how wide it's shown here
                     let texels = img.image.width() as f32 / (*width * scale as f32).max(1e-6);
                     // A fragment drawn bigger than when it was encoded
@@ -3499,12 +3518,29 @@ impl<'a> Encoder<'a> {
                     }
                     let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
                     let level = (level + self.coarser).min(12);
-                    let vello = self.vello.as_deref_mut().ok_or("no Vello")?;
-                    let Some((data, level)) = (0..=level).rev().find_map(|level| vello.picture(key, img, level).map(|data| (data, level))) else {
+                    // Blurs' sources note each image they draw, to be drawn
+                    // again once one changes
+                    let found = match self.picked.get(&(name.as_str(), level)).filter(|_| depth == 0) {
+                        Some(found) => found.clone(),
+                        None => {
+                            let vello = self.vello.as_deref_mut().ok_or("no Vello")?;
+                            let found = (0..=level).rev().find_map(|level| vello.picture(key, img, level).map(|data| (data, level)));
+                            if let Some((_, level)) = &found {
+                                self.drawn.push((key.clone(), *level));
+                            }
+                            self.picked.insert((name.as_str(), level), found.clone());
+                            found
+                        }
+                    };
+                    let Some((data, _)) = found else {
                         return Err("image Vello can't draw".into());
                     };
-                    self.drawn.push((key.clone(), level));
-                    self.shown.push((key.clone(), *width * scale as f32));
+                    let shown = *width * scale as f32;
+                    let widest = self.widest.entry(name.as_str()).or_insert(-1.0);
+                    if shown > *widest {
+                        *widest = shown;
+                        self.shown.push((key.clone(), shown));
+                    }
                     Plan::patch_image(encoding, effect, data);
                 }
                 Kind::Skia { name, id, m, cast, draw } => {
