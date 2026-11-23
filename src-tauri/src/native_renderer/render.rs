@@ -609,6 +609,9 @@ const UNFINISHED: &str = "units encoded in part";
 /// are kept and the tile's drawn in a later pass, so a level with thousands
 /// of units new to it, as one far out is, never holds frames back
 const ENCODE_SLICE: Duration = Duration::from_millis(4);
+/// Most bytes of path data a unit's encoded at two or more levels finer
+/// than a tile's has to stand in for it
+const STAND_IN_MOST: usize = 16 << 10;
 
 /// The level Vello draws tiles at while the zoom goes out: the power of two
 /// nearest it
@@ -3500,10 +3503,19 @@ impl Painter {
                     }
                     if !fresh {
                         let near = budget.and_then(|_| {
-                            [level + 1, level + 2, level + 3, level - 1, level - 2]
+                            // Those levels finer than the next only where
+                            // they draw little, as zooming out past them
+                            // drew far tiles from tens of megabytes of what
+                            // a level coarser would make in a few
+                            [(level + 1, true), (level + 2, false), (level + 3, false), (level - 1, true), (level - 2, true)]
                                 .into_iter()
-                                .map(|other| (unit.slot, unit.section, other))
-                                .find(|other| fragments.get(other).is_some_and(|encoded| usable(encoded, stamp, false, images)))
+                                .map(|(other, any)| ((unit.slot, unit.section, other), any))
+                                .find(|(other, any)| {
+                                    fragments.get(other).is_some_and(|encoded| {
+                                        usable(encoded, stamp, false, images) && (*any || matches!(&*encoded.made, Ok(fragment) if fragment.scene.encoding().path_data.len() <= STAND_IN_MOST))
+                                    })
+                                })
+                                .map(|(other, _)| other)
                         });
                         let short = fragments.get(&(unit.slot, unit.section, level - 1)).is_some_and(|encoded| usable(encoded, stamp, true, images));
                         jobs.push((shown.len(), near, short));
