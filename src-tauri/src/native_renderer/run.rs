@@ -554,6 +554,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         tree: AtomicBool::new(false),
     });
     *CTX.lock().unwrap() = Some(ctx.clone());
+    *ctx.hub.messages.lock().unwrap() = Some(ctx.messages.clone());
 
     // Skia's GPU objects stay on the thread that made them: the render
     // thread draws, the present thread shows what it has drawn

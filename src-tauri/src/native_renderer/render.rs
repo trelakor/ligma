@@ -142,6 +142,9 @@ pub enum Msg {
     Frame(Box<Frame>),
     /// Tab `0` is no longer parked, so its render tree isn't kept
     Unpark(Arc<str>),
+    /// The view the window shows ahead of Figma's frames, as the wheel
+    /// zooms it, drawn for in place of theirs till it's none again
+    Ahead(Option<View>),
     /// Figma's noise octaves, see `scene::Begin`
     Octaves(Vec<f32>),
     Changes(Prepared),
@@ -1558,6 +1561,9 @@ pub struct Painter {
     checker: Option<skia_safe::RuntimeEffect>,
     grid: Option<(skia_safe::RuntimeEffect, skia_safe::RuntimeEffect)>,
     view: Option<View>,
+    /// Figma's last frame's view, while the view drawn for is `Msg::Ahead`
+    figma_view: Option<View>,
+    ahead: bool,
     /// The last zoom (pixels per unit) and when it changed
     zoom: (f32, Instant),
     /// When the zoom changed before its last change
@@ -1765,6 +1771,8 @@ impl Painter {
                 .map_err(|error| log::warn!("native renderer: grid: {error}"))
                 .ok(),
             view: None,
+            figma_view: None,
+            ahead: false,
             zoom: (0.0, Instant::now()),
             zoom_was: Instant::now(),
             moved: Instant::now(),
@@ -4823,6 +4831,12 @@ impl Painter {
     fn handle(&mut self, message: Msg) -> bool {
         match message {
             Msg::Frame(frame) => self.frame(*frame),
+            Msg::Ahead(view) => {
+                self.ahead = view.is_some();
+                if let Some(view) = view.or_else(|| self.figma_view.clone()) {
+                    self.set_view(view);
+                }
+            }
             Msg::Unpark(tab) => {
                 trace(|| format!("{tab} unparked"));
                 self.parked.take_if(|parked| parked.tab == tab);
@@ -5015,6 +5029,14 @@ impl Painter {
             Msg::Quit => return false,
         }
         true
+    }
+
+    /// The view of Figma's frame, drawn for unless the window's ahead of it
+    fn frame_view(&mut self, view: View) {
+        self.figma_view = Some(view.clone());
+        if !self.ahead {
+            self.set_view(view);
+        }
     }
 
     fn set_view(&mut self, view: View) {
@@ -5221,7 +5243,7 @@ impl Painter {
         if again && !restored {
             trace(|| format!("frame {} mode=0 the same as the last whole scene", frame.header.seq));
             self.seq = frame.header.seq;
-            self.set_view(frame.view());
+            self.frame_view(frame.view());
             self.dirty = true;
             return;
         }
@@ -5324,7 +5346,7 @@ impl Painter {
         }
         if same {
             trace(|| format!("frame {} mode={} new=0 applied={applied_ms:.1}ms units={} areas=0", frame.header.seq, frame.header.mode, self.units.len()));
-            self.set_view(frame.view());
+            self.frame_view(frame.view());
             self.dirty = true;
             return;
         }
@@ -5371,7 +5393,7 @@ impl Painter {
             self.drop_tiles(&areas);
         }
         stats().lock().unwrap().nodes = self.tree.as_ref().map_or(0, |tree| tree.forest.nodes.len());
-        self.set_view(frame.view());
+        self.frame_view(frame.view());
         self.dirty = true;
     }
 
