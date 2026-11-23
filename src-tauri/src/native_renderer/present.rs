@@ -1478,6 +1478,15 @@ fn predicting() -> bool {
 }
 
 impl Screen {
+    /// Another tab's drawn: its frames are timed from now, by its own
+    /// numbers, as each tab counts its frames from its own start
+    fn tab_drawn(&mut self) {
+        self.timed = 0;
+        self.timed_at = 0.0;
+        self.owed = None;
+        super::hud::tab_drawn();
+    }
+
     pub fn new(device: &Device, output: Output, width: u32, height: u32) -> Result<Self, String> {
         let queue_desc = D3D12_COMMAND_QUEUE_DESC { Priority: D3D12_COMMAND_QUEUE_PRIORITY_HIGH.0, ..Default::default() };
         let queue = unsafe { device.device.CreateCommandQueue(&queue_desc) }.map_err(|error| format!("queue: {error}"))?;
@@ -1712,7 +1721,7 @@ impl Screen {
                     let (pieces, _) = cover_over(&kept.layers, kept.layers.len(), kept.content, &kept_view, self.size, &self.shown);
                     let _ = self.place(placed(&hub, &kept_view));
                     self.frame(&kept, &pieces, &kept_view, None, self.timed);
-                    super::hud::tab_drawn();
+                    self.tab_drawn();
                     room = false;
                     shown = Some((kept.serial, kept_view.clone(), None, self.size));
                     complete = Some(kept);
@@ -1873,7 +1882,7 @@ impl Screen {
                 if self.layer.is_some() && self.place(placed(&hub, &view)) {
                     shown = None;
                 }
-                super::hud::tab_drawn();
+                self.tab_drawn();
             }
             complete = Some(snapshot);
         }
