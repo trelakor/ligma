@@ -116,6 +116,7 @@ const presents = (lines) => {
   const slow = [];
   let images = 0;
   let imageMb = 0;
+  const tiles = [];
   for (const line of lines) {
     const m = line.match(/present seq=\d+ at=([\d.]+) px=([\d.]+) .*? x=(-?\d+) y=(-?\d+) .*?coarse=(-?[\d.]+) coarsest=(-?[\d.]+) serial=(\d+) path=(\d+)/);
     if (m) {
@@ -133,13 +134,15 @@ const presents = (lines) => {
     if (line.includes("holes=true") || line.includes("present held")) held++;
     if (line.includes("shown late:")) late++;
     if (line.includes("present not ahead")) notAhead++;
+    const tile = line.match(/ vello tiles px=\S+ at \S+ \S+ exact=\S+ rendered=([\d.]+)ms/);
+    if (tile) tiles.push(Number(tile[1]));
     const pass = line.match(/slow render pass (\d+)ms/);
     if (pass) slow.push(Number(pass[1]));
     if (/ image [0-9a-f]{40}\S* \d+x\d+ areas/.test(line)) images++;
     const mb = line.match(/images (\d+) MB/);
     if (mb) imageMb = Number(mb[1]);
   }
-  return { shown, sent, long, held, late, notAhead, slow, images, imageMb };
+  return { shown, sent, long, held, late, notAhead, slow, images, imageMb, tiles };
 };
 
 const percentile = (sorted, p) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] : 0);
@@ -183,11 +186,21 @@ const motion = (traced, from, to) => {
     longest: Math.max(0, ...traced.long),
     jerk: round(speeds.length > 2 ? jerk / (speeds.length - 2) / Math.max(speed, 0.001) : 0, 3),
     coarse: round(shown.reduce((a, s) => a + s.coarse, 0) / Math.max(1, shown.length), 3),
+    // Frames with a part shown at under half the detail it should have,
+    // as a tile still being drawn is
+    blurry: round(shown.filter((s) => s.coarse > 0.02 && s.coarsest < 0.5).length / Math.max(1, shown.length), 3),
+    ...tileTimes(traced.tiles),
     held: traced.held,
     late: traced.late,
     slowPasses: traced.slow.length,
     slowest: Math.max(0, ...traced.slow),
   };
+};
+
+// How long tiles took to draw, the middle one and the longest
+const tileTimes = (tiles) => {
+  const sorted = [...tiles].sort((a, b) => a - b);
+  return { tiles: tiles.length, tileP50: round(percentile(sorted, 0.5)), tileMax: round(sorted.at(-1) ?? 0) };
 };
 
 // How long the view took to settle after a jump: to the first frame shown,
@@ -207,6 +220,7 @@ const settling = (traced, from) => {
     imageMb: traced.imageMb,
     slowPasses: traced.slow.length,
     slowest: Math.max(0, ...traced.slow),
+    ...tileTimes(traced.tiles),
   };
 };
 
@@ -229,8 +243,10 @@ const wheel = async (ms, per, zoom) => {
   const start = Date.now();
   while (Date.now() - start < ms) {
     const sign = Math.floor((Date.now() - start) / 700) % 2 ? -1 : 1;
+    // A pinch in first, so it never meets Figma's least zoom, where the
+    // view would stand still
     fire("Input.dispatchMouseEvent", zoom
-      ? { type: "mouseWheel", x: box.x, y: box.y, deltaX: 0, deltaY: per * sign, modifiers: 2 }
+      ? { type: "mouseWheel", x: box.x, y: box.y, deltaX: 0, deltaY: -per * sign, modifiers: 2 }
       : { type: "mouseWheel", x: box.x, y: box.y, deltaX: per * sign * 0.8, deltaY: per * sign * 0.6 });
     await sleep(8);
   }
@@ -259,7 +275,7 @@ try {
         await sleep(15000);
       } else if (step === "pan") await wheel(4000, 6);
       else if (step === "fastpan") await wheel(3000, 40);
-      else if (step === "zoom") await wheel(3000, 12, true);
+      else if (step === "zoom") await wheel(2800, 12, true);
       else if (step === "deep") {
         // In close at 100%, then panned there
         await evaluate(`figma.viewport.zoom = 1; return true`);
@@ -293,8 +309,8 @@ for (const [name, result] of Object.entries(results)) {
   for (const [step, r] of Object.entries(result)) {
     rows.push(
       step === "jump"
-        ? `${name.padEnd(8)} ${step.padEnd(8)} first ${r.firstMs}ms sharp ${r.sharpMs}ms done ${r.doneMs}ms held ${r.held} slow ${r.slowPasses}/${r.slowest}ms images ${r.imageMb}MB vram ${r.vram.peak}MB`
-        : `${name.padEnd(8)} ${step.padEnd(8)} ${r.fps}fps p95 ${r.p95} p99 ${r.p99} max ${r.max}ms missed ${r.missed} hitches ${r.hitches} | figma ${r.figmaFps}fps hitches ${r.figmaHitches} max ${r.figmaMax} long ${r.longTasks}/${r.longest}ms | jerk ${r.jerk} coarse ${r.coarse} held ${r.held} slow ${r.slowPasses}/${r.slowest}ms vram ${r.vram.peak}MB`,
+        ? `${name.padEnd(8)} ${step.padEnd(8)} first ${r.firstMs}ms sharp ${r.sharpMs}ms done ${r.doneMs}ms held ${r.held} slow ${r.slowPasses}/${r.slowest}ms tiles ${r.tiles} p50 ${r.tileP50} max ${r.tileMax}ms images ${r.imageMb}MB vram ${r.vram.peak}MB`
+        : `${name.padEnd(8)} ${step.padEnd(8)} ${r.fps}fps p95 ${r.p95} p99 ${r.p99} max ${r.max}ms missed ${r.missed} hitches ${r.hitches} | figma ${r.figmaFps}fps hitches ${r.figmaHitches} max ${r.figmaMax} long ${r.longTasks}/${r.longest}ms | jerk ${r.jerk} coarse ${r.coarse} blurry ${r.blurry} held ${r.held} slow ${r.slowPasses}/${r.slowest}ms tiles ${r.tiles} p50 ${r.tileP50} max ${r.tileMax}ms vram ${r.vram.peak}MB`,
     );
   }
 }

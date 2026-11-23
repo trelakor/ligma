@@ -597,6 +597,12 @@ const EFFECT_PATIENCE: Duration = Duration::from_secs(5);
 const VELLO_BLOCK: i32 = 1;
 /// Tiles kept drawn by Vello, 1 MB each, past those the view needs
 const VELLO_TILES: usize = 64;
+/// Why a tile isn't drawn yet: its units are encoded over several passes
+const UNFINISHED: &str = "units encoded in part";
+/// How long a pass encodes units for tiles at most, past which those made
+/// are kept and the tile's drawn in a later pass, so a level with thousands
+/// of units new to it, as one far out is, never holds frames back
+const ENCODE_SLICE: Duration = Duration::from_millis(4);
 
 /// The level Vello draws tiles at while the zoom changes: the power of two
 /// at or past it, which frames only ever scale down
@@ -1371,6 +1377,8 @@ pub struct Painter {
     fragments: HashMap<(usize, bool, i32), Encoded>,
     /// Images of units made for the tile or view being drawn
     rasters_made: u32,
+    /// How long the tile being drawn encodes units at most this pass
+    slice: Option<Duration>,
     /// Textures to use again once the present thread has let go of them
     spare: Vec<Arc<Tex>>,
     /// What the last snapshot handed over had, its frame, and the fence the
@@ -1579,6 +1587,7 @@ impl Painter {
             rasters: HashMap::new(),
             raster_bytes: 0,
             rasters_made: 0,
+            slice: None,
             rasters_off: super::dev() && std::env::var("LIGMA_NATIVE_RASTERS").is_ok_and(|value| value == "0"),
             spare: Vec::new(),
             published: None,
@@ -2717,7 +2726,14 @@ impl Painter {
         let _span = super::span::span("vello or skia");
         let vello: Vec<TileKey> = keys.iter().copied().filter(|key| !self.vello_cant.contains(key)).collect();
         if !vello.is_empty() {
-            if let Err((key, why)) = self.vello_tiles(&vello, exact) {
+            self.slice = Some(ENCODE_SLICE);
+            let drawn = self.vello_tiles(&vello, exact);
+            self.slice = None;
+            if let Err((key, why)) = drawn {
+                if why == UNFINISHED {
+                    trace(|| format!("  vello tile {},{} px={:.4} encoded in part", key.x, key.y, key.px()));
+                    return;
+                }
                 trace(|| format!("  vello tile {},{} px={:.4} can't: {why}", key.x, key.y, key.px()));
                 if self.vello_cant.len() > 4096 {
                     self.vello_cant.clear();
@@ -3025,6 +3041,7 @@ impl Painter {
         plan.blur_view = self.blur_view;
         let whole = vello::kurbo::Rect::new(0.0, 0.0, w as f64, h as f64);
         let encoding_span = super::span::span("encode scene");
+        let made_span = super::span::span("make fragments");
         let (scene, failed, fell_back, mut pages) = match self.tree.as_ref() {
             None => (vello::Scene::new(), Some("not a tree".to_string()), 0, Vec::new()),
             Some(tree) => {
@@ -3075,7 +3092,7 @@ impl Painter {
                 };
                 // Encoded by threads at once, each taking the next unit until
                 // there are none
-                let (paths, begun, next) = (&self.vello_paths, Instant::now(), std::sync::atomic::AtomicUsize::new(0));
+                let (paths, begun, next, slice) = (&self.vello_paths, Instant::now(), std::sync::atomic::AtomicUsize::new(0), self.slice);
                 let threads = std::env::var("LIGMA_NATIVE_VELLO_THREADS").ok().and_then(|n| n.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, 8)).min(jobs.len());
                 type Done = Vec<(usize, (usize, bool, i32), bool, Option<Result<super::vello::Fragment, String>>)>;
                 let worked: Vec<(Done, i64, usize)> = std::thread::scope(|scope| {
@@ -3095,6 +3112,9 @@ impl Painter {
                                 encoder.px = Some(px);
                                 let mut done = Vec::new();
                                 while let Some(&(at, near, short)) = jobs.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                                    if slice.is_some_and(|slice| begun.elapsed() >= slice) {
+                                        break;
+                                    }
                                     let unit = &units_all[shown[at].0];
                                     let Some(place) = &unit.place else { continue };
                                     let over = budget.is_some_and(|budget| begun.elapsed() >= budget);
@@ -3123,12 +3143,18 @@ impl Painter {
                     workers.into_iter().map(|worker| worker.join().unwrap_or_else(|_| (Vec::new(), 0, 0))).collect()
                 });
                 encoding = begun.elapsed();
+                drop(made_span);
                 let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
                 encoder.coarser = self.image_coarser;
                 if !whole_tree {
                     encoder.failed = Some("not a tree".into());
                 }
                 reused += shown.len() - jobs.len();
+                let finished: usize = worked.iter().map(|(done, ..)| done.len()).sum();
+                // Those made are kept for the pass that draws it
+                if finished < jobs.len() {
+                    encoder.failed = Some(UNFINISHED.into());
+                }
                 for (done, fell_back, inexact) in worked {
                     encoder.fell_back += fell_back;
                     encoder.inexact += inexact;
@@ -3183,7 +3209,7 @@ impl Painter {
                             encoder.scene.append(&fragment.scene, Some(at));
                             append_took += timer.elapsed();
                             if sizing() {
-                                biggest.push((fragment.scene.encoding().n_paths, place.id, tree.info(place.id).count, unit.bounds));
+                                biggest.push((fragment.scene.encoding().path_data.len() as u32, place.id, tree.info(place.id).count, unit.bounds));
                             }
                             pictures.extend(encoder.drawn.drain(..));
                             widths.extend(encoder.shown.drain(..));
@@ -3202,10 +3228,9 @@ impl Painter {
                 }
                 if !biggest.is_empty() {
                     biggest.sort_by_key(|(paths, ..)| std::cmp::Reverse(*paths));
-                    trace(|| format!("  biggest units: {}", biggest.iter().take(6).map(|(paths, id, count, b)| format!("{id} paths={paths} nodes={count} at {:.0},{:.0} {:.0}x{:.0}", b.left, b.top, b.width(), b.height())).collect::<Vec<_>>().join(", ")));
-                    if biggest[0].2 > 10000 {
-                        trace(|| format!("  biggest unit: {}", super::vello::shape_of(tree, biggest[0].1, 0)));
-                    }
+                    trace(|| format!("  biggest units: {}", biggest.iter().take(6).map(|(paths, id, count, b)| format!("{id} words={paths} nodes={count} at {:.0},{:.0} {:.0}x{:.0}", b.left, b.top, b.width(), b.height())).collect::<Vec<_>>().join(", ")));
+                    let total: u64 = biggest.iter().map(|b| b.0 as u64).sum();
+                    trace(|| format!("  biggest of {} words: {}", total, biggest.iter().take(4).map(|b| super::vello::shape_of(tree, b.1, 0).chars().take(400).collect::<String>()).collect::<Vec<_>>().join(" || ")));
                 }
                 counts += encoder.counts;
                 inexact = encoder.inexact;
@@ -3214,7 +3239,14 @@ impl Painter {
                 (std::mem::take(&mut encoder.scene), encoder.failed.take(), encoder.fell_back, encoder.take_pages())
             }
         };
-        fragments.retain(|_, encoded| encoded.used.elapsed() < FRAGMENTS_KEPT);
+        // Let go of on a thread of their own, as a zoom leaves thousands
+        // unused at once, which took hundreds of milliseconds to free
+        let let_go = super::span::span("let go of fragments");
+        let gone: Vec<Encoded> = fragments.extract_if(|_, encoded| encoded.used.elapsed() >= FRAGMENTS_KEPT).map(|(_, encoded)| encoded).collect();
+        if gone.len() > 64 {
+            std::thread::spawn(move || drop(gone));
+        }
+        drop(let_go);
         self.fragments = fragments;
         drop(encoding_span);
         let encoded = started.elapsed();
@@ -3353,9 +3385,10 @@ impl Painter {
             }
         }
         let stats = format!(
-            "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} atlas={}k {}",
+            "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} kinds={:?} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} atlas={}k {}",
             paths,
             clips,
+            super::vello::KINDS.iter().map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed)).collect::<Vec<_>>(),
             {
                 let mut layers: Vec<(u32, u64)> = super::vello::LAYERS.lock().unwrap().take().unwrap_or_default().into_iter().collect();
                 layers.sort_by_key(|(_, n)| std::cmp::Reverse(*n));

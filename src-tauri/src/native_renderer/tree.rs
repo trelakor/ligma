@@ -629,10 +629,32 @@ impl Tree {
                 });
             }
             Op::FillGlyphs => {
-                let size = node.paint_size.unwrap_or([0.0, 0.0]);
-                // Glyphs reach past the box by their ascent and descent
-                let margin = size[1].max(1.0);
-                info.bounds = Some(transform.map_rect(Rect::from_wh(size[0], size[1]).with_outset((margin, margin))).0);
+                // Where its glyphs are, so a frame they're well inside
+                // needn't clip them
+                let glyphs = ext.painted_glyph_geometry.as_ref().and_then(|glyphs| {
+                    glyphs
+                        .glyphs
+                        .iter()
+                        .filter_map(|glyph| {
+                            let path = glyph.path.as_ref()?;
+                            let [x, y] = glyph.position.unwrap_or([0.0, 0.0]);
+                            let size = glyph.font_size.unwrap_or(1.0);
+                            let mut m = Matrix::translate((x, y));
+                            m.pre_scale((size, -size), None);
+                            m.pre_rotate(glyph.rotation.unwrap_or(0.0).to_degrees(), None);
+                            Some(m.map_rect(*self.skia_path(path).bounds()).0)
+                        })
+                        .reduce(Rect::join2)
+                });
+                info.bounds = Some(match glyphs.filter(|b| b.left.is_finite() && b.top.is_finite() && b.right.is_finite() && b.bottom.is_finite()) {
+                    Some(glyphs) => transform.map_rect(glyphs.with_outset((1.0, 1.0))).0,
+                    None => {
+                        let size = node.paint_size.unwrap_or([0.0, 0.0]);
+                        // Glyphs reach past the box by their ascent and descent
+                        let margin = size[1].max(1.0);
+                        transform.map_rect(Rect::from_wh(size[0], size[1]).with_outset((margin, margin))).0
+                    }
+                });
             }
             Op::StaticTransformBinding => {
                 info.bounds = of(node.child).and_then(|child| child.bounds).map(|bounds| transform.map_rect(bounds).0);
@@ -1494,6 +1516,13 @@ impl<'a> Drawer<'a> {
                 if one && matches!(op, MaskOpType::Normal | MaskOpType::Pattern | MaskOpType::BackgroundBlur) {
                     if let Some((fill, at)) = self.tree.clip_of(alpha) {
                         if let Some(outline) = self.tree.outline(fill) {
+                            // What's well inside it, as a frame's content
+                            // mostly is, it doesn't cut
+                            let pixel = (1.0 / self.device_scale().max(1e-6)).min(2.0);
+                            if self.tree.info(color).bounds.is_some_and(|inside| outline.with_transform(&at).conservatively_contains_rect(inside.with_outset((pixel, pixel)))) {
+                                self.draw(color);
+                                return;
+                            }
                             count(1, 1);
                             self.canvas.save();
                             self.canvas.clip_path(&self.volatile(outline.with_transform(&at)), ClipOp::Intersect, self.aa);

@@ -957,8 +957,16 @@ fn outside(shape: &Path, device: IRect) -> Option<Path> {
     Some(out)
 }
 
+/// How far from a shape, in device pixels, the lines simplifying it are at
+/// most in a fragment, which is shown up to twice as big: a quarter of what
+/// Vello flattens curves to
+const KEPT_TOLERANCE: f64 = 1.0 / 32.0;
+
 /// Parts of a shape past which `simplified` leaves it as it is
 const SIMPLIFY_MOST: usize = 4096;
+/// The same for a path simplified once for every place it's drawn, as a
+/// text's is, whose thousands of glyph contours come to a few pixels far out
+const SIMPLIFY_KEPT_MOST: usize = 1 << 17;
 /// Points of one of its lines, flattened, past which it's left as it is
 const SIMPLIFY_POINTS: usize = 16384;
 
@@ -967,7 +975,7 @@ const SIMPLIFY_POINTS: usize = 16384;
 /// of a grid `cells` to a pixel it covers, filled by `style`, where that's
 /// fewer still and `runs_too`, with how many parts it had. Without
 /// `runs_too` the lines come whether they're fewer or not
-fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, style: Fill, cells: f64, runs_too: bool) -> Option<(BezPath, usize)> {
+fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, style: Fill, cells: f64, runs_too: bool, most: usize) -> Option<(BezPath, usize)> {
     // Half the tolerance flattening, half leaving points out
     let half = tolerance / 2.0;
     // Its control points' bounds, which hold it, and how many parts it has
@@ -981,7 +989,7 @@ fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, styl
     }
     // One of very many parts, as a traced or scanned vector is, takes far
     // longer to make fewer of than Vello takes to draw as it is
-    if had == 0 || had > SIMPLIFY_MOST || (high.x - low.x).max(high.y - low.y) > 64.0 {
+    if had == 0 || had > most || (high.x - low.x).max(high.y - low.y) > 64.0 {
         return None;
     }
     SCRATCH.with_borrow_mut(|(line, keep, kept, spans)| {
@@ -1090,7 +1098,7 @@ fn simple(path: &Arc<rt::Path>, bez: &BezPath, linear: Affine, tolerance: f64, s
             return simple.clone();
         }
     }
-    let made = simplified(bez, linear, tolerance, style, 0.0, false).map(Arc::new);
+    let made = simplified(bez, linear, tolerance, style, 0.0, false, SIMPLIFY_KEPT_MOST).map(Arc::new);
     let mut shard = shard.lock().unwrap();
     if shard.len() >= SIMPLE_MOST {
         shard.clear();
@@ -1377,6 +1385,9 @@ fn count_layer() {
 }
 
 pub static SIZES: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
+/// Dev tools: paths filled and the lines Vello takes them as, by how
+/// `fill` drew them, in `Encoder::kind`'s order
+pub static KINDS: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
 pub static TIMES: [std::sync::atomic::AtomicU64; 12] = [const { std::sync::atomic::AtomicU64::new(0) }; 12];
 pub struct Timer(usize, std::time::Instant);
 impl Drop for Timer {
@@ -1706,6 +1717,10 @@ pub struct Encoder<'a> {
     /// Where what's drawn can show, in device pixels: inside the masks
     /// it's in, so what's masked away isn't encoded at all
     within: Option<Rect>,
+    /// Dev tools: how `fill` is drawing what it fills, glyphs' lines 1,
+    /// their cells 2, a path's cells 3, its lines 4, as it is 5, others'
+    /// lines 6, as they are 7, anything else 9
+    kind: usize,
 }
 
 impl<'a> Encoder<'a> {
@@ -1774,6 +1789,7 @@ impl<'a> Encoder<'a> {
             source: None,
             glyph_lines: None,
             within: None,
+            kind: 9,
         }
     }
 
@@ -1919,7 +1935,7 @@ impl<'a> Encoder<'a> {
     fn fill<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
         // Small, it's drawn with fewer lines no further than this from it,
         // in device pixels for fragments' largest zoom
-        let tolerance = switches().tolerance.unwrap_or(if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 });
+        let tolerance = switches().tolerance.unwrap_or(if self.retained { KEPT_TOLERANCE } else { 2.0 * KEPT_TOLERANCE });
         let env = timer(4);
         let whole = switches().whole;
         drop(env);
@@ -1943,7 +1959,9 @@ impl<'a> Encoder<'a> {
             if outline == shape_at as usize {
                 let small = small_runs(&lines, style, cells);
                 drop(simple_timer);
+                self.kind = if small.is_some() { 2 } else { 1 };
                 self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), small.as_ref().unwrap_or(&lines));
+                self.kind = 9;
                 self.glyph_lines = Some((outline, lines, had));
                 return;
             }
@@ -1957,25 +1975,49 @@ impl<'a> Encoder<'a> {
             let (linear, moved) = (Affine::new([c[0], c[1], c[2], c[3], 0.0, 0.0]), Affine::translate((c[4], c[5])));
             let made = simple(&path, &bez, linear, tolerance, style);
             drop(simple_timer);
-            return match made {
+            match made {
                 Some(made) if made.0.elements().len() > RUNS_FROM && kurbo::Shape::bounding_box(&made.0).size().max_side() <= RUNS_MOST => {
                     let lines = moved * made.0.clone();
                     match small_runs(&lines, style, cells) {
-                        Some(runs) if runs.elements().len() < made.1 => self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &runs),
-                        _ if made.0.elements().len() < made.1 => self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &lines),
-                        _ => self.fill_shape(style, transform, brush, brush_transform, shape),
+                        Some(runs) if runs.elements().len() < made.1 => {
+                            self.kind = 3;
+                            self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &runs)
+                        }
+                        _ if made.0.elements().len() < made.1 => {
+                            self.kind = 4;
+                            self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &lines)
+                        }
+                        _ => {
+                            self.kind = 5;
+                            self.fill_shape(style, transform, brush, brush_transform, shape)
+                        }
                     }
                 }
-                Some(made) if made.0.elements().len() < made.1 => self.fill_shape(style, moved, brush, brush_at(moved), &made.0),
-                _ => self.fill_shape(style, transform, brush, brush_transform, shape),
-            };
+                Some(made) if made.0.elements().len() < made.1 => {
+                    self.kind = 4;
+                    self.fill_shape(style, moved, brush, brush_at(moved), &made.0)
+                }
+                _ => {
+                    self.kind = 5;
+                    self.fill_shape(style, transform, brush, brush_transform, shape)
+                }
+            }
+            self.kind = 9;
+            return;
         }
-        let lines = simplified(shape, transform, tolerance, style, cells, true);
+        let lines = simplified(shape, transform, tolerance, style, cells, true, SIMPLIFY_MOST);
         drop(simple_timer);
         match lines {
-            Some((lines, _)) => self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &lines),
-            None => self.fill_shape(style, transform, brush, brush_transform, shape),
+            Some((lines, _)) => {
+                self.kind = 6;
+                self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &lines)
+            }
+            None => {
+                self.kind = 7;
+                self.fill_shape(style, transform, brush, brush_transform, shape)
+            }
         }
+        self.kind = 9;
     }
 
     /// A text's glyphs, each simplified for its size as `fill` does, in
@@ -1992,7 +2034,7 @@ impl<'a> Encoder<'a> {
         if biggest <= 0.0 || biggest * scale * 1.5 > 64.0 {
             return None;
         }
-        let tolerance = switches().tolerance.unwrap_or(if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 });
+        let tolerance = switches().tolerance.unwrap_or(if self.retained { KEPT_TOLERANCE } else { 2.0 * KEPT_TOLERANCE });
         let (mut out, mut had) = (BezPath::new(), 0);
         for glyph in &glyphs.glyphs {
             let Some(path) = &glyph.path else { continue };
@@ -2025,6 +2067,14 @@ impl<'a> Encoder<'a> {
             let segments = shape.path_elements(0.1).count() as u64;
             SIZES[bucket * 2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             SIZES[bucket * 2 + 1].fetch_add(segments, std::sync::atomic::Ordering::Relaxed);
+            let mut lines = 0u64;
+            kurbo::flatten(shape.path_elements(0.1).map(|element| transform * element), 0.25, |element| {
+                if !matches!(element, kurbo::PathEl::MoveTo(_)) {
+                    lines += 1;
+                }
+            });
+            KINDS[self.kind * 2].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            KINDS[self.kind * 2 + 1].fetch_add(lines, std::sync::atomic::Ordering::Relaxed);
         }
         match &self.soft {
             Some(soft) => {
@@ -2929,6 +2979,13 @@ impl<'a> Encoder<'a> {
         if (!blends || op == MaskOpType::BackgroundBlur) && matches!(op, MaskOpType::Normal | MaskOpType::Pattern | MaskOpType::BackgroundBlur) {
             if let Some((fill, at)) = self.tree.clip_of(alpha) {
                 if let Some(outline) = self.tree.outline(fill) {
+                    // What's well inside it, as a frame's content mostly
+                    // is, it doesn't cut
+                    let pixel = (1.0 / self.scale().max(1e-6)).min(2.0);
+                    if self.tree.info(color).bounds.is_some_and(|inside| outline.with_transform(&at).conservatively_contains_rect(inside.with_outset((pixel, pixel)))) {
+                        self.draw(color);
+                        return;
+                    }
                     let device = outline.with_transform(&Matrix::concat(&self.m, &at));
                     if blends {
                         let was = self.soften(device);
