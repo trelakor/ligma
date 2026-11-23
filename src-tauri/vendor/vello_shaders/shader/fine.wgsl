@@ -91,6 +91,16 @@ const MS_ALL = 0xF0F0F0F0u;
 const SOLIDS = 4u;
 var<private> solid_mask: array<u32, 16>;
 var<private> solid_color: array<u32, 16>;
+// Ligma: those of what's under a clip or layer, while its own are kept in
+// their place, one deep
+var<private> outer_mask: array<u32, 16>;
+var<private> outer_color: array<u32, 16>;
+
+// Ligma: whether fills at `depth` are kept apart by sample: under all
+// clips and layers, or in one that's `inner`
+fn track(depth: u32, inner: bool) -> bool {
+    return depth == 0u || (depth == 1u && inner);
+}
 
 // The even-odd rule's mask, a bit a sample in order, laid out as the
 // non-zero rule's
@@ -1382,6 +1392,9 @@ fn main(
     }
     var blend_stack: array<array<u32, PIXELS_PER_THREAD>, BLEND_STACK_SPLIT>;
     var clip_depth = 0u;
+    // Ligma: the clip or layer under all others keeps its fills apart by
+    // sample too, what's under it set aside meanwhile
+    var inner = false;
     var area: array<f32, PIXELS_PER_THREAD>;
 #ifdef msaa16
     // Ligma: the samples opaque fills have covered, each fill's color apart
@@ -1391,8 +1404,9 @@ fn main(
     // them through both their edges. A clip or layer of normal blend, opaque
     // over the pixel, takes the place of the samples its shape covers the
     // same way, and paint over the whole pixel tints each alike. Any other
-    // paint, or layer, leaves the pixel as one color again. Only of what's
-    // under all layers, what's in one drawn as it is
+    // paint, or layer, leaves the pixel as one color again. Under all
+    // layers, and in the one under all others but a copy, what's in one
+    // deeper drawn as it is
     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
         clear_solid(i);
     }
@@ -1442,7 +1456,7 @@ fn main(
         }
 #ifdef msaa16
         let paints = tag == CMD_BLUR_RECT || tag == CMD_LIN_GRAD || tag == CMD_RAD_GRAD || tag == CMD_SWEEP_GRAD || tag == CMD_IMAGE;
-        if clip_depth == 0u && !paints && tag != CMD_FILL && tag != CMD_SOLID && tag != CMD_COLOR && tag != CMD_JUMP && tag != CMD_BEGIN_CLIP && tag != CMD_END_CLIP {
+        if track(clip_depth, inner) && !paints && tag != CMD_FILL && tag != CMD_SOLID && tag != CMD_COLOR && tag != CMD_JUMP && tag != CMD_BEGIN_CLIP && tag != CMD_END_CLIP {
             let layer = tag == CMD_BEGIN_CLIP_COPY;
             for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                 if layer || area[i] > 0.0 {
@@ -1483,7 +1497,7 @@ fn main(
                 let color = read_color(cmd_ix);
                 let fg = unpack4x8unorm(color.rgba_color);
 #ifdef msaa16
-                if fg.a >= 1.0 && clip_depth == 0u {
+                if fg.a >= 1.0 && track(clip_depth, inner) {
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                         take_samples(i, fg, &rgba);
                     }
@@ -1491,7 +1505,7 @@ fn main(
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                         let fg_i = fg * area[i];
                         rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
-                        if clip_depth == 0u {
+                        if track(clip_depth, inner) {
                             painted(i, fg_i);
                         }
                     }
@@ -1507,6 +1521,18 @@ fn main(
             case CMD_BEGIN_CLIP, CMD_BEGIN_CLIP_COPY: {
                 // Ligma: a copy layer starts as what's under it, as stored
                 let copy = tag == CMD_BEGIN_CLIP_COPY;
+#ifdef msaa16
+                if clip_depth == 0u {
+                    inner = !copy;
+                    if inner {
+                        for (var j = 0u; j < 16u; j += 1u) {
+                            outer_mask[j] = solid_mask[j];
+                            outer_color[j] = solid_color[j];
+                            solid_mask[j] = 0u;
+                        }
+                    }
+                }
+#endif
                 if clip_depth < BLEND_STACK_SPLIT {
                     for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                         blend_stack[clip_depth][i] = pack4x8unorm(rgba[i]);
@@ -1527,6 +1553,15 @@ fn main(
             case CMD_END_CLIP: {
                 let end_clip = read_end_clip(cmd_ix);
                 clip_depth -= 1u;
+#ifdef msaa16
+                if clip_depth == 0u && inner {
+                    inner = false;
+                    for (var j = 0u; j < 16u; j += 1u) {
+                        solid_mask[j] = outer_mask[j];
+                        solid_color[j] = outer_color[j];
+                    }
+                }
+#endif
                 for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
                     var bg_rgba: u32;
                     if clip_depth < BLEND_STACK_SPLIT {
@@ -1541,7 +1576,7 @@ fn main(
 #ifdef msaa16
                     // Ligma: opaque over the pixel, it takes the place of
                     // the samples its shape covers, as an opaque fill does
-                    if clip_depth == 0u {
+                    if track(clip_depth, inner) {
                         if (end_clip.blend & 0x7fffu) == COMPOSE_SRC_OVER && end_clip.blend < 0x10000u && end_clip.alpha >= 1.0 && rgba[i].a >= 0.998 {
                             let content = rgba[i];
                             rgba[i] = bg;
@@ -1625,7 +1660,7 @@ fn main(
                     let fg_i = fg_rgba * area[i];
                     rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
-                    if clip_depth == 0u {
+                    if track(clip_depth, inner) {
                         painted(i, fg_i);
                     }
 #endif
@@ -1642,7 +1677,7 @@ fn main(
                     let fg_i = fg_rgba * area[i];
                     rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
-                    if clip_depth == 0u {
+                    if track(clip_depth, inner) {
                         painted(i, fg_i);
                     }
 #endif
@@ -1691,7 +1726,7 @@ fn main(
                         let fg_i = fg_rgba * area[i];
                         rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
-                        if clip_depth == 0u {
+                        if track(clip_depth, inner) {
                             painted(i, fg_i);
                         }
 #endif
@@ -1730,7 +1765,7 @@ fn main(
                     let fg_i = fg_rgba * area[i];
                     rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
-                    if clip_depth == 0u {
+                    if track(clip_depth, inner) {
                         painted(i, fg_i);
                     }
 #endif
@@ -1762,7 +1797,7 @@ fn main(
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
-                                if clip_depth == 0u {
+                                if track(clip_depth, inner) {
                                     painted(i, fg_i);
                                 }
 #endif
@@ -1794,7 +1829,7 @@ fn main(
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
-                                if clip_depth == 0u {
+                                if track(clip_depth, inner) {
                                     painted(i, fg_i);
                                 }
 #endif
@@ -1810,7 +1845,7 @@ fn main(
                                 let fg_i = pixel_format(fg_rgba * area[i] * image.alpha, image.format);
                                 rgba[i] = rgba[i] * (1.0 - fg_i.a) + fg_i;
 #ifdef msaa16
-                                if clip_depth == 0u {
+                                if track(clip_depth, inner) {
                                     painted(i, fg_i);
                                 }
 #endif
