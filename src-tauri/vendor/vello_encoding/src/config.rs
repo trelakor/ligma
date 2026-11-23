@@ -369,7 +369,13 @@ impl WorkgroupCounts {
             path_scan1: (reduced_size / PATH_REDUCE_WG, 1, 1),
             path_scan: (path_tag_wgs, 1, 1),
             bbox_clear: (draw_object_wgs, 1, 1),
-            flatten: (flatten_wgs, 1, 1),
+            // Ligma: as flatten.wgsl takes them, as a dispatch has at most
+            // 65535 workgroups a side
+            flatten: if flatten_wgs > 65535 {
+                (32768, flatten_wgs.div_ceil(32768), 1)
+            } else {
+                (flatten_wgs, 1, 1)
+            },
             draw_reduce: (draw_monoid_wgs, 1, 1),
             draw_leaf: (draw_monoid_wgs, 1, 1),
             clip_reduce: (clip_reduce_wgs, 1, 1),

@@ -836,7 +836,12 @@ fn main(
     @builtin(global_invocation_id) global_id: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
-    let ix = global_id.x;
+    // Ligma: past 65535 workgroups a side, as a scene of over 16M segments
+    // needs, they're dispatched 32768 wide and as many rows as it takes
+    let ix = global_id.y * (32768u * 256u) + global_id.x;
+    if ix >= (config.pathdata_base - config.pathtag_base) * 4u {
+        return;
+    }
     pathdata_base = config.pathdata_base;
     bbox = vec4(1e31, 1e31, -1e31, -1e31);
 
