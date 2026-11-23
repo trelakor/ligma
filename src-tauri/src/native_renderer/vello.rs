@@ -417,6 +417,13 @@ impl Vello {
         self.sync("start");
         let blurred = self.blur(plan, params.antialiasing_method);
         self.took_blurs = at.elapsed();
+        // Signalled once the render's done, on its own submission, which a
+        // submission of its own for it took a millisecond more of
+        {
+            let hal = unsafe { self.queue.as_hal::<Dx12>() }.ok_or("not D3D12")?;
+            hal.add_signal_fence(self.view_drawn.vello.clone(), value);
+        }
+        let render_span = super::span::span("vello render to texture");
         let rendered = blurred.and_then(|()| self.renderer.render_to_texture(&self.device, &self.queue, scene, &view, &params).map_err(|error| format!("render: {error}")));
         self.stages += &format!(
             " record={:.1} run={:.1} {:?}",
@@ -424,6 +431,7 @@ impl Vello {
             self.renderer.timing.1,
             vello::RUN_PARTS.iter().map(|n| (n.swap(0, std::sync::atomic::Ordering::Relaxed) / 100_000) as f64 / 10.0).collect::<Vec<_>>()
         );
+        drop(render_span);
         self.sync("main");
         self.renders = self.renderer.unchecked() - unchecked;
         for depth in &plan.depths {
@@ -436,12 +444,20 @@ impl Vello {
         }
         self.took = at.elapsed();
         let left_out = vello::low_level::vello_encoding::DROPPED_IMAGES.load(std::sync::atomic::Ordering::Relaxed) != dropped;
-        // Signalled after all Vello submitted, on a submission of its own
-        {
+        // Where nothing was submitted, as it failed first, on a submission
+        // of its own, as Skia's queue waits for it
+        let _signal = super::span::span("vello signal");
+        let unsent = {
             let hal = unsafe { self.queue.as_hal::<Dx12>() }.ok_or("not D3D12")?;
-            hal.add_signal_fence(self.view_drawn.vello.clone(), value);
+            let unsent = hal.remove_signal_fence(&self.view_drawn.vello);
+            if unsent {
+                hal.add_signal_fence(self.view_drawn.vello.clone(), value);
+            }
+            unsent
+        };
+        if unsent {
+            self.queue.submit([self.device.create_command_encoder(&Default::default()).finish()]);
         }
-        self.queue.submit([self.device.create_command_encoder(&Default::default()).finish()]);
         let _ = self.device.poll(wgpu::PollType::Poll);
         unsafe { skia_queue.Wait(&self.view_drawn.skia, value) }.map_err(|error| format!("wait: {error}"))?;
         rendered?;
@@ -450,6 +466,11 @@ impl Vello {
             return Err("images past Vello's atlas".into());
         }
         Ok(out)
+    }
+
+    /// How many renders the GPU's been handed that aren't checked yet
+    pub fn unchecked(&self) -> usize {
+        self.renderer.unchecked()
     }
 
     /// Once the GPU's drawn what's been rendered, what ran out of room in
@@ -781,6 +802,14 @@ impl Paths {
     /// Lets go of copies of paths the tree no longer has, and what was
     /// simplified of them, every few seconds
     pub fn prune(&self) {
+        // A few times a second, as looking over them all took a millisecond
+        // or more of each tile
+        static SWEPT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        let mut swept = SWEPT.lock().unwrap();
+        if swept.is_some_and(|at| at.elapsed() < std::time::Duration::from_millis(250)) {
+            return;
+        }
+        *swept = Some(std::time::Instant::now());
         self.0.lock().unwrap().retain(|_, (path, _)| path.strong_count() > 0);
         static PRUNED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
         let mut pruned = PRUNED.lock().unwrap();

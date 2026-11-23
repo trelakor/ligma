@@ -1024,6 +1024,24 @@ impl TileKey {
     }
 }
 
+/// Tiles Vello's drawn and copied out, put once it's checked it had room
+/// for them, which waits for the GPU. Checked after the next are handed to
+/// it, so the GPU draws them while the CPU encodes those
+struct DrawnTiles {
+    /// Each tile's texture, whether a change since made it out of date,
+    /// and whether it was in view then
+    tiles: Vec<(TileKey, Arc<Tex>, bool, bool)>,
+    first: TileKey,
+    /// Vello's renders unchecked, these last
+    renders: usize,
+    exact: bool,
+    counts: Counts,
+    stats: String,
+    started: Instant,
+    submitted: Duration,
+    span: (i32, i32, i32, i32),
+}
+
 struct Tile {
     /// As this context's image of `tex`
     image: Image,
@@ -1409,6 +1427,11 @@ pub struct Painter {
     rasters_made: u32,
     /// How long the tile being drawn encodes units at most this pass
     slice: Option<Duration>,
+    /// Tiles Vello drew last, not yet checked
+    drawn_tiles: Option<DrawnTiles>,
+    /// Set while tiles are rendered, which leave those drawn before them
+    /// to check after
+    pipelined: bool,
     /// Textures to use again once the present thread has let go of them
     spare: Vec<Arc<Tex>>,
     /// What the last snapshot handed over had, its frame, and the fence the
@@ -1622,6 +1645,8 @@ impl Painter {
             raster_bytes: 0,
             rasters_made: 0,
             slice: None,
+            drawn_tiles: None,
+            pipelined: false,
             rasters_off: super::dev() && std::env::var("LIGMA_NATIVE_RASTERS").is_ok_and(|value| value == "0"),
             spare: Vec::new(),
             published: None,
@@ -1797,6 +1822,9 @@ impl Painter {
             // last is shown once it's drawn
             if next != Some(Duration::ZERO) && self.unchecked.is_some() {
                 self.settle_unchecked();
+            }
+            if next != Some(Duration::ZERO) {
+                self.settle_tiles();
             }
             self.publish();
             if std::mem::take(&mut self.drew) {
@@ -2890,6 +2918,13 @@ impl Painter {
     /// Vello can't
     fn vello_or_skia(&mut self, keys: &[TileKey], exact: bool) {
         let _span = super::span::span("vello or skia");
+        // Those drawn and not yet checked are put once checked
+        let drawing = |key: &TileKey| self.drawn_tiles.as_ref().is_some_and(|drawn| drawn.tiles.iter().any(|(at, ..)| at == key));
+        let keys: Vec<TileKey> = keys.iter().copied().filter(|key| !drawing(key)).collect();
+        if keys.is_empty() {
+            self.settle_tiles();
+            return;
+        }
         let vello: Vec<TileKey> = keys.iter().copied().filter(|key| !self.vello_cant.contains(key)).collect();
         if !vello.is_empty() {
             self.slice = Some(ENCODE_SLICE);
@@ -2900,14 +2935,11 @@ impl Painter {
                     trace(|| format!("  vello tile {},{} px={:.4} encoded in part", key.x, key.y, key.px()));
                     return;
                 }
-                trace(|| format!("  vello tile {},{} px={:.4} can't: {why}", key.x, key.y, key.px()));
-                if self.vello_cant.len() > 4096 {
-                    self.vello_cant.clear();
-                }
-                self.vello_cant.insert(key);
+                self.vello_cannot(key, &why);
             }
             return;
         }
+        self.settle_tiles();
         let key = keys[0];
         if let Some(tile) = self.draw_tile(key, exact, false) {
             self.put_tile(key, tile);
@@ -2924,66 +2956,113 @@ impl Painter {
         let started = Instant::now();
         let block = std::env::var("LIGMA_NATIVE_VELLO_BLOCK").ok().and_then(|n| n.parse().ok()).unwrap_or(VELLO_BLOCK).max(1);
         let corner = |key: &TileKey| (key.x.div_euclid(block), key.y.div_euclid(block));
+        let batch_span = super::span::span("batch");
         let mine: Vec<TileKey> = if block > 1 { keys.iter().copied().filter(|key| key.px == first.px && corner(key) == corner(&first)).collect() } else { self.batch(first, keys) };
+        drop(batch_span);
         let (x0, y0) = (mine.iter().map(|key| key.x).min().unwrap_or(first.x), mine.iter().map(|key| key.y).min().unwrap_or(first.y));
         let (x1, y1) = (mine.iter().map(|key| key.x).max().unwrap_or(first.x), mine.iter().map(|key| key.y).max().unwrap_or(first.y));
         let (left, top, w, h) = (x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
         let px = first.px();
         let reach = Rect::from_xywh(left as f32 / px, top as f32 / px, w as f32 / px, h as f32 / px);
         self.settle_unchecked();
-        let settled = started.elapsed();
-        let mut waited = Duration::ZERO;
         let fail = |why: String| (first, why);
-        let mut drawn = None;
-        for _ in 0..8 {
-            // Tiles to scale while the zoom changes have units encoded for
-            // other levels stand in, drawn at this one's scale, as one unit
-            // can take tens of milliseconds to encode, which the next level
-            // doesn't wait for. Tiles once it's still are exact
-            let budget = (!exact).then_some(Duration::ZERO);
-            let (out, counts, stats, rough) = self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, false, None).map_err(fail)?;
-            let vello = self.vello.as_mut().ok_or_else(|| fail("no Vello".into()))?;
-            let checked = vello.check(usize::MAX).map_err(fail)?;
-            waited += vello.waited;
-            match checked {
-                Some(why) if why.starts_with("too big") => return Err(fail(why)),
-                Some(why) => trace(|| format!("  vello ran out of room, drawing again: {why}")),
-                None => {
-                    // With nothing standing in, it's as drawing them exactly
-                    // would be, which then isn't done again
-                    exact |= !rough;
-                    drawn = Some((out, counts, stats, std::mem::take(&mut vello.stages)));
-                    break;
-                }
+        // Tiles to scale while the zoom changes have units encoded for
+        // other levels stand in, drawn at this one's scale, as one unit can
+        // take tens of milliseconds to encode, which the next level doesn't
+        // wait for. Tiles once it's still are exact
+        let budget = (!exact).then_some(Duration::ZERO);
+        self.pipelined = true;
+        let rendered = self.vello_render(left, top, (0.0, 0.0), w, h, px, reach, budget, false, None);
+        self.pipelined = false;
+        let drawn = rendered.and_then(|(out, counts, stats, rough)| {
+            // With nothing standing in, it's as drawing them exactly would
+            // be, which then isn't done again
+            exact |= !rough;
+            let _span = super::span::span("copy out");
+            let image = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or("Vello's texture")?;
+            let mut paint = Paint::default();
+            paint.set_blend_mode(skia_safe::BlendMode::Src);
+            // Copied out each into a tile of its own, submitted at once
+            let mut tiles = Vec::new();
+            for &key in &mine {
+                let tex = self.tex(TILE, TILE).ok_or("texture")?;
+                let mut surface = self.target(&tex).ok_or("surface")?;
+                let from = Rect::from_xywh(((key.x - x0) * TILE) as f32, ((key.y - y0) * TILE) as f32, TILE as f32, TILE as f32);
+                surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
+                drop(surface);
+                tiles.push((key, tex, false, false));
             }
-        }
-        let (out, counts, stats, stages) = drawn.ok_or_else(|| fail("out of room in Vello's buffers".into()))?;
-        let rendered = started.elapsed();
-        let image = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or_else(|| fail("Vello's texture".into()))?;
-        let mut paint = Paint::default();
-        paint.set_blend_mode(skia_safe::BlendMode::Src);
-        // Copied out each into a tile of its own, submitted at once
-        let mut copied = Vec::new();
-        for &key in &mine {
-            let tex = self.tex(TILE, TILE).ok_or_else(|| fail("texture".into()))?;
-            let mut surface = self.target(&tex).ok_or_else(|| fail("surface".into()))?;
-            let from = Rect::from_xywh(((key.x - x0) * TILE) as f32, ((key.y - y0) * TILE) as f32, TILE as f32, TILE as f32);
-            surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
-            drop(surface);
-            copied.push((key, tex));
-        }
-        let _ = self.gpu.context.flush_and_submit();
-        for (key, tex) in copied {
-            let tile_image = gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None).ok_or_else(|| fail("submit".into()))?;
-            self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, seen: false, exact, draft: false, vello: true, drawn: 0 });
+            let _ = self.gpu.context.flush_and_submit();
+            Ok(DrawnTiles { tiles, first, renders: 0, exact, counts, stats, started, submitted: started.elapsed(), span: (x0, y0, x1 - x0 + 1, y1 - y0 + 1) })
+        });
+        // Those drawn before are checked now these are with the GPU, which
+        // leaves these the renders unchecked
+        self.settle_tiles();
+        let mut drawn = drawn.map_err(fail)?;
+        drawn.renders = self.vello.as_ref().map_or(0, |vello| vello.unchecked());
+        self.drawn_tiles = Some(drawn);
+        Ok(())
+    }
+
+    /// Puts the tiles Vello drew last once it's checked it had room for
+    /// them, waiting for the GPU to draw them
+    fn settle_tiles(&mut self) {
+        let Some(drawn) = self.drawn_tiles.take() else { return };
+        let _span = super::span::span("settle tiles");
+        let at = Instant::now();
+        let checked = match self.vello.as_mut() {
+            Some(vello) => vello.check(drawn.renders).map(|short| (short, vello.waited, std::mem::take(&mut vello.stages))),
+            None => Err("no Vello".into()),
+        };
+        let (waited, stages) = match checked {
+            Ok((None, waited, stages)) => (waited, stages),
+            failed => {
+                for (_, tex, ..) in drawn.tiles {
+                    self.retire(tex);
+                }
+                match failed {
+                    // Drawn again with the room it needs where it's still
+                    // wanted
+                    Ok((Some(why), ..)) if !why.starts_with("too big") => trace(|| format!("  vello ran out of room, drawing again: {why}")),
+                    Ok((Some(why), ..)) | Err(why) => self.vello_cannot(drawn.first, &why),
+                    Ok((None, ..)) => {}
+                }
+                return;
+            }
+        };
+        let exact = drawn.exact;
+        for (key, tex, stale, seen) in drawn.tiles {
+            let Some(image) = gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None) else {
+                self.retire(tex);
+                continue;
+            };
+            self.put_tile(key, Tile { image, tex, used: self.frame, counts: drawn.counts, stale, seen, exact, draft: false, vello: true, drawn: 0 });
         }
         self.drew = true;
-        super::stats().lock().unwrap().vello_tiles_ms = started.elapsed().as_secs_f64() * 1000.0;
+        self.dirty = true;
+        super::stats().lock().unwrap().vello_tiles_ms = drawn.started.elapsed().as_secs_f64() * 1000.0;
         trace(|| {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-            format!("  vello tiles px={px:.4} at {x0},{y0} {}x{} exact={exact} rendered={:.1}ms {:.1}ms settled={:.1} waited={:.1} {stats} gpu:{stages}", x1 - x0 + 1, y1 - y0 + 1, ms(rendered), ms(started.elapsed()), ms(settled), ms(waited))
+            let (x0, y0, w, h) = drawn.span;
+            let px = drawn.first.px();
+            format!(
+                "  vello tiles px={px:.4} at {x0},{y0} {w}x{h} exact={exact} rendered={:.1}ms submitted={:.1} held={:.1} waited={:.1} {} gpu:{stages}",
+                ms(drawn.started.elapsed()),
+                ms(drawn.submitted),
+                ms(at.duration_since(drawn.started).saturating_sub(drawn.submitted)),
+                ms(waited),
+                drawn.stats
+            )
         });
-        Ok(())
+    }
+
+    /// Notes Vello can't draw the tile at `key`, which Skia then draws
+    fn vello_cannot(&mut self, key: TileKey, why: &str) {
+        trace(|| format!("  vello tile {},{} px={:.4} can't: {why}", key.x, key.y, key.px()));
+        if self.vello_cant.len() > 4096 {
+            self.vello_cant.clear();
+        }
+        self.vello_cant.insert(key);
     }
 
     /// `first`, and the tiles of `keys` beside it in its row while together
@@ -2996,6 +3075,7 @@ impl Painter {
         let (top, bottom) = ((first.y * TILE) as f32 / px, ((first.y + 1) * TILE) as f32 / px);
         let mut held = [0usize; 2 * BATCH_TILES - 1];
         let reach = BATCH_TILES as i32 - 1;
+        let mut in_row = Vec::new();
         for unit in &self.units {
             let b = &unit.bounds;
             if b.bottom <= top || b.top >= bottom || b.width().max(b.height()) * px < 0.5 {
@@ -3003,9 +3083,27 @@ impl Painter {
             }
             let from = ((b.left * px / TILE as f32).floor() as i32 - first.x).max(-reach);
             let to = ((b.right * px / TILE as f32).floor() as i32 - first.x).min(reach);
-            let images = self.vello_uses.get(&(unit.slot, unit.section)).is_none_or(|(_, uses)| !uses.is_empty());
+            if from > to {
+                continue;
+            }
             for x in from..=to {
-                held[(x + reach) as usize] += if images { BATCH_UNITS + 1 } else { 1 };
+                held[(x + reach) as usize] += 1;
+            }
+            in_row.push((from, to, unit));
+        }
+        // Too many alone, which dense tiles mostly are, it's drawn alone
+        // without looking up what draws images
+        if held[reach as usize] > BATCH_UNITS {
+            return vec![first];
+        }
+        for (from, to, unit) in in_row {
+            if (from..=to).all(|x| held[(x + reach) as usize] > BATCH_UNITS) {
+                continue;
+            }
+            if self.vello_uses.get(&(unit.slot, unit.section)).is_none_or(|(_, uses)| !uses.is_empty()) {
+                for x in from..=to {
+                    held[(x + reach) as usize] += BATCH_UNITS;
+                }
             }
         }
         let units = |x: i32| held[(x + reach) as usize];
@@ -3183,6 +3281,11 @@ impl Painter {
     /// they'd fit with room to spare
     #[allow(clippy::too_many_arguments)]
     fn vello_render(&mut self, left: i32, top: i32, phase: (f32, f32), w: i32, h: i32, px: f32, reach: Rect, budget: Option<Duration>, copy: bool, kept: Option<(super::vello::Kept, i32, i32)>) -> Result<(Arc<Tex>, Counts, String, bool), String> {
+        // Vello's renders are checked in order, so tiles drawn before are
+        // checked first
+        if !self.pipelined {
+            self.settle_tiles();
+        }
         loop {
             match self.vello_render_at(left, top, phase, w, h, px, reach, budget, copy, kept) {
                 Err(why) if (why.starts_with("images need") || why == "images past Vello's atlas") && self.image_coarser < COARSEST_IMAGES => {
@@ -3269,6 +3372,7 @@ impl Painter {
                 // to it, and whether that's encoded already
                 let mut jobs: Vec<(usize, Option<(usize, bool, i32)>, bool)> = Vec::new();
                 let mut whole_tree = true;
+                let finding = super::span::span("find fragments");
                 for (index, (unit, &stamp)) in units_all.iter().zip(&stamps).enumerate() {
                     if !Rect::intersects2(&unit.bounds, &reach) || unit.bounds.width().max(unit.bounds.height()) * px < 0.5 {
                         continue;
@@ -3297,6 +3401,7 @@ impl Painter {
                 // Standing in from the start, those with a fragment to stand
                 // in need nothing encoded, nor threads to encode it, which
                 // took a millisecond or more to start for each tile
+                drop(finding);
                 type Done = Vec<(usize, (usize, bool, i32), bool, Option<Result<super::vello::Fragment, String>>)>;
                 let mut quick: Done = Vec::new();
                 if budget.is_some_and(|budget| budget.is_zero()) {
@@ -3396,6 +3501,7 @@ impl Painter {
                         shown[at].1 = Some(key);
                     }
                 }
+                let _placing = super::span::span("place fragments");
                 for &(index, key) in &shown {
                     if encoder.failed.is_some() {
                         break;
@@ -3544,8 +3650,11 @@ impl Painter {
         lap(&mut steps);
         drop(plan);
         vello.spare = scene;
-        vello.keep_pictures(&self.images);
-        self.vello_paths.prune();
+        {
+            let _span = super::span::span("keep pictures");
+            vello.keep_pictures(&self.images);
+            self.vello_paths.prune();
+        }
         lap(&mut steps);
         self.vello = Some(vello);
         let out = rendered.map_err(|error| {
@@ -3556,6 +3665,7 @@ impl Painter {
         // What Vello drew, unpremultiplied, copied into a texture of the
         // kind the present thread shows
         let tex = if !copy { out } else { self.vello_copy(&out, tw, th)? };
+        let asked_span = super::span::span("units asked");
         for (unit, bounds, asked) in asked {
             let super::vello::Asked { missing, sharper, used, places } = asked;
             let drew: Vec<String> = used.iter().chain(&missing).chain(&sharper).map(|(key, _)| key.clone()).collect();
@@ -3616,6 +3726,7 @@ impl Painter {
                 self.vello_uses.insert(unit, (px, uses));
             }
         }
+        drop(asked_span);
         let stats = format!(
             "{w}x{h} units={units} reused={reused} made={made_count} rough={rough} encoding={encoding:.1?} scene={scene_mb:.1}MB paths={} clips={} kinds={:?} sizes={:?} times={:?} blurs={blurs} skia_gpu={skia_gpu:?} inexact={inexact} pages={used_pages} fell_back={}k px encoded={:.1}ms (stamps {:.1} put {:.1} append {:.1}) skia={:.1}ms vello_cpu={:.1}ms (blurs {:.1}ms) vello={:.1}ms steps={steps:?} atlas={}k {}",
             paths,
@@ -4355,6 +4466,14 @@ impl Painter {
     fn clear_tiles(&mut self) {
         let _span = super::span::span("clear tiles");
         self.pending = None;
+        if let Some(drawn) = self.drawn_tiles.take() {
+            if let Some(vello) = self.vello.as_mut() {
+                let _ = vello.check(drawn.renders);
+            }
+            for (_, tex, ..) in drawn.tiles {
+                self.retire(tex);
+            }
+        }
         let tiles: Vec<Tile> = self.tiles.drain().map(|(_, tile)| tile).collect();
         for tile in tiles {
             self.drop_tile(tile);
@@ -5052,6 +5171,7 @@ impl Painter {
         self.spare.retain(|tex| (tex.width, tex.height) == (TILE, TILE));
         self.scratch.retain(|(_, ss, _)| *ss == 1);
         // Tiles show the view while Vello's memory is made again
+        self.settle_tiles();
         if let Some(vello) = self.vello.as_mut() {
             vello.trim();
         }
@@ -5109,6 +5229,7 @@ impl Painter {
     fn release(&mut self) {
         let _span = super::span::span("release");
         self.fit_images(false);
+        self.settle_tiles();
         if let Some(vello) = self.vello.as_mut() {
             vello.trim();
         }
@@ -5690,6 +5811,24 @@ impl Painter {
             if let Some(tile) = self.tiles.get_mut(&key) {
                 tile.seen = (tile.seen || !tile.stale) && view.is_some_and(|view| Rect::intersects2(&view, &key.area()));
                 tile.stale = true;
+            }
+        }
+        let hit: Vec<TileKey> = self
+            .drawn_tiles
+            .iter()
+            .flat_map(|drawn| drawn.tiles.iter().map(|(key, ..)| *key))
+            .filter(|key| {
+                let reach = self.margin(*key) as f32 / key.px();
+                let area = key.area().with_outset((reach, reach));
+                areas.iter().any(|other| Rect::intersects2(&area, other))
+            })
+            .collect();
+        if let Some(drawn) = self.drawn_tiles.as_mut() {
+            for (key, _, stale, seen) in &mut drawn.tiles {
+                if hit.contains(key) {
+                    *seen = (*seen || !*stale) && view.is_some_and(|view| Rect::intersects2(&view, &key.area()));
+                    *stale = true;
+                }
             }
         }
         if let Some(pending) = &self.pending {
