@@ -958,9 +958,10 @@ fn outside(shape: &Path, device: IRect) -> Option<Path> {
 }
 
 /// How far from a shape, in device pixels, the lines simplifying it are at
-/// most in a fragment, which is shown up to twice as big: a quarter of what
-/// Vello flattens curves to
-const KEPT_TOLERANCE: f64 = 1.0 / 32.0;
+/// most, which shown twice as big in a fragment is what Vello flattens
+/// curves to. Finer took text far out several times the lines, and looked
+/// the same
+const KEPT_TOLERANCE: f64 = 1.0 / 8.0;
 
 /// Parts of a shape past which `simplified` leaves it as it is
 const SIMPLIFY_MOST: usize = 4096;
@@ -1935,7 +1936,7 @@ impl<'a> Encoder<'a> {
     fn fill<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
         // Small, it's drawn with fewer lines no further than this from it,
         // in device pixels for fragments' largest zoom
-        let tolerance = switches().tolerance.unwrap_or(if self.retained { KEPT_TOLERANCE } else { 2.0 * KEPT_TOLERANCE });
+        let tolerance = switches().tolerance.unwrap_or(KEPT_TOLERANCE);
         let env = timer(4);
         let whole = switches().whole;
         drop(env);
@@ -2034,7 +2035,7 @@ impl<'a> Encoder<'a> {
         if biggest <= 0.0 || biggest * scale * 1.5 > 64.0 {
             return None;
         }
-        let tolerance = switches().tolerance.unwrap_or(if self.retained { KEPT_TOLERANCE } else { 2.0 * KEPT_TOLERANCE });
+        let tolerance = switches().tolerance.unwrap_or(KEPT_TOLERANCE);
         let (mut out, mut had) = (BezPath::new(), 0);
         for glyph in &glyphs.glyphs {
             let Some(path) = &glyph.path else { continue };

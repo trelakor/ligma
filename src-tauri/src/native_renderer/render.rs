@@ -1462,6 +1462,8 @@ pub struct Painter {
     view: Option<View>,
     /// The last zoom (pixels per unit) and when it changed
     zoom: (f32, Instant),
+    /// When the zoom changed before its last change
+    zoom_was: Instant,
     /// When the view last moved
     moved: Instant,
     /// Where the view's center was, how wide it was and when, in units, how
@@ -1649,6 +1651,7 @@ impl Painter {
                 .ok(),
             view: None,
             zoom: (0.0, Instant::now()),
+            zoom_was: Instant::now(),
             moved: Instant::now(),
             motion: None,
             velocity: (0.0, 0.0),
@@ -2036,6 +2039,7 @@ impl Painter {
             return None;
         }
         if px != self.zoom.0 {
+            self.zoom_was = self.zoom.1;
             self.zoom = (px, Instant::now());
         }
         self.frame += 1;
@@ -2191,7 +2195,12 @@ impl Painter {
         // zoom once it's settled
         if self.vello_ready() && self.tree.is_some() && std::env::var_os("LIGMA_NATIVE_VELLO_WHOLES").is_none() {
             let furthest = levels.first().map(|(_, pk)| pk.to_bits());
-            return self.fill_vello(px, (ox, oy, width, height), furthest, &pyramid, !settle.is_zero());
+            // A zoom changing once, as a jump to somewhere does, is drawn
+            // at once at the zoom it's at, not first a level up, which took
+            // a tenth of a second the view then waited on
+            let zooming = !settle.is_zero() && self.zoom.1.duration_since(self.zoom_was) < SETTLE;
+            let next = self.fill_vello(px, (ox, oy, width, height), furthest, &pyramid, zooming);
+            return if next.is_none() && !settle.is_zero() { Some(settle) } else { next };
         }
         let whole_here = self.whole.as_ref().is_some_and(|whole| whole.at == (ox, oy, pxb) && !whole.stale && whole.patch.is_empty() && !whole.rough);
         // While the zoom changes, tiles of it are of no use a moment later,
