@@ -129,6 +129,35 @@ opt-level = "s"
 panic = "abort"
 strip = true
 
+# The native renderer and what it draws with, which made at "s" took a tenth
+# to a fifth longer a tile, for 4MB more
+[profile.release.package.ligma]
+opt-level = 3
+
+[profile.release.package.vello]
+opt-level = 3
+
+[profile.release.package.vello_encoding]
+opt-level = 3
+
+[profile.release.package.wgpu]
+opt-level = 3
+
+[profile.release.package.wgpu-core]
+opt-level = 3
+
+[profile.release.package.wgpu-hal]
+opt-level = 3
+
+[profile.release.package.kurbo]
+opt-level = 3
+
+[profile.release.package.peniko]
+opt-level = 3
+
+[profile.release.package.gpu-allocator]
+opt-level = 3
+
 [patch.crates-io]
 # Vello's shaders with Figma's blend modes, image sampling and layers
 # that start as a copy of what's under them, see vendor/vello_shaders. Its
