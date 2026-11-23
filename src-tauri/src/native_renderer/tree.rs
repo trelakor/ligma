@@ -336,13 +336,30 @@ fn own_hash(node: &Node) -> u64 {
         HashWrite(&mut hasher),
         "{op:?}{transform:?}{paint_size:?}{stroke_mode:?}{bg_blur_expansion_for_frame_fill:?}{is_created_from_brush:?}{blend_mode:?}{opacity:?}{mask_op:?}{color:?}{radius:?}{ext:?}{extra:?}"
     );
+    // Paths and glyphs by their bits, as written out as text they took
+    // over a second of a big file's whole scene
     for geometry in geometry.iter().chain(fill_geometries).chain(stroke_geometries) {
         let rt::Geometry { path, paints, glyph_batch, glyph_metadata, extra } = geometry;
         path.as_deref().map(path_hash).hash(&mut hasher);
-        let _ = write!(HashWrite(&mut hasher), "{paints:?}{glyph_metadata:?}{extra:?}");
+        let _ = write!(HashWrite(&mut hasher), "{paints:?}{extra:?}");
+        for rt::GlyphMetadata { advance, rotation, extra } in glyph_metadata {
+            floats(&mut hasher, &[advance.unwrap_or(f32::NAN), rotation.unwrap_or(f32::NAN)]);
+            if !extra.is_empty() {
+                let _ = write!(HashWrite(&mut hasher), "{extra:?}");
+            }
+        }
         if let Some(batch) = glyph_batch {
             let rt::GlyphBatch { glyphs, decoration_paths, should_round_y, extra } = &**batch;
-            let _ = write!(HashWrite(&mut hasher), "{glyphs:?}{should_round_y:?}{extra:?}");
+            let _ = write!(HashWrite(&mut hasher), "{should_round_y:?}{extra:?}");
+            for rt::Glyph { path, position, font_size, rotation, style_id, emoji_paints, extra } in glyphs {
+                path.as_deref().map(path_hash).hash(&mut hasher);
+                let [x, y] = position.unwrap_or([f32::NAN; 2]);
+                floats(&mut hasher, &[x, y, font_size.unwrap_or(f32::NAN), rotation.unwrap_or(f32::NAN)]);
+                style_id.hash(&mut hasher);
+                if !emoji_paints.is_empty() || !extra.is_empty() {
+                    let _ = write!(HashWrite(&mut hasher), "{emoji_paints:?}{extra:?}");
+                }
+            }
             for path in decoration_paths {
                 path_hash(path).hash(&mut hasher);
             }
@@ -358,9 +375,18 @@ fn path_hash(path: &rt::Path) -> u64 {
     if let Some(hash) = path.content_hash {
         return hash;
     }
+    let rt::Path { fill_rule, verbs, points, metadata, content_hash: _, extra } = path;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let _ = std::fmt::Write::write_fmt(&mut HashWrite(&mut hasher), format_args!("{path:?}"));
+    let _ = std::fmt::Write::write_fmt(&mut HashWrite(&mut hasher), format_args!("{fill_rule:?}{metadata:?}{extra:?}"));
+    // SAFETY: `Verb` is a u8
+    hasher.write(unsafe { std::slice::from_raw_parts(verbs.as_ptr().cast::<u8>(), verbs.len()) });
+    floats(&mut hasher, points.as_flattened());
     hasher.finish()
+}
+
+fn floats(hasher: &mut std::collections::hash_map::DefaultHasher, values: &[f32]) {
+    // SAFETY: any f32's bytes are 4 u8s
+    hasher.write(unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values)) });
 }
 
 /// Nested nodes drawn at most, against a tree that refers to itself
