@@ -3146,22 +3146,22 @@ impl Painter {
 
     /// `first`, and the tiles of `keys` beside it in its row while together
     /// they draw few units, as each render takes a millisecond or two however
-    /// little it draws, and a zoom's tiles mostly draw little. Not those
-    /// drawing images, as its atlas would grow to hold all of theirs at once,
-    /// a copy of each
+    /// little it draws, and a zoom's tiles mostly draw little. A unit over
+    /// several is drawn once for them all. Not those drawing images the
+    /// others don't, as Vello's atlas would grow to hold all of them at once
     fn batch(&self, first: TileKey, keys: &[TileKey]) -> Vec<TileKey> {
         let px = first.px();
         let (top, bottom) = ((first.y * TILE) as f32 / px, ((first.y + 1) * TILE) as f32 / px);
         let mut held = [0usize; 2 * BATCH_TILES - 1];
         let reach = BATCH_TILES as i32 - 1;
+        let column = |at: f32| (at * px / TILE as f32).floor() as i32 - first.x;
         let mut in_row = Vec::new();
         for unit in &self.units {
             let b = &unit.bounds;
             if b.bottom <= top || b.top >= bottom || b.width().max(b.height()) * px < 0.5 {
                 continue;
             }
-            let from = ((b.left * px / TILE as f32).floor() as i32 - first.x).max(-reach);
-            let to = ((b.right * px / TILE as f32).floor() as i32 - first.x).min(reach);
+            let (from, to) = (column(b.left).max(-reach), column(b.right).min(reach));
             if from > to {
                 continue;
             }
@@ -3175,28 +3175,56 @@ impl Painter {
         if held[reach as usize] > BATCH_UNITS {
             return vec![first];
         }
-        for (from, to, unit) in in_row {
+        // The images each tile draws, where units drew them last, or the
+        // unit for those not drawn yet the tree says draw images
+        let mut images: [Vec<u64>; 2 * BATCH_TILES - 1] = Default::default();
+        let hash = |what: &dyn Fn(&mut std::collections::hash_map::DefaultHasher)| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            what(&mut hasher);
+            hasher.finish()
+        };
+        for &(from, to, unit) in &in_row {
             if (from..=to).all(|x| held[(x + reach) as usize] > BATCH_UNITS) {
                 continue;
             }
-            // Those not drawn yet by what the tree says they draw
-            let images = match self.vello_uses.get(&(unit.slot, unit.section)) {
-                Some((_, uses)) => !uses.is_empty(),
-                None => unit.custom || unit.place.as_ref().is_none_or(|place| self.tree.as_ref().is_none_or(|tree| tree.draws_images(place.id))),
-            };
-            if images {
-                for x in from..=to {
-                    held[(x + reach) as usize] += BATCH_UNITS;
+            match self.vello_uses.get(&(unit.slot, unit.section)) {
+                Some((_, uses)) => {
+                    for (key, _, at) in uses {
+                        if at.bottom <= top || at.top >= bottom {
+                            continue;
+                        }
+                        let id = hash(&|hasher| key.hash(hasher));
+                        for x in column(at.left).max(from)..=column(at.right).min(to) {
+                            images[(x + reach) as usize].push(id);
+                        }
+                    }
                 }
+                None if unit.custom || unit.place.as_ref().is_none_or(|place| self.tree.as_ref().is_none_or(|tree| tree.draws_images(place.id))) => {
+                    let id = hash(&|hasher| (unit.slot, unit.section).hash(hasher));
+                    for x in from..=to {
+                        images[(x + reach) as usize].push(id);
+                    }
+                }
+                None => {}
             }
         }
-        let units = |x: i32| held[(x + reach) as usize];
-        let mut total = units(0);
         let (mut left, mut right) = (0, 0);
+        let mut total = held[reach as usize];
+        let mut drawing = images[reach as usize].clone();
+        // Units over `x` not over the tiles already taken
+        let more = |x: i32, left: i32, right: i32| in_row.iter().filter(|(from, to, _)| (*from..=*to).contains(&x) && (*to < left || *from > right)).count();
         while right - left + 1 < BATCH_TILES as i32 {
-            let next = [right + 1, left - 1].into_iter().find(|&x| x.abs() <= reach && keys.contains(&TileKey { x: first.x + x, ..first }) && total + units(x) <= BATCH_UNITS);
+            let next = [right + 1, left - 1].into_iter().find(|&x| {
+                let at = (x + reach) as usize;
+                x.abs() <= reach
+                    && keys.contains(&TileKey { x: first.x + x, ..first })
+                    && held[at] <= BATCH_UNITS
+                    && (drawing.is_empty() || images[at].iter().all(|id| drawing.contains(id)))
+                    && total + more(x, left, right) <= BATCH_UNITS
+            });
             let Some(x) = next else { break };
-            total += units(x);
+            total += more(x, left, right);
+            drawing.extend_from_slice(&images[(x + reach) as usize]);
             if x > right {
                 right = x;
             } else {
