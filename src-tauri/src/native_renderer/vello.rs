@@ -2168,12 +2168,20 @@ impl<'a> Encoder<'a> {
     pub fn place(&mut self, place: &Place, post: &Matrix) {
         self.m = *post;
         self.from_post = post.invert().unwrap_or_default();
-        let soft = self.tree.info(place.id).blends;
+        let info = self.tree.info(place.id);
+        let soft = info.blends;
+        // Where it draws, a pixel out for its edges' antialiasing
+        let drawn = info.bounds.map(|bounds| Matrix::concat(post, &place.at).map_rect(bounds).0.with_outset((1.0, 1.0)));
         let was = self.soft.clone();
         let mut clips = 0;
         for (fill, at) in &place.clips {
             if let Some(outline) = self.tree.outline(*fill) {
                 let device = outline.with_transform(&Matrix::concat(post, at));
+                // One around all it draws cuts nothing, and each clip takes
+                // Vello a layer
+                if drawn.is_some_and(|drawn| device.conservatively_contains_rect(drawn)) {
+                    continue;
+                }
                 if soft {
                     self.soften(device);
                 } else {
