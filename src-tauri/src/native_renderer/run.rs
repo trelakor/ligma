@@ -53,9 +53,14 @@ struct Ctx {
     shared: Mutex<Option<(String, crate::webview2::Shared)>>,
     /// What the render and present threads share
     hub: Arc<Hub>,
-    /// The tab whose canvas Ligma draws in place of Figma's renderer, and
-    /// tabs opened before the renderer was on, since made ready for it
-    replaced: Mutex<Option<Webview>>,
+    /// The tabs whose canvas Ligma draws in place of Figma's renderer, the
+    /// one drawn and those it drew left hidden, and tabs opened before the
+    /// renderer was on, since made ready for it
+    replaced: Mutex<Vec<Webview>>,
+    /// Tabs left hidden that hand over frames still, the latest last, whose
+    /// scene the render thread keeps, so they're drawn again at once when
+    /// they're back, rather than Figma sending its whole scene again
+    parked: Mutex<Vec<String>>,
     hooked: Mutex<std::collections::HashSet<String>>,
     /// The tab handing over frames of Figma's render tree, and when it was
     /// asked to
@@ -217,56 +222,78 @@ const TREE_FAILURES: u32 = 4;
 /// thread can't apply, has Figma send the whole scene again
 fn take_frames(ctx: Arc<Ctx>) {
     use super::tree::Frame;
-    let mut session: Option<String> = None;
-    let mut pending: std::collections::BTreeMap<u64, Frame> = std::collections::BTreeMap::new();
-    // The frame to pass on next, once there's a whole scene to start from
-    let mut next: Option<u64> = None;
-    let mut gap: Option<Instant> = None;
+    // Of each tab handing over frames: the one drawn and those parked, whose
+    // frames wait till it's drawn again
+    #[derive(Default)]
+    struct Tab {
+        session: Option<String>,
+        pending: std::collections::BTreeMap<u64, Frame>,
+        // The frame to pass on next, once there's a whole scene to start from
+        next: Option<u64>,
+        gap: Option<Instant>,
+        /// When it was drawn again, in ms since 1970: frames sent before,
+        /// waiting while it was parked, aren't timed
+        since: f64,
+    }
+    let mut tabs: HashMap<String, Tab> = HashMap::new();
+    let mut drawn: Option<String> = None;
     let mut asked: Option<Instant> = None;
     let mut resyncs = 0u32;
     let mut overlay = super::overlay::Decoder::new();
     while !ctx.stop.load(Ordering::Relaxed) {
         let came = frames().take(Duration::from_millis(100));
         let tab = ctx.framing.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
+        let parked = ctx.parked.lock().unwrap().clone();
+        tabs.retain(|label, _| Some(label) == tab.as_ref() || parked.contains(label));
         for (from, body) in came {
-            if Some(&from) != tab.as_ref() {
+            if Some(&from) != tab.as_ref() && !parked.contains(&from) {
                 continue;
             }
-            let frame = match Frame::parse(body) {
+            let mut frame = match Frame::parse(body) {
                 Ok(frame) => frame,
                 Err(error) => {
                     log::warn!("native renderer: a frame couldn't be read: {error}");
                     continue;
                 }
             };
-            if session.as_deref() != Some(frame.header.session.as_str()) {
+            let state = tabs.entry(from.clone()).or_default();
+            frame.tab = from;
+            if state.session.as_deref() != Some(frame.header.session.as_str()) {
                 // The tab loaded again
-                session = Some(frame.header.session.clone());
-                pending.clear();
-                next = None;
+                state.session = Some(frame.header.session.clone());
+                state.pending.clear();
+                state.next = None;
             }
-            pending.insert(frame.header.seq, frame);
+            state.pending.insert(frame.header.seq, frame);
+            // Too many waiting while parked: it starts from a whole scene
+            if state.pending.len() > 256 {
+                state.pending.clear();
+                state.next = None;
+            }
         }
-        if tab.is_none() {
-            pending.clear();
-            next = None;
-            session = None;
+        let Some(tab) = tab else {
+            drawn = None;
             continue;
+        };
+        let state = tabs.entry(tab.clone()).or_default();
+        if drawn.as_ref() != Some(&tab) {
+            state.since = super::render::since_epoch_ms();
+            drawn = Some(tab);
         }
         if ctx.hub.tree_failures.swap(0, Ordering::Relaxed) > 0 {
-            next = None;
+            state.next = None;
             resyncs += 1;
         }
-        if next.is_none() {
+        if state.next.is_none() {
             // Starts from the first whole scene
-            match pending.iter().find(|(_, frame)| frame.header.mode == 0).map(|(&seq, _)| seq) {
+            match state.pending.iter().find(|(_, frame)| frame.header.mode == 0).map(|(&seq, _)| seq) {
                 Some(seq) => {
-                    pending.retain(|&at, _| at >= seq);
-                    next = Some(seq);
-                    gap = None;
+                    state.pending.retain(|&at, _| at >= seq);
+                    state.next = Some(seq);
+                    state.gap = None;
                 }
                 None => {
-                    pending.clear();
+                    state.pending.clear();
                     if asked.is_none_or(|at| at.elapsed() > Duration::from_millis(1000)) {
                         asked = Some(Instant::now());
                         if resyncs > TREE_FAILURES {
@@ -274,7 +301,7 @@ fn take_frames(ctx: Arc<Ctx>) {
                             // drawing the tab
                             log::warn!("native renderer: Figma's render tree couldn't be followed, so Figma's renderer draws the tab");
                             set_status("Figma's render tree couldn't be followed");
-                            stop_framing(&ctx);
+                            stop_framing(&ctx, true);
                             resyncs = 0;
                         } else if let Some(webview) = current(&ctx) {
                             let _ = webview.eval("window.__ligmaHook?.resync(); dispatchEvent(new Event('resize'))");
@@ -283,10 +310,10 @@ fn take_frames(ctx: Arc<Ctx>) {
                 }
             }
         }
-        while let Some(seq) = next {
-            let Some(frame) = pending.remove(&seq) else { break };
-            next = Some(seq + 1);
-            gap = None;
+        while let Some(seq) = state.next {
+            let Some(frame) = state.pending.remove(&seq) else { break };
+            state.next = Some(seq + 1);
+            state.gap = None;
             if frame.header.mode == 0 {
                 resyncs = resyncs.saturating_sub(1);
             }
@@ -317,36 +344,67 @@ fn take_frames(ctx: Arc<Ctx>) {
                     0.0
                 };
                 super::present::Made { at: frame.header.at, figma: figma.max(0.0) as f32 }
-            });
+            }).filter(|_| frame.header.at >= state.since);
             ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits(), made, frame.header.at);
             super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2} page={}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at, frame.header.page.as_ref().map_or_else(String::new, |page| page.to_string())));
             let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
         }
         // One missing a while is lost, so Figma sends the whole scene again
-        if next.is_some() && !pending.is_empty() {
-            let since = *gap.get_or_insert_with(Instant::now);
+        if state.next.is_some() && !state.pending.is_empty() {
+            let since = *state.gap.get_or_insert_with(Instant::now);
             if since.elapsed() > Duration::from_millis(500) {
-                log::info!("native renderer: frame {} didn't come, asking for the whole scene", next.unwrap_or(0));
-                next = None;
+                log::info!("native renderer: frame {} didn't come, asking for the whole scene", state.next.unwrap_or(0));
+                state.next = None;
             }
         }
     }
 }
 
-/// Stops the tab handing over frames, and draws the plugin API's scene again
-fn stop_framing(ctx: &Ctx) {
+/// Stops the tab handing over frames, and draws the plugin API's scene
+/// again. One left hidden is parked instead, unless it's `reloaded`
+fn stop_framing(ctx: &Ctx, reloaded: bool) {
     let framing = ctx.framing.lock().unwrap().take();
     if let Some((label, _)) = framing {
-        if let Some(webview) = ctx.app.get_webview(&label) {
-            let _ = webview.eval("window.__ligmaHook?.push(null)");
-            let mut replaced = ctx.replaced.lock().unwrap();
-            if replaced.as_ref().is_some_and(|replaced| replaced.label() == label) {
-                give_back(&webview);
-                *replaced = None;
+        let active = crate::tabs::active_file(&ctx.app).map(|file| file.webview.label().to_string());
+        let hidden = !reloaded && active.as_ref().is_some_and(|active| *active != label) && !crate::tabs::in_split(&ctx.app, &label);
+        let drawn = ctx.replaced.lock().unwrap().iter().any(|replaced| replaced.label() == label);
+        if hidden && drawn && ctx.tree.load(Ordering::Relaxed) {
+            let gone = {
+                let mut parked = ctx.parked.lock().unwrap();
+                parked.retain(|tab| *tab != label);
+                super::mark(|| format!("{label} parked"));
+                parked.push(label);
+                // Not counting the tab shown now, drawn from where it was
+                // parked as it's started again
+                let others = parked.iter().filter(|tab| Some(*tab) != active.as_ref()).count();
+                let oldest = parked.iter().position(|tab| Some(tab) != active.as_ref());
+                if others > PARKED { oldest.map(|at| parked.remove(at)) } else { None }
+            };
+            if let Some(gone) = gone {
+                release_tab(ctx, &gone);
             }
+        } else {
+            release_tab(ctx, &label);
         }
     }
     ctx.tree.store(false, Ordering::Relaxed);
+}
+
+/// Tabs parked at most, see `Ctx::parked`
+const PARKED: usize = 1;
+
+/// Has tab `label` stop handing over frames and draw its canvas again
+fn release_tab(ctx: &Ctx, label: &str) {
+    super::mark(|| format!("{label} handed back to Figma's renderer"));
+    let _ = ctx.messages.send(Msg::Unpark(label.into()));
+    ctx.parked.lock().unwrap().retain(|tab| tab != label);
+    if let Some(webview) = ctx.app.get_webview(label) {
+        let _ = webview.eval("window.__ligmaHook?.push(null)");
+        let mut replaced = ctx.replaced.lock().unwrap();
+        if let Some(at) = replaced.iter().position(|replaced| replaced.label() == label) {
+            give_back(&replaced.remove(at));
+        }
+    }
 }
 
 /// Has tab `webview` hand over frames of Figma's render tree, if its page
@@ -358,6 +416,23 @@ fn start_framing(ctx: &Ctx, webview: &Webview) -> bool {
     if framing.as_deref() == Some(label.as_str()) {
         return true;
     }
+    // Parked, it hands over frames still, which carry on from its scene
+    let was_parked = {
+        let mut parked = ctx.parked.lock().unwrap();
+        let was = parked.iter().any(|tab| *tab == label);
+        parked.retain(|tab| *tab != label);
+        was
+    };
+    if was_parked {
+        super::mark(|| format!("{label} drawn again from where it was parked"));
+        if framing.is_some() {
+            stop_framing(ctx, false);
+        }
+        *ctx.framing.lock().unwrap() = Some((label, Instant::now()));
+        ctx.tree.store(true, Ordering::Relaxed);
+        let _ = webview.eval("dispatchEvent(new Event('resize'))");
+        return true;
+    }
     let ready = eval_value(webview, "window.__ligmaHook ? window.__ligmaHook.ready() : null");
     if ready != Some(Value::Bool(true)) {
         return false;
@@ -367,7 +442,7 @@ fn start_framing(ctx: &Ctx, webview: &Webview) -> bool {
         return false;
     }
     if framing.is_some() {
-        stop_framing(ctx);
+        stop_framing(ctx, false);
     }
     let path = serde_json::to_string(&format!("/__ligma_native/{}/", pushed().secret)).unwrap();
     if eval_value(webview, &format!("window.__ligmaHook.push({path})")) != Some(Value::Bool(true)) {
@@ -405,7 +480,7 @@ pub fn start(app: &AppHandle) {
 
 pub fn stop(app: &AppHandle) {
     if let Some(ctx) = CTX.lock().unwrap().take() {
-        if let Some(webview) = ctx.replaced.lock().unwrap().take() {
+        for webview in std::mem::take(&mut *ctx.replaced.lock().unwrap()) {
             give_back(&webview);
         }
         fine_timers(false);
@@ -471,7 +546,8 @@ fn open(app: &AppHandle) -> Result<(), String> {
         encoded: Mutex::new(Encoded::default()),
         shared: Mutex::new(None),
         hub: Arc::new(Hub::new((size.width, size.height))),
-        replaced: Mutex::new(None),
+        replaced: Mutex::new(Vec::new()),
+        parked: Mutex::new(Vec::new()),
         hooked: Mutex::default(),
         framing: Mutex::new(None),
         canvas: Mutex::new((0, 0)),
@@ -713,8 +789,13 @@ fn sync(ctx: Arc<Ctx>) {
         // Another tab, or this one loaded again, whose page has to be told
         // where frames go and to leave the canvas to Ligma again
         let reloaded = ready.as_ref().and_then(Value::as_str) == Some("installed");
-        if ctx.framing.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab != label || reloaded) {
-            stop_framing(&ctx);
+        let framing = ctx.framing.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
+        if framing.as_ref().is_some_and(|tab| *tab != label || reloaded) {
+            stop_framing(&ctx, framing.as_deref() == Some(label.as_str()));
+        }
+        // One parked that loaded again starts over
+        if reloaded && ctx.parked.lock().unwrap().contains(&label) {
+            release_tab(&ctx, &label);
         }
         let shared_here = ctx.shared.lock().unwrap().as_ref().is_some_and(|(tab, _)| *tab == label);
         if reloaded || !shared_here {
@@ -808,18 +889,26 @@ fn sync(ctx: Arc<Ctx>) {
 fn take_over(ctx: &Ctx, webview: &Webview) {
     let label = webview.label().to_string();
     let mut replaced = ctx.replaced.lock().unwrap();
-    if replaced.as_ref().is_some_and(|replaced| replaced.label() == label) {
+    if replaced.iter().any(|replaced| replaced.label() == label) {
         return;
     }
-    if ctx.hub.snapshot.lock().unwrap().is_none() {
+    // Figma's canvas shows the tab till Ligma's drawn it whole
+    if ctx.hub.whole_tab.lock().unwrap().as_deref() != Some(label.as_str()) {
         return;
     }
     match eval_value(webview, "window.__ligmaHook ? window.__ligmaHook.replace(true) : null") {
         Some(Value::Bool(true)) => {
             super::mark(|| format!("drawing {label}'s canvas in place of Figma's renderer"));
-            if let Some(before) = replaced.replace(webview.clone()) {
-                give_back(&before);
-            }
+            // Tabs neither parked nor shown draw their canvas themselves
+            let parked = ctx.parked.lock().unwrap().clone();
+            replaced.retain(|before| {
+                let keep = parked.iter().any(|tab| tab == before.label());
+                if !keep {
+                    give_back(before);
+                }
+                keep
+            });
+            replaced.push(webview.clone());
         }
         // Opened before the renderer was on
         Some(Value::Null) => {
@@ -867,7 +956,7 @@ fn snapshot(ctx: &Ctx, webview: &Webview) -> Result<(), String> {
     let begin: Begin = serde_json::from_value(begin).map_err(|error| error.to_string())?;
     let page = begin.page.clone();
     let stream = begin.stream.clone();
-    let _ = ctx.messages.send(Msg::Begin(Box::new(Scene::new(begin))));
+    let _ = ctx.messages.send(Msg::Begin(Box::new(Scene { tab: Some(webview.label().into()), ..Scene::new(begin) })));
     let (mut transfer, mut parse, mut bytes, mut first) = (Duration::ZERO, Duration::ZERO, 0usize, None);
     let mut next = 0;
     let in_page = loop {
@@ -1149,9 +1238,18 @@ fn poll_view(ctx: Arc<Ctx>) {
     }
 }
 
-/// Where the mirrored tab is in the window, for the layer drawn under it
+pub fn tab_shown() {
+    let ctx = CTX.lock().unwrap().clone();
+    if let Some(ctx) = ctx {
+        place(&ctx);
+    }
+}
+
+/// The tab shown and where it is in the window, for the layer drawn under
+/// it, shown only while it's the tab drawn
 fn place(ctx: &Ctx) {
-    let origin = current(ctx).and_then(|webview| webview.position().ok()).map(|at| (at.x, at.y));
+    let shown = crate::tabs::active_file(&ctx.app).filter(|file| file.editor == "design").map(|file| file.webview);
+    let origin = shown.and_then(|webview| Some((webview.label().to_string(), webview.position().ok().map(|at| (at.x, at.y))?)));
     let mut current = ctx.hub.origin.lock().unwrap();
     if *current != origin {
         *current = origin;

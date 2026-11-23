@@ -156,6 +156,8 @@ fn no_outline() -> f64 {
 /// (`uiCommands`, see overlay.rs)
 pub struct Frame {
     pub header: Header,
+    /// The tab it came from
+    pub tab: String,
     body: Vec<u8>,
     start: usize,
 }
@@ -168,7 +170,7 @@ impl Frame {
         if header.ui > body.len() - end {
             return Err("overlay past the end".into());
         }
-        Ok(Frame { header, body, start: end })
+        Ok(Frame { header, tab: String::new(), body, start: end })
     }
 
     pub fn forest(&self) -> &[u8] {

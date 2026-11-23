@@ -82,6 +82,15 @@ pub fn presented(figma: f32, ligma: f32, waiting: bool) {
     record.frame((figma, ligma, since));
 }
 
+/// Another tab's drawn: its frames are timed from now, not with the last
+/// tab's, nor the wait for it as a frame
+pub fn tab_drawn() {
+    if let Some(record) = RECORDS.lock().unwrap()[0].as_mut() {
+        record.frames.clear();
+        record.last = None;
+    }
+}
+
 /// Shows the panel while Show stats is on, from when it's turned on
 pub fn follow(app: &AppHandle) {
     if super::show_stats() && !RUNNING.swap(true, Ordering::Relaxed) {

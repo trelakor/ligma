@@ -1319,6 +1319,7 @@ pub fn select(app: &AppHandle, id: u32) -> tauri::Result<()> {
             crate::webview2::on_hidden(&webview);
         }
     }
+    crate::native_renderer::tab_shown();
     // A tab past `max_hidden` sleeps now, not at the next timer tick
     if !previous.is_empty() {
         rest_idle(app);
@@ -1384,6 +1385,11 @@ fn end_split(app: &AppHandle, window: &str) {
 pub fn split_tabs(app: &AppHandle) -> Vec<u32> {
     let state = app.state::<Tabs>().inner().0.lock().unwrap();
     state.splits.values().flatten().copied().collect()
+}
+
+/// Whether the tab whose webview is `webview_label` is in a split view
+pub fn in_split(app: &AppHandle, webview_label: &str) -> bool {
+    split_tabs(app).into_iter().any(|id| label(id) == webview_label)
 }
 
 /// The other tab of the split view tab `id` is in, if any

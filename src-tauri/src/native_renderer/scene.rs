@@ -637,6 +637,8 @@ fn noise_octaves() -> Vec<f32> {
 #[derive(Default)]
 pub struct Scene {
     pub page: String,
+    /// The tab it's read from
+    pub tab: Option<std::sync::Arc<str>>,
     pub background: Option<Rgba>,
     /// The page's background is hidden: Figma shows a checkerboard
     pub transparent: bool,

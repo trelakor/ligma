@@ -107,6 +107,13 @@ fn show_stats_if(app: &AppHandle, settings: &Settings) {
     let _ = app;
 }
 
+/// Call once another tab's shown, for the canvas drawn under the window's
+/// tabs to show only under the tab it's drawn for
+pub fn tab_shown() {
+    #[cfg(windows)]
+    run::tab_shown();
+}
+
 fn enabled(settings: &Settings) -> bool {
     (settings.experimental && settings.native_renderer) || std::env::var("LIGMA_NATIVE_RENDERER").is_ok_and(|value| value == "1")
 }

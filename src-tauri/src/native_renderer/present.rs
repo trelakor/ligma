@@ -264,6 +264,8 @@ pub struct Snapshot {
     pub dark: bool,
     /// The render thread has more to draw for the view
     pub pending: bool,
+    /// The tab it's drawn from, shown only while that tab is
+    pub tab: Option<Arc<str>>,
 }
 
 impl Snapshot {
@@ -280,9 +282,9 @@ pub struct Hub {
     pub snapshot: Mutex<Option<Arc<Snapshot>>>,
     /// The window's size in pixels
     pub size: Mutex<(u32, u32)>,
-    /// Drawn in place of Figma's canvas, under the tab: where the tab's
-    /// webview is in the window, in pixels, and whether the tab is shown
-    pub origin: Mutex<Option<(i32, i32)>>,
+    /// Drawn in place of Figma's canvas, under the tab: the active Figma
+    /// tab, and where its webview is in the window, in pixels
+    pub origin: Mutex<Option<(String, (i32, i32))>>,
     pub stop: AtomicBool,
     /// Frames of the render tree that couldn't be applied in a row
     pub tree_failures: std::sync::atomic::AtomicU32,
@@ -292,6 +294,8 @@ pub struct Hub {
     frames: Mutex<std::collections::VecDeque<FrameView>>,
     /// The frame last shown, for tracing
     pub shown_seq: AtomicU64,
+    /// The tab the last frame shown whole was drawn from
+    pub whole_tab: Mutex<Option<Arc<str>>>,
     changes: Mutex<u64>,
     changed: Condvar,
 }
@@ -308,6 +312,7 @@ impl Hub {
             shared: Mutex::new(None),
             frames: Mutex::new(std::collections::VecDeque::new()),
             shown_seq: AtomicU64::new(0),
+            whole_tab: Mutex::new(None),
             changes: Mutex::new(0),
             changed: Condvar::new(),
         }
@@ -1640,6 +1645,10 @@ impl Screen {
         // view moves on over this, all of it as it was a moment before,
         // rather than standing still till the render thread fills them
         let mut complete: Option<Arc<Snapshot>> = None;
+        let mut complete_view: Option<View> = None;
+        // The last shown whole of the tabs shown before, and their views,
+        // shown the moment one's back till it's drawn again, not nothing
+        let mut left: Vec<(Arc<Snapshot>, View, Instant)> = Vec::new();
         // What's shown: the snapshot, the view, what's over it and the size
         let mut shown: Option<(u64, View, Option<u32>, (u32, u32))> = None;
         let mut seen = 0;
@@ -1685,10 +1694,41 @@ impl Screen {
                 shown = None;
             }
             if self.layer.is_some() {
-                // Where the browser puts Figma's canvas: at the nearest
-                // device pixel, a pixel of it to a pixel of the screen
-                let at = (*hub.origin.lock().unwrap()).filter(|_| view.visible).map(|(x, y)| (x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32));
-                self.place(at);
+                let showing = hub.origin.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
+                let whole_tab = hub.whole_tab.lock().unwrap().clone();
+                let away = showing.as_deref() != whole_tab.as_deref();
+                if away && complete.as_ref().is_some_and(|complete| complete.tab == whole_tab) && !left.iter().any(|(kept, ..)| kept.tab == whole_tab) {
+                    if let (Some(kept), Some(view)) = (complete.clone(), complete_view.clone()) {
+                        left.push((kept, view, Instant::now()));
+                        if left.len() > LEFT_TABS {
+                            left.remove(0);
+                        }
+                    }
+                }
+                left.retain(|(kept, _, at)| at.elapsed() <= LEFT_KEPT && (away || kept.tab != whole_tab));
+                let back = left.iter().position(|(kept, ..)| showing.is_some() && kept.tab.as_deref() == showing.as_deref() && snapshot.tab != kept.tab).map(|index| left.remove(index));
+                if let Some((kept, kept_view, _)) = back {
+                    hub.whole_tab.lock().unwrap().clone_from(&kept.tab);
+                    let (pieces, _) = cover_over(&kept.layers, kept.layers.len(), kept.content, &kept_view, self.size, &self.shown);
+                    let _ = self.place(placed(&hub, &kept_view));
+                    self.frame(&kept, &pieces, &kept_view, None, self.timed);
+                    super::hud::tab_drawn();
+                    room = false;
+                    shown = Some((kept.serial, kept_view.clone(), None, self.size));
+                    complete = Some(kept);
+                    complete_view = Some(kept_view);
+                    continue;
+                }
+                // Another tab's, not shown over this one
+                if snapshot.tab.is_some() && snapshot.tab.as_deref() != showing.as_deref() && snapshot.tab != whole_tab {
+                    let _ = self.place(None);
+                    seen = hub.wait(seen, Duration::from_millis(100));
+                    continue;
+                }
+                let at = placed(&hub, &view);
+                if self.place(at) {
+                    shown = None;
+                }
                 self.pan.canvas = at.map(|(x, y)| (self.window, (x, y, self.size.0 as i32, self.size.1 as i32)));
             }
             // Between Figma's frames, the view moved on as it's moving,
@@ -1730,7 +1770,7 @@ impl Screen {
                 // Its holes filled from the last snapshot shown whole, as
                 // it was a moment before, so the view never stands still
                 // for what's being drawn again
-                let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial).map(|before| {
+                let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial && before.tab == snapshot.tab).map(|before| {
                     let mut layers = snapshot.layers.clone();
                     layers.extend(before.layers.iter().cloned());
                     let (pieces, merged_hole) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
@@ -1748,6 +1788,7 @@ impl Screen {
                         transparent: snapshot.transparent,
                         dark: snapshot.dark,
                         pending: snapshot.pending,
+                        tab: snapshot.tab.clone(),
                     };
                     (merged, pieces, holes)
                 });
@@ -1780,7 +1821,7 @@ impl Screen {
                     shown = Some(now);
                     continue;
                 }
-                let before = complete.clone().filter(|before| before.serial != snapshot.serial).and_then(|before| {
+                let before = complete.clone().filter(|before| before.serial != snapshot.serial && before.tab == snapshot.tab).and_then(|before| {
                     let (pieces, holes) = cover_over(&before.layers, before.layers.len(), before.content, &view, self.size, &self.shown);
                     let holes = holes.is_some();
                     let then = (before.serial, view.clone(), overlay.as_ref().map(|drawn| drawn.canvas.unique_id()), self.size);
@@ -1820,8 +1861,20 @@ impl Screen {
             hub.shown_seq.store(seq, Ordering::Relaxed);
             PATH.store(0, Ordering::Relaxed);
             self.frame(&snapshot, &pieces, &view, overlay.as_ref(), seq);
+            complete_view = Some(view.clone());
             room = false;
             shown = Some(now);
+            let mut whole_tab = hub.whole_tab.lock().unwrap();
+            if *whole_tab != snapshot.tab {
+                whole_tab.clone_from(&snapshot.tab);
+                drop(whole_tab);
+                // Shown now it's drawn whole for the tab shown, presented
+                // again next, as the layer shows nothing till then
+                if self.layer.is_some() && self.place(placed(&hub, &view)) {
+                    shown = None;
+                }
+                super::hud::tab_drawn();
+            }
             complete = Some(snapshot);
         }
         drop((current, complete));
@@ -1830,14 +1883,16 @@ impl Screen {
         done();
     }
 
-    /// Moves the layer to `at` in the window, or hides it
-    fn place(&mut self, at: Option<(i32, i32)>) {
+    /// Moves the layer to `at` in the window, or hides it. True where it's
+    /// shown again, which shows nothing till a frame's presented again
+    fn place(&mut self, at: Option<(i32, i32)>) -> bool {
         let Some(layer) = &mut self.layer else {
-            return;
+            return false;
         };
         if layer.at == at {
-            return;
+            return false;
         }
+        let again = layer.at.is_none() && at.is_some();
         layer.at = at;
         unsafe {
             match at {
@@ -1853,6 +1908,7 @@ impl Screen {
             }
             let _ = layer.device.Commit();
         }
+        again
     }
 
     fn image(&mut self, tex: &Arc<Tex>) -> Option<Image> {
@@ -1990,6 +2046,24 @@ impl Screen {
         stats.holes(false);
         stats.record_frame(encoded.as_secs_f64() * 1000.0, rendered.as_secs_f64() * 1000.0, counts.native, counts.approximate, counts.skipped, view.zoom, snapshot.pending);
     }
+}
+
+/// How long what a tab showed last is kept once another's shown, for when
+/// it's back
+const LEFT_KEPT: Duration = Duration::from_secs(60);
+/// Tabs whose last frame is kept so
+const LEFT_TABS: usize = 2;
+
+/// Where the browser puts Figma's canvas: at the nearest device pixel, a
+/// pixel of it to a pixel of the screen. None to hide the layer, while the
+/// tab shown isn't the one drawn whole last, as one loading or Figma's own
+/// canvas drawing it till Ligma's drawn it, so another file's never shows
+fn placed(hub: &Hub, view: &View) -> Option<(i32, i32)> {
+    let (tab, (x, y)) = hub.origin.lock().unwrap().clone()?;
+    if !view.visible || hub.whole_tab.lock().unwrap().as_deref() != Some(tab.as_str()) {
+        return None;
+    }
+    Some((x + (view.cx * view.dpr).round() as i32, y + (view.cy * view.dpr).round() as i32))
 }
 
 /// How the frame being shown was put together, for `record`: the latest

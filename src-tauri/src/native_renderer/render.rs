@@ -140,6 +140,8 @@ pub enum Msg {
     /// A frame of Figma's render tree, which once it comes is drawn in place
     /// of the scene read through the plugin API
     Frame(Box<Frame>),
+    /// Tab `0` is no longer parked, so its render tree isn't kept
+    Unpark(Arc<str>),
     /// Figma's noise octaves, see `scene::Begin`
     Octaves(Vec<f32>),
     Changes(Prepared),
@@ -1576,6 +1578,14 @@ pub struct Painter {
     chunked: Option<Chunked>,
     /// The last frame of Figma's render tree applied
     seq: u64,
+    /// The tab the render tree is of
+    tab: Option<Arc<str>>,
+    /// The last whole scene taken in, summed, while nothing's changed since
+    whole_sum: Option<(usize, u64)>,
+    /// The render tree of the tab drawn before, kept while it's parked
+    parked: Option<Parked>,
+    /// Whether the tab's tree is kept as another's drawn, till it's unparked
+    park: bool,
     /// Units drawn small at powers of two, on pages of their own, for the
     /// view while it moves: by unit and power
     thumbs: HashMap<(usize, bool, i32), Thumb>,
@@ -1765,6 +1775,10 @@ impl Painter {
             unchecked: None,
             chunked: None,
             seq: 0,
+            tab: None,
+            whole_sum: None,
+            parked: None,
+            park: true,
             thumbs: HashMap::new(),
             thumb_pages: Vec::new(),
             thumbs_made: 0,
@@ -4594,6 +4608,33 @@ impl Painter {
         }
     }
 
+    /// Lets go of what's drawn of the tab drawn before, for another's
+    fn leave_tab(&mut self) {
+        self.tree = None;
+        self.whole_sum = None;
+        self.clear_tiles();
+        if self.last_whole.is_some() {
+            self.drop_last_whole();
+        }
+        if let Some(last) = self.unchecked.take() {
+            if let Some(vello) = self.vello.as_mut() {
+                let _ = vello.check(last.renders);
+            }
+            self.retire(last.layer.tex);
+        }
+        if let Some(chunked) = self.chunked.take() {
+            self.retire(chunked.tex);
+        }
+        self.scene_kept = None;
+        self.kept_drawn = None;
+        self.fragments.clear();
+        self.between.clear();
+        self.sharpened.clear();
+        self.versions.clear();
+        self.image_units.clear();
+        self.vello_uses.clear();
+    }
+
     fn clear_tiles(&mut self) {
         let _span = super::span::span("clear tiles");
         self.pending = None;
@@ -4753,6 +4794,7 @@ impl Painter {
             transparent,
             dark,
             pending: self.dirty,
+            tab: self.tab.clone(),
         };
         *self.hub.snapshot.lock().unwrap() = Some(Arc::new(snapshot));
         self.hub.poke();
@@ -4781,6 +4823,13 @@ impl Painter {
     fn handle(&mut self, message: Msg) -> bool {
         match message {
             Msg::Frame(frame) => self.frame(*frame),
+            Msg::Unpark(tab) => {
+                trace(|| format!("{tab} unparked"));
+                self.parked.take_if(|parked| parked.tab == tab);
+                if self.tab.as_ref() == Some(&tab) {
+                    self.park = false;
+                }
+            }
             Msg::Octaves(octaves) => {
                 self.octaves = octaves.clone();
                 if let Some(tree) = &mut self.tree {
@@ -4799,6 +4848,7 @@ impl Painter {
             Msg::View(_) if self.tree.is_some() => {}
             Msg::Begin(scene) => {
                 self.scene = *scene;
+                self.tab.clone_from(&self.scene.tab);
                 self.pictures.clear();
                 self.thumbs.clear();
                 self.clear_rasters();
@@ -5140,7 +5190,42 @@ impl Painter {
     /// comes with it, as Figma drew it
     fn frame(&mut self, frame: Frame) {
         let _span = super::span::span("apply frame");
-        let first = self.tree.is_none();
+        // Another tab's render tree: nothing drawn of the one before is kept,
+        // as its units' slots would be taken for others, but its tree is
+        // while it's parked (see `run::Ctx::parked`), to carry on from as
+        // it's drawn again. What's shown of it stays till this one's drawn,
+        // hidden while this tab is shown
+        let mut restored = false;
+        if self.tab.as_deref() != Some(frame.tab.as_str()) {
+            let back = self.parked.take_if(|parked| *parked.tab == *frame.tab);
+            if let Some(tree) = self.tree.take() {
+                if let Some(tab) = self.tab.clone().filter(|_| self.park) {
+                    trace(|| format!("{tab}'s tree kept"));
+                    self.parked = Some(Parked { tab, tree, whole_sum: self.whole_sum });
+                }
+                self.leave_tab();
+            }
+            self.park = true;
+            self.tab = Some(frame.tab.as_str().into());
+            if let Some(back) = back {
+                trace(|| format!("frame {} carries on from {}'s kept tree", frame.header.seq, back.tab));
+                self.tree = Some(back.tree);
+                self.whole_sum = back.whole_sum;
+                restored = true;
+            }
+        }
+        // A whole scene sent again as it was, as Figma does for a new worker
+        // of its own, isn't taken in again, a third of a second of a big one
+        let whole_sum = (frame.header.mode == 0).then(|| forest_sum(frame.forest(), frame.header.root));
+        let again = whole_sum.is_some() && whole_sum == self.whole_sum && self.tree.is_some();
+        if again && !restored {
+            trace(|| format!("frame {} mode=0 the same as the last whole scene", frame.header.seq));
+            self.seq = frame.header.seq;
+            self.set_view(frame.view());
+            self.dirty = true;
+            return;
+        }
+        let first = restored || self.tree.is_none();
         let tree = self.tree.get_or_insert_with(|| Tree::new(super::rt::Schema::bundled()));
         if tree.octaves.is_empty() {
             if self.octaves.len() >= 36 {
@@ -5151,7 +5236,7 @@ impl Painter {
         }
         let start = Instant::now();
         let root = tree.root;
-        let applied = match tree.apply(&frame) {
+        let applied = match if again { Ok(Default::default()) } else { tree.apply(&frame) } {
             Ok(applied) => applied,
             Err(error) => {
                 log::warn!("native renderer: frame {} not applied: {error}", frame.header.seq);
@@ -5160,6 +5245,7 @@ impl Painter {
             }
         };
         self.hub.tree_failures.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.whole_sum = whole_sum.or(self.whole_sum.filter(|_| !frame.edits()));
         self.seq = frame.header.seq;
         if frame.edits() {
             self.edited_seq = self.seq;
@@ -8020,4 +8106,27 @@ fn shrink(target: &mut Surface, image: &Image, source: skia_safe::IRect, average
         super::draw::sampled(image, FilterMode::Linear, mipmap),
         &paint,
     );
+}
+
+/// A parked tab's render tree, see `Painter::parked`
+struct Parked {
+    tab: Arc<str>,
+    tree: Tree,
+    whole_sum: Option<(usize, u64)>,
+}
+
+/// A whole scene's forest and root, summed, a word at a time, as hashing it
+/// as bytes took tens of milliseconds
+fn forest_sum(forest: &[u8], root: u32) -> (usize, u64) {
+    let (mut a, mut b) = (0x9e37_79b9_7f4a_7c15u64 ^ root as u64, 0xc2b2_ae3d_27d4_eb4fu64);
+    let mut words = forest.chunks_exact(16);
+    for pair in &mut words {
+        let (x, y) = (u64::from_le_bytes(pair[..8].try_into().unwrap()), u64::from_le_bytes(pair[8..].try_into().unwrap()));
+        a = (a ^ x).wrapping_mul(0x9fb2_1c65_1e98_df25).rotate_left(29);
+        b = (b ^ y).wrapping_mul(0xd6e8_feb8_6659_fd93).rotate_left(31);
+    }
+    for (index, &byte) in words.remainder().iter().enumerate() {
+        a = (a ^ ((byte as u64) << (index % 8 * 8))).wrapping_mul(0x9fb2_1c65_1e98_df25);
+    }
+    (forest.len(), a ^ b.rotate_left(17))
 }
