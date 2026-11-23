@@ -418,7 +418,12 @@ impl Vello {
         let blurred = self.blur(plan, params.antialiasing_method);
         self.took_blurs = at.elapsed();
         let rendered = blurred.and_then(|()| self.renderer.render_to_texture(&self.device, &self.queue, scene, &view, &params).map_err(|error| format!("render: {error}")));
-        self.stages += &format!(" record={:.1} run={:.1}", self.renderer.timing.0, self.renderer.timing.1);
+        self.stages += &format!(
+            " record={:.1} run={:.1} {:?}",
+            self.renderer.timing.0,
+            self.renderer.timing.1,
+            vello::RUN_PARTS.iter().map(|n| (n.swap(0, std::sync::atomic::Ordering::Relaxed) / 100_000) as f64 / 10.0).collect::<Vec<_>>()
+        );
         self.sync("main");
         self.renders = self.renderer.unchecked() - unchecked;
         for depth in &plan.depths {

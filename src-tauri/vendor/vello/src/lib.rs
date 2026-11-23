@@ -118,6 +118,8 @@ mod shaders;
 pub mod util;
 #[cfg(feature = "wgpu")]
 mod wgpu_engine;
+#[cfg(feature = "wgpu")]
+pub use wgpu_engine::RUN_PARTS;
 
 pub mod low_level {
     //! Utilities which can be used to create an alternative Vello renderer to [`Renderer`][crate::Renderer].

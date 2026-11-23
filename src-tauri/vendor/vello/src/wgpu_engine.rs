@@ -52,6 +52,17 @@ pub(crate) struct WgpuEngine {
     pub(crate) submitted: Option<wgpu::SubmissionIndex>,
 }
 
+/// Dev tools: time `run_recording` took by part, in ns
+pub static RUN_PARTS: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
+struct Part<'a>(usize, &'a mut std::time::Instant);
+impl Drop for Part<'_> {
+    fn drop(&mut self) {
+        let now = std::time::Instant::now();
+        RUN_PARTS[self.0].fetch_add((now - *self.1).as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        *self.1 = now;
+    }
+}
+
 pub(crate) struct Timer {
     set: wgpu::QuerySet,
     period: f64,
@@ -561,7 +572,15 @@ impl WgpuEngine {
             device.create_command_encoder(&CommandEncoderDescriptor { label: Some(label) });
         #[cfg(feature = "wgpu-profiler")]
         let query = profiler.begin_query(label, &mut encoder);
+        let mut lap = std::time::Instant::now();
         for command in &recording.commands {
+            let part = match command {
+                Command::Upload(..) | Command::UploadUniform(..) => 0,
+                Command::UploadImage(..) | Command::WriteImage(..) => 1,
+                Command::Dispatch(..) | Command::DispatchIndirect(..) => 2,
+                _ => 3,
+            };
+            let _part = Part(part, &mut lap);
             match command {
                 Command::Upload(buf_proxy, bytes) => {
                     transient_map
@@ -928,7 +947,10 @@ impl WgpuEngine {
         if let Some(timer) = &mut self.timer {
             timer.resolve(device, &mut encoder);
         }
+        let _part = Part(4, &mut lap);
         self.submitted = Some(queue.submit(Some(encoder.finish())));
+        drop(_part);
+        let _part = Part(5, &mut lap);
         self.staging.submitted();
         if let Some(timer) = &mut self.timer {
             timer.submitted();

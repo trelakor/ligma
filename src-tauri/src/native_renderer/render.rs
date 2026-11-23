@@ -551,7 +551,9 @@ fn reads_behind(scene: &Scene, unit: &Unit) -> Option<f32> {
 /// can't draw it. Made again once `stamp` isn't the unit's
 struct Encoded {
     stamp: u64,
-    made: Result<super::vello::Fragment, String>,
+    /// Boxed, so looking over when each was used, as tens of thousands
+    /// are, reads little memory
+    made: Box<Result<super::vello::Fragment, String>>,
     used: Instant,
 }
 
@@ -595,6 +597,10 @@ const EFFECT_PATIENCE: Duration = Duration::from_secs(5);
 
 /// Tiles a side Vello draws at most at once
 const VELLO_BLOCK: i32 = 1;
+/// Tiles a row Vello draws at most at once, while they draw few units
+const BATCH_TILES: usize = 4;
+/// Units the tiles Vello draws at once draw at most, past the first's
+const BATCH_UNITS: usize = 400;
 /// Tiles kept drawn by Vello, 1 MB each, past those the view needs
 const VELLO_TILES: usize = 64;
 /// Why a tile isn't drawn yet: its units are encoded over several passes
@@ -604,7 +610,13 @@ const UNFINISHED: &str = "units encoded in part";
 /// of units new to it, as one far out is, never holds frames back
 const ENCODE_SLICE: Duration = Duration::from_millis(4);
 
-/// The level Vello draws tiles at while the zoom changes: the power of two
+/// The level Vello draws tiles at while the zoom goes out: the power of two
+/// nearest it
+fn level_near(px: f32) -> f32 {
+    2f32.powf(px.max(1e-6).log2().round())
+}
+
+/// The level Vello draws tiles at while the zoom goes in: the power of two
 /// at or past it, which frames only ever scale down
 fn level_up(px: f32) -> f32 {
     2f32.powf(px.max(1e-6).log2().ceil())
@@ -624,7 +636,7 @@ const ENCODE_SETTLED: Duration = Duration::from_millis(30);
 /// use at its own level, to fall back to Skia
 fn usable(encoded: &Encoded, stamp: u64, own: bool, images: &HashMap<String, Img>) -> bool {
     encoded.stamp == stamp
-        && match &encoded.made {
+        && match &*encoded.made {
             Ok(fragment) => fragment.pictures.iter().all(|(key, _, id)| images.get(key).is_some_and(|img| img.image.unique_id() as u64 == *id)),
             Err(_) => own,
         }
@@ -2693,13 +2705,18 @@ impl Painter {
             let (right, bottom) = ((area.right * level).ceil() as i32, (area.bottom * level).ceil() as i32);
             Self::tiles_over(left, top, (right - left - 1).max(0), (bottom - top - 1).max(0), level.to_bits(), 0)
         };
-        let level = if zooming { level_up(px) } else { px };
+        // Zooming out, the level nearest, as the one at or past it would be
+        // up to four times the view's tiles, drawn to be shown at a quarter
+        // of their size, and the zoom's left it by the time they're drawn
+        let out = self.widening > 0.0;
+        let level_for = |px: f32| if out { level_near(px) } else { level_up(px) };
+        let level = if zooming { level_for(px) } else { px };
         let here = over(level, area);
         // Where the zoom will be in a moment, at the level it'll be drawn at
         let ahead = if zooming {
             let lag = 0.25;
             let grow = 2f64.powf((self.widening * lag).clamp(-2.0, 2.0)) as f32;
-            let next = level_up(px / grow);
+            let next = level_for(px / grow);
             let center = area.center();
             let (w, h) = (area.width() * grow, area.height() * grow);
             let (x, y) = (center.x + (self.velocity.0 * lag) as f32, center.y + (self.velocity.1 * lag) as f32);
@@ -2827,12 +2844,12 @@ impl Painter {
         // most half the time, as the browser drawing Figma's frames shares
         // it, and Figma sends none while it waits
         let moving = self.moved.elapsed() < VELLO_STILL;
-        // While the zoom changes, the level it's headed to first, which
-        // drawn before it gets there is never shown scaled up. The furthest
-        // is drawn exactly at once when it's still, as standing in saves
-        // it little there, where the GPU's time is most of it
+        // While the zoom changes, what it shows first, then the level it's
+        // headed to. The furthest is drawn exactly at once when it's still,
+        // as standing in saves it little there, where the GPU's time is
+        // most of it
         let todo = match zooming {
-            true => [(ahead_missing, false, true), (missing, false, false), (far_missing, false, true), (Vec::new(), false, true), (Vec::new(), false, true)],
+            true => [(missing, false, false), (ahead_missing, false, true), (far_missing, false, true), (Vec::new(), false, true), (Vec::new(), false, true)],
             false => [(missing, true, false), (ahead_missing, true, true), (far_missing, !moving, true), (between_missing, true, true), (far_rough, true, true)],
         };
         for (keys, exact, later) in todo {
@@ -2907,7 +2924,7 @@ impl Painter {
         let started = Instant::now();
         let block = std::env::var("LIGMA_NATIVE_VELLO_BLOCK").ok().and_then(|n| n.parse().ok()).unwrap_or(VELLO_BLOCK).max(1);
         let corner = |key: &TileKey| (key.x.div_euclid(block), key.y.div_euclid(block));
-        let mine: Vec<TileKey> = keys.iter().copied().filter(|key| key.px == first.px && corner(key) == corner(&first)).collect();
+        let mine: Vec<TileKey> = if block > 1 { keys.iter().copied().filter(|key| key.px == first.px && corner(key) == corner(&first)).collect() } else { self.batch(first, keys) };
         let (x0, y0) = (mine.iter().map(|key| key.x).min().unwrap_or(first.x), mine.iter().map(|key| key.y).min().unwrap_or(first.y));
         let (x1, y1) = (mine.iter().map(|key| key.x).max().unwrap_or(first.x), mine.iter().map(|key| key.y).max().unwrap_or(first.y));
         let (left, top, w, h) = (x0 * TILE, y0 * TILE, (x1 - x0 + 1) * TILE, (y1 - y0 + 1) * TILE);
@@ -2945,14 +2962,19 @@ impl Painter {
         let image = gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None).ok_or_else(|| fail("Vello's texture".into()))?;
         let mut paint = Paint::default();
         paint.set_blend_mode(skia_safe::BlendMode::Src);
+        // Copied out each into a tile of its own, submitted at once
+        let mut copied = Vec::new();
         for &key in &mine {
             let tex = self.tex(TILE, TILE).ok_or_else(|| fail("texture".into()))?;
-            let backend = tex.backend();
             let mut surface = self.target(&tex).ok_or_else(|| fail("surface".into()))?;
             let from = Rect::from_xywh(((key.x - x0) * TILE) as f32, ((key.y - y0) * TILE) as f32, TILE as f32, TILE as f32);
             surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
             drop(surface);
-            let tile_image = self.finish(&backend, false).ok_or_else(|| fail("submit".into()))?;
+            copied.push((key, tex));
+        }
+        let _ = self.gpu.context.flush_and_submit();
+        for (key, tex) in copied {
+            let tile_image = gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None).ok_or_else(|| fail("submit".into()))?;
             self.put_tile(key, Tile { image: tile_image, tex, used: self.frame, counts, stale: false, seen: false, exact, draft: false, vello: true, drawn: 0 });
         }
         self.drew = true;
@@ -2962,6 +2984,44 @@ impl Painter {
             format!("  vello tiles px={px:.4} at {x0},{y0} {}x{} exact={exact} rendered={:.1}ms {:.1}ms settled={:.1} waited={:.1} {stats} gpu:{stages}", x1 - x0 + 1, y1 - y0 + 1, ms(rendered), ms(started.elapsed()), ms(settled), ms(waited))
         });
         Ok(())
+    }
+
+    /// `first`, and the tiles of `keys` beside it in its row while together
+    /// they draw few units, as each render takes a millisecond or two however
+    /// little it draws, and a zoom's tiles mostly draw little. Not those
+    /// drawing images, or images Vello hasn't drawn yet, as its atlas would
+    /// grow to hold all of theirs at once, a copy of each
+    fn batch(&self, first: TileKey, keys: &[TileKey]) -> Vec<TileKey> {
+        let px = first.px();
+        let (top, bottom) = ((first.y * TILE) as f32 / px, ((first.y + 1) * TILE) as f32 / px);
+        let mut held = [0usize; 2 * BATCH_TILES - 1];
+        let reach = BATCH_TILES as i32 - 1;
+        for unit in &self.units {
+            let b = &unit.bounds;
+            if b.bottom <= top || b.top >= bottom || b.width().max(b.height()) * px < 0.5 {
+                continue;
+            }
+            let from = ((b.left * px / TILE as f32).floor() as i32 - first.x).max(-reach);
+            let to = ((b.right * px / TILE as f32).floor() as i32 - first.x).min(reach);
+            let images = self.vello_uses.get(&(unit.slot, unit.section)).is_none_or(|(_, uses)| !uses.is_empty());
+            for x in from..=to {
+                held[(x + reach) as usize] += if images { BATCH_UNITS + 1 } else { 1 };
+            }
+        }
+        let units = |x: i32| held[(x + reach) as usize];
+        let mut total = units(0);
+        let (mut left, mut right) = (0, 0);
+        while right - left + 1 < BATCH_TILES as i32 {
+            let next = [right + 1, left - 1].into_iter().find(|&x| x.abs() <= reach && keys.contains(&TileKey { x: first.x + x, ..first }) && total + units(x) <= BATCH_UNITS);
+            let Some(x) = next else { break };
+            total += units(x);
+            if x > right {
+                right = x;
+            } else {
+                left = x;
+            }
+        }
+        (left..=right).map(|x| TileKey { x: first.x + x, ..first }).collect()
     }
 
     /// Tiles past `VELLO_TILES` go, those shown longest ago first and those
@@ -3329,7 +3389,7 @@ impl Painter {
                         match made {
                             Some(made) => {
                                 made_count += 1;
-                                fragments.insert(key, Encoded { stamp: stamps[shown[at].0], made, used: now });
+                                fragments.insert(key, Encoded { stamp: stamps[shown[at].0], made: Box::new(made), used: now });
                             }
                             None => reused += 1,
                         }
@@ -3361,7 +3421,7 @@ impl Painter {
                     };
                     let Some(encoded) = fragments.get_mut(&key) else { continue };
                     encoded.used = now;
-                    match &mut encoded.made {
+                    match &mut *encoded.made {
                         Ok(fragment) => {
                             let at = fragment.at(px, from_x, from_y);
                             let timer = Instant::now();
