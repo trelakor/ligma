@@ -276,6 +276,13 @@ pub(super) fn tracing() -> bool {
 
 /// With LIGMA_NATIVE_TRACE_UNITS=1 as well, slow tiles are drawn again a
 /// unit at a time to trace what each costs, which holds up drawing
+/// Dev tools: the units drawn with the most paths, traced for each Vello
+/// render
+fn sizing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIGMA_NATIVE_VELLO_SIZES").is_some())
+}
+
 fn tracing_units() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| tracing() && std::env::var("LIGMA_NATIVE_TRACE_UNITS").is_ok_and(|value| value == "1"))
@@ -3028,6 +3035,8 @@ impl Painter {
                 // The units in view, by index, with the fragment each draws,
                 // where there's one of use yet
                 let mut shown: Vec<(usize, Option<(usize, bool, i32)>)> = Vec::new();
+                // Dev tools: the units drawn with the most paths
+                let mut biggest: Vec<(u32, u32, u32, Rect)> = Vec::new();
                 // Those to encode, by where they're shown, with what stands
                 // in past the time to encode: one of a level near, more
                 // detailed first, or else one a level coarser, which has less
@@ -3173,6 +3182,9 @@ impl Painter {
                             let timer = Instant::now();
                             encoder.scene.append(&fragment.scene, Some(at));
                             append_took += timer.elapsed();
+                            if sizing() {
+                                biggest.push((fragment.scene.encoding().n_paths, place.id, tree.info(place.id).count, unit.bounds));
+                            }
                             pictures.extend(encoder.drawn.drain(..));
                             widths.extend(encoder.shown.drain(..));
                             encoder.counts += fragment.counts;
@@ -3187,6 +3199,13 @@ impl Painter {
                         Err(why) => encoder.failed = Some(why.clone()),
                     }
                     units += 1;
+                }
+                if !biggest.is_empty() {
+                    biggest.sort_by_key(|(paths, ..)| std::cmp::Reverse(*paths));
+                    trace(|| format!("  biggest units: {}", biggest.iter().take(6).map(|(paths, id, count, b)| format!("{id} paths={paths} nodes={count} at {:.0},{:.0} {:.0}x{:.0}", b.left, b.top, b.width(), b.height())).collect::<Vec<_>>().join(", ")));
+                    if biggest[0].2 > 10000 {
+                        trace(|| format!("  biggest unit: {}", super::vello::shape_of(tree, biggest[0].1, 0)));
+                    }
                 }
                 counts += encoder.counts;
                 inexact = encoder.inexact;

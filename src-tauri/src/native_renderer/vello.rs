@@ -773,9 +773,16 @@ impl Paths {
         made
     }
 
-    /// Lets go of copies of paths the tree no longer has
+    /// Lets go of copies of paths the tree no longer has, and what was
+    /// simplified of them, every few seconds
     pub fn prune(&self) {
         self.0.lock().unwrap().retain(|_, (path, _)| path.strong_count() > 0);
+        static PRUNED: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+        let mut pruned = PRUNED.lock().unwrap();
+        if pruned.is_none_or(|at| at.elapsed() > std::time::Duration::from_secs(2)) {
+            *pruned = Some(std::time::Instant::now());
+            prune_simple();
+        }
     }
 }
 
@@ -958,8 +965,9 @@ const SIMPLIFY_POINTS: usize = 16384;
 /// `shape` drawn by `transform`, as lines no further than `tolerance` from
 /// it, where it's small enough that's fewer than it has, or as the cells
 /// of a grid `cells` to a pixel it covers, filled by `style`, where that's
-/// fewer still
-fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, style: Fill, cells: f64) -> Option<BezPath> {
+/// fewer still and `runs_too`, with how many parts it had. Without
+/// `runs_too` the lines come whether they're fewer or not
+fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, style: Fill, cells: f64, runs_too: bool) -> Option<(BezPath, usize)> {
     // Half the tolerance flattening, half leaving points out
     let half = tolerance / 2.0;
     // Its control points' bounds, which hold it, and how many parts it has
@@ -1040,18 +1048,76 @@ fn simplified(shape: &impl kurbo::Shape, transform: Affine, tolerance: f64, styl
             }
         }
         close(line, &mut out);
+        if !runs_too {
+            return Some((out, had));
+        }
         // Small with many contours, as text far out is, each takes lines
         // however small, which what covers the grid's cells doesn't
         let out = match out.elements().len() > RUNS_FROM && (high.x - low.x).max(high.y - low.y) <= RUNS_MOST {
             true => runs(&out, style, cells).filter(|runs| runs.elements().len() < out.elements().len()).unwrap_or(out),
             false => out,
         };
-        (out.elements().len() < had).then_some(out)
+        (out.elements().len() < had).then_some((out, had))
     })
+}
+
+/// Paths of the tree's made fewer lines by `simplified`, each at a size and
+/// turn, without where it's put, as that changes nothing of it: made once
+/// for every place a path's drawn the same, as a glyph is in every text of
+/// its font and size, and each instance of a component draws its shapes
+type SimpleKey = (usize, [u32; 4], u32);
+
+/// Its lines, and how many parts the path had, unless it's too big to be
+/// made fewer
+type Simple = Option<Arc<(BezPath, usize)>>;
+
+/// Shards of the paths simplified, by their key, with the path they're of
+/// held weakly, so one let go of isn't taken for another made where it was
+static SIMPLE: std::sync::LazyLock<[std::sync::Mutex<HashMap<SimpleKey, (std::sync::Weak<rt::Path>, Simple)>>; 16]> =
+    std::sync::LazyLock::new(|| std::array::from_fn(|_| std::sync::Mutex::new(HashMap::new())));
+
+/// Simplified paths kept in a shard at most, past which it starts over
+const SIMPLE_MOST: usize = 1 << 16;
+
+/// `path`, Vello's copy `bez`, drawn by `linear`, a transform that doesn't
+/// move it, made fewer lines no further than `tolerance` from it
+fn simple(path: &Arc<rt::Path>, bez: &BezPath, linear: Affine, tolerance: f64, style: Fill) -> Simple {
+    let c = linear.as_coeffs();
+    let key: SimpleKey = (Arc::as_ptr(path) as usize, [c[0] as f32, c[1] as f32, c[2] as f32, c[3] as f32].map(f32::to_bits), (tolerance as f32).to_bits());
+    let shard = &SIMPLE[((key.0 >> 4) ^ key.1[0] as usize ^ (key.1[3] as usize >> 3)) % SIMPLE.len()];
+    if let Some((held, simple)) = shard.lock().unwrap().get(&key) {
+        if held.strong_count() > 0 {
+            return simple.clone();
+        }
+    }
+    let made = simplified(bez, linear, tolerance, style, 0.0, false).map(Arc::new);
+    let mut shard = shard.lock().unwrap();
+    if shard.len() >= SIMPLE_MOST {
+        shard.clear();
+    }
+    shard.insert(key, (Arc::downgrade(path), made.clone()));
+    made
+}
+
+/// Lets go of simplified paths of paths the tree no longer has
+fn prune_simple() {
+    for shard in SIMPLE.iter() {
+        shard.lock().unwrap().retain(|_, (path, _)| path.strong_count() > 0);
+    }
 }
 
 /// Lines past which a small shape's drawn as the cells it covers
 const RUNS_FROM: usize = 96;
+
+/// `lines`, in device pixels, as the cells of the grid `cells` to a pixel
+/// it covers where it's small with many contours and they're fewer, as
+/// `simplified` does
+fn small_runs(lines: &BezPath, style: Fill, cells: f64) -> Option<BezPath> {
+    if lines.elements().len() <= RUNS_FROM || kurbo::Shape::bounding_box(lines).size().max_side() > RUNS_MOST {
+        return None;
+    }
+    runs(lines, style, cells).filter(|runs| runs.elements().len() < lines.elements().len())
+}
 
 /// Pixels across a shape's at most to be drawn as the cells it covers
 const RUNS_MOST: f64 = 8.0;
@@ -1227,7 +1293,7 @@ fn fewer(line: &[kurbo::Point], tolerance: f64, keep: &mut Vec<usize>, kept: &mu
 }
 
     /// Dev tools: what node `id` is, a few levels down
-fn shape_of(tree: &Tree, id: u32, depth: u32) -> String {
+pub(super) fn shape_of(tree: &Tree, id: u32, depth: u32) -> String {
         let Some(node) = tree.node(id) else { return "?".into() };
         let mut out = format!("{:?}", node.op);
         if let Some(geometry) = &node.geometry {
@@ -1236,8 +1302,10 @@ fn shape_of(tree: &Tree, id: u32, depth: u32) -> String {
         if !node.fill_geometries.is_empty() || !node.stroke_geometries.is_empty() {
             out += &format!("[fills {} strokes {} {:?}]", node.fill_geometries.iter().map(|g| g.paints.len()).sum::<usize>(), node.stroke_geometries.iter().map(|g| g.paints.len()).sum::<usize>(), node.stroke_mode);
         }
+        out += &format!("#{}n", tree.info(id).count);
         if depth < 3 {
-            let kids: Vec<u32> = node.children.iter().copied().chain(node.child).collect();
+            let ext = node.ext();
+            let kids: Vec<u32> = node.children.iter().copied().chain(node.child).chain(node.alpha_node).chain(node.color_node).chain(ext.spatial_plane_content_id).chain(ext.spatial_transform_child_id).chain(ext.spatial_composition_child_ids.iter().copied()).collect();
             if !kids.is_empty() {
                 out += &format!("({})", kids.iter().take(4).map(|&k| shape_of(tree, k, depth + 1)).collect::<Vec<_>>().join(" "));
                 if kids.len() > 4 {
@@ -1628,6 +1696,16 @@ pub struct Encoder<'a> {
     alpha_only: bool,
     /// Blurs in the scene, to be put in place
     pub effects: Vec<Effect>,
+    /// The tree's path being painted, and Vello's copy, which `fill`
+    /// simplifies once for every place it's drawn alike
+    source: Option<(Arc<rt::Path>, Arc<BezPath>)>,
+    /// The text being painted: where its outline is, which `fill` draws as
+    /// these lines instead, its glyphs each simplified, in device pixels,
+    /// and how many parts the outline had
+    glyph_lines: Option<(usize, BezPath, usize)>,
+    /// Where what's drawn can show, in device pixels: inside the masks
+    /// it's in, so what's masked away isn't encoded at all
+    within: Option<Rect>,
 }
 
 impl<'a> Encoder<'a> {
@@ -1693,6 +1771,9 @@ impl<'a> Encoder<'a> {
             cast: None,
             alpha_only: false,
             effects: Vec::new(),
+            source: None,
+            glyph_lines: None,
+            within: None,
         }
     }
 
@@ -1842,23 +1923,97 @@ impl<'a> Encoder<'a> {
         let env = timer(4);
         let whole = switches().whole;
         drop(env);
-        if whole {
-            let simple = timer(2);
-            // Cells a quarter of a pixel as it's shown, as Vello's samples are
-            let cells = if self.retained { 8.0 } else { 4.0 };
-            let lines = simplified(shape, transform, tolerance, style, cells);
-            drop(simple);
-            if let Some(lines) = lines {
-                // What the brush is drawn by stays as it was
-                let brush: peniko::BrushRef<'b> = brush.into();
-                let brush_transform = match brush {
-                    peniko::BrushRef::Solid(_) => None,
-                    _ => Some(transform * brush_transform.unwrap_or(Affine::IDENTITY)),
-                };
-                return self.fill_shape(style, Affine::IDENTITY, brush, brush_transform, &lines);
+        if !whole {
+            return self.fill_shape(style, transform, brush, brush_transform, shape);
+        }
+        let simple_timer = timer(2);
+        // Cells a quarter of a pixel as it's shown, as Vello's samples are
+        let cells = if self.retained { 8.0 } else { 4.0 };
+        let shape_at = shape as *const _ as *const ();
+        let brush: peniko::BrushRef<'b> = brush.into();
+        // What the brush is drawn by stays as it was, wherever the shape's
+        // drawn from
+        let brush_at = |at: Affine| match brush {
+            peniko::BrushRef::Solid(_) => None,
+            _ => Some(at.inverse() * transform * brush_transform.unwrap_or(Affine::IDENTITY)),
+        };
+        // A text's glyphs, each simplified for its size alone, in device
+        // pixels
+        if let Some((outline, lines, had)) = self.glyph_lines.take() {
+            if outline == shape_at as usize {
+                let small = small_runs(&lines, style, cells);
+                drop(simple_timer);
+                self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), small.as_ref().unwrap_or(&lines));
+                self.glyph_lines = Some((outline, lines, had));
+                return;
+            }
+            self.glyph_lines = Some((outline, lines, had));
+        }
+        // A path of the tree's, simplified once for every place it's drawn
+        // at this size and turn
+        let source = self.source.as_ref().filter(|(_, bez)| std::ptr::addr_eq(Arc::as_ptr(bez), shape_at)).cloned();
+        if let Some((path, bez)) = source {
+            let c = transform.as_coeffs();
+            let (linear, moved) = (Affine::new([c[0], c[1], c[2], c[3], 0.0, 0.0]), Affine::translate((c[4], c[5])));
+            let made = simple(&path, &bez, linear, tolerance, style);
+            drop(simple_timer);
+            return match made {
+                Some(made) if made.0.elements().len() > RUNS_FROM && kurbo::Shape::bounding_box(&made.0).size().max_side() <= RUNS_MOST => {
+                    let lines = moved * made.0.clone();
+                    match small_runs(&lines, style, cells) {
+                        Some(runs) if runs.elements().len() < made.1 => self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &runs),
+                        _ if made.0.elements().len() < made.1 => self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &lines),
+                        _ => self.fill_shape(style, transform, brush, brush_transform, shape),
+                    }
+                }
+                Some(made) if made.0.elements().len() < made.1 => self.fill_shape(style, moved, brush, brush_at(moved), &made.0),
+                _ => self.fill_shape(style, transform, brush, brush_transform, shape),
+            };
+        }
+        let lines = simplified(shape, transform, tolerance, style, cells, true);
+        drop(simple_timer);
+        match lines {
+            Some((lines, _)) => self.fill_shape(style, Affine::IDENTITY, brush, brush_at(Affine::IDENTITY), &lines),
+            None => self.fill_shape(style, transform, brush, brush_transform, shape),
+        }
+    }
+
+    /// A text's glyphs, each simplified for its size as `fill` does, in
+    /// device pixels, with how many parts they had. None where they're too
+    /// big on screen to be made fewer
+    fn small_glyphs(&self, glyphs: &rt::GlyphGeometry) -> Option<(BezPath, usize)> {
+        if !switches().whole {
+            return None;
+        }
+        let text = affine(&self.m);
+        let scale = text.determinant().abs().sqrt();
+        let biggest = glyphs.glyphs.iter().filter(|glyph| glyph.path.is_some()).map(|glyph| glyph.font_size.unwrap_or(1.0)).fold(0.0f32, f32::max) as f64;
+        // Glyphs reach a little past their size
+        if biggest <= 0.0 || biggest * scale * 1.5 > 64.0 {
+            return None;
+        }
+        let tolerance = switches().tolerance.unwrap_or(if self.retained { 1.0 / 128.0 } else { 1.0 / 64.0 });
+        let (mut out, mut had) = (BezPath::new(), 0);
+        for glyph in &glyphs.glyphs {
+            let Some(path) = &glyph.path else { continue };
+            let [x, y] = glyph.position.unwrap_or([0.0, 0.0]);
+            let size = glyph.font_size.unwrap_or(1.0);
+            let mut m = Matrix::translate((x, y));
+            m.pre_scale((size, -size), None);
+            m.pre_rotate(glyph.rotation.unwrap_or(0.0).to_degrees(), None);
+            let at = text * affine(&m);
+            let c = at.as_coeffs();
+            let (linear, moved) = (Affine::new([c[0], c[1], c[2], c[3], 0.0, 0.0]), Affine::translate((c[4], c[5])));
+            let bez = self.paths.path(self.tree, path);
+            let parts = bez.elements().len();
+            had += parts;
+            let fill = fill_of(&self.tree.skia_path(path));
+            match simple(path, &bez, linear, tolerance, fill) {
+                Some(made) if made.0.elements().len() < parts => out.extend((moved * made.0.clone()).elements().iter().copied()),
+                _ => out.extend((at * (*bez).clone()).elements().iter().copied()),
             }
         }
-        self.fill_shape(style, transform, brush, brush_transform, shape)
+        Some((out, had))
     }
 
     fn fill_shape<'b>(&mut self, style: Fill, transform: Affine, brush: impl Into<peniko::BrushRef<'b>>, brush_transform: Option<Affine>, shape: &impl kurbo::Shape) {
@@ -1950,9 +2105,19 @@ impl<'a> Encoder<'a> {
         if !self.retained && !Rect::intersects2(&self.m.map_rect(bounds).0, &Rect::from(self.view)) {
             return;
         }
+        if self.within.is_some_and(|within| !Rect::intersects2(&self.m.map_rect(bounds).0, &within)) {
+            self.counts.skipped += 1;
+            return;
+        }
+        // What moves or repeats what's in it shows it outside where it is
+        let within = self.within;
+        if !tree::keeps_place(node.op) {
+            self.within = None;
+        }
         self.depth += 1;
         self.op(&node, id, bounds);
         self.depth -= 1;
+        self.within = within;
     }
 
     fn with(&mut self, transform: Option<&rt::Transform>, f: impl FnOnce(&mut Self)) {
@@ -1981,11 +2146,13 @@ impl<'a> Encoder<'a> {
                 let Some(geometry) = &node.geometry else { return };
                 let Some(path) = &geometry.path else { return };
                 let (skia, bez) = (self.tree.skia_path(path), self.paths.path(self.tree, path));
+                let was = self.source.replace((path.clone(), bez.clone()));
                 self.with(Some(&node.transform.unwrap_or(rt::IDENTITY)), |this| {
                     for paint in &geometry.paints {
                         this.paint(node, paint, &skia, &bez);
                     }
                 });
+                self.source = was;
             }
             Op::FillStroke | Op::ScatterBrushFill | Op::ScatterBrushFillStroke => {
                 self.counts.native += 1;
@@ -2016,9 +2183,12 @@ impl<'a> Encoder<'a> {
                 let shape = bez(&outline);
                 drop(glyph_timer);
                 self.with(Some(&node.transform.unwrap_or(rt::IDENTITY)), |this| {
+                    let was = this.glyph_lines.take();
+                    this.glyph_lines = this.small_glyphs(glyphs).map(|(lines, had)| (&shape as *const BezPath as usize, lines, had));
                     for paint in &glyphs.paints {
                         this.paint(node, paint, &outline, &shape);
                     }
+                    this.glyph_lines = was;
                 });
             }
             Op::Blend => {
@@ -2117,9 +2287,11 @@ impl<'a> Encoder<'a> {
             for geometry in &node.fill_geometries {
                 let Some(path) = &geometry.path else { continue };
                 let (skia, bez) = (this.tree.skia_path(path), this.paths.path(this.tree, path));
+                let was = this.source.replace((path.clone(), bez.clone()));
                 for paint in &geometry.paints {
                     this.paint(node, paint, &skia, &bez);
                 }
+                this.source = was;
             }
         };
         let stroked = node.stroke_geometries.iter().any(|g| !g.paints.is_empty());
@@ -2152,9 +2324,11 @@ impl<'a> Encoder<'a> {
             for geometry in &node.stroke_geometries {
                 let Some(path) = &geometry.path else { continue };
                 let (skia, bez) = (this.tree.skia_path(path), this.paths.path(this.tree, path));
+                let was = this.source.replace((path.clone(), bez.clone()));
                 for paint in &geometry.paints {
                     this.paint(node, paint, &skia, &bez);
                 }
+                this.source = was;
             }
         };
         match (node.stroke_mode, outline) {
@@ -2726,6 +2900,27 @@ impl<'a> Encoder<'a> {
             }
             _ => {}
         }
+        let within = self.within;
+        if let Some(shown) = self.tree.info(alpha).bounds {
+            let shown = self.m.map_rect(shown).0.with_outset((2.0, 2.0));
+            self.within = Some(match within {
+                Some(mut within) => {
+                    if !within.intersect(shown) {
+                        within = Rect::default();
+                    }
+                    within
+                }
+                None => shown,
+            });
+        }
+        self.masked(op, alpha, color, bounds);
+        self.within = within;
+        let _ = id;
+    }
+
+    /// What mask `node` keeps of `color`, where `alpha` is, for the masks
+    /// that are clips or layers
+    fn masked(&mut self, op: MaskOpType, alpha: u32, color: u32, bounds: Rect) {
         let blends = self.cast.is_none() && self.tree.info(color).blends;
         // A clip cuts what's under it once, as one, as Figma masks, where
         // what's in it doesn't blend with what's under it. A background
@@ -2798,7 +2993,6 @@ impl<'a> Encoder<'a> {
             self.pop();
         }
         self.pop();
-        let _ = id;
     }
 
     /// A layer over `bounds` whose luminance, as Figma takes it, masks
@@ -2989,12 +3183,17 @@ impl<'a> Encoder<'a> {
             let spread = (3.0 * sigma * sx.max(sy)).ceil() as i32 + 2;
             self.view = view.with_outset((spread, spread));
         }
+        // As what's just outside where it shows is blurred into it
+        let within = self.within;
+        let spread = 3.0 * sigma * sx.max(sy) + 2.0;
+        self.within = within.map(|within| within.with_outset((spread, spread)));
         let scene = std::mem::replace(&mut self.scene, vello::Scene::new());
         let effects = std::mem::take(&mut self.effects);
         let soft = self.soft.take();
         self.draw(child);
         self.soft = soft;
         self.view = view;
+        self.within = within;
         let source = std::mem::replace(&mut self.scene, scene);
         let nested = std::mem::replace(&mut self.effects, effects);
         let shown = krect(bounds);

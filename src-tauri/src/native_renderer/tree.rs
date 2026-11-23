@@ -215,13 +215,22 @@ impl Frame {
     }
 }
 
+/// Whether what's in an `op` shows only where it's drawn, so what's
+/// outside where it can show needn't be drawn. Blurs widen that
+pub(super) fn keeps_place(op: Op) -> bool {
+    matches!(
+        op,
+        Op::Group | Op::StaticTransformBinding | Op::Mask | Op::Glass | Op::Blend | Op::Blur | Op::OcclusionScope | Op::HardMaskWithColor | Op::Fill | Op::FillStroke | Op::FillGlyphs
+    )
+}
+
 /// What's worked out once for a node and what's under it
 #[derive(Clone, Copy)]
 pub(super) struct Info {
     /// Where it draws, in the space it's drawn in
     pub(super) bounds: Option<Rect>,
     /// Nodes under it, itself included, counting shared ones each time
-    count: u32,
+    pub(super) count: u32,
     /// Points of the paths under it, counted the same way
     points: u32,
     /// Draws with a blend mode that reaches what's drawn before it
@@ -979,6 +988,9 @@ pub struct Drawer<'a> {
     shade: Option<skia_safe::ColorFilter>,
     depth: u8,
     patterns: u8,
+    /// Where what's drawn can show, in device pixels: inside the masks
+    /// it's in, so what's masked away isn't drawn at all
+    within: Option<Rect>,
 }
 
 impl<'a> Drawer<'a> {
@@ -1001,6 +1013,7 @@ impl<'a> Drawer<'a> {
             shade: None,
             depth: 0,
             patterns: 0,
+            within: None,
         }
     }
 
@@ -1057,9 +1070,28 @@ impl<'a> Drawer<'a> {
             self.counts.skipped += 1;
             return;
         }
+        let within = self.within;
+        if let Some(inside) = within {
+            let m = self.canvas.local_to_device_as_3x3();
+            if !Rect::intersects2(&m.map_rect(bounds).0, &inside) {
+                self.counts.skipped += 1;
+                return;
+            }
+            // What moves or repeats what's in it shows it outside where it
+            // is, and a blur shows what's just outside where it shows
+            if node.op == Op::Blur {
+                let radius = finite(node.radius).max(finite(node.ext().start_radius));
+                let scale = m.scale_x().hypot(m.skew_y()).max(m.skew_x().hypot(m.scale_y()));
+                let spread = 2.0 * radius * scale + 2.0;
+                self.within = Some(inside.with_outset((spread, spread)));
+            } else if !keeps_place(node.op) {
+                self.within = None;
+            }
+        }
         self.depth += 1;
         self.op(&node, bounds);
         self.depth -= 1;
+        self.within = within;
     }
 
     fn op(&mut self, node: &Node, bounds: Rect) {
@@ -1376,6 +1408,25 @@ impl<'a> Drawer<'a> {
     }
 
     fn mask(&mut self, node: &Node, bounds: Rect) {
+        let within = self.within;
+        let shown = node.alpha_node.and_then(|alpha| self.tree.info(alpha).bounds);
+        if let (Some(shown), false) = (shown, matches!(node.mask_op, Some(MaskOpType::KnockoutShadow) | Some(MaskOpType::InnerShadow))) {
+            let shown = self.canvas.local_to_device_as_3x3().map_rect(shown).0.with_outset((2.0, 2.0));
+            self.within = Some(match within {
+                Some(mut within) => {
+                    if !within.intersect(shown) {
+                        within = Rect::default();
+                    }
+                    within
+                }
+                None => shown,
+            });
+        }
+        self.masked(node, bounds);
+        self.within = within;
+    }
+
+    fn masked(&mut self, node: &Node, bounds: Rect) {
         let (Some(alpha), Some(color)) = (node.alpha_node, node.color_node) else {
             return;
         };
