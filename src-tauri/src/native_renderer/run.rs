@@ -1238,6 +1238,12 @@ fn poll_view(ctx: Arc<Ctx>) {
     }
 }
 
+/// Whether Ligma's renderer draws tab `label` in place of Figma's
+pub fn draws(label: &str) -> bool {
+    let ctx = CTX.lock().unwrap().clone();
+    ctx.is_some_and(|ctx| ctx.replaced.lock().unwrap().iter().any(|replaced| replaced.label() == label))
+}
+
 pub fn tab_shown() {
     let ctx = CTX.lock().unwrap().clone();
     if let Some(ctx) = ctx {

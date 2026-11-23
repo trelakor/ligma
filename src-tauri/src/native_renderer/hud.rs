@@ -107,7 +107,9 @@ fn run(app: AppHandle) {
     // Ligma's frames the panel has
     let mut sent = 0;
     while super::show_stats() {
-        let ligma = super::ON.load(Ordering::Relaxed);
+        // Ligma's renderer only once it's taken over the tab, as a tab just
+        // opened is Figma's own till then
+        let ligma = super::ON.load(Ordering::Relaxed) && tab.as_ref().is_some_and(|tab| super::run::draws(tab.label()));
         if ticked.is_some_and(|at| at.elapsed() < TICK) {
             // Only the frames presented since
             let frames: Vec<(f32, f32, Option<f32>)> = {
@@ -127,9 +129,10 @@ fn run(app: AppHandle) {
             continue;
         }
         ticked = Some(Instant::now());
+        tab = crate::tabs::active_file(&app).filter(|file| file.editor == "design").map(|file| file.webview);
+        let ligma = super::ON.load(Ordering::Relaxed) && tab.as_ref().is_some_and(|tab| super::run::draws(tab.label()));
         let active = usize::from(!ligma);
         let sample = memory.as_ref().map(GpuMemory::sample);
-        tab = crate::tabs::active_file(&app).filter(|file| file.editor == "design").map(|file| file.webview);
         // Figma's renderer draws in the browser's GPU process with the rest
         // of the page, so it's what the page counts it made (see gpu_count.js)
         let figma = if ligma { None } else { tab.as_ref().and_then(|tab| super::run::eval_value(tab, "window.__ligmaGpuBytes ?? null")).and_then(|value| value.as_f64()) };
