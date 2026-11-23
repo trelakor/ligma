@@ -611,7 +611,7 @@ const UNFINISHED: &str = "units encoded in part";
 const ENCODE_SLICE: Duration = Duration::from_millis(4);
 /// Most bytes of path data a unit's encoded at two or more levels finer
 /// than a tile's has to stand in for it
-const STAND_IN_MOST: usize = 16 << 10;
+const STAND_IN_MOST: usize = 256 << 10;
 
 /// The level Vello draws tiles at while the zoom goes out: the power of two
 /// nearest it
