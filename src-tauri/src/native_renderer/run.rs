@@ -1254,7 +1254,7 @@ fn fetch(ctx: Arc<Ctx>, requests: Arc<super::render::Requests>) {
 const FETCHES: usize = 12;
 /// Of those, decoded at once, as more would take the cores Figma's page
 /// and the renderer need
-const DECODES: usize = 4;
+const DECODES: usize = 8;
 
 /// One of the `DECODES` image decodes at a time, held till it's dropped
 struct Decoding;
@@ -1378,17 +1378,14 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     };
     let fetched = started.elapsed();
     let _decoding = Decoding::start();
-    let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?.to_rgba8();
+    let (image, original, halved) = decode(&bytes, width)?;
     let decoded = started.elapsed();
-    let original = image.dimensions();
-    let (w, h) = (original.0 as f64, original.1 as f64);
-    let side = (w.max(h) * (width.max(1.0) * 1.25 / w)).ceil();
     // Kept whole, or halved as many times as it can be and still be big
     // enough, each time by averaging 2 by 2 texels, which is how Figma
     // makes the smaller copies of images it draws from. Any other size
     // would sample differently from Figma
     let mut image = image;
-    for _ in 0..halvings(original.0.max(original.1), side) {
+    for _ in halved..halvings(original.0.max(original.1), side(original, width)) {
         image = halve(&image);
     }
     if let Some(adjust) = adjust {
@@ -1415,11 +1412,49 @@ fn fetch_image(ctx: &Ctx, webview: &Webview, key: &str, width: f64) -> Result<Im
     Ok(Img { image, original, area: None, stale: false })
 }
 
+/// The longest side an image `original` big needs to show `width` pixels
+/// wide
+fn side((w, h): (u32, u32), width: f64) -> f64 {
+    (w.max(h) as f64 * (width.max(1.0) * 1.25 / w.max(1) as f64)).ceil()
+}
+
+/// Image `bytes` decoded, its size, and how many times it's been halved
+/// already: a JPEG to be halved is decoded straight at up to an eighth its
+/// size, each pixel about the mean of those it stands for, as halving
+/// makes it, in a fraction of the time of decoding it whole, which for a
+/// big photo shown small was most of it
+fn decode(bytes: &[u8], width: f64) -> Result<(image::RgbaImage, (u32, u32), u32), String> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        let mut decoder = jpeg_decoder::Decoder::new(bytes);
+        if let Some(info) = decoder.read_info().ok().and_then(|()| decoder.info()) {
+            let original = (info.width as u32, info.height as u32);
+            let halved = halvings(original.0.max(original.1), side(original, width)).min(3);
+            let gray = matches!(info.pixel_format, jpeg_decoder::PixelFormat::L8);
+            if halved > 0 && (gray || matches!(info.pixel_format, jpeg_decoder::PixelFormat::RGB24)) {
+                let at = |size: u32| size.div_ceil(1 << halved).min(u16::MAX as u32) as u16;
+                if let Ok((w, h)) = decoder.scale(at(original.0), at(original.1)) {
+                    let pixels = decoder.decode().map_err(|error| error.to_string())?;
+                    let (w, h) = (w as u32, h as u32);
+                    let rgba: Vec<u8> = match gray {
+                        true => pixels.iter().flat_map(|&l| [l, l, l, 255]).collect(),
+                        false => pixels.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+                    };
+                    if let Some(image) = image::RgbaImage::from_raw(w, h, rgba) {
+                        return Ok((image, original, halved));
+                    }
+                }
+            }
+        }
+    }
+    let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?.to_rgba8();
+    let original = image.dimensions();
+    Ok((image, original, 0))
+}
+
 /// The longest side an image `original` big is kept at to show `width`
 /// pixels wide, as `fetch_image` keeps it
 pub(super) fn fitted((w, h): (u32, u32), width: f64) -> u32 {
-    let side = (w.max(h) as f64 * (width.max(1.0) * 1.25 / w.max(1) as f64)).ceil();
-    w.max(h) >> halvings(w.max(h), side)
+    w.max(h) >> halvings(w.max(h), side((w, h), width))
 }
 
 /// Smallest an image is kept at. Drawn with mipmaps, a copy halved down to
