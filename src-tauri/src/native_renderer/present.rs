@@ -1470,11 +1470,11 @@ fn on_canvas(window: isize, (left, top, width, height): (i32, i32, i32, i32), (x
     x >= 0.0 && y >= 0.0 && x < width as f64 && y < height as f64
 }
 
-/// Whether frames between Figma's show the view moved on, off with
-/// LIGMA_NATIVE_PREDICT=0
+/// Whether frames between Figma's show the view moved on, only with
+/// LIGMA_NATIVE_PREDICT=1
 fn predicting() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("LIGMA_NATIVE_PREDICT").map_or(true, |value| value != "0"))
+    *ON.get_or_init(|| std::env::var("LIGMA_NATIVE_PREDICT").is_ok_and(|value| value == "1"))
 }
 
 impl Screen {
