@@ -1391,6 +1391,8 @@ pub struct Painter {
     vello_in_view: HashMap<String, (f32, Instant)>,
     /// Units encoded for Vello, by unit and level, see `Encoded`
     fragments: HashMap<(usize, bool, i32), Encoded>,
+    /// When fragments unused for `FRAGMENTS_KEPT` were last let go
+    swept: Instant,
     /// Images of units made for the tile or view being drawn
     rasters_made: u32,
     /// How long the tile being drawn encodes units at most this pass
@@ -1582,6 +1584,7 @@ impl Painter {
             vello_shown: HashMap::new(),
             vello_in_view: HashMap::new(),
             fragments: HashMap::new(),
+            swept: Instant::now(),
             gpu,
             kit: Kit::new(),
             scene: Scene::default(),
@@ -2716,6 +2719,29 @@ impl Painter {
             let mut inner = area;
             let mut next = (px.log2() - 1e-4).floor().exp2();
             let room = VELLO_TILES.saturating_sub(here.len() + far.len());
+            // First the level a zoom in draws first, over as much of the view
+            // around its centre as half the room holds, nearest the centre
+            // first, so it starts sharp rather than from what's at rest
+            // scaled up, drawn while the zoom's past it
+            let up = level_up(px);
+            if up > px * 1.001 {
+                let center = area.center();
+                let mut part = 1.0;
+                let mut tiles = over(up, area);
+                while tiles.len() > room / 2 && part > 0.25 {
+                    part *= 0.85;
+                    let (w, h) = (area.width() * part, area.height() * part);
+                    tiles = over(up, Rect::from_xywh(center.x - w / 2.0, center.y - h / 2.0, w, h));
+                }
+                if tiles.len() <= room / 2 {
+                    let off = |key: &TileKey| {
+                        let at = key.area();
+                        (at.center_x() - center.x).hypot(at.center_y() - center.y)
+                    };
+                    tiles.sort_by(|a, b| off(a).total_cmp(&off(b)));
+                    found.extend(tiles);
+                }
+            }
             while furthest.is_none_or(|furthest| next > f32::from_bits(furthest)) {
                 let (w, h) = (area.width() * px / next, area.height() * px / next);
                 let center = area.center();
@@ -3199,6 +3225,23 @@ impl Painter {
                     }
                     shown.push((index, None));
                 }
+                // Standing in from the start, those with a fragment to stand
+                // in need nothing encoded, nor threads to encode it, which
+                // took a millisecond or more to start for each tile
+                type Done = Vec<(usize, (usize, bool, i32), bool, Option<Result<super::vello::Fragment, String>>)>;
+                let mut quick: Done = Vec::new();
+                if budget.is_some_and(|budget| budget.is_zero()) {
+                    jobs.retain(|&(at, near, short)| {
+                        let unit = &units_all[shown[at].0];
+                        let key = match (near, short) {
+                            (Some(near), _) => near,
+                            (None, true) => (unit.slot, unit.section, level - 1),
+                            (None, false) => return true,
+                        };
+                        quick.push((at, key, true, None));
+                        false
+                    });
+                }
                 let drawable: HashMap<String, super::vello::Drawable> = if jobs.is_empty() && !fresh {
                     HashMap::new()
                 } else {
@@ -3208,8 +3251,7 @@ impl Painter {
                 // there are none
                 let (paths, begun, next, slice) = (&self.vello_paths, Instant::now(), std::sync::atomic::AtomicUsize::new(0), self.slice);
                 let threads = std::env::var("LIGMA_NATIVE_VELLO_THREADS").ok().and_then(|n| n.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, 8)).min(jobs.len());
-                type Done = Vec<(usize, (usize, bool, i32), bool, Option<Result<super::vello::Fragment, String>>)>;
-                let worked: Vec<(Done, i64, usize)> = std::thread::scope(|scope| {
+                let mut worked: Vec<(Done, i64, usize)> = std::thread::scope(|scope| {
                     let (jobs, shown, drawable, next) = (&jobs, &shown, &drawable, &next);
                     let work = move |behind: bool| {
                                 // Behind every other thread, the browser's
@@ -3269,6 +3311,7 @@ impl Painter {
                 if finished < jobs.len() {
                     encoder.failed = Some(UNFINISHED.into());
                 }
+                worked.push((quick, 0, 0));
                 for (done, fell_back, inexact) in worked {
                     encoder.fell_back += fell_back;
                     encoder.inexact += inexact;
@@ -3356,9 +3399,15 @@ impl Painter {
         // Let go of on a thread of their own, as a zoom leaves thousands
         // unused at once, which took hundreds of milliseconds to free
         let let_go = super::span::span("let go of fragments");
-        let gone: Vec<Encoded> = fragments.extract_if(|_, encoded| encoded.used.elapsed() >= FRAGMENTS_KEPT).map(|(_, encoded)| encoded).collect();
-        if gone.len() > 64 {
-            std::thread::spawn(move || drop(gone));
+        // A few times a second, as looking over tens of thousands took a
+        // millisecond or more of each tile
+        if self.swept.elapsed() >= FRAGMENTS_KEPT / 8 {
+            self.swept = Instant::now();
+            let since = self.swept.checked_sub(FRAGMENTS_KEPT);
+            let gone: Vec<Encoded> = fragments.extract_if(|_, encoded| since.is_some_and(|since| encoded.used <= since)).map(|(_, encoded)| encoded).collect();
+            if gone.len() > 64 {
+                std::thread::spawn(move || drop(gone));
+            }
         }
         drop(let_go);
         self.fragments = fragments;
@@ -5459,12 +5508,33 @@ impl Painter {
             return;
         }
         let rect = |b: &[u32; 4]| Rect::from_ltrb(f32::from_bits(b[0]), f32::from_bits(b[1]), f32::from_bits(b[2]), f32::from_bits(b[3]));
-        let before: HashMap<(usize, bool), &Mark> = self.checked.iter().map(|mark| (mark.0, mark)).collect();
-        let after: HashMap<(usize, bool), &Mark> = now.iter().map(|mark| (mark.0, mark)).collect();
         let mut areas: Vec<Rect> = Vec::new();
         // Where only images came sharper: what's drawn shows the same, so
         // it's shown till it's drawn again
         let mut sharper: Vec<Rect> = Vec::new();
+        // The same units in the same order, as when images come, compared
+        // in place, as maps of tens of thousands took milliseconds each
+        if now.len() == self.checked.len() && now.iter().zip(&self.checked).all(|(new, old)| new.0 == old.0) {
+            for (old, mark) in self.checked.iter().zip(&now) {
+                if old == mark {
+                    continue;
+                }
+                if (old.1, old.2) == (mark.1, mark.2) {
+                    sharper.push(rect(&mark.1));
+                } else {
+                    areas.push(rect(&old.1));
+                    areas.push(rect(&mark.1));
+                }
+            }
+            self.checked = now;
+            areas.retain(|area| area.width() > 0.0 || area.height() > 0.0);
+            trace(|| format!("  check found {} areas changed, {} sharper", areas.len(), sharper.len()));
+            self.drop_tiles(&areas);
+            self.sharpen(&sharper);
+            return;
+        }
+        let before: HashMap<(usize, bool), &Mark> = self.checked.iter().map(|mark| (mark.0, mark)).collect();
+        let after: HashMap<(usize, bool), &Mark> = now.iter().map(|mark| (mark.0, mark)).collect();
         for mark in &now {
             match before.get(&mark.0) {
                 Some(old) if **old == *mark => {}
