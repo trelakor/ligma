@@ -3147,8 +3147,8 @@ impl Painter {
     /// `first`, and the tiles of `keys` beside it in its row while together
     /// they draw few units, as each render takes a millisecond or two however
     /// little it draws, and a zoom's tiles mostly draw little. Not those
-    /// drawing images, or images Vello hasn't drawn yet, as its atlas would
-    /// grow to hold all of theirs at once, a copy of each
+    /// drawing images, as its atlas would grow to hold all of theirs at once,
+    /// a copy of each
     fn batch(&self, first: TileKey, keys: &[TileKey]) -> Vec<TileKey> {
         let px = first.px();
         let (top, bottom) = ((first.y * TILE) as f32 / px, ((first.y + 1) * TILE) as f32 / px);
@@ -3179,7 +3179,12 @@ impl Painter {
             if (from..=to).all(|x| held[(x + reach) as usize] > BATCH_UNITS) {
                 continue;
             }
-            if self.vello_uses.get(&(unit.slot, unit.section)).is_none_or(|(_, uses)| !uses.is_empty()) {
+            // Those not drawn yet by what the tree says they draw
+            let images = match self.vello_uses.get(&(unit.slot, unit.section)) {
+                Some((_, uses)) => !uses.is_empty(),
+                None => unit.custom || unit.place.as_ref().is_none_or(|place| self.tree.as_ref().is_none_or(|tree| tree.draws_images(place.id))),
+            };
+            if images {
                 for x in from..=to {
                     held[(x + reach) as usize] += BATCH_UNITS;
                 }

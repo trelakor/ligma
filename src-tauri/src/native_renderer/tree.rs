@@ -239,6 +239,8 @@ pub(super) struct Info {
     custom: bool,
     /// Has something only drawn close to Figma's look
     approximate: Option<&'static str>,
+    /// Has an image or video fill, or may
+    images: bool,
 }
 
 /// A unit tiles are drawn from: node `id` drawn with `at`, inside `clips`
@@ -565,6 +567,12 @@ impl Tree {
         }
     }
 
+    /// Whether node `id` draws an image or video fill, or may
+    pub(super) fn draws_images(&self, id: u32) -> bool {
+        let info = self.info(id);
+        info.images || info.custom
+    }
+
     pub(super) fn info(&self, id: u32) -> Info {
         self.info_at(id, 0)
     }
@@ -573,7 +581,7 @@ impl Tree {
         if let Some(info) = self.info.read().unwrap().get(&id) {
             return *info;
         }
-        let none = Info { bounds: None, count: 1, points: 0, blends: false, custom: false, approximate: None };
+        let none = Info { bounds: None, count: 1, points: 0, blends: false, custom: false, approximate: None, images: false };
         let Some(node) = self.forest.get(id).cloned() else {
             return none;
         };
@@ -600,6 +608,8 @@ impl Tree {
         let own = node.geometry.iter().chain(&node.fill_geometries).chain(&node.stroke_geometries).filter_map(|g| g.path.as_ref()).map(|path| path.points.len() as u32).sum::<u32>();
         info.points = below.iter().fold(own, |points, info| points.saturating_add(info.points));
         info.custom = below.iter().any(|info| info.custom);
+        let image = |paint: &std::sync::Arc<rt::Paint>| matches!(paint.kind, Some(PaintType::Image | PaintType::Video));
+        info.images = below.iter().any(|info| info.images) || node.geometry.iter().chain(&node.fill_geometries).chain(&node.stroke_geometries).any(|g| g.paints.iter().any(image));
         info.approximate = below.iter().find_map(|info| info.approximate);
         let children_bounds = || below.iter().map(|info| info.bounds).fold(None, union);
         let transform = node.transform.map(|t| rt::to_matrix(&t)).unwrap_or_default();
