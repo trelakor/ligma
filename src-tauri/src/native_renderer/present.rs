@@ -714,6 +714,7 @@ pub struct Screen {
     /// How far ahead of Figma's last frame the frame being drawn is, in
     /// device pixels, which what Figma draws over the scene moves by too
     ahead_px: (f32, f32),
+    ahead_scale: f32,
 }
 
 /// The view's pan between Figma's frames. Figma sends one on fewer than
@@ -755,6 +756,26 @@ struct Pan {
     canvas: Option<(isize, (i32, i32, i32, i32))>,
     /// When the buttons went down last that a drag was worked out from
     tried: Option<f64>,
+    /// Figma's recent frames as the zoom changes: when each was sent and
+    /// its view
+    zooms: std::collections::VecDeque<(f64, View)>,
+    zooming: Option<Zooming>,
+    /// How much further the zoom's shown than Figma's last frame, as the
+    /// log of the ratio, since when it's been eased back from there, and
+    /// the log of the zoom of the frame it's from
+    zoom_lead: f64,
+    zoom_back: Option<(f64, Instant)>,
+    zoom_base: Option<f64>,
+    /// Where the zoom's about, in CSS pixels from the canvas's corner
+    anchor: (f64, f64),
+}
+
+/// The zoom changing as Figma's frames show it: the log of its ratio a
+/// millisecond, and the milliseconds between frames
+#[derive(Clone, Copy)]
+struct Zooming {
+    rate: f64,
+    gap: f64,
 }
 
 /// The wheel panning the view: the view's corner, in device pixels, is
@@ -810,6 +831,11 @@ const AHEAD_OF_GAP: f64 = 1.0;
 /// taken back over, in milliseconds
 const HOLD_MS: f64 = 120.0;
 const BACK_MS: f64 = 60.0;
+/// Figma's frames over this many milliseconds give how the zoom changes,
+/// and how far, in device pixels, each may be from where the point it's
+/// about puts it
+const ZOOM_OVER: f64 = 80.0;
+const ZOOM_FIT: f64 = 1.5;
 
 /// How long after the pointer moves Figma's frames show it, at most, and
 /// how long before, as the page's clock may be a little behind, in
@@ -842,6 +868,10 @@ impl Pan {
             self.last = Some(seq);
             self.took(sent, view, px);
         }
+        if self.zooming.is_some() || self.zoom_lead != 0.0 || self.zoom_back.is_some() {
+            return self.zoom_ahead(age, view);
+        }
+        self.zoom_base = None;
         // From the corner of the frame it's shown over now, so it shows
         // the same as Figma's frames come
         if let Some(base) = self.base {
@@ -888,6 +918,8 @@ impl Pan {
     fn not_ahead(&mut self) {
         self.lead = (0.0, 0.0);
         self.back = None;
+        self.zoom_lead = 0.0;
+        self.zoom_back = None;
         if let Some(drag) = &mut self.drag {
             drag.off = None;
         }
@@ -942,6 +974,115 @@ impl Pan {
         self.dragged(sent, corner);
         self.before = Some((sent, corner));
         self.wheeled(sent, corner);
+        self.zoomed(sent, view);
+    }
+
+    /// Takes in a frame of Figma's for the zoom changing
+    fn zoomed(&mut self, sent: f64, view: &View) {
+        let same = |before: &View| before.dpr == view.dpr && before.cx == view.cx && before.cy == view.cy && before.cw == view.cw && before.ch == view.ch && before.page == view.page && before.preview == view.preview;
+        if self.zooms.back().is_some_and(|(then, before)| !same(before) || sent - then > ZOOM_OVER) {
+            self.zooms.clear();
+        }
+        if self.zooms.back().is_some_and(|(then, _)| sent - then < 1.0) {
+            self.zooms.pop_back();
+        }
+        self.zooms.push_back((sent, view.clone()));
+        while self.zooms.front().is_some_and(|(then, _)| sent - then > ZOOM_OVER) {
+            self.zooms.pop_front();
+        }
+        // Only since it last turned from zooming in to out or back, as
+        // where it was headed before isn't where it's headed now
+        let step = |(a, b): (&(f64, View), &(f64, View))| (b.1.zoom - a.1.zoom).signum();
+        let last = self.zooms.iter().zip(self.zooms.iter().skip(1)).map(step).filter(|sign| *sign != 0.0).last();
+        if let Some(last) = last {
+            while self.zooms.len() > 1 && self.zooms.iter().zip(self.zooms.iter().skip(1)).map(step).any(|sign| sign != 0.0 && sign != last) {
+                self.zooms.pop_front();
+            }
+        }
+        self.zooming = None;
+        let (Some((then, first)), n) = (self.zooms.front(), self.zooms.len()) else { return };
+        let span = sent - then;
+        if n < 3 || span < 15.0 || first.zoom == view.zoom || self.following() {
+            return;
+        }
+        // Figma zooms about a point that stays where it is: from the first
+        // and the last, checked against each between
+        let inverse = 1.0 / first.zoom - 1.0 / view.zoom;
+        let anchor = ((view.x - first.x) / inverse, (view.y - first.y) / inverse);
+        let about = |frame: &View| (frame.x + anchor.0 / frame.zoom, frame.y + anchor.1 / frame.zoom);
+        let world = about(view);
+        let off = self.zooms.iter().map(|(_, frame)| {
+            let at = about(frame);
+            ((at.0 - world.0) * frame.zoom * frame.dpr).abs().max(((at.1 - world.1) * frame.zoom * frame.dpr).abs())
+        });
+        let off = off.fold(0.0, f64::max);
+        if off > ZOOM_FIT {
+            super::render::trace(|| format!("zoom not followed: {n} frames {off:.1}px off about {:.1},{:.1}", anchor.0, anchor.1));
+            return;
+        }
+        self.anchor = anchor;
+        self.zooming = Some(Zooming { rate: (view.zoom / first.zoom).ln() / span, gap: span / (n - 1) as f64 });
+    }
+
+    /// The view to show for Figma's frame `view`, come `age` ms ago, as the
+    /// zoom changes: moved on as it's changing, or eased back to the frame
+    /// once it's stopped, and how far its corner's moved, in units
+    fn zoom_ahead(&mut self, age: f64, view: &View) -> Option<(View, (f64, f64))> {
+        let log = view.zoom.ln();
+        // From the zoom of the frame it's shown over now, as with a pan
+        if let Some(base) = self.zoom_base {
+            let by = log - base;
+            let past = |lead: f64| if (lead - by) * by < 0.0 { 0.0 } else { lead - by };
+            self.zoom_lead = past(self.zoom_lead);
+            if let Some((from, _)) = &mut self.zoom_back {
+                *from = past(*from);
+            }
+        }
+        self.zoom_base = Some(log);
+        let lead = match self.zooming.filter(|_| age <= HOLD_MS) {
+            Some(zooming) => {
+                self.zoom_back = None;
+                let most = (zooming.gap * AHEAD_OF_GAP).min(AHEAD_MOST);
+                let to = zooming.rate * age.min(most);
+                let shown = self.zoom_lead;
+                // The wheel's stopped, so it's zoomed no further, only held
+                // where it's shown till Figma's frames catch up. Otherwise
+                // not back from where it's shown, as Figma's next frame often
+                // changes it less than the one before
+                if wheel_stopped() {
+                    if shown * zooming.rate > 0.0 { shown } else { 0.0 }
+                } else if shown * zooming.rate > 0.0 && shown.abs() > to.abs() {
+                    shown.abs().min(zooming.rate.abs() * AHEAD_MOST * 2.0).copysign(shown)
+                } else {
+                    to
+                }
+            }
+            None if self.zoom_lead != 0.0 || self.zoom_back.is_some() => {
+                let (from, since) = *self.zoom_back.get_or_insert((self.zoom_lead, Instant::now()));
+                let left = 1.0 - since.elapsed().as_secs_f64() * 1000.0 / BACK_MS;
+                if left <= 0.0 {
+                    self.zoom_back = None;
+                    0.0
+                } else {
+                    from * left
+                }
+            }
+            None => 0.0,
+        };
+        self.zoom_lead = lead;
+        if lead == 0.0 {
+            return None;
+        }
+        let zoom = view.zoom * lead.exp();
+        let (ax, ay) = self.anchor;
+        let mut moved = view.clone();
+        moved.x = view.x + ax / view.zoom - ax / zoom;
+        moved.y = view.y + ay / view.zoom - ay / zoom;
+        moved.w = view.w * view.zoom / zoom;
+        moved.h = view.h * view.zoom / zoom;
+        moved.zoom = zoom;
+        let by = (moved.x - view.x, moved.y - view.y);
+        Some((moved, by))
     }
 
     /// Takes in a frame of Figma's, with the view's corner at `corner`, for
@@ -1205,6 +1346,14 @@ impl Pan {
     /// How long till what's shown changes with no new frame of Figma's,
     /// none once it's back where Figma left it
     fn wake(&self, age: f64) -> Option<Duration> {
+        // The zoom changing, moved on as it does
+        if let Some(zooming) = self.zooming.filter(|_| age <= HOLD_MS) {
+            let most = (zooming.gap * AHEAD_OF_GAP).min(AHEAD_MOST);
+            return Some(Duration::from_secs_f64(if age <= most { 0.001 } else { (HOLD_MS - age) / 1000.0 }));
+        }
+        if self.zoom_back.is_some() {
+            return Some(Duration::from_millis(1));
+        }
         // Following the pointer, as it moves
         if self.back.is_some() || self.following() && (age <= HOLD_MS || pointer_held()) || self.wheel.is_some() && age <= WHEEL_OVER {
             return Some(Duration::from_millis(1));
@@ -1555,6 +1704,7 @@ impl Screen {
             timed_at: 0.0,
             pan: Pan::default(),
             ahead_px: (0.0, 0.0),
+            ahead_scale: 1.0,
         };
         screen.wrap_buffers()?;
         screen.warm();
@@ -1736,6 +1886,7 @@ impl Screen {
             let age = came.map_or(f64::INFINITY, |came| came.elapsed().as_secs_f64() * 1000.0);
             let px = view.px(self.size.0) as f64;
             let ahead = (predicting() && came.is_some()).then(|| self.pan.ahead(seq, sent, age, &view, px)).flatten();
+            let zoom = view.zoom;
             let (view, by) = match ahead {
                 Some((moved, by)) if cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, &self.shown).1.is_none() => (moved, by),
                 Some((moved, by)) => {
@@ -1747,7 +1898,11 @@ impl Screen {
                 }
                 None => (view, (0.0, 0.0)),
             };
-            self.ahead_px = ((by.0 * px) as f32, (by.1 * px) as f32);
+            // Zoomed on from Figma's frame too, its device pixels a unit
+            // scaled by as much
+            let scale = view.zoom / zoom;
+            self.ahead_px = ((by.0 * px * scale) as f32, (by.1 * px * scale) as f32);
+            self.ahead_scale = scale as f32;
             let wake = if predicting() { self.pan.wake(age) } else { None };
             let now = (snapshot.serial, view.clone(), overlay.as_ref().map(|drawn| drawn.canvas.unique_id()), self.size);
             if shown.as_ref() == Some(&now) {
@@ -1945,6 +2100,7 @@ impl Screen {
             canvas.save();
             // With the scene, where the view's moved on from Figma's frame
             canvas.translate((-ax, -ay));
+            canvas.scale((self.ahead_scale, self.ahead_scale));
             canvas.scale((sx, sy));
             canvas.draw_picture(&overlay.canvas, None, None);
             canvas.restore();
