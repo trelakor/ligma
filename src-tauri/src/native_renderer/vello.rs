@@ -1036,6 +1036,37 @@ impl Fragment {
     }
 }
 
+/// Whether node `id` is one paint drawn once, solid or a linear or radial
+/// gradient that doesn't blend, whose brush takes an opacity as a layer
+/// over it would
+fn fades(tree: &Tree, id: u32) -> bool {
+    fn one(paints: &[Arc<rt::Paint>]) -> bool {
+        matches!(paints, [paint] if matches!(paint.kind.unwrap_or(PaintType::Solid), PaintType::Solid | PaintType::GradientLinear | PaintType::GradientRadial) && !tree::blends(paint.blend_mode))
+    }
+    let mut id = id;
+    for _ in 0..8 {
+        let Some(node) = tree.node(id) else { return false };
+        match node.op {
+            Op::StaticTransformBinding => match node.child {
+                Some(child) => id = child,
+                None => return false,
+            },
+            Op::Group if node.children.len() == 1 => id = node.children[0],
+            Op::Fill => return node.geometry.as_ref().is_some_and(|g| g.path.is_some() && one(&g.paints)),
+            Op::FillGlyphs => return node.ext().painted_glyph_geometry.as_ref().is_some_and(|g| one(&g.paints)),
+            Op::FillStroke if node.ext().instance_transforms.is_empty() => {
+                let mut painted = node.fill_geometries.iter().chain(&node.stroke_geometries).filter(|g| g.path.is_some() && !g.paints.is_empty());
+                return match (painted.next(), painted.next()) {
+                    (Some(g), None) => one(&g.paints),
+                    _ => false,
+                };
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// What a node covers, as paths in device pixels
 enum Cover {
     /// Where any of them is
@@ -1824,6 +1855,9 @@ pub struct Encoder<'a> {
     cast: Option<Color4f>,
     /// Whether only the silhouette's alpha is taken, not its color
     alpha_only: bool,
+    /// How see-through what's painted is made besides its paints' own, where
+    /// one draw takes a layer's opacity in place of the layer
+    fade: f32,
     /// Blurs in the scene, to be put in place
     pub effects: Vec<Effect>,
     /// The tree's path being painted, and Vello's copy, which `fill`
@@ -1906,6 +1940,7 @@ impl<'a> Encoder<'a> {
             widest: HashMap::new(),
             cast: None,
             alpha_only: false,
+            fade: 1.0,
             effects: Vec::new(),
             source: None,
             glyph_lines: None,
@@ -1994,6 +2029,27 @@ impl<'a> Encoder<'a> {
                 self.saved.push((None, true));
             }
         }
+        true
+    }
+
+    /// A layer over `shape`, a path in device pixels, whose edge is smoothed
+    /// as a fill's, and cut by the soft clip too as `push`'s is
+    #[track_caller]
+    fn push_shaped(&mut self, mode: BlendMode, shape: Path) -> bool {
+        count_layer();
+        if switches().nolayers {
+            self.saved.push((self.soft.take(), false));
+            return true;
+        }
+        SIZES[14].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SIZES[if mode == BlendMode::default() { 18 } else { 19 }].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let soft = self.soft.take();
+        let shape = match &soft {
+            Some(soft) => Path::op(soft, &shape, skia_safe::PathOp::Intersect).unwrap_or(shape),
+            None => shape,
+        };
+        self.scene.push_layer(fill_of(&shape), mode, 1.0, Affine::IDENTITY, &bez(&shape));
+        self.saved.push((soft, true));
         true
     }
 
@@ -2381,8 +2437,19 @@ impl<'a> Encoder<'a> {
                     return;
                 }
                 let isolate = !tree::pass_through(node.blend_mode) || self.tree.info(child).blends;
-                if opacity >= 0.999 && !tree::blends(node.blend_mode) && !isolate {
+                // Where nothing in it blends, a layer of its own keeps it as
+                // it's drawn without one, and one draw in it is as see-through
+                // with the layer's opacity taken by its paint
+                let alone = !tree::blends(node.blend_mode) && !self.tree.info(child).blends;
+                if alone && opacity >= 0.999 {
                     self.draw(child);
+                    return;
+                }
+                if alone && fades(self.tree, child) {
+                    let faded = self.fade * opacity;
+                    let was = std::mem::replace(&mut self.fade, faded);
+                    self.draw(child);
+                    self.fade = was;
                     return;
                 }
                 SIZES[6].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2532,8 +2599,18 @@ impl<'a> Encoder<'a> {
                 });
                 SIZES[12].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let blends = self.cast.is_none() && node.stroke_geometries.iter().any(|g| g.paints.iter().any(|paint| tree::blends(paint.blend_mode)));
-                if let (false, Some(device)) = (blends, self.device(bounds)) {
-                    if let Some(n) = self.push_clips(vec![(outline.with_transform(&self.m), true)], device) {
+                if let Some(device) = self.device(bounds) {
+                    let shape = outline.with_transform(&self.m);
+                    if blends {
+                        // What blends is cut each on its own, as Skia's clip
+                        // cuts it, where in a layer it'd blend with nothing
+                        if let Some(out) = outside(&shape, device) {
+                            let was = self.soften(out);
+                            strokes(self);
+                            self.soft = was;
+                            return;
+                        }
+                    } else if let Some(n) = self.push_clips(vec![(shape, true)], device) {
                         SIZES[13].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         strokes(self);
                         for _ in 0..n {
@@ -2662,6 +2739,7 @@ impl<'a> Encoder<'a> {
         if kind == PaintType::GradientDiamond && self.diamond(node, paint, skia, path) {
             return;
         }
+        let opacity = opacity * self.fade;
         let mut image = None;
         let brush: Option<(peniko::Brush, Option<Affine>)> = match kind {
             PaintType::Image => match self.image(paint, node.paint_size.unwrap_or([1.0, 1.0]), opacity) {
@@ -2673,7 +2751,7 @@ impl<'a> Encoder<'a> {
                 Picture::Skia => None,
             },
             PaintType::Solid => Some((peniko::Brush::Solid(color(draw::color(tree::rgba(paint.color.unwrap_or_default()), opacity))), None)),
-            PaintType::GradientLinear | PaintType::GradientRadial => gradient(paint, kind, node.paint_size.unwrap_or([1.0, 1.0])),
+            PaintType::GradientLinear | PaintType::GradientRadial => gradient(paint, kind, node.paint_size.unwrap_or([1.0, 1.0])).map(|(brush, at)| (brush.multiply_alpha(self.fade), at)),
             _ => None,
         };
         let Some((brush, brush_transform)) = brush else {
@@ -2899,6 +2977,28 @@ impl<'a> Encoder<'a> {
             }
             _ => None,
         }
+    }
+
+    /// Where node `id` covers, drawn solid, as one path in device pixels
+    /// inside `device`, or Some(None) where it covers nothing. None where
+    /// it's more than one path or Skia can't make it one
+    fn cover_path(&mut self, id: u32, device: IRect) -> Option<Option<Path>> {
+        let rect = Rect::from(device);
+        let shape = match self.cover(id, false)? {
+            Cover::Any(mut paths) if paths.len() <= 1 => match paths.pop() {
+                None => return Some(None),
+                Some(path) if skia_safe::Contains::contains(&rect, *path.bounds()) => path,
+                Some(path) => Path::op(&path, &Path::rect(rect, None), skia_safe::PathOp::Intersect)?,
+            },
+            Cover::Any(_) => return None,
+            // Its edges are where they are, where clips nested take what each
+            // covers of a pixel times the other's, which differ only where a
+            // stroke thinner than a pixel crosses the outline's edge
+            Cover::All(clips) => clips.iter().try_fold(Path::rect(rect, None), |all, (path, outside)| {
+                Path::op(&all, path, if *outside { skia_safe::PathOp::Difference } else { skia_safe::PathOp::Intersect })
+            })?,
+        };
+        Some((!shape.is_empty()).then_some(shape))
     }
 
     /// Clips to all of `clips`, each a path or where it isn't inside
@@ -3162,6 +3262,19 @@ impl<'a> Encoder<'a> {
         }
         if tree::single_draw(self.tree, alpha) {
             SIZES[5].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        // A mask of one solid path takes the copy's layer to be that path,
+        // which keeps the copy by as much of each pixel as the path covers,
+        // as the mask drawn in a layer of its own would
+        if blends && matches!(op, MaskOpType::Normal | MaskOpType::Pattern) {
+            if let Some(shape) = self.device(bounds).and_then(|device| self.cover_path(alpha, device)) {
+                let Some(shape) = shape else { return };
+                if self.push_shaped(OVER_COPY, shape) {
+                    self.draw(color);
+                    self.pop();
+                }
+                return;
+            }
         }
         if !self.push(if blends { OVER_COPY } else { BlendMode::default() }, 1.0, bounds) {
             return;
