@@ -95,6 +95,10 @@ var<private> solid_color: array<u32, 16>;
 // their place, one deep
 var<private> outer_mask: array<u32, 16>;
 var<private> outer_color: array<u32, 16>;
+// Ligma: bit i clear when pixel i has no opaque samples, so what would only
+// read or clear its solids can be skipped. Set, it may still have none
+var<private> solid_any: u32;
+var<private> outer_any: u32;
 
 // Ligma: whether fills at `depth` are kept apart by sample: under all
 // clips and layers, or in one that's `inner`
@@ -1331,6 +1335,7 @@ fn clear_solid(i: u32) {
     for (var j = 0u; j < SOLIDS; j += 1u) {
         solid_mask[i * SOLIDS + j] = 0u;
     }
+    solid_any &= ~(1u << i);
 }
 
 // Ligma: `fg`, opaque, drawn where `ms_mask` covers pixel `i`'s samples. It
@@ -1348,29 +1353,57 @@ fn take_samples(i: u32, fg: vec4<f32>, rgba: ptr<function, array<vec4<f32>, PIXE
             free = j;
         }
     }
+    // Ligma: the solids are only indexed by `i` and loop counters, with what
+    // `a`, `b` and `free` pick carried along or matched against `j`, so once
+    // unrolled no index is dynamic and they can stay in registers
     if m != 0u {
         // Full, the two that cover least are taken as one
         if free == SOLIDS {
             var a = 0u;
             var b = 1u;
+            var na = countOneBits(solid_mask[i * SOLIDS]);
+            var nb = countOneBits(solid_mask[i * SOLIDS + 1u]);
+            var ca = solid_color[i * SOLIDS];
+            var cb = solid_color[i * SOLIDS + 1u];
+            var ma = solid_mask[i * SOLIDS];
+            var mb = solid_mask[i * SOLIDS + 1u];
             for (var j = 0u; j < SOLIDS; j += 1u) {
-                let n = countOneBits(solid_mask[i * SOLIDS + j]);
-                if n < countOneBits(solid_mask[i * SOLIDS + a]) {
+                let mj = solid_mask[i * SOLIDS + j];
+                let n = countOneBits(mj);
+                if n < na {
                     b = a;
+                    nb = na;
+                    cb = ca;
+                    mb = ma;
                     a = j;
-                } else if j != a && n < countOneBits(solid_mask[i * SOLIDS + b]) {
+                    na = n;
+                    ca = solid_color[i * SOLIDS + j];
+                    ma = mj;
+                } else if j != a && n < nb {
                     b = j;
+                    nb = n;
+                    cb = solid_color[i * SOLIDS + j];
+                    mb = mj;
                 }
             }
-            let na = f32(countOneBits(solid_mask[i * SOLIDS + a]));
-            let nb = f32(countOneBits(solid_mask[i * SOLIDS + b]));
-            let mixed = (unpack4x8unorm(solid_color[i * SOLIDS + a]) * na + unpack4x8unorm(solid_color[i * SOLIDS + b]) * nb) / (na + nb);
-            solid_mask[i * SOLIDS + a] |= solid_mask[i * SOLIDS + b];
-            solid_color[i * SOLIDS + a] = pack4x8unorm(mixed);
+            let fa = f32(na);
+            let fb = f32(nb);
+            let mixed = (unpack4x8unorm(ca) * fa + unpack4x8unorm(cb) * fb) / (fa + fb);
+            for (var j = 0u; j < SOLIDS; j += 1u) {
+                if j == a {
+                    solid_mask[i * SOLIDS + j] |= mb;
+                    solid_color[i * SOLIDS + j] = pack4x8unorm(mixed);
+                }
+            }
             free = b;
         }
-        solid_mask[i * SOLIDS + free] = m;
-        solid_color[i * SOLIDS + free] = pack4x8unorm(vec4(fg.rgb, 1.0));
+        for (var j = 0u; j < SOLIDS; j += 1u) {
+            if j == free {
+                solid_mask[i * SOLIDS + j] = m;
+                solid_color[i * SOLIDS + j] = pack4x8unorm(vec4(fg.rgb, 1.0));
+            }
+        }
+        solid_any |= 1u << i;
     }
     (*rgba)[i] = solid_sum(i) + rest;
 }
@@ -1379,7 +1412,7 @@ fn take_samples(i: u32, fg: vec4<f32>, rgba: ptr<function, array<vec4<f32>, PIXE
 // alike, so what opaque fills covered stays covered. Over some, the pixel's
 // one color again
 fn painted(i: u32, fg: vec4<f32>) {
-    if fg.a <= 0.0 {
+    if fg.a <= 0.0 || (solid_any & (1u << i)) == 0u {
         return;
     }
     if ms_mask[i] == MS_ALL {
@@ -1550,11 +1583,19 @@ fn main(
                 if clip_depth == 0u {
                     inner = !copy;
                     if inner {
-                        for (var j = 0u; j < 16u; j += 1u) {
-                            outer_mask[j] = solid_mask[j];
-                            outer_color[j] = solid_color[j];
-                            solid_mask[j] = 0u;
+                        // Ligma: a pixel with no solids keeps none, and
+                        // `outer_any` says not to read its stale outer ones
+                        outer_any = solid_any;
+                        for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                            if (solid_any & (1u << i)) != 0u {
+                                for (var j = 0u; j < SOLIDS; j += 1u) {
+                                    outer_mask[i * SOLIDS + j] = solid_mask[i * SOLIDS + j];
+                                    outer_color[i * SOLIDS + j] = solid_color[i * SOLIDS + j];
+                                    solid_mask[i * SOLIDS + j] = 0u;
+                                }
+                            }
                         }
+                        solid_any = 0u;
                     }
                 }
 #endif
@@ -1581,10 +1622,17 @@ fn main(
 #ifdef msaa16
                 if clip_depth == 0u && inner {
                     inner = false;
-                    for (var j = 0u; j < 16u; j += 1u) {
-                        solid_mask[j] = outer_mask[j];
-                        solid_color[j] = outer_color[j];
+                    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
+                        if (outer_any & (1u << i)) != 0u {
+                            for (var j = 0u; j < SOLIDS; j += 1u) {
+                                solid_mask[i * SOLIDS + j] = outer_mask[i * SOLIDS + j];
+                                solid_color[i * SOLIDS + j] = outer_color[i * SOLIDS + j];
+                            }
+                        } else if (solid_any & (1u << i)) != 0u {
+                            clear_solid(i);
+                        }
                     }
+                    solid_any = outer_any;
                 }
 #endif
                 for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {
