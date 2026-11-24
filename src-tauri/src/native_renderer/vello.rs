@@ -86,6 +86,9 @@ pub struct Vello {
     /// How many renders of Vello's the last view took
     pub renders: usize,
     out: Option<Target>,
+    /// What's under the units an edit changes, drawn once and kept, and
+    /// the image it is in Vello's atlas, see `put_under`
+    under: Option<(Target, ImageData)>,
     pages: Vec<Page>,
     /// What Skia drew onto the atlas for earlier views, drawn again from
     /// here where it would be the same, and the views drawn
@@ -260,6 +263,7 @@ impl Vello {
             spare: vello::Scene::new(),
             renders: 0,
             out: None,
+            under: None,
             pages: Vec::new(),
             pieces: HashMap::new(),
             piece_bytes: 0,
@@ -471,6 +475,48 @@ impl Vello {
         Ok(out)
     }
 
+    /// Keeps the last render's top left `width` by `height`, to draw others
+    /// over (see `put_under`). Vello's atlas takes it once, with the next
+    /// render, rather than the part of it each render draws over, which
+    /// took 3 milliseconds each
+    pub fn keep_under(&mut self, skia: &ID3D12Device, width: i32, height: i32) -> Result<(), String> {
+        let target = match self.under.take() {
+            Some((target, image)) => {
+                self.renderer.override_image(&image, None);
+                target
+            }
+            None => Self::make(skia, &self.device, width, height)?,
+        };
+        let target = if target.tex.width >= width && target.tex.height >= height { target } else { Self::make(skia, &self.device, width, height)? };
+        let out = self.wrap(self.out.as_ref().ok_or("no target")?, wgpu::TextureUsages::COPY_SRC);
+        let under = self.wrap(&target, wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST);
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_texture(out.as_image_copy(), under.as_image_copy(), wgpu::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 });
+        self.queue.submit([encoder.finish()]);
+        let image = ImageData {
+            data: peniko::Blob::new(Arc::new([0u8; 0])),
+            format: peniko::ImageFormat::Rgba8,
+            // As Vello draws it
+            alpha_type: peniko::ImageAlphaType::Alpha,
+            width: width as u32,
+            height: height as u32,
+        };
+        self.renderer.override_image(&image, Some(wgpu::TexelCopyTextureInfoBase { texture: under, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }));
+        self.under = Some((target, image));
+        Ok(())
+    }
+
+    /// What `keep_under` kept, to draw with `put_under`
+    pub fn under(&self) -> Option<ImageData> {
+        self.under.as_ref().map(|(_, image)| image.clone())
+    }
+
+    pub fn drop_under(&mut self) {
+        if let Some((_, image)) = self.under.take() {
+            self.renderer.override_image(&image, None);
+        }
+    }
+
     /// How many renders the GPU's been handed that aren't checked yet
     pub fn unchecked(&self) -> usize {
         self.renderer.unchecked()
@@ -661,6 +707,7 @@ impl Vello {
         self.piece_bytes = 0;
         self.renderer.trim();
         self.out = None;
+        self.drop_under();
         self.pages.clear();
         self.blurred.clear();
         if let Some(blurrer) = &mut self.blurrer {
@@ -1635,6 +1682,14 @@ fn nothing() -> ImageData {
 }
 
 /// What stands for a `width` by `height` part of a texture in scenes
+/// `under`, what `Vello::keep_under` kept, from (`x`, `y`) in it, under all
+/// else drawn, `width` by `height`. Exactly as kept, a pixel to a pixel
+pub fn put_under(scene: &mut vello::Scene, under: &ImageData, x: u32, y: u32, width: u32, height: u32) {
+    let brush = ImageBrush { image: under.clone(), sampler: ImageSampler { x_extend: Extend::Pad, y_extend: Extend::Pad, quality: ImageQuality::Low, alpha: 1.0 } };
+    let at = Affine::translate((-(x as f64), -(y as f64)));
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, Some(at), &kurbo::Rect::new(0.0, 0.0, width as f64, height as f64));
+}
+
 fn slot_image(width: i32, height: i32) -> ImageData {
     ImageData {
         data: peniko::Blob::new(Arc::new([0u8; 0])),

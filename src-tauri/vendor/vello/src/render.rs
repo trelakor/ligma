@@ -199,7 +199,11 @@ impl Render {
         let atlas_width = images.width.max(1);
         let atlas_height = images.height.max(1);
         let (image_atlas, atlas_proxy_action) = match persistent_image_atlas {
-            Some(proxy) if proxy.width == atlas_width && proxy.height == atlas_height => {
+            // Ligma: a scene drawing no images leaves the atlas as it is, as
+            // it was made again, tens of megabytes, and every image copied
+            // into it again, each time renders with and without them took
+            // turns, as blurs' and the view's do
+            Some(proxy) if images.width == 0 || (proxy.width == atlas_width && proxy.height == atlas_height) => {
                 (*proxy, AtlasProxyAction::Reused)
             }
             Some(proxy) => {

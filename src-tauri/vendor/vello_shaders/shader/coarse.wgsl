@@ -66,6 +66,23 @@ var<workgroup> sh_tile_base: array<u32, WG_SIZE>;
 var<private> cmd_offset: u32;
 var<private> cmd_limit: u32;
 
+// Ligma: where each layer open in the tile began, to take it back out where
+// nothing's drawn in it and it'd leave what's under it as it is, as a layer
+// a blend mode or opacity puts over a shape far from the tile does
+const EMPTY_DEPTHS = 16u;
+var<private> layer_begins: array<u32, EMPTY_DEPTHS>;
+
+// Whether a layer with nothing drawn in it, ended with `blend`, leaves what's
+// under it as it is
+fn leaves_under(blend: u32) -> bool {
+    if blend >= 0x10000u {
+        return false;
+    }
+    let compose = blend & 0xffu;
+    // Linear dodge is normal with this compose's tag
+    return compose == 2u || compose == 3u || compose == 4u || compose == 9u || compose == 11u || compose == 12u || compose == 13u || blend == 10u;
+}
+
 // Make sure there is space for a command of given size, plus a jump if needed
 fn alloc_cmd(size: u32) {
     if cmd_offset + size >= cmd_limit {
@@ -422,7 +439,11 @@ fn main(
                         if tile.segment_count_or_ix == 0u && backdrop_clear {
                             clip_zero_depth = clip_depth + 1u;
                         } else {
-                            write_begin_clip(scene[dd]);
+                            let blend = scene[dd];
+                            write_begin_clip(blend);
+                            if clip_depth < EMPTY_DEPTHS {
+                                layer_begins[clip_depth] = select(0xffffffffu, cmd_offset - 1u, blend != BLEND_OVER_COPY_TAG);
+                            }
                             render_blend_depth += 1u;
                             max_blend_depth = max(max_blend_depth, render_blend_depth);
                         }
@@ -430,10 +451,14 @@ fn main(
                     }
                     case DRAWTAG_END_CLIP: {
                         clip_depth -= 1u;
-                        write_path(tile, tile_ix, draw_flags);
                         let blend = scene[dd];
-                        let alpha = bitcast<f32>(scene[dd + 1u]);
-                        write_end_clip(CmdEndClip(blend, alpha));
+                        if clip_depth < EMPTY_DEPTHS && layer_begins[clip_depth] != 0xffffffffu && layer_begins[clip_depth] + 1u == cmd_offset && leaves_under(blend) {
+                            cmd_offset = layer_begins[clip_depth];
+                        } else {
+                            write_path(tile, tile_ix, draw_flags);
+                            let alpha = bitcast<f32>(scene[dd + 1u]);
+                            write_end_clip(CmdEndClip(blend, alpha));
+                        }
                         render_blend_depth -= 1u;
                     }
                     default: {}

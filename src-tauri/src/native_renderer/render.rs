@@ -815,17 +815,17 @@ struct Whole {
 /// Figma does, rather than tile by tile
 const EDITING: Duration = Duration::from_millis(400);
 
-/// While something's edited, what's under and over the units it changes in
-/// the whole view, each drawn once, so each frame only those are drawn
-/// again, over what they cover, and the three put together. The whole view
-/// drawn again each frame took the GPU 10 milliseconds and more, longer
-/// than Figma's frames come apart while something's dragged
+/// While something's edited, what's under the units it changes in the whole
+/// view, drawn once and kept by Vello, so each frame only those units and
+/// what's over them are drawn again, over it, where they change. The whole
+/// view drawn again each frame took the GPU 10 milliseconds and more, most
+/// of it what's under, longer than Figma's frames come apart while
+/// something's dragged
 struct Strata {
     at: (i32, i32, u32),
     phase: (f32, f32),
-    /// Each what it's of and as drawn, none for no units
-    below: Option<(u64, Arc<Tex>)>,
-    above: Option<(u64, Arc<Tex>)>,
+    /// What it's of, none for no units
+    under: Option<u64>,
 }
 
 /// Changed areas past which the whole view is drawn again, rather than each
@@ -1468,6 +1468,9 @@ pub struct Painter {
     /// The first and last units by index Vello draws, while a part of
     /// what's in the view is drawn
     only: Option<(usize, usize)>,
+    /// Where in what's kept under the units an edit changes Vello draws
+    /// over, see `Strata`
+    under_at: Option<(u32, u32)>,
     /// When Vello was started again after errors, to give up on it after
     /// a few close together
     vello_restarts: Vec<Instant>,
@@ -1709,6 +1712,7 @@ impl Painter {
             changing: Default::default(),
             strata: None,
             only: None,
+            under_at: None,
             blur_rows: 0,
             vello_restarts: Vec::new(),
             vello_too_big: None,
@@ -3515,6 +3519,7 @@ impl Painter {
         let mut widths: Vec<(String, f32)> = Vec::new();
         let (mut reused, mut made_count) = (0, 0);
         let (mut encoding, mut rough) = (Duration::ZERO, false);
+        let mut under_area = 0;
         // Blurs, drawn and put in place for the view
         let mut plan = super::vello::Plan::new();
         plan.coarser = self.blur_coarser;
@@ -3650,8 +3655,17 @@ impl Painter {
                 })();
                 encoding = begun.elapsed();
                 drop(made_span);
+                let under = self.under_at.map(|at| (vello.under(), at));
                 let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
                 encoder.coarser = self.image_coarser;
+                match under {
+                    Some((Some(image), (x, y))) => {
+                        under_area = image.width as u64 * image.height as u64;
+                        super::vello::put_under(&mut encoder.scene, &image, x, y, w as u32, h as u32);
+                    }
+                    Some((None, _)) => encoder.failed = Some("nothing kept under".into()),
+                    None => {}
+                }
                 if !whole_tree {
                     encoder.failed = Some("not a tree".into());
                 }
@@ -3783,7 +3797,7 @@ impl Painter {
         pictures.sort_unstable();
         pictures.dedup();
         // Past what Vello's atlas holds, it'd draw from where other images are
-        let area = vello.atlas_area(&pictures, used_pages);
+        let area = vello.atlas_area(&pictures, used_pages) + under_area;
         self.atlas_used = area;
         if area > ATLAS_MOST {
             self.vello = Some(vello);
@@ -4381,190 +4395,20 @@ impl Painter {
     }
 
     fn drop_strata(&mut self) {
-        if let Some(strata) = self.strata.take() {
-            for (_, tex) in strata.below.into_iter().chain(strata.above) {
-                self.retire(tex);
+        if self.strata.take().is_some() {
+            if let Some(vello) = self.vello.as_mut() {
+                vello.drop_under();
             }
         }
     }
 
-    /// The whole view put together from `Strata`, drawing again only the
-    /// units that change and those between them. False where it can't, or,
-    /// unless `build`, where what's under or over them would be drawn too
-    fn fill_strata(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), phase: (f32, f32), build: bool) -> bool {
-        if self.changing.is_empty() || self.tree.is_none() || (!build && self.strata.is_none()) || self.too_big() {
-            return false;
-        }
-        let _span = super::span::span("fill strata");
-        let started = Instant::now();
-        let reach = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
-        let shown = |unit: &Unit| unit.place.is_some() && Rect::intersects2(&unit.bounds, &reach);
-        let mut range: Option<(usize, usize)> = None;
-        for (index, unit) in self.units.iter().enumerate() {
-            if shown(unit) && self.changing.contains(&unit.slot) {
-                range = Some(range.map_or((index, index), |(first, _)| (first, index)));
-            }
-        }
-        let Some((first, last)) = range else { return false };
-        // What changes and what's over it are put over what's under it, so
-        // none of it may draw from what's under it
-        if self.units[first..].iter().any(|unit| shown(unit) && !unit.alone) {
-            if build {
-                trace(|| format!("  strata can't: units {first}..={last} or over them draw from what's under them"));
-            }
-            return false;
-        }
-        let key = |units: &[Unit]| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            let mut any = false;
-            for unit in units.iter().filter(|unit| shown(unit)) {
-                any = true;
-                self.mark(unit).hash(&mut hasher);
-                self.sharpened.get(&(unit.slot, unit.section)).hash(&mut hasher);
-            }
-            any.then(|| hasher.finish())
-        };
-        let (below_key, above_key) = (key(&self.units[..first]), key(&self.units[last + 1..]));
-        let at = (ox, oy, px.to_bits());
-        let had = self.strata.take().filter(|strata| strata.at == at && strata.phase == phase);
-        let (mut below, mut above) = had.map_or((None, None), |strata| (strata.below, strata.above));
-        let fits = |layer: &Option<(u64, Arc<Tex>)>, key: Option<u64>| layer.as_ref().map(|(key, _)| *key) == key;
-        if !build && !(fits(&below, below_key) && fits(&above, above_key)) {
-            self.strata = Some(Strata { at, phase, below, above });
-            return false;
-        }
-        self.settle_shown();
-        // Where the units drawn again are, on the grid patches are on
-        let mut area: Option<Rect> = None;
-        for unit in self.units[first..=last].iter().filter(|unit| shown(unit)) {
-            area = Some(area.map_or(unit.bounds, |area| Rect::join2(area, unit.bounds)));
-        }
-        let snap = |at: i32, down: bool| if down { at.div_euclid(PATCH_GRID) * PATCH_GRID } else { (at + PATCH_GRID - 1).div_euclid(PATCH_GRID) * PATCH_GRID };
-        let rect = area.and_then(|area| {
-            let device: skia_safe::IRect = Rect::from_ltrb(area.left * px - ox as f32, area.top * px - oy as f32, area.right * px - ox as f32, area.bottom * px - oy as f32).round_out();
-            let device = device.with_outset((3, 3));
-            let snapped = skia_safe::IRect::from_ltrb(snap(device.left, true), snap(device.top, true), snap(device.right, false), snap(device.bottom, false));
-            skia_safe::IRect::intersect(&snapped, &skia_safe::IRect::from_wh(width, height))
-        });
-        let drawn = |this: &mut Self, (first, last): (usize, usize), rect: skia_safe::IRect, copy: bool| -> Option<(Arc<Tex>, Counts)> {
-            let reach = Rect::from_xywh((ox + rect.left) as f32 / px, (oy + rect.top) as f32 / px, rect.width() as f32 / px, rect.height() as f32 / px).with_outset((2.0 / px, 2.0 / px));
-            this.only = Some((first, last));
-            let mut drawn = None;
-            for _ in 0..8 {
-                // Blurs are drawn from all of the whole view, as in each part
-                this.blur_view = Some(vello::kurbo::Rect::new(-rect.left as f64, -rect.top as f64, (width - rect.left) as f64, (height - rect.top) as f64));
-                let rendered = this.vello_render(ox + rect.left, oy + rect.top, phase, rect.width(), rect.height(), px, reach, None, copy, None);
-                this.blur_view = None;
-                let Ok((out, counts, _, _)) = rendered else { break };
-                let Some(vello) = this.vello.as_mut() else { break };
-                match vello.check(usize::MAX) {
-                    Ok(None) => {
-                        drawn = Some((out, counts));
-                        break;
-                    }
-                    Ok(Some(why)) if !why.starts_with("too big") => trace(|| format!("  vello ran out of room, drawing again: {why}")),
-                    _ => break,
-                }
-            }
-            this.only = None;
-            drawn
-        };
-        let view = skia_safe::IRect::from_wh(width, height);
-        let mut built = Vec::new();
-        let count = self.units.len();
-        for (which, key, units) in [(0, below_key, (0, first.saturating_sub(1))), (1, above_key, (last + 1, count.saturating_sub(1)))] {
-            let layer = if which == 0 { &mut below } else { &mut above };
-            if fits(layer, key) {
-                continue;
-            }
-            if let Some((_, tex)) = layer.take() {
-                self.retire(tex);
-            }
-            let Some(key) = key else { continue };
-            match drawn(self, units, view, true) {
-                Some((tex, _)) => *(if which == 0 { &mut below } else { &mut above }) = Some((key, tex)),
-                None => {
-                    for (_, tex) in below.into_iter().chain(above) {
-                        self.retire(tex);
-                    }
-                    return false;
-                }
-            }
-            built.push(units);
-        }
-        let changed = match rect {
-            Some(rect) => match drawn(self, (first, last), rect, false) {
-                Some((out, counts)) => Some((out, counts, rect)),
-                None => {
-                    self.strata = Some(Strata { at, phase, below, above });
-                    return false;
-                }
-            },
-            None => None,
-        };
-        let Some(target) = self.tex(width, height) else {
-            self.strata = Some(Strata { at, phase, below, above });
-            return false;
-        };
-        let Some(mut surface) = self.target(&target) else {
-            self.retire(target);
-            self.strata = Some(Strata { at, phase, below, above });
-            return false;
-        };
-        surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
-        let paint = Paint::default();
-        let mut counts = Counts::default();
-        let image = |this: &mut Self, tex: &Arc<Tex>, alpha: AlphaType| gpu::images::borrow_texture_from(&mut this.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, alpha, None);
-        if let Some(image) = below.as_ref().and_then(|(_, tex)| image(self, tex, AlphaType::Premul)) {
-            surface.canvas().draw_image(&image, (0, 0), Some(&paint));
-        }
-        if let Some((out, drawn, rect)) = &changed {
-            counts += *drawn;
-            // What Vello drew is unpremultiplied
-            if let Some(image) = image(self, out, AlphaType::Unpremul) {
-                let from = Rect::from_wh(rect.width() as f32, rect.height() as f32);
-                surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from(*rect), &paint);
-            }
-        }
-        if let Some(image) = above.as_ref().and_then(|(_, tex)| image(self, tex, AlphaType::Premul)) {
-            surface.canvas().draw_image(&image, (0, 0), Some(&paint));
-        }
-        drop(surface);
-        // Put together before Vello's next render draws into what it drew
-        let _ = self.finish(&target.backend(), false);
-        let fence = self.gpu.signal();
-        let seq = self.seq;
-        self.hand_whole(Layer { tex: target, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, false, true, seq);
-        // Drawn again whole at rest, as where parts meet each is drawn over
-        // the other, not as one
-        if let Some(whole) = self.whole.as_mut() {
-            whole.patched = true;
-        }
-        self.strata = Some(Strata { at, phase, below, above });
-        self.drew = true;
-        trace(|| {
-            let rect = changed.as_ref().map_or("none".to_string(), |(_, _, rect)| format!("{}x{}", rect.width(), rect.height()));
-            format!("  strata units={first}..={last} of {count} drawn={rect} built={built:?} {:.1}ms", started.elapsed().as_secs_f64() * 1000.0)
-        });
-        true
-    }
-
-    /// What changed in the whole view Vello drew, drawn again by Vello alone
-    /// over a copy of it, rather than all of it again, so an edit shows in
-    /// a few milliseconds. False where it's better drawn again whole
-    fn patch_whole_vello(&mut self) -> bool {
-        let _span = super::span::span("patch whole vello");
-        let _purpose = super::gpu_census::purpose("whole");
-        let started = Instant::now();
-        self.settle_shown();
-        let Some(whole) = self.whole.as_ref().filter(|whole| whole.vello && !whole.stale && !whole.rough && !whole.patch.is_empty() && whole.patch.len() <= PATCHES) else {
-            return false;
-        };
-        let (tex, x, y, px, phase) = (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px, whole.layer.phase);
-        let (width, height) = (tex.width, tex.height);
+    /// `areas`, in units, as rects of the whole view at (`x`, `y`) and `px`,
+    /// `width` by `height`, snapped to `PATCH_GRID` and those mostly over
+    /// each other made one
+    fn patch_rects(areas: &[Rect], (x, y, px): (i32, i32, f32), width: i32, height: i32) -> Vec<skia_safe::IRect> {
         let snap = |at: i32, down: bool| if down { at.div_euclid(PATCH_GRID) * PATCH_GRID } else { (at + PATCH_GRID - 1).div_euclid(PATCH_GRID) * PATCH_GRID };
         let mut rects: Vec<skia_safe::IRect> = Vec::new();
-        for area in &whole.patch {
+        for area in areas {
             let device: skia_safe::IRect = Rect::from_ltrb(area.left * px - x as f32, area.top * px - y as f32, area.right * px - x as f32, area.bottom * px - y as f32).round_out();
             let device = device.with_outset((3, 3));
             let snapped = skia_safe::IRect::from_ltrb(snap(device.left, true), snap(device.top, true), snap(device.right, false), snap(device.bottom, false));
@@ -4572,7 +4416,6 @@ impl Painter {
                 rects.push(rect);
             }
         }
-        // Rects mostly over each other drawn as one
         let size = |rect: &skia_safe::IRect| rect.width() as i64 * rect.height() as i64;
         'merge: loop {
             for i in 0..rects.len() {
@@ -4588,10 +4431,119 @@ impl Painter {
             }
             break;
         }
-        // Past half of it, drawing it all again takes about as long
-        if rects.iter().map(size).sum::<i64>() * 2 > width as i64 * height as i64 {
+        rects
+    }
+
+    /// The units an edit changes and those over them drawn again where they
+    /// change in the whole view, over what's under them, kept from when
+    /// they started changing (see `Strata`). False where it can't, or,
+    /// unless `build`, where what's under them would be drawn first
+    fn fill_strata(&mut self, px: f32, (ox, oy, width, height): (i32, i32, i32, i32), phase: (f32, f32), build: bool) -> bool {
+        if self.changing.is_empty() || self.tree.is_none() || (!build && self.strata.is_none()) || self.too_big() {
             return false;
         }
+        let at = (ox, oy, px.to_bits());
+        let fits = self.whole.as_ref().is_some_and(|whole| {
+            whole.vello && !whole.stale && !whole.rough && whole.at == at && whole.layer.phase == phase && whole.layer.tex.width == width && whole.layer.tex.height == height
+        });
+        if !fits {
+            return false;
+        }
+        let _span = super::span::span("fill strata");
+        let started = Instant::now();
+        let reach = Rect::from_xywh(ox as f32 / px, oy as f32 / px, width as f32 / px, height as f32 / px);
+        let shown = |unit: &Unit| unit.place.is_some() && Rect::intersects2(&unit.bounds, &reach);
+        let mut range: Option<(usize, usize)> = None;
+        for (index, unit) in self.units.iter().enumerate() {
+            if shown(unit) && self.changing.contains(&unit.slot) {
+                range = Some(range.map_or((index, index), |(first, _)| (first, index)));
+            }
+        }
+        let Some((first, last)) = range else { return false };
+        let under = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let mut any = false;
+            for unit in self.units[..first].iter().filter(|unit| shown(unit)) {
+                any = true;
+                self.mark(unit).hash(&mut hasher);
+                self.sharpened.get(&(unit.slot, unit.section)).hash(&mut hasher);
+            }
+            any.then(|| hasher.finish())
+        };
+        let kept = self.strata.as_ref().is_some_and(|strata| strata.at == at && strata.phase == phase && strata.under == under);
+        if !kept && !build {
+            return false;
+        }
+        self.settle_shown();
+        let mut built = Duration::ZERO;
+        if !kept {
+            self.drop_strata();
+            if under.is_some() {
+                let timer = Instant::now();
+                self.only = Some((0, first - 1));
+                let mut done = false;
+                for _ in 0..8 {
+                    self.blur_view = Some(vello::kurbo::Rect::new(0.0, 0.0, width as f64, height as f64));
+                    let rendered = self.vello_render(ox, oy, phase, width, height, px, reach.with_outset((2.0 / px, 2.0 / px)), None, false, None);
+                    self.blur_view = None;
+                    if rendered.is_err() {
+                        break;
+                    }
+                    let Some(vello) = self.vello.as_mut() else { break };
+                    match vello.check(usize::MAX) {
+                        Ok(None) => {
+                            done = vello.keep_under(&self.gpu.device, width, height).map_err(|why| trace(|| format!("  strata can't keep what's under: {why}"))).is_ok();
+                            break;
+                        }
+                        Ok(Some(why)) if !why.starts_with("too big") => trace(|| format!("  vello ran out of room, drawing again: {why}")),
+                        _ => break,
+                    }
+                }
+                self.only = None;
+                if !done {
+                    return false;
+                }
+                built = timer.elapsed();
+            }
+            self.strata = Some(Strata { at, phase, under });
+        }
+        // Where they were and are
+        let mut areas = self.whole.as_ref().map_or_else(Vec::new, |whole| whole.patch.clone());
+        areas.extend(self.units[first..=last].iter().filter(|unit| shown(unit)).map(|unit| unit.bounds));
+        let rects = Self::patch_rects(&areas, (ox, oy, px), width, height);
+        let over = (first, under.is_some());
+        let done = self.patch_whole_rects(&rects, Some(over), started);
+        trace(|| format!("  strata units={first}..={last} of {} built={:.1}ms {}", self.units.len(), built.as_secs_f64() * 1000.0, if done { "drawn" } else { "failed" }));
+        done
+    }
+
+    /// What changed in the whole view Vello drew, drawn again by Vello alone
+    /// over a copy of it, rather than all of it again, so an edit shows in
+    /// a few milliseconds. False where it's better drawn again whole
+    fn patch_whole_vello(&mut self) -> bool {
+        let started = Instant::now();
+        self.settle_shown();
+        let Some(whole) = self.whole.as_ref().filter(|whole| whole.vello && !whole.stale && !whole.rough && !whole.patch.is_empty() && whole.patch.len() <= PATCHES) else {
+            return false;
+        };
+        let (width, height) = (whole.layer.tex.width, whole.layer.tex.height);
+        let rects = Self::patch_rects(&whole.patch, (whole.layer.x, whole.layer.y, whole.layer.px), width, height);
+        // Past half of it, drawing it all again takes about as long
+        if rects.iter().map(|rect| rect.width() as i64 * rect.height() as i64).sum::<i64>() * 2 > width as i64 * height as i64 {
+            return false;
+        }
+        self.patch_whole_rects(&rects, None, started)
+    }
+
+    /// `rects` of the whole view drawn again by Vello, over a copy of it or
+    /// in place. With `over`, only the units from the first, and over what
+    /// `Strata` kept under them where they have it
+    fn patch_whole_rects(&mut self, rects: &[skia_safe::IRect], over: Option<(usize, bool)>, started: Instant) -> bool {
+        let _span = super::span::span("patch whole vello");
+        let _purpose = super::gpu_census::purpose("whole");
+        let Some(whole) = self.whole.as_ref() else { return false };
+        let (tex, x, y, px, phase) = (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px, whole.layer.phase);
+        let (width, height) = (tex.width, tex.height);
         let in_place = Arc::strong_count(&tex) == 2;
         let Some(target) = (if in_place { Some(tex.clone()) } else { self.tex(width, height) }) else {
             return false;
@@ -4614,8 +4566,12 @@ impl Painter {
             surface.canvas().draw_image(previous, (0, 0), Some(&copy));
         }
         let (mut waited, mut stats) = (Duration::ZERO, String::new());
-        for rect in &rects {
+        for rect in rects {
             let reach = Rect::from_xywh((x + rect.left) as f32 / px, (y + rect.top) as f32 / px, rect.width() as f32 / px, rect.height() as f32 / px).with_outset((2.0 / px, 2.0 / px));
+            if let Some((first, under)) = over {
+                self.only = Some((first, self.units.len().saturating_sub(1)));
+                self.under_at = under.then_some((rect.left as u32, rect.top as u32));
+            }
             let mut drawn = None;
             for _ in 0..8 {
                 // Blurs are drawn from all of the whole view, the same for
@@ -4640,6 +4596,8 @@ impl Painter {
                     _ => break,
                 }
             }
+            self.only = None;
+            self.under_at = None;
             let image = drawn.and_then(|out| gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None));
             let Some(image) = image else {
                 // What's drawn into it so far is never shown
@@ -4671,6 +4629,8 @@ impl Painter {
             whole.stale |= image.is_none();
             whole.patch.clear();
             whole.seq = seq;
+            // Drawn again whole at rest, as where parts meet each is drawn
+            // over the other, not as one
             whole.patched = true;
             if !in_place {
                 replaced = Some(std::mem::replace(&mut whole.layer.tex, target));
@@ -4681,7 +4641,7 @@ impl Painter {
         }
         trace(|| {
             let rects: Vec<String> = rects.iter().map(|rect| format!("{}x{}", rect.width(), rect.height())).collect();
-            format!("  patch vello rects={rects:?} waited={:.1}ms {:.1}ms {stats}", waited.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0)
+            format!("  patch vello rects={rects:?} over={over:?} waited={:.1}ms {:.1}ms {stats}", waited.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0)
         });
         self.drew = true;
         true
