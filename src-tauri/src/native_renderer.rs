@@ -73,6 +73,8 @@ mod span;
 #[cfg(windows)]
 mod render;
 #[cfg(windows)]
+mod replay;
+#[cfg(windows)]
 mod rt;
 #[cfg(windows)]
 mod run;

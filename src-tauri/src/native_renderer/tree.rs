@@ -173,6 +173,11 @@ impl Frame {
         Ok(Frame { header, tab: String::new(), body, start: end })
     }
 
+    /// The bytes it was parsed from
+    pub fn into_body(self) -> Vec<u8> {
+        self.body
+    }
+
     pub fn forest(&self) -> &[u8] {
         &self.body[self.start..self.body.len() - self.header.ui]
     }

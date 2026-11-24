@@ -222,6 +222,10 @@ const TREE_FAILURES: u32 = 4;
 /// thread can't apply, has Figma send the whole scene again
 fn take_frames(ctx: Arc<Ctx>) {
     use super::tree::Frame;
+    if let Some(replay) = super::replay::Replay::load() {
+        return replay_frames(ctx, replay);
+    }
+    let mut record = super::replay::Recorder::open();
     // Of each tab handing over frames: the one drawn and those parked, whose
     // frames wait till it's drawn again
     #[derive(Default)]
@@ -249,6 +253,9 @@ fn take_frames(ctx: Arc<Ctx>) {
             if Some(&from) != tab.as_ref() && !parked.contains(&from) {
                 continue;
             }
+            if let Some(record) = record.as_mut().filter(|_| Some(&from) == tab.as_ref()) {
+                record.write(&body);
+            }
             let mut frame = match Frame::parse(body) {
                 Ok(frame) => frame,
                 Err(error) => {
@@ -270,6 +277,9 @@ fn take_frames(ctx: Arc<Ctx>) {
                 state.pending.clear();
                 state.next = None;
             }
+        }
+        if let Some(record) = record.as_mut() {
+            record.flush();
         }
         let Some(tab) = tab else {
             drawn = None;
@@ -317,37 +327,7 @@ fn take_frames(ctx: Arc<Ctx>) {
             if frame.header.mode == 0 {
                 resyncs = resyncs.saturating_sub(1);
             }
-            let view = frame.view();
-            if !ctx.tree.swap(true, Ordering::Relaxed) {
-                super::mark(|| "drawing Figma's render tree".into());
-                set_status("Drawing");
-                if let Some(webview) = current(&ctx) {
-                    let octaves = eval_value(&webview, "window.__ligmaNative?.octaves?.() ?? null").and_then(|value| serde_json::from_value::<Vec<f32>>(value).ok());
-                    if let Some(octaves) = octaves {
-                        let _ = ctx.messages.send(Msg::Octaves(octaves));
-                    }
-                }
-            }
-            follow_canvas(&ctx, &view);
-            let drawn = overlay.as_mut().and_then(|overlay| overlay.decode(frame.ui()));
-            // Figma's part: from the input it answers, or from the start of
-            // the page's frame it was made in. Input from long before isn't
-            // what it answers, and one made outside a page's frame, as
-            // something loaded, has no start to time it from
-            let made = frame.header.page.as_ref().map(|page| {
-                let since = |key: &str| page[key].as_f64().unwrap_or(0.0);
-                let figma = if since("moves") > 0.0 && since("last") <= ANSWERS_MS {
-                    since("last")
-                } else if since("frame") <= PAGE_FRAME_MS {
-                    since("frame")
-                } else {
-                    0.0
-                };
-                super::present::Made { at: frame.header.at, figma: figma.max(0.0) as f32 }
-            }).filter(|_| frame.header.at >= state.since);
-            ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits(), made, frame.header.at);
-            super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2} page={}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at, frame.header.page.as_ref().map_or_else(String::new, |page| page.to_string())));
-            let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
+            pass_on(&ctx, &mut overlay, frame, state.since);
         }
         // One missing a while is lost, so Figma sends the whole scene again
         if state.next.is_some() && !state.pending.is_empty() {
@@ -357,6 +337,127 @@ fn take_frames(ctx: Arc<Ctx>) {
                 state.next = None;
             }
         }
+    }
+}
+
+/// Hands `frame`, the next in order, to the render and present threads.
+/// Frames sent before `since`, in ms since 1970, aren't timed
+fn pass_on(ctx: &Ctx, overlay: &mut Option<super::overlay::Decoder>, frame: super::tree::Frame, since: f64) {
+    let view = frame.view();
+    if !ctx.tree.swap(true, Ordering::Relaxed) {
+        super::mark(|| "drawing Figma's render tree".into());
+        set_status("Drawing");
+        if let Some(webview) = current(ctx) {
+            let octaves = eval_value(&webview, "window.__ligmaNative?.octaves?.() ?? null").and_then(|value| serde_json::from_value::<Vec<f32>>(value).ok());
+            if let Some(octaves) = octaves {
+                let _ = ctx.messages.send(Msg::Octaves(octaves));
+            }
+        }
+    }
+    follow_canvas(ctx, &view);
+    let drawn = overlay.as_mut().and_then(|overlay| overlay.decode(frame.ui()));
+    // Figma's part: from the input it answers, or from the start of the
+    // page's frame it was made in. Input from long before isn't what it
+    // answers, and one made outside a page's frame, as something loaded, has
+    // no start to time it from
+    let made = frame.header.page.as_ref().map(|page| {
+        let since = |key: &str| page[key].as_f64().unwrap_or(0.0);
+        let figma = if since("moves") > 0.0 && since("last") <= ANSWERS_MS {
+            since("last")
+        } else if since("frame") <= PAGE_FRAME_MS {
+            since("frame")
+        } else {
+            0.0
+        };
+        super::present::Made { at: frame.header.at, figma: figma.max(0.0) as f32 }
+    }).filter(|_| frame.header.at >= since);
+    ctx.hub.frame_view(frame.header.seq, view, drawn, frame.edits(), made, frame.header.at);
+    super::render::trace(|| format!("frame {} came {:.1}ms after Figma sent it ox={:.2} oy={:.2} sent={:.2} page={}", frame.header.seq, super::render::since_epoch_ms() - frame.header.at, frame.header.ox, frame.header.oy, frame.header.at, frame.header.page.as_ref().map_or_else(String::new, |page| page.to_string())));
+    let _ = ctx.messages.send(Msg::Frame(Box::new(frame)));
+}
+
+/// Between rounds of a replay played more than once, after the whole scene
+/// it starts from is handed over again
+const REPLAY_SETTLE: Duration = Duration::from_millis(2000);
+
+/// Plays recorded frames back in place of the tab's, which are let go of as
+/// they come: those up to the whole scene the drag starts from at once, then
+/// after `replay.wait` the rest one every `replay.every`, numbered on from
+/// the first and sent as they're handed over. Each round after the first
+/// starts from that whole scene again, which takes the tree back to where
+/// the drag started, as Figma sending it again would
+fn replay_frames(ctx: Arc<Ctx>, replay: super::replay::Replay) {
+    let mut overlay = super::overlay::Decoder::new();
+    let framing = || ctx.framing.lock().unwrap().as_ref().map(|(tab, _)| tab.clone());
+    // Once the tab hands frames over
+    let tab = loop {
+        if ctx.stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let came = frames().take(Duration::from_millis(100));
+        if let Some(tab) = framing().filter(|tab| came.iter().any(|(from, _)| from == tab)) {
+            break tab;
+        }
+    };
+    let idle = |until: Instant| {
+        loop {
+            drop(frames().take(Duration::ZERO));
+            if ctx.stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            match until.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()) {
+                Some(left) => sleep_fine(left.min(Duration::from_millis(50))),
+                None => return true,
+            }
+        }
+    };
+    let since = super::render::since_epoch_ms();
+    let mut seq = 0;
+    let mut feed = |body: &Vec<u8>| {
+        if framing().as_ref() != Some(&tab) {
+            return false;
+        }
+        if let Ok(mut frame) = super::tree::Frame::parse(body.clone()) {
+            seq += 1;
+            frame.header.seq = seq;
+            frame.header.at = super::render::since_epoch_ms();
+            frame.tab.clone_from(&tab);
+            pass_on(&ctx, &mut overlay, frame, since);
+        }
+        true
+    };
+    let said = format!("replay started: {} frames at once, {}ms later {} one every {}ms, {} times", replay.base.len(), replay.wait.as_millis(), replay.deltas.len(), replay.every.as_millis(), replay.loops);
+    log::info!("native renderer: {said}");
+    super::render::trace(|| said);
+    let played = 'played: {
+        if !replay.base.iter().all(&mut feed) || !idle(Instant::now() + replay.wait) {
+            break 'played None;
+        }
+        let mut fed = 0;
+        let mut took = Duration::ZERO;
+        for round in 0..replay.loops {
+            if round > 0 && (!replay.base.last().is_some_and(&mut feed) || !idle(Instant::now() + REPLAY_SETTLE)) {
+                break 'played None;
+            }
+            let start = Instant::now();
+            for (index, body) in replay.deltas.iter().enumerate() {
+                if !idle(start + replay.every * index as u32) || !feed(body) {
+                    break 'played None;
+                }
+                fed += 1;
+            }
+            took += start.elapsed();
+        }
+        Some((fed, took))
+    };
+    let said = match played {
+        Some((fed, took)) => format!("replay done n={fed} in {:.1}ms", took.as_secs_f64() * 1000.0),
+        None => "replay stopped, as the tab stopped handing frames over or the renderer stopped".into(),
+    };
+    log::info!("native renderer: {said}");
+    super::render::trace(|| said);
+    while !ctx.stop.load(Ordering::Relaxed) {
+        drop(frames().take(Duration::from_millis(100)));
     }
 }
 
