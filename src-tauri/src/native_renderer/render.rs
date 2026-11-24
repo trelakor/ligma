@@ -831,8 +831,10 @@ struct Strata {
     /// What's over what changes, kept too where it's all drawn over what's
     /// under it as is, by the units from the one after the last changing
     over: Option<(usize, u64)>,
-    sharper: u64,
-    built: Instant,
+    /// Of each, under and over, the images it drew sharper and when it was
+    /// drawn, each drawn again alone
+    sharper: [u64; 2],
+    built: [Instant; 2],
 }
 
 /// How often what `Strata` keeps is drawn again for images under what's
@@ -3525,8 +3527,9 @@ impl Painter {
         let stamps: Vec<u64> = self
             .units
             .iter()
-            .map(|unit| {
-                if !Rect::intersects2(&unit.bounds, &reach) {
+            .enumerate()
+            .map(|(index, unit)| {
+                if !Rect::intersects2(&unit.bounds, &reach) || only.is_some_and(|(first, last)| index < first || index > last) {
                     return 0;
                 }
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -3625,17 +3628,13 @@ impl Painter {
                         false
                     });
                 }
-                let drawable: HashMap<String, super::vello::Drawable> = if jobs.is_empty() && !fresh {
-                    HashMap::new()
-                } else {
-                    images.iter().filter_map(|(key, img)| super::vello::Vello::drawable(img).map(|drawable| (key.clone(), drawable))).collect()
-                };
+                let drawable = !jobs.is_empty() || fresh;
                 // Encoded by threads at once, each taking the next unit until
                 // there are none
                 let (paths, begun, next, slice) = (&self.vello_paths, Instant::now(), std::sync::atomic::AtomicUsize::new(0), self.slice);
                 let threads = std::env::var("LIGMA_NATIVE_VELLO_THREADS").ok().and_then(|n| n.parse().ok()).unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(1).clamp(1, super::pool::MOST)).min(jobs.len());
                 let mut worked: Vec<(Done, i64, usize)> = (|| {
-                    let (jobs, shown, drawable, next) = (&jobs, &shown, &drawable, &next);
+                    let (jobs, shown, next) = (&jobs, &shown, &next);
                     let work = move |behind: bool| {
                                 // Behind every other thread, the browser's
                                 // above all, whose frames Figma's wait on: at
@@ -3684,7 +3683,7 @@ impl Painter {
                 drop(made_span);
                 let under = self.under_at.map(|at| (vello.kept(false), at));
                 let over = self.over_at.map(|at| (vello.kept(true), at));
-                let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
+                let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, drawable, &self.gpu.device, &mut self.gpu.context, w, h);
                 encoder.coarser = self.image_coarser;
                 match under {
                     Some((Some(image), (x, y))) => {
@@ -4496,36 +4495,54 @@ impl Painter {
         }
         let Some((first, last)) = range else { return false };
         let (under, over, sharper) = {
-            let mut sharper = std::collections::hash_map::DefaultHasher::new();
-            let mut of = |units: &[Unit]| {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let of = |units: &[Unit]| {
+                let (mut hasher, mut sharper) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
                 let mut any = false;
                 for unit in units.iter().filter(|unit| shown(unit)) {
                     any = true;
                     self.mark(unit).hash(&mut hasher);
                     self.sharpened.get(&(unit.slot, unit.section)).hash(&mut sharper);
                 }
-                any.then(|| hasher.finish())
+                (any.then(|| hasher.finish()), sharper.finish())
             };
-            let under = of(&self.units[..first]);
+            let (under, under_sharper) = of(&self.units[..first]);
             // Kept apart from those that draw the same over what's under
             // them as over nothing, then put over that, after any that don't
             let from = self.units[last + 1..].iter().rposition(|unit| shown(unit) && (unit.blends || unit.custom || unit.section)).map_or(last + 1, |index| last + 2 + index);
-            let over = of(&self.units[from..]).map(|over| (from, over));
-            (under, over, sharper.finish())
+            let (over, over_sharper) = of(&self.units[from..]);
+            (under, over.map(|over| (from, over)), [under_sharper, over_sharper])
         };
-        let kept = self.strata.as_ref().is_some_and(|strata| {
-            strata.at == at && strata.phase == phase && strata.under == under && strata.over == over && (strata.sharper == sharper || strata.built.elapsed() < STRATA_SHARPER)
-        });
+        let old = self.strata.as_ref().filter(|strata| strata.at == at && strata.phase == phase).map(|strata| (strata.under, strata.over, strata.sharper, strata.built));
+        let fresh = |index: usize, same: bool| same && old.is_some_and(|(_, _, was, built)| was[index] == sharper[index] || built[index].elapsed() < STRATA_SHARPER);
+        let keep = [fresh(0, old.is_some_and(|(was, ..)| was == under)), fresh(1, old.is_some_and(|(_, was, ..)| was == over))];
+        let kept = keep[0] && keep[1];
         if !kept && !build {
             return false;
         }
         self.settle_shown();
         let mut built = Duration::ZERO;
         if !kept {
-            self.drop_strata();
+            if let Some(strata) = &self.strata {
+                trace(|| format!("  strata again: at {} phase {} under {} over {} sharper {:?}", strata.at != at, strata.phase != phase, strata.under != under, strata.over != over, [0, 1].map(|index| strata.sharper[index] != sharper[index])));
+            }
+            let (mut sharp, mut built_at) = match old {
+                Some((_, _, sharp, built)) => (sharp, built),
+                None => {
+                    self.drop_strata();
+                    (sharper, [Instant::now(); 2])
+                }
+            };
+            self.strata = None;
             let timer = Instant::now();
-            let layers = [under.map(|_| (0, first - 1, false)), over.map(|(from, _)| (from, self.units.len() - 1, true))];
+            // Those with nothing to keep now. The rest keep their textures
+            for (index, is_over) in [(0, false), (1, true)] {
+                if !keep[index] && (if is_over { over.is_none() } else { under.is_none() }) {
+                    if let Some(vello) = self.vello.as_mut() {
+                        vello.drop_kept_one(is_over);
+                    }
+                }
+            }
+            let layers = [under.filter(|_| !keep[0]).map(|_| (0, first - 1, false)), over.filter(|_| !keep[1]).map(|(from, _)| (from, self.units.len() - 1, true))];
             for (from, to, is_over) in layers.into_iter().flatten() {
                 self.only = Some((from, to));
                 let mut done = false;
@@ -4553,9 +4570,10 @@ impl Painter {
                     }
                     return false;
                 }
+                (sharp[is_over as usize], built_at[is_over as usize]) = (sharper[is_over as usize], Instant::now());
             }
             built = timer.elapsed();
-            self.strata = Some(Strata { at, phase, under, over, sharper, built: Instant::now() });
+            self.strata = Some(Strata { at, phase, under, over, sharper: sharp, built: built_at });
         }
         // Where they were and are
         let mut areas = self.whole.as_ref().map_or_else(Vec::new, |whole| whole.patch.clone());
@@ -5578,10 +5596,12 @@ impl Painter {
     fn settle_units(&mut self) {
         let Some((count, seq, at)) = self.units_due.take() else { return };
         let _span = super::span::span("settle units");
-        let before: HashMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
+        use super::rt::IdMap;
+        type IdSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<super::rt::IdHasher>>;
+        let before: IdMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
         self.rebuild_units();
         {
-            let now: std::collections::HashSet<usize> = self.units.iter().map(|unit| unit.slot).collect();
+            let now: IdSet<usize> = self.units.iter().map(|unit| unit.slot).collect();
             let mut areas: Vec<Rect> = before.iter().filter(|(slot, _)| !now.contains(slot)).map(|(_, bounds)| *bounds).collect();
             areas.extend(self.units.iter().filter(|unit| !before.contains_key(&unit.slot)).map(|unit| unit.bounds));
             self.pictures.retain(|(slot, _, _, _), _| now.contains(slot));
@@ -6227,8 +6247,8 @@ impl Painter {
             self.sharpen(&sharper);
             return;
         }
-        let before: HashMap<(usize, bool), &Mark> = self.checked.iter().map(|mark| (mark.0, mark)).collect();
-        let after: HashMap<(usize, bool), &Mark> = now.iter().map(|mark| (mark.0, mark)).collect();
+        let before: super::rt::IdMap<(usize, bool), &Mark> = self.checked.iter().map(|mark| (mark.0, mark)).collect();
+        let after: super::rt::IdMap<(usize, bool), &Mark> = now.iter().map(|mark| (mark.0, mark)).collect();
         for mark in &now {
             match before.get(&mark.0) {
                 Some(old) if **old == *mark => {}
@@ -6379,14 +6399,19 @@ impl Painter {
             // space as an edit moves the group's bounds, which would make it
             // new and drawn again, so a unit that draws the same as one before
             // keeps being that one
-            let mut was: HashMap<u64, Vec<(usize, Rect)>> = HashMap::new();
+            use super::rt::IdMap;
+            let mut was: IdMap<u64, Vec<(usize, Rect)>> = IdMap::default();
+            // An alias's slot is in `was` till a near match takes it, which
+            // takes its look too, so it's never an alias after
+            let mut was_at: IdMap<usize, Rect> = IdMap::default();
             for unit in self.units.drain(..) {
                 if let Some(look) = self.looks.get(&unit.slot) {
                     was.entry(look.what).or_default().push((unit.slot, unit.bounds));
+                    was_at.entry(unit.slot).or_insert(unit.bounds);
                 }
             }
             let tree_units = tree.units();
-            let fresh: std::collections::HashSet<usize> = tree_units.iter().map(|unit| unit.key).collect();
+            let fresh: std::collections::HashSet<usize, std::hash::BuildHasherDefault<super::rt::IdHasher>> = tree_units.iter().map(|unit| unit.key).collect();
             let mut looks = HashMap::with_capacity(tree_units.len());
             let mut aliases = HashMap::new();
             let mut units: Vec<Unit> = tree_units
@@ -6396,7 +6421,7 @@ impl Painter {
                     let alias = self.aliases.get(&unit.key).copied().filter(|slot| !fresh.contains(slot) && self.looks.contains_key(slot));
                     if let Some(alias) = alias {
                         slot = alias;
-                        bounds = was.values().flatten().find(|(old, _)| *old == alias).map_or(bounds, |(_, bounds)| *bounds);
+                        bounds = was_at.get(&alias).copied().unwrap_or(bounds);
                     }
                     let look = match self.looks.remove(&slot) {
                         Some(look) => look,
@@ -6425,7 +6450,8 @@ impl Painter {
             for i in 0..units.len() {
                 if !units[i].alone {
                     let area = units[i].bounds;
-                    units[i].alone = !units[..i].iter().any(|lower| Rect::intersects2(&lower.bounds, &area));
+                    // Nearest first, as what's under a unit is mostly just below it
+                    units[i].alone = !units[..i].iter().rev().any(|lower| Rect::intersects2(&lower.bounds, &area));
                 }
             }
             self.units = units;

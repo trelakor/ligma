@@ -512,6 +512,13 @@ impl Vello {
         self.kept[over as usize].as_ref().map(|(_, image)| image.clone())
     }
 
+    /// Lets go of what `keep` kept over, or under
+    pub fn drop_kept_one(&mut self, over: bool) {
+        if let Some((_, image)) = self.kept[over as usize].take() {
+            self.renderer.override_image(&image, None);
+        }
+    }
+
     pub fn drop_kept(&mut self) {
         for kept in &mut self.kept {
             if let Some((_, image)) = kept.take() {
@@ -833,7 +840,8 @@ impl Vello {
     /// What Vello takes of `img`'s texture, where it can draw it: its
     /// mipmap levels and size
     pub fn drawable(img: &Img) -> Option<Drawable> {
-        if std::env::var_os("LIGMA_NATIVE_VELLO_SKIA_IMAGES").is_some() {
+        static SKIA_IMAGES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *SKIA_IMAGES.get_or_init(|| std::env::var_os("LIGMA_NATIVE_VELLO_SKIA_IMAGES").is_some()) {
             return None;
         }
         let (backend, origin) = skia_safe::gpu::images::get_backend_texture_from_image(&img.image, false)?;
@@ -841,7 +849,7 @@ impl Vello {
         if origin != skia_safe::gpu::SurfaceOrigin::TopLeft || info.format != windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM || info.sample_count > 1 {
             return None;
         }
-        Some(Drawable { id: img.image.unique_id(), levels: info.level_count.max(1), width: backend.width() as u32, height: backend.height() as u32 })
+        Some(Drawable { levels: info.level_count.max(1), width: backend.width() as u32, height: backend.height() as u32 })
     }
 }
 
@@ -886,7 +894,6 @@ impl Paths {
 /// An image's texture as Vello can take it (see `Vello::drawable`)
 #[derive(Clone, Copy)]
 pub struct Drawable {
-    id: u32,
     levels: u32,
     width: u32,
     height: u32,
@@ -1763,8 +1770,8 @@ pub struct Encoder<'a> {
     skia: Option<&'a ID3D12Device>,
     context: Option<&'a mut skia_safe::gpu::DirectContext>,
     paths: &'a Paths,
-    /// The images Vello can draw, by key
-    drawable: &'a HashMap<String, Drawable>,
+    /// Whether Vello draws images' own textures, see `Vello::drawable`
+    drawable: bool,
     /// Skia's surfaces over the pages of the atlas used
     pages: Vec<skia_safe::Surface>,
     shelf: Shelf,
@@ -1844,7 +1851,7 @@ impl<'a> Encoder<'a> {
         kit: &'a Kit,
         vello: &'a mut Vello,
         paths: &'a Paths,
-        drawable: &'a HashMap<String, Drawable>,
+        drawable: bool,
         skia: &'a ID3D12Device,
         context: &'a mut skia_safe::gpu::DirectContext,
         width: i32,
@@ -1862,7 +1869,7 @@ impl<'a> Encoder<'a> {
     }
 
     /// One for a thread encoding units, which can't draw views
-    pub fn worker(tree: &'a Tree, images: &'a HashMap<String, Img>, paths: &'a Paths, drawable: &'a HashMap<String, Drawable>, width: i32, height: i32) -> Self {
+    pub fn worker(tree: &'a Tree, images: &'a HashMap<String, Img>, paths: &'a Paths, drawable: bool, width: i32, height: i32) -> Self {
         Self {
             tree,
             images,
@@ -2595,7 +2602,7 @@ impl<'a> Encoder<'a> {
             return false;
         };
         let Some(area) = img.area else { return false };
-        let drawable = self.drawable.get(&key).filter(|drawable| drawable.id == img.image.unique_id());
+        let drawable = self.drawable.then(|| Vello::drawable(img)).flatten();
         if drawable.is_none_or(|d| (d.width.max(d.height)) > 8192) {
             return false;
         }
@@ -2982,7 +2989,7 @@ impl<'a> Encoder<'a> {
         // of those under it, so Vello's atlas holds no more than that
         let texels = kept / shown.max(1e-6);
         let level = if texels <= 4.0 { 0 } else { (texels / 2.0).log2().floor().clamp(0.0, 12.0) as u32 };
-        let drawable = self.drawable.get(&key).filter(|drawable| drawable.id == img.image.unique_id());
+        let drawable = self.drawable.then(|| Vello::drawable(img)).flatten();
         let fits = |level: u32| drawable.is_some_and(|d| level < d.levels && (d.width >> level).max(d.height >> level).max(1) <= 8192);
         let Some(level) = (0..=level).rev().find(|&level| fits(level)) else {
             return Picture::Skia;

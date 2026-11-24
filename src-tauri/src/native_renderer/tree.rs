@@ -439,11 +439,11 @@ pub struct Tree {
     /// what changed, which are split into units of their own children, so
     /// what's beside what changes is drawn apart from it, see `hot_after`,
     /// as of when each was
-    hot: HashMap<u32, std::time::Instant>,
+    hot: IdMap<u32, std::time::Instant>,
     /// Where in the tree those are, by the children's places that lead
     /// there, which stay split as Figma sends them under new ids, as each
     /// change sends again those on the way to it
-    hot_places: Mutex<HashMap<u64, std::time::Instant>>,
+    hot_places: Mutex<IdMap<u64, std::time::Instant>>,
 }
 
 /// Changes with more nodes on the way to what changed than this split
@@ -454,6 +454,9 @@ const HOT_MOST: usize = 256;
 /// How long nodes on the way to what changed stay split, so units don't
 /// come apart and together again as an edit's changes and others take turns
 const HOT_KEPT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long they stay split at most while edits go on
+const HOT_KEPT_EDITING: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Tree {
     pub fn new(schema: &'static Schema) -> Self {
@@ -468,7 +471,7 @@ impl Tree {
             paths: Mutex::default(),
             patterns: Mutex::default(),
             octaves: Vec::new(),
-            hot: HashMap::new(),
+            hot: IdMap::default(),
             hot_places: Mutex::default(),
         }
     }
@@ -569,7 +572,7 @@ impl Tree {
 
     /// What `node` draws in it, not what it refers to otherwise, as shared
     /// sources what the view pans to draws can be
-    fn parts(node: &Node) -> impl Iterator<Item = u32> + '_ {
+    fn parts(node: &Node) -> impl DoubleEndedIterator<Item = u32> + '_ {
         node.children.iter().copied().chain(node.child).chain(node.color_node).chain(node.alpha_node)
     }
 
@@ -864,12 +867,15 @@ impl Tree {
         let mut out = Vec::new();
         if let Some(root) = self.root {
             let mut places = self.hot_places.lock().unwrap();
-            places.retain(|_, at| at.elapsed() < HOT_KEPT);
+            // While an edit goes on, those split as it started stay so too,
+            // as coming together again redrew all they hold as changed
+            let going = places.values().any(|at| at.elapsed() < HOT_KEPT);
+            places.retain(|_, at| at.elapsed() < if going { HOT_KEPT_EDITING } else { HOT_KEPT });
             self.expand(root, 0, &mut places, Matrix::default(), &mut Vec::new(), 0, &mut out);
         }
         // The same drawn twice in the same place is two units, for either
         // to go on its own
-        let mut seen: HashMap<usize, usize> = HashMap::with_capacity(out.len());
+        let mut seen: IdMap<usize, usize> = IdMap::with_capacity_and_hasher(out.len(), Default::default());
         for unit in &mut out {
             let count = seen.entry(unit.key).or_insert(0);
             if *count > 0 {
@@ -884,7 +890,7 @@ impl Tree {
 
     /// `place` is where `id` is in the tree, see `hot_places`
     #[allow(clippy::too_many_arguments)]
-    fn expand(&self, id: u32, place: u64, places: &mut HashMap<u64, std::time::Instant>, at: Matrix, clips: &mut Vec<(u32, Matrix)>, depth: u8, out: &mut Vec<TreeUnit>) {
+    fn expand(&self, id: u32, place: u64, places: &mut IdMap<u64, std::time::Instant>, at: Matrix, clips: &mut Vec<(u32, Matrix)>, depth: u8, out: &mut Vec<TreeUnit>) {
         let Some(node) = self.forest.get(id) else {
             return;
         };
@@ -1017,8 +1023,7 @@ impl Tree {
                     m
                 }
             };
-            let kids: Vec<u32> = Self::parts(node).collect();
-            stack.extend(kids.into_iter().rev().map(|id| (id, inner, depth + 1)));
+            stack.extend(Self::parts(node).rev().map(|id| (id, inner, depth + 1)));
         }
         Look { what: hasher.finish(), at }
     }
