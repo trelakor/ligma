@@ -592,6 +592,7 @@ pub fn stop(app: &AppHandle) {
         // What was shown last lets go of its GPU memory now, not once
         // every thread holding the hub is done
         *ctx.hub.snapshot.lock().unwrap() = None;
+        *ctx.hub.clean.lock().unwrap() = None;
     }
     if let Some(window) = app.get_window(WINDOW) {
         let _ = window.destroy();

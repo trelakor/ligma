@@ -755,6 +755,9 @@ struct Chunked {
     counts: Counts,
     started: Instant,
     seq: u64,
+    /// `Painter::edits` when it started: its parts drawn before any since
+    /// are out of date
+    edits: u64,
 }
 
 /// A scene Vello keeps on the GPU
@@ -796,11 +799,10 @@ struct Whole {
     at: (i32, i32, u32),
     /// Something in it changed since, past drawing again where
     stale: bool,
-    /// Where something in it changed since, in units, to draw again
+    /// Where something in it changed since, in units, to draw again: all
+    /// it's out of date in, so what it shows is never taken as up to date
+    /// where it isn't, nor left out of date where it's not drawn again
     patch: Vec<Rect>,
-    /// Where it's out of date, in units: what's in `patch`, and what's
-    /// left of it as it's drawn again elsewhere or not at all
-    dirt: Vec<Rect>,
     /// The render queue's fence passes this once the GPU has drawn it
     fence: u64,
     /// Changes with what's drawn in it
@@ -816,35 +818,20 @@ struct Whole {
     patched: bool,
 }
 
-impl Whole {
-    /// Notes where it changed in `patched` drawn again, if it's `drawn`,
-    /// otherwise all of it out of date
-    fn clean(&mut self, drawn: bool, patched: &[Rect]) {
-        if !drawn {
-            self.dirt = vec![layer_area(&self.layer)];
-            return;
-        }
-        self.dirt.retain(|dirt| !patched.iter().any(|area| area.left <= dirt.left && area.top <= dirt.top && area.right >= dirt.right && area.bottom >= dirt.bottom));
-    }
-}
-
-/// Where `layer` is, in units
-fn layer_area(layer: &Layer) -> Rect {
-    Rect::from_xywh(
-        (layer.x as f32 + layer.phase.0) / layer.px,
-        (layer.y as f32 + layer.phase.1) / layer.px,
-        layer.tex.width as f32 / layer.px,
-        layer.tex.height as f32 / layer.px,
-    )
-}
-
-/// How far past what changed drawing it again reaches, in pixels, as
-/// `patch_rects` draws it
+/// How far past what changed drawing it again reaches, in pixels
 const DIRT_REACH: i32 = 3;
 
-/// Most a tile's and the whole view's out of date parts are noted apart
+/// Most of a tile's out of date parts noted apart
 const TILE_DIRT: usize = 8;
-const WHOLE_DIRT: usize = 16;
+
+/// The pixels of a texture at (`x`, `y`) and `phase` of a pixel further at
+/// `px` that changing `area` leaves out of date, as far as drawing it
+/// reaches. What a patch for it draws again at least
+fn reach_of(area: &Rect, (x, y): (i32, i32), phase: (f32, f32), px: f32) -> skia_safe::IRect {
+    let (x, y) = (x as f32 + phase.0, y as f32 + phase.1);
+    let at = Rect::from_ltrb(area.left * px - x, area.top * px - y, area.right * px - x, area.bottom * px - y).round_out();
+    skia_safe::IRect::with_outset(&at, (DIRT_REACH, DIRT_REACH))
+}
 
 /// Notes `area` out of date in `dirt`, as one rect around all of it once
 /// there's more than `most`, as many make each frame slower to compose
@@ -859,22 +846,15 @@ fn soil(dirt: &mut Vec<Rect>, area: Rect, most: usize) {
     }
 }
 
-/// `dirt`, in units, in the pixels of `layer`'s texture, `out` more around
-/// each, as drawing reaches a little past what changed. All of it if
-/// there's none, as for what's out of date anywhere
-fn dirt_in(dirt: &[Rect], layer: &Layer, out: i32) -> Vec<skia_safe::IRect> {
+/// `dirt`, in units, in the pixels of `layer`'s texture, as far as drawing
+/// reaches past what changed. All of it if there's none, as for what's out
+/// of date anywhere
+fn dirt_in(dirt: &[Rect], layer: &Layer) -> Vec<skia_safe::IRect> {
     let whole = skia_safe::IRect::from_wh(layer.tex.width, layer.tex.height);
     if dirt.is_empty() {
         return vec![whole];
     }
-    let (x, y) = (layer.x as f32 + layer.phase.0, layer.y as f32 + layer.phase.1);
-    dirt.iter()
-        .filter_map(|area| {
-            let at = Rect::from_ltrb(area.left * layer.px - x, area.top * layer.px - y, area.right * layer.px - x, area.bottom * layer.px - y).round_out();
-            let at = skia_safe::IRect::with_outset(&at, (out, out));
-            skia_safe::IRect::intersect(&at, &whole)
-        })
-        .collect()
+    dirt.iter().filter_map(|area| skia_safe::IRect::intersect(&reach_of(area, (layer.x, layer.y), layer.phase, layer.px), &whole)).collect()
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -2490,7 +2470,7 @@ impl Painter {
         let between = phase != (0.0, 0.0);
         // Drawn a part at a time once tiles show it all exactly, as they
         // draw what's missing sooner, and would be drawn twice
-        if self.chunked.as_ref().is_some_and(|chunked| chunked.at != (ox, oy, pxb) || chunked.phase != phase || self.edited.elapsed() < chunked.started.elapsed() || !still) {
+        if self.chunked.as_ref().is_some_and(|chunked| chunked.at != (ox, oy, pxb) || chunked.phase != phase || self.edited.elapsed() < chunked.started.elapsed() || chunked.edits != self.edits || !still) {
             if let Some(chunked) = self.chunked.take() {
                 self.retire(chunked.tex);
             }
@@ -2812,7 +2792,7 @@ impl Painter {
             }
             let (cx, cy) = (width / 2, height / 2);
             parts.sort_by_key(|&(x, y, w, h)| (x + w / 2 - cx).pow(2) + (y + h / 2 - cy).pow(2));
-            self.chunked = Some(Chunked { at, phase, tex, next: 0, parts, counts: Counts::default(), started: Instant::now(), seq: self.seq });
+            self.chunked = Some(Chunked { at, phase, tex, next: 0, parts, counts: Counts::default(), started: Instant::now(), seq: self.seq, edits: self.edits });
         }
         let (x, y, w, h, first) = {
             let chunked = self.chunked.as_ref()?;
@@ -2896,10 +2876,11 @@ impl Painter {
         }
         let started = Instant::now();
         let inside = inside.map(|kept| (kept.id, kept.left, kept.top));
-        // A kept scene used though out of date leaves what changed since out
-        let behind = match (inside.is_some() && self.kept_stale, self.whole.as_mut()) {
+        // A kept scene used though out of date leaves what changed since out.
+        // The whole view stays out of date there till this one's handed
+        // over in its place
+        let behind = match (inside.is_some() && self.kept_stale, self.whole.as_ref()) {
             (true, Some(whole)) => whole.patch.clone(),
-            (_, Some(whole)) => std::mem::take(&mut whole.patch),
             _ => Vec::new(),
         };
         let drawn = match inside {
@@ -3507,7 +3488,6 @@ impl Painter {
                 // What changed as the GPU drew it isn't in it, as when an
                 // object's moved, which would show it where it was
                 if let Some(whole) = self.whole.as_mut() {
-                    whole.dirt.clone_from(&last.patch);
                     whole.patch = last.patch;
                 }
                 // At rest alone, as it waits for the GPU
@@ -4261,7 +4241,7 @@ impl Painter {
         let mut older = None;
         let old = match self.whole.as_mut() {
             Some(whole) => {
-                if !whole.stale && whole.patch.is_empty() && whole.dirt.is_empty() {
+                if !whole.stale && whole.patch.is_empty() {
                     older = Some(self.last_whole.replace(whole.layer.clone()));
                 }
                 whole.fence = fence;
@@ -4269,12 +4249,11 @@ impl Painter {
                 whole.at = at;
                 whole.stale = false;
                 whole.patch.clear();
-                whole.dirt.clear();
                 (whole.rough, whole.vello, whole.seq, whole.patched) = (rough, vello, seq, false);
                 Some(std::mem::replace(&mut whole.layer, layer))
             }
             None => {
-                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), dirt: Vec::new(), fence, serial, rough, vello, seq, patched: false });
+                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial, rough, vello, seq, patched: false });
                 None
             }
         };
@@ -4409,40 +4388,42 @@ impl Painter {
             return;
         };
         let areas = std::mem::take(&mut whole.patch);
-        let (tex, x, y, px) = (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px);
+        let (tex, x, y, px, phase) = (whole.layer.tex.clone(), whole.layer.x, whole.layer.y, whole.layer.px, whole.layer.phase);
         let (width, height) = (tex.width, tex.height);
         if areas.len() > PATCHES {
             whole.stale = true;
             return;
         }
         let texture = skia_safe::IRect::from_xywh(x, y, width, height);
-        let mut rects: Vec<skia_safe::IRect> = Vec::new();
-        let mut reach: Option<Rect> = None;
-        for area in &areas {
-            let device: skia_safe::IRect = Rect::from_ltrb(area.left * px, area.top * px, area.right * px, area.bottom * px).round_out();
-            let device = device.with_outset((2, 2));
-            let Some(device) = skia_safe::IRect::intersect(&device, &texture) else {
-                continue;
-            };
-            rects.push(device);
-            reach = Some(match reach {
-                Some(mut all) => {
-                    all.join(area);
-                    all
-                }
-                None => *area,
-            });
-        }
-        let Some(reach) = reach else {
+        let mut rects: Vec<skia_safe::IRect> = areas.iter().filter_map(|area| skia_safe::IRect::intersect(&reach_of(area, (x, y), phase, px).with_offset((x, y)), &texture)).collect();
+        if rects.is_empty() {
             return;
-        };
-        let reach = reach.with_outset((3.0 / px, 3.0 / px));
-        let near: Vec<Rect> = areas.iter().map(|area| area.with_outset((3.0 / px, 3.0 / px))).collect();
-        // Units under the areas changed, not all between them
+        }
+        // Areas mostly over each other are drawn as one. Each is a plain
+        // rect clip, which the GPU does with a scissor, where a region of
+        // them would take a mask the size of the view each time
+        let size = |rect: &skia_safe::IRect| rect.width() as i64 * rect.height() as i64;
+        'merge: loop {
+            for i in 0..rects.len() {
+                for j in i + 1..rects.len() {
+                    let (a, b) = (rects[i], rects[j]);
+                    let both = skia_safe::IRect::from_ltrb(a.left.min(b.left), a.top.min(b.top), a.right.max(b.right), a.bottom.max(b.bottom));
+                    if size(&both) * 4 <= (size(&rects[i]) + size(&rects[j])) * 5 {
+                        rects[i] = both;
+                        rects.swap_remove(j);
+                        continue 'merge;
+                    }
+                }
+            }
+            break;
+        }
+        // Units in what's drawn again, not all between, as each is cleared
+        // first: all in it, not only those near what changed
+        let near: Vec<Rect> = rects.iter().map(|rect| Rect::from_ltrb(rect.left as f32 / px, rect.top as f32 / px, rect.right as f32 / px, rect.bottom as f32 / px).with_outset((1.0 / px, 1.0 / px))).collect();
         let under: Vec<usize> = (0..self.units.len())
             .filter(|&unit| {
                 let bounds = self.units[unit].bounds;
-                Rect::intersects2(&bounds, &reach) && bounds.width().max(bounds.height()) * px >= 0.5 && near.iter().any(|area| Rect::intersects2(&bounds, area))
+                bounds.width().max(bounds.height()) * px >= 0.5 && near.iter().any(|area| Rect::intersects2(&bounds, area))
             })
             .collect();
         // So many it'd take a while: the whole view's drawn again from
@@ -4466,24 +4447,6 @@ impl Painter {
             if let Some((drawn, _)) = self.drawn(unit, level, true, px, true) {
                 pictures.push((self.units[unit].bounds, drawn));
             }
-        }
-        // Areas mostly over each other are drawn as one. Each is a plain
-        // rect clip, which the GPU does with a scissor, where a region of
-        // them would take a mask the size of the view each time
-        let size = |rect: &skia_safe::IRect| rect.width() as i64 * rect.height() as i64;
-        'merge: loop {
-            for i in 0..rects.len() {
-                for j in i + 1..rects.len() {
-                    let (a, b) = (rects[i], rects[j]);
-                    let both = skia_safe::IRect::from_ltrb(a.left.min(b.left), a.top.min(b.top), a.right.max(b.right), a.bottom.max(b.bottom));
-                    if size(&both) * 4 <= (size(&rects[i]) + size(&rects[j])) * 5 {
-                        rects[i] = both;
-                        rects.swap_remove(j);
-                        continue 'merge;
-                    }
-                }
-            }
-            break;
         }
         let passes: Vec<(skia_safe::IRect, Vec<Drawn>)> = rects
             .iter()
@@ -4537,7 +4500,6 @@ impl Painter {
             whole.serial = serial;
             whole.layer.drawn = serial;
             whole.stale |= image.is_none();
-            whole.clean(image.is_some(), &areas);
             if !in_place {
                 replaced = Some(std::mem::replace(&mut whole.layer.tex, target));
             }
@@ -4567,15 +4529,15 @@ impl Painter {
         }
     }
 
-    /// `areas`, in units, as rects of the whole view at (`x`, `y`) and `px`,
-    /// `width` by `height`, snapped to `PATCH_GRID` and those mostly over
-    /// each other made one
-    fn patch_rects(areas: &[Rect], (x, y, px): (i32, i32, f32), width: i32, height: i32) -> Vec<skia_safe::IRect> {
+    /// `areas`, in units, as rects of the whole view at (`x`, `y`), `phase`
+    /// and `px`, `width` by `height`, each over all it leaves out of date
+    /// (see `reach_of`), snapped to `PATCH_GRID` and those mostly over each
+    /// other made one
+    fn patch_rects(areas: &[Rect], (x, y, phase, px): (i32, i32, (f32, f32), f32), width: i32, height: i32) -> Vec<skia_safe::IRect> {
         let snap = |at: i32, down: bool| if down { at.div_euclid(PATCH_GRID) * PATCH_GRID } else { (at + PATCH_GRID - 1).div_euclid(PATCH_GRID) * PATCH_GRID };
         let mut rects: Vec<skia_safe::IRect> = Vec::new();
         for area in areas {
-            let device: skia_safe::IRect = Rect::from_ltrb(area.left * px - x as f32, area.top * px - y as f32, area.right * px - x as f32, area.bottom * px - y as f32).round_out();
-            let device = device.with_outset((3, 3));
+            let device = reach_of(area, (x, y), phase, px);
             let snapped = skia_safe::IRect::from_ltrb(snap(device.left, true), snap(device.top, true), snap(device.right, false), snap(device.bottom, false));
             if let Some(rect) = skia_safe::IRect::intersect(&snapped, &skia_safe::IRect::from_wh(width, height)) {
                 rects.push(rect);
@@ -4839,7 +4801,7 @@ impl Painter {
         // Where they were and are
         let mut areas = self.whole.as_ref().map_or_else(Vec::new, |whole| whole.patch.clone());
         areas.extend(self.units[first..=last].iter().filter(|unit| shown(unit)).map(|unit| unit.bounds));
-        let rects = Self::patch_rects(&areas, (ox, oy, px), width, height);
+        let rects = Self::patch_rects(&areas, (ox, oy, phase, px), width, height);
         let to = over.map_or(self.units.len() - 1, |(from, _)| from - 1);
         let done = self.patch_whole_rects(&rects, Some((first, to, layers[0].is_some(), over.is_some(), layers[2].map(|(from, to, _)| (from, to)))), started);
         trace(|| format!("  strata units={first}..={last} of {} over={} built={:.1}ms {}", self.units.len(), over.is_some(), built.as_secs_f64() * 1000.0, if done { "drawn" } else { "failed" }));
@@ -4856,7 +4818,7 @@ impl Painter {
             return false;
         };
         let (width, height, px) = (whole.layer.tex.width, whole.layer.tex.height, whole.layer.px);
-        let rects = Self::patch_rects(&whole.patch, (whole.layer.x, whole.layer.y, px), width, height);
+        let rects = Self::patch_rects(&whole.patch, (whole.layer.x, whole.layer.y, whole.layer.phase, px), width, height);
         // Past half of it, drawing it all again takes about as long
         if rects.iter().map(|rect| rect.width() as i64 * rect.height() as i64).sum::<i64>() * 2 > width as i64 * height as i64 {
             return false;
@@ -4959,7 +4921,6 @@ impl Painter {
                     self.retire(target);
                 } else if let Some(whole) = self.whole.as_mut() {
                     whole.stale = true;
-                    whole.clean(false, &[]);
                 }
                 return false;
             }
@@ -4976,8 +4937,8 @@ impl Painter {
             whole.serial = serial;
             whole.layer.drawn = serial;
             whole.stale |= image.is_none();
-            let patched = std::mem::take(&mut whole.patch);
-            whole.clean(image.is_some(), &patched);
+            // Each area's reach is in `rects` (see `patch_rects`)
+            whole.patch.clear();
             whole.seq = seq;
             // Drawn again whole at rest, as where parts meet each is drawn
             // over the other, not as one
@@ -5256,7 +5217,7 @@ impl Painter {
                 dirt: Vec::new(),
             };
             if tile.stale {
-                layer.dirt = dirt_in(&tile.dirt, &layer, DIRT_REACH);
+                layer.dirt = dirt_in(&tile.dirt, &layer);
             }
             layer
         });
@@ -5265,10 +5226,11 @@ impl Painter {
                 true => whole.layer.clone(),
                 false => stale.then(|| Layer { kind: LayerKind::Stale, ..whole.layer.clone() })?,
             };
-            // Its patch taken to draw a new one from leaves it out of date
-            // though it's not marked so
-            if whole.stale || !whole.dirt.is_empty() || !whole.patch.is_empty() {
-                layer.dirt = dirt_in(&whole.dirt, &layer, DIRT_REACH);
+            let texture = skia_safe::IRect::from_wh(layer.tex.width, layer.tex.height);
+            if whole.stale {
+                layer.dirt = vec![texture];
+            } else {
+                layer.dirt = whole.patch.iter().filter_map(|area| skia_safe::IRect::intersect(&reach_of(area, (layer.x, layer.y), layer.phase, layer.px), &texture)).collect();
             }
             Some(layer)
         });
@@ -5344,7 +5306,22 @@ impl Painter {
             tab: self.tab.clone(),
             edits: self.edits,
         };
-        *self.hub.snapshot.lock().unwrap() = Some(Arc::new(snapshot));
+        let snapshot = Arc::new(snapshot);
+        // Nothing of it out of date where the view is, kept for the present
+        // thread apart from the latest, which may be the next moment one
+        // that is, before the GPU's drawn this one
+        let view = self.view_area().map(|(view, _)| view);
+        let clean = snapshot.layers.iter().all(|layer| {
+            let (x, y) = (layer.x as f32 + layer.phase.0, layer.y as f32 + layer.phase.1);
+            layer.dirt.iter().all(|dirt| {
+                let at = Rect::from_ltrb((x + dirt.left as f32) / layer.px, (y + dirt.top as f32) / layer.px, (x + dirt.right as f32) / layer.px, (y + dirt.bottom as f32) / layer.px);
+                view.is_some_and(|view| !Rect::intersects2(&view, &at))
+            })
+        });
+        if clean {
+            *self.hub.clean.lock().unwrap() = Some(snapshot.clone());
+        }
+        *self.hub.snapshot.lock().unwrap() = Some(snapshot);
         self.hub.poke();
         if let Some(sent) = self.sent.take() {
             trace(|| format!("  change handed over {:.1}ms after Figma sent it", since_epoch_ms() - sent));
@@ -6732,15 +6709,13 @@ impl Painter {
         // Only what changed where they show, as one hidden for a change
         // off it would show tiles meanwhile, a fraction of a pixel off
         let over = |layer: &Layer| {
-            let at = Rect::from_xywh(layer.x as f32 / layer.px, layer.y as f32 / layer.px, layer.tex.width as f32 / layer.px, layer.tex.height as f32 / layer.px);
+            // As far as what changed reaches (see `reach_of`)
+            let reach = DIRT_REACH as f32 / layer.px;
+            let at = Rect::from_xywh(layer.x as f32 / layer.px, layer.y as f32 / layer.px, layer.tex.width as f32 / layer.px, layer.tex.height as f32 / layer.px).with_outset((reach, reach));
             areas.iter().filter(move |area| Rect::intersects2(&at, area)).copied()
         };
         if let Some(whole) = &mut self.whole {
-            let inside: Vec<Rect> = over(&whole.layer).collect();
-            for area in &inside {
-                soil(&mut whole.dirt, *area, WHOLE_DIRT);
-            }
-            whole.patch.extend(inside);
+            whole.patch.extend(over(&whole.layer));
         }
         if let Some(unchecked) = &mut self.unchecked {
             let inside: Vec<Rect> = over(&unchecked.layer).collect();
