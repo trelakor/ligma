@@ -464,11 +464,21 @@ pub struct Tree {
     /// before those drawn twice are told apart, those drawn twice left out
     last_units: Mutex<IdMap<u64, usize>>,
     /// Where each node those are of is drawn, and inside what
-    last_places: Mutex<IdMap<u32, Vec<(Matrix, Vec<(u32, Matrix)>)>>>,
+    last_places: Mutex<Places>,
     /// Since then, the keys the parts of those whose nodes frames let go
     /// of would have as units, taken before the nodes went: a unit with
     /// one of them draws what was drawn there before
     resplit: Mutex<std::collections::HashSet<u64>>,
+}
+
+/// Where the nodes of units are drawn, see `Tree::last_places`: of each
+/// node, the first of its places in `all`, each with the next of the same
+/// node's, or `usize::MAX`. In one list, kept from one `units` to the next,
+/// as a list for each node took an allocation for each unit every frame
+#[derive(Default)]
+struct Places {
+    first: IdMap<u32, usize>,
+    all: Vec<(Matrix, Vec<(u32, Matrix)>, usize)>,
 }
 
 /// Changes with more nodes on the way to what changed than this split
@@ -614,17 +624,22 @@ impl Tree {
     /// way to what changes again under new ids, and what that's split into
     /// beside what changed is drawn as it was
     fn note_parts(&mut self, released: &[u32]) {
-        let places = self.last_places.get_mut().unwrap();
-        let roots: Vec<(u32, Vec<(Matrix, Vec<(u32, Matrix)>)>)> = released.iter().filter_map(|&id| places.remove(&id).map(|at| (id, at))).collect();
+        let Places { first, all } = self.last_places.get_mut().unwrap();
+        let mut roots: Vec<(u32, Matrix, Vec<(u32, Matrix)>)> = Vec::new();
+        for &id in released {
+            let mut next = first.remove(&id).unwrap_or(usize::MAX);
+            while let Some((at, clips, after)) = all.get_mut(next) {
+                roots.push((id, *at, std::mem::take(clips)));
+                next = *after;
+            }
+        }
         if roots.is_empty() {
             return;
         }
         let released: std::collections::HashSet<u32> = released.iter().copied().collect();
         let mut keys = Vec::new();
-        for (id, at) in roots {
-            for (at, clips) in at {
-                self.parts_of(id, at, &clips, &released, 0, &mut keys);
-            }
+        for (id, at, clips) in roots {
+            self.parts_of(id, at, &clips, &released, 0, &mut keys);
         }
         self.resplit.get_mut().unwrap().extend(keys);
     }
@@ -948,35 +963,54 @@ impl Tree {
         }
         let broken = regrouping.broken;
         let resplit = std::mem::take(&mut *self.resplit.lock().unwrap());
+        // In the room the keys before took, unless that's far more
+        let mut keys = last;
+        keys.clear();
+        if keys.capacity() / 4 > out.len() {
+            keys.shrink_to(out.len());
+        }
+        keys.reserve(out.len());
         // The same drawn twice in the same place is two units, for either
-        // to go on its own
-        let mut seen: IdMap<usize, usize> = IdMap::with_capacity_and_hasher(out.len(), Default::default());
-        let mut keys: IdMap<u64, usize> = IdMap::with_capacity_and_hasher(out.len(), Default::default());
-        let mut twice = std::collections::HashSet::new();
+        // to go on its own: those after the first, told apart by how many
+        // came before them
+        let mut twice: IdMap<u64, usize> = IdMap::default();
         for unit in &mut out {
             let worked_out = unit.key;
             unit.kept_part = resplit.contains(&(worked_out as u64));
             if unit.regroups.is_some_and(|key| broken.contains(&key)) {
                 unit.regroups = None;
             }
-            let count = seen.entry(unit.key).or_insert(0);
-            if *count > 0 {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                (unit.key, *count).hash(&mut hasher);
-                unit.key = hasher.finish() as usize;
-            }
-            *count += 1;
-            if keys.insert(worked_out as u64, unit.key).is_some() {
-                twice.insert(worked_out as u64);
+            match keys.entry(worked_out as u64) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(unit.key);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    let count = twice.entry(worked_out as u64).or_insert(1);
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    (unit.key, *count).hash(&mut hasher);
+                    unit.key = hasher.finish() as usize;
+                    *count += 1;
+                }
             }
         }
-        keys.retain(|key, _| !twice.contains(key));
-        let mut places: IdMap<u32, Vec<(Matrix, Vec<(u32, Matrix)>)>> = IdMap::default();
-        for unit in &out {
-            places.entry(unit.place.id).or_default().push((unit.place.at, unit.place.clips.clone()));
+        if !twice.is_empty() {
+            keys.retain(|key, _| !twice.contains_key(key));
+        }
+        {
+            let mut places = self.last_places.lock().unwrap();
+            let Places { first, all } = &mut *places;
+            first.clear();
+            all.clear();
+            if all.capacity() / 4 > out.len() {
+                first.shrink_to(out.len());
+                all.shrink_to(out.len());
+            }
+            for unit in &out {
+                let next = first.insert(unit.place.id, all.len()).unwrap_or(usize::MAX);
+                all.push((unit.place.at, unit.place.clips.clone(), next));
+            }
         }
         *self.last_units.lock().unwrap() = keys;
-        *self.last_places.lock().unwrap() = places;
         out
     }
 

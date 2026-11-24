@@ -5770,14 +5770,16 @@ impl Painter {
         self.rebuild_units();
         {
             let now: IdSet<usize> = self.units.iter().map(|unit| unit.slot).collect();
+            let went: Vec<(usize, Rect)> = before.iter().filter(|(slot, _)| !now.contains(&slot.0)).map(|(slot, bounds)| (slot.0, *bounds)).collect();
+            let came: Vec<usize> = (0..self.units.len()).filter(|&at| !before.contains_key(&Slot(self.units[at].slot))).collect();
             // Those keyed by slots hold none that no unit had, so with none
             // gone there's nothing to let go of
-            let any_gone = before.keys().any(|slot| !now.contains(&slot.0));
+            let any_gone = !went.is_empty();
             // Units split into others that draw all they did the same, where
             // they were, change nothing there (see `regroup`), and what
             // they're split into changes as they did
-            let mut areas: Vec<Rect> = before.iter().filter(|(slot, _)| !now.contains(&slot.0) && !self.regroups.contains_key(&slot.0)).map(|(_, bounds)| *bounds).collect();
-            areas.extend(self.units.iter().filter(|unit| !before.contains_key(&Slot(unit.slot)) && !self.regrouped.contains_key(&unit.slot)).map(|unit| unit.bounds));
+            let mut areas: Vec<Rect> = went.iter().filter(|(slot, _)| !self.regroups.contains_key(slot)).map(|(_, bounds)| *bounds).collect();
+            areas.extend(came.iter().map(|&at| &self.units[at]).filter(|unit| !self.regrouped.contains_key(&unit.slot)).map(|unit| unit.bounds));
             let inherited: Vec<(usize, Instant)> = self.regrouped.iter().filter_map(|(&part, (owner, _))| self.changing.get(owner).map(|&at| (part, at))).collect();
             self.changing.extend(inherited);
             if strays || any_gone {
@@ -5815,7 +5817,7 @@ impl Painter {
                 self.changing.retain(|_, at| at.elapsed() < CHANGED_LATELY);
                 // Not those that draw, where they're drawn, what part of a
                 // unit gone drew, as what changed is beside them
-                let new = self.units.iter().filter(|unit| !before.contains_key(&Slot(unit.slot)) && !self.regrouped.contains_key(&unit.slot) && !self.unchanged.contains(&unit.slot));
+                let new = came.iter().map(|&at| &self.units[at]).filter(|unit| !self.regrouped.contains_key(&unit.slot) && !self.unchanged.contains(&unit.slot));
                 self.changing.extend(new.map(|unit| (unit.slot, now)).collect::<Vec<_>>());
                 self.edited = Instant::now();
                 self.sent = Some(at);
@@ -6402,7 +6404,8 @@ impl Painter {
             .iter()
             .map(|unit| ((unit.slot, unit.section), bits(&unit.bounds), self.mark(unit), self.sharpened.get(&(unit.slot, unit.section)).copied().unwrap_or(0)))
             .collect();
-        self.checked_at = now.iter().enumerate().map(|(at, mark)| (mark.0, at)).collect();
+        // Where each was at the check before, as `checked` still has them
+        let before_at = std::mem::replace(&mut self.checked_at, now.iter().enumerate().map(|(at, mark)| (mark.0, at)).collect());
         if now == self.checked {
             return;
         }
@@ -6431,8 +6434,10 @@ impl Painter {
             self.sharpen(&sharper);
             return;
         }
-        let before: super::rt::IdMap<(usize, bool), &Mark> = self.checked.iter().map(|mark| (mark.0, mark)).collect();
-        let after: super::rt::IdMap<(usize, bool), &Mark> = now.iter().map(|mark| (mark.0, mark)).collect();
+        // By where `checked_at` had them and has them now, rather than maps
+        // of tens of thousands made again each time
+        let before = |key: &(usize, bool)| before_at.get(key).and_then(|&at| self.checked.get(at)).filter(|mark| mark.0 == *key);
+        let after = &self.checked_at;
         // Units split into others that draw all they did the same, where
         // they were, change nothing there (see `regroup`), when the check
         // before saw them as they were then, and what they're split into is
@@ -6441,7 +6446,7 @@ impl Painter {
         if self.regroups_checked {
             for mark in now.iter().filter(|mark| !mark.0 .1) {
                 let Some(&(owner, part)) = self.regrouped.get(&mark.0 .0) else { continue };
-                let was = self.regroups.get(&owner).is_some_and(|(owner_mark, ..)| before.get(&(owner, false)).is_some_and(|old| old.2 == *owner_mark));
+                let was = self.regroups.get(&owner).is_some_and(|(owner_mark, ..)| before(&(owner, false)).is_some_and(|old| old.2 == *owner_mark));
                 if was && mark.2 == part && !after.contains_key(&(owner, false)) {
                     *split.entry(owner).or_default() += 1;
                 }
@@ -6450,8 +6455,8 @@ impl Painter {
         }
         let split_into = |slot: &(usize, bool)| !slot.1 && self.regrouped.get(&slot.0).is_some_and(|(owner, _)| split.contains_key(owner));
         for mark in &now {
-            match before.get(&mark.0) {
-                Some(old) if **old == *mark => {}
+            match before(&mark.0) {
+                Some(old) if *old == *mark => {}
                 Some(old) if (old.1, old.2) == (mark.1, mark.2) => sharper.push(rect(&mark.1)),
                 Some(old) => {
                     areas.push(rect(&old.1));
@@ -6468,7 +6473,7 @@ impl Painter {
         }
         // Of those here before and now, any drawn in another order
         let old_order = self.checked.iter().filter(|mark| after.contains_key(&mark.0));
-        let new_order = now.iter().filter(|mark| before.contains_key(&mark.0));
+        let new_order = now.iter().filter(|mark| before(&mark.0).is_some());
         for (old, new) in old_order.zip(new_order) {
             if old.0 != new.0 {
                 areas.push(rect(&old.1));
@@ -6672,8 +6677,12 @@ impl Painter {
             // in `fresh` taken are noted, as none after may take those again
             let mut taken: IdSet<usize> = IdSet::default();
             // Old units by what they draw, made once a unit's look is first
-            // made, before any look's added
-            let mut was: Option<IdMap<u64, Vec<(usize, Rect)>>> = None;
+            // made, before any look's added: of each look, how many old units
+            // have it, and of those the ones not in `fresh`, which alone can
+            // be taken, with their place among them all. A list of all those
+            // took over a millisecond a frame while something's dragged, and
+            // places kept as in it pick the same one it did
+            let mut was: Option<IdMap<u64, (usize, Vec<(usize, usize, Rect)>)>> = None;
             // An alias's slot is in `was` till a near match takes it, which
             // takes its look too, so it's never an alias after
             let mut was_at: Option<IdMap<usize, Rect>> = None;
@@ -6707,22 +6716,44 @@ impl Painter {
                 if !kept {
                     let look = tree.look(&unit.place);
                     let by_what = was.get_or_insert_with(|| {
-                        let mut was: IdMap<u64, Vec<(usize, Rect)>> = IdMap::default();
-                        for old in &olds {
+                        let mut was: IdMap<u64, (usize, Vec<(usize, usize, Rect)>)> = IdMap::default();
+                        for old in olds.iter().filter(|old| !fresh.contains(&old.slot)) {
                             if let Some(look) = self.looks.get(&old.slot) {
-                                was.entry(look.what).or_default().push((old.slot, old.bounds));
+                                was.entry(look.what).or_default();
+                            }
+                        }
+                        if !was.is_empty() {
+                            for old in &olds {
+                                let Some((count, gone)) = self.looks.get(&old.slot).and_then(|look| was.get_mut(&look.what)) else { continue };
+                                if !fresh.contains(&old.slot) {
+                                    gone.push((*count, old.slot, old.bounds));
+                                }
+                                *count += 1;
                             }
                         }
                         was
                     });
-                    let olds_of = by_what.get_mut(&look.what);
-                    let near = olds_of.as_ref().and_then(|olds| olds.iter().position(|(old, _)| !fresh.contains(old) && !taken.contains(old) && self.looks.get(old).is_some_and(|old| old.same(&look))));
-                    match (near, olds_of) {
-                        (Some(index), Some(olds)) => {
-                            (slot, bounds) = olds.swap_remove(index);
+                    let near = by_what.get_mut(&look.what).and_then(|(count, gone)| {
+                        let (index, _) = gone
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (_, old, _))| !taken.contains(old) && self.looks.get(old).is_some_and(|old| old.same(&look)))
+                            .min_by_key(|(_, (at, ..))| *at)?;
+                        let (at, slot, bounds) = gone.swap_remove(index);
+                        // Taking one from a list of them all moved its last
+                        // to where that one was
+                        *count -= 1;
+                        if let Some(last) = gone.iter_mut().find(|(was_at, ..)| *was_at == *count) {
+                            last.0 = at;
+                        }
+                        Some((slot, bounds))
+                    });
+                    match near {
+                        Some(near) => {
+                            (slot, bounds) = near;
                             taken.insert(slot);
                         }
-                        _ => {
+                        None => {
                             self.looks.insert(slot, look);
                         }
                     }
@@ -6764,8 +6795,10 @@ impl Painter {
             }
             drop(alone_span);
             self.units = units;
-            let olds_at: IdSet<usize> = olds.iter().map(|old| old.slot).collect();
-            self.unchanged = self.units.iter().zip(&kept_parts).filter(|(unit, &kept)| kept && !olds_at.contains(&unit.slot)).map(|(unit, _)| unit.slot).collect();
+            if kept_parts.contains(&true) {
+                let olds_at: IdSet<usize> = olds.iter().map(|old| old.slot).collect();
+                self.unchanged = self.units.iter().zip(&kept_parts).filter(|(unit, &kept)| kept && !olds_at.contains(&unit.slot)).map(|(unit, _)| unit.slot).collect();
+            }
             self.regroup(&olds, &owners);
             self.regroups_checked = checked;
             return;
