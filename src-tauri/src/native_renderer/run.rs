@@ -491,21 +491,42 @@ fn stop_framing(ctx: &Ctx, reloaded: bool) {
     ctx.tree.store(false, Ordering::Relaxed);
 }
 
-/// Tabs parked at most, see `Ctx::parked`
-const PARKED: usize = 1;
+/// Tabs parked at most, see `Ctx::parked`. Each keeps its render tree in
+/// memory, not video memory, and is shown again at once, where one let go
+/// of rests (see `rest`) and is drawn again from the whole scene
+pub(super) const PARKED: usize = 2;
 
-/// Has tab `label` stop handing over frames and draw its canvas again
+/// Has tab `label` stop handing over frames: shown, it draws its canvas
+/// again, hidden, it rests (see `rest`)
 fn release_tab(ctx: &Ctx, label: &str) {
-    super::mark(|| format!("{label} handed back to Figma's renderer"));
     let _ = ctx.messages.send(Msg::Unpark(label.into()));
     ctx.parked.lock().unwrap().retain(|tab| tab != label);
     if let Some(webview) = ctx.app.get_webview(label) {
-        let _ = webview.eval("window.__ligmaHook?.push(null)");
-        let mut replaced = ctx.replaced.lock().unwrap();
-        if let Some(at) = replaced.iter().position(|replaced| replaced.label() == label) {
-            give_back(&replaced.remove(at));
+        if shown(ctx, label) {
+            super::mark(|| format!("{label} handed back to Figma's renderer"));
+            let _ = webview.eval("window.__ligmaHook?.push(null)");
+            let mut replaced = ctx.replaced.lock().unwrap();
+            if let Some(at) = replaced.iter().position(|replaced| replaced.label() == label) {
+                give_back(&replaced.remove(at));
+            }
+        } else {
+            ctx.replaced.lock().unwrap().retain(|replaced| replaced.label() != label);
+            rest(&webview);
         }
     }
+}
+
+/// Whether tab `label` is the one shown, or one of a split
+fn shown(ctx: &Ctx, label: &str) -> bool {
+    crate::tabs::active_file(&ctx.app).is_some_and(|file| file.webview.label() == label) || crate::tabs::in_split(&ctx.app, label)
+}
+
+/// Has tab `webview`, left hidden, draw nothing till it's shown and drawn
+/// again: Figma's renderer isn't handed it, which would load its whole
+/// scene and images again, but let go of what it holds
+fn rest(webview: &Webview) {
+    super::mark(|| format!("{} rests, drawn by neither renderer while hidden", webview.label()));
+    let _ = eval(webview, "window.__ligmaHook?.rest() ?? null", Duration::from_secs(2));
 }
 
 /// Has tab `webview` hand over frames of Figma's render tree, if its page
@@ -1009,12 +1030,17 @@ fn take_over(ctx: &Ctx, webview: &Webview) {
     match eval_value(webview, "window.__ligmaHook ? window.__ligmaHook.replace(true) : null") {
         Some(Value::Bool(true)) => {
             super::mark(|| format!("drawing {label}'s canvas in place of Figma's renderer"));
-            // Tabs neither parked nor shown draw their canvas themselves
+            // Tabs neither parked nor shown draw their canvas themselves,
+            // and those hidden rest
             let parked = ctx.parked.lock().unwrap().clone();
             replaced.retain(|before| {
                 let keep = parked.iter().any(|tab| tab == before.label());
                 if !keep {
-                    give_back(before);
+                    if shown(ctx, before.label()) {
+                        give_back(before);
+                    } else {
+                        rest(before);
+                    }
                 }
                 keep
             });
@@ -1348,10 +1374,14 @@ fn poll_view(ctx: Arc<Ctx>) {
     }
 }
 
-/// Whether Ligma's renderer draws tab `label` in place of Figma's
+/// Whether Ligma's renderer draws tab `label` in place of Figma's, or will
+/// once it's drawn the frames it's asked it for
 pub fn draws(label: &str) -> bool {
     let ctx = CTX.lock().unwrap().clone();
-    ctx.is_some_and(|ctx| ctx.replaced.lock().unwrap().iter().any(|replaced| replaced.label() == label))
+    ctx.is_some_and(|ctx| {
+        ctx.replaced.lock().unwrap().iter().any(|replaced| replaced.label() == label)
+            || ctx.framing.lock().unwrap().as_ref().is_some_and(|(tab, _)| tab == label)
+    })
 }
 
 pub fn tab_shown() {

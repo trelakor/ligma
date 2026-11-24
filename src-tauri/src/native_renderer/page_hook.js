@@ -35,6 +35,9 @@
   const hook = (window.__ligmaHook = {
     // Ligma draws frames, Figma's worker gets none
     replacing: false,
+    // Left hidden and let go of by Ligma: neither it nor Figma's worker
+    // takes frames, till Ligma asks for them again as it's shown (`rest`)
+    resting: false,
     // Where to hand Ligma each frame, an address on this site Ligma answers
     // itself (see `Frames` in run.rs), set by Ligma
     pushTo: null,
@@ -73,6 +76,17 @@
   const handBackNow = () => {
     worker(true);
     hook.wantFull = true;
+  };
+  // Figma draws the tab should Ligma not ask for its frames, as when it
+  // couldn't start. Not while it's hidden, as Ligma asks for a tab's frames
+  // once it's shown: till then neither renderer draws it
+  const handBackUnasked = () => {
+    clearTimeout(unasked);
+    unasked = setTimeout(() => {
+      if (hook.pushTo || hook.toWorker) return;
+      if (document.hidden) document.addEventListener("visibilitychange", handBackUnasked, { once: true });
+      else handBackNow();
+    }, HAND_BACK);
   };
 
   // Figma's threaded renderer, behind a gate it reads once as it starts
@@ -213,9 +227,7 @@
       return false;
     }
     hook.frames++;
-    // Figma draws the tab should Ligma not ask for its frames, as when it
-    // couldn't start
-    if (hook.frames === 1) unasked = setTimeout(() => !hook.pushTo && !hook.toWorker && handBackNow(), HAND_BACK);
+    if (hook.frames === 1) handBackUnasked();
     if (!hook.toWorker) loading(f);
     if (!hook.panels?.dragging && (f.updateMode === 0 || forestLength(f.renderTreeForest) > 16 || f.releasedNodeIds?.length)) hook.playback++;
     if (hook.pushTo) {
@@ -1181,7 +1193,7 @@
   let warned = false;
   function freshWorker() {
     clearTimeout(freshening);
-    if (!hook.replacing || hook.toWorker || !hook.workerScene) return;
+    if (!(hook.replacing || hook.resting) || hook.toWorker || !hook.workerScene) return;
     const manager = hook.canvasWorker;
     if (typeof manager?.restartWorker !== "function") {
       if (!warned) console.warn("Ligma: Figma's canvas worker wasn't found, so the memory it holds isn't freed");
@@ -1203,7 +1215,7 @@
       hook.error = String(error);
     }
     // Figma puts a new canvas in for the new worker
-    under(true);
+    if (hook.replacing) under(true);
   }
 
   // Whether frames go to Figma's worker. Images it was meant to get
@@ -1225,6 +1237,7 @@
   hook.ready = () => hook.frames > 0 && !hook.error;
   hook.replace = (on) => {
     if (on && !hook.ready()) return false;
+    if (on) hook.resting = false;
     if (hook.replacing === on) return true;
     hook.replacing = on;
     under(on);
@@ -1246,6 +1259,7 @@
   // reads the page another way
   let handBack = 0;
   hook.push = (path) => {
+    if (path) hook.resting = false;
     hook.pushTo = path;
     hook.wantFull = true;
     worker(!path);
@@ -1255,6 +1269,25 @@
       sendFonts();
       handBack = setTimeout(() => !hook.replacing && !hook.toWorker && handBackNow(), HAND_BACK);
     } else window.__ligmaNative?.follow?.();
+    return true;
+  };
+  // Called by Ligma for a tab left hidden that it lets go of: rather than
+  // Figma's worker drawing it, loading its whole scene and images again
+  // for nothing, no one does, and the worker's swapped for a fresh one to
+  // free what it holds. Shown again, Ligma asks for its frames (`push`)
+  // and draws it from the whole scene Figma then sends
+  hook.rest = () => {
+    clearTimeout(handBack);
+    clearTimeout(unasked);
+    hook.pushTo = null;
+    hook.wantFull = true;
+    hook.resting = true;
+    worker(false);
+    if (hook.replacing) {
+      hook.replacing = false;
+      under(false);
+    }
+    freshWorker();
     return true;
   };
 })();

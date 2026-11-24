@@ -1718,8 +1718,9 @@ pub struct Painter {
     tab: Option<Arc<str>>,
     /// The last whole scene taken in, summed, while nothing's changed since
     whole_sum: Option<(usize, u64)>,
-    /// The render tree of the tab drawn before, kept while it's parked
-    parked: Option<Parked>,
+    /// The render trees of tabs drawn before, kept while they're parked,
+    /// the latest last
+    parked: Vec<Parked>,
     /// Whether the tab's tree is kept as another's drawn, till it's unparked
     park: bool,
     /// Units drawn small at powers of two, on pages of their own, for the
@@ -1934,7 +1935,7 @@ impl Painter {
             seq: 0,
             tab: None,
             whole_sum: None,
-            parked: None,
+            parked: Vec::new(),
             park: true,
             thumbs: HashMap::new(),
             thumb_pages: Vec::new(),
@@ -5400,7 +5401,7 @@ impl Painter {
             Msg::Frame(frame) => self.frame(*frame),
             Msg::Unpark(tab) => {
                 trace(|| format!("{tab} unparked"));
-                self.parked.take_if(|parked| parked.tab == tab);
+                self.parked.retain(|parked| parked.tab != tab);
                 if self.tab.as_ref() == Some(&tab) {
                     self.park = false;
                 }
@@ -5775,11 +5776,15 @@ impl Painter {
         // hidden while this tab is shown
         let mut restored = false;
         if self.tab.as_deref() != Some(frame.tab.as_str()) {
-            let back = self.parked.take_if(|parked| *parked.tab == *frame.tab);
+            let back = self.parked.iter().position(|parked| *parked.tab == *frame.tab).map(|at| self.parked.remove(at));
             if let Some(tree) = self.tree.take() {
                 if let Some(tab) = self.tab.clone().filter(|_| self.park) {
                     trace(|| format!("{tab}'s tree kept"));
-                    self.parked = Some(Parked { tab, tree, whole_sum: self.whole_sum });
+                    self.parked.retain(|parked| parked.tab != tab);
+                    self.parked.push(Parked { tab, tree, whole_sum: self.whole_sum });
+                    if self.parked.len() > super::run::PARKED {
+                        self.parked.remove(0);
+                    }
                 }
                 self.leave_tab();
             }
