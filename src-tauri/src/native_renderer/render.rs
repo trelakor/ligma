@@ -824,9 +824,16 @@ const EDITING: Duration = Duration::from_millis(400);
 struct Strata {
     at: (i32, i32, u32),
     phase: (f32, f32),
-    /// What it's of, none for no units
+    /// What it's of, none for no units, and the images it drew sharper
     under: Option<u64>,
+    sharper: u64,
+    built: Instant,
 }
+
+/// How often what `Strata` keeps is drawn again for images under what's
+/// edited coming sharper, as they come several times as an edit starts,
+/// drawn again each time at first. Exact once the edit's done
+const STRATA_SHARPER: Duration = Duration::from_millis(300);
 
 /// Changed areas past which the whole view is drawn again, rather than each
 const PATCHES: usize = 24;
@@ -4460,17 +4467,19 @@ impl Painter {
             }
         }
         let Some((first, last)) = range else { return false };
-        let under = {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let (under, sharper) = {
+            let (mut hasher, mut sharper) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
             let mut any = false;
             for unit in self.units[..first].iter().filter(|unit| shown(unit)) {
                 any = true;
                 self.mark(unit).hash(&mut hasher);
-                self.sharpened.get(&(unit.slot, unit.section)).hash(&mut hasher);
+                self.sharpened.get(&(unit.slot, unit.section)).hash(&mut sharper);
             }
-            any.then(|| hasher.finish())
+            (any.then(|| hasher.finish()), sharper.finish())
         };
-        let kept = self.strata.as_ref().is_some_and(|strata| strata.at == at && strata.phase == phase && strata.under == under);
+        let kept = self.strata.as_ref().is_some_and(|strata| {
+            strata.at == at && strata.phase == phase && strata.under == under && (strata.sharper == sharper || strata.built.elapsed() < STRATA_SHARPER)
+        });
         if !kept && !build {
             return false;
         }
@@ -4505,7 +4514,7 @@ impl Painter {
                 }
                 built = timer.elapsed();
             }
-            self.strata = Some(Strata { at, phase, under });
+            self.strata = Some(Strata { at, phase, under, sharper, built: Instant::now() });
         }
         // Where they were and are
         let mut areas = self.whole.as_ref().map_or_else(Vec::new, |whole| whole.patch.clone());
