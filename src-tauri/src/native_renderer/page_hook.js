@@ -50,10 +50,10 @@
     shared: null,
     // Figma's interface fonts, as its worker is given them
     fonts: null,
-    // Frames go to Figma's worker: not from when Ligma asks for them, so
-    // the worker isn't sent the whole scene again for nothing, till Ligma
-    // hands drawing back (`worker`)
-    toWorker: true,
+    // Frames go to Figma's worker: not from the start, as Ligma draws the
+    // tab from its first frame, nor from when Ligma asks for them, till it
+    // hands drawing back (`worker`), or never asks (`HAND_BACK`)
+    toWorker: false,
     // Figma's image publishers that left images for its worker undecoded
     // meanwhile
     skipped: new Set(),
@@ -63,6 +63,17 @@
   });
   // And now and then regardless
   setInterval(() => hook.playback++, 1000);
+
+  // How long Figma's canvas waits for Ligma, from the tab's first frame or
+  // from when Ligma asks for its frames, before Figma's worker draws it
+  // after all, as when Ligma reads the page another way
+  const HAND_BACK = 4000;
+  let unasked = 0;
+  // Figma's worker draws the tab, sent the whole scene
+  const handBackNow = () => {
+    worker(true);
+    hook.wantFull = true;
+  };
 
   // Figma's threaded renderer, behind a gate it reads once as it starts
   let options;
@@ -202,6 +213,9 @@
       return false;
     }
     hook.frames++;
+    // Figma draws the tab should Ligma not ask for its frames, as when it
+    // couldn't start
+    if (hook.frames === 1) unasked = setTimeout(() => !hook.pushTo && !hook.toWorker && handBackNow(), HAND_BACK);
     if (!hook.toWorker) loading(f);
     if (!hook.panels?.dragging && (f.updateMode === 0 || forestLength(f.renderTreeForest) > 16 || f.releasedNodeIds?.length)) hook.playback++;
     if (hook.pushTo) {
@@ -1230,20 +1244,16 @@
   // or two, rather than its worker loading the whole scene and its images
   // again. Unless Ligma hasn't taken over by `HAND_BACK` ms, as when it
   // reads the page another way
-  const HAND_BACK = 4000;
   let handBack = 0;
   hook.push = (path) => {
     hook.pushTo = path;
     hook.wantFull = true;
     worker(!path);
     clearTimeout(handBack);
+    clearTimeout(unasked);
     if (path) {
       sendFonts();
-      handBack = setTimeout(() => {
-        if (hook.replacing || hook.toWorker) return;
-        worker(true);
-        hook.wantFull = true;
-      }, HAND_BACK);
+      handBack = setTimeout(() => !hook.replacing && !hook.toWorker && handBackNow(), HAND_BACK);
     } else window.__ligmaNative?.follow?.();
     return true;
   };
