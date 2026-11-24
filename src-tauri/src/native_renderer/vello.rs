@@ -89,7 +89,7 @@ pub struct Vello {
     /// What's under the units an edit changes and what's over them, each
     /// drawn once and kept, and the image it is in Vello's atlas, see
     /// `put_kept`
-    kept: [Option<(Target, ImageData)>; 2],
+    kept: [Option<(Target, ImageData)>; 3],
     pages: Vec<Page>,
     /// What Skia drew onto the atlas for earlier views, drawn again from
     /// here where it would be the same, and the views drawn
@@ -264,7 +264,7 @@ impl Vello {
             spare: vello::Scene::new(),
             renders: 0,
             out: None,
-            kept: [None, None],
+            kept: [None, None, None],
             pages: Vec::new(),
             pieces: HashMap::new(),
             piece_bytes: 0,
@@ -480,8 +480,8 @@ impl Vello {
     /// under, or `over`, what others draw with (see `put_kept`). Vello's
     /// atlas takes it once, with the next render, rather than the part of
     /// it each render draws, which took 3 milliseconds each
-    pub fn keep(&mut self, over: bool, skia: &ID3D12Device, width: i32, height: i32) -> Result<(), String> {
-        let target = match self.kept[over as usize].take() {
+    pub fn keep(&mut self, layer: usize, skia: &ID3D12Device, width: i32, height: i32) -> Result<(), String> {
+        let target = match self.kept[layer].take() {
             Some((target, image)) => {
                 self.renderer.override_image(&image, None);
                 target
@@ -503,18 +503,18 @@ impl Vello {
             height: height as u32,
         };
         self.renderer.override_image(&image, Some(wgpu::TexelCopyTextureInfoBase { texture: under, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }));
-        self.kept[over as usize] = Some((target, image));
+        self.kept[layer] = Some((target, image));
         Ok(())
     }
 
     /// What `keep` kept, to draw with `put_kept`
-    pub fn kept(&self, over: bool) -> Option<ImageData> {
-        self.kept[over as usize].as_ref().map(|(_, image)| image.clone())
+    pub fn kept(&self, layer: usize) -> Option<ImageData> {
+        self.kept[layer].as_ref().map(|(_, image)| image.clone())
     }
 
-    /// Lets go of what `keep` kept over, or under
-    pub fn drop_kept_one(&mut self, over: bool) {
-        if let Some((_, image)) = self.kept[over as usize].take() {
+    /// Lets go of what `keep` kept as `layer`
+    pub fn drop_kept_one(&mut self, layer: usize) {
+        if let Some((_, image)) = self.kept[layer].take() {
             self.renderer.override_image(&image, None);
         }
     }
