@@ -798,6 +798,9 @@ struct Whole {
     stale: bool,
     /// Where something in it changed since, in units, to draw again
     patch: Vec<Rect>,
+    /// Where it's out of date, in units: what's in `patch`, and what's
+    /// left of it as it's drawn again elsewhere or not at all
+    dirt: Vec<Rect>,
     /// The render queue's fence passes this once the GPU has drawn it
     fence: u64,
     /// Changes with what's drawn in it
@@ -811,6 +814,67 @@ struct Whole {
     seq: u64,
     /// Parts of it drawn again since by Vello, to draw it all again at rest
     patched: bool,
+}
+
+impl Whole {
+    /// Notes where it changed in `patched` drawn again, if it's `drawn`,
+    /// otherwise all of it out of date
+    fn clean(&mut self, drawn: bool, patched: &[Rect]) {
+        if !drawn {
+            self.dirt = vec![layer_area(&self.layer)];
+            return;
+        }
+        self.dirt.retain(|dirt| !patched.iter().any(|area| area.left <= dirt.left && area.top <= dirt.top && area.right >= dirt.right && area.bottom >= dirt.bottom));
+    }
+}
+
+/// Where `layer` is, in units
+fn layer_area(layer: &Layer) -> Rect {
+    Rect::from_xywh(
+        (layer.x as f32 + layer.phase.0) / layer.px,
+        (layer.y as f32 + layer.phase.1) / layer.px,
+        layer.tex.width as f32 / layer.px,
+        layer.tex.height as f32 / layer.px,
+    )
+}
+
+/// How far past what changed drawing it again reaches, in pixels, as
+/// `patch_rects` draws it
+const DIRT_REACH: i32 = 3;
+
+/// Most a tile's and the whole view's out of date parts are noted apart
+const TILE_DIRT: usize = 8;
+const WHOLE_DIRT: usize = 16;
+
+/// Notes `area` out of date in `dirt`, as one rect around all of it once
+/// there's more than `most`, as many make each frame slower to compose
+fn soil(dirt: &mut Vec<Rect>, area: Rect, most: usize) {
+    if area.is_empty() || dirt.iter().any(|had| had.left <= area.left && had.top <= area.top && had.right >= area.right && had.bottom >= area.bottom) {
+        return;
+    }
+    dirt.push(area);
+    if dirt.len() > most {
+        let all = dirt.iter().skip(1).fold(dirt[0], |all, area| Rect::from_ltrb(all.left.min(area.left), all.top.min(area.top), all.right.max(area.right), all.bottom.max(area.bottom)));
+        *dirt = vec![all];
+    }
+}
+
+/// `dirt`, in units, in the pixels of `layer`'s texture, `out` more around
+/// each, as drawing reaches a little past what changed. All of it if
+/// there's none, as for what's out of date anywhere
+fn dirt_in(dirt: &[Rect], layer: &Layer, out: i32) -> Vec<skia_safe::IRect> {
+    let whole = skia_safe::IRect::from_wh(layer.tex.width, layer.tex.height);
+    if dirt.is_empty() {
+        return vec![whole];
+    }
+    let (x, y) = (layer.x as f32 + layer.phase.0, layer.y as f32 + layer.phase.1);
+    dirt.iter()
+        .filter_map(|area| {
+            let at = Rect::from_ltrb(area.left * layer.px - x, area.top * layer.px - y, area.right * layer.px - x, area.bottom * layer.px - y).round_out();
+            let at = skia_safe::IRect::with_outset(&at, (out, out));
+            skia_safe::IRect::intersect(&at, &whole)
+        })
+        .collect()
 }
 
 /// After a change, how long the whole view is kept up with every frame, as
@@ -1129,8 +1193,8 @@ impl TileKey {
 /// it, so the GPU draws them while the CPU encodes those
 struct DrawnTiles {
     /// Each tile's texture, whether a change since made it out of date,
-    /// and whether it was in view then
-    tiles: Vec<(TileKey, Arc<Tex>, bool, bool)>,
+    /// whether it was in view then, and where
+    tiles: Vec<(TileKey, Arc<Tex>, bool, bool, Vec<Rect>)>,
     first: TileKey,
     /// Vello's renders unchecked, these last
     renders: usize,
@@ -1150,6 +1214,9 @@ struct Tile {
     counts: Counts,
     /// Out of date, shown until it's drawn again
     stale: bool,
+    /// Where it's out of date, in units, see `Layer::dirt`. All of it if
+    /// none's noted
+    dirt: Vec<Rect>,
     /// Out of date while in view and in it since, so what it shows is what
     /// was just there. One out of date off the view shows the page as it
     /// was some time before, as without images that came since, so it's
@@ -1576,6 +1643,9 @@ pub struct Painter {
     images_later: std::collections::VecDeque<Msg>,
     /// The latest frame that changed the scene
     edited_seq: u64,
+    /// Counts the changes tiles and the whole view were marked out of date
+    /// for, see `Snapshot::edits`
+    edits: u64,
     /// Draws snapshots as the present thread does, for dev tools
     patterns: Patterns,
     /// Counts up, for each thing drawn to be told apart from what it was
@@ -1820,6 +1890,7 @@ impl Painter {
             changes_drawn: 0,
             images_later: std::collections::VecDeque::new(),
             edited_seq: 0,
+            edits: 0,
             patterns: Patterns::new(),
             serial: 0,
             whole: None,
@@ -2673,7 +2744,7 @@ impl Painter {
             Ok((tex, counts, stats, rough)) => {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough, patch: Vec::new(), seq: self.seq });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0, dirt: Vec::new() }, fence, at, renders, started, stats, rough, patch: Vec::new(), seq: self.seq });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2708,7 +2779,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 let at = (ox, oy, px.to_bits());
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: Vec::new(), seq: self.seq });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase, px, counts, kind: LayerKind::Whole, drawn: 0, dirt: Vec::new() }, fence, at, renders, started, stats, rough: false, patch: Vec::new(), seq: self.seq });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -2804,7 +2875,7 @@ impl Painter {
         if chunked.next == chunked.parts.len() {
             let chunked = self.chunked.take()?;
             let fence = self.gpu.signal();
-            let layer = Layer { tex: chunked.tex, x: ox, y: oy, phase, px, counts: chunked.counts, kind: LayerKind::Whole, drawn: 0 };
+            let layer = Layer { tex: chunked.tex, x: ox, y: oy, phase, px, counts: chunked.counts, kind: LayerKind::Whole, drawn: 0, dirt: Vec::new() };
             trace(|| format!("  whole vello chunked px={px:.3} {width}x{height} in {} parts {:.1}ms", chunked.parts.len(), chunked.started.elapsed().as_secs_f64() * 1000.0));
             vello::took_whole(true);
             self.hand_whole(layer, fence, at, false, true, chunked.seq);
@@ -2865,7 +2936,7 @@ impl Painter {
                 let fence = self.gpu.signal();
                 let renders = self.vello.as_ref().map_or(0, |vello| vello.renders);
                 self.kept_drawn = self.scene_kept.as_ref().map(|kept| (kept.id, at));
-                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, renders, started, stats, rough: false, patch: behind, seq: self.seq });
+                let last = self.unchecked.replace(Unchecked { layer: Layer { tex, x: ox, y: oy, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0, dirt: Vec::new() }, fence, at, renders, started, stats, rough: false, patch: behind, seq: self.seq });
                 if let Some(last) = last {
                     self.settle(last);
                 }
@@ -3192,7 +3263,7 @@ impl Painter {
                 let from = Rect::from_xywh(((key.x - x0) * TILE) as f32, ((key.y - y0) * TILE) as f32, TILE as f32, TILE as f32);
                 surface.canvas().draw_image_rect(&image, Some((&from, skia_safe::canvas::SrcRectConstraint::Fast)), Rect::from_wh(TILE as f32, TILE as f32), &paint);
                 drop(surface);
-                tiles.push((key, tex, false, false));
+                tiles.push((key, tex, false, false, Vec::new()));
             }
             let _ = self.gpu.context.flush_and_submit();
             Ok(DrawnTiles { tiles, first, renders: 0, exact, counts, stats, started, submitted: started.elapsed(), span: (x0, y0, x1 - x0 + 1, y1 - y0 + 1) })
@@ -3233,12 +3304,12 @@ impl Painter {
             }
         };
         let exact = drawn.exact;
-        for (key, tex, stale, seen) in drawn.tiles {
+        for (key, tex, stale, seen, dirt) in drawn.tiles {
             let Some(image) = gpu::images::borrow_texture_from(&mut self.gpu.context, &tex.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Premul, None) else {
                 self.retire(tex);
                 continue;
             };
-            self.put_tile(key, Tile { image, tex, used: self.frame, counts: drawn.counts, stale, seen, exact, draft: false, vello: true, drawn: 0 });
+            self.put_tile(key, Tile { image, tex, used: self.frame, counts: drawn.counts, stale, dirt, seen, exact, draft: false, vello: true, drawn: 0 });
         }
         self.drew = true;
         self.dirty = true;
@@ -3436,6 +3507,7 @@ impl Painter {
                 // What changed as the GPU drew it isn't in it, as when an
                 // object's moved, which would show it where it was
                 if let Some(whole) = self.whole.as_mut() {
+                    whole.dirt.clone_from(&last.patch);
                     whole.patch = last.patch;
                 }
                 // At rest alone, as it waits for the GPU
@@ -4163,7 +4235,7 @@ impl Painter {
                 }
             )
         });
-        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0 }, fence, at, false, false, self.seq);
+        self.hand_whole(Layer { tex, x: ox - margin, y: oy - margin, phase: (0.0, 0.0), px, counts, kind: LayerKind::Whole, drawn: 0, dirt: Vec::new() }, fence, at, false, false, self.seq);
         self.whole_took = started.elapsed();
         stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
         self.drew = true;
@@ -4189,7 +4261,7 @@ impl Painter {
         let mut older = None;
         let old = match self.whole.as_mut() {
             Some(whole) => {
-                if !whole.stale && whole.patch.is_empty() {
+                if !whole.stale && whole.patch.is_empty() && whole.dirt.is_empty() {
                     older = Some(self.last_whole.replace(whole.layer.clone()));
                 }
                 whole.fence = fence;
@@ -4197,11 +4269,12 @@ impl Painter {
                 whole.at = at;
                 whole.stale = false;
                 whole.patch.clear();
+                whole.dirt.clear();
                 (whole.rough, whole.vello, whole.seq, whole.patched) = (rough, vello, seq, false);
                 Some(std::mem::replace(&mut whole.layer, layer))
             }
             None => {
-                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), fence, serial, rough, vello, seq, patched: false });
+                self.whole = Some(Whole { layer, at, stale: false, patch: Vec::new(), dirt: Vec::new(), fence, serial, rough, vello, seq, patched: false });
                 None
             }
         };
@@ -4306,7 +4379,9 @@ impl Painter {
             // differently, not what was missing, so is left
             if times <= 2 {
                 tile.stale = true;
+                tile.dirt = vec![key.area()];
                 self.dirty = true;
+                self.edits += 1;
             }
         }
         trace(|| format!("  verified tiles {:.1}ms", started.elapsed().as_secs_f64() * 1000.0));
@@ -4462,6 +4537,7 @@ impl Painter {
             whole.serial = serial;
             whole.layer.drawn = serial;
             whole.stale |= image.is_none();
+            whole.clean(image.is_some(), &areas);
             if !in_place {
                 replaced = Some(std::mem::replace(&mut whole.layer.tex, target));
             }
@@ -4883,6 +4959,7 @@ impl Painter {
                     self.retire(target);
                 } else if let Some(whole) = self.whole.as_mut() {
                     whole.stale = true;
+                    whole.clean(false, &[]);
                 }
                 return false;
             }
@@ -4899,7 +4976,8 @@ impl Painter {
             whole.serial = serial;
             whole.layer.drawn = serial;
             whole.stale |= image.is_none();
-            whole.patch.clear();
+            let patched = std::mem::take(&mut whole.patch);
+            whole.clean(image.is_some(), &patched);
             whole.seq = seq;
             // Drawn again whole at rest, as where parts meet each is drawn
             // over the other, not as one
@@ -5157,27 +5235,42 @@ impl Painter {
                 !rough && tile.drawn < drawn && key.px() == px && area.left <= tile_area.left && area.top <= tile_area.top && area.right >= tile_area.right && area.bottom >= tile_area.bottom
             })
         };
-        let tiles = self.tiles.iter().filter(|(key, tile)| !under(key, tile) && (!tile.stale || stale)).map(|(key, tile)| Layer {
-            tex: tile.tex.clone(),
-            x: key.x * TILE,
-            y: key.y * TILE,
-            phase: (0.0, 0.0),
-            px: key.px(),
-            counts: tile.counts,
-            drawn: tile.drawn,
-            kind: if tile.stale && tile.seen && !older(key, tile) {
-                LayerKind::Stale
-            } else if tile.stale {
-                LayerKind::Old
-            } else if tile.draft {
-                LayerKind::Draft
-            } else {
-                LayerKind::Tile
-            },
+        let tiles = self.tiles.iter().filter(|(key, tile)| !under(key, tile) && (!tile.stale || stale)).map(|(key, tile)| {
+            let mut layer = Layer {
+                tex: tile.tex.clone(),
+                x: key.x * TILE,
+                y: key.y * TILE,
+                phase: (0.0, 0.0),
+                px: key.px(),
+                counts: tile.counts,
+                drawn: tile.drawn,
+                kind: if tile.stale && tile.seen && !older(key, tile) {
+                    LayerKind::Stale
+                } else if tile.stale {
+                    LayerKind::Old
+                } else if tile.draft {
+                    LayerKind::Draft
+                } else {
+                    LayerKind::Tile
+                },
+                dirt: Vec::new(),
+            };
+            if tile.stale {
+                layer.dirt = dirt_in(&tile.dirt, &layer, DIRT_REACH);
+            }
+            layer
         });
-        let whole = self.whole.as_ref().and_then(|whole| match !whole.stale && whole.patch.is_empty() {
-            true => Some(whole.layer.clone()),
-            false => stale.then(|| Layer { kind: LayerKind::Stale, ..whole.layer.clone() }),
+        let whole = self.whole.as_ref().and_then(|whole| {
+            let mut layer = match !whole.stale && whole.patch.is_empty() {
+                true => whole.layer.clone(),
+                false => stale.then(|| Layer { kind: LayerKind::Stale, ..whole.layer.clone() })?,
+            };
+            // Its patch taken to draw a new one from leaves it out of date
+            // though it's not marked so
+            if whole.stale || !whole.dirt.is_empty() || !whole.patch.is_empty() {
+                layer.dirt = dirt_in(&whole.dirt, &layer, DIRT_REACH);
+            }
+            Some(layer)
         });
         tiles.chain(whole).chain(self.last_whole.clone()).collect()
     }
@@ -5249,6 +5342,7 @@ impl Painter {
             dark,
             pending: self.dirty,
             tab: self.tab.clone(),
+            edits: self.edits,
         };
         *self.hub.snapshot.lock().unwrap() = Some(Arc::new(snapshot));
         self.hub.poke();
@@ -6584,37 +6678,46 @@ impl Painter {
             }
         }
         let areas = &areas[..];
-        let stale: Vec<TileKey> = self
-            .tiles
-            .keys()
-            .filter(|key| {
-                let reach = self.margin(**key) as f32 / key.px();
-                let area = key.area().with_outset((reach, reach));
-                areas.iter().any(|other| Rect::intersects2(&area, other))
-            })
-            .copied()
-            .collect();
+        self.edits += 1;
+        // Where in each tile, as far as background blurs over it reach
+        let hits = |key: TileKey| {
+            let reach = self.margin(key) as f32 / key.px();
+            let area = key.area();
+            let near = area.with_outset((reach, reach));
+            let dirt: Vec<Rect> = areas
+                .iter()
+                .filter(|other| Rect::intersects2(&near, other))
+                .map(|other| {
+                    let other = other.with_outset((reach, reach));
+                    Rect::from_ltrb(other.left.max(area.left), other.top.max(area.top), other.right.min(area.right), other.bottom.min(area.bottom))
+                })
+                .collect();
+            (!dirt.is_empty()).then_some((key, dirt))
+        };
+        // Each tile's own, as with all of it out of date none's noted
+        let soil_tile = |dirt: &mut Vec<Rect>, was_stale: bool, new: Vec<Rect>| {
+            if was_stale && dirt.is_empty() {
+                return;
+            }
+            for area in new {
+                soil(dirt, area, TILE_DIRT);
+            }
+        };
+        let stale: Vec<(TileKey, Vec<Rect>)> = self.tiles.keys().filter_map(|key| hits(*key)).collect();
+        let mut hit: HashMap<TileKey, Vec<Rect>> = self.drawn_tiles.iter().flat_map(|drawn| drawn.tiles.iter().map(|(key, ..)| *key)).filter_map(hits).collect();
         let view = self.view_area().map(|(view, _)| view);
-        for key in stale {
+        for (key, dirt) in stale {
             if let Some(tile) = self.tiles.get_mut(&key) {
                 tile.seen = (tile.seen || !tile.stale) && view.is_some_and(|view| Rect::intersects2(&view, &key.area()));
+                soil_tile(&mut tile.dirt, tile.stale, dirt);
                 tile.stale = true;
             }
         }
-        let hit: Vec<TileKey> = self
-            .drawn_tiles
-            .iter()
-            .flat_map(|drawn| drawn.tiles.iter().map(|(key, ..)| *key))
-            .filter(|key| {
-                let reach = self.margin(*key) as f32 / key.px();
-                let area = key.area().with_outset((reach, reach));
-                areas.iter().any(|other| Rect::intersects2(&area, other))
-            })
-            .collect();
         if let Some(drawn) = self.drawn_tiles.as_mut() {
-            for (key, _, stale, seen) in &mut drawn.tiles {
-                if hit.contains(key) {
+            for (key, _, stale, seen, dirt) in &mut drawn.tiles {
+                if let Some(new) = hit.remove(key) {
                     *seen = (*seen || !*stale) && view.is_some_and(|view| Rect::intersects2(&view, &key.area()));
+                    soil_tile(dirt, *stale, new);
                     *stale = true;
                 }
             }
@@ -6634,6 +6737,9 @@ impl Painter {
         };
         if let Some(whole) = &mut self.whole {
             let inside: Vec<Rect> = over(&whole.layer).collect();
+            for area in &inside {
+                soil(&mut whole.dirt, *area, WHOLE_DIRT);
+            }
             whole.patch.extend(inside);
         }
         if let Some(unchecked) = &mut self.unchecked {
@@ -7840,7 +7946,7 @@ impl Painter {
         if margin == 0 {
             self.scratch.push((margin, if msaa { 0 } else { ss }, scratch));
         }
-        Some(Tile { image, tex, used: self.frame, counts, stale: false, seen: false, exact, draft, vello: false, drawn: 0 })
+        Some(Tile { image, tex, used: self.frame, counts, stale: false, dirt: Vec::new(), seen: false, exact, draft, vello: false, drawn: 0 })
     }
 
     fn background(&self) -> Color4f {

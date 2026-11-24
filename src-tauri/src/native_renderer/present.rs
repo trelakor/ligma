@@ -226,6 +226,52 @@ pub struct Layer {
     pub kind: LayerKind,
     /// When it was drawn, later ones higher (see `Painter::serial`)
     pub drawn: u64,
+    /// Where it's out of date, in its texture's pixels: where something
+    /// changed since it was drawn. Shown there only where the last frame
+    /// showed it, so no frame shows the page as it was before what a frame
+    /// already showed
+    pub dirt: Vec<skia_safe::IRect>,
+}
+
+/// What the last frame showed: each piece's layer (see `shown_key`), where
+/// its texture went and where in the window it was shown. Where in the
+/// texture that was is worked out only for a layer out of date, as few are
+#[derive(Default)]
+pub struct Shown(Vec<((usize, i32, i32, u32), Rect, skia_safe::Region)>);
+
+impl Shown {
+    fn has(&self, layer: &Layer) -> bool {
+        let key = shown_key(layer);
+        self.0.iter().any(|(at, ..)| *at == key)
+    }
+
+    /// Where in `layer`'s texture the last frame showed it, each texel any
+    /// of its pixels shows
+    fn texels(&self, layer: &Layer) -> Option<skia_safe::Region> {
+        let key = shown_key(layer);
+        let (width, height) = (layer.tex.width, layer.tex.height);
+        let mut seen: Option<skia_safe::Region> = None;
+        for (_, dest, clip) in self.0.iter().filter(|(at, ..)| *at == key) {
+            let seen = seen.get_or_insert_with(skia_safe::Region::new);
+            let (sx, sy) = (width as f32 / dest.width(), height as f32 / dest.height());
+            for rect in skia_safe::region::Iterator::new(clip) {
+                let at = skia_safe::IRect::from_ltrb(
+                    (((rect.left as f32 - dest.left) * sx).floor() as i32).max(0),
+                    (((rect.top as f32 - dest.top) * sy).floor() as i32).max(0),
+                    (((rect.right as f32 - dest.left) * sx).ceil() as i32).min(width),
+                    (((rect.bottom as f32 - dest.top) * sy).ceil() as i32).min(height),
+                );
+                if !at.is_empty() {
+                    seen.op_rect(at, skia_safe::region::RegionOp::Union);
+                }
+            }
+        }
+        seen
+    }
+}
+
+fn shown_key(layer: &Layer) -> (usize, i32, i32, u32) {
+    (Arc::as_ptr(&layer.tex) as usize, layer.x, layer.y, layer.px.to_bits())
 }
 
 /// Longest a view waits for what it needs drawn before it's shown with
@@ -241,6 +287,7 @@ const EDIT_HOLD: Duration = Duration::from_millis(250);
 /// frame `seq` of Figma's render tree, so whatever's composed of it at any
 /// view is all of one moment of the page. Nothing in it changes once it's
 /// handed over: what's drawn again is drawn into textures of its own
+#[derive(Clone)]
 pub struct Snapshot {
     pub seq: u64,
     /// The latest frame whose changes are drawn wherever the view is: one
@@ -266,6 +313,9 @@ pub struct Snapshot {
     pub pending: bool,
     /// The tab it's drawn from, shown only while that tab is
     pub tab: Option<Arc<str>>,
+    /// Counts the changes drawn over: one with as many as another has
+    /// layers out of date where they were then
+    pub edits: u64,
 }
 
 impl Snapshot {
@@ -475,14 +525,15 @@ fn look_of(snapshot: &Snapshot, pieces: &[Piece], seq: u64, ahead: (f32, f32)) -
 /// view drawn at it, then the rest, scaled, each where those before don't
 /// cover. And whether that leaves some of the view out
 pub fn cover(layers: &[Layer], content: Option<Rect>, view: &View, size: (u32, u32)) -> (Vec<Piece>, bool) {
-    let (pieces, hole) = cover_over(layers, layers.len(), content, view, size, &std::collections::HashSet::new());
+    let (pieces, hole) = cover_over(layers, layers.len(), content, view, size, None);
     (pieces, hole.is_some())
 }
 
 /// As `cover`, with the layers from `behind` on used only where those
 /// before them leave holes, and out of date ones of textures in `shown`,
-/// the last frame's, first of those out of date
-fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32), shown: &std::collections::HashSet<usize>) -> (Vec<Piece>, Option<skia_safe::IRect>) {
+/// the last frame's, first of those out of date. Given `shown`, where a
+/// layer's out of date it's used only where the last frame showed it
+fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &View, size: (u32, u32), shown: Option<&Shown>) -> (Vec<Piece>, Option<skia_safe::IRect>) {
     if view.outline().is_some() {
         return (Vec::new(), None);
     }
@@ -524,7 +575,7 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
                 // lands on the grid doesn't matter. What the last frame
                 // showed first: another, older or never shown, would show
                 // the view other than it just was for a frame
-                (LayerKind::Stale, _) => (if shown.contains(&(Arc::as_ptr(&layer.tex) as usize)) { 1.3 } else { 1.6 }) + distance(layer.px),
+                (LayerKind::Stale, _) => (if shown.is_some_and(|shown| shown.has(layer)) { 1.3 } else { 1.6 }) + distance(layer.px),
                 // Under all up to date, however coarse
                 (LayerKind::Old, _) => 100.0 + distance(layer.px),
                 _ => 2.0 + distance(layer.px),
@@ -578,6 +629,11 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
         (dest, square)
     };
     let mut pieces = Vec::new();
+    // What nothing covers, out of date or not, once some is left out as out
+    // of date: only a hole here holds the view for what's being drawn, as
+    // one left by what's out of date would hold it each time a pan comes to
+    // what changed. There the canvas shows till it's drawn again
+    let mut bare: Option<skia_safe::Region> = None;
     // Each pixel goes to the first layer over its center, then any left,
     // as where layers of other zooms or phases meet, to the first over any
     // of it, which `paint` fills with its edge
@@ -586,18 +642,106 @@ fn cover_over(layers: &[Layer], behind: usize, content: Option<Rect>, view: &Vie
             if left.is_empty() {
                 break;
             }
-            let (dest, square) = place(&layers[i]);
+            let layer = &layers[i];
+            let (dest, square) = place(layer);
             let covers = if outward { skia_safe::IRect::from_ltrb(dest.left.floor() as i32, dest.top.floor() as i32, dest.right.ceil() as i32, dest.bottom.ceil() as i32) } else { dest.round() };
             let mut clip = skia_safe::Region::new();
             clip.set_rect(covers);
             if !clip.op_region(&left, skia_safe::region::RegionOp::Intersect) {
                 continue;
             }
-            left.op_rect(covers, skia_safe::region::RegionOp::Difference);
+            match shown.and_then(|shown| unseen_dirt(layer, &dest, shown)) {
+                Some(unseen) => {
+                    if super::render::tracing() {
+                        let mut out = clip.clone();
+                        if out.op_region(&unseen, skia_safe::region::RegionOp::Intersect) {
+                            let px: i64 = skia_safe::region::Iterator::new(&out).map(|rect| rect.width() as i64 * rect.height() as i64).sum();
+                            super::render::trace(|| format!("present left out {px}px of a {:?} layer px={:.3} as out of date and not just shown", layer.kind, layer.px));
+                        }
+                    }
+                    bare.get_or_insert_with(|| left.clone()).op_rect(covers, skia_safe::region::RegionOp::Difference);
+                    if !clip.op_region(&unseen, skia_safe::region::RegionOp::Difference) {
+                        continue;
+                    }
+                    left.op_region(&clip, skia_safe::region::RegionOp::Difference);
+                }
+                None => {
+                    left.op_rect(covers, skia_safe::region::RegionOp::Difference);
+                    if let Some(bare) = bare.as_mut() {
+                        bare.op_rect(covers, skia_safe::region::RegionOp::Difference);
+                    }
+                }
+            }
             pieces.push(Piece { layer: i, dest, clip, square });
         }
     }
-    (pieces, (!left.is_empty()).then(|| *left.bounds()))
+    if bare.as_ref().is_some_and(|bare| bare.is_empty() && !left.is_empty()) {
+        super::render::trace(|| format!("present shows the canvas over {}px of what's out of date", skia_safe::region::Iterator::new(&left).map(|rect| rect.width() as i64 * rect.height() as i64).sum::<i64>()));
+    }
+    let hole = bare.as_ref().unwrap_or(&left);
+    (pieces, (!hole.is_empty()).then(|| *hole.bounds()))
+}
+
+/// Where in the window, `layer` drawn at `dest`, it's out of date and the
+/// last frame didn't show it, as what's there was shown up to date since,
+/// or not at all: the page as it was before what a frame showed, or
+/// before it changed. None if nowhere
+fn unseen_dirt(layer: &Layer, dest: &Rect, shown: &Shown) -> Option<skia_safe::Region> {
+    if layer.dirt.is_empty() {
+        return None;
+    }
+    let mut dirt = skia_safe::Region::new();
+    for rect in &layer.dirt {
+        dirt.op_rect(*rect, skia_safe::region::RegionOp::Union);
+    }
+    if let Some(seen) = shown.texels(layer) {
+        if !dirt.op_region(&seen, skia_safe::region::RegionOp::Difference) {
+            return None;
+        }
+    }
+    // Each texel's pixels, all those it touches
+    let (sx, sy) = (dest.width() / layer.tex.width as f32, dest.height() / layer.tex.height as f32);
+    let mut unseen = skia_safe::Region::new();
+    for rect in skia_safe::region::Iterator::new(&dirt) {
+        let at = skia_safe::IRect::from_ltrb(
+            (dest.left + rect.left as f32 * sx).floor() as i32,
+            (dest.top + rect.top as f32 * sy).floor() as i32,
+            (dest.left + rect.right as f32 * sx).ceil() as i32,
+            (dest.top + rect.bottom as f32 * sy).ceil() as i32,
+        );
+        unseen.op_rect(at, skia_safe::region::RegionOp::Union);
+    }
+    Some(unseen)
+}
+
+/// What `pieces` of `layers` show (see `Shown`)
+fn shown_of(layers: &[Layer], pieces: &[Piece]) -> Shown {
+    Shown(pieces.iter().map(|piece| (shown_key(&layers[piece.layer]), piece.dest, piece.clip.clone())).collect())
+}
+
+/// `before`'s layers, out of date where they are as of `snapshot`: as in
+/// `snapshot` where it has them, as they were if nothing's changed since,
+/// otherwise all of them. And whether `snapshot` has each
+fn as_of(before: &Snapshot, snapshot: &Snapshot) -> Vec<(Layer, bool)> {
+    let now: std::collections::HashMap<(usize, i32, i32, u32), &Layer> = snapshot.layers.iter().map(|layer| (shown_key(layer), layer)).collect();
+    before
+        .layers
+        .iter()
+        .map(|layer| {
+            let mut layer = layer.clone();
+            let has = now.get(&shown_key(&layer)).map(|now| layer.dirt.clone_from(&now.dirt)).is_some();
+            if !has && before.edits != snapshot.edits {
+                layer.dirt = vec![skia_safe::IRect::from_wh(layer.tex.width, layer.tex.height)];
+            }
+            (layer, has)
+        })
+        .collect()
+}
+
+/// `before`'s layers to fill holes in `snapshot`'s with, those it doesn't
+/// have, out of date where they are now (see `as_of`)
+fn behind_of(before: &Snapshot, snapshot: &Snapshot) -> impl Iterator<Item = Layer> {
+    as_of(before, snapshot).into_iter().filter(|(_, has)| !has).map(|(layer, _)| layer)
 }
 
 /// What draws Figma's checkerboard and pixel grid
@@ -719,8 +863,8 @@ pub struct Screen {
     /// Textures frames read, held till the GPU's drawn them, so the render
     /// thread draws into none the GPU's still reading here
     reading: std::collections::VecDeque<(u64, Vec<Arc<Tex>>)>,
-    /// The textures the last frame showed
-    shown: std::collections::HashSet<usize>,
+    /// The textures the last frame showed, and where
+    shown: Shown,
     /// For Show stats: the oldest frame of Figma's not shown yet, as those
     /// passed over while the render thread was behind count too, the last
     /// one shown, and when
@@ -1572,7 +1716,7 @@ impl Screen {
             size: (width.max(1), height.max(1)),
             images: std::collections::HashMap::new(),
             patterns: Patterns::new(),
-            shown: std::collections::HashSet::new(),
+            shown: Shown::default(),
             queue,
             fence,
             frames: 0,
@@ -1740,7 +1884,8 @@ impl Screen {
                 let back = left.iter().position(|(kept, ..)| showing.is_some() && kept.tab.as_deref() == showing.as_deref() && snapshot.tab != kept.tab).map(|index| left.remove(index));
                 if let Some((kept, kept_view, _)) = back {
                     hub.whole_tab.lock().unwrap().clone_from(&kept.tab);
-                    let (pieces, _) = cover_over(&kept.layers, kept.layers.len(), kept.content, &kept_view, self.size, &self.shown);
+                    // As it was last seen, out of date or not
+                    let (pieces, _) = cover_over(&kept.layers, kept.layers.len(), kept.content, &kept_view, self.size, None);
                     let _ = self.place(placed(&hub, &kept_view));
                     self.frame(&kept, &pieces, &kept_view, None, self.timed);
                     self.tab_drawn();
@@ -1770,9 +1915,9 @@ impl Screen {
             let px = view.px(self.size.0) as f64;
             let ahead = (predicting() && came.is_some()).then(|| self.pan.ahead(seq, sent, age, &view, px)).flatten();
             let (view, by) = match ahead {
-                Some((moved, by)) if cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, &self.shown).1.is_none() => (moved, by),
+                Some((moved, by)) if cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, Some(&self.shown)).1.is_none() => (moved, by),
                 Some((moved, by)) => {
-                    let hole = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, &self.shown).1;
+                    let hole = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &moved, self.size, Some(&self.shown)).1;
                     let kinds: Vec<String> = snapshot.layers.iter().map(|layer| format!("{:?}@{},{} {}x{} px={:.3}", layer.kind, layer.x, layer.y, layer.tex.width, layer.tex.height, layer.px)).take(6).collect();
                     super::render::trace(|| format!("present not ahead by {:.1},{:.1}: hole {hole:?}, {} layers {kinds:?}", by.0 * px, by.1 * px, snapshot.layers.len()));
                     self.pan.not_ahead();
@@ -1797,7 +1942,7 @@ impl Screen {
             // All of the view or nothing: what's shown stays till the
             // render thread has drawn what the view needs. Its whole view
             // is drawn for the view itself, so it's what there is
-            let (pieces, hole) = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
+            let (pieces, hole) = cover_over(&snapshot.layers, snapshot.layers.len(), snapshot.content, &view, self.size, Some(&self.shown));
             if hole.is_some() && snapshot.whole_at != Some(view_at(&view, self.size)) {
                 stats().lock().unwrap().holes(true);
                 // Its holes filled from the last snapshot shown whole, as
@@ -1805,8 +1950,8 @@ impl Screen {
                 // for what's being drawn again
                 let merged = complete.as_ref().filter(|before| before.serial != snapshot.serial && before.tab == snapshot.tab).map(|before| {
                     let mut layers = snapshot.layers.clone();
-                    layers.extend(before.layers.iter().cloned());
-                    let (pieces, merged_hole) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, &self.shown);
+                    layers.extend(behind_of(before, &snapshot));
+                    let (pieces, merged_hole) = cover_over(&layers, snapshot.layers.len(), snapshot.content, &view, self.size, Some(&self.shown));
                     let holes = merged_hole.is_some();
                     let merged = Snapshot {
                         seq: snapshot.seq,
@@ -1822,6 +1967,7 @@ impl Screen {
                         dark: snapshot.dark,
                         pending: snapshot.pending,
                         tab: snapshot.tab.clone(),
+                        edits: snapshot.edits,
                     };
                     (merged, pieces, holes)
                 });
@@ -1857,7 +2003,9 @@ impl Screen {
                     continue;
                 }
                 let before = complete.clone().filter(|before| before.serial != snapshot.serial && before.tab == snapshot.tab).and_then(|before| {
-                    let (pieces, holes) = cover_over(&before.layers, before.layers.len(), before.content, &view, self.size, &self.shown);
+                    let layers = as_of(&before, &snapshot).into_iter().map(|(layer, _)| layer).collect();
+                    let before = Snapshot { layers, ..Snapshot::clone(&before) };
+                    let (pieces, holes) = cover_over(&before.layers, before.layers.len(), before.content, &view, self.size, Some(&self.shown));
                     let holes = holes.is_some();
                     let then = (before.serial, view.clone(), overlay.as_ref().map(|drawn| drawn.canvas.unique_id()), self.size);
                     (!holes && shown.as_ref() != Some(&then)).then_some((before, pieces, then))
@@ -2028,7 +2176,7 @@ impl Screen {
         drop(images);
         self.frames += 1;
         let read: Vec<Arc<Tex>> = pieces.iter().map(|piece| snapshot.layers[piece.layer].tex.clone()).collect();
-        self.shown = read.iter().map(|tex| Arc::as_ptr(tex) as usize).collect();
+        self.shown = shown_of(&snapshot.layers, pieces);
         if unsafe { self.queue.Signal(&self.fence, self.frames) }.is_err() {
             // Without the fence, waited for instead
             self.context.submit(SyncCpu::Yes);
