@@ -965,6 +965,13 @@ pub fn bez(path: &Path) -> BezPath {
     out
 }
 
+/// Clips what's drawn in `scene` from now on, till its layer's popped, to
+/// `outline` placed by `transform` in the scene's space
+pub fn push_clip(scene: &mut vello::Scene, outline: &Path, transform: Affine) {
+    count_layer();
+    scene.push_clip_layer(fill_of(outline), transform, &bez(outline));
+}
+
 pub fn affine(m: &Matrix) -> Affine {
     Affine::new([m.scale_x() as f64, m.skew_y() as f64, m.skew_x() as f64, m.scale_y() as f64, m.translate_x() as f64, m.translate_y() as f64])
 }
@@ -1065,6 +1072,13 @@ pub struct Fragment {
     pub pictures: Vec<(String, u32, u64)>,
     /// Its blurs, which each view draws and puts in place
     pub effects: Vec<Effect>,
+    /// The clips it's drawn in that cut what it draws, by where they are
+    /// in its unit's, which aren't in it: the view clips it, and those
+    /// beside it in the same clips, as one, as the unit they'd be of would
+    pub cuts: Vec<usize>,
+    /// Whether its unit blends, so the clips it's in that cut it are drawn
+    /// in it, softly, not by the view
+    pub soft: bool,
 }
 
 impl Fragment {
@@ -1883,6 +1897,9 @@ pub struct Encoder<'a> {
     /// The clip before each layer or clip, and whether Vello has a layer
     /// for it
     saved: Vec<(Option<Path>, bool)>,
+    /// While a fragment's encoded, the clips its unit's in that cut it,
+    /// left to the view, see `Fragment::cuts`
+    cuts: Option<Vec<usize>>,
     depth: u8,
     /// Encoding a fragment, for any view: nothing's cut by the view
     retained: bool,
@@ -1970,6 +1987,7 @@ impl<'a> Encoder<'a> {
             fell_back: 0,
             soft: None,
             saved: Vec::new(),
+            cuts: None,
             inexact: 0,
             skia_took: std::time::Duration::ZERO,
             kinds: Default::default(),
@@ -2318,7 +2336,10 @@ impl<'a> Encoder<'a> {
         let (asked, counts, pictures) = (std::mem::take(&mut self.asked), std::mem::take(&mut self.counts), std::mem::take(&mut self.pictures));
         let effects = std::mem::take(&mut self.effects);
         self.retained = true;
+        self.cuts = Some(Vec::new());
         self.place(place, &post);
+        let cuts = self.cuts.take().unwrap_or_default();
+        let soft = self.tree.info(place.id).blends;
         self.retained = false;
         let fragment = Fragment {
             scene: std::mem::replace(&mut self.scene, scene),
@@ -2328,6 +2349,8 @@ impl<'a> Encoder<'a> {
             counts: std::mem::replace(&mut self.counts, counts),
             pictures: std::mem::replace(&mut self.pictures, pictures),
             effects: std::mem::replace(&mut self.effects, effects),
+            cuts,
+            soft,
         };
         fragment
     }
@@ -2342,7 +2365,7 @@ impl<'a> Encoder<'a> {
         let drawn = info.bounds.map(|bounds| Matrix::concat(post, &place.at).map_rect(bounds).0.with_outset((1.0, 1.0)));
         let was = self.soft.clone();
         let mut clips = 0;
-        for (fill, at) in &place.clips {
+        for (index, (fill, at)) in place.clips.iter().enumerate() {
             if let Some(outline) = self.tree.outline(*fill) {
                 let device = outline.with_transform(&Matrix::concat(post, at));
                 // One around all it draws cuts nothing, and each clip takes
@@ -2352,6 +2375,8 @@ impl<'a> Encoder<'a> {
                 }
                 if soft {
                     self.soften(device);
+                } else if let Some(cuts) = &mut self.cuts {
+                    cuts.push(index);
                 } else {
                     self.clip(device);
                     clips += 1;

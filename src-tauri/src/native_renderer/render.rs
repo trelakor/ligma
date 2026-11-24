@@ -347,6 +347,9 @@ struct Unit {
     place: Option<Place>,
     /// Draws other than over what's under it, see `TreeUnit::blends`
     blends: bool,
+    /// What its node draws, as it was when the unit was made, see
+    /// `Tree::content`
+    content: u64,
 }
 
 /// A unit as it's drawn: its picture, or an image of it drawn at the scale
@@ -3642,13 +3645,7 @@ impl Painter {
                 if !Rect::intersects2(&unit.bounds, &reach) || !within(index) {
                     return 0;
                 }
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                self.mark(unit).hash(&mut hasher);
-                self.sharpened.get(&(unit.slot, unit.section)).hash(&mut hasher);
-                if let (Some(tree), Some(place)) = (&self.tree, &unit.place) {
-                    tree.content(place.id).hash(&mut hasher);
-                }
-                hasher.finish()
+                self.stamp(unit, self.tree.as_ref().zip(unit.place.as_ref()).map(|(tree, place)| tree.content(place.id)))
             })
             .collect();
         let stamped = started.elapsed();
@@ -3836,11 +3833,30 @@ impl Painter {
                     }
                 }
                 let _placing = super::span::span("place fragments");
+                // The clips open around what's placed: units in the same
+                // clips, one after the other, are drawn in them as one, as
+                // the unit they're split from would be, so they don't show
+                // where they meet along its edge
+                let mut open: Vec<(u32, skia_safe::Matrix)> = Vec::new();
+                let view = vello::kurbo::Affine::translate((-from_x, -from_y)) * vello::kurbo::Affine::scale(px as f64);
+                let clip_to = |scene: &mut vello::Scene, open: &mut Vec<(u32, skia_safe::Matrix)>, wanted: &[&(u32, skia_safe::Matrix)]| {
+                    let same = open.iter().zip(wanted).take_while(|(open, wanted)| *open == **wanted).count();
+                    while open.len() > same {
+                        scene.pop_layer();
+                        open.pop();
+                    }
+                    for &&(fill, m) in &wanted[same..] {
+                        let Some(outline) = tree.outline(fill) else { continue };
+                        super::vello::push_clip(scene, &outline, view * super::vello::affine(&m));
+                        open.push((fill, m));
+                    }
+                };
                 for &(index, key) in &shown {
                     if encoder.failed.is_some() {
                         break;
                     }
                     if let Some((Some(image), (x, y), _)) = mid.as_ref().filter(|(_, _, to)| index > *to) {
+                        clip_to(&mut encoder.scene, &mut open, &[]);
                         super::vello::put_kept(&mut encoder.scene, image, *x, *y, w as u32, h as u32);
                         mid = None;
                     }
@@ -3850,6 +3866,7 @@ impl Painter {
                         if !fresh {
                             continue;
                         }
+                        clip_to(&mut encoder.scene, &mut open, &[]);
                         encoder.place(place, &post);
                         let (mut effects, mut scene) = (std::mem::take(&mut encoder.effects), std::mem::take(&mut encoder.scene));
                         if let Err(why) = encoder.put(&mut plan, &mut effects, scene.encoding_mut(), vello::kurbo::Affine::IDENTITY, whole, 0) {
@@ -3867,6 +3884,8 @@ impl Painter {
                     encoded.used = now;
                     match &mut *encoded.made {
                         Ok(fragment) => {
+                            let wanted: Vec<&(u32, skia_safe::Matrix)> = fragment.cuts.iter().filter_map(|&cut| place.clips.get(cut)).collect();
+                            clip_to(&mut encoder.scene, &mut open, &wanted);
                             let at = fragment.at(px, from_x, from_y);
                             let timer = Instant::now();
                             // What Skia draws in it, drawn for the view, asks
@@ -3896,6 +3915,7 @@ impl Painter {
                     }
                     units += 1;
                 }
+                clip_to(&mut encoder.scene, &mut open, &[]);
                 if !biggest.is_empty() {
                     biggest.sort_by_key(|(paths, ..)| std::cmp::Reverse(*paths));
                     trace(|| format!("  biggest units: {}", biggest.iter().take(6).map(|(paths, id, count, b)| format!("{id} words={paths} nodes={count} at {:.0},{:.0} {:.0}x{:.0}", b.left, b.top, b.width(), b.height())).collect::<Vec<_>>().join(", ")));
@@ -6549,6 +6569,60 @@ impl Painter {
         hasher.finish()
     }
 
+    /// What fragments of `unit` are stamped with, see `usable`, its node
+    /// drawing `content`
+    fn stamp(&self, unit: &Unit, content: Option<u64>) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.mark(unit).hash(&mut hasher);
+        self.sharpened.get(&(unit.slot, unit.section)).hash(&mut hasher);
+        if let Some(content) = content {
+            content.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Hands units `moved` drew from, as they were, what was encoded of
+    /// them, which draws just what they do now but for where: the unit at
+    /// each index, the slot of the one gone, and how far it moved
+    fn take_moved(&mut self, olds: &[Unit], moved: &[(usize, usize, ((f32, f32), bool))]) {
+        if moved.is_empty() {
+            return;
+        }
+        let Some(tree) = &self.tree else { return };
+        let old_at: super::rt::IdMap<usize, usize> = olds.iter().enumerate().filter(|(_, old)| !old.section).map(|(index, old)| (old.slot, index)).collect();
+        let mut handed = Vec::new();
+        for &(index, from, by) in moved {
+            let (Some(unit), Some(&old)) = (self.units.get(index), old_at.get(&from)) else { continue };
+            let Some(place) = &unit.place else { continue };
+            handed.push((from, unit.slot, by, place.clips.len(), self.stamp(&olds[old], Some(olds[old].content)), self.stamp(unit, Some(tree.content(place.id)))));
+        }
+        let mut count = 0;
+        for (from, to, ((x, y), stays), clips, was, now) in handed {
+            for level in -16..=16 {
+                let Some(encoded) = self.fragments.get(&(from, false, level)) else { continue };
+                // One that blends has the clips it's in drawn in it
+                if encoded.stamp != was || encoded.made.as_ref().as_ref().map_or(true, |fragment| stays && fragment.soft) {
+                    continue;
+                }
+                let Some(mut encoded) = self.fragments.remove(&(from, false, level)) else { continue };
+                if let Ok(fragment) = &mut *encoded.made {
+                    fragment.origin = (fragment.origin.0 + x, fragment.origin.1 + y);
+                    for (_, place) in &mut fragment.asked.places {
+                        place.offset((x, y));
+                    }
+                    // Moved in them, those that didn't cut it may now
+                    if !fragment.soft {
+                        fragment.cuts = (0..clips).collect();
+                    }
+                }
+                encoded.stamp = now;
+                self.fragments.insert((to, false, level), encoded);
+                count += 1;
+            }
+        }
+        trace(|| format!("  {} units moved, {count} of their fragments kept", moved.len()));
+    }
+
     /// What units `keys` draw changed, though they're the same units
     fn bump(&mut self, keys: impl IntoIterator<Item = (usize, bool)>) {
         for key in keys {
@@ -6905,6 +6979,8 @@ impl Painter {
             // `regroup`, and whether it draws what part of one gone drew
             let mut owners: Vec<Option<usize>> = Vec::with_capacity(tree_units.len());
             let mut kept_parts: Vec<bool> = Vec::with_capacity(tree_units.len());
+            // Units that draw what one gone drew, moved, see `take_moved`
+            let mut moved: Vec<(usize, usize, ((f32, f32), bool))> = Vec::new();
             let looks_span = super::span::span("unit looks");
             for unit in tree_units {
                 owners.push(unit.regroups.map(|key| self.aliases.get(&key).copied().unwrap_or(key)));
@@ -6947,11 +7023,20 @@ impl Painter {
                         was
                     });
                     let near = by_what.get_mut(&look.what).and_then(|(count, gone)| {
-                        let (index, _) = gone
+                        let same = gone
                             .iter()
                             .enumerate()
                             .filter(|(_, (_, old, _))| !taken.contains(old) && self.looks.get(old).is_some_and(|old| old.same(&look)))
-                            .min_by_key(|(_, (at, ..))| *at)?;
+                            .min_by_key(|(_, (at, ..))| *at)
+                            .map(|(index, _)| (index, None));
+                        // Else one that draws the same but moved, as what's
+                        // dragged does, a new unit, whose fragments it takes
+                        let (index, by) = same.or_else(|| {
+                            if unit.custom {
+                                return None;
+                            }
+                            gone.iter().enumerate().filter(|(_, (_, old, _))| !taken.contains(old)).find_map(|(index, (_, old, _))| self.looks.get(old).and_then(|old| look.moved(old)).map(|by| (index, Some(by))))
+                        })?;
                         let (at, slot, bounds) = gone.swap_remove(index);
                         // Taking one from a list of them all moved its last
                         // to where that one was
@@ -6959,12 +7044,17 @@ impl Painter {
                         if let Some(last) = gone.iter_mut().find(|(was_at, ..)| *was_at == *count) {
                             last.0 = at;
                         }
-                        Some((slot, bounds))
+                        Some((slot, bounds, by))
                     });
                     match near {
-                        Some(near) => {
-                            (slot, bounds) = near;
+                        Some((near, near_bounds, None)) => {
+                            (slot, bounds) = (near, near_bounds);
                             taken.insert(slot);
+                        }
+                        Some((from, _, Some(by))) => {
+                            taken.insert(from);
+                            moved.push((units.len(), from, by));
+                            self.looks.insert(slot, look);
                         }
                         None => {
                             self.looks.insert(slot, look);
@@ -6974,7 +7064,8 @@ impl Painter {
                 if slot != unit.key {
                     aliases.insert(unit.key, slot);
                 }
-                units.push(Unit { slot, section: false, bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place), blends: unit.blends });
+                let content = tree.content(unit.place.id);
+                units.push(Unit { slot, section: false, bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place), blends: unit.blends, content });
             }
             drop(looks_span);
             {
@@ -7008,6 +7099,7 @@ impl Painter {
             }
             drop(alone_span);
             self.units = units;
+            self.take_moved(&olds, &moved);
             if kept_parts.contains(&true) {
                 let olds_at: IdSet<usize> = olds.iter().map(|old| old.slot).collect();
                 self.unchanged = self.units.iter().zip(&kept_parts).filter(|(unit, &kept)| kept && !olds_at.contains(&unit.slot)).map(|(unit, _)| unit.slot).collect();
@@ -7028,7 +7120,7 @@ impl Painter {
                 return;
             };
             if node.kind == Kind::Section {
-                units.push(Unit { slot, section: true, bounds, custom: false, alone: false, place: None, blends: true });
+                units.push(Unit { slot, section: true, bounds, custom: false, alone: false, place: None, blends: true, content: 0 });
                 for (i, &child) in node.children.iter().enumerate() {
                     let mask = scene.node(child).filter(|child| !child.hidden && child.mask.is_some());
                     if mask.is_some() {
@@ -7039,14 +7131,14 @@ impl Painter {
                             .filter_map(|&later| scene.node(later).filter(|later| !later.hidden).and_then(|later| later.bounds))
                             .reduce(|a, b| Rect::join2(a, b));
                         if let Some(rest) = rest {
-                            units.push(Unit { slot: child, section: true, bounds: rest, custom: false, alone: false, place: None, blends: true });
+                            units.push(Unit { slot: child, section: true, bounds: rest, custom: false, alone: false, place: None, blends: true, content: 0 });
                         }
                         break;
                     }
                     add(scene, child, units);
                 }
             } else {
-                units.push(Unit { slot, section: false, bounds, custom: false, alone: false, place: None, blends: true });
+                units.push(Unit { slot, section: false, bounds, custom: false, alone: false, place: None, blends: true, content: 0 });
             }
         }
         for &root in &self.scene.roots {

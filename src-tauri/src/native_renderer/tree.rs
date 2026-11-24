@@ -263,6 +263,8 @@ pub struct Place {
 pub struct Look {
     pub what: u64,
     pub at: Vec<[f32; 6]>,
+    /// How many of `at`, first, are its clips'
+    pub clips: usize,
 }
 
 impl Look {
@@ -271,6 +273,55 @@ impl Look {
         self.what == other.what
             && self.at.len() == other.at.len()
             && self.at.iter().zip(&other.at).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)))
+    }
+
+    /// How far `other` is moved to draw just what `self` does, where all
+    /// it draws is moved alike and nothing else changes, as what's dragged
+    /// is, and what moves aside for it in an auto layout, and whether any
+    /// clip it's in stays where it was, as one around what it's dragged in
+    pub fn moved(&self, other: &Look) -> Option<((f32, f32), bool)> {
+        if self.what != other.what || self.at.len() != other.at.len() || self.clips != other.clips {
+            return None;
+        }
+        let near = |a: f32, b: f32, by: f32| (a - b).abs() <= by * 1e-6 * a.abs().max(b.abs()).max(1.0);
+        let mut by: Option<(f32, f32, f32)> = None;
+        for (a, b) in self.at.iter().zip(&other.at).skip(self.clips) {
+            if ![0, 1, 3, 4].into_iter().all(|i| near(a[i], b[i], 1.0)) {
+                return None;
+            }
+            // Those that say nothing of where they are have no place
+            if a[2] == 0.0 && a[5] == 0.0 && b[2] == 0.0 && b[5] == 0.0 {
+                continue;
+            }
+            let (x, y) = (a[2] - b[2], a[5] - b[5]);
+            let size = a[2].abs().max(b[2].abs()).max(a[5].abs()).max(b[5].abs());
+            match by {
+                None => by = Some((x, y, size)),
+                Some((bx, by, was)) => {
+                    let size = size.max(was);
+                    if !near(x + size, bx + size, 4.0) || !near(y + size, by + size, 4.0) {
+                        return None;
+                    }
+                }
+            }
+        }
+        let (x, y, size) = by.filter(|&(x, y, _)| x != 0.0 || y != 0.0)?;
+        let mut stays = false;
+        for (a, b) in self.at.iter().zip(&other.at).take(self.clips) {
+            if ![0, 1, 3, 4].into_iter().all(|i| near(a[i], b[i], 1.0)) {
+                return None;
+            }
+            let size = size.max(a[2].abs()).max(b[2].abs()).max(a[5].abs()).max(b[5].abs());
+            if near(a[2] - b[2] + size, x + size, 4.0) && near(a[5] - b[5] + size, y + size, 4.0) {
+                continue;
+            }
+            if near(a[2], b[2], 4.0) && near(a[5], b[5], 4.0) {
+                stays = true;
+                continue;
+            }
+            return None;
+        }
+        Some(((x, y), stays))
     }
 }
 
@@ -1070,13 +1121,13 @@ impl Tree {
             (place, index).hash(&mut hasher);
             hasher.finish()
         };
-        // Split under a mask, what's in it is clipped piece by piece, which
-        // shows where they meet along its edge, so only where there's no
-        // other way to keep a change from redrawing much
+        // Split under a mask, what's in it is clipped piece by piece where
+        // Skia draws it, which shows where they meet along its edge, so only
+        // where there's no other way to keep a change from redrawing much
         let many = info.count > SPLIT && depth < 32;
         // Split now, a node that a unit the units made last was of, drawn
         // the same where it was, is split into what draws all it drew. Not
-        // inside clips, which Vello draws around each unit as a layer
+        // inside clips, which Skia draws around each unit
         let split_owner = |clips: &[(u32, Matrix)]| match owner {
             Some(owner) => Some(owner),
             None if regrouping.last.is_empty() || !clips.is_empty() || info.blends || info.custom => None,
@@ -1106,7 +1157,9 @@ impl Tree {
                     return self.expand(child, inner(u64::MAX), places, Matrix::concat(&at, &rt::to_matrix(&t)), clips, depth + 1, owner, regrouping, out);
                 }
             }
-            Op::Mask if many && matches!(node.mask_op, None | Some(MaskOpType::Normal)) => {
+            // Or while an edit in it goes on, as the view draws what's in
+            // the same clips as one (see `vello::Fragment::cuts`)
+            Op::Mask if (many || hot) && depth < 32 && matches!(node.mask_op, None | Some(MaskOpType::Normal)) => {
                 if let (Some(color), Some((fill, to))) = (node.color_node, node.alpha_node.and_then(|alpha| self.clip_of(alpha))) {
                     // Clipped piece by piece, it's drawn a little otherwise
                     if let Some(owner) = owner {
@@ -1124,8 +1177,11 @@ impl Tree {
             return;
         };
         let mut bounds = bounds;
+        // A clip's place has its fill's own matrix in it already, which
+        // the fill's bounds are in too
         for (fill, to) in clips.iter() {
-            let Some(clip) = self.info(*fill).bounds.map(|clip| to.map_rect(clip).0) else {
+            let own = self.forest.get(*fill).and_then(|fill| fill.transform).map_or(Matrix::default(), |own| rt::to_matrix(&own));
+            let Some(clip) = own.invert().zip(self.info(*fill).bounds).map(|(back, clip)| Matrix::concat(to, &back).map_rect(clip).0) else {
                 return;
             };
             if !bounds.intersect(clip) {
@@ -1195,7 +1251,7 @@ impl Tree {
             };
             stack.extend(Self::parts(node).rev().map(|id| (id, inner, depth + 1)));
         }
-        Look { what: hasher.finish(), at }
+        Look { what: hasher.finish(), at, clips: place.clips.len() }
     }
 
     /// When node `id` is no more than an opaque shape, the fill node it is
