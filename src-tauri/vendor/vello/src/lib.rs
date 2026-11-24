@@ -943,6 +943,7 @@ pub fn reset_room() {
     }
     *TAKEN.lock().unwrap() = [(0, None, 0); 7];
     *TAKEN_ONE_OFF.lock().unwrap() = [(0, None, 0); 7];
+    *WHOLE_TOOK.lock().unwrap() = ([0; 7], [0; 7]);
 }
 
 /// Ligma: how long buffers keep room for the most they took, so zooming
@@ -968,8 +969,64 @@ static PTCL_PER_TILE: [std::sync::atomic::AtomicU32; 2] = [std::sync::atomic::At
 /// Ligma: about what views took
 const PTCL_PER_TILE_AT_FIRST: f32 = 6.0;
 
-/// Ligma: dev tools, what the last render checked took of each buffer
+/// Ligma: what the last render checked took of each buffer
 pub static LAST_TOOK: std::sync::Mutex<[u32; 7]> = std::sync::Mutex::new([0; 7]);
+
+/// Ligma: what the last whole view drawn exactly took of each buffer, which
+/// a part of it, or some of what's in it, drawn again at its zoom takes no
+/// more of, and what the parts of one drawn in parts took so far
+#[cfg(feature = "wgpu")]
+static WHOLE_TOOK: std::sync::Mutex<([u32; 7], [u32; 7])> = std::sync::Mutex::new(([0; 7], [0; 7]));
+
+/// Ligma: what the render checked last took, as the whole view's or, with
+/// `parts`, what its parts took, see `took_part`
+#[cfg(feature = "wgpu")]
+pub fn took_whole(parts: bool) {
+    let mut whole = WHOLE_TOOK.lock().unwrap();
+    whole.0 = if parts { whole.1 } else { *LAST_TOOK.lock().unwrap() };
+}
+
+/// Ligma: what the render checked last took, as one more part of a whole
+/// view drawn in parts, its first where `first`. Lines are those of the
+/// paths it draws, which most parts draw many of, so the most of a part
+/// rather than of all of them
+#[cfg(feature = "wgpu")]
+pub fn took_part(first: bool) {
+    let took = *LAST_TOOK.lock().unwrap();
+    let mut whole = WHOLE_TOOK.lock().unwrap();
+    for (index, (parts, took)) in whole.1.iter_mut().zip(took).enumerate() {
+        *parts = match (first, index) {
+            (true, _) => took,
+            (false, 6) => (*parts).max(took),
+            (false, _) => parts.saturating_add(took),
+        };
+    }
+}
+
+/// Ligma: room for what the whole view took and a quarter more, as `fit`
+/// sizes it, in the room renders flagged `one_off` take, for what's drawn
+/// again of it as something's edited, which otherwise ran out after its
+/// room shrank to what tiles drawn meanwhile took and was drawn again two or
+/// three times. Held as if taken, so `fit` gives it back once it's not
+/// drawn for `PEAK_KEPT`
+#[cfg(feature = "wgpu")]
+pub fn room_for_whole(one_off: bool) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let need = WHOLE_TOOK.lock().unwrap().0;
+    let room = if one_off { vello_encoding::ONE_OFF.all() } else { vello_encoding::CAPACITY.all() };
+    let mut taken = if one_off { TAKEN_ONE_OFF.lock().unwrap() } else { TAKEN.lock().unwrap() };
+    for (index, ((room, need), taken)) in room.into_iter().zip(need).zip(taken.iter_mut()).enumerate() {
+        if need == 0 {
+            continue;
+        }
+        let cap = vello_encoding::most(index);
+        let floor = if index == 1 { 1 << 19 } else { 1 << 18 };
+        room.fetch_max(size_class(need.saturating_add(need / 4).max(floor)).min(cap), Relaxed);
+        if need >= taken.0 || taken.1.is_none_or(|at| at.elapsed() > PEAK_KEPT) {
+            *taken = (need.min(cap), Some(std::time::Instant::now()), taken.2);
+        }
+    }
+}
 
 fn fit(bump: &BumpAllocators, one_off: bool, had: [u32; 7], least: u32) -> Option<String> {
     use std::sync::atomic::Ordering::Relaxed;
