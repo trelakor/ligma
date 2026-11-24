@@ -102,6 +102,8 @@ pub struct Vello {
     broken: Arc<std::sync::atomic::AtomicBool>,
     /// Image fills' textures Vello has, by key and mipmap level
     pictures: HashMap<(String, u32), Held>,
+    /// Parts of pictures views put in the atlas alone, see `part`
+    parts: HashMap<(String, u32), Vec<Part>>,
     /// When `keep_pictures` last looked over them
     kept_pictures: std::time::Instant,
     barriers: Barriers,
@@ -118,6 +120,8 @@ pub struct Vello {
 /// An image fill's texture, Skia's, which Vello copies into its atlas
 struct Held {
     data: ImageData,
+    /// Its texture as wgpu's, which parts of it are copied from
+    texture: wgpu::Texture,
     /// Skia's, whose state it tracks
     backend: skia_safe::gpu::BackendTexture,
     resource: ID3D12Resource,
@@ -272,6 +276,7 @@ impl Vello {
 
             broken,
             pictures: HashMap::new(),
+            parts: HashMap::new(),
             kept_pictures: std::time::Instant::now(),
             barriers: Barriers { allocators: Vec::new(), list: None },
             skia: SendDevice(skia.clone()),
@@ -698,10 +703,31 @@ impl Vello {
             width,
             height,
         };
-        let base = wgpu::TexelCopyTextureInfoBase { texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All };
+        let base = wgpu::TexelCopyTextureInfoBase { texture: texture.clone(), mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All };
         self.renderer.override_image(&data, Some(base));
-        self.pictures.insert(at, Held { data: data.clone(), backend, resource: info.resource, id });
+        self.pictures.insert(at, Held { data: data.clone(), texture, backend, resource: info.resource, id });
         Some(data)
+    }
+
+    /// Texels `rect` (left, top, width, height) of picture `whole`, image
+    /// `key`'s at `level`, or a part kept that holds them, not much bigger,
+    /// for Vello's atlas to take alone, and where that part is. Kept while
+    /// views draw it, so views drawn again, or zoomed in, copy it once
+    pub fn part(&mut self, key: &str, level: u32, whole: &ImageData, rect: [u32; 4]) -> Option<(ImageData, [u32; 4])> {
+        let held = self.pictures.get(&(key.to_string(), level)).filter(|held| held.data.data.id() == whole.data.id())?;
+        let views = self.views;
+        let parts = self.parts.entry((key.to_string(), level)).or_default();
+        let area = |r: &[u32; 4]| r[2] as u64 * r[3] as u64;
+        let holds = |r: &[u32; 4]| r[0] <= rect[0] && r[1] <= rect[1] && r[0] + r[2] >= rect[0] + rect[2] && r[1] + r[3] >= rect[1] + rect[3];
+        if let Some(part) = parts.iter_mut().filter(|part| part.whole == whole.data.id() && holds(&part.rect) && area(&part.rect) <= area(&rect) * PART_SLACK).min_by_key(|part| area(&part.rect)) {
+            part.view = views;
+            return Some((part.data.clone(), part.rect));
+        }
+        let data = ImageData { data: peniko::Blob::new(Arc::new([0u8; 0])), format: whole.format, alpha_type: whole.alpha_type, width: rect[2], height: rect[3] };
+        let base = wgpu::TexelCopyTextureInfoBase { texture: held.texture.clone(), mip_level: level, origin: wgpu::Origin3d { x: rect[0], y: rect[1], z: 0 }, aspect: wgpu::TextureAspect::All };
+        self.renderer.override_image(&data, Some(base));
+        parts.push(Part { data: data.clone(), rect, whole: whole.data.id(), view: views });
+        Some((data, rect))
     }
 
     /// Pixels pictures `keys` take in Vello's atlas, with its pages
@@ -718,6 +744,9 @@ impl Vello {
         let _span = super::span::span("vello trim");
         self.pieces.clear();
         self.piece_bytes = 0;
+        for part in self.parts.drain().flat_map(|(_, parts)| parts) {
+            self.renderer.override_image(&part.data, None);
+        }
         self.renderer.trim();
         self.out = None;
         self.drop_kept();
@@ -749,6 +778,17 @@ impl Vello {
         let _span = super::span::span("vello begin view");
         self.views += 1;
         let views = self.views;
+        let renderer = &mut self.renderer;
+        self.parts.retain(|_, parts| {
+            parts.retain(|part| {
+                let kept = part.view + PART_VIEWS >= views;
+                if !kept {
+                    renderer.override_image(&part.data, None);
+                }
+                kept
+            });
+            !parts.is_empty()
+        });
         self.pieces.retain(|_, piece| piece.view + PIECE_VIEWS >= views);
         self.piece_bytes = self.pieces.values().map(piece_bytes).sum();
         if self.piece_bytes > PIECES_KEPT {
@@ -1589,6 +1629,10 @@ enum Kind {
     Image {
         key: String,
         width: f32,
+        /// From 0 to 1 across the image to the scene's space, as encoded at
+        /// `Effect::transform`, for views to draw only the part they show
+        /// from the atlas. None where it repeats, drawn whole
+        brush: Option<Affine>,
     },
     /// What Skia draws, with `m` from what's drawn to the scene's space,
     /// which each view has it draw onto the atlas at the zoom it's at
@@ -2707,9 +2751,10 @@ impl<'a> Encoder<'a> {
         let width = m.scale_x().hypot(m.skew_y()) * at.width();
         let was = std::mem::replace(&mut self.m, m);
         let patches = self.scene.encoding().resources.patches.len();
+        let transforms = self.scene.encoding().transforms.len();
         self.pictures.push((key.clone(), 0, img.image.unique_id() as u64));
         self.fill(Fill::NonZero, affine(&self.m), &peniko::Brush::Image(brush), Some(local), &rect);
-        self.image_drawn(patches, key, width, &Path::rect(at, None));
+        self.image_drawn(patches, transforms, Some(affine(&self.m) * local), key, width, &Path::rect(at, None));
         self.m = was;
         self.counts.native += 1;
         true
@@ -2781,9 +2826,12 @@ impl<'a> Encoder<'a> {
             None => false,
         };
         let patches = self.scene.encoding().resources.patches.len();
+        let transforms = self.scene.encoding().transforms.len();
+        let repeats = matches!(&brush, peniko::Brush::Image(image) if image.sampler.x_extend == Extend::Repeat || image.sampler.y_extend == Extend::Repeat);
         self.fill(fill_of(skia), affine(&self.m), &brush, brush_transform, path);
         if let Some((key, width)) = image {
-            self.image_drawn(patches, key, width, skia);
+            let placed = brush_transform.filter(|_| !repeats).map(|at| affine(&self.m) * at);
+            self.image_drawn(patches, transforms, placed, key, width, skia);
         }
         if blended {
             self.pop();
@@ -2835,10 +2883,12 @@ impl<'a> Encoder<'a> {
         true
     }
 
-    /// An image just drawn over `skia`, whose patches were `patches`
-    /// before, with its level picked for each view (see `Kind::Image`):
+    /// An image just drawn over `skia`, whose patches and transforms were
+    /// `patches` and `transforms` before, placed by `placed` unless it
+    /// repeats, with its level picked for each view (see `Kind::Image`):
     /// where its sampling's encoded, if it was drawn
-    fn image_drawn(&mut self, patches: usize, key: String, width: f32, skia: &Path) -> Option<usize> {
+    fn image_drawn(&mut self, patches: usize, transforms: usize, placed: Option<Affine>, key: String, width: f32, skia: &Path) -> Option<usize> {
+        let path = Transform::from_kurbo(&affine(&self.m));
         let encoding = self.scene.encoding_mut();
         if encoding.resources.patches.len() <= patches {
             return None;
@@ -2847,9 +2897,22 @@ impl<'a> Encoder<'a> {
         let Some(Patch::Image { draw_data_offset, .. }) = encoding.resources.patches.last() else { return None };
         let at = *draw_data_offset + 2;
         encoding.draw_data[at] |= 1 << 16;
+        // The brush's own transform, last encoded, unless it came to the
+        // path's and is shared with it, or was drawn otherwise
+        let brush = placed.filter(|placed| {
+            let brush = Transform::from_kurbo(placed);
+            encoding.transforms.len() > transforms && encoding.transforms.last() == Some(&brush) && brush != path
+        });
+        let transform = if brush.is_some() {
+            // So nothing drawn after takes it as its own
+            encoding.flags |= Encoding::FORCE_NEXT_TRANSFORM;
+            encoding.transforms.len() - 1
+        } else {
+            usize::MAX
+        };
         let bounds = self.m.map_rect(skia.bounds()).0;
         let bounds = kurbo::Rect::new(bounds.left as f64, bounds.top as f64, bounds.right as f64, bounds.bottom as f64);
-        self.effects.push(Effect { kind: Kind::Image { key, width }, bounds, transform: usize::MAX, patch });
+        self.effects.push(Effect { kind: Kind::Image { key, width, brush }, bounds, transform, patch });
         Some(at)
     }
 
@@ -2870,8 +2933,11 @@ impl<'a> Encoder<'a> {
             return true;
         }
         let patches = self.scene.encoding().resources.patches.len();
+        let transforms = self.scene.encoding().transforms.len();
+        let repeats = matches!(&brush.0, peniko::Brush::Image(image) if image.sampler.x_extend == Extend::Repeat || image.sampler.y_extend == Extend::Repeat);
         self.fill(fill_of(skia), affine(&self.m), &brush.0, Some(brush.1), path);
-        if let Some(at) = self.image_drawn(patches, key, width, skia) {
+        let placed = (!repeats).then(|| affine(&self.m) * brush.1);
+        if let Some(at) = self.image_drawn(patches, transforms, placed, key, width, skia) {
             // Ligma's shaders take the quality otherwise unused for it
             self.scene.encoding_mut().draw_data[at] |= 3 << 12;
         }
@@ -3689,8 +3755,11 @@ impl<'a> Encoder<'a> {
                     }
                     plan.depths[depth].blurs.push(Placed { job, image });
                 }
-                Kind::Image { key, width } => {
+                Kind::Image { key, width, brush } => {
                     let shown = t.transform_rect_bbox(effect.bounds).intersect(view);
+                    if let Some(brush) = brush.as_ref().filter(|_| effect.transform < encoding.transforms.len()) {
+                        encoding.transforms[effect.transform] = Transform::from_kurbo(brush);
+                    }
                     // Out of view, it takes no room in Vello's atlas
                     if shown.width() <= 0.0 || shown.height() <= 0.0 {
                         Plan::patch_image(encoding, effect, nothing());
@@ -3721,8 +3790,41 @@ impl<'a> Encoder<'a> {
                             found
                         }
                     };
-                    let Some((data, _)) = found else {
+                    let Some((data, level)) = found else {
                         return Err("image Vello can't draw".into());
+                    };
+                    // Only the part of it the view shows, and a few texels
+                    // around for sampling, goes in the atlas: zoomed in, a
+                    // whole image took it for a corner of it shown
+                    let part = brush.as_ref().filter(|_| effect.transform < encoding.transforms.len()).and_then(|brush| {
+                        let to_view = t * *brush;
+                        if to_view.determinant().abs() < 1e-12 {
+                            return None;
+                        }
+                        let uv = to_view.inverse().transform_rect_bbox(shown.inflate(2.0, 2.0));
+                        let (w, h) = (data.width as f64, data.height as f64);
+                        // On a grid, so a view moved a little takes the same
+                        // part, copied once
+                        let down = |v: f64| ((v - CROP_TEXELS) / CROP_GRID).floor() * CROP_GRID;
+                        let up = |v: f64| ((v + CROP_TEXELS) / CROP_GRID).ceil() * CROP_GRID;
+                        let (x0, y0) = (down(uv.x0 * w).clamp(0.0, w), down(uv.y0 * h).clamp(0.0, h));
+                        let (x1, y1) = (up(uv.x1 * w).clamp(0.0, w), up(uv.y1 * h).clamp(0.0, h));
+                        // Not worth a copy of its own unless it saves a
+                        // good part of it
+                        if x1 <= x0 || y1 <= y0 || (x1 - x0) * (y1 - y0) > w * h * CROP_WORTH {
+                            return None;
+                        }
+                        let rect = [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32];
+                        let (part, [x, y, pw, ph]) = self.vello.as_deref_mut()?.part(key, level, &data, rect)?;
+                        let (x, y, pw, ph) = (x as f64, y as f64, pw as f64, ph as f64);
+                        Some((part, *brush * Affine::new([pw / w, 0.0, 0.0, ph / h, x / w, y / h])))
+                    });
+                    let data = match part {
+                        Some((part, placed)) => {
+                            encoding.transforms[effect.transform] = Transform::from_kurbo(&placed);
+                            part
+                        }
+                        None => data,
                     };
                     let shown = *width * scale as f32;
                     let widest = self.widest.entry(name.as_str()).or_insert(-1.0);
@@ -3824,6 +3926,34 @@ impl<'a> Encoder<'a> {
 /// How much wider than it shows an image is asked for: as wide as the
 /// mipmap level Figma's sampling draws from (see `Encoder::image`)
 pub const ASKED: f64 = 1.42;
+
+/// Texels past what a view shows of an image it puts in Vello's atlas,
+/// for sampling at its edge to take as the whole image would
+const CROP_TEXELS: f64 = 4.0;
+
+/// Texels the parts of images put in Vello's atlas are snapped to
+const CROP_GRID: f64 = 64.0;
+
+/// Part of an image past which it's put in Vello's atlas whole
+const CROP_WORTH: f64 = 0.75;
+
+/// Views a part of an image no view's drawn is kept for, see `Vello::part`
+const PART_VIEWS: u64 = 4;
+
+/// Times bigger than a view needs a part of an image kept may be for the
+/// view to take it, rather than a new part copied
+const PART_SLACK: u64 = 4;
+
+/// Part of a picture in Vello's atlas, see `Vello::part`
+struct Part {
+    data: ImageData,
+    /// Its texels, left, top, width and height
+    rect: [u32; 4],
+    /// The whole picture's, so a new one makes new parts
+    whole: u64,
+    /// The last view that drew it
+    view: u64,
+}
 
 /// An image fill as Vello draws it, or not
 enum Picture {

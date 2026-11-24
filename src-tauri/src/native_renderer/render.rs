@@ -922,15 +922,29 @@ fn upload(context: &mut skia_safe::gpu::DirectContext, image: Image) -> Image {
 /// copied on the GPU. Not yet submitted. Without mipmaps of its own, as
 /// Skia making those on the GPU leaves textures it records wrongly (see
 /// `draw::sampled`): it's kept as big as the view needs, which takes it
-/// as it is, and had again should the view need it smaller still
+/// as it is, and halved again should the view need it smaller still
 fn halved(gpu: &mut Gpu, img: &Img, halvings: u32) -> Option<Img> {
-    let (w, h) = ((img.image.width() >> halvings).max(1), (img.image.height() >> halvings).max(1));
-    let mut surface = gpu.own_surface(w, h, 0)?;
     let mut paint = Paint::default();
     paint.set_blend_mode(skia_safe::BlendMode::Src);
-    let level = SamplingOptions::new(FilterMode::Linear, MipmapMode::Nearest);
-    surface.canvas().draw_image_rect_with_sampling_options(&img.image, None, Rect::from_iwh(w, h), level, &paint);
-    let image = surface.image_snapshot();
+    let image = if img.image.has_mipmaps() {
+        let (w, h) = ((img.image.width() >> halvings).max(1), (img.image.height() >> halvings).max(1));
+        let mut surface = gpu.own_surface(w, h, 0)?;
+        let level = SamplingOptions::new(FilterMode::Linear, MipmapMode::Nearest);
+        surface.canvas().draw_image_rect_with_sampling_options(&img.image, None, Rect::from_iwh(w, h), level, &paint);
+        surface.image_snapshot()
+    } else {
+        // One made smaller before has no levels: halved a step at a time,
+        // each pixel sampled between four, their mean, as a level is made
+        let mut image = img.image.clone();
+        let linear = SamplingOptions::new(FilterMode::Linear, MipmapMode::None);
+        for _ in 0..halvings {
+            let (w, h) = ((image.width() >> 1).max(1), (image.height() >> 1).max(1));
+            let mut surface = gpu.own_surface(w, h, 0)?;
+            surface.canvas().draw_image_rect_with_sampling_options(&image, None, Rect::from_iwh(w, h), linear, &paint);
+            image = surface.image_snapshot();
+        }
+        image
+    };
     Some(Img { image, original: img.original, area: img.area, stale: img.stale })
 }
 
@@ -4017,8 +4031,18 @@ impl Painter {
                 let off = |at: &Rect| centre.map_or(0.0, |(x, y)| (at.center_x() - x).hypot(at.center_y() - y));
                 all.iter().copied().min_by(|a, b| off(a).total_cmp(&off(b))).unwrap_or(bounds)
             };
-            for image in &images {
-                self.ask(std::slice::from_ref(image), Some(nearest(&image.0)));
+            // Zooming, those drawn sharper only in tiles around the view
+            // are asked for once they're in it: zooming in, they leave it,
+            // and zoomed out they show smaller, and were had at full size
+            // for nothing, hundreds of MB over many images
+            let zooming = !SETTLE.saturating_sub(self.zoom.1.elapsed()).is_zero();
+            let in_view = self.view.as_ref().map(|view| Rect::from_xywh(view.x as f32, view.y as f32, view.w as f32, view.h as f32));
+            for (index, image) in images.iter().enumerate() {
+                let at = nearest(&image.0);
+                if zooming && index >= missing.len() && in_view.is_some_and(|view| !Rect::intersects2(&at, &view)) {
+                    continue;
+                }
+                self.ask(std::slice::from_ref(image), Some(at));
             }
             let waiting: Vec<String> = missing.into_iter().map(|(key, _)| key).collect();
             self.wait_for(&waiting, bounds);
@@ -4044,9 +4068,15 @@ impl Painter {
             for (key, width, at) in &uses {
                 if seen.is_some_and(|seen| Rect::intersects2(at, &seen)) {
                     let width = &(width * to_view);
+                    // The widest over the last `IN_VIEW`, from when that was
+                    // drawn: kept from when it was last drawn at any width,
+                    // it never lessened while in view, so far out after
+                    // zooming in images were all kept as big as close up
                     let (widest, when) = self.vello_in_view.entry(key.clone()).or_insert((0.0, now));
-                    *widest = if when.elapsed() < IN_VIEW { widest.max(*width as f32) } else { *width as f32 };
-                    *when = now;
+                    if *width as f32 >= *widest || when.elapsed() >= IN_VIEW {
+                        *widest = *width as f32;
+                        *when = now;
+                    }
                 }
             }
             // What the zoom nearest the view's drew it with is what it
@@ -6160,6 +6190,9 @@ impl Painter {
                 }
             }
         }
+        // What the view needs as it is now, without what it drew moments ago
+        let mut need_now = need.clone();
+        let in_view_now = in_view.clone();
         // And the images effects run on, wherever those effects are needed,
         // as they run again on them each time their node changes
         self.vello_in_view.retain(|_, (_, at)| at.elapsed() < IN_VIEW);
@@ -6176,6 +6209,10 @@ impl Painter {
             for (key, width) in images {
                 let entry = need.entry(key.clone()).or_insert(0.0);
                 *entry = entry.max(*width);
+                if need_now.contains_key(effect) {
+                    let entry = need_now.entry(key.clone()).or_insert(0.0);
+                    *entry = entry.max(*width);
+                }
                 if shown {
                     in_view.insert(key.clone());
                 }
@@ -6256,7 +6293,7 @@ impl Painter {
         // swapped in once here. Vello draws from a mipmap level of them as
         // big, so they look the same
         let shown = std::mem::take(&mut self.vello_shown);
-        let mut halve: Vec<(String, f64)> = Vec::new();
+        let mut halve: Vec<(String, f64, bool)> = Vec::new();
         for (key, width) in shown {
             let Some(img) = self.images.get(&key) else { continue };
             if key.starts_with(RENDER) || key.starts_with(EFFECT) || img.stale {
@@ -6271,7 +6308,7 @@ impl Painter {
             let fits = fitted(img.original, asked) as f64;
             if kept > fits * 2.0 && self.asked.get(&key) != Some(&asked) {
                 total = total.saturating_sub((img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize);
-                halve.push((key, asked));
+                halve.push((key, asked, false));
             }
         }
         // Moving, those only coarse tiles draw are had again at the size
@@ -6294,7 +6331,7 @@ impl Painter {
                     break;
                 }
                 total = total.saturating_sub(saving);
-                halve.push((key, width));
+                halve.push((key, width, false));
             }
         }
         // Those in view alone past it, as far out with many images each
@@ -6318,8 +6355,45 @@ impl Painter {
                     break;
                 }
                 total = total.saturating_sub(saving);
-                halve.push((key, width));
+                halve.push((key, width, false));
             }
+        }
+        // Past it still, those kept bigger than the view needs now, for the
+        // view as it was moments ago, are had at what it needs now: first
+        // those out of it, the biggest first, at what tiles around it or
+        // coarse tiles draw them at, then those in it kept at least twice as
+        // big as it shows them, as zooming out. Kept as big as each was
+        // needed lately, zooming in and out over many images kept each as
+        // big as it showed close up, many times what any one view needs. Not
+        // while zooming, as those made smaller as the view zooms out are had
+        // again as it zooms back in, blurry meanwhile, and all that draws
+        // them drawn again
+        let zooming = !SETTLE.saturating_sub(self.zoom.1.elapsed()).is_zero();
+        if total > budget && !zooming {
+            let mut smaller: Vec<(bool, usize, String, f64)> = self
+                .images
+                .iter()
+                .filter(|(key, img)| !key.starts_with(RENDER) && !key.starts_with(EFFECT) && !img.stale)
+                .filter_map(|(key, img)| {
+                    let shown = in_view_now.contains(key.as_str());
+                    let width = if shown || fine_use.contains(key.as_str()) { need_now.get(key.as_str()) } else { coarse_need.get(key.as_str()) };
+                    let width = width.copied().unwrap_or(0.0);
+                    let kept = img.image.width().max(img.image.height()) as f64;
+                    let fits = fitted(img.original, width) as f64;
+                    (kept > if shown { fits * 2.0 } else { fits }).then(|| (shown, (img.bytes() as f64 * (1.0 - (fits / kept).powi(2))) as usize, key.clone(), width))
+                })
+                .collect();
+            smaller.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+            let fewer = halve.len();
+            for (_, saving, key, width) in smaller {
+                if total <= budget * 3 / 4 {
+                    break;
+                }
+                total = total.saturating_sub(saving);
+                halve.retain(|(other, _, forced)| *forced || *other != key);
+                halve.push((key, width, true));
+            }
+            trace(|| format!("images past the budget: {} made as small as the view needs now", halve.len().saturating_sub(fewer)));
         }
         self.make_smaller(halve);
         let images = &self.images;
@@ -6391,7 +6465,7 @@ impl Painter {
     /// at once and draws as it did, rather than fetched, decoded and
     /// uploaded again behind the images still loading. Others are asked for
     /// again
-    fn make_smaller(&mut self, smaller: Vec<(String, f64)>) {
+    fn make_smaller(&mut self, smaller: Vec<(String, f64, bool)>) {
         let _span = super::span::span("make smaller");
         let _purpose = super::gpu_census::purpose("image");
         let started = Instant::now();
@@ -6399,19 +6473,19 @@ impl Painter {
         // What they're made from, kept till the GPU has read them (see
         // `Gpu::flush`)
         let mut from: Vec<Image> = Vec::new();
-        for (key, width) in smaller {
+        for (key, width, forced) in smaller {
             // A few milliseconds' worth a pass, the rest at the next
             if started.elapsed() >= MAKE_SMALLER_A_PASS {
                 break;
             }
-            if self.asked.get(&key) == Some(&width) || self.grown.get(&key).is_some_and(|at| at.elapsed() < NEEDED_FOR) {
+            if self.asked.get(&key) == Some(&width) || (!forced && self.grown.get(&key).is_some_and(|at| at.elapsed() < NEEDED_FOR)) {
                 continue;
             }
             let Some(img) = self.images.get(&key) else { continue };
             let kept = img.image.width().max(img.image.height()) as u32;
             let fits = super::run::fitted(img.original, width).max(1);
             let halvings = (kept / fits).max(1).ilog2();
-            let level = img.image.has_mipmaps() && halvings > 0 && kept >> halvings == fits;
+            let level = halvings > 0 && kept >> halvings == fits;
             self.asked.insert(key.clone(), width);
             match level.then(|| halved(&mut self.gpu, img, halvings)).flatten() {
                 Some(small) => {
