@@ -535,6 +535,7 @@ impl Renderer {
             return Err(Error::NotRetained);
         }
         let mut render = Render::new();
+        render.late_download = true;
         vello_encoding::ENCODING_ONE_OFF.store(params.one_off, std::sync::atomic::Ordering::Relaxed);
         let mut recording = render.render_encoding_coarse(
             scene.encoding(),
@@ -620,6 +621,7 @@ impl Renderer {
                 bytemuck::pod_read_unaligned(&view)
             };
             buf.unmap();
+            self.engine.recycle_download(buf);
             let fits = fit(&bump, one_off, rooms, least);
             self.ran_out.push(fits.is_some());
             if let Some(why) = fits {

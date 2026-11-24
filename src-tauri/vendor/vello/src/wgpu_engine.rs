@@ -991,6 +991,19 @@ impl WgpuEngine {
                                 slice.fill(0);
                             }
                         }
+                    } else if !self.use_cpu {
+                        // Ligma: made and cleared now, as `create_bind_group`
+                        // makes it, rather than ending the pass that first
+                        // uses it for the clear
+                        let usage = BufferUsages::COPY_SRC
+                            | BufferUsages::COPY_DST
+                            | BufferUsages::STORAGE
+                            | BufferUsages::INDIRECT
+                            | BufferUsages::VERTEX;
+                        let buf = self.pool.get_buf(proxy.size, proxy.name, usage, device);
+                        pass = None;
+                        encoder.clear_buffer(&buf, *offset, *size);
+                        self.bind_map.insert_buf(proxy, buf);
                     } else {
                         self.bind_map.pending_clears.insert(proxy.id);
                     }
@@ -1073,6 +1086,16 @@ impl WgpuEngine {
 
     pub fn free_download(&mut self, buf: BufferProxy) {
         self.downloads.remove(&buf.id);
+    }
+
+    /// Ligma: a buffer `get_download` gave, once read and unmapped, for the
+    /// next download to use rather than one made for each render
+    pub fn recycle_download(&mut self, buf: Buffer) {
+        let recordings = self.pool.recordings;
+        let bufs = self.pool.bufs.entry(("download", buf.usage())).or_default();
+        if bufs.is_empty() {
+            bufs.push((buf, recordings));
+        }
     }
 
     fn create_bind_group_layout_entries(

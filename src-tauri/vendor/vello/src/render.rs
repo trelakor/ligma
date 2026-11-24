@@ -42,6 +42,10 @@ pub struct Render {
     fine_wg_count: Option<WorkgroupSize>,
     fine_resources: Option<FineResources>,
     mask_buf: Option<ResourceProxy>,
+    /// Ligma: the bump buffer's read back after fine rather than before it,
+    /// so the render's dispatches share one compute pass, see `record_fine`
+    pub(crate) late_download: bool,
+    late_bump: Option<BufferProxy>,
 
     #[cfg(feature = "debug_layers")]
     captured_buffers: Option<CapturedBuffers>,
@@ -112,6 +116,8 @@ impl Render {
             fine_wg_count: None,
             fine_resources: None,
             mask_buf: None,
+            late_download: false,
+            late_bump: None,
             #[cfg(feature = "debug_layers")]
             captured_buffers: None,
         }
@@ -290,6 +296,13 @@ impl Render {
     ) {
         let buffer_sizes = &cpu_config.buffer_sizes;
         let wg_counts = &cpu_config.workgroup_counts;
+        // Ligma: cleared before the first dispatch, as no stage before
+        // flatten takes it, so the clear doesn't end a compute pass midway
+        let bump_buf = BufferProxy::new(
+            buffer_sizes.bump_alloc.size_in_bytes().into(),
+            "vello.bump_buf",
+        );
+        recording.clear_all(bump_buf);
         let config_buf = ResourceProxy::Buffer(
             recording.upload_uniform("vello.config", bytemuck::bytes_of(&cpu_config.gpu)),
         );
@@ -369,11 +382,6 @@ impl Render {
             wg_counts.bbox_clear,
             [config_buf, path_bbox_buf],
         );
-        let bump_buf = BufferProxy::new(
-            buffer_sizes.bump_alloc.size_in_bytes().into(),
-            "vello.bump_buf",
-        );
-        recording.clear_all(bump_buf);
         let bump_buf = ResourceProxy::Buffer(bump_buf);
         let lines_buf =
             ResourceProxy::new_buf(buffer_sizes.lines.size_in_bytes().into(), "vello.lines_buf");
@@ -591,7 +599,11 @@ impl Render {
             out_image,
         });
         if robust {
-            recording.download(*bump_buf.as_buf().unwrap());
+            if self.late_download {
+                self.late_bump = bump_buf.as_buf().copied();
+            } else {
+                recording.download(*bump_buf.as_buf().unwrap());
+            }
         }
         recording.free_resource(bump_buf);
 
@@ -645,12 +657,21 @@ impl Render {
             }
             _ => {
                 if self.mask_buf.is_none() {
-                    let mask_lut = match fine.aa_config {
-                        AaConfig::Msaa16 => make_mask_lut_16(),
-                        AaConfig::Msaa8 => make_mask_lut(),
-                        AaConfig::Msaa4 => make_mask_lut_4(),
+                    // Ligma: made once, rather than for each render
+                    static MASK_LUTS: [std::sync::OnceLock<Vec<u8>>; 3] = [const { std::sync::OnceLock::new() }; 3];
+                    let index = match fine.aa_config {
+                        AaConfig::Msaa16 => 0,
+                        AaConfig::Msaa8 => 1,
+                        AaConfig::Msaa4 => 2,
                         _ => unreachable!(),
                     };
+                    let mask_lut = MASK_LUTS[index]
+                        .get_or_init(|| match index {
+                            0 => make_mask_lut_16(),
+                            1 => make_mask_lut(),
+                            _ => make_mask_lut_4(),
+                        })
+                        .clone();
                     let buf = recording.upload("vello.mask_lut", mask_lut);
                     self.mask_buf = Some(buf.into());
                 }
@@ -682,6 +703,11 @@ impl Render {
                     ],
                 );
             }
+        }
+        // Ligma: fine doesn't touch the bump buffer, so what it holds is
+        // what coarse's stages left in it
+        if let Some(bump) = self.late_bump.take() {
+            recording.download(bump);
         }
         recording.free_resource(fine.config_buf);
         recording.free_resource(fine.tile_buf);
