@@ -86,9 +86,10 @@ pub struct Vello {
     /// How many renders of Vello's the last view took
     pub renders: usize,
     out: Option<Target>,
-    /// What's under the units an edit changes, drawn once and kept, and
-    /// the image it is in Vello's atlas, see `put_under`
-    under: Option<(Target, ImageData)>,
+    /// What's under the units an edit changes and what's over them, each
+    /// drawn once and kept, and the image it is in Vello's atlas, see
+    /// `put_kept`
+    kept: [Option<(Target, ImageData)>; 2],
     pages: Vec<Page>,
     /// What Skia drew onto the atlas for earlier views, drawn again from
     /// here where it would be the same, and the views drawn
@@ -263,7 +264,7 @@ impl Vello {
             spare: vello::Scene::new(),
             renders: 0,
             out: None,
-            under: None,
+            kept: [None, None],
             pages: Vec::new(),
             pieces: HashMap::new(),
             piece_bytes: 0,
@@ -475,12 +476,12 @@ impl Vello {
         Ok(out)
     }
 
-    /// Keeps the last render's top left `width` by `height`, to draw others
-    /// over (see `put_under`). Vello's atlas takes it once, with the next
-    /// render, rather than the part of it each render draws over, which
-    /// took 3 milliseconds each
-    pub fn keep_under(&mut self, skia: &ID3D12Device, width: i32, height: i32) -> Result<(), String> {
-        let target = match self.under.take() {
+    /// Keeps the last render's top left `width` by `height` as what's
+    /// under, or `over`, what others draw with (see `put_kept`). Vello's
+    /// atlas takes it once, with the next render, rather than the part of
+    /// it each render draws, which took 3 milliseconds each
+    pub fn keep(&mut self, over: bool, skia: &ID3D12Device, width: i32, height: i32) -> Result<(), String> {
+        let target = match self.kept[over as usize].take() {
             Some((target, image)) => {
                 self.renderer.override_image(&image, None);
                 target
@@ -502,18 +503,20 @@ impl Vello {
             height: height as u32,
         };
         self.renderer.override_image(&image, Some(wgpu::TexelCopyTextureInfoBase { texture: under, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }));
-        self.under = Some((target, image));
+        self.kept[over as usize] = Some((target, image));
         Ok(())
     }
 
-    /// What `keep_under` kept, to draw with `put_under`
-    pub fn under(&self) -> Option<ImageData> {
-        self.under.as_ref().map(|(_, image)| image.clone())
+    /// What `keep` kept, to draw with `put_kept`
+    pub fn kept(&self, over: bool) -> Option<ImageData> {
+        self.kept[over as usize].as_ref().map(|(_, image)| image.clone())
     }
 
-    pub fn drop_under(&mut self) {
-        if let Some((_, image)) = self.under.take() {
-            self.renderer.override_image(&image, None);
+    pub fn drop_kept(&mut self) {
+        for kept in &mut self.kept {
+            if let Some((_, image)) = kept.take() {
+                self.renderer.override_image(&image, None);
+            }
         }
     }
 
@@ -707,7 +710,7 @@ impl Vello {
         self.piece_bytes = 0;
         self.renderer.trim();
         self.out = None;
-        self.drop_under();
+        self.drop_kept();
         self.pages.clear();
         self.blurred.clear();
         if let Some(blurrer) = &mut self.blurrer {
@@ -1682,10 +1685,10 @@ fn nothing() -> ImageData {
 }
 
 /// What stands for a `width` by `height` part of a texture in scenes
-/// `under`, what `Vello::keep_under` kept, from (`x`, `y`) in it, under all
-/// else drawn, `width` by `height`. Exactly as kept, a pixel to a pixel
-pub fn put_under(scene: &mut vello::Scene, under: &ImageData, x: u32, y: u32, width: u32, height: u32) {
-    let brush = ImageBrush { image: under.clone(), sampler: ImageSampler { x_extend: Extend::Pad, y_extend: Extend::Pad, quality: ImageQuality::Low, alpha: 1.0 } };
+/// `kept`, what `Vello::keep` kept, from (`x`, `y`) in it, over what's
+/// drawn so far, `width` by `height`. Exactly as kept, a pixel to a pixel
+pub fn put_kept(scene: &mut vello::Scene, kept: &ImageData, x: u32, y: u32, width: u32, height: u32) {
+    let brush = ImageBrush { image: kept.clone(), sampler: ImageSampler { x_extend: Extend::Pad, y_extend: Extend::Pad, quality: ImageQuality::Low, alpha: 1.0 } };
     let at = Affine::translate((-(x as f64), -(y as f64)));
     scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, Some(at), &kurbo::Rect::new(0.0, 0.0, width as f64, height as f64));
 }

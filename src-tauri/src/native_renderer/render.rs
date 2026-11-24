@@ -345,6 +345,8 @@ struct Unit {
     alone: bool,
     /// Of Figma's render tree, where `slot` is the unit's key
     place: Option<Place>,
+    /// Draws other than over what's under it, see `TreeUnit::blends`
+    blends: bool,
 }
 
 /// A unit as it's drawn: its picture, or an image of it drawn at the scale
@@ -826,6 +828,9 @@ struct Strata {
     phase: (f32, f32),
     /// What it's of, none for no units, and the images it drew sharper
     under: Option<u64>,
+    /// What's over what changes, kept too where it's all drawn over what's
+    /// under it as is, by the units from the one after the last changing
+    over: Option<(usize, u64)>,
     sharper: u64,
     built: Instant,
 }
@@ -834,6 +839,11 @@ struct Strata {
 /// edited coming sharper, as they come several times as an edit starts,
 /// drawn again each time at first. Exact once the edit's done
 const STRATA_SHARPER: Duration = Duration::from_millis(300);
+
+/// How long a unit counts as changing since it last did, so units an
+/// edit's first frame splits apart, new once, are soon kept with what's
+/// under what changes, not drawn again with it each frame
+const CHANGED_LATELY: Duration = Duration::from_millis(250);
 
 /// Changed areas past which the whole view is drawn again, rather than each
 const PATCHES: usize = 24;
@@ -1469,8 +1479,12 @@ pub struct Painter {
     /// Where blurs are drawn from while a patch of the whole view is drawn,
     /// see `Plan::blur_view`
     blur_view: Option<vello::kurbo::Rect>,
-    /// The units an edit going on changed, by slot
-    changing: std::collections::HashSet<usize>,
+    /// The units an edit going on changed, by slot, as of when they last did
+    changing: HashMap<usize, Instant>,
+    /// What each unit draws, by slot, see `tree::Tree::look`
+    looks: HashMap<usize, super::tree::Look>,
+    /// The slots of units kept as ones before them, by their own keys
+    aliases: HashMap<usize, usize>,
     strata: Option<Strata>,
     /// The first and last units by index Vello draws, while a part of
     /// what's in the view is drawn
@@ -1478,6 +1492,9 @@ pub struct Painter {
     /// Where in what's kept under the units an edit changes Vello draws
     /// over, see `Strata`
     under_at: Option<(u32, u32)>,
+    /// Where in what `Strata` kept over a part of the whole view Vello
+    /// draws is, while that's kept
+    over_at: Option<(u32, u32)>,
     /// When Vello was started again after errors, to give up on it after
     /// a few close together
     vello_restarts: Vec<Instant>,
@@ -1717,9 +1734,12 @@ impl Painter {
             blur_coarser: 0,
             blur_view: None,
             changing: Default::default(),
+            looks: Default::default(),
+            aliases: Default::default(),
             strata: None,
             only: None,
             under_at: None,
+            over_at: None,
             blur_rows: 0,
             vello_restarts: Vec::new(),
             vello_too_big: None,
@@ -3662,16 +3682,20 @@ impl Painter {
                 })();
                 encoding = begun.elapsed();
                 drop(made_span);
-                let under = self.under_at.map(|at| (vello.under(), at));
+                let under = self.under_at.map(|at| (vello.kept(false), at));
+                let over = self.over_at.map(|at| (vello.kept(true), at));
                 let mut encoder = super::vello::Encoder::new(tree, images, &self.kit, &mut vello, paths, &drawable, &self.gpu.device, &mut self.gpu.context, w, h);
                 encoder.coarser = self.image_coarser;
                 match under {
                     Some((Some(image), (x, y))) => {
                         under_area = image.width as u64 * image.height as u64;
-                        super::vello::put_under(&mut encoder.scene, &image, x, y, w as u32, h as u32);
+                        super::vello::put_kept(&mut encoder.scene, &image, x, y, w as u32, h as u32);
                     }
                     Some((None, _)) => encoder.failed = Some("nothing kept under".into()),
                     None => {}
+                }
+                if let Some((None, _)) = over {
+                    encoder.failed = Some("nothing kept over".into());
                 }
                 if !whole_tree {
                     encoder.failed = Some("not a tree".into());
@@ -3760,6 +3784,10 @@ impl Painter {
                     trace(|| format!("  biggest units: {}", biggest.iter().take(6).map(|(paths, id, count, b)| format!("{id} words={paths} nodes={count} at {:.0},{:.0} {:.0}x{:.0}", b.left, b.top, b.width(), b.height())).collect::<Vec<_>>().join(", ")));
                     let total: u64 = biggest.iter().map(|b| b.0 as u64).sum();
                     trace(|| format!("  biggest of {} words: {}", total, biggest.iter().take(4).map(|b| super::vello::shape_of(tree, b.1, 0).chars().take(400).collect::<String>()).collect::<Vec<_>>().join(" || ")));
+                }
+                if let Some((Some(image), (x, y))) = over {
+                    under_area += image.width as u64 * image.height as u64;
+                    super::vello::put_kept(&mut encoder.scene, &image, x, y, w as u32, h as u32);
                 }
                 counts += encoder.counts;
                 inexact = encoder.inexact;
@@ -4404,7 +4432,7 @@ impl Painter {
     fn drop_strata(&mut self) {
         if self.strata.take().is_some() {
             if let Some(vello) = self.vello.as_mut() {
-                vello.drop_under();
+                vello.drop_kept();
             }
         }
     }
@@ -4462,23 +4490,32 @@ impl Painter {
         let shown = |unit: &Unit| unit.place.is_some() && Rect::intersects2(&unit.bounds, &reach);
         let mut range: Option<(usize, usize)> = None;
         for (index, unit) in self.units.iter().enumerate() {
-            if shown(unit) && self.changing.contains(&unit.slot) {
+            if shown(unit) && self.changing.get(&unit.slot).is_some_and(|at| at.elapsed() < CHANGED_LATELY) {
                 range = Some(range.map_or((index, index), |(first, _)| (first, index)));
             }
         }
         let Some((first, last)) = range else { return false };
-        let (under, sharper) = {
-            let (mut hasher, mut sharper) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
-            let mut any = false;
-            for unit in self.units[..first].iter().filter(|unit| shown(unit)) {
-                any = true;
-                self.mark(unit).hash(&mut hasher);
-                self.sharpened.get(&(unit.slot, unit.section)).hash(&mut sharper);
-            }
-            (any.then(|| hasher.finish()), sharper.finish())
+        let (under, over, sharper) = {
+            let mut sharper = std::collections::hash_map::DefaultHasher::new();
+            let mut of = |units: &[Unit]| {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                let mut any = false;
+                for unit in units.iter().filter(|unit| shown(unit)) {
+                    any = true;
+                    self.mark(unit).hash(&mut hasher);
+                    self.sharpened.get(&(unit.slot, unit.section)).hash(&mut sharper);
+                }
+                any.then(|| hasher.finish())
+            };
+            let under = of(&self.units[..first]);
+            // Kept apart from those that draw the same over what's under
+            // them as over nothing, then put over that, after any that don't
+            let from = self.units[last + 1..].iter().rposition(|unit| shown(unit) && (unit.blends || unit.custom || unit.section)).map_or(last + 1, |index| last + 2 + index);
+            let over = of(&self.units[from..]).map(|over| (from, over));
+            (under, over, sharper.finish())
         };
         let kept = self.strata.as_ref().is_some_and(|strata| {
-            strata.at == at && strata.phase == phase && strata.under == under && (strata.sharper == sharper || strata.built.elapsed() < STRATA_SHARPER)
+            strata.at == at && strata.phase == phase && strata.under == under && strata.over == over && (strata.sharper == sharper || strata.built.elapsed() < STRATA_SHARPER)
         });
         if !kept && !build {
             return false;
@@ -4487,9 +4524,10 @@ impl Painter {
         let mut built = Duration::ZERO;
         if !kept {
             self.drop_strata();
-            if under.is_some() {
-                let timer = Instant::now();
-                self.only = Some((0, first - 1));
+            let timer = Instant::now();
+            let layers = [under.map(|_| (0, first - 1, false)), over.map(|(from, _)| (from, self.units.len() - 1, true))];
+            for (from, to, is_over) in layers.into_iter().flatten() {
+                self.only = Some((from, to));
                 let mut done = false;
                 for _ in 0..8 {
                     self.blur_view = Some(vello::kurbo::Rect::new(0.0, 0.0, width as f64, height as f64));
@@ -4501,7 +4539,7 @@ impl Painter {
                     let Some(vello) = self.vello.as_mut() else { break };
                     match vello.check(usize::MAX) {
                         Ok(None) => {
-                            done = vello.keep_under(&self.gpu.device, width, height).map_err(|why| trace(|| format!("  strata can't keep what's under: {why}"))).is_ok();
+                            done = vello.keep(is_over, &self.gpu.device, width, height).map_err(|why| trace(|| format!("  strata can't keep a layer: {why}"))).is_ok();
                             break;
                         }
                         Ok(Some(why)) if !why.starts_with("too big") => trace(|| format!("  vello ran out of room, drawing again: {why}")),
@@ -4510,19 +4548,22 @@ impl Painter {
                 }
                 self.only = None;
                 if !done {
+                    if let Some(vello) = self.vello.as_mut() {
+                        vello.drop_kept();
+                    }
                     return false;
                 }
-                built = timer.elapsed();
             }
-            self.strata = Some(Strata { at, phase, under, sharper, built: Instant::now() });
+            built = timer.elapsed();
+            self.strata = Some(Strata { at, phase, under, over, sharper, built: Instant::now() });
         }
         // Where they were and are
         let mut areas = self.whole.as_ref().map_or_else(Vec::new, |whole| whole.patch.clone());
         areas.extend(self.units[first..=last].iter().filter(|unit| shown(unit)).map(|unit| unit.bounds));
         let rects = Self::patch_rects(&areas, (ox, oy, px), width, height);
-        let over = (first, under.is_some());
-        let done = self.patch_whole_rects(&rects, Some(over), started);
-        trace(|| format!("  strata units={first}..={last} of {} built={:.1}ms {}", self.units.len(), built.as_secs_f64() * 1000.0, if done { "drawn" } else { "failed" }));
+        let to = over.map_or(self.units.len() - 1, |(from, _)| from - 1);
+        let done = self.patch_whole_rects(&rects, Some((first, to, under.is_some(), over.is_some())), started);
+        trace(|| format!("  strata units={first}..={last} of {} over={} built={:.1}ms {}", self.units.len(), over.is_some(), built.as_secs_f64() * 1000.0, if done { "drawn" } else { "failed" }));
         done
     }
 
@@ -4545,9 +4586,9 @@ impl Painter {
     }
 
     /// `rects` of the whole view drawn again by Vello, over a copy of it or
-    /// in place. With `over`, only the units from the first, and over what
-    /// `Strata` kept under them where they have it
-    fn patch_whole_rects(&mut self, rects: &[skia_safe::IRect], over: Option<(usize, bool)>, started: Instant) -> bool {
+    /// in place. With `strata`, only the units from the first to the last,
+    /// between what `Strata` kept under and over them where it has those
+    fn patch_whole_rects(&mut self, rects: &[skia_safe::IRect], strata: Option<(usize, usize, bool, bool)>, started: Instant) -> bool {
         let _span = super::span::span("patch whole vello");
         let _purpose = super::gpu_census::purpose("whole");
         let Some(whole) = self.whole.as_ref() else { return false };
@@ -4577,9 +4618,10 @@ impl Painter {
         let (mut waited, mut stats) = (Duration::ZERO, String::new());
         for rect in rects {
             let reach = Rect::from_xywh((x + rect.left) as f32 / px, (y + rect.top) as f32 / px, rect.width() as f32 / px, rect.height() as f32 / px).with_outset((2.0 / px, 2.0 / px));
-            if let Some((first, under)) = over {
-                self.only = Some((first, self.units.len().saturating_sub(1)));
+            if let Some((first, last, under, over)) = strata {
+                self.only = Some((first, last));
                 self.under_at = under.then_some((rect.left as u32, rect.top as u32));
+                self.over_at = over.then_some((rect.left as u32, rect.top as u32));
             }
             let mut drawn = None;
             for _ in 0..8 {
@@ -4607,6 +4649,7 @@ impl Painter {
             }
             self.only = None;
             self.under_at = None;
+            self.over_at = None;
             let image = drawn.and_then(|out| gpu::images::borrow_texture_from(&mut self.gpu.context, &out.backend(), SurfaceOrigin::TopLeft, ColorType::RGBA8888, AlphaType::Unpremul, None));
             let Some(image) = image else {
                 // What's drawn into it so far is never shown
@@ -4650,7 +4693,7 @@ impl Painter {
         }
         trace(|| {
             let rects: Vec<String> = rects.iter().map(|rect| format!("{}x{}", rect.width(), rect.height())).collect();
-            format!("  patch vello rects={rects:?} over={over:?} waited={:.1}ms {:.1}ms {stats}", waited.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0)
+            format!("  patch vello rects={rects:?} over={strata:?} waited={:.1}ms {:.1}ms {stats}", waited.as_secs_f64() * 1000.0, started.elapsed().as_secs_f64() * 1000.0)
         });
         self.drew = true;
         true
@@ -5568,7 +5611,9 @@ impl Painter {
                 if self.edited.elapsed() >= EDITING {
                     self.changing.clear();
                 }
-                self.changing.extend(self.units.iter().filter(|unit| !before.contains_key(&unit.slot)).map(|unit| unit.slot));
+                let now = Instant::now();
+                self.changing.retain(|_, at| at.elapsed() < CHANGED_LATELY);
+                self.changing.extend(self.units.iter().filter(|unit| !before.contains_key(&unit.slot)).map(|unit| (unit.slot, now)));
                 self.edited = Instant::now();
                 self.sent = Some(at);
             }
@@ -6329,11 +6374,54 @@ impl Painter {
             // Background blurs draw from copies of what's behind them, so
             // nothing reads what tiles have drawn
             self.backdrops.clear();
-            let mut units: Vec<Unit> = tree
-                .units()
+            // Figma sends a node's place a float's last bit off now and then,
+            // as it works it out again, and what's in a group again in another
+            // space as an edit moves the group's bounds, which would make it
+            // new and drawn again, so a unit that draws the same as one before
+            // keeps being that one
+            let mut was: HashMap<u64, Vec<(usize, Rect)>> = HashMap::new();
+            for unit in self.units.drain(..) {
+                if let Some(look) = self.looks.get(&unit.slot) {
+                    was.entry(look.what).or_default().push((unit.slot, unit.bounds));
+                }
+            }
+            let tree_units = tree.units();
+            let fresh: std::collections::HashSet<usize> = tree_units.iter().map(|unit| unit.key).collect();
+            let mut looks = HashMap::with_capacity(tree_units.len());
+            let mut aliases = HashMap::new();
+            let mut units: Vec<Unit> = tree_units
                 .into_iter()
-                .map(|unit| Unit { slot: unit.key, section: false, bounds: unit.bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place) })
+                .map(|unit| {
+                    let (mut slot, mut bounds) = (unit.key, unit.bounds);
+                    let alias = self.aliases.get(&unit.key).copied().filter(|slot| !fresh.contains(slot) && self.looks.contains_key(slot));
+                    if let Some(alias) = alias {
+                        slot = alias;
+                        bounds = was.values().flatten().find(|(old, _)| *old == alias).map_or(bounds, |(_, bounds)| *bounds);
+                    }
+                    let look = match self.looks.remove(&slot) {
+                        Some(look) => look,
+                        None => {
+                            let look = tree.look(&unit.place);
+                            let olds = was.get_mut(&look.what);
+                            let near = olds.as_ref().and_then(|olds| olds.iter().position(|(old, _)| !fresh.contains(old) && self.looks.get(old).is_some_and(|old| old.same(&look))));
+                            match (near, olds) {
+                                (Some(index), Some(olds)) => {
+                                    (slot, bounds) = olds.swap_remove(index);
+                                    self.looks.remove(&slot).unwrap_or(look)
+                                }
+                                _ => look,
+                            }
+                        }
+                    };
+                    looks.insert(slot, look);
+                    if slot != unit.key {
+                        aliases.insert(unit.key, slot);
+                    }
+                    Unit { slot, section: false, bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place), blends: unit.blends }
+                })
                 .collect();
+            self.looks = looks;
+            self.aliases = aliases;
             for i in 0..units.len() {
                 if !units[i].alone {
                     let area = units[i].bounds;
@@ -6355,7 +6443,7 @@ impl Painter {
                 return;
             };
             if node.kind == Kind::Section {
-                units.push(Unit { slot, section: true, bounds, custom: false, alone: false, place: None });
+                units.push(Unit { slot, section: true, bounds, custom: false, alone: false, place: None, blends: true });
                 for (i, &child) in node.children.iter().enumerate() {
                     let mask = scene.node(child).filter(|child| !child.hidden && child.mask.is_some());
                     if mask.is_some() {
@@ -6366,14 +6454,14 @@ impl Painter {
                             .filter_map(|&later| scene.node(later).filter(|later| !later.hidden).and_then(|later| later.bounds))
                             .reduce(|a, b| Rect::join2(a, b));
                         if let Some(rest) = rest {
-                            units.push(Unit { slot: child, section: true, bounds: rest, custom: false, alone: false, place: None });
+                            units.push(Unit { slot: child, section: true, bounds: rest, custom: false, alone: false, place: None, blends: true });
                         }
                         break;
                     }
                     add(scene, child, units);
                 }
             } else {
-                units.push(Unit { slot, section: false, bounds, custom: false, alone: false, place: None });
+                units.push(Unit { slot, section: false, bounds, custom: false, alone: false, place: None, blends: true });
             }
         }
         for &root in &self.scene.roots {

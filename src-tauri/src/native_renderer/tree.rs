@@ -254,6 +254,21 @@ pub struct Place {
     pub clips: Vec<(u32, Matrix)>,
 }
 
+/// See `Tree::look`
+pub struct Look {
+    pub what: u64,
+    pub at: Vec<[f32; 6]>,
+}
+
+impl Look {
+    /// Whether `self` and `other` draw the same but for a float's last bits
+    pub fn same(&self, other: &Look) -> bool {
+        self.what == other.what
+            && self.at.len() == other.at.len()
+            && self.at.iter().zip(&other.at).all(|(a, b)| a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1e-6 * a.abs().max(b.abs()).max(1.0)))
+    }
+}
+
 pub struct TreeUnit {
     /// Stays the same while the unit does, as its node never changes
     pub key: usize,
@@ -303,7 +318,8 @@ impl std::fmt::Write for HashWrite<'_> {
 
 /// A hash of what `node` draws of itself, by everything of it but the
 /// nodes it refers to, see `Tree::contents`
-fn own_hash(node: &Node) -> u64 {
+/// What `node` draws of itself, and that but for its matrix
+fn own_hash(node: &Node) -> (u64, u64) {
     use std::fmt::Write;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     // Each field, so one added to `Node` has to be thought of here
@@ -336,7 +352,7 @@ fn own_hash(node: &Node) -> u64 {
     }
     let _ = write!(
         HashWrite(&mut hasher),
-        "{op:?}{transform:?}{paint_size:?}{stroke_mode:?}{bg_blur_expansion_for_frame_fill:?}{is_created_from_brush:?}{blend_mode:?}{opacity:?}{mask_op:?}{color:?}{radius:?}{ext:?}{extra:?}"
+        "{op:?}{paint_size:?}{stroke_mode:?}{bg_blur_expansion_for_frame_fill:?}{is_created_from_brush:?}{blend_mode:?}{opacity:?}{mask_op:?}{color:?}{radius:?}{ext:?}{extra:?}"
     );
     // Paths and glyphs by their bits, as written out as text they took
     // over a second of a big file's whole scene
@@ -369,7 +385,11 @@ fn own_hash(node: &Node) -> u64 {
         0xfeu8.hash(&mut hasher);
     }
     (children.len(), child.is_some(), alpha_node.is_some(), color_node.is_some()).hash(&mut hasher);
-    hasher.finish()
+    let free = hasher.finish();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    free.hash(&mut hasher);
+    let _ = write!(HashWrite(&mut hasher), "{transform:?}");
+    (hasher.finish(), free)
 }
 
 /// A hash of a path's outline: Figma's own, when it sends one
@@ -405,7 +425,8 @@ pub struct Tree {
     /// an id again for another node
     contents: IdMap<u32, u64>,
     /// What each node draws of itself, see `own_hash`
-    owns: IdMap<u32, u64>,
+    /// and that but for its matrix, see `look`
+    owns: IdMap<u32, (u64, u64)>,
     /// Skia's copy of each path, by the path's address. The path is held
     /// weakly, which still keeps its address from being reused: held
     /// strongly, this and Vello's copies kept each other's paths forever
@@ -414,7 +435,25 @@ pub struct Tree {
     patterns: Mutex<HashMap<(u32, u64, i32), (Picture, Vec<String>)>>,
     /// Figma's noise octaves, see `scene::Begin`
     pub octaves: Vec<f32>,
+    /// Nodes changes lately sent again over some sent before, the way to
+    /// what changed, which are split into units of their own children, so
+    /// what's beside what changes is drawn apart from it, see `hot_after`,
+    /// as of when each was
+    hot: HashMap<u32, std::time::Instant>,
+    /// Where in the tree those are, by the children's places that lead
+    /// there, which stay split as Figma sends them under new ids, as each
+    /// change sends again those on the way to it
+    hot_places: Mutex<HashMap<u64, std::time::Instant>>,
 }
+
+/// Changes with more nodes on the way to what changed than this split
+/// nothing, as a change that big is more than an edit, and splitting it all
+/// makes thousands of units
+const HOT_MOST: usize = 256;
+
+/// How long nodes on the way to what changed stay split, so units don't
+/// come apart and together again as an edit's changes and others take turns
+const HOT_KEPT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl Tree {
     pub fn new(schema: &'static Schema) -> Self {
@@ -429,6 +468,8 @@ impl Tree {
             paths: Mutex::default(),
             patterns: Mutex::default(),
             octaves: Vec::new(),
+            hot: HashMap::new(),
+            hot_places: Mutex::default(),
         }
     }
 
@@ -479,7 +520,57 @@ impl Tree {
         }
         self.root = Some(header.root);
         self.header = Some(header.clone());
+        if header.mode == 0 {
+            self.hot.clear();
+            self.hot_places.lock().unwrap().clear();
+        } else if !applied.new_nodes.is_empty() {
+            let hot = self.hot_after(&applied.new_nodes);
+            let (forest, now) = (&self.forest, std::time::Instant::now());
+            self.hot.retain(|id, at| forest.get(*id).is_some() && now.duration_since(*at) < HOT_KEPT);
+            if hot.len() <= HOT_MOST {
+                self.hot.extend(hot.into_iter().map(|id| (id, now)));
+            }
+        }
         Ok(applied)
+    }
+
+    /// Of a change's `new` nodes, those with some of their children, or
+    /// theirs, sent before: the way from the root to what changed, not what
+    /// the view pans to, which comes all new
+    fn hot_after(&self, new: &[u32]) -> std::collections::HashSet<u32> {
+        let new: std::collections::HashSet<u32> = new.iter().copied().collect();
+        let mut over_old: HashMap<u32, bool> = HashMap::with_capacity(new.len());
+        let (mut stack, mut visiting) = (Vec::new(), std::collections::HashSet::new());
+        for &id in &new {
+            stack.push((id, false));
+            while let Some((id, ready)) = stack.pop() {
+                if over_old.contains_key(&id) {
+                    continue;
+                }
+                let Some(node) = self.forest.get(id) else {
+                    over_old.insert(id, false);
+                    continue;
+                };
+                if !ready {
+                    // One that refers back to itself ends there
+                    if !visiting.insert(id) {
+                        continue;
+                    }
+                    stack.push((id, true));
+                    stack.extend(Self::parts(node).filter(|child| new.contains(child) && !over_old.contains_key(child) && !visiting.contains(child)).map(|child| (child, false)));
+                    continue;
+                }
+                let any = Self::parts(node).any(|child| !new.contains(&child) || over_old.get(&child).copied().unwrap_or(false));
+                over_old.insert(id, any);
+            }
+        }
+        over_old.into_iter().filter(|&(_, any)| any).map(|(id, _)| id).collect()
+    }
+
+    /// What `node` draws in it, not what it refers to otherwise, as shared
+    /// sources what the view pans to draws can be
+    fn parts(node: &Node) -> impl Iterator<Item = u32> + '_ {
+        node.children.iter().copied().chain(node.child).chain(node.color_node).chain(node.alpha_node)
     }
 
     /// Hashes what the frame's new nodes draw, each after those it refers
@@ -501,7 +592,7 @@ impl Tree {
         // What each draws of itself, on every core, as a file's whole scene
         // is a hundred thousand nodes or so. One the same as the node its id
         // was keeps its hash, which telling takes about as long
-        let todo: Vec<(u32, &Arc<Node>, Option<(&Arc<Node>, u64)>)> = applied
+        let todo: Vec<(u32, &Arc<Node>, Option<(&Arc<Node>, (u64, u64))>)> = applied
             .new_nodes
             .iter()
             .filter_map(|&id| {
@@ -510,16 +601,16 @@ impl Tree {
                 Some((id, node, old))
             })
             .collect();
-        let own = |(_, node, old): &(u32, &Arc<Node>, Option<(&Arc<Node>, u64)>)| match old {
+        let own = |(_, node, old): &(u32, &Arc<Node>, Option<(&Arc<Node>, (u64, u64))>)| match old {
             Some((old, own)) if Arc::ptr_eq(old, node) || ***old == ***node => *own,
             _ => own_hash(node),
         };
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
-        let owns: Vec<u64> = if todo.len() < 2048 || threads < 2 {
+        let owns: Vec<(u64, u64)> = if todo.len() < 2048 || threads < 2 {
             todo.iter().map(own).collect()
         } else {
             std::thread::scope(|scope| {
-                let parts: Vec<_> = todo.chunks(todo.len().div_ceil(threads)).map(|part| scope.spawn(move || part.iter().map(own).collect::<Vec<u64>>())).collect();
+                let parts: Vec<_> = todo.chunks(todo.len().div_ceil(threads)).map(|part| scope.spawn(move || part.iter().map(own).collect::<Vec<(u64, u64)>>())).collect();
                 parts.into_iter().flat_map(|part| part.join().unwrap_or_default()).collect()
             })
         };
@@ -551,7 +642,7 @@ impl Tree {
                     continue;
                 }
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                owns.get(&id).copied().unwrap_or(0).hash(&mut hasher);
+                owns.get(&id).map_or(0, |own| own.0).hash(&mut hasher);
                 for id in node.refs() {
                     contents_now.get(&id).copied().unwrap_or(0).hash(&mut hasher);
                 }
@@ -772,7 +863,9 @@ impl Tree {
     pub fn units(&self) -> Vec<TreeUnit> {
         let mut out = Vec::new();
         if let Some(root) = self.root {
-            self.expand(root, Matrix::default(), &mut Vec::new(), 0, &mut out);
+            let mut places = self.hot_places.lock().unwrap();
+            places.retain(|_, at| at.elapsed() < HOT_KEPT);
+            self.expand(root, 0, &mut places, Matrix::default(), &mut Vec::new(), 0, &mut out);
         }
         // The same drawn twice in the same place is two units, for either
         // to go on its own
@@ -789,12 +882,27 @@ impl Tree {
         out
     }
 
-    fn expand(&self, id: u32, at: Matrix, clips: &mut Vec<(u32, Matrix)>, depth: u8, out: &mut Vec<TreeUnit>) {
+    /// `place` is where `id` is in the tree, see `hot_places`
+    #[allow(clippy::too_many_arguments)]
+    fn expand(&self, id: u32, place: u64, places: &mut HashMap<u64, std::time::Instant>, at: Matrix, clips: &mut Vec<(u32, Matrix)>, depth: u8, out: &mut Vec<TreeUnit>) {
         let Some(node) = self.forest.get(id) else {
             return;
         };
         let info = self.info(id);
-        let big = (info.count > SPLIT || info.points > SPLIT_POINTS) && depth < 32;
+        let hot = match self.hot.get(&id) {
+            Some(&since) => {
+                let latest = places.entry(place).or_insert(since);
+                *latest = (*latest).max(since);
+                true
+            }
+            None => places.contains_key(&place),
+        };
+        let big = (info.count > SPLIT || info.points > SPLIT_POINTS || hot) && depth < 32;
+        let inner = |index: u64| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (place, index).hash(&mut hasher);
+            hasher.finish()
+        };
         // Split under a mask, what's in it is clipped piece by piece, which
         // shows where they meet along its edge, so only where there's no
         // other way to keep a change from redrawing much
@@ -802,24 +910,24 @@ impl Tree {
         match node.op {
             Op::OcclusionScope | Op::Metadata | Op::CompositeTileGrid if big => {
                 if let Some(child) = node.child {
-                    return self.expand(child, at, clips, depth + 1, out);
+                    return self.expand(child, inner(u64::MAX), places, at, clips, depth + 1, out);
                 }
             }
             Op::Group if big => {
-                for &child in &node.children {
-                    self.expand(child, at, clips, depth + 1, out);
+                for (index, &child) in node.children.iter().enumerate() {
+                    self.expand(child, inner(index as u64), places, at, clips, depth + 1, out);
                 }
                 return;
             }
             Op::StaticTransformBinding if big => {
                 if let (Some(child), Some(t)) = (node.child, node.transform) {
-                    return self.expand(child, Matrix::concat(&at, &rt::to_matrix(&t)), clips, depth + 1, out);
+                    return self.expand(child, inner(u64::MAX), places, Matrix::concat(&at, &rt::to_matrix(&t)), clips, depth + 1, out);
                 }
             }
             Op::Mask if many && matches!(node.mask_op, None | Some(MaskOpType::Normal)) => {
                 if let (Some(color), Some((fill, to))) = (node.color_node, node.alpha_node.and_then(|alpha| self.clip_of(alpha))) {
                     clips.push((fill, Matrix::concat(&at, &to)));
-                    self.expand(color, at, clips, depth + 1, out);
+                    self.expand(color, inner(u64::MAX - 1), places, at, clips, depth + 1, out);
                     clips.pop();
                     return;
                 }
@@ -857,6 +965,62 @@ impl Tree {
             blends: info.blends,
             custom: info.custom,
         });
+    }
+
+    /// What unit `place` draws, with the matrices it's drawn with apart, so
+    /// it can be told it draws the same as one before but for where floats
+    /// round, though Figma sent it again in another space, as it does
+    /// what's in a group whose bounds an edit moves
+    pub fn look(&self, place: &Place) -> Look {
+        let six = |m: &Matrix| {
+            let mut values = [0.0f32; 9];
+            m.get_9(&mut values);
+            [values[0], values[1], values[2], values[3], values[4], values[5]]
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut at = Vec::new();
+        for (fill, m) in &place.clips {
+            self.content(*fill).hash(&mut hasher);
+            at.push(six(m));
+        }
+        let mut stack = vec![(place.id, place.at, 0u8)];
+        while let Some((id, m, depth)) = stack.pop() {
+            let Some(node) = self.forest.get(id).filter(|_| depth < DEPTH) else {
+                u64::MAX.hash(&mut hasher);
+                continue;
+            };
+            self.owns.get(&id).map_or(0, |own| own.1).hash(&mut hasher);
+            let parts = node.children.len() + node.child.iter().len() + node.alpha_node.iter().len() + node.color_node.iter().len();
+            for id in node.refs().skip(parts) {
+                self.content(id).hash(&mut hasher);
+            }
+            // A transform draws nothing itself, but what's in it by its
+            // matrix, any other node by its own and what's in it not
+            let inner = match node.transform {
+                Some(t) if node.op == Op::StaticTransformBinding => Matrix::concat(&m, &rt::to_matrix(&t)),
+                Some(t) => {
+                    at.push(six(&Matrix::concat(&m, &rt::to_matrix(&t))));
+                    if parts > 0 {
+                        at.push(six(&m));
+                    }
+                    m
+                }
+                // Where what's in it is drawn says where it is, but not
+                // its scale, which its effects go by
+                None if parts > 0 => {
+                    let [a, b, _, c, d, _] = six(&m);
+                    at.push([a, b, 0.0, c, d, 0.0]);
+                    m
+                }
+                None => {
+                    at.push(six(&m));
+                    m
+                }
+            };
+            let kids: Vec<u32> = Self::parts(node).collect();
+            stack.extend(kids.into_iter().rev().map(|id| (id, inner, depth + 1)));
+        }
+        Look { what: hasher.finish(), at }
     }
 
     /// When node `id` is no more than an opaque shape, the fill node it is
