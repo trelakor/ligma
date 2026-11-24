@@ -1547,7 +1547,22 @@ impl Hasher for IdHasher {
     }
 
     #[inline]
+    fn write_u8(&mut self, n: u8) {
+        self.write_u64(n as u64);
+    }
+
+    #[inline]
+    fn write_u16(&mut self, n: u16) {
+        self.write_u64(n as u64);
+    }
+
+    #[inline]
     fn write_u32(&mut self, n: u32) {
+        self.write_u64(n as u64);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, n: usize) {
         self.write_u64(n as u64);
     }
 

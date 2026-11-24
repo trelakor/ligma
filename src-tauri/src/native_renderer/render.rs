@@ -834,7 +834,13 @@ struct Strata {
     /// drawn again alone
     sharper: [u64; 3],
     built: [Instant; 3],
+    /// The units each shows, as of when it was drawn, see `Member`
+    members: [Vec<Member>; 3],
 }
+
+/// A unit a layer `Strata` keeps shows: its slot, mark (see
+/// `Painter::mark`) and when an image it drew last came sharper
+type Member = (usize, u64, Option<u64>);
 
 /// How often what `Strata` keeps is drawn again for images under what's
 /// edited coming sharper, as they come several times as an edit starts,
@@ -1483,9 +1489,21 @@ pub struct Painter {
     /// The units an edit going on changed, by slot, as of when they last did
     changing: HashMap<usize, Instant>,
     /// What each unit draws, by slot, see `tree::Tree::look`
-    looks: HashMap<usize, super::tree::Look>,
+    looks: super::rt::IdMap<usize, super::tree::Look>,
     /// The slots of units kept as ones before them, by their own keys
-    aliases: HashMap<usize, usize>,
+    aliases: super::rt::IdMap<usize, usize>,
+    /// Units the last `rebuild_units` split from one before, all it was
+    /// split into, the same, where it was, which draw just what it drew:
+    /// by slot, the slot of the one they're split from and their mark then
+    regrouped: super::rt::IdMap<usize, (usize, u64)>,
+    /// Those split, by slot: their mark and when an image they drew last
+    /// came sharper, as of then, and how many units they're split into
+    regroups: super::rt::IdMap<usize, (u64, Option<u64>, usize)>,
+    /// Whether `check` last saw the units those were split from
+    regroups_checked: bool,
+    /// Units the last `rebuild_units` brought that draw, where they're
+    /// drawn, what part of a unit gone drew, see `TreeUnit::kept_part`
+    unchanged: std::collections::HashSet<usize, std::hash::BuildHasherDefault<super::rt::IdHasher>>,
     strata: Option<Strata>,
     /// The first and last units by index Vello draws, while a part of
     /// what's in the view is drawn
@@ -1700,11 +1718,11 @@ pub struct Painter {
     image_units: HashMap<String, std::collections::HashSet<(usize, bool)>>,
     /// Counts up for a unit when what it draws changes but what it is
     /// doesn't, as when an image it drew comes
-    versions: HashMap<(usize, bool), u64>,
+    versions: super::rt::IdMap<(usize, bool), u64>,
     /// Counts up for a unit when an image it drew comes sharper: what's
     /// drawn of it is out of date for tiles, but thumbs, which are drawn
     /// small anyway, show the same thing
-    sharpened: HashMap<(usize, bool), u64>,
+    sharpened: super::rt::IdMap<(usize, bool), u64>,
     version_next: u64,
     /// Changes with units or their versions, so `check` knows when to look
     revision: u64,
@@ -1717,7 +1735,12 @@ pub struct Painter {
     /// `checked`
     touched: Vec<(usize, bool)>,
     units_rebuilt: bool,
-    checked_at: HashMap<(usize, bool), usize>,
+    checked_at: super::rt::IdMap<(usize, bool), usize>,
+    /// Whether `pictures`, `thumbs`, `rasters`, `image_units`, `versions`
+    /// or `sharpened` may hold slots no unit has, since `settle_units` last
+    /// let go of those. Only units going and `bump` put them there, as all
+    /// else adds for units as they're drawn
+    slot_strays: bool,
     /// Textures let go of, freed once the queue passes each fence value
     graves: Vec<(u64, Vec<windows::Win32::Graphics::Direct3D12::ID3D12Resource>)>,
     maker: Option<Maker>,
@@ -1741,6 +1764,10 @@ impl Painter {
             changing: Default::default(),
             looks: Default::default(),
             aliases: Default::default(),
+            regrouped: Default::default(),
+            regroups: Default::default(),
+            regroups_checked: false,
+            unchanged: Default::default(),
             strata: None,
             only: None,
             under_at: None,
@@ -1869,15 +1896,16 @@ impl Painter {
             effect_images: HashMap::new(),
             waiting_areas: HashMap::new(),
             image_units: HashMap::new(),
-            versions: HashMap::new(),
-            sharpened: HashMap::new(),
+            versions: Default::default(),
+            sharpened: Default::default(),
             version_next: 0,
             revision: 1,
             checked_revision: 0,
             checked: Vec::new(),
             touched: Vec::new(),
             units_rebuilt: true,
-            checked_at: HashMap::new(),
+            checked_at: Default::default(),
+            slot_strays: false,
             graves: Vec::new(),
             maker: None,
             kept,
@@ -2715,9 +2743,10 @@ impl Painter {
             parts.sort_by_key(|&(x, y, w, h)| (x + w / 2 - cx).pow(2) + (y + h / 2 - cy).pow(2));
             self.chunked = Some(Chunked { at, phase, tex, next: 0, parts, counts: Counts::default(), started: Instant::now(), seq: self.seq });
         }
-        let (x, y, w, h) = {
+        let (x, y, w, h, first) = {
             let chunked = self.chunked.as_ref()?;
-            chunked.parts[chunked.next]
+            let (x, y, w, h) = chunked.parts[chunked.next];
+            (x, y, w, h, chunked.next == 0)
         };
         let reach = Rect::from_xywh((ox + x) as f32 / px, (oy + y) as f32 / px, w as f32 / px, h as f32 / px);
         let started = Instant::now();
@@ -2743,6 +2772,7 @@ impl Painter {
             let vello = self.vello.as_mut()?;
             match vello.check(usize::MAX) {
                 Ok(None) => {
+                    vello::took_part(first);
                     drawn = Some((out, counts));
                     break;
                 }
@@ -2776,6 +2806,7 @@ impl Painter {
             let fence = self.gpu.signal();
             let layer = Layer { tex: chunked.tex, x: ox, y: oy, phase, px, counts: chunked.counts, kind: LayerKind::Whole, drawn: 0 };
             trace(|| format!("  whole vello chunked px={px:.3} {width}x{height} in {} parts {:.1}ms", chunked.parts.len(), chunked.started.elapsed().as_secs_f64() * 1000.0));
+            vello::took_whole(true);
             self.hand_whole(layer, fence, at, false, true, chunked.seq);
             self.drew = true;
         }
@@ -3395,6 +3426,12 @@ impl Painter {
                 trace(|| format!("  whole vello px={:.3} {} checked={:.1}ms {:.1}ms gpu:{stages}", last.layer.px, last.stats, waited.as_secs_f64() * 1000.0, last.started.elapsed().as_secs_f64() * 1000.0));
                 self.whole_took = last.started.elapsed();
                 stats().lock().unwrap().whole_ms = self.whole_took.as_secs_f64() * 1000.0;
+                // Its renders checked last, so what the last took is its own.
+                // Rough ones draw some units at other levels, and aren't
+                // drawn again in parts
+                if !last.rough {
+                    vello::took_whole(false);
+                }
                 self.hand_whole(last.layer, last.fence, last.at, last.rough, true, last.seq);
                 // What changed as the GPU drew it isn't in it, as when an
                 // object's moved, which would show it where it was
@@ -4486,6 +4523,74 @@ impl Painter {
         rects
     }
 
+    /// The units from `from` to `to` a layer `Strata` keeps over `reach`
+    /// shows
+    fn members(&self, (from, to): (usize, usize), reach: Rect) -> Vec<Member> {
+        self.units[from..=to]
+            .iter()
+            .filter(|unit| unit.place.is_some() && Rect::intersects2(&unit.bounds, &reach))
+            .map(|unit| (unit.slot, self.mark(unit), self.sharpened.get(&(unit.slot, unit.section)).copied()))
+            .collect()
+    }
+
+    /// Layers `Strata` keeps that show what they did, though units they
+    /// show were split since into others that draw all they did the same
+    /// (see `regroup`), kept as `layers` now are, rather than drawn again:
+    /// each unit they show now one they showed, as it was, or with the
+    /// rest it's split into that show, beside each other, one they showed
+    /// as it was, in the same order. `sharper` is as `fill_strata` has it
+    fn regroup_strata(&mut self, at: (i32, i32, u32), phase: (f32, f32), layers: &[Option<(usize, usize, u64)>; 3], sharper: &[u64; 3], reach: Rect) {
+        use super::rt::IdMap;
+        let Some(strata) = self.strata.as_ref().filter(|strata| strata.at == at && strata.phase == phase) else { return };
+        let shown = |unit: &Unit| unit.place.is_some() && Rect::intersects2(&unit.bounds, &reach);
+        // Of each split, how many of what it's split into show
+        let mut shown_parts: IdMap<usize, usize> = IdMap::default();
+        for unit in self.units.iter().filter(|unit| shown(unit)) {
+            if let Some((owner, _)) = self.regrouped.get(&unit.slot) {
+                *shown_parts.entry(*owner).or_default() += 1;
+            }
+        }
+        let mut kept: Vec<(usize, Vec<Member>, bool)> = Vec::new();
+        for index in 0..3 {
+            let (Some(was), Some((from, to, now))) = (strata.layers[index], layers[index]) else { continue };
+            if was == (from, to, now) {
+                continue;
+            }
+            let members = self.members((from, to), reach);
+            let mut stood: Vec<Member> = Vec::with_capacity(members.len());
+            let mut parts: IdMap<usize, usize> = IdMap::default();
+            for &(slot, mark, sharp) in &members {
+                let split = self.regrouped.get(&slot).filter(|(_, part)| *part == mark).and_then(|&(owner, _)| self.regroups.get(&owner).map(|split| (owner, *split)));
+                match split {
+                    Some((owner, (owner_mark, owner_sharp, _))) => {
+                        *parts.entry(owner).or_default() += 1;
+                        if stood.last().map(|member| member.0) != Some(owner) {
+                            stood.push((owner, owner_mark, owner_sharp));
+                        }
+                    }
+                    None => stood.push((slot, mark, sharp)),
+                }
+            }
+            let was_members = &strata.members[index];
+            let whole = parts.iter().all(|(owner, count)| shown_parts.get(owner) == Some(count));
+            if !whole || stood.len() != was_members.len() || !stood.iter().zip(was_members).all(|(now, was)| (now.0, now.1) == (was.0, was.1)) {
+                continue;
+            }
+            // Nothing it shows came sharper since it was drawn either
+            let sharp = stood.iter().zip(was_members).all(|(now, was)| now.2 == was.2);
+            kept.push((index, members, sharp));
+        }
+        let Some(strata) = self.strata.as_mut() else { return };
+        for (index, members, sharp) in kept {
+            trace(|| format!("  strata layer {index} kept, units split as they were"));
+            strata.layers[index] = layers[index];
+            strata.members[index] = members;
+            if sharp {
+                strata.sharper[index] = sharper[index];
+            }
+        }
+    }
+
     /// The units an edit changes and those over them drawn again where they
     /// change in the whole view, over what's under them, kept from when
     /// they started changing (see `Strata`). False where it can't, or,
@@ -4542,6 +4647,9 @@ impl Painter {
             ([under.map(|under| (0, first - 1, under)), over.map(|over| (from, self.units.len() - 1, over)), mid], [under_sharper, over_sharper, mid_sharper])
         };
         let over = layers[1].map(|(from, _, over)| (from, over));
+        if !self.regroups.is_empty() {
+            self.regroup_strata(at, phase, &layers, &sharper, reach);
+        }
         let old = self.strata.as_ref().filter(|strata| strata.at == at && strata.phase == phase).map(|strata| (strata.layers, strata.sharper, strata.built));
         let keep: [bool; 3] = std::array::from_fn(|index| old.is_some_and(|(was, was_sharper, built)| was[index] == layers[index] && (was_sharper[index] == sharper[index] || built[index].elapsed() < STRATA_SHARPER)));
         let kept = keep.iter().all(|&keep| keep);
@@ -4549,6 +4657,10 @@ impl Painter {
             return false;
         }
         self.settle_shown();
+        // What's drawn of it takes no more than all of it did, so Vello's
+        // room shrunk by tiles drawn since doesn't run out at the start of
+        // a drag
+        vello::room_for_whole(px < coarse(self.zoom.0));
         let mut built = Duration::ZERO;
         if !kept {
             if let Some(strata) = &self.strata {
@@ -4561,10 +4673,19 @@ impl Painter {
                     (sharper, [Instant::now(); 3])
                 }
             };
+            let mut members: [Vec<Member>; 3] = self.strata.as_mut().map(|strata| std::mem::take(&mut strata.members)).unwrap_or_default();
+            for (index, layer) in layers.iter().enumerate() {
+                if !keep[index] {
+                    members[index] = layer.map_or_else(Vec::new, |(from, to, _)| self.members((from, to), reach));
+                }
+            }
             self.strata = None;
             let timer = Instant::now();
             // Those with nothing to keep now. The rest keep their textures
             for index in 0..3 {
+                if layers[index].is_none() {
+                    (sharp[index], built_at[index]) = (sharper[index], Instant::now());
+                }
                 if !keep[index] && layers[index].is_none() {
                     if let Some(vello) = self.vello.as_mut() {
                         vello.drop_kept_one(index);
@@ -4605,7 +4726,7 @@ impl Painter {
                 (sharp[index], built_at[index]) = (sharper[index], Instant::now());
             }
             built = timer.elapsed();
-            self.strata = Some(Strata { at, phase, layers, sharper: sharp, built: built_at });
+            self.strata = Some(Strata { at, phase, layers, sharper: sharp, built: built_at, members });
         }
         // Where they were and are
         let mut areas = self.whole.as_ref().map_or_else(Vec::new, |whole| whole.patch.clone());
@@ -4626,12 +4747,14 @@ impl Painter {
         let Some(whole) = self.whole.as_ref().filter(|whole| whole.vello && !whole.stale && !whole.rough && !whole.patch.is_empty() && whole.patch.len() <= PATCHES) else {
             return false;
         };
-        let (width, height) = (whole.layer.tex.width, whole.layer.tex.height);
-        let rects = Self::patch_rects(&whole.patch, (whole.layer.x, whole.layer.y, whole.layer.px), width, height);
+        let (width, height, px) = (whole.layer.tex.width, whole.layer.tex.height, whole.layer.px);
+        let rects = Self::patch_rects(&whole.patch, (whole.layer.x, whole.layer.y, px), width, height);
         // Past half of it, drawing it all again takes about as long
         if rects.iter().map(|rect| rect.width() as i64 * rect.height() as i64).sum::<i64>() * 2 > width as i64 * height as i64 {
             return false;
         }
+        // As in `fill_strata`
+        vello::room_for_whole(px < coarse(self.zoom.0));
         self.patch_whole_rects(&rects, None, started)
     }
 
@@ -5632,26 +5755,49 @@ impl Painter {
         let _span = super::span::span("settle units");
         use super::rt::IdMap;
         type IdSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<super::rt::IdHasher>>;
-        let before: IdMap<usize, Rect> = self.units.iter().map(|unit| (unit.slot, unit.bounds)).collect();
+        // A slot hashed a byte at a time, as `IdHasher` once took a `usize`:
+        // gone units' areas come in the map's order, and patches of the
+        // whole view merge in theirs
+        #[derive(PartialEq, Eq)]
+        struct Slot(usize);
+        impl Hash for Slot {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                state.write(&self.0.to_ne_bytes());
+            }
+        }
+        let before: IdMap<Slot, Rect> = self.units.iter().map(|unit| (Slot(unit.slot), unit.bounds)).collect();
+        let strays = self.slot_strays;
         self.rebuild_units();
         {
             let now: IdSet<usize> = self.units.iter().map(|unit| unit.slot).collect();
-            let mut areas: Vec<Rect> = before.iter().filter(|(slot, _)| !now.contains(slot)).map(|(_, bounds)| *bounds).collect();
-            areas.extend(self.units.iter().filter(|unit| !before.contains_key(&unit.slot)).map(|unit| unit.bounds));
-            self.pictures.retain(|(slot, _, _, _), _| now.contains(slot));
-            self.thumbs.retain(|(slot, _, _), _| now.contains(slot));
-            self.versions.retain(|(slot, _), _| now.contains(slot));
-            self.sharpened.retain(|(slot, _), _| now.contains(slot));
-            self.image_units.retain(|_, units| {
-                units.retain(|(slot, _)| now.contains(slot));
-                !units.is_empty()
-            });
-            let gone: Vec<_> = self.rasters.keys().filter(|(slot, ..)| !now.contains(slot)).copied().collect();
-            for key in gone {
-                if let Some(raster) = self.rasters.remove(&key) {
-                    self.raster_bytes -= footprint(&raster.image);
+            // Those keyed by slots hold none that no unit had, so with none
+            // gone there's nothing to let go of
+            let any_gone = before.keys().any(|slot| !now.contains(&slot.0));
+            // Units split into others that draw all they did the same, where
+            // they were, change nothing there (see `regroup`), and what
+            // they're split into changes as they did
+            let mut areas: Vec<Rect> = before.iter().filter(|(slot, _)| !now.contains(&slot.0) && !self.regroups.contains_key(&slot.0)).map(|(_, bounds)| *bounds).collect();
+            areas.extend(self.units.iter().filter(|unit| !before.contains_key(&Slot(unit.slot)) && !self.regrouped.contains_key(&unit.slot)).map(|unit| unit.bounds));
+            let inherited: Vec<(usize, Instant)> = self.regrouped.iter().filter_map(|(&part, (owner, _))| self.changing.get(owner).map(|&at| (part, at))).collect();
+            self.changing.extend(inherited);
+            if strays || any_gone {
+                let _span = super::span::span("let go of units gone");
+                self.pictures.retain(|(slot, _, _, _), _| now.contains(slot));
+                self.thumbs.retain(|(slot, _, _), _| now.contains(slot));
+                self.versions.retain(|(slot, _), _| now.contains(slot));
+                self.sharpened.retain(|(slot, _), _| now.contains(slot));
+                self.image_units.retain(|_, units| {
+                    units.retain(|(slot, _)| now.contains(slot));
+                    !units.is_empty()
+                });
+                let gone: Vec<_> = self.rasters.keys().filter(|(slot, ..)| !now.contains(slot)).copied().collect();
+                for key in gone {
+                    if let Some(raster) = self.rasters.remove(&key) {
+                        self.raster_bytes -= footprint(&raster.image);
+                    }
                 }
             }
+            self.slot_strays = false;
             trace(|| format!("units of frame {seq} and {} before units={} areas={}", count - 1, self.units.len(), areas.len()));
             // An edit is drawn into the whole view at once, each frame. Not
             // so units Figma sends as the view pans to them, or what changes
@@ -5667,7 +5813,10 @@ impl Painter {
                 }
                 let now = Instant::now();
                 self.changing.retain(|_, at| at.elapsed() < CHANGED_LATELY);
-                self.changing.extend(self.units.iter().filter(|unit| !before.contains_key(&unit.slot)).map(|unit| (unit.slot, now)));
+                // Not those that draw, where they're drawn, what part of a
+                // unit gone drew, as what changed is beside them
+                let new = self.units.iter().filter(|unit| !before.contains_key(&Slot(unit.slot)) && !self.regrouped.contains_key(&unit.slot) && !self.unchanged.contains(&unit.slot));
+                self.changing.extend(new.map(|unit| (unit.slot, now)).collect::<Vec<_>>());
                 self.edited = Instant::now();
                 self.sent = Some(at);
             }
@@ -6202,6 +6351,7 @@ impl Painter {
             self.versions.insert(key, self.version_next);
             self.touched.push(key);
             self.revision += 1;
+            self.slot_strays = true;
         }
     }
 
@@ -6283,6 +6433,22 @@ impl Painter {
         }
         let before: super::rt::IdMap<(usize, bool), &Mark> = self.checked.iter().map(|mark| (mark.0, mark)).collect();
         let after: super::rt::IdMap<(usize, bool), &Mark> = now.iter().map(|mark| (mark.0, mark)).collect();
+        // Units split into others that draw all they did the same, where
+        // they were, change nothing there (see `regroup`), when the check
+        // before saw them as they were then, and what they're split into is
+        // as it was then too
+        let mut split: super::rt::IdMap<usize, usize> = Default::default();
+        if self.regroups_checked {
+            for mark in now.iter().filter(|mark| !mark.0 .1) {
+                let Some(&(owner, part)) = self.regrouped.get(&mark.0 .0) else { continue };
+                let was = self.regroups.get(&owner).is_some_and(|(owner_mark, ..)| before.get(&(owner, false)).is_some_and(|old| old.2 == *owner_mark));
+                if was && mark.2 == part && !after.contains_key(&(owner, false)) {
+                    *split.entry(owner).or_default() += 1;
+                }
+            }
+            split.retain(|owner, parts| self.regroups.get(owner).is_some_and(|regroup| regroup.2 == *parts));
+        }
+        let split_into = |slot: &(usize, bool)| !slot.1 && self.regrouped.get(&slot.0).is_some_and(|(owner, _)| split.contains_key(owner));
         for mark in &now {
             match before.get(&mark.0) {
                 Some(old) if **old == *mark => {}
@@ -6291,11 +6457,12 @@ impl Painter {
                     areas.push(rect(&old.1));
                     areas.push(rect(&mark.1));
                 }
+                None if split_into(&mark.0) => {}
                 None => areas.push(rect(&mark.1)),
             }
         }
         for mark in &self.checked {
-            if !after.contains_key(&mark.0) {
+            if !after.contains_key(&mark.0) && !(!mark.0 .1 && split.contains_key(&mark.0 .0)) {
                 areas.push(rect(&mark.1));
             }
         }
@@ -6420,10 +6587,67 @@ impl Painter {
         self.drop_last_whole();
     }
 
+    /// Notes in `regrouped` and `regroups` the units just made split from
+    /// one of `olds` that draw all it drew the same (see
+    /// `TreeUnit::regroups`), `owners` that one's slot for each: where it's
+    /// gone, all it's split into new, beside each other where it was among
+    /// the rest. What's drawn there is the same, though the units aren't
+    fn regroup(&mut self, olds: &[Unit], owners: &[Option<usize>]) {
+        use super::rt::IdMap;
+        type IdSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<super::rt::IdHasher>>;
+        if owners.iter().all(Option::is_none) {
+            return;
+        }
+        let old_at: IdMap<usize, usize> = olds.iter().enumerate().filter(|(_, old)| old.place.is_some() && !old.section).map(|(index, old)| (old.slot, index)).collect();
+        let now: IdSet<usize> = self.units.iter().map(|unit| unit.slot).collect();
+        // By the slot of the one split, the first and last index of what
+        // it's split into, and whether that can stand for it
+        let mut blocks: IdMap<usize, (usize, usize, bool)> = IdMap::default();
+        for (index, (unit, owner)) in self.units.iter().zip(owners).enumerate() {
+            let Some(owner) = *owner else { continue };
+            let fits = old_at.contains_key(&owner) && !now.contains(&owner) && !old_at.contains_key(&unit.slot);
+            let block = blocks.entry(owner).or_insert((index, index, true));
+            block.2 &= fits && index <= block.1 + 1;
+            block.1 = index;
+        }
+        blocks.retain(|_, block| block.2);
+        if blocks.is_empty() {
+            return;
+        }
+        // All here before and now in the same order, what's split into
+        // standing for what it's split from, or none of it stands for it
+        let before = olds.iter().map(|old| old.slot).filter(|slot| old_at.contains_key(slot) && (now.contains(slot) || blocks.contains_key(slot)));
+        let mut after: Vec<usize> = Vec::with_capacity(self.units.len());
+        for (unit, owner) in self.units.iter().zip(owners) {
+            let slot = owner.filter(|owner| blocks.contains_key(owner)).unwrap_or(unit.slot);
+            if old_at.contains_key(&slot) && !(after.last() == Some(&slot) && blocks.contains_key(&slot)) {
+                after.push(slot);
+            }
+        }
+        if !before.eq(after.iter().copied()) {
+            trace(|| format!("  {} units split the same, but others moved", blocks.len()));
+            return;
+        }
+        let parts: Vec<(usize, (usize, u64))> =
+            self.units.iter().zip(owners).filter_map(|(unit, owner)| owner.filter(|owner| blocks.contains_key(owner)).map(|owner| (unit.slot, (owner, self.mark(unit))))).collect();
+        let split: Vec<(usize, (u64, Option<u64>, usize))> = blocks
+            .iter()
+            .map(|(&owner, &(first, last, _))| (owner, (self.mark(&olds[old_at[&owner]]), self.sharpened.get(&(owner, false)).copied(), last + 1 - first)))
+            .collect();
+        trace(|| format!("  {} units split into {} that draw the same", split.len(), parts.len()));
+        self.regrouped.extend(parts);
+        self.regroups.extend(split);
+    }
+
     fn rebuild_units(&mut self) {
         let _span = super::span::span("rebuild units");
         self.revision += 1;
+        let checked = !self.units_rebuilt;
         self.units_rebuilt = true;
+        self.slot_strays = true;
+        self.regrouped.clear();
+        self.regroups.clear();
+        self.unchanged.clear();
         if let Some(tree) = &self.tree {
             // Background blurs draw from copies of what's behind them, so
             // nothing reads what tiles have drawn
@@ -6434,53 +6658,103 @@ impl Painter {
             // new and drawn again, so a unit that draws the same as one before
             // keeps being that one
             use super::rt::IdMap;
-            let mut was: IdMap<u64, Vec<(usize, Rect)>> = IdMap::default();
+            type IdSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<super::rt::IdHasher>>;
+            let olds = std::mem::take(&mut self.units);
+            let tree_units = {
+                let _span = super::span::span("tree units");
+                tree.units()
+            };
+            let fresh: IdSet<usize> = tree_units.iter().map(|unit| unit.key).collect();
+            // Keys repeat only where a hash collides, and then a key's look,
+            // once a unit took it, is gone for those after it
+            let repeats = fresh.len() != tree_units.len();
+            // Looks stay where they are as units take them, and the slots not
+            // in `fresh` taken are noted, as none after may take those again
+            let mut taken: IdSet<usize> = IdSet::default();
+            // Old units by what they draw, made once a unit's look is first
+            // made, before any look's added
+            let mut was: Option<IdMap<u64, Vec<(usize, Rect)>>> = None;
             // An alias's slot is in `was` till a near match takes it, which
             // takes its look too, so it's never an alias after
-            let mut was_at: IdMap<usize, Rect> = IdMap::default();
-            for unit in self.units.drain(..) {
-                if let Some(look) = self.looks.get(&unit.slot) {
-                    was.entry(look.what).or_default().push((unit.slot, unit.bounds));
-                    was_at.entry(unit.slot).or_insert(unit.bounds);
+            let mut was_at: Option<IdMap<usize, Rect>> = None;
+            let mut aliases = IdMap::default();
+            let mut units: Vec<Unit> = Vec::with_capacity(tree_units.len());
+            // Of each, the slot of the unit before it's split from, see
+            // `regroup`, and whether it draws what part of one gone drew
+            let mut owners: Vec<Option<usize>> = Vec::with_capacity(tree_units.len());
+            let mut kept_parts: Vec<bool> = Vec::with_capacity(tree_units.len());
+            let looks_span = super::span::span("unit looks");
+            for unit in tree_units {
+                owners.push(unit.regroups.map(|key| self.aliases.get(&key).copied().unwrap_or(key)));
+                kept_parts.push(unit.kept_part);
+                let (mut slot, mut bounds) = (unit.key, unit.bounds);
+                let alias = self.aliases.get(&unit.key).copied().filter(|slot| !fresh.contains(slot) && !taken.contains(slot) && self.looks.contains_key(slot));
+                if let Some(alias) = alias {
+                    slot = alias;
+                    let was_at = was_at.get_or_insert_with(|| {
+                        let mut was_at = IdMap::default();
+                        for old in olds.iter().filter(|old| !fresh.contains(&old.slot) && self.looks.contains_key(&old.slot)) {
+                            was_at.entry(old.slot).or_insert(old.bounds);
+                        }
+                        was_at
+                    });
+                    bounds = was_at.get(&alias).copied().unwrap_or(bounds);
                 }
-            }
-            let tree_units = tree.units();
-            let fresh: std::collections::HashSet<usize, std::hash::BuildHasherDefault<super::rt::IdHasher>> = tree_units.iter().map(|unit| unit.key).collect();
-            let mut looks = HashMap::with_capacity(tree_units.len());
-            let mut aliases = HashMap::new();
-            let mut units: Vec<Unit> = tree_units
-                .into_iter()
-                .map(|unit| {
-                    let (mut slot, mut bounds) = (unit.key, unit.bounds);
-                    let alias = self.aliases.get(&unit.key).copied().filter(|slot| !fresh.contains(slot) && self.looks.contains_key(slot));
-                    if let Some(alias) = alias {
-                        slot = alias;
-                        bounds = was_at.get(&alias).copied().unwrap_or(bounds);
-                    }
-                    let look = match self.looks.remove(&slot) {
-                        Some(look) => look,
-                        None => {
-                            let look = tree.look(&unit.place);
-                            let olds = was.get_mut(&look.what);
-                            let near = olds.as_ref().and_then(|olds| olds.iter().position(|(old, _)| !fresh.contains(old) && self.looks.get(old).is_some_and(|old| old.same(&look))));
-                            match (near, olds) {
-                                (Some(index), Some(olds)) => {
-                                    (slot, bounds) = olds.swap_remove(index);
-                                    self.looks.remove(&slot).unwrap_or(look)
-                                }
-                                _ => look,
+                let kept = !taken.contains(&slot) && self.looks.contains_key(&slot);
+                if repeats || slot != unit.key {
+                    taken.insert(slot);
+                }
+                if !kept {
+                    let look = tree.look(&unit.place);
+                    let by_what = was.get_or_insert_with(|| {
+                        let mut was: IdMap<u64, Vec<(usize, Rect)>> = IdMap::default();
+                        for old in &olds {
+                            if let Some(look) = self.looks.get(&old.slot) {
+                                was.entry(look.what).or_default().push((old.slot, old.bounds));
                             }
                         }
-                    };
-                    looks.insert(slot, look);
-                    if slot != unit.key {
-                        aliases.insert(unit.key, slot);
+                        was
+                    });
+                    let olds_of = by_what.get_mut(&look.what);
+                    let near = olds_of.as_ref().and_then(|olds| olds.iter().position(|(old, _)| !fresh.contains(old) && !taken.contains(old) && self.looks.get(old).is_some_and(|old| old.same(&look))));
+                    match (near, olds_of) {
+                        (Some(index), Some(olds)) => {
+                            (slot, bounds) = olds.swap_remove(index);
+                            taken.insert(slot);
+                        }
+                        _ => {
+                            self.looks.insert(slot, look);
+                        }
                     }
-                    Unit { slot, section: false, bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place), blends: unit.blends }
-                })
-                .collect();
-            self.looks = looks;
+                }
+                if slot != unit.key {
+                    aliases.insert(unit.key, slot);
+                }
+                units.push(Unit { slot, section: false, bounds, custom: unit.custom, alone: !unit.blends, place: Some(unit.place), blends: unit.blends });
+            }
+            drop(looks_span);
+            {
+                let _span = super::span::span("drop looks");
+                // The looks of old units none took go, and of keys whose
+                // units took others' looks. Every unit's slot has a look, so
+                // as many looks as units are theirs alone
+                if !repeats {
+                    for old in &olds {
+                        if !fresh.contains(&old.slot) && !taken.contains(&old.slot) {
+                            self.looks.remove(&old.slot);
+                        }
+                    }
+                    for key in aliases.keys() {
+                        self.looks.remove(key);
+                    }
+                }
+                if repeats || self.looks.len() != units.len() {
+                    let slots: IdSet<usize> = units.iter().map(|unit| unit.slot).collect();
+                    self.looks.retain(|slot, _| slots.contains(slot));
+                }
+            }
             self.aliases = aliases;
+            let alone_span = super::span::span("units alone");
             for i in 0..units.len() {
                 if !units[i].alone {
                     let area = units[i].bounds;
@@ -6488,7 +6762,12 @@ impl Painter {
                     units[i].alone = !units[..i].iter().rev().any(|lower| Rect::intersects2(&lower.bounds, &area));
                 }
             }
+            drop(alone_span);
             self.units = units;
+            let olds_at: IdSet<usize> = olds.iter().map(|old| old.slot).collect();
+            self.unchanged = self.units.iter().zip(&kept_parts).filter(|(unit, &kept)| kept && !olds_at.contains(&unit.slot)).map(|(unit, _)| unit.slot).collect();
+            self.regroup(&olds, &owners);
+            self.regroups_checked = checked;
             return;
         }
         let mut units = Vec::new();

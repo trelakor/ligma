@@ -276,6 +276,22 @@ pub struct TreeUnit {
     pub bounds: Rect,
     pub blends: bool,
     pub custom: bool,
+    /// The key of the unit the units made last had that's split now into
+    /// this and others, when what it's split into draws all it drew, the
+    /// same: what drew it is the same and where, split only where that's
+    /// drawn the same in parts, with nothing that blends
+    pub regroups: Option<usize>,
+    /// Draws, where it did, what was part of a unit the units made last
+    /// had whose node has gone since, see `Tree::resplit`
+    pub kept_part: bool,
+}
+
+/// What `Tree::expand` tells `TreeUnit::regroups` by: the units made last,
+/// see `Tree::last_units`, and the keys of those split now into what
+/// doesn't draw all they drew the same
+struct Regrouping<'a> {
+    last: &'a IdMap<u64, usize>,
+    broken: std::collections::HashSet<usize>,
 }
 
 /// A custom effect node's effects, as the effect host runs them
@@ -444,6 +460,15 @@ pub struct Tree {
     /// there, which stay split as Figma sends them under new ids, as each
     /// change sends again those on the way to it
     hot_places: Mutex<IdMap<u64, std::time::Instant>>,
+    /// The keys of the units `units` last made, by the keys as worked out
+    /// before those drawn twice are told apart, those drawn twice left out
+    last_units: Mutex<IdMap<u64, usize>>,
+    /// Where each node those are of is drawn, and inside what
+    last_places: Mutex<IdMap<u32, Vec<(Matrix, Vec<(u32, Matrix)>)>>>,
+    /// Since then, the keys the parts of those whose nodes frames let go
+    /// of would have as units, taken before the nodes went: a unit with
+    /// one of them draws what was drawn there before
+    resplit: Mutex<std::collections::HashSet<u64>>,
 }
 
 /// Changes with more nodes on the way to what changed than this split
@@ -473,6 +498,9 @@ impl Tree {
             octaves: Vec::new(),
             hot: IdMap::default(),
             hot_places: Mutex::default(),
+            last_units: Mutex::default(),
+            last_places: Mutex::default(),
+            resplit: Mutex::default(),
         }
     }
 
@@ -488,6 +516,10 @@ impl Tree {
             let _span = super::span::span("keep tree");
             (header.mode == 0).then(|| self.forest.nodes.clone())
         };
+        if header.mode != 0 && !header.released.is_empty() {
+            let _span = super::span::span("parts let go");
+            self.note_parts(&header.released);
+        }
         let applied = {
             let _span = super::span::span("decode tree");
             self.forest.apply(frame.forest(), header.mode, &header.released, self.schema)?
@@ -574,6 +606,45 @@ impl Tree {
     /// sources what the view pans to draws can be
     fn parts(node: &Node) -> impl DoubleEndedIterator<Item = u32> + '_ {
         node.children.iter().copied().chain(node.child).chain(node.color_node).chain(node.alpha_node)
+    }
+
+    /// Notes in `resplit`, while the nodes are there still, the keys of
+    /// the parts of the units of nodes `released` lets go of, as `expand`
+    /// would split them, down through nodes let go of too: Figma sends the
+    /// way to what changes again under new ids, and what that's split into
+    /// beside what changed is drawn as it was
+    fn note_parts(&mut self, released: &[u32]) {
+        let places = self.last_places.get_mut().unwrap();
+        let roots: Vec<(u32, Vec<(Matrix, Vec<(u32, Matrix)>)>)> = released.iter().filter_map(|&id| places.remove(&id).map(|at| (id, at))).collect();
+        if roots.is_empty() {
+            return;
+        }
+        let released: std::collections::HashSet<u32> = released.iter().copied().collect();
+        let mut keys = Vec::new();
+        for (id, at) in roots {
+            for (at, clips) in at {
+                self.parts_of(id, at, &clips, &released, 0, &mut keys);
+            }
+        }
+        self.resplit.get_mut().unwrap().extend(keys);
+    }
+
+    fn parts_of(&self, id: u32, at: Matrix, clips: &[(u32, Matrix)], released: &std::collections::HashSet<u32>, depth: u8, out: &mut Vec<u64>) {
+        let Some(node) = self.forest.get(id).filter(|_| depth < 32) else {
+            return;
+        };
+        let (parts, at): (&[u32], Matrix) = match (node.op, &node.child, node.transform) {
+            (Op::Group, ..) => (node.children.as_slice(), at),
+            (Op::OcclusionScope | Op::Metadata | Op::CompositeTileGrid, Some(child), _) => (std::slice::from_ref(child), at),
+            (Op::StaticTransformBinding, Some(child), Some(t)) => (std::slice::from_ref(child), Matrix::concat(&at, &rt::to_matrix(&t))),
+            _ => return,
+        };
+        for &part in parts {
+            out.push(self.key_of(part, &at, clips));
+            if released.contains(&part) {
+                self.parts_of(part, at, clips, released, depth + 1, out);
+            }
+        }
     }
 
     /// Hashes what the frame's new nodes draw, each after those it refers
@@ -865,18 +936,29 @@ impl Tree {
     /// The units to draw tiles from, bottom first
     pub fn units(&self) -> Vec<TreeUnit> {
         let mut out = Vec::new();
+        let last = std::mem::take(&mut *self.last_units.lock().unwrap());
+        let mut regrouping = Regrouping { last: &last, broken: Default::default() };
         if let Some(root) = self.root {
             let mut places = self.hot_places.lock().unwrap();
             // While an edit goes on, those split as it started stay so too,
             // as coming together again redrew all they hold as changed
             let going = places.values().any(|at| at.elapsed() < HOT_KEPT);
             places.retain(|_, at| at.elapsed() < if going { HOT_KEPT_EDITING } else { HOT_KEPT });
-            self.expand(root, 0, &mut places, Matrix::default(), &mut Vec::new(), 0, &mut out);
+            self.expand(root, 0, &mut places, Matrix::default(), &mut Vec::new(), 0, None, &mut regrouping, &mut out);
         }
+        let broken = regrouping.broken;
+        let resplit = std::mem::take(&mut *self.resplit.lock().unwrap());
         // The same drawn twice in the same place is two units, for either
         // to go on its own
         let mut seen: IdMap<usize, usize> = IdMap::with_capacity_and_hasher(out.len(), Default::default());
+        let mut keys: IdMap<u64, usize> = IdMap::with_capacity_and_hasher(out.len(), Default::default());
+        let mut twice = std::collections::HashSet::new();
         for unit in &mut out {
+            let worked_out = unit.key;
+            unit.kept_part = resplit.contains(&(worked_out as u64));
+            if unit.regroups.is_some_and(|key| broken.contains(&key)) {
+                unit.regroups = None;
+            }
             let count = seen.entry(unit.key).or_insert(0);
             if *count > 0 {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -884,13 +966,53 @@ impl Tree {
                 unit.key = hasher.finish() as usize;
             }
             *count += 1;
+            if keys.insert(worked_out as u64, unit.key).is_some() {
+                twice.insert(worked_out as u64);
+            }
         }
+        keys.retain(|key, _| !twice.contains(key));
+        let mut places: IdMap<u32, Vec<(Matrix, Vec<(u32, Matrix)>)>> = IdMap::default();
+        for unit in &out {
+            places.entry(unit.place.id).or_default().push((unit.place.at, unit.place.clips.clone()));
+        }
+        *self.last_units.lock().unwrap() = keys;
+        *self.last_places.lock().unwrap() = places;
         out
     }
 
-    /// `place` is where `id` is in the tree, see `hot_places`
+    /// What a unit of node `id` drawn with `at` inside `clips` is known by
+    fn key_of(&self, id: u32, at: &Matrix, clips: &[(u32, Matrix)]) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.content(id).hash(&mut hasher);
+        let mut values = [0.0f32; 9];
+        for m in std::iter::once(at).chain(clips.iter().map(|(_, m)| m)) {
+            m.get_9(&mut values);
+            for value in values {
+                value.to_bits().hash(&mut hasher);
+            }
+        }
+        for (fill, _) in clips {
+            self.content(*fill).hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// `place` is where `id` is in the tree, see `hot_places`. `owner` is
+    /// the key of the unit before that what it's in drew as, see
+    /// `TreeUnit::regroups`
     #[allow(clippy::too_many_arguments)]
-    fn expand(&self, id: u32, place: u64, places: &mut IdMap<u64, std::time::Instant>, at: Matrix, clips: &mut Vec<(u32, Matrix)>, depth: u8, out: &mut Vec<TreeUnit>) {
+    fn expand(
+        &self,
+        id: u32,
+        place: u64,
+        places: &mut IdMap<u64, std::time::Instant>,
+        at: Matrix,
+        clips: &mut Vec<(u32, Matrix)>,
+        depth: u8,
+        owner: Option<usize>,
+        regrouping: &mut Regrouping,
+        out: &mut Vec<TreeUnit>,
+    ) {
         let Some(node) = self.forest.get(id) else {
             return;
         };
@@ -913,27 +1035,46 @@ impl Tree {
         // shows where they meet along its edge, so only where there's no
         // other way to keep a change from redrawing much
         let many = info.count > SPLIT && depth < 32;
+        // Split now, a node that a unit the units made last was of, drawn
+        // the same where it was, is split into what draws all it drew. Not
+        // inside clips, which Vello draws around each unit as a layer
+        let split_owner = |clips: &[(u32, Matrix)]| match owner {
+            Some(owner) => Some(owner),
+            None if regrouping.last.is_empty() || !clips.is_empty() || info.blends || info.custom => None,
+            None => regrouping.last.get(&self.key_of(id, &at, clips)).copied(),
+        };
         match node.op {
             Op::OcclusionScope | Op::Metadata | Op::CompositeTileGrid if big => {
                 if let Some(child) = node.child {
-                    return self.expand(child, inner(u64::MAX), places, at, clips, depth + 1, out);
+                    let owner = split_owner(clips.as_slice());
+                    // It draws its children too, which it isn't split into
+                    if let Some(owner) = owner.filter(|_| !node.children.is_empty()) {
+                        regrouping.broken.insert(owner);
+                    }
+                    return self.expand(child, inner(u64::MAX), places, at, clips, depth + 1, owner, regrouping, out);
                 }
             }
             Op::Group if big => {
+                let owner = split_owner(clips.as_slice());
                 for (index, &child) in node.children.iter().enumerate() {
-                    self.expand(child, inner(index as u64), places, at, clips, depth + 1, out);
+                    self.expand(child, inner(index as u64), places, at, clips, depth + 1, owner, regrouping, out);
                 }
                 return;
             }
             Op::StaticTransformBinding if big => {
                 if let (Some(child), Some(t)) = (node.child, node.transform) {
-                    return self.expand(child, inner(u64::MAX), places, Matrix::concat(&at, &rt::to_matrix(&t)), clips, depth + 1, out);
+                    let owner = split_owner(clips.as_slice());
+                    return self.expand(child, inner(u64::MAX), places, Matrix::concat(&at, &rt::to_matrix(&t)), clips, depth + 1, owner, regrouping, out);
                 }
             }
             Op::Mask if many && matches!(node.mask_op, None | Some(MaskOpType::Normal)) => {
                 if let (Some(color), Some((fill, to))) = (node.color_node, node.alpha_node.and_then(|alpha| self.clip_of(alpha))) {
+                    // Clipped piece by piece, it's drawn a little otherwise
+                    if let Some(owner) = owner {
+                        regrouping.broken.insert(owner);
+                    }
                     clips.push((fill, Matrix::concat(&at, &to)));
-                    self.expand(color, inner(u64::MAX - 1), places, at, clips, depth + 1, out);
+                    self.expand(color, inner(u64::MAX - 1), places, at, clips, depth + 1, None, regrouping, out);
                     clips.pop();
                     return;
                 }
@@ -952,24 +1093,14 @@ impl Tree {
                 return;
             }
         }
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.content(id).hash(&mut hasher);
-        let mut values = [0.0f32; 9];
-        for m in std::iter::once(&at).chain(clips.iter().map(|(_, m)| m)) {
-            m.get_9(&mut values);
-            for value in values {
-                value.to_bits().hash(&mut hasher);
-            }
-        }
-        for (fill, _) in clips.iter() {
-            self.content(*fill).hash(&mut hasher);
-        }
         out.push(TreeUnit {
-            key: hasher.finish() as usize,
+            key: self.key_of(id, &at, clips) as usize,
             place: Place { id, at, clips: clips.clone() },
             bounds,
             blends: info.blends,
             custom: info.custom,
+            regroups: owner,
+            kept_part: false,
         });
     }
 
